@@ -8,6 +8,7 @@ import '../../networking/api_client.dart';
 import '../../networking/event_source.dart';
 import '../approvals/approval_card.dart';
 import 'model_provider_selector.dart';
+import 'tool_call_card.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -29,7 +30,8 @@ class _ChatScreenState extends State<ChatScreen> {
   final _controller = TextEditingController();
   final _scrollController = ScrollController();
   final List<_ChatEntry> _messages = [];
-  final Map<String, _ChatEntry> _assistantEntries = {};
+  final Map<String, _MessageEntry> _assistantEntries = {};
+  final Map<String, _ToolCallEntry> _toolEntries = {};
   final List<_PendingApproval> _approvals = [];
   StreamSubscription<TuringEvent>? _subscription;
   String _modelProvider = 'ollama';
@@ -52,7 +54,7 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {
       _messages
         ..clear()
-        ..addAll(messages.map(_ChatEntry.fromMessage));
+        ..addAll(messages.map(_MessageEntry.fromMessage));
     });
     _scrollToBottom();
   }
@@ -81,7 +83,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final delta = event.payload['delta'] as String? ?? '';
     var entry = _assistantEntries[messageId];
     if (entry == null) {
-      entry = _ChatEntry.assistant(messageId: messageId, content: '');
+      entry = _MessageEntry.assistant(messageId: messageId, content: '');
       _assistantEntries[messageId] = entry;
       setState(() => _messages.add(entry!));
     }
@@ -120,7 +122,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (text.isEmpty) return;
     setState(
       () => _messages.add(
-        _ChatEntry.user(
+        _MessageEntry.user(
           messageId: 'local_${DateTime.now().microsecondsSinceEpoch}',
           content: text,
         ),
@@ -237,8 +239,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _subscription?.cancel();
     widget.eventSource.close();
-    for (final message in _messages) {
-      message.content.dispose();
+    for (final entry in _messages) {
+      entry.dispose();
     }
     _controller.dispose();
     _scrollController.dispose();
@@ -250,6 +252,30 @@ class _ChatMessageTile extends StatelessWidget {
   const _ChatMessageTile({required this.entry});
 
   final _ChatEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    switch (entry) {
+      case _MessageEntry message:
+        return _MessageBubble(entry: message);
+      case _ToolCallEntry tool:
+        return ValueListenableBuilder<ToolCallStatus>(
+          valueListenable: tool.status,
+          builder: (context, status, _) => ToolCallCard(
+            toolName: tool.toolName,
+            serverName: tool.serverName,
+            status: status,
+            error: tool.error,
+          ),
+        );
+    }
+  }
+}
+
+class _MessageBubble extends StatelessWidget {
+  const _MessageBubble({required this.entry});
+
+  final _MessageEntry entry;
 
   @override
   Widget build(BuildContext context) {
@@ -286,29 +312,33 @@ class _ChatMessageTile extends StatelessWidget {
   }
 }
 
-class _ChatEntry {
-  _ChatEntry({
+sealed class _ChatEntry {
+  void dispose();
+}
+
+class _MessageEntry extends _ChatEntry {
+  _MessageEntry({
     required this.messageId,
     required this.isUser,
     required String content,
   }) : content = ValueNotifier(content);
 
-  factory _ChatEntry.user({
+  factory _MessageEntry.user({
     required String messageId,
     required String content,
   }) {
-    return _ChatEntry(messageId: messageId, isUser: true, content: content);
+    return _MessageEntry(messageId: messageId, isUser: true, content: content);
   }
 
-  factory _ChatEntry.assistant({
+  factory _MessageEntry.assistant({
     required String messageId,
     required String content,
   }) {
-    return _ChatEntry(messageId: messageId, isUser: false, content: content);
+    return _MessageEntry(messageId: messageId, isUser: false, content: content);
   }
 
-  factory _ChatEntry.fromMessage(Message message) {
-    return _ChatEntry(
+  factory _MessageEntry.fromMessage(Message message) {
+    return _MessageEntry(
       messageId: message.messageId,
       isUser: message.role == 'user',
       content: message.content,
@@ -318,6 +348,28 @@ class _ChatEntry {
   final String messageId;
   final bool isUser;
   final ValueNotifier<String> content;
+
+  @override
+  void dispose() => content.dispose();
+}
+
+class _ToolCallEntry extends _ChatEntry {
+  _ToolCallEntry({
+    required this.toolCallId,
+    required this.toolName,
+    required ToolCallStatus status,
+    this.serverName,
+    this.error,
+  }) : status = ValueNotifier(status);
+
+  final String toolCallId;
+  final String toolName;
+  final String? serverName;
+  String? error;
+  final ValueNotifier<ToolCallStatus> status;
+
+  @override
+  void dispose() => status.dispose();
 }
 
 class _PendingApproval {
