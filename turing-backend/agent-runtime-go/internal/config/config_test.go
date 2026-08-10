@@ -146,6 +146,59 @@ func TestLoadFromEnvRejectsTimeoutMillisecondsThatOverflowDuration(t *testing.T)
 	}
 }
 
+func TestLoadFromEnvRejectsInvalidEndpointURLs(t *testing.T) {
+	for _, env := range []string{
+		"OLLAMA_BASE_URL",
+		"OPENAI_BASE_URL",
+		"MCP_SYSTEM_BASE_URL",
+		"MCP_FILES_BASE_URL",
+	} {
+		for _, value := range []string{
+			"ftp://provider.example/v1",
+			"http:///missing-host",
+			"http://:8080/missing-host",
+			"provider.example/v1",
+		} {
+			t.Run(env+"/"+value, func(t *testing.T) {
+				_, err := LoadFromEnv(mapEnv(map[string]string{
+					"TURING_INTERNAL_TOKEN": "internal",
+					env:                     value,
+				}))
+
+				if err == nil || !strings.Contains(err.Error(), env) ||
+					!strings.Contains(err.Error(), "absolute http or https URL with a non-empty host") {
+					t.Fatalf("LoadFromEnv(%s=%q) error = %v, want env-specific URL validation", env, value, err)
+				}
+			})
+		}
+	}
+}
+
+func TestLoadFromEnvAcceptsHTTPAndHTTPSEndpointURLs(t *testing.T) {
+	for _, env := range []string{
+		"OLLAMA_BASE_URL",
+		"OPENAI_BASE_URL",
+		"MCP_SYSTEM_BASE_URL",
+		"MCP_FILES_BASE_URL",
+	} {
+		for _, value := range []string{
+			"http://provider.example/v1",
+			"https://provider.example/v1",
+			"HTTP://provider.example/v1",
+		} {
+			t.Run(env+"/"+value, func(t *testing.T) {
+				_, err := LoadFromEnv(mapEnv(map[string]string{
+					"TURING_INTERNAL_TOKEN": "internal",
+					env:                     value,
+				}))
+				if err != nil {
+					t.Fatalf("LoadFromEnv(%s=%q) failed: %v", env, value, err)
+				}
+			})
+		}
+	}
+}
+
 func mapEnv(values map[string]string) func(string) string {
 	return func(name string) string {
 		return values[name]

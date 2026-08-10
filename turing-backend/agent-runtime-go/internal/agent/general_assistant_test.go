@@ -1763,6 +1763,25 @@ func TestExecuteEmitsRunFailedWhenMessageFetchFails(t *testing.T) {
 	}
 }
 
+func TestExecuteReturnsContextErrorWithoutRunFailedWhenMessageFetchFailsAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	assistant := NewGeneralAssistant(nil, fakeMessageClient{err: errors.New("fetch interrupted")}, nil)
+	var updates []*turingv1.RuntimeUpdate
+
+	err := assistant.Execute(ctx, testJob(), func(update *turingv1.RuntimeUpdate) error {
+		updates = append(updates, update)
+		return nil
+	})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Execute error = %v, want context.Canceled", err)
+	}
+	if len(updates) != 0 {
+		t.Fatalf("updates = %+v, want none", updates)
+	}
+}
+
 func TestExecuteClassifiesTypedMessageFetchFailures(t *testing.T) {
 	tests := []struct {
 		code      codes.Code
@@ -1777,6 +1796,8 @@ func TestExecuteClassifiesTypedMessageFetchFailures(t *testing.T) {
 		{code: codes.InvalidArgument, retryable: false},
 		{code: codes.NotFound, retryable: false},
 		{code: codes.FailedPrecondition, retryable: false},
+		{code: codes.Canceled, retryable: false},
+		{code: codes.Unimplemented, retryable: false},
 	}
 	for _, test := range tests {
 		t.Run(test.code.String(), func(t *testing.T) {

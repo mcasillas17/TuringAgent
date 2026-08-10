@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"strconv"
 	"time"
@@ -57,17 +58,33 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	ollamaBaseURL, err := endpointURLValue(getenv, "OLLAMA_BASE_URL", "http://host.docker.internal:11434")
+	if err != nil {
+		return Config{}, err
+	}
+	openAIBaseURL, err := endpointURLValue(getenv, "OPENAI_BASE_URL", "https://api.openai.com/v1")
+	if err != nil {
+		return Config{}, err
+	}
+	mcpSystemBaseURL, err := endpointURLValue(getenv, "MCP_SYSTEM_BASE_URL", "http://turing-mcp-system:7100/mcp")
+	if err != nil {
+		return Config{}, err
+	}
+	mcpFilesBaseURL, err := endpointURLValue(getenv, "MCP_FILES_BASE_URL", "http://turing-mcp-files:7110/mcp")
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
 		OrchestratorGRPCAddr: grpcAddr(getenv),
 		InternalToken:        internalToken,
 		WorkerID:             defaultString(getenv("TURING_WORKER_ID"), "worker-general-go"),
-		OllamaBaseURL:        defaultString(getenv("OLLAMA_BASE_URL"), "http://host.docker.internal:11434"),
+		OllamaBaseURL:        ollamaBaseURL,
 		OllamaModel:          defaultString(getenv("OLLAMA_MODEL"), "llama3.2"),
-		OpenAIBaseURL:        defaultString(getenv("OPENAI_BASE_URL"), "https://api.openai.com/v1"),
+		OpenAIBaseURL:        openAIBaseURL,
 		OpenAIAPIKey:         getenv("OPENAI_API_KEY"),
 		OpenAIModel:          defaultString(getenv("OPENAI_MODEL"), "gpt-4o-mini"),
-		MCPSystemBaseURL:     defaultString(getenv("MCP_SYSTEM_BASE_URL"), "http://turing-mcp-system:7100/mcp"),
-		MCPFilesBaseURL:      defaultString(getenv("MCP_FILES_BASE_URL"), "http://turing-mcp-files:7110/mcp"),
+		MCPSystemBaseURL:     mcpSystemBaseURL,
+		MCPFilesBaseURL:      mcpFilesBaseURL,
 		MCPSystemToken:       getenv("MCP_SYSTEM_TOKEN_GENERAL"),
 		MCPFilesToken:        getenv("MCP_FILES_TOKEN_GENERAL"),
 		MaxConcurrentRuns:    maxConcurrentRuns,
@@ -76,6 +93,15 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 		ToolTimeout:          toolTimeout,
 		LogLevel:             defaultString(getenv("LOG_LEVEL"), "info"),
 	}, nil
+}
+
+func endpointURLValue(getenv func(string) string, name string, defaultValue string) (string, error) {
+	value := defaultString(getenv(name), defaultValue)
+	parsed, err := url.Parse(value)
+	if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", fmt.Errorf("%s must be an absolute http or https URL with a non-empty host", name)
+	}
+	return value, nil
 }
 
 func grpcAddr(getenv func(string) string) string {

@@ -86,6 +86,9 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	}
 	messages, err := a.messages.FetchMessages(ctx, job.GetSessionId())
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return emitRunFailed(emit, job, "message_fetch_failed", err.Error(), retryableMessageFetchError(err))
 	}
 	if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_STARTED, map[string]any{"messageId": job.GetAssistantMessageId(), "role": "assistant"})); err != nil {
@@ -491,7 +494,7 @@ func retryableMessageFetchError(err error) bool {
 	switch status.Code(err) {
 	case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted, codes.Aborted:
 		return true
-	case codes.Unauthenticated, codes.PermissionDenied, codes.InvalidArgument, codes.NotFound, codes.FailedPrecondition:
+	case codes.Canceled, codes.Unimplemented, codes.Unauthenticated, codes.PermissionDenied, codes.InvalidArgument, codes.NotFound, codes.FailedPrecondition:
 		return false
 	default:
 		return true

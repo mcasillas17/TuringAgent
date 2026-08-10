@@ -264,6 +264,93 @@ func TestOpenAIEmitsProviderErrorEnvelopeWithoutCodeOrCompletion(t *testing.T) {
 	}
 }
 
+func TestOpenAIClassifiesStreamedProviderErrorEnvelopes(t *testing.T) {
+	tests := []struct {
+		name        string
+		errorJSON   string
+		wantCode    string
+		wantMessage string
+	}{
+		{
+			name:        "authentication type with null code",
+			errorJSON:   `{"message":"API key rejected","type":"authentication_error","code":null}`,
+			wantCode:    "model_auth_failed",
+			wantMessage: "OpenAI-compatible provider error: API key rejected",
+		},
+		{
+			name:        "permission code with absent type",
+			errorJSON:   `{"message":"Permission denied","code":"permission_denied"}`,
+			wantCode:    "model_auth_failed",
+			wantMessage: "OpenAI-compatible provider error (permission_denied): Permission denied",
+		},
+		{
+			name:        "invalid request type with absent code",
+			errorJSON:   `{"message":"Invalid input","type":"invalid_request_error"}`,
+			wantCode:    "model_request_failed",
+			wantMessage: "OpenAI-compatible provider error: Invalid input",
+		},
+		{
+			name:        "model not found code with null type",
+			errorJSON:   `{"message":"Unknown model","type":null,"code":"model_not_found"}`,
+			wantCode:    "model_request_failed",
+			wantMessage: "OpenAI-compatible provider error (model_not_found): Unknown model",
+		},
+		{
+			name:        "invalid prompt code",
+			errorJSON:   `{"message":"Prompt rejected","code":"invalid_prompt"}`,
+			wantCode:    "model_request_failed",
+			wantMessage: "OpenAI-compatible provider error (invalid_prompt): Prompt rejected",
+		},
+		{
+			name:        "context error from message with null fields",
+			errorJSON:   `{"message":"maximum context length exceeded","type":null,"code":null}`,
+			wantCode:    "model_request_failed",
+			wantMessage: "OpenAI-compatible provider error: maximum context length exceeded",
+		},
+		{
+			name:        "rate limit code with null type",
+			errorJSON:   `{"message":"Try later","type":null,"code":"rate_limit_exceeded"}`,
+			wantCode:    "model_unavailable",
+			wantMessage: "OpenAI-compatible provider error (rate_limit_exceeded): Try later",
+		},
+		{
+			name:        "server type with absent code",
+			errorJSON:   `{"message":"Provider failed","type":"server_error"}`,
+			wantCode:    "model_unavailable",
+			wantMessage: "OpenAI-compatible provider error: Provider failed",
+		},
+		{
+			name:        "overloaded from message with absent fields",
+			errorJSON:   `{"message":"The service is overloaded"}`,
+			wantCode:    "model_unavailable",
+			wantMessage: "OpenAI-compatible provider error: The service is overloaded",
+		},
+		{
+			name:        "unknown strings default to permanent model error",
+			errorJSON:   `{"message":"provider-specific failure","type":"vendor_error","code":"vendor_code"}`,
+			wantCode:    "model_error",
+			wantMessage: "OpenAI-compatible provider error (vendor_code): provider-specific failure",
+		},
+		{
+			name:        "unknown absent fields default to permanent model error",
+			errorJSON:   `{"message":"provider-specific failure"}`,
+			wantCode:    "model_error",
+			wantMessage: "OpenAI-compatible provider error: provider-specific failure",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := streamOpenAIEvents(t, "data: {\"error\":"+tt.errorJSON+"}\n\ndata: [DONE]\n\n")
+
+			assertOpenAIEventTypes(t, got, "error")
+			if got[0].Code != tt.wantCode || got[0].Message != tt.wantMessage {
+				t.Fatalf("error event = %+v, want code %q and message %q", got[0], tt.wantCode, tt.wantMessage)
+			}
+		})
+	}
+}
+
 func TestOpenAIRejectsMalformedProviderErrorEnvelopes(t *testing.T) {
 	tests := []struct {
 		name string
@@ -274,6 +361,7 @@ func TestOpenAIRejectsMalformedProviderErrorEnvelopes(t *testing.T) {
 		{name: "missing message", data: `{"error":{"code":"rate_limit_exceeded"}}`},
 		{name: "empty message", data: `{"error":{"message":"","code":"rate_limit_exceeded"}}`},
 		{name: "non-string code", data: `{"error":{"message":"unavailable","code":429}}`},
+		{name: "non-string type", data: `{"error":{"message":"unavailable","type":429}}`},
 		{
 			name: "error and choices",
 			data: `{"error":{"message":"unavailable","code":"provider_error"},"choices":[{"index":0,"delta":{}}]}`,

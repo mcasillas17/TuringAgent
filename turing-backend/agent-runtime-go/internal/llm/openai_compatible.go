@@ -425,6 +425,7 @@ type openAIChoice struct {
 type openAIErrorEnvelope struct {
 	Message string          `json:"message"`
 	Code    json.RawMessage `json:"code"`
+	Type    json.RawMessage `json:"type"`
 }
 
 type openAIDelta struct {
@@ -598,18 +599,74 @@ func parseOpenAIErrorEnvelope(data []byte) (StreamEvent, error) {
 		return StreamEvent{}, fmt.Errorf("malformed error envelope: missing message")
 	}
 
-	code := ""
-	if len(providerError.Code) > 0 && string(providerError.Code) != "null" {
-		if err := json.Unmarshal(providerError.Code, &code); err != nil || strings.TrimSpace(code) == "" {
-			return StreamEvent{}, fmt.Errorf("malformed error envelope: code must be a non-empty string")
-		}
+	providerCode, err := openAIErrorString(providerError.Code, "code")
+	if err != nil {
+		return StreamEvent{}, err
+	}
+	providerType, err := openAIErrorString(providerError.Type, "type")
+	if err != nil {
+		return StreamEvent{}, err
 	}
 	message := "OpenAI-compatible provider error"
-	if code != "" {
-		message += fmt.Sprintf(" (%s)", code)
+	if providerCode != "" {
+		message += fmt.Sprintf(" (%s)", providerCode)
 	}
 	message += ": " + providerError.Message
-	return StreamEvent{Type: "error", Code: "model_unavailable", Message: message}, nil
+	return StreamEvent{
+		Type:    "error",
+		Code:    classifyOpenAIError(providerType, providerCode, providerError.Message),
+		Message: message,
+	}, nil
+}
+
+func openAIErrorString(raw json.RawMessage, field string) (string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil || strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("malformed error envelope: %s must be a non-empty string", field)
+	}
+	return value, nil
+}
+
+func classifyOpenAIError(errorType string, errorCode string, message string) string {
+	details := normalizeOpenAIErrorDetails(errorType + " " + errorCode + " " + message)
+	if containsOpenAIErrorIndicator(details,
+		"authentication", "unauthorized", "api key", "permission", "forbidden",
+		"access denied", "account deactivated", "organization deactivated",
+	) {
+		return "model_auth_failed"
+	}
+	if containsOpenAIErrorIndicator(details,
+		"invalid request", "bad request", "model not found", "invalid model",
+		"context length", "context window", "maximum context", "invalid input",
+		"invalid parameter", "invalid value", "invalid prompt", "malformed request", "unsupported model",
+	) {
+		return "model_request_failed"
+	}
+	if containsOpenAIErrorIndicator(details,
+		"rate limit", "too many requests", "quota", "server error", "internal error",
+		"internal server", "overload", "service unavailable", "temporarily unavailable",
+		"timeout", "capacity",
+	) {
+		return "model_unavailable"
+	}
+	return "model_error"
+}
+
+func normalizeOpenAIErrorDetails(details string) string {
+	details = strings.ToLower(details)
+	return strings.NewReplacer("_", " ", "-", " ", ".", " ").Replace(details)
+}
+
+func containsOpenAIErrorIndicator(details string, indicators ...string) bool {
+	for _, indicator := range indicators {
+		if strings.Contains(details, indicator) {
+			return true
+		}
+	}
+	return false
 }
 
 func (state *openAIStreamState) appendToolCallFragment(index int, fragment openAIToolCallDelta) error {
