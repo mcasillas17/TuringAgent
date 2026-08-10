@@ -166,50 +166,55 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 }
 
 func (a *GeneralAssistant) discoverTools(ctx context.Context) (*ToolRegistry, error) {
-	a.registryMu.Lock()
-	if a.registry != nil {
-		registry := a.registry
-		a.registryMu.Unlock()
-		return registry, nil
-	}
-	if a.discovery != nil {
-		discovery := a.discovery
-		a.registryMu.Unlock()
-		select {
-		case <-discovery.done:
-			if err := ctx.Err(); err != nil {
-				return nil, err
+	for {
+		a.registryMu.Lock()
+		if a.registry != nil {
+			registry := a.registry
+			a.registryMu.Unlock()
+			return registry, nil
+		}
+		if a.discovery != nil {
+			discovery := a.discovery
+			a.registryMu.Unlock()
+			select {
+			case <-discovery.done:
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				if discovery.err == nil {
+					return discovery.registry, nil
+				}
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
 			}
-			return discovery.registry, discovery.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
 		}
-	}
-	discovery := &toolDiscovery{done: make(chan struct{})}
-	a.discovery = discovery
-	a.registryMu.Unlock()
+		discovery := &toolDiscovery{done: make(chan struct{})}
+		a.discovery = discovery
+		a.registryMu.Unlock()
 
-	servers := make(map[string]ToolLister)
-	if a.tools != nil {
-		if !isNilToolLister(a.tools.SystemMCP) {
-			servers["system"] = a.tools.SystemMCP
+		servers := make(map[string]ToolLister)
+		if a.tools != nil {
+			if !isNilToolLister(a.tools.SystemMCP) {
+				servers["system"] = a.tools.SystemMCP
+			}
+			if !isNilToolLister(a.tools.FilesMCP) {
+				servers["files"] = a.tools.FilesMCP
+			}
 		}
-		if !isNilToolLister(a.tools.FilesMCP) {
-			servers["files"] = a.tools.FilesMCP
-		}
-	}
-	registry, err := BuildToolRegistry(ctx, servers)
+		registry, err := BuildToolRegistry(ctx, servers)
 
-	a.registryMu.Lock()
-	discovery.registry = registry
-	discovery.err = err
-	if err == nil {
-		a.registry = registry
+		a.registryMu.Lock()
+		discovery.registry = registry
+		discovery.err = err
+		if err == nil {
+			a.registry = registry
+		}
+		a.discovery = nil
+		close(discovery.done)
+		a.registryMu.Unlock()
+		return registry, err
 	}
-	a.discovery = nil
-	close(discovery.done)
-	a.registryMu.Unlock()
-	return registry, err
 }
 
 func (a *GeneralAssistant) executeToolCall(
@@ -220,6 +225,9 @@ func (a *GeneralAssistant) executeToolCall(
 	call llm.ToolCall,
 	messages *[]llm.ChatMessage,
 ) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	payload := map[string]any{"toolName": call.Name, "toolCallId": call.ID}
 	if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED, payload)); err != nil {
 		return err
@@ -246,6 +254,9 @@ func (a *GeneralAssistant) executeToolCall(
 		Args:       call.Arguments,
 		MCPClient:  entry.Client,
 	})
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
 	if err != nil {
 		if emitErr := emitToolCallFailed(emit, job, call, err.Error()); emitErr != nil {
 			return emitErr

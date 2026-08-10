@@ -156,12 +156,25 @@ func TestExecuteChecksContextWhileWaitingForToolDiscovery(t *testing.T) {
 	go func() { firstDone <- assistant.Execute(context.Background(), testJob(), discardUpdate) }()
 	<-entered
 	ctx, cancel := context.WithCancel(context.Background())
+	waiting := make(chan struct{})
+	waiterDone := make(chan error, 1)
+	go func() {
+		waiterDone <- assistant.Execute(&doneSignalingContext{Context: ctx, called: waiting}, testJob(), discardUpdate)
+	}()
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("second Execute did not begin waiting for tool discovery")
+	}
 	cancel()
 
-	err := assistant.Execute(ctx, testJob(), discardUpdate)
-
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("waiting Execute error = %v, want context.Canceled", err)
+	select {
+	case err := <-waiterDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("waiting Execute error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waiting Execute did not return its context cancellation")
 	}
 	close(release)
 	if err := <-firstDone; err != nil {
@@ -209,6 +222,66 @@ func TestExecuteRetriesAfterCanceledToolDiscovery(t *testing.T) {
 	}
 	if got := provider.calls.Load(); got != 1 {
 		t.Fatalf("provider calls = %d, want only successful retry", got)
+	}
+}
+
+func TestExecuteHealthyWaiterRetriesCanceledLeaderToolDiscovery(t *testing.T) {
+	firstEntered := make(chan struct{})
+	var attempts atomic.Int32
+	client := &assistantTestToolLister{
+		listFunc: func(ctx context.Context) ([]map[string]any, error) {
+			if attempts.Add(1) == 1 {
+				close(firstEntered)
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			return []map[string]any{{"name": "system.time"}}, nil
+		},
+	}
+	provider := &completionProvider{}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{SystemMCP: client},
+	)
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderDone := make(chan error, 1)
+	go func() { leaderDone <- assistant.Execute(leaderCtx, testJob(), discardUpdate) }()
+	<-firstEntered
+
+	waiting := make(chan struct{})
+	waiterCtx := &doneSignalingContext{Context: context.Background(), called: waiting}
+	waiterDone := make(chan error, 1)
+	go func() { waiterDone <- assistant.Execute(waiterCtx, testJob(), discardUpdate) }()
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("healthy Execute did not begin waiting for the leader's discovery")
+	}
+	cancelLeader()
+
+	select {
+	case err := <-leaderDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("leader Execute error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("leader Execute did not return after cancellation")
+	}
+	select {
+	case err := <-waiterDone:
+		if err != nil {
+			t.Fatalf("healthy waiter Execute error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("healthy waiter did not retry discovery and complete")
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("ListTools attempts = %d, want canceled leader attempt and one retry", got)
+	}
+	if got := provider.calls.Load(); got != 1 {
+		t.Fatalf("provider calls = %d, want healthy waiter to complete once", got)
 	}
 }
 
@@ -603,6 +676,82 @@ func TestExecuteDoesNotStartAnotherModelTurnAfterToolCancellation(t *testing.T) 
 	}
 }
 
+func TestExecuteStopsMultipleToolCallsImmediatelyOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	firstStarted := make(chan struct{})
+	secondStarted := make(chan struct{})
+	var runnerCalls atomic.Int32
+	var mcpCalls atomic.Int32
+	provider := &queuedProvider{responses: [][]llm.StreamEvent{{
+		{Type: "tool_call", ToolCalls: []llm.ToolCall{
+			{ID: "call_first", Name: "system.first"},
+			{ID: "call_second", Name: "system.second"},
+		}},
+	}}}
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{"name": "system.first"}, {"name": "system.second"}},
+		callFunc: func(ctx context.Context, _ string, _ map[string]any) (map[string]any, error) {
+			switch mcpCalls.Add(1) {
+			case 1:
+				close(firstStarted)
+				<-ctx.Done()
+				return nil, ctx.Err()
+			default:
+				close(secondStarted)
+				return map[string]any{"unexpected": true}, nil
+			}
+		},
+	}
+	runner := &tools.Runner{PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+		if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+			runnerCalls.Add(1)
+		}
+		return allowToolCall(context.Background(), beacon)
+	}}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{SystemMCP: client, Runner: runner},
+	)
+	var updates []*turingv1.RuntimeUpdate
+	done := make(chan error, 1)
+	go func() {
+		done <- assistant.Execute(ctx, testJob(), func(update *turingv1.RuntimeUpdate) error {
+			updates = append(updates, update)
+			return nil
+		})
+	}()
+	<-firstStarted
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Execute error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Execute did not return after the first tool call observed cancellation")
+	}
+	if got := runnerCalls.Load(); got != 1 {
+		t.Fatalf("runner calls = %d, want 1", got)
+	}
+	if got := mcpCalls.Load(); got != 1 {
+		t.Fatalf("MCP calls = %d, want 1", got)
+	}
+	select {
+	case <-secondStarted:
+		t.Fatal("second tool call started after cancellation")
+	default:
+	}
+	for _, update := range updates {
+		if event := update.GetEvent(); event != nil &&
+			(event.Type == turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED ||
+				event.Type == turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED) {
+			t.Fatalf("canceled tool call emitted recovery event %s", event.Type)
+		}
+	}
+}
+
 func TestExecutePropagatesToolLifecycleEmitErrors(t *testing.T) {
 	emitErr := errors.New("emit failed")
 	tests := []struct {
@@ -921,6 +1070,17 @@ func (p *completionProvider) StreamChat(context.Context, llm.ChatRequest) (<-cha
 }
 
 func discardUpdate(*turingv1.RuntimeUpdate) error { return nil }
+
+type doneSignalingContext struct {
+	context.Context
+	called chan struct{}
+	once   sync.Once
+}
+
+func (c *doneSignalingContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.called) })
+	return c.Context.Done()
+}
 
 func eventTypes(updates []*turingv1.RuntimeUpdate) []turingv1.TuringEventType {
 	var result []turingv1.TuringEventType
