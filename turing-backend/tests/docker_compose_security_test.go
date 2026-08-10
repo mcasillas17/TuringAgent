@@ -79,6 +79,23 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 	)
 }
 
+func TestMCPFilesImageRunsAsFixedNonRootUser(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "mcp-files", "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dockerfile := string(data)
+	for _, snippet := range []string{
+		"addgroup -g 1000 -S mcp-files",
+		"adduser -u 1000 -S -G mcp-files mcp-files",
+		"USER mcp-files:mcp-files",
+	} {
+		if !strings.Contains(dockerfile, snippet) {
+			t.Fatalf("mcp-files Dockerfile missing %q", snippet)
+		}
+	}
+}
+
 func composeServiceBlock(t *testing.T, compose string, serviceName string) string {
 	t.Helper()
 	startMarker := "  " + serviceName + ":\n"

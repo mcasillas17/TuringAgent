@@ -1142,32 +1142,11 @@ func TestUpdatePreservesExistingPermissions(t *testing.T) {
 	}
 }
 
-func TestUpdateExpectedHashRequiresWritePermission(t *testing.T) {
+func TestUpdateTargetModeRequiresWriteBit(t *testing.T) {
 	for _, mode := range []os.FileMode{0400, 0444} {
 		t.Run(fmt.Sprintf("%04o", mode), func(t *testing.T) {
-			root := t.TempDir()
-			note := filepath.Join(root, "note.txt")
-			const original = "original"
-			if err := os.WriteFile(note, []byte(original), 0600); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Chmod(note, mode); err != nil {
-				t.Fatal(err)
-			}
-			files := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
-
-			_, updateErr := files.Update(map[string]any{
-				"path":         "note.txt",
-				"content":      "updated",
-				"expectedHash": contentHash(original),
-			}, "approval-token", "general_assistant")
-
-			if updateErr == nil {
-				t.Fatalf("Update replaced a read-only file with mode %04o", mode)
-			}
-			content, readErr := os.ReadFile(note)
-			if readErr != nil || string(content) != original {
-				t.Fatalf("content = %q, %v; want original", content, readErr)
+			if err := requireUpdateWriteBits(uint32(mode)); err == nil {
+				t.Fatalf("requireUpdateWriteBits(%04o) succeeded; want rejection", mode)
 			}
 		})
 	}

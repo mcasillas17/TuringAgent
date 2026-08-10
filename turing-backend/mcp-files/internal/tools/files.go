@@ -559,6 +559,9 @@ func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, appr
 	if originalStat.Mode&unix.S_IFMT != unix.S_IFREG {
 		return nil, errors.New("update target is not a regular file")
 	}
+	if err := requireUpdateWriteBits(uint32(originalStat.Mode)); err != nil {
+		return nil, err
+	}
 	if expectedHash != "" {
 		current, _, _, err := readBoundedContext(ctx, currentFile, MaxMutationContentBytes+1)
 		if err != nil {
@@ -621,6 +624,9 @@ func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, appr
 		finalStat.Ino != originalStat.Ino {
 		return nil, errors.New("update target changed during operation")
 	}
+	if err := requireUpdateWriteBits(uint32(finalStat.Mode)); err != nil {
+		return nil, err
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -632,6 +638,13 @@ func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, appr
 		return nil, fmt.Errorf("sync directory after update %q: %w", pathValue, err)
 	}
 	return map[string]any{"path": pathValue, "sha256": contentHash(content)}, nil
+}
+
+func requireUpdateWriteBits(mode uint32) error {
+	if mode&0222 == 0 {
+		return errors.New("update target has no write permission bits")
+	}
+	return nil
 }
 
 func (f FilesTools) Call(name string, args map[string]any, approvalToken string, agentID string) (map[string]any, error) {
