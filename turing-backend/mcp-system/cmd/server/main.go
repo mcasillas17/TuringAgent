@@ -107,6 +107,9 @@ func writeJSONRPCStatus(w http.ResponseWriter, statusCode int, res jsonrpc.Respo
 }
 
 func parseToolCallParams(req jsonrpc.Request) (string, map[string]any, *jsonrpc.RequestError) {
+	if paramsErr := rejectUnknownParams(req, "name", "arguments", "_meta"); paramsErr != nil {
+		return "", nil, paramsErr
+	}
 	name, valid := req.Params["name"].(string)
 	if !valid || strings.TrimSpace(name) == "" {
 		return "", nil, jsonrpc.InvalidParams(req.ID, "name must be a non-empty string")
@@ -129,6 +132,9 @@ func parseToolCallParams(req jsonrpc.Request) (string, map[string]any, *jsonrpc.
 }
 
 func validateToolsListParams(req jsonrpc.Request) *jsonrpc.RequestError {
+	if paramsErr := rejectUnknownParams(req, "cursor", "_meta"); paramsErr != nil {
+		return paramsErr
+	}
 	if cursor, present := req.Params["cursor"]; present {
 		if _, valid := cursor.(string); !valid {
 			return jsonrpc.InvalidParams(req.ID, "cursor must be a string")
@@ -137,6 +143,19 @@ func validateToolsListParams(req jsonrpc.Request) *jsonrpc.RequestError {
 	if meta, present := req.Params["_meta"]; present {
 		if object, valid := meta.(map[string]any); !valid || object == nil {
 			return jsonrpc.InvalidParams(req.ID, "_meta must be an object")
+		}
+	}
+	return nil
+}
+
+func rejectUnknownParams(req jsonrpc.Request, allowed ...string) *jsonrpc.RequestError {
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, key := range allowed {
+		allowedSet[key] = struct{}{}
+	}
+	for key := range req.Params {
+		if _, ok := allowedSet[key]; !ok {
+			return jsonrpc.InvalidParams(req.ID, "unknown params key")
 		}
 	}
 	return nil

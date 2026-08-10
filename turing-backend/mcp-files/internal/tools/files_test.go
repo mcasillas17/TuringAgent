@@ -578,6 +578,58 @@ func TestUpdateExpectedHashIsCompareAndSwapUnderConcurrency(t *testing.T) {
 	}
 }
 
+func TestUpdateWithoutExpectedHashHoldsPathLockThroughReplacement(t *testing.T) {
+	root := t.TempDir()
+	note := filepath.Join(root, "note.txt")
+	const original = "original"
+	if err := os.WriteFile(note, []byte(original), 0640); err != nil {
+		t.Fatal(err)
+	}
+	plain := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
+	compareAndSwap := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
+	lockKey := plain.root + "\x00note.txt"
+	unlock, err := processPathLocks.lockContext(context.Background(), lockKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+
+	plainResult := make(chan error, 1)
+	go func() {
+		_, updateErr := plain.Update(map[string]any{
+			"path": "note.txt", "content": "plain-update",
+		}, "approval-token", "general_assistant")
+		plainResult <- updateErr
+	}()
+	waitForPathLockRefs(t, lockKey, 2)
+
+	compareAndSwapResult := make(chan error, 1)
+	go func() {
+		_, updateErr := compareAndSwap.Update(map[string]any{
+			"path":         "note.txt",
+			"content":      "compare-and-swap-update",
+			"expectedHash": contentHash(original),
+		}, "approval-token", "general_assistant")
+		compareAndSwapResult <- updateErr
+	}()
+	waitForPathLockRefs(t, lockKey, 3)
+	unlock()
+
+	if err := <-plainResult; err != nil {
+		t.Fatalf("plain update failed: %v", err)
+	}
+	if err := <-compareAndSwapResult; err == nil || !strings.Contains(err.Error(), "expectedHash mismatch") {
+		t.Fatalf("compare-and-swap error = %v, want expectedHash mismatch", err)
+	}
+	content, err := os.ReadFile(note)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "plain-update" {
+		t.Fatalf("final content = %q, want plain-update", content)
+	}
+}
+
 func TestUpdateExpectedHashRejectsOversizedExistingFileWithoutUnboundedRead(t *testing.T) {
 	root := t.TempDir()
 	note := filepath.Join(root, "note.txt")
@@ -598,6 +650,27 @@ func TestUpdateExpectedHashRejectsOversizedExistingFileWithoutUnboundedRead(t *t
 	content, readErr := os.ReadFile(note)
 	if readErr != nil || len(content) != mutationContentByteLimit+1 {
 		t.Fatalf("existing file changed: len=%d, err=%v", len(content), readErr)
+	}
+}
+
+func waitForPathLockRefs(t *testing.T, path string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		processPathLocks.mutex.Lock()
+		entry := processPathLocks.locks[path]
+		got := 0
+		if entry != nil {
+			got = entry.refs
+		}
+		processPathLocks.mutex.Unlock()
+		if got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("path lock references = %d, want %d", got, want)
+		}
+		runtime.Gosched()
 	}
 }
 

@@ -187,6 +187,8 @@ func TestMcpHandlerRejectsMalformedToolCallParams(t *testing.T) {
 		"empty name":                `{"name":" "}`,
 		"non-object metadata":       `{"name":"files.list","_meta":[]}`,
 		"non-string approval token": `{"name":"files.list","_meta":{"approvalToken":1}}`,
+		"unknown parameter":         `{"name":"files.list","unexpected":true}`,
+		"unknown metadata":          `{"name":"files.list","_meta":{"unexpected":true}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":` + params + `}`
@@ -204,6 +206,7 @@ func TestMcpHandlerRejectsMalformedToolsListParams(t *testing.T) {
 	for name, params := range map[string]string{
 		"non-string cursor":   `{"cursor":1}`,
 		"non-object metadata": `{"_meta":[]}`,
+		"unknown parameter":   `{"unexpected":true}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			body := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":` + params + `}`
