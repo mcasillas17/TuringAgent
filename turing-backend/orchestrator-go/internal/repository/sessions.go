@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
@@ -27,6 +28,7 @@ type Session struct {
 
 type Message struct {
 	MessageID   string
+	SessionID   string
 	Role        string
 	Content     string
 	ContentType string
@@ -98,6 +100,51 @@ func (r *Repository) ListMessages(ctx context.Context, sessionID string, limit i
 		reversed[i], reversed[j] = reversed[j], reversed[i]
 	}
 	return reversed, nil
+}
+
+func (r *Repository) SearchMessages(ctx context.Context, sessionID, query string, limit int) ([]Message, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	if query == "" {
+		return []Message{}, nil
+	}
+
+	sqlQuery := `
+		SELECT m.id, m.session_id, m.role, m.content, m.content_type, m.sequence, m.created_at
+		FROM messages_fts
+		JOIN messages m ON m.rowid = messages_fts.rowid
+		WHERE messages_fts MATCH ?`
+	args := []any{fts5Phrase(query)}
+	if sessionID != "" {
+		sqlQuery += ` AND m.session_id = ?`
+		args = append(args, sessionID)
+	}
+	sqlQuery += ` ORDER BY bm25(messages_fts), m.id LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := r.db.QueryContext(ctx, sqlQuery, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []Message
+	for rows.Next() {
+		var message Message
+		if err := rows.Scan(&message.MessageID, &message.SessionID, &message.Role, &message.Content, &message.ContentType, &message.Sequence, &message.CreatedAt); err != nil {
+			return nil, err
+		}
+		messages = append(messages, message)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return messages, nil
+}
+
+func fts5Phrase(query string) string {
+	return `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
 }
 
 func nullableString(value sql.NullString) any {
