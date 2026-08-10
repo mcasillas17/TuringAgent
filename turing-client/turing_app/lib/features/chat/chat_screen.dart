@@ -48,6 +48,7 @@ class _ChatScreenState extends State<ChatScreen> {
   StreamSubscription<TuringEvent>? _subscription;
   String _modelProvider = 'ollama';
   bool _streamEnded = false;
+  bool _historyLoadFailed = false;
 
   @override
   void initState() {
@@ -61,8 +62,21 @@ class _ChatScreenState extends State<ChatScreen> {
   /// of every earlier turn is re-delivered. Applying those while `listMessages`
   /// is still in flight would render a second copy of the conversation with no
   /// way to tell which bubbles history already covers.
+  ///
+  /// The load is awaited but never allowed to fail the startup: `listMessages`
+  /// hits a backend that routinely is not up (gRPC unavailable, stale token,
+  /// deadline). Letting that propagate would skip `connect()` entirely and
+  /// leave a screen that receives no deltas, no tool cards and — because the
+  /// drop notice is raised from the subscription — no signal at all. Degrade to
+  /// "no history" instead, and say so.
   Future<void> _start() async {
-    await _loadInitialMessages();
+    try {
+      await _loadInitialMessages();
+    } catch (_) {
+      // The dedup sets stay empty, so replayed deltas may re-render text the
+      // server already persisted. A duplicated transcript beats a silent one.
+      if (mounted) setState(() => _historyLoadFailed = true);
+    }
     if (!mounted) return;
     // `lastSequence` is deliberately left unset: `Message.sequence` is a
     // separate per-message counter, NOT the event sequence this parameter
@@ -81,6 +95,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   static const _streamEndedNotice =
       'Connection to the session lost. Reopen the session to continue.';
+
+  static const _historyFailedNotice =
+      'Earlier messages could not be loaded. This session is live from here on.';
 
   /// The event stream is the only source of terminal `tool.call.*` events, so
   /// once it errors (gRPC disconnect, deadline, auth failure) or closes, any
@@ -386,7 +403,9 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ),
-          if (_streamEnded) _StreamEndedNotice(message: _streamEndedNotice),
+          if (_historyLoadFailed)
+            _SessionNotice(message: _historyFailedNotice),
+          if (_streamEnded) _SessionNotice(message: _streamEndedNotice),
           for (final approval in _approvals)
             ApprovalCard(
               toolName: approval.toolName,
@@ -498,8 +517,8 @@ class _ChatMessageTile extends StatelessWidget {
 
 /// Persistent, screen-reader-announced banner for a session whose event stream
 /// is gone. Presentational only: the parent owns when it is shown.
-class _StreamEndedNotice extends StatelessWidget {
-  const _StreamEndedNotice({required this.message});
+class _SessionNotice extends StatelessWidget {
+  const _SessionNotice({required this.message});
 
   final String message;
 
@@ -551,25 +570,32 @@ class _MessageBubble extends StatelessWidget {
     final foreground = entry.isUser
         ? colorScheme.onPrimaryContainer
         : colorScheme.onSurface;
-    return Align(
-      alignment: alignment,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 640),
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: background,
-            borderRadius: BorderRadius.circular(8),
+    // The builder wraps the chrome, not just the text: an entry can legitimately
+    // hold no content — an assistant row adopted from a mid-run reopen before
+    // its first delta, or one sealed by a tool call that arrived before any text
+    // — and a decorated Container with an empty Text paints as a stray pill that
+    // screen readers announce as an empty node. The entry (and its ObjectKey
+    // identity) is deliberately left in place so late deltas can still fill it.
+    return ValueListenableBuilder<String>(
+      valueListenable: entry.content,
+      builder: (context, content, _) {
+        if (content.isEmpty) return const SizedBox.shrink();
+        return Align(
+          alignment: alignment,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 640),
+            child: Container(
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: background,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(content, style: TextStyle(color: foreground)),
+            ),
           ),
-          child: ValueListenableBuilder<String>(
-            valueListenable: entry.content,
-            builder: (context, content, _) {
-              return Text(content, style: TextStyle(color: foreground));
-            },
-          ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

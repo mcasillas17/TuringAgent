@@ -610,6 +610,132 @@ void main() {
     unawaited(events.close());
   });
 
+  testWidgets('a failed history load still opens the event subscription', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    // Routine for a local-first stack: the backend may be down, the token
+    // stale, the deadline blown. History is the expendable surface here — the
+    // live session is not.
+    final apiClient = _FakeApiClient()
+      ..messagesError = StateError('grpc unavailable');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 1,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 2,
+        payload: {'messageId': 'msg_a', 'delta': 'still streaming'},
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.byType(ToolCallCard),
+      findsOneWidget,
+      reason: 'a history failure must not suppress the live event stream',
+    );
+    expect(find.text('still streaming'), findsOneWidget);
+    expect(
+      find.textContaining('Earlier messages could not be loaded'),
+      findsOneWidget,
+      reason: 'a silently empty transcript looks identical to a fresh session',
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a live tool call leaves no empty bubble above the card', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_user',
+          role: 'user',
+          content: 'what time is it',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+        // Reopened mid-run: the assistant row exists but is still empty, so it
+        // is adopted as the live bubble.
+        Message(
+          messageId: 'msg_live',
+          role: 'assistant',
+          content: '',
+          sequence: 2,
+          createdAt: _fixedDate,
+        ),
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // The turn's FIRST output is a tool call, not text: the create path seals
+    // the adopted (still empty) bubble, orphaning it above the card.
+    for (final type in ['tool.call.started', 'tool.call.completed']) {
+      events.add(
+        _event(
+          type: type,
+          sequence: 1,
+          payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+    }
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 2,
+        payload: {'messageId': 'msg_live', 'delta': 'It is noon.'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('It is noon.'), findsOneWidget);
+    expect(
+      // Scoped to the transcript: the composer's empty TextField also renders
+      // an empty text node, and it is not what this asserts about.
+      find.descendant(of: find.byType(ListView), matching: find.text('')),
+      findsNothing,
+      reason:
+          'a sealed, never-filled bubble must not paint as an empty pill (or '
+          'be announced as an empty text node) between the question and card',
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
   testWidgets('replayed deltas do not duplicate completed history text', (
     tester,
   ) async {
@@ -1550,6 +1676,10 @@ class _FakeApiClient implements TuringApi {
   /// When set, `listMessages` returns this future instead of resolving
   /// immediately, letting a test drive the history-load race explicitly.
   Completer<List<Message>>? messagesGate;
+
+  /// When set, `listMessages` fails with it — the backend being unreachable is
+  /// the normal case for a local-first stack, not an exotic one.
+  Object? messagesError;
   List<Message> initialMessages = const [];
 
   @override
@@ -1595,6 +1725,8 @@ class _FakeApiClient implements TuringApi {
     int limit = 50,
     String? before,
   }) {
+    final error = messagesError;
+    if (error != null) return Future.error(error);
     return messagesGate?.future ?? Future.value(initialMessages);
   }
 
