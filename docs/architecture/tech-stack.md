@@ -16,6 +16,8 @@ TuringAgent is split into four local runtime pieces:
 
 The client talks to the orchestrator through gRPC. The agent runtime talks to MCP servers over internal HTTP JSON-RPC. MCP servers are not published to the host.
 
+For what the shipped session-recall capability does—and the two intentionally deferred model-context and summary layers—see [Session recall scope](session-recall.md).
+
 ## gRPC and protobuf
 
 Protocol definitions live under `proto/turing/v1/`.
