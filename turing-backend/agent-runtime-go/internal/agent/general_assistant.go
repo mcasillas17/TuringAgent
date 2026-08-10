@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base32"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -100,7 +102,6 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	requestMessages := append([]llm.ChatMessage{}, messages...)
 	requestMessages = append(requestMessages, llm.ChatMessage{Role: "user", Content: job.GetUserText()})
 	content := ""
-	usedToolCallIDs := make(map[string]struct{})
 	toolCallCount := 0
 	successfulToolSideEffect := false
 	for toolIteration := 0; ; {
@@ -169,7 +170,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			)
 		}
 		toolCallCount += len(calls)
-		normalizeToolCallIDs(calls, usedToolCallIDs)
+		normalizeToolCallIDs(calls, job.GetRunId(), toolIteration)
 		requestMessages = append(requestMessages, llm.ChatMessage{
 			Role:      "assistant",
 			Content:   turnText,
@@ -304,7 +305,8 @@ func (a *GeneralAssistant) executeToolCall(
 		if tools.RunWasTerminalized(err) {
 			return toolCallOutcome{}, errRunTerminalized
 		}
-		if tools.SideEffectWasCommitted(err) || tools.ReportingFailed(err) {
+		if tools.SideEffectWasCommitted(err) || tools.SideEffectWasUncertain(err) ||
+			tools.ApprovalWaitFailed(err) || tools.ReportingFailed(err) {
 			return toolCallOutcome{}, err
 		}
 		if !tools.BeaconWasPosted(err) {
@@ -368,16 +370,11 @@ func appendToolError(messages *[]llm.ChatMessage, call llm.ToolCall, message str
 	return nil
 }
 
-func normalizeToolCallIDs(calls []llm.ToolCall, used map[string]struct{}) {
+func normalizeToolCallIDs(calls []llm.ToolCall, runID string, toolRound int) {
 	for index := range calls {
-		for {
-			candidate := tools.NewToolCallID()
-			if _, exists := used[candidate]; !exists {
-				calls[index].ID = candidate
-				used[candidate] = struct{}{}
-				break
-			}
-		}
+		input := fmt.Sprintf("%d:%s:%d:%d", len(runID), runID, toolRound, index)
+		sum := sha256.Sum256([]byte(input))
+		calls[index].ID = "call_" + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:])
 	}
 }
 
@@ -417,7 +414,8 @@ func (a *GeneralAssistant) tryDebugTool(ctx context.Context, job *turingv1.Agent
 		if tools.RunWasTerminalized(err) {
 			return true, nil
 		}
-		if tools.SideEffectWasCommitted(err) || tools.ReportingFailed(err) {
+		if tools.SideEffectWasCommitted(err) || tools.SideEffectWasUncertain(err) ||
+			tools.ApprovalWaitFailed(err) || tools.ReportingFailed(err) {
 			return true, err
 		}
 		return true, emitRunFailed(emit, job, "tool_call_failed", err.Error(), false)

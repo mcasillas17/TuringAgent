@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -215,6 +216,36 @@ func TestRunApprovalWaitFailurePostsFailedAfter(t *testing.T) {
 	if !errors.Is(err, waitErr) || !BeaconWasPosted(err) || RunWasTerminalized(err) {
 		t.Fatalf("Run error = %T %v, want recoverable posted wait error", err, err)
 	}
+	if !strings.Contains(fmt.Sprintf("%T", err), "ApprovalWaitError") {
+		t.Fatalf("Run error = %T %v, want ApprovalWaitError", err, err)
+	}
+	assertBeaconSequence(t, beacons,
+		beaconExpectation{phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE},
+		beaconExpectation{
+			phase:  turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER,
+			status: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED,
+			code:   "approval_wait_failed",
+		},
+	)
+}
+
+func TestRunMissingApprovalWaiterReturnsTypedFailure(t *testing.T) {
+	var beacons []*turingv1.ToolCallBeacon
+	runner := &Runner{PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+		beacons = append(beacons, beacon)
+		return &turingv1.ToolPolicyDecision{
+			Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+			ApprovalId: "approval_1",
+			ToolCallId: beacon.GetToolCallId(),
+		}, nil
+	}}
+
+	_, err := runner.Run(context.Background(), RunInput{ToolName: "system.echo", MCPClient: fakeMCPClient{}})
+
+	if err == nil || !strings.Contains(fmt.Sprintf("%T", err), "ApprovalWaitError") ||
+		!strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("Run error = %T %v, want configured ApprovalWaitError", err, err)
+	}
 	assertBeaconSequence(t, beacons,
 		beaconExpectation{phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE},
 		beaconExpectation{
@@ -243,6 +274,11 @@ func TestRunMCPFailurePostsFailedAfter(t *testing.T) {
 
 	if !errors.Is(err, callErr) || !BeaconWasPosted(err) {
 		t.Fatalf("Run error = %T %v, want posted MCP error", err, err)
+	}
+	var uncertain interface{ SideEffectUncertain() bool }
+	if !errors.As(err, &uncertain) || !uncertain.SideEffectUncertain() ||
+		!strings.Contains(fmt.Sprintf("%T", err), "SideEffectUnknownError") {
+		t.Fatalf("Run error = %T %v, want SideEffectUnknownError", err, err)
 	}
 	assertBeaconSequence(t, beacons,
 		beaconExpectation{phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE},
@@ -358,6 +394,18 @@ func TestRunReturnsReportingFailureWhenFailedAfterCannotBePosted(t *testing.T) {
 			}
 			if SideEffectWasCommitted(err) {
 				t.Fatalf("Run error = %T %v, must not report committed side effect", err, err)
+			}
+			if test.name == "MCP failure" {
+				if !errors.Is(err, operationErr) ||
+					!strings.Contains(fmt.Sprintf("%T", reporting.operationErr), "SideEffectUnknownError") {
+					t.Fatalf("Run error = %T %v, want reporting failure preserving side-effect uncertainty", err, err)
+				}
+			}
+			if test.name == "approval wait" {
+				if !errors.Is(err, operationErr) ||
+					!strings.Contains(fmt.Sprintf("%T", reporting.operationErr), "ApprovalWaitError") {
+					t.Fatalf("Run error = %T %v, want reporting failure preserving approval wait context", err, err)
+				}
 			}
 			assertBeaconSequence(t, beacons,
 				beaconExpectation{phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE},

@@ -45,6 +45,9 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	if maxToolCalls <= 0 {
+		return Config{}, errors.New("TURING_MAX_TOOL_CALLS_PER_RUN must be greater than 0")
+	}
 	modelTimeoutMs, err := intValue(getenv, "TURING_MODEL_TIMEOUT_MS", 120000)
 	if err != nil {
 		return Config{}, err

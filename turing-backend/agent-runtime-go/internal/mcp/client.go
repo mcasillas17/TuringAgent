@@ -29,6 +29,25 @@ type Client struct {
 	nextID           int64
 }
 
+type RetryableError interface {
+	error
+	Retryable() bool
+}
+
+type classifiedError struct {
+	err       error
+	retryable bool
+}
+
+func (e classifiedError) Error() string   { return e.err.Error() }
+func (e classifiedError) Unwrap() error   { return e.err }
+func (e classifiedError) Retryable() bool { return e.retryable }
+
+func Retryable(err error) bool {
+	var classified RetryableError
+	return errors.As(err, &classified) && classified.Retryable()
+}
+
 func NewClient(endpoint string, token string, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -36,8 +55,12 @@ func NewClient(endpoint string, token string, httpClient *http.Client) *Client {
 	return &Client{endpoint: endpoint, token: token, httpClient: httpClient, maxResponseBytes: defaultMaxResponseBytes, nextID: 1}
 }
 
-func (c *Client) ListTools(ctx context.Context) ([]map[string]any, error) {
-	tools := make([]map[string]any, 0)
+func (c *Client) ListTools(ctx context.Context) (tools []map[string]any, err error) {
+	defer func() {
+		err = classifyListToolsError(err)
+	}()
+
+	tools = make([]map[string]any, 0)
 	encodedToolBytes := 0
 	params := map[string]any{}
 	seenCursors := make(map[string]struct{})
@@ -113,11 +136,11 @@ func (c *Client) request(ctx context.Context, method string, params map[string]a
 	id := c.nextRequestID()
 	payload, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
 	if err != nil {
-		return nil, err
+		return nil, nonRetryableError(err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(payload))
 	if err != nil {
-		return nil, err
+		return nil, nonRetryableError(err)
 	}
 	req.Header.Set("content-type", "application/json")
 	if c.token != "" {
@@ -125,30 +148,48 @@ func (c *Client) request(ctx context.Context, method string, params map[string]a
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		if ctxErr := directContextError(ctx, err); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, retryableError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("MCP HTTP %d", resp.StatusCode)
+		err := fmt.Errorf("MCP HTTP %d", resp.StatusCode)
+		retryable := resp.StatusCode == http.StatusRequestTimeout ||
+			resp.StatusCode == http.StatusTooManyRequests ||
+			(resp.StatusCode >= http.StatusInternalServerError && resp.StatusCode < 600)
+		return nil, classifiedError{err: err, retryable: retryable}
 	}
 	obj, err := decodeLimitedObject(resp.Body, c.maxResponseBytes)
 	if err != nil {
 		return nil, err
 	}
+	if version, ok := obj["jsonrpc"].(string); !ok || version != "2.0" {
+		return nil, nonRetryableError(errors.New("MCP response jsonrpc must be \"2.0\""))
+	}
+	responseID, ok := obj["id"].(json.Number)
+	if !ok {
+		return nil, nonRetryableError(errors.New("MCP response id must be a request ID"))
+	}
+	responseIDValue, err := responseID.Int64()
+	if err != nil || responseIDValue != id {
+		return nil, nonRetryableError(fmt.Errorf("MCP response id does not match request ID %d", id))
+	}
 	if rawErr, ok := obj["error"]; ok && rawErr != nil {
 		errorObj, ok := rawErr.(map[string]any)
 		if !ok {
-			return nil, errors.New("MCP error")
+			return nil, nonRetryableError(errors.New("MCP error"))
 		}
 		message, ok := errorObj["message"].(string)
 		if !ok || message == "" {
-			return nil, errors.New("MCP error")
+			return nil, nonRetryableError(errors.New("MCP error"))
 		}
-		return nil, fmt.Errorf("MCP error: %s", message)
+		return nil, nonRetryableError(fmt.Errorf("MCP error: %s", message))
 	}
 	result, ok := obj["result"]
 	if !ok || result == nil {
-		return map[string]any{}, nil
+		return nil, nonRetryableError(errors.New("MCP response must contain result or error"))
 	}
 	resultObj, ok := result.(map[string]any)
 	if !ok {
@@ -169,11 +210,53 @@ func decodeLimitedObject(reader io.Reader, maxBytes int64) (map[string]any, erro
 	limited := io.LimitReader(reader, maxBytes+1)
 	data, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, err
+		return nil, retryableError(err)
 	}
 	if int64(len(data)) > maxBytes {
-		return nil, errors.New("MCP response too large")
+		return nil, nonRetryableError(errors.New("MCP response too large"))
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	return safejson.DecodeObject(decoder)
+	obj, err := safejson.DecodeObject(decoder)
+	if err != nil {
+		return nil, nonRetryableError(err)
+	}
+	return obj, nil
+}
+
+func classifyListToolsError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if direct := directContextError(nil, err); direct != nil {
+		return direct
+	}
+	var classified RetryableError
+	if errors.As(err, &classified) {
+		return err
+	}
+	return nonRetryableError(err)
+}
+
+func directContextError(ctx context.Context, err error) error {
+	if ctx != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		return context.Canceled
+	case errors.Is(err, context.DeadlineExceeded):
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func retryableError(err error) error {
+	return classifiedError{err: err, retryable: true}
+}
+
+func nonRetryableError(err error) error {
+	return classifiedError{err: err}
 }

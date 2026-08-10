@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
+	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/mcp"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/safejson"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
 )
@@ -93,7 +94,12 @@ func BuildToolRegistry(ctx context.Context, servers map[string]ToolLister) (*Too
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, ctxErr
 			}
-			return nil, retryableToolDiscoveryError(fmt.Errorf("discover tools from MCP server %q: %w", serverName, err))
+			wrapped := fmt.Errorf("discover tools from MCP server %q: %w", serverName, err)
+			var classified mcp.RetryableError
+			if errors.As(err, &classified) && !mcp.Retryable(err) {
+				return nil, permanentToolDiscoveryError(wrapped)
+			}
+			return nil, retryableToolDiscoveryError(wrapped)
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err

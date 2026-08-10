@@ -541,6 +541,18 @@ func TestBuildToolRegistryClassifiesValidationAndTransportErrors(t *testing.T) {
 			servers:   map[string]ToolLister{"server": &registryTestClient{listErr: errors.New("transport unavailable")}},
 			retryable: true,
 		},
+		{
+			name:      "classified HTTP 401 is permanent",
+			servers:   map[string]ToolLister{"server": &registryTestClient{listErr: classifiedListError{message: "MCP HTTP 401"}}},
+			retryable: false,
+		},
+		{
+			name: "classified HTTP 500 is retryable",
+			servers: map[string]ToolLister{"server": &registryTestClient{listErr: classifiedListError{
+				message: "MCP HTTP 500", retryable: true,
+			}}},
+			retryable: true,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -648,6 +660,14 @@ type registryTestClient struct {
 	listErr   error
 	listCalls int
 }
+
+type classifiedListError struct {
+	message   string
+	retryable bool
+}
+
+func (e classifiedListError) Error() string   { return e.message }
+func (e classifiedListError) Retryable() bool { return e.retryable }
 
 func (c *registryTestClient) ListTools(context.Context) ([]map[string]any, error) {
 	c.listCalls++

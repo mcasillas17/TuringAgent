@@ -67,21 +67,22 @@ func (r *Runner) Run(ctx context.Context, input RunInput) (map[string]any, error
 		return nil, ToolRejectedError{Reason: reason}
 	case turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED:
 		if r.WaitApproval == nil {
-			err = errors.New("approval waiter is not configured")
+			err = ApprovalWaitError{err: errors.New("approval waiter is not configured")}
 			if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "approval_wait_failed", Message: err.Error()}, started); reportErr != nil {
 				return nil, ReportingFailureError{operationErr: err, reportErr: reportErr}
 			}
-			return nil, markBeaconPosted(err)
+			return nil, err
 		}
 		approvalToken, err = r.WaitApproval(ctx, decision.GetApprovalId())
 		if err != nil {
 			if runWasTerminalized(err) {
 				return nil, terminalRunError{err: err}
 			}
+			operationErr := ApprovalWaitError{err: err}
 			if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "approval_wait_failed", Message: err.Error()}, started); reportErr != nil {
-				return nil, ReportingFailureError{operationErr: err, reportErr: reportErr}
+				return nil, ReportingFailureError{operationErr: operationErr, reportErr: reportErr}
 			}
-			return nil, markBeaconPosted(err)
+			return nil, operationErr
 		}
 	default:
 		err = errors.New("unsupported tool policy decision")
@@ -92,10 +93,11 @@ func (r *Runner) Run(ctx context.Context, input RunInput) (map[string]any, error
 	}
 	result, err := input.MCPClient.CallTool(ctx, input.ToolName, input.Args, approvalToken)
 	if err != nil {
+		operationErr := SideEffectUnknownError{err: err}
 		if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "mcp_call_failed", Message: err.Error()}, started); reportErr != nil {
-			return nil, ReportingFailureError{operationErr: err, reportErr: reportErr}
+			return nil, ReportingFailureError{operationErr: operationErr, reportErr: reportErr}
 		}
-		return nil, markBeaconPosted(err)
+		return nil, operationErr
 	}
 	if err := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_COMPLETED, safejson.Summary(result, 500), nil, started); err != nil {
 		return nil, SideEffectCommittedError{err: err}
@@ -176,10 +178,27 @@ type ReportingFailureError struct {
 func (e ReportingFailureError) Error() string {
 	return fmt.Sprintf("%v; report tool outcome: %v", e.operationErr, e.reportErr)
 }
-func (e ReportingFailureError) Unwrap() error             { return e.reportErr }
-func (e ReportingFailureError) BeaconPosted() bool        { return true }
-func (e ReportingFailureError) ReportingFailed() bool     { return true }
-func (e ReportingFailureError) SideEffectUncertain() bool { return true }
+func (e ReportingFailureError) Unwrap() []error       { return []error{e.operationErr, e.reportErr} }
+func (e ReportingFailureError) BeaconPosted() bool    { return true }
+func (e ReportingFailureError) ReportingFailed() bool { return true }
+
+type uncertainSideEffect interface {
+	SideEffectUncertain() bool
+}
+
+func SideEffectWasUncertain(err error) bool {
+	var uncertain uncertainSideEffect
+	return errors.As(err, &uncertain) && uncertain.SideEffectUncertain()
+}
+
+type SideEffectUnknownError struct {
+	err error
+}
+
+func (e SideEffectUnknownError) Error() string             { return e.err.Error() }
+func (e SideEffectUnknownError) Unwrap() error             { return e.err }
+func (e SideEffectUnknownError) BeaconPosted() bool        { return true }
+func (e SideEffectUnknownError) SideEffectUncertain() bool { return true }
 
 type ToolRejectedError struct {
 	Reason string
@@ -190,6 +209,24 @@ func (e ToolRejectedError) Error() string {
 }
 func (e ToolRejectedError) BeaconPosted() bool { return true }
 func (e ToolRejectedError) Recoverable() bool  { return true }
+
+type approvalWaitFailure interface {
+	ApprovalWaitFailed() bool
+}
+
+func ApprovalWaitFailed(err error) bool {
+	var waitFailure approvalWaitFailure
+	return errors.As(err, &waitFailure) && waitFailure.ApprovalWaitFailed()
+}
+
+type ApprovalWaitError struct {
+	err error
+}
+
+func (e ApprovalWaitError) Error() string            { return fmt.Sprintf("wait for tool approval: %v", e.err) }
+func (e ApprovalWaitError) Unwrap() error            { return e.err }
+func (e ApprovalWaitError) BeaconPosted() bool       { return true }
+func (e ApprovalWaitError) ApprovalWaitFailed() bool { return true }
 
 type SideEffectCommittedError struct {
 	err error

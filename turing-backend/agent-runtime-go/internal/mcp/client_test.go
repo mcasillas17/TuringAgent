@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -378,11 +379,120 @@ func TestListToolsPropagatesCancellationDuringPagination(t *testing.T) {
 	cancel()
 
 	err := waitForTestError(t, errCh, handlerErrors, "ListTools result")
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("ListTools error = %v, want context.Canceled", err)
+	if err != context.Canceled {
+		t.Fatalf("ListTools error = %T %v, want context.Canceled directly", err, err)
 	}
 	waitForTestSignal(t, secondPageDone, handlerErrors, "second page handler completion")
 	assertNoHandlerErrors(t, handlerErrors)
+}
+
+func TestListToolsClassifiesRetryableFailures(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    int
+		body      string
+		retryable bool
+	}{
+		{name: "unauthorized", status: http.StatusUnauthorized, retryable: false},
+		{name: "request timeout", status: http.StatusRequestTimeout, retryable: true},
+		{name: "rate limited", status: http.StatusTooManyRequests, retryable: true},
+		{name: "server failure", status: http.StatusInternalServerError, retryable: true},
+		{name: "invalid HTTP status", status: 600, retryable: false},
+		{name: "malformed JSON", status: http.StatusOK, body: `{not-json`, retryable: false},
+		{
+			name:      "malformed protocol",
+			status:    http.StatusOK,
+			body:      `{"jsonrpc":"1.0","id":1,"result":{"tools":[]}}`,
+			retryable: false,
+		},
+		{
+			name:      "missing response ID",
+			status:    http.StatusOK,
+			body:      `{"jsonrpc":"2.0","result":{"tools":[]}}`,
+			retryable: false,
+		},
+		{
+			name:      "mismatched response ID",
+			status:    http.StatusOK,
+			body:      `{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}`,
+			retryable: false,
+		},
+		{
+			name:      "JSON-RPC error",
+			status:    http.StatusOK,
+			body:      `{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"failed"}}`,
+			retryable: false,
+		},
+		{
+			name:      "malformed tools page",
+			status:    http.StatusOK,
+			body:      `{"jsonrpc":"2.0","id":1,"result":{"tools":"invalid"}}`,
+			retryable: false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newListToolsServer(t, func(listToolsRequest) (int, string, error) {
+				return test.status, test.body, nil
+			})
+			client := NewClient(server.URL, "", server.Client())
+
+			_, err := client.ListTools(context.Background())
+			server.assertNoHandlerErrors(t)
+
+			if err == nil {
+				t.Fatal("ListTools returned nil error")
+			}
+			if got := retryableFromError(err); got != test.retryable {
+				t.Fatalf("retryable(%T %v) = %t, want %t", err, err, got, test.retryable)
+			}
+		})
+	}
+}
+
+func TestListToolsClassifiesNetworkFailureAsRetryable(t *testing.T) {
+	transportErr := errors.New("network unavailable")
+	client := NewClient("http://mcp.invalid", "", &http.Client{
+		Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			return nil, transportErr
+		}),
+	})
+
+	_, err := client.ListTools(context.Background())
+
+	if !errors.Is(err, transportErr) || !retryableFromError(err) {
+		t.Fatalf("ListTools error = %T %v, want retryable network failure", err, err)
+	}
+}
+
+func TestListToolsReturnsBodyReadCancellationDirectly(t *testing.T) {
+	bodyStarted := make(chan struct{})
+	client := NewClient("http://mcp.invalid", "", &http.Client{
+		Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body: &cancelingResponseBody{
+					ctx:     request.Context(),
+					started: bodyStarted,
+				},
+				Header: make(http.Header),
+			}, nil
+		}),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := client.ListTools(ctx)
+		result <- err
+	}()
+	<-bodyStarted
+	cancel()
+
+	err := <-result
+
+	if err != context.Canceled {
+		t.Fatalf("ListTools error = %T %v, want context.Canceled directly", err, err)
+	}
 }
 
 func TestCallToolReturnsJSONRPCErrorMessage(t *testing.T) {
@@ -397,6 +507,32 @@ func TestCallToolReturnsJSONRPCErrorMessage(t *testing.T) {
 		t.Fatalf("CallTool error = %v, want denied", err)
 	}
 }
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+type cancelingResponseBody struct {
+	ctx     context.Context
+	started chan<- struct{}
+}
+
+func (b *cancelingResponseBody) Read([]byte) (int, error) {
+	close(b.started)
+	<-b.ctx.Done()
+	return 0, b.ctx.Err()
+}
+
+func (*cancelingResponseBody) Close() error { return nil }
+
+func retryableFromError(err error) bool {
+	var classified interface{ Retryable() bool }
+	return errors.As(err, &classified) && classified.Retryable()
+}
+
+var _ io.ReadCloser = (*cancelingResponseBody)(nil)
 
 type listToolsRequest struct {
 	ID     int64          `json:"id"`
