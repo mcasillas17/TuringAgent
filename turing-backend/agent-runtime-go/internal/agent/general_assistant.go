@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
@@ -20,19 +19,24 @@ type MessageClient interface {
 }
 
 type GeneralAssistantTools struct {
-	SystemMCP ToolLister
-	FilesMCP  ToolLister
-	Runner    *tools.Runner
+	SystemMCP          ToolLister
+	FilesMCP           ToolLister
+	Runner             *tools.Runner
+	MaxToolCallsPerRun int
 }
 
-const maxToolIterations = 5
+const (
+	maxToolIterations         = 5
+	defaultMaxToolCallsPerRun = 10
+)
 
-var generatedToolCallID atomic.Uint64
+var errRunTerminalized = errors.New("run already terminalized")
 
 type GeneralAssistant struct {
-	providers map[turingv1.ModelProvider]llm.Provider
-	messages  MessageClient
-	tools     *GeneralAssistantTools
+	providers          map[turingv1.ModelProvider]llm.Provider
+	messages           MessageClient
+	tools              *GeneralAssistantTools
+	maxToolCallsPerRun int
 
 	registryMu sync.Mutex
 	registry   *ToolRegistry
@@ -47,7 +51,16 @@ type toolDiscovery struct {
 }
 
 func NewGeneralAssistant(providers map[turingv1.ModelProvider]llm.Provider, messages MessageClient, toolset *GeneralAssistantTools) *GeneralAssistant {
-	return &GeneralAssistant{providers: providers, messages: messages, tools: toolset}
+	maxToolCallsPerRun := defaultMaxToolCallsPerRun
+	if toolset != nil && toolset.MaxToolCallsPerRun > 0 {
+		maxToolCallsPerRun = toolset.MaxToolCallsPerRun
+	}
+	return &GeneralAssistant{
+		providers:          providers,
+		messages:           messages,
+		tools:              toolset,
+		maxToolCallsPerRun: maxToolCallsPerRun,
+	}
 }
 
 func (a *GeneralAssistant) SetToolBeaconPoster(post func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error)) {
@@ -87,6 +100,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	requestMessages = append(requestMessages, llm.ChatMessage{Role: "user", Content: job.GetUserText()})
 	content := ""
 	usedToolCallIDs := make(map[string]struct{})
+	toolCallCount := 0
 	for toolIteration := 0; ; {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -143,6 +157,16 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		if len(calls) == 0 {
 			return completeRun(emit, job, content)
 		}
+		if toolCallCount+len(calls) > a.maxToolCallsPerRun {
+			return emitRunFailed(
+				emit,
+				job,
+				"tool_call_limit_exceeded",
+				fmt.Sprintf("model requested more than %d tool calls", a.maxToolCallsPerRun),
+				false,
+			)
+		}
+		toolCallCount += len(calls)
 		normalizeToolCallIDs(calls, usedToolCallIDs)
 		requestMessages = append(requestMessages, llm.ChatMessage{
 			Role:      "assistant",
@@ -151,6 +175,9 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		})
 		for _, call := range calls {
 			if err := a.executeToolCall(ctx, job, emit, registry, call, &requestMessages); err != nil {
+				if errors.Is(err, errRunTerminalized) {
+					return nil
+				}
 				return err
 			}
 		}
@@ -261,6 +288,12 @@ func (a *GeneralAssistant) executeToolCall(
 		return ctxErr
 	}
 	if err != nil {
+		if tools.RunWasTerminalized(err) {
+			return errRunTerminalized
+		}
+		if tools.SideEffectWasCommitted(err) {
+			return err
+		}
 		if !tools.BeaconWasPosted(err) {
 			if emitErr := emitAssistantToolCallFailed(emit, job, call, err.Error()); emitErr != nil {
 				return emitErr
@@ -270,10 +303,23 @@ func (a *GeneralAssistant) executeToolCall(
 	}
 	data, err := json.Marshal(result)
 	if err != nil {
-		return appendToolError(messages, call, err.Error())
+		return ToolResultReportingError{ToolCallID: call.ID, err: err}
 	}
 	*messages = append(*messages, toolResultMessage(call, data))
 	return nil
+}
+
+type ToolResultReportingError struct {
+	ToolCallID string
+	err        error
+}
+
+func (e ToolResultReportingError) Error() string {
+	return fmt.Sprintf("report tool result %s: %v", e.ToolCallID, e.err)
+}
+
+func (e ToolResultReportingError) Unwrap() error {
+	return e.err
 }
 
 func emitAssistantToolCallFailed(emit func(*turingv1.RuntimeUpdate) error, job *turingv1.AgentJob, call llm.ToolCall, message string) error {
@@ -305,31 +351,12 @@ func appendToolError(messages *[]llm.ChatMessage, call llm.ToolCall, message str
 }
 
 func normalizeToolCallIDs(calls []llm.ToolCall, used map[string]struct{}) {
-	preserve := make([]bool, len(calls))
-	unavailable := make(map[string]struct{}, len(used)+len(calls))
-	for id := range used {
-		unavailable[id] = struct{}{}
-	}
-	for index, call := range calls {
-		if call.ID == "" {
-			continue
-		}
-		if _, exists := unavailable[call.ID]; !exists {
-			preserve[index] = true
-			unavailable[call.ID] = struct{}{}
-		}
-	}
 	for index := range calls {
-		if preserve[index] {
-			used[calls[index].ID] = struct{}{}
-			continue
-		}
 		for {
-			candidate := fmt.Sprintf("runtime_call_%d", generatedToolCallID.Add(1))
-			if _, exists := unavailable[candidate]; !exists {
+			candidate := tools.NewToolCallID()
+			if _, exists := used[candidate]; !exists {
 				calls[index].ID = candidate
 				used[candidate] = struct{}{}
-				unavailable[candidate] = struct{}{}
 				break
 			}
 		}
@@ -369,11 +396,17 @@ func (a *GeneralAssistant) tryDebugTool(ctx context.Context, job *turingv1.Agent
 	}
 	result, err := a.tools.Runner.Run(ctx, tools.RunInput{AgentID: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, RunID: job.GetRunId(), TraceID: job.GetTraceId(), ServerName: serverName, ToolName: toolName, Args: args, MCPClient: client})
 	if err != nil {
+		if tools.RunWasTerminalized(err) {
+			return true, nil
+		}
+		if tools.SideEffectWasCommitted(err) {
+			return true, err
+		}
 		return true, emitRunFailed(emit, job, "tool_call_failed", err.Error(), false)
 	}
 	data, err := json.Marshal(result)
 	if err != nil {
-		return true, emitRunFailed(emit, job, "tool_call_failed", err.Error(), false)
+		return true, ToolResultReportingError{err: err}
 	}
 	content := string(data)
 	if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA, map[string]any{"messageId": job.GetAssistantMessageId(), "delta": content})); err != nil {

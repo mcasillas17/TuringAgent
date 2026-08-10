@@ -46,9 +46,10 @@ func run() error {
 		return client.WaitForApprovalToken(ctx, approvalID, time.Second, 65*time.Second)
 	}}
 	toolset := &agent.GeneralAssistantTools{
-		SystemMCP: mcp.NewClient(cfg.MCPSystemBaseURL, cfg.MCPSystemToken, http.DefaultClient),
-		FilesMCP:  mcp.NewClient(cfg.MCPFilesBaseURL, cfg.MCPFilesToken, http.DefaultClient),
-		Runner:    toolRunner,
+		SystemMCP:          mcp.NewClient(cfg.MCPSystemBaseURL, cfg.MCPSystemToken, http.DefaultClient),
+		FilesMCP:           mcp.NewClient(cfg.MCPFilesBaseURL, cfg.MCPFilesToken, http.DefaultClient),
+		Runner:             toolRunner,
+		MaxToolCallsPerRun: cfg.MaxToolCallsPerRun,
 	}
 	executor := agent.NewGeneralAssistant(providers, client, toolset)
 	runtimeWorker := worker.New(worker.Options{WorkerID: cfg.WorkerID, AgentID: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: cfg.MaxConcurrentRuns}, runtimeClientAdapter{client: client}, executor)

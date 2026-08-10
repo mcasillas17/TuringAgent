@@ -163,6 +163,7 @@ func (h *grpcHarness) startRuntimeWorker() {
 			InternalToken:     integrationInternalToken,
 			WorkerID:          "worker-grpc-integration",
 			MaxConcurrentRuns: 1,
+			MaxToolCallsPerRun: 10,
 			OpenAIBaseURL:     h.fakeModel.server.URL,
 			OpenAIAPIKey:      "fake-key",
 			MCPSystemBaseURL:  h.systemMCP.server.URL,

@@ -146,9 +146,9 @@ func (c *Client) WaitForApprovalToken(ctx context.Context, approvalID string, po
 			}
 			return state.GetApprovalToken(), nil
 		case turingv1.ApprovalStatus_APPROVAL_STATUS_DENIED:
-			return "", errors.New("approval denied")
+			return "", terminalApprovalError{message: "approval denied"}
 		case turingv1.ApprovalStatus_APPROVAL_STATUS_EXPIRED:
-			return "", errors.New("approval expired")
+			return "", terminalApprovalError{message: "approval expired"}
 		case turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED:
 			return "", errors.New("approval already consumed")
 		}
@@ -159,6 +159,13 @@ func (c *Client) WaitForApprovalToken(ctx context.Context, approvalID string, po
 		}
 	}
 }
+
+type terminalApprovalError struct {
+	message string
+}
+
+func (e terminalApprovalError) Error() string     { return e.message }
+func (e terminalApprovalError) RunTerminal() bool { return true }
 
 func (c *Client) ConsumeApproval(ctx context.Context, approvalID string) error {
 	_, err := c.approvals.ConsumeApproval(c.withAuth(ctx), &turingv1.ConsumeApprovalRequest{ApprovalId: approvalID})

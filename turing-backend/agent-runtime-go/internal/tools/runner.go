@@ -43,7 +43,7 @@ func (r *Runner) Run(ctx context.Context, input RunInput) (map[string]any, error
 	}
 	toolCallID := input.ToolCallID
 	if toolCallID == "" {
-		toolCallID = newToolCallID()
+		toolCallID = NewToolCallID()
 	}
 	started := time.Now()
 	decision, err := r.post(ctx, beacon(input, toolCallID, turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, turingv1.ToolCallStatus_TOOL_CALL_STATUS_UNSPECIFIED, "", nil, 0))
@@ -71,6 +71,9 @@ func (r *Runner) Run(ctx context.Context, input RunInput) (map[string]any, error
 		}
 		approvalToken, err = r.WaitApproval(ctx, decision.GetApprovalId())
 		if err != nil {
+			if runWasTerminalized(err) {
+				return nil, terminalRunError{err: err}
+			}
 			_ = r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_DENIED, "", &turingv1.ToolCallError{Code: "approval_denied", Message: err.Error()}, started)
 			return nil, markBeaconPosted(err)
 		}
@@ -84,7 +87,7 @@ func (r *Runner) Run(ctx context.Context, input RunInput) (map[string]any, error
 		return nil, markBeaconPosted(err)
 	}
 	if err := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_COMPLETED, safejson.Summary(result, 500), nil, started); err != nil {
-		return nil, markBeaconPosted(err)
+		return nil, SideEffectCommittedError{err: err}
 	}
 	return result, nil
 }
@@ -123,6 +126,46 @@ func BeaconWasPosted(err error) bool {
 	return beaconWasPosted(err)
 }
 
+type terminalRunState interface {
+	RunTerminal() bool
+}
+
+func runWasTerminalized(err error) bool {
+	var terminal terminalRunState
+	return errors.As(err, &terminal) && terminal.RunTerminal()
+}
+
+func RunWasTerminalized(err error) bool {
+	return runWasTerminalized(err)
+}
+
+type committedSideEffect interface {
+	SideEffectCommitted() bool
+}
+
+func SideEffectWasCommitted(err error) bool {
+	var committed committedSideEffect
+	return errors.As(err, &committed) && committed.SideEffectCommitted()
+}
+
+type SideEffectCommittedError struct {
+	err error
+}
+
+func (e SideEffectCommittedError) Error() string             { return e.err.Error() }
+func (e SideEffectCommittedError) Unwrap() error             { return e.err }
+func (e SideEffectCommittedError) BeaconPosted() bool        { return true }
+func (e SideEffectCommittedError) SideEffectCommitted() bool { return true }
+
+type terminalRunError struct {
+	err error
+}
+
+func (e terminalRunError) Error() string      { return e.err.Error() }
+func (e terminalRunError) Unwrap() error      { return e.err }
+func (e terminalRunError) BeaconPosted() bool { return true }
+func (e terminalRunError) RunTerminal() bool  { return true }
+
 type beaconPostedError struct {
 	err error
 }
@@ -156,6 +199,6 @@ func beacon(input RunInput, toolCallID string, phase turingv1.ToolCallPhase, sta
 	}
 }
 
-func newToolCallID() string {
+func NewToolCallID() string {
 	return "call_" + ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader).String()
 }

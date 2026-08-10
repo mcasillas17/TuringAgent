@@ -140,3 +140,81 @@ func TestSearchMessagesReturnsTheRPCError(t *testing.T) {
 		t.Errorf("got %+v, want nil excerpts on error", got)
 	}
 }
+
+func TestWaitForApprovalTokenMarksDeniedAndExpiredRunsTerminal(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  turingv1.ApprovalStatus
+		message string
+	}{
+		{name: "denied", status: turingv1.ApprovalStatus_APPROVAL_STATUS_DENIED, message: "approval denied"},
+		{name: "expired", status: turingv1.ApprovalStatus_APPROVAL_STATUS_EXPIRED, message: "approval expired"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &Client{approvals: approvalStateClient{status: test.status}}
+
+			_, err := client.WaitForApprovalToken(context.Background(), "approval_1", time.Millisecond, time.Second)
+
+			if err == nil || err.Error() != test.message {
+				t.Fatalf("WaitForApprovalToken error = %v, want %q", err, test.message)
+			}
+			var terminal interface{ RunTerminal() bool }
+			if !errors.As(err, &terminal) || !terminal.RunTerminal() {
+				t.Fatalf("WaitForApprovalToken error = %T %v, want terminal-run error", err, err)
+			}
+		})
+	}
+}
+
+func TestWaitForApprovalTokenDoesNotAssumeConsumedApprovalIsTerminal(t *testing.T) {
+	client := &Client{approvals: approvalStateClient{
+		status: turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED,
+	}}
+
+	_, err := client.WaitForApprovalToken(context.Background(), "approval_1", time.Millisecond, time.Second)
+
+	if err == nil || err.Error() != "approval already consumed" {
+		t.Fatalf("WaitForApprovalToken error = %v, want consumed error", err)
+	}
+	var terminal interface{ RunTerminal() bool }
+	if errors.As(err, &terminal) && terminal.RunTerminal() {
+		t.Fatalf("consumed approval error = %T %v, must not be terminal-run error", err, err)
+	}
+}
+
+type approvalStateClient struct {
+	status turingv1.ApprovalStatus
+}
+
+func (c approvalStateClient) GetApprovalForRuntime(
+	context.Context,
+	*turingv1.GetApprovalForRuntimeRequest,
+	...grpc.CallOption,
+) (*turingv1.RuntimeApprovalState, error) {
+	return &turingv1.RuntimeApprovalState{Status: c.status}, nil
+}
+
+func (approvalStateClient) ApproveApproval(
+	context.Context,
+	*turingv1.ApproveApprovalRequest,
+	...grpc.CallOption,
+) (*turingv1.ApprovalResponse, error) {
+	panic("unexpected call")
+}
+
+func (approvalStateClient) DenyApproval(
+	context.Context,
+	*turingv1.DenyApprovalRequest,
+	...grpc.CallOption,
+) (*turingv1.ApprovalResponse, error) {
+	panic("unexpected call")
+}
+
+func (approvalStateClient) ConsumeApproval(
+	context.Context,
+	*turingv1.ConsumeApprovalRequest,
+	...grpc.CallOption,
+) (*turingv1.ApprovalResponse, error) {
+	panic("unexpected call")
+}

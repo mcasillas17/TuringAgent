@@ -16,16 +16,17 @@ import (
 )
 
 type WorkerConfig struct {
-	Conn              *grpc.ClientConn
-	InternalToken     string
-	WorkerID          string
-	MaxConcurrentRuns int
-	OpenAIBaseURL     string
-	OpenAIAPIKey      string
-	MCPSystemBaseURL  string
-	MCPFilesBaseURL   string
-	MCPSystemToken    string
-	MCPFilesToken     string
+	Conn               *grpc.ClientConn
+	InternalToken      string
+	WorkerID           string
+	MaxConcurrentRuns  int
+	MaxToolCallsPerRun int
+	OpenAIBaseURL      string
+	OpenAIAPIKey       string
+	MCPSystemBaseURL   string
+	MCPFilesBaseURL    string
+	MCPSystemToken     string
+	MCPFilesToken      string
 }
 
 func RunWorker(ctx context.Context, cfg WorkerConfig) error {
@@ -37,9 +38,10 @@ func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 		return client.WaitForApprovalToken(ctx, approvalID, 10*time.Millisecond, 5*time.Second)
 	}}
 	toolset := &agent.GeneralAssistantTools{
-		SystemMCP: mcp.NewClient(cfg.MCPSystemBaseURL, cfg.MCPSystemToken, http.DefaultClient),
-		FilesMCP:  mcp.NewClient(cfg.MCPFilesBaseURL, cfg.MCPFilesToken, http.DefaultClient),
-		Runner:    toolRunner,
+		SystemMCP:          mcp.NewClient(cfg.MCPSystemBaseURL, cfg.MCPSystemToken, http.DefaultClient),
+		FilesMCP:           mcp.NewClient(cfg.MCPFilesBaseURL, cfg.MCPFilesToken, http.DefaultClient),
+		Runner:             toolRunner,
+		MaxToolCallsPerRun: cfg.MaxToolCallsPerRun,
 	}
 	executor := agent.NewGeneralAssistant(providers, client, toolset)
 	runtimeWorker := worker.New(worker.Options{WorkerID: cfg.WorkerID, AgentID: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: cfg.MaxConcurrentRuns}, runtimeClientAdapter{client: client}, executor)

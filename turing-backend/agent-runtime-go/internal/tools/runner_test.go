@@ -4,10 +4,37 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 )
+
+func TestNewToolCallIDIsUniqueAcrossConcurrentSamples(t *testing.T) {
+	const sampleSize = 512
+	ids := make(chan string, sampleSize)
+	var group sync.WaitGroup
+	for range sampleSize {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			ids <- NewToolCallID()
+		}()
+	}
+	group.Wait()
+	close(ids)
+
+	seen := make(map[string]struct{}, sampleSize)
+	for id := range ids {
+		if !strings.HasPrefix(id, "call_") {
+			t.Fatalf("NewToolCallID() = %q, want call_ prefix", id)
+		}
+		if _, exists := seen[id]; exists {
+			t.Fatalf("NewToolCallID() returned duplicate %q", id)
+		}
+		seen[id] = struct{}{}
+	}
+}
 
 func TestRunUsesSuppliedToolCallIDForAllBeacons(t *testing.T) {
 	var beacons []*turingv1.ToolCallBeacon
@@ -110,6 +137,7 @@ func TestRunPostsFailureAfterWhenPolicyDecisionWaitFailsAfterBeforeSent(t *testi
 			if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
 				return nil, waitErr
 			}
+
 			return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: beacon.GetToolCallId()}, nil
 		},
 	}
@@ -140,9 +168,96 @@ func TestRunPostsFailureAfterWhenPolicyDecisionWaitFailsAfterBeforeSent(t *testi
 	}
 }
 
+func TestRunReturnsTerminalApprovalErrorWithoutPostingAfterBeacon(t *testing.T) {
+	var beacons []*turingv1.ToolCallBeacon
+	var mcpCalls int
+	runner := &Runner{
+		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+			beacons = append(beacons, beacon)
+			return &turingv1.ToolPolicyDecision{
+				Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+				ApprovalId: "approval_1",
+				ToolCallId: beacon.GetToolCallId(),
+			}, nil
+		},
+		WaitApproval: func(context.Context, string) (string, error) {
+			return "", terminalRunTestError{message: "approval denied"}
+		},
+	}
+
+	_, err := runner.Run(context.Background(), RunInput{
+		ToolName: "system.echo",
+		MCPClient: mcpClientFunc(func(context.Context, string, map[string]any, ...string) (map[string]any, error) {
+			mcpCalls++
+			return map[string]any{"ok": true}, nil
+		}),
+	})
+
+	if err == nil || err.Error() != "approval denied" || !RunWasTerminalized(err) {
+		t.Fatalf("Run error = %T %v, want terminal approval error", err, err)
+	}
+	if !BeaconWasPosted(err) {
+		t.Fatalf("Run error = %T %v, want before beacon ownership", err, err)
+	}
+	if len(beacons) != 1 || beacons[0].GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+		t.Fatalf("beacons = %+v, want only before beacon", beacons)
+	}
+	if mcpCalls != 0 {
+		t.Fatalf("MCP calls = %d, want 0", mcpCalls)
+	}
+}
+
+func TestRunMarksSuccessfulMCPCallWhenCompletedBeaconFails(t *testing.T) {
+	reportErr := errors.New("completed beacon failed")
+	var beacons []*turingv1.ToolCallBeacon
+	var mcpCalls int
+	runner := &Runner{
+		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+			beacons = append(beacons, beacon)
+			if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
+				return nil, reportErr
+			}
+			return &turingv1.ToolPolicyDecision{
+				Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
+				ToolCallId: beacon.GetToolCallId(),
+			}, nil
+		},
+	}
+
+	_, err := runner.Run(context.Background(), RunInput{
+		ToolName: "system.write",
+		MCPClient: mcpClientFunc(func(context.Context, string, map[string]any, ...string) (map[string]any, error) {
+			mcpCalls++
+			return map[string]any{"ok": true}, nil
+		}),
+	})
+
+	if !errors.Is(err, reportErr) || !SideEffectWasCommitted(err) {
+		t.Fatalf("Run error = %T %v, want committed-side-effect error wrapping report failure", err, err)
+	}
+	if !BeaconWasPosted(err) {
+		t.Fatalf("Run error = %T %v, want beacon ownership", err, err)
+	}
+	if mcpCalls != 1 {
+		t.Fatalf("MCP calls = %d, want 1 successful call", mcpCalls)
+	}
+	if len(beacons) != 2 ||
+		beacons[1].GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER ||
+		beacons[1].GetStatus() != turingv1.ToolCallStatus_TOOL_CALL_STATUS_COMPLETED {
+		t.Fatalf("beacons = %+v, want attempted completed after beacon", beacons)
+	}
+}
+
 type beaconPostedTestError struct {
 	err error
 }
+
+type terminalRunTestError struct {
+	message string
+}
+
+func (e terminalRunTestError) Error() string     { return e.message }
+func (e terminalRunTestError) RunTerminal() bool { return true }
 
 func (e beaconPostedTestError) Error() string { return e.err.Error() }
 func (e beaconPostedTestError) Unwrap() error { return e.err }
@@ -158,6 +273,17 @@ func (fakeMCPClient) CallTool(ctx context.Context, name string, args map[string]
 
 type failingMCPClient struct {
 	err error
+}
+
+type mcpClientFunc func(context.Context, string, map[string]any, ...string) (map[string]any, error)
+
+func (f mcpClientFunc) CallTool(
+	ctx context.Context,
+	name string,
+	args map[string]any,
+	approvalToken ...string,
+) (map[string]any, error) {
+	return f(ctx, name, args, approvalToken...)
 }
 
 func (c failingMCPClient) CallTool(context.Context, string, map[string]any, ...string) (map[string]any, error) {
