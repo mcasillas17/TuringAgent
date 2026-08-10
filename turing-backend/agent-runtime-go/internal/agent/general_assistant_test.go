@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +17,8 @@ import (
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestExecuteRejectsNilJob(t *testing.T) {
@@ -1758,6 +1763,36 @@ func TestExecuteEmitsRunFailedWhenMessageFetchFails(t *testing.T) {
 	}
 }
 
+func TestExecuteClassifiesTypedMessageFetchFailures(t *testing.T) {
+	tests := []struct {
+		code      codes.Code
+		retryable bool
+	}{
+		{code: codes.Unavailable, retryable: true},
+		{code: codes.DeadlineExceeded, retryable: true},
+		{code: codes.ResourceExhausted, retryable: true},
+		{code: codes.Aborted, retryable: true},
+		{code: codes.Unauthenticated, retryable: false},
+		{code: codes.PermissionDenied, retryable: false},
+		{code: codes.InvalidArgument, retryable: false},
+		{code: codes.NotFound, retryable: false},
+		{code: codes.FailedPrecondition, retryable: false},
+	}
+	for _, test := range tests {
+		t.Run(test.code.String(), func(t *testing.T) {
+			fetchErr := status.Error(test.code, "fetch failed")
+			assistant := NewGeneralAssistant(nil, fakeMessageClient{err: fetchErr}, nil)
+
+			updates := collectUpdates(t, assistant, testJob())
+
+			failed := updates[len(updates)-1].GetRunFailed()
+			if failed == nil || failed.Code != "message_fetch_failed" || failed.Retryable != test.retryable {
+				t.Fatalf("terminal update = %+v, want retryable=%t message_fetch_failed", updates[len(updates)-1], test.retryable)
+			}
+		})
+	}
+}
+
 func TestExecuteEmitsRunFailedWhenProviderStreamStartFails(t *testing.T) {
 	streamErr := errors.New("stream unavailable")
 	assistant := NewGeneralAssistant(
@@ -1773,6 +1808,112 @@ func TestExecuteEmitsRunFailedWhenProviderStreamStartFails(t *testing.T) {
 	failed := updates[len(updates)-1].GetRunFailed()
 	if failed == nil || failed.Code != "model_stream_failed" || failed.Message != streamErr.Error() || !failed.Retryable {
 		t.Fatalf("terminal update = %+v, want retryable model_stream_failed", updates[len(updates)-1])
+	}
+}
+
+func TestExecuteClassifiesTypedProviderStreamStartFailures(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		retryable bool
+	}{
+		{
+			name:      "unsupported JSON type",
+			err:       &json.UnsupportedTypeError{Type: reflect.TypeOf(make(chan int))},
+			retryable: false,
+		},
+		{
+			name:      "unsupported JSON value",
+			err:       &json.UnsupportedValueError{Value: reflect.ValueOf(1), Str: "unsupported"},
+			retryable: false,
+		},
+		{
+			name:      "malformed URL",
+			err:       &url.Error{Op: "parse", URL: "://bad", Err: errors.New("missing protocol scheme")},
+			retryable: false,
+		},
+		{
+			name:      "temporary network error",
+			err:       &net.DNSError{Err: "temporary", Name: "provider.test", IsTemporary: true},
+			retryable: true,
+		},
+		{
+			name:      "timeout network error",
+			err:       &net.DNSError{Err: "timeout", Name: "provider.test", IsTimeout: true},
+			retryable: true,
+		},
+		{
+			name:      "generic untyped error",
+			err:       errors.New("stream unavailable"),
+			retryable: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assistant := NewGeneralAssistant(
+				map[turingv1.ModelProvider]llm.Provider{
+					turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: errorProvider{err: test.err},
+				},
+				fakeMessageClient{},
+				nil,
+			)
+
+			updates := collectUpdates(t, assistant, testJob())
+
+			failed := updates[len(updates)-1].GetRunFailed()
+			if failed == nil || failed.Code != "model_stream_failed" || failed.Retryable != test.retryable {
+				t.Fatalf("terminal update = %+v, want retryable=%t model_stream_failed", updates[len(updates)-1], test.retryable)
+			}
+		})
+	}
+}
+
+func TestExecuteReturnsSynchronousProviderContextCancellation(t *testing.T) {
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: errorProvider{err: context.Canceled},
+		},
+		fakeMessageClient{},
+		nil,
+	)
+
+	err := assistant.Execute(context.Background(), testJob(), discardUpdate)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Execute error = %v, want context.Canceled", err)
+	}
+}
+
+func TestExecuteMakesTypedTransientProviderFailureNonRetryableAfterSideEffect(t *testing.T) {
+	provider := &toolThenModelFailureProvider{
+		synchronous: true,
+		startErr:    &net.DNSError{Err: "temporary", Name: "provider.test", IsTemporary: true},
+	}
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{"name": "system.write"}},
+		result:      map[string]any{"ok": true},
+	}
+	runner := &tools.Runner{
+		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+			return &turingv1.ToolPolicyDecision{
+				Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+				ApprovalId: "approval_1",
+				ToolCallId: beacon.GetToolCallId(),
+			}, nil
+		},
+		WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{SystemMCP: client, Runner: runner},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	failed := updates[len(updates)-1].GetRunFailed()
+	if failed == nil || failed.Code != "model_stream_failed" || failed.Retryable {
+		t.Fatalf("terminal update = %+v, want side-effect override retryable=false", updates[len(updates)-1])
 	}
 }
 
@@ -2225,6 +2366,7 @@ func (p *silentLoopingToolProvider) StreamChat(context.Context, llm.ChatRequest)
 type toolThenModelFailureProvider struct {
 	calls       int
 	synchronous bool
+	startErr    error
 }
 
 func (p *toolThenModelFailureProvider) ID() string { return "tool-then-failure" }
@@ -2240,6 +2382,9 @@ func (p *toolThenModelFailureProvider) StreamChat(context.Context, llm.ChatReque
 		return out, nil
 	}
 	if p.synchronous {
+		if p.startErr != nil {
+			return nil, p.startErr
+		}
 		return nil, errors.New("stream unavailable")
 	}
 	out := make(chan llm.StreamEvent, 1)

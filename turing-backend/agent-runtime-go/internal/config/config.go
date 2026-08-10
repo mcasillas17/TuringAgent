@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"time"
@@ -48,19 +49,13 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 	if maxToolCalls <= 0 {
 		return Config{}, errors.New("TURING_MAX_TOOL_CALLS_PER_RUN must be greater than 0")
 	}
-	modelTimeoutMs, err := intValue(getenv, "TURING_MODEL_TIMEOUT_MS", 120000)
+	modelTimeout, err := durationMillisecondsValue(getenv, "TURING_MODEL_TIMEOUT_MS", 120000)
 	if err != nil {
 		return Config{}, err
 	}
-	if modelTimeoutMs <= 0 {
-		return Config{}, errors.New("TURING_MODEL_TIMEOUT_MS must be greater than 0")
-	}
-	toolTimeoutMs, err := intValue(getenv, "TURING_TOOL_TIMEOUT_MS", 30000)
+	toolTimeout, err := durationMillisecondsValue(getenv, "TURING_TOOL_TIMEOUT_MS", 30000)
 	if err != nil {
 		return Config{}, err
-	}
-	if toolTimeoutMs <= 0 {
-		return Config{}, errors.New("TURING_TOOL_TIMEOUT_MS must be greater than 0")
 	}
 	return Config{
 		OrchestratorGRPCAddr: grpcAddr(getenv),
@@ -77,8 +72,8 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 		MCPFilesToken:        getenv("MCP_FILES_TOKEN_GENERAL"),
 		MaxConcurrentRuns:    maxConcurrentRuns,
 		MaxToolCallsPerRun:   maxToolCalls,
-		ModelTimeout:         time.Duration(modelTimeoutMs) * time.Millisecond,
-		ToolTimeout:          time.Duration(toolTimeoutMs) * time.Millisecond,
+		ModelTimeout:         modelTimeout,
+		ToolTimeout:          toolTimeout,
 		LogLevel:             defaultString(getenv("LOG_LEVEL"), "info"),
 	}, nil
 }
@@ -103,6 +98,33 @@ func intValue(getenv func(string) string, name string, defaultValue int) (int, e
 		return 0, fmt.Errorf("%s must be an integer", name)
 	}
 	return parsed, nil
+}
+
+func durationMillisecondsValue(getenv func(string) string, name string, defaultValue int64) (time.Duration, error) {
+	value := getenv(name)
+	if value == "" {
+		value = strconv.FormatInt(defaultValue, 10)
+	}
+	milliseconds, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		var numberError *strconv.NumError
+		if errors.As(err, &numberError) && errors.Is(numberError.Err, strconv.ErrRange) {
+			return 0, fmt.Errorf("%s exceeds maximum duration of %d milliseconds", name, maxDurationMilliseconds())
+		}
+		return 0, fmt.Errorf("%s must be an integer", name)
+	}
+	if milliseconds <= 0 {
+		return 0, fmt.Errorf("%s must be greater than 0", name)
+	}
+	maxMilliseconds := maxDurationMilliseconds()
+	if milliseconds > maxMilliseconds {
+		return 0, fmt.Errorf("%s exceeds maximum duration of %d milliseconds", name, maxMilliseconds)
+	}
+	return time.Duration(milliseconds) * time.Millisecond, nil
+}
+
+func maxDurationMilliseconds() int64 {
+	return int64(math.MaxInt64 / int64(time.Millisecond))
 }
 
 func defaultString(value string, fallback string) string {

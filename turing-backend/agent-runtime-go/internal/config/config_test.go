@@ -1,6 +1,8 @@
 package config
 
 import (
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -95,6 +97,52 @@ func TestLoadFromEnvRejectsNonPositiveTimeouts(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestLoadFromEnvAcceptsLargestRepresentableTimeoutMilliseconds(t *testing.T) {
+	maxMilliseconds := int64(math.MaxInt64 / int64(time.Millisecond))
+	value := strconv.FormatInt(maxMilliseconds, 10)
+	for _, env := range []string{"TURING_MODEL_TIMEOUT_MS", "TURING_TOOL_TIMEOUT_MS"} {
+		t.Run(env, func(t *testing.T) {
+			cfg, err := LoadFromEnv(mapEnv(map[string]string{
+				"TURING_INTERNAL_TOKEN": "internal",
+				env:                     value,
+			}))
+			if err != nil {
+				t.Fatalf("LoadFromEnv(%s=%s) failed: %v", env, value, err)
+			}
+			got := cfg.ModelTimeout
+			if env == "TURING_TOOL_TIMEOUT_MS" {
+				got = cfg.ToolTimeout
+			}
+			want := time.Duration(maxMilliseconds) * time.Millisecond
+			if got != want {
+				t.Fatalf("%s duration = %v, want %v", env, got, want)
+			}
+		})
+	}
+}
+
+func TestLoadFromEnvRejectsTimeoutMillisecondsThatOverflowDuration(t *testing.T) {
+	maxMilliseconds := int64(math.MaxInt64 / int64(time.Millisecond))
+	values := []string{
+		strconv.FormatInt(maxMilliseconds+1, 10),
+		"9223372036854775808",
+	}
+	for _, value := range values {
+		for _, env := range []string{"TURING_MODEL_TIMEOUT_MS", "TURING_TOOL_TIMEOUT_MS"} {
+			t.Run(env+"/"+value, func(t *testing.T) {
+				_, err := LoadFromEnv(mapEnv(map[string]string{
+					"TURING_INTERNAL_TOKEN": "internal",
+					env:                     value,
+				}))
+				if err == nil || !strings.Contains(err.Error(), env) ||
+					!strings.Contains(err.Error(), "maximum") {
+					t.Fatalf("LoadFromEnv(%s=%s) error = %v, want clear overflow validation", env, value, err)
+				}
+			})
+		}
 	}
 }
 

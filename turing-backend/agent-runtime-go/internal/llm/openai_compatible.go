@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 )
 
@@ -38,7 +40,11 @@ func NewOpenAICompatible(baseURL string, apiKey string, client *http.Client) *Op
 func (p *OpenAICompatible) ID() string { return "openai_compatible" }
 
 func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
-	messages, err := openAIMessages(req.Messages)
+	aliases, err := buildOpenAIToolAliases(req.Tools)
+	if err != nil {
+		return nil, err
+	}
+	messages, err := openAIMessages(req.Messages, aliases.byOriginal)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +54,7 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 		Stream:      true,
 		Temperature: req.Temperature,
 		MaxTokens:   req.MaxTokens,
-		Tools:       openAITools(req.Tools),
+		Tools:       openAITools(req.Tools, aliases.byOriginal),
 	})
 	if err != nil {
 		return nil, err
@@ -76,7 +82,7 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), maxStreamTokenBytes)
 		scanner.Split(splitSSELines)
-		state := newOpenAIStreamState()
+		state := newOpenAIStreamState(aliases.byAlias)
 		dispatch := func(data string) bool {
 			if strings.TrimSpace(data) == "" {
 				return false
@@ -229,7 +235,7 @@ type openAIMessageFunctionCall struct {
 	Arguments string `json:"arguments"`
 }
 
-func openAIMessages(messages []ChatMessage) ([]openAIMessage, error) {
+func openAIMessages(messages []ChatMessage, aliases map[string]string) ([]openAIMessage, error) {
 	converted := make([]openAIMessage, 0, len(messages))
 	for _, message := range messages {
 		result := openAIMessage{
@@ -250,11 +256,15 @@ func openAIMessages(messages []ChatMessage) ([]openAIMessage, error) {
 				if err != nil {
 					return nil, err
 				}
+				name := call.Name
+				if alias, ok := aliases[name]; ok {
+					name = alias
+				}
 				result.ToolCalls = append(result.ToolCalls, openAIMessageToolCall{
 					ID:   call.ID,
 					Type: "function",
 					Function: openAIMessageFunctionCall{
-						Name:      call.Name,
+						Name:      name,
 						Arguments: string(arguments),
 					},
 				})
@@ -276,23 +286,129 @@ type openAIFunctionDefinition struct {
 	Parameters  map[string]any `json:"parameters"`
 }
 
-func openAITools(definitions []ToolDefinition) []openAITool {
+func openAITools(definitions []ToolDefinition, aliases map[string]string) []openAITool {
 	tools := make([]openAITool, 0, len(definitions))
 	for _, definition := range definitions {
 		parameters := definition.Parameters
 		if parameters == nil {
 			parameters = map[string]any{"type": "object"}
 		}
+		name := definition.Name
+		if alias, ok := aliases[name]; ok {
+			name = alias
+		}
 		tools = append(tools, openAITool{
 			Type: "function",
 			Function: openAIFunctionDefinition{
-				Name:        definition.Name,
+				Name:        name,
 				Description: definition.Description,
 				Parameters:  parameters,
 			},
 		})
 	}
+
 	return tools
+}
+
+type openAIToolAliases struct {
+	byOriginal map[string]string
+	byAlias    map[string]string
+}
+
+func buildOpenAIToolAliases(definitions []ToolDefinition) (openAIToolAliases, error) {
+	aliases := openAIToolAliases{
+		byOriginal: make(map[string]string, len(definitions)),
+		byAlias:    make(map[string]string, len(definitions)),
+	}
+	used := make(map[string]struct{}, len(definitions))
+	invalid := make([]string, 0, len(definitions))
+	seen := make(map[string]struct{}, len(definitions))
+	for _, definition := range definitions {
+		if _, duplicate := seen[definition.Name]; duplicate {
+			return openAIToolAliases{}, fmt.Errorf("duplicate OpenAI tool definition %q", definition.Name)
+		}
+		seen[definition.Name] = struct{}{}
+		if isOpenAIFunctionName(definition.Name) {
+			aliases.byOriginal[definition.Name] = definition.Name
+			aliases.byAlias[definition.Name] = definition.Name
+			used[definition.Name] = struct{}{}
+			continue
+		}
+		invalid = append(invalid, definition.Name)
+	}
+
+	sort.Strings(invalid)
+	for _, original := range invalid {
+		for attempt := 0; ; attempt++ {
+			alias := openAIToolAlias(original, attempt)
+			if _, collision := used[alias]; collision {
+				continue
+			}
+			aliases.byOriginal[original] = alias
+			aliases.byAlias[alias] = original
+			used[alias] = struct{}{}
+			break
+		}
+	}
+	return aliases, nil
+}
+
+func isOpenAIFunctionName(name string) bool {
+	if len(name) == 0 || len(name) > 64 {
+		return false
+	}
+	for index := 0; index < len(name); index++ {
+		character := name[index]
+		if (character >= 'A' && character <= 'Z') ||
+			(character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') ||
+			character == '_' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func openAIToolAlias(original string, attempt int) string {
+	prefix := sanitizeOpenAIToolName(original)
+	hashInput := original
+	if attempt > 0 {
+		hashInput = fmt.Sprintf("%s#%d", original, attempt)
+	}
+	sum := sha256.Sum256([]byte(hashInput))
+	const suffixLength = 12
+	suffix := fmt.Sprintf("%x", sum[:])[:suffixLength]
+	const maxPrefixLength = 64 - 1 - suffixLength
+	if len(prefix) > maxPrefixLength {
+		prefix = prefix[:maxPrefixLength]
+	}
+	return prefix + "_" + suffix
+}
+
+func sanitizeOpenAIToolName(name string) string {
+	var sanitized strings.Builder
+	lastWasReplacement := false
+	for _, character := range name {
+		valid := (character >= 'A' && character <= 'Z') ||
+			(character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') ||
+			character == '_' || character == '-'
+		if valid {
+			sanitized.WriteRune(character)
+			lastWasReplacement = false
+			continue
+		}
+		if !lastWasReplacement {
+			sanitized.WriteByte('_')
+			lastWasReplacement = true
+		}
+	}
+	prefix := strings.Trim(sanitized.String(), "_-")
+	if prefix == "" {
+		return "tool"
+	}
+	return prefix
 }
 
 type openAIEnvelope struct {
@@ -336,10 +452,15 @@ type openAIStreamState struct {
 	toolCalls       map[int]*openAIToolCall
 	argumentBytes   int
 	identifierBytes int
+	toolAliases     map[string]string
 }
 
-func newOpenAIStreamState() *openAIStreamState {
-	return &openAIStreamState{toolCalls: make(map[int]*openAIToolCall)}
+func newOpenAIStreamState(toolAliases ...map[string]string) *openAIStreamState {
+	state := &openAIStreamState{toolCalls: make(map[int]*openAIToolCall)}
+	if len(toolAliases) > 0 {
+		state.toolAliases = toolAliases[0]
+	}
+	return state
 }
 
 func parseOpenAIData(data []byte, state *openAIStreamState) ([]StreamEvent, bool, error) {
@@ -432,6 +553,9 @@ func parseOpenAIData(data []byte, state *openAIStreamState) ([]StreamEvent, bool
 				name := call.name
 				if name == "" {
 					return nil, false, fmt.Errorf("tool call %d is missing a function name", index)
+				}
+				if original, ok := state.toolAliases[name]; ok {
+					name = original
 				}
 				arguments := make(map[string]any)
 				if call.arguments.Len() > 0 {

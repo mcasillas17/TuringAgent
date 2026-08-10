@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -401,6 +402,161 @@ func TestOpenAIRequestSerializesFunctionTools(t *testing.T) {
 	if tool["type"] != "function" || function["name"] != "get_weather" ||
 		function["description"] != "Get the weather" || parameters["type"] != "object" {
 		t.Fatalf("tool = %#v", tool)
+	}
+}
+
+func TestOpenAIRequestAliasesMCPToolNamesWithoutChangingDefinitions(t *testing.T) {
+	longName := strings.Repeat("long-name-", 8)
+	definitions := []ToolDefinition{
+		{Name: "system.time", Description: "system.time", Parameters: map[string]any{"type": "object", "required": []any{"zone"}}},
+		{Name: "files.create", Description: "files.create", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}}},
+		{Name: "already_valid-1", Description: "already_valid-1", Parameters: map[string]any{"type": "object"}},
+		{Name: longName, Description: longName, Parameters: map[string]any{"type": "object", "additionalProperties": false}},
+		{Name: "name.with/collision", Description: "name.with/collision", Parameters: map[string]any{"type": "object"}},
+		{Name: "name/with.collision", Description: "name/with.collision", Parameters: map[string]any{"type": "object"}},
+	}
+
+	functions := captureOpenAIToolFunctions(t, definitions, nil)
+	aliases := make(map[string]string, len(functions))
+	validName := regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	for _, function := range functions {
+		original, _ := function["description"].(string)
+		alias, _ := function["name"].(string)
+		if !validName.MatchString(alias) {
+			t.Fatalf("alias %q for %q is not OpenAI compliant", alias, original)
+		}
+		if prior, duplicate := aliases[alias]; duplicate {
+			t.Fatalf("alias %q is shared by %q and %q", alias, prior, original)
+		}
+		aliases[alias] = original
+		wantParameters := toolDefinitionByName(t, definitions, original).Parameters
+		if !reflect.DeepEqual(function["parameters"], wantParameters) {
+			t.Fatalf("parameters for %q = %#v, want %#v", original, function["parameters"], wantParameters)
+		}
+	}
+	if aliases["already_valid-1"] != "already_valid-1" {
+		t.Fatalf("valid unique name was changed: aliases = %#v", aliases)
+	}
+	for _, original := range []string{"system.time", "files.create", longName} {
+		for alias, mapped := range aliases {
+			if mapped == original && alias == original {
+				t.Fatalf("invalid original %q was not aliased", original)
+			}
+		}
+	}
+}
+
+func TestOpenAIToolAliasesAreDeterministicAcrossDefinitionOrder(t *testing.T) {
+	forward := []ToolDefinition{
+		{Name: "system.time", Description: "system.time"},
+		{Name: "files.create", Description: "files.create"},
+		{Name: "valid_name", Description: "valid_name"},
+	}
+	reversed := []ToolDefinition{forward[2], forward[1], forward[0]}
+
+	first := aliasesByDescription(captureOpenAIToolFunctions(t, forward, nil))
+	second := aliasesByDescription(captureOpenAIToolFunctions(t, reversed, nil))
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("aliases depend on definition order: forward=%#v reversed=%#v", first, second)
+	}
+}
+
+func TestOpenAIToolAliasAvoidsValidNameCollision(t *testing.T) {
+	invalid := ToolDefinition{Name: "system.time", Description: "system.time"}
+	initial := aliasesByDescription(captureOpenAIToolFunctions(t, []ToolDefinition{invalid}, nil))["system.time"]
+	definitions := []ToolDefinition{
+		invalid,
+		{Name: initial, Description: initial},
+	}
+
+	aliases := aliasesByDescription(captureOpenAIToolFunctions(t, definitions, nil))
+	if aliases[initial] != initial {
+		t.Fatalf("valid name %q was changed: aliases=%#v", initial, aliases)
+	}
+	if aliases["system.time"] == initial {
+		t.Fatalf("invalid name alias collided with valid name %q", initial)
+	}
+}
+
+func TestOpenAIRequestUsesAdvertisedAliasForAssistantToolCalls(t *testing.T) {
+	messages := []ChatMessage{{
+		Role: "assistant",
+		ToolCalls: []ToolCall{{
+			ID: "call_1", Name: "system.time", Arguments: map[string]any{},
+		}},
+	}}
+
+	functions, request := captureOpenAIRequest(t, []ToolDefinition{{Name: "system.time", Description: "clock"}}, messages)
+	alias, _ := functions[0]["name"].(string)
+	message := requireSingleObject(t, request["messages"], "messages")
+	call := requireSingleObject(t, message["tool_calls"], "tool_calls")
+	function, _ := call["function"].(map[string]any)
+	if function["name"] != alias || alias == "system.time" {
+		t.Fatalf("assistant function name = %#v, advertised alias = %q", function["name"], alias)
+	}
+}
+
+func TestOpenAIStreamsAdvertisedAliasAsOriginalToolName(t *testing.T) {
+	requestAlias := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request openAIChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		alias := request.Tools[0].Function.Name
+		requestAlias <- alias
+		fmt.Fprintf(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":%q,\"arguments\":\"{}\"}}]}}]}\n\n", alias)
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
+	}))
+	t.Cleanup(server.Close)
+
+	provider := NewOpenAICompatible(server.URL, "", server.Client())
+	events, err := provider.StreamChat(context.Background(), ChatRequest{
+		Model: "gpt-4o-mini",
+		Tools: []ToolDefinition{{Name: "files.create"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := collectEvents(events)
+	if alias := <-requestAlias; alias == "files.create" {
+		t.Fatalf("advertised name = %q, want alias", alias)
+	}
+	if len(got) < 1 || len(got[0].ToolCalls) != 1 || got[0].ToolCalls[0].Name != "files.create" {
+		t.Fatalf("events = %+v, want provider-neutral files.create tool call", got)
+	}
+}
+
+func TestOpenAILeavesUnadvertisedStreamedToolNameUnchanged(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"not_advertised","arguments":"{}"}}]}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
+	}))
+	t.Cleanup(server.Close)
+
+	provider := NewOpenAICompatible(server.URL, "", server.Client())
+	events, err := provider.StreamChat(context.Background(), ChatRequest{
+		Model: "gpt-4o-mini",
+		Tools: []ToolDefinition{{Name: "system.time"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := collectEvents(events)
+	if len(got) < 1 || got[0].ToolCalls[0].Name != "not_advertised" {
+		t.Fatalf("events = %+v, want unknown model name unchanged", got)
+	}
+}
+
+func TestOpenAIRejectsDuplicateOriginalToolDefinitions(t *testing.T) {
+	provider := NewOpenAICompatible("http://example.test", "", nil)
+	_, err := provider.StreamChat(context.Background(), ChatRequest{
+		Model: "gpt-4o-mini",
+		Tools: []ToolDefinition{{Name: "system.time"}, {Name: "system.time"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "duplicate") || !strings.Contains(err.Error(), "system.time") {
+		t.Fatalf("StreamChat error = %v, want duplicate original definition error", err)
 	}
 }
 
@@ -1058,6 +1214,66 @@ func requireSingleObject(t *testing.T, value any, label string) map[string]any {
 		t.Fatalf("%s[0] = %#v, want object", label, values[0])
 	}
 	return object
+}
+
+func captureOpenAIToolFunctions(t *testing.T, definitions []ToolDefinition, messages []ChatMessage) []map[string]any {
+	t.Helper()
+	functions, _ := captureOpenAIRequest(t, definitions, messages)
+	return functions
+}
+
+func captureOpenAIRequest(t *testing.T, definitions []ToolDefinition, messages []ChatMessage) ([]map[string]any, map[string]any) {
+	t.Helper()
+	requestBody := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requestBody <- body
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(server.Close)
+
+	provider := NewOpenAICompatible(server.URL, "", server.Client())
+	events, err := provider.StreamChat(context.Background(), ChatRequest{
+		Model: "gpt-4o-mini", Tools: definitions, Messages: messages,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collectEvents(events)
+
+	var request map[string]any
+	if err := json.Unmarshal(<-requestBody, &request); err != nil {
+		t.Fatal(err)
+	}
+	rawTools, _ := request["tools"].([]any)
+	functions := make([]map[string]any, 0, len(rawTools))
+	for _, rawTool := range rawTools {
+		tool, _ := rawTool.(map[string]any)
+		function, _ := tool["function"].(map[string]any)
+		functions = append(functions, function)
+	}
+	return functions, request
+}
+
+func aliasesByDescription(functions []map[string]any) map[string]string {
+	aliases := make(map[string]string, len(functions))
+	for _, function := range functions {
+		original, _ := function["description"].(string)
+		alias, _ := function["name"].(string)
+		aliases[original] = alias
+	}
+	return aliases
+}
+
+func toolDefinitionByName(t *testing.T, definitions []ToolDefinition, name string) ToolDefinition {
+	t.Helper()
+	for _, definition := range definitions {
+		if definition.Name == name {
+			return definition
+		}
+	}
+	t.Fatalf("missing tool definition %q", name)
+	return ToolDefinition{}
 }
 
 func streamOpenAIEvents(t *testing.T, body string) []StreamEvent {

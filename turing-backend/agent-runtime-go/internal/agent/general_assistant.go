@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +17,8 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/safejson"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type MessageClient interface {
@@ -82,7 +86,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	}
 	messages, err := a.messages.FetchMessages(ctx, job.GetSessionId())
 	if err != nil {
-		return emitRunFailed(emit, job, "message_fetch_failed", err.Error(), true)
+		return emitRunFailed(emit, job, "message_fetch_failed", err.Error(), retryableMessageFetchError(err))
 	}
 	if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_STARTED, map[string]any{"messageId": job.GetAssistantMessageId(), "role": "assistant"})); err != nil {
 		return err
@@ -126,7 +130,10 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			if errors.Is(modelErr, context.DeadlineExceeded) {
 				return emitRunFailed(emit, job, "model_timeout", modelErr.Error(), !successfulToolSideEffect)
 			}
-			return emitRunFailed(emit, job, "model_stream_failed", err.Error(), !successfulToolSideEffect)
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+			return emitRunFailed(emit, job, "model_stream_failed", err.Error(), retryableProviderStartError(err) && !successfulToolSideEffect)
 		}
 		turnText := ""
 		var calls []llm.ToolCall
@@ -478,6 +485,54 @@ func retryableModelError(code string) bool {
 	default:
 		return false
 	}
+}
+
+func retryableMessageFetchError(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted, codes.Aborted:
+		return true
+	case codes.Unauthenticated, codes.PermissionDenied, codes.InvalidArgument, codes.NotFound, codes.FailedPrecondition:
+		return false
+	default:
+		return true
+	}
+}
+
+func retryableProviderStartError(err error) bool {
+	var classified interface{ Retryable() bool }
+	if errors.As(err, &classified) {
+		return classified.Retryable()
+	}
+
+	var unsupportedType *json.UnsupportedTypeError
+	if errors.As(err, &unsupportedType) {
+		return false
+	}
+	var unsupportedValue *json.UnsupportedValueError
+	if errors.As(err, &unsupportedValue) {
+		return false
+	}
+
+	var urlError *url.Error
+	if errors.As(err, &urlError) {
+		if urlError.Op == "parse" {
+			return false
+		}
+	}
+	var escapeError url.EscapeError
+	if errors.As(err, &escapeError) {
+		return false
+	}
+	var invalidHostError url.InvalidHostError
+	if errors.As(err, &invalidHostError) {
+		return false
+	}
+
+	var networkError net.Error
+	if errors.As(err, &networkError) && (networkError.Timeout() || networkError.Temporary()) {
+		return true
+	}
+	return true
 }
 
 func (a *GeneralAssistant) modelTimeout() time.Duration {
