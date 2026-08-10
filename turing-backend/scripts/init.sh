@@ -11,11 +11,6 @@ generate_client_key() {
   printf 'tk_%s\n' "$(openssl rand -hex 32)"
 }
 
-if [[ ! -f .env ]]; then
-  (umask 077 && cp .env.example .env)
-fi
-chmod 600 .env
-
 ensure_var() {
   local name="$1"
   local value="$2"
@@ -38,11 +33,6 @@ set_var() {
   fi
 }
 
-read_var() {
-  local name="$1"
-  sed -n "s/^${name}=//p" .env | tail -n 1
-}
-
 is_positive_id() {
   local value="$1"
   [[ "$value" =~ ^[1-9][0-9]{0,9}$ ]] &&
@@ -52,76 +42,91 @@ is_positive_id() {
 configure_host_identity() {
   local current_uid="$1"
   local current_gid="$2"
-  local mode
-  local uid
-  local gid
-  mode="$(read_var HOST_IDENTITY_MODE)"
-  if [[ "$mode" == "manual" ]]; then
-    uid="$(read_var HOST_UID)"
-    gid="$(read_var HOST_GID)"
-    if is_positive_id "$uid" && is_positive_id "$gid"; then
-      selected_uid="$uid"
-      selected_gid="$gid"
-      return
-    fi
-    printf 'Invalid manual HOST_UID/HOST_GID; using safe fallback 1000:1000.\n' >&2
-    uid=1000
-    gid=1000
-  else
-    set_var HOST_IDENTITY_MODE auto
-    uid="$current_uid"
-    gid="$current_gid"
-    if ! is_positive_id "$uid" || ! is_positive_id "$gid"; then
-      uid=1000
-      gid=1000
-    fi
-  fi
+  set_var HOST_IDENTITY_MODE auto
+  set_var HOST_UID "$current_uid"
+  set_var HOST_GID "$current_gid"
+}
 
-  set_var HOST_UID "$uid"
-  set_var HOST_GID "$gid"
-  selected_uid="$uid"
-  selected_gid="$gid"
+validate_sandbox_entries() {
+  local directory="$1"
+  local sandbox_path="$2"
+  local entry
+  local relative
+
+  for entry in "$directory"/* "$directory"/.[!.]* "$directory"/..?*; do
+    if [[ ! -e "$entry" && ! -L "$entry" ]]; then
+      continue
+    fi
+    if [[ -L "$entry" ]]; then
+      continue
+    fi
+    relative="${entry#"$sandbox_path"/}"
+    if [[ -d "$entry" ]]; then
+      if [[ ! -O "$entry" || ! -r "$entry" || ! -w "$entry" || ! -x "$entry" ]]; then
+        printf 'Initialization failed: legacy sandbox directory is not readable, writable, and traversable: %s\n' \
+          "$relative" >&2
+        return 1
+      fi
+      if ! validate_sandbox_entries "$entry" "$sandbox_path"; then
+        return 1
+      fi
+    elif [[ -f "$entry" ]] && {
+      [[ ! -O "$entry" ]] || [[ ! -r "$entry" ]] || [[ ! -w "$entry" ]]
+    }; then
+      printf 'Initialization failed: legacy sandbox file is not readable and writable: %s\n' \
+        "$relative" >&2
+      return 1
+    fi
+  done
 }
 
 provision_sandbox() {
-  local current_uid="$1"
-  local current_gid="$2"
-  local uid="$3"
-  local gid="$4"
   local sandbox_path="$PWD/sandbox"
 
-  mkdir -p "$sandbox_path"
-  if [[ "$current_uid" == "0" ]]; then
-    if ! chown "$uid:$gid" "$sandbox_path"; then
-      printf 'Initialization failed: failed to set sandbox ownership to %s:%s.\n' "$uid" "$gid" >&2
-      return 1
-    fi
-    return
-  fi
-  if [[ "$current_uid" != "$uid" || "$current_gid" != "$gid" ]]; then
-    printf 'Initialization failed: cannot safely provision sandbox ownership for %s:%s as %s:%s.\n' \
-      "$uid" "$gid" "$current_uid" "$current_gid" >&2
+  if [[ -L "$sandbox_path" ]]; then
+    printf 'Initialization failed: sandbox must be a real directory, not a symlink.\n' >&2
     return 1
   fi
-  if [[ ! -O "$sandbox_path" || ! -w "$sandbox_path" ]]; then
-    printf 'Initialization failed: sandbox is not owned and writable by the selected host identity.\n' >&2
+  if [[ -e "$sandbox_path" && ! -d "$sandbox_path" ]]; then
+    printf 'Initialization failed: sandbox must be a real directory.\n' >&2
     return 1
   fi
+  if [[ ! -e "$sandbox_path" ]] && ! mkdir -- "$sandbox_path"; then
+    printf 'Initialization failed: could not create sandbox directory.\n' >&2
+    return 1
+  fi
+  if [[ -L "$sandbox_path" || ! -d "$sandbox_path" ]]; then
+    printf 'Initialization failed: sandbox must be a real directory, not a symlink.\n' >&2
+    return 1
+  fi
+  if [[ ! -O "$sandbox_path" || ! -r "$sandbox_path" || ! -w "$sandbox_path" || ! -x "$sandbox_path" ]]; then
+    printf 'Initialization failed: sandbox is not owned, readable, writable, and traversable by the host user.\n' >&2
+    return 1
+  fi
+  validate_sandbox_entries "$sandbox_path" "$sandbox_path"
 }
+
+current_uid="$(id -u 2>/dev/null || true)"
+current_gid="$(id -g 2>/dev/null || true)"
+if ! is_positive_id "$current_uid" || ! is_positive_id "$current_gid"; then
+  printf 'Initialization failed: init.sh must be run by a non-root host user with canonical UID/GID values.\n' >&2
+  exit 1
+fi
+provision_sandbox
+
+if [[ ! -f .env ]]; then
+  (umask 077 && cp .env.example .env)
+fi
+chmod 600 .env
 
 ensure_var TURING_CLIENT_API_KEY "$(generate_client_key)"
 ensure_var TURING_INTERNAL_TOKEN "$(generate_secret)"
 ensure_var MCP_SYSTEM_TOKEN_GENERAL "$(generate_secret)"
 ensure_var MCP_FILES_TOKEN_GENERAL "$(generate_secret)"
 ensure_var TURING_APPROVAL_JWT_SECRET "$(generate_secret)"
-current_uid="$(id -u 2>/dev/null || true)"
-current_gid="$(id -g 2>/dev/null || true)"
-selected_uid=
-selected_gid=
 configure_host_identity "$current_uid" "$current_gid"
 rm -f .env.bak
 mkdir -p data
-provision_sandbox "$current_uid" "$current_gid" "$selected_uid" "$selected_gid"
 
 client_key="$(grep '^TURING_CLIENT_API_KEY=' .env | cut -d= -f2-)"
 printf 'TuringAgent backend initialized.\n'

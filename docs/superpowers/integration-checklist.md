@@ -5,7 +5,7 @@ Use this checklist to validate the integrated v1.0 stack on `pturing-v1-base`.
 ## 1. Foundation (Task 1-2)
 - [ ] `turing-backend/scripts/init.sh` exists and generates a valid `.env` with random secrets.
 - [ ] `turing-backend/scripts/dev.sh` exists and starts the local v1 backend stack.
-- [ ] `turing-backend/infra/docker-compose.yml` is valid (`docker compose -f infra/docker-compose.yml config --quiet`) and starts the orchestrator, runtime, and MCP services by default.
+- [ ] `turing-backend/infra/docker-compose.yml` is valid (`cd turing-backend && ./scripts/compose.sh config --quiet`) and starts the orchestrator, runtime, and MCP services by default.
 - [ ] `turing-backend/shared-types` exists and `npm run build` generates `dist/` with valid type declarations.
 - [ ] `turing-client/turing_app` contains the preserved Flutter shell and backend-connected client surfaces.
 
@@ -56,8 +56,8 @@ Use this checklist to validate the integrated v1.0 stack on `pturing-v1-base`.
 
 ## Verification Best Practices
 
-- **Log Monitoring**: During full backend smoke tests, keep a terminal open with `cd turing-backend && docker compose -f infra/docker-compose.yml logs -f`.
+- **Log Monitoring**: During full backend smoke tests, keep a terminal open with `cd turing-backend && ./scripts/compose.sh logs -f`.
 - **Database Inspection**: Use `sqlite3 turing-backend/data/turing.db` to verify that tables are being populated as expected.
 - **Network Isolation**: Verify that `turing-agent-runtime-general` cannot reach MCP servers it is not authorized for by checking Docker network configurations.
 - **Ollama Mocking**: If Ollama is unavailable, verify that the runtime fails gracefully with a `model_unavailable` error code rather than an unhandled exception.
-- **Clean Starts**: Use `docker compose -f turing-backend/infra/docker-compose.yml down -v` carefully when you need to reset local containers and volumes.
+- **Clean Starts**: Use `cd turing-backend && ./scripts/compose.sh down -v` carefully when you need to reset local containers and volumes.

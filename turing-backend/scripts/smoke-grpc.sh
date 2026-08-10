@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 ./scripts/init.sh
 
 compose() {
-  docker compose --env-file .env -f infra/docker-compose.yml "$@"
+  ./scripts/compose.sh "$@"
 }
 
 compose up --build -d

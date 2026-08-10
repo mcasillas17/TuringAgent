@@ -21,6 +21,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+const (
+	approvalTokenIssuer = "turing.orchestrator"
+	approvalTokenType   = "JWT"
+)
+
 type Claims struct {
 	Iss      string `json:"iss"`
 	Sub      string `json:"sub"`
@@ -33,6 +38,10 @@ type Claims struct {
 }
 
 func VerifyHS256(token string, secret string) (Claims, error) {
+	return verifyHS256At(token, secret, time.Now())
+}
+
+func verifyHS256At(token string, secret string, now time.Time) (Claims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return Claims{}, errors.New("invalid token")
@@ -51,6 +60,9 @@ func VerifyHS256(token string, secret string) (Claims, error) {
 	if header.Alg != "HS256" {
 		return Claims{}, errors.New("invalid token algorithm")
 	}
+	if header.Typ != approvalTokenType {
+		return Claims{}, errors.New("invalid token type")
+	}
 	signingInput := parts[0] + "." + parts[1]
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(signingInput))
@@ -66,7 +78,10 @@ func VerifyHS256(token string, secret string) (Claims, error) {
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return Claims{}, err
 	}
-	if claims.Exp < time.Now().Unix() {
+	if claims.Iss != approvalTokenIssuer {
+		return Claims{}, errors.New("invalid token issuer")
+	}
+	if claims.Exp <= now.Unix() {
 		return Claims{}, errors.New("token expired")
 	}
 	return claims, nil

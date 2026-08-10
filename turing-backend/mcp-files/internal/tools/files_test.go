@@ -20,6 +20,21 @@ import (
 
 const mutationContentByteLimit = 512 * 1024
 
+func TestReadRejectsUnixAbsolutePaths(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "note.txt"), []byte("sandbox content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{"/note.txt", "//note.txt"} {
+		t.Run(path, func(t *testing.T) {
+			if _, err := NewFilesTools(root).Read(map[string]any{"path": path}); err == nil {
+				t.Fatalf("Read accepted absolute path %q", path)
+			}
+		})
+	}
+}
+
 func TestReadRejectsTraversal(t *testing.T) {
 	root := t.TempDir()
 	_, err := NewFilesTools(root).Read(map[string]any{"path": "../outside.txt"})

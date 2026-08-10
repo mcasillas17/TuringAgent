@@ -96,6 +96,90 @@ func TestMCPFilesImageRunsAsFixedNonRootUser(t *testing.T) {
 	}
 }
 
+func TestMCPComposeServicesUseRuntimeHardening(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "infra", "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := string(data)
+
+	for _, serviceName := range []string{"turing-mcp-system", "turing-mcp-files"} {
+		block := composeServiceBlock(t, compose, serviceName)
+		requireContainsAll(t, serviceName, block,
+			"read_only: true",
+			"cap_drop:",
+			"- ALL",
+			"security_opt:",
+			"- no-new-privileges:true",
+		)
+	}
+
+	files := composeServiceBlock(t, compose, "turing-mcp-files")
+	requireContainsAll(t, "turing-mcp-files", files, "- ../sandbox:/sandbox")
+	if strings.Contains(files, "../sandbox:/sandbox:ro") {
+		t.Fatal("turing-mcp-files sandbox mount is read-only")
+	}
+}
+
+func TestMCPFilesComposeRequiresValidatedHostIdentity(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "infra", "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := composeServiceBlock(t, string(data), "turing-mcp-files")
+	requireContainsAll(t, "turing-mcp-files", files,
+		"${HOST_UID:?",
+		"${HOST_GID:?",
+	)
+	if strings.Contains(files, "HOST_UID:-") || strings.Contains(files, "HOST_GID:-") {
+		t.Fatal("turing-mcp-files permits a fallback identity instead of requiring validated host IDs")
+	}
+}
+
+func TestRepositoryDockerignoreExcludesSensitiveAndGeneratedContent(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".dockerignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := make(map[string]bool)
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			lines[line] = true
+		}
+	}
+	for _, pattern := range []string{
+		".git",
+		".worktrees",
+		".copilot",
+		".env",
+		".env.*",
+		"**/.env",
+		"**/.env.*",
+		"**/.runtime",
+		"**/data",
+		"**/sandbox",
+		"**/node_modules",
+		"**/.dart_tool",
+		"**/build",
+		"**/dist",
+		"**/coverage",
+		"**/*.log",
+		"**/*.pem",
+		"**/*.key",
+		"**/*.cert",
+	} {
+		if !lines[pattern] {
+			t.Errorf(".dockerignore missing %q", pattern)
+		}
+	}
+	for _, requiredInput := range []string{"go.mod", "go.sum", "gen", "turing-backend"} {
+		if lines[requiredInput] {
+			t.Errorf(".dockerignore excludes required Dockerfile input %q", requiredInput)
+		}
+	}
+}
+
 func composeServiceBlock(t *testing.T, compose string, serviceName string) string {
 	t.Helper()
 	startMarker := "  " + serviceName + ":\n"

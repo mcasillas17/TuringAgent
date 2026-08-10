@@ -76,7 +76,9 @@ Approval-gated file writes use a two-step flow:
 1. The orchestrator creates an approval record for the requested tool call.
 2. After user approval, the orchestrator signs a short-lived HS256 JWT.
 3. The agent runtime sends that JWT to `mcp-files` as `params._meta.approvalToken`.
-4. `mcp-files` verifies audience, subject, tool name, argument hash, signature, and expiration.
+4. `mcp-files` requires its approval secret at startup and verifies the JWT
+   type, orchestrator issuer, audience, subject, tool name, argument hash,
+   signature, and expiration (including rejecting `exp == now`).
 5. `mcp-files` calls `ApprovalService.ConsumeApproval` over internal gRPC using `authorization: Bearer ${TURING_INTERNAL_TOKEN}`.
 6. The file write proceeds only if the consume response is `APPROVAL_STATUS_CONSUMED`.
 
@@ -90,7 +92,12 @@ See [MCP security and approval flow](../mcp-security-and-integration.md) for the
 - `turing-backend/data/`
 - `turing-backend/sandbox/`
 
-Do not commit generated secrets, local databases, or sandbox files.
+Initialization must run as the non-root host owner. It rejects a symlinked
+sandbox and inaccessible legacy entries rather than recursively changing
+ownership or permissions. Compose must be launched through
+`turing-backend/scripts/compose.sh` (direct invocation is unsupported because
+exported variables override `.env`). Do not commit generated secrets, local
+databases, or sandbox files.
 
 ## Verification matrix
 

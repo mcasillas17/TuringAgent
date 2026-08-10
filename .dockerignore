@@ -1,0 +1,43 @@
+# Version control and agent/worktree state
+.git
+.github
+.worktrees
+.copilot
+**/.copilot
+
+# Local configuration, credentials, and runtime state
+.env
+.env.*
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.cert
+**/.runtime
+**/data
+**/sandbox
+
+# Dependency caches, generated build output, and test artifacts
+**/node_modules
+**/.dart_tool
+**/.pub-cache
+**/.gradle
+**/Pods
+**/DerivedData
+**/build
+**/dist
+**/coverage
+**/*.log
+**/*.test
+**/*.prof
+turing-backend/mcp-files/server
+turing-backend/mcp-system/server
+
+# Sources unused by the backend container builds
+docs
+turing-client
+
+# Host metadata and editor state
+**/.DS_Store
+**/.idea
+**/.vscode

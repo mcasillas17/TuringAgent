@@ -17,6 +17,26 @@ import (
 
 const expectedFilesRequestLimit = 6*524288 + 64*1024
 
+func TestLoadConfigRequiresApprovalJWTSecret(t *testing.T) {
+	t.Setenv("TURING_APPROVAL_JWT_SECRET", "")
+
+	if _, err := loadConfig(); err == nil || !strings.Contains(err.Error(), "TURING_APPROVAL_JWT_SECRET is required") {
+		t.Fatalf("loadConfig error = %v", err)
+	}
+}
+
+func TestLoadConfigAcceptsConfiguredApprovalJWTSecret(t *testing.T) {
+	t.Setenv("TURING_APPROVAL_JWT_SECRET", "approval-secret")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig failed: %v", err)
+	}
+	if cfg.approvalJwtSecret != "approval-secret" {
+		t.Fatalf("approvalJwtSecret = %q", cfg.approvalJwtSecret)
+	}
+}
+
 func TestHTTPServerConfiguresConnectionTimeouts(t *testing.T) {
 	server := newHTTPServer(":7110", http.NotFoundHandler())
 

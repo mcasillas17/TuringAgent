@@ -43,7 +43,7 @@ func TestCIWorkflowCoversCoreChecks(t *testing.T) {
 	requireContains(t, workflow, `echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"`)
 	requireContains(t, workflow, "go test -tags sqlite_fts5 ./.github/workflows")
 	requireContains(t, workflow, "flutter test")
-	requireContains(t, workflow, "bash -n turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/smoke-grpc.sh")
+	requireContains(t, workflow, "bash -n turing-backend/scripts/compose.sh turing-backend/scripts/dev.sh turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/rotate-client-key.sh turing-backend/scripts/smoke-grpc.sh turing-backend/scripts/smoke.sh")
 }
 
 // stepIndent is the column commands sit at inside ci.yml's `run: |` blocks
@@ -85,7 +85,7 @@ func TestMCPSystemImageDropsPrivileges(t *testing.T) {
 	)
 }
 
-func TestComposeRunsMCPFilesAsConfiguredHostIdentity(t *testing.T) {
+func TestComposeRunsMCPFilesAsValidatedHostIdentity(t *testing.T) {
 	data, err := os.ReadFile("../../turing-backend/infra/docker-compose.yml")
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +93,7 @@ func TestComposeRunsMCPFilesAsConfiguredHostIdentity(t *testing.T) {
 
 	compose := string(data)
 	filesService := requireIndentedBlock(t, compose, "  turing-mcp-files:", 2)
-	requireContains(t, filesService, `user: "${HOST_UID:-1000}:${HOST_GID:-1000}"`)
+	requireContains(t, filesService, `user: "${HOST_UID:?Use scripts/compose.sh to launch}:${HOST_GID:?Use scripts/compose.sh to launch}"`)
 	for _, service := range []string{"turing-orchestrator", "turing-agent-runtime-general", "turing-mcp-system"} {
 		block := requireIndentedBlock(t, compose, "  "+service+":", 2)
 		if strings.Contains(block, "HOST_UID") || strings.Contains(block, "HOST_GID") {

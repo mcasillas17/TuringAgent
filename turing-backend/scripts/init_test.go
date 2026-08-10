@@ -19,39 +19,29 @@ HOST_GID=2000
 	assertEnvValue(t, result.env, "HOST_GID", "20")
 }
 
-func TestInitFallsBackForRootOrInvalidHostIdentity(t *testing.T) {
-	result := runInit(t, "0", "not-a-number", `
-HOST_UID=2000
-HOST_GID=2000
-`)
-
-	assertEnvValue(t, result.env, "HOST_UID", "1000")
-	assertEnvValue(t, result.env, "HOST_GID", "1000")
-	assertChownCalls(t, result, "1000:1000 "+result.sandbox)
-}
-
-func TestInitPreservesValidExplicitHostIdentity(t *testing.T) {
-	result := runInit(t, "0", "0", `
+func TestInitUsesCurrentNonRootIdentityInsteadOfConfiguredOverrides(t *testing.T) {
+	result := runInit(t, "501", "20", `
 HOST_IDENTITY_MODE=manual
 HOST_UID=1234
 HOST_GID=2345
 `)
 
-	assertEnvValue(t, result.env, "HOST_UID", "1234")
-	assertEnvValue(t, result.env, "HOST_GID", "2345")
-	assertChownCalls(t, result, "1234:2345 "+result.sandbox)
+	assertEnvValue(t, result.env, "HOST_UID", "501")
+	assertEnvValue(t, result.env, "HOST_GID", "20")
+	assertChownCalls(t, result)
 }
 
-func TestInitRejectsNoncanonicalOrOutOfRangeManualIDs(t *testing.T) {
+func TestInitRejectsRootOrInvalidCurrentIdentityBeforeMutation(t *testing.T) {
 	tests := []struct {
 		name string
 		uid  string
 		gid  string
 	}{
-		{name: "zero padded zero", uid: "00", gid: "20"},
+		{name: "root", uid: "0", gid: "0"},
+		{name: "zero padded root", uid: "00", gid: "20"},
 		{name: "zero padded positive", uid: "01", gid: "20"},
-		{name: "zero", uid: "0", gid: "20"},
 		{name: "negative", uid: "-1", gid: "20"},
+		{name: "nonnumeric", uid: "not-a-number", gid: "20"},
 		{name: "above portable maximum", uid: "2147483648", gid: "20"},
 		{name: "far above portable maximum", uid: "99999999999999999999", gid: "20"},
 		{name: "invalid group", uid: "20", gid: "01"},
@@ -59,67 +49,122 @@ func TestInitRejectsNoncanonicalOrOutOfRangeManualIDs(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result := runInit(t, "0", "0", `
-HOST_IDENTITY_MODE=manual
-HOST_UID=`+test.uid+`
-HOST_GID=`+test.gid+`
-`)
-
-			assertEnvValue(t, result.env, "HOST_UID", "1000")
-			assertEnvValue(t, result.env, "HOST_GID", "1000")
-			assertChownCalls(t, result, "1000:1000 "+result.sandbox)
+			result := executeInit(t, test.uid, test.gid, "", 0)
+			if result.err == nil {
+				t.Fatalf("init.sh succeeded for current identity %s:%s; output:\n%s", test.uid, test.gid, result.output)
+			}
+			if !strings.Contains(result.output, "must be run by a non-root host user with canonical UID/GID values") {
+				t.Fatalf("failure did not explain the host identity requirement:\n%s", result.output)
+			}
+			if _, err := os.Lstat(result.sandbox); !os.IsNotExist(err) {
+				t.Fatalf("sandbox was mutated before identity rejection: %v", err)
+			}
+			assertChownCalls(t, result)
 		})
 	}
 }
 
-func TestInitAcceptsPortableMaximumID(t *testing.T) {
-	result := runInit(t, "0", "0", `
-HOST_IDENTITY_MODE=manual
-HOST_UID=2147483647
-HOST_GID=2147483647
-`)
-
-	assertEnvValue(t, result.env, "HOST_UID", "2147483647")
-	assertEnvValue(t, result.env, "HOST_GID", "2147483647")
-	assertChownCalls(t, result, "2147483647:2147483647 "+result.sandbox)
-}
-
-func TestInitDoesNotChownForValidNonRootHostIdentity(t *testing.T) {
+func TestInitCreatesRealOwnedWritableTraversableSandboxWithoutChown(t *testing.T) {
 	result := runInit(t, "501", "20", "")
 
 	assertEnvValue(t, result.env, "HOST_UID", "501")
 	assertEnvValue(t, result.env, "HOST_GID", "20")
 	assertChownCalls(t, result)
+	info, err := os.Lstat(result.sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("sandbox mode = %v, want a real directory", info.Mode())
+	}
 }
 
-func TestInitFailsWhenNonRootFallbackCannotBeProvisioned(t *testing.T) {
-	result := executeInit(t, "501", "not-a-number", "", 0)
+func TestInitRejectsPreExistingSandboxSymlink(t *testing.T) {
+	var target string
+	result := executeInitWithSetup(t, "501", "20", "", 0, func(t *testing.T, root string) {
+		target = filepath.Join(root, "outside")
+		if err := os.Mkdir(target, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(root, "sandbox")); err != nil {
+			t.Fatal(err)
+		}
+	})
 
 	if result.err == nil {
 		t.Fatalf("init.sh succeeded; output:\n%s", result.output)
 	}
-	if !strings.Contains(result.output, "cannot safely provision sandbox ownership") {
-		t.Fatalf("failure did not explain unsafe ownership provisioning:\n%s", result.output)
+	if !strings.Contains(result.output, "sandbox must be a real directory, not a symlink") {
+		t.Fatalf("failure did not explain the sandbox symlink rejection:\n%s", result.output)
 	}
 	if strings.Contains(result.output, "backend initialized") {
-		t.Fatalf("init.sh claimed readiness after ownership failure:\n%s", result.output)
+		t.Fatalf("init.sh claimed readiness for a symlinked sandbox:\n%s", result.output)
 	}
 	assertChownCalls(t, result)
+	if info, err := os.Lstat(result.sandbox); err != nil {
+		t.Fatalf("sandbox symlink was removed: %v", err)
+	} else if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("sandbox symlink was replaced: mode=%v", info.Mode())
+	}
+	if info, err := os.Stat(target); err != nil {
+		t.Fatalf("symlink target was removed: %v", err)
+	} else if !info.IsDir() {
+		t.Fatalf("symlink target was mutated: mode=%v", info.Mode())
+	}
 }
 
-func TestInitFailsClearlyWhenRootCannotChownSandbox(t *testing.T) {
-	result := executeInit(t, "0", "0", "", 1)
+func TestInitRejectsInaccessibleLegacySandboxEntries(t *testing.T) {
+	tests := []struct {
+		name       string
+		create     func(t *testing.T, sandbox string)
+		wantOutput string
+	}{
+		{
+			name: "directory",
+			create: func(t *testing.T, sandbox string) {
+				path := filepath.Join(sandbox, "locked")
+				if err := os.Mkdir(path, 0500); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(path, 0700) })
+			},
+			wantOutput: "legacy sandbox directory is not readable, writable, and traversable: locked",
+		},
+		{
+			name: "file",
+			create: func(t *testing.T, sandbox string) {
+				path := filepath.Join(sandbox, "locked.txt")
+				if err := os.WriteFile(path, []byte("legacy"), 0000); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(path, 0600) })
+			},
+			wantOutput: "legacy sandbox file is not readable and writable: locked.txt",
+		},
+	}
 
-	if result.err == nil {
-		t.Fatalf("init.sh succeeded; output:\n%s", result.output)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := executeInitWithSetup(t, "501", "20", "", 0, func(t *testing.T, root string) {
+				sandbox := filepath.Join(root, "sandbox")
+				if err := os.Mkdir(sandbox, 0700); err != nil {
+					t.Fatal(err)
+				}
+				test.create(t, sandbox)
+			})
+
+			if result.err == nil {
+				t.Fatalf("init.sh succeeded; output:\n%s", result.output)
+			}
+			if !strings.Contains(result.output, test.wantOutput) {
+				t.Fatalf("failure did not identify the inaccessible entry:\n%s", result.output)
+			}
+			if strings.Contains(result.output, "backend initialized") {
+				t.Fatalf("init.sh claimed readiness with inaccessible legacy content:\n%s", result.output)
+			}
+			assertChownCalls(t, result)
+		})
 	}
-	if !strings.Contains(result.output, "failed to set sandbox ownership to 1000:1000") {
-		t.Fatalf("failure did not explain chown failure:\n%s", result.output)
-	}
-	if strings.Contains(result.output, "backend initialized") {
-		t.Fatalf("init.sh claimed readiness after chown failure:\n%s", result.output)
-	}
-	assertChownCalls(t, result, "1000:1000 "+result.sandbox)
 }
 
 type initResult struct {
@@ -140,6 +185,11 @@ func runInit(t *testing.T, uid, gid, identityConfig string) initResult {
 }
 
 func executeInit(t *testing.T, uid, gid, identityConfig string, chownExit int) initResult {
+	t.Helper()
+	return executeInitWithSetup(t, uid, gid, identityConfig, chownExit, nil)
+}
+
+func executeInitWithSetup(t *testing.T, uid, gid, identityConfig string, chownExit int, setup func(*testing.T, string)) initResult {
 	t.Helper()
 	root := t.TempDir()
 	scriptsDir := filepath.Join(root, "scripts")
@@ -162,6 +212,9 @@ func executeInit(t *testing.T, uid, gid, identityConfig string, chownExit int) i
 		strings.TrimSpace(identityConfig) + "\n"
 	if err := os.WriteFile(filepath.Join(root, ".env"), []byte(env), 0600); err != nil {
 		t.Fatal(err)
+	}
+	if setup != nil {
+		setup(t, root)
 	}
 
 	binDir := filepath.Join(root, "bin")

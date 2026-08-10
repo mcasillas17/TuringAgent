@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,7 +35,7 @@ func TestValidateChecksClaimsAndConsumesApprovalOverGRPC(t *testing.T) {
 		},
 	}
 	args := map[string]any{"content": "hello", "path": "note.txt"}
-	token := signTestToken(t, "secret", Claims{Sub: "general_assistant", Aud: "mcp-files", JTI: "appr_1", Tool: "files.create", ArgsHash: hashArgs(t, args), Exp: time.Now().Add(time.Minute).Unix(), Iat: time.Now().Unix()})
+	token := signTestToken(t, "secret", Claims{Iss: "turing.orchestrator", Sub: "general_assistant", Aud: "mcp-files", JTI: "appr_1", Tool: "files.create", ArgsHash: hashArgs(t, args), Exp: time.Now().Add(time.Minute).Unix(), Iat: time.Now().Unix()})
 
 	if err := consumer.Validate(token, "files.create", args, "general_assistant"); err != nil {
 		t.Fatalf("expected valid approval: %v", err)
@@ -49,7 +50,7 @@ func TestValidateChecksClaimsAndConsumesApprovalOverGRPC(t *testing.T) {
 
 func TestValidateRejectsMismatchedApprovalBinding(t *testing.T) {
 	args := map[string]any{"content": "hello", "path": "note.txt"}
-	base := Claims{Sub: "general_assistant", Aud: "mcp-files", JTI: "appr_1", Tool: "files.create", ArgsHash: hashArgs(t, args), Exp: time.Now().Add(time.Minute).Unix(), Iat: time.Now().Unix()}
+	base := Claims{Iss: "turing.orchestrator", Sub: "general_assistant", Aud: "mcp-files", JTI: "appr_1", Tool: "files.create", ArgsHash: hashArgs(t, args), Exp: time.Now().Add(time.Minute).Unix(), Iat: time.Now().Unix()}
 	cases := []struct {
 		name   string
 		claims Claims
@@ -72,6 +73,44 @@ func TestValidateRejectsMismatchedApprovalBinding(t *testing.T) {
 	}
 }
 
+func TestVerifyHS256RejectsMissingOrUnexpectedIssuer(t *testing.T) {
+	base := Claims{Iss: "turing.orchestrator", Exp: time.Now().Add(time.Minute).Unix()}
+	for _, issuer := range []string{"", "other.issuer"} {
+		t.Run(issuer, func(t *testing.T) {
+			claims := base
+			claims.Iss = issuer
+			if _, err := VerifyHS256(signTestToken(t, "secret", claims), "secret"); err == nil {
+				t.Fatalf("VerifyHS256 accepted issuer %q", issuer)
+			}
+		})
+	}
+}
+
+func TestVerifyHS256RejectsMissingOrUnexpectedTokenType(t *testing.T) {
+	claims := Claims{Iss: "turing.orchestrator", Exp: time.Now().Add(time.Minute).Unix()}
+	for _, tokenType := range []string{"", "approval+jwt"} {
+		t.Run(tokenType, func(t *testing.T) {
+			token := signTestTokenWithType(t, "secret", claims, tokenType)
+			if _, err := VerifyHS256(token, "secret"); err == nil {
+				t.Fatalf("VerifyHS256 accepted token type %q", tokenType)
+			}
+		})
+	}
+}
+
+func TestVerifyHS256ExpirationBoundary(t *testing.T) {
+	now := time.Unix(2_000_000_000, 0)
+	claims := Claims{Iss: "turing.orchestrator", Exp: now.Unix()}
+	if _, err := verifyHS256At(signTestToken(t, "secret", claims), "secret", now); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("verifyHS256At accepted exp == now: %v", err)
+	}
+
+	claims.Exp = now.Add(time.Second).Unix()
+	if _, err := verifyHS256At(signTestToken(t, "secret", claims), "secret", now); err != nil {
+		t.Fatalf("verifyHS256At rejected exp one second after now: %v", err)
+	}
+}
+
 func TestValidateRejectsConsumeReplayConflict(t *testing.T) {
 	args := map[string]any{"content": "hello", "path": "note.txt"}
 	_, dialer := startApprovalServer(t, &recordingApprovalService{err: status.Error(codes.FailedPrecondition, "approval is not approved")})
@@ -84,7 +123,7 @@ func TestValidateRejectsConsumeReplayConflict(t *testing.T) {
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 		},
 	}
-	token := signTestToken(t, "secret", Claims{Sub: "general_assistant", Aud: "mcp-files", JTI: "appr_1", Tool: "files.create", ArgsHash: hashArgs(t, args), Exp: time.Now().Add(time.Minute).Unix(), Iat: time.Now().Unix()})
+	token := signTestToken(t, "secret", Claims{Iss: "turing.orchestrator", Sub: "general_assistant", Aud: "mcp-files", JTI: "appr_1", Tool: "files.create", ArgsHash: hashArgs(t, args), Exp: time.Now().Add(time.Minute).Unix(), Iat: time.Now().Unix()})
 	if err := consumer.Validate(token, "files.create", args, "general_assistant"); err == nil {
 		t.Fatalf("expected replay/consume conflict")
 	}
@@ -101,6 +140,7 @@ func TestValidateContextDerivesConsumeCancellationFromCaller(t *testing.T) {
 		ApprovalClient: client,
 	}
 	token := signTestToken(t, "secret", Claims{
+		Iss:      "turing.orchestrator",
 		Sub:      "general_assistant",
 		Aud:      "mcp-files",
 		JTI:      "appr_1",
@@ -144,6 +184,7 @@ func TestValidateContextDoesNotStartConsumeWhenAlreadyCanceled(t *testing.T) {
 		ApprovalClient: client,
 	}
 	token := signTestToken(t, "secret", Claims{
+		Iss:      "turing.orchestrator",
 		Sub:      "general_assistant",
 		Aud:      "mcp-files",
 		JTI:      "appr_1",
@@ -229,7 +270,16 @@ func startApprovalServer(t *testing.T, approvalServer turingv1.ApprovalServiceSe
 
 func signTestToken(t *testing.T, secret string, claims Claims) string {
 	t.Helper()
-	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	return signTestTokenWithType(t, secret, claims, "JWT")
+}
+
+func signTestTokenWithType(t *testing.T, secret string, claims Claims, tokenType string) string {
+	t.Helper()
+	headerBytes, err := json.Marshal(map[string]string{"alg": "HS256", "typ": tokenType})
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := base64.RawURLEncoding.EncodeToString(headerBytes)
 	payloadBytes, err := json.Marshal(claims)
 	if err != nil {
 		t.Fatal(err)

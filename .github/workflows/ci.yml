@@ -172,7 +172,7 @@ jobs:
         run: tools/proto/check.sh
 
       - name: Check shell scripts
-        run: bash -n turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/smoke-grpc.sh
+        run: bash -n turing-backend/scripts/compose.sh turing-backend/scripts/dev.sh turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/rotate-client-key.sh turing-backend/scripts/smoke-grpc.sh turing-backend/scripts/smoke.sh
 
       - name: Check workflow coverage
         run: go test -tags sqlite_fts5 ./.github/workflows

@@ -79,8 +79,10 @@ func (t *pathLockTable) lockContext(ctx context.Context, path string) (func(), e
 }
 
 func normalizeSandboxPath(input string) (string, []string, error) {
-	trimmed := strings.TrimLeft(input, string(filepath.Separator))
-	clean := filepath.Clean(trimmed)
+	if filepath.IsAbs(input) || filepath.VolumeName(input) != "" {
+		return "", nil, invalidParams("path escapes sandbox")
+	}
+	clean := filepath.Clean(input)
 	if clean == "" {
 		clean = "."
 	}

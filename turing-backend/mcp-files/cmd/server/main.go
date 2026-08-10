@@ -26,7 +26,10 @@ type serverConfig struct {
 }
 
 func main() {
-	cfg := loadConfig()
+	cfg, err := loadConfig()
+	if err != nil {
+		log.Fatal(err)
+	}
 	if err := os.MkdirAll(cfg.sandboxRoot, 0700); err != nil {
 		log.Fatal(err)
 	}
@@ -49,14 +52,18 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 	}
 }
 
-func loadConfig() serverConfig {
+func loadConfig() (serverConfig, error) {
+	approvalJWTSecret := os.Getenv("TURING_APPROVAL_JWT_SECRET")
+	if approvalJWTSecret == "" {
+		return serverConfig{}, errors.New("TURING_APPROVAL_JWT_SECRET is required")
+	}
 	return serverConfig{
 		filesToken:           os.Getenv("MCP_FILES_TOKEN_GENERAL"),
-		approvalJwtSecret:    os.Getenv("TURING_APPROVAL_JWT_SECRET"),
+		approvalJwtSecret:    approvalJWTSecret,
 		orchestratorGRPCAddr: envOrDefault("ORCHESTRATOR_GRPC_ADDR", "turing-orchestrator:3001"),
 		internalToken:        os.Getenv("TURING_INTERNAL_TOKEN"),
 		sandboxRoot:          envOrDefault("FILES_SANDBOX_ROOT", "/sandbox"),
-	}
+	}, nil
 }
 
 func newHandler(cfg serverConfig) http.Handler {

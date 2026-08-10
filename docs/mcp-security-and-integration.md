@@ -14,6 +14,9 @@ runtime and orchestrator.
 Compose exposes these ports only to internal Docker networks; it does not
 publish them to the host. An empty configured bearer token denies every
 request rather than opening the service. Both images run as non-root users.
+Compose also makes both MCP root filesystems read-only, drops all Linux
+capabilities, and sets `no-new-privileges`. The `mcp-files` `/sandbox` bind
+mount remains writable. Neither service needs a writable temporary filesystem.
 The servers bound request bodies and configure header, read, write, and idle
 HTTP timeouts. Responses are ordinary bounded JSON responses, not open-ended
 streams, so a finite write timeout is appropriate.
@@ -59,9 +62,9 @@ discovery fail closed.
 
 ## File request and result shapes
 
-Paths are sandbox-relative. A leading platform path separator is accepted and
-removed; absolute volume-qualified paths and any cleaned `..` component are
-rejected. Unknown arguments and wrong types are rejected rather than ignored.
+Paths are sandbox-relative. Unix absolute paths, volume-qualified paths, and
+any cleaned `..` component are rejected rather than rewritten. Unknown
+arguments and wrong types are rejected rather than ignored.
 
 ### `files.list`
 
@@ -149,9 +152,11 @@ The runtime and file server both enforce ordering:
 4. `mcp-files` validates arguments and performs only non-mutating precondition
    checks (for example, existence/type/permission and optional current-hash
    checks) before approval consumption.
-5. The server verifies HS256 signature and expiry, then binds `aud` to
-   `mcp-files`, `sub` to the bearer-derived agent, `tool` to the requested
-   tool, and `args_hash` to canonical JSON of the exact arguments.
+5. The server requires `TURING_APPROVAL_JWT_SECRET` at startup. It verifies the
+   HS256 signature, `typ == "JWT"`, `iss == "turing.orchestrator"`, and expiry
+   (`exp <= now` is expired), then binds `aud` to `mcp-files`, `sub` to the
+   bearer-derived agent, `tool` to the requested tool, and `args_hash` to
+   canonical JSON of the exact arguments.
 6. It synchronously consumes the JWT `jti` through the orchestrator's
    `ApprovalService.ConsumeApproval`. Only `APPROVAL_STATUS_CONSUMED`
    succeeds; replay/not-approved maps to `FailedPrecondition`.
@@ -187,23 +192,24 @@ content-oriented tool.
 
 ## Bind-mount identities and host security systems
 
-The standalone `mcp-files` image uses UID/GID 1000. Compose overrides only
-that service with `${HOST_UID:-1000}:${HOST_GID:-1000}` so its bind-mounted
-`sandbox/` remains writable without making it world-writable.
+The standalone `mcp-files` image uses UID/GID 1000. Repository Compose launches
+override only that service with the current host account's UID/GID so its
+bind-mounted `sandbox/` remains writable without making it world-writable.
 
-`scripts/init.sh` defaults `HOST_IDENTITY_MODE` to `auto` and refreshes both
-IDs on every run. It accepts only positive decimal UID/GID values; root,
-missing, or nonnumeric host IDs fall back to `1000:1000`. To deliberately use
-another positive identity, set:
+`scripts/init.sh` accepts only canonical positive UID/GID values for the
+current process and rejects root, invalid, or out-of-range identities before it
+mutates the sandbox or `.env`. It always rewrites `HOST_UID` and `HOST_GID` to
+the current host values; manual or stale values are not supported. It rejects a
+pre-existing sandbox symlink, creates a real directory when absent, and checks
+that the root and existing nested directories/files are owned and accessible
+to the host user. Symlink entries are not followed. The script reports legacy
+inaccessible content and exits; it never recursively runs `chmod` or `chown`.
 
-```dotenv
-HOST_IDENTITY_MODE=manual
-HOST_UID=1234
-HOST_GID=2345
-```
-
-Invalid manual values are replaced with the safe fallback rather than silently
-retained.
+All repository launch scripts delegate to `scripts/compose.sh`. That wrapper
+revalidates the current non-root identity and supplies it directly to Compose,
+overriding both exported and `.env` `HOST_UID`/`HOST_GID` values. Direct
+`docker compose` invocation is unsupported because shell variables take
+precedence over `.env` and can bypass that preflight.
 
 Rootless Docker and daemon `userns-remap` translate container IDs through
 daemon-specific subordinate-ID mappings. A host UID copied into Compose is
@@ -594,6 +600,11 @@ Consume method requirements:
   `internal/auth/auth.go` to that effect.
 - **`files.delete` and `files.move`.** They remain permanently disabled and
   are not advertised. Re-enabling them is a code change plus a policy decision.
+
+The repository-root `.dockerignore` excludes Git/agent state, `.env` and key
+material, runtime data, sandbox contents, dependency caches, and generated
+build/test output from root-context backend image builds. Required Go modules
+and generated protobuf sources remain in the context.
 
 ## Local verification
 
