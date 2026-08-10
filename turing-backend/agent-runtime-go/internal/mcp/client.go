@@ -13,7 +13,10 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/safejson"
 )
 
-const defaultMaxResponseBytes int64 = 1024 * 1024
+const (
+	defaultMaxResponseBytes int64 = 1024 * 1024
+	maxListToolsPages             = 100
+)
 
 type Client struct {
 	endpoint         string
@@ -32,18 +35,39 @@ func NewClient(endpoint string, token string, httpClient *http.Client) *Client {
 }
 
 func (c *Client) ListTools(ctx context.Context) ([]map[string]any, error) {
-	result, err := c.request(ctx, "tools/list", map[string]any{})
-	if err != nil {
-		return nil, err
-	}
-	values, _ := result["tools"].([]any)
-	tools := make([]map[string]any, 0, len(values))
-	for _, value := range values {
-		if tool, ok := value.(map[string]any); ok {
-			tools = append(tools, tool)
+	tools := make([]map[string]any, 0)
+	params := map[string]any{}
+	seenCursors := make(map[string]struct{})
+	for page := 0; page < maxListToolsPages; page++ {
+		result, err := c.request(ctx, "tools/list", params)
+		if err != nil {
+			return nil, err
 		}
+		values, _ := result["tools"].([]any)
+		for _, value := range values {
+			if tool, ok := value.(map[string]any); ok {
+				tools = append(tools, tool)
+			}
+		}
+
+		rawCursor, present := result["nextCursor"]
+		if !present || rawCursor == nil {
+			return tools, nil
+		}
+		cursor, ok := rawCursor.(string)
+		if !ok {
+			return nil, fmt.Errorf("MCP tools/list nextCursor must be a string, null, or absent")
+		}
+		if cursor == "" {
+			return tools, nil
+		}
+		if _, repeated := seenCursors[cursor]; repeated {
+			return nil, fmt.Errorf("MCP tools/list returned repeated nextCursor %q", cursor)
+		}
+		seenCursors[cursor] = struct{}{}
+		params = map[string]any{"cursor": cursor}
 	}
-	return tools, nil
+	return nil, fmt.Errorf("MCP tools/list exceeded page limit of %d", maxListToolsPages)
 }
 
 func (c *Client) CallTool(ctx context.Context, name string, args map[string]any, approvalToken ...string) (map[string]any, error) {

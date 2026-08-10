@@ -1,13 +1,16 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sort"
 	"strings"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
+	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/safejson"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
 )
 
@@ -92,7 +95,10 @@ func BuildToolRegistry(ctx context.Context, servers map[string]toolLister) (*Too
 				if parameters == nil {
 					parameters = map[string]any{"type": "object"}
 				} else {
-					parameters = cloneJSONMap(parameters)
+					parameters, err = normalizeJSONMap(parameters)
+					if err != nil {
+						return nil, fmt.Errorf("MCP server %q tool %q has invalid inputSchema: %w", serverName, name, err)
+					}
 					rootType, present := parameters["type"]
 					if !present {
 						parameters["type"] = "object"
@@ -146,7 +152,7 @@ func BuildToolRegistry(ctx context.Context, servers map[string]toolLister) (*Too
 func (r *ToolRegistry) Definitions() []llm.ToolDefinition {
 	definitions := make([]llm.ToolDefinition, len(r.definitions))
 	for index, definition := range r.definitions {
-		definition.Parameters = cloneJSONMap(definition.Parameters)
+		definition.Parameters = cloneNormalizedJSONMap(definition.Parameters)
 		definitions[index] = definition
 	}
 	return definitions
@@ -155,30 +161,42 @@ func (r *ToolRegistry) Definitions() []llm.ToolDefinition {
 func (r *ToolRegistry) Lookup(name string) (ToolEntry, bool) {
 	entry, ok := r.entries[name]
 	if ok {
-		entry.Definition.Parameters = cloneJSONMap(entry.Definition.Parameters)
+		entry.Definition.Parameters = cloneNormalizedJSONMap(entry.Definition.Parameters)
 	}
 	return entry, ok
 }
 
-func cloneJSONMap(source map[string]any) map[string]any {
+func normalizeJSONMap(source map[string]any) (map[string]any, error) {
+	data, err := json.Marshal(source)
+	if err != nil {
+		return nil, fmt.Errorf("normalize JSON object: %w", err)
+	}
+	normalized, err := safejson.DecodeObject(json.NewDecoder(bytes.NewReader(data)))
+	if err != nil {
+		return nil, fmt.Errorf("normalize JSON object: %w", err)
+	}
+	return normalized, nil
+}
+
+func cloneNormalizedJSONMap(source map[string]any) map[string]any {
 	if source == nil {
 		return nil
 	}
 	cloned := make(map[string]any, len(source))
 	for key, value := range source {
-		cloned[key] = cloneJSONValue(value)
+		cloned[key] = cloneNormalizedJSONValue(value)
 	}
 	return cloned
 }
 
-func cloneJSONValue(value any) any {
+func cloneNormalizedJSONValue(value any) any {
 	switch value := value.(type) {
 	case map[string]any:
-		return cloneJSONMap(value)
+		return cloneNormalizedJSONMap(value)
 	case []any:
 		cloned := make([]any, len(value))
 		for index, item := range value {
-			cloned[index] = cloneJSONValue(item)
+			cloned[index] = cloneNormalizedJSONValue(item)
 		}
 		return cloned
 	default:

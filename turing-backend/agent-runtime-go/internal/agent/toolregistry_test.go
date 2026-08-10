@@ -154,6 +154,92 @@ func TestBuildRegistryDeepCopiesSourceSchema(t *testing.T) {
 	}
 }
 
+func TestBuildRegistryDeepCopiesTypedNestedSourceSchema(t *testing.T) {
+	properties := map[string]map[string]any{
+		"choice": {
+			"type": "string",
+			"enum": []string{"alpha", "beta"},
+		},
+	}
+	required := []string{"choice"}
+	schema := map[string]any{
+		"type":       "object",
+		"properties": properties,
+		"required":   required,
+	}
+	registry, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+		"server": &registryTestClient{tools: []map[string]any{{
+			"name":        "typed",
+			"inputSchema": schema,
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("BuildToolRegistry returned error: %v", err)
+	}
+
+	properties["choice"]["type"] = "number"
+	properties["choice"]["enum"].([]string)[0] = "mutated"
+	required[0] = "mutated"
+
+	assertNestedRegistrySchemaUnchanged(t, registry.Definitions()[0].Parameters)
+}
+
+func TestToolRegistryAccessorsIsolateNormalizedTypedNestedSchemas(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]map[string]any{
+			"choice": {
+				"type": "string",
+				"enum": []string{"alpha", "beta"},
+			},
+		},
+		"required": []string{"choice"},
+	}
+	registry, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+		"server": &registryTestClient{tools: []map[string]any{{
+			"name":        "typed",
+			"inputSchema": schema,
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("BuildToolRegistry returned error: %v", err)
+	}
+
+	first := registry.Definitions()[0].Parameters
+	mutateNestedRegistrySchema(first)
+	entry, ok := registry.Lookup("typed")
+	if !ok {
+		t.Fatal("Lookup(typed) returned false")
+	}
+	assertNestedRegistrySchemaUnchanged(t, entry.Definition.Parameters)
+	assertNestedRegistrySchemaUnchanged(t, registry.Definitions()[0].Parameters)
+}
+
+func TestBuildRegistryRejectsUnsupportedJSONValuesInInputSchema(t *testing.T) {
+	tests := map[string]any{
+		"channel":  make(chan int),
+		"function": func() {},
+		"complex":  complex(1, 2),
+	}
+	for name, unsupported := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+				"invalid-server": &registryTestClient{tools: []map[string]any{{
+					"name": "unsupported_schema",
+					"inputSchema": map[string]any{
+						"type":       "object",
+						"properties": map[string]any{"bad": unsupported},
+					},
+				}}},
+			})
+			if err == nil {
+				t.Fatal("BuildToolRegistry returned nil error")
+			}
+			assertErrorContains(t, err, "invalid-server", "unsupported_schema", "inputSchema", "unsupported")
+		})
+	}
+}
+
 func TestToolRegistryDefinitionsDeepCopiesSchema(t *testing.T) {
 	registry := buildNestedSchemaRegistry(t)
 
