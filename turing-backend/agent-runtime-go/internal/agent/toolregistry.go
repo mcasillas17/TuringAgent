@@ -27,6 +27,12 @@ type ToolRegistry struct {
 	entries     map[string]ToolEntry
 }
 
+type toolOrigin struct {
+	serverName  string
+	serverIndex int
+	listIndex   int
+}
+
 // BuildToolRegistry discovers servers in name order and preserves each server's tool order.
 func BuildToolRegistry(ctx context.Context, servers map[string]toolLister) (*ToolRegistry, error) {
 	if err := ctx.Err(); err != nil {
@@ -39,8 +45,11 @@ func BuildToolRegistry(ctx context.Context, servers map[string]toolLister) (*Too
 	}
 	sort.Strings(serverNames)
 
-	registry := &ToolRegistry{entries: make(map[string]ToolEntry)}
-	for _, serverName := range serverNames {
+	registry := &ToolRegistry{
+		entries: make(map[string]ToolEntry),
+	}
+	origins := make(map[string]toolOrigin)
+	for serverIndex, serverName := range serverNames {
 		client := servers[serverName]
 		if isNilToolLister(client) {
 			return nil, fmt.Errorf("MCP server %q has nil client", serverName)
@@ -82,11 +91,34 @@ func BuildToolRegistry(ctx context.Context, servers map[string]toolLister) (*Too
 				}
 				if parameters == nil {
 					parameters = map[string]any{"type": "object"}
+				} else {
+					parameters = cloneJSONMap(parameters)
+					rootType, present := parameters["type"]
+					if !present {
+						parameters["type"] = "object"
+					} else if rootTypeString, valid := rootType.(string); !valid || rootTypeString != "object" {
+						return nil, fmt.Errorf(
+							"MCP server %q tool %d %q has invalid inputSchema root type: must be string %q",
+							serverName,
+							index,
+							name,
+							"object",
+						)
+					}
 				}
 			}
 
-			if existing, duplicate := registry.entries[name]; duplicate {
-				return nil, fmt.Errorf("tool %q from MCP server %q duplicates tool from MCP server %q", name, serverName, existing.ServerName)
+			if original, duplicate := origins[name]; duplicate {
+				return nil, fmt.Errorf(
+					"tool %q at MCP server %q (server index %d, list index %d) duplicates original at MCP server %q (server index %d, list index %d)",
+					name,
+					serverName,
+					serverIndex,
+					index,
+					original.serverName,
+					original.serverIndex,
+					original.listIndex,
+				)
 			}
 
 			definition := llm.ToolDefinition{
@@ -99,6 +131,11 @@ func BuildToolRegistry(ctx context.Context, servers map[string]toolLister) (*Too
 				Client:     client,
 				Definition: definition,
 			}
+			origins[name] = toolOrigin{
+				serverName:  serverName,
+				serverIndex: serverIndex,
+				listIndex:   index,
+			}
 			registry.definitions = append(registry.definitions, definition)
 		}
 	}
@@ -108,13 +145,45 @@ func BuildToolRegistry(ctx context.Context, servers map[string]toolLister) (*Too
 
 func (r *ToolRegistry) Definitions() []llm.ToolDefinition {
 	definitions := make([]llm.ToolDefinition, len(r.definitions))
-	copy(definitions, r.definitions)
+	for index, definition := range r.definitions {
+		definition.Parameters = cloneJSONMap(definition.Parameters)
+		definitions[index] = definition
+	}
 	return definitions
 }
 
 func (r *ToolRegistry) Lookup(name string) (ToolEntry, bool) {
 	entry, ok := r.entries[name]
+	if ok {
+		entry.Definition.Parameters = cloneJSONMap(entry.Definition.Parameters)
+	}
 	return entry, ok
+}
+
+func cloneJSONMap(source map[string]any) map[string]any {
+	if source == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(source))
+	for key, value := range source {
+		cloned[key] = cloneJSONValue(value)
+	}
+	return cloned
+}
+
+func cloneJSONValue(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		return cloneJSONMap(value)
+	case []any:
+		cloned := make([]any, len(value))
+		for index, item := range value {
+			cloned[index] = cloneJSONValue(item)
+		}
+		return cloned
+	default:
+		return value
+	}
 }
 
 func isNilToolLister(client toolLister) bool {

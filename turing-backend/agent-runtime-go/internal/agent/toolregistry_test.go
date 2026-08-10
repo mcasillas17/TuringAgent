@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
@@ -129,6 +130,90 @@ func TestBuildRegistryDefinitionsReturnsFreshSlice(t *testing.T) {
 	}
 }
 
+func TestBuildRegistryDeepCopiesSourceSchema(t *testing.T) {
+	schema := nestedRegistrySchema()
+	client := &registryTestClient{tools: []map[string]any{{
+		"name":        "isolated",
+		"inputSchema": schema,
+	}}}
+	registry, err := BuildToolRegistry(context.Background(), map[string]toolLister{"server": client})
+	if err != nil {
+		t.Fatalf("BuildToolRegistry returned error: %v", err)
+	}
+
+	mutateNestedRegistrySchema(schema)
+
+	assertNestedRegistrySchemaUnchanged(t, registry.Definitions()[0].Parameters)
+	entry, ok := registry.Lookup("isolated")
+	if !ok {
+		t.Fatal("Lookup(isolated) returned false")
+	}
+	assertNestedRegistrySchemaUnchanged(t, entry.Definition.Parameters)
+	if entry.Client != client {
+		t.Fatal("Lookup did not preserve client identity")
+	}
+}
+
+func TestToolRegistryDefinitionsDeepCopiesSchema(t *testing.T) {
+	registry := buildNestedSchemaRegistry(t)
+
+	first := registry.Definitions()
+	mutateNestedRegistrySchema(first[0].Parameters)
+
+	assertNestedRegistrySchemaUnchanged(t, registry.Definitions()[0].Parameters)
+	entry, ok := registry.Lookup("isolated")
+	if !ok {
+		t.Fatal("Lookup(isolated) returned false")
+	}
+	assertNestedRegistrySchemaUnchanged(t, entry.Definition.Parameters)
+}
+
+func TestToolRegistryLookupDeepCopiesSchema(t *testing.T) {
+	registry := buildNestedSchemaRegistry(t)
+
+	first, ok := registry.Lookup("isolated")
+	if !ok {
+		t.Fatal("Lookup(isolated) returned false")
+	}
+	mutateNestedRegistrySchema(first.Definition.Parameters)
+
+	second, ok := registry.Lookup("isolated")
+	if !ok {
+		t.Fatal("second Lookup(isolated) returned false")
+	}
+	assertNestedRegistrySchemaUnchanged(t, second.Definition.Parameters)
+	assertNestedRegistrySchemaUnchanged(t, registry.Definitions()[0].Parameters)
+}
+
+func TestToolRegistryConcurrentAccessorsReturnIsolatedSchemas(t *testing.T) {
+	registry := buildNestedSchemaRegistry(t)
+
+	const goroutines = 32
+	var wait sync.WaitGroup
+	wait.Add(goroutines)
+	for index := 0; index < goroutines; index++ {
+		go func() {
+			defer wait.Done()
+			for iteration := 0; iteration < 100; iteration++ {
+				definitions := registry.Definitions()
+				assertNestedRegistrySchemaUnchanged(t, definitions[0].Parameters)
+				mutateNestedRegistrySchema(definitions[0].Parameters)
+
+				entry, ok := registry.Lookup("isolated")
+				if !ok {
+					t.Error("Lookup(isolated) returned false")
+					return
+				}
+				assertNestedRegistrySchemaUnchanged(t, entry.Definition.Parameters)
+				mutateNestedRegistrySchema(entry.Definition.Parameters)
+			}
+		}()
+	}
+	wait.Wait()
+
+	assertNestedRegistrySchemaUnchanged(t, registry.Definitions()[0].Parameters)
+}
+
 func TestBuildRegistryRejectsInvalidToolNames(t *testing.T) {
 	tests := map[string]map[string]any{
 		"missing":    {},
@@ -184,6 +269,93 @@ func TestBuildRegistryRejectsInvalidInputSchema(t *testing.T) {
 	}
 }
 
+func TestBuildRegistryNormalizesMissingInputSchemaRootType(t *testing.T) {
+	schema := map[string]any{
+		"properties": map[string]any{"value": map[string]any{"type": "string"}},
+	}
+	registry, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+		"server": &registryTestClient{tools: []map[string]any{{
+			"name":        "normalized",
+			"inputSchema": schema,
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("BuildToolRegistry returned error: %v", err)
+	}
+	if got := registry.Definitions()[0].Parameters["type"]; got != "object" {
+		t.Fatalf("normalized root type = %#v, want object", got)
+	}
+	if _, mutated := schema["type"]; mutated {
+		t.Fatal("normalization mutated source schema")
+	}
+}
+
+func TestBuildRegistryDefaultsNilInputSchemas(t *testing.T) {
+	var typedNil map[string]any
+	tests := map[string]map[string]any{
+		"missing":   {"name": "defaulted"},
+		"nil":       {"name": "defaulted", "inputSchema": nil},
+		"typed nil": {"name": "defaulted", "inputSchema": typedNil},
+	}
+	for name, tool := range tests {
+		t.Run(name, func(t *testing.T) {
+			registry, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+				"server": &registryTestClient{tools: []map[string]any{tool}},
+			})
+			if err != nil {
+				t.Fatalf("BuildToolRegistry returned error: %v", err)
+			}
+			if got, want := registry.Definitions()[0].Parameters, map[string]any{"type": "object"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("Parameters = %#v, want %#v", got, want)
+			}
+		})
+	}
+}
+
+func TestBuildRegistryAcceptsExplicitObjectInputSchemaRootType(t *testing.T) {
+	registry, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+		"server": &registryTestClient{tools: []map[string]any{{
+			"name":        "object_schema",
+			"inputSchema": map[string]any{"type": "object"},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("BuildToolRegistry returned error: %v", err)
+	}
+	if got := registry.Definitions()[0].Parameters["type"]; got != "object" {
+		t.Fatalf("root type = %#v, want object", got)
+	}
+}
+
+func TestBuildRegistryRejectsInvalidInputSchemaRootType(t *testing.T) {
+	tests := map[string]any{
+		"null":        nil,
+		"boolean":     true,
+		"number":      12,
+		"array":       []any{"object"},
+		"map":         map[string]any{},
+		"array type":  "array",
+		"string type": "string",
+	}
+	for name, rootType := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+				"schema-server": &registryTestClient{tools: []map[string]any{
+					{"name": "first"},
+					{
+						"name":        "bad_schema",
+						"inputSchema": map[string]any{"type": rootType},
+					},
+				}},
+			})
+			if err == nil {
+				t.Fatal("BuildToolRegistry returned nil error")
+			}
+			assertErrorContains(t, err, "schema-server", "bad_schema", "tool 1", "type", "object")
+		})
+	}
+}
+
 func TestBuildRegistryRejectsDuplicateToolNames(t *testing.T) {
 	t.Run("within server", func(t *testing.T) {
 		_, err := BuildToolRegistry(context.Background(), map[string]toolLister{
@@ -195,18 +367,31 @@ func TestBuildRegistryRejectsDuplicateToolNames(t *testing.T) {
 		if err == nil {
 			t.Fatal("BuildToolRegistry returned nil error")
 		}
-		assertErrorContains(t, err, "duplicate", "same-server")
+		want := `tool "duplicate" at MCP server "same-server" (server index 0, list index 1) duplicates original at MCP server "same-server" (server index 0, list index 0)`
+		if err.Error() != want {
+			t.Fatalf("error = %q, want %q", err, want)
+		}
 	})
 
 	t.Run("across servers", func(t *testing.T) {
 		_, err := BuildToolRegistry(context.Background(), map[string]toolLister{
-			"first-server":  &registryTestClient{tools: []map[string]any{{"name": "duplicate"}}},
-			"second-server": &registryTestClient{tools: []map[string]any{{"name": "duplicate"}}},
+			"first-server": &registryTestClient{tools: []map[string]any{
+				{"name": "first"},
+				{"name": "duplicate"},
+			}},
+			"second-server": &registryTestClient{tools: []map[string]any{
+				{"name": "second"},
+				{"name": "another"},
+				{"name": "duplicate"},
+			}},
 		})
 		if err == nil {
 			t.Fatal("BuildToolRegistry returned nil error")
 		}
-		assertErrorContains(t, err, "duplicate", "first-server", "second-server")
+		want := `tool "duplicate" at MCP server "second-server" (server index 1, list index 2) duplicates original at MCP server "first-server" (server index 0, list index 1)`
+		if err.Error() != want {
+			t.Fatalf("error = %q, want %q", err, want)
+		}
 	})
 }
 
@@ -283,5 +468,49 @@ func assertErrorContains(t *testing.T, err error, parts ...string) {
 		if !strings.Contains(err.Error(), part) {
 			t.Errorf("error %q does not contain %q", err, part)
 		}
+	}
+}
+
+func buildNestedSchemaRegistry(t *testing.T) *ToolRegistry {
+	t.Helper()
+	registry, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+		"server": &registryTestClient{tools: []map[string]any{{
+			"name":        "isolated",
+			"inputSchema": nestedRegistrySchema(),
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("BuildToolRegistry returned error: %v", err)
+	}
+	return registry
+}
+
+func nestedRegistrySchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"choice": map[string]any{
+				"type": "string",
+				"enum": []any{"alpha", "beta"},
+			},
+		},
+		"required": []any{"choice"},
+	}
+}
+
+func mutateNestedRegistrySchema(schema map[string]any) {
+	properties := schema["properties"].(map[string]any)
+	choice := properties["choice"].(map[string]any)
+	choice["type"] = "number"
+	enum := choice["enum"].([]any)
+	enum[0] = "mutated"
+	required := schema["required"].([]any)
+	required[0] = "mutated"
+}
+
+func assertNestedRegistrySchemaUnchanged(t *testing.T, schema map[string]any) {
+	t.Helper()
+	if !reflect.DeepEqual(schema, nestedRegistrySchema()) {
+		t.Errorf("schema = %#v, want %#v", schema, nestedRegistrySchema())
 	}
 }
