@@ -18,14 +18,20 @@ require protoc-gen-go
 require protoc-gen-go-grpc
 require dart
 
-if ! command -v protoc-gen-dart >/dev/null 2>&1; then
-  echo "missing required tool: protoc-gen-dart; install it with: dart pub global activate protoc_plugin 22.5.0" >&2
+dart_pub_cache="${PUB_CACHE:-$HOME/.pub-cache}"
+if [[ "$dart_pub_cache" != /* ]]; then
+  dart_pub_cache="$PWD/$dart_pub_cache"
+fi
+dart_plugin="$dart_pub_cache/bin/protoc-gen-dart"
+
+if [[ ! -x "$dart_plugin" ]]; then
+  echo "missing required Dart protobuf plugin at $dart_plugin; install it with: PUB_CACHE=\"$dart_pub_cache\" dart pub global activate protoc_plugin 22.5.0" >&2
   exit 127
 fi
 
-dart_plugin_version="$(dart pub global list 2>/dev/null | awk '$1 == "protoc_plugin" { print $2; exit }')"
+dart_plugin_version="$(PUB_CACHE="$dart_pub_cache" dart pub global list 2>/dev/null | awk '$1 == "protoc_plugin" { print $2; exit }')"
 if [[ "$dart_plugin_version" != "22.5.0" ]]; then
-  echo "protoc-gen-dart requires protoc_plugin 22.5.0 (found: ${dart_plugin_version:-not globally activated}); run: dart pub global activate protoc_plugin 22.5.0" >&2
+  echo "protoc-gen-dart requires protoc_plugin 22.5.0 in $dart_pub_cache (found: ${dart_plugin_version:-not globally activated}); run: PUB_CACHE=\"$dart_pub_cache\" dart pub global activate protoc_plugin 22.5.0" >&2
   exit 1
 fi
 
@@ -36,7 +42,7 @@ protoc -I "$PROTO_DIR" \
   --go-grpc_out="$OUT_DIR/go" --go-grpc_opt=paths=source_relative \
   "$PROTO_DIR"/turing/v1/*.proto
 
-protoc -I "$PROTO_DIR" --dart_out=grpc:"$FLUTTER_OUT_DIR" "$PROTO_DIR"/turing/v1/*.proto
+protoc -I "$PROTO_DIR" --plugin=protoc-gen-dart="$dart_plugin" --dart_out=grpc:"$FLUTTER_OUT_DIR" "$PROTO_DIR"/turing/v1/*.proto
 
 if command -v protoc-gen-swift >/dev/null 2>&1 && command -v protoc-gen-grpc-swift >/dev/null 2>&1; then
   protoc -I "$PROTO_DIR" --swift_out="$OUT_DIR/swift" --grpc-swift_out="$OUT_DIR/swift" "$PROTO_DIR"/turing/v1/*.proto

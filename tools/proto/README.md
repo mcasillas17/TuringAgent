@@ -20,7 +20,7 @@ tools/proto/generate.sh
 tools/proto/check.sh
 ```
 
-`generate.sh` fails with an installation command if `protoc-gen-dart` is absent or the globally activated `protoc_plugin` is not exactly 22.5.0. This prevents developer and CI environments from silently accepting stale Flutter stubs or producing version-dependent churn.
+`generate.sh` resolves the global pub cache from `PUB_CACHE`, or `$HOME/.pub-cache` when unset. It requires that cache's exact `bin/protoc-gen-dart`, verifies that the cache has `protoc_plugin` 22.5.0 globally activated, and passes the absolute executable path directly to protoc. A different `protoc-gen-dart` earlier on `PATH` is ignored. Missing or mismatched installations fail with the exact `PUB_CACHE=... dart pub global activate protoc_plugin 22.5.0` repair command. This prevents developer and CI environments from silently accepting stale Flutter stubs or producing version-dependent churn.
 
 Other client generators remain optional and are used when installed:
 
