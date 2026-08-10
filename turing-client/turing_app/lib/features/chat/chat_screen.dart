@@ -107,6 +107,11 @@ class _ChatScreenState extends State<ChatScreen> {
         error: error,
       );
       _toolEntries[toolCallId] = entry;
+      // Seal any in-progress assistant bubbles: the runtime reuses one
+      // assistantMessageId across the whole turn, so text streamed AFTER this
+      // tool call must start a fresh bubble below the card rather than append
+      // to the pre-tool bubble above it.
+      _assistantEntries.clear();
       setState(() => _messages.add(entry!));
       _scrollToBottom();
       return;

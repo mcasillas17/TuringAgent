@@ -239,6 +239,71 @@ void main() {
     unawaited(events.close());
   });
 
+  testWidgets('assistant text after a tool call renders below the tool card '
+      '(same messageId across the turn)', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // The runtime loop reuses ONE assistantMessageId for pre-tool preamble
+    // and the post-tool answer.
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: {'messageId': 'msg_x', 'delta': 'Checking the time.'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 2,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'tool.call.completed',
+        sequence: 3,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 4,
+        payload: {'messageId': 'msg_x', 'delta': 'It is noon.'},
+      ),
+    );
+    await tester.pump();
+
+    final toolY = tester.getTopLeft(find.text('system.time')).dy;
+    final answerY = tester.getTopLeft(find.text('It is noon.')).dy;
+    expect(
+      answerY,
+      greaterThan(toolY),
+      reason: 'the post-tool answer must render below the tool card',
+    );
+    // The preamble and the answer are distinct bubbles, not merged.
+    expect(find.text('Checking the time.'), findsOneWidget);
+    expect(find.text('It is noon.'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
   testWidgets('tool cards render chronologically between message bubbles', (
     tester,
   ) async {
