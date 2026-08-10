@@ -66,37 +66,83 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), maxStreamTokenBytes)
 		toolCalls := make(map[int]*openAIToolCall)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if !strings.HasPrefix(line, "data:") {
-				continue
+		sawChunk := false
+		dispatch := func(data string) bool {
+			if strings.TrimSpace(data) == "" {
+				return false
 			}
-			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			if data == "" {
-				continue
+			if strings.TrimSpace(data) == "[DONE]" {
+				if len(toolCalls) > 0 {
+					sendStreamEvent(ctx, out, StreamEvent{
+						Type:    "error",
+						Code:    "model_bad_chunk",
+						Message: fmt.Sprintf("[DONE] received with %d unfinished tool call(s)", len(toolCalls)),
+					})
+				} else {
+					sendStreamEvent(ctx, out, StreamEvent{Type: "completed", FinishReason: "stop"})
+				}
+				return true
 			}
-			if data == "[DONE]" {
-				sendStreamEvent(ctx, out, StreamEvent{Type: "completed", FinishReason: "stop"})
-				return
-			}
+			sawChunk = true
 			events, done, err := parseOpenAIData([]byte(data), toolCalls)
 			if err != nil {
 				sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: err.Error()})
-				return
+				return true
 			}
 			for _, event := range events {
 				if !sendStreamEvent(ctx, out, event) {
-					return
+					return true
 				}
 			}
-			if done {
-				return
+			return done
+		}
+
+		var dataLines []string
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line == "" {
+				if len(dataLines) > 0 {
+					data := strings.Join(dataLines, "\n")
+					dataLines = nil
+					if dispatch(data) {
+						return
+					}
+				}
+				continue
 			}
+			if strings.HasPrefix(line, ":") {
+				continue
+			}
+			field, value, found := strings.Cut(line, ":")
+			if !found {
+				value = ""
+			}
+			if field != "data" {
+				continue
+			}
+			if strings.HasPrefix(value, " ") {
+				value = value[1:]
+			}
+			dataLines = append(dataLines, value)
 		}
 		if err := scanner.Err(); err != nil {
 			if ctx.Err() == nil {
 				sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_stream_error", Message: err.Error()})
 			}
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if len(dataLines) > 0 && dispatch(strings.Join(dataLines, "\n")) {
+			return
+		}
+		if sawChunk {
+			message := "OpenAI-compatible stream ended before a terminal event"
+			if len(toolCalls) > 0 {
+				message += fmt.Sprintf(" with %d unfinished tool call(s)", len(toolCalls))
+			}
+			sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_stream_error", Message: message})
 		}
 	}()
 	return out, nil
@@ -143,7 +189,11 @@ func openAIMessages(messages []ChatMessage) ([]openAIMessage, error) {
 			result.ToolCallID = message.ToolCallID
 		} else if message.Role == "assistant" {
 			for _, call := range message.ToolCalls {
-				arguments, err := json.Marshal(call.Arguments)
+				callArguments := call.Arguments
+				if callArguments == nil {
+					callArguments = map[string]any{}
+				}
+				arguments, err := json.Marshal(callArguments)
 				if err != nil {
 					return nil, err
 				}
@@ -207,6 +257,7 @@ type openAIDelta struct {
 type openAIToolCallDelta struct {
 	Index    int    `json:"index"`
 	ID       string `json:"id"`
+	Type     string `json:"type"`
 	Function struct {
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
@@ -236,6 +287,7 @@ func parseOpenAIData(data []byte, toolCalls map[int]*openAIToolCall) ([]StreamEv
 		return nil, false, nil
 	}
 	choice := chunk.Choices[0]
+	events := make([]StreamEvent, 0, 2)
 	if len(choice.Delta) > 0 && string(choice.Delta) != "null" {
 		var delta openAIDelta
 		decoder := json.NewDecoder(bytes.NewReader(choice.Delta))
@@ -244,6 +296,12 @@ func parseOpenAIData(data []byte, toolCalls map[int]*openAIToolCall) ([]StreamEv
 			return nil, false, err
 		}
 		for _, fragment := range delta.ToolCalls {
+			if fragment.Index < 0 {
+				return nil, false, fmt.Errorf("tool call has negative index %d", fragment.Index)
+			}
+			if fragment.Type != "" && fragment.Type != "function" {
+				return nil, false, fmt.Errorf("tool call %d has unsupported type %q", fragment.Index, fragment.Type)
+			}
 			call := toolCalls[fragment.Index]
 			if call == nil {
 				call = &openAIToolCall{}
@@ -254,11 +312,14 @@ func parseOpenAIData(data []byte, toolCalls map[int]*openAIToolCall) ([]StreamEv
 			call.arguments += fragment.Function.Arguments
 		}
 		if delta.Content != nil && *delta.Content != "" {
-			return []StreamEvent{{Type: "delta", Text: *delta.Content}}, false, nil
+			events = append(events, StreamEvent{Type: "delta", Text: *delta.Content})
 		}
 	}
 	if choice.FinishReason != nil {
 		if *choice.FinishReason == "tool_calls" {
+			if len(toolCalls) == 0 {
+				return nil, false, fmt.Errorf("finish_reason tool_calls received without any accumulated tool calls")
+			}
 			calls := make([]ToolCall, 0, len(toolCalls))
 			indices := make([]int, 0, len(toolCalls))
 			for index := range toolCalls {
@@ -267,34 +328,40 @@ func parseOpenAIData(data []byte, toolCalls map[int]*openAIToolCall) ([]StreamEv
 			sort.Ints(indices)
 			for _, index := range indices {
 				call := toolCalls[index]
+				if call.id == "" {
+					return nil, false, fmt.Errorf("tool call %d is missing an ID", index)
+				}
+				if call.name == "" {
+					return nil, false, fmt.Errorf("tool call %d is missing a function name", index)
+				}
 				arguments := make(map[string]any)
 				if call.arguments != "" {
 					decoder := json.NewDecoder(strings.NewReader(call.arguments))
 					decoder.UseNumber()
 					var decoded any
 					if err := decoder.Decode(&decoded); err != nil {
-						return nil, false, err
+						return nil, false, fmt.Errorf("tool call %d arguments are malformed: %w", index, err)
 					}
 					if err := decoder.Decode(&struct{}{}); err != io.EOF {
 						if err == nil {
 							err = fmt.Errorf("multiple JSON values")
 						}
-						return nil, false, fmt.Errorf("malformed tool call arguments: %w", err)
+						return nil, false, fmt.Errorf("tool call %d arguments are malformed: %w", index, err)
 					}
 					var ok bool
 					arguments, ok = decoded.(map[string]any)
 					if !ok {
-						return nil, false, fmt.Errorf("tool call arguments must be a JSON object")
+						return nil, false, fmt.Errorf("tool call %d arguments must be a JSON object", index)
 					}
 				}
 				calls = append(calls, ToolCall{ID: call.id, Name: call.name, Arguments: arguments})
 			}
-			return []StreamEvent{
-				{Type: "tool_call", ToolCalls: calls},
-				{Type: "completed", FinishReason: *choice.FinishReason},
-			}, true, nil
+			events = append(events, StreamEvent{Type: "tool_call", ToolCalls: calls})
+		} else if len(toolCalls) > 0 {
+			return nil, false, fmt.Errorf("finish_reason %q received with unfinished tool calls", *choice.FinishReason)
 		}
-		return []StreamEvent{{Type: "completed", FinishReason: *choice.FinishReason}}, true, nil
+		events = append(events, StreamEvent{Type: "completed", FinishReason: *choice.FinishReason})
+		return events, true, nil
 	}
-	return nil, false, nil
+	return events, false, nil
 }
