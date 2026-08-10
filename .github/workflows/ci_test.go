@@ -72,13 +72,34 @@ func TestMCPFilesImagePreparesSandboxBeforeDroppingPrivileges(t *testing.T) {
 	)
 }
 
+func TestMCPSystemImageDropsPrivileges(t *testing.T) {
+	data, err := os.ReadFile("../../turing-backend/mcp-system/Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	requireInOrder(t, string(data),
+		"addgroup -g 1000 -S mcp-system",
+		"adduser -u 1000 -S -G mcp-system mcp-system",
+		"USER mcp-system:mcp-system",
+	)
+}
+
 func TestComposeRunsMCPFilesAsConfiguredHostIdentity(t *testing.T) {
 	data, err := os.ReadFile("../../turing-backend/infra/docker-compose.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	requireContains(t, string(data), `user: "${HOST_UID:-1000}:${HOST_GID:-1000}"`)
+	compose := string(data)
+	filesService := requireIndentedBlock(t, compose, "  turing-mcp-files:", 2)
+	requireContains(t, filesService, `user: "${HOST_UID:-1000}:${HOST_GID:-1000}"`)
+	for _, service := range []string{"turing-orchestrator", "turing-agent-runtime-general", "turing-mcp-system"} {
+		block := requireIndentedBlock(t, compose, "  "+service+":", 2)
+		if strings.Contains(block, "HOST_UID") || strings.Contains(block, "HOST_GID") {
+			t.Fatalf("%s unexpectedly uses the mcp-files host identity:\n%s", service, block)
+		}
+	}
 }
 
 func TestInitConfiguresHostIdentityForBindMountedSandbox(t *testing.T) {
@@ -86,6 +107,7 @@ func TestInitConfiguresHostIdentityForBindMountedSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	requireContains(t, string(envExample), "\nHOST_IDENTITY_MODE=auto\n")
 	requireContains(t, string(envExample), "\nHOST_UID=\n")
 	requireContains(t, string(envExample), "\nHOST_GID=\n")
 
@@ -93,8 +115,8 @@ func TestInitConfiguresHostIdentityForBindMountedSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireContains(t, string(initScript), `ensure_var HOST_UID "$(id -u)"`)
-	requireContains(t, string(initScript), `ensure_var HOST_GID "$(id -g)"`)
+	requireContains(t, string(initScript), "configure_host_identity")
+	requireContains(t, string(initScript), "is_positive_id")
 }
 
 func TestSandboxIsNotMadeWorldWritable(t *testing.T) {
@@ -132,4 +154,21 @@ func requireInOrder(t *testing.T, text string, snippets ...string) {
 		}
 		offset += index + len(snippet)
 	}
+}
+
+func requireIndentedBlock(t *testing.T, text, header string, indent int) string {
+	t.Helper()
+	start := strings.Index(text, header+"\n")
+	if start == -1 {
+		t.Fatalf("content missing block %q", header)
+	}
+	lines := strings.Split(text[start:], "\n")
+	block := []string{lines[0]}
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) != "" && len(line)-len(strings.TrimLeft(line, " ")) <= indent {
+			break
+		}
+		block = append(block, line)
+	}
+	return strings.Join(block, "\n")
 }

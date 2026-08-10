@@ -1142,6 +1142,42 @@ func TestUpdatePreservesExistingPermissions(t *testing.T) {
 	}
 }
 
+func TestUpdateStripsSpecialPermissionBits(t *testing.T) {
+	root := t.TempDir()
+	note := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(note, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	specialMode := os.FileMode(0755) | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+	if err := os.Chmod(note, specialMode); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(note)
+	if err != nil {
+		t.Fatal(err)
+	}
+	specialBits := os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+	if before.Mode()&specialBits != specialBits {
+		t.Skipf("filesystem did not retain requested special bits: mode %v", before.Mode())
+	}
+	files := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
+
+	if _, err := files.Update(map[string]any{"path": "note.txt", "content": "updated"}, "approval-token", "general_assistant"); err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+
+	after, err := os.Stat(note)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Mode().Perm() != 0755 {
+		t.Fatalf("updated permissions = %04o, want 0755", after.Mode().Perm())
+	}
+	if got := after.Mode() & specialBits; got != 0 {
+		t.Fatalf("updated special bits = %v, want none", got)
+	}
+}
+
 func TestUpdateTargetModeRequiresWriteBit(t *testing.T) {
 	for _, mode := range []os.FileMode{0400, 0444} {
 		t.Run(fmt.Sprintf("%04o", mode), func(t *testing.T) {

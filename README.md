@@ -71,6 +71,7 @@ Run developer checks from the repository root:
 go test -tags sqlite_fts5 ./... -count=1
 go build -tags sqlite_fts5 ./...
 cd turing-backend/mcp-files && go test ./... -count=1 && go build ./cmd/server
+cd ../mcp-system && go test ./... -count=1 && go build ./cmd/server
 cd ../../turing-client/turing_app && flutter test
 ```
 
@@ -85,7 +86,8 @@ Common values:
 | `TURING_CLIENT_API_KEY` | Bearer token for Flutter and other public gRPC clients |
 | `TURING_INTERNAL_TOKEN` | Bearer token for internal runtime and approval gRPC calls |
 | `TURING_APPROVAL_JWT_SECRET` | HS256 secret used for approval tokens |
-| `HOST_UID` / `HOST_GID` | User and group used by Compose for `mcp-files`; `init.sh` sets them to the local account |
+| `HOST_IDENTITY_MODE` | `auto` refreshes bind-mount IDs on every init; `manual` preserves valid explicit IDs |
+| `HOST_UID` / `HOST_GID` | Positive user/group used only by Compose `mcp-files`; root or invalid IDs fall back to 1000 |
 | `ORCHESTRATOR_GRPC_ADDR` | Internal orchestrator gRPC address, usually `turing-orchestrator:3001` |
 | `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Local model endpoint and default model |
 | `OPENAI_API_KEY` / `OPENAI_MODEL` | Optional OpenAI-compatible model configuration |
@@ -96,7 +98,7 @@ Common values:
 - **Authentication fails:** confirm the Flutter API key matches `TURING_CLIENT_API_KEY` in `turing-backend/.env`.
 - **No model response:** ensure Ollama is running on the host and the configured model is available.
 - **Smoke test times out:** inspect the `turing-orchestrator` and `turing-agent-runtime-general` container logs.
-- **File tools fail:** confirm `turing-backend/sandbox/` exists, rerun `scripts/init.sh` if `.env` lacks the local `HOST_UID`/`HOST_GID`, and confirm approval-required write tools were approved in the client.
+- **File tools fail:** confirm `turing-backend/sandbox/` exists, rerun `scripts/init.sh`, and confirm approval-required writes were approved. Rootless Docker, `userns-remap`, and SELinux may require daemon-specific ownership/mapping or labeling; see the MCP security guide.
 
 ## Documentation
 

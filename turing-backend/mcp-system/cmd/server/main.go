@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/project-turing/mcp-system/internal/auth"
 	"github.com/project-turing/mcp-system/internal/jsonrpc"
@@ -18,8 +19,19 @@ const maxMCPRequestBytes = 1024 * 1024
 func main() {
 	addr := ":" + envOrDefault("PORT", "7100")
 	log.Printf("starting mcp-system on %s", addr)
-	if err := http.ListenAndServe(addr, newHandler(os.Getenv("MCP_SYSTEM_TOKEN_GENERAL"))); err != nil {
+	if err := newHTTPServer(addr, newHandler(os.Getenv("MCP_SYSTEM_TOKEN_GENERAL"))).ListenAndServe(); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      2 * time.Minute,
+		IdleTimeout:       60 * time.Second,
 	}
 }
 

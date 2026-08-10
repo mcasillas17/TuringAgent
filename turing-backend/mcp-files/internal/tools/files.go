@@ -594,7 +594,7 @@ func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, appr
 	if err := writeAllContext(ctx, temporary, []byte(content)); err != nil {
 		return nil, err
 	}
-	if err := unix.Fchmod(int(temporary.Fd()), uint32(originalStat.Mode&07777)); err != nil {
+	if err := unix.Fchmod(int(temporary.Fd()), uint32(originalStat.Mode&0777)); err != nil {
 		return nil, err
 	}
 	if err := f.syncFile(temporary); err != nil {

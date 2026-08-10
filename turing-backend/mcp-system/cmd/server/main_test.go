@@ -7,9 +7,27 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 const expectedSystemRequestLimit = 1024 * 1024
+
+func TestHTTPServerConfiguresConnectionTimeouts(t *testing.T) {
+	server := newHTTPServer(":7100", http.NotFoundHandler())
+
+	if server.ReadHeaderTimeout != 5*time.Second {
+		t.Fatalf("ReadHeaderTimeout = %v, want 5s", server.ReadHeaderTimeout)
+	}
+	if server.ReadTimeout != 30*time.Second {
+		t.Fatalf("ReadTimeout = %v, want 30s", server.ReadTimeout)
+	}
+	if server.WriteTimeout != 2*time.Minute {
+		t.Fatalf("WriteTimeout = %v, want 2m", server.WriteTimeout)
+	}
+	if server.IdleTimeout != 60*time.Second {
+		t.Fatalf("IdleTimeout = %v, want 60s", server.IdleTimeout)
+	}
+}
 
 func TestMcpHandlerRequiresBearerToken(t *testing.T) {
 	handler := newHandler("system-token")
