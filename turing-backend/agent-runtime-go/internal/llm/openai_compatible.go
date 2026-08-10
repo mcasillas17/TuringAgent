@@ -16,6 +16,7 @@ import (
 
 const (
 	maxOpenAIEventDataBytes                   = maxStreamTokenBytes
+	maxOpenAIHTTPErrorBodyBytes               = maxOpenAIEventDataBytes
 	maxOpenAIToolCalls                        = 128
 	maxOpenAIToolCallArgumentBytes            = maxStreamTokenBytes
 	maxOpenAIToolCallAggregateArgumentBytes   = maxStreamTokenBytes
@@ -76,7 +77,14 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 		defer close(out)
 		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: providerHTTPErrorCode(resp.StatusCode), Message: fmt.Sprintf("OpenAI-compatible provider returned %d", resp.StatusCode)})
+			code := providerHTTPErrorCode(resp.StatusCode)
+			if resp.StatusCode == http.StatusTooManyRequests {
+				body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxOpenAIHTTPErrorBodyBytes)+1))
+				if err == nil && len(body) <= maxOpenAIHTTPErrorBodyBytes && isOpenAIQuotaErrorBody(body) {
+					code = "model_quota_exceeded"
+				}
+			}
+			sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: code, Message: fmt.Sprintf("OpenAI-compatible provider returned %d", resp.StatusCode)})
 			return
 		}
 		scanner := bufio.NewScanner(resp.Body)
@@ -631,6 +639,9 @@ func openAIErrorString(raw json.RawMessage, field string) (string, error) {
 }
 
 func classifyOpenAIError(errorType string, errorCode string, message string) string {
+	if isOpenAIQuotaError(errorType, errorCode) {
+		return "model_quota_exceeded"
+	}
 	details := normalizeOpenAIErrorDetails(errorType + " " + errorCode + " " + message)
 	if containsOpenAIErrorIndicator(details,
 		"authentication", "unauthorized", "api key", "permission", "forbidden",
@@ -653,6 +664,24 @@ func classifyOpenAIError(errorType string, errorCode string, message string) str
 		return "model_unavailable"
 	}
 	return "model_error"
+}
+
+func isOpenAIQuotaErrorBody(data []byte) bool {
+	events, done, err := parseOpenAIData(data, newOpenAIStreamState())
+	return err == nil && done && len(events) == 1 &&
+		events[0].Type == "error" && events[0].Code == "model_quota_exceeded"
+}
+
+func isOpenAIQuotaError(errorType string, errorCode string) bool {
+	for _, signal := range []string{errorType, errorCode} {
+		switch strings.TrimSpace(normalizeOpenAIErrorDetails(signal)) {
+		case "insufficient quota", "quota exceeded", "quota exhausted", "exceeded quota",
+			"billing hard limit reached", "billing hard limit exceeded",
+			"credit balance exhausted", "credits exhausted":
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeOpenAIErrorDetails(details string) string {
