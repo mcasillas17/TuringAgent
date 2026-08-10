@@ -23,7 +23,7 @@ Protocol definitions live under `proto/turing/v1/`.
 Generated code:
 
 - Go: `gen/turing/v1/go/turing/v1/`
-- Dart: `turing-client/turing_app/lib/gen/turing/v1/`
+- Dart: `turing-client/turing_app/lib/generated/turing/v1/`
 
 Useful commands:
 

@@ -16,6 +16,18 @@ require() {
 require protoc
 require protoc-gen-go
 require protoc-gen-go-grpc
+require dart
+
+if ! command -v protoc-gen-dart >/dev/null 2>&1; then
+  echo "missing required tool: protoc-gen-dart; install it with: dart pub global activate protoc_plugin 22.5.0" >&2
+  exit 127
+fi
+
+dart_plugin_version="$(dart pub global list 2>/dev/null | awk '$1 == "protoc_plugin" { print $2; exit }')"
+if [[ "$dart_plugin_version" != "22.5.0" ]]; then
+  echo "protoc-gen-dart requires protoc_plugin 22.5.0 (found: ${dart_plugin_version:-not globally activated}); run: dart pub global activate protoc_plugin 22.5.0" >&2
+  exit 1
+fi
 
 mkdir -p "$OUT_DIR/go" "$OUT_DIR/dart" "$OUT_DIR/swift" "$OUT_DIR/csharp" "$OUT_DIR/kotlin" "$FLUTTER_OUT_DIR"
 
@@ -24,11 +36,7 @@ protoc -I "$PROTO_DIR" \
   --go-grpc_out="$OUT_DIR/go" --go-grpc_opt=paths=source_relative \
   "$PROTO_DIR"/turing/v1/*.proto
 
-if command -v protoc-gen-dart >/dev/null 2>&1; then
-  protoc -I "$PROTO_DIR" --dart_out=grpc:"$FLUTTER_OUT_DIR" "$PROTO_DIR"/turing/v1/*.proto
-else
-  echo "protoc-gen-dart not installed; skipping Dart generation" >&2
-fi
+protoc -I "$PROTO_DIR" --dart_out=grpc:"$FLUTTER_OUT_DIR" "$PROTO_DIR"/turing/v1/*.proto
 
 if command -v protoc-gen-swift >/dev/null 2>&1 && command -v protoc-gen-grpc-swift >/dev/null 2>&1; then
   protoc -I "$PROTO_DIR" --swift_out="$OUT_DIR/swift" --grpc-swift_out="$OUT_DIR/swift" "$PROTO_DIR"/turing/v1/*.proto
