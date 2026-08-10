@@ -15,17 +15,10 @@ func ApplyMigrations(ctx context.Context, database *DB) error {
 	if _, err := database.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
 		return err
 	}
-	entries, err := migrationFS.ReadDir("schema")
+	names, err := migrationNames()
 	if err != nil {
 		return err
 	}
-	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") {
-			names = append(names, entry.Name())
-		}
-	}
-	sort.Strings(names)
 	for _, name := range names {
 		version := strings.TrimSuffix(name, ".sql")
 		var exists int
@@ -56,4 +49,39 @@ func ApplyMigrations(ctx context.Context, database *DB) error {
 		}
 	}
 	return nil
+}
+
+// LatestSchemaVersion reports the numeric version prefix from the latest
+// embedded migration.
+func LatestSchemaVersion() (string, error) {
+	names, err := migrationNames()
+	if err != nil {
+		return "", err
+	}
+	if len(names) == 0 {
+		return "", fmt.Errorf("no schema migrations embedded")
+	}
+	version := strings.TrimSuffix(names[len(names)-1], ".sql")
+	if separator := strings.IndexByte(version, '_'); separator >= 0 {
+		version = version[:separator]
+	}
+	if version == "" {
+		return "", fmt.Errorf("latest schema migration has no version")
+	}
+	return version, nil
+}
+
+func migrationNames() ([]string, error) {
+	entries, err := migrationFS.ReadDir("schema")
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }

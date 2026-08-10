@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -49,6 +50,11 @@ func New(cfg config.Config) (*App, error) {
 		_ = database.Close()
 		return nil, err
 	}
+	schemaVersion, err := db.LatestSchemaVersion()
+	if err != nil {
+		_ = database.Close()
+		return nil, errors.New("initialize schema version")
+	}
 
 	repo := repository.New(database)
 	eventBus := eventsvc.NewBus(128)
@@ -58,7 +64,7 @@ func New(cfg config.Config) (*App, error) {
 	eventService := eventsvc.NewServer(repo, eventBus)
 	chatService := chatsvc.New(repo, eventBus, runtimeService, cfg.OllamaModel, cfg.OpenAIModel)
 	auditService := auditsvc.New(repo)
-	healthService := &HealthServer{}
+	healthService := &HealthServer{schemaVersion: schemaVersion}
 
 	publicServer := grpc.NewServer(
 		grpc.UnaryInterceptor(auth.UnaryInterceptor(cfg.ClientAPIKey)),
@@ -141,6 +147,8 @@ func stopGRPCServer(server *grpc.Server) {
 
 type HealthServer struct {
 	turingv1.UnimplementedHealthServiceServer
+
+	schemaVersion string
 }
 
 func (s *HealthServer) Check(context.Context, *turingv1.HealthCheckRequest) (*turingv1.HealthCheckResponse, error) {
@@ -148,5 +156,5 @@ func (s *HealthServer) Check(context.Context, *turingv1.HealthCheckRequest) (*tu
 }
 
 func (s *HealthServer) Version(context.Context, *turingv1.VersionRequest) (*turingv1.VersionResponse, error) {
-	return &turingv1.VersionResponse{Version: "1.0.0-go", SchemaVersion: "0002"}, nil
+	return &turingv1.VersionResponse{Version: "1.0.0-go", SchemaVersion: s.schemaVersion}, nil
 }
