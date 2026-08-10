@@ -327,8 +327,8 @@ type openAIToolCallDelta struct {
 }
 
 type openAIToolCall struct {
-	id        strings.Builder
-	name      strings.Builder
+	id        string
+	name      string
 	arguments strings.Builder
 }
 
@@ -378,10 +378,7 @@ func parseOpenAIData(data []byte, state *openAIStreamState) ([]StreamEvent, bool
 		return nil, false, fmt.Errorf("chunk must contain exactly one choice, got %d", len(choices))
 	}
 	choice := choices[0]
-	if choice.Index == nil {
-		return nil, false, fmt.Errorf("choice is missing index")
-	}
-	if *choice.Index != 0 {
+	if choice.Index != nil && *choice.Index != 0 {
 		return nil, false, fmt.Errorf("choice has index %d, want 0", *choice.Index)
 	}
 
@@ -424,7 +421,7 @@ func parseOpenAIData(data []byte, state *openAIStreamState) ([]StreamEvent, bool
 				if !ok {
 					return nil, false, fmt.Errorf("tool call indices are non-contiguous: missing index %d", index)
 				}
-				id := call.id.String()
+				id := call.id
 				if id == "" {
 					return nil, false, fmt.Errorf("tool call %d is missing an ID", index)
 				}
@@ -432,7 +429,7 @@ func parseOpenAIData(data []byte, state *openAIStreamState) ([]StreamEvent, bool
 					return nil, false, fmt.Errorf("tool call %d has duplicate ID %q", index, id)
 				}
 				ids[id] = struct{}{}
-				name := call.name.String()
+				name := call.name
 				if name == "" {
 					return nil, false, fmt.Errorf("tool call %d is missing a function name", index)
 				}
@@ -510,8 +507,20 @@ func (state *openAIStreamState) appendToolCallFragment(index int, fragment openA
 		}
 	}
 
-	identifierBytes := len(fragment.ID) + len(fragment.Function.Name)
-	if identifierBytes > maxOpenAIToolCallAggregateIdentifierBytes-state.identifierBytes {
+	identifierBytes := state.identifierBytes
+	if fragment.ID != "" {
+		if call != nil {
+			identifierBytes -= len(call.id)
+		}
+		identifierBytes += len(fragment.ID)
+	}
+	if fragment.Function.Name != "" {
+		if call != nil {
+			identifierBytes -= len(call.name)
+		}
+		identifierBytes += len(fragment.Function.Name)
+	}
+	if identifierBytes > maxOpenAIToolCallAggregateIdentifierBytes {
 		return fmt.Errorf("tool call ID and name bytes exceed %d", maxOpenAIToolCallAggregateIdentifierBytes)
 	}
 
@@ -531,10 +540,14 @@ func (state *openAIStreamState) appendToolCallFragment(index int, fragment openA
 		call = &openAIToolCall{}
 		state.toolCalls[index] = call
 	}
-	call.id.WriteString(fragment.ID)
-	call.name.WriteString(fragment.Function.Name)
+	if fragment.ID != "" {
+		call.id = fragment.ID
+	}
+	if fragment.Function.Name != "" {
+		call.name = fragment.Function.Name
+	}
 	call.arguments.WriteString(argumentFragment)
-	state.identifierBytes += identifierBytes
+	state.identifierBytes = identifierBytes
 	state.argumentBytes += argumentBytes
 	return nil
 }

@@ -14,10 +14,10 @@ import (
 	"time"
 )
 
-func TestOpenAICompatibleStreamChatParsesSSEDeltaAndCompletion(t *testing.T) {
+func TestOpenAICompatibleStreamChatAcceptsRequiredFixtureWithoutChoiceIndex(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
-		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"content":"Hi"}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"Hi"}}]}`+"\n\n")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	t.Cleanup(server.Close)
@@ -305,11 +305,6 @@ func TestOpenAIValidatesSingleChoiceEnvelope(t *testing.T) {
 			wantMessage: "exactly one choice",
 		},
 		{
-			name:        "missing choice index",
-			data:        `{"choices":[{"delta":{"content":"invalid"}}]}`,
-			wantMessage: "missing index",
-		},
-		{
 			name:        "nonzero choice index",
 			data:        `{"choices":[{"index":1,"delta":{"content":"invalid"}}]}`,
 			wantMessage: "index 1",
@@ -327,11 +322,11 @@ func TestOpenAIValidatesSingleChoiceEnvelope(t *testing.T) {
 	}
 }
 
-func TestOpenAIStreamsToolCall(t *testing.T) {
+func TestOpenAIToolCallDeltaReplacesRepeatedIDAndName(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
-		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_","type":"function","function":{"name":"get_","arguments":"{\"city\":"}}]}}]}`+"\n\n")
-		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"1","function":{"name":"weather","arguments":"\"Paris\"}"}}]}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_old","type":"function","function":{"name":"old_name","arguments":"{\"city\":"}}]}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_latest","function":{"name":"latest_name","arguments":"\"Paris\"}"}}]}}]}`+"\n\n")
 		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
@@ -349,7 +344,7 @@ func TestOpenAIStreamsToolCall(t *testing.T) {
 		t.Fatalf("tool call event = %+v", got[0])
 	}
 	call := got[0].ToolCalls[0]
-	if call.ID != "call_1" || call.Name != "get_weather" || call.Arguments["city"] != "Paris" {
+	if call.ID != "call_latest" || call.Name != "latest_name" || call.Arguments["city"] != "Paris" {
 		t.Fatalf("tool call = %+v", call)
 	}
 	if got[1].Type != "completed" || got[1].FinishReason != "tool_calls" {
@@ -779,13 +774,14 @@ func TestOpenAIBoundsResponseWideToolCallState(t *testing.T) {
 		}
 	})
 
-	t.Run("ID and name bytes", func(t *testing.T) {
+	t.Run("replacement ID and name bytes", func(t *testing.T) {
 		state := newOpenAIStreamState()
-		state.identifierBytes = maxOpenAIToolCallAggregateIdentifierBytes - 2
-		if _, _, err := parseOpenAIData(openAIToolFragment(0, "i", "n", ""), state); err != nil {
+		boundaryID := strings.Repeat("i", maxOpenAIToolCallAggregateIdentifierBytes-1)
+		if _, _, err := parseOpenAIData(openAIToolFragment(0, boundaryID, "n", ""), state); err != nil {
 			t.Fatalf("fragment reaching identifier boundary: %v", err)
 		}
-		if _, _, err := parseOpenAIData(openAIToolFragment(0, "i", "", ""), state); err == nil ||
+		oversizedReplacementID := strings.Repeat("i", maxOpenAIToolCallAggregateIdentifierBytes)
+		if _, _, err := parseOpenAIData(openAIToolFragment(0, oversizedReplacementID, "", ""), state); err == nil ||
 			!strings.Contains(err.Error(), "ID and name bytes exceed") {
 			t.Fatalf("overflow error = %v, want identifier byte bound", err)
 		}
