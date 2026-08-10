@@ -759,6 +759,22 @@ func TestOpenAIBoundsResponseWideToolCallState(t *testing.T) {
 	})
 }
 
+func TestOpenAIRejectsPerCallToolArgumentOverflow(t *testing.T) {
+	halfLimit := strings.Repeat("x", maxOpenAIToolCallArgumentBytes/2)
+	body := "data: " + string(openAIToolFragment(0, "call_0", "oversized", halfLimit)) + "\n\n" +
+		"data: " + string(openAIToolFragment(0, "", "", halfLimit)) + "\n\n" +
+		"data: " + string(openAIToolFragment(0, "", "", "x")) + "\n\n" +
+		`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+
+	got := streamOpenAIEvents(t, body)
+	assertOpenAIEventTypes(t, got, "error")
+	wantMessage := fmt.Sprintf("tool call 0 arguments exceed %d bytes", maxOpenAIToolCallArgumentBytes)
+	if got[0].Code != "model_bad_chunk" || got[0].Message != wantMessage {
+		t.Fatalf("events = %+v, want only per-call overflow error %q", got, wantMessage)
+	}
+}
+
 func TestOpenAIStreamsEmptyToolArgumentsAsEmptyMap(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
