@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -62,10 +63,16 @@ type fakeModelServer struct {
 	started              chan struct{}
 	cancelled            chan struct{}
 	blockUntilCancel     bool
+	modelDrivenToolCall  bool
 	startedOnce          sync.Once
 	cancelledOnce        sync.Once
 	mu                   sync.Mutex
 	chatCompletionBodies []map[string]any
+}
+
+type fakeMCPRequest struct {
+	method string
+	params map[string]any
 }
 
 type fakeMCPServer struct {
@@ -73,6 +80,9 @@ type fakeMCPServer struct {
 	name           string
 	token          string
 	approvalTokens chan string
+	mu             sync.Mutex
+	advertiseTime  bool
+	requests       []fakeMCPRequest
 }
 
 type harnessOption func(*harnessConfig)
@@ -159,17 +169,17 @@ func (h *grpcHarness) startRuntimeWorker() {
 	h.workerDone = make(chan error, 1)
 	go func() {
 		err := runtimetestkit.RunWorker(ctx, runtimetestkit.WorkerConfig{
-			Conn:              h.internalConn,
-			InternalToken:     integrationInternalToken,
-			WorkerID:          "worker-grpc-integration",
-			MaxConcurrentRuns: 1,
+			Conn:               h.internalConn,
+			InternalToken:      integrationInternalToken,
+			WorkerID:           "worker-grpc-integration",
+			MaxConcurrentRuns:  1,
 			MaxToolCallsPerRun: 10,
-			OpenAIBaseURL:     h.fakeModel.server.URL,
-			OpenAIAPIKey:      "fake-key",
-			MCPSystemBaseURL:  h.systemMCP.server.URL,
-			MCPFilesBaseURL:   h.filesMCP.server.URL,
-			MCPSystemToken:    integrationSystemToken,
-			MCPFilesToken:     integrationFilesToken,
+			OpenAIBaseURL:      h.fakeModel.server.URL,
+			OpenAIAPIKey:       "fake-key",
+			MCPSystemBaseURL:   h.systemMCP.server.URL,
+			MCPFilesBaseURL:    h.filesMCP.server.URL,
+			MCPSystemToken:     integrationSystemToken,
+			MCPFilesToken:      integrationFilesToken,
 		})
 		if err != nil && !errors.Is(err, context.Canceled) && status.Code(err) != codes.Canceled {
 			h.workerDone <- err
@@ -288,6 +298,8 @@ func (f *fakeModelServer) handleChatCompletion(w http.ResponseWriter, r *http.Re
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	f.mu.Lock()
 	f.chatCompletionBodies = append(f.chatCompletionBodies, body)
+	requestNumber := len(f.chatCompletionBodies)
+	modelDrivenToolCall := f.modelDrivenToolCall
 	f.mu.Unlock()
 
 	w.Header().Set("content-type", "text/event-stream")
@@ -301,6 +313,10 @@ func (f *fakeModelServer) handleChatCompletion(w http.ResponseWriter, r *http.Re
 		f.cancelledOnce.Do(func() { close(f.cancelled) })
 		return
 	}
+	if modelDrivenToolCall {
+		f.writeModelDrivenResponse(w, flusher, body, requestNumber)
+		return
+	}
 	for _, token := range []string{"Hel", "lo"} {
 		writeOpenAIChunk(w, token, "")
 		if flusher != nil {
@@ -311,6 +327,76 @@ func (f *fakeModelServer) handleChatCompletion(w http.ResponseWriter, r *http.Re
 	if flusher != nil {
 		flusher.Flush()
 	}
+}
+
+func (f *fakeModelServer) writeModelDrivenResponse(w http.ResponseWriter, flusher http.Flusher, body map[string]any, requestNumber int) {
+	switch requestNumber {
+	case 1:
+		alias := advertisedFunctionAlias(body)
+		if alias == "" {
+			writeOpenAIChunk(w, "", "stop")
+			return
+		}
+		writeOpenAIToolCallChunk(w, alias, `{"zone":`, true)
+		if flusher != nil {
+			flusher.Flush()
+		}
+		writeOpenAIToolCallChunk(w, "", `"UTC"}`, false)
+		if flusher != nil {
+			flusher.Flush()
+		}
+		writeOpenAIChunk(w, "", "tool_calls")
+	case 2:
+		writeOpenAIChunk(w, "The fixed time is 2025-01-02T03:04:05Z.", "")
+		if flusher != nil {
+			flusher.Flush()
+		}
+		writeOpenAIChunk(w, "", "stop")
+	default:
+		writeOpenAIChunk(w, "", "stop")
+	}
+	_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	if flusher != nil {
+		flusher.Flush()
+	}
+}
+
+func advertisedFunctionAlias(body map[string]any) string {
+	tools, _ := body["tools"].([]any)
+	if len(tools) == 0 {
+		return ""
+	}
+	tool, _ := tools[0].(map[string]any)
+	function, _ := tool["function"].(map[string]any)
+	alias, _ := function["name"].(string)
+	return alias
+}
+
+func writeOpenAIToolCallChunk(w http.ResponseWriter, alias, arguments string, initial bool) {
+	function := map[string]any{"arguments": arguments}
+	call := map[string]any{"index": 0, "function": function}
+	if initial {
+		call["id"] = "provider_tool_call"
+		call["type"] = "function"
+		function["name"] = alias
+	}
+	data, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{
+		"index": 0,
+		"delta": map[string]any{"tool_calls": []any{call}},
+	}}})
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+}
+
+func (f *fakeModelServer) enableModelDrivenToolCall() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.modelDrivenToolCall = true
+}
+
+func (f *fakeModelServer) bodies() []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]map[string]any(nil), f.chatCompletionBodies...)
 }
 
 func writeOpenAIChunk(w http.ResponseWriter, token string, finishReason string) {
@@ -351,8 +437,26 @@ func (f *fakeMCPServer) handle(w http.ResponseWriter, r *http.Request) {
 		writeJSONRPCError(w, nil, "bad request")
 		return
 	}
+	f.mu.Lock()
+	f.requests = append(f.requests, fakeMCPRequest{method: req.Method, params: req.Params})
+	advertiseTime := f.advertiseTime
+	f.mu.Unlock()
 	if req.Method == "tools/list" {
-		writeJSONRPCResult(w, req.ID, map[string]any{"tools": []any{}})
+		tools := []any{}
+		if advertiseTime && f.name == "system" {
+			tools = append(tools, map[string]any{
+				"name":        "system.time",
+				"description": "Get the current system time for a time zone.",
+				"inputSchema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"zone": map[string]any{"type": "string"},
+					},
+					"required": []any{"zone"},
+				},
+			})
+		}
+		writeJSONRPCResult(w, req.ID, map[string]any{"tools": tools})
 		return
 	}
 	if req.Method != "tools/call" {
@@ -380,6 +484,18 @@ func (f *fakeMCPServer) handle(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSONRPCError(w, req.ID, "unknown tool")
 	}
+}
+
+func (f *fakeMCPServer) enableTimeTool() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.advertiseTime = true
+}
+
+func (f *fakeMCPServer) recordedRequests() []fakeMCPRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]fakeMCPRequest(nil), f.requests...)
 }
 
 func writeJSONRPCResult(w http.ResponseWriter, id any, result map[string]any) {
@@ -491,6 +607,74 @@ func TestDiscoveredToolsAppearInListTools(t *testing.T) {
 			t.Fatalf("ListTools[%q] = %v, want %v", name, got[name], policy)
 		}
 	}
+}
+
+func TestModelDrivenToolCallCompletesRun(t *testing.T) {
+	const (
+		userText  = "What time is it in UTC?"
+		finalText = "The fixed time is 2025-01-02T03:04:05Z."
+	)
+	harness := newGRPCHarness(t)
+	defer harness.close()
+	harness.systemMCP.enableTimeTool()
+	harness.fakeModel.enableModelDrivenToolCall()
+
+	sessionID := harness.createSession(t, "model-driven tool call")
+	streamEvents := harness.sendMessageToCompletion(t, sessionID, userText)
+	listed, err := harness.events.ListEvents(harness.clientContext(), &turingv1.ListEventsRequest{
+		SessionId: sessionID,
+		Limit:     100,
+	})
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+
+	var started, completed []*turingv1.TuringEvent
+	for _, event := range listed.Events {
+		switch event.Type {
+		case turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED:
+			started = append(started, event)
+		case turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED:
+			completed = append(completed, event)
+		case turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED,
+			turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_DENIED,
+			turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_DENIED:
+			t.Fatalf("unexpected terminal tool event: %s", event.Type)
+		}
+	}
+	if len(started) != 1 || len(completed) != 1 {
+		t.Fatalf("tool lifecycle counts: started=%d completed=%d, want 1 each", len(started), len(completed))
+	}
+	toolCallID := stringField(started[0].Payload, "toolCallId")
+	if toolCallID == "" || stringField(completed[0].Payload, "toolCallId") != toolCallID {
+		t.Fatalf("tool call IDs: started=%q completed=%q", toolCallID, stringField(completed[0].Payload, "toolCallId"))
+	}
+	if toolCallID == "provider_tool_call" || !strings.HasPrefix(toolCallID, "call_") {
+		t.Fatalf("tool call ID = %q, want deterministic runtime-generated ID", toolCallID)
+	}
+	if got := stringField(started[0].Payload, "toolName"); got != "system.time" {
+		t.Fatalf("started toolName = %q, want system.time", got)
+	}
+	if got := stringField(completed[0].Payload, "toolName"); got != "system.time" {
+		t.Fatalf("completed toolName = %q, want system.time", got)
+	}
+	if got := messageCompletedContent(streamEvents); got != finalText {
+		t.Fatalf("stream message.completed content = %q, want %q", got, finalText)
+	}
+	if got := messageCompletedPayload(listed.Events); got != finalText {
+		t.Fatalf("persisted message.completed content = %q, want %q", got, finalText)
+	}
+	if got := runCompletedPersistedContent(t, harness, sessionID, streamEvents); got != finalText {
+		t.Fatalf("run completed content = %q, want %q", got, finalText)
+	}
+
+	modelBodies := harness.fakeModel.bodies()
+	if len(modelBodies) != 2 {
+		t.Fatalf("OpenAI request count = %d, want 2", len(modelBodies))
+	}
+	alias, initialMessages := assertInitialOpenAIRequest(t, modelBodies[0], userText)
+	assertFollowupOpenAIRequest(t, modelBodies[1], initialMessages, alias, toolCallID)
+	assertModelDrivenMCPRequests(t, harness.systemMCP.recordedRequests(), harness.filesMCP.recordedRequests())
 }
 
 func TestApprovalRequiredToolFlow(t *testing.T) {
@@ -634,4 +818,175 @@ func (h *grpcHarness) sendMessageToCompletion(t *testing.T, sessionID string, co
 		}
 	}
 	return got
+}
+
+func runCompletedPersistedContent(t *testing.T, harness *grpcHarness, sessionID string, events []*turingv1.ChatStreamEvent) string {
+	t.Helper()
+	assistantMessageID := ""
+	for _, event := range events {
+		if completed := event.GetRunCompleted(); completed != nil {
+			assistantMessageID = completed.AssistantMessageId
+			break
+		}
+	}
+	if assistantMessageID == "" {
+		t.Fatal("stream did not include run completed with an assistant message ID")
+	}
+	ctx, cancel := context.WithTimeout(harness.clientContext(), 5*time.Second)
+	defer cancel()
+	response, err := harness.sessions.ListMessages(ctx, &turingv1.ListMessagesRequest{SessionId: sessionID})
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	for _, message := range response.Messages {
+		if message.MessageId == assistantMessageID {
+			return message.Content
+		}
+	}
+	t.Fatalf("run completed assistant message %q was not persisted", assistantMessageID)
+	return ""
+}
+
+func assertInitialOpenAIRequest(t *testing.T, body map[string]any, userText string) (string, []any) {
+	t.Helper()
+	tools, _ := body["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("initial OpenAI tools = %#v, want one tool", body["tools"])
+	}
+	tool, _ := tools[0].(map[string]any)
+	if tool["type"] != "function" {
+		t.Fatalf("advertised OpenAI tool type = %#v, want function", tool["type"])
+	}
+	function, _ := tool["function"].(map[string]any)
+	alias, _ := function["name"].(string)
+	if alias == "" || strings.Contains(alias, ".") || !isOpenAIFunctionAlias(alias) {
+		t.Fatalf("advertised OpenAI function alias = %q, want a valid non-dotted alias", alias)
+	}
+	if got := function["description"]; got != "Get the current system time for a time zone." {
+		t.Fatalf("advertised description = %#v", got)
+	}
+	wantSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"zone": map[string]any{"type": "string"},
+		},
+		"required": []any{"zone"},
+	}
+	if got := function["parameters"]; !reflect.DeepEqual(got, wantSchema) {
+		t.Fatalf("advertised schema = %#v, want %#v", got, wantSchema)
+	}
+	messages, _ := body["messages"].([]any)
+	foundUser := false
+	for _, raw := range messages {
+		message, _ := raw.(map[string]any)
+		if message["role"] == "user" && message["content"] == userText {
+			foundUser = true
+		}
+	}
+	if !foundUser {
+		t.Fatalf("initial OpenAI messages = %#v, want user content %q", body["messages"], userText)
+	}
+	return alias, messages
+}
+
+func assertFollowupOpenAIRequest(t *testing.T, body map[string]any, initialMessages []any, alias, toolCallID string) {
+	t.Helper()
+	messages, _ := body["messages"].([]any)
+	if len(messages) != len(initialMessages)+2 {
+		t.Fatalf("follow-up OpenAI messages = %#v, want initial history plus assistant and tool", body["messages"])
+	}
+	if !reflect.DeepEqual(messages[:len(initialMessages)], initialMessages) {
+		t.Fatalf("follow-up history = %#v, want %#v", messages[:len(initialMessages)], initialMessages)
+	}
+
+	assistant, _ := messages[len(initialMessages)].(map[string]any)
+	if assistant["role"] != "assistant" {
+		t.Fatalf("follow-up message[1] role = %#v, want assistant", assistant["role"])
+	}
+	calls, _ := assistant["tool_calls"].([]any)
+	if len(calls) != 1 {
+		t.Fatalf("assistant tool_calls = %#v, want one", assistant["tool_calls"])
+	}
+	call, _ := calls[0].(map[string]any)
+	if got := call["id"]; got != toolCallID {
+		t.Fatalf("assistant tool call ID = %#v, want %q", got, toolCallID)
+	}
+	if got := call["type"]; got != "function" {
+		t.Fatalf("assistant tool call type = %#v, want function", got)
+	}
+	function, _ := call["function"].(map[string]any)
+	if got := function["name"]; got != alias {
+		t.Fatalf("assistant wire function name = %#v, want alias %q", got, alias)
+	}
+	var arguments map[string]any
+	argumentsJSON, _ := function["arguments"].(string)
+	if err := json.Unmarshal([]byte(argumentsJSON), &arguments); err != nil {
+		t.Fatalf("assistant wire arguments %q: %v", argumentsJSON, err)
+	}
+	if !reflect.DeepEqual(arguments, map[string]any{"zone": "UTC"}) {
+		t.Fatalf("assistant wire arguments = %#v", arguments)
+	}
+
+	tool, _ := messages[len(initialMessages)+1].(map[string]any)
+	if tool["role"] != "tool" || tool["tool_call_id"] != toolCallID {
+		t.Fatalf("tool result linkage = %#v, want tool_call_id %q", tool, toolCallID)
+	}
+	var result map[string]any
+	resultJSON, _ := tool["content"].(string)
+	if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
+		t.Fatalf("tool result content %q: %v", resultJSON, err)
+	}
+	if !reflect.DeepEqual(result, map[string]any{"time": "2025-01-02T03:04:05Z"}) {
+		t.Fatalf("tool result content = %#v", result)
+	}
+}
+
+func isOpenAIFunctionAlias(name string) bool {
+	if len(name) == 0 || len(name) > 64 {
+		return false
+	}
+	for _, character := range name {
+		if character >= 'a' && character <= 'z' ||
+			character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' ||
+			character == '_' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func assertModelDrivenMCPRequests(t *testing.T, system, files []fakeMCPRequest) {
+	t.Helper()
+	var calls []fakeMCPRequest
+	for serverName, requests := range map[string][]fakeMCPRequest{"system": system, "files": files} {
+		listCount := 0
+		for _, request := range requests {
+			switch request.method {
+			case "tools/list":
+				listCount++
+				if _, present := request.params["cursor"]; present {
+					t.Fatalf("%s tools/list unexpectedly included cursor: %#v", serverName, request.params)
+				}
+			case "tools/call":
+				if serverName != "system" {
+					t.Fatalf("%s MCP unexpectedly received tools/call: %#v", serverName, request.params)
+				}
+				calls = append(calls, request)
+			}
+		}
+		if listCount != 1 {
+			t.Fatalf("%s MCP tools/list count = %d, want 1", serverName, listCount)
+		}
+	}
+	if len(calls) != 1 {
+		t.Fatalf("system MCP tools/call count = %d, want 1", len(calls))
+	}
+	if got := calls[0].params["name"]; got != "system.time" {
+		t.Fatalf("MCP tools/call name = %#v, want system.time", got)
+	}
+	if got := calls[0].params["arguments"]; !reflect.DeepEqual(got, map[string]any{"zone": "UTC"}) {
+		t.Fatalf("MCP tools/call arguments = %#v", got)
+	}
 }
