@@ -14,8 +14,10 @@ import (
 )
 
 const (
-	defaultMaxResponseBytes int64 = 1024 * 1024
-	maxListToolsPages             = 100
+	defaultMaxResponseBytes  int64 = 1024 * 1024
+	maxListToolsPages              = 100
+	maxListToolsTotalCount         = 10_000
+	maxListToolsEncodedBytes       = 4 * 1024 * 1024
 )
 
 type Client struct {
@@ -36,6 +38,7 @@ func NewClient(endpoint string, token string, httpClient *http.Client) *Client {
 
 func (c *Client) ListTools(ctx context.Context) ([]map[string]any, error) {
 	tools := make([]map[string]any, 0)
+	encodedToolBytes := 0
 	params := map[string]any{}
 	seenCursors := make(map[string]struct{})
 	for page := 0; page < maxListToolsPages; page++ {
@@ -43,12 +46,40 @@ func (c *Client) ListTools(ctx context.Context) ([]map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		values, _ := result["tools"].([]any)
-		for _, value := range values {
-			if tool, ok := value.(map[string]any); ok {
-				tools = append(tools, tool)
-			}
+		rawTools, present := result["tools"]
+		values, ok := rawTools.([]any)
+		if !present || !ok {
+			return nil, fmt.Errorf("MCP tools/list page %d tools must be present and an array", page+1)
 		}
+		if len(values) > maxListToolsTotalCount-len(tools) {
+			return nil, fmt.Errorf(
+				"MCP tools/list page %d total tool count exceeds limit of %d",
+				page+1,
+				maxListToolsTotalCount,
+			)
+		}
+		pageTools := make([]map[string]any, len(values))
+		for index, value := range values {
+			tool, ok := value.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("MCP tools/list page %d tool %d must be an object", page+1, index)
+			}
+			encoded, err := json.Marshal(tool)
+			if err != nil {
+				return nil, fmt.Errorf("MCP tools/list page %d tool %d cannot be encoded: %w", page+1, index, err)
+			}
+			if len(encoded) > maxListToolsEncodedBytes-encodedToolBytes {
+				return nil, fmt.Errorf(
+					"MCP tools/list page %d tool %d makes aggregate encoded tool bytes exceed limit of %d",
+					page+1,
+					index,
+					maxListToolsEncodedBytes,
+				)
+			}
+			encodedToolBytes += len(encoded)
+			pageTools[index] = tool
+		}
+		tools = append(tools, pageTools...)
 
 		rawCursor, present := result["nextCursor"]
 		if !present || rawCursor == nil {
@@ -57,9 +88,6 @@ func (c *Client) ListTools(ctx context.Context) ([]map[string]any, error) {
 		cursor, ok := rawCursor.(string)
 		if !ok {
 			return nil, fmt.Errorf("MCP tools/list nextCursor must be a string, null, or absent")
-		}
-		if cursor == "" {
-			return tools, nil
 		}
 		if _, repeated := seenCursors[cursor]; repeated {
 			return nil, fmt.Errorf("MCP tools/list returned repeated nextCursor %q", cursor)
