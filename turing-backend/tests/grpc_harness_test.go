@@ -724,7 +724,7 @@ func TestSendMessageStreamsTokensToCompletion(t *testing.T) {
 	events := harness.sendMessageToCompletion(t, sessionID, "hello")
 
 	assertTokenDeltas(t, events, []string{"Hel", "lo"})
-	if completed := messageCompletedContent(events); completed != "Hello" {
+	if completed := messageCompletedContent(t, events); completed != "Hello" {
 		t.Fatalf("message completed content = %q, want Hello", completed)
 	}
 	if !hasRunCompleted(events) {
@@ -815,6 +815,7 @@ func TestModelDrivenToolCallCompletesRun(t *testing.T) {
 	assertNoFakeHandlerErrors(t, harness.fakeModel, harness.systemMCP, harness.filesMCP)
 	runID := completedRunID(t, streamEvents)
 	expectedToolCallID := deterministicToolCallID(runID, 0, 0)
+	assertStreamedToolLifecycle(t, streamEvents, expectedToolCallID, "system.time", runID)
 	listContext, cancelList := context.WithTimeout(harness.clientContext(), 5*time.Second)
 	defer cancelList()
 	listed, err := harness.events.ListEvents(listContext, &turingv1.ListEventsRequest{
@@ -856,7 +857,7 @@ func TestModelDrivenToolCallCompletesRun(t *testing.T) {
 	if startedName, completedName := stringField(started[0].Payload, "toolName"), stringField(completed[0].Payload, "toolName"); startedName != "system.time" || completedName != startedName {
 		t.Fatalf("tool lifecycle names: started=%q completed=%q, want system.time for both", startedName, completedName)
 	}
-	if got := messageCompletedContent(streamEvents); got != finalText {
+	if got := messageCompletedContent(t, streamEvents); got != finalText {
 		t.Fatalf("stream message.completed content = %q, want %q", got, finalText)
 	}
 	if got := messageCompletedPayload(listed.Events); got != finalText {
@@ -934,7 +935,7 @@ func TestApprovalRequiredToolFlow(t *testing.T) {
 		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_APPROVED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED,
 	)
-	if completed := messageCompletedContent(got); completed == "" {
+	if completed := messageCompletedContent(t, got); completed == "" {
 		t.Fatal("tool flow did not complete assistant message")
 	}
 }
@@ -1048,25 +1049,70 @@ func runCompletedPersistedContent(t *testing.T, harness *grpcHarness, sessionID 
 
 func completedRunID(t *testing.T, events []*turingv1.ChatStreamEvent) string {
 	t.Helper()
-	runID := ""
+	var completedRuns []*turingv1.RunCompleted
 	for _, event := range events {
 		if completed := event.GetRunCompleted(); completed != nil {
-			if runID != "" {
-				t.Fatalf("stream included multiple run.completed events: %q and %q", runID, completed.RunId)
-			}
-			runID = completed.RunId
+			completedRuns = append(completedRuns, completed)
 		}
 	}
-	if runID == "" {
-		t.Fatal("stream did not include run.completed with a run ID")
+	if len(completedRuns) != 1 {
+		t.Fatalf("stream run.completed count = %d, want 1", len(completedRuns))
 	}
-	return runID
+	if completedRuns[0].RunId == "" {
+		t.Fatal("stream run.completed had an empty run ID")
+	}
+	return completedRuns[0].RunId
 }
 
 func deterministicToolCallID(runID string, round, index int) string {
 	input := fmt.Sprintf("%d:%s:%d:%d", len(runID), runID, round, index)
 	sum := sha256.Sum256([]byte(input))
 	return "call_" + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:])
+}
+
+func assertStreamedToolLifecycle(t *testing.T, events []*turingv1.ChatStreamEvent, toolCallID string, toolName string, runID string) {
+	t.Helper()
+	var started, completed []*turingv1.TuringEvent
+	startedIndex, completedIndex := -1, -1
+	for index, streamEvent := range events {
+		event := streamEvent.GetPersistedEvent()
+		if event == nil {
+			continue
+		}
+		switch event.Type {
+		case turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED:
+			started = append(started, event)
+			startedIndex = index
+		case turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED:
+			completed = append(completed, event)
+			completedIndex = index
+		case turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED,
+			turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_DENIED,
+			turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_DENIED:
+			t.Fatalf("unexpected streamed terminal tool event: %s", event.Type)
+		}
+	}
+	if len(started) != 1 || len(completed) != 1 {
+		t.Fatalf("streamed tool lifecycle counts: started=%d completed=%d, want 1 each", len(started), len(completed))
+	}
+	if startedIndex >= completedIndex {
+		t.Fatalf("streamed tool lifecycle order: started index=%d completed index=%d, want STARTED before COMPLETED", startedIndex, completedIndex)
+	}
+	assertToolLifecycleEvent(t, "streamed started", started[0], toolCallID, toolName, runID)
+	assertToolLifecycleEvent(t, "streamed completed", completed[0], toolCallID, toolName, runID)
+}
+
+func assertToolLifecycleEvent(t *testing.T, label string, event *turingv1.TuringEvent, toolCallID string, toolName string, runID string) {
+	t.Helper()
+	if event.RunId != runID {
+		t.Fatalf("%s run ID = %q, want %q", label, event.RunId, runID)
+	}
+	if got := stringField(event.Payload, "toolCallId"); got != toolCallID {
+		t.Fatalf("%s toolCallId = %q, want %q", label, got, toolCallID)
+	}
+	if got := stringField(event.Payload, "toolName"); got != toolName {
+		t.Fatalf("%s toolName = %q, want %q", label, got, toolName)
+	}
 }
 
 func assertInitialOpenAIRequest(t *testing.T, body map[string]any, userText string) string {
