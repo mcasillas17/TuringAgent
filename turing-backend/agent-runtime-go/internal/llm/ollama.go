@@ -283,6 +283,12 @@ func (state *ollamaStreamState) appendToolCallFragment(index int, id, name strin
 	if call == nil && len(state.toolCalls) >= maxOllamaToolCalls {
 		return fmt.Errorf("tool call count exceeds %d", maxOllamaToolCalls)
 	}
+	if call != nil && id != "" && call.id != "" && id != call.id {
+		return fmt.Errorf("tool call %d has conflicting ID %q after %q", index, id, call.id)
+	}
+	if call != nil && name != "" && call.name != "" && name != call.name {
+		return fmt.Errorf("tool call %d has conflicting function name %q after %q", index, name, call.name)
+	}
 
 	mergedArguments := make(map[string]any)
 	if call != nil {

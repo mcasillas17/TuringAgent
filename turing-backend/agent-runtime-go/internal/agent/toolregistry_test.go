@@ -430,6 +430,79 @@ func TestBuildRegistryRejectsInvalidInputSchema(t *testing.T) {
 	}
 }
 
+func TestBuildRegistryRejectsMalformedInputSchemaStructure(t *testing.T) {
+	tests := []struct {
+		name        string
+		schema      map[string]any
+		wantMessage string
+	}{
+		{
+			name:        "properties is not an object",
+			schema:      map[string]any{"type": "object", "properties": []any{}},
+			wantMessage: "properties",
+		},
+		{
+			name: "property definition is not an object",
+			schema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"value": "string"},
+			},
+			wantMessage: `property "value"`,
+		},
+		{
+			name:        "required is not an array",
+			schema:      map[string]any{"type": "object", "required": "value"},
+			wantMessage: "required",
+		},
+		{
+			name: "required entry is not a string",
+			schema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"value": map[string]any{"type": "string"}},
+				"required":   []any{7},
+			},
+			wantMessage: "required entry 0",
+		},
+		{
+			name: "required name is absent from properties",
+			schema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+				"required":   []any{"value"},
+			},
+			wantMessage: `required name "value"`,
+		},
+		{
+			name:        "additionalProperties is null",
+			schema:      map[string]any{"type": "object", "additionalProperties": nil},
+			wantMessage: "additionalProperties",
+		},
+		{
+			name:        "additionalProperties is a string",
+			schema:      map[string]any{"type": "object", "additionalProperties": "false"},
+			wantMessage: "additionalProperties",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
+				"schema-server": &registryTestClient{tools: []map[string]any{{
+					"name":        "malformed",
+					"inputSchema": tt.schema,
+				}}},
+			})
+
+			if err == nil {
+				t.Fatal("BuildToolRegistry returned nil error")
+			}
+			assertErrorContains(t, err, "schema-server", "malformed", "inputSchema", tt.wantMessage)
+			if ToolDiscoveryRetryable(err) {
+				t.Fatalf("BuildToolRegistry error = %T %v, want permanent catalog error", err, err)
+			}
+		})
+	}
+}
+
 func TestBuildRegistryNormalizesMissingInputSchemaRootType(t *testing.T) {
 	schema := map[string]any{
 		"properties": map[string]any{"value": map[string]any{"type": "string"}},

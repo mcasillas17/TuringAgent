@@ -561,6 +561,78 @@ func TestCallToolReturnsJSONRPCErrorMessage(t *testing.T) {
 	}
 }
 
+func TestCallToolRejectsResponseWithResultAndError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"content":[]},"error":{"code":-32000,"message":"failed"}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	result, err := NewClient(server.URL, "", server.Client()).CallTool(context.Background(), "system.echo", nil)
+
+	if err == nil || !strings.Contains(err.Error(), "both result and error") {
+		t.Fatalf("CallTool error = %v, want conflicting response envelope error", err)
+	}
+	if result != nil {
+		t.Fatalf("CallTool result = %#v, want nil", result)
+	}
+}
+
+func TestCallToolRejectsNonObjectResult(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":["not","an","object"]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	result, err := NewClient(server.URL, "", server.Client()).CallTool(context.Background(), "system.echo", nil)
+
+	if err == nil || !strings.Contains(err.Error(), "result must be an object") {
+		t.Fatalf("CallTool error = %v, want non-object result error", err)
+	}
+	if result != nil {
+		t.Fatalf("CallTool result = %#v, want nil", result)
+	}
+}
+
+func TestCallToolReturnsTypedErrorForToolFailureResult(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"tool failed"}],"isError":true}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	result, err := NewClient(server.URL, "", server.Client()).CallTool(context.Background(), "system.echo", nil)
+
+	var toolErr ToolCallError
+	if !errors.As(err, &toolErr) || !strings.Contains(err.Error(), "tool failed") {
+		t.Fatalf("CallTool error = %T %v, want typed tool failure", err, err)
+	}
+	if result != nil {
+		t.Fatalf("CallTool result = %#v, want nil", result)
+	}
+	if toolErr.Result["isError"] != true {
+		t.Fatalf("ToolCallError result = %#v, want original failure result", toolErr.Result)
+	}
+}
+
+func TestCallToolAcceptsObjectResult(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"content":[],"isError":false,"value":42}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	result, err := NewClient(server.URL, "", server.Client()).CallTool(context.Background(), "system.echo", nil)
+
+	if err != nil {
+		t.Fatalf("CallTool returned error: %v", err)
+	}
+	if result["value"] != json.Number("42") {
+		t.Fatalf("CallTool result = %#v, want preserved object", result)
+	}
+}
+
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {

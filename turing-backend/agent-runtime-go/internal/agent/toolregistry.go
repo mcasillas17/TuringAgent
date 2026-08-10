@@ -154,6 +154,9 @@ func BuildToolRegistry(ctx context.Context, servers map[string]ToolLister) (*Too
 						}
 						return nil, permanentToolDiscoveryError(fmt.Errorf("MCP server %q tool %q has invalid inputSchema: %w", serverName, name, err))
 					}
+					if ctxErr := ctx.Err(); ctxErr != nil {
+						return nil, ctxErr
+					}
 					rootType, present := parameters["type"]
 					if !present {
 						parameters["type"] = "object"
@@ -164,6 +167,14 @@ func BuildToolRegistry(ctx context.Context, servers map[string]ToolLister) (*Too
 							index,
 							name,
 							"object",
+						))
+					}
+					if err := validateInputSchemaShape(parameters); err != nil {
+						return nil, permanentToolDiscoveryError(fmt.Errorf(
+							"MCP server %q tool %q has invalid inputSchema: %w",
+							serverName,
+							name,
+							err,
 						))
 					}
 				}
@@ -234,6 +245,55 @@ func normalizeJSONMap(source map[string]any) (map[string]any, error) {
 		return nil, fmt.Errorf("normalize JSON object: %w", err)
 	}
 	return normalized, nil
+}
+
+func validateInputSchemaShape(schema map[string]any) error {
+	var properties map[string]any
+	if rawProperties, present := schema["properties"]; present {
+		var ok bool
+		properties, ok = rawProperties.(map[string]any)
+		if !ok {
+			return errors.New("properties must be an object")
+		}
+		for name, rawDefinition := range properties {
+			definition, ok := rawDefinition.(map[string]any)
+			if !ok {
+				return fmt.Errorf("property %q definition must be an object", name)
+			}
+			if err := validateInputSchemaShape(definition); err != nil {
+				return fmt.Errorf("property %q: %w", name, err)
+			}
+		}
+	}
+
+	if rawRequired, present := schema["required"]; present {
+		required, ok := rawRequired.([]any)
+		if !ok {
+			return errors.New("required must be an array")
+		}
+		for index, rawName := range required {
+			name, ok := rawName.(string)
+			if !ok {
+				return fmt.Errorf("required entry %d must be a string", index)
+			}
+			if _, present := properties[name]; !present {
+				return fmt.Errorf("required name %q is absent from properties", name)
+			}
+		}
+	}
+
+	if additionalProperties, present := schema["additionalProperties"]; present {
+		switch value := additionalProperties.(type) {
+		case bool:
+		case map[string]any:
+			if err := validateInputSchemaShape(value); err != nil {
+				return fmt.Errorf("additionalProperties: %w", err)
+			}
+		default:
+			return errors.New("additionalProperties must be a boolean or schema object")
+		}
+	}
+	return nil
 }
 
 func cloneNormalizedJSONMap(source map[string]any) map[string]any {

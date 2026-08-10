@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/safejson"
@@ -50,6 +51,29 @@ type JSONRPCError struct {
 
 func (e JSONRPCError) Error() string {
 	return fmt.Sprintf("MCP error %d: %s", e.Code, e.Message)
+}
+
+type ToolCallError struct {
+	Result map[string]any
+}
+
+func (e ToolCallError) Error() string {
+	message := "MCP tool call failed"
+	content, ok := e.Result["content"].([]any)
+	if !ok {
+		return message
+	}
+	for _, item := range content {
+		block, ok := item.(map[string]any)
+		if !ok || block["type"] != "text" {
+			continue
+		}
+		text, ok := block["text"].(string)
+		if ok && strings.TrimSpace(text) != "" {
+			return message + ": " + text
+		}
+	}
+	return message
 }
 
 func Retryable(err error) bool {
@@ -138,7 +162,14 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any,
 	if len(approvalToken) > 0 && approvalToken[0] != "" {
 		params["_meta"] = map[string]any{"approvalToken": approvalToken[0]}
 	}
-	return c.request(ctx, "tools/call", params)
+	result, err := c.request(ctx, "tools/call", params)
+	if err != nil {
+		return nil, err
+	}
+	if isError, ok := result["isError"].(bool); ok && isError {
+		return nil, nonRetryableError(ToolCallError{Result: result})
+	}
+	return result, nil
 }
 
 func (c *Client) request(ctx context.Context, method string, params map[string]any) (map[string]any, error) {
@@ -185,7 +216,12 @@ func (c *Client) request(ctx context.Context, method string, params map[string]a
 	if err != nil || responseIDValue != id {
 		return nil, nonRetryableError(fmt.Errorf("MCP response id does not match request ID %d", id))
 	}
-	if rawErr, ok := obj["error"]; ok && rawErr != nil {
+	result, hasResult := obj["result"]
+	rawErr, hasError := obj["error"]
+	if hasResult && hasError {
+		return nil, nonRetryableError(errors.New("MCP response must not contain both result and error"))
+	}
+	if hasError {
 		errorObj, ok := rawErr.(map[string]any)
 		if !ok {
 			return nil, nonRetryableError(errors.New("MCP error"))
@@ -206,13 +242,12 @@ func (c *Client) request(ctx context.Context, method string, params map[string]a
 		retryable := code == -32603 || (code >= -32099 && code <= -32000)
 		return nil, classifiedError{err: rpcErr, retryable: retryable}
 	}
-	result, ok := obj["result"]
-	if !ok || result == nil {
+	if !hasResult {
 		return nil, nonRetryableError(errors.New("MCP response must contain result or error"))
 	}
 	resultObj, ok := result.(map[string]any)
 	if !ok {
-		return map[string]any{"value": result}, nil
+		return nil, nonRetryableError(errors.New("MCP response result must be an object"))
 	}
 	return resultObj, nil
 }

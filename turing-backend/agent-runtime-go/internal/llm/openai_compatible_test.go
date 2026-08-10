@@ -437,11 +437,11 @@ func TestOpenAIIgnoresEmptyChoiceUsageAndKeepaliveChunks(t *testing.T) {
 	}
 }
 
-func TestOpenAIToolCallDeltaReplacesRepeatedIDAndName(t *testing.T) {
+func TestOpenAIToolCallDeltaAcceptsRepeatedIDAndName(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
-		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_old","type":"function","function":{"name":"old_name","arguments":"{\"city\":"}}]}}]}`+"\n\n")
-		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_latest","function":{"name":"latest_name","arguments":"\"Paris\"}"}}]}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"get_weather","arguments":"{\"city\":"}}]}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","function":{"name":"get_weather","arguments":"\"Paris\"}"}}]}}]}`+"\n\n")
 		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
@@ -459,11 +459,60 @@ func TestOpenAIToolCallDeltaReplacesRepeatedIDAndName(t *testing.T) {
 		t.Fatalf("tool call event = %+v", got[0])
 	}
 	call := got[0].ToolCalls[0]
-	if call.ID != "call_latest" || call.Name != "latest_name" || call.Arguments["city"] != "Paris" {
+	if call.ID != "call_0" || call.Name != "get_weather" || call.Arguments["city"] != "Paris" {
 		t.Fatalf("tool call = %+v", call)
 	}
 	if got[1].Type != "completed" || got[1].FinishReason != "tool_calls" {
 		t.Fatalf("completion = %+v", got[1])
+	}
+}
+
+func TestOpenAIRejectsConflictingToolCallIdentityFragments(t *testing.T) {
+	tests := []struct {
+		name        string
+		firstID     string
+		secondID    string
+		firstName   string
+		secondName  string
+		wantMessage string
+	}{
+		{
+			name:        "ID",
+			firstID:     "call_0",
+			secondID:    "call_changed",
+			firstName:   "get_weather",
+			secondName:  "get_weather",
+			wantMessage: "conflicting ID",
+		},
+		{
+			name:        "function name",
+			firstID:     "call_0",
+			secondID:    "call_0",
+			firstName:   "get_weather",
+			secondName:  "get_time",
+			wantMessage: "conflicting function name",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := "data: " + string(openAIToolFragment(0, tt.firstID, tt.firstName, "")) + "\n\n" +
+				"data: " + string(openAIToolFragment(0, tt.secondID, tt.secondName, "{}")) + "\n\n"
+
+			got := streamOpenAIEvents(t, body)
+
+			assertOpenAIEventTypes(t, got, "error")
+			if got[0].Code != "model_bad_chunk" || !strings.Contains(got[0].Message, tt.wantMessage) {
+				t.Fatalf("events = %+v, want model_bad_chunk containing %q", got, tt.wantMessage)
+			}
+		})
+	}
+}
+
+func TestDecodeOpenAIDeltaRejectsTrailingJSONValues(t *testing.T) {
+	_, err := decodeOpenAIDelta([]byte(`{"content":"accepted"} {"content":"ignored"}`))
+
+	if err == nil || !strings.Contains(err.Error(), "trailing data") {
+		t.Fatalf("decodeOpenAIDelta error = %v, want trailing-data error", err)
 	}
 }
 
@@ -1049,14 +1098,13 @@ func TestOpenAIBoundsResponseWideToolCallState(t *testing.T) {
 		}
 	})
 
-	t.Run("replacement ID and name bytes", func(t *testing.T) {
+	t.Run("aggregate ID and name bytes", func(t *testing.T) {
 		state := newOpenAIStreamState()
 		boundaryID := strings.Repeat("i", maxOpenAIToolCallAggregateIdentifierBytes-1)
 		if _, _, err := parseOpenAIData(openAIToolFragment(0, boundaryID, "n", ""), state); err != nil {
 			t.Fatalf("fragment reaching identifier boundary: %v", err)
 		}
-		oversizedReplacementID := strings.Repeat("i", maxOpenAIToolCallAggregateIdentifierBytes)
-		if _, _, err := parseOpenAIData(openAIToolFragment(0, oversizedReplacementID, "", ""), state); err == nil ||
+		if _, _, err := parseOpenAIData(openAIToolFragment(1, "i", "", ""), state); err == nil ||
 			!strings.Contains(err.Error(), "ID and name bytes exceed") {
 			t.Fatalf("overflow error = %v, want identifier byte bound", err)
 		}

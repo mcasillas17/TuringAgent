@@ -521,10 +521,8 @@ func parseOpenAIData(data []byte, state *openAIStreamState) ([]StreamEvent, bool
 
 	events := make([]StreamEvent, 0, 2)
 	if len(choice.Delta) > 0 && string(choice.Delta) != "null" {
-		var delta openAIDelta
-		decoder := json.NewDecoder(bytes.NewReader(choice.Delta))
-		decoder.UseNumber()
-		if err := decoder.Decode(&delta); err != nil {
+		delta, err := decodeOpenAIDelta(choice.Delta)
+		if err != nil {
 			return nil, false, err
 		}
 		for _, fragment := range delta.ToolCalls {
@@ -603,6 +601,22 @@ func parseOpenAIData(data []byte, state *openAIStreamState) ([]StreamEvent, bool
 		return events, true, nil
 	}
 	return events, false, nil
+}
+
+func decodeOpenAIDelta(data []byte) (openAIDelta, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var delta openAIDelta
+	if err := decoder.Decode(&delta); err != nil {
+		return openAIDelta{}, fmt.Errorf("malformed delta: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			err = fmt.Errorf("multiple JSON values")
+		}
+		return openAIDelta{}, fmt.Errorf("delta contains trailing data: %w", err)
+	}
+	return delta, nil
 }
 
 func parseOpenAIErrorEnvelope(data []byte) (StreamEvent, error) {
@@ -709,6 +723,17 @@ func (state *openAIStreamState) appendToolCallFragment(index int, fragment openA
 	call := state.toolCalls[index]
 	if call == nil && len(state.toolCalls) >= maxOpenAIToolCalls {
 		return fmt.Errorf("tool call count exceeds %d", maxOpenAIToolCalls)
+	}
+	if call != nil && fragment.ID != "" && call.id != "" && fragment.ID != call.id {
+		return fmt.Errorf("tool call %d has conflicting ID %q after %q", index, fragment.ID, call.id)
+	}
+	if call != nil && fragment.Function.Name != "" && call.name != "" && fragment.Function.Name != call.name {
+		return fmt.Errorf(
+			"tool call %d has conflicting function name %q after %q",
+			index,
+			fragment.Function.Name,
+			call.name,
+		)
 	}
 
 	argumentFragment := ""

@@ -313,7 +313,7 @@ func TestOllamaParsesMultipleToolCallsAndEmptyArguments(t *testing.T) {
 
 func TestOllamaMergesPartialToolCallArguments(t *testing.T) {
 	got := streamOllamaEvents(t,
-		`{"message":{"content":"first ","tool_calls":[{"id":"temporary","function":{"index":0,"name":"lookup","arguments":{"query":"weather","details":{"days":3}}}}]},"done":false}`+"\n"+
+		`{"message":{"content":"first ","tool_calls":[{"id":"call_0","function":{"index":0,"name":"get_weather","arguments":{"query":"weather","details":{"days":3}}}}]},"done":false}`+"\n"+
 			`{"message":{"content":"then ","tool_calls":[{"id":"call_0","function":{"index":0,"name":"get_weather","arguments":{"units":"celsius","details":{"lang":"fr"},"query":"weather"}}},{"id":"call_1","function":{"index":1,"name":"clock","arguments":{"city":"Paris"}}}]},"done":false}`+"\n"+
 			`{"message":{"content":"done"},"done":true,"done_reason":"tool_calls"}`+"\n")
 
@@ -332,6 +332,53 @@ func TestOllamaMergesPartialToolCallArguments(t *testing.T) {
 	}
 	if calls[1].ID != "call_1" || calls[1].Name != "clock" || calls[1].Arguments["city"] != "Paris" {
 		t.Fatalf("second call = %+v", calls[1])
+	}
+}
+
+func TestOllamaRejectsConflictingToolCallIdentityFragments(t *testing.T) {
+	tests := []struct {
+		name        string
+		firstID     string
+		secondID    string
+		firstName   string
+		secondName  string
+		wantMessage string
+	}{
+		{
+			name:        "ID",
+			firstID:     "call_0",
+			secondID:    "call_changed",
+			firstName:   "get_weather",
+			secondName:  "get_weather",
+			wantMessage: "conflicting ID",
+		},
+		{
+			name:        "function name",
+			firstID:     "call_0",
+			secondID:    "call_0",
+			firstName:   "get_weather",
+			secondName:  "get_time",
+			wantMessage: "conflicting function name",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := fmt.Sprintf(
+				"{\"message\":{\"tool_calls\":[{\"id\":%q,\"function\":{\"index\":0,\"name\":%q,\"arguments\":{}}}]},\"done\":false}\n"+
+					"{\"message\":{\"tool_calls\":[{\"id\":%q,\"function\":{\"index\":0,\"name\":%q,\"arguments\":{}}}]},\"done\":true}\n",
+				tt.firstID,
+				tt.firstName,
+				tt.secondID,
+				tt.secondName,
+			)
+
+			got := streamOllamaEvents(t, body)
+
+			assertOllamaEventTypes(t, got, "error")
+			if got[0].Code != "model_bad_chunk" || !strings.Contains(got[0].Message, tt.wantMessage) {
+				t.Fatalf("events = %+v, want model_bad_chunk containing %q", got, tt.wantMessage)
+			}
+		})
 	}
 }
 
