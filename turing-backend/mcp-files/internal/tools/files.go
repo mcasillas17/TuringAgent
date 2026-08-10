@@ -15,71 +15,49 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
-	defaultReadBytes     = 64 * 1024
-	maxReadBytes         = 512 * 1024
-	defaultListEntries   = 200
-	maxListEntries       = 1000
-	defaultSearchResults = 50
-	maxSearchResults     = 200
-	maxSearchEntries     = 2000
-	maxSearchFiles       = 1000
-	maxSearchBytes       = 8 * 1024 * 1024
+	MaxMutationContentBytes = 512 * 1024
+
+	defaultReadBytes      = 64 * 1024
+	maxReadBytes          = 512 * 1024
+	defaultListEntries    = 200
+	maxListEntries        = 1000
+	defaultSearchResults  = 50
+	maxSearchResults      = 200
+	maxSearchEntries      = 2000
+	maxSearchFiles        = 1000
+	maxSearchBytes        = 8 * 1024 * 1024
+	searchDirBatchSize    = 64
+	maxSearchErrorDetails = 20
 )
 
 type ApprovalValidator interface {
-	Validate(token string, tool string, args map[string]any, agentID string) error
+	ValidateContext(ctx context.Context, token string, tool string, args map[string]any, agentID string) error
 }
 
 type FilesTools struct {
 	root      string
 	validator ApprovalValidator
+	locks     *pathLockTable
 }
 
 func NewFilesTools(root string) FilesTools {
 	abs, _ := filepath.Abs(root)
-	// Canonicalize the sandbox root so that EvalSymlinks-based path checks
-	// compare like-for-like on systems where the tmp/parent path traverses a
-	// symlink (e.g. macOS, where /var is a symlink to /private/var).
+	// Canonicalize the configured root once so descriptor-relative opens start
+	// from the same directory on systems where a parent path is a symlink.
 	if real, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = real
 	}
-	return FilesTools{root: abs}
+	return FilesTools{root: abs, locks: processPathLocks}
 }
 
 func (f FilesTools) WithApprovalValidator(validator ApprovalValidator) FilesTools {
 	f.validator = validator
 	return f
-}
-
-func (f FilesTools) resolve(input string) (string, error) {
-	clean := filepath.Clean(strings.TrimPrefix(input, "/"))
-	full := filepath.Join(f.root, clean)
-	existing := full
-	missing := []string{}
-	for {
-		if _, err := os.Lstat(existing); err == nil {
-			break
-		}
-		parent := filepath.Dir(existing)
-		if parent == existing {
-			return "", errors.New("path escapes sandbox")
-		}
-		missing = append([]string{filepath.Base(existing)}, missing...)
-		existing = parent
-	}
-	resolvedExisting, err := filepath.EvalSymlinks(existing)
-	if err != nil {
-		return "", err
-	}
-	resolved := filepath.Join(append([]string{resolvedExisting}, missing...)...)
-	rel, err := filepath.Rel(f.root, resolved)
-	if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
-		return "", errors.New("path escapes sandbox")
-	}
-	return resolved, nil
 }
 
 func (f FilesTools) Read(args map[string]any) (map[string]any, error) {
@@ -94,20 +72,17 @@ func (f FilesTools) ReadContext(ctx context.Context, args map[string]any) (map[s
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	full, err := f.resolve(pathValue)
+	file, _, _, err := f.openRegularFile(pathValue)
 	if err != nil {
 		return nil, err
 	}
-	info, err := os.Stat(full)
+	defer file.Close()
+	content, bytesRead, _, err := readBoundedContext(ctx, file, maxReadBytes+1)
 	if err != nil {
 		return nil, err
 	}
-	if info.Size() > maxReadBytes {
+	if len(content) > maxReadBytes {
 		return nil, errors.New("file too large")
-	}
-	content, err := os.ReadFile(full)
-	if err != nil {
-		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -122,7 +97,7 @@ func (f FilesTools) ReadContext(ctx context.Context, args map[string]any) (map[s
 			content = content[:len(content)-1]
 		}
 	}
-	return map[string]any{"path": pathValue, "content": string(content), "truncated": truncated}, nil
+	return map[string]any{"path": pathValue, "content": string(content), "truncated": truncated, "bytesRead": bytesRead}, nil
 }
 
 func (f FilesTools) List(args map[string]any) (map[string]any, error) {
@@ -137,11 +112,7 @@ func (f FilesTools) ListContext(ctx context.Context, args map[string]any) (map[s
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	full, err := f.resolve(pathValue)
-	if err != nil {
-		return nil, err
-	}
-	directory, err := os.Open(full)
+	directory, _, err := f.openDirectoryPath(pathValue, false)
 	if err != nil {
 		return nil, err
 	}
@@ -177,132 +148,392 @@ func (f FilesTools) SearchContext(ctx context.Context, args map[string]any) (map
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	full, err := f.resolve(pathValue)
+	clean, _, err := normalizeSandboxPath(pathValue)
 	if err != nil {
 		return nil, err
 	}
+	type directoryTask struct {
+		path      string
+		directory *os.File
+	}
+	directories := []directoryTask{}
 	matches := []map[string]any{}
+	errorDetails := []map[string]any{}
 	entriesVisited := 0
+	directoryEntriesRead := 0
+	directoriesScanned := 0
 	filesScanned := 0
+	skippedFiles := 0
 	bytesScanned := int64(0)
+	errorCount := 0
 	truncated := false
-	err = filepath.WalkDir(full, func(path string, entry os.DirEntry, walkErr error) error {
-		if err := ctx.Err(); err != nil {
-			return err
+	stop := false
+	recordFailure := func(path, operation string, failure error) {
+		errorCount++
+		if len(errorDetails) < maxSearchErrorDetails {
+			errorDetails = append(errorDetails, map[string]any{
+				"path":      filepath.ToSlash(path),
+				"operation": operation,
+				"error":     failure.Error(),
+			})
 		}
-		if entriesVisited >= maxSearchEntries {
+	}
+	scanFile := func(file *os.File, rel string) {
+		if len(matches) >= limit || filesScanned >= maxSearchFiles {
+			_ = file.Close()
 			truncated = true
-			return filepath.SkipAll
-		}
-		entriesVisited++
-		if walkErr != nil || entry.IsDir() {
-			return nil
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return nil
-		}
-		if len(matches) >= limit {
-			truncated = true
-			return filepath.SkipAll
-		}
-		if filesScanned >= maxSearchFiles {
-			truncated = true
-			return filepath.SkipAll
+			stop = true
+			return
 		}
 		filesScanned++
-		resolved, err := filepath.EvalSymlinks(path)
-		if err != nil {
-			return nil
-		}
-		rel, err := filepath.Rel(f.root, resolved)
-		if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
-			return nil
-		}
-		info, err := entry.Info()
-		if err != nil || info.Size() > maxReadBytes {
-			return nil
-		}
-		if info.Size() > int64(maxSearchBytes)-bytesScanned {
+		remainingBytes := int64(maxSearchBytes) - bytesScanned
+		if remainingBytes <= 0 {
+			_ = file.Close()
 			truncated = true
-			return filepath.SkipAll
+			stop = true
+			return
 		}
-		bytesScanned += info.Size()
-		content, err := os.ReadFile(resolved)
-		if err != nil {
-			return nil
+		readLimit := int64(maxReadBytes + 1)
+		aggregateLimited := remainingBytes < readLimit
+		if aggregateLimited {
+			readLimit = remainingBytes
 		}
-		if err := ctx.Err(); err != nil {
-			return err
+		content, actualBytes, reachedLimit, readErr := readBoundedContext(ctx, file, readLimit)
+		closeErr := file.Close()
+		bytesScanned += actualBytes
+		if readErr != nil {
+			recordFailure(rel, "read file", readErr)
+			return
+		}
+		if closeErr != nil {
+			recordFailure(rel, "close file", closeErr)
+			return
+		}
+		if len(content) > maxReadBytes {
+			recordFailure(rel, "read file", errors.New("file exceeds per-file byte limit"))
+			return
+		}
+		if aggregateLimited && reachedLimit {
+			truncated = true
+			stop = true
+			return
 		}
 		if !utf8.Valid(content) {
-			return nil
+			skippedFiles++
+			return
 		}
 		text := string(content)
 		if strings.Contains(text, query) {
-			matches = append(matches, map[string]any{"path": rel, "snippet": firstSnippet(text, query)})
+			matches = append(matches, map[string]any{
+				"path":    filepath.ToSlash(rel),
+				"snippet": firstSnippet(text, query),
+			})
 		}
-		return nil
-	})
-	if err != nil {
+	}
+	openAndScanFile := func(rel string) {
+		file, _, _, openErr := f.openRegularFile(rel)
+		if openErr != nil {
+			recordFailure(rel, "open file", openErr)
+			return
+		}
+		scanFile(file, rel)
+	}
+	initial, _, openErr := f.openPath(clean, unix.O_RDONLY|unix.O_NONBLOCK)
+	if openErr != nil {
+		return nil, openErr
+	}
+	var initialStat unix.Stat_t
+	if err := unix.Fstat(int(initial.Fd()), &initialStat); err != nil {
+		_ = initial.Close()
+		return nil, err
+	}
+	switch initialStat.Mode & unix.S_IFMT {
+	case unix.S_IFREG:
+		entriesVisited = 1
+		scanFile(initial, clean)
+	case unix.S_IFDIR:
+		entriesVisited = 1
+		directories = append(directories, directoryTask{path: clean, directory: initial})
+	default:
+		_ = initial.Close()
+		recordFailure(clean, "inspect path", errors.New("unsupported file type"))
+	}
+	for len(directories) > 0 && !stop {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		task := directories[0]
+		directories = directories[1:]
+		directory := task.directory
+		if directory == nil {
+			directory, _, openErr = f.openDirectoryPath(task.path, false)
+			if openErr != nil {
+				recordFailure(task.path, "open directory", openErr)
+				continue
+			}
+		}
+		directoriesScanned++
+		for !stop {
+			if err := ctx.Err(); err != nil {
+				_ = directory.Close()
+				return nil, err
+			}
+			remainingEntries := maxSearchEntries - entriesVisited
+			if remainingEntries <= 0 {
+				truncated = true
+				stop = true
+				break
+			}
+			batchSize := searchDirBatchSize
+			if remainingEntries < batchSize {
+				batchSize = remainingEntries
+			}
+			entries, readErr := directory.ReadDir(batchSize)
+			directoryEntriesRead += len(entries)
+			sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+			for _, entry := range entries {
+				if err := ctx.Err(); err != nil {
+					_ = directory.Close()
+					return nil, err
+				}
+				entriesVisited++
+				rel := entry.Name()
+				if task.path != "." {
+					rel = filepath.Join(task.path, entry.Name())
+				}
+				if entry.Type()&os.ModeSymlink != 0 {
+					skippedFiles++
+					continue
+				}
+				if entry.IsDir() {
+					directories = append(directories, directoryTask{path: rel})
+					continue
+				}
+				openAndScanFile(rel)
+				if stop {
+					break
+				}
+			}
+			if readErr != nil && !errors.Is(readErr, io.EOF) {
+				recordFailure(task.path, "read directory", readErr)
+				break
+			}
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			if entriesVisited >= maxSearchEntries {
+				truncated = true
+				stop = true
+			}
+		}
+		if closeErr := directory.Close(); closeErr != nil {
+			recordFailure(task.path, "close directory", closeErr)
+		}
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return map[string]any{
-		"matches":        matches,
-		"truncated":      truncated,
-		"entriesVisited": entriesVisited,
-		"filesScanned":   filesScanned,
-		"bytesScanned":   bytesScanned,
+		"matches":               matches,
+		"truncated":             truncated,
+		"incomplete":            errorCount > 0,
+		"errors":                errorDetails,
+		"errorCount":            errorCount,
+		"errorDetailsTruncated": errorCount > len(errorDetails),
+		"entriesVisited":        entriesVisited,
+		"directoryEntriesRead":  directoryEntriesRead,
+		"directoriesScanned":    directoriesScanned,
+		"filesScanned":          filesScanned,
+		"skippedFiles":          skippedFiles,
+		"bytesScanned":          bytesScanned,
 	}, nil
 }
 
 func (f FilesTools) Create(args map[string]any, approvalToken string, agentID string) (map[string]any, error) {
+	return f.CreateContext(context.Background(), args, approvalToken, agentID)
+}
+
+func (f FilesTools) CreateContext(ctx context.Context, args map[string]any, approvalToken string, agentID string) (map[string]any, error) {
 	pathValue, content, err := validateCreateArgs(args)
 	if err != nil {
 		return nil, err
 	}
-	if err := f.validateApproval("files.create", args, approvalToken, agentID); err != nil {
+	if err := f.validateApproval(ctx, "files.create", args, approvalToken, agentID); err != nil {
 		return nil, err
 	}
-	full, err := f.resolve(pathValue)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	parent, leaf, _, err := f.openParentPath(pathValue, true)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := os.Stat(full); err == nil {
+	defer parent.Close()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	fd, err := unix.Openat(
+		int(parent.Fd()),
+		leaf,
+		unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW,
+		0600,
+	)
+	if errors.Is(err, unix.EEXIST) {
 		return nil, errors.New("file already exists")
 	}
-	if err := os.MkdirAll(filepath.Dir(full), 0700); err != nil {
+	if err != nil {
+		return nil, fmt.Errorf("create %q: %w", pathValue, err)
+	}
+	file := os.NewFile(uintptr(fd), leaf)
+	if file == nil {
+		_ = unix.Close(fd)
+		_ = unix.Unlinkat(int(parent.Fd()), leaf, 0)
+		return nil, errors.New("create file: invalid descriptor")
+	}
+	removeOnFailure := true
+	defer func() {
+		_ = file.Close()
+		if removeOnFailure {
+			_ = unix.Unlinkat(int(parent.Fd()), leaf, 0)
+		}
+	}()
+	if err := writeAllContext(ctx, file, []byte(content)); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(full, []byte(content), 0600); err != nil {
+	if err := file.Sync(); err != nil {
 		return nil, err
 	}
+	if err := file.Close(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	removeOnFailure = false
 	return map[string]any{"path": pathValue, "sha256": contentHash(content)}, nil
 }
 
 func (f FilesTools) Update(args map[string]any, approvalToken string, agentID string) (map[string]any, error) {
+	return f.UpdateContext(context.Background(), args, approvalToken, agentID)
+}
+
+func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, approvalToken string, agentID string) (map[string]any, error) {
 	pathValue, content, expectedHash, err := validateUpdateArgs(args)
 	if err != nil {
 		return nil, err
 	}
-	if err := f.validateApproval("files.update", args, approvalToken, agentID); err != nil {
+	if err := f.validateApproval(ctx, "files.update", args, approvalToken, agentID); err != nil {
 		return nil, err
 	}
-	full, err := f.resolve(pathValue)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	clean, _, err := normalizeSandboxPath(pathValue)
 	if err != nil {
 		return nil, err
 	}
+	unlock, err := f.locks.lockContext(ctx, f.root+"\x00"+clean)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	parent, leaf, _, err := f.openParentPath(clean, false)
+	if err != nil {
+		return nil, err
+	}
+	defer parent.Close()
+	openFlags := unix.O_WRONLY
 	if expectedHash != "" {
-		current, err := os.ReadFile(full)
+		openFlags = unix.O_RDONLY
+	}
+	fd, err := unix.Openat(
+		int(parent.Fd()),
+		leaf,
+		openFlags|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW,
+		0,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("open %q: %w", pathValue, err)
+	}
+	currentFile := os.NewFile(uintptr(fd), leaf)
+	if currentFile == nil {
+		_ = unix.Close(fd)
+		return nil, errors.New("open existing file: invalid descriptor")
+	}
+	defer currentFile.Close()
+	var originalStat unix.Stat_t
+	if err := unix.Fstat(fd, &originalStat); err != nil {
+		return nil, err
+	}
+	if originalStat.Mode&unix.S_IFMT != unix.S_IFREG {
+		return nil, errors.New("update target is not a regular file")
+	}
+	if expectedHash != "" {
+		current, _, _, err := readBoundedContext(ctx, currentFile, MaxMutationContentBytes+1)
 		if err != nil {
 			return nil, err
+		}
+		if len(current) > MaxMutationContentBytes {
+			return nil, fmt.Errorf("existing file is too large to hash (limit %d bytes)", MaxMutationContentBytes)
 		}
 		if contentHash(string(current)) != expectedHash {
 			return nil, errors.New("expectedHash mismatch")
 		}
 	}
-	if err := os.WriteFile(full, []byte(content), 0600); err != nil {
+	temporary, temporaryName, err := createTemporaryFile(parent, uint32(originalStat.Mode&0777))
+	if err != nil {
 		return nil, err
 	}
+	removeTemporary := true
+	defer func() {
+		_ = temporary.Close()
+		if removeTemporary {
+			_ = unix.Unlinkat(int(parent.Fd()), temporaryName, 0)
+		}
+	}()
+	if err := writeAllContext(ctx, temporary, []byte(content)); err != nil {
+		return nil, err
+	}
+	if err := unix.Fchmod(int(temporary.Fd()), uint32(originalStat.Mode&07777)); err != nil {
+		return nil, err
+	}
+	if err := temporary.Sync(); err != nil {
+		return nil, err
+	}
+	if err := temporary.Close(); err != nil {
+		return nil, err
+	}
+	if expectedHash != "" {
+		if _, err := currentFile.Seek(0, io.SeekStart); err != nil {
+			return nil, err
+		}
+		current, _, _, err := readBoundedContext(ctx, currentFile, MaxMutationContentBytes+1)
+		if err != nil {
+			return nil, err
+		}
+		if len(current) > MaxMutationContentBytes || contentHash(string(current)) != expectedHash {
+			return nil, errors.New("update target changed during operation")
+		}
+	}
+	var finalStat unix.Stat_t
+	if err := unix.Fstatat(int(parent.Fd()), leaf, &finalStat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return nil, fmt.Errorf("verify update target: %w", err)
+	}
+	if finalStat.Mode&unix.S_IFMT != unix.S_IFREG ||
+		finalStat.Dev != originalStat.Dev ||
+		finalStat.Ino != originalStat.Ino {
+		return nil, errors.New("update target changed during operation")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := unix.Renameat(int(parent.Fd()), temporaryName, int(parent.Fd()), leaf); err != nil {
+		return nil, fmt.Errorf("replace update target: %w", err)
+	}
+	removeTemporary = false
 	return map[string]any{"path": pathValue, "sha256": contentHash(content)}, nil
 }
 
@@ -322,9 +553,9 @@ func (f FilesTools) CallContext(ctx context.Context, name string, args map[strin
 	case "files.read":
 		return f.ReadContext(ctx, args)
 	case "files.create":
-		return f.Create(args, approvalToken, agentID)
+		return f.CreateContext(ctx, args, approvalToken, agentID)
 	case "files.update":
-		return f.Update(args, approvalToken, agentID)
+		return f.UpdateContext(ctx, args, approvalToken, agentID)
 	case "files.delete", "files.move":
 		return nil, errors.New("tool disabled")
 	default:
@@ -332,14 +563,14 @@ func (f FilesTools) CallContext(ctx context.Context, name string, args map[strin
 	}
 }
 
-func (f FilesTools) validateApproval(tool string, args map[string]any, approvalToken string, agentID string) error {
+func (f FilesTools) validateApproval(ctx context.Context, tool string, args map[string]any, approvalToken string, agentID string) error {
 	if f.validator == nil {
 		return errors.New("approval validator not configured")
 	}
 	if approvalToken == "" {
 		return errors.New("approval token required")
 	}
-	return f.validator.Validate(approvalToken, tool, args, agentID)
+	return f.validator.ValidateContext(ctx, approvalToken, tool, args, agentID)
 }
 
 func validateReadArgs(args map[string]any) (string, int, error) {
@@ -391,7 +622,13 @@ func validateCreateArgs(args map[string]any) (string, string, error) {
 		return "", "", err
 	}
 	content, err := requiredString(args, "content", true)
-	return pathValue, content, err
+	if err != nil {
+		return "", "", err
+	}
+	if len(content) > MaxMutationContentBytes {
+		return "", "", fmt.Errorf("content exceeds %d byte limit", MaxMutationContentBytes)
+	}
+	return pathValue, content, nil
 }
 
 func validateUpdateArgs(args map[string]any) (string, string, string, error) {
@@ -405,6 +642,9 @@ func validateUpdateArgs(args map[string]any) (string, string, string, error) {
 	content, err := requiredString(args, "content", true)
 	if err != nil {
 		return "", "", "", err
+	}
+	if len(content) > MaxMutationContentBytes {
+		return "", "", "", fmt.Errorf("content exceeds %d byte limit", MaxMutationContentBytes)
 	}
 	expectedHash := ""
 	if value, present := args["expectedHash"]; present {
@@ -476,6 +716,62 @@ func validContentHash(value string) bool {
 	return err == nil
 }
 
+func readBoundedContext(ctx context.Context, reader io.Reader, limit int64) ([]byte, int64, bool, error) {
+	if limit < 0 {
+		return nil, 0, false, errors.New("read limit must not be negative")
+	}
+	const chunkSize = 32 * 1024
+	var content bytes.Buffer
+	var bytesRead int64
+	for bytesRead < limit {
+		if err := ctx.Err(); err != nil {
+			return nil, bytesRead, false, err
+		}
+		size := int64(chunkSize)
+		if remaining := limit - bytesRead; remaining < size {
+			size = remaining
+		}
+		buffer := make([]byte, int(size))
+		count, err := reader.Read(buffer)
+		if count > 0 {
+			_, _ = content.Write(buffer[:count])
+			bytesRead += int64(count)
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return content.Bytes(), bytesRead, false, nil
+			}
+			return nil, bytesRead, false, err
+		}
+		if count == 0 {
+			return nil, bytesRead, false, io.ErrNoProgress
+		}
+	}
+	return content.Bytes(), bytesRead, true, nil
+}
+
+func writeAllContext(ctx context.Context, writer io.Writer, content []byte) error {
+	const chunkSize = 32 * 1024
+	for len(content) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		size := chunkSize
+		if len(content) < size {
+			size = len(content)
+		}
+		written, err := writer.Write(content[:size])
+		if err != nil {
+			return err
+		}
+		if written <= 0 || written > size {
+			return io.ErrShortWrite
+		}
+		content = content[written:]
+	}
+	return ctx.Err()
+}
+
 func firstSnippet(text string, query string) string {
 	index := strings.Index(text, query)
 	if index < 0 {
@@ -485,9 +781,15 @@ func firstSnippet(text string, query string) string {
 	if start < 0 {
 		start = 0
 	}
+	for start < index && !utf8.RuneStart(text[start]) {
+		start++
+	}
 	end := index + len(query) + 40
 	if end > len(text) {
 		end = len(text)
+	}
+	for end > index+len(query) && end < len(text) && !utf8.RuneStart(text[end]) {
+		end--
 	}
 	return text[start:end]
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,7 +10,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	filetools "github.com/project-turing/mcp-files/internal/tools"
 )
+
+const expectedFilesRequestLimit = 6*524288 + 64*1024
 
 func TestMcpHandlerRejectsUnauthorizedRequests(t *testing.T) {
 	handler := newHandler(serverConfig{
@@ -80,6 +85,158 @@ func TestMcpHandlerCallsFilesReadTool(t *testing.T) {
 	}
 }
 
+func TestMcpHandlerRejectsOversizedRequestBody(t *testing.T) {
+	handler := testFilesHandler(t)
+	for name, body := range map[string]string{
+		"valid JSON":      `{"jsonrpc":"2.0","id":1,"method":"tools/list","padding":"` + strings.Repeat("x", expectedFilesRequestLimit) + `"}`,
+		"early malformed": `x` + strings.Repeat(" ", expectedFilesRequestLimit),
+	} {
+		t.Run(name, func(t *testing.T) {
+			status, response := callFilesMCP(t, handler, body)
+			if status != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status = %d, want %d; response=%s", status, http.StatusRequestEntityTooLarge, response)
+			}
+			assertRPCErrorCode(t, response, -32600)
+		})
+	}
+}
+
+func TestMcpHandlerAllowsWorstCaseEscapedMaximumFileContent(t *testing.T) {
+	handler := testFilesHandler(t)
+	request := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "files.create",
+			"arguments": map[string]any{
+				"path":    "note.txt",
+				"content": strings.Repeat("\x01", filetools.MaxMutationContentBytes),
+			},
+			"_meta": map[string]any{"approvalToken": "invalid"},
+		},
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) > expectedFilesRequestLimit {
+		t.Fatalf("test envelope size = %d, exceeds expected request limit %d", len(body), expectedFilesRequestLimit)
+	}
+
+	status, response := callFilesMCP(t, handler, string(body))
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; response=%s", status, response)
+	}
+	assertRPCErrorCode(t, response, -32000)
+}
+
+func TestMcpHandlerStrictlyValidatesJSONRPCEnvelope(t *testing.T) {
+	handler := testFilesHandler(t)
+	tests := []struct {
+		name string
+		body string
+		code int
+	}{
+		{name: "malformed JSON", body: `{`, code: -32700},
+		{name: "root array", body: `[]`, code: -32600},
+		{name: "wrong version", body: `{"jsonrpc":"1.0","id":1,"method":"tools/list"}`, code: -32600},
+		{name: "missing id", body: `{"jsonrpc":"2.0","method":"tools/list"}`, code: -32600},
+		{name: "null id", body: `{"jsonrpc":"2.0","id":null,"method":"tools/list"}`, code: -32600},
+		{name: "boolean id", body: `{"jsonrpc":"2.0","id":true,"method":"tools/list"}`, code: -32600},
+		{name: "fractional id", body: `{"jsonrpc":"2.0","id":1.5,"method":"tools/list"}`, code: -32600},
+		{name: "missing method", body: `{"jsonrpc":"2.0","id":1}`, code: -32600},
+		{name: "empty method", body: `{"jsonrpc":"2.0","id":1,"method":""}`, code: -32600},
+		{name: "array params", body: `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":[]}`, code: -32602},
+		{name: "null params", body: `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":null}`, code: -32602},
+		{name: "unknown envelope field", body: `{"jsonrpc":"2.0","id":1,"method":"tools/list","extra":true}`, code: -32600},
+		{name: "second object", body: `{"jsonrpc":"2.0","id":1,"method":"tools/list"} {}`, code: -32600},
+		{name: "trailing garbage", body: `{"jsonrpc":"2.0","id":1,"method":"tools/list"} garbage`, code: -32700},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			status, response := callFilesMCP(t, handler, test.body)
+			if status != http.StatusOK {
+				t.Fatalf("status = %d, want 200; response=%s", status, response)
+			}
+			assertRPCErrorCode(t, response, test.code)
+		})
+	}
+}
+
+func TestMcpHandlerRejectsNonObjectToolArguments(t *testing.T) {
+	handler := testFilesHandler(t)
+	for _, arguments := range []string{`null`, `"text"`, `[]`, `1`, `true`} {
+		t.Run(arguments, func(t *testing.T) {
+			body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files.list","arguments":` + arguments + `}}`
+			status, response := callFilesMCP(t, handler, body)
+			if status != http.StatusOK {
+				t.Fatalf("status = %d, want 200; response=%s", status, response)
+			}
+			assertRPCErrorCode(t, response, -32602)
+		})
+	}
+}
+
+func TestMcpHandlerRejectsMalformedToolCallParams(t *testing.T) {
+	handler := testFilesHandler(t)
+	for name, params := range map[string]string{
+		"missing name":              `{}`,
+		"non-string name":           `{"name":1}`,
+		"empty name":                `{"name":" "}`,
+		"non-object metadata":       `{"name":"files.list","_meta":[]}`,
+		"non-string approval token": `{"name":"files.list","_meta":{"approvalToken":1}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":` + params + `}`
+			status, response := callFilesMCP(t, handler, body)
+			if status != http.StatusOK {
+				t.Fatalf("status = %d, want 200; response=%s", status, response)
+			}
+			assertRPCErrorCode(t, response, -32602)
+		})
+	}
+}
+
+func TestMcpHandlerRejectsMalformedToolsListParams(t *testing.T) {
+	handler := testFilesHandler(t)
+	for name, params := range map[string]string{
+		"non-string cursor":   `{"cursor":1}`,
+		"non-object metadata": `{"_meta":[]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":` + params + `}`
+			status, response := callFilesMCP(t, handler, body)
+			if status != http.StatusOK {
+				t.Fatalf("status = %d, want 200; response=%s", status, response)
+			}
+			assertRPCErrorCode(t, response, -32602)
+		})
+	}
+}
+
+func TestMcpHandlerAllowsOmittedToolArguments(t *testing.T) {
+	handler := testFilesHandler(t)
+
+	status, response := callFilesMCP(t, handler, `{"jsonrpc":"2.0","id":"request-1","method":"tools/call","params":{"name":"files.list"}}`)
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; response=%s", status, response)
+	}
+	var envelope struct {
+		ID     string         `json:"id"`
+		Result map[string]any `json:"result"`
+		Error  map[string]any `json:"error"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.ID != "request-1" || envelope.Result == nil || envelope.Error != nil {
+		t.Fatalf("response = %s, want successful correlated result", response)
+	}
+}
+
 func TestListToolsAdvertisesOnlyCallableToolsWithAccurateSchemas(t *testing.T) {
 	tools := listTools()
 	wantRequired := map[string][]any{
@@ -125,6 +282,8 @@ func TestListToolsAdvertisesOnlyCallableToolsWithAccurateSchemas(t *testing.T) {
 	assertIntegerBounds(t, tools, "files.list", "limit", 1, 1000)
 	assertIntegerBounds(t, tools, "files.search", "limit", 1, 200)
 	assertIntegerBounds(t, tools, "files.read", "maxBytes", 1, 524288)
+	assertStringMaxLength(t, tools, "files.create", "content", 524288)
+	assertStringMaxLength(t, tools, "files.update", "content", 524288)
 }
 
 func assertIntegerBounds(t *testing.T, tools []map[string]any, toolName, property string, minimum, maximum int) {
@@ -141,4 +300,53 @@ func assertIntegerBounds(t *testing.T, tools []map[string]any, toolName, propert
 		return
 	}
 	t.Fatalf("tool %s was not advertised", toolName)
+}
+
+func assertStringMaxLength(t *testing.T, advertised []map[string]any, toolName, property string, maximum int) {
+	t.Helper()
+	for _, tool := range advertised {
+		if tool["name"] != toolName {
+			continue
+		}
+		schema := tool["inputSchema"].(map[string]any)
+		definition := schema["properties"].(map[string]any)[property].(map[string]any)
+		if definition["type"] != "string" || definition["maxLength"] != maximum {
+			t.Fatalf("%s %s schema = %#v, want string maxLength %d", toolName, property, definition, maximum)
+		}
+		return
+	}
+	t.Fatalf("tool %s was not advertised", toolName)
+}
+
+func testFilesHandler(t *testing.T) http.Handler {
+	t.Helper()
+	return newHandler(serverConfig{
+		filesToken:        "files-token",
+		approvalJwtSecret: "jwt-secret",
+		sandboxRoot:       t.TempDir(),
+	})
+}
+
+func callFilesMCP(t *testing.T, handler http.Handler, body string) (int, []byte) {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+"files-token")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response.Code, response.Body.Bytes()
+}
+
+func assertRPCErrorCode(t *testing.T, response []byte, want int) {
+	t.Helper()
+	var envelope struct {
+		Error *struct {
+			Code int `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		t.Fatalf("decode response %q: %v", response, err)
+	}
+	if envelope.Error == nil || envelope.Error.Code != want {
+		t.Fatalf("response = %s, want JSON-RPC error code %d", response, want)
+	}
 }

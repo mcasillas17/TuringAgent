@@ -2,13 +2,23 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
+	"unicode/utf8"
 )
+
+const mutationContentByteLimit = 512 * 1024
 
 func TestReadRejectsTraversal(t *testing.T) {
 	root := t.TempDir()
@@ -60,6 +70,20 @@ func TestReadRejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestReadRejectsSymlinkEvenWhenTargetRemainsInsideSandbox(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "target.txt"), []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target.txt", filepath.Join(root, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := NewFilesTools(root).Read(map[string]any{"path": "link.txt"}); err == nil {
+		t.Fatal("Read followed a symlink")
+	}
+}
+
 func TestReadRejectsFileTooLarge(t *testing.T) {
 	root := t.TempDir()
 	content := strings.Repeat("x", maxReadBytes+1)
@@ -80,7 +104,7 @@ func TestReadHonorsMaxBytesWithTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read failed: %v", err)
 	}
-	if result["content"] != "abc" || result["truncated"] != true {
+	if result["content"] != "abc" || result["truncated"] != true || result["bytesRead"] != int64(6) {
 		t.Fatalf("expected truncated content, got %#v", result)
 	}
 }
@@ -92,6 +116,36 @@ func TestReadRejectsBinaryContent(t *testing.T) {
 	}
 	if _, err := NewFilesTools(root).Read(map[string]any{"path": "binary.bin"}); err == nil {
 		t.Fatalf("expected binary/invalid UTF-8 rejection")
+	}
+}
+
+func TestReadBoundedContextStopsAtActualByteLimit(t *testing.T) {
+	reader := &countingReader{remaining: 4096}
+
+	content, bytesRead, reachedLimit, err := readBoundedContext(context.Background(), reader, 1024)
+
+	if err != nil {
+		t.Fatalf("readBoundedContext returned error: %v", err)
+	}
+	if len(content) != 1024 || bytesRead != 1024 || reader.read != 1024 {
+		t.Fatalf("bounded read = len %d, bytesRead %d, source reads %d; want 1024", len(content), bytesRead, reader.read)
+	}
+	if !reachedLimit {
+		t.Fatal("bounded read did not report reaching its limit")
+	}
+}
+
+func TestReadBoundedContextChecksCancellationBetweenChunks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	reader := &cancelAfterReadReader{cancel: cancel}
+
+	_, _, _, err := readBoundedContext(ctx, reader, 128*1024)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("readBoundedContext error = %v, want context.Canceled", err)
+	}
+	if reader.reads != 1 {
+		t.Fatalf("source reads = %d, want 1 before cancellation", reader.reads)
 	}
 }
 
@@ -111,6 +165,100 @@ func TestSearchInsideSandbox(t *testing.T) {
 	if len(matches) != 1 || !strings.Contains(matches[0]["path"].(string), "note.txt") {
 		t.Fatalf("unexpected matches: %#v", matches)
 	}
+	if result["entriesVisited"] != 3 {
+		t.Fatalf("entriesVisited = %#v, want root plus two files", result["entriesVisited"])
+	}
+}
+
+func TestSearchAcceptsFileAsStartingPath(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "note.txt"), []byte("alpha beta"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := NewFilesTools(root).Search(map[string]any{"path": "note.txt", "query": "alpha"})
+
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	matches := result["matches"].([]map[string]any)
+	if len(matches) != 1 || matches[0]["path"] != "note.txt" {
+		t.Fatalf("matches = %#v, want note.txt", matches)
+	}
+	if result["incomplete"] != false {
+		t.Fatalf("Search result = %#v, want complete file search", result)
+	}
+}
+
+func TestSearchReportsTraversalAndReadFailuresAsIncomplete(t *testing.T) {
+	root, err := os.MkdirTemp(".", ".search-errors-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	socketPath := filepath.Join(root, "unreadable.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	result, err := NewFilesTools(root).Search(map[string]any{"path": ".", "query": "missing"})
+
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if result["incomplete"] != true || result["errorCount"] != 1 {
+		t.Fatalf("Search result = %#v, want incomplete=true and errorCount=1", result)
+	}
+	details, ok := result["errors"].([]map[string]any)
+	if !ok || len(details) != 1 || !strings.Contains(details[0]["path"].(string), "unreadable.sock") {
+		t.Fatalf("Search errors = %#v, want socket path detail", result["errors"])
+	}
+}
+
+func TestSearchReportsBoundedDirectoryWork(t *testing.T) {
+	root := t.TempDir()
+	for index := 0; index < maxSearchEntries+100; index++ {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("%04d.txt", index)), []byte("content"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := NewFilesTools(root).Search(map[string]any{"path": ".", "query": "missing"})
+
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	entriesRead, ok := result["directoryEntriesRead"].(int)
+	if !ok || entriesRead > maxSearchEntries {
+		t.Fatalf("directoryEntriesRead = %#v, want at most %d", result["directoryEntriesRead"], maxSearchEntries)
+	}
+	if result["truncated"] != true || result["directoriesScanned"] != 1 {
+		t.Fatalf("Search result = %#v, want bounded single-directory truncation", result)
+	}
+}
+
+func TestSearchSnippetAlwaysHasValidUTF8Boundaries(t *testing.T) {
+	root := t.TempDir()
+	text := strings.Repeat("界", 20) + "needle" + strings.Repeat("界", 20)
+	if err := os.WriteFile(filepath.Join(root, "unicode.txt"), []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := NewFilesTools(root).Search(map[string]any{"path": ".", "query": "needle"})
+
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	matches := result["matches"].([]map[string]any)
+	if len(matches) != 1 {
+		t.Fatalf("matches = %#v, want one", matches)
+	}
+	snippet := matches[0]["snippet"].(string)
+	if !utf8.ValidString(snippet) {
+		t.Fatalf("snippet is invalid UTF-8: %q", snippet)
+	}
 }
 
 func TestListHonorsLimitAndReportsTruncation(t *testing.T) {
@@ -128,6 +276,20 @@ func TestListHonorsLimitAndReportsTruncation(t *testing.T) {
 	items := result["items"].([]map[string]any)
 	if len(items) != 2 || result["truncated"] != true {
 		t.Fatalf("List result = %#v, want two items and truncated=true", result)
+	}
+}
+
+func TestListRejectsSymlinkedDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "target"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target", filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := NewFilesTools(root).List(map[string]any{"path": "link"}); err == nil {
+		t.Fatal("List followed a symlinked directory")
 	}
 }
 
@@ -183,6 +345,23 @@ func TestSearchRejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestSearchRejectsSymlinkedStartingDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "target"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "target", "note.txt"), []byte("alpha"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target", filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := NewFilesTools(root).Search(map[string]any{"path": "link", "query": "alpha"}); err == nil {
+		t.Fatal("Search followed a symlinked starting directory")
+	}
+}
+
 func TestCreateAndUpdateRequireValidatedApproval(t *testing.T) {
 	root := t.TempDir()
 	validator := fakeApprovalValidator{valid: true}
@@ -209,6 +388,353 @@ func TestCreateRejectsApprovalForDifferentArgs(t *testing.T) {
 	files := NewFilesTools(root).WithApprovalValidator(validator)
 	if _, err := files.Create(map[string]any{"path": "note.txt", "content": "hello"}, "bad-token", "general_assistant"); err == nil {
 		t.Fatalf("expected approval validation failure")
+	}
+}
+
+func TestCreateEnforcesContentByteLimitBeforeApproval(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		wantErr bool
+	}{
+		{name: "ASCII boundary", content: strings.Repeat("x", mutationContentByteLimit)},
+		{name: "multibyte boundary", content: strings.Repeat("é", mutationContentByteLimit/2)},
+		{name: "one byte over", content: strings.Repeat("x", mutationContentByteLimit+1), wantErr: true},
+		{name: "multibyte over", content: strings.Repeat("é", mutationContentByteLimit/2+1), wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			validator := &recordingApprovalValidator{}
+			files := NewFilesTools(root).WithApprovalValidator(validator)
+
+			_, err := files.Create(map[string]any{"path": "note.txt", "content": test.content}, "approval-token", "general_assistant")
+
+			if test.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "content exceeds") {
+					t.Fatalf("Create error = %v, want content byte limit error", err)
+				}
+				if validator.calls != 0 {
+					t.Fatalf("approval validations = %d, want 0", validator.calls)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Create returned error at boundary: %v", err)
+			}
+			if validator.calls != 1 {
+				t.Fatalf("approval validations = %d, want 1", validator.calls)
+			}
+		})
+	}
+}
+
+func TestUpdateEnforcesContentByteLimitBeforeApprovalOrMutation(t *testing.T) {
+	root := t.TempDir()
+	note := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(note, []byte("original"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	validator := &recordingApprovalValidator{}
+	files := NewFilesTools(root).WithApprovalValidator(validator)
+
+	_, err := files.Update(map[string]any{
+		"path": "note.txt", "content": strings.Repeat("x", mutationContentByteLimit+1),
+	}, "approval-token", "general_assistant")
+
+	if err == nil || !strings.Contains(err.Error(), "content exceeds") {
+		t.Fatalf("Update error = %v, want content byte limit error", err)
+	}
+	if validator.calls != 0 {
+		t.Fatalf("approval validations = %d, want 0", validator.calls)
+	}
+	content, readErr := os.ReadFile(note)
+	if readErr != nil || string(content) != "original" {
+		t.Fatalf("content = %q, %v; want original", content, readErr)
+	}
+}
+
+func TestCreateRejectsSymlinkedParent(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "target"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target", filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	files := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
+
+	_, err := files.Create(map[string]any{"path": "link/note.txt", "content": "hello"}, "approval-token", "general_assistant")
+
+	if err == nil {
+		t.Fatal("Create followed a symlinked parent")
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "target", "note.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("Create mutated symlink target: %v", statErr)
+	}
+}
+
+func TestUpdateRejectsSymlinkTarget(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target.txt")
+	if err := os.WriteFile(target, []byte("original"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target.txt", filepath.Join(root, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	files := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
+
+	_, err := files.Update(map[string]any{"path": "link.txt", "content": "updated"}, "approval-token", "general_assistant")
+
+	if err == nil {
+		t.Fatal("Update followed a symlink")
+	}
+	content, readErr := os.ReadFile(target)
+	if readErr != nil || string(content) != "original" {
+		t.Fatalf("symlink target content = %q, %v; want original", content, readErr)
+	}
+}
+
+func TestCreateIsExclusiveUnderConcurrency(t *testing.T) {
+	const callers = 32
+	root := t.TempDir()
+	validator := newGatedApprovalValidator(callers)
+	files := NewFilesTools(root).WithApprovalValidator(validator)
+	start := make(chan struct{})
+	results := make(chan error, callers)
+	var workers sync.WaitGroup
+	for index := 0; index < callers; index++ {
+		workers.Add(1)
+		go func(index int) {
+			defer workers.Done()
+			<-start
+			_, err := files.Create(map[string]any{
+				"path":    "note.txt",
+				"content": strings.Repeat(fmt.Sprintf("%02d", index), mutationContentByteLimit/2),
+			}, "approval-token", "general_assistant")
+			results <- err
+		}(index)
+	}
+	close(start)
+	validator.waitUntilEntered(t)
+	validator.releaseAll()
+	workers.Wait()
+	close(results)
+
+	successes := 0
+	for err := range results {
+		if err == nil {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful creates = %d, want exactly 1", successes)
+	}
+}
+
+func TestUpdateExpectedHashIsCompareAndSwapUnderConcurrency(t *testing.T) {
+	const callers = 16
+	root := t.TempDir()
+	original := strings.Repeat("a", mutationContentByteLimit)
+	if err := os.WriteFile(filepath.Join(root, "note.txt"), []byte(original), 0640); err != nil {
+		t.Fatal(err)
+	}
+	validator := newGatedApprovalValidator(callers)
+	instances := []FilesTools{
+		NewFilesTools(root).WithApprovalValidator(validator),
+		NewFilesTools(root).WithApprovalValidator(validator),
+	}
+	start := make(chan struct{})
+	results := make(chan error, callers)
+	var workers sync.WaitGroup
+	for index := 0; index < callers; index++ {
+		workers.Add(1)
+		go func(index int) {
+			defer workers.Done()
+			<-start
+			_, err := instances[index%len(instances)].Update(map[string]any{
+				"path":         "note.txt",
+				"content":      fmt.Sprintf("updated-%02d", index),
+				"expectedHash": contentHash(original),
+			}, "approval-token", "general_assistant")
+			results <- err
+		}(index)
+	}
+	close(start)
+	validator.waitUntilEntered(t)
+	validator.releaseAll()
+	workers.Wait()
+	close(results)
+
+	successes := 0
+	for err := range results {
+		if err == nil {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful compare-and-swap updates = %d, want exactly 1", successes)
+	}
+}
+
+func TestUpdateExpectedHashRejectsOversizedExistingFileWithoutUnboundedRead(t *testing.T) {
+	root := t.TempDir()
+	note := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(note, []byte(strings.Repeat("x", mutationContentByteLimit+1)), 0640); err != nil {
+		t.Fatal(err)
+	}
+	files := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
+
+	_, err := files.Update(map[string]any{
+		"path":         "note.txt",
+		"content":      "updated",
+		"expectedHash": "sha256:" + strings.Repeat("0", sha256.Size*2),
+	}, "approval-token", "general_assistant")
+
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("Update error = %v, want bounded existing-file error", err)
+	}
+	content, readErr := os.ReadFile(note)
+	if readErr != nil || len(content) != mutationContentByteLimit+1 {
+		t.Fatalf("existing file changed: len=%d, err=%v", len(content), readErr)
+	}
+}
+
+func TestUpdatePreservesExistingPermissions(t *testing.T) {
+	root := t.TempDir()
+	note := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(note, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(note, 0666); err != nil {
+		t.Fatal(err)
+	}
+	files := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
+
+	if _, err := files.Update(map[string]any{"path": "note.txt", "content": "updated"}, "approval-token", "general_assistant"); err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+	info, err := os.Stat(note)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0666 {
+		t.Fatalf("updated mode = %04o, want 0666", info.Mode().Perm())
+	}
+}
+
+func TestUpdateWithoutExpectedHashSupportsWriteOnlyFile(t *testing.T) {
+	root := t.TempDir()
+	note := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(note, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(note, 0200); err != nil {
+		t.Fatal(err)
+	}
+	files := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
+
+	_, updateErr := files.Update(map[string]any{
+		"path": "note.txt", "content": "updated",
+	}, "approval-token", "general_assistant")
+
+	if updateErr != nil {
+		t.Fatalf("Update returned error for write-only file: %v", updateErr)
+	}
+	if err := os.Chmod(note, 0600); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(note)
+	if err != nil || string(content) != "updated" {
+		t.Fatalf("updated content = %q, %v; want updated", content, err)
+	}
+}
+
+func TestReadAndUpdateStayConfinedDuringParentRenameSymlinkRace(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	insideDirectory := filepath.Join(root, "swap")
+	parkedDirectory := filepath.Join(root, "parked")
+	if err := os.Mkdir(insideDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(insideDirectory, "note.txt"), []byte("inside"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	outsideNote := filepath.Join(outside, "note.txt")
+	if err := os.WriteFile(outsideNote, []byte("outside"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	files := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
+	stop := make(chan struct{})
+	var flipper sync.WaitGroup
+	flipper.Add(1)
+	go func() {
+		defer flipper.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if err := os.Rename(insideDirectory, parkedDirectory); err != nil {
+				runtime.Gosched()
+				continue
+			}
+			if err := os.Symlink(outside, insideDirectory); err == nil {
+				runtime.Gosched()
+				_ = os.Remove(insideDirectory)
+			}
+			_ = os.Rename(parkedDirectory, insideDirectory)
+		}
+	}()
+
+	for index := 0; index < 500; index++ {
+		if result, err := files.Read(map[string]any{"path": "swap/note.txt"}); err == nil {
+			content := result["content"].(string)
+			if content != "inside" && content != "updated" {
+				close(stop)
+				flipper.Wait()
+				t.Fatalf("Read escaped sandbox and returned %q", content)
+			}
+		}
+		if index%10 == 0 {
+			_, _ = files.Update(map[string]any{
+				"path": "swap/note.txt", "content": "updated",
+			}, "approval-token", "general_assistant")
+		}
+	}
+	close(stop)
+	flipper.Wait()
+
+	outsideContent, err := os.ReadFile(outsideNote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(outsideContent) != "outside" {
+		t.Fatalf("outside file was mutated to %q", outsideContent)
+	}
+}
+
+func TestPathLockWaitHonorsCancellation(t *testing.T) {
+	locks := newPathLockTable()
+	unlock, err := locks.lockContext(context.Background(), "note.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	secondUnlock, err := locks.lockContext(ctx, "note.txt")
+
+	if secondUnlock != nil {
+		secondUnlock()
+		t.Fatal("canceled lock wait acquired the lock")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("lockContext error = %v, want context.Canceled", err)
 	}
 }
 
@@ -302,6 +828,84 @@ func TestCallContextRejectsCanceledSideEffectBeforeApprovalOrMutation(t *testing
 	}
 }
 
+func TestCallContextCancelsBlockingApprovalWithoutMutation(t *testing.T) {
+	root := t.TempDir()
+	validator := &blockingApprovalValidator{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	files := NewFilesTools(root).WithApprovalValidator(validator)
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := files.CallContext(ctx, "files.create", map[string]any{
+			"path": "note.txt", "content": "hello",
+		}, "approval-token", "general_assistant")
+		result <- err
+	}()
+	select {
+	case <-validator.entered:
+	case <-time.After(time.Second):
+		t.Fatal("approval validation did not start")
+	}
+
+	cancel()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("CallContext error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		close(validator.release)
+		t.Fatal("CallContext did not stop after cancellation")
+	}
+	if _, err := os.Stat(filepath.Join(root, "note.txt")); !os.IsNotExist(err) {
+		t.Fatalf("canceled call mutated note.txt: %v", err)
+	}
+}
+
+func TestCallContextChecksCancellationAfterApproval(t *testing.T) {
+	root := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	validator := cancelingApprovalValidator{cancel: cancel}
+	files := NewFilesTools(root).WithApprovalValidator(validator)
+
+	_, err := files.CallContext(ctx, "files.create", map[string]any{
+		"path": "note.txt", "content": "hello",
+	}, "approval-token", "general_assistant")
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("CallContext error = %v, want context.Canceled", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "note.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("canceled call mutated note.txt: %v", statErr)
+	}
+}
+
+func TestCallContextDoesNotUpdateWhenApprovalCancelsContext(t *testing.T) {
+	root := t.TempDir()
+	note := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(note, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	validator := cancelingApprovalValidator{cancel: cancel}
+	files := NewFilesTools(root).WithApprovalValidator(validator)
+
+	_, err := files.CallContext(ctx, "files.update", map[string]any{
+		"path": "note.txt", "content": "updated",
+	}, "approval-token", "general_assistant")
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("CallContext error = %v, want context.Canceled", err)
+	}
+	content, readErr := os.ReadFile(note)
+	if readErr != nil || string(content) != "original" {
+		t.Fatalf("canceled call content = %q, %v; want original", content, readErr)
+	}
+}
+
 type fakeApprovalValidator struct {
 	valid bool
 }
@@ -310,14 +914,120 @@ type recordingApprovalValidator struct {
 	calls int
 }
 
-func (v *recordingApprovalValidator) Validate(string, string, map[string]any, string) error {
+func (v *recordingApprovalValidator) ValidateContext(context.Context, string, string, map[string]any, string) error {
 	v.calls++
 	return nil
 }
 
-func (f fakeApprovalValidator) Validate(token string, tool string, args map[string]any, agentID string) error {
+func (f fakeApprovalValidator) ValidateContext(_ context.Context, token string, tool string, args map[string]any, agentID string) error {
 	if f.valid {
 		return nil
 	}
 	return os.ErrPermission
+}
+
+type blockingApprovalValidator struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (v *blockingApprovalValidator) Validate(string, string, map[string]any, string) error {
+	close(v.entered)
+	<-v.release
+	return nil
+}
+
+func (v *blockingApprovalValidator) ValidateContext(ctx context.Context, _ string, _ string, _ map[string]any, _ string) error {
+	close(v.entered)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type cancelingApprovalValidator struct {
+	cancel context.CancelFunc
+}
+
+func (v cancelingApprovalValidator) Validate(string, string, map[string]any, string) error {
+	v.cancel()
+	return nil
+}
+
+func (v cancelingApprovalValidator) ValidateContext(context.Context, string, string, map[string]any, string) error {
+	v.cancel()
+	return nil
+}
+
+type countingReader struct {
+	remaining int
+	read      int
+}
+
+func (r *countingReader) Read(buffer []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, io.EOF
+	}
+	count := len(buffer)
+	if count > r.remaining {
+		count = r.remaining
+	}
+	for index := 0; index < count; index++ {
+		buffer[index] = 'x'
+	}
+	r.remaining -= count
+	r.read += count
+	return count, nil
+}
+
+type cancelAfterReadReader struct {
+	cancel context.CancelFunc
+	reads  int
+}
+
+func (r *cancelAfterReadReader) Read(buffer []byte) (int, error) {
+	r.reads++
+	for index := range buffer {
+		buffer[index] = 'x'
+	}
+	r.cancel()
+	return len(buffer), nil
+}
+
+type gatedApprovalValidator struct {
+	total   int32
+	entered atomic.Int32
+	ready   chan struct{}
+	release chan struct{}
+}
+
+func newGatedApprovalValidator(total int) *gatedApprovalValidator {
+	return &gatedApprovalValidator{
+		total:   int32(total),
+		ready:   make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (v *gatedApprovalValidator) ValidateContext(ctx context.Context, _ string, _ string, _ map[string]any, _ string) error {
+	if v.entered.Add(1) == v.total {
+		close(v.ready)
+	}
+	select {
+	case <-v.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (v *gatedApprovalValidator) waitUntilEntered(t *testing.T) {
+	t.Helper()
+	select {
+	case <-v.ready:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("approval calls entered = %d, want %d", v.entered.Load(), v.total)
+	}
+}
+
+func (v *gatedApprovalValidator) releaseAll() {
+	close(v.release)
 }

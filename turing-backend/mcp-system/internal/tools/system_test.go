@@ -7,12 +7,44 @@ import (
 )
 
 func TestCallSystemTime(t *testing.T) {
-	result, err := Call("system.time", map[string]any{"timezone": "UTC"})
+	result, err := Call("system.time", map[string]any{})
 	if err != nil {
 		t.Fatalf("Call returned error: %v", err)
 	}
 	if result["iso"] == "" {
 		t.Fatalf("expected iso timestamp")
+	}
+}
+
+func TestCallRejectsArgumentsForZeroArgumentTools(t *testing.T) {
+	for _, name := range []string{"system.health", "system.time", "system.info"} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Call(name, map[string]any{"unexpected": true}); err == nil {
+				t.Fatalf("Call(%q) accepted an argument outside its schema", name)
+			}
+		})
+	}
+}
+
+func TestCallEchoEnforcesAdvertisedSchema(t *testing.T) {
+	for name, args := range map[string]map[string]any{
+		"unknown argument": {"text": "hello", "unexpected": true},
+		"non-string text":  {"text": 123},
+		"null text":        {"text": nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Call("system.echo", args); err == nil {
+				t.Fatalf("Call(system.echo, %#v) accepted invalid arguments", args)
+			}
+		})
+	}
+
+	result, err := Call("system.echo", map[string]any{})
+	if err != nil {
+		t.Fatalf("Call(system.echo) returned error for omitted text: %v", err)
+	}
+	if result["text"] != "" {
+		t.Fatalf("omitted echo text = %#v, want empty string", result["text"])
 	}
 }
 

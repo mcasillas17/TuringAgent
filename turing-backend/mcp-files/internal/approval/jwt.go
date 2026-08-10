@@ -85,6 +85,13 @@ type ApprovalClient interface {
 }
 
 func (c Consumer) Validate(token string, tool string, args map[string]any, agentID string) error {
+	return c.ValidateContext(context.Background(), token, tool, args, agentID)
+}
+
+func (c Consumer) ValidateContext(ctx context.Context, token string, tool string, args map[string]any, agentID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	claims, err := VerifyHS256(token, c.JWTSecret)
 	if err != nil {
 		return err
@@ -105,11 +112,11 @@ func (c Consumer) Validate(token string, tool string, args map[string]any, agent
 	if claims.ArgsHash != argsHash {
 		return errors.New("approval args_hash does not match call")
 	}
-	return c.consume(claims.JTI)
+	return c.consume(ctx, claims.JTI)
 }
 
-func (c Consumer) consume(jti string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func (c Consumer) consume(parent context.Context, jti string) error {
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 	client, closeClient, err := c.approvalClient()
 	if err != nil {

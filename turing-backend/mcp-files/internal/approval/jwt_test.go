@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -89,10 +90,98 @@ func TestValidateRejectsConsumeReplayConflict(t *testing.T) {
 	}
 }
 
+func TestValidateContextDerivesConsumeCancellationFromCaller(t *testing.T) {
+	args := map[string]any{"content": "hello", "path": "note.txt"}
+	client := &blockingApprovalClient{
+		started: make(chan struct{}),
+	}
+	consumer := Consumer{
+		InternalToken:  "internal",
+		JWTSecret:      "secret",
+		ApprovalClient: client,
+	}
+	token := signTestToken(t, "secret", Claims{
+		Sub:      "general_assistant",
+		Aud:      "mcp-files",
+		JTI:      "appr_1",
+		Tool:     "files.create",
+		ArgsHash: hashArgs(t, args),
+		Exp:      time.Now().Add(time.Minute).Unix(),
+		Iat:      time.Now().Unix(),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- consumer.ValidateContext(ctx, token, "files.create", args, "general_assistant")
+	}()
+
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("approval consume did not start")
+	}
+	cancel()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("ValidateContext error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ValidateContext did not stop after caller cancellation")
+	}
+	if client.consumed {
+		t.Fatal("canceled approval was consumed")
+	}
+}
+
+func TestValidateContextDoesNotStartConsumeWhenAlreadyCanceled(t *testing.T) {
+	args := map[string]any{"content": "hello", "path": "note.txt"}
+	client := &blockingApprovalClient{started: make(chan struct{})}
+	consumer := Consumer{
+		InternalToken:  "internal",
+		JWTSecret:      "secret",
+		ApprovalClient: client,
+	}
+	token := signTestToken(t, "secret", Claims{
+		Sub:      "general_assistant",
+		Aud:      "mcp-files",
+		JTI:      "appr_1",
+		Tool:     "files.create",
+		ArgsHash: hashArgs(t, args),
+		Exp:      time.Now().Add(time.Minute).Unix(),
+		Iat:      time.Now().Unix(),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := consumer.ValidateContext(ctx, token, "files.create", args, "general_assistant")
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ValidateContext error = %v, want context.Canceled", err)
+	}
+	select {
+	case <-client.started:
+		t.Fatal("approval consume started for an already canceled request")
+	default:
+	}
+}
+
 func TestCanonicalArgsHashMatchesTypeScriptFixture(t *testing.T) {
 	if got := hashArgs(t, map[string]any{"B": float64(1), "a": float64(2)}); got != "sha256:812e5e7fb7bb816dc477e91a136430192eadcf83ff303881298146e106ae0161" {
 		t.Fatalf("unexpected canonical hash %s", got)
 	}
+}
+
+type blockingApprovalClient struct {
+	started  chan struct{}
+	consumed bool
+}
+
+func (c *blockingApprovalClient) ConsumeApproval(ctx context.Context, _ *turingv1.ConsumeApprovalRequest, _ ...grpc.CallOption) (*turingv1.ApprovalResponse, error) {
+	close(c.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 type recordingApprovalService struct {
