@@ -23,6 +23,8 @@ type WorkerConfig struct {
 	MaxToolCallsPerRun int
 	ModelTimeout       time.Duration
 	ToolTimeout        time.Duration
+	ApprovalTimeout    time.Duration
+	TotalToolTimeout   time.Duration
 	OpenAIBaseURL      string
 	OpenAIAPIKey       string
 	MCPSystemBaseURL   string
@@ -37,7 +39,7 @@ func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE: llm.NewOpenAICompatible(cfg.OpenAIBaseURL, cfg.OpenAIAPIKey, http.DefaultClient),
 	}
 	toolRunner := &tools.Runner{WaitApproval: func(ctx context.Context, approvalID string) (string, error) {
-		return client.WaitForApprovalToken(ctx, approvalID, 10*time.Millisecond, 5*time.Second)
+		return client.WaitForApprovalToken(ctx, approvalID, 10*time.Millisecond, cfg.approvalTimeout())
 	}}
 	toolset := &agent.GeneralAssistantTools{
 		SystemMCP:          mcp.NewClient(cfg.MCPSystemBaseURL, cfg.MCPSystemToken, http.DefaultClient),
@@ -46,6 +48,7 @@ func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 		MaxToolCallsPerRun: cfg.MaxToolCallsPerRun,
 		ModelTimeout:       cfg.modelTimeout(),
 		ToolTimeout:        cfg.toolTimeout(),
+		TotalToolTimeout:   cfg.totalToolTimeout(),
 	}
 	executor := agent.NewGeneralAssistant(providers, client, toolset)
 	runtimeWorker := worker.New(worker.Options{WorkerID: cfg.WorkerID, AgentID: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: cfg.MaxConcurrentRuns}, runtimeClientAdapter{client: client}, executor)
@@ -62,6 +65,20 @@ func (cfg WorkerConfig) modelTimeout() time.Duration {
 func (cfg WorkerConfig) toolTimeout() time.Duration {
 	if cfg.ToolTimeout > 0 {
 		return cfg.ToolTimeout
+	}
+	return 30 * time.Second
+}
+
+func (cfg WorkerConfig) approvalTimeout() time.Duration {
+	if cfg.ApprovalTimeout > 0 {
+		return cfg.ApprovalTimeout
+	}
+	return 5 * time.Second
+}
+
+func (cfg WorkerConfig) totalToolTimeout() time.Duration {
+	if cfg.TotalToolTimeout > 0 {
+		return cfg.TotalToolTimeout
 	}
 	return 30 * time.Second
 }

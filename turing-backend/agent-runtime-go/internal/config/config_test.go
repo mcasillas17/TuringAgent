@@ -75,6 +75,12 @@ func TestLoadFromEnvDefaultsTimeouts(t *testing.T) {
 	if cfg.ToolTimeout != 30*time.Second {
 		t.Fatalf("ToolTimeout = %v, want 30s", cfg.ToolTimeout)
 	}
+	if cfg.ApprovalTimeout != 65*time.Second {
+		t.Fatalf("ApprovalTimeout = %v, want 65s", cfg.ApprovalTimeout)
+	}
+	if cfg.TotalToolTimeout != 180*time.Second {
+		t.Fatalf("TotalToolTimeout = %v, want 180s", cfg.TotalToolTimeout)
+	}
 }
 
 func TestLoadFromEnvRejectsNonPositiveTimeouts(t *testing.T) {
@@ -84,6 +90,8 @@ func TestLoadFromEnvRejectsNonPositiveTimeouts(t *testing.T) {
 	}{
 		{name: "model zero", env: "TURING_MODEL_TIMEOUT_MS"},
 		{name: "tool zero", env: "TURING_TOOL_TIMEOUT_MS"},
+		{name: "approval zero", env: "TURING_APPROVAL_TIMEOUT_MS"},
+		{name: "total tool zero", env: "TURING_TOOL_TOTAL_TIMEOUT_MS"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			for _, value := range []string{"0", "-1"} {
@@ -103,7 +111,12 @@ func TestLoadFromEnvRejectsNonPositiveTimeouts(t *testing.T) {
 func TestLoadFromEnvAcceptsLargestRepresentableTimeoutMilliseconds(t *testing.T) {
 	maxMilliseconds := int64(math.MaxInt64 / int64(time.Millisecond))
 	value := strconv.FormatInt(maxMilliseconds, 10)
-	for _, env := range []string{"TURING_MODEL_TIMEOUT_MS", "TURING_TOOL_TIMEOUT_MS"} {
+	for _, env := range []string{
+		"TURING_MODEL_TIMEOUT_MS",
+		"TURING_TOOL_TIMEOUT_MS",
+		"TURING_APPROVAL_TIMEOUT_MS",
+		"TURING_TOOL_TOTAL_TIMEOUT_MS",
+	} {
 		t.Run(env, func(t *testing.T) {
 			cfg, err := LoadFromEnv(mapEnv(map[string]string{
 				"TURING_INTERNAL_TOKEN": "internal",
@@ -112,10 +125,12 @@ func TestLoadFromEnvAcceptsLargestRepresentableTimeoutMilliseconds(t *testing.T)
 			if err != nil {
 				t.Fatalf("LoadFromEnv(%s=%s) failed: %v", env, value, err)
 			}
-			got := cfg.ModelTimeout
-			if env == "TURING_TOOL_TIMEOUT_MS" {
-				got = cfg.ToolTimeout
-			}
+			got := map[string]time.Duration{
+				"TURING_MODEL_TIMEOUT_MS":      cfg.ModelTimeout,
+				"TURING_TOOL_TIMEOUT_MS":       cfg.ToolTimeout,
+				"TURING_APPROVAL_TIMEOUT_MS":   cfg.ApprovalTimeout,
+				"TURING_TOOL_TOTAL_TIMEOUT_MS": cfg.TotalToolTimeout,
+			}[env]
 			want := time.Duration(maxMilliseconds) * time.Millisecond
 			if got != want {
 				t.Fatalf("%s duration = %v, want %v", env, got, want)
@@ -131,7 +146,12 @@ func TestLoadFromEnvRejectsTimeoutMillisecondsThatOverflowDuration(t *testing.T)
 		"9223372036854775808",
 	}
 	for _, value := range values {
-		for _, env := range []string{"TURING_MODEL_TIMEOUT_MS", "TURING_TOOL_TIMEOUT_MS"} {
+		for _, env := range []string{
+			"TURING_MODEL_TIMEOUT_MS",
+			"TURING_TOOL_TIMEOUT_MS",
+			"TURING_APPROVAL_TIMEOUT_MS",
+			"TURING_TOOL_TOTAL_TIMEOUT_MS",
+		} {
 			t.Run(env+"/"+value, func(t *testing.T) {
 				_, err := LoadFromEnv(mapEnv(map[string]string{
 					"TURING_INTERNAL_TOKEN": "internal",
@@ -158,6 +178,8 @@ func TestLoadFromEnvRejectsInvalidEndpointURLs(t *testing.T) {
 			"http:///missing-host",
 			"http://:8080/missing-host",
 			"provider.example/v1",
+			"https://provider.example/v1?tenant=one",
+			"https://provider.example/v1#fragment",
 		} {
 			t.Run(env+"/"+value, func(t *testing.T) {
 				_, err := LoadFromEnv(mapEnv(map[string]string{

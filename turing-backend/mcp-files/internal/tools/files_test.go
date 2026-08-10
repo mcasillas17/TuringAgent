@@ -1,6 +1,9 @@
 package tools
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +30,19 @@ func TestReadInsideSandbox(t *testing.T) {
 	}
 	if result["content"] != "hello" {
 		t.Fatalf("unexpected content: %#v", result)
+	}
+}
+
+func TestReadRequiresNonEmptyStringPath(t *testing.T) {
+	for _, args := range []map[string]any{
+		{},
+		{"path": ""},
+		{"path": 123},
+	} {
+		_, err := NewFilesTools(t.TempDir()).Read(args)
+		if err == nil || !strings.Contains(err.Error(), "path is required") {
+			t.Fatalf("Read(%#v) error = %v, want path is required", args, err)
+		}
 	}
 }
 
@@ -97,6 +113,58 @@ func TestSearchInsideSandbox(t *testing.T) {
 	}
 }
 
+func TestListHonorsLimitAndReportsTruncation(t *testing.T) {
+	root := t.TempDir()
+	for index := 0; index < 3; index++ {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("%d.txt", index)), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := NewFilesTools(root).List(map[string]any{"path": ".", "limit": float64(2)})
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 2 || result["truncated"] != true {
+		t.Fatalf("List result = %#v, want two items and truncated=true", result)
+	}
+}
+
+func TestSearchStopsAtTraversalBudget(t *testing.T) {
+	root := t.TempDir()
+	for index := 0; index < 1001; index++ {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("%04d.txt", index)), []byte("content"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := NewFilesTools(root).Search(map[string]any{"path": ".", "query": "missing"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if result["truncated"] != true {
+		t.Fatalf("Search result = %#v, want truncated=true at traversal budget", result)
+	}
+}
+
+func TestSearchStopsAtDirectoryTraversalBudget(t *testing.T) {
+	root := t.TempDir()
+	for index := 0; index < 2001; index++ {
+		if err := os.Mkdir(filepath.Join(root, fmt.Sprintf("%04d", index)), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := NewFilesTools(root).Search(map[string]any{"path": ".", "query": "missing"})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if result["truncated"] != true {
+		t.Fatalf("Search result = %#v, want truncated=true at directory traversal budget", result)
+	}
+}
+
 func TestSearchRejectsSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
@@ -144,6 +212,64 @@ func TestCreateRejectsApprovalForDifferentArgs(t *testing.T) {
 	}
 }
 
+func TestCreateValidatesArgumentsBeforeApproval(t *testing.T) {
+	for _, args := range []map[string]any{
+		{},
+		{"path": "", "content": "hello"},
+		{"path": "note.txt"},
+		{"path": "note.txt", "content": 123},
+		{"path": "note.txt", "content": "hello", "unexpected": true},
+	} {
+		root := t.TempDir()
+		validator := &recordingApprovalValidator{}
+		files := NewFilesTools(root).WithApprovalValidator(validator)
+
+		_, err := files.Create(args, "approval-token", "general_assistant")
+
+		if err == nil {
+			t.Fatalf("Create(%#v) returned nil error", args)
+		}
+		if validator.calls != 0 {
+			t.Fatalf("Create(%#v) approval validations = %d, want 0", args, validator.calls)
+		}
+		if _, statErr := os.Stat(filepath.Join(root, "note.txt")); !os.IsNotExist(statErr) {
+			t.Fatalf("Create(%#v) mutated note.txt: %v", args, statErr)
+		}
+	}
+}
+
+func TestUpdateValidatesArgumentsBeforeApprovalAndMutation(t *testing.T) {
+	for _, args := range []map[string]any{
+		{},
+		{"path": "", "content": "updated"},
+		{"path": "note.txt"},
+		{"path": "note.txt", "content": 123},
+		{"path": "note.txt", "content": "updated", "expectedHash": "not-a-sha256"},
+		{"path": "note.txt", "content": "updated", "unexpected": true},
+	} {
+		root := t.TempDir()
+		note := filepath.Join(root, "note.txt")
+		if err := os.WriteFile(note, []byte("original"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		validator := &recordingApprovalValidator{}
+		files := NewFilesTools(root).WithApprovalValidator(validator)
+
+		_, err := files.Update(args, "approval-token", "general_assistant")
+
+		if err == nil {
+			t.Fatalf("Update(%#v) returned nil error", args)
+		}
+		if validator.calls != 0 {
+			t.Fatalf("Update(%#v) approval validations = %d, want 0", args, validator.calls)
+		}
+		content, readErr := os.ReadFile(note)
+		if readErr != nil || string(content) != "original" {
+			t.Fatalf("Update(%#v) content = %q, %v; want original", args, content, readErr)
+		}
+	}
+}
+
 func TestDeleteAndMoveDisabled(t *testing.T) {
 	files := NewFilesTools(t.TempDir())
 	if _, err := files.Call("files.delete", map[string]any{}, "", "general_assistant"); err == nil {
@@ -154,8 +280,39 @@ func TestDeleteAndMoveDisabled(t *testing.T) {
 	}
 }
 
+func TestCallContextRejectsCanceledSideEffectBeforeApprovalOrMutation(t *testing.T) {
+	root := t.TempDir()
+	validator := &recordingApprovalValidator{}
+	files := NewFilesTools(root).WithApprovalValidator(validator)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := files.CallContext(ctx, "files.create", map[string]any{
+		"path": "note.txt", "content": "hello",
+	}, "approval-token", "general_assistant")
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("CallContext error = %v, want context.Canceled", err)
+	}
+	if validator.calls != 0 {
+		t.Fatalf("approval validations = %d, want 0", validator.calls)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "note.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("canceled call mutated note.txt: %v", statErr)
+	}
+}
+
 type fakeApprovalValidator struct {
 	valid bool
+}
+
+type recordingApprovalValidator struct {
+	calls int
+}
+
+func (v *recordingApprovalValidator) Validate(string, string, map[string]any, string) error {
+	v.calls++
+	return nil
 }
 
 func (f fakeApprovalValidator) Validate(token string, tool string, args map[string]any, agentID string) error {

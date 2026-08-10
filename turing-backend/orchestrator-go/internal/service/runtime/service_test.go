@@ -1451,14 +1451,15 @@ func TestToolBeaconRequiresApprovalForFilesTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
-		RunId:      enqueued.RunID,
-		TraceId:    enqueued.TraceID,
-		ToolCallId: "call_files_update",
-		AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
-		ServerName: "files",
-		ToolName:   "files.update",
-		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
-		Args:       args,
+		RunId:           enqueued.RunID,
+		TraceId:         enqueued.TraceID,
+		ToolCallId:      "call_files_update",
+		ModelToolCallId: "provider_call_1",
+		AgentId:         turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName:      "files",
+		ToolName:        "files.update",
+		Phase:           turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		Args:            args,
 	}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -1471,7 +1472,8 @@ func TestToolBeaconRequiresApprovalForFilesTool(t *testing.T) {
 	}
 	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
 		RunId: enqueued.RunID, TraceId: enqueued.TraceID, ToolCallId: "call_files_update",
-		AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "files",
+		ModelToolCallId: "provider_call_1",
+		AgentId:         turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "files",
 		ToolName: "files.update", Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, Args: args,
 	}}}); err != nil {
 		t.Fatal(err)
@@ -1520,6 +1522,7 @@ func TestToolBeaconRequiresApprovalForFilesTool(t *testing.T) {
 		t.Fatalf("approval start lifecycle = %v, want %v", lifecycle, want)
 	}
 	if startedPayload["toolCallId"] != "call_files_update" || startedPayload["serverName"] != "files" ||
+		startedPayload["modelToolCallId"] != "provider_call_1" ||
 		startedPayload["toolName"] != "files.update" || !reflect.DeepEqual(startedPayload["args"], args.AsMap()) {
 		t.Fatalf("tool.call.started payload = %#v", startedPayload)
 	}

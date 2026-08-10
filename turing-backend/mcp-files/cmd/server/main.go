@@ -83,7 +83,7 @@ func handleMCP(w http.ResponseWriter, r *http.Request, filesTools tools.FilesToo
 			args = map[string]any{}
 		}
 		approvalToken := approvalTokenFromParams(req.Params)
-		result, err := filesTools.Call(name, args, approvalToken, agentID)
+		result, err := filesTools.CallContext(r.Context(), name, args, approvalToken, agentID)
 		if err != nil {
 			writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Error: map[string]any{"code": -32000, "message": err.Error()}})
 			return
@@ -99,8 +99,11 @@ func listTools() []map[string]any {
 		{
 			"name":        "files.list",
 			"description": "List files and directories at a sandbox-relative path.",
-			"inputSchema": objectSchema(map[string]any{"path": stringSchema()}, []any{}),
-			"policy":      "safe",
+			"inputSchema": objectSchema(map[string]any{
+				"path":  stringSchema(),
+				"limit": integerSchema(1, 1000),
+			}, []any{}),
+			"policy": "safe",
 		},
 		{
 			"name":        "files.search",
@@ -118,7 +121,7 @@ func listTools() []map[string]any {
 			"inputSchema": objectSchema(map[string]any{
 				"path":     stringSchema(),
 				"maxBytes": integerSchema(1, 524288),
-			}, []any{}),
+			}, []any{"path"}),
 			"policy": "safe",
 		},
 		{

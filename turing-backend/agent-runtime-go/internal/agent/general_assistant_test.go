@@ -117,6 +117,34 @@ func TestExecuteReplacesWhitespaceOnlyFinalModelContentWithFallback(t *testing.T
 		t.Fatalf("fallback delta = %+v, want %q", fallbackDelta, emptyFinalFallback)
 	}
 }
+
+func TestExecuteRejectsModelOutputBeyondAggregateByteLimit(t *testing.T) {
+	provider := &scriptedProvider{events: []llm.StreamEvent{
+		{Type: "delta", Text: strings.Repeat("a", maxModelOutputBytes)},
+		{Type: "delta", Text: "b"},
+	}}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
+		},
+		fakeMessageClient{},
+		nil,
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	failed := updates[len(updates)-1].GetRunFailed()
+	if failed == nil || failed.Code != "model_output_limit_exceeded" || failed.Retryable {
+		t.Fatalf("terminal update = %+v, want non-retryable model_output_limit_exceeded", updates[len(updates)-1])
+	}
+	if got := eventTypes(updates); !reflect.DeepEqual(got, []turingv1.TuringEventType{
+		turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_STARTED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA,
+	}) {
+		t.Fatalf("event types = %v, want started and only the in-limit delta", got)
+	}
+}
+
 func TestExecuteEnforcesAggregateSuccessfulToolResultLimit(t *testing.T) {
 	const limit = 4 * 1024 * 1024
 	for _, test := range []struct {
@@ -142,11 +170,7 @@ func TestExecuteEnforcesAggregateSuccessfulToolResultLimit(t *testing.T) {
 			}
 			runner := &tools.Runner{
 				PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
-					return &turingv1.ToolPolicyDecision{
-						Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
-						ApprovalId: "approval_1",
-						ToolCallId: beacon.GetToolCallId(),
-					}, nil
+					return approvalToolCall(beacon), nil
 				},
 				WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
 			}
@@ -744,11 +768,7 @@ func TestExecuteStopsAfterUncertainMCPCallFailure(t *testing.T) {
 	runner := &tools.Runner{
 		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 			beacons = append(beacons, beacon)
-			return &turingv1.ToolPolicyDecision{
-				Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
-				ApprovalId: "approval_1",
-				ToolCallId: beacon.GetToolCallId(),
-			}, nil
+			return approvalToolCall(beacon), nil
 		},
 		WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
 	}
@@ -877,11 +897,7 @@ func TestExecuteStopsSilentlyWhenApprovalAlreadyTerminalizedRun(t *testing.T) {
 	runner := &tools.Runner{
 		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 			beacons = append(beacons, beacon)
-			return &turingv1.ToolPolicyDecision{
-				Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
-				ApprovalId: "approval_1",
-				ToolCallId: beacon.GetToolCallId(),
-			}, nil
+			return approvalToolCall(beacon), nil
 		},
 		WaitApproval: func(context.Context, string) (string, error) {
 			return "", agentTerminalRunError{message: "approval denied"}
@@ -949,11 +965,7 @@ func TestExecuteStopsOnApprovalWaitFailures(t *testing.T) {
 			runner := &tools.Runner{
 				PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 					beacons = append(beacons, beacon)
-					return &turingv1.ToolPolicyDecision{
-						Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
-						ApprovalId: "approval_1",
-						ToolCallId: beacon.GetToolCallId(),
-					}, nil
+					return approvalToolCall(beacon), nil
 				},
 				WaitApproval: test.wait,
 			}
@@ -1524,6 +1536,7 @@ func TestExecutePassesJobAndRegistryMetadataToRunner(t *testing.T) {
 	if before == nil ||
 		before.ToolCallId == "" ||
 		before.ToolCallId == modelCall.ID ||
+		before.ModelToolCallId != modelCall.ID ||
 		before.AgentId != turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT ||
 		before.RunId != "run_1" ||
 		before.TraceId != "trace_1" ||
@@ -2181,11 +2194,7 @@ func TestExecuteMakesTypedTransientProviderFailureNonRetryableAfterSideEffect(t 
 	}
 	runner := &tools.Runner{
 		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
-			return &turingv1.ToolPolicyDecision{
-				Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
-				ApprovalId: "approval_1",
-				ToolCallId: beacon.GetToolCallId(),
-			}, nil
+			return approvalToolCall(beacon), nil
 		},
 		WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
 	}
@@ -2250,11 +2259,7 @@ func TestExecuteMakesLaterModelFailuresNonRetryableOnlyAfterApprovalGatedSuccess
 			runner := &tools.Runner{PostBeacon: post}
 			if test.approvalGated {
 				runner.PostBeacon = func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
-					return &turingv1.ToolPolicyDecision{
-						Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
-						ApprovalId: "approval_1",
-						ToolCallId: beacon.GetToolCallId(),
-					}, nil
+					return approvalToolCall(beacon), nil
 				}
 				runner.WaitApproval = func(context.Context, string) (string, error) { return "token", nil }
 			}
@@ -2307,11 +2312,7 @@ func TestExecuteModelTimeoutIsNonRetryableAfterApprovalGatedSuccess(t *testing.T
 	}
 	runner := &tools.Runner{
 		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
-			return &turingv1.ToolPolicyDecision{
-				Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
-				ApprovalId: "approval_1",
-				ToolCallId: beacon.GetToolCallId(),
-			}, nil
+			return approvalToolCall(beacon), nil
 		},
 		WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
 	}
@@ -2606,6 +2607,18 @@ func allowToolCall(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv
 		Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
 		ToolCallId: beacon.GetToolCallId(),
 	}, nil
+}
+
+func approvalToolCall(beacon *turingv1.ToolCallBeacon) *turingv1.ToolPolicyDecision {
+	decision := turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED
+	if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
+		decision = turingv1.ToolPolicyDecision_DECISION_ALLOW
+	}
+	return &turingv1.ToolPolicyDecision{
+		Decision:   decision,
+		ApprovalId: "approval_1",
+		ToolCallId: beacon.GetToolCallId(),
+	}
 }
 
 type completionProvider struct {

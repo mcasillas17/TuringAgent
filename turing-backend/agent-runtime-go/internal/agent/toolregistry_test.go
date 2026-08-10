@@ -158,6 +158,37 @@ func TestBuildRegistryReturnsUsableEmptyRegistry(t *testing.T) {
 	}
 }
 
+func TestBuildRegistryDoesNotAdvertiseToolsMarkedDisabled(t *testing.T) {
+	registry, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
+		"server": &registryTestClient{tools: []map[string]any{
+			{"name": "safe", "policy": "safe"},
+			{"name": "disabled", "policy": "disabled"},
+			{"name": "approval", "policy": "approval_required"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("BuildToolRegistry returned error: %v", err)
+	}
+	if got, want := definitionNames(registry.Definitions()), []string{"safe", "approval"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("definition names = %v, want %v", got, want)
+	}
+	if _, exists := registry.Lookup("disabled"); exists {
+		t.Fatal("disabled tool was callable")
+	}
+}
+
+func TestBuildRegistryRejectsUnknownAdvertisedPolicy(t *testing.T) {
+	_, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
+		"server": &registryTestClient{tools: []map[string]any{{
+			"name": "unknown-policy", "policy": "maybe",
+		}}},
+	})
+	if err == nil || ToolDiscoveryRetryable(err) ||
+		!strings.Contains(err.Error(), "invalid policy") {
+		t.Fatalf("BuildToolRegistry error = %T %v, want permanent invalid policy error", err, err)
+	}
+}
+
 func TestBuildRegistryDefinitionsReturnsFreshSlice(t *testing.T) {
 	registry, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
 		"server": &registryTestClient{tools: []map[string]any{{"name": "original"}}},

@@ -808,24 +808,28 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 }
 
 func (s *Server) appendToolStartedEvent(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run, args map[string]any) (repository.Event, error) {
-	return s.appendToolEvent(ctx, run, "tool.call.started", map[string]any{
+	payload := map[string]any{
 		"toolCallId": beacon.ToolCallId,
 		"serverName": beaconServerName(beacon),
 		"toolName":   beacon.ToolName,
 		"args":       args,
-	})
+	}
+	addModelToolCallID(payload, beacon)
+	return s.appendToolEvent(ctx, run, "tool.call.started", payload)
 }
 
 func (s *Server) denyToolBefore(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run, argsJSON string, argsHash string, reason string) (*turingv1.ToolPolicyDecision, error) {
 	if err := s.repo.RecordToolCallBefore(ctx, repository.ToolCallRecord{ToolCallID: beacon.ToolCallId, RunID: beacon.RunId, Status: "denied"}, "general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash); err != nil {
 		return nil, mapToolCallError(err)
 	}
-	event, err := s.appendToolEvent(ctx, run, "tool.call.denied", map[string]any{
+	deniedPayload := map[string]any{
 		"toolCallId": beacon.ToolCallId,
 		"serverName": beaconServerName(beacon),
 		"toolName":   beacon.ToolName,
 		"reason":     reason,
-	})
+	}
+	addModelToolCallID(deniedPayload, beacon)
+	event, err := s.appendToolEvent(ctx, run, "tool.call.denied", deniedPayload)
 	if err != nil {
 		return nil, err
 	}
@@ -859,6 +863,7 @@ func (s *Server) handleToolAfter(ctx context.Context, beacon *turingv1.ToolCallB
 		"resultSummary": beacon.ResultSummary,
 		"durationMs":    beacon.DurationMs,
 	}
+	addModelToolCallID(payload, beacon)
 	if beacon.Error != nil {
 		payload["error"] = map[string]any{"code": beacon.Error.Code, "message": beacon.Error.Message}
 	}
@@ -961,6 +966,7 @@ func toolAuditPayload(beacon *turingv1.ToolCallBeacon) map[string]any {
 	if beacon.Args != nil {
 		payload["args"] = beacon.Args.AsMap()
 	}
+	addModelToolCallID(payload, beacon)
 	if beacon.Status != turingv1.ToolCallStatus_TOOL_CALL_STATUS_UNSPECIFIED {
 		payload["status"] = beacon.Status.String()
 	}
@@ -974,6 +980,12 @@ func toolAuditPayload(beacon *turingv1.ToolCallBeacon) map[string]any {
 		payload["error"] = map[string]any{"code": beacon.Error.Code, "message": beacon.Error.Message}
 	}
 	return payload
+}
+
+func addModelToolCallID(payload map[string]any, beacon *turingv1.ToolCallBeacon) {
+	if beacon.GetModelToolCallId() != "" {
+		payload["modelToolCallId"] = beacon.GetModelToolCallId()
+	}
 }
 
 func (s *Server) appendToolEvent(ctx context.Context, run repository.Run, eventType string, payload map[string]any) (repository.Event, error) {

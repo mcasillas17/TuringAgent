@@ -114,6 +114,19 @@ func BuildToolRegistry(ctx context.Context, servers map[string]ToolLister) (*Too
 			if !present || !valid || strings.TrimSpace(name) == "" {
 				return nil, permanentToolDiscoveryError(fmt.Errorf("MCP server %q tool %d has invalid name: must be a non-blank string", serverName, index))
 			}
+			if value, present := raw["policy"]; present {
+				policy, valid := value.(string)
+				if !valid {
+					return nil, permanentToolDiscoveryError(fmt.Errorf("MCP server %q tool %q has invalid policy: must be a string", serverName, name))
+				}
+				switch policy {
+				case "safe", "approval_required":
+				case "disabled":
+					continue
+				default:
+					return nil, permanentToolDiscoveryError(fmt.Errorf("MCP server %q tool %q has invalid policy %q", serverName, name, policy))
+				}
+			}
 
 			description := ""
 			if value, present := raw["description"]; present {

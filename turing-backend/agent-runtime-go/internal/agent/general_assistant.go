@@ -32,11 +32,13 @@ type GeneralAssistantTools struct {
 	MaxToolCallsPerRun int
 	ModelTimeout       time.Duration
 	ToolTimeout        time.Duration
+	TotalToolTimeout   time.Duration
 }
 
 const (
 	maxToolIterations         = 5
 	defaultMaxToolCallsPerRun = 10
+	maxModelOutputBytes       = 4 * 1024 * 1024
 	maxToolResultBytes        = 4 * 1024 * 1024
 	toolIterationFallback     = "Tool iteration limit reached before a final response."
 	emptyFinalFallback        = "The model returned an empty response."
@@ -118,7 +120,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	}
 	requestMessages := append([]llm.ChatMessage{}, messages...)
 	requestMessages = append(requestMessages, llm.ChatMessage{Role: "user", Content: job.GetUserText()})
-	content := ""
+	var content strings.Builder
 	toolCallCount := 0
 	successfulToolSideEffect := false
 	usedModelToolCallIDs := make(map[string]struct{})
@@ -147,7 +149,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			}
 			return emitRunFailed(emit, job, "model_stream_failed", err.Error(), retryableProviderStartError(err) && !successfulToolSideEffect)
 		}
-		turnText := ""
+		var turnText strings.Builder
 		var calls []llm.ToolCall
 	stream:
 		for {
@@ -168,8 +170,18 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			}
 			switch event.Type {
 			case "delta":
-				turnText += event.Text
-				content += event.Text
+				if len(event.Text) > maxModelOutputBytes-content.Len() {
+					cancelModel()
+					return emitRunFailed(
+						emit,
+						job,
+						"model_output_limit_exceeded",
+						fmt.Sprintf("model output exceeds %d bytes", maxModelOutputBytes),
+						false,
+					)
+				}
+				turnText.WriteString(event.Text)
+				content.WriteString(event.Text)
 				if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA, map[string]any{"messageId": job.GetAssistantMessageId(), "delta": event.Text})); err != nil {
 					cancelModel()
 					return err
@@ -198,16 +210,17 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			return emitRunFailed(emit, job, "model_timeout", modelErr.Error(), !successfulToolSideEffect)
 		}
 		if len(calls) == 0 {
-			if strings.TrimSpace(content) == "" {
+			if strings.TrimSpace(content.String()) == "" {
 				if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA, map[string]any{
 					"messageId": job.GetAssistantMessageId(),
 					"delta":     emptyFinalFallback,
 				})); err != nil {
 					return err
 				}
-				content = emptyFinalFallback
+				content.Reset()
+				content.WriteString(emptyFinalFallback)
 			}
-			return completeRun(emit, job, content)
+			return completeRun(emit, job, content.String())
 		}
 		if toolCallCount+len(calls) > a.maxToolCallsPerRun {
 			return emitRunFailed(
@@ -222,7 +235,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		normalizeToolCallIDs(calls, job.GetRunId(), toolIteration, usedModelToolCallIDs)
 		requestMessages = append(requestMessages, llm.ChatMessage{
 			Role:      "assistant",
-			Content:   turnText,
+			Content:   turnText.String(),
 			ToolCalls: calls,
 		})
 		for _, call := range calls {
@@ -256,16 +269,16 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			})); err != nil {
 				return err
 			}
-			if content == "" {
+			if content.Len() == 0 {
 				if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA, map[string]any{
 					"messageId": job.GetAssistantMessageId(),
 					"delta":     toolIterationFallback,
 				})); err != nil {
 					return err
 				}
-				content = toolIterationFallback
+				content.WriteString(toolIterationFallback)
 			}
-			return completeRun(emit, job, content)
+			return completeRun(emit, job, content.String())
 		}
 	}
 }
@@ -353,14 +366,16 @@ func (a *GeneralAssistant) executeToolCall(
 		return toolErrorOutcome(call, "tool_runner_unavailable")
 	}
 	runOutcome, err := a.tools.Runner.RunWithOutcome(ctx, tools.RunInput{
-		AgentID:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
-		RunID:      job.GetRunId(),
-		TraceID:    job.GetTraceId(),
-		ServerName: entry.ServerName,
-		ToolName:   call.Name,
-		Args:       call.Arguments,
-		MCPClient:  entry.Client,
-		Timeout:    a.toolTimeout(),
+		AgentID:         turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		RunID:           job.GetRunId(),
+		TraceID:         job.GetTraceId(),
+		ModelToolCallID: call.ID,
+		ServerName:      entry.ServerName,
+		ToolName:        call.Name,
+		Args:            call.Arguments,
+		MCPClient:       entry.Client,
+		Timeout:         a.toolTimeout(),
+		TotalTimeout:    a.totalToolTimeout(),
 	})
 	outcome := toolCallOutcome{SuccessfulSideEffect: runOutcome.SideEffecting}
 	if ctxErr := ctx.Err(); ctxErr != nil && !tools.ReportingFailed(err) {
@@ -637,6 +652,13 @@ func (a *GeneralAssistant) toolTimeout() time.Duration {
 		return 0
 	}
 	return a.tools.ToolTimeout
+}
+
+func (a *GeneralAssistant) totalToolTimeout() time.Duration {
+	if a.tools == nil {
+		return 0
+	}
+	return a.tools.TotalToolTimeout
 }
 
 func boundedContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {

@@ -24,14 +24,16 @@ type Runner struct {
 }
 
 type RunInput struct {
-	AgentID    turingv1.AgentId
-	RunID      string
-	TraceID    string
-	ServerName string
-	ToolName   string
-	Args       map[string]any
-	MCPClient  MCPClient
-	Timeout    time.Duration
+	AgentID         turingv1.AgentId
+	RunID           string
+	TraceID         string
+	ModelToolCallID string
+	ServerName      string
+	ToolName        string
+	Args            map[string]any
+	MCPClient       MCPClient
+	Timeout         time.Duration
+	TotalTimeout    time.Duration
 }
 
 func (r *Runner) Run(ctx context.Context, input RunInput) (map[string]any, error) {
@@ -45,6 +47,8 @@ type RunOutcome struct {
 }
 
 func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome, error) {
+	ctx, cancel := stageContext(ctx, input.TotalTimeout)
+	defer cancel()
 	if input.Args == nil {
 		input.Args = map[string]any{}
 	}
@@ -135,6 +139,9 @@ func (r *Runner) postAfter(ctx context.Context, input RunInput, toolCallID strin
 	decision, err := r.postWithTimeout(ctx, input.Timeout, beacon(input, toolCallID, turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER, status, summary, callErr, time.Since(started).Milliseconds()))
 	if err == nil {
 		err = validatePolicyDecision(decision, toolCallID)
+		if err == nil && decision.GetDecision() != turingv1.ToolPolicyDecision_DECISION_ALLOW {
+			err = fmt.Errorf("after tool policy decision must be allow, got %s", decision.GetDecision().String())
+		}
 		if err != nil {
 			err = markBeaconPosted(err)
 		}
@@ -327,18 +334,19 @@ func markBeaconPosted(err error) error {
 func beacon(input RunInput, toolCallID string, phase turingv1.ToolCallPhase, status turingv1.ToolCallStatus, summary string, callErr *turingv1.ToolCallError, durationMS int64) *turingv1.ToolCallBeacon {
 	args, _ := safejson.ToStruct(input.Args)
 	return &turingv1.ToolCallBeacon{
-		Phase:         phase,
-		ToolCallId:    toolCallID,
-		AgentId:       input.AgentID,
-		ServerName:    input.ServerName,
-		ToolName:      input.ToolName,
-		Args:          args,
-		Status:        status,
-		ResultSummary: summary,
-		DurationMs:    durationMS,
-		Error:         callErr,
-		RunId:         input.RunID,
-		TraceId:       input.TraceID,
+		Phase:           phase,
+		ToolCallId:      toolCallID,
+		AgentId:         input.AgentID,
+		ServerName:      input.ServerName,
+		ToolName:        input.ToolName,
+		Args:            args,
+		Status:          status,
+		ResultSummary:   summary,
+		DurationMs:      durationMS,
+		Error:           callErr,
+		RunId:           input.RunID,
+		TraceId:         input.TraceID,
+		ModelToolCallId: input.ModelToolCallID,
 	}
 }
 

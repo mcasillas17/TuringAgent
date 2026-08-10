@@ -38,6 +38,7 @@ message ToolCallBeacon {
   ToolCallError error = 10;
   string run_id = 11;
   string trace_id = 12;
+  string model_tool_call_id = 13;
 }
 
 message ToolPolicyDecision {

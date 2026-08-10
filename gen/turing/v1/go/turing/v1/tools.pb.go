@@ -228,21 +228,22 @@ func (x *ToolCallError) GetMessage() string {
 }
 
 type ToolCallBeacon struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Phase         ToolCallPhase          `protobuf:"varint,1,opt,name=phase,proto3,enum=turing.v1.ToolCallPhase" json:"phase,omitempty"`
-	ToolCallId    string                 `protobuf:"bytes,2,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
-	AgentId       AgentId                `protobuf:"varint,3,opt,name=agent_id,json=agentId,proto3,enum=turing.v1.AgentId" json:"agent_id,omitempty"`
-	ServerName    string                 `protobuf:"bytes,4,opt,name=server_name,json=serverName,proto3" json:"server_name,omitempty"`
-	ToolName      string                 `protobuf:"bytes,5,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
-	Args          *structpb.Struct       `protobuf:"bytes,6,opt,name=args,proto3" json:"args,omitempty"`
-	Status        ToolCallStatus         `protobuf:"varint,7,opt,name=status,proto3,enum=turing.v1.ToolCallStatus" json:"status,omitempty"`
-	ResultSummary string                 `protobuf:"bytes,8,opt,name=result_summary,json=resultSummary,proto3" json:"result_summary,omitempty"`
-	DurationMs    int64                  `protobuf:"varint,9,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
-	Error         *ToolCallError         `protobuf:"bytes,10,opt,name=error,proto3" json:"error,omitempty"`
-	RunId         string                 `protobuf:"bytes,11,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	TraceId       string                 `protobuf:"bytes,12,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Phase           ToolCallPhase          `protobuf:"varint,1,opt,name=phase,proto3,enum=turing.v1.ToolCallPhase" json:"phase,omitempty"`
+	ToolCallId      string                 `protobuf:"bytes,2,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	AgentId         AgentId                `protobuf:"varint,3,opt,name=agent_id,json=agentId,proto3,enum=turing.v1.AgentId" json:"agent_id,omitempty"`
+	ServerName      string                 `protobuf:"bytes,4,opt,name=server_name,json=serverName,proto3" json:"server_name,omitempty"`
+	ToolName        string                 `protobuf:"bytes,5,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	Args            *structpb.Struct       `protobuf:"bytes,6,opt,name=args,proto3" json:"args,omitempty"`
+	Status          ToolCallStatus         `protobuf:"varint,7,opt,name=status,proto3,enum=turing.v1.ToolCallStatus" json:"status,omitempty"`
+	ResultSummary   string                 `protobuf:"bytes,8,opt,name=result_summary,json=resultSummary,proto3" json:"result_summary,omitempty"`
+	DurationMs      int64                  `protobuf:"varint,9,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
+	Error           *ToolCallError         `protobuf:"bytes,10,opt,name=error,proto3" json:"error,omitempty"`
+	RunId           string                 `protobuf:"bytes,11,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	TraceId         string                 `protobuf:"bytes,12,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	ModelToolCallId string                 `protobuf:"bytes,13,opt,name=model_tool_call_id,json=modelToolCallId,proto3" json:"model_tool_call_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ToolCallBeacon) Reset() {
@@ -359,6 +360,13 @@ func (x *ToolCallBeacon) GetTraceId() string {
 	return ""
 }
 
+func (x *ToolCallBeacon) GetModelToolCallId() string {
+	if x != nil {
+		return x.ModelToolCallId
+	}
+	return ""
+}
+
 type ToolPolicyDecision struct {
 	state         protoimpl.MessageState      `protogen:"open.v1"`
 	Decision      ToolPolicyDecision_Decision `protobuf:"varint,1,opt,name=decision,proto3,enum=turing.v1.ToolPolicyDecision_Decision" json:"decision,omitempty"`
@@ -434,7 +442,7 @@ const file_turing_v1_tools_proto_rawDesc = "" +
 	"\x15turing/v1/tools.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16turing/v1/common.proto\"=\n" +
 	"\rToolCallError\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xd9\x03\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\x86\x04\n" +
 	"\x0eToolCallBeacon\x12.\n" +
 	"\x05phase\x18\x01 \x01(\x0e2\x18.turing.v1.ToolCallPhaseR\x05phase\x12 \n" +
 	"\ftool_call_id\x18\x02 \x01(\tR\n" +
@@ -451,7 +459,8 @@ const file_turing_v1_tools_proto_rawDesc = "" +
 	"\x05error\x18\n" +
 	" \x01(\v2\x18.turing.v1.ToolCallErrorR\x05error\x12\x15\n" +
 	"\x06run_id\x18\v \x01(\tR\x05runId\x12\x19\n" +
-	"\btrace_id\x18\f \x01(\tR\atraceId\"\xa0\x02\n" +
+	"\btrace_id\x18\f \x01(\tR\atraceId\x12+\n" +
+	"\x12model_tool_call_id\x18\r \x01(\tR\x0fmodelToolCallId\"\xa0\x02\n" +
 	"\x12ToolPolicyDecision\x12B\n" +
 	"\bdecision\x18\x01 \x01(\x0e2&.turing.v1.ToolPolicyDecision.DecisionR\bdecision\x12 \n" +
 	"\ftool_call_id\x18\x02 \x01(\tR\n" +

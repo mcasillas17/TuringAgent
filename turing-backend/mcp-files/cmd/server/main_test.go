@@ -85,7 +85,7 @@ func TestListToolsAdvertisesOnlyCallableToolsWithAccurateSchemas(t *testing.T) {
 	wantRequired := map[string][]any{
 		"files.list":   {},
 		"files.search": {"query"},
-		"files.read":   {},
+		"files.read":   {"path"},
 		"files.create": {"path", "content"},
 		"files.update": {"path", "content"},
 	}
@@ -122,6 +122,7 @@ func TestListToolsAdvertisesOnlyCallableToolsWithAccurateSchemas(t *testing.T) {
 		}
 	}
 
+	assertIntegerBounds(t, tools, "files.list", "limit", 1, 1000)
 	assertIntegerBounds(t, tools, "files.search", "limit", 1, 200)
 	assertIntegerBounds(t, tools, "files.read", "maxBytes", 1, 524288)
 }

@@ -27,6 +27,8 @@ type Config struct {
 	MaxToolCallsPerRun   int
 	ModelTimeout         time.Duration
 	ToolTimeout          time.Duration
+	ApprovalTimeout      time.Duration
+	TotalToolTimeout     time.Duration
 	LogLevel             string
 }
 
@@ -55,6 +57,14 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	toolTimeout, err := durationMillisecondsValue(getenv, "TURING_TOOL_TIMEOUT_MS", 30000)
+	if err != nil {
+		return Config{}, err
+	}
+	approvalTimeout, err := durationMillisecondsValue(getenv, "TURING_APPROVAL_TIMEOUT_MS", 65000)
+	if err != nil {
+		return Config{}, err
+	}
+	totalToolTimeout, err := durationMillisecondsValue(getenv, "TURING_TOOL_TOTAL_TIMEOUT_MS", 180000)
 	if err != nil {
 		return Config{}, err
 	}
@@ -91,6 +101,8 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 		MaxToolCallsPerRun:   maxToolCalls,
 		ModelTimeout:         modelTimeout,
 		ToolTimeout:          toolTimeout,
+		ApprovalTimeout:      approvalTimeout,
+		TotalToolTimeout:     totalToolTimeout,
 		LogLevel:             defaultString(getenv("LOG_LEVEL"), "info"),
 	}, nil
 }
@@ -98,8 +110,10 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 func endpointURLValue(getenv func(string) string, name string, defaultValue string) (string, error) {
 	value := defaultString(getenv(name), defaultValue)
 	parsed, err := url.Parse(value)
-	if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return "", fmt.Errorf("%s must be an absolute http or https URL with a non-empty host", name)
+	if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return "", fmt.Errorf("%s must be an absolute http or https URL with a non-empty host and no query or fragment", name)
 	}
 	return value, nil
 }
