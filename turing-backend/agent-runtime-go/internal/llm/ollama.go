@@ -8,13 +8,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 )
 
 const (
-	maxStreamTokenBytes            = 1024 * 1024
-	maxOllamaToolCalls             = 128
-	maxOllamaToolCallArgumentBytes = maxStreamTokenBytes
+	maxStreamTokenBytes                     = 1024 * 1024
+	maxOllamaToolCalls                      = 128
+	maxOllamaToolCallIDBytes                = 1024
+	maxOllamaToolCallNameBytes              = 1024
+	maxOllamaToolCallArgumentBytes          = maxStreamTokenBytes
+	maxOllamaToolCallAggregateArgumentBytes = maxStreamTokenBytes
 )
 
 type Ollama struct {
@@ -33,12 +37,11 @@ func (p *Ollama) ID() string { return "ollama" }
 
 func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
 	body, err := json.Marshal(ollamaChatRequest{
-		Model:       req.Model,
-		Messages:    ollamaMessages(req.Messages),
-		Stream:      true,
-		Temperature: req.Temperature,
-		MaxTokens:   req.MaxTokens,
-		Tools:       ollamaTools(req.Tools),
+		Model:    req.Model,
+		Messages: ollamaMessages(req.Messages),
+		Stream:   true,
+		Options:  ollamaRequestOptions(req.Temperature, req.MaxTokens),
+		Tools:    ollamaTools(req.Tools),
 	})
 	if err != nil {
 		return nil, err
@@ -62,6 +65,7 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 		}
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), maxStreamTokenBytes)
+		state := newOllamaStreamState()
 		for scanner.Scan() {
 			line := bytes.TrimSpace(scanner.Bytes())
 			if len(line) == 0 {
@@ -81,67 +85,83 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 				sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_unavailable", Message: "Ollama provider error: " + providerError})
 				return
 			}
+
+			rawDone, present := obj["done"]
+			done, ok := rawDone.(bool)
+			if !present || !ok {
+				sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: "done must be a boolean"})
+				return
+			}
+			reason := ""
+			if rawReason, present := obj["done_reason"]; present {
+				var ok bool
+				reason, ok = rawReason.(string)
+				if !ok {
+					sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: "done_reason must be a string"})
+					return
+				}
+				if !done {
+					sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: "done_reason is only valid on a terminal chunk"})
+					return
+				}
+			}
+
+			content := ""
 			if rawMessage, present := obj["message"]; present {
 				message, ok := rawMessage.(map[string]any)
 				if !ok {
 					sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: "message must be an object"})
 					return
 				}
-				hasToolCalls := false
+				if rawRole, present := message["role"]; present {
+					if _, ok := rawRole.(string); !ok {
+						sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: "message role must be a string"})
+						return
+					}
+				}
+				if rawContent, present := message["content"]; present {
+					var ok bool
+					content, ok = rawContent.(string)
+					if !ok {
+						sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: "message content must be a string"})
+						return
+					}
+				}
 				if rawToolCalls, present := message["tool_calls"]; present {
-					toolCalls, err := parseOllamaToolCalls(rawToolCalls)
-					if err != nil {
+					if err := state.appendToolCallFragments(rawToolCalls); err != nil {
 						sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: err.Error()})
 						return
 					}
-					if len(toolCalls) > 0 {
-						hasToolCalls = true
-						if !sendStreamEvent(ctx, out, StreamEvent{Type: "tool_call", ToolCalls: toolCalls}) {
-							return
-						}
-					}
-				}
-				if !hasToolCalls {
-					rawContent, present := message["content"]
-					if present {
-						content, ok := rawContent.(string)
-						if !ok {
-							sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: "message content must be a string"})
-							return
-						}
-						if content != "" {
-							if !sendStreamEvent(ctx, out, StreamEvent{Type: "delta", Text: content}) {
-								return
-							}
-						}
-					}
 				}
 			}
-			if rawDone, present := obj["done"]; present {
-				done, ok := rawDone.(bool)
-				if !ok {
-					sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: "done must be a boolean"})
+			if content != "" {
+				if !sendStreamEvent(ctx, out, StreamEvent{Type: "delta", Text: content}) {
 					return
 				}
-				if !done {
-					continue
-				}
-				reason := ""
-				if rawReason, present := obj["done_reason"]; present {
-					var ok bool
-					reason, ok = rawReason.(string)
-					if !ok {
-						sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: "done_reason must be a string"})
-						return
-					}
-				}
-				sendStreamEvent(ctx, out, StreamEvent{Type: "completed", FinishReason: reason})
-				return
 			}
+			if !done {
+				continue
+			}
+			if state.hasToolCalls() {
+				toolCalls, err := state.finalizeToolCalls()
+				if err != nil {
+					sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: err.Error()})
+					return
+				}
+				if !sendStreamEvent(ctx, out, StreamEvent{Type: "tool_call", ToolCalls: toolCalls}) {
+					return
+				}
+			}
+			sendStreamEvent(ctx, out, StreamEvent{Type: "completed", FinishReason: reason})
+			return
 		}
 		if err := scanner.Err(); err != nil {
 			if ctx.Err() == nil {
-				sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_stream_error", Message: err.Error()})
+				code := "model_stream_error"
+				if strings.Contains(err.Error(), "token too long") {
+					code = "model_bad_chunk"
+				}
+				sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: code, Message: err.Error()})
 			}
 			return
 		}
@@ -152,71 +172,263 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 	return out, nil
 }
 
-func parseOllamaToolCalls(value any) ([]ToolCall, error) {
+type ollamaStreamToolCall struct {
+	id            string
+	name          string
+	arguments     map[string]any
+	argumentBytes int
+}
+
+type ollamaStreamState struct {
+	toolCalls     map[int]*ollamaStreamToolCall
+	argumentBytes int
+}
+
+func newOllamaStreamState() *ollamaStreamState {
+	return &ollamaStreamState{toolCalls: make(map[int]*ollamaStreamToolCall)}
+}
+
+func (state *ollamaStreamState) hasToolCalls() bool {
+	return len(state.toolCalls) > 0
+}
+
+func (state *ollamaStreamState) appendToolCallFragments(value any) error {
 	rawCalls, ok := value.([]any)
 	if !ok {
-		return nil, fmt.Errorf("tool_calls must be an array")
+		return fmt.Errorf("tool_calls must be an array")
 	}
 	if len(rawCalls) > maxOllamaToolCalls {
-		return nil, fmt.Errorf("tool call count exceeds %d", maxOllamaToolCalls)
+		return fmt.Errorf("tool call count exceeds %d", maxOllamaToolCalls)
 	}
-	calls := make([]ToolCall, 0, len(rawCalls))
-	for index, rawCall := range rawCalls {
+	indices := make(map[int]struct{}, len(rawCalls))
+	for position, rawCall := range rawCalls {
 		call, ok := rawCall.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("tool call %d must be an object", index)
-		}
-		if _, present := call["id"]; present {
-			return nil, fmt.Errorf("tool call %d contains unsupported ID", index)
+			return fmt.Errorf("tool call %d must be an object", position)
 		}
 		if _, present := call["type"]; present {
-			return nil, fmt.Errorf("tool call %d contains unsupported type", index)
+			return fmt.Errorf("tool call %d contains unsupported type", position)
+		}
+		id := ""
+		if rawID, present := call["id"]; present {
+			id, ok = rawID.(string)
+			if !ok {
+				return fmt.Errorf("tool call %d ID must be a string", position)
+			}
+			if len(id) > maxOllamaToolCallIDBytes {
+				return fmt.Errorf("tool call ID exceeds %d bytes", maxOllamaToolCallIDBytes)
+			}
 		}
 		function, ok := call["function"].(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("tool call %d function must be an object", index)
+			return fmt.Errorf("tool call %d function must be an object", position)
 		}
-		name, ok := function["name"].(string)
-		if !ok || name == "" {
-			return nil, fmt.Errorf("tool call %d function name must be a non-empty string", index)
+		index := 0
+		if rawIndex, present := function["index"]; present {
+			number, ok := rawIndex.(json.Number)
+			if !ok {
+				return fmt.Errorf("tool call %d function index must be an integer", position)
+			}
+			parsed, err := number.Int64()
+			if err != nil {
+				return fmt.Errorf("tool call %d function index must be an integer", position)
+			}
+			if parsed < 0 {
+				return fmt.Errorf("tool call has negative index %d", parsed)
+			}
+			if parsed >= maxOllamaToolCalls {
+				return fmt.Errorf("tool call index %d exceeds %d", parsed, maxOllamaToolCalls-1)
+			}
+			index = int(parsed)
+		} else if len(state.toolCalls) > 0 {
+			return fmt.Errorf("tool call %d missing index is ambiguous after indexed tool calls", position)
 		}
-		arguments, ok := function["arguments"].(map[string]any)
+		if _, duplicate := indices[index]; duplicate {
+			return fmt.Errorf("tool calls contain duplicate index %d", index)
+		}
+		indices[index] = struct{}{}
+
+		name := ""
+		if rawName, present := function["name"]; present {
+			name, ok = rawName.(string)
+			if !ok {
+				return fmt.Errorf("tool call %d function name must be a string", index)
+			}
+			if len(name) > maxOllamaToolCallNameBytes {
+				return fmt.Errorf("tool call name exceeds %d bytes", maxOllamaToolCallNameBytes)
+			}
+		}
+
+		rawArguments, present := function["arguments"]
+		if !present {
+			return fmt.Errorf("tool call %d function arguments must be an object", index)
+		}
+		arguments, ok := rawArguments.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("tool call %d function arguments must be an object", index)
+			return fmt.Errorf("tool call %d function arguments must be an object", index)
 		}
-		encodedArguments, err := json.Marshal(arguments)
-		if err != nil {
-			return nil, fmt.Errorf("tool call %d function arguments: %w", index, err)
+		if err := state.appendToolCallFragment(index, id, name, arguments); err != nil {
+			return err
 		}
-		if len(encodedArguments) > maxOllamaToolCallArgumentBytes {
-			return nil, fmt.Errorf("tool call %d arguments exceed %d bytes", index, maxOllamaToolCallArgumentBytes)
+	}
+	return nil
+}
+
+func (state *ollamaStreamState) appendToolCallFragment(index int, id, name string, arguments map[string]any) error {
+	call := state.toolCalls[index]
+	if call == nil && len(state.toolCalls) >= maxOllamaToolCalls {
+		return fmt.Errorf("tool call count exceeds %d", maxOllamaToolCalls)
+	}
+
+	mergedArguments := make(map[string]any)
+	if call != nil {
+		mergedArguments = cloneOllamaArgumentMap(call.arguments)
+	}
+	if err := mergeOllamaArgumentMaps(mergedArguments, arguments, ""); err != nil {
+		return fmt.Errorf("tool call %d %w", index, err)
+	}
+	encodedArguments, err := json.Marshal(mergedArguments)
+	if err != nil {
+		return fmt.Errorf("tool call %d function arguments: %w", index, err)
+	}
+	if len(encodedArguments) > maxOllamaToolCallArgumentBytes {
+		return fmt.Errorf("tool call %d arguments exceed %d bytes", index, maxOllamaToolCallArgumentBytes)
+	}
+	oldArgumentBytes := 0
+	if call != nil {
+		oldArgumentBytes = call.argumentBytes
+	}
+	aggregateArgumentBytes := state.argumentBytes - oldArgumentBytes + len(encodedArguments)
+	if aggregateArgumentBytes > maxOllamaToolCallAggregateArgumentBytes {
+		return fmt.Errorf("aggregate arguments exceed %d bytes", maxOllamaToolCallAggregateArgumentBytes)
+	}
+
+	if call == nil {
+		call = &ollamaStreamToolCall{}
+		state.toolCalls[index] = call
+	}
+	if id != "" {
+		call.id = id
+	}
+	if name != "" {
+		call.name = name
+	}
+	call.arguments = mergedArguments
+	call.argumentBytes = len(encodedArguments)
+	state.argumentBytes = aggregateArgumentBytes
+	return nil
+}
+
+func (state *ollamaStreamState) finalizeToolCalls() ([]ToolCall, error) {
+	calls := make([]ToolCall, 0, len(state.toolCalls))
+	ids := make(map[string]struct{}, len(state.toolCalls))
+	for index := 0; index < len(state.toolCalls); index++ {
+		call, ok := state.toolCalls[index]
+		if !ok {
+			return nil, fmt.Errorf("tool call indices are non-contiguous: missing index %d", index)
 		}
-		calls = append(calls, ToolCall{Name: name, Arguments: arguments})
+		if call.name == "" {
+			return nil, fmt.Errorf("tool call %d is missing a function name", index)
+		}
+		if call.id != "" {
+			if _, duplicate := ids[call.id]; duplicate {
+				return nil, fmt.Errorf("tool call %d has duplicate ID %q", index, call.id)
+			}
+			ids[call.id] = struct{}{}
+		}
+		calls = append(calls, ToolCall{
+			ID:        call.id,
+			Name:      call.name,
+			Arguments: cloneOllamaArgumentMap(call.arguments),
+		})
 	}
 	return calls, nil
 }
 
+func mergeOllamaArgumentMaps(destination, fragment map[string]any, path string) error {
+	for key, fragmentValue := range fragment {
+		argumentPath := key
+		if path != "" {
+			argumentPath = path + "." + key
+		}
+		existingValue, present := destination[key]
+		if !present {
+			destination[key] = cloneOllamaArgumentValue(fragmentValue)
+			continue
+		}
+		existingMap, existingIsMap := existingValue.(map[string]any)
+		fragmentMap, fragmentIsMap := fragmentValue.(map[string]any)
+		if existingIsMap && fragmentIsMap {
+			if err := mergeOllamaArgumentMaps(existingMap, fragmentMap, argumentPath); err != nil {
+				return err
+			}
+			continue
+		}
+		if !reflect.DeepEqual(existingValue, fragmentValue) {
+			return fmt.Errorf("has conflicting argument %q", argumentPath)
+		}
+	}
+	return nil
+}
+
+func cloneOllamaArgumentMap(value map[string]any) map[string]any {
+	cloned := make(map[string]any, len(value))
+	for key, item := range value {
+		cloned[key] = cloneOllamaArgumentValue(item)
+	}
+	return cloned
+}
+
+func cloneOllamaArgumentValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneOllamaArgumentMap(typed)
+	case []any:
+		cloned := make([]any, len(typed))
+		for index, item := range typed {
+			cloned[index] = cloneOllamaArgumentValue(item)
+		}
+		return cloned
+	default:
+		return value
+	}
+}
+
 type ollamaChatRequest struct {
-	Model       string          `json:"model"`
-	Messages    []ollamaMessage `json:"messages"`
-	Stream      bool            `json:"stream"`
-	Temperature float64         `json:"temperature,omitempty"`
-	MaxTokens   int             `json:"num_predict,omitempty"`
-	Tools       []ollamaTool    `json:"tools,omitempty"`
+	Model    string          `json:"model"`
+	Messages []ollamaMessage `json:"messages"`
+	Stream   bool            `json:"stream"`
+	Options  *ollamaOptions  `json:"options,omitempty"`
+	Tools    []ollamaTool    `json:"tools,omitempty"`
+}
+
+type ollamaOptions struct {
+	Temperature float64 `json:"temperature,omitempty"`
+	NumPredict  int     `json:"num_predict,omitempty"`
+}
+
+func ollamaRequestOptions(temperature float64, maxTokens int) *ollamaOptions {
+	if temperature == 0 && maxTokens == 0 {
+		return nil
+	}
+	return &ollamaOptions{Temperature: temperature, NumPredict: maxTokens}
 }
 
 type ollamaMessage struct {
-	Role      string                  `json:"role"`
-	Content   string                  `json:"content"`
-	ToolName  string                  `json:"tool_name,omitempty"`
-	ToolCalls []ollamaMessageToolCall `json:"tool_calls,omitempty"`
+	Role       string                  `json:"role"`
+	Content    string                  `json:"content"`
+	ToolName   string                  `json:"tool_name,omitempty"`
+	ToolCallID string                  `json:"tool_call_id,omitempty"`
+	ToolCalls  []ollamaMessageToolCall `json:"tool_calls,omitempty"`
 }
 
 type ollamaMessageToolCall struct {
+	ID       string             `json:"id,omitempty"`
 	Function ollamaFunctionCall `json:"function"`
 }
 
 type ollamaFunctionCall struct {
+	Index     int            `json:"index"`
 	Name      string         `json:"name"`
 	Arguments map[string]any `json:"arguments"`
 }
@@ -227,14 +439,20 @@ func ollamaMessages(messages []ChatMessage) []ollamaMessage {
 		result := ollamaMessage{Role: message.Role, Content: message.Content}
 		if message.Role == "tool" {
 			result.ToolName = message.Name
+			result.ToolCallID = message.ToolCallID
 		} else if message.Role == "assistant" {
-			for _, call := range message.ToolCalls {
+			for index, call := range message.ToolCalls {
 				arguments := call.Arguments
 				if arguments == nil {
 					arguments = map[string]any{}
 				}
 				result.ToolCalls = append(result.ToolCalls, ollamaMessageToolCall{
-					Function: ollamaFunctionCall{Name: call.Name, Arguments: arguments},
+					ID: call.ID,
+					Function: ollamaFunctionCall{
+						Index:     index,
+						Name:      call.Name,
+						Arguments: arguments,
+					},
 				})
 			}
 		}

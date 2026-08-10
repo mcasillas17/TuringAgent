@@ -55,7 +55,7 @@ func TestOllamaRejectsMultipleJSONValuesOnOneLine(t *testing.T) {
 
 func TestOllamaParsesToolCall(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"message":{"role":"assistant","content":"ignored","tool_calls":[{"function":{"name":"get_weather","arguments":{"city":"Paris"}}}]},"done":true,"done_reason":"stop"}` + "\n"))
+		w.Write([]byte(`{"message":{"role":"assistant","content":"I'll check.","tool_calls":[{"id":"call_1","function":{"index":0,"name":"get_weather","arguments":{"city":"Paris"}}}]},"done":true,"done_reason":"tool_calls"}` + "\n"))
 	}))
 	t.Cleanup(server.Close)
 
@@ -65,18 +65,29 @@ func TestOllamaParsesToolCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := collectEvents(events)
-	if len(got) != 2 || got[0].Type != "tool_call" || got[1].Type != "completed" {
-		t.Fatalf("events = %+v, want tool_call then completed", got)
+	assertOllamaEventTypes(t, got, "delta", "tool_call", "completed")
+	if got[0].Text != "I'll check." {
+		t.Fatalf("delta = %+v", got[0])
 	}
-	if got[0].Text != "" || len(got[0].ToolCalls) != 1 {
-		t.Fatalf("tool call event = %+v", got[0])
+	if got[1].Text != "" || len(got[1].ToolCalls) != 1 {
+		t.Fatalf("tool call event = %+v", got[1])
 	}
-	call := got[0].ToolCalls[0]
-	if call.ID != "" || call.Name != "get_weather" || call.Arguments["city"] != "Paris" {
+	call := got[1].ToolCalls[0]
+	if call.ID != "call_1" || call.Name != "get_weather" || call.Arguments["city"] != "Paris" {
 		t.Fatalf("tool call = %+v", call)
 	}
-	if got[1].FinishReason != "stop" {
-		t.Fatalf("completion = %+v, want stop reason", got[1])
+	if got[2].FinishReason != "tool_calls" {
+		t.Fatalf("completion = %+v, want tool_calls reason", got[2])
+	}
+}
+
+func TestOllamaAcceptsLegacyToolCallWithoutIDOrIndex(t *testing.T) {
+	got := streamOllamaEvents(t,
+		`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"get_weather","arguments":{"city":"Paris"}}}]},"done":true,"done_reason":"tool_calls"}`+"\n")
+	assertOllamaEventTypes(t, got, "tool_call", "completed")
+	call := got[0].ToolCalls[0]
+	if call.ID != "" || call.Name != "get_weather" || call.Arguments["city"] != "Paris" {
+		t.Fatalf("legacy tool call = %+v", call)
 	}
 }
 
@@ -117,6 +128,29 @@ func TestOllamaRequestSerializesTools(t *testing.T) {
 	}
 }
 
+func TestOllamaRequestNestsOptions(t *testing.T) {
+	body := captureOllamaRequest(t, ChatRequest{
+		Model:       "llama3.2",
+		Temperature: 0.25,
+		MaxTokens:   321,
+	})
+	if _, present := body["temperature"]; present {
+		t.Fatalf("top-level temperature was serialized: %#v", body)
+	}
+	if _, present := body["num_predict"]; present {
+		t.Fatalf("top-level num_predict was serialized: %#v", body)
+	}
+	options, ok := body["options"].(map[string]any)
+	if !ok || options["temperature"] != json.Number("0.25") || options["num_predict"] != json.Number("321") {
+		t.Fatalf("options = %#v", body["options"])
+	}
+
+	withoutOptions := captureOllamaRequest(t, ChatRequest{Model: "llama3.2"})
+	if _, present := withoutOptions["options"]; present {
+		t.Fatalf("zero options were serialized: %#v", withoutOptions)
+	}
+}
+
 func TestOllamaRequestSerializesProviderSpecificMessages(t *testing.T) {
 	body := captureOllamaRequest(t, ChatRequest{
 		Model: "llama3.2",
@@ -149,25 +183,49 @@ func TestOllamaRequestSerializesProviderSpecificMessages(t *testing.T) {
 	assistant := messages[2].(map[string]any)
 	toolCalls := assistant["tool_calls"].([]any)
 	call := toolCalls[0].(map[string]any)
-	if _, present := call["id"]; present {
-		t.Fatalf("unsupported tool call ID was serialized: %#v", call)
+	if call["id"] != "call_1" {
+		t.Fatalf("tool call ID = %#v, want call_1", call["id"])
 	}
 	if _, present := call["type"]; present {
 		t.Fatalf("unsupported tool call type was serialized: %#v", call)
 	}
 	function := call["function"].(map[string]any)
-	if function["name"] != "get_weather" {
+	if function["name"] != "get_weather" || function["index"] != json.Number("0") {
 		t.Fatalf("function = %#v", function)
 	}
 	if arguments, ok := function["arguments"].(map[string]any); !ok || arguments["city"] != "Paris" {
 		t.Fatalf("arguments = %#v, want object", function["arguments"])
 	}
 	toolResult := messages[3].(map[string]any)
-	if toolResult["role"] != "tool" || toolResult["content"] != `{"temperature":72}` || toolResult["tool_name"] != "get_weather" {
+	if toolResult["role"] != "tool" || toolResult["content"] != `{"temperature":72}` ||
+		toolResult["tool_name"] != "get_weather" || toolResult["tool_call_id"] != "call_1" {
 		t.Fatalf("tool result = %#v", toolResult)
 	}
+}
+
+func TestOllamaRequestPreservesEmptyToolCallCompatibility(t *testing.T) {
+	body := captureOllamaRequest(t, ChatRequest{
+		Model: "llama3.2",
+		Messages: []ChatMessage{
+			{Role: "assistant", ToolCalls: []ToolCall{{Name: "legacy"}}},
+			{Role: "tool", Content: "ok"},
+		},
+	})
+	messages := body["messages"].([]any)
+	call := messages[0].(map[string]any)["tool_calls"].([]any)[0].(map[string]any)
+	if _, present := call["id"]; present {
+		t.Fatalf("empty ID was serialized: %#v", call)
+	}
+	function := call["function"].(map[string]any)
+	if function["index"] != json.Number("0") {
+		t.Fatalf("function index = %#v, want 0", function["index"])
+	}
+	toolResult := messages[1].(map[string]any)
 	if _, present := toolResult["tool_call_id"]; present {
-		t.Fatalf("OpenAI-only tool_call_id was serialized: %#v", toolResult)
+		t.Fatalf("empty tool_call_id was serialized: %#v", toolResult)
+	}
+	if _, present := toolResult["tool_name"]; present {
+		t.Fatalf("empty tool_name was serialized: %#v", toolResult)
 	}
 }
 
@@ -188,16 +246,43 @@ func TestOllamaRequestDefaultsNilToolCallArguments(t *testing.T) {
 
 func TestOllamaParsesMultipleToolCallsAndEmptyArguments(t *testing.T) {
 	got := streamOllamaEvents(t,
-		`{"message":{"role":"assistant","content":"must not stream","tool_calls":[{"function":{"name":"first","arguments":{}}},{"function":{"name":"second","arguments":{"count":2}}}]},"done":false}`+"\n"+
+		`{"message":{"role":"assistant","content":"using tools","tool_calls":[{"id":"call_1","function":{"index":1,"name":"second","arguments":{"count":2}}},{"id":"call_0","function":{"index":0,"name":"first","arguments":{}}}]},"done":false}`+"\n"+
 			`{"done":true,"done_reason":"tool_calls"}`+"\n")
-	assertOllamaEventTypes(t, got, "tool_call", "completed")
-	if len(got[0].ToolCalls) != 2 || got[0].ToolCalls[0].Name != "first" ||
-		got[0].ToolCalls[0].ID != "" || got[0].ToolCalls[0].Arguments == nil ||
-		got[0].ToolCalls[1].Name != "second" || got[0].ToolCalls[1].Arguments["count"] != json.Number("2") {
-		t.Fatalf("tool calls = %+v", got[0].ToolCalls)
+	assertOllamaEventTypes(t, got, "delta", "tool_call", "completed")
+	if got[0].Text != "using tools" {
+		t.Fatalf("delta = %+v", got[0])
 	}
-	if got[1].FinishReason != "tool_calls" {
-		t.Fatalf("completion = %+v", got[1])
+	if len(got[1].ToolCalls) != 2 || got[1].ToolCalls[0].Name != "first" ||
+		got[1].ToolCalls[0].ID != "call_0" || got[1].ToolCalls[0].Arguments == nil ||
+		got[1].ToolCalls[1].Name != "second" || got[1].ToolCalls[1].Arguments["count"] != json.Number("2") {
+		t.Fatalf("tool calls = %+v", got[1].ToolCalls)
+	}
+	if got[2].FinishReason != "tool_calls" {
+		t.Fatalf("completion = %+v", got[2])
+	}
+}
+
+func TestOllamaMergesPartialToolCallArguments(t *testing.T) {
+	got := streamOllamaEvents(t,
+		`{"message":{"content":"first ","tool_calls":[{"id":"temporary","function":{"index":0,"name":"lookup","arguments":{"query":"weather","details":{"days":3}}}}]},"done":false}`+"\n"+
+			`{"message":{"content":"then ","tool_calls":[{"id":"call_0","function":{"index":0,"name":"get_weather","arguments":{"units":"celsius","details":{"lang":"fr"},"query":"weather"}}},{"id":"call_1","function":{"index":1,"name":"clock","arguments":{"city":"Paris"}}}]},"done":false}`+"\n"+
+			`{"message":{"content":"done"},"done":true,"done_reason":"tool_calls"}`+"\n")
+
+	assertOllamaEventTypes(t, got, "delta", "delta", "delta", "tool_call", "completed")
+	if got[0].Text != "first " || got[1].Text != "then " || got[2].Text != "done" {
+		t.Fatalf("content events = %+v", got[:3])
+	}
+	calls := got[3].ToolCalls
+	if len(calls) != 2 || calls[0].ID != "call_0" || calls[0].Name != "get_weather" ||
+		calls[0].Arguments["query"] != "weather" || calls[0].Arguments["units"] != "celsius" {
+		t.Fatalf("tool calls = %+v", calls)
+	}
+	details, ok := calls[0].Arguments["details"].(map[string]any)
+	if !ok || details["days"] != json.Number("3") || details["lang"] != "fr" {
+		t.Fatalf("merged details = %#v", calls[0].Arguments["details"])
+	}
+	if calls[1].ID != "call_1" || calls[1].Name != "clock" || calls[1].Arguments["city"] != "Paris" {
+		t.Fatalf("second call = %+v", calls[1])
 	}
 }
 
@@ -217,7 +302,6 @@ func TestOllamaRejectsMalformedToolCalls(t *testing.T) {
 		{name: "arguments missing", toolCalls: `[{"function":{"name":"bad"}}]`},
 		{name: "arguments null", toolCalls: `[{"function":{"name":"bad","arguments":null}}]`},
 		{name: "arguments not object", toolCalls: `[{"function":{"name":"bad","arguments":[]}}]`},
-		{name: "unexpected ID", toolCalls: `[{"id":"call_1","function":{"name":"bad","arguments":{}}}]`},
 		{name: "unexpected type", toolCalls: `[{"type":"function","function":{"name":"bad","arguments":{}}}]`},
 	}
 	for _, tt := range tests {
@@ -226,6 +310,128 @@ func TestOllamaRejectsMalformedToolCalls(t *testing.T) {
 			assertOllamaEventTypes(t, got, "error")
 			if got[0].Code != "model_bad_chunk" {
 				t.Fatalf("event = %+v, want model_bad_chunk", got[0])
+			}
+		})
+	}
+}
+
+func TestOllamaValidatesChunkEnvelopeFields(t *testing.T) {
+	tests := []struct {
+		name        string
+		body        string
+		wantMessage string
+	}{
+		{name: "message null", body: `{"message":null,"done":false}`, wantMessage: "message must be an object"},
+		{name: "message array", body: `{"message":[],"done":false}`, wantMessage: "message must be an object"},
+		{name: "role null", body: `{"message":{"role":null},"done":false}`, wantMessage: "message role must be a string"},
+		{name: "role number", body: `{"message":{"role":3},"done":false}`, wantMessage: "message role must be a string"},
+		{name: "content null", body: `{"message":{"content":null},"done":false}`, wantMessage: "message content must be a string"},
+		{name: "content object", body: `{"message":{"content":{}},"done":false}`, wantMessage: "message content must be a string"},
+		{name: "tool calls object", body: `{"message":{"tool_calls":{}},"done":false}`, wantMessage: "tool_calls must be an array"},
+		{name: "done missing", body: `{"message":{"content":"partial"}}`, wantMessage: "done must be a boolean"},
+		{name: "done null", body: `{"done":null}`, wantMessage: "done must be a boolean"},
+		{name: "done string", body: `{"done":"true"}`, wantMessage: "done must be a boolean"},
+		{name: "done reason null", body: `{"done":true,"done_reason":null}`, wantMessage: "done_reason must be a string"},
+		{name: "done reason number", body: `{"done":true,"done_reason":3}`, wantMessage: "done_reason must be a string"},
+		{name: "nonterminal done reason", body: `{"done":false,"done_reason":"stop"}`, wantMessage: "done_reason is only valid on a terminal chunk"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := streamOllamaEvents(t, tt.body+"\n")
+			assertOllamaEventTypes(t, got, "error")
+			if got[0].Code != "model_bad_chunk" || !strings.Contains(got[0].Message, tt.wantMessage) {
+				t.Fatalf("events = %+v, want model_bad_chunk containing %q", got, tt.wantMessage)
+			}
+		})
+	}
+}
+
+func TestOllamaValidatesToolCallStreamIntegrity(t *testing.T) {
+	tests := []struct {
+		name        string
+		body        string
+		wantMessage string
+	}{
+		{
+			name:        "negative index",
+			body:        `{"message":{"tool_calls":[{"function":{"index":-1,"name":"bad","arguments":{}}}]},"done":true}`,
+			wantMessage: "negative index -1",
+		},
+		{
+			name:        "non-integer index",
+			body:        `{"message":{"tool_calls":[{"function":{"index":1.5,"name":"bad","arguments":{}}}]},"done":true}`,
+			wantMessage: "index must be an integer",
+		},
+		{
+			name:        "index out of range",
+			body:        `{"message":{"tool_calls":[{"function":{"index":128,"name":"bad","arguments":{}}}]},"done":true}`,
+			wantMessage: "index 128 exceeds",
+		},
+		{
+			name:        "sparse indices",
+			body:        `{"message":{"tool_calls":[{"function":{"index":1,"name":"bad","arguments":{}}}]},"done":true}`,
+			wantMessage: "non-contiguous",
+		},
+		{
+			name:        "duplicate indices in chunk",
+			body:        `{"message":{"tool_calls":[{"function":{"index":0,"name":"first","arguments":{}}},{"function":{"index":0,"name":"again","arguments":{}}}]},"done":true}`,
+			wantMessage: "duplicate index 0",
+		},
+		{
+			name:        "multiple missing indices",
+			body:        `{"message":{"tool_calls":[{"function":{"name":"first","arguments":{}}},{"function":{"name":"second","arguments":{}}}]},"done":true}`,
+			wantMessage: "missing index is ambiguous",
+		},
+		{
+			name: "missing index after indexed call",
+			body: `{"message":{"tool_calls":[{"function":{"index":1,"name":"second","arguments":{}}}]},"done":false}` + "\n" +
+				`{"message":{"tool_calls":[{"function":{"name":"legacy","arguments":{}}}]},"done":true}`,
+			wantMessage: "missing index is ambiguous",
+		},
+		{
+			name:        "duplicate IDs",
+			body:        `{"message":{"tool_calls":[{"id":"duplicate","function":{"index":0,"name":"first","arguments":{}}},{"id":"duplicate","function":{"index":1,"name":"second","arguments":{}}}]},"done":true}`,
+			wantMessage: `duplicate ID "duplicate"`,
+		},
+		{
+			name:        "ID wrong type",
+			body:        `{"message":{"tool_calls":[{"id":3,"function":{"index":0,"name":"bad","arguments":{}}}]},"done":true}`,
+			wantMessage: "ID must be a string",
+		},
+		{
+			name:        "index wrong type",
+			body:        `{"message":{"tool_calls":[{"function":{"index":"0","name":"bad","arguments":{}}}]},"done":true}`,
+			wantMessage: "index must be an integer",
+		},
+		{
+			name:        "name wrong type",
+			body:        `{"message":{"tool_calls":[{"function":{"index":0,"name":3,"arguments":{}}}]},"done":true}`,
+			wantMessage: "name must be a string",
+		},
+		{
+			name:        "missing final name",
+			body:        `{"message":{"tool_calls":[{"function":{"index":0,"arguments":{}}}]},"done":true}`,
+			wantMessage: "missing a function name",
+		},
+		{
+			name: "conflicting scalar argument",
+			body: `{"message":{"tool_calls":[{"function":{"index":0,"name":"tool","arguments":{"key":"first"}}}]},"done":false}` + "\n" +
+				`{"message":{"tool_calls":[{"function":{"index":0,"name":"","arguments":{"key":"second"}}}]},"done":true}`,
+			wantMessage: `conflicting argument "key"`,
+		},
+		{
+			name: "conflicting argument type",
+			body: `{"message":{"tool_calls":[{"function":{"index":0,"name":"tool","arguments":{"key":{"nested":true}}}}]},"done":false}` + "\n" +
+				`{"message":{"tool_calls":[{"function":{"index":0,"name":"","arguments":{"key":"second"}}}]},"done":true}`,
+			wantMessage: `conflicting argument "key"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := streamOllamaEvents(t, tt.body+"\n")
+			assertOllamaEventTypes(t, got, "error")
+			if got[0].Code != "model_bad_chunk" || !strings.Contains(got[0].Message, tt.wantMessage) {
+				t.Fatalf("events = %+v, want model_bad_chunk containing %q", got, tt.wantMessage)
 			}
 		})
 	}
@@ -240,25 +446,70 @@ func TestOllamaTreatsEmptyToolCallsAsNoCalls(t *testing.T) {
 }
 
 func TestOllamaBoundsToolCalls(t *testing.T) {
-	t.Run("call count", func(t *testing.T) {
-		calls := make([]any, 129)
-		for index := range calls {
-			calls[index] = map[string]any{"function": map[string]any{"name": "tool", "arguments": map[string]any{}}}
-		}
-		if _, err := parseOllamaToolCalls(calls); err == nil || !strings.Contains(err.Error(), "count exceeds") {
-			t.Fatalf("error = %v, want tool call count bound", err)
+	t.Run("call count boundary accepted", func(t *testing.T) {
+		got := streamOllamaEvents(t, ollamaToolCallsBody(t, maxOllamaToolCalls)+"\n")
+		assertOllamaEventTypes(t, got, "tool_call", "completed")
+		if len(got[0].ToolCalls) != maxOllamaToolCalls {
+			t.Fatalf("tool call count = %d", len(got[0].ToolCalls))
 		}
 	})
 
-	t.Run("encoded arguments", func(t *testing.T) {
-		calls := []any{map[string]any{
-			"function": map[string]any{
-				"name":      "tool",
-				"arguments": map[string]any{"value": strings.Repeat("x", maxStreamTokenBytes+1)},
-			},
-		}}
-		if _, err := parseOllamaToolCalls(calls); err == nil || !strings.Contains(err.Error(), "arguments exceed") {
-			t.Fatalf("error = %v, want encoded argument bound", err)
+	t.Run("call count overflow", func(t *testing.T) {
+		got := streamOllamaEvents(t, ollamaToolCallsBody(t, maxOllamaToolCalls+1)+"\n")
+		assertOllamaEventTypes(t, got, "error")
+		if got[0].Code != "model_bad_chunk" || !strings.Contains(got[0].Message, "count exceeds") {
+			t.Fatalf("events = %+v", got)
+		}
+	})
+
+	for _, field := range []string{"id", "name"} {
+		t.Run(field+" boundary accepted", func(t *testing.T) {
+			value := strings.Repeat("x", 1024)
+			call := `{"id":"` + value + `","function":{"index":0,"name":"tool","arguments":{}}}`
+			if field == "name" {
+				call = `{"id":"call","function":{"index":0,"name":"` + value + `","arguments":{}}}`
+			}
+			got := streamOllamaEvents(t, `{"message":{"tool_calls":[`+call+`]},"done":true}`+"\n")
+			assertOllamaEventTypes(t, got, "tool_call", "completed")
+		})
+
+		t.Run(field+" overflow", func(t *testing.T) {
+			value := strings.Repeat("x", 1025)
+			call := `{"id":"` + value + `","function":{"index":0,"name":"tool","arguments":{}}}`
+			if field == "name" {
+				call = `{"id":"call","function":{"index":0,"name":"` + value + `","arguments":{}}}`
+			}
+			got := streamOllamaEvents(t, `{"message":{"tool_calls":[`+call+`]},"done":true}`+"\n")
+			assertOllamaEventTypes(t, got, "error")
+			wantMessage := field + " exceeds"
+			if field == "id" {
+				wantMessage = "ID exceeds"
+			}
+			if got[0].Code != "model_bad_chunk" || !strings.Contains(got[0].Message, wantMessage) {
+				t.Fatalf("events = %+v", got)
+			}
+		})
+	}
+
+	t.Run("per-call arguments", func(t *testing.T) {
+		fragment := strings.Repeat("x", maxOllamaToolCallArgumentBytes/2)
+		body := `{"message":{"tool_calls":[{"function":{"index":0,"name":"tool","arguments":{"a":"` + fragment + `"}}}]},"done":false}` + "\n" +
+			`{"message":{"tool_calls":[{"function":{"index":0,"name":"","arguments":{"b":"` + fragment + `"}}}]},"done":true}` + "\n"
+		got := streamOllamaEvents(t, body)
+		assertOllamaEventTypes(t, got, "error")
+		if got[0].Code != "model_bad_chunk" || !strings.Contains(got[0].Message, "arguments exceed") {
+			t.Fatalf("events = %+v", got)
+		}
+	})
+
+	t.Run("aggregate arguments", func(t *testing.T) {
+		fragment := strings.Repeat("x", maxOllamaToolCallArgumentBytes/2)
+		body := `{"message":{"tool_calls":[{"function":{"index":0,"name":"first","arguments":{"a":"` + fragment + `"}}}]},"done":false}` + "\n" +
+			`{"message":{"tool_calls":[{"function":{"index":1,"name":"second","arguments":{"b":"` + fragment + `"}}}]},"done":true}` + "\n"
+		got := streamOllamaEvents(t, body)
+		assertOllamaEventTypes(t, got, "error")
+		if got[0].Code != "model_bad_chunk" || !strings.Contains(got[0].Message, "aggregate arguments exceed") {
+			t.Fatalf("events = %+v", got)
 		}
 	})
 }
@@ -304,12 +555,19 @@ func TestOllamaReportsEOFBeforeTerminalEvent(t *testing.T) {
 	}
 }
 
-func TestOllamaOversizedNDJSONLineReturnsStreamError(t *testing.T) {
+func TestOllamaOversizedNDJSONLineReturnsBadChunk(t *testing.T) {
 	got := streamOllamaEvents(t, strings.Repeat("x", maxStreamTokenBytes+1)+"\n")
 	assertOllamaEventTypes(t, got, "error")
-	if got[0].Code != "model_stream_error" {
-		t.Fatalf("event = %+v, want model_stream_error", got[0])
+	if got[0].Code != "model_bad_chunk" {
+		t.Fatalf("event = %+v, want model_bad_chunk", got[0])
 	}
+}
+
+func TestOllamaEmitsOnlyOneTerminalSequence(t *testing.T) {
+	got := streamOllamaEvents(t,
+		`{"message":{"tool_calls":[{"id":"call_0","function":{"index":0,"name":"tool","arguments":{}}}]},"done":true,"done_reason":"tool_calls"}`+"\n"+
+			`{"done":true,"done_reason":"stop"}`+"\n")
+	assertOllamaEventTypes(t, got, "tool_call", "completed")
 }
 
 func TestOllamaHTTPErrorReturnsUnavailableEvent(t *testing.T) {
@@ -409,6 +667,29 @@ func assertOllamaEventTypes(t *testing.T, events []StreamEvent, types ...string)
 			t.Fatalf("event %d = %+v, want type %q", index, events[index], eventType)
 		}
 	}
+}
+
+func ollamaToolCallsBody(t *testing.T, count int) string {
+	t.Helper()
+	calls := make([]any, count)
+	for index := range calls {
+		calls[index] = map[string]any{
+			"id": fmt.Sprintf("call_%d", index),
+			"function": map[string]any{
+				"index":     index,
+				"name":      "tool",
+				"arguments": map[string]any{},
+			},
+		}
+	}
+	encoded, err := json.Marshal(map[string]any{
+		"message": map[string]any{"tool_calls": calls},
+		"done":    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
 }
 
 func collectEvents(events <-chan StreamEvent) []StreamEvent {
