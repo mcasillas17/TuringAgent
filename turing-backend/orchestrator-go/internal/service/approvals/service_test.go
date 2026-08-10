@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -239,8 +240,8 @@ func TestApproveApprovalNotifiesRuntimeWithToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if notifier.runID != enqueued.RunID || notifier.approvalID != approvalID || notifier.status != "approved" || !strings.Contains(notifier.approvalToken, ".") {
-		t.Fatalf("approval notification = %+v", notifier)
+	if got := notifier.snapshot(); got.runID != enqueued.RunID || got.approvalID != approvalID || got.status != "approved" || !strings.Contains(got.approvalToken, ".") {
+		t.Fatalf("approval notification = %+v", got)
 	}
 }
 
@@ -276,7 +277,96 @@ func TestGetApprovalForRuntimeReturnsApprovedTokenAndConsumeConsumesOnce(t *test
 	}
 }
 
+func TestGetApprovalForRuntimeLazilyExpiresOnceAndTerminalizesRunAndJob(t *testing.T) {
+	h := newApprovalHarness(t)
+	enqueued := h.createRunningToolCall(t)
+	approvalID, err := h.service.CreateApprovalForTool(context.Background(), enqueued.RunID, "call_1", "general_assistant", "files.update", map[string]any{"path": "note.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.database.ExecContext(context.Background(), `UPDATE approvals SET expires_at = ? WHERE id = ?`, time.Now().Add(-time.Minute).Format(time.RFC3339Nano), approvalID); err != nil {
+		t.Fatal(err)
+	}
+	notifier := &recordingApprovalNotifier{}
+	h.service.SetNotifier(notifier)
+	published, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
+	defer unsubscribe()
+
+	start := make(chan struct{})
+	states := make(chan *turingv1.RuntimeApprovalState, 2)
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-start
+			state, callErr := h.service.GetApprovalForRuntime(context.Background(), &turingv1.GetApprovalForRuntimeRequest{ApprovalId: approvalID})
+			states <- state
+			errs <- callErr
+		}()
+	}
+	close(start)
+	for range 2 {
+		if callErr := <-errs; callErr != nil {
+			t.Fatalf("GetApprovalForRuntime error: %v", callErr)
+		}
+		state := <-states
+		if state.GetStatus() != turingv1.ApprovalStatus_APPROVAL_STATUS_EXPIRED {
+			t.Fatalf("runtime approval state = %+v, want expired", state)
+		}
+	}
+
+	second, err := h.service.GetApprovalForRuntime(context.Background(), &turingv1.GetApprovalForRuntimeRequest{ApprovalId: approvalID})
+	if err != nil {
+		t.Fatalf("second GetApprovalForRuntime error: %v", err)
+	}
+	if second.GetStatus() != turingv1.ApprovalStatus_APPROVAL_STATUS_EXPIRED {
+		t.Fatalf("second runtime approval state = %+v, want expired", second)
+	}
+
+	var runStatus, runCode string
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status, error_code FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&runStatus, &runCode); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus != "failed" || runCode != "approval_expired" {
+		t.Fatalf("run status/code = %q/%q, want failed/approval_expired", runStatus, runCode)
+	}
+	var jobStatus, jobCode string
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status, error_code FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus, &jobCode); err != nil {
+		t.Fatal(err)
+	}
+	if jobStatus != "failed" || jobCode != "approval_expired" {
+		t.Fatalf("job status/code = %q/%q, want failed/approval_expired", jobStatus, jobCode)
+	}
+	var eventCount, auditCount int
+	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'approval.expired'`, enqueued.RunID).Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM audit_logs WHERE action = 'approval.expired' AND target = ?`, approvalID).Scan(&auditCount); err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 1 || auditCount != 1 {
+		t.Fatalf("expiration event/audit counts = %d/%d, want 1/1", eventCount, auditCount)
+	}
+	if got := notifier.snapshot(); got.count != 1 || got.runID != enqueued.RunID || got.approvalID != approvalID || got.status != "expired" || got.approvalToken != "" {
+		t.Fatalf("expiration notification = %+v, want one expired notification", got)
+	}
+	select {
+	case event := <-published:
+		if event.Type != "approval.expired" {
+			t.Fatalf("published event = %+v, want approval.expired", event)
+		}
+	default:
+		t.Fatal("approval.expired was not published")
+	}
+	select {
+	case event := <-published:
+		t.Fatalf("duplicate event published: %+v", event)
+	default:
+	}
+}
+
 type recordingApprovalNotifier struct {
+	mu            sync.Mutex
+	count         int
 	runID         string
 	approvalID    string
 	status        string
@@ -284,11 +374,34 @@ type recordingApprovalNotifier struct {
 }
 
 func (n *recordingApprovalNotifier) NotifyApprovalUpdated(ctx context.Context, runID string, approvalID string, status string, approvalToken string) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.count++
 	n.runID = runID
 	n.approvalID = approvalID
 	n.status = status
 	n.approvalToken = approvalToken
 	return nil
+}
+
+type approvalNotificationSnapshot struct {
+	count         int
+	runID         string
+	approvalID    string
+	status        string
+	approvalToken string
+}
+
+func (n *recordingApprovalNotifier) snapshot() approvalNotificationSnapshot {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return approvalNotificationSnapshot{
+		count:         n.count,
+		runID:         n.runID,
+		approvalID:    n.approvalID,
+		status:        n.status,
+		approvalToken: n.approvalToken,
+	}
 }
 
 func TestDenyApprovalReturnsDeniedStatus(t *testing.T) {

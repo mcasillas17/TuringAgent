@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -37,6 +38,31 @@ type toolOrigin struct {
 	listIndex   int
 }
 
+type ToolDiscoveryError struct {
+	err       error
+	retryable bool
+}
+
+func (e ToolDiscoveryError) Error() string   { return e.err.Error() }
+func (e ToolDiscoveryError) Unwrap() error   { return e.err }
+func (e ToolDiscoveryError) Retryable() bool { return e.retryable }
+
+func ToolDiscoveryRetryable(err error) bool {
+	var discoveryErr interface{ Retryable() bool }
+	if errors.As(err, &discoveryErr) {
+		return discoveryErr.Retryable()
+	}
+	return true
+}
+
+func permanentToolDiscoveryError(err error) error {
+	return ToolDiscoveryError{err: err}
+}
+
+func retryableToolDiscoveryError(err error) error {
+	return ToolDiscoveryError{err: err, retryable: true}
+}
+
 // BuildToolRegistry discovers servers in name order and preserves each server's tool order.
 func BuildToolRegistry(ctx context.Context, servers map[string]ToolLister) (*ToolRegistry, error) {
 	if err := ctx.Err(); err != nil {
@@ -59,25 +85,28 @@ func BuildToolRegistry(ctx context.Context, servers map[string]ToolLister) (*Too
 		}
 		client := servers[serverName]
 		if isNilToolLister(client) {
-			return nil, fmt.Errorf("MCP server %q has nil client", serverName)
+			return nil, permanentToolDiscoveryError(fmt.Errorf("MCP server %q has nil client", serverName))
 		}
 
 		discovered, err := client.ListTools(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("discover tools from MCP server %q: %w", serverName, err)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			return nil, retryableToolDiscoveryError(fmt.Errorf("discover tools from MCP server %q: %w", serverName, err))
 		}
 		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("discover tools from MCP server %q: %w", serverName, err)
+			return nil, err
 		}
 
 		for index, raw := range discovered {
 			if err := ctx.Err(); err != nil {
-				return nil, fmt.Errorf("normalize tools from MCP server %q: %w", serverName, err)
+				return nil, err
 			}
 			nameValue, present := raw["name"]
 			name, valid := nameValue.(string)
 			if !present || !valid || strings.TrimSpace(name) == "" {
-				return nil, fmt.Errorf("MCP server %q tool %d has invalid name: must be a non-blank string", serverName, index)
+				return nil, permanentToolDiscoveryError(fmt.Errorf("MCP server %q tool %d has invalid name: must be a non-blank string", serverName, index))
 			}
 
 			description := ""
@@ -85,7 +114,7 @@ func BuildToolRegistry(ctx context.Context, servers map[string]ToolLister) (*Too
 				var valid bool
 				description, valid = value.(string)
 				if !valid {
-					return nil, fmt.Errorf("MCP server %q tool %q has invalid description: must be a string", serverName, name)
+					return nil, permanentToolDiscoveryError(fmt.Errorf("MCP server %q tool %q has invalid description: must be a string", serverName, name))
 				}
 			}
 
@@ -94,32 +123,35 @@ func BuildToolRegistry(ctx context.Context, servers map[string]ToolLister) (*Too
 				var valid bool
 				parameters, valid = value.(map[string]any)
 				if !valid {
-					return nil, fmt.Errorf("MCP server %q tool %q has invalid inputSchema: must be an object", serverName, name)
+					return nil, permanentToolDiscoveryError(fmt.Errorf("MCP server %q tool %q has invalid inputSchema: must be an object", serverName, name))
 				}
 				if parameters == nil {
 					parameters = map[string]any{"type": "object"}
 				} else {
 					parameters, err = normalizeJSONMap(parameters)
 					if err != nil {
-						return nil, fmt.Errorf("MCP server %q tool %q has invalid inputSchema: %w", serverName, name, err)
+						if ctxErr := ctx.Err(); ctxErr != nil {
+							return nil, ctxErr
+						}
+						return nil, permanentToolDiscoveryError(fmt.Errorf("MCP server %q tool %q has invalid inputSchema: %w", serverName, name, err))
 					}
 					rootType, present := parameters["type"]
 					if !present {
 						parameters["type"] = "object"
 					} else if rootTypeString, valid := rootType.(string); !valid || rootTypeString != "object" {
-						return nil, fmt.Errorf(
+						return nil, permanentToolDiscoveryError(fmt.Errorf(
 							"MCP server %q tool %d %q has invalid inputSchema root type: must be string %q",
 							serverName,
 							index,
 							name,
 							"object",
-						)
+						))
 					}
 				}
 			}
 
 			if original, duplicate := origins[name]; duplicate {
-				return nil, fmt.Errorf(
+				return nil, permanentToolDiscoveryError(fmt.Errorf(
 					"tool %q at MCP server %q (server index %d, list index %d) duplicates original at MCP server %q (server index %d, list index %d)",
 					name,
 					serverName,
@@ -128,7 +160,7 @@ func BuildToolRegistry(ctx context.Context, servers map[string]ToolLister) (*Too
 					original.serverName,
 					original.serverIndex,
 					original.listIndex,
-				)
+				))
 			}
 
 			definition := llm.ToolDefinition{

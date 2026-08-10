@@ -28,6 +28,7 @@ type GeneralAssistantTools struct {
 const (
 	maxToolIterations         = 5
 	defaultMaxToolCallsPerRun = 10
+	toolIterationFallback     = "Tool iteration limit reached before a final response."
 )
 
 var errRunTerminalized = errors.New("run already terminalized")
@@ -94,13 +95,14 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return emitRunFailed(emit, job, "tool_discovery_failed", err.Error(), true)
+		return emitRunFailed(emit, job, "tool_discovery_failed", err.Error(), ToolDiscoveryRetryable(err))
 	}
 	requestMessages := append([]llm.ChatMessage{}, messages...)
 	requestMessages = append(requestMessages, llm.ChatMessage{Role: "user", Content: job.GetUserText()})
 	content := ""
 	usedToolCallIDs := make(map[string]struct{})
 	toolCallCount := 0
+	successfulToolSideEffect := false
 	for toolIteration := 0; ; {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -114,7 +116,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			return emitRunFailed(emit, job, "model_stream_failed", err.Error(), true)
+			return emitRunFailed(emit, job, "model_stream_failed", err.Error(), !successfulToolSideEffect)
 		}
 		turnText := ""
 		var calls []llm.ToolCall
@@ -148,7 +150,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				if message == "" {
 					message = code
 				}
-				return emitRunFailed(emit, job, code, message, retryableModelError(code))
+				return emitRunFailed(emit, job, code, message, retryableModelError(code) && !successfulToolSideEffect)
 			}
 		}
 		if ctx.Err() != nil {
@@ -174,7 +176,9 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			ToolCalls: calls,
 		})
 		for _, call := range calls {
-			if err := a.executeToolCall(ctx, job, emit, registry, call, &requestMessages); err != nil {
+			outcome, err := a.executeToolCall(ctx, job, emit, registry, call, &requestMessages)
+			successfulToolSideEffect = successfulToolSideEffect || outcome.SuccessfulSideEffect
+			if err != nil {
 				if errors.Is(err, errRunTerminalized) {
 					return nil
 				}
@@ -188,6 +192,15 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				"maxToolIterations": maxToolIterations,
 			})); err != nil {
 				return err
+			}
+			if content == "" {
+				if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA, map[string]any{
+					"messageId": job.GetAssistantMessageId(),
+					"delta":     toolIterationFallback,
+				})); err != nil {
+					return err
+				}
+				content = toolIterationFallback
 			}
 			return completeRun(emit, job, content)
 		}
@@ -257,22 +270,22 @@ func (a *GeneralAssistant) executeToolCall(
 	registry *ToolRegistry,
 	call llm.ToolCall,
 	messages *[]llm.ChatMessage,
-) error {
+) (toolCallOutcome, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return toolCallOutcome{}, err
 	}
 	entry, found := registry.Lookup(call.Name)
 	if !found {
 		if err := emitAssistantToolCallFailed(emit, job, call, "unknown_tool"); err != nil {
-			return err
+			return toolCallOutcome{}, err
 		}
-		return appendToolError(messages, call, "unknown_tool")
+		return toolCallOutcome{}, appendToolError(messages, call, "unknown_tool")
 	}
 	if a.tools == nil || a.tools.Runner == nil {
 		if err := emitAssistantToolCallFailed(emit, job, call, "tool_runner_unavailable"); err != nil {
-			return err
+			return toolCallOutcome{}, err
 		}
-		return appendToolError(messages, call, "tool_runner_unavailable")
+		return toolCallOutcome{}, appendToolError(messages, call, "tool_runner_unavailable")
 	}
 	result, err := a.tools.Runner.Run(ctx, tools.RunInput{
 		AgentID:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
@@ -285,28 +298,33 @@ func (a *GeneralAssistant) executeToolCall(
 		MCPClient:  entry.Client,
 	})
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return ctxErr
+		return toolCallOutcome{}, ctxErr
 	}
 	if err != nil {
 		if tools.RunWasTerminalized(err) {
-			return errRunTerminalized
+			return toolCallOutcome{}, errRunTerminalized
 		}
-		if tools.SideEffectWasCommitted(err) {
-			return err
+		if tools.SideEffectWasCommitted(err) || tools.ReportingFailed(err) {
+			return toolCallOutcome{}, err
 		}
 		if !tools.BeaconWasPosted(err) {
 			if emitErr := emitAssistantToolCallFailed(emit, job, call, err.Error()); emitErr != nil {
-				return emitErr
+				return toolCallOutcome{}, emitErr
 			}
 		}
-		return appendToolError(messages, call, err.Error())
+		return toolCallOutcome{}, appendToolError(messages, call, err.Error())
 	}
+	outcome := toolCallOutcome{SuccessfulSideEffect: true}
 	data, err := json.Marshal(result)
 	if err != nil {
-		return ToolResultReportingError{ToolCallID: call.ID, err: err}
+		return outcome, ToolResultReportingError{ToolCallID: call.ID, err: err}
 	}
 	*messages = append(*messages, toolResultMessage(call, data))
-	return nil
+	return outcome, nil
+}
+
+type toolCallOutcome struct {
+	SuccessfulSideEffect bool
 }
 
 type ToolResultReportingError struct {
@@ -399,7 +417,7 @@ func (a *GeneralAssistant) tryDebugTool(ctx context.Context, job *turingv1.Agent
 		if tools.RunWasTerminalized(err) {
 			return true, nil
 		}
-		if tools.SideEffectWasCommitted(err) {
+		if tools.SideEffectWasCommitted(err) || tools.ReportingFailed(err) {
 			return true, err
 		}
 		return true, emitRunFailed(emit, job, "tool_call_failed", err.Error(), false)

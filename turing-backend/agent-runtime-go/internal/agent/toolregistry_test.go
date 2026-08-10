@@ -511,6 +511,54 @@ func TestBuildRegistryAddsServerContextToDiscoveryErrors(t *testing.T) {
 	assertErrorContains(t, err, "broken-server")
 }
 
+func TestBuildToolRegistryClassifiesValidationAndTransportErrors(t *testing.T) {
+	tests := []struct {
+		name      string
+		servers   map[string]ToolLister
+		retryable bool
+	}{
+		{
+			name: "malformed schema is permanent",
+			servers: map[string]ToolLister{"server": &registryTestClient{tools: []map[string]any{{
+				"name": "bad", "inputSchema": "not-an-object",
+			}}}},
+			retryable: false,
+		},
+		{
+			name: "duplicate name is permanent",
+			servers: map[string]ToolLister{"server": &registryTestClient{tools: []map[string]any{
+				{"name": "duplicate"}, {"name": "duplicate"},
+			}}},
+			retryable: false,
+		},
+		{
+			name:      "nil client is permanent",
+			servers:   map[string]ToolLister{"server": nil},
+			retryable: false,
+		},
+		{
+			name:      "list transport failure is retryable",
+			servers:   map[string]ToolLister{"server": &registryTestClient{listErr: errors.New("transport unavailable")}},
+			retryable: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := BuildToolRegistry(context.Background(), test.servers)
+			if err == nil {
+				t.Fatal("BuildToolRegistry returned nil error")
+			}
+			var discoveryErr ToolDiscoveryError
+			if !errors.As(err, &discoveryErr) {
+				t.Fatalf("error = %T %v, want ToolDiscoveryError", err, err)
+			}
+			if got := ToolDiscoveryRetryable(err); got != test.retryable {
+				t.Fatalf("ToolDiscoveryRetryable(error) = %t, want %t", got, test.retryable)
+			}
+		})
+	}
+}
+
 func TestBuildRegistryRespectsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

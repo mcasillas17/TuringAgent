@@ -86,22 +86,8 @@ func (s *Server) ApproveApproval(ctx context.Context, req *turingv1.ApproveAppro
 		return nil, status.Error(codes.FailedPrecondition, "approval is not pending")
 	}
 	if expired(approval.ExpiresAt) {
-		expiredApproval, expireErr := s.repo.ExpireApproval(ctx, req.ApprovalId, "")
-		if expireErr != nil {
-			return nil, mapApprovalError(expireErr)
-		}
-		event, eventErr := s.appendApprovalEvent(ctx, expiredApproval, "approval.expired", map[string]any{"approvalId": expiredApproval.ApprovalID, "toolName": expiredApproval.ToolName})
-		if eventErr != nil {
-			return nil, eventErr
-		}
-		s.publishEvent(event)
-		if auditErr := s.audit.Record(ctx, expiredApproval.RunID, "system", "", "approval.expired", expiredApproval.ApprovalID, map[string]any{"toolName": expiredApproval.ToolName}); auditErr != nil {
-			return nil, auditErr
-		}
-		if s.notifier != nil {
-			if notifyErr := s.notifier.NotifyApprovalUpdated(ctx, expiredApproval.RunID, expiredApproval.ApprovalID, "expired", ""); notifyErr != nil {
-				return nil, notifyErr
-			}
+		if _, err := s.expireApproval(ctx, req.ApprovalId); err != nil {
+			return nil, mapApprovalError(err)
 		}
 		return nil, status.Error(codes.FailedPrecondition, "approval expired")
 	}
@@ -161,11 +147,45 @@ func (s *Server) GetApprovalForRuntime(ctx context.Context, req *turingv1.GetApp
 	if err != nil {
 		return nil, mapApprovalError(err)
 	}
+	if approval.Status == "pending" && expired(approval.ExpiresAt) {
+		approval, err = s.expireApproval(ctx, req.ApprovalId)
+		if err != nil {
+			current, currentErr := s.repo.GetApproval(ctx, req.ApprovalId)
+			if currentErr != nil {
+				return nil, mapApprovalError(err)
+			}
+			if current.Status == "pending" {
+				return nil, mapApprovalError(err)
+			}
+			approval = current
+		}
+	}
 	return &turingv1.RuntimeApprovalState{
 		ApprovalId:    approval.ApprovalID,
 		Status:        mapApprovalStatus(approval.Status),
 		ApprovalToken: approval.ApprovalToken,
 	}, nil
+}
+
+func (s *Server) expireApproval(ctx context.Context, approvalID string) (repository.ApprovalRecord, error) {
+	expiredApproval, err := s.repo.ExpireApproval(ctx, approvalID, "")
+	if err != nil {
+		return repository.ApprovalRecord{}, err
+	}
+	event, err := s.appendApprovalEvent(ctx, expiredApproval, "approval.expired", map[string]any{"approvalId": expiredApproval.ApprovalID, "toolName": expiredApproval.ToolName})
+	if err != nil {
+		return repository.ApprovalRecord{}, err
+	}
+	s.publishEvent(event)
+	if err := s.audit.Record(ctx, expiredApproval.RunID, "system", "", "approval.expired", expiredApproval.ApprovalID, map[string]any{"toolName": expiredApproval.ToolName}); err != nil {
+		return repository.ApprovalRecord{}, err
+	}
+	if s.notifier != nil {
+		if err := s.notifier.NotifyApprovalUpdated(ctx, expiredApproval.RunID, expiredApproval.ApprovalID, "expired", ""); err != nil {
+			return repository.ApprovalRecord{}, err
+		}
+	}
+	return expiredApproval, nil
 }
 
 func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeApprovalRequest) (*turingv1.ApprovalResponse, error) {

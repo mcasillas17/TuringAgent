@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -152,7 +153,7 @@ func TestWaitForApprovalTokenMarksDeniedAndExpiredRunsTerminal(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			client := &Client{approvals: approvalStateClient{status: test.status}}
+			client := &Client{approvals: &approvalStateClient{status: test.status}}
 
 			_, err := client.WaitForApprovalToken(context.Background(), "approval_1", time.Millisecond, time.Second)
 
@@ -168,7 +169,7 @@ func TestWaitForApprovalTokenMarksDeniedAndExpiredRunsTerminal(t *testing.T) {
 }
 
 func TestWaitForApprovalTokenDoesNotAssumeConsumedApprovalIsTerminal(t *testing.T) {
-	client := &Client{approvals: approvalStateClient{
+	client := &Client{approvals: &approvalStateClient{
 		status: turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED,
 	}}
 
@@ -183,19 +184,73 @@ func TestWaitForApprovalTokenDoesNotAssumeConsumedApprovalIsTerminal(t *testing.
 	}
 }
 
-type approvalStateClient struct {
-	status turingv1.ApprovalStatus
+func TestWaitForApprovalTokenReturnsLazyExpiryBeforeWaitTimeout(t *testing.T) {
+	clientState := &approvalStateClient{statuses: []turingv1.ApprovalStatus{
+		turingv1.ApprovalStatus_APPROVAL_STATUS_PENDING,
+		turingv1.ApprovalStatus_APPROVAL_STATUS_EXPIRED,
+	}}
+	client := &Client{approvals: clientState}
+
+	_, err := client.WaitForApprovalToken(context.Background(), "approval_1", time.Millisecond, time.Hour)
+
+	if err == nil || err.Error() != "approval expired" {
+		t.Fatalf("WaitForApprovalToken error = %v, want approval expired", err)
+	}
+	var terminal interface{ RunTerminal() bool }
+	if !errors.As(err, &terminal) || !terminal.RunTerminal() {
+		t.Fatalf("WaitForApprovalToken error = %T %v, want terminal-run error", err, err)
+	}
+	if got := clientState.callCount(); got != 2 {
+		t.Fatalf("GetApprovalForRuntime calls = %d, want pending then expired", got)
+	}
 }
 
-func (c approvalStateClient) GetApprovalForRuntime(
+func TestWaitForApprovalTokenContextDeadlineIsNotTerminalDenial(t *testing.T) {
+	client := &Client{approvals: &approvalStateClient{status: turingv1.ApprovalStatus_APPROVAL_STATUS_PENDING}}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	_, err := client.WaitForApprovalToken(ctx, "approval_1", time.Hour, time.Hour)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitForApprovalToken error = %v, want deadline exceeded", err)
+	}
+	var terminal interface{ RunTerminal() bool }
+	if errors.As(err, &terminal) && terminal.RunTerminal() {
+		t.Fatalf("WaitForApprovalToken error = %T %v, must not be terminal denial", err, err)
+	}
+}
+
+type approvalStateClient struct {
+	mu       sync.Mutex
+	status   turingv1.ApprovalStatus
+	statuses []turingv1.ApprovalStatus
+	calls    int
+}
+
+func (c *approvalStateClient) GetApprovalForRuntime(
 	context.Context,
 	*turingv1.GetApprovalForRuntimeRequest,
 	...grpc.CallOption,
 ) (*turingv1.RuntimeApprovalState, error) {
-	return &turingv1.RuntimeApprovalState{Status: c.status}, nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	status := c.status
+	if len(c.statuses) > 0 {
+		status = c.statuses[0]
+		c.statuses = c.statuses[1:]
+	}
+	return &turingv1.RuntimeApprovalState{Status: status}, nil
 }
 
-func (approvalStateClient) ApproveApproval(
+func (c *approvalStateClient) callCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
+func (*approvalStateClient) ApproveApproval(
 	context.Context,
 	*turingv1.ApproveApprovalRequest,
 	...grpc.CallOption,
@@ -203,7 +258,7 @@ func (approvalStateClient) ApproveApproval(
 	panic("unexpected call")
 }
 
-func (approvalStateClient) DenyApproval(
+func (*approvalStateClient) DenyApproval(
 	context.Context,
 	*turingv1.DenyApprovalRequest,
 	...grpc.CallOption,
@@ -211,7 +266,7 @@ func (approvalStateClient) DenyApproval(
 	panic("unexpected call")
 }
 
-func (approvalStateClient) ConsumeApproval(
+func (*approvalStateClient) ConsumeApproval(
 	context.Context,
 	*turingv1.ConsumeApprovalRequest,
 	...grpc.CallOption,

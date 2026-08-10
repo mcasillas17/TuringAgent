@@ -168,6 +168,92 @@ func TestRunPostsFailureAfterWhenPolicyDecisionWaitFailsAfterBeforeSent(t *testi
 	}
 }
 
+func TestRunPolicyDenialReturnsRecoverableRejectionWithoutAfterBeacon(t *testing.T) {
+	var beacons []*turingv1.ToolCallBeacon
+	runner := &Runner{PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+		beacons = append(beacons, beacon)
+		return &turingv1.ToolPolicyDecision{
+			Decision:   turingv1.ToolPolicyDecision_DECISION_DENY,
+			Reason:     "blocked",
+			ToolCallId: beacon.GetToolCallId(),
+		}, nil
+	}}
+
+	_, err := runner.Run(context.Background(), RunInput{ToolName: "system.echo", MCPClient: fakeMCPClient{}})
+
+	var rejected ToolRejectedError
+	if !errors.As(err, &rejected) || !BeaconWasPosted(err) || RunWasTerminalized(err) {
+		t.Fatalf("Run error = %T %v, want recoverable posted ToolRejectedError", err, err)
+	}
+	if !rejected.Recoverable() {
+		t.Fatalf("ToolRejectedError = %+v, want recoverable", rejected)
+	}
+	if len(beacons) != 1 || beacons[0].GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+		t.Fatalf("beacons = %+v, want one before beacon", beacons)
+	}
+}
+
+func TestRunApprovalWaitFailurePostsFailedAfter(t *testing.T) {
+	waitErr := errors.New("approval polling timed out")
+	var beacons []*turingv1.ToolCallBeacon
+	runner := &Runner{
+		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+			beacons = append(beacons, beacon)
+			return &turingv1.ToolPolicyDecision{
+				Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+				ApprovalId: "approval_1",
+				ToolCallId: beacon.GetToolCallId(),
+			}, nil
+		},
+		WaitApproval: func(context.Context, string) (string, error) {
+			return "", waitErr
+		},
+	}
+
+	_, err := runner.Run(context.Background(), RunInput{ToolName: "system.echo", MCPClient: fakeMCPClient{}})
+
+	if !errors.Is(err, waitErr) || !BeaconWasPosted(err) || RunWasTerminalized(err) {
+		t.Fatalf("Run error = %T %v, want recoverable posted wait error", err, err)
+	}
+	assertBeaconSequence(t, beacons,
+		beaconExpectation{phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE},
+		beaconExpectation{
+			phase:  turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER,
+			status: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED,
+			code:   "approval_wait_failed",
+		},
+	)
+}
+
+func TestRunMCPFailurePostsFailedAfter(t *testing.T) {
+	callErr := errors.New("MCP failed")
+	var beacons []*turingv1.ToolCallBeacon
+	runner := &Runner{PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+		beacons = append(beacons, beacon)
+		return &turingv1.ToolPolicyDecision{
+			Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
+			ToolCallId: beacon.GetToolCallId(),
+		}, nil
+	}}
+
+	_, err := runner.Run(context.Background(), RunInput{
+		ToolName:  "system.echo",
+		MCPClient: failingMCPClient{err: callErr},
+	})
+
+	if !errors.Is(err, callErr) || !BeaconWasPosted(err) {
+		t.Fatalf("Run error = %T %v, want posted MCP error", err, err)
+	}
+	assertBeaconSequence(t, beacons,
+		beaconExpectation{phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE},
+		beaconExpectation{
+			phase:  turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER,
+			status: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED,
+			code:   "mcp_call_failed",
+		},
+	)
+}
+
 func TestRunReturnsTerminalApprovalErrorWithoutPostingAfterBeacon(t *testing.T) {
 	var beacons []*turingv1.ToolCallBeacon
 	var mcpCalls int
@@ -207,6 +293,80 @@ func TestRunReturnsTerminalApprovalErrorWithoutPostingAfterBeacon(t *testing.T) 
 	}
 }
 
+func TestRunReturnsReportingFailureWhenFailedAfterCannotBePosted(t *testing.T) {
+	reportErr := errors.New("after beacon unavailable")
+	operationErr := errors.New("operation failed")
+	tests := []struct {
+		name       string
+		decision   *turingv1.ToolPolicyDecision
+		beforeErr  error
+		wait       func(context.Context, string) (string, error)
+		client     MCPClient
+		wantStatus turingv1.ToolCallStatus
+	}{
+		{
+			name:       "policy decision",
+			beforeErr:  beaconPostedTestError{err: operationErr},
+			client:     fakeMCPClient{},
+			wantStatus: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED,
+		},
+		{
+			name: "approval wait",
+			decision: &turingv1.ToolPolicyDecision{
+				Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+				ApprovalId: "approval_1",
+			},
+			wait:       func(context.Context, string) (string, error) { return "", operationErr },
+			client:     fakeMCPClient{},
+			wantStatus: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED,
+		},
+		{
+			name:       "MCP failure",
+			decision:   &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW},
+			client:     failingMCPClient{err: operationErr},
+			wantStatus: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED,
+		},
+		{
+			name:       "unsupported decision",
+			decision:   &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_UNSPECIFIED},
+			client:     fakeMCPClient{},
+			wantStatus: turingv1.ToolCallStatus_TOOL_CALL_STATUS_DENIED,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var beacons []*turingv1.ToolCallBeacon
+			runner := &Runner{
+				PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+					beacons = append(beacons, beacon)
+					if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
+						return nil, reportErr
+					}
+					if test.beforeErr != nil {
+						return nil, test.beforeErr
+					}
+					return test.decision, nil
+				},
+				WaitApproval: test.wait,
+			}
+
+			_, err := runner.Run(context.Background(), RunInput{ToolName: "system.echo", MCPClient: test.client})
+
+			var reporting ReportingFailureError
+			if !errors.As(err, &reporting) || !errors.Is(err, reportErr) || !ReportingFailed(err) || !BeaconWasPosted(err) {
+				t.Fatalf("Run error = %T %v, want ReportingFailureError wrapping report error", err, err)
+			}
+			if SideEffectWasCommitted(err) {
+				t.Fatalf("Run error = %T %v, must not report committed side effect", err, err)
+			}
+			assertBeaconSequence(t, beacons,
+				beaconExpectation{phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE},
+				beaconExpectation{phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER, status: test.wantStatus},
+			)
+		})
+	}
+}
+
 func TestRunMarksSuccessfulMCPCallWhenCompletedBeaconFails(t *testing.T) {
 	reportErr := errors.New("completed beacon failed")
 	var beacons []*turingv1.ToolCallBeacon
@@ -217,6 +377,7 @@ func TestRunMarksSuccessfulMCPCallWhenCompletedBeaconFails(t *testing.T) {
 			if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
 				return nil, reportErr
 			}
+
 			return &turingv1.ToolPolicyDecision{
 				Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
 				ToolCallId: beacon.GetToolCallId(),
@@ -245,6 +406,26 @@ func TestRunMarksSuccessfulMCPCallWhenCompletedBeaconFails(t *testing.T) {
 		beacons[1].GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER ||
 		beacons[1].GetStatus() != turingv1.ToolCallStatus_TOOL_CALL_STATUS_COMPLETED {
 		t.Fatalf("beacons = %+v, want attempted completed after beacon", beacons)
+	}
+}
+
+type beaconExpectation struct {
+	phase  turingv1.ToolCallPhase
+	status turingv1.ToolCallStatus
+	code   string
+}
+
+func assertBeaconSequence(t *testing.T, got []*turingv1.ToolCallBeacon, want ...beaconExpectation) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("beacons = %+v, want %d", got, len(want))
+	}
+	for index, expected := range want {
+		if got[index].GetPhase() != expected.phase ||
+			got[index].GetStatus() != expected.status ||
+			(expected.code != "" && got[index].GetError().GetCode() != expected.code) {
+			t.Fatalf("beacon %d = %+v, want %+v", index, got[index], expected)
+		}
 	}
 }
 
