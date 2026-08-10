@@ -41,15 +41,13 @@ func TestChatMessageJSONOmitsEmptyToolThreadingFields(t *testing.T) {
 	}
 }
 
-func TestChatMessageJSONIncludesToolThreadingFields(t *testing.T) {
+func TestAssistantChatMessageJSONIncludesToolCalls(t *testing.T) {
 	message := ChatMessage{
-		Role:       "tool",
-		Content:    `{"temperature":72}`,
-		Name:       "weather",
-		ToolCallID: "call_1",
+		Role:    "assistant",
+		Content: "",
 		ToolCalls: []ToolCall{{
-			ID:        "call_2",
-			Name:      "forecast",
+			ID:        "call_1",
+			Name:      "weather",
 			Arguments: map[string]any{"days": 3},
 		}},
 	}
@@ -59,7 +57,26 @@ func TestChatMessageJSONIncludesToolThreadingFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const want = `{"role":"tool","content":"{\"temperature\":72}","name":"weather","tool_call_id":"call_1","tool_calls":[{"id":"call_2","name":"forecast","arguments":{"days":3}}]}`
+	const want = `{"role":"assistant","content":"","tool_calls":[{"id":"call_1","name":"weather","arguments":{"days":3}}]}`
+	if string(got) != want {
+		t.Fatalf("json = %s, want %s", got, want)
+	}
+}
+
+func TestToolChatMessageJSONIncludesResultThreadingFields(t *testing.T) {
+	message := ChatMessage{
+		Role:       "tool",
+		Content:    `{"temperature":72}`,
+		Name:       "weather",
+		ToolCallID: "call_1",
+	}
+
+	got, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const want = `{"role":"tool","content":"{\"temperature\":72}","name":"weather","tool_call_id":"call_1"}`
 	if string(got) != want {
 		t.Fatalf("json = %s, want %s", got, want)
 	}
