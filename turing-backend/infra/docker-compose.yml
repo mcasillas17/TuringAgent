@@ -86,6 +86,7 @@ services:
     build:
       context: ../..
       dockerfile: turing-backend/mcp-files/Dockerfile
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     environment:
       MCP_FILES_TOKEN_GENERAL: ${MCP_FILES_TOKEN_GENERAL}
       TURING_APPROVAL_JWT_SECRET: ${TURING_APPROVAL_JWT_SECRET}

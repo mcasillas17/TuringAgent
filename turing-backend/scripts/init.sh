@@ -33,6 +33,8 @@ ensure_var TURING_INTERNAL_TOKEN "$(generate_secret)"
 ensure_var MCP_SYSTEM_TOKEN_GENERAL "$(generate_secret)"
 ensure_var MCP_FILES_TOKEN_GENERAL "$(generate_secret)"
 ensure_var TURING_APPROVAL_JWT_SECRET "$(generate_secret)"
+ensure_var HOST_UID "$(id -u)"
+ensure_var HOST_GID "$(id -g)"
 rm -f .env.bak
 mkdir -p data sandbox
 

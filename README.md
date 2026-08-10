@@ -31,7 +31,9 @@ cd TuringAgent/turing-backend
 ./scripts/init.sh
 ```
 
-`init.sh` creates `turing-backend/.env`, generates local bearer tokens, creates `data/` and `sandbox/`, and prints the Flutter client API key. Do not commit `.env`.
+`init.sh` creates `turing-backend/.env`, generates local bearer tokens, records
+the local UID/GID for the bind-mounted sandbox, creates `data/` and `sandbox/`,
+and prints the Flutter client API key. Do not commit `.env`.
 
 Start the backend stack:
 
@@ -83,6 +85,7 @@ Common values:
 | `TURING_CLIENT_API_KEY` | Bearer token for Flutter and other public gRPC clients |
 | `TURING_INTERNAL_TOKEN` | Bearer token for internal runtime and approval gRPC calls |
 | `TURING_APPROVAL_JWT_SECRET` | HS256 secret used for approval tokens |
+| `HOST_UID` / `HOST_GID` | User and group used by Compose for `mcp-files`; `init.sh` sets them to the local account |
 | `ORCHESTRATOR_GRPC_ADDR` | Internal orchestrator gRPC address, usually `turing-orchestrator:3001` |
 | `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Local model endpoint and default model |
 | `OPENAI_API_KEY` / `OPENAI_MODEL` | Optional OpenAI-compatible model configuration |
@@ -93,7 +96,7 @@ Common values:
 - **Authentication fails:** confirm the Flutter API key matches `TURING_CLIENT_API_KEY` in `turing-backend/.env`.
 - **No model response:** ensure Ollama is running on the host and the configured model is available.
 - **Smoke test times out:** inspect the `turing-orchestrator` and `turing-agent-runtime-general` container logs.
-- **File tools fail:** confirm `turing-backend/sandbox/` exists and that approval-required write tools were approved in the client.
+- **File tools fail:** confirm `turing-backend/sandbox/` exists, rerun `scripts/init.sh` if `.env` lacks the local `HOST_UID`/`HOST_GID`, and confirm approval-required write tools were approved in the client.
 
 ## Documentation
 

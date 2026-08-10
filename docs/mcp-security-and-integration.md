@@ -224,6 +224,11 @@ confused-deputy escapes.
 ### Sandbox root
 
 The sandbox root is configured by `FILES_SANDBOX_ROOT` (default `/sandbox`).
+The standalone image runs as its fixed non-root UID/GID 1000. For the local
+Compose workflow, `scripts/init.sh` records the host account as `HOST_UID` and
+`HOST_GID`, and Compose runs `mcp-files` with that identity so the process can
+write to the host-owned `sandbox/` bind mount. Compose defaults both values to
+1000 when they are unset; the sandbox is not made world-writable.
 On construction, the root is processed in two steps:
 
 1. `filepath.Abs(root)` — make it absolute.

@@ -72,6 +72,49 @@ func TestMCPFilesImagePreparesSandboxBeforeDroppingPrivileges(t *testing.T) {
 	)
 }
 
+func TestComposeRunsMCPFilesAsConfiguredHostIdentity(t *testing.T) {
+	data, err := os.ReadFile("../../turing-backend/infra/docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	requireContains(t, string(data), `user: "${HOST_UID:-1000}:${HOST_GID:-1000}"`)
+}
+
+func TestInitConfiguresHostIdentityForBindMountedSandbox(t *testing.T) {
+	envExample, err := os.ReadFile("../../turing-backend/.env.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireContains(t, string(envExample), "\nHOST_UID=\n")
+	requireContains(t, string(envExample), "\nHOST_GID=\n")
+
+	initScript, err := os.ReadFile("../../turing-backend/scripts/init.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireContains(t, string(initScript), `ensure_var HOST_UID "$(id -u)"`)
+	requireContains(t, string(initScript), `ensure_var HOST_GID "$(id -g)"`)
+}
+
+func TestSandboxIsNotMadeWorldWritable(t *testing.T) {
+	for _, path := range []string{
+		"../../turing-backend/mcp-files/Dockerfile",
+		"../../turing-backend/scripts/init.sh",
+		"../../turing-backend/scripts/reset.sh",
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, unsafe := range []string{"chmod 777", "chmod a+w", "chmod o+w"} {
+			if strings.Contains(string(data), unsafe) {
+				t.Fatalf("%s makes the sandbox world-writable with %q", path, unsafe)
+			}
+		}
+	}
+}
+
 func requireContains(t *testing.T, text string, snippet string) {
 	t.Helper()
 	if !strings.Contains(text, snippet) {
