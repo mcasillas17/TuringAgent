@@ -2,8 +2,6 @@ package tests
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base32"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -514,6 +512,12 @@ func (f *fakeModelServer) enableModelDrivenToolCall() {
 	f.modelDrivenToolCall = true
 }
 
+func (f *fakeModelServer) resetBodies() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.chatCompletionBodies = nil
+}
+
 func (f *fakeModelServer) bodies() []map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -802,20 +806,27 @@ func TestDiscoveredToolsAppearInListTools(t *testing.T) {
 
 func TestModelDrivenToolCallCompletesRun(t *testing.T) {
 	const (
-		userText  = "What time is it in UTC?"
-		finalText = "The fixed time is 2025-01-02T03:04:05Z."
+		priorUserText      = "Remember this previous turn."
+		priorAssistantText = "Hello"
+		userText           = "What time is it in UTC?"
+		finalText          = "The fixed time is 2025-01-02T03:04:05Z."
 	)
 	harness := newGRPCHarness(t)
 	defer harness.close()
 	harness.systemMCP.enableTimeTool()
-	harness.fakeModel.enableModelDrivenToolCall()
 
 	sessionID := harness.createSession(t, "model-driven tool call")
+	priorEvents := harness.sendMessageToCompletion(t, sessionID, priorUserText)
+	if got := messageCompletedContent(t, priorEvents); got != priorAssistantText {
+		t.Fatalf("prior message.completed content = %q, want %q", got, priorAssistantText)
+	}
+	harness.fakeModel.resetBodies()
+	harness.fakeModel.enableModelDrivenToolCall()
+
 	streamEvents := harness.sendMessageToCompletion(t, sessionID, userText)
 	assertNoFakeHandlerErrors(t, harness.fakeModel, harness.systemMCP, harness.filesMCP)
 	runID := completedRunID(t, streamEvents)
-	expectedToolCallID := deterministicToolCallID(runID, 0, 0)
-	assertStreamedToolLifecycle(t, streamEvents, expectedToolCallID, "system.time", runID)
+	toolCallID := assertStreamedToolLifecycle(t, streamEvents, "system.time", runID, finalText)
 	listContext, cancelList := context.WithTimeout(harness.clientContext(), 5*time.Second)
 	defer cancelList()
 	listed, err := harness.events.ListEvents(listContext, &turingv1.ListEventsRequest{
@@ -826,33 +837,45 @@ func TestModelDrivenToolCallCompletesRun(t *testing.T) {
 		t.Fatalf("ListEvents: %v", err)
 	}
 
-	var started, completed []*turingv1.TuringEvent
+	var started, completed, messageCompleted []*turingv1.TuringEvent
 	for _, event := range listed.Events {
+		if event.RunId != runID {
+			continue
+		}
 		switch event.Type {
 		case turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED:
 			started = append(started, event)
 		case turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED:
 			completed = append(completed, event)
-		case turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED,
+		case turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_COMPLETED:
+			messageCompleted = append(messageCompleted, event)
+		case turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_FAILED,
+			turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED,
 			turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_DENIED,
 			turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_DENIED:
-			t.Fatalf("unexpected terminal tool event: %s", event.Type)
+			t.Fatalf("unexpected failed or denied event: %s", event.Type)
 		}
 	}
 	if len(started) != 1 || len(completed) != 1 {
 		t.Fatalf("tool lifecycle counts: started=%d completed=%d, want 1 each", len(started), len(completed))
 	}
+	if len(messageCompleted) != 1 {
+		t.Fatalf("persisted message.completed count = %d, want 1", len(messageCompleted))
+	}
 	if started[0].Sequence >= completed[0].Sequence {
 		t.Fatalf("tool lifecycle sequences: started=%d completed=%d, want STARTED before COMPLETED", started[0].Sequence, completed[0].Sequence)
+	}
+	if completed[0].Sequence >= messageCompleted[0].Sequence {
+		t.Fatalf("completion sequences: tool=%d message=%d, want tool before message", completed[0].Sequence, messageCompleted[0].Sequence)
 	}
 	if started[0].RunId != runID || completed[0].RunId != runID {
 		t.Fatalf("tool lifecycle run IDs: started=%q completed=%q, want %q", started[0].RunId, completed[0].RunId, runID)
 	}
-	if got := stringField(started[0].Payload, "toolCallId"); got != expectedToolCallID {
-		t.Fatalf("started toolCallId = %q, want %q", got, expectedToolCallID)
+	if got := stringField(started[0].Payload, "toolCallId"); got != toolCallID {
+		t.Fatalf("started toolCallId = %q, want streamed opaque ID %q", got, toolCallID)
 	}
-	if got := stringField(completed[0].Payload, "toolCallId"); got != expectedToolCallID {
-		t.Fatalf("completed toolCallId = %q, want %q", got, expectedToolCallID)
+	if got := stringField(completed[0].Payload, "toolCallId"); got != toolCallID {
+		t.Fatalf("completed toolCallId = %q, want streamed opaque ID %q", got, toolCallID)
 	}
 	if startedName, completedName := stringField(started[0].Payload, "toolName"), stringField(completed[0].Payload, "toolName"); startedName != "system.time" || completedName != startedName {
 		t.Fatalf("tool lifecycle names: started=%q completed=%q, want system.time for both", startedName, completedName)
@@ -860,7 +883,7 @@ func TestModelDrivenToolCallCompletesRun(t *testing.T) {
 	if got := messageCompletedContent(t, streamEvents); got != finalText {
 		t.Fatalf("stream message.completed content = %q, want %q", got, finalText)
 	}
-	if got := messageCompletedPayload(listed.Events); got != finalText {
+	if got := stringField(messageCompleted[0].Payload, "content"); got != finalText {
 		t.Fatalf("persisted message.completed content = %q, want %q", got, finalText)
 	}
 	if got := runCompletedPersistedContent(t, harness, sessionID, streamEvents); got != finalText {
@@ -871,8 +894,8 @@ func TestModelDrivenToolCallCompletesRun(t *testing.T) {
 	if len(modelBodies) != 2 {
 		t.Fatalf("OpenAI request count = %d, want 2", len(modelBodies))
 	}
-	alias := assertInitialOpenAIRequest(t, modelBodies[0], userText)
-	assertFollowupOpenAIRequest(t, modelBodies[1], userText, alias, expectedToolCallID)
+	alias := assertInitialOpenAIRequest(t, modelBodies[0], priorUserText, priorAssistantText, userText)
+	assertFollowupOpenAIRequest(t, modelBodies[1], priorUserText, priorAssistantText, userText, alias, toolCallID)
 	assertModelDrivenMCPRequests(t, harness.systemMCP.recordedRequests(), harness.filesMCP.recordedRequests())
 }
 
@@ -1064,17 +1087,34 @@ func completedRunID(t *testing.T, events []*turingv1.ChatStreamEvent) string {
 	return completedRuns[0].RunId
 }
 
-func deterministicToolCallID(runID string, round, index int) string {
-	input := fmt.Sprintf("%d:%s:%d:%d", len(runID), runID, round, index)
-	sum := sha256.Sum256([]byte(input))
-	return "call_" + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:])
-}
-
-func assertStreamedToolLifecycle(t *testing.T, events []*turingv1.ChatStreamEvent, toolCallID string, toolName string, runID string) {
+func assertStreamedToolLifecycle(t *testing.T, events []*turingv1.ChatStreamEvent, toolName, runID, finalText string) string {
 	t.Helper()
 	var started, completed []*turingv1.TuringEvent
 	startedIndex, completedIndex := -1, -1
+	finalDeltaIndex, messageCompletedIndex, runCompletedIndex := -1, -1, -1
+	finalDeltaCount, messageCompletedCount, runCompletedCount := 0, 0, 0
 	for index, streamEvent := range events {
+		if delta := streamEvent.GetTokenDelta(); delta != nil {
+			if delta.Delta != finalText {
+				t.Fatalf("streamed message delta = %q, want %q", delta.Delta, finalText)
+			}
+			finalDeltaCount++
+			finalDeltaIndex = index
+		}
+		if message := streamEvent.GetMessageCompleted(); message != nil {
+			if message.Content != finalText {
+				t.Fatalf("streamed message.completed content = %q, want %q", message.Content, finalText)
+			}
+			messageCompletedCount++
+			messageCompletedIndex = index
+		}
+		if streamEvent.GetRunCompleted() != nil {
+			runCompletedCount++
+			runCompletedIndex = index
+		}
+		if streamEvent.GetRunFailed() != nil || streamEvent.GetRunCancelled() != nil {
+			t.Fatalf("unexpected streamed run terminal event: %#v", streamEvent.Event)
+		}
 		event := streamEvent.GetPersistedEvent()
 		if event == nil {
 			continue
@@ -1098,8 +1138,19 @@ func assertStreamedToolLifecycle(t *testing.T, events []*turingv1.ChatStreamEven
 	if startedIndex >= completedIndex {
 		t.Fatalf("streamed tool lifecycle order: started index=%d completed index=%d, want STARTED before COMPLETED", startedIndex, completedIndex)
 	}
+	if finalDeltaCount != 1 || messageCompletedCount != 1 || runCompletedCount != 1 {
+		t.Fatalf("streamed completion counts: final delta=%d message.completed=%d run.completed=%d, want 1 each", finalDeltaCount, messageCompletedCount, runCompletedCount)
+	}
+	if completedIndex >= finalDeltaIndex || finalDeltaIndex >= messageCompletedIndex || messageCompletedIndex >= runCompletedIndex {
+		t.Fatalf("streamed completion order: tool=%d final delta=%d message=%d run=%d", completedIndex, finalDeltaIndex, messageCompletedIndex, runCompletedIndex)
+	}
+	toolCallID := stringField(started[0].Payload, "toolCallId")
+	if toolCallID == "" {
+		t.Fatal("streamed started toolCallId is empty")
+	}
 	assertToolLifecycleEvent(t, "streamed started", started[0], toolCallID, toolName, runID)
 	assertToolLifecycleEvent(t, "streamed completed", completed[0], toolCallID, toolName, runID)
+	return toolCallID
 }
 
 func assertToolLifecycleEvent(t *testing.T, label string, event *turingv1.TuringEvent, toolCallID string, toolName string, runID string) {
@@ -1115,7 +1166,7 @@ func assertToolLifecycleEvent(t *testing.T, label string, event *turingv1.Turing
 	}
 }
 
-func assertInitialOpenAIRequest(t *testing.T, body map[string]any, userText string) string {
+func assertInitialOpenAIRequest(t *testing.T, body map[string]any, priorUserText, priorAssistantText, userText string) string {
 	t.Helper()
 	tools, _ := body["tools"].([]any)
 	if len(tools) != 1 {
@@ -1143,27 +1194,35 @@ func assertInitialOpenAIRequest(t *testing.T, body map[string]any, userText stri
 		t.Fatalf("advertised schema = %#v, want %#v", got, wantSchema)
 	}
 	messages, _ := body["messages"].([]any)
-	wantMessages := []any{map[string]any{"role": "user", "content": userText}}
+	wantMessages := []any{
+		map[string]any{"role": "user", "content": priorUserText},
+		map[string]any{"role": "assistant", "content": priorAssistantText},
+		map[string]any{"role": "user", "content": userText},
+	}
 	if !reflect.DeepEqual(messages, wantMessages) {
 		t.Fatalf("initial OpenAI messages = %#v, want exactly %#v", messages, wantMessages)
 	}
 	return alias
 }
 
-func assertFollowupOpenAIRequest(t *testing.T, body map[string]any, userText, alias, toolCallID string) {
+func assertFollowupOpenAIRequest(t *testing.T, body map[string]any, priorUserText, priorAssistantText, userText, alias, toolCallID string) {
 	t.Helper()
 	messages, _ := body["messages"].([]any)
-	if len(messages) != 3 {
-		t.Fatalf("follow-up OpenAI messages = %#v, want exactly user, assistant, and tool", body["messages"])
+	if len(messages) != 5 {
+		t.Fatalf("follow-up OpenAI messages = %#v, want exactly prior user, prior assistant, current user, tool call, and tool result", body["messages"])
 	}
-	wantUser := map[string]any{"role": "user", "content": userText}
-	if !reflect.DeepEqual(messages[0], wantUser) {
-		t.Fatalf("follow-up message[0] = %#v, want %#v", messages[0], wantUser)
+	wantHistory := []any{
+		map[string]any{"role": "user", "content": priorUserText},
+		map[string]any{"role": "assistant", "content": priorAssistantText},
+		map[string]any{"role": "user", "content": userText},
+	}
+	if !reflect.DeepEqual(messages[:3], wantHistory) {
+		t.Fatalf("follow-up history = %#v, want %#v", messages[:3], wantHistory)
 	}
 
-	assistant, _ := messages[1].(map[string]any)
+	assistant, _ := messages[3].(map[string]any)
 	if assistant["role"] != "assistant" {
-		t.Fatalf("follow-up message[1] role = %#v, want assistant", assistant["role"])
+		t.Fatalf("follow-up message[3] role = %#v, want assistant", assistant["role"])
 	}
 	calls, _ := assistant["tool_calls"].([]any)
 	if len(calls) != 1 {
@@ -1189,7 +1248,7 @@ func assertFollowupOpenAIRequest(t *testing.T, body map[string]any, userText, al
 		t.Fatalf("assistant wire arguments = %#v", arguments)
 	}
 
-	tool, _ := messages[2].(map[string]any)
+	tool, _ := messages[4].(map[string]any)
 	if tool["role"] != "tool" || tool["tool_call_id"] != toolCallID {
 		t.Fatalf("tool result linkage = %#v, want tool_call_id %q", tool, toolCallID)
 	}

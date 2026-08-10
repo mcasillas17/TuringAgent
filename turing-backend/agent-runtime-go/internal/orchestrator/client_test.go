@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -144,14 +145,15 @@ func TestSearchMessagesReturnsTheRPCError(t *testing.T) {
 	}
 }
 
-func TestFetchMessagesExcludesCurrentTurnIDsWithoutContentDeduplication(t *testing.T) {
-	client := &Client{sessions: &messageListClient{messages: []*turingv1.Message{
-		{MessageId: "msg_current_assistant", Role: turingv1.MessageRole_MESSAGE_ROLE_ASSISTANT, Content: ""},
-		{MessageId: "msg_current_user", Role: turingv1.MessageRole_MESSAGE_ROLE_USER, Content: "repeat me"},
-		{MessageId: "msg_older_empty_assistant", Role: turingv1.MessageRole_MESSAGE_ROLE_ASSISTANT, Content: ""},
-		{MessageId: "msg_older_user", Role: turingv1.MessageRole_MESSAGE_ROLE_USER, Content: "repeat me"},
+func TestFetchMessagesPreservesChronologicalOrderAndExcludesOnlyExactIDs(t *testing.T) {
+	sessions := &messageListClient{messages: []*turingv1.Message{
 		{MessageId: "msg_system", Role: turingv1.MessageRole_MESSAGE_ROLE_SYSTEM, Content: "instructions"},
-	}}}
+		{MessageId: "msg_older_user", Role: turingv1.MessageRole_MESSAGE_ROLE_USER, Content: "repeat me"},
+		{MessageId: "msg_older_empty_assistant", Role: turingv1.MessageRole_MESSAGE_ROLE_ASSISTANT, Content: ""},
+		{MessageId: "msg_current_user", Role: turingv1.MessageRole_MESSAGE_ROLE_USER, Content: "repeat me"},
+		{MessageId: "msg_current_assistant", Role: turingv1.MessageRole_MESSAGE_ROLE_ASSISTANT, Content: ""},
+	}}
+	client := &Client{sessions: sessions}
 
 	got, err := client.FetchMessages(
 		context.Background(),
@@ -169,6 +171,69 @@ func TestFetchMessagesExcludesCurrentTurnIDsWithoutContentDeduplication(t *testi
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("FetchMessages = %#v, want %#v", got, want)
+	}
+	if got := sessions.lastRequest.GetLimit(); got != 52 {
+		t.Fatalf("ListMessages limit = %d, want 52", got)
+	}
+}
+
+func TestFetchMessagesRetainsFiftyEntriesAfterExcludingCurrentTurn(t *testing.T) {
+	messages := make([]*turingv1.Message, 0, 52)
+	for i := 0; i < 52; i++ {
+		messages = append(messages, &turingv1.Message{
+			MessageId: fmt.Sprintf("msg_%02d", i),
+			Role:      turingv1.MessageRole_MESSAGE_ROLE_USER,
+			Content:   fmt.Sprintf("message %02d", i),
+		})
+	}
+	sessions := &messageListClient{messages: messages}
+	client := &Client{sessions: sessions}
+
+	got, err := client.FetchMessages(context.Background(), "session_1", "msg_50", "msg_51")
+	if err != nil {
+		t.Fatalf("FetchMessages returned error: %v", err)
+	}
+	if len(got) != 50 {
+		t.Fatalf("FetchMessages count = %d, want 50", len(got))
+	}
+	for i, message := range got {
+		want := fmt.Sprintf("message %02d", i)
+		if message.Role != "user" || message.Content != want {
+			t.Fatalf("FetchMessages[%d] = %#v, want user %q", i, message, want)
+		}
+	}
+	if got := sessions.lastRequest.GetLimit(); got != 52 {
+		t.Fatalf("ListMessages limit = %d, want 52", got)
+	}
+}
+
+func TestFetchMessagesDeduplicatesNonemptyExclusionsAndKeepsMostRecentFifty(t *testing.T) {
+	messages := make([]*turingv1.Message, 0, 51)
+	for i := 0; i < 51; i++ {
+		messages = append(messages, &turingv1.Message{
+			MessageId: fmt.Sprintf("msg_%02d", i),
+			Role:      turingv1.MessageRole_MESSAGE_ROLE_ASSISTANT,
+			Content:   fmt.Sprintf("message %02d", i),
+		})
+	}
+	sessions := &messageListClient{messages: messages}
+	client := &Client{sessions: sessions}
+
+	got, err := client.FetchMessages(context.Background(), "session_1", "", "msg_missing", "msg_missing", "")
+	if err != nil {
+		t.Fatalf("FetchMessages returned error: %v", err)
+	}
+	if len(got) != 50 {
+		t.Fatalf("FetchMessages count = %d, want 50", len(got))
+	}
+	for i, message := range got {
+		want := fmt.Sprintf("message %02d", i+1)
+		if message.Role != "assistant" || message.Content != want {
+			t.Fatalf("FetchMessages[%d] = %#v, want assistant %q", i, message, want)
+		}
+	}
+	if got := sessions.lastRequest.GetLimit(); got != 51 {
+		t.Fatalf("ListMessages limit = %d, want 51", got)
 	}
 }
 
@@ -253,14 +318,16 @@ func TestWaitForApprovalTokenContextDeadlineIsNotTerminalDenial(t *testing.T) {
 
 type messageListClient struct {
 	turingv1.SessionServiceClient
-	messages []*turingv1.Message
+	messages    []*turingv1.Message
+	lastRequest *turingv1.ListMessagesRequest
 }
 
 func (c *messageListClient) ListMessages(
-	context.Context,
-	*turingv1.ListMessagesRequest,
-	...grpc.CallOption,
+	_ context.Context,
+	request *turingv1.ListMessagesRequest,
+	_ ...grpc.CallOption,
 ) (*turingv1.ListMessagesResponse, error) {
+	c.lastRequest = request
 	return &turingv1.ListMessagesResponse{Messages: c.messages}, nil
 }
 
