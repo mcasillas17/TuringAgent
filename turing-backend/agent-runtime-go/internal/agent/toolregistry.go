@@ -14,7 +14,8 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
 )
 
-type toolLister interface {
+// ToolLister discovers and invokes tools for an MCP server.
+type ToolLister interface {
 	tools.MCPClient
 	ListTools(ctx context.Context) ([]map[string]any, error)
 }
@@ -37,7 +38,7 @@ type toolOrigin struct {
 }
 
 // BuildToolRegistry discovers servers in name order and preserves each server's tool order.
-func BuildToolRegistry(ctx context.Context, servers map[string]toolLister) (*ToolRegistry, error) {
+func BuildToolRegistry(ctx context.Context, servers map[string]ToolLister) (*ToolRegistry, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -53,12 +54,12 @@ func BuildToolRegistry(ctx context.Context, servers map[string]toolLister) (*Too
 	}
 	origins := make(map[string]toolOrigin)
 	for serverIndex, serverName := range serverNames {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("discover tools from MCP server %q: %w", serverName, err)
+		}
 		client := servers[serverName]
 		if isNilToolLister(client) {
 			return nil, fmt.Errorf("MCP server %q has nil client", serverName)
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("discover tools from MCP server %q: %w", serverName, err)
 		}
 
 		discovered, err := client.ListTools(ctx)
@@ -70,6 +71,9 @@ func BuildToolRegistry(ctx context.Context, servers map[string]toolLister) (*Too
 		}
 
 		for index, raw := range discovered {
+			if err := ctx.Err(); err != nil {
+				return nil, fmt.Errorf("normalize tools from MCP server %q: %w", serverName, err)
+			}
 			nameValue, present := raw["name"]
 			name, valid := nameValue.(string)
 			if !present || !valid || strings.TrimSpace(name) == "" {
@@ -146,6 +150,9 @@ func BuildToolRegistry(ctx context.Context, servers map[string]toolLister) (*Too
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return registry, nil
 }
 
@@ -204,7 +211,7 @@ func cloneNormalizedJSONValue(value any) any {
 	}
 }
 
-func isNilToolLister(client toolLister) bool {
+func isNilToolLister(client ToolLister) bool {
 	if client == nil {
 		return true
 	}

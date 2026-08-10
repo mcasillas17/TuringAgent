@@ -27,7 +27,7 @@ func TestBuildRegistryDiscoversToolsAndSupportsLookup(t *testing.T) {
 		{"name": "beta_only", "description": "beta tool", "inputSchema": nil},
 	}}
 
-	registry, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+	registry, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
 		"beta":  beta,
 		"alpha": alpha,
 	})
@@ -69,7 +69,7 @@ func TestBuildRegistryDiscoversToolsAndSupportsLookup(t *testing.T) {
 func TestBuildRegistryAdvertisesDeterministically(t *testing.T) {
 	want := []string{"a_second", "a_first", "z_only"}
 	for iteration := 0; iteration < 50; iteration++ {
-		servers := make(map[string]toolLister)
+		servers := make(map[string]ToolLister)
 		if iteration%2 == 0 {
 			servers["z-server"] = &registryTestClient{tools: []map[string]any{{"name": "z_only"}}}
 			servers["a-server"] = &registryTestClient{tools: []map[string]any{{"name": "a_second"}, {"name": "a_first"}}}
@@ -89,7 +89,7 @@ func TestBuildRegistryAdvertisesDeterministically(t *testing.T) {
 }
 
 func TestBuildRegistryReturnsUsableEmptyRegistry(t *testing.T) {
-	tests := map[string]map[string]toolLister{
+	tests := map[string]map[string]ToolLister{
 		"empty server map": {},
 		"server with no tools": {
 			"empty": &registryTestClient{},
@@ -115,7 +115,7 @@ func TestBuildRegistryReturnsUsableEmptyRegistry(t *testing.T) {
 }
 
 func TestBuildRegistryDefinitionsReturnsFreshSlice(t *testing.T) {
-	registry, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+	registry, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
 		"server": &registryTestClient{tools: []map[string]any{{"name": "original"}}},
 	})
 	if err != nil {
@@ -136,7 +136,7 @@ func TestBuildRegistryDeepCopiesSourceSchema(t *testing.T) {
 		"name":        "isolated",
 		"inputSchema": schema,
 	}}}
-	registry, err := BuildToolRegistry(context.Background(), map[string]toolLister{"server": client})
+	registry, err := BuildToolRegistry(context.Background(), map[string]ToolLister{"server": client})
 	if err != nil {
 		t.Fatalf("BuildToolRegistry returned error: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestBuildRegistryDeepCopiesTypedNestedSourceSchema(t *testing.T) {
 		"properties": properties,
 		"required":   required,
 	}
-	registry, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+	registry, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
 		"server": &registryTestClient{tools: []map[string]any{{
 			"name":        "typed",
 			"inputSchema": schema,
@@ -195,7 +195,7 @@ func TestToolRegistryAccessorsIsolateNormalizedTypedNestedSchemas(t *testing.T) 
 		},
 		"required": []string{"choice"},
 	}
-	registry, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+	registry, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
 		"server": &registryTestClient{tools: []map[string]any{{
 			"name":        "typed",
 			"inputSchema": schema,
@@ -223,7 +223,7 @@ func TestBuildRegistryRejectsUnsupportedJSONValuesInInputSchema(t *testing.T) {
 	}
 	for name, unsupported := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+			_, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
 				"invalid-server": &registryTestClient{tools: []map[string]any{{
 					"name": "unsupported_schema",
 					"inputSchema": map[string]any{
@@ -309,7 +309,7 @@ func TestBuildRegistryRejectsInvalidToolNames(t *testing.T) {
 	}
 	for name, tool := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+			_, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
 				"invalid-server": &registryTestClient{tools: []map[string]any{tool}},
 			})
 			if err == nil {
@@ -321,7 +321,7 @@ func TestBuildRegistryRejectsInvalidToolNames(t *testing.T) {
 }
 
 func TestBuildRegistryRejectsInvalidDescription(t *testing.T) {
-	_, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+	_, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
 		"invalid-server": &registryTestClient{tools: []map[string]any{{
 			"name":        "bad_description",
 			"description": 7,
@@ -341,7 +341,7 @@ func TestBuildRegistryRejectsInvalidInputSchema(t *testing.T) {
 	}
 	for name, schema := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+			_, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
 				"invalid-server": &registryTestClient{tools: []map[string]any{{
 					"name":        "bad_schema",
 					"inputSchema": schema,
@@ -359,7 +359,7 @@ func TestBuildRegistryNormalizesMissingInputSchemaRootType(t *testing.T) {
 	schema := map[string]any{
 		"properties": map[string]any{"value": map[string]any{"type": "string"}},
 	}
-	registry, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+	registry, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
 		"server": &registryTestClient{tools: []map[string]any{{
 			"name":        "normalized",
 			"inputSchema": schema,
@@ -385,7 +385,7 @@ func TestBuildRegistryDefaultsNilInputSchemas(t *testing.T) {
 	}
 	for name, tool := range tests {
 		t.Run(name, func(t *testing.T) {
-			registry, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+			registry, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
 				"server": &registryTestClient{tools: []map[string]any{tool}},
 			})
 			if err != nil {
@@ -399,7 +399,7 @@ func TestBuildRegistryDefaultsNilInputSchemas(t *testing.T) {
 }
 
 func TestBuildRegistryAcceptsExplicitObjectInputSchemaRootType(t *testing.T) {
-	registry, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+	registry, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
 		"server": &registryTestClient{tools: []map[string]any{{
 			"name":        "object_schema",
 			"inputSchema": map[string]any{"type": "object"},
@@ -425,7 +425,7 @@ func TestBuildRegistryRejectsInvalidInputSchemaRootType(t *testing.T) {
 	}
 	for name, rootType := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+			_, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
 				"schema-server": &registryTestClient{tools: []map[string]any{
 					{"name": "first"},
 					{
@@ -444,7 +444,7 @@ func TestBuildRegistryRejectsInvalidInputSchemaRootType(t *testing.T) {
 
 func TestBuildRegistryRejectsDuplicateToolNames(t *testing.T) {
 	t.Run("within server", func(t *testing.T) {
-		_, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+		_, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
 			"same-server": &registryTestClient{tools: []map[string]any{
 				{"name": "duplicate"},
 				{"name": "duplicate"},
@@ -460,7 +460,7 @@ func TestBuildRegistryRejectsDuplicateToolNames(t *testing.T) {
 	})
 
 	t.Run("across servers", func(t *testing.T) {
-		_, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+		_, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
 			"first-server": &registryTestClient{tools: []map[string]any{
 				{"name": "first"},
 				{"name": "duplicate"},
@@ -483,7 +483,7 @@ func TestBuildRegistryRejectsDuplicateToolNames(t *testing.T) {
 
 func TestBuildRegistryRejectsNilClient(t *testing.T) {
 	t.Run("nil interface", func(t *testing.T) {
-		_, err := BuildToolRegistry(context.Background(), map[string]toolLister{"nil-server": nil})
+		_, err := BuildToolRegistry(context.Background(), map[string]ToolLister{"nil-server": nil})
 		if err == nil {
 			t.Fatal("BuildToolRegistry returned nil error")
 		}
@@ -492,7 +492,7 @@ func TestBuildRegistryRejectsNilClient(t *testing.T) {
 
 	t.Run("typed nil", func(t *testing.T) {
 		var client *registryTestClient
-		_, err := BuildToolRegistry(context.Background(), map[string]toolLister{"nil-server": client})
+		_, err := BuildToolRegistry(context.Background(), map[string]ToolLister{"nil-server": client})
 		if err == nil {
 			t.Fatal("BuildToolRegistry returned nil error")
 		}
@@ -502,7 +502,7 @@ func TestBuildRegistryRejectsNilClient(t *testing.T) {
 
 func TestBuildRegistryAddsServerContextToDiscoveryErrors(t *testing.T) {
 	discoveryErr := errors.New("discovery failed")
-	_, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+	_, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
 		"broken-server": &registryTestClient{listErr: discoveryErr},
 	})
 	if !errors.Is(err, discoveryErr) {
@@ -516,13 +516,83 @@ func TestBuildRegistryRespectsCancellation(t *testing.T) {
 	cancel()
 	client := &registryTestClient{}
 
-	_, err := BuildToolRegistry(ctx, map[string]toolLister{"server": client})
+	_, err := BuildToolRegistry(ctx, map[string]ToolLister{"server": client})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 	if client.listCalls != 0 {
 		t.Fatalf("ListTools calls = %d, want zero for already-canceled context", client.listCalls)
 	}
+}
+
+func TestBuildRegistryStopsToolNormalizationWhenCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	client := &registryTestClient{tools: []map[string]any{
+		{
+			"name": "canceling",
+			"inputSchema": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"value": cancelingJSONValue{cancel: cancel}},
+			},
+		},
+		{
+			"name":        "must_not_normalize",
+			"inputSchema": map[string]any{"unsupported": func() {}},
+		},
+	}}
+
+	_, err := BuildToolRegistry(ctx, map[string]ToolLister{"server": client})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+}
+
+func TestBuildRegistryStopsServerNormalizationWhenCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	first := &registryTestClient{tools: []map[string]any{{
+		"name": "canceling",
+		"inputSchema": map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"value": cancelingJSONValue{cancel: cancel}},
+		},
+	}}}
+	second := &registryTestClient{}
+
+	_, err := BuildToolRegistry(ctx, map[string]ToolLister{
+		"first":  first,
+		"second": second,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if second.listCalls != 0 {
+		t.Fatalf("second server ListTools calls = %d, want zero", second.listCalls)
+	}
+}
+
+func TestBuildRegistryChecksCancellationBeforeSuccessfulReturn(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	client := &registryTestClient{tools: []map[string]any{{
+		"name": "canceling",
+		"inputSchema": map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"value": cancelingJSONValue{cancel: cancel}},
+		},
+	}}}
+
+	_, err := BuildToolRegistry(ctx, map[string]ToolLister{"server": client})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+}
+
+type cancelingJSONValue struct {
+	cancel context.CancelFunc
+}
+
+func (value cancelingJSONValue) MarshalJSON() ([]byte, error) {
+	value.cancel()
+	return []byte(`"normalized"`), nil
 }
 
 type registryTestClient struct {
@@ -559,7 +629,7 @@ func assertErrorContains(t *testing.T, err error, parts ...string) {
 
 func buildNestedSchemaRegistry(t *testing.T) *ToolRegistry {
 	t.Helper()
-	registry, err := BuildToolRegistry(context.Background(), map[string]toolLister{
+	registry, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
 		"server": &registryTestClient{tools: []map[string]any{{
 			"name":        "isolated",
 			"inputSchema": nestedRegistrySchema(),

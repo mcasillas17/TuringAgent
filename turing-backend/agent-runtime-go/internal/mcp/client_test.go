@@ -11,29 +11,32 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const (
 	wantMaxListToolsTotalCount   = 10_000
 	wantMaxListToolsEncodedBytes = 4 * 1024 * 1024
+	testChannelTimeout           = 2 * time.Second
 )
 
 func TestListToolsPaginatesInOrder(t *testing.T) {
 	var requests []listToolsRequest
-	server := newListToolsServer(t, func(request listToolsRequest) (int, string) {
+	server := newListToolsServer(t, func(request listToolsRequest) (int, string, error) {
 		requests = append(requests, request)
 		switch len(requests) {
 		case 1:
-			return http.StatusOK, `{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"first"},{"name":"second"}],"nextCursor":"page-2"}}`
+			return http.StatusOK, `{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"first"},{"name":"second"}],"nextCursor":"page-2"}}`, nil
 		case 2:
-			return http.StatusOK, `{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"third"}],"nextCursor":"page-3"}}`
+			return http.StatusOK, `{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"third"}],"nextCursor":"page-3"}}`, nil
 		default:
-			return http.StatusOK, `{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"fourth"}]}}`
+			return http.StatusOK, `{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"fourth"}]}}`, nil
 		}
 	})
 	client := NewClient(server.URL, "", server.Client())
 
 	tools, err := client.ListTools(context.Background())
+	server.assertNoHandlerErrors(t)
 	if err != nil {
 		t.Fatalf("ListTools returned error: %v", err)
 	}
@@ -55,13 +58,14 @@ func TestListToolsTreatsAbsentAndNullNextCursorAsTerminal(t *testing.T) {
 	for name, result := range tests {
 		t.Run(name, func(t *testing.T) {
 			requests := 0
-			server := newListToolsServer(t, func(request listToolsRequest) (int, string) {
+			server := newListToolsServer(t, func(request listToolsRequest) (int, string, error) {
 				requests++
-				return http.StatusOK, fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":%s}`, request.ID, result)
+				return http.StatusOK, fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":%s}`, request.ID, result), nil
 			})
 			client := NewClient(server.URL, "", server.Client())
 
 			tools, err := client.ListTools(context.Background())
+			server.assertNoHandlerErrors(t)
 			if err != nil {
 				t.Fatalf("ListTools returned error: %v", err)
 			}
@@ -77,16 +81,17 @@ func TestListToolsTreatsAbsentAndNullNextCursorAsTerminal(t *testing.T) {
 
 func TestListToolsRequestsEmptyCursorAndRejectsWhenRepeated(t *testing.T) {
 	var requests []listToolsRequest
-	server := newListToolsServer(t, func(request listToolsRequest) (int, string) {
+	server := newListToolsServer(t, func(request listToolsRequest) (int, string, error) {
 		requests = append(requests, request)
 		return http.StatusOK, fmt.Sprintf(
 			`{"jsonrpc":"2.0","id":%d,"result":{"tools":[],"nextCursor":""}}`,
 			request.ID,
-		)
+		), nil
 	})
 	client := NewClient(server.URL, "", server.Client())
 
 	_, err := client.ListTools(context.Background())
+	server.assertNoHandlerErrors(t)
 	if err == nil || !strings.Contains(err.Error(), "repeated") {
 		t.Fatalf("ListTools error = %v, want repeated cursor error", err)
 	}
@@ -94,12 +99,13 @@ func TestListToolsRequestsEmptyCursorAndRejectsWhenRepeated(t *testing.T) {
 }
 
 func TestListToolsRejectsInvalidNextCursor(t *testing.T) {
-	server := newListToolsServer(t, func(request listToolsRequest) (int, string) {
-		return http.StatusOK, `{"jsonrpc":"2.0","id":1,"result":{"tools":[],"nextCursor":42}}`
+	server := newListToolsServer(t, func(request listToolsRequest) (int, string, error) {
+		return http.StatusOK, `{"jsonrpc":"2.0","id":1,"result":{"tools":[],"nextCursor":42}}`, nil
 	})
 	client := NewClient(server.URL, "", server.Client())
 
 	_, err := client.ListTools(context.Background())
+	server.assertNoHandlerErrors(t)
 	if err == nil || !strings.Contains(err.Error(), "nextCursor") {
 		t.Fatalf("ListTools error = %v, want invalid nextCursor error", err)
 	}
@@ -137,7 +143,7 @@ func TestListToolsValidatesToolsOnEveryPage(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			requests := 0
-			server := newListToolsServer(t, func(request listToolsRequest) (int, string) {
+			server := newListToolsServer(t, func(request listToolsRequest) (int, string, error) {
 				requests++
 				result := test.firstPage
 				if requests == 2 {
@@ -147,11 +153,12 @@ func TestListToolsValidatesToolsOnEveryPage(t *testing.T) {
 					`{"jsonrpc":"2.0","id":%d,"result":%s}`,
 					request.ID,
 					result,
-				)
+				), nil
 			})
 			client := NewClient(server.URL, "", server.Client())
 
 			tools, err := client.ListTools(context.Background())
+			server.assertNoHandlerErrors(t)
 			if err == nil || !strings.Contains(err.Error(), test.wantError) {
 				t.Fatalf("ListTools error = %v, want %q", err, test.wantError)
 			}
@@ -164,13 +171,14 @@ func TestListToolsValidatesToolsOnEveryPage(t *testing.T) {
 
 func TestListToolsRejectsRepeatedCursor(t *testing.T) {
 	var requests []listToolsRequest
-	server := newListToolsServer(t, func(request listToolsRequest) (int, string) {
+	server := newListToolsServer(t, func(request listToolsRequest) (int, string, error) {
 		requests = append(requests, request)
-		return http.StatusOK, fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"tools":[],"nextCursor":"same"}}`, request.ID)
+		return http.StatusOK, fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"tools":[],"nextCursor":"same"}}`, request.ID), nil
 	})
 	client := NewClient(server.URL, "", server.Client())
 
 	_, err := client.ListTools(context.Background())
+	server.assertNoHandlerErrors(t)
 	if err == nil || !strings.Contains(err.Error(), "repeated") {
 		t.Fatalf("ListTools error = %v, want repeated cursor error", err)
 	}
@@ -180,17 +188,18 @@ func TestListToolsRejectsRepeatedCursor(t *testing.T) {
 func TestListToolsEnforcesPageLimit(t *testing.T) {
 	const wantRequests = 100
 	requests := 0
-	server := newListToolsServer(t, func(request listToolsRequest) (int, string) {
+	server := newListToolsServer(t, func(request listToolsRequest) (int, string, error) {
 		requests++
 		return http.StatusOK, fmt.Sprintf(
 			`{"jsonrpc":"2.0","id":%d,"result":{"tools":[],"nextCursor":"page-%d"}}`,
 			request.ID,
 			requests,
-		)
+		), nil
 	})
 	client := NewClient(server.URL, "", server.Client())
 
 	_, err := client.ListTools(context.Background())
+	server.assertNoHandlerErrors(t)
 	if err == nil || !strings.Contains(err.Error(), "page limit") {
 		t.Fatalf("ListTools error = %v, want page limit error", err)
 	}
@@ -205,12 +214,14 @@ func TestListToolsEnforcesTotalToolCountLimit(t *testing.T) {
 		for index := range page {
 			page[index] = map[string]any{}
 		}
-		server := newListToolsServer(t, func(request listToolsRequest) (int, string) {
-			return http.StatusOK, listToolsResponse(t, request.ID, page, nil)
+		server := newListToolsServer(t, func(request listToolsRequest) (int, string, error) {
+			body, err := listToolsResponse(request.ID, page, nil)
+			return http.StatusOK, body, err
 		})
 		client := NewClient(server.URL, "", server.Client())
 
 		tools, err := client.ListTools(context.Background())
+		server.assertNoHandlerErrors(t)
 		if err != nil {
 			t.Fatalf("ListTools returned error at count boundary: %v", err)
 		}
@@ -225,17 +236,20 @@ func TestListToolsEnforcesTotalToolCountLimit(t *testing.T) {
 			firstPage[index] = map[string]any{}
 		}
 		requests := 0
-		server := newListToolsServer(t, func(request listToolsRequest) (int, string) {
+		server := newListToolsServer(t, func(request listToolsRequest) (int, string, error) {
 			requests++
 			if requests == 1 {
 				cursor := "overflow"
-				return http.StatusOK, listToolsResponse(t, request.ID, firstPage, &cursor)
+				body, err := listToolsResponse(request.ID, firstPage, &cursor)
+				return http.StatusOK, body, err
 			}
-			return http.StatusOK, listToolsResponse(t, request.ID, []map[string]any{{}}, nil)
+			body, err := listToolsResponse(request.ID, []map[string]any{{}}, nil)
+			return http.StatusOK, body, err
 		})
 		client := NewClient(server.URL, "", server.Client())
 
 		tools, err := client.ListTools(context.Background())
+		server.assertNoHandlerErrors(t)
 		wantError := fmt.Sprintf("page 2 total tool count exceeds limit of %d", wantMaxListToolsTotalCount)
 		if err == nil || !strings.Contains(err.Error(), wantError) {
 			t.Fatalf("ListTools error = %v, want %q", err, wantError)
@@ -268,7 +282,7 @@ func TestListToolsEnforcesAggregateEncodedToolBytesLimit(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			requests := 0
-			server := newListToolsServer(t, func(request listToolsRequest) (int, string) {
+			server := newListToolsServer(t, func(request listToolsRequest) (int, string, error) {
 				requests++
 				tool := boundaryTool
 				if requests > pagesAtBoundary {
@@ -279,11 +293,13 @@ func TestListToolsEnforcesAggregateEncodedToolBytesLimit(t *testing.T) {
 					next := fmt.Sprintf("page-%d", requests+1)
 					cursor = &next
 				}
-				return http.StatusOK, listToolsResponse(t, request.ID, []map[string]any{tool}, cursor)
+				body, err := listToolsResponse(request.ID, []map[string]any{tool}, cursor)
+				return http.StatusOK, body, err
 			})
 			client := NewClient(server.URL, "", server.Client())
 
 			tools, err := client.ListTools(context.Background())
+			server.assertNoHandlerErrors(t)
 			if test.wantError == "" {
 				if err != nil {
 					t.Fatalf("ListTools returned error at byte boundary: %v", err)
@@ -305,16 +321,17 @@ func TestListToolsEnforcesAggregateEncodedToolBytesLimit(t *testing.T) {
 
 func TestListToolsPropagatesLaterPageJSONRPCError(t *testing.T) {
 	requests := 0
-	server := newListToolsServer(t, func(request listToolsRequest) (int, string) {
+	server := newListToolsServer(t, func(request listToolsRequest) (int, string, error) {
 		requests++
 		if requests == 1 {
-			return http.StatusOK, `{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"first"}],"nextCursor":"next"}}`
+			return http.StatusOK, `{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"first"}],"nextCursor":"next"}}`, nil
 		}
-		return http.StatusOK, `{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"later page failed"}}`
+		return http.StatusOK, `{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"later page failed"}}`, nil
 	})
 	client := NewClient(server.URL, "", server.Client())
 
 	tools, err := client.ListTools(context.Background())
+	server.assertNoHandlerErrors(t)
 	if err == nil || !strings.Contains(err.Error(), "later page failed") {
 		t.Fatalf("ListTools error = %v, want later page error", err)
 	}
@@ -325,31 +342,47 @@ func TestListToolsPropagatesLaterPageJSONRPCError(t *testing.T) {
 
 func TestListToolsPropagatesCancellationDuringPagination(t *testing.T) {
 	secondPageStarted := make(chan struct{})
+	secondPageDone := make(chan struct{})
+	handlerErrors := make(chan error, 1)
 	var once sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		request := decodeListToolsRequest(t, r)
+		request, err := decodeListToolsRequest(r)
+		if err != nil {
+			reportHandlerError(handlerErrors, err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
 		if request.Params["cursor"] == nil {
 			w.Header().Set("content-type", "application/json")
 			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"tools":[],"nextCursor":"next"}}`, request.ID)
 			return
 		}
 		once.Do(func() { close(secondPageStarted) })
-		<-r.Context().Done()
+		defer close(secondPageDone)
+		select {
+		case <-r.Context().Done():
+		case <-time.After(testChannelTimeout):
+			reportHandlerError(handlerErrors, errors.New("timed out waiting for second page request cancellation"))
+		}
 	}))
 	t.Cleanup(server.Close)
 	client := NewClient(server.URL, "", server.Client())
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	errCh := make(chan error, 1)
 	go func() {
 		_, err := client.ListTools(ctx)
 		errCh <- err
 	}()
-	<-secondPageStarted
+	waitForTestSignal(t, secondPageStarted, handlerErrors, "second page request")
 	cancel()
 
-	if err := <-errCh; !errors.Is(err, context.Canceled) {
+	err := waitForTestError(t, errCh, handlerErrors, "ListTools result")
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("ListTools error = %v, want context.Canceled", err)
 	}
+	waitForTestSignal(t, secondPageDone, handlerErrors, "second page handler completion")
+	assertNoHandlerErrors(t, handlerErrors)
 }
 
 func TestCallToolReturnsJSONRPCErrorMessage(t *testing.T) {
@@ -371,32 +404,92 @@ type listToolsRequest struct {
 	Params map[string]any `json:"params"`
 }
 
+type listToolsTestServer struct {
+	*httptest.Server
+	handlerErrors <-chan error
+}
+
 func newListToolsServer(
 	t *testing.T,
-	response func(listToolsRequest) (status int, body string),
-) *httptest.Server {
+	response func(listToolsRequest) (status int, body string, err error),
+) *listToolsTestServer {
 	t.Helper()
+	handlerErrors := make(chan error, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		request := decodeListToolsRequest(t, r)
-		status, body := response(request)
+		request, err := decodeListToolsRequest(r)
+		if err != nil {
+			reportHandlerError(handlerErrors, err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		status, body, err := response(request)
+		if err != nil {
+			reportHandlerError(handlerErrors, fmt.Errorf("build response: %w", err))
+			http.Error(w, "invalid response", http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("content-type", "application/json")
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(server.Close)
-	return server
+	return &listToolsTestServer{Server: server, handlerErrors: handlerErrors}
 }
 
-func decodeListToolsRequest(t *testing.T, r *http.Request) listToolsRequest {
-	t.Helper()
+func decodeListToolsRequest(r *http.Request) (listToolsRequest, error) {
 	var request listToolsRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		t.Fatalf("decode request: %v", err)
+		return listToolsRequest{}, fmt.Errorf("decode request: %w", err)
 	}
 	if request.Method != "tools/list" {
-		t.Fatalf("method = %q, want tools/list", request.Method)
+		return listToolsRequest{}, fmt.Errorf("method = %q, want tools/list", request.Method)
 	}
-	return request
+	return request, nil
+}
+
+func (server *listToolsTestServer) assertNoHandlerErrors(t *testing.T) {
+	t.Helper()
+	assertNoHandlerErrors(t, server.handlerErrors)
+}
+
+func assertNoHandlerErrors(t *testing.T, handlerErrors <-chan error) {
+	t.Helper()
+	select {
+	case err := <-handlerErrors:
+		t.Fatalf("HTTP handler assertion: %v", err)
+	default:
+	}
+}
+
+func reportHandlerError(handlerErrors chan<- error, err error) {
+	select {
+	case handlerErrors <- err:
+	default:
+	}
+}
+
+func waitForTestSignal(t *testing.T, signal <-chan struct{}, handlerErrors <-chan error, description string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case err := <-handlerErrors:
+		t.Fatalf("HTTP handler assertion while waiting for %s: %v", description, err)
+	case <-time.After(testChannelTimeout):
+		t.Fatalf("timed out waiting for %s", description)
+	}
+}
+
+func waitForTestError(t *testing.T, result <-chan error, handlerErrors <-chan error, description string) error {
+	t.Helper()
+	select {
+	case err := <-result:
+		return err
+	case err := <-handlerErrors:
+		t.Fatalf("HTTP handler assertion while waiting for %s: %v", description, err)
+	case <-time.After(testChannelTimeout):
+		t.Fatalf("timed out waiting for %s", description)
+	}
+	return nil
 }
 
 func assertListToolsRequests(t *testing.T, requests []listToolsRequest, params []map[string]any) {
@@ -414,17 +507,16 @@ func assertListToolsRequests(t *testing.T, requests []listToolsRequest, params [
 	}
 }
 
-func listToolsResponse(t *testing.T, id int64, tools []map[string]any, nextCursor *string) string {
-	t.Helper()
+func listToolsResponse(id int64, tools []map[string]any, nextCursor *string) (string, error) {
 	result := map[string]any{"tools": tools}
 	if nextCursor != nil {
 		result["nextCursor"] = *nextCursor
 	}
 	response, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
 	if err != nil {
-		t.Fatalf("marshal response: %v", err)
+		return "", fmt.Errorf("marshal response: %w", err)
 	}
-	return string(response)
+	return string(response), nil
 }
 
 func toolWithEncodedSize(t *testing.T, size int) map[string]any {
