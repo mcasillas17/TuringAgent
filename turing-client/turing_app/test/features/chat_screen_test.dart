@@ -545,7 +545,7 @@ void main() {
     unawaited(events.close());
   });
 
-  testWidgets('late history load does not wipe a live tool card', (
+  testWidgets('the event subscription opens only after history has loaded', (
     tester,
   ) async {
     final events = StreamController<TuringEvent>(sync: true);
@@ -563,8 +563,8 @@ void main() {
     );
     await tester.pump();
 
-    // A live tool call starts and completes WHILE listMessages is still in
-    // flight (history has not resolved yet).
+    // The stream replays the session from sequence 0, so nothing may be applied
+    // before the client knows which messageIds history already covers.
     events.add(
       _event(
         type: 'tool.call.started',
@@ -573,22 +573,22 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byType(ToolCallCard), findsNothing);
 
-    // History resolves late.
     gate.complete([
       Message(
         messageId: 'msg_hist',
         role: 'user',
         content: 'earlier question',
-        sequence: 0,
+        sequence: 1,
         createdAt: _fixedDate,
       ),
     ]);
     await tester.pump();
+    await tester.pump();
 
-    // The live card survives the history seed, and its terminal event still
-    // updates it in place rather than being orphaned.
+    // Nothing buffered while history loaded is lost: the card appears below the
+    // seeded history, and its terminal event still updates it in place.
     events.add(
       _event(
         type: 'tool.call.completed',
@@ -599,8 +599,185 @@ void main() {
     await tester.pump();
 
     expect(find.text('earlier question'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('earlier question')).dy,
+      lessThan(tester.getTopLeft(find.text('system.time')).dy),
+    );
     expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('replayed deltas do not duplicate completed history text', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_user',
+          role: 'user',
+          content: 'what time is it',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+        Message(
+          messageId: 'msg_asst',
+          role: 'assistant',
+          content: 'It is noon.',
+          sequence: 2,
+          createdAt: _fixedDate,
+        ),
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('It is noon.'), findsOneWidget);
+
+    // Opening a session replays the whole persisted event log, including every
+    // delta that produced the history above.
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: {'messageId': 'msg_asst', 'delta': 'It is noon.'},
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.text('It is noon.'),
+      findsOneWidget,
+      reason: 'history must not be rendered a second time from its own replay',
+    );
+
+    // A genuinely new turn still streams normally.
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 2,
+        payload: {'messageId': 'msg_next', 'delta': 'Fresh answer'},
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Fresh answer'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('an unfinished assistant row keeps streaming into its bubble', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_user',
+          role: 'user',
+          content: 'what time is it',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+        // The assistant row is inserted empty when the job is created, so a
+        // session reopened mid-run carries it in history with no content.
+        Message(
+          messageId: 'msg_live',
+          role: 'assistant',
+          content: '',
+          sequence: 2,
+          createdAt: _fixedDate,
+        ),
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    for (final delta in ['It is ', 'noon.']) {
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: {'messageId': 'msg_live', 'delta': delta},
+        ),
+      );
+      await tester.pump();
+    }
+
+    expect(
+      find.text('It is noon.'),
+      findsOneWidget,
+      reason: 'deltas for an unfinished history row belong IN that bubble',
+    );
+    expect(
+      // One bubble per history row (the question and the answer) and no third:
+      // the empty row was filled, not left sitting above a duplicate.
+      find.byType(ValueListenableBuilder<String>),
+      findsNWidgets(2),
+      reason: 'streaming into a history row must not open a second bubble',
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a dead stream is announced even with no tool card running', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // No tool call is in flight, so resolving running cards signals nothing:
+    // without a notice the user just sees prompts that never answer.
+    events.addError(StateError('stream dropped'));
+    await tester.pump();
+
+    expect(
+      find.textContaining('Connection to the session lost'),
+      findsOneWidget,
+    );
+
+    // The subscription is not cancelled on error, so a later event proves the
+    // stream is alive again and the notice must not linger.
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: {'messageId': 'msg_a', 'delta': 'still here'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.textContaining('Connection to the session lost'), findsNothing);
+    expect(find.text('still here'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());
@@ -1145,14 +1322,214 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());
   });
+
+  testWidgets('replayed tool calls from a finished turn are not re-rendered', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final earlier = DateTime.parse('2026-05-10T00:00:00.000Z');
+    final later = DateTime.parse('2026-05-10T00:05:00.000Z');
+    final apiClient = _FakeApiClient()
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_u1',
+          role: 'user',
+          content: 'q1',
+          sequence: 1,
+          createdAt: earlier,
+        ),
+        // The runtime reuses one assistantMessageId for a turn's preamble AND
+        // its post-tool answer, so a finished tool-using turn persists as a
+        // single, complete assistant message.
+        Message(
+          messageId: 'msg_a1',
+          role: 'assistant',
+          content: 'answer1',
+          sequence: 2,
+          createdAt: earlier,
+        ),
+        Message(
+          messageId: 'msg_u2',
+          role: 'user',
+          content: 'q2',
+          sequence: 3,
+          createdAt: later,
+        ),
+        // Reopened mid-run: the assistant row exists but is still empty.
+        Message(
+          messageId: 'msg_live',
+          role: 'assistant',
+          content: '',
+          sequence: 4,
+          createdAt: later,
+        ),
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // Reopening replays the WHOLE persisted log, so turn 1's tool events arrive
+    // again even though its text is already fully on screen.
+    for (final type in ['tool.call.started', 'tool.call.completed']) {
+      events.add(
+        _event(
+          type: type,
+          sequence: 1,
+          createdAt: earlier,
+          payload: {'toolCallId': 'call_old', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+    }
+
+    expect(
+      find.byType(ToolCallCard),
+      findsNothing,
+      reason:
+          'a tool call from a turn history already renders is finished '
+          'business; appending its card would attribute it to the newest turn',
+    );
+
+    // The live turn still streams into the adopted (empty) history row.
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 2,
+        payload: {'messageId': 'msg_live', 'delta': 'It is noon.'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('It is noon.'), findsOneWidget);
+    expect(
+      find.byType(ValueListenableBuilder<String>),
+      findsNWidgets(4),
+      reason:
+          'the replayed tool call must not orphan the adopted bubble into '
+          'an empty pill with a duplicate below it',
+    );
+    expect(
+      tester.getTopLeft(find.text('It is noon.')).dy,
+      greaterThan(tester.getTopLeft(find.text('q2')).dy),
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a tool call newer than history still renders on reopen', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_user',
+          role: 'user',
+          content: 'what time is it',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 1,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.byType(ToolCallCard),
+      findsOneWidget,
+      reason: 'suppressing replayed history must not silence live tool calls',
+    );
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a tool event with no usable timestamp is still rendered', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_user',
+          role: 'user',
+          content: 'what time is it',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // `GrpcMappers` turns an unset proto timestamp into the Unix epoch. That
+    // says nothing about when the event happened, so the history filter must
+    // fail OPEN — treating it as ancient would hide every live tool call.
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 1,
+        createdAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(ToolCallCard), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
 }
 
 final _fixedDate = DateTime.parse('2026-05-10T00:00:00.000Z');
+
+/// Default stamp for events a test feeds as LIVE. It is deliberately later than
+/// [_fixedDate] (the stamp of seeded history) because the screen suppresses tool
+/// events belonging to turns history already covers; a live event that shared
+/// history's timestamp would be indistinguishable from a replayed one.
+final _liveDate = DateTime.parse('2026-05-10T01:00:00.000Z');
 
 TuringEvent _event({
   required String type,
   required int sequence,
   required Map<String, dynamic> payload,
+  DateTime? createdAt,
 }) {
   return TuringEvent(
     eventId: 'evt_$sequence',
@@ -1161,7 +1538,7 @@ TuringEvent _event({
     traceId: 'trace_1',
     sequence: sequence,
     type: type,
-    createdAt: DateTime.parse('2026-05-10T00:00:00.000Z'),
+    createdAt: createdAt ?? _liveDate,
     payload: payload,
   );
 }

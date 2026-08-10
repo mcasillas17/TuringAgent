@@ -33,16 +33,45 @@ class _ChatScreenState extends State<ChatScreen> {
   final Map<String, _MessageEntry> _assistantEntries = {};
   final Map<String, _ToolCallEntry> _toolEntries = {};
   final List<_PendingApproval> _approvals = [];
+
+  /// Ids of history messages whose text is already complete on screen. The
+  /// stream replays the deltas that produced them, and those must not be
+  /// applied a second time.
+  final Set<String> _completedHistoryMessageIds = {};
+
+  /// `createdAt` of the newest history message whose text is already complete
+  /// on screen. Everything stamped at or before it belongs to a turn history
+  /// fully covers, so its replayed `tool.call.*` events are finished business —
+  /// see [_applyToolCall]. Null when history carried no completed message (a
+  /// fresh session), which suppresses nothing.
+  DateTime? _historyWatermark;
   StreamSubscription<TuringEvent>? _subscription;
   String _modelProvider = 'ollama';
-  int? _lastSequence;
+  bool _streamEnded = false;
 
   @override
   void initState() {
     super.initState();
-    _loadInitialMessages();
+    unawaited(_start());
+  }
+
+  /// History is seeded BEFORE the subscription opens, never concurrently with
+  /// it. `SubscribeSessionEvents` replays the session's persisted events from
+  /// the requested sequence and only then goes live, so every `message.delta`
+  /// of every earlier turn is re-delivered. Applying those while `listMessages`
+  /// is still in flight would render a second copy of the conversation with no
+  /// way to tell which bubbles history already covers.
+  Future<void> _start() async {
+    await _loadInitialMessages();
+    if (!mounted) return;
+    // `lastSequence` is deliberately left unset: `Message.sequence` is a
+    // separate per-message counter, NOT the event sequence this parameter
+    // takes, and `TuringApi.listEvents` drops the `latestSequence` the server
+    // reports — so a full replay is the only request the client can make
+    // honestly. Duplicate history is filtered by messageId instead, which also
+    // survives the server's 500-event replay cap.
     _subscription = widget.eventSource
-        .connect(sessionId: widget.sessionId, lastSequence: _lastSequence)
+        .connect(sessionId: widget.sessionId)
         .listen(
           _applyEvent,
           onError: _handleStreamEnded,
@@ -50,11 +79,19 @@ class _ChatScreenState extends State<ChatScreen> {
         );
   }
 
+  static const _streamEndedNotice =
+      'Connection to the session lost. Reopen the session to continue.';
+
   /// The event stream is the only source of terminal `tool.call.*` events, so
   /// once it errors (gRPC disconnect, deadline, auth failure) or closes, any
   /// card still in [ToolCallStatus.running] can never resolve. Left alone it
   /// would spin forever and tell the user a tool is still executing. Resolve
   /// those cards instead; already-terminal cards are untouched.
+  ///
+  /// Resolving cards is not enough on its own: usually no tool call is in
+  /// flight when the stream drops, and [TuringEventSource] never reconnects, so
+  /// the screen would go permanently silent with no user-visible signal. Raise
+  /// a persistent notice too.
   void _handleStreamEnded([Object? error, StackTrace? stackTrace]) {
     if (!mounted) return;
     for (final entry in _toolEntries.values) {
@@ -67,6 +104,7 @@ class _ChatScreenState extends State<ChatScreen> {
         serverName: current.serverName,
       );
     }
+    setState(() => _streamEnded = true);
   }
 
   /// Payloads arrive as a `Map<String, dynamic>` decoded from a proto Struct,
@@ -85,20 +123,40 @@ class _ChatScreenState extends State<ChatScreen> {
       sessionId: widget.sessionId,
     );
     if (!mounted || messages.isEmpty) return;
-    // Seed history non-destructively: prepend it above any live entries (tool
-    // cards, streaming bubbles) that the event stream may have already created
-    // while `listMessages` was in flight. A destructive clear+addAll here would
-    // wipe those live entries from the UI, leak their notifiers, and orphan the
+    final entries = <_MessageEntry>[];
+    DateTime? watermark;
+    for (final message in messages) {
+      final entry = _MessageEntry.fromMessage(message);
+      entries.add(entry);
+      if (!entry.isUser && message.content.isEmpty) {
+        // An assistant row with no content is a turn that is still streaming:
+        // the row is inserted empty when the job is created. Adopt it as the
+        // live bubble so replayed and live deltas land IN it rather than
+        // opening a duplicate bubble underneath.
+        _assistantEntries[message.messageId] = entry;
+      } else {
+        _completedHistoryMessageIds.add(message.messageId);
+        // `listMessages` is ordered by the server, but a max is cheap and does
+        // not depend on that.
+        if (watermark == null || message.createdAt.isAfter(watermark)) {
+          watermark = message.createdAt;
+        }
+      }
+    }
+    _historyWatermark = watermark;
+    // Seed history non-destructively: prepend it above any live entries. A
+    // destructive clear+addAll here would leak their notifiers and orphan the
     // correlation maps (`_toolEntries` / `_assistantEntries`) so later terminal
     // events would mutate cards no widget listens to.
-    setState(() {
-      _messages.insertAll(0, messages.map(_MessageEntry.fromMessage));
-    });
+    setState(() => _messages.insertAll(0, entries));
     _scrollToBottom();
   }
 
   void _applyEvent(TuringEvent event) {
-    _lastSequence = event.sequence;
+    // Events are arriving, so any earlier drop notice is stale: an error does
+    // not cancel the subscription (`cancelOnError` defaults to false), and the
+    // stream can keep delivering after one.
+    if (_streamEnded) setState(() => _streamEnded = false);
     switch (event.type) {
       case 'message.delta':
         _applyMessageDelta(event);
@@ -127,7 +185,36 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// `GrpcMappers` maps an unset proto timestamp to the Unix epoch, so an event
+  /// stamped at (or before) it carries no usable time. The history filter fails
+  /// OPEN on those: rendering a possibly stale card is a far smaller harm than
+  /// silently hiding every live tool call because the server dropped a field.
+  static final _unknownEventTime = DateTime.fromMillisecondsSinceEpoch(
+    0,
+    isUtc: true,
+  );
+
   void _applyToolCall(TuringEvent event, ToolCallStatus status) {
+    // The subscription replays the whole persisted log (see [_start]), so every
+    // tool call of every earlier turn is re-delivered. Deltas are de-duplicated
+    // by messageId; tool events have no equivalent identity in history, so they
+    // are filtered by time instead. A tool call from a turn whose text is
+    // already complete on screen is finished business: recreating its card
+    // would append it BELOW every later message (history is prepended, cards
+    // are appended) and — because the create path seals live bubbles via
+    // `_assistantEntries.clear()` — would orphan an adopted, still-streaming
+    // assistant row into an empty pill with a duplicate bubble under it.
+    //
+    // Consequence, accepted deliberately: tool cards are not reconstructed for
+    // turns that are already fully in history. There is no ordering key that
+    // could place them correctly anyway — `Message` carries no event sequence
+    // to interleave against — so the past renders as text only.
+    final watermark = _historyWatermark;
+    if (watermark != null &&
+        event.createdAt.isAfter(_unknownEventTime) &&
+        !event.createdAt.isAfter(watermark)) {
+      return;
+    }
     final toolCallId = _asString(event.payload['toolCallId']);
     if (toolCallId == null || toolCallId.isEmpty) return;
     // The frozen proto contract carries `toolName` as a non-nullable scalar, so
@@ -206,6 +293,9 @@ class _ChatScreenState extends State<ChatScreen> {
   void _applyMessageDelta(TuringEvent event) {
     final messageId =
         _asString(event.payload['messageId']) ?? 'active_assistant';
+    // The replayed deltas that produced an already-complete history message
+    // would otherwise render its text a second time below the history block.
+    if (_completedHistoryMessageIds.contains(messageId)) return;
     final delta = _asString(event.payload['delta']) ?? '';
     var entry = _assistantEntries[messageId];
     if (entry == null) {
@@ -296,6 +386,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ),
+          if (_streamEnded) _StreamEndedNotice(message: _streamEndedNotice),
           for (final approval in _approvals)
             ApprovalCard(
               toolName: approval.toolName,
@@ -402,6 +493,44 @@ class _ChatMessageTile extends StatelessWidget {
           ),
         );
     }
+  }
+}
+
+/// Persistent, screen-reader-announced banner for a session whose event stream
+/// is gone. Presentational only: the parent owns when it is shown.
+class _StreamEndedNotice extends StatelessWidget {
+  const _StreamEndedNotice({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      child: Container(
+        width: double.infinity,
+        color: colorScheme.errorContainer,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            Icon(
+              Icons.cloud_off,
+              size: 18,
+              color: colorScheme.onErrorContainer,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                message,
+                style: TextStyle(color: colorScheme.onErrorContainer),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
