@@ -74,7 +74,47 @@ class _ChatScreenState extends State<ChatScreen> {
       case 'approval.consumed':
         _clearApproval(event);
         break;
+      case 'tool.call.started':
+        _applyToolCall(event, ToolCallStatus.running);
+        break;
+      case 'tool.call.completed':
+        _applyToolCall(event, ToolCallStatus.completed);
+        break;
+      case 'tool.call.failed':
+        _applyToolCall(event, ToolCallStatus.failed);
+        break;
+      case 'tool.call.denied':
+        _applyToolCall(event, ToolCallStatus.denied);
+        break;
     }
+  }
+
+  void _applyToolCall(TuringEvent event, ToolCallStatus status) {
+    final toolCallId = event.payload['toolCallId'] as String?;
+    if (toolCallId == null) return;
+    final toolName = event.payload['toolName'] as String? ?? 'tool';
+    final error = event.payload['error'] as String?;
+
+    var entry = _toolEntries[toolCallId];
+    if (entry == null) {
+      // Create on 'started', or defensively on a terminal event that arrives
+      // without a prior start (e.g. an event-replay gap).
+      entry = _ToolCallEntry(
+        toolCallId: toolCallId,
+        toolName: toolName,
+        serverName: event.payload['serverName'] as String?,
+        status: status,
+        error: error,
+      );
+      _toolEntries[toolCallId] = entry;
+      setState(() => _messages.add(entry!));
+      _scrollToBottom();
+      return;
+    }
+    // Update the existing card in place; the ValueNotifier drives the rebuild.
+    if (error != null) entry.error = error;
+    entry.status.value = status;
+    _scrollToBottom();
   }
 
   void _applyMessageDelta(TuringEvent event) {

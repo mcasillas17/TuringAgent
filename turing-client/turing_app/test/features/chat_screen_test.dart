@@ -127,6 +127,168 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());
   });
+
+  testWidgets('tool.call.started renders a running tool card', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 1,
+        payload: {
+          'toolCallId': 'call_1',
+          'toolName': 'system.time',
+          'serverName': 'system',
+        },
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('system.time'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('tool.call.completed updates the same card in place', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 1,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'tool.call.completed',
+        sequence: 2,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    // Still exactly one card — updated in place, not duplicated.
+    expect(find.text('system.time'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('tool.call.failed shows the error even without a prior start', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.failed',
+        sequence: 1,
+        payload: {
+          'toolCallId': 'call_9',
+          'toolName': 'files.create',
+          'error': 'mcp_call_failed',
+        },
+      ),
+    );
+    await tester.pump();
+
+    expect(find.textContaining('mcp_call_failed'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('tool cards render chronologically between message bubbles', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: {'messageId': 'msg_a', 'delta': 'before'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 2,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 3,
+        payload: {'messageId': 'msg_b', 'delta': 'after'},
+      ),
+    );
+    await tester.pump();
+
+    final firstBubbleY = tester.getTopLeft(find.text('before')).dy;
+    final toolCardY = tester.getTopLeft(find.text('system.time')).dy;
+    final secondBubbleY = tester.getTopLeft(find.text('after')).dy;
+    expect(firstBubbleY, lessThan(toolCardY));
+    expect(toolCardY, lessThan(secondBubbleY));
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
 }
 
 TuringEvent _event({
