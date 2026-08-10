@@ -1164,9 +1164,11 @@ func TestExecuteReturnsRunnerReportingFailureWithoutModelRecovery(t *testing.T) 
 func TestExecuteStopsAfterPostedBeforeBeaconDecisionFailure(t *testing.T) {
 	waitErr := agentBeaconPostedTestError{err: context.DeadlineExceeded}
 	var beacons []*turingv1.ToolCallBeacon
+	ctx, cancel := context.WithCancel(context.Background())
 	runner := &tools.Runner{PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 		beacons = append(beacons, beacon)
 		if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+			cancel()
 			return nil, waitErr
 		}
 		return allowToolCall(context.Background(), beacon)
@@ -1185,7 +1187,7 @@ func TestExecuteStopsAfterPostedBeforeBeaconDecisionFailure(t *testing.T) {
 	)
 	var updates []*turingv1.RuntimeUpdate
 
-	err := assistant.Execute(context.Background(), testJob(), func(update *turingv1.RuntimeUpdate) error {
+	err := assistant.Execute(ctx, testJob(), func(update *turingv1.RuntimeUpdate) error {
 		updates = append(updates, update)
 		return nil
 	})
@@ -1286,15 +1288,6 @@ func TestExecuteSurfacesRecoverableToolErrorsToModel(t *testing.T) {
 				}, nil
 			}},
 			wantError: "tool denied: blocked",
-		},
-		{
-			name:        "runner error",
-			definitions: []map[string]any{{"name": "system.requested"}},
-			runner: &tools.Runner{PostBeacon: func(_ context.Context, _ *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
-				return nil, errors.New("policy unavailable")
-			}},
-			wantError: "policy unavailable",
-			wantOwned: true,
 		},
 	}
 	for _, test := range tests {

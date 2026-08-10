@@ -59,13 +59,7 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 	started := time.Now()
 	decision, err := r.postWithTimeout(ctx, input.Timeout, beacon(input, toolCallID, turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, turingv1.ToolCallStatus_TOOL_CALL_STATUS_UNSPECIFIED, "", nil, 0))
 	if err != nil {
-		if beaconWasPosted(err) {
-			if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "tool_policy_decision_failed", Message: err.Error()}, started); reportErr != nil {
-				return RunOutcome{}, ReportingFailureError{operationErr: err, reportErr: reportErr}
-			}
-			return RunOutcome{}, markBeaconPosted(err)
-		}
-		return RunOutcome{}, err
+		return RunOutcome{}, beaconReportingError{err: err}
 	}
 	approvalToken := ""
 	sideEffecting := false
@@ -214,6 +208,15 @@ func (e ReportingFailureError) Error() string {
 func (e ReportingFailureError) Unwrap() []error       { return []error{e.operationErr, e.reportErr} }
 func (e ReportingFailureError) BeaconPosted() bool    { return true }
 func (e ReportingFailureError) ReportingFailed() bool { return true }
+
+type beaconReportingError struct {
+	err error
+}
+
+func (e beaconReportingError) Error() string         { return e.err.Error() }
+func (e beaconReportingError) Unwrap() error         { return e.err }
+func (e beaconReportingError) BeaconPosted() bool    { return beaconWasPosted(e.err) }
+func (e beaconReportingError) ReportingFailed() bool { return true }
 
 type uncertainSideEffect interface {
 	SideEffectUncertain() bool

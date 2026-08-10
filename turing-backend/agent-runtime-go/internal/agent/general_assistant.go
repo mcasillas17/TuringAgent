@@ -334,7 +334,7 @@ func (a *GeneralAssistant) executeToolCall(
 		Timeout:    a.toolTimeout(),
 	})
 	outcome := toolCallOutcome{SuccessfulSideEffect: runOutcome.SideEffecting}
-	if ctxErr := ctx.Err(); ctxErr != nil {
+	if ctxErr := ctx.Err(); ctxErr != nil && !tools.ReportingFailed(err) {
 		return toolCallOutcome{}, ctxErr
 	}
 	if err != nil {
