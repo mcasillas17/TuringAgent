@@ -38,32 +38,37 @@ func TestNewToolCallIDIsUniqueAcrossConcurrentSamples(t *testing.T) {
 	}
 }
 
-func TestRunUsesSuppliedToolCallIDForAllBeacons(t *testing.T) {
-	var beacons []*turingv1.ToolCallBeacon
+func TestRunGeneratesFreshBeaconIDForEveryExecutionAttempt(t *testing.T) {
+	var attemptIDs []string
 	runner := &Runner{PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
-		beacons = append(beacons, beacon)
+		if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+			attemptIDs = append(attemptIDs, beacon.GetToolCallId())
+		}
 		return &turingv1.ToolPolicyDecision{
 			Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
 			ToolCallId: beacon.GetToolCallId(),
 		}, nil
 	}}
 
-	_, err := runner.Run(context.Background(), RunInput{
-		ToolCallID: "provider_call_1",
-		ToolName:   "system.echo",
-		MCPClient:  fakeMCPClient{},
-	})
+	input := RunInput{
+		ToolName:  "system.echo",
+		MCPClient: fakeMCPClient{},
+	}
+	if _, err := runner.Run(context.Background(), input); err != nil {
+		t.Fatalf("first Run error: %v", err)
+	}
+	if _, err := runner.Run(context.Background(), input); err != nil {
+		t.Fatalf("second Run error: %v", err)
+	}
 
-	if err != nil {
-		t.Fatalf("Run error: %v", err)
+	if len(attemptIDs) != 2 {
+		t.Fatalf("attempt IDs = %v, want two", attemptIDs)
 	}
-	if len(beacons) != 2 {
-		t.Fatalf("beacons = %d, want before and after", len(beacons))
+	if attemptIDs[0] == "" || attemptIDs[1] == "" {
+		t.Fatalf("attempt IDs = %v, want generated beacon IDs", attemptIDs)
 	}
-	for _, beacon := range beacons {
-		if beacon.GetToolCallId() != "provider_call_1" {
-			t.Fatalf("tool_call_id = %q, want provider_call_1", beacon.GetToolCallId())
-		}
+	if attemptIDs[0] == attemptIDs[1] {
+		t.Fatalf("retry reused beacon ID %q", attemptIDs[0])
 	}
 }
 
@@ -140,7 +145,6 @@ func TestRunDoesNotPostAfterWhenBeforeDecisionWaitFailsAfterBeaconSent(t *testin
 			if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
 				return nil, waitErr
 			}
-
 			return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: beacon.GetToolCallId()}, nil
 		},
 	}
@@ -165,6 +169,99 @@ func TestRunDoesNotPostAfterWhenBeforeDecisionWaitFailsAfterBeaconSent(t *testin
 	}
 	if mcpCalls != 0 {
 		t.Fatalf("MCP calls = %d, want 0", mcpCalls)
+	}
+}
+
+func TestRunRejectsMissingOrMismatchedBeforeDecisionID(t *testing.T) {
+	tests := []struct {
+		name     string
+		decision func(*turingv1.ToolCallBeacon) *turingv1.ToolPolicyDecision
+	}{
+		{name: "nil decision", decision: func(*turingv1.ToolCallBeacon) *turingv1.ToolPolicyDecision { return nil }},
+		{name: "empty ID", decision: func(*turingv1.ToolCallBeacon) *turingv1.ToolPolicyDecision {
+			return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW}
+		}},
+		{name: "mismatched ID", decision: func(*turingv1.ToolCallBeacon) *turingv1.ToolPolicyDecision {
+			return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: "call_other"}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var beacons []*turingv1.ToolCallBeacon
+			mcpCalls := 0
+			runner := &Runner{PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+				beacons = append(beacons, beacon)
+				return test.decision(beacon), nil
+			}}
+
+			_, err := runner.Run(context.Background(), RunInput{
+				ToolName: "system.echo",
+				MCPClient: mcpClientFunc(func(context.Context, string, map[string]any, ...string) (map[string]any, error) {
+					mcpCalls++
+					return map[string]any{"ok": true}, nil
+				}),
+			})
+
+			if err == nil || !strings.Contains(err.Error(), "tool policy decision") || !ReportingFailed(err) || !BeaconWasPosted(err) {
+				t.Fatalf("Run error = %T %v, want posted decision correlation reporting failure", err, err)
+			}
+			if mcpCalls != 0 {
+				t.Fatalf("MCP calls = %d, want 0", mcpCalls)
+			}
+			if len(beacons) != 1 || beacons[0].GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+				t.Fatalf("beacons = %+v, want only BEFORE", beacons)
+			}
+		})
+	}
+}
+
+func TestRunClassifiesMismatchedAfterDecisionID(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		before        turingv1.ToolPolicyDecision_Decision
+		wantCommitted bool
+	}{
+		{name: "safe tool reporting failure", before: turingv1.ToolPolicyDecision_DECISION_ALLOW},
+		{name: "side effect committed", before: turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED, wantCommitted: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mcpCalls := 0
+			runner := &Runner{
+				PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+					id := beacon.GetToolCallId()
+					if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
+						id = "call_other"
+					}
+					return &turingv1.ToolPolicyDecision{
+						Decision:   test.before,
+						ApprovalId: "approval_1",
+						ToolCallId: id,
+					}, nil
+				},
+				WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+			}
+
+			_, err := runner.Run(context.Background(), RunInput{
+				ToolName: "system.echo",
+				MCPClient: mcpClientFunc(func(context.Context, string, map[string]any, ...string) (map[string]any, error) {
+					mcpCalls++
+					return map[string]any{"ok": true}, nil
+				}),
+			})
+
+			if err == nil || !strings.Contains(err.Error(), "tool policy decision") || !BeaconWasPosted(err) {
+				t.Fatalf("Run error = %T %v, want decision correlation error", err, err)
+			}
+			if got := SideEffectWasCommitted(err); got != test.wantCommitted {
+				t.Fatalf("SideEffectWasCommitted(%v) = %t, want %t", err, got, test.wantCommitted)
+			}
+			if got := ReportingFailed(err); got == test.wantCommitted {
+				t.Fatalf("ReportingFailed(%v) = %t, want %t", err, got, !test.wantCommitted)
+			}
+			if mcpCalls != 1 {
+				t.Fatalf("MCP calls = %d, want 1 completed call", mcpCalls)
+			}
+		})
 	}
 }
 
@@ -372,7 +469,12 @@ func TestRunReturnsReportingFailureWhenFailedAfterCannotBePosted(t *testing.T) {
 					if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
 						return nil, reportErr
 					}
-					return test.decision, nil
+					return &turingv1.ToolPolicyDecision{
+						Decision:   test.decision.GetDecision(),
+						Reason:     test.decision.GetReason(),
+						ApprovalId: test.decision.GetApprovalId(),
+						ToolCallId: beacon.GetToolCallId(),
+					}, nil
 				},
 				WaitApproval: test.wait,
 			}

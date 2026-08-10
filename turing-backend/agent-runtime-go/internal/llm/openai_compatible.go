@@ -226,7 +226,7 @@ type openAIChatRequest struct {
 
 type openAIMessage struct {
 	Role       string                  `json:"role"`
-	Content    string                  `json:"content"`
+	Content    *string                 `json:"content"`
 	Name       string                  `json:"name,omitempty"`
 	ToolCallID string                  `json:"tool_call_id,omitempty"`
 	ToolCalls  []openAIMessageToolCall `json:"tool_calls,omitempty"`
@@ -246,15 +246,19 @@ type openAIMessageFunctionCall struct {
 func openAIMessages(messages []ChatMessage, aliases map[string]string) ([]openAIMessage, error) {
 	converted := make([]openAIMessage, 0, len(messages))
 	for _, message := range messages {
+		content := message.Content
 		result := openAIMessage{
 			Role:    message.Role,
-			Content: message.Content,
+			Content: &content,
 			Name:    message.Name,
 		}
 		if message.Role == "tool" {
 			result.Name = ""
 			result.ToolCallID = message.ToolCallID
 		} else if message.Role == "assistant" {
+			if message.Content == "" && len(message.ToolCalls) > 0 {
+				result.Content = nil
+			}
 			for _, call := range message.ToolCalls {
 				callArguments := call.Arguments
 				if callArguments == nil {
@@ -503,6 +507,9 @@ func parseOpenAIData(data []byte, state *openAIStreamState) ([]StreamEvent, bool
 	}
 	if err := json.Unmarshal(envelope.Choices, &choices); err != nil {
 		return nil, false, fmt.Errorf("malformed choices: %w", err)
+	}
+	if len(choices) == 0 && choices != nil {
+		return nil, false, nil
 	}
 	if len(choices) != 1 {
 		return nil, false, fmt.Errorf("chunk must contain exactly one choice, got %d", len(choices))

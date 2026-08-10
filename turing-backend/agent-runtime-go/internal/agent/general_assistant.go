@@ -37,7 +37,9 @@ type GeneralAssistantTools struct {
 const (
 	maxToolIterations         = 5
 	defaultMaxToolCallsPerRun = 10
+	maxToolResultBytes        = 4 * 1024 * 1024
 	toolIterationFallback     = "Tool iteration limit reached before a final response."
+	emptyFinalFallback        = "The model returned an empty response."
 )
 
 var errRunTerminalized = errors.New("run already terminalized")
@@ -119,6 +121,8 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	content := ""
 	toolCallCount := 0
 	successfulToolSideEffect := false
+	usedModelToolCallIDs := make(map[string]struct{})
+	toolResultBytes := 0
 	for toolIteration := 0; ; {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -194,6 +198,15 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			return emitRunFailed(emit, job, "model_timeout", modelErr.Error(), !successfulToolSideEffect)
 		}
 		if len(calls) == 0 {
+			if strings.TrimSpace(content) == "" {
+				if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA, map[string]any{
+					"messageId": job.GetAssistantMessageId(),
+					"delta":     emptyFinalFallback,
+				})); err != nil {
+					return err
+				}
+				content = emptyFinalFallback
+			}
 			return completeRun(emit, job, content)
 		}
 		if toolCallCount+len(calls) > a.maxToolCallsPerRun {
@@ -206,20 +219,33 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			)
 		}
 		toolCallCount += len(calls)
-		normalizeToolCallIDs(calls, job.GetRunId(), toolIteration)
+		normalizeToolCallIDs(calls, job.GetRunId(), toolIteration, usedModelToolCallIDs)
 		requestMessages = append(requestMessages, llm.ChatMessage{
 			Role:      "assistant",
 			Content:   turnText,
 			ToolCalls: calls,
 		})
 		for _, call := range calls {
-			outcome, err := a.executeToolCall(ctx, job, emit, registry, call, &requestMessages)
+			outcome, err := a.executeToolCall(ctx, job, emit, registry, call)
 			successfulToolSideEffect = successfulToolSideEffect || outcome.SuccessfulSideEffect
 			if err != nil {
 				if errors.Is(err, errRunTerminalized) {
 					return nil
 				}
 				return err
+			}
+			if outcome.ResultMessage != nil {
+				if outcome.AppendedBytes > maxToolResultBytes-toolResultBytes {
+					return emitRunFailed(
+						emit,
+						job,
+						"tool_result_limit_exceeded",
+						fmt.Sprintf("serialized tool results exceed %d bytes", maxToolResultBytes),
+						false,
+					)
+				}
+				requestMessages = append(requestMessages, *outcome.ResultMessage)
+				toolResultBytes += outcome.AppendedBytes
 			}
 		}
 		toolIteration++
@@ -309,7 +335,6 @@ func (a *GeneralAssistant) executeToolCall(
 	emit func(*turingv1.RuntimeUpdate) error,
 	registry *ToolRegistry,
 	call llm.ToolCall,
-	messages *[]llm.ChatMessage,
 ) (toolCallOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return toolCallOutcome{}, err
@@ -319,19 +344,18 @@ func (a *GeneralAssistant) executeToolCall(
 		if err := emitAssistantToolCallFailed(emit, job, call, "unknown_tool"); err != nil {
 			return toolCallOutcome{}, err
 		}
-		return toolCallOutcome{}, appendToolError(messages, call, "unknown_tool")
+		return toolErrorOutcome(call, "unknown_tool")
 	}
 	if a.tools == nil || a.tools.Runner == nil {
 		if err := emitAssistantToolCallFailed(emit, job, call, "tool_runner_unavailable"); err != nil {
 			return toolCallOutcome{}, err
 		}
-		return toolCallOutcome{}, appendToolError(messages, call, "tool_runner_unavailable")
+		return toolErrorOutcome(call, "tool_runner_unavailable")
 	}
 	runOutcome, err := a.tools.Runner.RunWithOutcome(ctx, tools.RunInput{
 		AgentID:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
 		RunID:      job.GetRunId(),
 		TraceID:    job.GetTraceId(),
-		ToolCallID: call.ID,
 		ServerName: entry.ServerName,
 		ToolName:   call.Name,
 		Args:       call.Arguments,
@@ -355,18 +379,22 @@ func (a *GeneralAssistant) executeToolCall(
 				return toolCallOutcome{}, emitErr
 			}
 		}
-		return toolCallOutcome{}, appendToolError(messages, call, err.Error())
+		return toolErrorOutcome(call, err.Error())
 	}
 	data, err := json.Marshal(runOutcome.Result)
 	if err != nil {
 		return outcome, ToolResultReportingError{ToolCallID: call.ID, err: err}
 	}
-	*messages = append(*messages, toolResultMessage(call, data))
+	message := toolResultMessage(call, data)
+	outcome.ResultMessage = &message
+	outcome.AppendedBytes = len(data)
 	return outcome, nil
 }
 
 type toolCallOutcome struct {
 	SuccessfulSideEffect bool
+	ResultMessage        *llm.ChatMessage
+	AppendedBytes        int
 }
 
 type ToolResultReportingError struct {
@@ -401,21 +429,75 @@ func toolResultMessage(call llm.ToolCall, content []byte) llm.ChatMessage {
 	return llm.ChatMessage{Role: "tool", Name: call.Name, ToolCallID: call.ID, Content: string(content)}
 }
 
-func appendToolError(messages *[]llm.ChatMessage, call llm.ToolCall, message string) error {
+func toolErrorOutcome(call llm.ToolCall, message string) (toolCallOutcome, error) {
 	data, err := json.Marshal(map[string]string{"error": message})
 	if err != nil {
-		return err
+		return toolCallOutcome{}, err
 	}
-	*messages = append(*messages, toolResultMessage(call, data))
-	return nil
+	result := toolResultMessage(call, data)
+	return toolCallOutcome{ResultMessage: &result, AppendedBytes: len(data)}, nil
 }
 
-func normalizeToolCallIDs(calls []llm.ToolCall, runID string, toolRound int) {
-	for index := range calls {
-		input := fmt.Sprintf("%d:%s:%d:%d", len(runID), runID, toolRound, index)
-		sum := sha256.Sum256([]byte(input))
-		calls[index].ID = "call_" + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:])
+func normalizeToolCallIDs(calls []llm.ToolCall, runID string, toolRound int, used map[string]struct{}) {
+	counts := make(map[string]int, len(calls))
+	for _, call := range calls {
+		if validProviderToolCallID(call.ID) {
+			counts[call.ID]++
+		}
 	}
+	for id, count := range counts {
+		if count > 1 {
+			used[id] = struct{}{}
+		}
+	}
+	for index := range calls {
+		providerID := calls[index].ID
+		_, alreadyUsed := used[providerID]
+		if validProviderToolCallID(providerID) && counts[providerID] == 1 && !alreadyUsed {
+			used[providerID] = struct{}{}
+			continue
+		}
+		arguments, err := json.Marshal(calls[index].Arguments)
+		if err != nil {
+			arguments = []byte(fmt.Sprintf("%#v", calls[index].Arguments))
+		}
+		for collision := 0; ; collision++ {
+			input := fmt.Sprintf(
+				"%d:%s:%d:%d:%d:%s:%d:%s:%d",
+				len(runID), runID,
+				toolRound,
+				index,
+				len(calls[index].Name), calls[index].Name,
+				len(arguments), arguments,
+				collision,
+			)
+			sum := sha256.Sum256([]byte(input))
+			id := "call_" + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:])
+			if _, duplicate := used[id]; duplicate {
+				continue
+			}
+			calls[index].ID = id
+			used[id] = struct{}{}
+			break
+		}
+	}
+}
+
+func validProviderToolCallID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for index := range len(id) {
+		character := id[index]
+		if character >= 'a' && character <= 'z' ||
+			character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' ||
+			character == '_' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func completeRun(emit func(*turingv1.RuntimeUpdate) error, job *turingv1.AgentJob, content string) error {
@@ -429,7 +511,7 @@ func (a *GeneralAssistant) tryDebugTool(ctx context.Context, job *turingv1.Agent
 	if a.tools == nil || a.tools.Runner == nil {
 		return false, nil
 	}
-	var client tools.MCPClient
+	var client ToolLister
 	serverName := ""
 	toolName := ""
 	args := map[string]any{}
@@ -446,7 +528,7 @@ func (a *GeneralAssistant) tryDebugTool(ctx context.Context, job *turingv1.Agent
 	default:
 		return false, nil
 	}
-	if client == nil {
+	if isNilToolLister(client) {
 		return true, emitRunFailed(emit, job, "tool_call_failed", "MCP client is not configured", false)
 	}
 	result, err := a.tools.Runner.Run(ctx, tools.RunInput{AgentID: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, RunID: job.GetRunId(), TraceID: job.GetTraceId(), ServerName: serverName, ToolName: toolName, Args: args, MCPClient: client, Timeout: a.toolTimeout()})

@@ -399,7 +399,6 @@ func TestOpenAIValidatesSingleChoiceEnvelope(t *testing.T) {
 	}{
 		{name: "missing choices", data: `{}`, wantMessage: "exactly one choice"},
 		{name: "null choices", data: `{"choices":null}`, wantMessage: "exactly one choice"},
-		{name: "empty choices", data: `{"choices":[]}`, wantMessage: "exactly one choice"},
 		{
 			name:        "multiple choices",
 			data:        `{"choices":[{"index":0,"delta":{}},{"index":1,"delta":{}}]}`,
@@ -420,6 +419,21 @@ func TestOpenAIValidatesSingleChoiceEnvelope(t *testing.T) {
 				t.Fatalf("events = %+v, want model_bad_chunk containing %q", got, tt.wantMessage)
 			}
 		})
+	}
+}
+
+func TestOpenAIIgnoresEmptyChoiceUsageAndKeepaliveChunks(t *testing.T) {
+	got := streamOpenAIEvents(t,
+		"data: "+`{"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":0}}`+"\n\n"+
+			"data: "+`{"choices":[]}`+"\n\n"+
+			"data: "+`{"choices":[{"index":0,"delta":{"content":"done"}}]}`+"\n\n"+
+			"data: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`+"\n\n"+
+			"data: [DONE]\n\n",
+	)
+
+	assertOpenAIEventTypes(t, got, "delta", "completed")
+	if got[0].Text != "done" || got[1].FinishReason != "stop" {
+		t.Fatalf("events = %+v, want normal completion after ignored chunks", got)
 	}
 }
 
@@ -725,14 +739,19 @@ func TestOpenAIRequestSerializesAssistantToolCalls(t *testing.T) {
 	}
 	collectEvents(events)
 
+	body := <-requestBody
+	const wantJSON = `{"model":"gpt-4o-mini","messages":[{"role":"assistant","content":null,"name":"planner","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}}]}],"stream":true}`
+	if string(body) != wantJSON {
+		t.Fatalf("request JSON = %s, want %s", body, wantJSON)
+	}
 	var got map[string]any
-	if err := json.Unmarshal(<-requestBody, &got); err != nil {
+	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatal(err)
 	}
 	message := requireSingleObject(t, got["messages"], "messages")
 	want := map[string]any{
 		"role":    "assistant",
-		"content": "",
+		"content": nil,
 		"name":    "planner",
 		"tool_calls": []any{map[string]any{
 			"id":   "call_1",

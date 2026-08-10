@@ -117,6 +117,53 @@ func TestPostToolBeaconMarksErrorAfterBeaconSent(t *testing.T) {
 	}
 }
 
+func TestDelayedDecisionFromCancelledAttemptCannotSatisfyRetry(t *testing.T) {
+	stream := newFakeStream()
+	worker := New(Options{WorkerID: "worker-1", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := worker.postToolBeacon(firstCtx, stream, &turingv1.ToolCallBeacon{ToolCallId: "call_first"})
+		firstDone <- err
+	}()
+	_ = nextSent(t, stream)
+	cancelFirst()
+	if err := <-firstDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled attempt error = %v, want context.Canceled", err)
+	}
+
+	retryDone := make(chan *turingv1.ToolPolicyDecision, 1)
+	go func() {
+		decision, _ := worker.postToolBeacon(context.Background(), stream, &turingv1.ToolCallBeacon{ToolCallId: "call_retry"})
+		retryDone <- decision
+	}()
+	_ = nextSent(t, stream)
+
+	worker.deliverDecision(&turingv1.ToolPolicyDecision{
+		Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
+		ToolCallId: "call_first",
+	})
+	select {
+	case decision := <-retryDone:
+		t.Fatalf("delayed cancelled-attempt decision satisfied retry: %+v", decision)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	worker.deliverDecision(&turingv1.ToolPolicyDecision{
+		Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
+		ToolCallId: "call_retry",
+	})
+	select {
+	case decision := <-retryDone:
+		if decision.GetToolCallId() != "call_retry" {
+			t.Fatalf("retry decision = %+v", decision)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("matching retry decision was not delivered")
+	}
+}
+
 type providerExecutor struct{ provider llm.Provider }
 
 func (e providerExecutor) Execute(ctx context.Context, job *turingv1.AgentJob, emit func(*turingv1.RuntimeUpdate) error) error {

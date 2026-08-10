@@ -239,6 +239,12 @@ func decodeLimitedObject(reader io.Reader, maxBytes int64) (map[string]any, erro
 	if err != nil {
 		return nil, nonRetryableError(err)
 	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			err = errors.New("MCP response contains multiple JSON values")
+		}
+		return nil, nonRetryableError(fmt.Errorf("MCP response contains trailing data: %w", err))
+	}
 	return obj, nil
 }
 

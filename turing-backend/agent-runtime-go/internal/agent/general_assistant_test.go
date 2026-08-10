@@ -67,6 +67,157 @@ func TestExecuteAddsFallbackWhenIterationCapHasNoVisibleContent(t *testing.T) {
 	}
 }
 
+func TestExecuteAddsFallbackWhenFinalModelTurnHasNoVisibleContent(t *testing.T) {
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: &completionProvider{},
+		},
+		fakeMessageClient{},
+		nil,
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	const fallback = "The model returned an empty response."
+	if got := eventTypes(updates); fmt.Sprint(got) != fmt.Sprint([]turingv1.TuringEventType{
+		turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_STARTED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_COMPLETED,
+	}) {
+		t.Fatalf("event types = %v, want started, fallback delta, completed", got)
+	}
+	if got := updates[1].GetEvent().GetPayload().AsMap()["delta"]; got != fallback {
+		t.Fatalf("fallback delta = %#v, want %q", got, fallback)
+	}
+	if completed := updates[len(updates)-1].GetRunCompleted(); completed == nil || completed.Content != fallback {
+		t.Fatalf("run completion = %+v, want fallback content", completed)
+	}
+}
+
+func TestExecuteReplacesWhitespaceOnlyFinalModelContentWithFallback(t *testing.T) {
+	provider := &queuedProvider{responses: [][]llm.StreamEvent{{
+		{Type: "delta", Text: " \n\t"},
+		{Type: "completed", FinishReason: "stop"},
+	}}}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
+		},
+		fakeMessageClient{},
+		nil,
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	if completed := updates[len(updates)-1].GetRunCompleted(); completed == nil || completed.Content != emptyFinalFallback {
+		t.Fatalf("run completion = %+v, want fallback %q", completed, emptyFinalFallback)
+	}
+	fallbackDelta := updates[len(updates)-3].GetEvent()
+	if fallbackDelta == nil || fallbackDelta.GetPayload().AsMap()["delta"] != emptyFinalFallback {
+		t.Fatalf("fallback delta = %+v, want %q", fallbackDelta, emptyFinalFallback)
+	}
+}
+func TestExecuteEnforcesAggregateSuccessfulToolResultLimit(t *testing.T) {
+	const limit = 4 * 1024 * 1024
+	for _, test := range []struct {
+		name       string
+		resultSize int
+		wantFailed bool
+	}{
+		{name: "exact boundary", resultSize: limit},
+		{name: "overflow", resultSize: limit + 1, wantFailed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := []llm.ToolCall{{ID: "provider_call", Name: "files.create"}}
+			if test.wantFailed {
+				calls = append(calls, llm.ToolCall{ID: "must_not_run", Name: "files.create"})
+			}
+			provider := &queuedProvider{responses: [][]llm.StreamEvent{
+				{{Type: "tool_call", ToolCalls: calls}},
+				{{Type: "delta", Text: "done"}},
+			}}
+			client := &assistantTestToolLister{
+				definitions: []map[string]any{{"name": "files.create"}},
+				result:      toolResultWithSerializedSize(t, test.resultSize),
+			}
+			runner := &tools.Runner{
+				PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+					return &turingv1.ToolPolicyDecision{
+						Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+						ApprovalId: "approval_1",
+						ToolCallId: beacon.GetToolCallId(),
+					}, nil
+				},
+				WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+			}
+			assistant := NewGeneralAssistant(
+				map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+				fakeMessageClient{},
+				&GeneralAssistantTools{FilesMCP: client, Runner: runner},
+			)
+
+			updates := collectUpdates(t, assistant, testJob())
+
+			if test.wantFailed {
+				failed := updates[len(updates)-1].GetRunFailed()
+				if failed == nil || failed.Code != "tool_result_limit_exceeded" || failed.Retryable {
+					t.Fatalf("terminal update = %+v, want non-retryable tool_result_limit_exceeded", updates[len(updates)-1])
+				}
+				if len(provider.requests) != 1 {
+					t.Fatalf("provider requests = %d, want no follow-up model call", len(provider.requests))
+				}
+				if len(client.calls) != 1 {
+					t.Fatalf("side-effecting MCP calls = %d, want only completed overflow call", len(client.calls))
+				}
+				return
+			}
+			if completed := updates[len(updates)-1].GetRunCompleted(); completed == nil || completed.Content != "done" {
+				t.Fatalf("terminal update = %+v, want completed boundary result", updates[len(updates)-1])
+			}
+			if got := len(provider.requests[1].Messages[2].Content); got != limit {
+				t.Fatalf("serialized tool result bytes = %d, want %d", got, limit)
+			}
+		})
+	}
+}
+
+func TestExecuteCountsAggregateErrorToolResultsAcrossCalls(t *testing.T) {
+	const limit = 4 * 1024 * 1024
+	provider := &queuedProvider{responses: [][]llm.StreamEvent{
+		{{Type: "tool_call", ToolCalls: []llm.ToolCall{
+			{ID: "first", Name: "system.first"},
+			{ID: "second", Name: "system.second"},
+		}}},
+		{{Type: "delta", Text: "must not continue"}},
+	}}
+	call := 0
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{"name": "system.first"}, {"name": "system.second"}},
+		callFunc: func(context.Context, string, map[string]any) (map[string]any, error) {
+			call++
+			size := limit / 2
+			if call == 2 {
+				size++
+			}
+			return nil, errors.New(strings.Repeat("e", size-len(`{"error":""}`)))
+		},
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{SystemMCP: client, Runner: &tools.Runner{PostBeacon: allowToolCall}},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	failed := updates[len(updates)-1].GetRunFailed()
+	if failed == nil || failed.Code != "tool_result_limit_exceeded" || failed.Retryable {
+		t.Fatalf("terminal update = %+v, want aggregate error-result limit failure", updates[len(updates)-1])
+	}
+	if len(client.calls) != 2 || len(provider.requests) != 1 {
+		t.Fatalf("calls: MCP=%d model=%d, want 2 and 1", len(client.calls), len(provider.requests))
+	}
+}
 func TestExecuteEmitsRunFailedForMissingProvider(t *testing.T) {
 	assistant := NewGeneralAssistant(nil, fakeMessageClient{}, nil)
 
@@ -529,7 +680,7 @@ func TestExecuteRunsModelChosenTool(t *testing.T) {
 	}
 	callMessage := secondMessages[1]
 	if callMessage.Role != "assistant" || len(callMessage.ToolCalls) != 1 ||
-		callMessage.ToolCalls[0].ID == "" || callMessage.ToolCalls[0].ID == "provider_call_1" {
+		callMessage.ToolCalls[0].ID != "provider_call_1" {
 		t.Fatalf("assistant tool-call message = %+v", callMessage)
 	}
 	if resultMessage := secondMessages[2]; resultMessage.Role != "tool" ||
@@ -883,13 +1034,12 @@ func TestExecuteRunsMultipleToolCallsSequentiallyAndPreservesTurnContent(t *test
 	if got := threaded[1].Content; got != "Checking. " {
 		t.Fatalf("assistant tool turn content = %q", got)
 	}
-	firstRuntimeID := threaded[1].ToolCalls[0].ID
-	secondRuntimeID := threaded[1].ToolCalls[1].ID
-	if firstRuntimeID == "" || firstRuntimeID == "call_a" ||
-		secondRuntimeID == "" || secondRuntimeID == "call_b" ||
-		firstRuntimeID == secondRuntimeID ||
-		threaded[2].Role != "tool" || threaded[2].ToolCallID != firstRuntimeID ||
-		threaded[3].Role != "tool" || threaded[3].ToolCallID != secondRuntimeID {
+	firstModelID := threaded[1].ToolCalls[0].ID
+	secondModelID := threaded[1].ToolCalls[1].ID
+	if firstModelID != "call_a" ||
+		secondModelID != "call_b" ||
+		threaded[2].Role != "tool" || threaded[2].ToolCallID != firstModelID ||
+		threaded[3].Role != "tool" || threaded[3].ToolCallID != secondModelID {
 		t.Fatalf("threaded tool results = %+v", threaded)
 	}
 	completed := updates[len(updates)-1].GetRunCompleted()
@@ -1281,10 +1431,11 @@ func TestExecuteSurfacesRecoverableToolErrorsToModel(t *testing.T) {
 		{
 			name:        "runner denied",
 			definitions: []map[string]any{{"name": "system.requested"}},
-			runner: &tools.Runner{PostBeacon: func(_ context.Context, _ *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+			runner: &tools.Runner{PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 				return &turingv1.ToolPolicyDecision{
-					Decision: turingv1.ToolPolicyDecision_DECISION_DENY,
-					Reason:   "blocked",
+					Decision:   turingv1.ToolPolicyDecision_DECISION_DENY,
+					Reason:     "blocked",
+					ToolCallId: beacon.GetToolCallId(),
 				}, nil
 			}},
 			wantError: "tool denied: blocked",
@@ -1365,9 +1516,14 @@ func TestExecutePassesJobAndRegistryMetadataToRunner(t *testing.T) {
 
 	collectUpdates(t, assistant, testJob())
 
+	modelCall := provider.requests[1].Messages[1].ToolCalls[0]
+	toolResult := provider.requests[1].Messages[2]
+	if modelCall.ID != "provider_id" || toolResult.ToolCallID != modelCall.ID {
+		t.Fatalf("model linkage = call %q result %q, want preserved provider ID", modelCall.ID, toolResult.ToolCallID)
+	}
 	if before == nil ||
 		before.ToolCallId == "" ||
-		before.ToolCallId == "provider_id" ||
+		before.ToolCallId == modelCall.ID ||
 		before.AgentId != turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT ||
 		before.RunId != "run_1" ||
 		before.TraceId != "trace_1" ||
@@ -1438,7 +1594,7 @@ func TestExecuteGeneratesUniqueToolCallIDsAcrossNewAssistantsConcurrently(t *tes
 		index := index
 		go func() {
 			provider := &queuedProvider{responses: [][]llm.StreamEvent{
-				{{Type: "tool_call", ToolCalls: []llm.ToolCall{{ID: "provider_reused", Name: "system.time"}}}},
+				{{Type: "tool_call", ToolCalls: []llm.ToolCall{{ID: "../../provider_reused", Name: "system.time"}}}},
 				{{Type: "delta", Text: "done"}},
 			}}
 			client := &assistantTestToolLister{
@@ -1467,7 +1623,7 @@ func TestExecuteGeneratesUniqueToolCallIDsAcrossNewAssistantsConcurrently(t *tes
 		if got.err != nil {
 			t.Fatalf("Execute returned error: %v", got.err)
 		}
-		if got.id == "" || got.id == "provider_reused" {
+		if got.id == "" || got.id == "../../provider_reused" {
 			t.Fatalf("normalized ID = %q, want fresh runtime ID", got.id)
 		}
 		if _, exists := seen[got.id]; exists {
@@ -1559,7 +1715,7 @@ func TestExecuteGeneratesUniqueIDsForEmptyProviderToolCallIDs(t *testing.T) {
 	}
 }
 
-func TestExecuteRewritesEveryProviderToolCallID(t *testing.T) {
+func TestExecutePreservesValidUniqueProviderToolCallID(t *testing.T) {
 	provider := &queuedProvider{responses: [][]llm.StreamEvent{
 		{{Type: "tool_call", ToolCalls: []llm.ToolCall{
 			{ID: "runtime_call_1", Name: "system.first"},
@@ -1580,11 +1736,71 @@ func TestExecuteRewritesEveryProviderToolCallID(t *testing.T) {
 	collectUpdates(t, assistant, testJob())
 
 	calls := provider.requests[1].Messages[1].ToolCalls
-	if calls[0].ID == "" || calls[0].ID == "runtime_call_1" {
-		t.Fatalf("first runtime ID = %q, want fresh ID", calls[0].ID)
+	if calls[0].ID != "runtime_call_1" {
+		t.Fatalf("first model linkage ID = %q, want preserved provider ID", calls[0].ID)
 	}
 	if calls[1].ID == "" || calls[1].ID == calls[0].ID {
-		t.Fatalf("runtime IDs = %q, %q; want unique", calls[0].ID, calls[1].ID)
+		t.Fatalf("model linkage IDs = %q, %q; want unique", calls[0].ID, calls[1].ID)
+	}
+}
+
+func TestExecuteSynthesizedToolCallIDDependsOnToolAndCanonicalArguments(t *testing.T) {
+	execute := func(name string, arguments map[string]any) string {
+		t.Helper()
+		provider := &queuedProvider{responses: [][]llm.StreamEvent{
+			{{Type: "tool_call", ToolCalls: []llm.ToolCall{{
+				ID: "../../invalid", Name: name, Arguments: arguments,
+			}}}},
+			{{Type: "delta", Text: "done"}},
+		}}
+		client := &assistantTestToolLister{
+			definitions: []map[string]any{{"name": name}},
+			result:      map[string]any{"ok": true},
+		}
+		assistant := NewGeneralAssistant(
+			map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+			fakeMessageClient{},
+			&GeneralAssistantTools{SystemMCP: client, Runner: &tools.Runner{PostBeacon: allowToolCall}},
+		)
+		collectUpdates(t, assistant, testJob())
+		return provider.requests[1].Messages[1].ToolCalls[0].ID
+	}
+
+	first := execute("system.first", map[string]any{"a": 1, "b": 2})
+	sameCanonical := execute("system.first", map[string]any{"b": 2, "a": 1})
+	differentTool := execute("system.second", map[string]any{"a": 1, "b": 2})
+	differentArgs := execute("system.first", map[string]any{"a": 1, "b": 3})
+	if first != sameCanonical {
+		t.Fatalf("canonical-equivalent args generated %q and %q", first, sameCanonical)
+	}
+	if first == differentTool || first == differentArgs || differentTool == differentArgs {
+		t.Fatalf("IDs do not distinguish tool/args: first=%q tool=%q args=%q", first, differentTool, differentArgs)
+	}
+}
+
+func TestExecuteSynthesizesInvalidAndOverlongProviderToolCallIDs(t *testing.T) {
+	invalidIDs := []string{"", "contains space", "line\nbreak", "../../unsafe", strings.Repeat("x", 129)}
+	for _, providerID := range invalidIDs {
+		t.Run(fmt.Sprintf("%q", providerID), func(t *testing.T) {
+			provider := &queuedProvider{responses: [][]llm.StreamEvent{
+				{{Type: "tool_call", ToolCalls: []llm.ToolCall{{ID: providerID, Name: "system.time"}}}},
+				{{Type: "delta", Text: "done"}},
+			}}
+			client := &assistantTestToolLister{
+				definitions: []map[string]any{{"name": "system.time"}},
+				result:      map[string]any{"ok": true},
+			}
+			assistant := NewGeneralAssistant(
+				map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+				fakeMessageClient{},
+				&GeneralAssistantTools{SystemMCP: client, Runner: &tools.Runner{PostBeacon: allowToolCall}},
+			)
+			collectUpdates(t, assistant, testJob())
+			got := provider.requests[1].Messages[1].ToolCalls[0].ID
+			if got == "" || got == providerID || len(got) > 128 {
+				t.Fatalf("normalized ID = %q from provider ID %q", got, providerID)
+			}
+		})
 	}
 }
 
@@ -2141,6 +2357,42 @@ func TestExecutePreservesDebugToolPath(t *testing.T) {
 	}
 }
 
+func TestExecuteDebugToolRejectsTypedNilMCPClient(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		userText string
+		toolset  func(ToolLister) *GeneralAssistantTools
+	}{
+		{
+			name:     "system",
+			userText: "/tool system.time",
+			toolset: func(client ToolLister) *GeneralAssistantTools {
+				return &GeneralAssistantTools{SystemMCP: client, Runner: &tools.Runner{PostBeacon: allowToolCall}}
+			},
+		},
+		{
+			name:     "files",
+			userText: "/tool files.create",
+			toolset: func(client ToolLister) *GeneralAssistantTools {
+				return &GeneralAssistantTools{FilesMCP: client, Runner: &tools.Runner{PostBeacon: allowToolCall}}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var nilClient *assistantTestToolLister
+			assistant := NewGeneralAssistant(nil, fakeMessageClient{}, test.toolset(nilClient))
+			job := testJob()
+			job.UserText = test.userText
+
+			updates := collectUpdates(t, assistant, job)
+
+			failed := updates[len(updates)-1].GetRunFailed()
+			if failed == nil || failed.Code != "tool_call_failed" || failed.Retryable {
+				t.Fatalf("terminal update = %+v, want non-retryable tool_call_failed", updates[len(updates)-1])
+			}
+		})
+	}
+}
 func TestGeneralAssistantStreamsDeltasAndCompletesRun(t *testing.T) {
 	provider := &scriptedProvider{events: []llm.StreamEvent{{Type: "delta", Text: "Hel"}, {Type: "delta", Text: "lo"}, {Type: "completed", FinishReason: "stop"}}}
 	var fetchedSessionID string
@@ -2371,6 +2623,23 @@ func (p *completionProvider) StreamChat(context.Context, llm.ChatRequest) (<-cha
 }
 
 func discardUpdate(*turingv1.RuntimeUpdate) error { return nil }
+
+func toolResultWithSerializedSize(t *testing.T, size int) map[string]any {
+	t.Helper()
+	const overhead = len(`{"data":""}`)
+	if size < overhead {
+		t.Fatalf("serialized result size %d is below overhead %d", size, overhead)
+	}
+	result := map[string]any{"data": strings.Repeat("x", size-overhead)}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != size {
+		t.Fatalf("serialized result size = %d, want %d", len(data), size)
+	}
+	return result
+}
 
 type doneSignalingContext struct {
 	context.Context

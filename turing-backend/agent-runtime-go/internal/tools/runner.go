@@ -27,7 +27,6 @@ type RunInput struct {
 	AgentID    turingv1.AgentId
 	RunID      string
 	TraceID    string
-	ToolCallID string
 	ServerName string
 	ToolName   string
 	Args       map[string]any
@@ -52,14 +51,14 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 	if err := r.fetchMetadata(ctx, input.Timeout); err != nil {
 		return RunOutcome{}, err
 	}
-	toolCallID := input.ToolCallID
-	if toolCallID == "" {
-		toolCallID = NewToolCallID()
-	}
+	toolCallID := NewToolCallID()
 	started := time.Now()
 	decision, err := r.postWithTimeout(ctx, input.Timeout, beacon(input, toolCallID, turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, turingv1.ToolCallStatus_TOOL_CALL_STATUS_UNSPECIFIED, "", nil, 0))
 	if err != nil {
 		return RunOutcome{}, beaconReportingError{err: err}
+	}
+	if err := validatePolicyDecision(decision, toolCallID); err != nil {
+		return RunOutcome{}, beaconReportingError{err: markBeaconPosted(err)}
 	}
 	approvalToken := ""
 	sideEffecting := false
@@ -133,8 +132,27 @@ func (r *Runner) fetchMetadata(ctx context.Context, timeout time.Duration) error
 }
 
 func (r *Runner) postAfter(ctx context.Context, input RunInput, toolCallID string, status turingv1.ToolCallStatus, summary string, callErr *turingv1.ToolCallError, started time.Time) error {
-	_, err := r.postWithTimeout(ctx, input.Timeout, beacon(input, toolCallID, turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER, status, summary, callErr, time.Since(started).Milliseconds()))
+	decision, err := r.postWithTimeout(ctx, input.Timeout, beacon(input, toolCallID, turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER, status, summary, callErr, time.Since(started).Milliseconds()))
+	if err == nil {
+		err = validatePolicyDecision(decision, toolCallID)
+		if err != nil {
+			err = markBeaconPosted(err)
+		}
+	}
 	return err
+}
+
+func validatePolicyDecision(decision *turingv1.ToolPolicyDecision, toolCallID string) error {
+	if decision == nil {
+		return errors.New("tool policy decision is required")
+	}
+	if decision.GetToolCallId() == "" {
+		return errors.New("tool policy decision tool_call_id is required")
+	}
+	if decision.GetToolCallId() != toolCallID {
+		return fmt.Errorf("tool policy decision tool_call_id %q does not match beacon %q", decision.GetToolCallId(), toolCallID)
+	}
+	return nil
 }
 
 func (r *Runner) postWithTimeout(ctx context.Context, timeout time.Duration, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {

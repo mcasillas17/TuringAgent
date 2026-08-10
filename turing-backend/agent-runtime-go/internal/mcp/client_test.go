@@ -21,6 +21,35 @@ const (
 	testChannelTimeout           = 2 * time.Second
 )
 
+func TestDecodeLimitedObjectRejectsTrailingJSONAndGarbage(t *testing.T) {
+	for _, input := range []string{
+		`{"value":1} {"other":2}`,
+		`{"value":1} trailing`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			result, err := decodeLimitedObject(strings.NewReader(input), int64(len(input)))
+			if err == nil || result != nil {
+				t.Fatalf("decodeLimitedObject(%q) = %#v, %v; want trailing-data error", input, result, err)
+			}
+			if retryableFromError(err) {
+				t.Fatalf("trailing-data error = %T %v, want non-retryable", err, err)
+			}
+		})
+	}
+}
+
+func TestDecodeLimitedObjectAllowsTrailingWhitespaceAndUsesJSONNumbers(t *testing.T) {
+	const input = "{\"value\":9007199254740993}\n\t "
+	result, err := decodeLimitedObject(strings.NewReader(input), int64(len(input)))
+	if err != nil {
+		t.Fatalf("decodeLimitedObject returned error: %v", err)
+	}
+	number, ok := result["value"].(json.Number)
+	if !ok || number.String() != "9007199254740993" {
+		t.Fatalf("decoded value = %#v, want exact json.Number", result["value"])
+	}
+}
+
 func TestListToolsPaginatesInOrder(t *testing.T) {
 	var requests []listToolsRequest
 	server := newListToolsServer(t, func(request listToolsRequest) (int, string, error) {
