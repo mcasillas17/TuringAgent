@@ -26,7 +26,7 @@ func TestOpenAICompatibleStreamChatParsesSSEDeltaAndCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := collectEvents(events)
-	if got[0].Text != "Hi" || got[1].Type != "completed" {
+	if len(got) != 2 || got[0].Text != "Hi" || got[1].Type != "completed" {
 		t.Fatalf("events = %+v", got)
 	}
 }
@@ -67,6 +67,42 @@ func TestOpenAIReportsEOFBeforeTerminalEvent(t *testing.T) {
 	if len(got) != 2 || got[0].Type != "delta" || got[1].Type != "error" ||
 		got[1].Code != "model_stream_error" || !strings.Contains(got[1].Message, "terminal event") {
 		t.Fatalf("events = %+v, want delta then premature EOF stream error", got)
+	}
+}
+
+func TestOpenAIReportsStreamErrorForNonterminalBodies(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "empty"},
+		{name: "comment only", body: ": keepalive\n\n"},
+		{name: "non SSE", body: `{"choices":[]}`},
+		{
+			name: "unterminated data event",
+			body: `data: {"choices":[{"delta":{"content":"must not dispatch"}}]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("content-type", "text/event-stream")
+				fmt.Fprint(w, tt.body)
+			}))
+			t.Cleanup(server.Close)
+
+			provider := NewOpenAICompatible(server.URL, "", server.Client())
+			events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "gpt-4o-mini"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := collectEvents(events)
+			if len(got) != 1 || got[0].Type != "error" || got[0].Code != "model_stream_error" ||
+				!strings.Contains(got[0].Message, "terminal event") {
+				t.Fatalf("events = %+v, want terminal model_stream_error", got)
+			}
+		})
 	}
 }
 
@@ -131,6 +167,64 @@ func TestOpenAIParsesMultilineSSEDataEvent(t *testing.T) {
 	if len(got) != 2 || got[0].Type != "delta" || got[0].Text != "multiline" ||
 		got[1].Type != "completed" {
 		t.Fatalf("events = %+v, want multiline delta then completion", got)
+	}
+}
+
+func TestOpenAIRejectsOversizedAggregateSSEEventData(t *testing.T) {
+	halfLimit := strings.Repeat("x", maxStreamTokenBytes/2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\ndata: %s\ndata: x\n\n", halfLimit, halfLimit)
+	}))
+	t.Cleanup(server.Close)
+
+	provider := NewOpenAICompatible(server.URL, "", server.Client())
+	events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "gpt-4o-mini"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := collectEvents(events)
+	if len(got) != 1 || got[0].Type != "error" || got[0].Code != "model_bad_chunk" ||
+		!strings.Contains(got[0].Message, "event data exceeds") {
+		t.Fatalf("events = %+v, want oversized event model_bad_chunk", got)
+	}
+}
+
+func TestOpenAIParsesSSEStreamPreambleAndLineEndings(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "UTF-8 BOM",
+			body: "\uFEFF" + `data: {"choices":[{"delta":{"content":"bom"}}]}` + "\n\n" +
+				"data: [DONE]\n\n",
+		},
+		{
+			name: "CR-only separators",
+			body: `data: {"choices":[{"delta":{"content":"cr"}}]}` + "\r\r" +
+				"data: [DONE]\r\r",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("content-type", "text/event-stream")
+				fmt.Fprint(w, tt.body)
+			}))
+			t.Cleanup(server.Close)
+
+			provider := NewOpenAICompatible(server.URL, "", server.Client())
+			events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "gpt-4o-mini"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := collectEvents(events)
+			if len(got) != 2 || got[0].Type != "delta" || got[1].Type != "completed" {
+				t.Fatalf("events = %+v, want delta then completion", got)
+			}
+		})
 	}
 }
 
@@ -200,10 +294,20 @@ func TestOpenAIRequestSerializesFunctionTools(t *testing.T) {
 	if !ok || len(tools) != 1 {
 		t.Fatalf("tools = %#v", got["tools"])
 	}
-	tool := tools[0].(map[string]any)
-	function := tool["function"].(map[string]any)
+	tool, ok := tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool = %#v, want object", tools[0])
+	}
+	function, ok := tool["function"].(map[string]any)
+	if !ok {
+		t.Fatalf("function = %#v, want object", tool["function"])
+	}
+	parameters, ok := function["parameters"].(map[string]any)
+	if !ok {
+		t.Fatalf("parameters = %#v, want object", function["parameters"])
+	}
 	if tool["type"] != "function" || function["name"] != "get_weather" ||
-		function["description"] != "Get the weather" || function["parameters"].(map[string]any)["type"] != "object" {
+		function["description"] != "Get the weather" || parameters["type"] != "object" {
 		t.Fatalf("tool = %#v", tool)
 	}
 }
@@ -231,7 +335,11 @@ func TestOpenAIRequestDefaultsNilToolParameters(t *testing.T) {
 	if err := json.Unmarshal(<-requestBody, &got); err != nil {
 		t.Fatal(err)
 	}
-	function := got["tools"].([]any)[0].(map[string]any)["function"].(map[string]any)
+	tool := requireSingleObject(t, got["tools"], "tools")
+	function, ok := tool["function"].(map[string]any)
+	if !ok {
+		t.Fatalf("function = %#v, want object", tool["function"])
+	}
 	want := map[string]any{
 		"name":       "no_arguments",
 		"parameters": map[string]any{"type": "object"},
@@ -273,7 +381,7 @@ func TestOpenAIRequestSerializesAssistantToolCalls(t *testing.T) {
 	if err := json.Unmarshal(<-requestBody, &got); err != nil {
 		t.Fatal(err)
 	}
-	message := got["messages"].([]any)[0].(map[string]any)
+	message := requireSingleObject(t, got["messages"], "messages")
 	want := map[string]any{
 		"role":    "assistant",
 		"content": "",
@@ -321,7 +429,12 @@ func TestOpenAIRequestSerializesNilAssistantToolArgumentsAsObject(t *testing.T) 
 	if err := json.Unmarshal(<-requestBody, &got); err != nil {
 		t.Fatal(err)
 	}
-	function := got["messages"].([]any)[0].(map[string]any)["tool_calls"].([]any)[0].(map[string]any)["function"].(map[string]any)
+	message := requireSingleObject(t, got["messages"], "messages")
+	toolCall := requireSingleObject(t, message["tool_calls"], "tool_calls")
+	function, ok := toolCall["function"].(map[string]any)
+	if !ok {
+		t.Fatalf("function = %#v, want object", toolCall["function"])
+	}
 	if function["arguments"] != "{}" {
 		t.Fatalf("function arguments = %#v, want %q", function["arguments"], "{}")
 	}
@@ -360,7 +473,7 @@ func TestOpenAIRequestSerializesToolResultMessage(t *testing.T) {
 	if err := json.Unmarshal(<-requestBody, &got); err != nil {
 		t.Fatal(err)
 	}
-	message := got["messages"].([]any)[0].(map[string]any)
+	message := requireSingleObject(t, got["messages"], "messages")
 	want := map[string]any{
 		"role":         "tool",
 		"content":      `{"temperature":72}`,
@@ -380,16 +493,17 @@ func TestOpenAIStreamsToolCallsSortedByIndex(t *testing.T) {
 	t.Cleanup(server.Close)
 	provider := NewOpenAICompatible(server.URL, "", server.Client())
 
-	for attempt := 0; attempt < 20; attempt++ {
-		events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "gpt-4o-mini"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		got := collectEvents(events)
-		calls := got[0].ToolCalls
-		if len(calls) != 2 || calls[0].ID != "call_0" || calls[1].ID != "call_1" {
-			t.Fatalf("tool calls = %+v, want index order", calls)
-		}
+	events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "gpt-4o-mini"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := collectEvents(events)
+	if len(got) != 2 || got[0].Type != "tool_call" {
+		t.Fatalf("events = %+v, want tool call then completion", got)
+	}
+	calls := got[0].ToolCalls
+	if len(calls) != 2 || calls[0].ID != "call_0" || calls[1].ID != "call_1" {
+		t.Fatalf("tool calls = %+v, want index order", calls)
 	}
 }
 
@@ -441,6 +555,30 @@ func TestOpenAIValidatesToolCallStreamIntegrity(t *testing.T) {
 			name:        "negative index",
 			stream:      `data: {"choices":[{"delta":{"tool_calls":[{"index":-1,"id":"call_0","type":"function","function":{"name":"bad","arguments":"{}"}}]}}]}` + "\n\n",
 			wantMessage: "negative index -1",
+		},
+		{
+			name: "missing index",
+			stream: `data: {"choices":[{"delta":{"tool_calls":[{"id":"call_0","type":"function","function":{"name":"bad","arguments":"{}"}}]}}]}` + "\n\n" +
+				`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+			wantMessage: "missing index",
+		},
+		{
+			name: "index set starts above zero",
+			stream: `data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"call_1","type":"function","function":{"name":"sparse","arguments":"{}"}}]}}]}` + "\n\n" +
+				`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+			wantMessage: "non-contiguous",
+		},
+		{
+			name: "index set contains gap",
+			stream: `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"first","arguments":"{}"}},{"index":2,"id":"call_2","type":"function","function":{"name":"third","arguments":"{}"}}]}}]}` + "\n\n" +
+				`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+			wantMessage: "non-contiguous",
+		},
+		{
+			name: "duplicate IDs",
+			stream: `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"duplicate","type":"function","function":{"name":"first","arguments":"{}"}},{"index":1,"id":"duplicate","type":"function","function":{"name":"second","arguments":"{}"}}]}}]}` + "\n\n" +
+				`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+			wantMessage: `duplicate ID "duplicate"`,
 		},
 		{
 			name:        "unsupported type",
@@ -506,6 +644,32 @@ func TestOpenAIValidatesToolCallStreamIntegrity(t *testing.T) {
 	}
 }
 
+func TestOpenAIRejectsOversizedAccumulatedToolArguments(t *testing.T) {
+	halfLimit := strings.Repeat("x", maxStreamTokenBytes/2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		writeFragment := func(arguments string) {
+			fmt.Fprintf(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","function":{"name":"large","arguments":%q}}]}}]}`+"\n\n", arguments)
+		}
+		writeFragment(halfLimit)
+		writeFragment(halfLimit)
+		writeFragment("x")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
+	}))
+	t.Cleanup(server.Close)
+
+	provider := NewOpenAICompatible(server.URL, "", server.Client())
+	events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "gpt-4o-mini"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := collectEvents(events)
+	if len(got) != 1 || got[0].Type != "error" || got[0].Code != "model_bad_chunk" ||
+		!strings.Contains(got[0].Message, "arguments exceed") {
+		t.Fatalf("events = %+v, want oversized arguments model_bad_chunk", got)
+	}
+}
+
 func TestOpenAIStreamsEmptyToolArgumentsAsEmptyMap(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
@@ -520,6 +684,9 @@ func TestOpenAIStreamsEmptyToolArgumentsAsEmptyMap(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := collectEvents(events)
+	if len(got) != 2 || len(got[0].ToolCalls) != 1 {
+		t.Fatalf("events = %+v, want one tool call then completion", got)
+	}
 	arguments := got[0].ToolCalls[0].Arguments
 	if arguments == nil || len(arguments) != 0 {
 		t.Fatalf("arguments = %#v, want non-nil empty map", arguments)
@@ -579,7 +746,7 @@ func TestOpenAIRequestSerializesNormalMessage(t *testing.T) {
 	if err := json.Unmarshal(<-requestBody, &got); err != nil {
 		t.Fatal(err)
 	}
-	message := got["messages"].([]any)[0].(map[string]any)
+	message := requireSingleObject(t, got["messages"], "messages")
 	want := map[string]any{"role": "user", "content": "hello", "name": "alice"}
 	if !reflect.DeepEqual(message, want) {
 		t.Fatalf("message = %#v, want %#v", message, want)
@@ -687,4 +854,17 @@ func TestOpenAIStreamStopsOnCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("request context was not canceled")
 	}
+}
+
+func requireSingleObject(t *testing.T, value any, label string) map[string]any {
+	t.Helper()
+	values, ok := value.([]any)
+	if !ok || len(values) != 1 {
+		t.Fatalf("%s = %#v, want one object", label, value)
+	}
+	object, ok := values[0].(map[string]any)
+	if !ok {
+		t.Fatalf("%s[0] = %#v, want object", label, values[0])
+	}
+	return object
 }

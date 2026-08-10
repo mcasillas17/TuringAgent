@@ -19,7 +19,7 @@ func TestOllamaStreamChatParsesDeltaAndCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := collectEvents(events)
-	if got[0].Text != "Hel" || got[1].Type != "completed" {
+	if len(got) != 2 || got[0].Text != "Hel" || got[1].Type != "completed" {
 		t.Fatalf("events = %+v", got)
 	}
 }
@@ -35,8 +35,21 @@ func TestOllamaStreamChatMalformedJSONReturnsErrorEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := collectEvents(events)
-	if got[0].Code != "model_bad_chunk" {
-		t.Fatalf("code = %q", got[0].Code)
+	if len(got) != 1 || got[0].Code != "model_bad_chunk" {
+		t.Fatalf("events = %+v, want model_bad_chunk", got)
+	}
+}
+
+func TestSendStreamEventRejectsReadySendAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	out := make(chan StreamEvent, 1)
+
+	if sendStreamEvent(ctx, out, StreamEvent{Type: "delta", Text: "late"}) {
+		t.Fatal("sendStreamEvent accepted an event after cancellation")
+	}
+	if len(out) != 0 {
+		t.Fatal("sendStreamEvent delivered an event after cancellation")
 	}
 }
 

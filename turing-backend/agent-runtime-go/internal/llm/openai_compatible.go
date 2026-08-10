@@ -8,8 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
 	"strings"
+)
+
+const (
+	maxOpenAIEventDataBytes        = maxStreamTokenBytes
+	maxOpenAIToolCallArgumentBytes = maxStreamTokenBytes
 )
 
 type OpenAICompatible struct {
@@ -65,8 +69,8 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 		}
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), maxStreamTokenBytes)
+		scanner.Split(splitSSELines)
 		toolCalls := make(map[int]*openAIToolCall)
-		sawChunk := false
 		dispatch := func(data string) bool {
 			if strings.TrimSpace(data) == "" {
 				return false
@@ -83,7 +87,6 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 				}
 				return true
 			}
-			sawChunk = true
 			events, done, err := parseOpenAIData([]byte(data), toolCalls)
 			if err != nil {
 				sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: err.Error()})
@@ -98,12 +101,19 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 		}
 
 		var dataLines []string
+		dataBytes := 0
+		firstLine := true
 		for scanner.Scan() {
 			line := scanner.Text()
+			if firstLine {
+				line = strings.TrimPrefix(line, "\uFEFF")
+				firstLine = false
+			}
 			if line == "" {
 				if len(dataLines) > 0 {
 					data := strings.Join(dataLines, "\n")
 					dataLines = nil
+					dataBytes = 0
 					if dispatch(data) {
 						return
 					}
@@ -123,7 +133,20 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 			if strings.HasPrefix(value, " ") {
 				value = value[1:]
 			}
+			additionalBytes := len(value)
+			if len(dataLines) > 0 {
+				additionalBytes++
+			}
+			if additionalBytes > maxOpenAIEventDataBytes-dataBytes {
+				sendStreamEvent(ctx, out, StreamEvent{
+					Type:    "error",
+					Code:    "model_bad_chunk",
+					Message: fmt.Sprintf("SSE event data exceeds %d bytes", maxOpenAIEventDataBytes),
+				})
+				return
+			}
 			dataLines = append(dataLines, value)
+			dataBytes += additionalBytes
 		}
 		if err := scanner.Err(); err != nil {
 			if ctx.Err() == nil {
@@ -134,18 +157,35 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 		if ctx.Err() != nil {
 			return
 		}
-		if len(dataLines) > 0 && dispatch(strings.Join(dataLines, "\n")) {
-			return
+		message := "OpenAI-compatible stream ended before a terminal event"
+		if len(toolCalls) > 0 {
+			message += fmt.Sprintf(" with %d unfinished tool call(s)", len(toolCalls))
 		}
-		if sawChunk {
-			message := "OpenAI-compatible stream ended before a terminal event"
-			if len(toolCalls) > 0 {
-				message += fmt.Sprintf(" with %d unfinished tool call(s)", len(toolCalls))
-			}
-			sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_stream_error", Message: message})
-		}
+		sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_stream_error", Message: message})
 	}()
 	return out, nil
+}
+
+func splitSSELines(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	for i, b := range data {
+		switch b {
+		case '\n':
+			return i + 1, data[:i], nil
+		case '\r':
+			if i+1 == len(data) && !atEOF {
+				return 0, nil, nil
+			}
+			advance := i + 1
+			if i+1 < len(data) && data[i+1] == '\n' {
+				advance++
+			}
+			return advance, data[:i], nil
+		}
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
 }
 
 type openAIChatRequest struct {
@@ -255,7 +295,7 @@ type openAIDelta struct {
 }
 
 type openAIToolCallDelta struct {
-	Index    int    `json:"index"`
+	Index    *int   `json:"index"`
 	ID       string `json:"id"`
 	Type     string `json:"type"`
 	Function struct {
@@ -267,7 +307,7 @@ type openAIToolCallDelta struct {
 type openAIToolCall struct {
 	id        string
 	name      string
-	arguments string
+	arguments strings.Builder
 }
 
 func parseOpenAIData(data []byte, toolCalls map[int]*openAIToolCall) ([]StreamEvent, bool, error) {
@@ -296,20 +336,27 @@ func parseOpenAIData(data []byte, toolCalls map[int]*openAIToolCall) ([]StreamEv
 			return nil, false, err
 		}
 		for _, fragment := range delta.ToolCalls {
-			if fragment.Index < 0 {
-				return nil, false, fmt.Errorf("tool call has negative index %d", fragment.Index)
+			if fragment.Index == nil {
+				return nil, false, fmt.Errorf("tool call is missing index")
+			}
+			index := *fragment.Index
+			if index < 0 {
+				return nil, false, fmt.Errorf("tool call has negative index %d", index)
 			}
 			if fragment.Type != "" && fragment.Type != "function" {
-				return nil, false, fmt.Errorf("tool call %d has unsupported type %q", fragment.Index, fragment.Type)
+				return nil, false, fmt.Errorf("tool call %d has unsupported type %q", index, fragment.Type)
 			}
-			call := toolCalls[fragment.Index]
+			call := toolCalls[index]
 			if call == nil {
 				call = &openAIToolCall{}
-				toolCalls[fragment.Index] = call
+				toolCalls[index] = call
 			}
 			call.id += fragment.ID
 			call.name += fragment.Function.Name
-			call.arguments += fragment.Function.Arguments
+			if len(fragment.Function.Arguments) > maxOpenAIToolCallArgumentBytes-call.arguments.Len() {
+				return nil, false, fmt.Errorf("tool call %d arguments exceed %d bytes", index, maxOpenAIToolCallArgumentBytes)
+			}
+			call.arguments.WriteString(fragment.Function.Arguments)
 		}
 		if delta.Content != nil && *delta.Content != "" {
 			events = append(events, StreamEvent{Type: "delta", Text: *delta.Content})
@@ -321,22 +368,25 @@ func parseOpenAIData(data []byte, toolCalls map[int]*openAIToolCall) ([]StreamEv
 				return nil, false, fmt.Errorf("finish_reason tool_calls received without any accumulated tool calls")
 			}
 			calls := make([]ToolCall, 0, len(toolCalls))
-			indices := make([]int, 0, len(toolCalls))
-			for index := range toolCalls {
-				indices = append(indices, index)
-			}
-			sort.Ints(indices)
-			for _, index := range indices {
-				call := toolCalls[index]
+			ids := make(map[string]struct{}, len(toolCalls))
+			for index := 0; index < len(toolCalls); index++ {
+				call, ok := toolCalls[index]
+				if !ok {
+					return nil, false, fmt.Errorf("tool call indices are non-contiguous: missing index %d", index)
+				}
 				if call.id == "" {
 					return nil, false, fmt.Errorf("tool call %d is missing an ID", index)
 				}
+				if _, duplicate := ids[call.id]; duplicate {
+					return nil, false, fmt.Errorf("tool call %d has duplicate ID %q", index, call.id)
+				}
+				ids[call.id] = struct{}{}
 				if call.name == "" {
 					return nil, false, fmt.Errorf("tool call %d is missing a function name", index)
 				}
 				arguments := make(map[string]any)
-				if call.arguments != "" {
-					decoder := json.NewDecoder(strings.NewReader(call.arguments))
+				if call.arguments.Len() > 0 {
+					decoder := json.NewDecoder(strings.NewReader(call.arguments.String()))
 					decoder.UseNumber()
 					var decoded any
 					if err := decoder.Decode(&decoded); err != nil {

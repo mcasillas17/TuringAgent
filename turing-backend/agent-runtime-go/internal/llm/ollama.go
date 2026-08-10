@@ -110,6 +110,9 @@ func decodeObjectLine(line []byte) (map[string]any, error) {
 }
 
 func sendStreamEvent(ctx context.Context, out chan<- StreamEvent, event StreamEvent) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	select {
 	case out <- event:
 		return true
