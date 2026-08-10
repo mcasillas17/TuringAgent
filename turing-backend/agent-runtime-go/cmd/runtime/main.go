@@ -50,6 +50,8 @@ func run() error {
 		FilesMCP:           mcp.NewClient(cfg.MCPFilesBaseURL, cfg.MCPFilesToken, http.DefaultClient),
 		Runner:             toolRunner,
 		MaxToolCallsPerRun: cfg.MaxToolCallsPerRun,
+		ModelTimeout:       cfg.ModelTimeout,
+		ToolTimeout:        cfg.ToolTimeout,
 	}
 	executor := agent.NewGeneralAssistant(providers, client, toolset)
 	runtimeWorker := worker.New(worker.Options{WorkerID: cfg.WorkerID, AgentID: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: cfg.MaxConcurrentRuns}, runtimeClientAdapter{client: client}, executor)

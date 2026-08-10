@@ -52,9 +52,15 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	if modelTimeoutMs <= 0 {
+		return Config{}, errors.New("TURING_MODEL_TIMEOUT_MS must be greater than 0")
+	}
 	toolTimeoutMs, err := intValue(getenv, "TURING_TOOL_TIMEOUT_MS", 30000)
 	if err != nil {
 		return Config{}, err
+	}
+	if toolTimeoutMs <= 0 {
+		return Config{}, errors.New("TURING_TOOL_TIMEOUT_MS must be greater than 0")
 	}
 	return Config{
 		OrchestratorGRPCAddr: grpcAddr(getenv),

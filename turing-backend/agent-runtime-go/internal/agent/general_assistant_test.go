@@ -129,6 +129,38 @@ func TestExecuteRetriesFailedToolDiscovery(t *testing.T) {
 	}
 }
 
+func TestExecuteRetriesToolDiscoveryAfterTimeoutWithoutCachingFailure(t *testing.T) {
+	var attempts atomic.Int32
+	client := &assistantTestToolLister{
+		listFunc: func(ctx context.Context) ([]map[string]any, error) {
+			if attempts.Add(1) == 1 {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			return []map[string]any{{"name": "system.time"}}, nil
+		},
+	}
+	provider := &completionProvider{}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{SystemMCP: client, ToolTimeout: 10 * time.Millisecond},
+	)
+
+	first := collectUpdates(t, assistant, testJob())
+	failed := first[len(first)-1].GetRunFailed()
+	if failed == nil || failed.Code != "tool_discovery_failed" || !failed.Retryable {
+		t.Fatalf("first terminal update = %+v, want retryable tool_discovery_failed", first[len(first)-1])
+	}
+	second := collectUpdates(t, assistant, testJob())
+	if second[len(second)-1].GetRunCompleted() == nil {
+		t.Fatalf("second terminal update = %+v, want completed retry", second[len(second)-1])
+	}
+	if got := client.listCalls.Load(); got != 2 {
+		t.Fatalf("ListTools calls = %d, want timeout followed by retry", got)
+	}
+}
+
 func TestExecuteMakesToolDiscoveryValidationFailureNonRetryable(t *testing.T) {
 	client := &assistantTestToolLister{
 		definitions: []map[string]any{{
@@ -553,10 +585,17 @@ func TestExecuteRunnerBeaconsOwnKnownToolLifecycle(t *testing.T) {
 func TestExecuteStopsAfterUncertainMCPCallFailure(t *testing.T) {
 	callErr := errors.New("connection reset after request")
 	var beacons []*turingv1.ToolCallBeacon
-	runner := &tools.Runner{PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
-		beacons = append(beacons, beacon)
-		return allowToolCall(context.Background(), beacon)
-	}}
+	runner := &tools.Runner{
+		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+			beacons = append(beacons, beacon)
+			return &turingv1.ToolPolicyDecision{
+				Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+				ApprovalId: "approval_1",
+				ToolCallId: beacon.GetToolCallId(),
+			}, nil
+		},
+		WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+	}
 	provider := &queuedProvider{responses: [][]llm.StreamEvent{
 		{{Type: "tool_call", ToolCalls: []llm.ToolCall{{ID: "provider_call", Name: "system.write"}}}},
 		{{Type: "delta", Text: "must not run"}},
@@ -596,6 +635,41 @@ func TestExecuteStopsAfterUncertainMCPCallFailure(t *testing.T) {
 		beacons[1].GetStatus() != turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED ||
 		beacons[1].GetError().GetCode() != "mcp_call_failed" {
 		t.Fatalf("beacons = %+v, want BEFORE then AFTER FAILED mcp_call_failed", beacons)
+	}
+}
+
+func TestExecuteRecoversThroughModelAfterSafeMCPCallFailure(t *testing.T) {
+	callErr := errors.New("safe read unavailable")
+	provider := &queuedProvider{responses: [][]llm.StreamEvent{
+		{{Type: "tool_call", ToolCalls: []llm.ToolCall{{ID: "provider_call", Name: "system.read"}}}},
+		{{Type: "delta", Text: "recovered"}},
+	}}
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{"name": "system.read"}},
+		callFunc: func(context.Context, string, map[string]any) (map[string]any, error) {
+			return nil, callErr
+		},
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{
+			SystemMCP: client,
+			Runner:    &tools.Runner{PostBeacon: allowToolCall},
+		},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	if len(provider.requests) != 2 {
+		t.Fatalf("provider requests = %d, want recovery model call", len(provider.requests))
+	}
+	toolResult := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if toolResult.Role != "tool" || !strings.Contains(toolResult.Content, callErr.Error()) {
+		t.Fatalf("tool result = %+v, want recoverable safe failure", toolResult)
+	}
+	if completed := updates[len(updates)-1].GetRunCompleted(); completed == nil || completed.Content != "recovered" {
+		t.Fatalf("terminal update = %+v, want recovered completion", updates[len(updates)-1])
 	}
 }
 
@@ -992,8 +1066,12 @@ func TestExecuteReturnsCommittedSideEffectErrorWithoutModelRetry(t *testing.T) {
 		if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
 			return nil, reportErr
 		}
-		return allowToolCall(context.Background(), beacon)
-	}}
+		return &turingv1.ToolPolicyDecision{
+			Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+			ApprovalId: "approval_1",
+			ToolCallId: beacon.GetToolCallId(),
+		}, nil
+	}, WaitApproval: func(context.Context, string) (string, error) { return "token", nil }}
 	provider := &queuedProvider{responses: [][]llm.StreamEvent{
 		{{Type: "tool_call", ToolCalls: []llm.ToolCall{{ID: "provider_call", Name: "system.write"}}}},
 		{{Type: "delta", Text: "must not run"}},
@@ -1698,21 +1776,38 @@ func TestExecuteEmitsRunFailedWhenProviderStreamStartFails(t *testing.T) {
 	}
 }
 
-func TestExecuteMakesLaterModelFailuresNonRetryableAfterSuccessfulToolSideEffect(t *testing.T) {
+func TestExecuteMakesLaterModelFailuresNonRetryableOnlyAfterApprovalGatedSuccess(t *testing.T) {
 	tests := []struct {
 		name            string
 		synchronous     bool
+		approvalGated   bool
 		wantCode        string
 		wantMessagePart string
+		retryable       bool
 	}{
 		{
-			name:            "synchronous stream start",
+			name:            "safe synchronous stream start",
 			synchronous:     true,
+			wantCode:        "model_stream_failed",
+			wantMessagePart: "stream unavailable",
+			retryable:       true,
+		},
+		{
+			name:            "safe streamed transport",
+			wantCode:        "model_stream_error",
+			wantMessagePart: "stream interrupted",
+			retryable:       true,
+		},
+		{
+			name:            "approval synchronous stream start",
+			synchronous:     true,
+			approvalGated:   true,
 			wantCode:        "model_stream_failed",
 			wantMessagePart: "stream unavailable",
 		},
 		{
-			name:            "streamed transport",
+			name:            "approval streamed transport",
+			approvalGated:   true,
 			wantCode:        "model_stream_error",
 			wantMessagePart: "stream interrupted",
 		},
@@ -1724,22 +1819,90 @@ func TestExecuteMakesLaterModelFailuresNonRetryableAfterSuccessfulToolSideEffect
 				definitions: []map[string]any{{"name": "system.write"}},
 				result:      map[string]any{"ok": true},
 			}
+			post := allowToolCall
+			runner := &tools.Runner{PostBeacon: post}
+			if test.approvalGated {
+				runner.PostBeacon = func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+					return &turingv1.ToolPolicyDecision{
+						Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+						ApprovalId: "approval_1",
+						ToolCallId: beacon.GetToolCallId(),
+					}, nil
+				}
+				runner.WaitApproval = func(context.Context, string) (string, error) { return "token", nil }
+			}
 			assistant := NewGeneralAssistant(
 				map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
 				fakeMessageClient{},
-				&GeneralAssistantTools{SystemMCP: client, Runner: &tools.Runner{PostBeacon: allowToolCall}},
+				&GeneralAssistantTools{SystemMCP: client, Runner: runner},
 			)
 
 			updates := collectUpdates(t, assistant, testJob())
 
 			failed := updates[len(updates)-1].GetRunFailed()
-			if failed == nil || failed.Code != test.wantCode || failed.Retryable || !strings.Contains(failed.Message, test.wantMessagePart) {
-				t.Fatalf("terminal update = %+v, want non-retryable %s", updates[len(updates)-1], test.wantCode)
+			if failed == nil || failed.Code != test.wantCode || failed.Retryable != test.retryable || !strings.Contains(failed.Message, test.wantMessagePart) {
+				t.Fatalf("terminal update = %+v, want retryable=%t %s", updates[len(updates)-1], test.retryable, test.wantCode)
 			}
 			if len(client.calls) != 1 {
 				t.Fatalf("MCP calls = %d, want one successful side effect", len(client.calls))
 			}
 		})
+	}
+}
+
+func TestExecuteTimesOutProviderThatNeverClosesAndCancelsModelContext(t *testing.T) {
+	provider := &neverClosingProvider{contextSeen: make(chan context.Context, 1)}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{ModelTimeout: 10 * time.Millisecond},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	failed := updates[len(updates)-1].GetRunFailed()
+	if failed == nil || failed.Code != "model_timeout" || !failed.Retryable {
+		t.Fatalf("terminal update = %+v, want retryable model_timeout", updates[len(updates)-1])
+	}
+	modelCtx := <-provider.contextSeen
+	select {
+	case <-modelCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("model context was not canceled promptly")
+	}
+}
+
+func TestExecuteModelTimeoutIsNonRetryableAfterApprovalGatedSuccess(t *testing.T) {
+	provider := &toolThenNeverClosingProvider{}
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{"name": "system.write"}},
+		result:      map[string]any{"ok": true},
+	}
+	runner := &tools.Runner{
+		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+			return &turingv1.ToolPolicyDecision{
+				Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+				ApprovalId: "approval_1",
+				ToolCallId: beacon.GetToolCallId(),
+			}, nil
+		},
+		WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{
+			SystemMCP:    client,
+			Runner:       runner,
+			ModelTimeout: 10 * time.Millisecond,
+		},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	failed := updates[len(updates)-1].GetRunFailed()
+	if failed == nil || failed.Code != "model_timeout" || failed.Retryable {
+		t.Fatalf("terminal update = %+v, want non-retryable model_timeout", updates[len(updates)-1])
 	}
 }
 
@@ -1799,6 +1962,9 @@ func TestGeneralAssistantClassifiesStreamedProviderErrors(t *testing.T) {
 	}{
 		{code: "model_unavailable", retryable: true},
 		{code: "model_stream_error", retryable: true},
+		{code: "model_timeout", retryable: true},
+		{code: "model_auth_failed", retryable: false},
+		{code: "model_request_failed", retryable: false},
 		{code: "model_bad_chunk", retryable: false},
 		{code: "model_error", retryable: false},
 		{code: "", retryable: false},
@@ -2092,6 +2258,36 @@ func (p *blockingProvider) ID() string { return "blocking" }
 func (p *blockingProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	close(p.entered)
 	return p.events, nil
+}
+
+type neverClosingProvider struct {
+	contextSeen chan context.Context
+}
+
+func (p *neverClosingProvider) ID() string { return "never-closing" }
+
+func (p *neverClosingProvider) StreamChat(ctx context.Context, _ llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	p.contextSeen <- ctx
+	return make(chan llm.StreamEvent), nil
+}
+
+type toolThenNeverClosingProvider struct {
+	calls int
+}
+
+func (p *toolThenNeverClosingProvider) ID() string { return "tool-then-never-closing" }
+
+func (p *toolThenNeverClosingProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	p.calls++
+	if p.calls == 1 {
+		out := make(chan llm.StreamEvent, 1)
+		out <- llm.StreamEvent{Type: "tool_call", ToolCalls: []llm.ToolCall{{
+			ID: "provider_call", Name: "system.write",
+		}}}
+		close(out)
+		return out, nil
+	}
+	return make(chan llm.StreamEvent), nil
 }
 
 type errorProvider struct {

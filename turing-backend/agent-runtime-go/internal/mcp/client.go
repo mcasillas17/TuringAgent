@@ -43,6 +43,15 @@ func (e classifiedError) Error() string   { return e.err.Error() }
 func (e classifiedError) Unwrap() error   { return e.err }
 func (e classifiedError) Retryable() bool { return e.retryable }
 
+type JSONRPCError struct {
+	Code    int64
+	Message string
+}
+
+func (e JSONRPCError) Error() string {
+	return fmt.Sprintf("MCP error %d: %s", e.Code, e.Message)
+}
+
 func Retryable(err error) bool {
 	var classified RetryableError
 	return errors.As(err, &classified) && classified.Retryable()
@@ -181,11 +190,21 @@ func (c *Client) request(ctx context.Context, method string, params map[string]a
 		if !ok {
 			return nil, nonRetryableError(errors.New("MCP error"))
 		}
+		codeNumber, ok := errorObj["code"].(json.Number)
+		if !ok {
+			return nil, nonRetryableError(errors.New("MCP error code must be an integer"))
+		}
+		code, err := codeNumber.Int64()
+		if err != nil {
+			return nil, nonRetryableError(errors.New("MCP error code must be an integer"))
+		}
 		message, ok := errorObj["message"].(string)
 		if !ok || message == "" {
 			return nil, nonRetryableError(errors.New("MCP error"))
 		}
-		return nil, nonRetryableError(fmt.Errorf("MCP error: %s", message))
+		rpcErr := JSONRPCError{Code: code, Message: message}
+		retryable := code == -32603 || (code >= -32099 && code <= -32000)
+		return nil, classifiedError{err: rpcErr, retryable: retryable}
 	}
 	result, ok := obj["result"]
 	if !ok || result == nil {

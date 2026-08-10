@@ -70,7 +70,7 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 		defer close(out)
 		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_unavailable", Message: fmt.Sprintf("OpenAI-compatible provider returned %d", resp.StatusCode)})
+			sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: providerHTTPErrorCode(resp.StatusCode), Message: fmt.Sprintf("OpenAI-compatible provider returned %d", resp.StatusCode)})
 			return
 		}
 		scanner := bufio.NewScanner(resp.Body)

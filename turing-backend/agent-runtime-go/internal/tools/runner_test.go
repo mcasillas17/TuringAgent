@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 )
@@ -256,16 +257,17 @@ func TestRunMissingApprovalWaiterReturnsTypedFailure(t *testing.T) {
 	)
 }
 
-func TestRunMCPFailurePostsFailedAfter(t *testing.T) {
+func TestRunApprovalGatedMCPFailurePostsFailedAfter(t *testing.T) {
 	callErr := errors.New("MCP failed")
 	var beacons []*turingv1.ToolCallBeacon
 	runner := &Runner{PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 		beacons = append(beacons, beacon)
 		return &turingv1.ToolPolicyDecision{
-			Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
+			Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+			ApprovalId: "approval_1",
 			ToolCallId: beacon.GetToolCallId(),
 		}, nil
-	}}
+	}, WaitApproval: func(context.Context, string) (string, error) { return "token", nil }}
 
 	_, err := runner.Run(context.Background(), RunInput{
 		ToolName:  "system.echo",
@@ -358,7 +360,8 @@ func TestRunReturnsReportingFailureWhenFailedAfterCannotBePosted(t *testing.T) {
 		},
 		{
 			name:       "MCP failure",
-			decision:   &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW},
+			decision:   &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED},
+			wait:       func(context.Context, string) (string, error) { return "token", nil },
 			client:     failingMCPClient{err: operationErr},
 			wantStatus: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED,
 		},
@@ -427,10 +430,12 @@ func TestRunMarksSuccessfulMCPCallWhenCompletedBeaconFails(t *testing.T) {
 			}
 
 			return &turingv1.ToolPolicyDecision{
-				Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
+				Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+				ApprovalId: "approval_1",
 				ToolCallId: beacon.GetToolCallId(),
 			}, nil
 		},
+		WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
 	}
 
 	_, err := runner.Run(context.Background(), RunInput{
@@ -454,6 +459,177 @@ func TestRunMarksSuccessfulMCPCallWhenCompletedBeaconFails(t *testing.T) {
 		beacons[1].GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER ||
 		beacons[1].GetStatus() != turingv1.ToolCallStatus_TOOL_CALL_STATUS_COMPLETED {
 		t.Fatalf("beacons = %+v, want attempted completed after beacon", beacons)
+	}
+}
+
+func TestRunWithOutcomeDistinguishesSafeAndApprovalGatedSuccess(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		decision      turingv1.ToolPolicyDecision_Decision
+		sideEffecting bool
+	}{
+		{name: "allow is safe", decision: turingv1.ToolPolicyDecision_DECISION_ALLOW},
+		{name: "approval required is side effecting", decision: turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED, sideEffecting: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &Runner{
+				PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+					return &turingv1.ToolPolicyDecision{
+						Decision:   test.decision,
+						ApprovalId: "approval_1",
+						ToolCallId: beacon.GetToolCallId(),
+					}, nil
+				},
+				WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+			}
+
+			outcome, err := runner.RunWithOutcome(context.Background(), RunInput{
+				ToolName:  "system.echo",
+				MCPClient: fakeMCPClient{},
+			})
+
+			if err != nil {
+				t.Fatalf("RunWithOutcome error: %v", err)
+			}
+			if outcome.SideEffecting != test.sideEffecting || outcome.Result["ok"] != true {
+				t.Fatalf("outcome = %+v, want sideEffecting=%t and result", outcome, test.sideEffecting)
+			}
+		})
+	}
+}
+
+func TestRunWithOutcomeMakesOnlyApprovalGatedMCPFailureUncertain(t *testing.T) {
+	callErr := errors.New("MCP failed")
+	for _, test := range []struct {
+		name      string
+		decision  turingv1.ToolPolicyDecision_Decision
+		uncertain bool
+	}{
+		{name: "allow is recoverable", decision: turingv1.ToolPolicyDecision_DECISION_ALLOW},
+		{name: "approval required is uncertain", decision: turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED, uncertain: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &Runner{
+				PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+					return &turingv1.ToolPolicyDecision{
+						Decision:   test.decision,
+						ApprovalId: "approval_1",
+						ToolCallId: beacon.GetToolCallId(),
+					}, nil
+				},
+				WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+			}
+
+			_, err := runner.RunWithOutcome(context.Background(), RunInput{
+				ToolName:  "system.echo",
+				MCPClient: failingMCPClient{err: callErr},
+			})
+
+			if !errors.Is(err, callErr) || !BeaconWasPosted(err) {
+				t.Fatalf("RunWithOutcome error = %T %v, want posted MCP error", err, err)
+			}
+			if SideEffectWasUncertain(err) != test.uncertain {
+				t.Fatalf("SideEffectWasUncertain(%T %v) = %t, want %t", err, err, SideEffectWasUncertain(err), test.uncertain)
+			}
+			if !test.uncertain {
+				var recoverable interface{ Recoverable() bool }
+				if !errors.As(err, &recoverable) || !recoverable.Recoverable() {
+					t.Fatalf("RunWithOutcome error = %T %v, want recoverable safe-tool error", err, err)
+				}
+			}
+		})
+	}
+}
+
+func TestRunAppliesFreshTimeoutToEachNetworkStage(t *testing.T) {
+	const timeout = 10 * time.Millisecond
+	block := func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	tests := []struct {
+		name   string
+		runner *Runner
+		client MCPClient
+	}{
+		{
+			name: "metadata",
+			runner: &Runner{MetadataFetchers: []func(context.Context) error{
+				block,
+			}},
+			client: fakeMCPClient{},
+		},
+		{
+			name: "before beacon",
+			runner: &Runner{PostBeacon: func(ctx context.Context, _ *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+				return nil, block(ctx)
+			}},
+			client: fakeMCPClient{},
+		},
+		{
+			name:   "MCP call",
+			runner: &Runner{PostBeacon: allowToolDecision},
+			client: mcpClientFunc(func(ctx context.Context, _ string, _ map[string]any, _ ...string) (map[string]any, error) {
+				return nil, block(ctx)
+			}),
+		},
+		{
+			name: "after beacon",
+			runner: &Runner{PostBeacon: func(ctx context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+				if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
+					return nil, block(ctx)
+				}
+				return allowToolDecision(ctx, beacon)
+			}},
+			client: fakeMCPClient{},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			started := time.Now()
+			_, err := test.runner.Run(context.Background(), RunInput{
+				Timeout:   timeout,
+				ToolName:  "system.echo",
+				MCPClient: test.client,
+			})
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("Run error = %T %v, want deadline exceeded", err, err)
+			}
+			if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+				t.Fatalf("Run took %v, want bounded stage", elapsed)
+			}
+		})
+	}
+}
+
+func TestRunDoesNotApplyToolTimeoutToApprovalWait(t *testing.T) {
+	const timeout = 5 * time.Millisecond
+	runner := &Runner{
+		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+			return &turingv1.ToolPolicyDecision{
+				Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+				ApprovalId: "approval_1",
+				ToolCallId: beacon.GetToolCallId(),
+			}, nil
+		},
+		WaitApproval: func(ctx context.Context, _ string) (string, error) {
+			select {
+			case <-time.After(3 * timeout):
+				return "token", nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		},
+	}
+
+	outcome, err := runner.RunWithOutcome(context.Background(), RunInput{
+		Timeout:   timeout,
+		ToolName:  "system.echo",
+		MCPClient: fakeMCPClient{},
+	})
+
+	if err != nil || !outcome.SideEffecting {
+		t.Fatalf("RunWithOutcome = %+v, %v; want approval wait beyond tool timeout to succeed", outcome, err)
 	}
 }
 
@@ -495,6 +671,13 @@ func (e beaconPostedTestError) BeaconPosted() bool {
 }
 
 type fakeMCPClient struct{}
+
+func allowToolDecision(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+	return &turingv1.ToolPolicyDecision{
+		Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
+		ToolCallId: beacon.GetToolCallId(),
+	}, nil
+}
 
 func (fakeMCPClient) CallTool(ctx context.Context, name string, args map[string]any, approvalToken ...string) (map[string]any, error) {
 	return map[string]any{"ok": true}, nil

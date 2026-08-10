@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -76,6 +77,19 @@ func openApprovalTestDB(t *testing.T) *db.DB {
 		t.Fatalf("apply migrations: %v", err)
 	}
 	return database
+}
+
+func TestRecoverExpirationConflictReturnsCurrentReadError(t *testing.T) {
+	expirationErr := fmt.Errorf("expiration conflict")
+	currentErr := fmt.Errorf("current approval unavailable")
+
+	_, err := recoverExpirationConflict(context.Background(), expirationErr, func(context.Context) (repository.ApprovalRecord, error) {
+		return repository.ApprovalRecord{}, currentErr
+	})
+
+	if !errors.Is(err, currentErr) || errors.Is(err, expirationErr) {
+		t.Fatalf("recoverExpirationConflict error = %v, want current read error", err)
+	}
 }
 
 func (h *approvalHarness) createRunningToolCall(t *testing.T) repository.EnqueueUserMessageResult {

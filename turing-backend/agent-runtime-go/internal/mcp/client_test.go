@@ -418,9 +418,27 @@ func TestListToolsClassifiesRetryableFailures(t *testing.T) {
 			retryable: false,
 		},
 		{
-			name:      "JSON-RPC error",
+			name:      "JSON-RPC server error",
 			status:    http.StatusOK,
 			body:      `{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"failed"}}`,
+			retryable: true,
+		},
+		{
+			name:      "JSON-RPC internal error",
+			status:    http.StatusOK,
+			body:      `{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"internal"}}`,
+			retryable: true,
+		},
+		{
+			name:      "JSON-RPC invalid params",
+			status:    http.StatusOK,
+			body:      `{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"invalid"}}`,
+			retryable: false,
+		},
+		{
+			name:      "JSON-RPC other protocol error",
+			status:    http.StatusOK,
+			body:      `{"jsonrpc":"2.0","id":1,"error":{"code":-31999,"message":"other"}}`,
 			retryable: false,
 		},
 		{
@@ -445,6 +463,12 @@ func TestListToolsClassifiesRetryableFailures(t *testing.T) {
 			}
 			if got := retryableFromError(err); got != test.retryable {
 				t.Fatalf("retryable(%T %v) = %t, want %t", err, err, got, test.retryable)
+			}
+			if strings.HasPrefix(test.name, "JSON-RPC") {
+				var rpcErr JSONRPCError
+				if !errors.As(err, &rpcErr) || !strings.Contains(err.Error(), fmt.Sprint(rpcErr.Code)) {
+					t.Fatalf("ListTools error = %T %v, want preserved JSON-RPC code", err, err)
+				}
 			}
 		})
 	}

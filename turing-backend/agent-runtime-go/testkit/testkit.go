@@ -21,6 +21,8 @@ type WorkerConfig struct {
 	WorkerID           string
 	MaxConcurrentRuns  int
 	MaxToolCallsPerRun int
+	ModelTimeout       time.Duration
+	ToolTimeout        time.Duration
 	OpenAIBaseURL      string
 	OpenAIAPIKey       string
 	MCPSystemBaseURL   string
@@ -42,10 +44,26 @@ func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 		FilesMCP:           mcp.NewClient(cfg.MCPFilesBaseURL, cfg.MCPFilesToken, http.DefaultClient),
 		Runner:             toolRunner,
 		MaxToolCallsPerRun: cfg.MaxToolCallsPerRun,
+		ModelTimeout:       cfg.modelTimeout(),
+		ToolTimeout:        cfg.toolTimeout(),
 	}
 	executor := agent.NewGeneralAssistant(providers, client, toolset)
 	runtimeWorker := worker.New(worker.Options{WorkerID: cfg.WorkerID, AgentID: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: cfg.MaxConcurrentRuns}, runtimeClientAdapter{client: client}, executor)
 	return runtimeWorker.Run(ctx)
+}
+
+func (cfg WorkerConfig) modelTimeout() time.Duration {
+	if cfg.ModelTimeout > 0 {
+		return cfg.ModelTimeout
+	}
+	return 120 * time.Second
+}
+
+func (cfg WorkerConfig) toolTimeout() time.Duration {
+	if cfg.ToolTimeout > 0 {
+		return cfg.ToolTimeout
+	}
+	return 30 * time.Second
 }
 
 type runtimeClientAdapter struct{ client *orchestrator.Client }

@@ -60,7 +60,7 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 		defer close(out)
 		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_unavailable", Message: fmt.Sprintf("Ollama returned %d", resp.StatusCode)})
+			sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: providerHTTPErrorCode(resp.StatusCode), Message: fmt.Sprintf("Ollama returned %d", resp.StatusCode)})
 			return
 		}
 		scanner := bufio.NewScanner(resp.Body)

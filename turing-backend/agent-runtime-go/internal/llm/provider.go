@@ -1,6 +1,9 @@
 package llm
 
-import "context"
+import (
+	"context"
+	"net/http"
+)
 
 type ChatMessage struct {
 	Role       string     `json:"role"`
@@ -45,4 +48,15 @@ type StreamEvent struct {
 type Provider interface {
 	ID() string
 	StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error)
+}
+
+func providerHTTPErrorCode(status int) string {
+	switch {
+	case status == http.StatusRequestTimeout, status == http.StatusTooManyRequests, status >= 500 && status < 600:
+		return "model_unavailable"
+	case status == http.StatusUnauthorized, status == http.StatusForbidden:
+		return "model_auth_failed"
+	default:
+		return "model_request_failed"
+	}
 }

@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadFromEnvDoesNotUseLegacyHTTPOrchestratorBaseURL(t *testing.T) {
@@ -54,6 +55,44 @@ func TestLoadFromEnvRejectsNonPositiveMaxToolCallsPerRun(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "TURING_MAX_TOOL_CALLS_PER_RUN") ||
 				!strings.Contains(err.Error(), "greater than 0") {
 				t.Fatalf("LoadFromEnv error = %v, want clear positive-value validation", err)
+			}
+		})
+	}
+}
+
+func TestLoadFromEnvDefaultsTimeouts(t *testing.T) {
+	cfg, err := LoadFromEnv(mapEnv(map[string]string{
+		"TURING_INTERNAL_TOKEN": "internal",
+	}))
+	if err != nil {
+		t.Fatalf("LoadFromEnv failed: %v", err)
+	}
+	if cfg.ModelTimeout != 120*time.Second {
+		t.Fatalf("ModelTimeout = %v, want 120s", cfg.ModelTimeout)
+	}
+	if cfg.ToolTimeout != 30*time.Second {
+		t.Fatalf("ToolTimeout = %v, want 30s", cfg.ToolTimeout)
+	}
+}
+
+func TestLoadFromEnvRejectsNonPositiveTimeouts(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		env  string
+	}{
+		{name: "model zero", env: "TURING_MODEL_TIMEOUT_MS"},
+		{name: "tool zero", env: "TURING_TOOL_TIMEOUT_MS"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, value := range []string{"0", "-1"} {
+				_, err := LoadFromEnv(mapEnv(map[string]string{
+					"TURING_INTERNAL_TOKEN": "internal",
+					test.env:                value,
+				}))
+				if err == nil || !strings.Contains(err.Error(), test.env) ||
+					!strings.Contains(err.Error(), "greater than 0") {
+					t.Fatalf("LoadFromEnv(%s=%s) error = %v, want clear positive-value validation", test.env, value, err)
+				}
 			}
 		})
 	}

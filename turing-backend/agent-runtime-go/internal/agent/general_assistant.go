@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
@@ -25,6 +26,8 @@ type GeneralAssistantTools struct {
 	FilesMCP           ToolLister
 	Runner             *tools.Runner
 	MaxToolCallsPerRun int
+	ModelTimeout       time.Duration
+	ToolTimeout        time.Duration
 }
 
 const (
@@ -108,14 +111,20 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		events, err := provider.StreamChat(ctx, llm.ChatRequest{
+		modelCtx, cancelModel := boundedContext(ctx, a.modelTimeout())
+		events, err := provider.StreamChat(modelCtx, llm.ChatRequest{
 			Model:    job.GetModel(),
 			Messages: requestMessages,
 			Tools:    registry.Definitions(),
 		})
 		if err != nil {
+			modelErr := modelCtx.Err()
+			cancelModel()
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			if errors.Is(modelErr, context.DeadlineExceeded) {
+				return emitRunFailed(emit, job, "model_timeout", modelErr.Error(), !successfulToolSideEffect)
 			}
 			return emitRunFailed(emit, job, "model_stream_failed", err.Error(), !successfulToolSideEffect)
 		}
@@ -126,8 +135,13 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			var event llm.StreamEvent
 			var ok bool
 			select {
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-modelCtx.Done():
+				modelErr := modelCtx.Err()
+				cancelModel()
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return emitRunFailed(emit, job, "model_timeout", modelErr.Error(), !successfulToolSideEffect)
 			case event, ok = <-events:
 				if !ok {
 					break stream
@@ -138,6 +152,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				turnText += event.Text
 				content += event.Text
 				if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA, map[string]any{"messageId": job.GetAssistantMessageId(), "delta": event.Text})); err != nil {
+					cancelModel()
 					return err
 				}
 			case "tool_call":
@@ -151,11 +166,17 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				if message == "" {
 					message = code
 				}
+				cancelModel()
 				return emitRunFailed(emit, job, code, message, retryableModelError(code) && !successfulToolSideEffect)
 			}
 		}
+		modelErr := modelCtx.Err()
+		cancelModel()
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if errors.Is(modelErr, context.DeadlineExceeded) {
+			return emitRunFailed(emit, job, "model_timeout", modelErr.Error(), !successfulToolSideEffect)
 		}
 		if len(calls) == 0 {
 			return completeRun(emit, job, content)
@@ -209,6 +230,9 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 }
 
 func (a *GeneralAssistant) discoverTools(ctx context.Context) (*ToolRegistry, error) {
+	parentCtx := ctx
+	ctx, cancel := boundedContext(ctx, a.toolTimeout())
+	defer cancel()
 	for {
 		a.registryMu.Lock()
 		if a.registry != nil {
@@ -253,7 +277,7 @@ func (a *GeneralAssistant) discoverTools(ctx context.Context) (*ToolRegistry, er
 		a.registryMu.Lock()
 		discovery.registry = registry
 		discovery.err = err
-		discovery.retryAfterLeaderCancel = err != nil && ctx.Err() != nil && errors.Is(err, ctx.Err())
+		discovery.retryAfterLeaderCancel = err != nil && parentCtx.Err() != nil && errors.Is(err, parentCtx.Err())
 		if err == nil {
 			a.registry = registry
 		}
@@ -288,7 +312,7 @@ func (a *GeneralAssistant) executeToolCall(
 		}
 		return toolCallOutcome{}, appendToolError(messages, call, "tool_runner_unavailable")
 	}
-	result, err := a.tools.Runner.Run(ctx, tools.RunInput{
+	runOutcome, err := a.tools.Runner.RunWithOutcome(ctx, tools.RunInput{
 		AgentID:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
 		RunID:      job.GetRunId(),
 		TraceID:    job.GetTraceId(),
@@ -297,7 +321,9 @@ func (a *GeneralAssistant) executeToolCall(
 		ToolName:   call.Name,
 		Args:       call.Arguments,
 		MCPClient:  entry.Client,
+		Timeout:    a.toolTimeout(),
 	})
+	outcome := toolCallOutcome{SuccessfulSideEffect: runOutcome.SideEffecting}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return toolCallOutcome{}, ctxErr
 	}
@@ -316,8 +342,7 @@ func (a *GeneralAssistant) executeToolCall(
 		}
 		return toolCallOutcome{}, appendToolError(messages, call, err.Error())
 	}
-	outcome := toolCallOutcome{SuccessfulSideEffect: true}
-	data, err := json.Marshal(result)
+	data, err := json.Marshal(runOutcome.Result)
 	if err != nil {
 		return outcome, ToolResultReportingError{ToolCallID: call.ID, err: err}
 	}
@@ -409,7 +434,7 @@ func (a *GeneralAssistant) tryDebugTool(ctx context.Context, job *turingv1.Agent
 	if client == nil {
 		return true, emitRunFailed(emit, job, "tool_call_failed", "MCP client is not configured", false)
 	}
-	result, err := a.tools.Runner.Run(ctx, tools.RunInput{AgentID: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, RunID: job.GetRunId(), TraceID: job.GetTraceId(), ServerName: serverName, ToolName: toolName, Args: args, MCPClient: client})
+	result, err := a.tools.Runner.Run(ctx, tools.RunInput{AgentID: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, RunID: job.GetRunId(), TraceID: job.GetTraceId(), ServerName: serverName, ToolName: toolName, Args: args, MCPClient: client, Timeout: a.toolTimeout()})
 	if err != nil {
 		if tools.RunWasTerminalized(err) {
 			return true, nil
@@ -448,9 +473,30 @@ func emitRunFailed(emit func(*turingv1.RuntimeUpdate) error, job *turingv1.Agent
 
 func retryableModelError(code string) bool {
 	switch code {
-	case "model_unavailable", "model_stream_error":
+	case "model_unavailable", "model_stream_error", "model_timeout":
 		return true
 	default:
 		return false
 	}
+}
+
+func (a *GeneralAssistant) modelTimeout() time.Duration {
+	if a.tools == nil {
+		return 0
+	}
+	return a.tools.ModelTimeout
+}
+
+func (a *GeneralAssistant) toolTimeout() time.Duration {
+	if a.tools == nil {
+		return 0
+	}
+	return a.tools.ToolTimeout
+}
+
+func boundedContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, timeout)
 }

@@ -943,6 +943,39 @@ func TestOpenAIOversizedPhysicalSSELineReturnsBadChunk(t *testing.T) {
 	}
 }
 
+func TestOpenAIClassifiesHTTPErrorStatus(t *testing.T) {
+	tests := []struct {
+		status int
+		code   string
+	}{
+		{status: http.StatusRequestTimeout, code: "model_unavailable"},
+		{status: http.StatusTooManyRequests, code: "model_unavailable"},
+		{status: http.StatusInternalServerError, code: "model_unavailable"},
+		{status: http.StatusUnauthorized, code: "model_auth_failed"},
+		{status: http.StatusForbidden, code: "model_auth_failed"},
+		{status: http.StatusUnprocessableEntity, code: "model_request_failed"},
+		{status: 600, code: "model_request_failed"},
+	}
+	for _, test := range tests {
+		t.Run(http.StatusText(test.status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "provider error", test.status)
+			}))
+			t.Cleanup(server.Close)
+			provider := NewOpenAICompatible(server.URL, "", server.Client())
+			events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "gpt-4o-mini"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := collectEvents(events)
+			assertOpenAIEventTypes(t, got, "error")
+			if got[0].Code != test.code || !strings.Contains(got[0].Message, fmt.Sprint(test.status)) {
+				t.Fatalf("event = %+v, want code %q with status %d", got[0], test.code, test.status)
+			}
+		})
+	}
+}
+
 func TestOpenAIReaderErrorReturnsStreamErrorEvent(t *testing.T) {
 	readErr := errors.New("provider connection reset")
 	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {

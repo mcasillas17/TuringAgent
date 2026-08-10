@@ -150,14 +150,12 @@ func (s *Server) GetApprovalForRuntime(ctx context.Context, req *turingv1.GetApp
 	if approval.Status == "pending" && expired(approval.ExpiresAt) {
 		approval, err = s.expireApproval(ctx, req.ApprovalId)
 		if err != nil {
-			current, currentErr := s.repo.GetApproval(ctx, req.ApprovalId)
-			if currentErr != nil {
+			approval, err = recoverExpirationConflict(ctx, err, func(ctx context.Context) (repository.ApprovalRecord, error) {
+				return s.repo.GetApproval(ctx, req.ApprovalId)
+			})
+			if err != nil {
 				return nil, mapApprovalError(err)
 			}
-			if current.Status == "pending" {
-				return nil, mapApprovalError(err)
-			}
-			approval = current
 		}
 	}
 	return &turingv1.RuntimeApprovalState{
@@ -165,6 +163,21 @@ func (s *Server) GetApprovalForRuntime(ctx context.Context, req *turingv1.GetApp
 		Status:        mapApprovalStatus(approval.Status),
 		ApprovalToken: approval.ApprovalToken,
 	}, nil
+}
+
+func recoverExpirationConflict(
+	ctx context.Context,
+	expirationErr error,
+	getCurrent func(context.Context) (repository.ApprovalRecord, error),
+) (repository.ApprovalRecord, error) {
+	current, currentErr := getCurrent(ctx)
+	if currentErr != nil {
+		return repository.ApprovalRecord{}, currentErr
+	}
+	if current.Status == "pending" {
+		return repository.ApprovalRecord{}, expirationErr
+	}
+	return current, nil
 }
 
 func (s *Server) expireApproval(ctx context.Context, approvalID string) (repository.ApprovalRecord, error) {
