@@ -34,6 +34,7 @@ func TestBuildRegistryDiscoversToolsAndSupportsLookup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildToolRegistry returned error: %v", err)
 	}
+
 	if alpha.listCalls != 1 || beta.listCalls != 1 {
 		t.Fatalf("ListTools calls = alpha:%d beta:%d, want one each", alpha.listCalls, beta.listCalls)
 	}
@@ -63,6 +64,49 @@ func TestBuildRegistryDiscoversToolsAndSupportsLookup(t *testing.T) {
 	}
 	if _, ok := registry.Lookup("unknown"); ok {
 		t.Fatal("Lookup(unknown) returned true")
+	}
+}
+
+func TestBuildRegistryRetainsProductionLikeCatalogMetadata(t *testing.T) {
+	systemSchema := map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{},
+		"additionalProperties": false,
+	}
+	filesSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path":    map[string]any{"type": "string"},
+			"content": map[string]any{"type": "string"},
+		},
+		"required":             []any{"path", "content"},
+		"additionalProperties": false,
+	}
+	registry, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
+		"system": &registryTestClient{tools: []map[string]any{{
+			"name": "system.info", "description": "Return runtime information.", "inputSchema": systemSchema,
+		}}},
+		"files": &registryTestClient{tools: []map[string]any{{
+			"name": "files.create", "description": "Create a UTF-8 text file.", "inputSchema": filesSchema,
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	definitions := registry.Definitions()
+	if len(definitions) != 2 {
+		t.Fatalf("Definitions length = %d, want 2", len(definitions))
+	}
+	byName := make(map[string]llm.ToolDefinition, len(definitions))
+	for _, definition := range definitions {
+		byName[definition.Name] = definition
+	}
+	if got := byName["system.info"]; got.Description != "Return runtime information." || !reflect.DeepEqual(got.Parameters, systemSchema) {
+		t.Fatalf("system.info definition = %#v", got)
+	}
+	if got := byName["files.create"]; got.Description != "Create a UTF-8 text file." || !reflect.DeepEqual(got.Parameters, filesSchema) {
+		t.Fatalf("files.create definition = %#v", got)
 	}
 }
 

@@ -1109,6 +1109,7 @@ func TestModelDrivenFilesCreateCompletesApprovalFlow(t *testing.T) {
 	runID := completedRunID(t, events)
 	beaconID := assertStreamedApprovalToolLifecycle(t, events, "files.create", runID, approvalID, finalText)
 	assertPersistedTypes(t, events,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_REQUESTED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_APPROVED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_CONSUMED,
@@ -1414,17 +1415,30 @@ func assertStreamedToolLifecycle(t *testing.T, events []*turingv1.ChatStreamEven
 
 func assertStreamedApprovalToolLifecycle(t *testing.T, events []*turingv1.ChatStreamEvent, toolName, runID, approvalID, finalText string) string {
 	t.Helper()
-	var requested, approved, consumed, completed []*turingv1.TuringEvent
-	requestedIndex, approvedIndex, consumedIndex, completedIndex := -1, -1, -1, -1
+	var started, requested, approved, consumed, completed []*turingv1.TuringEvent
+	startedIndex, requestedIndex, approvedIndex, consumedIndex, completedIndex := -1, -1, -1, -1, -1
+	messageCompletedIndex, runCompletedIndex := -1, -1
 	for index, streamEvent := range events {
 		if failed := streamEvent.GetRunFailed(); failed != nil {
 			t.Fatalf("unexpected run failure: %+v", failed)
 		}
+		if message := streamEvent.GetMessageCompleted(); message != nil {
+			if message.Content != finalText {
+				t.Fatalf("streamed message.completed content = %q, want %q", message.Content, finalText)
+			}
+			messageCompletedIndex = index
+		}
 		event := streamEvent.GetPersistedEvent()
+		if streamEvent.GetRunCompleted() != nil {
+			runCompletedIndex = index
+		}
 		if event == nil || event.RunId != runID {
 			continue
 		}
 		switch event.Type {
+		case turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED:
+			started = append(started, event)
+			startedIndex = index
 		case turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_REQUESTED:
 			requested = append(requested, event)
 			requestedIndex = index
@@ -1444,13 +1458,14 @@ func assertStreamedApprovalToolLifecycle(t *testing.T, events []*turingv1.ChatSt
 			t.Fatalf("unexpected failed or denied event: %s", event.Type)
 		}
 	}
-	if len(requested) != 1 || len(approved) != 1 || len(consumed) != 1 || len(completed) != 1 {
-		t.Fatalf("approval lifecycle counts: requested=%d approved=%d consumed=%d completed=%d, want 1 each",
-			len(requested), len(approved), len(consumed), len(completed))
+	if len(started) != 1 || len(requested) != 1 || len(approved) != 1 || len(consumed) != 1 || len(completed) != 1 {
+		t.Fatalf("approval lifecycle counts: started=%d requested=%d approved=%d consumed=%d completed=%d, want 1 each",
+			len(started), len(requested), len(approved), len(consumed), len(completed))
 	}
-	if !(requestedIndex < approvedIndex && approvedIndex < consumedIndex && consumedIndex < completedIndex) {
-		t.Fatalf("approval lifecycle order: requested=%d approved=%d consumed=%d completed=%d",
-			requestedIndex, approvedIndex, consumedIndex, completedIndex)
+	if !(startedIndex < requestedIndex && requestedIndex < approvedIndex && approvedIndex < consumedIndex &&
+		consumedIndex < completedIndex && completedIndex < messageCompletedIndex && messageCompletedIndex < runCompletedIndex) {
+		t.Fatalf("approval lifecycle order: started=%d requested=%d approved=%d consumed=%d completed=%d message=%d run=%d",
+			startedIndex, requestedIndex, approvedIndex, consumedIndex, completedIndex, messageCompletedIndex, runCompletedIndex)
 	}
 	for label, event := range map[string]*turingv1.TuringEvent{
 		"requested": requested[0],
@@ -1461,10 +1476,11 @@ func assertStreamedApprovalToolLifecycle(t *testing.T, events []*turingv1.ChatSt
 			t.Fatalf("%s approvalId = %q, want %q", label, got, approvalID)
 		}
 	}
-	toolCallID := stringField(completed[0].Payload, "toolCallId")
+	toolCallID := stringField(started[0].Payload, "toolCallId")
 	if toolCallID == "" {
-		t.Fatal("tool.call.completed toolCallId is empty")
+		t.Fatal("tool.call.started toolCallId is empty")
 	}
+	assertToolLifecycleEvent(t, "streamed started", started[0], toolCallID, toolName, runID)
 	assertToolLifecycleEvent(t, "streamed completed", completed[0], toolCallID, toolName, runID)
 	if got := messageCompletedContent(t, events); got != finalText {
 		t.Fatalf("message.completed content = %q, want %q", got, finalText)

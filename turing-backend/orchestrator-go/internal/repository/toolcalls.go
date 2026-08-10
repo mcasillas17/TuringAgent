@@ -19,34 +19,42 @@ type ToolCallRecord struct {
 }
 
 func (r *Repository) RecordToolCallBefore(ctx context.Context, record ToolCallRecord, agentID string, serverName string, toolName string, argsJSON string, argsHash string) error {
+	_, err := r.RecordToolCallBeforeNew(ctx, record, agentID, serverName, toolName, argsJSON, argsHash)
+	return err
+}
+
+func (r *Repository) RecordToolCallBeforeNew(ctx context.Context, record ToolCallRecord, agentID string, serverName string, toolName string, argsJSON string, argsHash string) (bool, error) {
 	status := record.Status
 	if status == "" {
 		status = "requested"
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	var existingRunID, existingAgentID, existingServerName, existingToolName, existingArgsHash string
 	err = tx.QueryRowContext(ctx, `SELECT run_id, agent_id, server_name, tool_name, args_hash FROM tool_calls WHERE id = ?`, record.ToolCallID).Scan(&existingRunID, &existingAgentID, &existingServerName, &existingToolName, &existingArgsHash)
 	if err == nil {
 		if existingRunID == record.RunID && existingAgentID == agentID && existingServerName == serverName && existingToolName == toolName && existingArgsHash == argsHash {
-			return tx.Commit()
+			return false, tx.Commit()
 		}
-		return ErrToolCallConflict
+		return false, ErrToolCallConflict
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return err
+		return false, err
 	}
 	var approvalID any
 	if record.ApprovalID != "" {
 		approvalID = record.ApprovalID
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO tool_calls (id, run_id, agent_id, server_name, tool_name, args_json, args_hash, status, approval_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ToolCallID, record.RunID, agentID, serverName, toolName, argsJSON, argsHash, status, approvalID, now()); err != nil {
-		return err
+		return false, err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (r *Repository) RecordToolCallAfter(ctx context.Context, toolCallID string, runID string, status string, resultSummary string, errorCode string, errorMessage string, durationMS int64) error {

@@ -7,11 +7,25 @@ import (
 )
 
 func List() []map[string]any {
+	emptySchema := map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{},
+		"additionalProperties": false,
+	}
 	return []map[string]any{
-		{"name": "system.health", "policy": "safe"},
-		{"name": "system.time", "policy": "safe"},
-		{"name": "system.echo", "policy": "safe"},
-		{"name": "system.info", "policy": "safe"},
+		{"name": "system.health", "description": "Check whether the system MCP service is healthy.", "inputSchema": emptySchema, "policy": "safe"},
+		{"name": "system.time", "description": "Return the current UTC time.", "inputSchema": emptySchema, "policy": "safe"},
+		{
+			"name":        "system.echo",
+			"description": "Echo the supplied text, or an empty string when text is omitted.",
+			"inputSchema": map[string]any{
+				"type":                 "object",
+				"properties":           map[string]any{"text": map[string]any{"type": "string"}},
+				"additionalProperties": false,
+			},
+			"policy": "safe",
+		},
+		{"name": "system.info", "description": "Return operating system, architecture, and Go runtime information.", "inputSchema": emptySchema, "policy": "safe"},
 	}
 }
 

@@ -206,8 +206,14 @@ func (state *ollamaStreamState) appendToolCallFragments(value any) error {
 		if !ok {
 			return fmt.Errorf("tool call %d must be an object", position)
 		}
-		if _, present := call["type"]; present {
-			return fmt.Errorf("tool call %d contains unsupported type", position)
+		if rawType, present := call["type"]; present {
+			callType, ok := rawType.(string)
+			if !ok {
+				return fmt.Errorf("tool call %d type must be a string", position)
+			}
+			if callType != "function" {
+				return fmt.Errorf("tool call %d type must be %q", position, "function")
+			}
 		}
 		id := ""
 		if rawID, present := call["id"]; present {
@@ -422,6 +428,7 @@ type ollamaMessage struct {
 
 type ollamaMessageToolCall struct {
 	ID       string             `json:"id,omitempty"`
+	Type     string             `json:"type"`
 	Function ollamaFunctionCall `json:"function"`
 }
 
@@ -445,7 +452,8 @@ func ollamaMessages(messages []ChatMessage) []ollamaMessage {
 					arguments = map[string]any{}
 				}
 				result.ToolCalls = append(result.ToolCalls, ollamaMessageToolCall{
-					ID: call.ID,
+					ID:   call.ID,
+					Type: "function",
 					Function: ollamaFunctionCall{
 						Index:     index,
 						Name:      call.Name,

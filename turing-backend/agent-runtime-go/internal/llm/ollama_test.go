@@ -55,7 +55,7 @@ func TestOllamaRejectsMultipleJSONValuesOnOneLine(t *testing.T) {
 
 func TestOllamaParsesToolCall(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"message":{"role":"assistant","content":"I'll check.","tool_calls":[{"id":"call_1","function":{"index":0,"name":"get_weather","arguments":{"city":"Paris"}}}]},"done":true,"done_reason":"tool_calls"}` + "\n"))
+		w.Write([]byte(`{"message":{"role":"assistant","content":"I'll check.","tool_calls":[{"id":"call_1","type":"function","function":{"index":0,"name":"get_weather","arguments":{"city":"Paris"}}}]},"done":true,"done_reason":"tool_calls"}` + "\n"))
 	}))
 	t.Cleanup(server.Close)
 
@@ -235,8 +235,8 @@ func TestOllamaRequestSerializesProviderSpecificMessages(t *testing.T) {
 	if call["id"] != "call_1" {
 		t.Fatalf("tool call ID = %#v, want call_1", call["id"])
 	}
-	if _, present := call["type"]; present {
-		t.Fatalf("unsupported tool call type was serialized: %#v", call)
+	if call["type"] != "function" {
+		t.Fatalf("tool call type = %#v, want function", call["type"])
 	}
 	function := call["function"].(map[string]any)
 	if function["name"] != "get_weather" || function["index"] != json.Number("0") {
@@ -351,7 +351,9 @@ func TestOllamaRejectsMalformedToolCalls(t *testing.T) {
 		{name: "arguments missing", toolCalls: `[{"function":{"name":"bad"}}]`},
 		{name: "arguments null", toolCalls: `[{"function":{"name":"bad","arguments":null}}]`},
 		{name: "arguments not object", toolCalls: `[{"function":{"name":"bad","arguments":[]}}]`},
-		{name: "unexpected type", toolCalls: `[{"type":"function","function":{"name":"bad","arguments":{}}}]`},
+		{name: "null type", toolCalls: `[{"type":null,"function":{"name":"bad","arguments":{}}}]`},
+		{name: "non-string type", toolCalls: `[{"type":42,"function":{"name":"bad","arguments":{}}}]`},
+		{name: "other string type", toolCalls: `[{"type":"command","function":{"name":"bad","arguments":{}}}]`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

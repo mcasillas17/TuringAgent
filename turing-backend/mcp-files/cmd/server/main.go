@@ -96,14 +96,65 @@ func handleMCP(w http.ResponseWriter, r *http.Request, filesTools tools.FilesToo
 
 func listTools() []map[string]any {
 	return []map[string]any{
-		{"name": "files.list", "policy": "safe"},
-		{"name": "files.search", "policy": "safe"},
-		{"name": "files.read", "policy": "safe"},
-		{"name": "files.create", "policy": "approval_required"},
-		{"name": "files.update", "policy": "approval_required"},
-		{"name": "files.delete", "policy": "disabled"},
-		{"name": "files.move", "policy": "disabled"},
+		{
+			"name":        "files.list",
+			"description": "List files and directories at a sandbox-relative path.",
+			"inputSchema": objectSchema(map[string]any{"path": stringSchema()}, []any{}),
+			"policy":      "safe",
+		},
+		{
+			"name":        "files.search",
+			"description": "Search UTF-8 files for a query within a sandbox-relative path.",
+			"inputSchema": objectSchema(map[string]any{
+				"path":  stringSchema(),
+				"query": stringSchema(),
+				"limit": integerSchema(1, 200),
+			}, []any{"query"}),
+			"policy": "safe",
+		},
+		{
+			"name":        "files.read",
+			"description": "Read a UTF-8 file from a sandbox-relative path.",
+			"inputSchema": objectSchema(map[string]any{
+				"path":     stringSchema(),
+				"maxBytes": integerSchema(1, 524288),
+			}, []any{}),
+			"policy": "safe",
+		},
+		{
+			"name":        "files.create",
+			"description": "Create a UTF-8 file at a sandbox-relative path.",
+			"inputSchema": objectSchema(map[string]any{"path": stringSchema(), "content": stringSchema()}, []any{"path", "content"}),
+			"policy":      "approval_required",
+		},
+		{
+			"name":        "files.update",
+			"description": "Replace a UTF-8 file, optionally requiring its current SHA-256 hash.",
+			"inputSchema": objectSchema(map[string]any{
+				"path":         stringSchema(),
+				"content":      stringSchema(),
+				"expectedHash": stringSchema(),
+			}, []any{"path", "content"}),
+			"policy": "approval_required",
+		},
 	}
+}
+
+func objectSchema(properties map[string]any, required []any) map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"properties":           properties,
+		"required":             required,
+		"additionalProperties": false,
+	}
+}
+
+func stringSchema() map[string]any {
+	return map[string]any{"type": "string"}
+}
+
+func integerSchema(minimum, maximum int) map[string]any {
+	return map[string]any{"type": "integer", "minimum": minimum, "maximum": maximum}
 }
 
 func approvalTokenFromParams(params map[string]any) string {

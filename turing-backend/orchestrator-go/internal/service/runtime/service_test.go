@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1468,6 +1469,20 @@ func TestToolBeaconRequiresApprovalForFilesTool(t *testing.T) {
 	if decision.Decision != turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED || decision.ApprovalId == "" {
 		t.Fatalf("tool policy decision = %+v", decision)
 	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+		RunId: enqueued.RunID, TraceId: enqueued.TraceID, ToolCallId: "call_files_update",
+		AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "files",
+		ToolName: "files.update", Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, Args: args,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	repeated := recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+		decision := cmd.GetToolPolicyDecision()
+		return decision != nil && decision.ToolCallId == "call_files_update"
+	}).GetToolPolicyDecision()
+	if repeated.ApprovalId != decision.ApprovalId {
+		t.Fatalf("repeated approval ID = %q, want %q", repeated.ApprovalId, decision.ApprovalId)
+	}
 	var toolCallStatus, approvalID string
 	if err := h.database.QueryRowContext(context.Background(), `SELECT status, approval_id FROM tool_calls WHERE id = ?`, "call_files_update").Scan(&toolCallStatus, &approvalID); err != nil {
 		t.Fatal(err)
@@ -1486,17 +1501,27 @@ func TestToolBeaconRequiresApprovalForFilesTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var sawRequested bool
+	var lifecycle []string
+	var startedPayload map[string]any
 	for _, event := range replayed {
-		if event.Type == "approval.requested" && event.RunID.Valid && event.RunID.String == enqueued.RunID {
-			sawRequested = true
+		if !event.RunID.Valid || event.RunID.String != enqueued.RunID {
+			continue
 		}
-		if event.Type == "tool.call.started" && event.RunID.Valid && event.RunID.String == enqueued.RunID {
-			t.Fatal("approval-required tool emitted tool.call.started before approval")
+		if event.Type == "tool.call.started" || event.Type == "approval.requested" {
+			lifecycle = append(lifecycle, event.Type)
+		}
+		if event.Type == "tool.call.started" {
+			if err := json.Unmarshal([]byte(event.PayloadJSON), &startedPayload); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	if !sawRequested {
-		t.Fatal("approval.requested event was not persisted")
+	if want := []string{"tool.call.started", "approval.requested"}; !reflect.DeepEqual(lifecycle, want) {
+		t.Fatalf("approval start lifecycle = %v, want %v", lifecycle, want)
+	}
+	if startedPayload["toolCallId"] != "call_files_update" || startedPayload["serverName"] != "files" ||
+		startedPayload["toolName"] != "files.update" || !reflect.DeepEqual(startedPayload["args"], args.AsMap()) {
+		t.Fatalf("tool.call.started payload = %#v", startedPayload)
 	}
 	var auditAction string
 	if err := h.database.QueryRowContext(context.Background(), `SELECT action FROM audit_logs WHERE target = 'call_files_update'`).Scan(&auditAction); err != nil && !errors.Is(err, sql.ErrNoRows) {

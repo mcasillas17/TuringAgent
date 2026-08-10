@@ -1,6 +1,10 @@
 package tools
 
-import "testing"
+import (
+	"reflect"
+	"strings"
+	"testing"
+)
 
 func TestCallSystemTime(t *testing.T) {
 	result, err := Call("system.time", map[string]any{"timezone": "UTC"})
@@ -19,5 +23,38 @@ func TestSystemInfoDoesNotExposeSecrets(t *testing.T) {
 	}
 	if _, ok := result["env"]; ok {
 		t.Fatalf("system.info must not expose env")
+	}
+}
+
+func TestListAdvertisesDocumentedObjectSchemas(t *testing.T) {
+	advertised := List()
+	if len(advertised) != 4 {
+		t.Fatalf("List returned %d tools, want 4", len(advertised))
+	}
+	for _, tool := range advertised {
+		name, _ := tool["name"].(string)
+		description, _ := tool["description"].(string)
+		if strings.TrimSpace(description) == "" {
+			t.Errorf("%s description is empty", name)
+		}
+		schema, ok := tool["inputSchema"].(map[string]any)
+		if !ok || schema["type"] != "object" {
+			t.Errorf("%s inputSchema = %#v, want object root", name, tool["inputSchema"])
+			continue
+		}
+		if schema["additionalProperties"] != false {
+			t.Errorf("%s additionalProperties = %#v, want false", name, schema["additionalProperties"])
+		}
+		if tool["policy"] != "safe" {
+			t.Errorf("%s policy = %#v, want safe", name, tool["policy"])
+		}
+		if name == "system.echo" {
+			want := map[string]any{"text": map[string]any{"type": "string"}}
+			if !reflect.DeepEqual(schema["properties"], want) {
+				t.Errorf("system.echo properties = %#v, want %#v", schema["properties"], want)
+			}
+		} else if properties, ok := schema["properties"].(map[string]any); !ok || len(properties) != 0 {
+			t.Errorf("%s properties = %#v, want empty object", name, schema["properties"])
+		}
 	}
 }
