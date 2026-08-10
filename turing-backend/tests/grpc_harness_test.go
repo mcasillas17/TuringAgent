@@ -2,6 +2,8 @@ package tests
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base32"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +37,7 @@ const (
 	integrationSystemToken   = "system-token"
 	integrationFilesToken    = "files-token"
 	integrationApprovalKey   = "approval-secret"
+	integrationOpenAIKey     = "fake-key"
 )
 
 var integrationArtifacts string
@@ -66,23 +69,28 @@ type fakeModelServer struct {
 	modelDrivenToolCall  bool
 	startedOnce          sync.Once
 	cancelledOnce        sync.Once
+	handlerErrorOnce     sync.Once
 	mu                   sync.Mutex
 	chatCompletionBodies []map[string]any
+	handlerErrors        chan error
 }
 
 type fakeMCPRequest struct {
 	method string
 	params map[string]any
+	id     json.Number
 }
 
 type fakeMCPServer struct {
-	server         *httptest.Server
-	name           string
-	token          string
-	approvalTokens chan string
-	mu             sync.Mutex
-	advertiseTime  bool
-	requests       []fakeMCPRequest
+	server           *httptest.Server
+	name             string
+	token            string
+	approvalTokens   chan string
+	mu               sync.Mutex
+	advertiseTime    bool
+	requests         []fakeMCPRequest
+	handlerErrorOnce sync.Once
+	handlerErrors    chan error
 }
 
 type harnessOption func(*harnessConfig)
@@ -175,7 +183,7 @@ func (h *grpcHarness) startRuntimeWorker() {
 			MaxConcurrentRuns:  1,
 			MaxToolCallsPerRun: 10,
 			OpenAIBaseURL:      h.fakeModel.server.URL,
-			OpenAIAPIKey:       "fake-key",
+			OpenAIAPIKey:       integrationOpenAIKey,
 			MCPSystemBaseURL:   h.systemMCP.server.URL,
 			MCPFilesBaseURL:    h.filesMCP.server.URL,
 			MCPSystemToken:     integrationSystemToken,
@@ -283,6 +291,7 @@ func newFakeModelServer(blockUntilCancel bool) *fakeModelServer {
 		started:          make(chan struct{}),
 		cancelled:        make(chan struct{}),
 		blockUntilCancel: blockUntilCancel,
+		handlerErrors:    make(chan error, 1),
 	}
 	fake.server = httptest.NewServer(http.HandlerFunc(fake.handleChatCompletion))
 	return fake
@@ -290,16 +299,37 @@ func newFakeModelServer(blockUntilCancel bool) *fakeModelServer {
 
 func (f *fakeModelServer) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost || r.URL.Path != "/chat/completions" {
-		http.NotFound(w, r)
+		f.reject(w, http.StatusNotFound, fmt.Errorf("OpenAI request = %s %s, want POST /chat/completions", r.Method, r.URL.Path))
+		return
+	}
+	if got, want := r.Header.Get("authorization"), "Bearer "+integrationOpenAIKey; got != want {
+		f.reject(w, http.StatusUnauthorized, fmt.Errorf("OpenAI authorization = %q, want %q", got, want))
+		return
+	}
+	if got := r.Header.Get("content-type"); got != "application/json" {
+		f.reject(w, http.StatusUnsupportedMediaType, fmt.Errorf("OpenAI content-type = %q, want application/json", got))
 		return
 	}
 	defer r.Body.Close()
 	var body map[string]any
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&body); err != nil {
+		f.reject(w, http.StatusBadRequest, fmt.Errorf("decode OpenAI request: %w", err))
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		f.reject(w, http.StatusBadRequest, fmt.Errorf("OpenAI request must contain one JSON object"))
+		return
+	}
 	f.mu.Lock()
-	f.chatCompletionBodies = append(f.chatCompletionBodies, body)
-	requestNumber := len(f.chatCompletionBodies)
 	modelDrivenToolCall := f.modelDrivenToolCall
+	requestNumber := len(f.chatCompletionBodies) + 1
+	if err := validateOpenAIRequest(body, requestNumber, modelDrivenToolCall); err != nil {
+		f.mu.Unlock()
+		f.reject(w, http.StatusBadRequest, err)
+		return
+	}
+	f.chatCompletionBodies = append(f.chatCompletionBodies, body)
 	f.mu.Unlock()
 
 	w.Header().Set("content-type", "text/event-stream")
@@ -329,6 +359,97 @@ func (f *fakeModelServer) handleChatCompletion(w http.ResponseWriter, r *http.Re
 	}
 }
 
+func (f *fakeModelServer) reject(w http.ResponseWriter, statusCode int, err error) {
+	f.handlerErrorOnce.Do(func() { f.handlerErrors <- err })
+	http.Error(w, err.Error(), statusCode)
+}
+
+func validateOpenAIRequest(body map[string]any, requestNumber int, requireToolFlow bool) error {
+	if got := body["model"]; got != "fake-model" {
+		return fmt.Errorf("OpenAI model = %#v, want fake-model", got)
+	}
+	if got := body["stream"]; got != true {
+		return fmt.Errorf("OpenAI stream = %#v, want true", got)
+	}
+	messages, ok := body["messages"].([]any)
+	if !ok || len(messages) == 0 {
+		return fmt.Errorf("OpenAI messages = %#v, want a non-empty array", body["messages"])
+	}
+	for index, raw := range messages {
+		message, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("OpenAI message[%d] = %#v, want object", index, raw)
+		}
+		if role, ok := message["role"].(string); !ok || role == "" {
+			return fmt.Errorf("OpenAI message[%d] role = %#v, want non-empty string", index, message["role"])
+		}
+	}
+
+	rawTools, toolsPresent := body["tools"]
+	tools, toolsAreArray := rawTools.([]any)
+	if requireToolFlow && (!toolsPresent || !toolsAreArray || len(tools) != 1) {
+		return fmt.Errorf("OpenAI tools = %#v, want one function tool", rawTools)
+	}
+	if toolsPresent && !toolsAreArray {
+		return fmt.Errorf("OpenAI tools = %#v, want array", rawTools)
+	}
+	for index, raw := range tools {
+		tool, ok := raw.(map[string]any)
+		if !ok || tool["type"] != "function" {
+			return fmt.Errorf("OpenAI tool[%d] = %#v, want function object", index, raw)
+		}
+		function, ok := tool["function"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("OpenAI tool[%d] function = %#v, want object", index, tool["function"])
+		}
+		if name, ok := function["name"].(string); !ok || name == "" {
+			return fmt.Errorf("OpenAI tool[%d] name = %#v, want non-empty string", index, function["name"])
+		}
+		if _, ok := function["description"].(string); !ok {
+			return fmt.Errorf("OpenAI tool[%d] description = %#v, want string", index, function["description"])
+		}
+		if _, ok := function["parameters"].(map[string]any); !ok {
+			return fmt.Errorf("OpenAI tool[%d] parameters = %#v, want object", index, function["parameters"])
+		}
+	}
+	if !requireToolFlow {
+		return nil
+	}
+
+	switch requestNumber {
+	case 1:
+		last, _ := messages[len(messages)-1].(map[string]any)
+		if last["role"] != "user" {
+			return fmt.Errorf("initial OpenAI final message role = %#v, want user", last["role"])
+		}
+	case 2:
+		if len(messages) < 2 {
+			return fmt.Errorf("follow-up OpenAI messages = %#v, want assistant and tool messages", messages)
+		}
+		assistant, _ := messages[len(messages)-2].(map[string]any)
+		toolResult, _ := messages[len(messages)-1].(map[string]any)
+		calls, callsOK := assistant["tool_calls"].([]any)
+		if assistant["role"] != "assistant" || !callsOK || len(calls) != 1 {
+			return fmt.Errorf("follow-up OpenAI assistant message = %#v, want one tool call", assistant)
+		}
+		call, callOK := calls[0].(map[string]any)
+		function, functionOK := call["function"].(map[string]any)
+		_, idOK := call["id"].(string)
+		_, argumentsOK := function["arguments"].(string)
+		if !callOK || !functionOK || !idOK || call["type"] != "function" || !argumentsOK {
+			return fmt.Errorf("follow-up OpenAI tool call = %#v, want serialized function call", calls[0])
+		}
+		_, resultIDOK := toolResult["tool_call_id"].(string)
+		_, contentOK := toolResult["content"].(string)
+		if toolResult["role"] != "tool" || !resultIDOK || !contentOK {
+			return fmt.Errorf("follow-up OpenAI tool result = %#v, want linked tool content", toolResult)
+		}
+	default:
+		return fmt.Errorf("OpenAI request count exceeded tool flow: got request %d", requestNumber)
+	}
+	return nil
+}
+
 func (f *fakeModelServer) writeModelDrivenResponse(w http.ResponseWriter, flusher http.Flusher, body map[string]any, requestNumber int) {
 	switch requestNumber {
 	case 1:
@@ -337,7 +458,7 @@ func (f *fakeModelServer) writeModelDrivenResponse(w http.ResponseWriter, flushe
 			writeOpenAIChunk(w, "", "stop")
 			return
 		}
-		writeOpenAIToolCallChunk(w, alias, `{"zone":`, true)
+		writeOpenAIToolCallChunk(w, alias, `{"timezone":`, true)
 		if flusher != nil {
 			flusher.Flush()
 		}
@@ -412,18 +533,27 @@ func writeOpenAIChunk(w http.ResponseWriter, token string, finishReason string) 
 }
 
 func newFakeMCPServer(name string, token string) *fakeMCPServer {
-	fake := &fakeMCPServer{name: name, token: token, approvalTokens: make(chan string, 4)}
+	fake := &fakeMCPServer{
+		name:           name,
+		token:          token,
+		approvalTokens: make(chan string, 4),
+		handlerErrors:  make(chan error, 1),
+	}
 	fake.server = httptest.NewServer(http.HandlerFunc(fake.handle))
 	return fake
 }
 
 func (f *fakeMCPServer) handle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.NotFound(w, r)
+		f.reject(w, http.StatusMethodNotAllowed, fmt.Errorf("%s MCP method = %s, want POST", f.name, r.Method))
 		return
 	}
 	if got, want := r.Header.Get("authorization"), "Bearer "+f.token; got != want {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		f.reject(w, http.StatusUnauthorized, fmt.Errorf("%s MCP authorization = %q, want %q", f.name, got, want))
+		return
+	}
+	if got := r.Header.Get("content-type"); got != "application/json" {
+		f.reject(w, http.StatusUnsupportedMediaType, fmt.Errorf("%s MCP content-type = %q, want application/json", f.name, got))
 		return
 	}
 	defer r.Body.Close()
@@ -433,12 +563,36 @@ func (f *fakeMCPServer) handle(w http.ResponseWriter, r *http.Request) {
 		Method  string         `json:"method"`
 		Params  map[string]any `json:"params"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONRPCError(w, nil, "bad request")
+	decoder := json.NewDecoder(r.Body)
+	decoder.UseNumber()
+	if err := decoder.Decode(&req); err != nil {
+		f.reject(w, http.StatusBadRequest, fmt.Errorf("decode %s MCP request: %w", f.name, err))
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		f.reject(w, http.StatusBadRequest, fmt.Errorf("%s MCP request must contain one JSON object", f.name))
+		return
+	}
+	if req.JSONRPC != "2.0" {
+		f.reject(w, http.StatusBadRequest, fmt.Errorf("%s MCP jsonrpc = %q, want 2.0", f.name, req.JSONRPC))
+		return
+	}
+	requestID, ok := req.ID.(json.Number)
+	if !ok {
+		f.reject(w, http.StatusBadRequest, fmt.Errorf("%s MCP request ID = %#v, want integer", f.name, req.ID))
+		return
+	}
+	requestIDValue, err := requestID.Int64()
+	if err != nil || requestIDValue < 1 {
+		f.reject(w, http.StatusBadRequest, fmt.Errorf("%s MCP request ID = %q, want positive integer", f.name, requestID))
+		return
+	}
+	if err := validateMCPParams(req.Method, req.Params); err != nil {
+		f.reject(w, http.StatusBadRequest, fmt.Errorf("%s MCP: %w", f.name, err))
 		return
 	}
 	f.mu.Lock()
-	f.requests = append(f.requests, fakeMCPRequest{method: req.Method, params: req.Params})
+	f.requests = append(f.requests, fakeMCPRequest{method: req.Method, params: req.Params, id: requestID})
 	advertiseTime := f.advertiseTime
 	f.mu.Unlock()
 	if req.Method == "tools/list" {
@@ -450,17 +604,12 @@ func (f *fakeMCPServer) handle(w http.ResponseWriter, r *http.Request) {
 				"inputSchema": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"zone": map[string]any{"type": "string"},
+						"timezone": map[string]any{"type": "string"},
 					},
-					"required": []any{"zone"},
 				},
 			})
 		}
-		writeJSONRPCResult(w, req.ID, map[string]any{"tools": tools})
-		return
-	}
-	if req.Method != "tools/call" {
-		writeJSONRPCError(w, req.ID, "unknown method")
+		writeJSONRPCResult(w, requestID, map[string]any{"tools": tools})
 		return
 	}
 	toolName, _ := req.Params["name"].(string)
@@ -468,11 +617,15 @@ func (f *fakeMCPServer) handle(w http.ResponseWriter, r *http.Request) {
 	meta, _ := req.Params["_meta"].(map[string]any)
 	switch toolName {
 	case "system.time":
-		writeJSONRPCResult(w, req.ID, map[string]any{"time": "2025-01-02T03:04:05Z"})
+		writeJSONRPCResult(w, requestID, map[string]any{
+			"iso":      "2025-01-02T03:04:05Z",
+			"unixMs":   int64(1735787045000),
+			"timezone": "UTC",
+		})
 	case "files.create":
 		approvalToken, _ := meta["approvalToken"].(string)
 		if approvalToken == "" {
-			writeJSONRPCError(w, req.ID, "approval token required")
+			writeJSONRPCError(w, requestID, "approval token required")
 			return
 		}
 		select {
@@ -480,10 +633,48 @@ func (f *fakeMCPServer) handle(w http.ResponseWriter, r *http.Request) {
 		default:
 		}
 		path, _ := args["path"].(string)
-		writeJSONRPCResult(w, req.ID, map[string]any{"path": path, "created": true, "content": "created through approval flow"})
+		writeJSONRPCResult(w, requestID, map[string]any{"path": path, "created": true, "content": "created through approval flow"})
 	default:
-		writeJSONRPCError(w, req.ID, "unknown tool")
+		f.reject(w, http.StatusBadRequest, fmt.Errorf("%s MCP unexpected tool %q", f.name, toolName))
 	}
+}
+
+func (f *fakeMCPServer) reject(w http.ResponseWriter, statusCode int, err error) {
+	f.handlerErrorOnce.Do(func() { f.handlerErrors <- err })
+	http.Error(w, err.Error(), statusCode)
+}
+
+func validateMCPParams(method string, params map[string]any) error {
+	if params == nil {
+		return fmt.Errorf("%s params = nil, want object", method)
+	}
+	switch method {
+	case "tools/list":
+		if len(params) != 0 {
+			return fmt.Errorf("tools/list params = %#v, want empty object", params)
+		}
+	case "tools/call":
+		name, nameOK := params["name"].(string)
+		if !nameOK || name == "" {
+			return fmt.Errorf("tools/call name = %#v, want non-empty string", params["name"])
+		}
+		if _, ok := params["arguments"].(map[string]any); !ok {
+			return fmt.Errorf("tools/call arguments = %#v, want object", params["arguments"])
+		}
+		if meta, present := params["_meta"]; present {
+			if _, ok := meta.(map[string]any); !ok {
+				return fmt.Errorf("tools/call _meta = %#v, want object", meta)
+			}
+		}
+		for key := range params {
+			if key != "name" && key != "arguments" && key != "_meta" {
+				return fmt.Errorf("tools/call unexpected param %q", key)
+			}
+		}
+	default:
+		return fmt.Errorf("method = %q, want tools/list or tools/call", method)
+	}
+	return nil
 }
 
 func (f *fakeMCPServer) enableTimeTool() {
@@ -621,7 +812,12 @@ func TestModelDrivenToolCallCompletesRun(t *testing.T) {
 
 	sessionID := harness.createSession(t, "model-driven tool call")
 	streamEvents := harness.sendMessageToCompletion(t, sessionID, userText)
-	listed, err := harness.events.ListEvents(harness.clientContext(), &turingv1.ListEventsRequest{
+	assertNoFakeHandlerErrors(t, harness.fakeModel, harness.systemMCP, harness.filesMCP)
+	runID := completedRunID(t, streamEvents)
+	expectedToolCallID := deterministicToolCallID(runID, 0, 0)
+	listContext, cancelList := context.WithTimeout(harness.clientContext(), 5*time.Second)
+	defer cancelList()
+	listed, err := harness.events.ListEvents(listContext, &turingv1.ListEventsRequest{
 		SessionId: sessionID,
 		Limit:     100,
 	})
@@ -645,18 +841,20 @@ func TestModelDrivenToolCallCompletesRun(t *testing.T) {
 	if len(started) != 1 || len(completed) != 1 {
 		t.Fatalf("tool lifecycle counts: started=%d completed=%d, want 1 each", len(started), len(completed))
 	}
-	toolCallID := stringField(started[0].Payload, "toolCallId")
-	if toolCallID == "" || stringField(completed[0].Payload, "toolCallId") != toolCallID {
-		t.Fatalf("tool call IDs: started=%q completed=%q", toolCallID, stringField(completed[0].Payload, "toolCallId"))
+	if started[0].Sequence >= completed[0].Sequence {
+		t.Fatalf("tool lifecycle sequences: started=%d completed=%d, want STARTED before COMPLETED", started[0].Sequence, completed[0].Sequence)
 	}
-	if toolCallID == "provider_tool_call" || !strings.HasPrefix(toolCallID, "call_") {
-		t.Fatalf("tool call ID = %q, want deterministic runtime-generated ID", toolCallID)
+	if started[0].RunId != runID || completed[0].RunId != runID {
+		t.Fatalf("tool lifecycle run IDs: started=%q completed=%q, want %q", started[0].RunId, completed[0].RunId, runID)
 	}
-	if got := stringField(started[0].Payload, "toolName"); got != "system.time" {
-		t.Fatalf("started toolName = %q, want system.time", got)
+	if got := stringField(started[0].Payload, "toolCallId"); got != expectedToolCallID {
+		t.Fatalf("started toolCallId = %q, want %q", got, expectedToolCallID)
 	}
-	if got := stringField(completed[0].Payload, "toolName"); got != "system.time" {
-		t.Fatalf("completed toolName = %q, want system.time", got)
+	if got := stringField(completed[0].Payload, "toolCallId"); got != expectedToolCallID {
+		t.Fatalf("completed toolCallId = %q, want %q", got, expectedToolCallID)
+	}
+	if startedName, completedName := stringField(started[0].Payload, "toolName"), stringField(completed[0].Payload, "toolName"); startedName != "system.time" || completedName != startedName {
+		t.Fatalf("tool lifecycle names: started=%q completed=%q, want system.time for both", startedName, completedName)
 	}
 	if got := messageCompletedContent(streamEvents); got != finalText {
 		t.Fatalf("stream message.completed content = %q, want %q", got, finalText)
@@ -673,7 +871,7 @@ func TestModelDrivenToolCallCompletesRun(t *testing.T) {
 		t.Fatalf("OpenAI request count = %d, want 2", len(modelBodies))
 	}
 	alias, initialMessages := assertInitialOpenAIRequest(t, modelBodies[0], userText)
-	assertFollowupOpenAIRequest(t, modelBodies[1], initialMessages, alias, toolCallID)
+	assertFollowupOpenAIRequest(t, modelBodies[1], initialMessages, alias, expectedToolCallID)
 	assertModelDrivenMCPRequests(t, harness.systemMCP.recordedRequests(), harness.filesMCP.recordedRequests())
 }
 
@@ -702,6 +900,7 @@ func TestApprovalRequiredToolFlow(t *testing.T) {
 	for {
 		event, err := stream.Recv()
 		if err != nil {
+			assertNoFakeHandlerErrors(t, harness.fakeModel, harness.systemMCP, harness.filesMCP)
 			t.Fatal(err)
 		}
 		got = append(got, event)
@@ -847,6 +1046,29 @@ func runCompletedPersistedContent(t *testing.T, harness *grpcHarness, sessionID 
 	return ""
 }
 
+func completedRunID(t *testing.T, events []*turingv1.ChatStreamEvent) string {
+	t.Helper()
+	runID := ""
+	for _, event := range events {
+		if completed := event.GetRunCompleted(); completed != nil {
+			if runID != "" {
+				t.Fatalf("stream included multiple run.completed events: %q and %q", runID, completed.RunId)
+			}
+			runID = completed.RunId
+		}
+	}
+	if runID == "" {
+		t.Fatal("stream did not include run.completed with a run ID")
+	}
+	return runID
+}
+
+func deterministicToolCallID(runID string, round, index int) string {
+	input := fmt.Sprintf("%d:%s:%d:%d", len(runID), runID, round, index)
+	sum := sha256.Sum256([]byte(input))
+	return "call_" + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:])
+}
+
 func assertInitialOpenAIRequest(t *testing.T, body map[string]any, userText string) (string, []any) {
 	t.Helper()
 	tools, _ := body["tools"].([]any)
@@ -868,9 +1090,8 @@ func assertInitialOpenAIRequest(t *testing.T, body map[string]any, userText stri
 	wantSchema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"zone": map[string]any{"type": "string"},
+			"timezone": map[string]any{"type": "string"},
 		},
-		"required": []any{"zone"},
 	}
 	if got := function["parameters"]; !reflect.DeepEqual(got, wantSchema) {
 		t.Fatalf("advertised schema = %#v, want %#v", got, wantSchema)
@@ -923,7 +1144,7 @@ func assertFollowupOpenAIRequest(t *testing.T, body map[string]any, initialMessa
 	if err := json.Unmarshal([]byte(argumentsJSON), &arguments); err != nil {
 		t.Fatalf("assistant wire arguments %q: %v", argumentsJSON, err)
 	}
-	if !reflect.DeepEqual(arguments, map[string]any{"zone": "UTC"}) {
+	if !reflect.DeepEqual(arguments, map[string]any{"timezone": "UTC"}) {
 		t.Fatalf("assistant wire arguments = %#v", arguments)
 	}
 
@@ -936,7 +1157,12 @@ func assertFollowupOpenAIRequest(t *testing.T, body map[string]any, initialMessa
 	if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
 		t.Fatalf("tool result content %q: %v", resultJSON, err)
 	}
-	if !reflect.DeepEqual(result, map[string]any{"time": "2025-01-02T03:04:05Z"}) {
+	wantResult := map[string]any{
+		"iso":      "2025-01-02T03:04:05Z",
+		"unixMs":   float64(1735787045000),
+		"timezone": "UTC",
+	}
+	if !reflect.DeepEqual(result, wantResult) {
 		t.Fatalf("tool result content = %#v", result)
 	}
 }
@@ -959,34 +1185,38 @@ func isOpenAIFunctionAlias(name string) bool {
 
 func assertModelDrivenMCPRequests(t *testing.T, system, files []fakeMCPRequest) {
 	t.Helper()
-	var calls []fakeMCPRequest
-	for serverName, requests := range map[string][]fakeMCPRequest{"system": system, "files": files} {
-		listCount := 0
-		for _, request := range requests {
-			switch request.method {
-			case "tools/list":
-				listCount++
-				if _, present := request.params["cursor"]; present {
-					t.Fatalf("%s tools/list unexpectedly included cursor: %#v", serverName, request.params)
-				}
-			case "tools/call":
-				if serverName != "system" {
-					t.Fatalf("%s MCP unexpectedly received tools/call: %#v", serverName, request.params)
-				}
-				calls = append(calls, request)
-			}
-		}
-		if listCount != 1 {
-			t.Fatalf("%s MCP tools/list count = %d, want 1", serverName, listCount)
-		}
+	if len(system) != 2 || system[0].method != "tools/list" || system[1].method != "tools/call" {
+		t.Fatalf("system MCP requests = %#v, want tools/list then tools/call", system)
 	}
-	if len(calls) != 1 {
-		t.Fatalf("system MCP tools/call count = %d, want 1", len(calls))
+	if len(files) != 1 || files[0].method != "tools/list" {
+		t.Fatalf("files MCP requests = %#v, want only tools/list", files)
 	}
-	if got := calls[0].params["name"]; got != "system.time" {
+	if len(system[0].params) != 0 || len(files[0].params) != 0 {
+		t.Fatalf("MCP tools/list params: system=%#v files=%#v, want empty objects", system[0].params, files[0].params)
+	}
+	if system[0].id == "" || system[1].id == "" || files[0].id == "" {
+		t.Fatalf("MCP request IDs must be present integers: system=%#v files=%#v", system, files)
+	}
+	if got := system[1].params["name"]; got != "system.time" {
 		t.Fatalf("MCP tools/call name = %#v, want system.time", got)
 	}
-	if got := calls[0].params["arguments"]; !reflect.DeepEqual(got, map[string]any{"zone": "UTC"}) {
+	if got := system[1].params["arguments"]; !reflect.DeepEqual(got, map[string]any{"timezone": "UTC"}) {
 		t.Fatalf("MCP tools/call arguments = %#v", got)
+	}
+}
+
+func assertNoFakeHandlerErrors(t *testing.T, model *fakeModelServer, servers ...*fakeMCPServer) {
+	t.Helper()
+	select {
+	case err := <-model.handlerErrors:
+		t.Fatalf("fake OpenAI rejected request: %v", err)
+	default:
+	}
+	for _, server := range servers {
+		select {
+		case err := <-server.handlerErrors:
+			t.Fatalf("fake %s MCP rejected request: %v", server.name, err)
+		default:
+		}
 	}
 }
