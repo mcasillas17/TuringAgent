@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,9 +13,14 @@ import (
 )
 
 const (
-	maxOpenAIEventDataBytes        = maxStreamTokenBytes
-	maxOpenAIToolCallArgumentBytes = maxStreamTokenBytes
+	maxOpenAIEventDataBytes                   = maxStreamTokenBytes
+	maxOpenAIToolCalls                        = 128
+	maxOpenAIToolCallArgumentBytes            = maxStreamTokenBytes
+	maxOpenAIToolCallAggregateArgumentBytes   = maxStreamTokenBytes
+	maxOpenAIToolCallAggregateIdentifierBytes = 64 * 1024
 )
+
+var errOpenAIPhysicalSSELineTooLong = errors.New("OpenAI-compatible SSE line exceeds maximum size")
 
 type OpenAICompatible struct {
 	baseURL string
@@ -70,24 +76,24 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), maxStreamTokenBytes)
 		scanner.Split(splitSSELines)
-		toolCalls := make(map[int]*openAIToolCall)
+		state := newOpenAIStreamState()
 		dispatch := func(data string) bool {
 			if strings.TrimSpace(data) == "" {
 				return false
 			}
 			if strings.TrimSpace(data) == "[DONE]" {
-				if len(toolCalls) > 0 {
+				if len(state.toolCalls) > 0 {
 					sendStreamEvent(ctx, out, StreamEvent{
 						Type:    "error",
 						Code:    "model_bad_chunk",
-						Message: fmt.Sprintf("[DONE] received with %d unfinished tool call(s)", len(toolCalls)),
+						Message: fmt.Sprintf("[DONE] received with %d unfinished tool call(s)", len(state.toolCalls)),
 					})
 				} else {
 					sendStreamEvent(ctx, out, StreamEvent{Type: "completed", FinishReason: "stop"})
 				}
 				return true
 			}
-			events, done, err := parseOpenAIData([]byte(data), toolCalls)
+			events, done, err := parseOpenAIData([]byte(data), state)
 			if err != nil {
 				sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: err.Error()})
 				return true
@@ -150,7 +156,11 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 		}
 		if err := scanner.Err(); err != nil {
 			if ctx.Err() == nil {
-				sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_stream_error", Message: err.Error()})
+				code := "model_stream_error"
+				if errors.Is(err, errOpenAIPhysicalSSELineTooLong) {
+					code = "model_bad_chunk"
+				}
+				sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: code, Message: err.Error()})
 			}
 			return
 		}
@@ -158,8 +168,8 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 			return
 		}
 		message := "OpenAI-compatible stream ended before a terminal event"
-		if len(toolCalls) > 0 {
-			message += fmt.Sprintf(" with %d unfinished tool call(s)", len(toolCalls))
+		if len(state.toolCalls) > 0 {
+			message += fmt.Sprintf(" with %d unfinished tool call(s)", len(state.toolCalls))
 		}
 		sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_stream_error", Message: message})
 	}()
@@ -181,6 +191,9 @@ func splitSSELines(data []byte, atEOF bool) (advance int, token []byte, err erro
 			}
 			return advance, data[:i], nil
 		}
+	}
+	if len(data) >= maxStreamTokenBytes {
+		return 0, nil, errOpenAIPhysicalSSELineTooLong
 	}
 	if atEOF && len(data) > 0 {
 		return len(data), data, nil
@@ -282,11 +295,20 @@ func openAITools(definitions []ToolDefinition) []openAITool {
 	return tools
 }
 
-type openAIChunk struct {
-	Choices []struct {
-		Delta        json.RawMessage `json:"delta"`
-		FinishReason *string         `json:"finish_reason"`
-	} `json:"choices"`
+type openAIEnvelope struct {
+	Choices json.RawMessage `json:"choices"`
+	Error   json.RawMessage `json:"error"`
+}
+
+type openAIChoice struct {
+	Index        *int            `json:"index"`
+	Delta        json.RawMessage `json:"delta"`
+	FinishReason *string         `json:"finish_reason"`
+}
+
+type openAIErrorEnvelope struct {
+	Message string          `json:"message"`
+	Code    json.RawMessage `json:"code"`
 }
 
 type openAIDelta struct {
@@ -305,16 +327,26 @@ type openAIToolCallDelta struct {
 }
 
 type openAIToolCall struct {
-	id        string
-	name      string
+	id        strings.Builder
+	name      strings.Builder
 	arguments strings.Builder
 }
 
-func parseOpenAIData(data []byte, toolCalls map[int]*openAIToolCall) ([]StreamEvent, bool, error) {
+type openAIStreamState struct {
+	toolCalls       map[int]*openAIToolCall
+	argumentBytes   int
+	identifierBytes int
+}
+
+func newOpenAIStreamState() *openAIStreamState {
+	return &openAIStreamState{toolCalls: make(map[int]*openAIToolCall)}
+}
+
+func parseOpenAIData(data []byte, state *openAIStreamState) ([]StreamEvent, bool, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
-	var chunk openAIChunk
-	if err := decoder.Decode(&chunk); err != nil {
+	var envelope openAIEnvelope
+	if err := decoder.Decode(&envelope); err != nil {
 		return nil, false, err
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
@@ -323,10 +355,36 @@ func parseOpenAIData(data []byte, toolCalls map[int]*openAIToolCall) ([]StreamEv
 		}
 		return nil, false, fmt.Errorf("malformed chunk: %w", err)
 	}
-	if len(chunk.Choices) == 0 {
-		return nil, false, nil
+
+	if len(envelope.Error) > 0 {
+		if len(envelope.Choices) > 0 {
+			return nil, false, fmt.Errorf("malformed error envelope: contains choices")
+		}
+		event, err := parseOpenAIErrorEnvelope(envelope.Error)
+		if err != nil {
+			return nil, false, err
+		}
+		return []StreamEvent{event}, true, nil
 	}
-	choice := chunk.Choices[0]
+
+	var choices []openAIChoice
+	if len(envelope.Choices) == 0 {
+		return nil, false, fmt.Errorf("chunk must contain exactly one choice, got 0")
+	}
+	if err := json.Unmarshal(envelope.Choices, &choices); err != nil {
+		return nil, false, fmt.Errorf("malformed choices: %w", err)
+	}
+	if len(choices) != 1 {
+		return nil, false, fmt.Errorf("chunk must contain exactly one choice, got %d", len(choices))
+	}
+	choice := choices[0]
+	if choice.Index == nil {
+		return nil, false, fmt.Errorf("choice is missing index")
+	}
+	if *choice.Index != 0 {
+		return nil, false, fmt.Errorf("choice has index %d, want 0", *choice.Index)
+	}
+
 	events := make([]StreamEvent, 0, 2)
 	if len(choice.Delta) > 0 && string(choice.Delta) != "null" {
 		var delta openAIDelta
@@ -346,17 +404,9 @@ func parseOpenAIData(data []byte, toolCalls map[int]*openAIToolCall) ([]StreamEv
 			if fragment.Type != "" && fragment.Type != "function" {
 				return nil, false, fmt.Errorf("tool call %d has unsupported type %q", index, fragment.Type)
 			}
-			call := toolCalls[index]
-			if call == nil {
-				call = &openAIToolCall{}
-				toolCalls[index] = call
+			if err := state.appendToolCallFragment(index, fragment); err != nil {
+				return nil, false, err
 			}
-			call.id += fragment.ID
-			call.name += fragment.Function.Name
-			if len(fragment.Function.Arguments) > maxOpenAIToolCallArgumentBytes-call.arguments.Len() {
-				return nil, false, fmt.Errorf("tool call %d arguments exceed %d bytes", index, maxOpenAIToolCallArgumentBytes)
-			}
-			call.arguments.WriteString(fragment.Function.Arguments)
 		}
 		if delta.Content != nil && *delta.Content != "" {
 			events = append(events, StreamEvent{Type: "delta", Text: *delta.Content})
@@ -364,24 +414,26 @@ func parseOpenAIData(data []byte, toolCalls map[int]*openAIToolCall) ([]StreamEv
 	}
 	if choice.FinishReason != nil {
 		if *choice.FinishReason == "tool_calls" {
-			if len(toolCalls) == 0 {
+			if len(state.toolCalls) == 0 {
 				return nil, false, fmt.Errorf("finish_reason tool_calls received without any accumulated tool calls")
 			}
-			calls := make([]ToolCall, 0, len(toolCalls))
-			ids := make(map[string]struct{}, len(toolCalls))
-			for index := 0; index < len(toolCalls); index++ {
-				call, ok := toolCalls[index]
+			calls := make([]ToolCall, 0, len(state.toolCalls))
+			ids := make(map[string]struct{}, len(state.toolCalls))
+			for index := 0; index < len(state.toolCalls); index++ {
+				call, ok := state.toolCalls[index]
 				if !ok {
 					return nil, false, fmt.Errorf("tool call indices are non-contiguous: missing index %d", index)
 				}
-				if call.id == "" {
+				id := call.id.String()
+				if id == "" {
 					return nil, false, fmt.Errorf("tool call %d is missing an ID", index)
 				}
-				if _, duplicate := ids[call.id]; duplicate {
-					return nil, false, fmt.Errorf("tool call %d has duplicate ID %q", index, call.id)
+				if _, duplicate := ids[id]; duplicate {
+					return nil, false, fmt.Errorf("tool call %d has duplicate ID %q", index, id)
 				}
-				ids[call.id] = struct{}{}
-				if call.name == "" {
+				ids[id] = struct{}{}
+				name := call.name.String()
+				if name == "" {
 					return nil, false, fmt.Errorf("tool call %d is missing a function name", index)
 				}
 				arguments := make(map[string]any)
@@ -404,14 +456,72 @@ func parseOpenAIData(data []byte, toolCalls map[int]*openAIToolCall) ([]StreamEv
 						return nil, false, fmt.Errorf("tool call %d arguments must be a JSON object", index)
 					}
 				}
-				calls = append(calls, ToolCall{ID: call.id, Name: call.name, Arguments: arguments})
+				calls = append(calls, ToolCall{ID: id, Name: name, Arguments: arguments})
 			}
 			events = append(events, StreamEvent{Type: "tool_call", ToolCalls: calls})
-		} else if len(toolCalls) > 0 {
+		} else if len(state.toolCalls) > 0 {
 			return nil, false, fmt.Errorf("finish_reason %q received with unfinished tool calls", *choice.FinishReason)
 		}
 		events = append(events, StreamEvent{Type: "completed", FinishReason: *choice.FinishReason})
 		return events, true, nil
 	}
 	return events, false, nil
+}
+
+func parseOpenAIErrorEnvelope(data []byte) (StreamEvent, error) {
+	var providerError openAIErrorEnvelope
+	if err := json.Unmarshal(data, &providerError); err != nil {
+		return StreamEvent{}, fmt.Errorf("malformed error envelope: %w", err)
+	}
+	if strings.TrimSpace(providerError.Message) == "" {
+		return StreamEvent{}, fmt.Errorf("malformed error envelope: missing message")
+	}
+
+	code := ""
+	if len(providerError.Code) > 0 && string(providerError.Code) != "null" {
+		if err := json.Unmarshal(providerError.Code, &code); err != nil || strings.TrimSpace(code) == "" {
+			return StreamEvent{}, fmt.Errorf("malformed error envelope: code must be a non-empty string")
+		}
+	}
+	message := "OpenAI-compatible provider error"
+	if code != "" {
+		message += fmt.Sprintf(" (%s)", code)
+	}
+	message += ": " + providerError.Message
+	return StreamEvent{Type: "error", Code: "model_unavailable", Message: message}, nil
+}
+
+func (state *openAIStreamState) appendToolCallFragment(index int, fragment openAIToolCallDelta) error {
+	call := state.toolCalls[index]
+	if call == nil && len(state.toolCalls) >= maxOpenAIToolCalls {
+		return fmt.Errorf("tool call count exceeds %d", maxOpenAIToolCalls)
+	}
+
+	identifierBytes := len(fragment.ID) + len(fragment.Function.Name)
+	if identifierBytes > maxOpenAIToolCallAggregateIdentifierBytes-state.identifierBytes {
+		return fmt.Errorf("tool call ID and name bytes exceed %d", maxOpenAIToolCallAggregateIdentifierBytes)
+	}
+
+	argumentBytes := len(fragment.Function.Arguments)
+	currentCallArgumentBytes := 0
+	if call != nil {
+		currentCallArgumentBytes = call.arguments.Len()
+	}
+	if argumentBytes > maxOpenAIToolCallArgumentBytes-currentCallArgumentBytes {
+		return fmt.Errorf("tool call %d arguments exceed %d bytes", index, maxOpenAIToolCallArgumentBytes)
+	}
+	if argumentBytes > maxOpenAIToolCallAggregateArgumentBytes-state.argumentBytes {
+		return fmt.Errorf("aggregate arguments exceed %d bytes", maxOpenAIToolCallAggregateArgumentBytes)
+	}
+
+	if call == nil {
+		call = &openAIToolCall{}
+		state.toolCalls[index] = call
+	}
+	call.id.WriteString(fragment.ID)
+	call.name.WriteString(fragment.Function.Name)
+	call.arguments.WriteString(fragment.Function.Arguments)
+	state.identifierBytes += identifierBytes
+	state.argumentBytes += argumentBytes
+	return nil
 }

@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,7 +17,7 @@ import (
 func TestOpenAICompatibleStreamChatParsesSSEDeltaAndCompletion(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"Hi"}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"content":"Hi"}}]}`+"\n\n")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	t.Cleanup(server.Close)
@@ -34,7 +35,7 @@ func TestOpenAICompatibleStreamChatParsesSSEDeltaAndCompletion(t *testing.T) {
 func TestOpenAIChunkEmitsDeltaAndFinishReason(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"Hi"},"finish_reason":"length"}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":"length"}]}`+"\n\n")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	t.Cleanup(server.Close)
@@ -54,7 +55,7 @@ func TestOpenAIChunkEmitsDeltaAndFinishReason(t *testing.T) {
 func TestOpenAIReportsEOFBeforeTerminalEvent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"partial"}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"content":"partial"}}]}`+"\n\n")
 	}))
 	t.Cleanup(server.Close)
 
@@ -80,7 +81,7 @@ func TestOpenAIReportsStreamErrorForNonterminalBodies(t *testing.T) {
 		{name: "non SSE", body: `{"choices":[]}`},
 		{
 			name: "unterminated data event",
-			body: `data: {"choices":[{"delta":{"content":"must not dispatch"}}]}`,
+			body: `data: {"choices":[{"index":0,"delta":{"content":"must not dispatch"}}]}`,
 		},
 	}
 
@@ -109,7 +110,7 @@ func TestOpenAIReportsStreamErrorForNonterminalBodies(t *testing.T) {
 func TestOpenAIReportsEOFWithPendingToolCall(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"pending","arguments":"{}"}}]}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"pending","arguments":"{}"}}]}}]}`+"\n\n")
 	}))
 	t.Cleanup(server.Close)
 
@@ -128,7 +129,7 @@ func TestOpenAIReportsEOFWithPendingToolCall(t *testing.T) {
 func TestOpenAIRejectsDoneWithPendingToolCall(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"pending","arguments":"{}"}}]}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"pending","arguments":"{}"}}]}}]}`+"\n\n")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	t.Cleanup(server.Close)
@@ -152,7 +153,7 @@ func TestOpenAIParsesMultilineSSEDataEvent(t *testing.T) {
 		fmt.Fprint(w, "event: message\n")
 		fmt.Fprint(w, "data: {\"choices\":[\n")
 		fmt.Fprint(w, "id: ignored\n")
-		fmt.Fprint(w, "data: {\"delta\":{\"content\":\"multiline\"}}\n")
+		fmt.Fprint(w, "data: {\"index\":0,\"delta\":{\"content\":\"multiline\"}}\n")
 		fmt.Fprint(w, "data: ]}\n\n")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
@@ -197,12 +198,12 @@ func TestOpenAIParsesSSEStreamPreambleAndLineEndings(t *testing.T) {
 	}{
 		{
 			name: "UTF-8 BOM",
-			body: "\uFEFF" + `data: {"choices":[{"delta":{"content":"bom"}}]}` + "\n\n" +
+			body: "\uFEFF" + `data: {"choices":[{"index":0,"delta":{"content":"bom"}}]}` + "\n\n" +
 				"data: [DONE]\n\n",
 		},
 		{
 			name: "CR-only separators",
-			body: `data: {"choices":[{"delta":{"content":"cr"}}]}` + "\r\r" +
+			body: `data: {"choices":[{"index":0,"delta":{"content":"cr"}}]}` + "\r\r" +
 				"data: [DONE]\r\r",
 		},
 	}
@@ -228,12 +229,88 @@ func TestOpenAIParsesSSEStreamPreambleAndLineEndings(t *testing.T) {
 	}
 }
 
+func TestOpenAIEmitsProviderErrorEnvelopeWithoutCompletion(t *testing.T) {
+	got := streamOpenAIEvents(t,
+		`data: {"error":{"message":"quota exceeded","code":"rate_limit_exceeded"}}`+"\n\n"+
+			"data: [DONE]\n\n")
+
+	assertOpenAIEventTypes(t, got, "error")
+	if got[0].Code != "model_unavailable" ||
+		got[0].Message != "OpenAI-compatible provider error (rate_limit_exceeded): quota exceeded" {
+		t.Fatalf("error event = %+v", got[0])
+	}
+}
+
+func TestOpenAIRejectsMalformedProviderErrorEnvelopes(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+	}{
+		{name: "null", data: `{"error":null}`},
+		{name: "not object", data: `{"error":"unavailable"}`},
+		{name: "missing message", data: `{"error":{"code":"rate_limit_exceeded"}}`},
+		{name: "empty message", data: `{"error":{"message":"","code":"rate_limit_exceeded"}}`},
+		{name: "non-string code", data: `{"error":{"message":"unavailable","code":429}}`},
+		{
+			name: "error and choices",
+			data: `{"error":{"message":"unavailable","code":"provider_error"},"choices":[{"index":0,"delta":{}}]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := streamOpenAIEvents(t, "data: "+tt.data+"\n\ndata: [DONE]\n\n")
+			assertOpenAIEventTypes(t, got, "error")
+			if got[0].Code != "model_bad_chunk" || !strings.Contains(got[0].Message, "error envelope") {
+				t.Fatalf("events = %+v, want malformed error envelope model_bad_chunk", got)
+			}
+		})
+	}
+}
+
+func TestOpenAIValidatesSingleChoiceEnvelope(t *testing.T) {
+	tests := []struct {
+		name        string
+		data        string
+		wantMessage string
+	}{
+		{name: "missing choices", data: `{}`, wantMessage: "exactly one choice"},
+		{name: "null choices", data: `{"choices":null}`, wantMessage: "exactly one choice"},
+		{name: "empty choices", data: `{"choices":[]}`, wantMessage: "exactly one choice"},
+		{
+			name:        "multiple choices",
+			data:        `{"choices":[{"index":0,"delta":{}},{"index":1,"delta":{}}]}`,
+			wantMessage: "exactly one choice",
+		},
+		{
+			name:        "missing choice index",
+			data:        `{"choices":[{"delta":{"content":"invalid"}}]}`,
+			wantMessage: "missing index",
+		},
+		{
+			name:        "nonzero choice index",
+			data:        `{"choices":[{"index":1,"delta":{"content":"invalid"}}]}`,
+			wantMessage: "index 1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := streamOpenAIEvents(t, "data: "+tt.data+"\n\ndata: [DONE]\n\n")
+			assertOpenAIEventTypes(t, got, "error")
+			if got[0].Code != "model_bad_chunk" || !strings.Contains(got[0].Message, tt.wantMessage) {
+				t.Fatalf("events = %+v, want model_bad_chunk containing %q", got, tt.wantMessage)
+			}
+		})
+	}
+}
+
 func TestOpenAIStreamsToolCall(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_","type":"function","function":{"name":"get_","arguments":"{\"city\":"}}]}}]}`+"\n\n")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"1","function":{"name":"weather","arguments":"\"Paris\"}"}}]}}]}`+"\n\n")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_","type":"function","function":{"name":"get_","arguments":"{\"city\":"}}]}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"1","function":{"name":"weather","arguments":"\"Paris\"}"}}]}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	t.Cleanup(server.Close)
@@ -245,9 +322,7 @@ func TestOpenAIStreamsToolCall(t *testing.T) {
 	}
 
 	got := collectEvents(events)
-	if len(got) != 2 {
-		t.Fatalf("events = %+v, want tool_call and completed", got)
-	}
+	assertOpenAIEventTypes(t, got, "tool_call", "completed")
 	if got[0].Type != "tool_call" || len(got[0].ToolCalls) != 1 {
 		t.Fatalf("tool call event = %+v", got[0])
 	}
@@ -487,8 +562,8 @@ func TestOpenAIRequestSerializesToolResultMessage(t *testing.T) {
 func TestOpenAIStreamsToolCallsSortedByIndex(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"call_1","function":{"name":"second","arguments":"{}"}},{"index":0,"id":"call_0","function":{"name":"first","arguments":"{}"}}]}}]}`+"\n\n")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_1","function":{"name":"second","arguments":"{}"}},{"index":0,"id":"call_0","function":{"name":"first","arguments":"{}"}}]}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
 	}))
 	t.Cleanup(server.Close)
 	provider := NewOpenAICompatible(server.URL, "", server.Client())
@@ -498,9 +573,7 @@ func TestOpenAIStreamsToolCallsSortedByIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := collectEvents(events)
-	if len(got) != 2 || got[0].Type != "tool_call" {
-		t.Fatalf("events = %+v, want tool call then completion", got)
-	}
+	assertOpenAIEventTypes(t, got, "tool_call", "completed")
 	calls := got[0].ToolCalls
 	if len(calls) != 2 || calls[0].ID != "call_0" || calls[1].ID != "call_1" {
 		t.Fatalf("tool calls = %+v, want index order", calls)
@@ -510,8 +583,8 @@ func TestOpenAIStreamsToolCallsSortedByIndex(t *testing.T) {
 func TestOpenAIRejectsNonObjectToolArguments(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","function":{"name":"bad","arguments":"null"}}]}}]}`+"\n\n")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","function":{"name":"bad","arguments":"null"}}]}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
 	}))
 	t.Cleanup(server.Close)
 
@@ -529,8 +602,8 @@ func TestOpenAIRejectsNonObjectToolArguments(t *testing.T) {
 func TestOpenAIRejectsMalformedToolArguments(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","function":{"name":"bad","arguments":"{}{}"}}]}}]}`+"\n\n")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","function":{"name":"bad","arguments":"{}{}"}}]}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
 	}))
 	t.Cleanup(server.Close)
 
@@ -553,71 +626,71 @@ func TestOpenAIValidatesToolCallStreamIntegrity(t *testing.T) {
 	}{
 		{
 			name:        "negative index",
-			stream:      `data: {"choices":[{"delta":{"tool_calls":[{"index":-1,"id":"call_0","type":"function","function":{"name":"bad","arguments":"{}"}}]}}]}` + "\n\n",
+			stream:      `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":-1,"id":"call_0","type":"function","function":{"name":"bad","arguments":"{}"}}]}}]}` + "\n\n",
 			wantMessage: "negative index -1",
 		},
 		{
 			name: "missing index",
-			stream: `data: {"choices":[{"delta":{"tool_calls":[{"id":"call_0","type":"function","function":{"name":"bad","arguments":"{}"}}]}}]}` + "\n\n" +
-				`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+			stream: `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"id":"call_0","type":"function","function":{"name":"bad","arguments":"{}"}}]}}]}` + "\n\n" +
+				`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
 			wantMessage: "missing index",
 		},
 		{
 			name: "index set starts above zero",
-			stream: `data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"call_1","type":"function","function":{"name":"sparse","arguments":"{}"}}]}}]}` + "\n\n" +
-				`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+			stream: `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_1","type":"function","function":{"name":"sparse","arguments":"{}"}}]}}]}` + "\n\n" +
+				`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
 			wantMessage: "non-contiguous",
 		},
 		{
 			name: "index set contains gap",
-			stream: `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"first","arguments":"{}"}},{"index":2,"id":"call_2","type":"function","function":{"name":"third","arguments":"{}"}}]}}]}` + "\n\n" +
-				`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+			stream: `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"first","arguments":"{}"}},{"index":2,"id":"call_2","type":"function","function":{"name":"third","arguments":"{}"}}]}}]}` + "\n\n" +
+				`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
 			wantMessage: "non-contiguous",
 		},
 		{
 			name: "duplicate IDs",
-			stream: `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"duplicate","type":"function","function":{"name":"first","arguments":"{}"}},{"index":1,"id":"duplicate","type":"function","function":{"name":"second","arguments":"{}"}}]}}]}` + "\n\n" +
-				`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+			stream: `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"duplicate","type":"function","function":{"name":"first","arguments":"{}"}},{"index":1,"id":"duplicate","type":"function","function":{"name":"second","arguments":"{}"}}]}}]}` + "\n\n" +
+				`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
 			wantMessage: `duplicate ID "duplicate"`,
 		},
 		{
 			name:        "unsupported type",
-			stream:      `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"computer","function":{"name":"bad","arguments":"{}"}}]}}]}` + "\n\n",
+			stream:      `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"computer","function":{"name":"bad","arguments":"{}"}}]}}]}` + "\n\n",
 			wantMessage: `unsupported type "computer"`,
 		},
 		{
 			name:        "finish without calls",
-			stream:      `data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+			stream:      `data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
 			wantMessage: "without any accumulated tool calls",
 		},
 		{
 			name: "non-tool finish with pending call",
-			stream: `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"pending","arguments":"{}"}}]}}]}` + "\n\n" +
-				`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n\n",
+			stream: `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"pending","arguments":"{}"}}]}}]}` + "\n\n" +
+				`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n",
 			wantMessage: `finish_reason "stop" received with unfinished tool calls`,
 		},
 		{
 			name: "missing ID",
-			stream: `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"type":"function","function":{"name":"missing_id","arguments":"{}"}}]}}]}` + "\n\n" +
-				`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+			stream: `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"type":"function","function":{"name":"missing_id","arguments":"{}"}}]}}]}` + "\n\n" +
+				`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
 			wantMessage: "tool call 0 is missing an ID",
 		},
 		{
 			name: "missing name",
-			stream: `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"arguments":"{}"}}]}}]}` + "\n\n" +
-				`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+			stream: `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"arguments":"{}"}}]}}]}` + "\n\n" +
+				`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
 			wantMessage: "tool call 0 is missing a function name",
 		},
 		{
 			name: "malformed arguments",
-			stream: `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"bad","arguments":"{}{}"}}]}}]}` + "\n\n" +
-				`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+			stream: `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"bad","arguments":"{}{}"}}]}}]}` + "\n\n" +
+				`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
 			wantMessage: "tool call 0 arguments are malformed",
 		},
 		{
 			name: "non-object arguments",
-			stream: `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"bad","arguments":"[]"}}]}}]}` + "\n\n" +
-				`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+			stream: `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"bad","arguments":"[]"}}]}}]}` + "\n\n" +
+				`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
 			wantMessage: "tool call 0 arguments must be a JSON object",
 		},
 	}
@@ -627,6 +700,7 @@ func TestOpenAIValidatesToolCallStreamIntegrity(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("content-type", "text/event-stream")
 				fmt.Fprint(w, tt.stream)
+				fmt.Fprint(w, "data: [DONE]\n\n")
 			}))
 			t.Cleanup(server.Close)
 
@@ -636,7 +710,8 @@ func TestOpenAIValidatesToolCallStreamIntegrity(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := collectEvents(events)
-			if len(got) != 1 || got[0].Type != "error" || got[0].Code != "model_bad_chunk" ||
+			assertOpenAIEventTypes(t, got, "error")
+			if got[0].Code != "model_bad_chunk" ||
 				!strings.Contains(got[0].Message, tt.wantMessage) {
 				t.Fatalf("events = %+v, want model_bad_chunk containing %q", got, tt.wantMessage)
 			}
@@ -644,37 +719,51 @@ func TestOpenAIValidatesToolCallStreamIntegrity(t *testing.T) {
 	}
 }
 
-func TestOpenAIRejectsOversizedAccumulatedToolArguments(t *testing.T) {
-	halfLimit := strings.Repeat("x", maxStreamTokenBytes/2)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("content-type", "text/event-stream")
-		writeFragment := func(arguments string) {
-			fmt.Fprintf(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","function":{"name":"large","arguments":%q}}]}}]}`+"\n\n", arguments)
+func TestOpenAIBoundsResponseWideToolCallState(t *testing.T) {
+	t.Run("call count", func(t *testing.T) {
+		state := newOpenAIStreamState()
+		for index := 0; index < maxOpenAIToolCalls-1; index++ {
+			state.toolCalls[index] = &openAIToolCall{}
 		}
-		writeFragment(halfLimit)
-		writeFragment(halfLimit)
-		writeFragment("x")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
-	}))
-	t.Cleanup(server.Close)
+		if _, _, err := parseOpenAIData(openAIToolFragment(maxOpenAIToolCalls-1, "i", "n", ""), state); err != nil {
+			t.Fatalf("fragment reaching call count boundary: %v", err)
+		}
+		if _, _, err := parseOpenAIData(openAIToolFragment(maxOpenAIToolCalls, "i", "n", ""), state); err == nil ||
+			!strings.Contains(err.Error(), "tool call count exceeds") {
+			t.Fatalf("overflow error = %v, want tool call count bound", err)
+		}
+	})
 
-	provider := NewOpenAICompatible(server.URL, "", server.Client())
-	events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "gpt-4o-mini"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := collectEvents(events)
-	if len(got) != 1 || got[0].Type != "error" || got[0].Code != "model_bad_chunk" ||
-		!strings.Contains(got[0].Message, "arguments exceed") {
-		t.Fatalf("events = %+v, want oversized arguments model_bad_chunk", got)
-	}
+	t.Run("aggregate arguments", func(t *testing.T) {
+		state := newOpenAIStreamState()
+		state.argumentBytes = maxOpenAIToolCallAggregateArgumentBytes - 1
+		if _, _, err := parseOpenAIData(openAIToolFragment(0, "", "", "x"), state); err != nil {
+			t.Fatalf("fragment reaching argument boundary: %v", err)
+		}
+		if _, _, err := parseOpenAIData(openAIToolFragment(0, "", "", "x"), state); err == nil ||
+			!strings.Contains(err.Error(), "aggregate arguments exceed") {
+			t.Fatalf("overflow error = %v, want aggregate argument bound", err)
+		}
+	})
+
+	t.Run("ID and name bytes", func(t *testing.T) {
+		state := newOpenAIStreamState()
+		state.identifierBytes = maxOpenAIToolCallAggregateIdentifierBytes - 2
+		if _, _, err := parseOpenAIData(openAIToolFragment(0, "i", "n", ""), state); err != nil {
+			t.Fatalf("fragment reaching identifier boundary: %v", err)
+		}
+		if _, _, err := parseOpenAIData(openAIToolFragment(0, "i", "", ""), state); err == nil ||
+			!strings.Contains(err.Error(), "ID and name bytes exceed") {
+			t.Fatalf("overflow error = %v, want identifier byte bound", err)
+		}
+	})
 }
 
 func TestOpenAIStreamsEmptyToolArgumentsAsEmptyMap(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","function":{"name":"no_arguments","arguments":""}}]}}]}`+"\n\n")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","function":{"name":"no_arguments","arguments":""}}]}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
 	}))
 	t.Cleanup(server.Close)
 
@@ -684,8 +773,9 @@ func TestOpenAIStreamsEmptyToolArgumentsAsEmptyMap(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := collectEvents(events)
-	if len(got) != 2 || len(got[0].ToolCalls) != 1 {
-		t.Fatalf("events = %+v, want one tool call then completion", got)
+	assertOpenAIEventTypes(t, got, "tool_call", "completed")
+	if len(got[0].ToolCalls) != 1 {
+		t.Fatalf("events = %+v, want one tool call", got)
 	}
 	arguments := got[0].ToolCalls[0].Arguments
 	if arguments == nil || len(arguments) != 0 {
@@ -789,7 +879,7 @@ func TestOpenAIRejectsChunkWithTrailingJSON(t *testing.T) {
 	}
 }
 
-func TestOpenAIScannerErrorReturnsStreamErrorEvent(t *testing.T) {
+func TestOpenAIOversizedPhysicalSSELineReturnsBadChunk(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
 		fmt.Fprint(w, "data: "+strings.Repeat("x", maxStreamTokenBytes+1)+"\n\n")
@@ -802,8 +892,30 @@ func TestOpenAIScannerErrorReturnsStreamErrorEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := collectEvents(events)
-	if len(got) != 1 || got[0].Type != "error" || got[0].Code != "model_stream_error" {
-		t.Fatalf("events = %+v, want model_stream_error", got)
+	if len(got) != 1 || got[0].Type != "error" || got[0].Code != "model_bad_chunk" {
+		t.Fatalf("events = %+v, want model_bad_chunk", got)
+	}
+}
+
+func TestOpenAIReaderErrorReturnsStreamErrorEvent(t *testing.T) {
+	readErr := errors.New("provider connection reset")
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       &failingReadCloser{err: readErr},
+			Header:     make(http.Header),
+		}, nil
+	})}
+	provider := NewOpenAICompatible("http://provider.example", "", client)
+
+	events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "gpt-4o-mini"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := collectEvents(events)
+	assertOpenAIEventTypes(t, got, "error")
+	if got[0].Code != "model_stream_error" || !strings.Contains(got[0].Message, readErr.Error()) {
+		t.Fatalf("events = %+v, want reader model_stream_error", got)
 	}
 }
 
@@ -811,7 +923,7 @@ func TestOpenAIStreamStopsOnCancellation(t *testing.T) {
 	requestCanceled := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"first"}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"content":"first"}}]}`+"\n\n")
 		w.(http.Flusher).Flush()
 		select {
 		case <-r.Context().Done():
@@ -867,4 +979,56 @@ func requireSingleObject(t *testing.T, value any, label string) map[string]any {
 		t.Fatalf("%s[0] = %#v, want object", label, values[0])
 	}
 	return object
+}
+
+func streamOpenAIEvents(t *testing.T, body string) []StreamEvent {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		fmt.Fprint(w, body)
+	}))
+	t.Cleanup(server.Close)
+
+	provider := NewOpenAICompatible(server.URL, "", server.Client())
+	events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "gpt-4o-mini"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return collectEvents(events)
+}
+
+func assertOpenAIEventTypes(t *testing.T, events []StreamEvent, want ...string) {
+	t.Helper()
+	if len(events) != len(want) {
+		t.Fatalf("event types = %+v, want %v", events, want)
+	}
+	for index, event := range events {
+		if event.Type != want[index] {
+			t.Fatalf("event %d type = %q, want %q; events = %+v", index, event.Type, want[index], events)
+		}
+	}
+}
+
+func openAIToolFragment(index int, id, name, arguments string) []byte {
+	return fmt.Appendf(nil,
+		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":%d,"id":%q,"function":{"name":%q,"arguments":%q}}]}}]}`,
+		index, id, name, arguments)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+type failingReadCloser struct {
+	err error
+}
+
+func (r *failingReadCloser) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+func (r *failingReadCloser) Close() error {
+	return nil
 }
