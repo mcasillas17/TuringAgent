@@ -535,7 +535,7 @@ func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, appr
 	defer parent.Close()
 	openFlags := unix.O_WRONLY
 	if expectedHash != "" {
-		openFlags = unix.O_RDONLY
+		openFlags = unix.O_RDWR
 	}
 	fd, err := unix.Openat(
 		int(parent.Fd()),
