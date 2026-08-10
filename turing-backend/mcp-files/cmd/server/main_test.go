@@ -201,6 +201,37 @@ func TestMcpHandlerRejectsMalformedToolCallParams(t *testing.T) {
 	}
 }
 
+func TestMcpHandlerMapsToolArgumentErrorsToInvalidParams(t *testing.T) {
+	handler := testFilesHandler(t)
+	for name, body := range map[string]string{
+		"missing required argument": `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files.read"}}`,
+		"unknown argument":          `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files.list","arguments":{"unexpected":true}}}`,
+		"wrong argument type":       `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files.read","arguments":{"path":1}}}`,
+		"invalid argument value":    `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files.list","arguments":{"limit":0}}}`,
+		"escaping path":             `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files.read","arguments":{"path":"../outside.txt"}}}`,
+		"unknown tool":              `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files.missing"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			status, response := callFilesMCP(t, handler, body)
+			if status != http.StatusOK {
+				t.Fatalf("status = %d, want 200; response=%s", status, response)
+			}
+			assertRPCErrorCode(t, response, -32602)
+		})
+	}
+}
+
+func TestMcpHandlerKeepsOperationalToolErrorsAsServerErrors(t *testing.T) {
+	handler := testFilesHandler(t)
+
+	status, response := callFilesMCP(t, handler, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files.read","arguments":{"path":"missing.txt"}}}`)
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; response=%s", status, response)
+	}
+	assertRPCErrorCode(t, response, -32000)
+}
+
 func TestMcpHandlerRejectsMalformedToolsListParams(t *testing.T) {
 	handler := testFilesHandler(t)
 	for name, params := range map[string]string{

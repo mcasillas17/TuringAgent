@@ -17,6 +17,8 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 )
 
 const (
@@ -26,6 +28,7 @@ const (
 	maxReadBytes          = 512 * 1024
 	defaultListEntries    = 200
 	maxListEntries        = 1000
+	maxListEntriesScanned = 4 * maxListEntries
 	defaultSearchResults  = 50
 	maxSearchResults      = 200
 	maxSearchEntries      = 2000
@@ -40,9 +43,11 @@ type ApprovalValidator interface {
 }
 
 type FilesTools struct {
-	root      string
-	validator ApprovalValidator
-	locks     *pathLockTable
+	root          string
+	validator     ApprovalValidator
+	locks         *pathLockTable
+	syncFile      func(*os.File) error
+	syncDirectory func(*os.File) error
 }
 
 func NewFilesTools(root string) FilesTools {
@@ -52,12 +57,21 @@ func NewFilesTools(root string) FilesTools {
 	if real, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = real
 	}
-	return FilesTools{root: abs, locks: processPathLocks}
+	return FilesTools{
+		root:          abs,
+		locks:         processPathLocks,
+		syncFile:      func(file *os.File) error { return file.Sync() },
+		syncDirectory: func(directory *os.File) error { return directory.Sync() },
+	}
 }
 
 func (f FilesTools) WithApprovalValidator(validator ApprovalValidator) FilesTools {
 	f.validator = validator
 	return f
+}
+
+func (f FilesTools) pathLockKey(clean string) string {
+	return f.root + "\x00" + norm.NFC.String(cases.Fold().String(clean))
 }
 
 func (f FilesTools) Read(args map[string]any) (map[string]any, error) {
@@ -72,7 +86,16 @@ func (f FilesTools) ReadContext(ctx context.Context, args map[string]any) (map[s
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	file, _, _, err := f.openRegularFile(pathValue)
+	clean, _, err := normalizeSandboxPath(pathValue)
+	if err != nil {
+		return nil, err
+	}
+	unlock, err := f.locks.lockContext(ctx, f.pathLockKey(clean))
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	file, _, _, err := f.openRegularFile(clean)
 	if err != nil {
 		return nil, err
 	}
@@ -117,16 +140,38 @@ func (f FilesTools) ListContext(ctx context.Context, args map[string]any) (map[s
 		return nil, err
 	}
 	defer directory.Close()
-	entries, err := directory.ReadDir(limit + 1)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	entries := make([]os.DirEntry, 0, limit+1)
+	entriesScanned := 0
+	exhausted := false
+	for len(entries) <= limit && entriesScanned < maxListEntriesScanned {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		batchSize := searchDirBatchSize
+		if remaining := maxListEntriesScanned - entriesScanned; remaining < batchSize {
+			batchSize = remaining
+		}
+		batch, readErr := directory.ReadDir(batchSize)
+		entriesScanned += len(batch)
+		for _, entry := range batch {
+			if !isInternalStagingName(entry.Name()) {
+				entries = append(entries, entry)
+			}
+			if len(entries) > limit {
+				break
+			}
+		}
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return nil, readErr
+		}
+		if errors.Is(readErr, io.EOF) {
+			exhausted = true
+			break
+		}
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-	truncated := len(entries) > limit
-	if truncated {
+	truncated := len(entries) > limit || !exhausted
+	if len(entries) > limit {
 		entries = entries[:limit]
 	}
 	items := make([]map[string]any, 0, len(entries))
@@ -297,6 +342,9 @@ func (f FilesTools) SearchContext(ctx context.Context, args map[string]any) (map
 					return nil, err
 				}
 				entriesVisited++
+				if isInternalStagingName(entry.Name()) {
+					continue
+				}
 				rel := entry.Name()
 				if task.path != "." {
 					rel = filepath.Join(task.path, entry.Name())
@@ -358,59 +406,102 @@ func (f FilesTools) CreateContext(ctx context.Context, args map[string]any, appr
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	clean, _, err := normalizeSandboxPath(pathValue)
+	if err != nil {
+		return nil, err
+	}
+	unlock, err := f.locks.lockContext(ctx, f.pathLockKey(clean))
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := f.checkCreatePreconditions(clean); err != nil {
+		return nil, err
+	}
 	if err := f.validateApproval(ctx, "files.create", args, approvalToken, agentID); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	parent, leaf, _, err := f.openParentPath(pathValue, true)
+	parent, leaf, _, err := f.openParentPath(clean, true)
 	if err != nil {
 		return nil, err
 	}
 	defer parent.Close()
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	fd, err := unix.Openat(
-		int(parent.Fd()),
-		leaf,
-		unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW,
-		0600,
-	)
-	if errors.Is(err, unix.EEXIST) {
-		return nil, errors.New("file already exists")
-	}
+	temporary, temporaryName, err := createTemporaryFile(parent, createStagingPrefix, 0600)
 	if err != nil {
-		return nil, fmt.Errorf("create %q: %w", pathValue, err)
+		return nil, fmt.Errorf("stage create %q: %w", pathValue, err)
 	}
-	file := os.NewFile(uintptr(fd), leaf)
-	if file == nil {
-		_ = unix.Close(fd)
-		_ = unix.Unlinkat(int(parent.Fd()), leaf, 0)
-		return nil, errors.New("create file: invalid descriptor")
-	}
-	removeOnFailure := true
+	removeTemporary := true
 	defer func() {
-		_ = file.Close()
-		if removeOnFailure {
-			_ = unix.Unlinkat(int(parent.Fd()), leaf, 0)
+		_ = temporary.Close()
+		if removeTemporary {
+			_ = unix.Unlinkat(int(parent.Fd()), temporaryName, 0)
 		}
 	}()
-	if err := writeAllContext(ctx, file, []byte(content)); err != nil {
+	if err := writeAllContext(ctx, temporary, []byte(content)); err != nil {
 		return nil, err
 	}
-	if err := file.Sync(); err != nil {
+	if err := f.syncFile(temporary); err != nil {
 		return nil, err
 	}
-	if err := file.Close(); err != nil {
+	if err := temporary.Close(); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	removeOnFailure = false
+	if err := unix.Linkat(int(parent.Fd()), temporaryName, int(parent.Fd()), leaf, 0); err != nil {
+		if errors.Is(err, unix.EEXIST) {
+			return nil, errors.New("file already exists")
+		}
+		return nil, fmt.Errorf("install create target %q: %w", pathValue, err)
+	}
+	if err := unix.Unlinkat(int(parent.Fd()), temporaryName, 0); err != nil {
+		return nil, fmt.Errorf("remove create staging file: %w", err)
+	}
+	removeTemporary = false
+	if err := f.syncDirectory(parent); err != nil {
+		return nil, fmt.Errorf("sync directory after create %q: %w", pathValue, err)
+	}
+	if err := f.syncCreateAncestors(clean); err != nil {
+		return nil, fmt.Errorf("sync directory hierarchy after create %q: %w", pathValue, err)
+	}
 	return map[string]any{"path": pathValue, "sha256": contentHash(content)}, nil
+}
+
+func (f FilesTools) checkCreatePreconditions(path string) error {
+	root, err := f.openRoot()
+	if err != nil {
+		return err
+	}
+	if err := root.Close(); err != nil {
+		return err
+	}
+	parent, leaf, _, err := f.openParentPath(path, false)
+	if errors.Is(err, unix.ENOENT) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	var stat unix.Stat_t
+	err = unix.Fstatat(int(parent.Fd()), leaf, &stat, unix.AT_SYMLINK_NOFOLLOW)
+	if errors.Is(err, unix.ENOENT) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect create target %q: %w", path, err)
+	}
+	return errors.New("file already exists")
 }
 
 func (f FilesTools) Update(args map[string]any, approvalToken string, agentID string) (map[string]any, error) {
@@ -422,9 +513,6 @@ func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, appr
 	if err != nil {
 		return nil, err
 	}
-	if err := f.validateApproval(ctx, "files.update", args, approvalToken, agentID); err != nil {
-		return nil, err
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -432,7 +520,7 @@ func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, appr
 	if err != nil {
 		return nil, err
 	}
-	unlock, err := f.locks.lockContext(ctx, f.root+"\x00"+clean)
+	unlock, err := f.locks.lockContext(ctx, f.pathLockKey(clean))
 	if err != nil {
 		return nil, err
 	}
@@ -483,7 +571,13 @@ func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, appr
 			return nil, errors.New("expectedHash mismatch")
 		}
 	}
-	temporary, temporaryName, err := createTemporaryFile(parent, uint32(originalStat.Mode&0777))
+	if err := f.validateApproval(ctx, "files.update", args, approvalToken, agentID); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	temporary, temporaryName, err := createTemporaryFile(parent, updateStagingPrefix, uint32(originalStat.Mode&0777))
 	if err != nil {
 		return nil, err
 	}
@@ -500,7 +594,7 @@ func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, appr
 	if err := unix.Fchmod(int(temporary.Fd()), uint32(originalStat.Mode&07777)); err != nil {
 		return nil, err
 	}
-	if err := temporary.Sync(); err != nil {
+	if err := f.syncFile(temporary); err != nil {
 		return nil, err
 	}
 	if err := temporary.Close(); err != nil {
@@ -534,6 +628,9 @@ func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, appr
 		return nil, fmt.Errorf("replace update target: %w", err)
 	}
 	removeTemporary = false
+	if err := f.syncDirectory(parent); err != nil {
+		return nil, fmt.Errorf("sync directory after update %q: %w", pathValue, err)
+	}
 	return map[string]any{"path": pathValue, "sha256": contentHash(content)}, nil
 }
 
@@ -559,7 +656,7 @@ func (f FilesTools) CallContext(ctx context.Context, name string, args map[strin
 	case "files.delete", "files.move":
 		return nil, errors.New("tool disabled")
 	default:
-		return nil, errors.New("unknown tool")
+		return nil, invalidParams("unknown tool")
 	}
 }
 
@@ -626,7 +723,7 @@ func validateCreateArgs(args map[string]any) (string, string, error) {
 		return "", "", err
 	}
 	if len(content) > MaxMutationContentBytes {
-		return "", "", fmt.Errorf("content exceeds %d byte limit", MaxMutationContentBytes)
+		return "", "", invalidParamsf("content exceeds %d byte limit", MaxMutationContentBytes)
 	}
 	return pathValue, content, nil
 }
@@ -644,14 +741,14 @@ func validateUpdateArgs(args map[string]any) (string, string, string, error) {
 		return "", "", "", err
 	}
 	if len(content) > MaxMutationContentBytes {
-		return "", "", "", fmt.Errorf("content exceeds %d byte limit", MaxMutationContentBytes)
+		return "", "", "", invalidParamsf("content exceeds %d byte limit", MaxMutationContentBytes)
 	}
 	expectedHash := ""
 	if value, present := args["expectedHash"]; present {
 		var valid bool
 		expectedHash, valid = value.(string)
 		if !valid || !validContentHash(expectedHash) {
-			return "", "", "", errors.New("expectedHash must be a sha256: prefixed SHA-256 hex digest")
+			return "", "", "", invalidParams("expectedHash must be a sha256: prefixed SHA-256 hex digest")
 		}
 	}
 	return pathValue, content, expectedHash, nil
@@ -664,7 +761,7 @@ func rejectUnknownArgs(args map[string]any, allowed ...string) error {
 	}
 	for name := range args {
 		if _, ok := allowedSet[name]; !ok {
-			return fmt.Errorf("unknown argument %q", name)
+			return invalidParamsf("unknown argument %q", name)
 		}
 	}
 	return nil
@@ -674,7 +771,7 @@ func requiredString(args map[string]any, name string, allowEmpty bool) (string, 
 	value, present := args[name]
 	stringValue, valid := value.(string)
 	if !present || !valid || (!allowEmpty && strings.TrimSpace(stringValue) == "") {
-		return "", fmt.Errorf("%s is required and must be a %sstring", name, map[bool]string{true: "", false: "non-empty "}[allowEmpty])
+		return "", invalidParamsf("%s is required and must be a %sstring", name, map[bool]string{true: "", false: "non-empty "}[allowEmpty])
 	}
 	return stringValue, nil
 }
@@ -698,11 +795,11 @@ func optionalInteger(args map[string]any, name string, defaultValue, minimum, ma
 	case int:
 		number = float64(value)
 	default:
-		return 0, fmt.Errorf("%s must be an integer between %d and %d", name, minimum, maximum)
+		return 0, invalidParamsf("%s must be an integer between %d and %d", name, minimum, maximum)
 	}
 	if math.IsNaN(number) || math.IsInf(number, 0) || math.Trunc(number) != number ||
 		number < float64(minimum) || number > float64(maximum) {
-		return 0, fmt.Errorf("%s must be an integer between %d and %d", name, minimum, maximum)
+		return 0, invalidParamsf("%s must be an integer between %d and %d", name, minimum, maximum)
 	}
 	return int(number), nil
 }

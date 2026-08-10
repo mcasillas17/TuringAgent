@@ -141,6 +141,23 @@ func TestMcpHandlerRejectsMalformedToolCallParams(t *testing.T) {
 	}
 }
 
+func TestMcpHandlerMapsToolArgumentErrorsToInvalidParams(t *testing.T) {
+	handler := newHandler("system-token")
+	for name, body := range map[string]string{
+		"unknown argument":    `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"system.health","arguments":{"unexpected":true}}}`,
+		"wrong argument type": `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"system.echo","arguments":{"text":1}}}`,
+		"unknown tool":        `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"system.missing"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			status, response := callSystemMCP(t, handler, body)
+			if status != http.StatusOK {
+				t.Fatalf("status = %d, want 200; response=%s", status, response)
+			}
+			assertRPCErrorCode(t, response, -32602)
+		})
+	}
+}
+
 func TestMcpHandlerRejectsMalformedToolsListParams(t *testing.T) {
 	handler := newHandler("system-token")
 	for name, params := range map[string]string{

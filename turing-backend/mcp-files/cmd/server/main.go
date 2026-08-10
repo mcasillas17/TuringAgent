@@ -121,7 +121,11 @@ func handleMCP(w http.ResponseWriter, r *http.Request, filesTools tools.FilesToo
 		}
 		result, err := filesTools.CallContext(r.Context(), name, args, approvalToken, agentID)
 		if err != nil {
-			writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Error: map[string]any{"code": -32000, "message": err.Error()}})
+			code := -32000
+			if tools.IsInvalidParams(err) {
+				code = -32602
+			}
+			writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Error: map[string]any{"code": code, "message": err.Error()}})
 			return
 		}
 		writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: result})

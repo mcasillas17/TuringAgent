@@ -279,6 +279,28 @@ func TestListHonorsLimitAndReportsTruncation(t *testing.T) {
 	}
 }
 
+func TestListBoundsScanningWhenDirectoryContainsOnlyInternalStagingNames(t *testing.T) {
+	root := t.TempDir()
+	for index := 0; index < maxListEntriesScanned; index++ {
+		name := fmt.Sprintf("%s%04d", createStagingPrefix, index)
+		if err := os.WriteFile(filepath.Join(root, name), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := NewFilesTools(root).List(map[string]any{"limit": 10})
+
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if items := result["items"].([]map[string]any); len(items) != 0 {
+		t.Fatalf("List exposed internal staging entries: %#v", items)
+	}
+	if result["truncated"] != true {
+		t.Fatalf("truncated = %#v, want true at scan bound", result["truncated"])
+	}
+}
+
 func TestListRejectsSymlinkedDirectory(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "target"), 0700); err != nil {
@@ -364,14 +386,20 @@ func TestSearchRejectsSymlinkedStartingDirectory(t *testing.T) {
 
 func TestCreateAndUpdateRequireValidatedApproval(t *testing.T) {
 	root := t.TempDir()
-	validator := fakeApprovalValidator{valid: true}
+	validator := &recordingApprovalValidator{}
 	files := NewFilesTools(root).WithApprovalValidator(validator)
 
 	if _, err := files.Create(map[string]any{"path": "note.txt", "content": "hello"}, "approval-token", "general_assistant"); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
+	if validator.callCount() != 1 {
+		t.Fatalf("approval validations after create = %d, want 1", validator.callCount())
+	}
 	if _, err := files.Update(map[string]any{"path": "note.txt", "content": "updated"}, "approval-token-2", "general_assistant"); err != nil {
 		t.Fatalf("update failed: %v", err)
+	}
+	if validator.callCount() != 2 {
+		t.Fatalf("approval validations after update = %d, want 2", validator.callCount())
 	}
 	content, err := os.ReadFile(filepath.Join(root, "note.txt"))
 	if err != nil {
@@ -414,16 +442,16 @@ func TestCreateEnforcesContentByteLimitBeforeApproval(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), "content exceeds") {
 					t.Fatalf("Create error = %v, want content byte limit error", err)
 				}
-				if validator.calls != 0 {
-					t.Fatalf("approval validations = %d, want 0", validator.calls)
+				if validator.callCount() != 0 {
+					t.Fatalf("approval validations = %d, want 0", validator.callCount())
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("Create returned error at boundary: %v", err)
 			}
-			if validator.calls != 1 {
-				t.Fatalf("approval validations = %d, want 1", validator.calls)
+			if validator.callCount() != 1 {
+				t.Fatalf("approval validations = %d, want 1", validator.callCount())
 			}
 		})
 	}
@@ -445,8 +473,8 @@ func TestUpdateEnforcesContentByteLimitBeforeApprovalOrMutation(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "content exceeds") {
 		t.Fatalf("Update error = %v, want content byte limit error", err)
 	}
-	if validator.calls != 0 {
-		t.Fatalf("approval validations = %d, want 0", validator.calls)
+	if validator.callCount() != 0 {
+		t.Fatalf("approval validations = %d, want 0", validator.callCount())
 	}
 	content, readErr := os.ReadFile(note)
 	if readErr != nil || string(content) != "original" {
@@ -499,7 +527,7 @@ func TestUpdateRejectsSymlinkTarget(t *testing.T) {
 func TestCreateIsExclusiveUnderConcurrency(t *testing.T) {
 	const callers = 32
 	root := t.TempDir()
-	validator := newGatedApprovalValidator(callers)
+	validator := &recordingApprovalValidator{}
 	files := NewFilesTools(root).WithApprovalValidator(validator)
 	start := make(chan struct{})
 	results := make(chan error, callers)
@@ -517,8 +545,6 @@ func TestCreateIsExclusiveUnderConcurrency(t *testing.T) {
 		}(index)
 	}
 	close(start)
-	validator.waitUntilEntered(t)
-	validator.releaseAll()
 	workers.Wait()
 	close(results)
 
@@ -531,6 +557,9 @@ func TestCreateIsExclusiveUnderConcurrency(t *testing.T) {
 	if successes != 1 {
 		t.Fatalf("successful creates = %d, want exactly 1", successes)
 	}
+	if validator.callCount() != 1 {
+		t.Fatalf("approval validations = %d, want only the successful create", validator.callCount())
+	}
 }
 
 func TestUpdateExpectedHashIsCompareAndSwapUnderConcurrency(t *testing.T) {
@@ -540,7 +569,7 @@ func TestUpdateExpectedHashIsCompareAndSwapUnderConcurrency(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "note.txt"), []byte(original), 0640); err != nil {
 		t.Fatal(err)
 	}
-	validator := newGatedApprovalValidator(callers)
+	validator := &recordingApprovalValidator{}
 	instances := []FilesTools{
 		NewFilesTools(root).WithApprovalValidator(validator),
 		NewFilesTools(root).WithApprovalValidator(validator),
@@ -562,8 +591,6 @@ func TestUpdateExpectedHashIsCompareAndSwapUnderConcurrency(t *testing.T) {
 		}(index)
 	}
 	close(start)
-	validator.waitUntilEntered(t)
-	validator.releaseAll()
 	workers.Wait()
 	close(results)
 
@@ -576,6 +603,424 @@ func TestUpdateExpectedHashIsCompareAndSwapUnderConcurrency(t *testing.T) {
 	if successes != 1 {
 		t.Fatalf("successful compare-and-swap updates = %d, want exactly 1", successes)
 	}
+	if validator.callCount() != 1 {
+		t.Fatalf("approval validations = %d, want only the successful update", validator.callCount())
+	}
+}
+
+func TestCreatePublishesOnlyFsyncedContentAndSerializesRead(t *testing.T) {
+	root := t.TempDir()
+	content := strings.Repeat("complete-content-", 16*1024)
+	staged := make(chan struct{})
+	release := make(chan struct{})
+	files := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
+	syncFile := files.syncFile
+	files.syncFile = func(file *os.File) error {
+		if err := syncFile(file); err != nil {
+			return err
+		}
+		if strings.HasPrefix(file.Name(), ".turing-create-") {
+			close(staged)
+			<-release
+		}
+		return nil
+	}
+
+	createResult := make(chan error, 1)
+	go func() {
+		_, err := files.Create(map[string]any{
+			"path": "note.txt", "content": content,
+		}, "approval-token", "general_assistant")
+		createResult <- err
+	}()
+	select {
+	case <-staged:
+	case <-time.After(5 * time.Second):
+		t.Fatal("create did not reach the fsynced staging point")
+	}
+	if _, err := os.Lstat(filepath.Join(root, "note.txt")); !os.IsNotExist(err) {
+		t.Fatalf("final path became visible before staging completed: %v", err)
+	}
+
+	readResult := make(chan struct {
+		result map[string]any
+		err    error
+	}, 1)
+	go func() {
+		result, err := files.Read(map[string]any{"path": "note.txt", "maxBytes": len(content)})
+		readResult <- struct {
+			result map[string]any
+			err    error
+		}{result: result, err: err}
+	}()
+	waitForPathLockRefs(t, files.pathLockKey("note.txt"), 2)
+	select {
+	case result := <-readResult:
+		t.Fatalf("read completed while create held the path lock: %#v, %v", result.result, result.err)
+	default:
+	}
+
+	close(release)
+	if err := <-createResult; err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	read := <-readResult
+	if read.err != nil {
+		t.Fatalf("Read returned error: %v", read.err)
+	}
+	if read.result["content"] != content {
+		t.Fatalf("Read returned %d bytes, want complete %d-byte content", len(read.result["content"].(string)), len(content))
+	}
+}
+
+func TestCreateSerializesUpdateUntilAtomicPublication(t *testing.T) {
+	root := t.TempDir()
+	staged := make(chan struct{})
+	release := make(chan struct{})
+	validator := &recordingApprovalValidator{}
+	files := NewFilesTools(root).WithApprovalValidator(validator)
+	syncFile := files.syncFile
+	files.syncFile = func(file *os.File) error {
+		if err := syncFile(file); err != nil {
+			return err
+		}
+		if strings.HasPrefix(file.Name(), ".turing-create-") {
+			close(staged)
+			<-release
+		}
+		return nil
+	}
+
+	createResult := make(chan error, 1)
+	go func() {
+		_, err := files.Create(map[string]any{
+			"path": "note.txt", "content": "created",
+		}, "create-approval", "general_assistant")
+		createResult <- err
+	}()
+	select {
+	case <-staged:
+	case <-time.After(5 * time.Second):
+		t.Fatal("create did not reach the fsynced staging point")
+	}
+
+	updateResult := make(chan error, 1)
+	go func() {
+		_, err := files.Update(map[string]any{
+			"path": "note.txt", "content": "updated",
+		}, "update-approval", "general_assistant")
+		updateResult <- err
+	}()
+	waitForPathLockRefs(t, files.pathLockKey("note.txt"), 2)
+	if validator.callCount() != 1 {
+		t.Fatalf("approval validations before create publication = %d, want only create", validator.callCount())
+	}
+
+	close(release)
+	if err := <-createResult; err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if err := <-updateResult; err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+	if validator.callCount() != 2 {
+		t.Fatalf("approval validations = %d, want one per successful mutation", validator.callCount())
+	}
+	content, err := os.ReadFile(filepath.Join(root, "note.txt"))
+	if err != nil || string(content) != "updated" {
+		t.Fatalf("final content = %q, %v; want updated", content, err)
+	}
+}
+
+func TestCreateAtomicInstallDoesNotReplaceConcurrentTarget(t *testing.T) {
+	root := t.TempDir()
+	staged := make(chan struct{})
+	release := make(chan struct{})
+	files := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
+	syncFile := files.syncFile
+	files.syncFile = func(file *os.File) error {
+		if err := syncFile(file); err != nil {
+			return err
+		}
+		if strings.HasPrefix(file.Name(), ".turing-create-") {
+			close(staged)
+			<-release
+		}
+		return nil
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := files.Create(map[string]any{
+			"path": "note.txt", "content": "approved content",
+		}, "approval-token", "general_assistant")
+		result <- err
+	}()
+	select {
+	case <-staged:
+	case <-time.After(5 * time.Second):
+		t.Fatal("create did not reach the fsynced staging point")
+	}
+	if err := os.WriteFile(filepath.Join(root, "note.txt"), []byte("concurrent content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+
+	if err := <-result; err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("Create error = %v, want file already exists", err)
+	}
+	content, err := os.ReadFile(filepath.Join(root, "note.txt"))
+	if err != nil || string(content) != "concurrent content" {
+		t.Fatalf("final content = %q, %v; want concurrent content", content, err)
+	}
+}
+
+func TestCreateStagingFilesAreInaccessibleToConcurrentTools(t *testing.T) {
+	root := t.TempDir()
+	const approvedContent = "approved content"
+	staged := make(chan struct{})
+	release := make(chan struct{})
+	validator := &recordingApprovalValidator{}
+	files := NewFilesTools(root).WithApprovalValidator(validator)
+	syncFile := files.syncFile
+	files.syncFile = func(file *os.File) error {
+		if err := syncFile(file); err != nil {
+			return err
+		}
+		if strings.HasPrefix(file.Name(), ".turing-create-") {
+			close(staged)
+			<-release
+		}
+		return nil
+	}
+
+	createResult := make(chan error, 1)
+	go func() {
+		_, err := files.Create(map[string]any{
+			"path": "note.txt", "content": approvedContent,
+		}, "create-approval", "general_assistant")
+		createResult <- err
+	}()
+	select {
+	case <-staged:
+	case <-time.After(5 * time.Second):
+		t.Fatal("create did not reach the fsynced staging point")
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	stagingName := ""
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".turing-create-") {
+			stagingName = entry.Name()
+			break
+		}
+	}
+	if stagingName == "" {
+		close(release)
+		t.Fatal("could not find create staging file")
+	}
+
+	listResult, listErr := files.List(map[string]any{})
+	searchResult, searchErr := files.Search(map[string]any{"query": approvedContent})
+	readResult, readErr := files.Read(map[string]any{"path": stagingName})
+	_, updateErr := files.Update(map[string]any{
+		"path": stagingName, "content": "substituted content",
+	}, "update-approval", "general_assistant")
+	close(release)
+	createErr := <-createResult
+
+	if listErr != nil {
+		t.Fatalf("List returned error: %v", listErr)
+	}
+	for _, item := range listResult["items"].([]map[string]any) {
+		if item["name"] == stagingName {
+			t.Errorf("List exposed internal staging file %q", stagingName)
+		}
+	}
+	if searchErr != nil {
+		t.Fatalf("Search returned error: %v", searchErr)
+	}
+	for _, match := range searchResult["matches"].([]map[string]any) {
+		if match["path"] == stagingName {
+			t.Errorf("Search exposed internal staging file %q", stagingName)
+		}
+	}
+	for _, detail := range searchResult["errors"].([]map[string]any) {
+		if detail["path"] == stagingName {
+			t.Errorf("Search exposed internal staging file %q as an error", stagingName)
+		}
+	}
+	if searchResult["incomplete"] == true {
+		t.Errorf("Search treated an internal staging file as a failure: %#v", searchResult["errors"])
+	}
+	if readErr == nil {
+		t.Errorf("Read exposed internal staging content: %#v", readResult)
+	}
+	if updateErr == nil {
+		t.Error("Update replaced an internal staging file")
+	}
+	if createErr != nil {
+		t.Fatalf("Create returned error: %v", createErr)
+	}
+	if validator.callCount() != 1 {
+		t.Fatalf("approval validations = %d, want only create", validator.callCount())
+	}
+	content, err := os.ReadFile(filepath.Join(root, "note.txt"))
+	if err != nil || string(content) != approvedContent {
+		t.Fatalf("final content = %q, %v; want approved content", content, err)
+	}
+}
+
+func TestMutationsFsyncContainingDirectoryBeforeSuccess(t *testing.T) {
+	for _, mutation := range []string{"create", "update"} {
+		t.Run(mutation, func(t *testing.T) {
+			root := t.TempDir()
+			if mutation == "update" {
+				if err := os.WriteFile(filepath.Join(root, "note.txt"), []byte("original"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			files := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
+			syncDirectory := files.syncDirectory
+			var directorySyncs int
+			files.syncDirectory = func(directory *os.File) error {
+				directorySyncs++
+				return syncDirectory(directory)
+			}
+
+			var err error
+			if mutation == "create" {
+				_, err = files.Create(map[string]any{
+					"path": "note.txt", "content": "created",
+				}, "approval-token", "general_assistant")
+			} else {
+				_, err = files.Update(map[string]any{
+					"path": "note.txt", "content": "updated",
+				}, "approval-token", "general_assistant")
+			}
+
+			if err != nil {
+				t.Fatalf("%s returned error: %v", mutation, err)
+			}
+			if directorySyncs == 0 {
+				t.Fatalf("%s acknowledged without syncing the containing directory", mutation)
+			}
+		})
+	}
+}
+
+func TestConcurrentCreateFsyncsSharedAncestorsBeforeAcknowledgement(t *testing.T) {
+	root := t.TempDir()
+	first := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
+	second := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
+	firstRootSync := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var pauseFirstRootSync sync.Once
+	firstSyncDirectory := first.syncDirectory
+	first.syncDirectory = func(directory *os.File) error {
+		if directory.Name() == first.root {
+			pauseFirstRootSync.Do(func() {
+				close(firstRootSync)
+				<-releaseFirst
+			})
+		}
+		return firstSyncDirectory(directory)
+	}
+
+	firstResult := make(chan error, 1)
+	go func() {
+		_, err := first.Create(map[string]any{
+			"path": "shared/first.txt", "content": "first",
+		}, "first-approval", "general_assistant")
+		firstResult <- err
+	}()
+	select {
+	case <-firstRootSync:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first create did not pause before syncing the root")
+	}
+
+	secondSyncDirectory := second.syncDirectory
+	var secondRootSyncs int
+	second.syncDirectory = func(directory *os.File) error {
+		if directory.Name() == second.root {
+			secondRootSyncs++
+		}
+		return secondSyncDirectory(directory)
+	}
+	_, secondErr := second.Create(map[string]any{
+		"path": "shared/second.txt", "content": "second",
+	}, "second-approval", "general_assistant")
+	close(releaseFirst)
+	firstErr := <-firstResult
+
+	if secondErr != nil {
+		t.Fatalf("second Create returned error: %v", secondErr)
+	}
+	if secondRootSyncs == 0 {
+		t.Fatal("second Create acknowledged without independently syncing the shared ancestor")
+	}
+	if firstErr != nil {
+		t.Fatalf("first Create returned error: %v", firstErr)
+	}
+}
+
+func TestCreateFsyncsNewDirectoryHierarchy(t *testing.T) {
+	root := t.TempDir()
+	files := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
+	syncDirectory := files.syncDirectory
+	synced := map[string]int{}
+	files.syncDirectory = func(directory *os.File) error {
+		synced[directory.Name()]++
+		return syncDirectory(directory)
+	}
+
+	_, err := files.Create(map[string]any{
+		"path": "nested/deeper/note.txt", "content": "created",
+	}, "approval-token", "general_assistant")
+
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	for _, directory := range []string{files.root, "nested", "deeper"} {
+		if synced[directory] == 0 {
+			t.Errorf("directory %q was not synced; calls = %#v", directory, synced)
+		}
+	}
+}
+
+func TestMutationsDoNotAcknowledgeDirectorySyncFailure(t *testing.T) {
+	syncFailure := errors.New("directory sync failed")
+	for _, mutation := range []string{"create", "update"} {
+		t.Run(mutation, func(t *testing.T) {
+			root := t.TempDir()
+			if mutation == "update" {
+				if err := os.WriteFile(filepath.Join(root, "note.txt"), []byte("original"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			files := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
+			files.syncDirectory = func(*os.File) error { return syncFailure }
+
+			var err error
+			if mutation == "create" {
+				_, err = files.Create(map[string]any{
+					"path": "note.txt", "content": "created",
+				}, "approval-token", "general_assistant")
+			} else {
+				_, err = files.Update(map[string]any{
+					"path": "note.txt", "content": "updated",
+				}, "approval-token", "general_assistant")
+			}
+
+			if !errors.Is(err, syncFailure) {
+				t.Fatalf("%s error = %v, want directory sync failure", mutation, err)
+			}
+		})
+	}
 }
 
 func TestUpdateWithoutExpectedHashHoldsPathLockThroughReplacement(t *testing.T) {
@@ -587,7 +1032,7 @@ func TestUpdateWithoutExpectedHashHoldsPathLockThroughReplacement(t *testing.T) 
 	}
 	plain := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
 	compareAndSwap := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
-	lockKey := plain.root + "\x00note.txt"
+	lockKey := plain.pathLockKey("note.txt")
 	unlock, err := processPathLocks.lockContext(context.Background(), lockKey)
 	if err != nil {
 		t.Fatal(err)
@@ -811,6 +1256,46 @@ func TestPathLockWaitHonorsCancellation(t *testing.T) {
 	}
 }
 
+func TestPathLockKeyConservativelyFoldsCaseAliases(t *testing.T) {
+	files := NewFilesTools(t.TempDir())
+
+	aliases := []string{
+		"directory/café.txt",
+		"Directory/CAFÉ.txt",
+		"directory/cafe\u0301.txt",
+		"directory/CAFE\u0301.TXT",
+	}
+	want := files.pathLockKey(aliases[0])
+	for _, alias := range aliases[1:] {
+		if got := files.pathLockKey(alias); got != want {
+			t.Fatalf("alias lock key %q = %q, want %q", alias, got, want)
+		}
+	}
+}
+
+func TestPathLockKeyUsesFullUnicodeCaseFolding(t *testing.T) {
+	files := NewFilesTools(t.TempDir())
+
+	sigma := files.pathLockKey("directory/Σ.txt")
+	finalSigma := files.pathLockKey("directory/ς.txt")
+
+	if sigma != finalSigma {
+		t.Fatalf("Unicode case-alias lock keys differ: %q != %q", sigma, finalSigma)
+	}
+}
+
+func TestReservedStagingNamesAreCaseInsensitive(t *testing.T) {
+	for _, name := range []string{
+		".turing-create-token",
+		".TURING-CREATE-token",
+		".Turing-Update-token",
+	} {
+		if !isInternalStagingName(name) {
+			t.Errorf("isInternalStagingName(%q) = false, want true", name)
+		}
+	}
+}
+
 func TestCreateValidatesArgumentsBeforeApproval(t *testing.T) {
 	for _, args := range []map[string]any{
 		{},
@@ -828,8 +1313,8 @@ func TestCreateValidatesArgumentsBeforeApproval(t *testing.T) {
 		if err == nil {
 			t.Fatalf("Create(%#v) returned nil error", args)
 		}
-		if validator.calls != 0 {
-			t.Fatalf("Create(%#v) approval validations = %d, want 0", args, validator.calls)
+		if validator.callCount() != 0 {
+			t.Fatalf("Create(%#v) approval validations = %d, want 0", args, validator.callCount())
 		}
 		if _, statErr := os.Stat(filepath.Join(root, "note.txt")); !os.IsNotExist(statErr) {
 			t.Fatalf("Create(%#v) mutated note.txt: %v", args, statErr)
@@ -859,13 +1344,147 @@ func TestUpdateValidatesArgumentsBeforeApprovalAndMutation(t *testing.T) {
 		if err == nil {
 			t.Fatalf("Update(%#v) returned nil error", args)
 		}
-		if validator.calls != 0 {
-			t.Fatalf("Update(%#v) approval validations = %d, want 0", args, validator.calls)
+		if validator.callCount() != 0 {
+			t.Fatalf("Update(%#v) approval validations = %d, want 0", args, validator.callCount())
 		}
 		content, readErr := os.ReadFile(note)
 		if readErr != nil || string(content) != "original" {
 			t.Fatalf("Update(%#v) content = %q, %v; want original", args, content, readErr)
 		}
+	}
+}
+
+func TestCreateLocalPreconditionFailuresDoNotConsumeApproval(t *testing.T) {
+	tests := []struct {
+		name  string
+		path  string
+		setup func(t *testing.T, root string)
+	}{
+		{
+			name: "target exists",
+			path: "note.txt",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(root, "note.txt"), []byte("original"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "parent is symlink",
+			path: "link/note.txt",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.Mkdir(filepath.Join(root, "target"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("target", filepath.Join(root, "link")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "path escapes sandbox",
+			path: "../outside.txt",
+			setup: func(*testing.T, string) {
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			test.setup(t, root)
+			validator := &recordingApprovalValidator{}
+			files := NewFilesTools(root).WithApprovalValidator(validator)
+
+			_, err := files.Create(map[string]any{
+				"path": test.path, "content": "created",
+			}, "approval-token", "general_assistant")
+
+			if err == nil {
+				t.Fatal("Create returned nil error")
+			}
+			if validator.callCount() != 0 {
+				t.Fatalf("approval validations = %d, want 0", validator.callCount())
+			}
+		})
+	}
+}
+
+func TestUpdateLocalPreconditionFailuresDoNotConsumeApproval(t *testing.T) {
+	tests := []struct {
+		name  string
+		path  string
+		args  map[string]any
+		setup func(t *testing.T, root string)
+	}{
+		{
+			name: "target missing",
+			path: "missing.txt",
+			setup: func(*testing.T, string) {
+			},
+		},
+		{
+			name: "target is directory",
+			path: "directory",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.Mkdir(filepath.Join(root, "directory"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "target is symlink",
+			path: "link.txt",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(root, "target.txt"), []byte("original"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("target.txt", filepath.Join(root, "link.txt")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "expected hash mismatch",
+			path: "note.txt",
+			args: map[string]any{"expectedHash": "sha256:" + strings.Repeat("0", sha256.Size*2)},
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(root, "note.txt"), []byte("original"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "path escapes sandbox",
+			path: "../outside.txt",
+			setup: func(*testing.T, string) {
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			test.setup(t, root)
+			validator := &recordingApprovalValidator{}
+			files := NewFilesTools(root).WithApprovalValidator(validator)
+			args := map[string]any{"path": test.path, "content": "updated"}
+			for key, value := range test.args {
+				args[key] = value
+			}
+
+			_, err := files.Update(args, "approval-token", "general_assistant")
+
+			if err == nil {
+				t.Fatal("Update returned nil error")
+			}
+			if validator.callCount() != 0 {
+				t.Fatalf("approval validations = %d, want 0", validator.callCount())
+			}
+		})
 	}
 }
 
@@ -893,8 +1512,8 @@ func TestCallContextRejectsCanceledSideEffectBeforeApprovalOrMutation(t *testing
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("CallContext error = %v, want context.Canceled", err)
 	}
-	if validator.calls != 0 {
-		t.Fatalf("approval validations = %d, want 0", validator.calls)
+	if validator.callCount() != 0 {
+		t.Fatalf("approval validations = %d, want 0", validator.callCount())
 	}
 	if _, statErr := os.Stat(filepath.Join(root, "note.txt")); !os.IsNotExist(statErr) {
 		t.Fatalf("canceled call mutated note.txt: %v", statErr)
@@ -984,12 +1603,16 @@ type fakeApprovalValidator struct {
 }
 
 type recordingApprovalValidator struct {
-	calls int
+	calls atomic.Int32
 }
 
 func (v *recordingApprovalValidator) ValidateContext(context.Context, string, string, map[string]any, string) error {
-	v.calls++
+	v.calls.Add(1)
 	return nil
+}
+
+func (v *recordingApprovalValidator) callCount() int {
+	return int(v.calls.Load())
 }
 
 func (f fakeApprovalValidator) ValidateContext(_ context.Context, token string, tool string, args map[string]any, agentID string) error {
@@ -1063,44 +1686,4 @@ func (r *cancelAfterReadReader) Read(buffer []byte) (int, error) {
 	}
 	r.cancel()
 	return len(buffer), nil
-}
-
-type gatedApprovalValidator struct {
-	total   int32
-	entered atomic.Int32
-	ready   chan struct{}
-	release chan struct{}
-}
-
-func newGatedApprovalValidator(total int) *gatedApprovalValidator {
-	return &gatedApprovalValidator{
-		total:   int32(total),
-		ready:   make(chan struct{}),
-		release: make(chan struct{}),
-	}
-}
-
-func (v *gatedApprovalValidator) ValidateContext(ctx context.Context, _ string, _ string, _ map[string]any, _ string) error {
-	if v.entered.Add(1) == v.total {
-		close(v.ready)
-	}
-	select {
-	case <-v.release:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (v *gatedApprovalValidator) waitUntilEntered(t *testing.T) {
-	t.Helper()
-	select {
-	case <-v.ready:
-	case <-time.After(5 * time.Second):
-		t.Fatalf("approval calls entered = %d, want %d", v.entered.Load(), v.total)
-	}
-}
-
-func (v *gatedApprovalValidator) releaseAll() {
-	close(v.release)
 }

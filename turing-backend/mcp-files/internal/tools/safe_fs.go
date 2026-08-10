@@ -14,6 +14,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const (
+	createStagingPrefix = ".turing-create-"
+	updateStagingPrefix = ".turing-update-"
+)
+
 type pathLockEntry struct {
 	token chan struct{}
 	refs  int
@@ -80,7 +85,7 @@ func normalizeSandboxPath(input string) (string, []string, error) {
 		clean = "."
 	}
 	if filepath.IsAbs(clean) || filepath.VolumeName(clean) != "" {
-		return "", nil, errors.New("path escapes sandbox")
+		return "", nil, invalidParams("path escapes sandbox")
 	}
 	if clean == "." {
 		return clean, nil, nil
@@ -88,10 +93,18 @@ func normalizeSandboxPath(input string) (string, []string, error) {
 	components := strings.Split(clean, string(filepath.Separator))
 	for _, component := range components {
 		if component == "" || component == "." || component == ".." || strings.IndexByte(component, 0) >= 0 {
-			return "", nil, errors.New("path escapes sandbox")
+			return "", nil, invalidParams("path escapes sandbox")
+		}
+		if isInternalStagingName(component) {
+			return "", nil, invalidParams("path uses a reserved internal name")
 		}
 	}
 	return clean, components, nil
+}
+
+func isInternalStagingName(name string) bool {
+	folded := strings.ToLower(name)
+	return strings.HasPrefix(folded, createStagingPrefix) || strings.HasPrefix(folded, updateStagingPrefix)
 }
 
 func (f FilesTools) openRoot() (*os.File, error) {
@@ -117,6 +130,7 @@ func (f FilesTools) openDirectoryPath(input string, create bool) (*os.File, stri
 		return nil, "", err
 	}
 	for _, component := range components {
+		created := false
 		fd, openErr := unix.Openat(
 			int(current.Fd()),
 			component,
@@ -124,7 +138,11 @@ func (f FilesTools) openDirectoryPath(input string, create bool) (*os.File, stri
 			0,
 		)
 		if openErr != nil && create && errors.Is(openErr, unix.ENOENT) {
-			if mkdirErr := unix.Mkdirat(int(current.Fd()), component, 0700); mkdirErr != nil && !errors.Is(mkdirErr, unix.EEXIST) {
+			mkdirErr := unix.Mkdirat(int(current.Fd()), component, 0700)
+			switch {
+			case mkdirErr == nil:
+				created = true
+			case !errors.Is(mkdirErr, unix.EEXIST):
 				_ = current.Close()
 				return nil, "", fmt.Errorf("create directory %q: %w", component, mkdirErr)
 			}
@@ -145,6 +163,18 @@ func (f FilesTools) openDirectoryPath(input string, create bool) (*os.File, stri
 			_ = current.Close()
 			return nil, "", fmt.Errorf("open directory %q: invalid descriptor", component)
 		}
+		if created {
+			if syncErr := f.syncDirectory(next); syncErr != nil {
+				_ = next.Close()
+				_ = current.Close()
+				return nil, "", fmt.Errorf("sync new directory %q: %w", component, syncErr)
+			}
+			if syncErr := f.syncDirectory(current); syncErr != nil {
+				_ = next.Close()
+				_ = current.Close()
+				return nil, "", fmt.Errorf("sync parent for directory %q: %w", component, syncErr)
+			}
+		}
 		_ = current.Close()
 		current = next
 	}
@@ -157,7 +187,7 @@ func (f FilesTools) openParentPath(input string, create bool) (*os.File, string,
 		return nil, "", "", err
 	}
 	if len(components) == 0 {
-		return nil, "", "", errors.New("path must name a file")
+		return nil, "", "", invalidParams("path must name a file")
 	}
 	parentPath := "."
 	if len(components) > 1 {
@@ -213,13 +243,58 @@ func (f FilesTools) openRegularFile(input string) (*os.File, string, *unix.Stat_
 	return file, clean, &stat, nil
 }
 
-func createTemporaryFile(parent *os.File, mode uint32) (*os.File, string, error) {
+func (f FilesTools) syncCreateAncestors(input string) error {
+	_, components, err := normalizeSandboxPath(input)
+	if err != nil {
+		return err
+	}
+	if len(components) <= 1 {
+		return nil
+	}
+	root, err := f.openRoot()
+	if err != nil {
+		return err
+	}
+	directories := []*os.File{root}
+	defer func() {
+		for _, directory := range directories {
+			_ = directory.Close()
+		}
+	}()
+	current := root
+	for _, component := range components[:len(components)-2] {
+		fd, openErr := unix.Openat(
+			int(current.Fd()),
+			component,
+			unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW,
+			0,
+		)
+		if openErr != nil {
+			return fmt.Errorf("open create ancestor %q: %w", component, openErr)
+		}
+		next := os.NewFile(uintptr(fd), component)
+		if next == nil {
+			_ = unix.Close(fd)
+			return fmt.Errorf("open create ancestor %q: invalid descriptor", component)
+		}
+		directories = append(directories, next)
+		current = next
+	}
+	for index := len(directories) - 1; index >= 0; index-- {
+		if syncErr := f.syncDirectory(directories[index]); syncErr != nil {
+			return fmt.Errorf("sync create ancestor %q: %w", directories[index].Name(), syncErr)
+		}
+	}
+	return nil
+}
+
+func createTemporaryFile(parent *os.File, prefix string, mode uint32) (*os.File, string, error) {
 	for attempt := 0; attempt < 16; attempt++ {
 		random := make([]byte, 12)
 		if _, err := rand.Read(random); err != nil {
 			return nil, "", err
 		}
-		name := ".turing-update-" + hex.EncodeToString(random)
+		name := prefix + hex.EncodeToString(random)
 		fd, err := unix.Openat(
 			int(parent.Fd()),
 			name,

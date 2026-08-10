@@ -1,8 +1,6 @@
 package tools
 
 import (
-	"errors"
-	"fmt"
 	"runtime"
 	"time"
 )
@@ -46,7 +44,7 @@ func Call(name string, args map[string]any) (map[string]any, error) {
 	case "system.echo":
 		for argument := range args {
 			if argument != "text" {
-				return nil, fmt.Errorf("unknown argument %q", argument)
+				return nil, invalidParamsf("unknown argument %q", argument)
 			}
 		}
 		text := ""
@@ -54,7 +52,7 @@ func Call(name string, args map[string]any) (map[string]any, error) {
 			var valid bool
 			text, valid = value.(string)
 			if !valid {
-				return nil, errors.New("text must be a string")
+				return nil, invalidParams("text must be a string")
 			}
 		}
 		return map[string]any{"text": text}, nil
@@ -64,13 +62,13 @@ func Call(name string, args map[string]any) (map[string]any, error) {
 		}
 		return map[string]any{"os": runtime.GOOS, "arch": runtime.GOARCH, "runtime": runtime.Version()}, nil
 	default:
-		return nil, errors.New("unknown tool")
+		return nil, invalidParams("unknown tool")
 	}
 }
 
 func rejectArguments(args map[string]any) error {
 	for argument := range args {
-		return fmt.Errorf("unknown argument %q", argument)
+		return invalidParamsf("unknown argument %q", argument)
 	}
 	return nil
 }
