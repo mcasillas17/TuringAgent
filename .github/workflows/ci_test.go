@@ -58,9 +58,35 @@ func requireRunsIn(t *testing.T, workflow string, dir string, command string) {
 	requireContains(t, workflow, "cd "+dir+stepIndent+command)
 }
 
+func TestMCPFilesImagePreparesSandboxBeforeDroppingPrivileges(t *testing.T) {
+	data, err := os.ReadFile("../../turing-backend/mcp-files/Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dockerfile := string(data)
+
+	requireInOrder(t, dockerfile,
+		"mkdir -p /sandbox",
+		"chown 1000:1000 /sandbox",
+		"USER mcp-files:mcp-files",
+	)
+}
+
 func requireContains(t *testing.T, text string, snippet string) {
 	t.Helper()
 	if !strings.Contains(text, snippet) {
 		t.Fatalf("workflow missing %q", snippet)
+	}
+}
+
+func requireInOrder(t *testing.T, text string, snippets ...string) {
+	t.Helper()
+	offset := 0
+	for _, snippet := range snippets {
+		index := strings.Index(text[offset:], snippet)
+		if index == -1 {
+			t.Fatalf("content missing %q in required order", snippet)
+		}
+		offset += index + len(snippet)
 	}
 }

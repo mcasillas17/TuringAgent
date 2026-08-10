@@ -10,7 +10,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /server ./cmd/server
 
 FROM alpine:3.20
 RUN addgroup -g 1000 -S mcp-files \
-    && adduser -u 1000 -S -G mcp-files mcp-files
+    && adduser -u 1000 -S -G mcp-files mcp-files \
+    && mkdir -p /sandbox \
+    && chown 1000:1000 /sandbox
 WORKDIR /app
 COPY --from=builder /server ./server
 USER mcp-files:mcp-files
