@@ -602,6 +602,17 @@ func TestOpenAIStreamsToolCallsSortedByIndex(t *testing.T) {
 	}
 }
 
+func TestOpenAIRejectsNullToolArguments(t *testing.T) {
+	body := `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","function":{"name":"bad","arguments":null}}]}}]}` + "\n\n" +
+		`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n"
+
+	got := streamOpenAIEvents(t, body)
+	assertOpenAIEventTypes(t, got, "error")
+	if got[0].Code != "model_bad_chunk" || !strings.Contains(got[0].Message, "arguments must be a string") {
+		t.Fatalf("events = %+v, want null arguments model_bad_chunk and no completion", got)
+	}
+}
+
 func TestOpenAIRejectsNonObjectToolArguments(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
@@ -798,26 +809,27 @@ func TestOpenAIRejectsPerCallToolArgumentOverflow(t *testing.T) {
 }
 
 func TestOpenAIStreamsEmptyToolArgumentsAsEmptyMap(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("content-type", "text/event-stream")
-		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","function":{"name":"no_arguments","arguments":""}}]}}]}`+"\n\n")
-		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
-	}))
-	t.Cleanup(server.Close)
-
-	provider := NewOpenAICompatible(server.URL, "", server.Client())
-	events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "gpt-4o-mini"})
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name     string
+		function string
+	}{
+		{name: "omitted initial fragment", function: `{"name":"no_arguments"}`},
+		{name: "empty string", function: `{"name":"no_arguments","arguments":""}`},
 	}
-	got := collectEvents(events)
-	assertOpenAIEventTypes(t, got, "tool_call", "completed")
-	if len(got[0].ToolCalls) != 1 {
-		t.Fatalf("events = %+v, want one tool call", got)
-	}
-	arguments := got[0].ToolCalls[0].Arguments
-	if arguments == nil || len(arguments) != 0 {
-		t.Fatalf("arguments = %#v, want non-nil empty map", arguments)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","function":` + tt.function + `}]}}]}` + "\n\n" +
+				`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n"
+			got := streamOpenAIEvents(t, body)
+			assertOpenAIEventTypes(t, got, "tool_call", "completed")
+			if len(got[0].ToolCalls) != 1 {
+				t.Fatalf("events = %+v, want one tool call", got)
+			}
+			arguments := got[0].ToolCalls[0].Arguments
+			if arguments == nil || len(arguments) != 0 {
+				t.Fatalf("arguments = %#v, want non-nil empty map", arguments)
+			}
+		})
 	}
 }
 

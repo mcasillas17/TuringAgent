@@ -321,8 +321,8 @@ type openAIToolCallDelta struct {
 	ID       string `json:"id"`
 	Type     string `json:"type"`
 	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
 	} `json:"function"`
 }
 
@@ -497,12 +497,25 @@ func (state *openAIStreamState) appendToolCallFragment(index int, fragment openA
 		return fmt.Errorf("tool call count exceeds %d", maxOpenAIToolCalls)
 	}
 
+	argumentFragment := ""
+	if len(fragment.Function.Arguments) > 0 {
+		var decoded any
+		if err := json.Unmarshal(fragment.Function.Arguments, &decoded); err != nil {
+			return fmt.Errorf("tool call %d arguments must be a string: %w", index, err)
+		}
+		var ok bool
+		argumentFragment, ok = decoded.(string)
+		if !ok {
+			return fmt.Errorf("tool call %d arguments must be a string", index)
+		}
+	}
+
 	identifierBytes := len(fragment.ID) + len(fragment.Function.Name)
 	if identifierBytes > maxOpenAIToolCallAggregateIdentifierBytes-state.identifierBytes {
 		return fmt.Errorf("tool call ID and name bytes exceed %d", maxOpenAIToolCallAggregateIdentifierBytes)
 	}
 
-	argumentBytes := len(fragment.Function.Arguments)
+	argumentBytes := len(argumentFragment)
 	currentCallArgumentBytes := 0
 	if call != nil {
 		currentCallArgumentBytes = call.arguments.Len()
@@ -520,7 +533,7 @@ func (state *openAIStreamState) appendToolCallFragment(index int, fragment openA
 	}
 	call.id.WriteString(fragment.ID)
 	call.name.WriteString(fragment.Function.Name)
-	call.arguments.WriteString(fragment.Function.Arguments)
+	call.arguments.WriteString(argumentFragment)
 	state.identifierBytes += identifierBytes
 	state.argumentBytes += argumentBytes
 	return nil
