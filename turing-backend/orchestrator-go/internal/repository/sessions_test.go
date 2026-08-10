@@ -98,6 +98,36 @@ func TestSearchMessagesTreatsInputAsLiteralPhrase(t *testing.T) {
 	assertSearchMessageIDs(t, malformed, []string{"m-malformed"})
 }
 
+func TestSearchMessagesTreatsNULAsLiteralDelimiter(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	insertSearchSession(t, ctx, database, "s1")
+	insertSearchMessage(t, ctx, database, "m-nul-phrase", "s1", "alpha beta", 1)
+	insertSearchMessage(t, ctx, database, "m-nul-alpha", "s1", "alpha", 2)
+	insertSearchMessage(t, ctx, database, "m-nul-beta", "s1", "beta", 3)
+
+	results, err := repo.SearchMessages(ctx, "", "alpha\x00beta", 10)
+	if err != nil {
+		t.Fatalf("SearchMessages NUL query: %v", err)
+	}
+	assertSearchMessageIDs(t, results, []string{"m-nul-phrase"})
+}
+
+func TestSearchMessagesNULOnlyInputReturnsNoMatches(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	insertSearchSession(t, ctx, database, "s1")
+	insertSearchMessage(t, ctx, database, "m-nul-content", "s1", "anything", 1)
+
+	results, err := repo.SearchMessages(ctx, "", "\x00", 10)
+	if err != nil {
+		t.Fatalf("SearchMessages NUL-only query: %v", err)
+	}
+	assertSearchMessageIDs(t, results, []string{})
+}
+
 func TestSearchMessagesReturnsQueryErrors(t *testing.T) {
 	database := openTestDB(t)
 	repo := New(database)

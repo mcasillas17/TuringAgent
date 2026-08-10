@@ -106,6 +106,7 @@ func (r *Repository) SearchMessages(ctx context.Context, sessionID, query string
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
+	query = strings.ReplaceAll(query, "\x00", " ")
 	if query == "" {
 		return []Message{}, nil
 	}
