@@ -2143,7 +2143,19 @@ func TestExecutePreservesDebugToolPath(t *testing.T) {
 
 func TestGeneralAssistantStreamsDeltasAndCompletesRun(t *testing.T) {
 	provider := &scriptedProvider{events: []llm.StreamEvent{{Type: "delta", Text: "Hel"}, {Type: "delta", Text: "lo"}, {Type: "completed", FinishReason: "stop"}}}
-	assistant := NewGeneralAssistant(map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider}, fakeMessageClient{messages: []llm.ChatMessage{{Role: "system", Content: "Be helpful"}}}, nil)
+	var fetchedSessionID string
+	var fetchedExclusions []string
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{
+			messages: []llm.ChatMessage{{Role: "system", Content: "Be helpful"}},
+			onFetch: func(sessionID string, excludeMessageIDs []string) {
+				fetchedSessionID = sessionID
+				fetchedExclusions = append([]string(nil), excludeMessageIDs...)
+			},
+		},
+		nil,
+	)
 	updates := collectUpdates(t, assistant, testJob())
 
 	if updates[0].GetEvent().Type != turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_STARTED {
@@ -2158,8 +2170,15 @@ func TestGeneralAssistantStreamsDeltasAndCompletesRun(t *testing.T) {
 	if completed := updates[4].GetRunCompleted(); completed == nil || completed.Content != "Hello" || completed.AssistantMessageId != "msg_assistant" {
 		t.Fatalf("terminal update = %+v, want run_completed content", updates[4])
 	}
-	if len(provider.requests) != 1 || len(provider.requests[0].Messages) != 2 || provider.requests[0].Messages[1].Content != "hi" {
-		t.Fatalf("provider requests = %+v", provider.requests)
+	if fetchedSessionID != "sess_1" || !reflect.DeepEqual(fetchedExclusions, []string{"msg_user", "msg_assistant"}) {
+		t.Fatalf("FetchMessages(sessionID, exclusions) = (%q, %#v), want (%q, %#v)", fetchedSessionID, fetchedExclusions, "sess_1", []string{"msg_user", "msg_assistant"})
+	}
+	wantMessages := []llm.ChatMessage{
+		{Role: "system", Content: "Be helpful"},
+		{Role: "user", Content: "hi"},
+	}
+	if len(provider.requests) != 1 || !reflect.DeepEqual(provider.requests[0].Messages, wantMessages) {
+		t.Fatalf("provider requests = %+v, want messages %+v", provider.requests, wantMessages)
 	}
 	if provider.requests[0].Tools == nil || len(provider.requests[0].Tools) != 0 {
 		t.Fatalf("nil toolset request tools = %#v, want usable empty definitions", provider.requests[0].Tools)
@@ -2258,9 +2277,13 @@ func (p *scriptedProvider) StreamChat(ctx context.Context, req llm.ChatRequest) 
 type fakeMessageClient struct {
 	messages []llm.ChatMessage
 	err      error
+	onFetch  func(sessionID string, excludeMessageIDs []string)
 }
 
-func (c fakeMessageClient) FetchMessages(ctx context.Context, sessionID string) ([]llm.ChatMessage, error) {
+func (c fakeMessageClient) FetchMessages(ctx context.Context, sessionID string, excludeMessageIDs ...string) ([]llm.ChatMessage, error) {
+	if c.onFetch != nil {
+		c.onFetch(sessionID, excludeMessageIDs)
+	}
 	return c.messages, c.err
 }
 

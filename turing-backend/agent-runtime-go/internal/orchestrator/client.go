@@ -62,15 +62,24 @@ func (c *Client) ConnectWorker(ctx context.Context) (turingv1.RuntimeService_Con
 	return c.runtime.ConnectWorker(c.withAuth(ctx))
 }
 
-func (c *Client) FetchMessages(ctx context.Context, sessionID string) ([]llm.ChatMessage, error) {
+func (c *Client) FetchMessages(ctx context.Context, sessionID string, excludeMessageIDs ...string) ([]llm.ChatMessage, error) {
 	resp, err := c.sessions.ListMessages(c.withAuth(ctx), &turingv1.ListMessagesRequest{SessionId: sessionID, Limit: 50})
 	if err != nil {
 		return nil, err
 	}
 	messages := resp.GetMessages()
 	out := make([]llm.ChatMessage, 0, len(messages))
+	excluded := make(map[string]struct{}, len(excludeMessageIDs))
+	for _, messageID := range excludeMessageIDs {
+		if messageID != "" {
+			excluded[messageID] = struct{}{}
+		}
+	}
 	for i := len(messages) - 1; i >= 0; i-- {
 		message := messages[i]
+		if _, exclude := excluded[message.GetMessageId()]; exclude {
+			continue
+		}
 		role, ok := chatRole(message.GetRole())
 		if !ok {
 			continue

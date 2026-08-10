@@ -3,11 +3,13 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/memory"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -142,6 +144,34 @@ func TestSearchMessagesReturnsTheRPCError(t *testing.T) {
 	}
 }
 
+func TestFetchMessagesExcludesCurrentTurnIDsWithoutContentDeduplication(t *testing.T) {
+	client := &Client{sessions: &messageListClient{messages: []*turingv1.Message{
+		{MessageId: "msg_current_assistant", Role: turingv1.MessageRole_MESSAGE_ROLE_ASSISTANT, Content: ""},
+		{MessageId: "msg_current_user", Role: turingv1.MessageRole_MESSAGE_ROLE_USER, Content: "repeat me"},
+		{MessageId: "msg_older_empty_assistant", Role: turingv1.MessageRole_MESSAGE_ROLE_ASSISTANT, Content: ""},
+		{MessageId: "msg_older_user", Role: turingv1.MessageRole_MESSAGE_ROLE_USER, Content: "repeat me"},
+		{MessageId: "msg_system", Role: turingv1.MessageRole_MESSAGE_ROLE_SYSTEM, Content: "instructions"},
+	}}}
+
+	got, err := client.FetchMessages(
+		context.Background(),
+		"session_1",
+		"msg_current_user",
+		"msg_current_assistant",
+	)
+	if err != nil {
+		t.Fatalf("FetchMessages returned error: %v", err)
+	}
+	want := []llm.ChatMessage{
+		{Role: "system", Content: "instructions"},
+		{Role: "user", Content: "repeat me"},
+		{Role: "assistant", Content: ""},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("FetchMessages = %#v, want %#v", got, want)
+	}
+}
+
 func TestWaitForApprovalTokenMarksDeniedAndExpiredRunsTerminal(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -219,6 +249,19 @@ func TestWaitForApprovalTokenContextDeadlineIsNotTerminalDenial(t *testing.T) {
 	if errors.As(err, &terminal) && terminal.RunTerminal() {
 		t.Fatalf("WaitForApprovalToken error = %T %v, must not be terminal denial", err, err)
 	}
+}
+
+type messageListClient struct {
+	turingv1.SessionServiceClient
+	messages []*turingv1.Message
+}
+
+func (c *messageListClient) ListMessages(
+	context.Context,
+	*turingv1.ListMessagesRequest,
+	...grpc.CallOption,
+) (*turingv1.ListMessagesResponse, error) {
+	return &turingv1.ListMessagesResponse{Messages: c.messages}, nil
 }
 
 type approvalStateClient struct {

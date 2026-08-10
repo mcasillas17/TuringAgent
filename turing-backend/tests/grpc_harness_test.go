@@ -870,8 +870,8 @@ func TestModelDrivenToolCallCompletesRun(t *testing.T) {
 	if len(modelBodies) != 2 {
 		t.Fatalf("OpenAI request count = %d, want 2", len(modelBodies))
 	}
-	alias, initialMessages := assertInitialOpenAIRequest(t, modelBodies[0], userText)
-	assertFollowupOpenAIRequest(t, modelBodies[1], initialMessages, alias, expectedToolCallID)
+	alias := assertInitialOpenAIRequest(t, modelBodies[0], userText)
+	assertFollowupOpenAIRequest(t, modelBodies[1], userText, alias, expectedToolCallID)
 	assertModelDrivenMCPRequests(t, harness.systemMCP.recordedRequests(), harness.filesMCP.recordedRequests())
 }
 
@@ -1069,7 +1069,7 @@ func deterministicToolCallID(runID string, round, index int) string {
 	return "call_" + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:])
 }
 
-func assertInitialOpenAIRequest(t *testing.T, body map[string]any, userText string) (string, []any) {
+func assertInitialOpenAIRequest(t *testing.T, body map[string]any, userText string) string {
 	t.Helper()
 	tools, _ := body["tools"].([]any)
 	if len(tools) != 1 {
@@ -1097,30 +1097,25 @@ func assertInitialOpenAIRequest(t *testing.T, body map[string]any, userText stri
 		t.Fatalf("advertised schema = %#v, want %#v", got, wantSchema)
 	}
 	messages, _ := body["messages"].([]any)
-	foundUser := false
-	for _, raw := range messages {
-		message, _ := raw.(map[string]any)
-		if message["role"] == "user" && message["content"] == userText {
-			foundUser = true
-		}
+	wantMessages := []any{map[string]any{"role": "user", "content": userText}}
+	if !reflect.DeepEqual(messages, wantMessages) {
+		t.Fatalf("initial OpenAI messages = %#v, want exactly %#v", messages, wantMessages)
 	}
-	if !foundUser {
-		t.Fatalf("initial OpenAI messages = %#v, want user content %q", body["messages"], userText)
-	}
-	return alias, messages
+	return alias
 }
 
-func assertFollowupOpenAIRequest(t *testing.T, body map[string]any, initialMessages []any, alias, toolCallID string) {
+func assertFollowupOpenAIRequest(t *testing.T, body map[string]any, userText, alias, toolCallID string) {
 	t.Helper()
 	messages, _ := body["messages"].([]any)
-	if len(messages) != len(initialMessages)+2 {
-		t.Fatalf("follow-up OpenAI messages = %#v, want initial history plus assistant and tool", body["messages"])
+	if len(messages) != 3 {
+		t.Fatalf("follow-up OpenAI messages = %#v, want exactly user, assistant, and tool", body["messages"])
 	}
-	if !reflect.DeepEqual(messages[:len(initialMessages)], initialMessages) {
-		t.Fatalf("follow-up history = %#v, want %#v", messages[:len(initialMessages)], initialMessages)
+	wantUser := map[string]any{"role": "user", "content": userText}
+	if !reflect.DeepEqual(messages[0], wantUser) {
+		t.Fatalf("follow-up message[0] = %#v, want %#v", messages[0], wantUser)
 	}
 
-	assistant, _ := messages[len(initialMessages)].(map[string]any)
+	assistant, _ := messages[1].(map[string]any)
 	if assistant["role"] != "assistant" {
 		t.Fatalf("follow-up message[1] role = %#v, want assistant", assistant["role"])
 	}
@@ -1148,7 +1143,7 @@ func assertFollowupOpenAIRequest(t *testing.T, body map[string]any, initialMessa
 		t.Fatalf("assistant wire arguments = %#v", arguments)
 	}
 
-	tool, _ := messages[len(initialMessages)+1].(map[string]any)
+	tool, _ := messages[2].(map[string]any)
 	if tool["role"] != "tool" || tool["tool_call_id"] != toolCallID {
 		t.Fatalf("tool result linkage = %#v, want tool_call_id %q", tool, toolCallID)
 	}
