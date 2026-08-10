@@ -9,8 +9,8 @@ Run these in order and report the outcome of each. Stop and surface failures —
 
 ```bash
 # 1. Root module
-go test ./... -count=1
-go build ./...
+go test -tags sqlite_fts5 ./... -count=1
+go build -tags sqlite_fts5 ./...
 
 # 2. mcp-files (separate module)
 ( cd turing-backend/mcp-files && go test ./... -count=1 && go build ./cmd/server )

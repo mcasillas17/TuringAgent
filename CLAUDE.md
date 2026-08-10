@@ -17,9 +17,11 @@ This is a **multi-module** Go repo. `go build ./...` / `go test ./...` at the ro
 
 Run each from the repo root. Subshells, not `cd X && ... && cd ../..` — on failure `&&` short-circuits and strands you in the subdirectory.
 
+The root module requires SQLite FTS5, so its `go test` and `go build` commands must include `-tags sqlite_fts5` (or set `GOFLAGS=-tags=sqlite_fts5`).
+
 ```bash
-go test ./... -count=1
-go build ./...
+go test -tags sqlite_fts5 ./... -count=1
+go build -tags sqlite_fts5 ./...
 ( cd turing-backend/mcp-files  && go test ./... -count=1 && go build ./cmd/server )
 ( cd turing-backend/mcp-system && go test ./... -count=1 && go build ./... )   # not covered by CI
 ( cd turing-client/turing_app  && flutter test )

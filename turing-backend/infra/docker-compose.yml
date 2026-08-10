@@ -3,6 +3,8 @@ services:
     build:
       context: ../..
       dockerfile: turing-backend/orchestrator-go/Dockerfile
+      args:
+        GOFLAGS: -tags=sqlite_fts5
     environment:
       TURING_CLIENT_API_KEY: ${TURING_CLIENT_API_KEY}
       TURING_INTERNAL_TOKEN: ${TURING_INTERNAL_TOKEN}

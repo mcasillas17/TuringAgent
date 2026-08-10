@@ -24,10 +24,10 @@ jobs:
           cache: true
 
       - name: Run Go tests
-        run: go test ./... -count=1
+        run: go test -tags sqlite_fts5 ./... -count=1
 
       - name: Build Go packages
-        run: go build ./...
+        run: go build -tags sqlite_fts5 ./...
 
   mcp-files:
     name: MCP files module

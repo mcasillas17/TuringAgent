@@ -13,8 +13,8 @@ func TestCIWorkflowCoversCoreChecks(t *testing.T) {
 	}
 	workflow := string(data)
 
-	requireContains(t, workflow, "go test ./... -count=1")
-	requireContains(t, workflow, "go build ./...")
+	requireContains(t, workflow, "go test -tags sqlite_fts5 ./... -count=1")
+	requireContains(t, workflow, "go build -tags sqlite_fts5 ./...")
 	requireContains(t, workflow, "cd turing-backend/mcp-files")
 	requireContains(t, workflow, "go test ./... -count=1")
 	requireContains(t, workflow, "go build ./cmd/server")
