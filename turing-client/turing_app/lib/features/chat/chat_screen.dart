@@ -39,12 +39,12 @@ class _ChatScreenState extends State<ChatScreen> {
   /// applied a second time.
   final Set<String> _completedHistoryMessageIds = {};
 
-  /// `createdAt` of the newest history message whose text is already complete
-  /// on screen. Everything stamped at or before it belongs to a turn history
-  /// fully covers, so its replayed `tool.call.*` events are finished business —
-  /// see [_applyToolCall]. Null when history carried no completed message (a
-  /// fresh session), which suppresses nothing.
-  DateTime? _historyWatermark;
+  /// Sequence of the newest event already persisted when this screen opened.
+  /// The subscription replays the log from its start, so every event at or
+  /// below this sequence is a REPLAY of business that finished before the
+  /// screen existed — see [_applyToolCall]. Null when the tail could not be
+  /// read (fresh session, or the call failed), which suppresses nothing.
+  int? _replayWatermarkSequence;
   StreamSubscription<TuringEvent>? _subscription;
   String _modelProvider = 'ollama';
   bool _streamEnded = false;
@@ -78,12 +78,13 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) setState(() => _historyLoadFailed = true);
     }
     if (!mounted) return;
-    // `lastSequence` is deliberately left unset: `Message.sequence` is a
-    // separate per-message counter, NOT the event sequence this parameter
-    // takes, and `TuringApi.listEvents` drops the `latestSequence` the server
-    // reports — so a full replay is the only request the client can make
-    // honestly. Duplicate history is filtered by messageId instead, which also
-    // survives the server's 500-event replay cap.
+    await _loadReplayWatermark();
+    if (!mounted) return;
+    // `lastSequence` is deliberately left unset even though the watermark above
+    // now knows a sequence: subscribing from it would DROP every event the
+    // runtime emits between the two RPCs. A full replay plus a client-side
+    // filter keeps that window covered. Duplicate history text is filtered by
+    // messageId instead, which also survives the server's 500-event replay cap.
     _subscription = widget.eventSource
         .connect(sessionId: widget.sessionId)
         .listen(
@@ -135,13 +136,40 @@ class _ChatScreenState extends State<ChatScreen> {
   /// heal the card (see [_applyToolCall]).
   static const _placeholderToolName = 'tool';
 
+  /// Reads the already-persisted event tail so [_applyToolCall] can tell a
+  /// replayed event from a live one by SEQUENCE. Sequence is exact and free of
+  /// clock skew; message timestamps are not usable for this — the backend
+  /// stamps a turn's rows at enqueue time and never restamps them, so a
+  /// finished turn's messages are stamped BEFORE its own tool events.
+  ///
+  /// Fails open (watermark left unset, nothing suppressed) on any error: this
+  /// screen must survive an unreachable backend, and re-rendering a stale card
+  /// is a far smaller harm than silently hiding every live tool call. The
+  /// server's `limit` cap errs the same way — a truncated tail only lowers the
+  /// watermark, which suppresses less.
+  Future<void> _loadReplayWatermark() async {
+    final List<TuringEvent> events;
+    try {
+      events = await widget.apiClient.listEvents(sessionId: widget.sessionId);
+    } catch (_) {
+      return;
+    }
+    if (!mounted || events.isEmpty) return;
+    // Ordering is the server's business; a max costs nothing and does not
+    // depend on it.
+    var watermark = events.first.sequence;
+    for (final event in events) {
+      if (event.sequence > watermark) watermark = event.sequence;
+    }
+    _replayWatermarkSequence = watermark;
+  }
+
   Future<void> _loadInitialMessages() async {
     final messages = await widget.apiClient.listMessages(
       sessionId: widget.sessionId,
     );
     if (!mounted || messages.isEmpty) return;
     final entries = <_MessageEntry>[];
-    DateTime? watermark;
     for (final message in messages) {
       final entry = _MessageEntry.fromMessage(message);
       entries.add(entry);
@@ -153,14 +181,8 @@ class _ChatScreenState extends State<ChatScreen> {
         _assistantEntries[message.messageId] = entry;
       } else {
         _completedHistoryMessageIds.add(message.messageId);
-        // `listMessages` is ordered by the server, but a max is cheap and does
-        // not depend on that.
-        if (watermark == null || message.createdAt.isAfter(watermark)) {
-          watermark = message.createdAt;
-        }
       }
     }
-    _historyWatermark = watermark;
     // Seed history non-destructively: prepend it above any live entries. A
     // destructive clear+addAll here would leak their notifiers and orphan the
     // correlation maps (`_toolEntries` / `_assistantEntries`) so later terminal
@@ -170,6 +192,12 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _applyEvent(TuringEvent event) {
+    // `dispose` cancels the subscription, but cancellation of a gRPC-backed
+    // stream is asynchronous: an event already scheduled for delivery can still
+    // land here after the State is gone, and every handler below calls
+    // `setState`. Guard once at the entry point — it covers all four of them,
+    // and mirrors [_handleStreamEnded].
+    if (!mounted) return;
     // Events are arriving, so any earlier drop notice is stale: an error does
     // not cancel the subscription (`cancelOnError` defaults to false), and the
     // stream can keep delivering after one.
@@ -202,36 +230,23 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  /// `GrpcMappers` maps an unset proto timestamp to the Unix epoch, so an event
-  /// stamped at (or before) it carries no usable time. The history filter fails
-  /// OPEN on those: rendering a possibly stale card is a far smaller harm than
-  /// silently hiding every live tool call because the server dropped a field.
-  static final _unknownEventTime = DateTime.fromMillisecondsSinceEpoch(
-    0,
-    isUtc: true,
-  );
-
   void _applyToolCall(TuringEvent event, ToolCallStatus status) {
     // The subscription replays the whole persisted log (see [_start]), so every
-    // tool call of every earlier turn is re-delivered. Deltas are de-duplicated
-    // by messageId; tool events have no equivalent identity in history, so they
-    // are filtered by time instead. A tool call from a turn whose text is
-    // already complete on screen is finished business: recreating its card
-    // would append it BELOW every later message (history is prepended, cards
-    // are appended) and — because the create path seals live bubbles via
+    // tool call that happened before this screen opened is re-delivered. Deltas
+    // are de-duplicated by messageId; tool events have no equivalent identity
+    // in history, so they are filtered by the event sequence captured in
+    // [_loadReplayWatermark] instead. Recreating a card for one of them would
+    // append it BELOW every later message (history is prepended, cards are
+    // appended) and — because the create path seals live bubbles via
     // `_assistantEntries.clear()` — would orphan an adopted, still-streaming
     // assistant row into an empty pill with a duplicate bubble under it.
     //
     // Consequence, accepted deliberately: tool cards are not reconstructed for
-    // turns that are already fully in history. There is no ordering key that
-    // could place them correctly anyway — `Message` carries no event sequence
-    // to interleave against — so the past renders as text only.
-    final watermark = _historyWatermark;
-    if (watermark != null &&
-        event.createdAt.isAfter(_unknownEventTime) &&
-        !event.createdAt.isAfter(watermark)) {
-      return;
-    }
+    // calls the log already holds. There is no ordering key that could place
+    // them correctly anyway — `Message` carries no event sequence to interleave
+    // against — so the past renders as text only.
+    final watermark = _replayWatermarkSequence;
+    if (watermark != null && event.sequence <= watermark) return;
     final toolCallId = _asString(event.payload['toolCallId']);
     if (toolCallId == null || toolCallId.isEmpty) return;
     // The frozen proto contract carries `toolName` as a non-nullable scalar, so
@@ -240,7 +255,17 @@ class _ChatScreenState extends State<ChatScreen> {
     final rawToolName = _asString(event.payload['toolName']);
     final error = _asString(event.payload['error']);
 
-    var entry = _toolEntries[toolCallId];
+    // The contract only guarantees `toolCallId` correlates started -> terminal
+    // WITHIN a run, and a runtime that mints ids itself (call_0, call_1, ...
+    // when the model supplies none) restarts the numbering every turn. Scope
+    // the correlation key by the event's own runId so turn 2's `call_1` cannot
+    // hijack turn 1's card — the payload contract is untouched, and
+    // `toolCallId` stays the entry's own field.
+    final runId = event.runId;
+    final key = (runId == null || runId.isEmpty)
+        ? toolCallId
+        : '$runId:$toolCallId';
+    var entry = _toolEntries[key];
     if (entry == null) {
       // Create on 'started', or defensively on a terminal event that arrives
       // without a prior start (e.g. an event-replay gap).
@@ -253,7 +278,7 @@ class _ChatScreenState extends State<ChatScreen> {
         status: status,
         error: error,
       );
-      _toolEntries[toolCallId] = entry;
+      _toolEntries[key] = entry;
       // Seal any in-progress assistant bubbles: the runtime reuses one
       // assistantMessageId across the whole turn, so text streamed AFTER this
       // tool call must start a fresh bubble below the card rather than append

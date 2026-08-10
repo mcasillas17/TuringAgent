@@ -1449,13 +1449,101 @@ void main() {
     unawaited(events.close());
   });
 
-  testWidgets('replayed tool calls from a finished turn are not re-rendered', (
+  testWidgets(
+    'replayed tool calls of the newest finished turn are not re-rendered',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      // The backend stamps a turn's user AND assistant rows at enqueue time and
+      // never restamps them, so a finished turn's messages are stamped BEFORE
+      // its own tool events. History here is ONLY that one finished turn: any
+      // filter that compares wall-clock times lets its replayed cards through.
+      final turnStart = DateTime.parse('2026-05-10T00:00:00.000Z');
+      final afterTurn = DateTime.parse('2026-05-10T00:00:09.000Z');
+      final persisted = [
+        _event(
+          type: 'tool.call.started',
+          sequence: 7,
+          createdAt: afterTurn,
+          payload: {'toolCallId': 'call_old', 'toolName': 'system.time'},
+        ),
+        _event(
+          type: 'tool.call.completed',
+          sequence: 8,
+          createdAt: afterTurn,
+          payload: {'toolCallId': 'call_old', 'toolName': 'system.time'},
+        ),
+      ];
+      final apiClient = _FakeApiClient()
+        ..initialEvents = persisted
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_u1',
+            role: 'user',
+            content: 'q1',
+            sequence: 1,
+            createdAt: turnStart,
+          ),
+          Message(
+            messageId: 'msg_a1',
+            role: 'assistant',
+            content: 'answer1',
+            sequence: 2,
+            createdAt: turnStart,
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // Reopening replays the WHOLE persisted log.
+      for (final event in persisted) {
+        events.add(event);
+        await tester.pump();
+      }
+
+      expect(
+        find.byType(ToolCallCard),
+        findsNothing,
+        reason:
+            'a tool call the persisted log already holds is finished business; '
+            'appending its card would place it below the answer it belongs to',
+      );
+      expect(find.text('answer1'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets('replayed tool calls do not disturb a still-streaming turn', (
     tester,
   ) async {
     final events = StreamController<TuringEvent>(sync: true);
     final earlier = DateTime.parse('2026-05-10T00:00:00.000Z');
     final later = DateTime.parse('2026-05-10T00:05:00.000Z');
     final apiClient = _FakeApiClient()
+      ..initialEvents = [
+        _event(
+          type: 'tool.call.started',
+          sequence: 1,
+          createdAt: earlier,
+          payload: {'toolCallId': 'call_old', 'toolName': 'system.time'},
+        ),
+        _event(
+          type: 'tool.call.completed',
+          sequence: 2,
+          createdAt: earlier,
+          payload: {'toolCallId': 'call_old', 'toolName': 'system.time'},
+        ),
+      ]
       ..initialMessages = [
         Message(
           messageId: 'msg_u1',
@@ -1504,11 +1592,11 @@ void main() {
 
     // Reopening replays the WHOLE persisted log, so turn 1's tool events arrive
     // again even though its text is already fully on screen.
-    for (final type in ['tool.call.started', 'tool.call.completed']) {
+    for (var sequence = 1; sequence <= 2; sequence++) {
       events.add(
         _event(
-          type: type,
-          sequence: 1,
+          type: sequence == 1 ? 'tool.call.started' : 'tool.call.completed',
+          sequence: sequence,
           createdAt: earlier,
           payload: {'toolCallId': 'call_old', 'toolName': 'system.time'},
         ),
@@ -1528,7 +1616,7 @@ void main() {
     events.add(
       _event(
         type: 'message.delta',
-        sequence: 2,
+        sequence: 3,
         payload: {'messageId': 'msg_live', 'delta': 'It is noon.'},
       ),
     );
@@ -1551,11 +1639,18 @@ void main() {
     unawaited(events.close());
   });
 
-  testWidgets('a tool call newer than history still renders on reopen', (
+  testWidgets('a tool call past the replay watermark still renders', (
     tester,
   ) async {
     final events = StreamController<TuringEvent>(sync: true);
     final apiClient = _FakeApiClient()
+      ..initialEvents = [
+        _event(
+          type: 'message.delta',
+          sequence: 4,
+          payload: {'messageId': 'msg_a1', 'delta': 'hi'},
+        ),
+      ]
       ..initialMessages = [
         Message(
           messageId: 'msg_user',
@@ -1580,7 +1675,7 @@ void main() {
     events.add(
       _event(
         type: 'tool.call.started',
-        sequence: 1,
+        sequence: 5,
         payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
       ),
     );
@@ -1589,7 +1684,7 @@ void main() {
     expect(
       find.byType(ToolCallCard),
       findsOneWidget,
-      reason: 'suppressing replayed history must not silence live tool calls',
+      reason: 'suppressing replayed events must not silence live tool calls',
     );
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
 
@@ -1597,11 +1692,16 @@ void main() {
     unawaited(events.close());
   });
 
-  testWidgets('a tool event with no usable timestamp is still rendered', (
-    tester,
-  ) async {
+  testWidgets('an unreadable event tail suppresses nothing', (tester) async {
     final events = StreamController<TuringEvent>(sync: true);
+    // The backend is routinely unreachable in a local-first stack. Without a
+    // watermark the filter must fail OPEN: a possibly stale card beats hiding
+    // every live tool call.
     final apiClient = _FakeApiClient()
+      ..eventsError = const TuringApiException(
+        code: 'UNAVAILABLE',
+        message: 'no backend',
+      )
       ..initialMessages = [
         Message(
           messageId: 'msg_user',
@@ -1623,32 +1723,145 @@ void main() {
     );
     await tester.pump();
 
-    // `GrpcMappers` turns an unset proto timestamp into the Unix epoch. That
-    // says nothing about when the event happened, so the history filter must
-    // fail OPEN — treating it as ancient would hide every live tool call.
     events.add(
       _event(
         type: 'tool.call.started',
         sequence: 1,
-        createdAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
         payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
       ),
     );
     await tester.pump();
 
     expect(find.byType(ToolCallCard), findsOneWidget);
+    expect(
+      find.text(
+        'Earlier messages could not be loaded. This session is live from here '
+        'on.',
+      ),
+      findsNothing,
+      reason: 'the tail is an internal detail; history itself loaded fine',
+    );
 
     await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('the same toolCallId in two runs renders two cards', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // A runtime that mints ids itself restarts the numbering every run, so
+    // `call_1` of run 2 must not update run 1's card.
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 1,
+        runId: 'run_1',
+        payload: {'toolCallId': 'call_1', 'toolName': 'a.one'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'tool.call.completed',
+        sequence: 2,
+        runId: 'run_1',
+        payload: {'toolCallId': 'call_1', 'toolName': 'a.one'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 3,
+        runId: 'run_2',
+        payload: {'toolCallId': 'call_1', 'toolName': 'b.two'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(ToolCallCard), findsNWidgets(2));
+    expect(find.text('a.one'), findsOneWidget);
+    expect(find.text('b.two'), findsOneWidget);
+    expect(
+      find.byIcon(Icons.check_circle_outline),
+      findsOneWidget,
+      reason: 'run 1 stays Completed rather than regressing to a spinner',
+    );
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('an event delivered after dispose is ignored', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    // Cancelling a gRPC-backed stream is asynchronous, so an event can still be
+    // delivered after `dispose`. This source reproduces that: its subscription
+    // keeps delivering after `cancel()`.
+    final source = _UncancellableEventSource(events.stream);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: source,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 1,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+    expect(find.byType(ToolCallCard), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    // Unguarded, this throws 'setState() called after dispose()'.
+    events.add(
+      _event(
+        type: 'tool.call.completed',
+        sequence: 2,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 3,
+        payload: {'messageId': 'msg_a1', 'delta': 'late'},
+      ),
+    );
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
     unawaited(events.close());
   });
 }
 
 final _fixedDate = DateTime.parse('2026-05-10T00:00:00.000Z');
 
-/// Default stamp for events a test feeds as LIVE. It is deliberately later than
-/// [_fixedDate] (the stamp of seeded history) because the screen suppresses tool
-/// events belonging to turns history already covers; a live event that shared
-/// history's timestamp would be indistinguishable from a replayed one.
+/// Default stamp for events a test feeds as LIVE. Nothing branches on it — the
+/// screen tells replay from live by SEQUENCE — but keeping it later than
+/// [_fixedDate] (the stamp of seeded history) keeps the fixtures honest.
 final _liveDate = DateTime.parse('2026-05-10T01:00:00.000Z');
 
 TuringEvent _event({
@@ -1656,11 +1869,12 @@ TuringEvent _event({
   required int sequence,
   required Map<String, dynamic> payload,
   DateTime? createdAt,
+  String runId = 'run_1',
 }) {
   return TuringEvent(
     eventId: 'evt_$sequence',
     sessionId: 'sess_1',
-    runId: 'run_1',
+    runId: runId,
     traceId: 'trace_1',
     sequence: sequence,
     type: type,
@@ -1681,6 +1895,13 @@ class _FakeApiClient implements TuringApi {
   /// the normal case for a local-first stack, not an exotic one.
   Object? messagesError;
   List<Message> initialMessages = const [];
+
+  /// The event log already persisted when the screen opens. The screen reads
+  /// its tail to learn which sequences the subscription will merely REPLAY.
+  List<TuringEvent> initialEvents = const [];
+
+  /// When set, `listEvents` fails with it.
+  Object? eventsError;
 
   @override
   Future<Map<String, dynamic>> approveApproval(
@@ -1715,8 +1936,10 @@ class _FakeApiClient implements TuringApi {
     required String sessionId,
     int? after,
     int limit = 500,
-  }) async {
-    return const [];
+  }) {
+    final error = eventsError;
+    if (error != null) return Future.error(error);
+    return Future.value(initialEvents);
   }
 
   @override
@@ -1769,4 +1992,74 @@ class _FakeEventSource implements TuringEventSource {
   void close() {
     closed = true;
   }
+}
+
+/// Event source whose subscription IGNORES `cancel()`, standing in for a
+/// gRPC-backed stream whose cancellation is asynchronous and therefore does not
+/// stop an event already on its way to the listener.
+class _UncancellableEventSource implements TuringEventSource {
+  _UncancellableEventSource(this._events);
+
+  final Stream<TuringEvent> _events;
+
+  @override
+  Stream<TuringEvent> connect({required String sessionId, int? lastSequence}) =>
+      _UncancellableStream(_events);
+
+  @override
+  void close() {}
+}
+
+class _UncancellableStream extends Stream<TuringEvent> {
+  _UncancellableStream(this._source);
+
+  final Stream<TuringEvent> _source;
+
+  @override
+  StreamSubscription<TuringEvent> listen(
+    void Function(TuringEvent event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) {
+    return _UncancellableSubscription(
+      _source.listen(
+        onData,
+        onError: onError,
+        onDone: onDone,
+        cancelOnError: cancelOnError,
+      ),
+    );
+  }
+}
+
+class _UncancellableSubscription implements StreamSubscription<TuringEvent> {
+  _UncancellableSubscription(this._inner);
+
+  final StreamSubscription<TuringEvent> _inner;
+
+  @override
+  Future<void> cancel() async {}
+
+  @override
+  Future<E> asFuture<E>([E? futureValue]) => _inner.asFuture(futureValue);
+
+  @override
+  bool get isPaused => _inner.isPaused;
+
+  @override
+  void onData(void Function(TuringEvent event)? handleData) =>
+      _inner.onData(handleData);
+
+  @override
+  void onDone(void Function()? handleDone) => _inner.onDone(handleDone);
+
+  @override
+  void onError(Function? handleError) => _inner.onError(handleError);
+
+  @override
+  void pause([Future<void>? resumeSignal]) => _inner.pause(resumeSignal);
+
+  @override
+  void resume() => _inner.resume();
 }
