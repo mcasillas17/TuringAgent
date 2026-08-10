@@ -241,6 +241,28 @@ func TestOpenAIEmitsProviderErrorEnvelopeWithoutCompletion(t *testing.T) {
 	}
 }
 
+func TestOpenAIEmitsProviderErrorEnvelopeWithoutCodeOrCompletion(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+	}{
+		{name: "absent", data: `{"error":{"message":"quota exceeded"}}`},
+		{name: "null", data: `{"error":{"message":"quota exceeded","code":null}}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := streamOpenAIEvents(t, "data: "+tt.data+"\n\ndata: [DONE]\n\n")
+
+			assertOpenAIEventTypes(t, got, "error")
+			if got[0].Code != "model_unavailable" ||
+				got[0].Message != "OpenAI-compatible provider error: quota exceeded" {
+				t.Fatalf("error event = %+v", got[0])
+			}
+		})
+	}
+}
+
 func TestOpenAIRejectsMalformedProviderErrorEnvelopes(t *testing.T) {
 	tests := []struct {
 		name string

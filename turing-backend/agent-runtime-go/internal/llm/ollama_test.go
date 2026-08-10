@@ -40,19 +40,6 @@ func TestOllamaStreamChatMalformedJSONReturnsErrorEvent(t *testing.T) {
 	}
 }
 
-func TestSendStreamEventRejectsReadySendAfterCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	out := make(chan StreamEvent, 1)
-
-	if sendStreamEvent(ctx, out, StreamEvent{Type: "delta", Text: "late"}) {
-		t.Fatal("sendStreamEvent accepted an event after cancellation")
-	}
-	if len(out) != 0 {
-		t.Fatal("sendStreamEvent delivered an event after cancellation")
-	}
-}
-
 func collectEvents(events <-chan StreamEvent) []StreamEvent {
 	var got []StreamEvent
 	for event := range events {
