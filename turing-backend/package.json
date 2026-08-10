@@ -2,8 +2,8 @@
   "name": "project-turing-backend",
   "private": true,
   "scripts": {
-    "build": "go build ./...",
-    "test": "go test ./...",
-    "lint": "go test ./..."
+    "build": "go build -tags sqlite_fts5 ./...",
+    "test": "go test -tags sqlite_fts5 ./...",
+    "lint": "go test -tags sqlite_fts5 ./..."
   }
 }

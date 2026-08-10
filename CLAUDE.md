@@ -8,7 +8,7 @@ Local-first AI orchestration platform: a Flutter desktop client + Go gRPC backen
 
 ## Multi-module layout (important)
 
-This is a **multi-module** Go repo. `go build ./...` / `go test ./...` at the root does **NOT** cover these separate modules — you must `cd` into them:
+This is a **multi-module** Go repo. `go build -tags sqlite_fts5 ./...` / `go test -tags sqlite_fts5 ./...` at the root does **NOT** cover these separate modules — you must `cd` into them:
 - `/go.mod` — root module `github.com/mcasillas17/TuringAgent` (orchestrator-go, agent-runtime-go, gen, tests)
 - `turing-backend/mcp-files/go.mod` — sandboxed file tools; has a `replace` back to root
 - `turing-backend/mcp-system/go.mod` — standalone system tools; **not covered by CI** — build/test it manually when you touch it
@@ -34,7 +34,7 @@ The `/verify` skill runs this matrix.
 
 ## Gotchas
 
-- **`turing-backend/package.json`'s `lint` script runs `go test`, not a linter.** The real Go linter is golangci-lint (v2, config at `.golangci.yml`): `golangci-lint run ./...` from the root, and separately inside `turing-backend/mcp-files` and `turing-backend/mcp-system`. Not yet wired into CI. `gofmt` runs automatically on save via the format hook; Flutter has `flutter analyze` (defaults only, not in CI).
+- **`turing-backend/package.json`'s `lint` script runs a tagged `go test`, not a linter.** The real Go linter is golangci-lint (v2, config at `.golangci.yml`): `golangci-lint run ./...` from the root, and separately inside `turing-backend/mcp-files` and `turing-backend/mcp-system`. Not yet wired into CI. `gofmt` runs automatically on save via the format hook; Flutter has `flutter analyze` (defaults only, not in CI).
 - **Generated proto code is committed.** After editing a `.proto`, run `tools/proto/generate.sh` and commit the regenerated `gen/` (and Dart output). CI's `tools/proto/check.sh` fails on any diff, so codegen must be deterministic.
 - **CI is self-guarding:** `.github/workflows/ci_test.go` asserts `ci.yml` contains specific commands — editing CI commands may require updating that test.
 - **mcp-files approval flow:** mutating file tools require a short-lived HS256 approval JWT (signed by the orchestrator after user approval, passed as `params._meta.approvalToken`), verified by mcp-files, then consumed via `ApprovalService.ConsumeApproval` over internal gRPC. The write proceeds only on `APPROVAL_STATUS_CONSUMED`.

@@ -86,7 +86,7 @@ jobs:
         run: bash -n turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/smoke-grpc.sh
 
       - name: Check workflow coverage
-        run: go test ./.github/workflows
+        run: go test -tags sqlite_fts5 ./.github/workflows
 
   flutter:
     name: Flutter tests
