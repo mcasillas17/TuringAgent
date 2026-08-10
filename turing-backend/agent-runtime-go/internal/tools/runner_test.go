@@ -130,11 +130,12 @@ func TestRunErrorIndicatesWhetherBeforeBeaconWasPosted(t *testing.T) {
 	})
 }
 
-func TestRunPostsFailureAfterWhenPolicyDecisionWaitFailsAfterBeforeSent(t *testing.T) {
-	waitErr := beaconPostedTestError{err: context.Canceled}
+func TestRunDoesNotPostAfterWhenBeforeDecisionWaitFailsAfterBeaconSent(t *testing.T) {
+	waitErr := beaconPostedTestError{err: context.DeadlineExceeded}
 	var beacons []*turingv1.ToolCallBeacon
+	var mcpCalls int
 	runner := &Runner{
-		PostBeacon: func(ctx context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 			beacons = append(beacons, beacon)
 			if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
 				return nil, waitErr
@@ -150,23 +151,20 @@ func TestRunPostsFailureAfterWhenPolicyDecisionWaitFailsAfterBeforeSent(t *testi
 		TraceID:    "trace_1",
 		ServerName: "system",
 		ToolName:   "system.echo",
-		MCPClient:  fakeMCPClient{},
+		MCPClient: mcpClientFunc(func(context.Context, string, map[string]any, ...string) (map[string]any, error) {
+			mcpCalls++
+			return map[string]any{"ok": true}, nil
+		}),
 	})
 
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("Run error = %v, want context.Canceled", err)
+	if !errors.Is(err, context.DeadlineExceeded) || !BeaconWasPosted(err) {
+		t.Fatalf("Run error = %T %v, want posted error wrapping context.DeadlineExceeded", err, err)
 	}
-	if len(beacons) != 2 {
-		t.Fatalf("beacons = %d, want before and failure after", len(beacons))
+	if len(beacons) != 1 || beacons[0].GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+		t.Fatalf("beacons = %+v, want exactly one BEFORE beacon", beacons)
 	}
-	if beacons[1].GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER || beacons[1].GetStatus() != turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED {
-		t.Fatalf("after beacon = %+v, want failed after beacon", beacons[1])
-	}
-	if beacons[1].GetError().GetCode() != "tool_policy_decision_failed" {
-		t.Fatalf("after error = %+v, want tool_policy_decision_failed", beacons[1].GetError())
-	}
-	if beacons[1].GetToolCallId() != beacons[0].GetToolCallId() {
-		t.Fatalf("after tool_call_id = %q, want %q", beacons[1].GetToolCallId(), beacons[0].GetToolCallId())
+	if mcpCalls != 0 {
+		t.Fatalf("MCP calls = %d, want 0", mcpCalls)
 	}
 }
 
@@ -337,17 +335,10 @@ func TestRunReturnsReportingFailureWhenFailedAfterCannotBePosted(t *testing.T) {
 	tests := []struct {
 		name       string
 		decision   *turingv1.ToolPolicyDecision
-		beforeErr  error
 		wait       func(context.Context, string) (string, error)
 		client     MCPClient
 		wantStatus turingv1.ToolCallStatus
 	}{
-		{
-			name:       "policy decision",
-			beforeErr:  beaconPostedTestError{err: operationErr},
-			client:     fakeMCPClient{},
-			wantStatus: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED,
-		},
 		{
 			name: "approval wait",
 			decision: &turingv1.ToolPolicyDecision{
@@ -380,9 +371,6 @@ func TestRunReturnsReportingFailureWhenFailedAfterCannotBePosted(t *testing.T) {
 					beacons = append(beacons, beacon)
 					if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
 						return nil, reportErr
-					}
-					if test.beforeErr != nil {
-						return nil, test.beforeErr
 					}
 					return test.decision, nil
 				},

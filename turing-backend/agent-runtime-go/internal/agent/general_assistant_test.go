@@ -1161,6 +1161,62 @@ func TestExecuteReturnsRunnerReportingFailureWithoutModelRecovery(t *testing.T) 
 	}
 }
 
+func TestExecuteStopsAfterPostedBeforeBeaconDecisionFailure(t *testing.T) {
+	waitErr := agentBeaconPostedTestError{err: context.DeadlineExceeded}
+	var beacons []*turingv1.ToolCallBeacon
+	runner := &tools.Runner{PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+		beacons = append(beacons, beacon)
+		if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+			return nil, waitErr
+		}
+		return allowToolCall(context.Background(), beacon)
+	}}
+	provider := &queuedProvider{responses: [][]llm.StreamEvent{
+		{{Type: "tool_call", ToolCalls: []llm.ToolCall{{ID: "provider_call", Name: "system.read"}}}},
+		{{Type: "delta", Text: "must not run"}},
+	}}
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{"name": "system.read"}},
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{SystemMCP: client, Runner: runner},
+	)
+	var updates []*turingv1.RuntimeUpdate
+
+	err := assistant.Execute(context.Background(), testJob(), func(update *turingv1.RuntimeUpdate) error {
+		updates = append(updates, update)
+		return nil
+	})
+
+	if !errors.Is(err, context.DeadlineExceeded) || !tools.BeaconWasPosted(err) || !tools.ReportingFailed(err) {
+		t.Fatalf("Execute error = %T %v, want posted reporting error wrapping deadline exceeded", err, err)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider requests = %d, want no model recovery", len(provider.requests))
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("MCP calls = %d, want 0", len(client.calls))
+	}
+	if len(beacons) != 1 || beacons[0].GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+		t.Fatalf("beacons = %+v, want exactly one BEFORE beacon", beacons)
+	}
+	for _, update := range updates {
+		if update.GetRunFailed() != nil || update.GetRunCompleted() != nil {
+			t.Fatalf("assistant emitted terminal runtime update: %+v", update)
+		}
+		if event := update.GetEvent(); event != nil {
+			switch event.GetType() {
+			case turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED,
+				turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED,
+				turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED:
+				t.Fatalf("assistant synthesized tool lifecycle after beacon failure: %+v", event)
+			}
+		}
+	}
+}
+
 func TestExecuteReturnsToolResultReportingErrorWithoutModelRetry(t *testing.T) {
 	provider := &queuedProvider{responses: [][]llm.StreamEvent{
 		{{Type: "tool_call", ToolCalls: []llm.ToolCall{{ID: "provider_call", Name: "system.read"}}}},
@@ -2473,3 +2529,11 @@ type agentTerminalRunError struct {
 
 func (e agentTerminalRunError) Error() string     { return e.message }
 func (e agentTerminalRunError) RunTerminal() bool { return true }
+
+type agentBeaconPostedTestError struct {
+	err error
+}
+
+func (e agentBeaconPostedTestError) Error() string      { return e.err.Error() }
+func (e agentBeaconPostedTestError) Unwrap() error      { return e.err }
+func (e agentBeaconPostedTestError) BeaconPosted() bool { return true }
