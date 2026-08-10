@@ -503,6 +503,110 @@ func TestBuildRegistryRejectsMalformedInputSchemaStructure(t *testing.T) {
 	}
 }
 
+func TestBuildRegistryRejectsMalformedSchemasNestedUnderSchemaKeywords(t *testing.T) {
+	malformed := func() map[string]any {
+		return map[string]any{"required": []any{"missing"}}
+	}
+	tests := []struct {
+		name        string
+		nested      map[string]any
+		wantMessage string
+	}{
+		{name: "items", nested: map[string]any{"items": malformed()}, wantMessage: "items"},
+		{name: "prefixItems", nested: map[string]any{"prefixItems": []any{malformed()}}, wantMessage: "prefixItems entry 0"},
+		{name: "oneOf", nested: map[string]any{"oneOf": []any{malformed()}}, wantMessage: "oneOf entry 0"},
+		{name: "anyOf", nested: map[string]any{"anyOf": []any{malformed()}}, wantMessage: "anyOf entry 0"},
+		{name: "allOf", nested: map[string]any{"allOf": []any{malformed()}}, wantMessage: "allOf entry 0"},
+		{name: "not", nested: map[string]any{"not": malformed()}, wantMessage: "not"},
+		{name: "if", nested: map[string]any{"if": malformed()}, wantMessage: "if"},
+		{name: "then", nested: map[string]any{"then": malformed()}, wantMessage: "then"},
+		{name: "else", nested: map[string]any{"else": malformed()}, wantMessage: "else"},
+		{name: "$defs", nested: map[string]any{"$defs": map[string]any{"broken": malformed()}}, wantMessage: `$defs entry "broken"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := map[string]any{"type": "object"}
+			for keyword, value := range tt.nested {
+				schema[keyword] = value
+			}
+			_, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
+				"schema-server": &registryTestClient{tools: []map[string]any{{
+					"name":        "malformed",
+					"inputSchema": schema,
+				}}},
+			})
+
+			if err == nil {
+				t.Fatal("BuildToolRegistry returned nil error")
+			}
+			assertErrorContains(t, err, "inputSchema", tt.wantMessage, `required name "missing"`)
+			if ToolDiscoveryRetryable(err) {
+				t.Fatalf("BuildToolRegistry error = %T %v, want permanent catalog error", err, err)
+			}
+		})
+	}
+}
+
+func TestBuildRegistryAcceptsBooleanSchemasUnderNestedSchemaKeywords(t *testing.T) {
+	schema := map[string]any{
+		"type":        "object",
+		"items":       true,
+		"prefixItems": []any{true, false},
+		"oneOf":       []any{true},
+		"anyOf":       []any{false},
+		"allOf":       []any{true},
+		"not":         false,
+		"if":          true,
+		"then":        false,
+		"else":        true,
+		"$defs":       map[string]any{"allowed": true, "denied": false},
+	}
+	_, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
+		"schema-server": &registryTestClient{tools: []map[string]any{{
+			"name":        "boolean_schemas",
+			"inputSchema": schema,
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("BuildToolRegistry returned error for valid boolean schemas: %v", err)
+	}
+}
+
+func TestBuildRegistryRejectsMalformedNestedSchemaKeywordShapes(t *testing.T) {
+	tests := []struct {
+		name        string
+		nested      map[string]any
+		wantMessage string
+	}{
+		{name: "single schema keyword", nested: map[string]any{"items": "invalid"}, wantMessage: "items"},
+		{name: "schema array keyword", nested: map[string]any{"oneOf": map[string]any{}}, wantMessage: "oneOf"},
+		{name: "schema array entry", nested: map[string]any{"prefixItems": []any{"invalid"}}, wantMessage: "prefixItems entry 0"},
+		{name: "$defs container", nested: map[string]any{"$defs": []any{}}, wantMessage: "$defs"},
+		{name: "$defs entry", nested: map[string]any{"$defs": map[string]any{"broken": "invalid"}}, wantMessage: `$defs entry "broken"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := map[string]any{"type": "object"}
+			for keyword, value := range tt.nested {
+				schema[keyword] = value
+			}
+			_, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
+				"schema-server": &registryTestClient{tools: []map[string]any{{
+					"name":        "malformed",
+					"inputSchema": schema,
+				}}},
+			})
+			if err == nil {
+				t.Fatal("BuildToolRegistry returned nil error")
+			}
+			assertErrorContains(t, err, "inputSchema", tt.wantMessage)
+			if ToolDiscoveryRetryable(err) {
+				t.Fatalf("BuildToolRegistry error = %T %v, want permanent catalog error", err, err)
+			}
+		})
+	}
+}
+
 func TestBuildRegistryNormalizesMissingInputSchemaRootType(t *testing.T) {
 	schema := map[string]any{
 		"properties": map[string]any{"value": map[string]any{"type": "string"}},

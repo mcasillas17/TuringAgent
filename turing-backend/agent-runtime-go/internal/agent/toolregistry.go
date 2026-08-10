@@ -293,6 +293,62 @@ func validateInputSchemaShape(schema map[string]any) error {
 			return errors.New("additionalProperties must be a boolean or schema object")
 		}
 	}
+
+	for _, keyword := range []string{"items", "not", "if", "then", "else"} {
+		rawNested, present := schema[keyword]
+		if !present {
+			continue
+		}
+		switch nested := rawNested.(type) {
+		case bool:
+		case map[string]any:
+			if err := validateInputSchemaShape(nested); err != nil {
+				return fmt.Errorf("%s: %w", keyword, err)
+			}
+		default:
+			return fmt.Errorf("%s must be a boolean or schema object", keyword)
+		}
+	}
+
+	for _, keyword := range []string{"prefixItems", "oneOf", "anyOf", "allOf"} {
+		rawNested, present := schema[keyword]
+		if !present {
+			continue
+		}
+		nested, ok := rawNested.([]any)
+		if !ok {
+			return fmt.Errorf("%s must be an array of boolean or schema objects", keyword)
+		}
+		for index, rawEntry := range nested {
+			switch entry := rawEntry.(type) {
+			case bool:
+			case map[string]any:
+				if err := validateInputSchemaShape(entry); err != nil {
+					return fmt.Errorf("%s entry %d: %w", keyword, index, err)
+				}
+			default:
+				return fmt.Errorf("%s entry %d must be a boolean or schema object", keyword, index)
+			}
+		}
+	}
+
+	if rawDefinitions, present := schema["$defs"]; present {
+		definitions, ok := rawDefinitions.(map[string]any)
+		if !ok {
+			return errors.New("$defs must be an object of boolean or schema values")
+		}
+		for name, rawDefinition := range definitions {
+			switch definition := rawDefinition.(type) {
+			case bool:
+			case map[string]any:
+				if err := validateInputSchemaShape(definition); err != nil {
+					return fmt.Errorf("$defs entry %q: %w", name, err)
+				}
+			default:
+				return fmt.Errorf("$defs entry %q must be a boolean or schema object", name)
+			}
+		}
+	}
 	return nil
 }
 
