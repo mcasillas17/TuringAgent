@@ -354,7 +354,269 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());
   });
+
+  testWidgets('late history load does not wipe a live tool card', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final gate = Completer<List<Message>>();
+    final apiClient = _FakeApiClient()..messagesGate = gate;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // A live tool call starts and completes WHILE listMessages is still in
+    // flight (history has not resolved yet).
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 1,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    // History resolves late.
+    gate.complete([
+      Message(
+        messageId: 'msg_hist',
+        role: 'user',
+        content: 'earlier question',
+        sequence: 0,
+        createdAt: _fixedDate,
+      ),
+    ]);
+    await tester.pump();
+
+    // The live card survives the history seed, and its terminal event still
+    // updates it in place rather than being orphaned.
+    events.add(
+      _event(
+        type: 'tool.call.completed',
+        sequence: 2,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('earlier question'), findsOneWidget);
+    expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('tool.call.denied renders a denied card', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.denied',
+        sequence: 1,
+        payload: {'toolCallId': 'c1', 'toolName': 'files.create'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byIcon(Icons.block), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('tool.call.started then failed updates the error in place', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 1,
+        payload: {'toolCallId': 'call_1', 'toolName': 'files.create'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'tool.call.failed',
+        sequence: 2,
+        payload: {
+          'toolCallId': 'call_1',
+          'toolName': 'files.create',
+          'error': 'boom',
+        },
+      ),
+    );
+    await tester.pump();
+
+    // The error is written before status notifies, so it appears on rebuild.
+    expect(find.textContaining('boom'), findsOneWidget);
+    expect(find.byIcon(Icons.error_outline), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a stale replayed started does not regress a completed card', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    for (final type in ['tool.call.started', 'tool.call.completed']) {
+      events.add(
+        _event(
+          type: type,
+          sequence: 1,
+          payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+    }
+    // A duplicate/out-of-order 'started' arrives after the terminal state.
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 3,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('an empty toolName still renders a non-empty label', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 1,
+        payload: {'toolCallId': 'c1', 'toolName': ''},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('tool'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('distinct toolCallIds render two independent cards', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 1,
+        payload: {'toolCallId': 'call_1', 'toolName': 'a.one'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 2,
+        payload: {'toolCallId': 'call_2', 'toolName': 'b.two'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'tool.call.completed',
+        sequence: 3,
+        payload: {'toolCallId': 'call_1', 'toolName': 'a.one'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('a.one'), findsOneWidget);
+    expect(find.text('b.two'), findsOneWidget);
+    expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
 }
+
+final _fixedDate = DateTime.parse('2026-05-10T00:00:00.000Z');
 
 TuringEvent _event({
   required String type,
@@ -376,6 +638,11 @@ TuringEvent _event({
 class _FakeApiClient implements TuringApi {
   String? lastSentContent;
   String? lastModelProvider;
+
+  /// When set, `listMessages` returns this future instead of resolving
+  /// immediately, letting a test drive the history-load race explicitly.
+  Completer<List<Message>>? messagesGate;
+  List<Message> initialMessages = const [];
 
   @override
   Future<Map<String, dynamic>> approveApproval(
@@ -419,8 +686,8 @@ class _FakeApiClient implements TuringApi {
     required String sessionId,
     int limit = 50,
     String? before,
-  }) async {
-    return const [];
+  }) {
+    return messagesGate?.future ?? Future.value(initialMessages);
   }
 
   @override

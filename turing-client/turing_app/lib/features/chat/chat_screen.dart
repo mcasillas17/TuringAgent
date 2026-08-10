@@ -51,10 +51,14 @@ class _ChatScreenState extends State<ChatScreen> {
       sessionId: widget.sessionId,
     );
     if (!mounted || messages.isEmpty) return;
+    // Seed history non-destructively: prepend it above any live entries (tool
+    // cards, streaming bubbles) that the event stream may have already created
+    // while `listMessages` was in flight. A destructive clear+addAll here would
+    // wipe those live entries from the UI, leak their notifiers, and orphan the
+    // correlation maps (`_toolEntries` / `_assistantEntries`) so later terminal
+    // events would mutate cards no widget listens to.
     setState(() {
-      _messages
-        ..clear()
-        ..addAll(messages.map(_MessageEntry.fromMessage));
+      _messages.insertAll(0, messages.map(_MessageEntry.fromMessage));
     });
     _scrollToBottom();
   }
@@ -92,7 +96,13 @@ class _ChatScreenState extends State<ChatScreen> {
   void _applyToolCall(TuringEvent event, ToolCallStatus status) {
     final toolCallId = event.payload['toolCallId'] as String?;
     if (toolCallId == null) return;
-    final toolName = event.payload['toolName'] as String? ?? 'tool';
+    // The frozen proto contract carries `toolName` as a non-nullable scalar, so
+    // an unset value arrives as '' (not null) on the live stream. Treat empty as
+    // missing so the card never renders a blank label.
+    final rawToolName = event.payload['toolName'] as String?;
+    final toolName = (rawToolName == null || rawToolName.isEmpty)
+        ? 'tool'
+        : rawToolName;
     final error = event.payload['error'] as String?;
 
     var entry = _toolEntries[toolCallId];
@@ -116,7 +126,16 @@ class _ChatScreenState extends State<ChatScreen> {
       _scrollToBottom();
       return;
     }
+    // Terminal states are final: ignore a stale/duplicate 'started' replayed
+    // (at-least-once redelivery, reconnect, replay overlap) after the call has
+    // already resolved, so a finished card never regresses to a spinner.
+    if (status == ToolCallStatus.running &&
+        entry.status.value != ToolCallStatus.running) {
+      return;
+    }
     // Update the existing card in place; the ValueNotifier drives the rebuild.
+    // `error` is assigned before `status` so the rebuild reads the fresh error:
+    // `error` is a plain field read during build, only `status` notifies.
     if (error != null) entry.error = error;
     entry.status.value = status;
     _scrollToBottom();
