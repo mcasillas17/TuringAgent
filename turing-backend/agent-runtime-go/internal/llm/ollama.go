@@ -223,7 +223,7 @@ func (state *ollamaStreamState) appendToolCallFragments(value any) error {
 		if !ok {
 			return fmt.Errorf("tool call %d function must be an object", position)
 		}
-		index := 0
+		index := position
 		if rawIndex, present := function["index"]; present {
 			number, ok := rawIndex.(json.Number)
 			if !ok {
@@ -240,8 +240,6 @@ func (state *ollamaStreamState) appendToolCallFragments(value any) error {
 				return fmt.Errorf("tool call index %d exceeds %d", parsed, maxOllamaToolCalls-1)
 			}
 			index = int(parsed)
-		} else if len(state.toolCalls) > 0 {
-			return fmt.Errorf("tool call %d missing index is ambiguous after indexed tool calls", position)
 		}
 		if _, duplicate := indices[index]; duplicate {
 			return fmt.Errorf("tool calls contain duplicate index %d", index)

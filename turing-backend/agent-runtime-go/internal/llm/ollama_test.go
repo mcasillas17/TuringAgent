@@ -91,6 +91,55 @@ func TestOllamaAcceptsLegacyToolCallWithoutIDOrIndex(t *testing.T) {
 	}
 }
 
+func TestOllamaMapsLegacyToolCallsByArrayPosition(t *testing.T) {
+	got := streamOllamaEvents(t,
+		`{"message":{"tool_calls":[{"function":{"name":"first","arguments":{"position":0}}},{"function":{"name":"second","arguments":{"position":1}}}]},"done":true,"done_reason":"tool_calls"}`+"\n")
+
+	assertOllamaEventTypes(t, got, "tool_call", "completed")
+	calls := got[0].ToolCalls
+	if len(calls) != 2 ||
+		calls[0].Name != "first" || calls[0].Arguments["position"] != json.Number("0") ||
+		calls[1].Name != "second" || calls[1].Arguments["position"] != json.Number("1") {
+		t.Fatalf("legacy tool calls = %+v", calls)
+	}
+}
+
+func TestOllamaMergesLegacyToolCallFragmentsByArrayPosition(t *testing.T) {
+	got := streamOllamaEvents(t,
+		`{"message":{"tool_calls":[{"function":{"name":"first","arguments":{"first_part":true}}},{"function":{"name":"second","arguments":{"first_part":true}}}]},"done":false}`+"\n"+
+			`{"message":{"tool_calls":[{"function":{"name":"","arguments":{"second_part":0}}},{"function":{"name":"","arguments":{"second_part":1}}}]},"done":true,"done_reason":"tool_calls"}`+"\n")
+
+	assertOllamaEventTypes(t, got, "tool_call", "completed")
+	calls := got[0].ToolCalls
+	if len(calls) != 2 ||
+		calls[0].Name != "first" || calls[0].Arguments["first_part"] != true || calls[0].Arguments["second_part"] != json.Number("0") ||
+		calls[1].Name != "second" || calls[1].Arguments["first_part"] != true || calls[1].Arguments["second_part"] != json.Number("1") {
+		t.Fatalf("fragmented legacy tool calls = %+v", calls)
+	}
+}
+
+func TestOllamaCombinesExplicitAndImplicitToolCallIndices(t *testing.T) {
+	got := streamOllamaEvents(t,
+		`{"message":{"tool_calls":[{"id":"call_1","function":{"index":1,"name":"second","arguments":{"explicit":true}}}]},"done":false}`+"\n"+
+			`{"message":{"tool_calls":[{"function":{"name":"first","arguments":{"implicit":true}}}]},"done":true,"done_reason":"tool_calls"}`+"\n")
+
+	assertOllamaEventTypes(t, got, "tool_call", "completed")
+	calls := got[0].ToolCalls
+	if len(calls) != 2 || calls[0].Name != "first" || calls[1].ID != "call_1" || calls[1].Name != "second" {
+		t.Fatalf("mixed-index tool calls = %+v", calls)
+	}
+}
+
+func TestOllamaRejectsExplicitIndexCollisionWithImplicitPosition(t *testing.T) {
+	got := streamOllamaEvents(t,
+		`{"message":{"tool_calls":[{"function":{"name":"implicit","arguments":{}}},{"function":{"index":0,"name":"explicit","arguments":{}}}]},"done":true}`+"\n")
+
+	assertOllamaEventTypes(t, got, "error")
+	if got[0].Code != "model_bad_chunk" || !strings.Contains(got[0].Message, "duplicate index 0") {
+		t.Fatalf("events = %+v, want duplicate-index model_bad_chunk", got)
+	}
+}
+
 func TestOllamaRequestSerializesTools(t *testing.T) {
 	body := captureOllamaRequest(t, ChatRequest{
 		Model: "llama3.2",
@@ -376,17 +425,6 @@ func TestOllamaValidatesToolCallStreamIntegrity(t *testing.T) {
 			name:        "duplicate indices in chunk",
 			body:        `{"message":{"tool_calls":[{"function":{"index":0,"name":"first","arguments":{}}},{"function":{"index":0,"name":"again","arguments":{}}}]},"done":true}`,
 			wantMessage: "duplicate index 0",
-		},
-		{
-			name:        "multiple missing indices",
-			body:        `{"message":{"tool_calls":[{"function":{"name":"first","arguments":{}}},{"function":{"name":"second","arguments":{}}}]},"done":true}`,
-			wantMessage: "missing index is ambiguous",
-		},
-		{
-			name: "missing index after indexed call",
-			body: `{"message":{"tool_calls":[{"function":{"index":1,"name":"second","arguments":{}}}]},"done":false}` + "\n" +
-				`{"message":{"tool_calls":[{"function":{"name":"legacy","arguments":{}}}]},"done":true}`,
-			wantMessage: "missing index is ambiguous",
 		},
 		{
 			name:        "duplicate IDs",
