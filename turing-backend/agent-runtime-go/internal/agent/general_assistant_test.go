@@ -2125,6 +2125,7 @@ func TestGeneralAssistantClassifiesStreamedProviderErrors(t *testing.T) {
 		{code: "model_unavailable", retryable: true},
 		{code: "model_stream_error", retryable: true},
 		{code: "model_timeout", retryable: true},
+		{code: "model_quota_exceeded", retryable: false},
 		{code: "model_auth_failed", retryable: false},
 		{code: "model_request_failed", retryable: false},
 		{code: "model_bad_chunk", retryable: false},

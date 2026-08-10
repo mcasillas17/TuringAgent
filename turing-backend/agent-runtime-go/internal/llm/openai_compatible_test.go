@@ -314,6 +314,18 @@ func TestOpenAIClassifiesStreamedProviderErrorEnvelopes(t *testing.T) {
 			wantMessage: "OpenAI-compatible provider error (rate_limit_exceeded): Try later",
 		},
 		{
+			name:        "insufficient quota code",
+			errorJSON:   `{"message":"Add credits","code":"insufficient_quota"}`,
+			wantCode:    "model_quota_exceeded",
+			wantMessage: "OpenAI-compatible provider error (insufficient_quota): Add credits",
+		},
+		{
+			name:        "billing hard limit type",
+			errorJSON:   `{"message":"Billing limit reached","type":"billing_hard_limit_reached"}`,
+			wantCode:    "model_quota_exceeded",
+			wantMessage: "OpenAI-compatible provider error: Billing limit reached",
+		},
+		{
 			name:        "server type with absent code",
 			errorJSON:   `{"message":"Provider failed","type":"server_error"}`,
 			wantCode:    "model_unavailable",
@@ -1215,6 +1227,70 @@ func TestOpenAIClassifiesHTTPErrorStatus(t *testing.T) {
 			assertOpenAIEventTypes(t, got, "error")
 			if got[0].Code != test.code || !strings.Contains(got[0].Message, fmt.Sprint(test.status)) {
 				t.Fatalf("event = %+v, want code %q with status %d", got[0], test.code, test.status)
+			}
+		})
+	}
+}
+
+func TestOpenAIClassifiesHTTPQuota429(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprint(w, `{"error":{"message":"Add credits","type":"insufficient_quota","code":"insufficient_quota"}}`)
+	}))
+	t.Cleanup(server.Close)
+
+	provider := NewOpenAICompatible(server.URL, "", server.Client())
+	events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "gpt-4o-mini"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := collectEvents(events)
+	assertOpenAIEventTypes(t, got, "error")
+	if got[0].Code != "model_quota_exceeded" ||
+		got[0].Message != "OpenAI-compatible provider returned 429" {
+		t.Fatalf("event = %+v, want nonretryable quota status error", got[0])
+	}
+}
+
+func TestOpenAIKeepsOrdinaryHTTPRateLimit429Unavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprint(w, `{"error":{"message":"Slow down","type":"rate_limit_error","code":"rate_limit_exceeded"}}`)
+	}))
+	t.Cleanup(server.Close)
+
+	provider := NewOpenAICompatible(server.URL, "", server.Client())
+	events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "gpt-4o-mini"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := collectEvents(events)
+	assertOpenAIEventTypes(t, got, "error")
+	if got[0].Code != "model_unavailable" ||
+		got[0].Message != "OpenAI-compatible provider returned 429" {
+		t.Fatalf("event = %+v, want retryable rate-limit status error", got[0])
+	}
+}
+
+func TestOpenAIMalformedOrEmptyHTTP429BodyRemainsUnavailable(t *testing.T) {
+	for _, body := range []string{"", `{"error":`} {
+		t.Run(fmt.Sprintf("body %q", body), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusTooManyRequests)
+				fmt.Fprint(w, body)
+			}))
+			t.Cleanup(server.Close)
+
+			provider := NewOpenAICompatible(server.URL, "", server.Client())
+			events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "gpt-4o-mini"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := collectEvents(events)
+			assertOpenAIEventTypes(t, got, "error")
+			if got[0].Code != "model_unavailable" ||
+				got[0].Message != "OpenAI-compatible provider returned 429" {
+				t.Fatalf("event = %+v, want unavailable status error", got[0])
 			}
 		})
 	}
