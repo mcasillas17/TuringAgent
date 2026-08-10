@@ -2,7 +2,6 @@ package llm
 
 import (
 	"encoding/json"
-	"reflect"
 	"testing"
 )
 
@@ -51,7 +50,7 @@ func TestChatMessageJSONIncludesToolThreadingFields(t *testing.T) {
 		ToolCalls: []ToolCall{{
 			ID:        "call_2",
 			Name:      "forecast",
-			Arguments: `{"days":3}`,
+			Arguments: map[string]any{"days": 3},
 		}},
 	}
 
@@ -60,13 +59,13 @@ func TestChatMessageJSONIncludesToolThreadingFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const want = `{"role":"tool","content":"{\"temperature\":72}","name":"weather","tool_call_id":"call_1","tool_calls":[{"id":"call_2","name":"forecast","arguments":"{\"days\":3}"}]}`
+	const want = `{"role":"tool","content":"{\"temperature\":72}","name":"weather","tool_call_id":"call_1","tool_calls":[{"id":"call_2","name":"forecast","arguments":{"days":3}}]}`
 	if string(got) != want {
 		t.Fatalf("json = %s, want %s", got, want)
 	}
 }
 
-func TestToolDefinitionJSONContract(t *testing.T) {
+func TestToolDefinitionJSONIncludesDescriptionAndParameters(t *testing.T) {
 	definition := ToolDefinition{
 		Name:        "weather",
 		Description: "Get the current weather",
@@ -88,32 +87,43 @@ func TestToolDefinitionJSONContract(t *testing.T) {
 	if string(got) != want {
 		t.Fatalf("json = %s, want %s", got, want)
 	}
-
-	request := ChatRequest{Tools: []ToolDefinition{definition}}
-	if !reflect.DeepEqual(request.Tools, []ToolDefinition{definition}) {
-		t.Fatalf("tools = %#v, want %#v", request.Tools, []ToolDefinition{definition})
-	}
 }
 
-func TestToolCallJSONContractAndStreamEventSupport(t *testing.T) {
-	call := ToolCall{
-		ID:        "call_1",
-		Name:      "weather",
-		Arguments: `{"city":"Seattle"}`,
-	}
-
-	got, err := json.Marshal(call)
+func TestToolDefinitionJSONOmitsEmptyDescription(t *testing.T) {
+	got, err := json.Marshal(ToolDefinition{
+		Name:       "weather",
+		Parameters: map[string]any{"type": "object"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	const want = `{"id":"call_1","name":"weather","arguments":"{\"city\":\"Seattle\"}"}`
+	const want = `{"name":"weather","parameters":{"type":"object"}}`
 	if string(got) != want {
 		t.Fatalf("json = %s, want %s", got, want)
 	}
+}
 
+func TestToolCallCarriesParsedArgumentsAndSerializesThemAsObject(t *testing.T) {
+	var arguments map[string]any
+	if err := json.Unmarshal([]byte(`{"city":"Seattle"}`), &arguments); err != nil {
+		t.Fatal(err)
+	}
+
+	call := ToolCall{
+		ID:        "call_1",
+		Name:      "weather",
+		Arguments: arguments,
+	}
 	event := StreamEvent{Type: "tool_call", ToolCalls: []ToolCall{call}}
-	if event.Type != "tool_call" || !reflect.DeepEqual(event.ToolCalls, []ToolCall{call}) {
-		t.Fatalf("event = %#v", event)
+
+	got, err := json.Marshal(event.ToolCalls)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const want = `[{"id":"call_1","name":"weather","arguments":{"city":"Seattle"}}]`
+	if string(got) != want {
+		t.Fatalf("json = %s, want %s", got, want)
 	}
 }
