@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/features/chat/chat_screen.dart';
+import 'package:turing_flutter_app/features/chat/tool_call_card.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/session.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
@@ -156,10 +157,199 @@ void main() {
     await tester.pump();
 
     expect(find.text('system.time'), findsOneWidget);
+    // Locks the optional `serverName` payload key all the way through to the
+    // card; without this the card renders identically if the key is dropped.
+    expect(find.text('system'), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());
+  });
+
+  testWidgets('a tool event without a toolCallId is ignored, not rendered', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // Malformed/partial event: no correlation id, so no card can be tracked.
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 1,
+        payload: {'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(ToolCallCard), findsNothing);
+
+    // The stream survives it: a well-formed event still renders.
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 2,
+        payload: {'toolCallId': 'call_1', 'toolName': 'files.create'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(ToolCallCard), findsOneWidget);
+    expect(find.text('files.create'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a non-String payload value does not kill the subscription', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // The payload is a Struct-decoded Map<String, dynamic>; a producer bug can
+    // put any type behind a contract key. A hard cast here would throw and take
+    // every subsequent event down with it.
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 1,
+        payload: {'toolCallId': 42, 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(ToolCallCard), findsNothing);
+
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 2,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(ToolCallCard), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a stream error resolves cards still running', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 1,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'tool.call.completed',
+        sequence: 2,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 3,
+        payload: {'toolCallId': 'call_2', 'toolName': 'files.create'},
+      ),
+    );
+    await tester.pump();
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    // The gRPC stream drops (disconnect / deadline / auth failure). No terminal
+    // event can ever arrive for call_2 now.
+    events.addError(StateError('stream dropped'));
+    await tester.pump();
+
+    expect(
+      find.byType(CircularProgressIndicator),
+      findsNothing,
+      reason: 'no card may keep spinning once the stream is gone',
+    );
+    expect(find.byIcon(Icons.error_outline), findsOneWidget);
+    expect(find.textContaining('connection lost'), findsOneWidget);
+    // The already-resolved card is untouched.
+    expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a stream close resolves cards still running', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 1,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    // Not awaited: the close future only settles once the test pumps, so
+    // awaiting it here would deadlock under fake async. The controller is sync,
+    // so onDone has already been delivered.
+    unawaited(events.close());
+    await tester.pump();
+
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.byIcon(Icons.error_outline), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   testWidgets('tool.call.completed updates the same card in place', (
@@ -491,6 +681,212 @@ void main() {
     unawaited(events.close());
   });
 
+  testWidgets('a real failure replaces the connection-lost placeholder error', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 1,
+        payload: {'toolCallId': 'call_1', 'toolName': 'files.create'},
+      ),
+    );
+    await tester.pump();
+
+    // The stream errors: the card is resolved with the placeholder error. The
+    // subscription is NOT cancelled (cancelOnError defaults to false), so the
+    // real terminal event can still arrive afterwards.
+    events.addError(StateError('stream dropped'));
+    await tester.pump();
+    expect(find.textContaining('connection lost'), findsOneWidget);
+
+    events.add(
+      _event(
+        type: 'tool.call.failed',
+        sequence: 2,
+        payload: {
+          'toolCallId': 'call_1',
+          'toolName': 'files.create',
+          'error': 'mcp_call_failed',
+        },
+      ),
+    );
+    await tester.pump();
+
+    // The status is unchanged (failed -> failed), so only an error-carrying
+    // notification can refresh the card.
+    expect(find.textContaining('mcp_call_failed'), findsOneWidget);
+    expect(
+      find.textContaining('connection lost'),
+      findsNothing,
+      reason: 'the placeholder must not outlive the real failure reason',
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a late started adopts serverName without regressing the card', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // Replay gap: the terminal event lands first, and only `tool.call.started`
+    // is guaranteed to carry `serverName`.
+    events.add(
+      _event(
+        type: 'tool.call.completed',
+        sequence: 1,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+    expect(find.text('system'), findsNothing);
+
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 2,
+        payload: {
+          'toolCallId': 'call_1',
+          'toolName': 'system.time',
+          'serverName': 'system',
+        },
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.text('system'),
+      findsOneWidget,
+      reason: 'late metadata the client received must not be dropped',
+    );
+    // ...and the card still does not regress to a spinner.
+    expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a non-String message.delta payload does not kill the stream', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // Same Struct-decoding hazard as the tool payloads: a hard cast here would
+    // throw an uncaught zone error and drop the event.
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: {'messageId': 42, 'delta': 7},
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 2,
+        payload: {'messageId': 'msg_a', 'delta': 'still here'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('still here'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a non-String approvalId does not kill the stream', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'approval.requested',
+        sequence: 1,
+        payload: {'approvalId': 1, 'toolName': 'files.update'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'approval.consumed',
+        sequence: 2,
+        payload: {'approvalId': 1},
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'approval.requested',
+        sequence: 3,
+        payload: {
+          'approvalId': 'appr_1',
+          'toolName': 'files.update',
+          'argsSummary': 'Update note.txt',
+        },
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Approval requested: files.update'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
   testWidgets('a stale replayed started does not regress a completed card', (
     tester,
   ) async {
@@ -560,6 +956,141 @@ void main() {
     await tester.pump();
 
     expect(find.text('tool'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a later real toolName replaces the placeholder label', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // The first event the client sees carries no usable name, so the card is
+    // created with the placeholder label.
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 1,
+        payload: {'toolCallId': 'call_1', 'toolName': ''},
+      ),
+    );
+    await tester.pump();
+    expect(find.text('tool'), findsOneWidget);
+
+    // A later well-formed event carries the real name: adopt it rather than
+    // leaving the card (and its screen-reader label) permanently wrong.
+    events.add(
+      _event(
+        type: 'tool.call.completed',
+        sequence: 2,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('system.time'), findsOneWidget);
+    expect(find.text('tool'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a real toolName is never overwritten by the placeholder', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 1,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+
+    // A terminal event omits the name (or carries a malformed one): the good
+    // name already on the card wins.
+    events.add(
+      _event(
+        type: 'tool.call.completed',
+        sequence: 2,
+        payload: {'toolCallId': 'call_1', 'toolName': 42},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('system.time'), findsOneWidget);
+    expect(find.text('tool'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a late started adopts the real toolName after a terminal', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.completed',
+        sequence: 1,
+        payload: {'toolCallId': 'call_1', 'toolName': ''},
+      ),
+    );
+    await tester.pump();
+    expect(find.text('tool'), findsOneWidget);
+
+    // The ignored (terminal states are final) late 'started' still carries the
+    // only good metadata the client will ever see.
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 2,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('system.time'), findsOneWidget);
+    expect(find.text('tool'), findsNothing);
+    expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
 
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());

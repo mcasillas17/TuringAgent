@@ -127,6 +127,33 @@ void main() {
     handle.dispose();
   });
 
+  testWidgets('announces in-place status changes as a live region', (
+    tester,
+  ) async {
+    final handle = tester.ensureSemantics();
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: ToolCallCard(
+            toolName: 'system.time',
+            status: ToolCallStatus.completed,
+          ),
+        ),
+      ),
+    );
+
+    // The card mutates in place (running -> terminal) with no list change, so
+    // a silent relabel would never be announced to VoiceOver/TalkBack.
+    expect(
+      tester.getSemantics(find.byType(ToolCallCard)),
+      containsSemantics(
+        isLiveRegion: true,
+        label: 'Tool call system.time: Completed',
+      ),
+    );
+    handle.dispose();
+  });
+
   testWidgets('renders the tool name once when a server is present', (
     tester,
   ) async {

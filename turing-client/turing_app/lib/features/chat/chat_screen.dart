@@ -43,8 +43,42 @@ class _ChatScreenState extends State<ChatScreen> {
     _loadInitialMessages();
     _subscription = widget.eventSource
         .connect(sessionId: widget.sessionId, lastSequence: _lastSequence)
-        .listen(_applyEvent);
+        .listen(
+          _applyEvent,
+          onError: _handleStreamEnded,
+          onDone: _handleStreamEnded,
+        );
   }
+
+  /// The event stream is the only source of terminal `tool.call.*` events, so
+  /// once it errors (gRPC disconnect, deadline, auth failure) or closes, any
+  /// card still in [ToolCallStatus.running] can never resolve. Left alone it
+  /// would spin forever and tell the user a tool is still executing. Resolve
+  /// those cards instead; already-terminal cards are untouched.
+  void _handleStreamEnded([Object? error, StackTrace? stackTrace]) {
+    if (!mounted) return;
+    for (final entry in _toolEntries.values) {
+      final current = entry.state.value;
+      if (current.status != ToolCallStatus.running) continue;
+      entry.state.value = (
+        toolName: current.toolName,
+        status: ToolCallStatus.failed,
+        error: 'connection lost',
+        serverName: current.serverName,
+      );
+    }
+  }
+
+  /// Payloads arrive as a `Map<String, dynamic>` decoded from a proto Struct,
+  /// so a producer bug can put any type behind a contract key. An `as String?`
+  /// cast would throw a `TypeError` out of the listener and take the whole
+  /// subscription (and therefore every later event) down with it.
+  static String? _asString(Object? value) => value is String ? value : null;
+
+  /// Fallback label for a card whose events have not yet carried a usable
+  /// `toolName`. Doubles as the "still unresolved" marker so a later event can
+  /// heal the card (see [_applyToolCall]).
+  static const _placeholderToolName = 'tool';
 
   Future<void> _loadInitialMessages() async {
     final messages = await widget.apiClient.listMessages(
@@ -94,16 +128,13 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _applyToolCall(TuringEvent event, ToolCallStatus status) {
-    final toolCallId = event.payload['toolCallId'] as String?;
-    if (toolCallId == null) return;
+    final toolCallId = _asString(event.payload['toolCallId']);
+    if (toolCallId == null || toolCallId.isEmpty) return;
     // The frozen proto contract carries `toolName` as a non-nullable scalar, so
     // an unset value arrives as '' (not null) on the live stream. Treat empty as
     // missing so the card never renders a blank label.
-    final rawToolName = event.payload['toolName'] as String?;
-    final toolName = (rawToolName == null || rawToolName.isEmpty)
-        ? 'tool'
-        : rawToolName;
-    final error = event.payload['error'] as String?;
+    final rawToolName = _asString(event.payload['toolName']);
+    final error = _asString(event.payload['error']);
 
     var entry = _toolEntries[toolCallId];
     if (entry == null) {
@@ -111,8 +142,10 @@ class _ChatScreenState extends State<ChatScreen> {
       // without a prior start (e.g. an event-replay gap).
       entry = _ToolCallEntry(
         toolCallId: toolCallId,
-        toolName: toolName,
-        serverName: event.payload['serverName'] as String?,
+        toolName: (rawToolName == null || rawToolName.isEmpty)
+            ? _placeholderToolName
+            : rawToolName,
+        serverName: _asString(event.payload['serverName']),
         status: status,
         error: error,
       );
@@ -126,25 +159,54 @@ class _ChatScreenState extends State<ChatScreen> {
       _scrollToBottom();
       return;
     }
+    final current = entry.state.value;
+    // Only `tool.call.started` is guaranteed to carry `serverName`, and it can
+    // arrive after a terminal event (replay gap). Adopt the metadata whenever
+    // the card is still missing it, even on an event that is otherwise ignored.
+    final incomingServer = _asString(event.payload['serverName']);
+    final serverName =
+        (current.serverName == null || current.serverName!.isEmpty)
+        ? incomingServer
+        : current.serverName;
+    // Same self-healing for the name: if the first event the client saw carried
+    // a malformed/empty `toolName` the card is stuck on the placeholder, so take
+    // the first real name any later event supplies. A good name is never
+    // downgraded back to the placeholder by a later malformed event.
+    final toolName =
+        (current.toolName == _placeholderToolName &&
+            rawToolName != null &&
+            rawToolName.isNotEmpty)
+        ? rawToolName
+        : current.toolName;
     // Terminal states are final: ignore a stale/duplicate 'started' replayed
     // (at-least-once redelivery, reconnect, replay overlap) after the call has
     // already resolved, so a finished card never regresses to a spinner.
     if (status == ToolCallStatus.running &&
-        entry.status.value != ToolCallStatus.running) {
+        current.status != ToolCallStatus.running) {
+      entry.state.value = (
+        toolName: toolName,
+        status: current.status,
+        error: current.error,
+        serverName: serverName,
+      );
       return;
     }
-    // Update the existing card in place; the ValueNotifier drives the rebuild.
-    // `error` is assigned before `status` so the rebuild reads the fresh error:
-    // `error` is a plain field read during build, only `status` notifies.
-    if (error != null) entry.error = error;
-    entry.status.value = status;
+    // Update the existing card in place with a single write: everything the
+    // card renders lives in one notifier, so a changed error (or a newly
+    // adopted serverName) still rebuilds even when `status` is unchanged.
+    entry.state.value = (
+      toolName: toolName,
+      status: status,
+      error: error ?? current.error,
+      serverName: serverName,
+    );
     _scrollToBottom();
   }
 
   void _applyMessageDelta(TuringEvent event) {
     final messageId =
-        event.payload['messageId'] as String? ?? 'active_assistant';
-    final delta = event.payload['delta'] as String? ?? '';
+        _asString(event.payload['messageId']) ?? 'active_assistant';
+    final delta = _asString(event.payload['delta']) ?? '';
     var entry = _assistantEntries[messageId];
     if (entry == null) {
       entry = _MessageEntry.assistant(messageId: messageId, content: '');
@@ -156,8 +218,8 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _addApproval(TuringEvent event) {
-    final approvalId = event.payload['approvalId'] as String?;
-    final toolName = event.payload['toolName'] as String?;
+    final approvalId = _asString(event.payload['approvalId']);
+    final toolName = _asString(event.payload['toolName']);
     if (approvalId == null || toolName == null) return;
     setState(() {
       _approvals.removeWhere((approval) => approval.approvalId == approvalId);
@@ -165,14 +227,14 @@ class _ChatScreenState extends State<ChatScreen> {
         _PendingApproval(
           approvalId: approvalId,
           toolName: toolName,
-          argsSummary: event.payload['argsSummary'] as String? ?? '',
+          argsSummary: _asString(event.payload['argsSummary']) ?? '',
         ),
       );
     });
   }
 
   void _clearApproval(TuringEvent event) {
-    final approvalId = event.payload['approvalId'] as String?;
+    final approvalId = _asString(event.payload['approvalId']);
     if (approvalId == null) return;
     setState(
       () => _approvals.removeWhere(
@@ -223,8 +285,15 @@ class _ChatScreenState extends State<ChatScreen> {
               controller: _scrollController,
               padding: const EdgeInsets.all(12),
               itemCount: _messages.length,
-              itemBuilder: (context, index) =>
-                  _ChatMessageTile(entry: _messages[index]),
+              // Key on the entry itself: `_loadInitialMessages` prepends
+              // history with `insertAll(0, ...)`, shifting every live entry's
+              // index. Without a key Flutter re-associates Elements by
+              // position, tearing down and re-subscribing each
+              // ValueListenableBuilder and resetting a running card's spinner.
+              itemBuilder: (context, index) => _ChatMessageTile(
+                key: ObjectKey(_messages[index]),
+                entry: _messages[index],
+              ),
             ),
           ),
           for (final approval in _approvals)
@@ -313,7 +382,7 @@ class _ChatScreenState extends State<ChatScreen> {
 }
 
 class _ChatMessageTile extends StatelessWidget {
-  const _ChatMessageTile({required this.entry});
+  const _ChatMessageTile({super.key, required this.entry});
 
   final _ChatEntry entry;
 
@@ -323,13 +392,13 @@ class _ChatMessageTile extends StatelessWidget {
       case _MessageEntry message:
         return _MessageBubble(entry: message);
       case _ToolCallEntry tool:
-        return ValueListenableBuilder<ToolCallStatus>(
-          valueListenable: tool.status,
-          builder: (context, status, _) => ToolCallCard(
-            toolName: tool.toolName,
-            serverName: tool.serverName,
-            status: status,
-            error: tool.error,
+        return ValueListenableBuilder<_ToolCallState>(
+          valueListenable: tool.state,
+          builder: (context, state, _) => ToolCallCard(
+            toolName: state.toolName,
+            serverName: state.serverName,
+            status: state.status,
+            error: state.error,
           ),
         );
     }
@@ -417,23 +486,37 @@ class _MessageEntry extends _ChatEntry {
   void dispose() => content.dispose();
 }
 
+/// Everything a [ToolCallCard] renders that can change after creation, held in
+/// ONE notifier. Records have value equality, so any changed member (a
+/// corrected `error`, a late `serverName` or `toolName`) notifies even when
+/// `status` is the same — a plain field read during build would silently go
+/// stale instead.
+typedef _ToolCallState = ({
+  String toolName,
+  ToolCallStatus status,
+  String? error,
+  String? serverName,
+});
+
 class _ToolCallEntry extends _ChatEntry {
   _ToolCallEntry({
     required this.toolCallId,
-    required this.toolName,
+    required String toolName,
     required ToolCallStatus status,
-    this.serverName,
-    this.error,
-  }) : status = ValueNotifier(status);
+    String? serverName,
+    String? error,
+  }) : state = ValueNotifier((
+         toolName: toolName,
+         status: status,
+         error: error,
+         serverName: serverName,
+       ));
 
   final String toolCallId;
-  final String toolName;
-  final String? serverName;
-  String? error;
-  final ValueNotifier<ToolCallStatus> status;
+  final ValueNotifier<_ToolCallState> state;
 
   @override
-  void dispose() => status.dispose();
+  void dispose() => state.dispose();
 }
 
 class _PendingApproval {

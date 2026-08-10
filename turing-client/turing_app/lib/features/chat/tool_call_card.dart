@@ -34,6 +34,11 @@ class ToolCallCard extends StatelessWidget {
 
     return Semantics(
       container: true,
+      // The card is relabelled in place when the call resolves (running ->
+      // completed/failed/denied) with no structural list change, which screen
+      // readers do not announce on their own. Marking it live means a user who
+      // has already moved focus past the card still hears the outcome.
+      liveRegion: true,
       label: semanticsLabel,
       child: ExcludeSemantics(
         child: Align(
