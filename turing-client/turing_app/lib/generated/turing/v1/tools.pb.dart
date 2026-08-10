@@ -1,21 +1,22 @@
+// This is a generated file - do not edit.
 //
-//  Generated code. Do not modify.
-//  source: turing/v1/tools.proto
-//
+// Generated from turing/v1/tools.proto.
+
 // @dart = 3.3
 
 // ignore_for_file: annotate_overrides, camel_case_types, comment_references
-// ignore_for_file: constant_identifier_names, library_prefixes
-// ignore_for_file: non_constant_identifier_names, prefer_final_fields
-// ignore_for_file: unnecessary_import, unnecessary_this, unused_import
+// ignore_for_file: constant_identifier_names
+// ignore_for_file: curly_braces_in_flow_control_structures
+// ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
+// ignore_for_file: non_constant_identifier_names
 
 import 'dart:core' as $core;
 
 import 'package:fixnum/fixnum.dart' as $fixnum;
 import 'package:protobuf/protobuf.dart' as $pb;
 
-import '../../google/protobuf/struct.pb.dart' as $6;
-import 'common.pbenum.dart' as $7;
+import '../../google/protobuf/struct.pb.dart' as $0;
+import 'common.pbenum.dart' as $1;
 import 'tools.pbenum.dart';
 
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
@@ -27,22 +28,20 @@ class ToolCallError extends $pb.GeneratedMessage {
     $core.String? code,
     $core.String? message,
   }) {
-    final $result = create();
-    if (code != null) {
-      $result.code = code;
-    }
-    if (message != null) {
-      $result.message = message;
-    }
-    return $result;
+    final result = create();
+    if (code != null) result.code = code;
+    if (message != null) result.message = message;
+    return result;
   }
-  ToolCallError._() : super();
-  factory ToolCallError.fromBuffer($core.List<$core.int> i,
-          [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(i, r);
-  factory ToolCallError.fromJson($core.String i,
-          [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(i, r);
+
+  ToolCallError._();
+
+  factory ToolCallError.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ToolCallError.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ToolCallError',
@@ -59,10 +58,12 @@ class ToolCallError extends $pb.GeneratedMessage {
       super.copyWith((message) => updates(message as ToolCallError))
           as ToolCallError;
 
+  @$core.override
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
   static ToolCallError create() => ToolCallError._();
+  @$core.override
   ToolCallError createEmptyInstance() => create();
   static $pb.PbList<ToolCallError> createRepeated() =>
       $pb.PbList<ToolCallError>();
@@ -74,10 +75,7 @@ class ToolCallError extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   $core.String get code => $_getSZ(0);
   @$pb.TagNumber(1)
-  set code($core.String v) {
-    $_setString(0, v);
-  }
-
+  set code($core.String value) => $_setString(0, value);
   @$pb.TagNumber(1)
   $core.bool hasCode() => $_has(0);
   @$pb.TagNumber(1)
@@ -86,10 +84,7 @@ class ToolCallError extends $pb.GeneratedMessage {
   @$pb.TagNumber(2)
   $core.String get message => $_getSZ(1);
   @$pb.TagNumber(2)
-  set message($core.String v) {
-    $_setString(1, v);
-  }
-
+  set message($core.String value) => $_setString(1, value);
   @$pb.TagNumber(2)
   $core.bool hasMessage() => $_has(1);
   @$pb.TagNumber(2)
@@ -100,10 +95,10 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
   factory ToolCallBeacon({
     ToolCallPhase? phase,
     $core.String? toolCallId,
-    $7.AgentId? agentId,
+    $1.AgentId? agentId,
     $core.String? serverName,
     $core.String? toolName,
-    $6.Struct? args,
+    $0.Struct? args,
     ToolCallStatus? status,
     $core.String? resultSummary,
     $fixnum.Int64? durationMs,
@@ -111,52 +106,30 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
     $core.String? runId,
     $core.String? traceId,
   }) {
-    final $result = create();
-    if (phase != null) {
-      $result.phase = phase;
-    }
-    if (toolCallId != null) {
-      $result.toolCallId = toolCallId;
-    }
-    if (agentId != null) {
-      $result.agentId = agentId;
-    }
-    if (serverName != null) {
-      $result.serverName = serverName;
-    }
-    if (toolName != null) {
-      $result.toolName = toolName;
-    }
-    if (args != null) {
-      $result.args = args;
-    }
-    if (status != null) {
-      $result.status = status;
-    }
-    if (resultSummary != null) {
-      $result.resultSummary = resultSummary;
-    }
-    if (durationMs != null) {
-      $result.durationMs = durationMs;
-    }
-    if (error != null) {
-      $result.error = error;
-    }
-    if (runId != null) {
-      $result.runId = runId;
-    }
-    if (traceId != null) {
-      $result.traceId = traceId;
-    }
-    return $result;
+    final result = create();
+    if (phase != null) result.phase = phase;
+    if (toolCallId != null) result.toolCallId = toolCallId;
+    if (agentId != null) result.agentId = agentId;
+    if (serverName != null) result.serverName = serverName;
+    if (toolName != null) result.toolName = toolName;
+    if (args != null) result.args = args;
+    if (status != null) result.status = status;
+    if (resultSummary != null) result.resultSummary = resultSummary;
+    if (durationMs != null) result.durationMs = durationMs;
+    if (error != null) result.error = error;
+    if (runId != null) result.runId = runId;
+    if (traceId != null) result.traceId = traceId;
+    return result;
   }
-  ToolCallBeacon._() : super();
-  factory ToolCallBeacon.fromBuffer($core.List<$core.int> i,
-          [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(i, r);
-  factory ToolCallBeacon.fromJson($core.String i,
-          [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(i, r);
+
+  ToolCallBeacon._();
+
+  factory ToolCallBeacon.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ToolCallBeacon.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ToolCallBeacon',
@@ -167,14 +140,14 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
         valueOf: ToolCallPhase.valueOf,
         enumValues: ToolCallPhase.values)
     ..aOS(2, _omitFieldNames ? '' : 'toolCallId')
-    ..e<$7.AgentId>(3, _omitFieldNames ? '' : 'agentId', $pb.PbFieldType.OE,
-        defaultOrMaker: $7.AgentId.AGENT_ID_UNSPECIFIED,
-        valueOf: $7.AgentId.valueOf,
-        enumValues: $7.AgentId.values)
+    ..e<$1.AgentId>(3, _omitFieldNames ? '' : 'agentId', $pb.PbFieldType.OE,
+        defaultOrMaker: $1.AgentId.AGENT_ID_UNSPECIFIED,
+        valueOf: $1.AgentId.valueOf,
+        enumValues: $1.AgentId.values)
     ..aOS(4, _omitFieldNames ? '' : 'serverName')
     ..aOS(5, _omitFieldNames ? '' : 'toolName')
-    ..aOM<$6.Struct>(6, _omitFieldNames ? '' : 'args',
-        subBuilder: $6.Struct.create)
+    ..aOM<$0.Struct>(6, _omitFieldNames ? '' : 'args',
+        subBuilder: $0.Struct.create)
     ..e<ToolCallStatus>(7, _omitFieldNames ? '' : 'status', $pb.PbFieldType.OE,
         defaultOrMaker: ToolCallStatus.TOOL_CALL_STATUS_UNSPECIFIED,
         valueOf: ToolCallStatus.valueOf,
@@ -194,10 +167,12 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
       super.copyWith((message) => updates(message as ToolCallBeacon))
           as ToolCallBeacon;
 
+  @$core.override
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
   static ToolCallBeacon create() => ToolCallBeacon._();
+  @$core.override
   ToolCallBeacon createEmptyInstance() => create();
   static $pb.PbList<ToolCallBeacon> createRepeated() =>
       $pb.PbList<ToolCallBeacon>();
@@ -209,10 +184,7 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   ToolCallPhase get phase => $_getN(0);
   @$pb.TagNumber(1)
-  set phase(ToolCallPhase v) {
-    $_setField(1, v);
-  }
-
+  set phase(ToolCallPhase value) => $_setField(1, value);
   @$pb.TagNumber(1)
   $core.bool hasPhase() => $_has(0);
   @$pb.TagNumber(1)
@@ -221,22 +193,16 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
   @$pb.TagNumber(2)
   $core.String get toolCallId => $_getSZ(1);
   @$pb.TagNumber(2)
-  set toolCallId($core.String v) {
-    $_setString(1, v);
-  }
-
+  set toolCallId($core.String value) => $_setString(1, value);
   @$pb.TagNumber(2)
   $core.bool hasToolCallId() => $_has(1);
   @$pb.TagNumber(2)
   void clearToolCallId() => $_clearField(2);
 
   @$pb.TagNumber(3)
-  $7.AgentId get agentId => $_getN(2);
+  $1.AgentId get agentId => $_getN(2);
   @$pb.TagNumber(3)
-  set agentId($7.AgentId v) {
-    $_setField(3, v);
-  }
-
+  set agentId($1.AgentId value) => $_setField(3, value);
   @$pb.TagNumber(3)
   $core.bool hasAgentId() => $_has(2);
   @$pb.TagNumber(3)
@@ -245,10 +211,7 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
   @$pb.TagNumber(4)
   $core.String get serverName => $_getSZ(3);
   @$pb.TagNumber(4)
-  set serverName($core.String v) {
-    $_setString(3, v);
-  }
-
+  set serverName($core.String value) => $_setString(3, value);
   @$pb.TagNumber(4)
   $core.bool hasServerName() => $_has(3);
   @$pb.TagNumber(4)
@@ -257,36 +220,27 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
   @$pb.TagNumber(5)
   $core.String get toolName => $_getSZ(4);
   @$pb.TagNumber(5)
-  set toolName($core.String v) {
-    $_setString(4, v);
-  }
-
+  set toolName($core.String value) => $_setString(4, value);
   @$pb.TagNumber(5)
   $core.bool hasToolName() => $_has(4);
   @$pb.TagNumber(5)
   void clearToolName() => $_clearField(5);
 
   @$pb.TagNumber(6)
-  $6.Struct get args => $_getN(5);
+  $0.Struct get args => $_getN(5);
   @$pb.TagNumber(6)
-  set args($6.Struct v) {
-    $_setField(6, v);
-  }
-
+  set args($0.Struct value) => $_setField(6, value);
   @$pb.TagNumber(6)
   $core.bool hasArgs() => $_has(5);
   @$pb.TagNumber(6)
   void clearArgs() => $_clearField(6);
   @$pb.TagNumber(6)
-  $6.Struct ensureArgs() => $_ensure(5);
+  $0.Struct ensureArgs() => $_ensure(5);
 
   @$pb.TagNumber(7)
   ToolCallStatus get status => $_getN(6);
   @$pb.TagNumber(7)
-  set status(ToolCallStatus v) {
-    $_setField(7, v);
-  }
-
+  set status(ToolCallStatus value) => $_setField(7, value);
   @$pb.TagNumber(7)
   $core.bool hasStatus() => $_has(6);
   @$pb.TagNumber(7)
@@ -295,10 +249,7 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
   @$pb.TagNumber(8)
   $core.String get resultSummary => $_getSZ(7);
   @$pb.TagNumber(8)
-  set resultSummary($core.String v) {
-    $_setString(7, v);
-  }
-
+  set resultSummary($core.String value) => $_setString(7, value);
   @$pb.TagNumber(8)
   $core.bool hasResultSummary() => $_has(7);
   @$pb.TagNumber(8)
@@ -307,10 +258,7 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
   @$pb.TagNumber(9)
   $fixnum.Int64 get durationMs => $_getI64(8);
   @$pb.TagNumber(9)
-  set durationMs($fixnum.Int64 v) {
-    $_setInt64(8, v);
-  }
-
+  set durationMs($fixnum.Int64 value) => $_setInt64(8, value);
   @$pb.TagNumber(9)
   $core.bool hasDurationMs() => $_has(8);
   @$pb.TagNumber(9)
@@ -319,10 +267,7 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
   @$pb.TagNumber(10)
   ToolCallError get error => $_getN(9);
   @$pb.TagNumber(10)
-  set error(ToolCallError v) {
-    $_setField(10, v);
-  }
-
+  set error(ToolCallError value) => $_setField(10, value);
   @$pb.TagNumber(10)
   $core.bool hasError() => $_has(9);
   @$pb.TagNumber(10)
@@ -333,10 +278,7 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
   @$pb.TagNumber(11)
   $core.String get runId => $_getSZ(10);
   @$pb.TagNumber(11)
-  set runId($core.String v) {
-    $_setString(10, v);
-  }
-
+  set runId($core.String value) => $_setString(10, value);
   @$pb.TagNumber(11)
   $core.bool hasRunId() => $_has(10);
   @$pb.TagNumber(11)
@@ -345,10 +287,7 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
   @$pb.TagNumber(12)
   $core.String get traceId => $_getSZ(11);
   @$pb.TagNumber(12)
-  set traceId($core.String v) {
-    $_setString(11, v);
-  }
-
+  set traceId($core.String value) => $_setString(11, value);
   @$pb.TagNumber(12)
   $core.bool hasTraceId() => $_has(11);
   @$pb.TagNumber(12)
@@ -362,28 +301,22 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
     $core.String? approvalId,
     $core.String? reason,
   }) {
-    final $result = create();
-    if (decision != null) {
-      $result.decision = decision;
-    }
-    if (toolCallId != null) {
-      $result.toolCallId = toolCallId;
-    }
-    if (approvalId != null) {
-      $result.approvalId = approvalId;
-    }
-    if (reason != null) {
-      $result.reason = reason;
-    }
-    return $result;
+    final result = create();
+    if (decision != null) result.decision = decision;
+    if (toolCallId != null) result.toolCallId = toolCallId;
+    if (approvalId != null) result.approvalId = approvalId;
+    if (reason != null) result.reason = reason;
+    return result;
   }
-  ToolPolicyDecision._() : super();
-  factory ToolPolicyDecision.fromBuffer($core.List<$core.int> i,
-          [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(i, r);
-  factory ToolPolicyDecision.fromJson($core.String i,
-          [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(i, r);
+
+  ToolPolicyDecision._();
+
+  factory ToolPolicyDecision.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ToolPolicyDecision.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ToolPolicyDecision',
@@ -406,10 +339,12 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
       super.copyWith((message) => updates(message as ToolPolicyDecision))
           as ToolPolicyDecision;
 
+  @$core.override
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
   static ToolPolicyDecision create() => ToolPolicyDecision._();
+  @$core.override
   ToolPolicyDecision createEmptyInstance() => create();
   static $pb.PbList<ToolPolicyDecision> createRepeated() =>
       $pb.PbList<ToolPolicyDecision>();
@@ -421,10 +356,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   ToolPolicyDecision_Decision get decision => $_getN(0);
   @$pb.TagNumber(1)
-  set decision(ToolPolicyDecision_Decision v) {
-    $_setField(1, v);
-  }
-
+  set decision(ToolPolicyDecision_Decision value) => $_setField(1, value);
   @$pb.TagNumber(1)
   $core.bool hasDecision() => $_has(0);
   @$pb.TagNumber(1)
@@ -433,10 +365,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
   @$pb.TagNumber(2)
   $core.String get toolCallId => $_getSZ(1);
   @$pb.TagNumber(2)
-  set toolCallId($core.String v) {
-    $_setString(1, v);
-  }
-
+  set toolCallId($core.String value) => $_setString(1, value);
   @$pb.TagNumber(2)
   $core.bool hasToolCallId() => $_has(1);
   @$pb.TagNumber(2)
@@ -445,10 +374,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
   @$pb.TagNumber(3)
   $core.String get approvalId => $_getSZ(2);
   @$pb.TagNumber(3)
-  set approvalId($core.String v) {
-    $_setString(2, v);
-  }
-
+  set approvalId($core.String value) => $_setString(2, value);
   @$pb.TagNumber(3)
   $core.bool hasApprovalId() => $_has(2);
   @$pb.TagNumber(3)
@@ -457,16 +383,14 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
   @$pb.TagNumber(4)
   $core.String get reason => $_getSZ(3);
   @$pb.TagNumber(4)
-  set reason($core.String v) {
-    $_setString(3, v);
-  }
-
+  set reason($core.String value) => $_setString(3, value);
   @$pb.TagNumber(4)
   $core.bool hasReason() => $_has(3);
   @$pb.TagNumber(4)
   void clearReason() => $_clearField(4);
 }
 
-const _omitFieldNames = $core.bool.fromEnvironment('protobuf.omit_field_names');
-const _omitMessageNames =
+const $core.bool _omitFieldNames =
+    $core.bool.fromEnvironment('protobuf.omit_field_names');
+const $core.bool _omitMessageNames =
     $core.bool.fromEnvironment('protobuf.omit_message_names');

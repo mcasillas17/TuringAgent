@@ -46,6 +46,16 @@ message ListMessagesResponse {
   repeated Message messages = 1;
 }
 
+message SearchMessagesRequest {
+  string query = 1;
+  string session_id = 2; // optional scope; empty = all sessions
+  int32 limit = 3;
+}
+
+message SearchMessagesResponse {
+  repeated Message messages = 1;
+}
+
 message GetConfigRequest {}
 
 message GetConfigResponse {
@@ -77,6 +87,7 @@ service SessionService {
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   rpc GetSession(GetSessionRequest) returns (Session);
   rpc ListMessages(ListMessagesRequest) returns (ListMessagesResponse);
+  rpc SearchMessages(SearchMessagesRequest) returns (SearchMessagesResponse);
   rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
   rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
   rpc ListTools(ListToolsRequest) returns (ListToolsResponse);

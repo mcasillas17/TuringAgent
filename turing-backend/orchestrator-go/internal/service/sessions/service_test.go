@@ -13,13 +13,16 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
 
 type sessionHarness struct {
-	repo *repository.Repository
-	conn *grpc.ClientConn
+	database *db.DB
+	repo     *repository.Repository
+	conn     *grpc.ClientConn
 }
 
 func newSessionHarness(t *testing.T) *sessionHarness {
@@ -51,7 +54,7 @@ func newSessionHarness(t *testing.T) *sessionHarness {
 		grpcServer.Stop()
 		_ = conn.Close()
 	})
-	return &sessionHarness{repo: repo, conn: conn}
+	return &sessionHarness{database: database, repo: repo, conn: conn}
 }
 
 func openSessionTestDB(t *testing.T) *db.DB {
@@ -148,5 +151,101 @@ func TestSessionServiceServesPublicReadEndpoints(t *testing.T) {
 	}
 	if gotTools["files.create"] != turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED {
 		t.Fatalf("files.create policy = %v", gotTools["files.create"])
+	}
+}
+
+func TestSessionServiceSearchMessagesValidatesQuery(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+
+	for name, req := range map[string]*turingv1.SearchMessagesRequest{
+		"empty":      {},
+		"whitespace": {Query: " \t\n "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := client.SearchMessages(ctx, req)
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("SearchMessages error = %v, want InvalidArgument", err)
+			}
+		})
+	}
+
+	_, err := New(h.repo, config.Config{}).SearchMessages(ctx, nil)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("SearchMessages nil request error = %v, want InvalidArgument", err)
+	}
+}
+
+func TestSessionServiceSearchMessagesReturnsGlobalAndScopedResults(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	insertServiceSearchSession(t, ctx, h.database, "session-a")
+	insertServiceSearchSession(t, ctx, h.database, "session-b")
+	insertServiceSearchMessage(t, ctx, h.database, "message-a", "session-a", "assistant", "recallneedle alpha", 1)
+	insertServiceSearchMessage(t, ctx, h.database, "message-b", "session-b", "user", "recallneedle beta", 1)
+	insertServiceSearchMessage(t, ctx, h.database, "message-c", "session-b", "tool", "unrelated", 2)
+
+	global, err := client.SearchMessages(ctx, &turingv1.SearchMessagesRequest{Query: "recallneedle", Limit: 10})
+	if err != nil {
+		t.Fatalf("SearchMessages global: %v", err)
+	}
+	if len(global.Messages) != 2 {
+		t.Fatalf("global message count = %d, want 2", len(global.Messages))
+	}
+	got := make(map[string]*turingv1.Message, len(global.Messages))
+	for _, message := range global.Messages {
+		got[message.MessageId] = message
+	}
+	if message := got["message-a"]; message == nil || message.SessionId != "session-a" || message.Content != "recallneedle alpha" || message.Role != turingv1.MessageRole_MESSAGE_ROLE_ASSISTANT {
+		t.Fatalf("global message-a = %+v", message)
+	}
+	if message := got["message-b"]; message == nil || message.SessionId != "session-b" || message.Content != "recallneedle beta" || message.Role != turingv1.MessageRole_MESSAGE_ROLE_USER {
+		t.Fatalf("global message-b = %+v", message)
+	}
+
+	scoped, err := client.SearchMessages(ctx, &turingv1.SearchMessagesRequest{Query: "recallneedle", SessionId: "session-b", Limit: 10})
+	if err != nil {
+		t.Fatalf("SearchMessages scoped: %v", err)
+	}
+	if len(scoped.Messages) != 1 || scoped.Messages[0].MessageId != "message-b" || scoped.Messages[0].SessionId != "session-b" {
+		t.Fatalf("scoped messages = %+v", scoped.Messages)
+	}
+}
+
+func TestSessionServiceSearchMessagesHonorsLimit(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	insertServiceSearchSession(t, ctx, h.database, "session-limit")
+	for i := 1; i <= 3; i++ {
+		insertServiceSearchMessage(t, ctx, h.database, fmt.Sprintf("message-%d", i), "session-limit", "user", "limitneedle", int64(i))
+	}
+
+	response, err := client.SearchMessages(ctx, &turingv1.SearchMessagesRequest{Query: "limitneedle", Limit: 2})
+	if err != nil {
+		t.Fatalf("SearchMessages: %v", err)
+	}
+	if len(response.Messages) != 2 {
+		t.Fatalf("message count = %d, want 2", len(response.Messages))
+	}
+}
+
+func insertServiceSearchSession(t *testing.T, ctx context.Context, database *db.DB, id string) {
+	t.Helper()
+	_, err := database.ExecContext(ctx, `INSERT INTO sessions (id, created_at, updated_at) VALUES (?, '2026-08-10T00:00:00Z', '2026-08-10T00:00:00Z')`, id)
+	if err != nil {
+		t.Fatalf("insert session %s: %v", id, err)
+	}
+}
+
+func insertServiceSearchMessage(t *testing.T, ctx context.Context, database *db.DB, id, sessionID, role, content string, sequence int64) {
+	t.Helper()
+	_, err := database.ExecContext(ctx, `
+		INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at)
+		VALUES (?, ?, ?, ?, 'text', ?, '2026-08-10T00:00:00Z')`, id, sessionID, role, content, sequence)
+	if err != nil {
+		t.Fatalf("insert message %s: %v", id, err)
 	}
 }

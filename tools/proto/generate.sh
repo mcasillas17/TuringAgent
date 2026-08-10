@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROTO_DIR="$ROOT/proto"
 OUT_DIR="$ROOT/gen/turing/v1"
+FLUTTER_OUT_DIR="$ROOT/turing-client/turing_app/lib/generated"
 
 require() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -16,7 +17,7 @@ require protoc
 require protoc-gen-go
 require protoc-gen-go-grpc
 
-mkdir -p "$OUT_DIR/go" "$OUT_DIR/dart" "$OUT_DIR/swift" "$OUT_DIR/csharp" "$OUT_DIR/kotlin"
+mkdir -p "$OUT_DIR/go" "$OUT_DIR/dart" "$OUT_DIR/swift" "$OUT_DIR/csharp" "$OUT_DIR/kotlin" "$FLUTTER_OUT_DIR"
 
 protoc -I "$PROTO_DIR" \
   --go_out="$OUT_DIR/go" --go_opt=paths=source_relative \
@@ -24,7 +25,7 @@ protoc -I "$PROTO_DIR" \
   "$PROTO_DIR"/turing/v1/*.proto
 
 if command -v protoc-gen-dart >/dev/null 2>&1; then
-  protoc -I "$PROTO_DIR" --dart_out=grpc:"$OUT_DIR/dart" "$PROTO_DIR"/turing/v1/*.proto
+  protoc -I "$PROTO_DIR" --dart_out=grpc:"$FLUTTER_OUT_DIR" "$PROTO_DIR"/turing/v1/*.proto
 else
   echo "protoc-gen-dart not installed; skipping Dart generation" >&2
 fi

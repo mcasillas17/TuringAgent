@@ -1,13 +1,14 @@
+// This is a generated file - do not edit.
 //
-//  Generated code. Do not modify.
-//  source: turing/v1/approvals.proto
-//
+// Generated from turing/v1/approvals.proto.
+
 // @dart = 3.3
 
 // ignore_for_file: annotate_overrides, camel_case_types, comment_references
-// ignore_for_file: constant_identifier_names, library_prefixes
-// ignore_for_file: non_constant_identifier_names, prefer_final_fields
-// ignore_for_file: unnecessary_import, unnecessary_this, unused_import
+// ignore_for_file: constant_identifier_names
+// ignore_for_file: curly_braces_in_flow_control_structures
+// ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
+// ignore_for_file: non_constant_identifier_names
 
 import 'dart:async' as $async;
 import 'dart:core' as $core;
@@ -29,56 +30,58 @@ class ApprovalServiceClient extends $grpc.Client {
     '',
   ];
 
-  static final _$approveApproval =
-      $grpc.ClientMethod<$0.ApproveApprovalRequest, $0.ApprovalResponse>(
-          '/turing.v1.ApprovalService/ApproveApproval',
-          ($0.ApproveApprovalRequest value) => value.writeToBuffer(),
-          ($core.List<$core.int> value) =>
-              $0.ApprovalResponse.fromBuffer(value));
-  static final _$denyApproval =
-      $grpc.ClientMethod<$0.DenyApprovalRequest, $0.ApprovalResponse>(
-          '/turing.v1.ApprovalService/DenyApproval',
-          ($0.DenyApprovalRequest value) => value.writeToBuffer(),
-          ($core.List<$core.int> value) =>
-              $0.ApprovalResponse.fromBuffer(value));
-  static final _$getApprovalForRuntime = $grpc.ClientMethod<
-          $0.GetApprovalForRuntimeRequest, $0.RuntimeApprovalState>(
-      '/turing.v1.ApprovalService/GetApprovalForRuntime',
-      ($0.GetApprovalForRuntimeRequest value) => value.writeToBuffer(),
-      ($core.List<$core.int> value) =>
-          $0.RuntimeApprovalState.fromBuffer(value));
-  static final _$consumeApproval =
-      $grpc.ClientMethod<$0.ConsumeApprovalRequest, $0.ApprovalResponse>(
-          '/turing.v1.ApprovalService/ConsumeApproval',
-          ($0.ConsumeApprovalRequest value) => value.writeToBuffer(),
-          ($core.List<$core.int> value) =>
-              $0.ApprovalResponse.fromBuffer(value));
-
   ApprovalServiceClient(super.channel, {super.options, super.interceptors});
 
   $grpc.ResponseFuture<$0.ApprovalResponse> approveApproval(
-      $0.ApproveApprovalRequest request,
-      {$grpc.CallOptions? options}) {
+    $0.ApproveApprovalRequest request, {
+    $grpc.CallOptions? options,
+  }) {
     return $createUnaryCall(_$approveApproval, request, options: options);
   }
 
   $grpc.ResponseFuture<$0.ApprovalResponse> denyApproval(
-      $0.DenyApprovalRequest request,
-      {$grpc.CallOptions? options}) {
+    $0.DenyApprovalRequest request, {
+    $grpc.CallOptions? options,
+  }) {
     return $createUnaryCall(_$denyApproval, request, options: options);
   }
 
   $grpc.ResponseFuture<$0.RuntimeApprovalState> getApprovalForRuntime(
-      $0.GetApprovalForRuntimeRequest request,
-      {$grpc.CallOptions? options}) {
+    $0.GetApprovalForRuntimeRequest request, {
+    $grpc.CallOptions? options,
+  }) {
     return $createUnaryCall(_$getApprovalForRuntime, request, options: options);
   }
 
   $grpc.ResponseFuture<$0.ApprovalResponse> consumeApproval(
-      $0.ConsumeApprovalRequest request,
-      {$grpc.CallOptions? options}) {
+    $0.ConsumeApprovalRequest request, {
+    $grpc.CallOptions? options,
+  }) {
     return $createUnaryCall(_$consumeApproval, request, options: options);
   }
+
+  // method descriptors
+
+  static final _$approveApproval =
+      $grpc.ClientMethod<$0.ApproveApprovalRequest, $0.ApprovalResponse>(
+          '/turing.v1.ApprovalService/ApproveApproval',
+          ($0.ApproveApprovalRequest value) => value.writeToBuffer(),
+          $0.ApprovalResponse.fromBuffer);
+  static final _$denyApproval =
+      $grpc.ClientMethod<$0.DenyApprovalRequest, $0.ApprovalResponse>(
+          '/turing.v1.ApprovalService/DenyApproval',
+          ($0.DenyApprovalRequest value) => value.writeToBuffer(),
+          $0.ApprovalResponse.fromBuffer);
+  static final _$getApprovalForRuntime = $grpc.ClientMethod<
+          $0.GetApprovalForRuntimeRequest, $0.RuntimeApprovalState>(
+      '/turing.v1.ApprovalService/GetApprovalForRuntime',
+      ($0.GetApprovalForRuntimeRequest value) => value.writeToBuffer(),
+      $0.RuntimeApprovalState.fromBuffer);
+  static final _$consumeApproval =
+      $grpc.ClientMethod<$0.ConsumeApprovalRequest, $0.ApprovalResponse>(
+          '/turing.v1.ApprovalService/ConsumeApproval',
+          ($0.ConsumeApprovalRequest value) => value.writeToBuffer(),
+          $0.ApprovalResponse.fromBuffer);
 }
 
 @$pb.GrpcServiceName('turing.v1.ApprovalService')
@@ -129,10 +132,16 @@ abstract class ApprovalServiceBase extends $grpc.Service {
     return approveApproval($call, await $request);
   }
 
+  $async.Future<$0.ApprovalResponse> approveApproval(
+      $grpc.ServiceCall call, $0.ApproveApprovalRequest request);
+
   $async.Future<$0.ApprovalResponse> denyApproval_Pre($grpc.ServiceCall $call,
       $async.Future<$0.DenyApprovalRequest> $request) async {
     return denyApproval($call, await $request);
   }
+
+  $async.Future<$0.ApprovalResponse> denyApproval(
+      $grpc.ServiceCall call, $0.DenyApprovalRequest request);
 
   $async.Future<$0.RuntimeApprovalState> getApprovalForRuntime_Pre(
       $grpc.ServiceCall $call,
@@ -140,18 +149,15 @@ abstract class ApprovalServiceBase extends $grpc.Service {
     return getApprovalForRuntime($call, await $request);
   }
 
+  $async.Future<$0.RuntimeApprovalState> getApprovalForRuntime(
+      $grpc.ServiceCall call, $0.GetApprovalForRuntimeRequest request);
+
   $async.Future<$0.ApprovalResponse> consumeApproval_Pre(
       $grpc.ServiceCall $call,
       $async.Future<$0.ConsumeApprovalRequest> $request) async {
     return consumeApproval($call, await $request);
   }
 
-  $async.Future<$0.ApprovalResponse> approveApproval(
-      $grpc.ServiceCall call, $0.ApproveApprovalRequest request);
-  $async.Future<$0.ApprovalResponse> denyApproval(
-      $grpc.ServiceCall call, $0.DenyApprovalRequest request);
-  $async.Future<$0.RuntimeApprovalState> getApprovalForRuntime(
-      $grpc.ServiceCall call, $0.GetApprovalForRuntimeRequest request);
   $async.Future<$0.ApprovalResponse> consumeApproval(
       $grpc.ServiceCall call, $0.ConsumeApprovalRequest request);
 }

@@ -1,13 +1,14 @@
+// This is a generated file - do not edit.
 //
-//  Generated code. Do not modify.
-//  source: turing/v1/common.proto
-//
+// Generated from turing/v1/common.proto.
+
 // @dart = 3.3
 
 // ignore_for_file: annotate_overrides, camel_case_types, comment_references
-// ignore_for_file: constant_identifier_names, library_prefixes
-// ignore_for_file: non_constant_identifier_names, prefer_final_fields
-// ignore_for_file: unnecessary_import, unnecessary_this, unused_import
+// ignore_for_file: constant_identifier_names
+// ignore_for_file: curly_braces_in_flow_control_structures
+// ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
+// ignore_for_file: non_constant_identifier_names
 
 import 'dart:core' as $core;
 
@@ -29,7 +30,7 @@ class AgentId extends $pb.ProtobufEnum {
   static AgentId? valueOf($core.int value) =>
       value < 0 || value >= _byValue.length ? null : _byValue[value];
 
-  const AgentId._(super.v, super.n);
+  const AgentId._(super.value, super.name);
 }
 
 class ModelProvider extends $pb.ProtobufEnum {
@@ -51,7 +52,7 @@ class ModelProvider extends $pb.ProtobufEnum {
   static ModelProvider? valueOf($core.int value) =>
       value < 0 || value >= _byValue.length ? null : _byValue[value];
 
-  const ModelProvider._(super.v, super.n);
+  const ModelProvider._(super.value, super.name);
 }
 
 class MessageRole extends $pb.ProtobufEnum {
@@ -79,7 +80,7 @@ class MessageRole extends $pb.ProtobufEnum {
   static MessageRole? valueOf($core.int value) =>
       value < 0 || value >= _byValue.length ? null : _byValue[value];
 
-  const MessageRole._(super.v, super.n);
+  const MessageRole._(super.value, super.name);
 }
 
 class ToolPolicy extends $pb.ProtobufEnum {
@@ -104,7 +105,7 @@ class ToolPolicy extends $pb.ProtobufEnum {
   static ToolPolicy? valueOf($core.int value) =>
       value < 0 || value >= _byValue.length ? null : _byValue[value];
 
-  const ToolPolicy._(super.v, super.n);
+  const ToolPolicy._(super.value, super.name);
 }
 
 class RunStatus extends $pb.ProtobufEnum {
@@ -138,7 +139,8 @@ class RunStatus extends $pb.ProtobufEnum {
   static RunStatus? valueOf($core.int value) =>
       value < 0 || value >= _byValue.length ? null : _byValue[value];
 
-  const RunStatus._(super.v, super.n);
+  const RunStatus._(super.value, super.name);
 }
 
-const _omitEnumNames = $core.bool.fromEnvironment('protobuf.omit_enum_names');
+const $core.bool _omitEnumNames =
+    $core.bool.fromEnvironment('protobuf.omit_enum_names');
