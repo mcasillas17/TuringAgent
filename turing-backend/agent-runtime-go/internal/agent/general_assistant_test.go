@@ -133,6 +133,76 @@ func TestExecuteSharesConcurrentToolDiscovery(t *testing.T) {
 	}
 }
 
+func TestExecuteSharesConcurrentToolDiscoveryFailure(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var attempts atomic.Int32
+	client := &assistantTestToolLister{
+		listFunc: func(context.Context) ([]map[string]any, error) {
+			if attempts.Add(1) == 1 {
+				close(entered)
+				<-release
+				return nil, errors.New("discovery unavailable")
+			}
+			return []map[string]any{{"name": "system.time"}}, nil
+		},
+	}
+	provider := &completionProvider{}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{SystemMCP: client},
+	)
+
+	type result struct {
+		err     error
+		updates []*turingv1.RuntimeUpdate
+	}
+	execute := func(ctx context.Context) result {
+		var updates []*turingv1.RuntimeUpdate
+		err := assistant.Execute(ctx, testJob(), func(update *turingv1.RuntimeUpdate) error {
+			updates = append(updates, update)
+			return nil
+		})
+		return result{err: err, updates: updates}
+	}
+
+	results := make(chan result, 2)
+	go func() { results <- execute(context.Background()) }()
+	<-entered
+	waiting := make(chan struct{})
+	go func() {
+		results <- execute(&doneSignalingContext{Context: context.Background(), called: waiting})
+	}()
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("second Execute did not join the discovery flight")
+	}
+	close(release)
+
+	for range 2 {
+		got := <-results
+		if got.err != nil {
+			t.Fatalf("Execute returned error: %v", got.err)
+		}
+		failed := got.updates[len(got.updates)-1].GetRunFailed()
+		if failed == nil || failed.Code != "tool_discovery_failed" {
+			t.Fatalf("terminal update = %+v, want tool_discovery_failed", got.updates[len(got.updates)-1])
+		}
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("concurrent ListTools attempts = %d, want 1 shared failure", got)
+	}
+
+	if err := assistant.Execute(context.Background(), testJob(), discardUpdate); err != nil {
+		t.Fatalf("subsequent Execute error: %v", err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("ListTools attempts after separate retry = %d, want 2", got)
+	}
+}
+
 func TestExecuteChecksContextWhileWaitingForToolDiscovery(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -324,6 +394,92 @@ func TestExecuteRunsModelChosenTool(t *testing.T) {
 	}
 }
 
+func TestExecuteRunnerBeaconsOwnKnownToolLifecycle(t *testing.T) {
+	var beacons []*turingv1.ToolCallBeacon
+	runner := &tools.Runner{PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+		beacons = append(beacons, beacon)
+		return allowToolCall(context.Background(), beacon)
+	}}
+	provider := &queuedProvider{responses: [][]llm.StreamEvent{
+		{{Type: "tool_call", ToolCalls: []llm.ToolCall{{ID: "provider_call_1", Name: "system.time"}}}},
+		{{Type: "delta", Text: "done"}},
+	}}
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{"name": "system.time"}},
+		result:      map[string]any{"ok": true},
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{SystemMCP: client, Runner: runner},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	var assistantLifecycle []turingv1.TuringEventType
+	for _, eventType := range eventTypes(updates) {
+		switch eventType {
+		case turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED,
+			turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED,
+			turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED:
+			assistantLifecycle = append(assistantLifecycle, eventType)
+		}
+	}
+	if len(assistantLifecycle) != 0 {
+		t.Fatalf("assistant lifecycle events = %v, want beacon ownership", assistantLifecycle)
+	}
+	gotLifecycle := lifecycleFromBeacons(beacons)
+	wantLifecycle := []beaconLifecycleEvent{
+		{eventType: "tool.call.started", toolCallID: "provider_call_1"},
+		{eventType: "tool.call.completed", toolCallID: "provider_call_1"},
+	}
+	if fmt.Sprint(gotLifecycle) != fmt.Sprint(wantLifecycle) {
+		t.Fatalf("beacon lifecycle = %+v, want %+v", gotLifecycle, wantLifecycle)
+	}
+}
+
+func TestExecuteDenialProducesDeniedBeaconWithoutAssistantFailure(t *testing.T) {
+	var beacons []*turingv1.ToolCallBeacon
+	runner := &tools.Runner{PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+		beacons = append(beacons, beacon)
+		if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+			return &turingv1.ToolPolicyDecision{
+				Decision:   turingv1.ToolPolicyDecision_DECISION_DENY,
+				ToolCallId: beacon.GetToolCallId(),
+				Reason:     "blocked",
+			}, nil
+		}
+		return &turingv1.ToolPolicyDecision{}, nil
+	}}
+	provider := &queuedProvider{responses: [][]llm.StreamEvent{
+		{{Type: "tool_call", ToolCalls: []llm.ToolCall{{ID: "provider_denied", Name: "system.time"}}}},
+		{{Type: "delta", Text: "recovered"}},
+	}}
+	client := &assistantTestToolLister{definitions: []map[string]any{{"name": "system.time"}}}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{SystemMCP: client, Runner: runner},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	for _, update := range updates {
+		if event := update.GetEvent(); event != nil &&
+			event.Type == turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED {
+			t.Fatalf("assistant emitted failed event for denied runner call: %+v", event)
+		}
+	}
+	gotLifecycle := lifecycleFromBeacons(beacons)
+	wantLifecycle := []beaconLifecycleEvent{
+		{eventType: "tool.call.started", toolCallID: "provider_denied"},
+		{eventType: "tool.call.denied", toolCallID: "provider_denied"},
+	}
+	if fmt.Sprint(gotLifecycle) != fmt.Sprint(wantLifecycle) {
+		t.Fatalf("beacon lifecycle = %+v, want %+v", gotLifecycle, wantLifecycle)
+	}
+}
+
 func TestExecuteRunsMultipleToolCallsSequentiallyAndPreservesTurnContent(t *testing.T) {
 	provider := &queuedProvider{responses: [][]llm.StreamEvent{
 		{
@@ -372,10 +528,6 @@ func TestExecuteRunsMultipleToolCallsSequentiallyAndPreservesTurnContent(t *test
 	wantTypes := []turingv1.TuringEventType{
 		turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_STARTED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA,
-		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED,
-		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED,
-		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED,
-		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_COMPLETED,
 	}
@@ -428,16 +580,19 @@ func TestExecuteSurfacesRecoverableToolErrorsToModel(t *testing.T) {
 		callErr     error
 		wantError   string
 		wantCalls   int
+		wantOwned   bool
 	}{
 		{
 			name:      "unknown tool",
 			runner:    &tools.Runner{PostBeacon: allowToolCall},
 			wantError: "unknown_tool",
+			wantOwned: true,
 		},
 		{
 			name:        "nil runner",
 			definitions: []map[string]any{{"name": "system.requested"}},
 			wantError:   "tool_runner_unavailable",
+			wantOwned:   true,
 		},
 		{
 			name:        "runner denied",
@@ -457,6 +612,7 @@ func TestExecuteSurfacesRecoverableToolErrorsToModel(t *testing.T) {
 				return nil, errors.New("policy unavailable")
 			}},
 			wantError: "policy unavailable",
+			wantOwned: true,
 		},
 		{
 			name:        "MCP error",
@@ -496,14 +652,20 @@ func TestExecuteSurfacesRecoverableToolErrorsToModel(t *testing.T) {
 			updates := collectUpdates(t, assistant, testJob())
 
 			types := eventTypes(updates)
-			if len(types) < 3 ||
-				types[1] != turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED ||
-				types[2] != turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED {
-				t.Fatalf("event types = %v, want message started then tool started/failed", types)
-			}
-			failedPayload := updates[2].GetEvent().Payload.AsMap()
-			if failedPayload["toolName"] != "system.requested" || failedPayload["toolCallId"] != "call_recover" {
-				t.Fatalf("failed payload = %+v", failedPayload)
+			if test.wantOwned {
+				if len(types) < 3 ||
+					types[1] != turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED ||
+					types[2] != turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED {
+					t.Fatalf("event types = %v, want message started then tool started/failed", types)
+				}
+			} else {
+				for _, eventType := range types {
+					if eventType == turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED ||
+						eventType == turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED ||
+						eventType == turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED {
+						t.Fatalf("event types = %v, want runner beacon ownership", types)
+					}
+				}
 			}
 			resultMessage := provider.requests[1].Messages[2]
 			var result map[string]string
@@ -550,6 +712,7 @@ func TestExecutePassesJobAndRegistryMetadataToRunner(t *testing.T) {
 	collectUpdates(t, assistant, testJob())
 
 	if before == nil ||
+		before.ToolCallId != "provider_id" ||
 		before.AgentId != turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT ||
 		before.RunId != "run_1" ||
 		before.TraceId != "trace_1" ||
@@ -559,6 +722,56 @@ func TestExecutePassesJobAndRegistryMetadataToRunner(t *testing.T) {
 	}
 	if len(client.calls) != 1 || client.calls[0].args["path"] != "note.txt" {
 		t.Fatalf("MCP calls = %+v", client.calls)
+	}
+}
+
+func TestExecuteRegeneratesDuplicateProviderToolCallIDsAndLinksResults(t *testing.T) {
+	provider := &queuedProvider{responses: [][]llm.StreamEvent{
+		{{Type: "tool_call", ToolCalls: []llm.ToolCall{
+			{ID: "duplicate", Name: "system.first"},
+			{ID: "duplicate", Name: "system.second"},
+		}}},
+		{{Type: "tool_call", ToolCalls: []llm.ToolCall{
+			{ID: "duplicate", Name: "system.third"},
+		}}},
+		{{Type: "delta", Text: "done"}},
+	}}
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{
+			{"name": "system.first"},
+			{"name": "system.second"},
+			{"name": "system.third"},
+		},
+		result: map[string]any{"ok": true},
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{SystemMCP: client, Runner: &tools.Runner{PostBeacon: allowToolCall}},
+	)
+
+	collectUpdates(t, assistant, testJob())
+
+	firstTurn := provider.requests[1].Messages
+	firstID := firstTurn[1].ToolCalls[0].ID
+	secondID := firstTurn[1].ToolCalls[1].ID
+	if firstID != "duplicate" {
+		t.Fatalf("first provider ID = %q, want preserved", firstID)
+	}
+	if secondID == "" || secondID == firstID {
+		t.Fatalf("same-turn IDs = %q, %q; want second regenerated", firstID, secondID)
+	}
+	if firstTurn[2].ToolCallID != firstID || firstTurn[3].ToolCallID != secondID {
+		t.Fatalf("first-turn tool result linkage = %+v", firstTurn)
+	}
+
+	secondTurn := provider.requests[2].Messages
+	thirdID := secondTurn[4].ToolCalls[0].ID
+	if thirdID == "" || thirdID == firstID || thirdID == secondID {
+		t.Fatalf("cross-turn IDs = %q, %q, %q; want unique third ID", firstID, secondID, thirdID)
+	}
+	if secondTurn[5].ToolCallID != thirdID {
+		t.Fatalf("third tool result ID = %q, want %q", secondTurn[5].ToolCallID, thirdID)
 	}
 }
 
@@ -752,37 +965,18 @@ func TestExecuteStopsMultipleToolCallsImmediatelyOnCancellation(t *testing.T) {
 	}
 }
 
-func TestExecutePropagatesToolLifecycleEmitErrors(t *testing.T) {
+func TestExecutePropagatesAssistantOwnedToolLifecycleEmitErrors(t *testing.T) {
 	emitErr := errors.New("emit failed")
-	tests := []struct {
-		name        string
-		definitions []map[string]any
-		target      turingv1.TuringEventType
-	}{
-		{
-			name:        "started",
-			definitions: []map[string]any{{"name": "system.requested"}},
-			target:      turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED,
-		},
-		{
-			name:        "completed",
-			definitions: []map[string]any{{"name": "system.requested"}},
-			target:      turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED,
-		},
-		{
-			name:   "failed",
-			target: turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED,
-		},
+	tests := []turingv1.TuringEventType{
+		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED,
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	for _, target := range tests {
+		t.Run(target.String(), func(t *testing.T) {
 			provider := &queuedProvider{responses: [][]llm.StreamEvent{
 				{{Type: "tool_call", ToolCalls: []llm.ToolCall{{ID: "call_emit", Name: "system.requested"}}}},
 			}}
-			client := &assistantTestToolLister{
-				definitions: test.definitions,
-				result:      map[string]any{"ok": true},
-			}
+			client := &assistantTestToolLister{}
 			assistant := NewGeneralAssistant(
 				map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
 				fakeMessageClient{},
@@ -790,7 +984,7 @@ func TestExecutePropagatesToolLifecycleEmitErrors(t *testing.T) {
 			)
 
 			err := assistant.Execute(context.Background(), testJob(), func(update *turingv1.RuntimeUpdate) error {
-				if event := update.GetEvent(); event != nil && event.Type == test.target {
+				if event := update.GetEvent(); event != nil && event.Type == target {
 					return emitErr
 				}
 				return nil
@@ -930,13 +1124,43 @@ func TestGeneralAssistantStreamsDeltasAndCompletesRun(t *testing.T) {
 	}
 }
 
-func TestGeneralAssistantEmitsRunFailedForProviderError(t *testing.T) {
-	provider := &scriptedProvider{events: []llm.StreamEvent{{Type: "error", Code: "model_bad_chunk", Message: "bad chunk"}}}
-	assistant := NewGeneralAssistant(map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider}, fakeMessageClient{}, nil)
-	updates := collectUpdates(t, assistant, testJob())
-	failed := updates[len(updates)-1].GetRunFailed()
-	if failed == nil || failed.Code != "model_bad_chunk" || failed.Message != "bad chunk" || failed.Retryable {
-		t.Fatalf("last update = %+v, want non-retryable run_failed", updates[len(updates)-1])
+func TestGeneralAssistantClassifiesStreamedProviderErrors(t *testing.T) {
+	tests := []struct {
+		code      string
+		retryable bool
+	}{
+		{code: "model_unavailable", retryable: true},
+		{code: "model_stream_error", retryable: true},
+		{code: "model_bad_chunk", retryable: false},
+		{code: "model_error", retryable: false},
+		{code: "", retryable: false},
+	}
+	for _, test := range tests {
+		name := test.code
+		if name == "" {
+			name = "empty defaults to model_error"
+		}
+		t.Run(name, func(t *testing.T) {
+			provider := &scriptedProvider{events: []llm.StreamEvent{{
+				Type: "error", Code: test.code, Message: "provider error",
+			}}}
+			assistant := NewGeneralAssistant(
+				map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+				fakeMessageClient{},
+				nil,
+			)
+
+			updates := collectUpdates(t, assistant, testJob())
+
+			failed := updates[len(updates)-1].GetRunFailed()
+			wantCode := test.code
+			if wantCode == "" {
+				wantCode = "model_error"
+			}
+			if failed == nil || failed.Code != wantCode || failed.Message != "provider error" || failed.Retryable != test.retryable {
+				t.Fatalf("last update = %+v, want code %q retryable=%t", updates[len(updates)-1], wantCode, test.retryable)
+			}
+		})
 	}
 }
 
@@ -1087,6 +1311,37 @@ func eventTypes(updates []*turingv1.RuntimeUpdate) []turingv1.TuringEventType {
 	for _, update := range updates {
 		if event := update.GetEvent(); event != nil {
 			result = append(result, event.Type)
+		}
+	}
+	return result
+}
+
+type beaconLifecycleEvent struct {
+	eventType  string
+	toolCallID string
+}
+
+func lifecycleFromBeacons(beacons []*turingv1.ToolCallBeacon) []beaconLifecycleEvent {
+	result := make([]beaconLifecycleEvent, 0, len(beacons))
+	for _, beacon := range beacons {
+		eventType := ""
+		switch beacon.GetPhase() {
+		case turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE:
+			eventType = "tool.call.started"
+		case turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER:
+			switch beacon.GetStatus() {
+			case turingv1.ToolCallStatus_TOOL_CALL_STATUS_COMPLETED:
+				eventType = "tool.call.completed"
+			case turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED:
+				eventType = "tool.call.failed"
+			case turingv1.ToolCallStatus_TOOL_CALL_STATUS_DENIED:
+				eventType = "tool.call.denied"
+			}
+		}
+		if eventType != "" {
+			result = append(result, beaconLifecycleEvent{
+				eventType: eventType, toolCallID: beacon.GetToolCallId(),
+			})
 		}
 	}
 	return result

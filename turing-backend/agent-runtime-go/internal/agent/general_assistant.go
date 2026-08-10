@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -39,9 +40,10 @@ type GeneralAssistant struct {
 }
 
 type toolDiscovery struct {
-	done     chan struct{}
-	registry *ToolRegistry
-	err      error
+	done                   chan struct{}
+	registry               *ToolRegistry
+	err                    error
+	retryAfterLeaderCancel bool
 }
 
 func NewGeneralAssistant(providers map[turingv1.ModelProvider]llm.Provider, messages MessageClient, toolset *GeneralAssistantTools) *GeneralAssistant {
@@ -132,7 +134,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				if message == "" {
 					message = code
 				}
-				return emitRunFailed(emit, job, code, message, false)
+				return emitRunFailed(emit, job, code, message, retryableModelError(code))
 			}
 		}
 		if ctx.Err() != nil {
@@ -184,7 +186,10 @@ func (a *GeneralAssistant) discoverTools(ctx context.Context) (*ToolRegistry, er
 				if discovery.err == nil {
 					return discovery.registry, nil
 				}
-				continue
+				if discovery.retryAfterLeaderCancel {
+					continue
+				}
+				return nil, discovery.err
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
@@ -207,6 +212,7 @@ func (a *GeneralAssistant) discoverTools(ctx context.Context) (*ToolRegistry, er
 		a.registryMu.Lock()
 		discovery.registry = registry
 		discovery.err = err
+		discovery.retryAfterLeaderCancel = err != nil && ctx.Err() != nil && errors.Is(err, ctx.Err())
 		if err == nil {
 			a.registry = registry
 		}
@@ -228,19 +234,15 @@ func (a *GeneralAssistant) executeToolCall(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	payload := map[string]any{"toolName": call.Name, "toolCallId": call.ID}
-	if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED, payload)); err != nil {
-		return err
-	}
 	entry, found := registry.Lookup(call.Name)
 	if !found {
-		if err := emitToolCallFailed(emit, job, call, "unknown_tool"); err != nil {
+		if err := emitAssistantToolCallFailed(emit, job, call, "unknown_tool"); err != nil {
 			return err
 		}
 		return appendToolError(messages, call, "unknown_tool")
 	}
 	if a.tools == nil || a.tools.Runner == nil {
-		if err := emitToolCallFailed(emit, job, call, "tool_runner_unavailable"); err != nil {
+		if err := emitAssistantToolCallFailed(emit, job, call, "tool_runner_unavailable"); err != nil {
 			return err
 		}
 		return appendToolError(messages, call, "tool_runner_unavailable")
@@ -249,6 +251,7 @@ func (a *GeneralAssistant) executeToolCall(
 		AgentID:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
 		RunID:      job.GetRunId(),
 		TraceID:    job.GetTraceId(),
+		ToolCallID: call.ID,
 		ServerName: entry.ServerName,
 		ToolName:   call.Name,
 		Args:       call.Arguments,
@@ -258,25 +261,28 @@ func (a *GeneralAssistant) executeToolCall(
 		return ctxErr
 	}
 	if err != nil {
-		if emitErr := emitToolCallFailed(emit, job, call, err.Error()); emitErr != nil {
-			return emitErr
+		if !tools.BeaconWasPosted(err) {
+			if emitErr := emitAssistantToolCallFailed(emit, job, call, err.Error()); emitErr != nil {
+				return emitErr
+			}
 		}
 		return appendToolError(messages, call, err.Error())
 	}
 	data, err := json.Marshal(result)
 	if err != nil {
-		if emitErr := emitToolCallFailed(emit, job, call, err.Error()); emitErr != nil {
-			return emitErr
-		}
 		return appendToolError(messages, call, err.Error())
 	}
-	if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED, map[string]any{
+	*messages = append(*messages, toolResultMessage(call, data))
+	return nil
+}
+
+func emitAssistantToolCallFailed(emit func(*turingv1.RuntimeUpdate) error, job *turingv1.AgentJob, call llm.ToolCall, message string) error {
+	if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED, map[string]any{
 		"toolName": call.Name, "toolCallId": call.ID,
 	})); err != nil {
 		return err
 	}
-	*messages = append(*messages, toolResultMessage(call, data))
-	return nil
+	return emitToolCallFailed(emit, job, call, message)
 }
 
 func emitToolCallFailed(emit func(*turingv1.RuntimeUpdate) error, job *turingv1.AgentJob, call llm.ToolCall, message string) error {
@@ -299,19 +305,32 @@ func appendToolError(messages *[]llm.ChatMessage, call llm.ToolCall, message str
 }
 
 func normalizeToolCallIDs(calls []llm.ToolCall, used map[string]struct{}) {
-	for _, call := range calls {
-		if call.ID != "" {
-			used[call.ID] = struct{}{}
+	preserve := make([]bool, len(calls))
+	unavailable := make(map[string]struct{}, len(used)+len(calls))
+	for id := range used {
+		unavailable[id] = struct{}{}
+	}
+	for index, call := range calls {
+		if call.ID == "" {
+			continue
+		}
+		if _, exists := unavailable[call.ID]; !exists {
+			preserve[index] = true
+			unavailable[call.ID] = struct{}{}
 		}
 	}
 	for index := range calls {
-		if calls[index].ID == "" {
-			for calls[index].ID == "" {
-				candidate := fmt.Sprintf("runtime_call_%d", generatedToolCallID.Add(1))
-				if _, exists := used[candidate]; !exists {
-					calls[index].ID = candidate
-					used[candidate] = struct{}{}
-				}
+		if preserve[index] {
+			used[calls[index].ID] = struct{}{}
+			continue
+		}
+		for {
+			candidate := fmt.Sprintf("runtime_call_%d", generatedToolCallID.Add(1))
+			if _, exists := unavailable[candidate]; !exists {
+				calls[index].ID = candidate
+				used[candidate] = struct{}{}
+				unavailable[candidate] = struct{}{}
+				break
 			}
 		}
 	}
@@ -376,4 +395,13 @@ func messageEvent(job *turingv1.AgentJob, eventType turingv1.TuringEventType, pa
 
 func emitRunFailed(emit func(*turingv1.RuntimeUpdate) error, job *turingv1.AgentJob, code string, message string, retryable bool) error {
 	return emit(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{RunId: job.GetRunId(), Code: code, Message: message, Retryable: retryable}}})
+}
+
+func retryableModelError(code string) bool {
+	switch code {
+	case "model_unavailable", "model_stream_error":
+		return true
+	default:
+		return false
+	}
 }
