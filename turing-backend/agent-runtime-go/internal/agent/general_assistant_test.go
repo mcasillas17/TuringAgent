@@ -858,8 +858,8 @@ func TestExecuteEmitsRunFailedWhenMessageFetchFails(t *testing.T) {
 	updates := collectUpdates(t, assistant, testJob())
 
 	failed := updates[len(updates)-1].GetRunFailed()
-	if failed == nil || failed.Code != "message_fetch_failed" || failed.Message != fetchErr.Error() {
-		t.Fatalf("terminal update = %+v", updates[len(updates)-1])
+	if failed == nil || failed.Code != "message_fetch_failed" || failed.Message != fetchErr.Error() || !failed.Retryable {
+		t.Fatalf("terminal update = %+v, want retryable message_fetch_failed", updates[len(updates)-1])
 	}
 }
 
@@ -876,8 +876,8 @@ func TestExecuteEmitsRunFailedWhenProviderStreamStartFails(t *testing.T) {
 	updates := collectUpdates(t, assistant, testJob())
 
 	failed := updates[len(updates)-1].GetRunFailed()
-	if failed == nil || failed.Code != "model_stream_failed" || failed.Message != streamErr.Error() {
-		t.Fatalf("terminal update = %+v", updates[len(updates)-1])
+	if failed == nil || failed.Code != "model_stream_failed" || failed.Message != streamErr.Error() || !failed.Retryable {
+		t.Fatalf("terminal update = %+v, want retryable model_stream_failed", updates[len(updates)-1])
 	}
 }
 
@@ -935,8 +935,8 @@ func TestGeneralAssistantEmitsRunFailedForProviderError(t *testing.T) {
 	assistant := NewGeneralAssistant(map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider}, fakeMessageClient{}, nil)
 	updates := collectUpdates(t, assistant, testJob())
 	failed := updates[len(updates)-1].GetRunFailed()
-	if failed == nil || failed.Code != "model_bad_chunk" || failed.Message != "bad chunk" {
-		t.Fatalf("last update = %+v, want run_failed", updates[len(updates)-1])
+	if failed == nil || failed.Code != "model_bad_chunk" || failed.Message != "bad chunk" || failed.Retryable {
+		t.Fatalf("last update = %+v, want non-retryable run_failed", updates[len(updates)-1])
 	}
 }
 

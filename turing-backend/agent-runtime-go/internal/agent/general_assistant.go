@@ -61,7 +61,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	}
 	messages, err := a.messages.FetchMessages(ctx, job.GetSessionId())
 	if err != nil {
-		return emitRunFailed(emit, job, "message_fetch_failed", err.Error(), false)
+		return emitRunFailed(emit, job, "message_fetch_failed", err.Error(), true)
 	}
 	if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_STARTED, map[string]any{"messageId": job.GetAssistantMessageId(), "role": "assistant"})); err != nil {
 		return err
@@ -98,7 +98,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			return emitRunFailed(emit, job, "model_stream_failed", err.Error(), false)
+			return emitRunFailed(emit, job, "model_stream_failed", err.Error(), true)
 		}
 		turnText := ""
 		var calls []llm.ToolCall
