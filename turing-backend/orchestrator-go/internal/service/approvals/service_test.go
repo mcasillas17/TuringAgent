@@ -378,6 +378,99 @@ func TestGetApprovalForRuntimeLazilyExpiresOnceAndTerminalizesRunAndJob(t *testi
 	}
 }
 
+func TestGetApprovalForRuntimeReturnsPostCommitExpirationErrors(t *testing.T) {
+	notifierErr := status.Error(codes.Unavailable, "notify expiration failed: not pending")
+	tests := []struct {
+		name      string
+		setup     func(t *testing.T, h *approvalHarness) error
+		wantError string
+		wantCause error
+	}{
+		{
+			name: "append event",
+			setup: func(t *testing.T, h *approvalHarness) error {
+				_, err := h.database.ExecContext(context.Background(), `
+					CREATE TRIGGER fail_expiration_event
+					BEFORE INSERT ON events
+					WHEN NEW.type = 'approval.expired'
+					BEGIN
+						SELECT RAISE(ABORT, 'append expiration event failed');
+					END
+				`)
+				return err
+			},
+			wantError: "append expiration event failed",
+		},
+		{
+			name: "audit",
+			setup: func(t *testing.T, h *approvalHarness) error {
+				_, err := h.database.ExecContext(context.Background(), `
+					CREATE TRIGGER fail_expiration_audit
+					BEFORE INSERT ON audit_logs
+					WHEN NEW.action = 'approval.expired'
+					BEGIN
+						SELECT RAISE(ABORT, 'record expiration audit failed');
+					END
+				`)
+				return err
+			},
+			wantError: "record expiration audit failed",
+		},
+		{
+			name: "notifier",
+			setup: func(t *testing.T, h *approvalHarness) error {
+				h.service.SetNotifier(failingApprovalNotifier{err: notifierErr})
+				return nil
+			},
+			wantError: "notify expiration failed: not pending",
+			wantCause: notifierErr,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newApprovalHarness(t)
+			enqueued := h.createRunningToolCall(t)
+			approvalID, err := h.service.CreateApprovalForTool(context.Background(), enqueued.RunID, "call_1", "general_assistant", "files.update", map[string]any{"path": "note.txt"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.database.ExecContext(context.Background(), `UPDATE approvals SET expires_at = ? WHERE id = ?`, time.Now().Add(-time.Minute).Format(time.RFC3339Nano), approvalID); err != nil {
+				t.Fatal(err)
+			}
+			if err := tt.setup(t, h); err != nil {
+				t.Fatal(err)
+			}
+
+			state, err := h.service.GetApprovalForRuntime(context.Background(), &turingv1.GetApprovalForRuntimeRequest{ApprovalId: approvalID})
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("GetApprovalForRuntime state/error = %+v/%v, want error containing %q", state, err, tt.wantError)
+			}
+			if tt.wantCause != nil && !errors.Is(err, tt.wantCause) {
+				t.Fatalf("GetApprovalForRuntime error = %v, want wrapped cause %v", err, tt.wantCause)
+			}
+			if tt.wantCause != nil && status.Code(err) != status.Code(tt.wantCause) {
+				t.Fatalf("GetApprovalForRuntime status code = %s, want %s", status.Code(err), status.Code(tt.wantCause))
+			}
+			current, err := h.repo.GetApproval(context.Background(), approvalID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if current.Status != "expired" {
+				t.Fatalf("approval status = %q, want expired", current.Status)
+			}
+		})
+	}
+}
+
+type failingApprovalNotifier struct {
+	err error
+}
+
+func (n failingApprovalNotifier) NotifyApprovalUpdated(context.Context, string, string, string, string) error {
+	return n.err
+}
+
 type recordingApprovalNotifier struct {
 	mu            sync.Mutex
 	count         int

@@ -150,6 +150,9 @@ func (s *Server) GetApprovalForRuntime(ctx context.Context, req *turingv1.GetApp
 	if approval.Status == "pending" && expired(approval.ExpiresAt) {
 		approval, err = s.expireApproval(ctx, req.ApprovalId)
 		if err != nil {
+			if isPostCommitExpirationError(err) {
+				return nil, err
+			}
 			approval, err = recoverExpirationConflict(ctx, err, func(ctx context.Context) (repository.ApprovalRecord, error) {
 				return s.repo.GetApproval(ctx, req.ApprovalId)
 			})
@@ -180,6 +183,23 @@ func recoverExpirationConflict(
 	return current, nil
 }
 
+type postCommitExpirationError struct {
+	err error
+}
+
+func (e *postCommitExpirationError) Error() string {
+	return e.err.Error()
+}
+
+func (e *postCommitExpirationError) Unwrap() error {
+	return e.err
+}
+
+func isPostCommitExpirationError(err error) bool {
+	var postCommitErr *postCommitExpirationError
+	return errors.As(err, &postCommitErr)
+}
+
 func (s *Server) expireApproval(ctx context.Context, approvalID string) (repository.ApprovalRecord, error) {
 	expiredApproval, err := s.repo.ExpireApproval(ctx, approvalID, "")
 	if err != nil {
@@ -187,15 +207,15 @@ func (s *Server) expireApproval(ctx context.Context, approvalID string) (reposit
 	}
 	event, err := s.appendApprovalEvent(ctx, expiredApproval, "approval.expired", map[string]any{"approvalId": expiredApproval.ApprovalID, "toolName": expiredApproval.ToolName})
 	if err != nil {
-		return repository.ApprovalRecord{}, err
+		return repository.ApprovalRecord{}, &postCommitExpirationError{err: err}
 	}
 	s.publishEvent(event)
 	if err := s.audit.Record(ctx, expiredApproval.RunID, "system", "", "approval.expired", expiredApproval.ApprovalID, map[string]any{"toolName": expiredApproval.ToolName}); err != nil {
-		return repository.ApprovalRecord{}, err
+		return repository.ApprovalRecord{}, &postCommitExpirationError{err: err}
 	}
 	if s.notifier != nil {
 		if err := s.notifier.NotifyApprovalUpdated(ctx, expiredApproval.RunID, expiredApproval.ApprovalID, "expired", ""); err != nil {
-			return repository.ApprovalRecord{}, err
+			return repository.ApprovalRecord{}, &postCommitExpirationError{err: err}
 		}
 	}
 	return expiredApproval, nil
