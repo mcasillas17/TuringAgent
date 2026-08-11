@@ -294,6 +294,17 @@ func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeAppro
 		return nil, status.Error(codes.InvalidArgument, "approval_id is required")
 	}
 	transition, err := s.repo.ConsumeApprovalWithEvent(ctx, req.ApprovalId, "")
+	if errors.Is(err, repository.ErrApprovalExpired) {
+		expiredApproval := transition.Approval
+		if transition.RunFailedEvent.EventID != "" {
+			s.publishEvent(transition.RunFailedEvent)
+		}
+		if transition.ApprovalEvent.EventID != "" {
+			s.publishEvent(transition.ApprovalEvent)
+		}
+		s.finishPostCommit(expiredApproval, "system", "approval.expired", "expired", "")
+		return nil, status.Error(codes.FailedPrecondition, "approval expired")
+	}
 	if err != nil {
 		return nil, mapApprovalError(err)
 	}

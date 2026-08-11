@@ -269,7 +269,8 @@ func (r *Repository) terminalizeApproval(
 		}
 		return ApprovalTerminalization{Approval: record}, nil
 	}
-	if record.Status != "pending" {
+	approvedExpiration := approvalStatus == "expired" && record.Status == "approved"
+	if record.Status != "pending" && !approvedExpiration {
 		return ApprovalTerminalization{}, errors.New("approval is not pending")
 	}
 	if expireAtDeadline && approvalExpiredAtDecision(record.ExpiresAt, decidedAt) {
@@ -284,7 +285,7 @@ func (r *Repository) terminalizeApproval(
 		return ApprovalTerminalization{}, err
 	}
 	lateRuntimeFailure := runStatus == "failed"
-	if runStatus != "waiting_approval" && !lateRuntimeFailure {
+	if runStatus != "waiting_approval" && !lateRuntimeFailure && !(approvedExpiration && runStatus == "running") {
 		return ApprovalTerminalization{}, errors.New("run not found for approval")
 	}
 	if lateRuntimeFailure {
@@ -292,7 +293,17 @@ func (r *Repository) terminalizeApproval(
 			return ApprovalTerminalization{}, err
 		}
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE approvals SET status = ?, decided_at = ? WHERE id = ? AND status = 'pending'`, approvalStatus, decidedAt, approvalID)
+	approvalStatusPredicate := "status = 'pending'"
+	if approvedExpiration {
+		approvalStatusPredicate = "status = 'approved'"
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE approvals
+		SET status = ?,
+			approval_jti = CASE WHEN ? = 'expired' THEN NULL ELSE approval_jti END,
+			approval_token = CASE WHEN ? = 'expired' THEN NULL ELSE approval_token END,
+			decided_at = ?
+		WHERE id = ? AND `+approvalStatusPredicate, approvalStatus, approvalStatus, approvalStatus, decidedAt, approvalID)
 	if err != nil {
 		return ApprovalTerminalization{}, err
 	}
@@ -324,11 +335,14 @@ func (r *Repository) terminalizeApproval(
 	}
 	var event Event
 	if !lateRuntimeFailure {
+		runStatusPredicate := "status = 'waiting_approval'"
+		if approvedExpiration {
+			runStatusPredicate = "status IN ('waiting_approval', 'running')"
+		}
 		result, err = tx.ExecContext(ctx, `
 			UPDATE agent_runs
 			SET status = 'failed', error_code = ?, error_message = ?, finished_at = ?
-			WHERE id = ? AND status = 'waiting_approval'
-		`, errorCode, errorMessage, decidedAt, record.RunID)
+			WHERE id = ? AND `+runStatusPredicate, errorCode, errorMessage, decidedAt, record.RunID)
 		if err != nil {
 			return ApprovalTerminalization{}, err
 		}
@@ -434,6 +448,10 @@ func (r *Repository) ConsumeApprovalWithEvent(ctx context.Context, approvalID st
 	if consumedAt == "" {
 		consumedAt = now()
 	}
+	consumedTime, err := time.Parse(time.RFC3339Nano, consumedAt)
+	if err != nil {
+		return ApprovalTerminalization{}, err
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ApprovalTerminalization{}, err
@@ -452,12 +470,32 @@ func (r *Repository) ConsumeApprovalWithEvent(ctx context.Context, approvalID st
 	if current.Status != "approved" {
 		return ApprovalTerminalization{}, errors.New("approval is not approved")
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE approvals SET status = 'consumed', consumed_at = ? WHERE id = ? AND status = 'approved'`, consumedAt, approvalID)
+	result, err := tx.ExecContext(ctx, `
+		UPDATE approvals
+		SET status = 'consumed', consumed_at = ?
+		WHERE id = ?
+			AND status = 'approved'
+			AND `+sqliteTimestampNanos("expires_at")+` > ?
+	`, consumedAt, approvalID, consumedTime.UTC().UnixNano())
 	if err != nil {
 		return ApprovalTerminalization{}, err
 	}
-	if err := expectOneRow(result, "approval is not approved"); err != nil {
+	changed, err := result.RowsAffected()
+	if err != nil {
 		return ApprovalTerminalization{}, err
+	}
+	if changed != 1 {
+		if approvalExpiredAtDecision(current.ExpiresAt, consumedAt) {
+			if err := tx.Rollback(); err != nil {
+				return ApprovalTerminalization{}, err
+			}
+			transition, terminalizeErr := r.ExpireApprovalWithEvent(ctx, approvalID, consumedAt)
+			if terminalizeErr != nil {
+				return ApprovalTerminalization{}, terminalizeErr
+			}
+			return transition, ErrApprovalExpired
+		}
+		return ApprovalTerminalization{}, errors.New("approval is not approved")
 	}
 	record, err := approvalByID(ctx, tx, approvalID)
 	if err != nil {
