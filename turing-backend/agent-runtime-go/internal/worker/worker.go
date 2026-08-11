@@ -42,8 +42,12 @@ type Worker struct {
 	approvals  map[string]string
 	toolCalls  map[string]string
 	decisionMu sync.Mutex
-	decisions  map[string]chan *turingv1.ToolPolicyDecision
+	decisions  map[string][]*decisionWaiter
 	sendMu     sync.Mutex
+}
+
+type decisionWaiter struct {
+	decision chan *turingv1.ToolPolicyDecision
 }
 
 type activeRun struct {
@@ -63,7 +67,7 @@ func New(options Options, client RuntimeClient, executor Executor) *Worker {
 	if options.MaxConcurrentRuns <= 0 {
 		options.MaxConcurrentRuns = 1
 	}
-	return &Worker{options: options, client: client, executor: executor, active: map[string]*activeRun{}, approvals: map[string]string{}, toolCalls: map[string]string{}, decisions: map[string]chan *turingv1.ToolPolicyDecision{}}
+	return &Worker{options: options, client: client, executor: executor, active: map[string]*activeRun{}, approvals: map[string]string{}, toolCalls: map[string]string{}, decisions: map[string][]*decisionWaiter{}}
 }
 
 func (w *Worker) Run(ctx context.Context) error {
@@ -238,14 +242,12 @@ func (w *Worker) postToolBeacon(ctx context.Context, stream RuntimeStream, beaco
 	if beacon == nil || beacon.ToolCallId == "" {
 		return nil, errors.New("tool beacon with tool_call_id is required")
 	}
-	waiter := make(chan *turingv1.ToolPolicyDecision, 1)
+	waiter := &decisionWaiter{decision: make(chan *turingv1.ToolPolicyDecision, 1)}
 	w.decisionMu.Lock()
-	w.decisions[beacon.ToolCallId] = waiter
+	w.decisions[beacon.ToolCallId] = append(w.decisions[beacon.ToolCallId], waiter)
 	w.decisionMu.Unlock()
 	defer func() {
-		w.decisionMu.Lock()
-		delete(w.decisions, beacon.ToolCallId)
-		w.decisionMu.Unlock()
+		w.removeDecisionWaiter(beacon.ToolCallId, waiter)
 		w.mu.Lock()
 		delete(w.toolCalls, beacon.ToolCallId)
 		w.mu.Unlock()
@@ -257,7 +259,7 @@ func (w *Worker) postToolBeacon(ctx context.Context, stream RuntimeStream, beaco
 		return nil, err
 	}
 	select {
-	case decision := <-waiter:
+	case decision := <-waiter.decision:
 		if decision.GetDecision() == turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED && decision.GetApprovalId() != "" && beacon.GetRunId() != "" {
 			w.mu.Lock()
 			w.approvals[decision.GetApprovalId()] = beacon.GetRunId()
@@ -284,11 +286,18 @@ func (w *Worker) deliverDecision(decision *turingv1.ToolPolicyDecision) {
 		return
 	}
 	w.decisionMu.Lock()
-	waiter := w.decisions[decision.ToolCallId]
-	w.decisionMu.Unlock()
-	if waiter == nil {
+	waiters := w.decisions[decision.ToolCallId]
+	if len(waiters) == 0 {
+		w.decisionMu.Unlock()
 		return
 	}
+	waiter := waiters[0]
+	if len(waiters) == 1 {
+		delete(w.decisions, decision.ToolCallId)
+	} else {
+		w.decisions[decision.ToolCallId] = waiters[1:]
+	}
+	w.decisionMu.Unlock()
 	if decision.GetDecision() == turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED && decision.GetApprovalId() != "" {
 		w.mu.Lock()
 		if runID := w.toolCalls[decision.GetToolCallId()]; runID != "" {
@@ -297,8 +306,26 @@ func (w *Worker) deliverDecision(decision *turingv1.ToolPolicyDecision) {
 		w.mu.Unlock()
 	}
 	select {
-	case waiter <- decision:
+	case waiter.decision <- decision:
 	default:
+	}
+}
+
+func (w *Worker) removeDecisionWaiter(toolCallID string, target *decisionWaiter) {
+	w.decisionMu.Lock()
+	defer w.decisionMu.Unlock()
+	waiters := w.decisions[toolCallID]
+	for index, waiter := range waiters {
+		if waiter != target {
+			continue
+		}
+		waiters = append(waiters[:index], waiters[index+1:]...)
+		if len(waiters) == 0 {
+			delete(w.decisions, toolCallID)
+		} else {
+			w.decisions[toolCallID] = waiters
+		}
+		return
 	}
 }
 

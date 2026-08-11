@@ -774,6 +774,49 @@ func TestApprovalLifecycleRecordsTokenAndUpdatesRun(t *testing.T) {
 	}
 }
 
+func TestRecordToolCallAfterRejectsCompletionFromRequested(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Requested completion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "safe tool", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{ToolCallID: "call_requested", RunID: enqueued.RunID, Status: "requested"}, "general_assistant", "system", "system.echo", `{"value":"hello"}`, "sha256:requested"); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, _, err := repo.RecordToolCallAfterWithEvent(ctx, ToolCallAfterRecord{
+		ToolCallID: "call_requested",
+		RunID:      enqueued.RunID,
+		ServerName: "system",
+		ToolName:   "system.echo",
+		Status:     "completed",
+	}, "tool.call.completed", `{"toolCallId":"call_requested"}`)
+	if err != ErrToolCallInvalidTransition {
+		t.Fatalf("RecordToolCallAfterWithEvent error = %v, want ErrToolCallInvalidTransition", err)
+	}
+	if changed {
+		t.Fatal("RecordToolCallAfterWithEvent changed a requested call to completed")
+	}
+	var toolCallStatus string
+	if err := database.QueryRowContext(ctx, `SELECT status FROM tool_calls WHERE id = ?`, "call_requested").Scan(&toolCallStatus); err != nil {
+		t.Fatal(err)
+	}
+	if toolCallStatus != "requested" {
+		t.Fatalf("tool call status = %q, want requested", toolCallStatus)
+	}
+}
+
 func TestRecordToolCallBeforeRejectsConflictingID(t *testing.T) {
 	database := openTestDB(t)
 	repo := New(database)

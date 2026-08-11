@@ -812,6 +812,200 @@ func TestConnectWorkerRequeuesJobWhenAssignmentSendFails(t *testing.T) {
 	}
 }
 
+func TestConnectWorkerTerminalizesApprovalWhenDecisionSendFails(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "approval decision send failure")
+	published, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
+	defer unsubscribe()
+	args, err := structpb.NewStruct(map[string]any{"path": "note.txt", "content": "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err = h.service.ConnectWorker(&failingApprovalDecisionStream{
+		ctx:    ctx,
+		cancel: cancel,
+		ready: &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+			WorkerId:          "worker-decision-send-fails",
+			AgentId:           turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+			MaxConcurrentRuns: 1,
+		}}},
+		beacon: &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+			RunId:      enqueued.RunID,
+			TraceId:    enqueued.TraceID,
+			ToolCallId: "call_delivery_failure",
+			AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+			ServerName: "files",
+			ToolName:   "files.update",
+			Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+			Args:       args,
+		}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "tool policy decision send failed") {
+		t.Fatalf("ConnectWorker error = %v, want tool policy decision send failure", err)
+	}
+
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runCode sql.NullString
+	if err := h.database.QueryRowContext(context.Background(), `SELECT error_code FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&runCode); err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "failed" || runCode.String != "approval_delivery_failed" {
+		t.Fatalf("run status/code = %q/%q, want failed/approval_delivery_failed", run.Status, runCode.String)
+	}
+	approval, err := h.repo.GetApprovalByToolCall(context.Background(), enqueued.RunID, "call_delivery_failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval.Status != "denied" {
+		t.Fatalf("approval status = %q, want denied", approval.Status)
+	}
+	var jobStatus, jobCode, toolCallStatus string
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status, error_code FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus, &jobCode); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status FROM tool_calls WHERE id = ?`, "call_delivery_failure").Scan(&toolCallStatus); err != nil {
+		t.Fatal(err)
+	}
+	if jobStatus != "failed" || jobCode != "approval_delivery_failed" || toolCallStatus != "failed" {
+		t.Fatalf("terminal states job=%q/%q tool_call=%q, want failed/approval_delivery_failed/failed", jobStatus, jobCode, toolCallStatus)
+	}
+	var terminalEvents int
+	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'agent.run.failed'`, enqueued.RunID).Scan(&terminalEvents); err != nil {
+		t.Fatal(err)
+	}
+	if terminalEvents != 1 {
+		t.Fatalf("agent.run.failed event count = %d, want 1", terminalEvents)
+	}
+	event := recvBusEvent(t, published, func(event events.Event) bool {
+		return event.RunID == enqueued.RunID && event.Type == "agent.run.failed"
+	})
+	if event.TraceID != enqueued.TraceID {
+		t.Fatalf("agent.run.failed trace_id = %q, want %q", event.TraceID, enqueued.TraceID)
+	}
+}
+
+func TestToolBeaconTerminalizesPostCommitApprovalCreationFailure(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "approval creation event failure")
+	if _, err := h.database.ExecContext(context.Background(), `
+		CREATE TRIGGER fail_approval_requested_event
+		BEFORE INSERT ON events
+		WHEN NEW.type = 'approval.requested'
+		BEGIN
+			SELECT RAISE(ABORT, 'append approval requested event failed');
+		END
+	`); err != nil {
+		t.Fatal(err)
+	}
+	published, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
+	defer unsubscribe()
+	args, err := structpb.NewStruct(map[string]any{"path": "note.txt", "content": "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+		RunId:      enqueued.RunID,
+		TraceId:    enqueued.TraceID,
+		ToolCallId: "call_post_commit_failure",
+		AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName: "files",
+		ToolName:   "files.update",
+		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		Args:       args,
+	}}})
+	if err == nil || !strings.Contains(err.Error(), "append approval requested event failed") {
+		t.Fatalf("tool beacon error = %v, want post-commit approval event failure", err)
+	}
+
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := h.repo.GetApprovalByToolCall(context.Background(), enqueued.RunID, "call_post_commit_failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runCode, jobCode sql.NullString
+	var jobStatus, toolCallStatus string
+	if err := h.database.QueryRowContext(context.Background(), `SELECT error_code FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&runCode); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status, error_code FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus, &jobCode); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status FROM tool_calls WHERE id = ?`, "call_post_commit_failure").Scan(&toolCallStatus); err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "failed" || runCode.String != "approval_delivery_failed" || approval.Status != "denied" ||
+		jobStatus != "failed" || jobCode.String != "approval_delivery_failed" || toolCallStatus != "failed" {
+		t.Fatalf("terminal states run=%q/%q approval=%q job=%q/%q tool_call=%q", run.Status, runCode.String, approval.Status, jobStatus, jobCode.String, toolCallStatus)
+	}
+	var terminalEvents int
+	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'agent.run.failed'`, enqueued.RunID).Scan(&terminalEvents); err != nil {
+		t.Fatal(err)
+	}
+	if terminalEvents != 1 {
+		t.Fatalf("agent.run.failed event count = %d, want 1", terminalEvents)
+	}
+	_ = recvBusEvent(t, published, func(event events.Event) bool {
+		return event.RunID == enqueued.RunID && event.Type == "agent.run.failed"
+	})
+}
+
+func TestToolBeaconTerminalizesPostCommitApprovalCreationFailureAfterCancellation(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "cancelled post-commit approval failure")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service := New(h.repo, h.bus, cancellingApprovalCreator{repo: h.repo, cancel: cancel})
+	published, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
+	defer unsubscribe()
+
+	err := service.applyUpdate(ctx, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+		RunId:      enqueued.RunID,
+		TraceId:    enqueued.TraceID,
+		ToolCallId: "call_cancelled_post_commit_failure",
+		AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName: "files",
+		ToolName:   "files.update",
+		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		Args:       mustStruct(t, map[string]any{"path": "note.txt", "content": "hello"}),
+	}}})
+	if err == nil || !strings.Contains(err.Error(), "post-commit approval creation failed") {
+		t.Fatalf("tool beacon error = %v, want post-commit approval creation failure", err)
+	}
+
+	approval, err := h.repo.GetApprovalByToolCall(context.Background(), enqueued.RunID, "call_cancelled_post_commit_failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runCode, jobCode sql.NullString
+	var runStatus, jobStatus, toolCallStatus string
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status, error_code FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&runStatus, &runCode); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status, error_code FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus, &jobCode); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status FROM tool_calls WHERE id = ?`, "call_cancelled_post_commit_failure").Scan(&toolCallStatus); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus != "failed" || runCode.String != "approval_delivery_failed" || approval.Status != "denied" ||
+		jobStatus != "failed" || jobCode.String != "approval_delivery_failed" || toolCallStatus != "failed" {
+		t.Fatalf("terminal states run=%q/%q approval=%q job=%q/%q tool_call=%q", runStatus, runCode.String, approval.Status, jobStatus, jobCode.String, toolCallStatus)
+	}
+	_ = recvBusEvent(t, published, func(event events.Event) bool {
+		return event.RunID == enqueued.RunID && event.Type == "agent.run.failed"
+	})
+}
+
 type failingAssignmentStream struct {
 	grpc.ServerStream
 	ctx       context.Context
@@ -839,6 +1033,55 @@ func (s *failingAssignmentStream) Recv() (*turingv1.RuntimeUpdate, error) {
 }
 
 func (s *failingAssignmentStream) Context() context.Context { return s.ctx }
+
+type failingApprovalDecisionStream struct {
+	grpc.ServerStream
+	ctx        context.Context
+	cancel     context.CancelFunc
+	ready      *turingv1.RuntimeUpdate
+	beacon     *turingv1.RuntimeUpdate
+	readySent  bool
+	beaconSent bool
+}
+
+func (s *failingApprovalDecisionStream) Send(cmd *turingv1.RuntimeCommand) error {
+	if cmd.GetToolPolicyDecision() != nil {
+		if s.cancel != nil {
+			s.cancel()
+		}
+		return errors.New("tool policy decision send failed")
+	}
+	return nil
+}
+
+func (s *failingApprovalDecisionStream) Recv() (*turingv1.RuntimeUpdate, error) {
+	if !s.readySent {
+		s.readySent = true
+		return s.ready, nil
+	}
+	if !s.beaconSent {
+		s.beaconSent = true
+		return s.beacon, nil
+	}
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
+func (s *failingApprovalDecisionStream) Context() context.Context { return s.ctx }
+
+type cancellingApprovalCreator struct {
+	repo   *repository.Repository
+	cancel context.CancelFunc
+}
+
+func (c cancellingApprovalCreator) CreateApprovalForTool(ctx context.Context, runID string, toolCallID string, agentID string, toolName string, _ map[string]any) (string, error) {
+	approval, err := c.repo.CreateApproval(ctx, runID, toolCallID, agentID, toolName, `{}`, "sha256:cancelled", "2099-01-01T00:00:00Z")
+	if err != nil {
+		return "", err
+	}
+	c.cancel()
+	return approval.ApprovalID, errors.New("post-commit approval creation failed")
+}
 
 func TestDispatchPendingRespectsWorkerMaxConcurrentRuns(t *testing.T) {
 	h := newHarness(t)

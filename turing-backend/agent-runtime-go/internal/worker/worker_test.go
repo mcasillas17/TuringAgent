@@ -293,6 +293,71 @@ func TestDelayedDecisionFromCancelledAttemptCannotSatisfyRetry(t *testing.T) {
 	}
 }
 
+func TestDelayedBeforeDecisionWithSameToolCallIDCannotSatisfyAfter(t *testing.T) {
+	stream := newFakeStream()
+	worker := New(Options{WorkerID: "worker-1", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+	beforeCtx, cancelBefore := context.WithCancel(context.Background())
+	defer cancelBefore()
+	afterCtx, cancelAfter := context.WithCancel(context.Background())
+	defer cancelAfter()
+	type result struct {
+		decision *turingv1.ToolPolicyDecision
+		err      error
+	}
+	beforeDone := make(chan result, 1)
+	afterDone := make(chan result, 1)
+
+	go func() {
+		decision, err := worker.postToolBeacon(beforeCtx, stream, &turingv1.ToolCallBeacon{
+			ToolCallId: "call_same",
+			Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		})
+		beforeDone <- result{decision: decision, err: err}
+	}()
+	_ = nextSent(t, stream)
+	go func() {
+		decision, err := worker.postToolBeacon(afterCtx, stream, &turingv1.ToolCallBeacon{
+			ToolCallId: "call_same",
+			Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER,
+		})
+		afterDone <- result{decision: decision, err: err}
+	}()
+	_ = nextSent(t, stream)
+
+	worker.deliverDecision(&turingv1.ToolPolicyDecision{
+		Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
+		ToolCallId: "call_same",
+	})
+	select {
+	case result := <-afterDone:
+		t.Fatalf("delayed BEFORE decision satisfied AFTER waiter: %+v", result)
+	case result := <-beforeDone:
+		if result.err != nil || result.decision.GetToolCallId() != "call_same" {
+			t.Fatalf("BEFORE decision result = %+v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("delayed BEFORE decision did not satisfy BEFORE waiter")
+	}
+	select {
+	case result := <-afterDone:
+		t.Fatalf("AFTER waiter completed before its decision arrived: %+v", result)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	worker.deliverDecision(&turingv1.ToolPolicyDecision{
+		Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
+		ToolCallId: "call_same",
+	})
+	select {
+	case result := <-afterDone:
+		if result.err != nil || result.decision.GetToolCallId() != "call_same" {
+			t.Fatalf("AFTER decision result = %+v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("matching AFTER decision was not delivered")
+	}
+}
+
 type providerExecutor struct{ provider llm.Provider }
 
 type approvalWaitingExecutor struct {

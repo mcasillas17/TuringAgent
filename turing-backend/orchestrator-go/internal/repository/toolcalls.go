@@ -109,6 +109,9 @@ func (r *Repository) RecordToolCallAfter(ctx context.Context, record ToolCallAft
 		}
 		return false, ErrToolCallInvalidTransition
 	}
+	if record.Status == "completed" && !toolCallCanComplete(currentStatus) {
+		return false, ErrToolCallInvalidTransition
+	}
 	if currentStatus == "approval_required" && record.Status == "completed" {
 		if err := approvalAllowsCompletion(ctx, tx, approvalID); err != nil {
 			return false, err
@@ -173,6 +176,9 @@ func (r *Repository) RecordToolCallAfterWithEvent(ctx context.Context, record To
 		}
 		return false, Event{}, ErrToolCallInvalidTransition
 	}
+	if record.Status == "completed" && !toolCallCanComplete(currentStatus) {
+		return false, Event{}, ErrToolCallInvalidTransition
+	}
 	if runStatus != "running" && runStatus != "waiting_approval" {
 		return false, Event{}, ErrToolCallInvalidTransition
 	}
@@ -226,6 +232,10 @@ func isOpenToolCallStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func toolCallCanComplete(status string) bool {
+	return status == "allowed" || status == "approval_required"
 }
 
 func nullableStringValue(value sql.NullString) string {
