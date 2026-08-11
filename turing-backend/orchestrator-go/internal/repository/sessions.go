@@ -56,7 +56,7 @@ func (r *Repository) ListSessions(ctx context.Context, limit int) ([]Session, er
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var sessions []Session
 	for rows.Next() {
 		var session Session
@@ -82,7 +82,7 @@ func (r *Repository) ListMessages(ctx context.Context, sessionID string, limit i
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var reversed []Message
 	for rows.Next() {
 		var msg Message

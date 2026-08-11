@@ -57,11 +57,16 @@ func run(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	conn, err := grpc.DialContext(ctx, cfg.addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(dialLocalGRPC), grpc.WithBlock())
+	// NewClient is lazy, so the old WithBlock behaviour (wait for the stack to
+	// come up) is reproduced by Connect plus WaitForReady on the health probe
+	// below. "passthrough:///" keeps the address opaque to the resolver exactly
+	// as DialContext did, so dialLocalGRPC still receives host:port verbatim.
+	conn, err := grpc.NewClient("passthrough:///"+cfg.addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(dialLocalGRPC))
 	if err != nil {
-		return fmt.Errorf("dial %s: %w", cfg.addr, err)
+		return fmt.Errorf("create client for %s: %w", cfg.addr, err)
 	}
-	defer conn.Close()
+	conn.Connect()
+	defer func() { _ = conn.Close() }()
 
 	client := smokeClient{
 		token:    cfg.token,
@@ -116,7 +121,7 @@ func readDotEnv(path string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	return parseDotEnv(file)
 }
 
@@ -147,7 +152,10 @@ func (c smokeClient) withAuth(ctx context.Context) context.Context {
 }
 
 func (c smokeClient) checkHealth(ctx context.Context) error {
-	resp, err := c.health.Check(c.withAuth(ctx), &turingv1.HealthCheckRequest{})
+	// WaitForReady replaces the removed WithBlock: block until the channel is
+	// ready or the caller's timeout fires, rather than failing fast while the
+	// orchestrator is still starting.
+	resp, err := c.health.Check(c.withAuth(ctx), &turingv1.HealthCheckRequest{}, grpc.WaitForReady(true))
 	if err != nil {
 		return fmt.Errorf("HealthService.Check: %w", err)
 	}
@@ -285,7 +293,6 @@ func (c smokeClient) validatePersistedEvents(ctx context.Context, sessionID stri
 		case turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_COMPLETED:
 			terminalEvent = true
 		case turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_FAILED:
-			terminalEvent = true
 			return errors.New("EventService.ListEvents observed agent.run.failed")
 		}
 	}

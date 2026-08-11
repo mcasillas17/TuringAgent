@@ -111,12 +111,14 @@ func (c Consumer) Validate(token string, tool string, args map[string]any, agent
 func (c Consumer) consume(jti string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	client, closeClient, err := c.approvalClient(ctx)
+	client, closeClient, err := c.approvalClient()
 	if err != nil {
 		return err
 	}
 	if closeClient != nil {
-		defer closeClient()
+		// The connection is short-lived and the approval result is already
+		// determined by the time it closes, so a close error is not actionable.
+		defer func() { _ = closeClient() }()
 	}
 	if c.InternalToken != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.InternalToken)
@@ -134,7 +136,7 @@ func (c Consumer) consume(jti string) error {
 	return nil
 }
 
-func (c Consumer) approvalClient(ctx context.Context) (ApprovalClient, func() error, error) {
+func (c Consumer) approvalClient() (ApprovalClient, func() error, error) {
 	if c.ApprovalClient != nil {
 		return c.ApprovalClient, nil, nil
 	}
@@ -145,7 +147,10 @@ func (c Consumer) approvalClient(ctx context.Context) (ApprovalClient, func() er
 	if len(options) == 0 {
 		options = []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 	}
-	conn, err := grpc.DialContext(ctx, c.OrchestratorGRPCAddr, options...)
+	// "passthrough:///" preserves DialContext's resolver behaviour: the address
+	// (a Docker service name, ORCHESTRATOR_GRPC_ADDR) is handed to the dialer
+	// verbatim instead of going through NewClient's default DNS resolver.
+	conn, err := grpc.NewClient("passthrough:///"+c.OrchestratorGRPCAddr, options...)
 	if err != nil {
 		return nil, nil, err
 	}

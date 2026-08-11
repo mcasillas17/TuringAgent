@@ -38,7 +38,7 @@ func (r *Repository) CreateApproval(ctx context.Context, runID string, toolCallI
 	if err != nil {
 		return ApprovalRecord{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var nullableToolCallID any
 	if toolCallID != "" {
 		nullableToolCallID = toolCallID
@@ -88,7 +88,7 @@ func (r *Repository) ApproveApproval(ctx context.Context, approvalID string, app
 	if err != nil {
 		return ApprovalRecord{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	result, err := tx.ExecContext(ctx, `UPDATE approvals SET status = 'approved', approval_jti = ?, approval_token = ?, decided_at = ? WHERE id = ? AND status = 'pending'`, approvalID, approvalToken, decidedAt, approvalID)
 	if err != nil {
 		return ApprovalRecord{}, err
@@ -121,7 +121,7 @@ func (r *Repository) ExpireApproval(ctx context.Context, approvalID string, deci
 	if err != nil {
 		return ApprovalRecord{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	result, err := tx.ExecContext(ctx, `UPDATE approvals SET status = 'expired', decided_at = ? WHERE id = ? AND status = 'pending'`, decidedAt, approvalID)
 	if err != nil {
 		return ApprovalRecord{}, err
@@ -157,7 +157,7 @@ func (r *Repository) DenyApproval(ctx context.Context, approvalID string, decide
 	if err != nil {
 		return ApprovalRecord{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	result, err := tx.ExecContext(ctx, `UPDATE approvals SET status = 'denied', decided_at = ? WHERE id = ? AND status = 'pending'`, decidedAt, approvalID)
 	if err != nil {
 		return ApprovalRecord{}, err
@@ -193,7 +193,7 @@ func (r *Repository) ConsumeApproval(ctx context.Context, approvalID string, con
 	if err != nil {
 		return ApprovalRecord{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	result, err := tx.ExecContext(ctx, `UPDATE approvals SET status = 'consumed', consumed_at = ? WHERE id = ? AND status = 'approved'`, consumedAt, approvalID)
 	if err != nil {
 		return ApprovalRecord{}, err

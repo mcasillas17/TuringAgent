@@ -35,7 +35,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	providers := map[turingv1.ModelProvider]llm.Provider{
 		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: llm.NewOllama(cfg.OllamaBaseURL, http.DefaultClient),
 	}

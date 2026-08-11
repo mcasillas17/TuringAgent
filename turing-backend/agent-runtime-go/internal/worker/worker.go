@@ -75,7 +75,7 @@ func (w *Worker) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer stream.CloseSend()
+	defer func() { _ = stream.CloseSend() }()
 	if setter, ok := w.executor.(BeaconPosterSetter); ok {
 		setter.SetToolBeaconPoster(func(ctx context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 			return w.postToolBeacon(ctx, stream, beacon)

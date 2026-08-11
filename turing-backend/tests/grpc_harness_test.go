@@ -220,10 +220,6 @@ func (h *grpcHarness) clientContext() context.Context {
 	return metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+integrationClientKey)
 }
 
-func (h *grpcHarness) internalContext() context.Context {
-	return metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+integrationInternalToken)
-}
-
 func (h *grpcHarness) close() {
 	h.closeOnce.Do(func() {
 		if h.workerCancel != nil {

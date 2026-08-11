@@ -1,0 +1,39 @@
+# golangci-lint (v2) config for TuringAgent.
+# Run from repo root:                  golangci-lint run ./...
+# Separate modules must be run in-dir: cd turing-backend/mcp-files  && golangci-lint run ./...
+#                                      cd turing-backend/mcp-system && golangci-lint run ./...
+# Generated proto code under gen/ is excluded.
+version: "2"
+
+run:
+  timeout: 5m
+
+issues:
+  # Defaults (50 per linter / 3 per identical message) silently hide most of a
+  # backlog. Report everything so the baseline is honest.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+  exclusions:
+    # NOTE: `paths` entries are unanchored regexes matched against the whole
+    # path, so a bare `gen` also matches turing-backend/aGENt-runtime-go and
+    # silently skips that entire tree. golangci-lint already skips generated
+    # files by their header, so gen/ needs no entry at all — do not add one back
+    # without anchoring it (`^gen/`).
+    rules:
+      # Test files: relax unchecked-error noise.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
