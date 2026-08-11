@@ -12,7 +12,6 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/safejson"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
-	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/runtime"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -22,12 +21,17 @@ type Server struct {
 	turingv1.UnimplementedChatServiceServer
 	repo        *repository.Repository
 	bus         *events.Bus
-	runtime     *runtime.Server
+	runtime     runtimeDispatcher
 	ollamaModel string
 	openAIModel string
 }
 
-func New(repo *repository.Repository, bus *events.Bus, runtimeServer *runtime.Server, ollamaModel string, openAIModel string) *Server {
+type runtimeDispatcher interface {
+	DispatchPending(context.Context) error
+	CancelRun(context.Context, string, string)
+}
+
+func New(repo *repository.Repository, bus *events.Bus, runtimeServer runtimeDispatcher, ollamaModel string, openAIModel string) *Server {
 	return &Server{repo: repo, bus: bus, runtime: runtimeServer, ollamaModel: ollamaModel, openAIModel: openAIModel}
 }
 
@@ -93,7 +97,7 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 		return err
 	}
 	if s.runtime != nil {
-		if err := s.runtime.DispatchPending(ctx); err != nil {
+		if err := s.runtime.DispatchPending(context.WithoutCancel(ctx)); err != nil {
 			s.cancelRun(enqueued.RunID)
 			if ctx.Err() != nil {
 				return status.Error(codes.Canceled, "client cancelled stream")

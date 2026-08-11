@@ -100,6 +100,61 @@ func (h *harness) createSession(t *testing.T) string {
 	return session.SessionID
 }
 
+func TestSendMessageDispatchContextSurvivesClientCancellation(t *testing.T) {
+	database := openChatTestDB(t)
+	repo := repository.New(database)
+	bus := events.NewBus(8)
+	dispatcher := &dispatchContextRecorder{}
+	service := New(repo, bus, dispatcher, "llama3.2", "gpt-4o-mini")
+	session, err := repo.CreateSession(context.Background(), "Cancelled dispatch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamCtx, cancel := context.WithCancel(context.Background())
+	stream := &cancellingChatStream{ctx: streamCtx, cancel: cancel}
+
+	err = service.SendMessage(&turingv1.SendMessageRequest{
+		SessionId:     session.SessionID,
+		Content:       "keep global dispatch alive",
+		ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:         "llama3.2",
+	}, stream)
+	if status.Code(err) != codes.Canceled {
+		t.Fatalf("SendMessage error = %v, want Canceled", err)
+	}
+	if dispatcher.contextErr != nil {
+		t.Fatalf("DispatchPending received cancelled client context: %v", dispatcher.contextErr)
+	}
+}
+
+type dispatchContextRecorder struct {
+	contextErr error
+}
+
+func (d *dispatchContextRecorder) DispatchPending(ctx context.Context) error {
+	d.contextErr = ctx.Err()
+	return nil
+}
+
+func (d *dispatchContextRecorder) CancelRun(context.Context, string, string) {}
+
+type cancellingChatStream struct {
+	grpc.ServerStream
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func (s *cancellingChatStream) Context() context.Context {
+	return s.ctx
+}
+
+func (s *cancellingChatStream) Send(event *turingv1.ChatStreamEvent) error {
+	if event.GetRunQueued() != nil {
+		s.cancel()
+	}
+	return nil
+}
+
 func TestSendMessageStreamsQueuedEvent(t *testing.T) {
 	h := newHarness(t)
 	sessionID := h.createSession(t)
