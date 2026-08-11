@@ -41,6 +41,7 @@ type App struct {
 	stopOnce     sync.Once
 	reaperCancel context.CancelFunc
 	reaperDone   chan struct{}
+	authFailures *auth.AsyncFailureRecorder
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -79,7 +80,7 @@ func New(cfg config.Config) (*App, error) {
 	chatService := chatsvc.New(repo, eventBus, runtimeService, cfg.OllamaModel, cfg.OpenAIModel)
 	auditService := auditsvc.New(repo)
 	healthService := &HealthServer{schemaVersion: schemaVersion}
-	authFailureRecorder := func(ctx context.Context, failure auth.Failure) error {
+	persistAuthFailure := func(ctx context.Context, failure auth.Failure) error {
 		return auditService.Record(ctx, failure.RequestID, failure.ActorType, failure.Peer, "auth.failed", failure.Method, map[string]any{
 			"method":    failure.Method,
 			"requestId": failure.RequestID,
@@ -87,8 +88,9 @@ func New(cfg config.Config) (*App, error) {
 			"peer":      failure.Peer,
 		})
 	}
-	publicAuth := auth.InterceptorOptions{ActorType: "client", FailureRecorder: authFailureRecorder}
-	internalAuth := auth.InterceptorOptions{ActorType: "runtime", FailureRecorder: authFailureRecorder}
+	authFailures := auth.NewAsyncFailureRecorder(persistAuthFailure)
+	publicAuth := auth.InterceptorOptions{ActorType: "client", FailureRecorder: authFailures.Record}
+	internalAuth := auth.InterceptorOptions{ActorType: "runtime", FailureRecorder: authFailures.Record}
 	for _, event := range recoveredEvents {
 		eventBus.Publish(eventsvc.Event{
 			EventID: event.EventID, SessionID: event.SessionID, RunID: event.RunID.String,
@@ -131,6 +133,7 @@ func New(cfg config.Config) (*App, error) {
 		AuditService:    auditService,
 		HealthService:   healthService,
 		database:        database,
+		authFailures:    authFailures,
 		reaperDone:      make(chan struct{}),
 	}
 	reaperCtx, reaperCancel := context.WithCancel(context.Background())
@@ -174,6 +177,11 @@ func (a *App) Stop() {
 			}()
 		}
 		wg.Wait()
+		if a.authFailures != nil {
+			closeCtx, cancel := context.WithTimeout(context.Background(), gracefulStopTimeout)
+			_ = a.authFailures.Close(closeCtx)
+			cancel()
+		}
 		if a.database != nil {
 			_ = a.database.Close()
 		}
