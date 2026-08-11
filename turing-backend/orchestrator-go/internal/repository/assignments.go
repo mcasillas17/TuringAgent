@@ -172,6 +172,18 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 			}
 			return AssignmentReconciliation{Fenced: true}, nil
 		}
+		if staleRecovery {
+			reconciliation, terminalized, err := terminalizeStaleApprovedAuthorizationTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, sessionID, traceID)
+			if err != nil {
+				return AssignmentReconciliation{}, err
+			}
+			if terminalized {
+				if err := tx.Commit(); err != nil {
+					return AssignmentReconciliation{}, err
+				}
+				return reconciliation, nil
+			}
+		}
 		if err := requeueAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID); err != nil {
 			return AssignmentReconciliation{}, err
 		}
@@ -205,6 +217,195 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 	default:
 		return AssignmentReconciliation{}, ErrAssignmentFenced
 	}
+}
+
+func terminalizeStaleApprovedAuthorizationTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	runID string,
+	jobID string,
+	attemptID string,
+	sessionID string,
+	traceID string,
+) (AssignmentReconciliation, bool, error) {
+	type approvalAuthorization struct {
+		id, toolCallID, toolName, modelToolCallID string
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT a.id, COALESCE(a.tool_call_id, ''), a.tool_name, COALESCE(tc.model_tool_call_id, '')
+		FROM approvals a
+		LEFT JOIN tool_calls tc ON tc.id = a.tool_call_id AND tc.run_id = a.run_id
+		WHERE a.run_id = ? AND a.status IN ('approved', 'consumed')
+		ORDER BY `+sqliteTimestampNanos("a.created_at")+`, a.id
+	`, runID)
+	if err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+	var approvals []approvalAuthorization
+	for rows.Next() {
+		var approval approvalAuthorization
+		if err := rows.Scan(&approval.id, &approval.toolCallID, &approval.toolName, &approval.modelToolCallID); err != nil {
+			rows.Close()
+			return AssignmentReconciliation{}, false, err
+		}
+		approvals = append(approvals, approval)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return AssignmentReconciliation{}, false, err
+	}
+	if err := rows.Close(); err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+	if len(approvals) == 0 {
+		return AssignmentReconciliation{}, false, nil
+	}
+
+	type openToolCall struct {
+		id, toolName, modelToolCallID, approvalID string
+	}
+	toolRows, err := tx.QueryContext(ctx, `
+		SELECT id, tool_name, COALESCE(model_tool_call_id, ''), COALESCE(approval_id, '')
+		FROM tool_calls
+		WHERE run_id = ? AND status IN ('requested', 'allowed', 'approval_required')
+		ORDER BY `+sqliteTimestampNanos("created_at")+`, id
+	`, runID)
+	if err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+	var toolCalls []openToolCall
+	for toolRows.Next() {
+		var toolCall openToolCall
+		if err := toolRows.Scan(&toolCall.id, &toolCall.toolName, &toolCall.modelToolCallID, &toolCall.approvalID); err != nil {
+			toolRows.Close()
+			return AssignmentReconciliation{}, false, err
+		}
+		toolCalls = append(toolCalls, toolCall)
+	}
+	if err := toolRows.Err(); err != nil {
+		toolRows.Close()
+		return AssignmentReconciliation{}, false, err
+	}
+	if err := toolRows.Close(); err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+
+	const code = "side_effect_uncertain"
+	const message = "Stale assignment may have executed an approved tool call"
+	finishedAt := now()
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE approvals
+		SET status = 'expired', approval_jti = NULL, approval_token = NULL, decided_at = COALESCE(decided_at, ?)
+		WHERE run_id = ? AND status IN ('approved', 'consumed')
+	`, finishedAt, runID); err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE tool_calls
+		SET status = 'failed', error_code = ?, error_message = ?, completed_at = COALESCE(completed_at, ?)
+		WHERE run_id = ? AND status IN ('requested', 'allowed', 'approval_required')
+	`, code, message, finishedAt, runID); err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET status = 'failed',
+			error_code = ?,
+			error_message = ?,
+			finished_at = ?,
+			execution_active = 0,
+			execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
+			execution_state = 'exited',
+			execution_lease_expires_at = NULL,
+			execution_lease_expires_at_ns = NULL
+		WHERE id = ?
+			AND status = 'running'
+			AND (? = '' OR COALESCE(execution_attempt_id, '') = ?)
+	`, code, message, finishedAt, finishedAt, runID, attemptID, attemptID)
+	if err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+	if jobID == "" {
+		if err := tx.QueryRowContext(ctx, `SELECT id FROM jobs WHERE run_id = ? AND status = 'in_progress'`, runID).Scan(&jobID); err != nil {
+			return AssignmentReconciliation{}, false, err
+		}
+	}
+	result, err = tx.ExecContext(ctx, `
+		UPDATE jobs
+		SET status = 'failed',
+			finished_at = ?,
+			error_code = ?,
+			error_message = ?,
+			lease_owner = NULL,
+			lease_expires_at = NULL,
+			lease_expires_at_ns = NULL
+		WHERE id = ?
+			AND run_id = ?
+			AND status = 'in_progress'
+			AND (? = '' OR COALESCE(assignment_attempt_id, '') = ?)
+	`, finishedAt, code, message, jobID, runID, attemptID, attemptID)
+	if err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+	for _, approval := range approvals {
+		payload := map[string]any{
+			"approvalId": approval.id,
+			"toolCallId": approval.toolCallID,
+			"toolName":   approval.toolName,
+			"reason":     code,
+		}
+		if approval.modelToolCallID != "" {
+			payload["modelToolCallId"] = approval.modelToolCallID
+		}
+		payloadJSON, err := json.Marshal(payload)
+		if err != nil {
+			return AssignmentReconciliation{}, false, err
+		}
+		if _, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "approval.expired", string(payloadJSON), finishedAt); err != nil {
+			return AssignmentReconciliation{}, false, err
+		}
+	}
+	for _, toolCall := range toolCalls {
+		payload := map[string]any{
+			"toolCallId": toolCall.id,
+			"toolName":   toolCall.toolName,
+			"status":     "failed",
+			"reason":     code,
+			"error": map[string]any{
+				"code": code, "message": message,
+			},
+		}
+		if toolCall.modelToolCallID != "" {
+			payload["modelToolCallId"] = toolCall.modelToolCallID
+		}
+		if toolCall.approvalID != "" {
+			payload["approvalId"] = toolCall.approvalID
+		}
+		payloadJSON, err := json.Marshal(payload)
+		if err != nil {
+			return AssignmentReconciliation{}, false, err
+		}
+		if _, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "tool.call.failed", string(payloadJSON), finishedAt); err != nil {
+			return AssignmentReconciliation{}, false, err
+		}
+	}
+	payloadJSON, err := json.Marshal(map[string]any{
+		"runId": runID, "code": code, "message": message, "retryable": false,
+	})
+	if err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+	event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.failed", string(payloadJSON), finishedAt)
+	if err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+	return AssignmentReconciliation{Cleared: true, RunFailedEvent: event}, true, nil
 }
 
 func fenceExecutionTx(ctx context.Context, tx *sql.Tx, runID string) error {
