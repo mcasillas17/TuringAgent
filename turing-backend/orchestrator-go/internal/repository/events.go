@@ -32,7 +32,7 @@ func (r *Repository) AppendEvent(ctx context.Context, input AppendEventInput) (E
 	if err != nil {
 		return Event{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var next int64
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE session_id = ?`, input.SessionID).Scan(&next); err != nil {
 		return Event{}, err
@@ -64,7 +64,7 @@ func (r *Repository) ReplayEvents(ctx context.Context, sessionID string, afterSe
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var events []Event
 	for rows.Next() {
 		var event Event

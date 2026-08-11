@@ -11,7 +11,7 @@ func (r *Repository) RecordAudit(ctx context.Context, correlationID string, acto
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO audit_logs (id, correlation_id, actor_type, actor_id, action, target, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, ids.New("audit"), nullableText(correlationID), actorType, nullableText(actorID), action, nullableText(target), nullableText(payloadJSON), now()); err != nil {
 		return err
 	}

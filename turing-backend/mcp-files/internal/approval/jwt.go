@@ -147,14 +147,10 @@ func (c Consumer) approvalClient(ctx context.Context) (ApprovalClient, func() er
 	if len(options) == 0 {
 		options = []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 	}
-	// TODO: migrate to grpc.NewClient. Deliberately not a drive-by change:
-	// NewClient defaults to the DNS resolver where DialContext used passthrough,
-	// which alters name resolution for the Docker service address this consumes
-	// (ORCHESTRATOR_GRPC_ADDR). Since this is the approval-consumption path and
-	// no test exercises real dialing, the swap needs verification against the
-	// compose stack. DialContext remains supported throughout gRPC 1.x.
-	//nolint:staticcheck // SA1019: see TODO above.
-	conn, err := grpc.DialContext(ctx, c.OrchestratorGRPCAddr, options...)
+	// "passthrough:///" preserves DialContext's resolver behaviour: the address
+	// (a Docker service name, ORCHESTRATOR_GRPC_ADDR) is handed to the dialer
+	// verbatim instead of going through NewClient's default DNS resolver.
+	conn, err := grpc.NewClient("passthrough:///"+c.OrchestratorGRPCAddr, options...)
 	if err != nil {
 		return nil, nil, err
 	}

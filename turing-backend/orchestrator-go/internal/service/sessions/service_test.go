@@ -38,7 +38,7 @@ func newSessionHarness(t *testing.T) *sessionHarness {
 	go func() {
 		_ = grpcServer.Serve(lis)
 	}()
-	conn, err := grpc.DialContext(context.Background(), "bufnet",
+	conn, err := grpc.NewClient("passthrough:///bufnet",
 		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
 			return lis.Dial()
 		}),

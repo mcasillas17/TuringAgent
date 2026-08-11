@@ -48,7 +48,7 @@ func newHarness(t *testing.T) *harness {
 	go func() {
 		_ = grpcServer.Serve(lis)
 	}()
-	conn, err := grpc.DialContext(context.Background(), "bufnet",
+	conn, err := grpc.NewClient("passthrough:///bufnet",
 		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
 			return lis.Dial()
 		}),
@@ -1431,7 +1431,7 @@ func TestToolBeaconAfterRecordsCompletionEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var action string
 		if err := rows.Scan(&action); err != nil {

@@ -8,6 +8,12 @@ version: "2"
 run:
   timeout: 5m
 
+issues:
+  # Defaults (50 per linter / 3 per identical message) silently hide most of a
+  # backlog. Report everything so the baseline is honest.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
 linters:
   enable:
     - errcheck

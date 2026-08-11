@@ -37,7 +37,7 @@ func (r *Repository) MarkRunRunning(ctx context.Context, runID string) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'running', started_at = ? WHERE id = ? AND status = 'queued'`, startedAt, runID)
 	if err != nil {
 		return err
@@ -61,7 +61,7 @@ func (r *Repository) CompleteRun(ctx context.Context, runID string, assistantMes
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'completed', finished_at = ? WHERE id = ? AND status IN ('running','waiting_approval')`, finishedAt, runID)
 	if err != nil {
 		return err
@@ -90,7 +90,7 @@ func (r *Repository) CompleteRunWithEvent(ctx context.Context, runID string, ass
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var sessionID, traceID string
 	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&sessionID, &traceID); err != nil {
 		return nil, err
@@ -146,7 +146,7 @@ func (r *Repository) FailRun(ctx context.Context, runID string, code string, mes
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'failed', error_code = ?, error_message = ?, finished_at = ? WHERE id = ? AND status IN ('queued','running','waiting_approval')`, code, message, finishedAt, runID)
 	if err != nil {
 		return err
@@ -166,7 +166,7 @@ func (r *Repository) FailRunWithEvent(ctx context.Context, runID string, code st
 	if err != nil {
 		return Event{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var sessionID, traceID string
 	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&sessionID, &traceID); err != nil {
 		return Event{}, err
@@ -197,7 +197,7 @@ func (r *Repository) CancelRun(ctx context.Context, runID string, reason string)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'cancelled', cancellation_reason = ?, finished_at = ? WHERE id = ? AND status IN ('queued','running','waiting_approval')`, reason, finishedAt, runID)
 	if err != nil {
 		return err
@@ -217,7 +217,7 @@ func (r *Repository) CancelRunWithEvent(ctx context.Context, runID string, reaso
 	if err != nil {
 		return Event{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var sessionID, traceID string
 	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&sessionID, &traceID); err != nil {
 		return Event{}, err
@@ -291,7 +291,7 @@ func (r *Repository) AppendRuntimeEvent(ctx context.Context, event *turingv1.Tur
 	if err != nil {
 		return Event{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = status WHERE id = ? AND status IN ('running','waiting_approval')`, event.RunId)
 	if err != nil {
 		return Event{}, err

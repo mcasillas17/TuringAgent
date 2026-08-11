@@ -43,6 +43,15 @@ cd turing-backend && ./scripts/init.sh   # generates .env, tokens, data/ & sandb
 ```
 Requires Docker + Compose, Go 1.23+, Flutter, and Ollama running on the host (`OLLAMA_BASE_URL=http://host.docker.internal:11434`, default model `llama3.2`). Run the client: `cd turing-client/turing_app && flutter pub get && flutter run -d macos`.
 
+## Review before pushing (required)
+
+Before pushing a branch or opening a PR, dispatch a subagent with **Opus 4.8** to review the full diff. Give it the changed files and ask it to report:
+- correctness bugs, edge cases, and gaps against the stated intent
+- concrete improvements (reuse, simplification, clearer naming)
+- **unit test coverage** — every new behavior and every fixed bug needs a test that fails without the fix; call out untested paths explicitly
+
+Act on the findings (or state why one is rejected) before pushing. Do not treat a green test run as a substitute for this review — tests only prove what they cover.
+
 ## Repo etiquette
 
 Work on an isolated git worktree + feature branch; open a PR into `main` (recent history is squash-merged PRs). Do not commit directly to `main`.
