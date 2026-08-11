@@ -58,7 +58,7 @@ func New(cfg config.Config) (*App, error) {
 
 	repo := repository.New(database)
 	eventBus := eventsvc.NewBus(128)
-	approvalService := approvalsvc.New(repo, eventBus, cfg.ApprovalJWTSecret)
+	approvalService := approvalsvc.New(repo, eventBus, cfg.ApprovalJWTSecret, time.Duration(cfg.ApprovalTTLMS)*time.Millisecond)
 	runtimeService := runtimesvc.New(repo, eventBus, approvalService)
 	sessionService := sessionsvc.New(repo, cfg)
 	eventService := eventsvc.NewServer(repo, eventBus)

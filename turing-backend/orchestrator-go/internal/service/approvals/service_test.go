@@ -3,6 +3,7 @@ package approvals
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -158,6 +159,148 @@ func TestCreateApprovalForToolPersistsEventAndAudit(t *testing.T) {
 	if auditAction != "approval.requested" {
 		t.Fatalf("audit action = %q", auditAction)
 	}
+}
+
+func TestDefaultApprovalTTLAlignsExpiryAndJWT(t *testing.T) {
+	h := newApprovalHarness(t)
+	enqueued := h.createRunningToolCall(t)
+	started := time.Now()
+	approvalID, err := h.service.CreateApprovalForTool(context.Background(), enqueued.RunID, "call_1", "general_assistant", "files.update", map[string]any{"path": "note.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := h.repo.GetApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, approval.ExpiresAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ttl := expiresAt.Sub(started); ttl < 64*time.Second || ttl > 66*time.Second {
+		t.Fatalf("approval TTL = %v, want configured default near 65s", ttl)
+	}
+	if expiresAt.Nanosecond() != 0 {
+		t.Fatalf("approval expiry = %s, want whole-second precision shared with JWT", approval.ExpiresAt)
+	}
+	if _, err := h.service.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
+		t.Fatal(err)
+	}
+	approved, err := h.repo.GetApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(approved.ApprovalToken, ".")
+	if len(parts) != 3 {
+		t.Fatalf("approval token = %q, want JWT", approved.ApprovalToken)
+	}
+	payloadJSON, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(payloadJSON, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["exp"] != float64(expiresAt.Unix()) {
+		t.Fatalf("JWT exp = %#v, want approval expiry %d", payload["exp"], expiresAt.Unix())
+	}
+}
+
+func TestApprovalLifecycleEventsIncludePersistedCorrelationIDs(t *testing.T) {
+	createApproval := func(t *testing.T, h *approvalHarness) (repository.EnqueueUserMessageResult, string) {
+		t.Helper()
+		session, err := h.repo.CreateSession(context.Background(), "Correlation")
+		if err != nil {
+			t.Fatal(err)
+		}
+		enqueued, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+			SessionID: session.SessionID, Content: "needs approval", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.repo.MarkRunRunning(context.Background(), enqueued.RunID); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.repo.RecordToolCallBefore(context.Background(), repository.ToolCallRecord{
+			ToolCallID: "call_correlation", RunID: enqueued.RunID, ModelToolCallID: "provider_call_1",
+		}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:correlation"); err != nil {
+			t.Fatal(err)
+		}
+		approvalID, err := h.service.CreateApprovalForTool(context.Background(), enqueued.RunID, "call_correlation", "general_assistant", "files.update", map[string]any{"path": "note.txt"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return enqueued, approvalID
+	}
+	assertCorrelation := func(t *testing.T, h *approvalHarness, enqueued repository.EnqueueUserMessageResult, eventType, approvalID string) {
+		t.Helper()
+		events, _, err := h.repo.ReplayEvents(context.Background(), enqueued.SessionID, 0, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, event := range events {
+			if event.Type != eventType {
+				continue
+			}
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["approvalId"] != approvalID || payload["toolCallId"] != "call_correlation" ||
+				payload["runId"] != enqueued.RunID || payload["traceId"] != enqueued.TraceID ||
+				payload["modelToolCallId"] != "provider_call_1" {
+				t.Fatalf("%s payload = %+v", eventType, payload)
+			}
+			return
+		}
+		t.Fatalf("%s event was not persisted", eventType)
+	}
+
+	t.Run("requested", func(t *testing.T) {
+		h := newApprovalHarness(t)
+		enqueued, approvalID := createApproval(t, h)
+		assertCorrelation(t, h, enqueued, "approval.requested", approvalID)
+	})
+	t.Run("approved", func(t *testing.T) {
+		h := newApprovalHarness(t)
+		enqueued, approvalID := createApproval(t, h)
+		if _, err := h.service.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
+			t.Fatal(err)
+		}
+		assertCorrelation(t, h, enqueued, "approval.approved", approvalID)
+	})
+	t.Run("denied", func(t *testing.T) {
+		h := newApprovalHarness(t)
+		enqueued, approvalID := createApproval(t, h)
+		if _, err := h.service.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{ApprovalId: approvalID}); err != nil {
+			t.Fatal(err)
+		}
+		assertCorrelation(t, h, enqueued, "approval.denied", approvalID)
+	})
+	t.Run("expired", func(t *testing.T) {
+		h := newApprovalHarness(t)
+		enqueued, approvalID := createApproval(t, h)
+		if _, err := h.database.ExecContext(context.Background(), `UPDATE approvals SET expires_at = ? WHERE id = ?`, time.Now().Add(-time.Minute).Format(time.RFC3339Nano), approvalID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.service.GetApprovalForRuntime(context.Background(), &turingv1.GetApprovalForRuntimeRequest{ApprovalId: approvalID}); err != nil {
+			t.Fatal(err)
+		}
+		assertCorrelation(t, h, enqueued, "approval.expired", approvalID)
+	})
+	t.Run("consumed", func(t *testing.T) {
+		h := newApprovalHarness(t)
+		enqueued, approvalID := createApproval(t, h)
+		if _, err := h.service.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.service.ConsumeApproval(context.Background(), &turingv1.ConsumeApprovalRequest{ApprovalId: approvalID}); err != nil {
+			t.Fatal(err)
+		}
+		assertCorrelation(t, h, enqueued, "approval.consumed", approvalID)
+	})
 }
 
 func TestCreateApprovalForToolReusesExistingToolCallApproval(t *testing.T) {
@@ -350,30 +493,46 @@ func TestGetApprovalForRuntimeLazilyExpiresOnceAndTerminalizesRunAndJob(t *testi
 	if jobStatus != "failed" || jobCode != "approval_expired" {
 		t.Fatalf("job status/code = %q/%q, want failed/approval_expired", jobStatus, jobCode)
 	}
-	var eventCount, auditCount int
+	var toolCallStatus string
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status FROM tool_calls WHERE id = 'call_1'`).Scan(&toolCallStatus); err != nil {
+		t.Fatal(err)
+	}
+	if toolCallStatus != "failed" {
+		t.Fatalf("expired tool call status = %q, want failed", toolCallStatus)
+	}
+	var eventCount, terminalEventCount, auditCount int
 	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'approval.expired'`, enqueued.RunID).Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'agent.run.failed'`, enqueued.RunID).Scan(&terminalEventCount); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM audit_logs WHERE action = 'approval.expired' AND target = ?`, approvalID).Scan(&auditCount); err != nil {
 		t.Fatal(err)
 	}
-	if eventCount != 1 || auditCount != 1 {
-		t.Fatalf("expiration event/audit counts = %d/%d, want 1/1", eventCount, auditCount)
+	if eventCount != 1 || terminalEventCount != 1 || auditCount != 1 {
+		t.Fatalf("expiration event/terminal-event/audit counts = %d/%d/%d, want 1/1/1", eventCount, terminalEventCount, auditCount)
 	}
 	if got := notifier.snapshot(); got.count != 1 || got.runID != enqueued.RunID || got.approvalID != approvalID || got.status != "expired" || got.approvalToken != "" {
 		t.Fatalf("expiration notification = %+v, want one expired notification", got)
 	}
-	select {
-	case event := <-published:
-		if event.Type != "approval.expired" {
-			t.Fatalf("published event = %+v, want approval.expired", event)
+	publishedTypes := map[string]int{}
+	for len(publishedTypes) < 2 {
+		select {
+		case event := <-published:
+			if event.RunID == enqueued.RunID && (event.Type == "approval.expired" || event.Type == "agent.run.failed") {
+				publishedTypes[event.Type]++
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("published expiration lifecycle = %v, want approval.expired and agent.run.failed", publishedTypes)
 		}
-	default:
-		t.Fatal("approval.expired was not published")
+	}
+	if publishedTypes["approval.expired"] != 1 || publishedTypes["agent.run.failed"] != 1 {
+		t.Fatalf("published expiration lifecycle = %v, want one of each", publishedTypes)
 	}
 	select {
 	case event := <-published:
-		t.Fatalf("duplicate event published: %+v", event)
+		t.Fatalf("duplicate expiration event published: %+v", event)
 	default:
 	}
 }
@@ -533,6 +692,45 @@ func TestDenyApprovalReturnsDeniedStatus(t *testing.T) {
 	}
 	if run.Status != "failed" {
 		t.Fatalf("run status = %q, want failed", run.Status)
+	}
+}
+
+func TestDenyApprovalPublishesCommittedTerminalRunEventOnlyOnce(t *testing.T) {
+	h := newApprovalHarness(t)
+	enqueued := h.createRunningToolCall(t)
+	approvalID, err := h.service.CreateApprovalForTool(context.Background(), enqueued.RunID, "call_1", "general_assistant", "files.update", map[string]any{"path": "note.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
+	defer unsubscribe()
+	client := turingv1.NewApprovalServiceClient(h.conn)
+
+	if _, err := client.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{ApprovalId: approvalID}); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for len(got) < 2 {
+		select {
+		case event := <-published:
+			if event.RunID == enqueued.RunID && (event.Type == "approval.denied" || event.Type == "agent.run.failed") {
+				got[event.Type]++
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("published lifecycle events = %v, want approval.denied and agent.run.failed", got)
+		}
+	}
+	if got["approval.denied"] != 1 || got["agent.run.failed"] != 1 {
+		t.Fatalf("published lifecycle events = %v, want one of each", got)
+	}
+
+	if _, err := client.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{ApprovalId: approvalID}); err != nil {
+		t.Fatalf("repeated denial: %v", err)
+	}
+	select {
+	case event := <-published:
+		t.Fatalf("repeated denial published duplicate event: %+v", event)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

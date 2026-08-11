@@ -35,6 +35,52 @@ func newTestApp(t *testing.T) *App {
 	return app
 }
 
+func TestAppPassesConfiguredApprovalTTLToApprovalService(t *testing.T) {
+	app, err := New(config.Config{
+		ClientAPIKey:      "client",
+		InternalToken:     "internal",
+		ApprovalJWTSecret: "approval-secret",
+		ApprovalTTLMS:     2000,
+		DatabasePath:      t.TempDir() + "/turing.db",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Stop)
+	session, err := app.Repository.CreateSession(context.Background(), "Approval TTL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := app.Repository.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "needs approval", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Repository.MarkRunRunning(context.Background(), enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Repository.RecordToolCallBefore(context.Background(), repository.ToolCallRecord{ToolCallID: "call_ttl", RunID: enqueued.RunID}, "general_assistant", "files", "files.update", `{}`, "sha256:ttl"); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	approvalID, err := app.ApprovalService.CreateApprovalForTool(context.Background(), enqueued.RunID, "call_ttl", "general_assistant", "files.update", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := app.Repository.GetApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, approval.ExpiresAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ttl := expiresAt.Sub(started); ttl < time.Second || ttl > 3*time.Second {
+		t.Fatalf("approval TTL = %v, want configured 2s", ttl)
+	}
+}
+
 func newBufconnClient(t *testing.T, server *grpc.Server) *grpc.ClientConn {
 	t.Helper()
 	lis := bufconn.Listen(1024 * 1024)

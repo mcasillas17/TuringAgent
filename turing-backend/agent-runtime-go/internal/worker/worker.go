@@ -39,6 +39,8 @@ type Worker struct {
 	executor   Executor
 	mu         sync.Mutex
 	active     map[string]*activeRun
+	approvals  map[string]string
+	toolCalls  map[string]string
 	decisionMu sync.Mutex
 	decisions  map[string]chan *turingv1.ToolPolicyDecision
 	sendMu     sync.Mutex
@@ -61,7 +63,7 @@ func New(options Options, client RuntimeClient, executor Executor) *Worker {
 	if options.MaxConcurrentRuns <= 0 {
 		options.MaxConcurrentRuns = 1
 	}
-	return &Worker{options: options, client: client, executor: executor, active: map[string]*activeRun{}, decisions: map[string]chan *turingv1.ToolPolicyDecision{}}
+	return &Worker{options: options, client: client, executor: executor, active: map[string]*activeRun{}, approvals: map[string]string{}, toolCalls: map[string]string{}, decisions: map[string]chan *turingv1.ToolPolicyDecision{}}
 }
 
 func (w *Worker) Run(ctx context.Context) error {
@@ -104,6 +106,12 @@ func (w *Worker) Run(ctx context.Context) error {
 			return nil
 		case *turingv1.RuntimeCommand_ToolPolicyDecision:
 			w.deliverDecision(value.ToolPolicyDecision)
+		case *turingv1.RuntimeCommand_ApprovalUpdated:
+			if value.ApprovalUpdated != nil && (value.ApprovalUpdated.Status == "denied" || value.ApprovalUpdated.Status == "expired") {
+				if err := w.cancelApprovalRun(ctx, stream, value.ApprovalUpdated.ApprovalId); err != nil {
+					return err
+				}
+			}
 		}
 	}
 }
@@ -112,21 +120,38 @@ func (w *Worker) startRun(parent context.Context, stream RuntimeStream, job *tur
 	runCtx, cancel := context.WithCancel(parent)
 	entry := &activeRun{cancel: cancel, done: make(chan struct{})}
 	w.mu.Lock()
+	if _, exists := w.active[job.GetRunId()]; exists || len(w.active) >= w.options.MaxConcurrentRuns {
+		w.mu.Unlock()
+		cancel()
+		return
+	}
 	w.active[job.GetRunId()] = entry
 	w.mu.Unlock()
 	go func() {
 		defer close(entry.done)
-		defer func() {
-			if !entry.isStopping() {
-				w.deleteActive(job.GetRunId())
-			}
-		}()
+		var terminal *turingv1.RuntimeUpdate
 		err := w.executor.Execute(runCtx, job, func(update *turingv1.RuntimeUpdate) error {
 			if isDerivedMessageCompleted(update) {
 				return nil
 			}
+			if isTerminalRunUpdate(update) {
+				terminal = update
+				return nil
+			}
 			return w.send(stream, update)
 		})
+		if entry.isStopping() {
+			return
+		}
+		w.deleteActive(job.GetRunId())
+		if terminal != nil {
+			_ = w.send(stream, terminal)
+			return
+		}
+		if runWasTerminalized(err) {
+			_ = w.send(stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: job.GetRunId()}}})
+			return
+		}
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(runCtx.Err(), context.Canceled) {
 			_ = w.send(stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{RunId: job.GetRunId(), Code: "runtime_error", Message: err.Error(), Retryable: false}}})
 		}
@@ -137,6 +162,19 @@ func isDerivedMessageCompleted(update *turingv1.RuntimeUpdate) bool {
 	event := update.GetEvent()
 	// RuntimeService derives message.completed from run_completed.
 	return event != nil && event.Type == turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_COMPLETED
+}
+
+func isTerminalRunUpdate(update *turingv1.RuntimeUpdate) bool {
+	return update != nil && (update.GetRunCompleted() != nil || update.GetRunFailed() != nil)
+}
+
+type terminalRunState interface {
+	RunTerminal() bool
+}
+
+func runWasTerminalized(err error) bool {
+	var terminal terminalRunState
+	return errors.As(err, &terminal) && terminal.RunTerminal()
 }
 
 func (w *Worker) cancelRun(ctx context.Context, stream RuntimeStream, runID string) error {
@@ -161,10 +199,30 @@ func (w *Worker) activeRun(runID string) *activeRun {
 	return w.active[runID]
 }
 
+func (w *Worker) cancelApprovalRun(ctx context.Context, stream RuntimeStream, approvalID string) error {
+	w.mu.Lock()
+	runID := w.approvals[approvalID]
+	w.mu.Unlock()
+	if runID == "" {
+		return nil
+	}
+	return w.cancelRun(ctx, stream, runID)
+}
+
 func (w *Worker) deleteActive(runID string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	delete(w.active, runID)
+	for approvalID, approvalRunID := range w.approvals {
+		if approvalRunID == runID {
+			delete(w.approvals, approvalID)
+		}
+	}
+	for toolCallID, toolCallRunID := range w.toolCalls {
+		if toolCallRunID == runID {
+			delete(w.toolCalls, toolCallID)
+		}
+	}
 }
 
 func (w *Worker) send(stream RuntimeStream, update *turingv1.RuntimeUpdate) error {
@@ -188,12 +246,23 @@ func (w *Worker) postToolBeacon(ctx context.Context, stream RuntimeStream, beaco
 		w.decisionMu.Lock()
 		delete(w.decisions, beacon.ToolCallId)
 		w.decisionMu.Unlock()
+		w.mu.Lock()
+		delete(w.toolCalls, beacon.ToolCallId)
+		w.mu.Unlock()
 	}()
+	w.mu.Lock()
+	w.toolCalls[beacon.ToolCallId] = beacon.RunId
+	w.mu.Unlock()
 	if err := w.send(stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: beacon}}); err != nil {
 		return nil, err
 	}
 	select {
 	case decision := <-waiter:
+		if decision.GetDecision() == turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED && decision.GetApprovalId() != "" && beacon.GetRunId() != "" {
+			w.mu.Lock()
+			w.approvals[decision.GetApprovalId()] = beacon.GetRunId()
+			w.mu.Unlock()
+		}
 		return decision, nil
 	case <-ctx.Done():
 		return nil, sentBeaconError{err: ctx.Err()}
@@ -219,6 +288,13 @@ func (w *Worker) deliverDecision(decision *turingv1.ToolPolicyDecision) {
 	w.decisionMu.Unlock()
 	if waiter == nil {
 		return
+	}
+	if decision.GetDecision() == turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED && decision.GetApprovalId() != "" {
+		w.mu.Lock()
+		if runID := w.toolCalls[decision.GetToolCallId()]; runID != "" {
+			w.approvals[decision.GetApprovalId()] = runID
+		}
+		w.mu.Unlock()
 	}
 	select {
 	case waiter <- decision:

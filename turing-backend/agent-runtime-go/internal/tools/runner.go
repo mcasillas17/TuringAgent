@@ -46,6 +46,8 @@ type RunOutcome struct {
 	SideEffecting bool
 }
 
+const fallbackAfterReportTimeout = 5 * time.Second
+
 func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome, error) {
 	ctx, cancel := stageContext(ctx, input.TotalTimeout)
 	defer cancel()
@@ -59,10 +61,21 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 	started := time.Now()
 	decision, err := r.postWithTimeout(ctx, input.Timeout, beacon(input, toolCallID, turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, turingv1.ToolCallStatus_TOOL_CALL_STATUS_UNSPECIFIED, "", nil, 0))
 	if err != nil {
-		return RunOutcome{}, beaconReportingError{err: err}
+		operationErr := beaconReportingError{err: err}
+		if !beaconWasPosted(err) {
+			return RunOutcome{}, operationErr
+		}
+		if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "tool_policy_decision_failed", Message: err.Error()}, started); reportErr != nil {
+			return RunOutcome{}, ReportingFailureError{operationErr: operationErr, reportErr: reportErr}
+		}
+		return RunOutcome{}, operationErr
 	}
 	if err := validatePolicyDecision(decision, toolCallID); err != nil {
-		return RunOutcome{}, beaconReportingError{err: markBeaconPosted(err)}
+		operationErr := beaconReportingError{err: markBeaconPosted(err)}
+		if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "tool_policy_decision_invalid", Message: err.Error()}, started); reportErr != nil {
+			return RunOutcome{}, ReportingFailureError{operationErr: operationErr, reportErr: reportErr}
+		}
+		return RunOutcome{}, operationErr
 	}
 	approvalToken := ""
 	sideEffecting := false
@@ -136,17 +149,27 @@ func (r *Runner) fetchMetadata(ctx context.Context, timeout time.Duration) error
 }
 
 func (r *Runner) postAfter(ctx context.Context, input RunInput, toolCallID string, status turingv1.ToolCallStatus, summary string, callErr *turingv1.ToolCallError, started time.Time) error {
-	decision, err := r.postWithTimeout(ctx, input.Timeout, beacon(input, toolCallID, turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER, status, summary, callErr, time.Since(started).Milliseconds()))
+	reportCtx, cancel := afterReportContext(ctx, input.Timeout)
+	defer cancel()
+	decision, err := r.postWithTimeout(reportCtx, input.Timeout, beacon(input, toolCallID, turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER, status, summary, callErr, time.Since(started).Milliseconds()))
 	if err == nil {
 		err = validatePolicyDecision(decision, toolCallID)
 		if err == nil && decision.GetDecision() != turingv1.ToolPolicyDecision_DECISION_ALLOW {
 			err = fmt.Errorf("after tool policy decision must be allow, got %s", decision.GetDecision().String())
 		}
+
 		if err != nil {
 			err = markBeaconPosted(err)
 		}
 	}
 	return err
+}
+
+func afterReportContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		timeout = fallbackAfterReportTimeout
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), timeout)
 }
 
 func validatePolicyDecision(decision *turingv1.ToolPolicyDecision, toolCallID string) error {

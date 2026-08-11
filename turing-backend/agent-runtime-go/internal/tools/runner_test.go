@@ -141,7 +141,7 @@ func TestRunErrorIndicatesWhetherBeforeBeaconWasPosted(t *testing.T) {
 	})
 }
 
-func TestRunDoesNotPostAfterWhenBeforeDecisionWaitFailsAfterBeaconSent(t *testing.T) {
+func TestRunPostsFailedAfterWhenBeforeDecisionWaitFailsAfterBeaconSent(t *testing.T) {
 	waitErr := beaconPostedTestError{err: context.DeadlineExceeded}
 	var beacons []*turingv1.ToolCallBeacon
 	var mcpCalls int
@@ -170,9 +170,14 @@ func TestRunDoesNotPostAfterWhenBeforeDecisionWaitFailsAfterBeaconSent(t *testin
 	if !errors.Is(err, context.DeadlineExceeded) || !BeaconWasPosted(err) {
 		t.Fatalf("Run error = %T %v, want posted error wrapping context.DeadlineExceeded", err, err)
 	}
-	if len(beacons) != 1 || beacons[0].GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
-		t.Fatalf("beacons = %+v, want exactly one BEFORE beacon", beacons)
-	}
+	assertBeaconSequence(t, beacons,
+		beaconExpectation{phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE},
+		beaconExpectation{
+			phase:  turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER,
+			status: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED,
+			code:   "tool_policy_decision_failed",
+		},
+	)
 	if mcpCalls != 0 {
 		t.Fatalf("MCP calls = %d, want 0", mcpCalls)
 	}
@@ -214,9 +219,14 @@ func TestRunRejectsMissingOrMismatchedBeforeDecisionID(t *testing.T) {
 			if mcpCalls != 0 {
 				t.Fatalf("MCP calls = %d, want 0", mcpCalls)
 			}
-			if len(beacons) != 1 || beacons[0].GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
-				t.Fatalf("beacons = %+v, want only BEFORE", beacons)
-			}
+			assertBeaconSequence(t, beacons,
+				beaconExpectation{phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE},
+				beaconExpectation{
+					phase:  turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER,
+					status: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED,
+					code:   "tool_policy_decision_invalid",
+				},
+			)
 		})
 	}
 }
@@ -781,8 +791,16 @@ func TestRunDoesNotApplyToolTimeoutToApprovalWait(t *testing.T) {
 
 func TestRunEnforcesTotalTimeoutAcrossApprovalWait(t *testing.T) {
 	const totalTimeout = 10 * time.Millisecond
+	var beacons []*turingv1.ToolCallBeacon
 	runner := &Runner{
-		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+		PostBeacon: func(ctx context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+			beacons = append(beacons, beacon)
+			if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				return allowDecision(beacon), nil
+			}
 			return &turingv1.ToolPolicyDecision{
 				Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
 				ApprovalId: "approval_1",
@@ -803,12 +821,20 @@ func TestRunEnforcesTotalTimeoutAcrossApprovalWait(t *testing.T) {
 		MCPClient:    fakeMCPClient{},
 	})
 
-	if !errors.Is(err, context.DeadlineExceeded) {
+	if !errors.Is(err, context.DeadlineExceeded) || ReportingFailed(err) {
 		t.Fatalf("Run error = %T %v, want context deadline exceeded", err, err)
 	}
 	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
 		t.Fatalf("Run took %v, want total timeout near %v", elapsed, totalTimeout)
 	}
+	assertBeaconSequence(t, beacons,
+		beaconExpectation{phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE},
+		beaconExpectation{
+			phase:  turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER,
+			status: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED,
+			code:   "approval_wait_failed",
+		},
+	)
 }
 
 func allowDecision(beacon *turingv1.ToolCallBeacon) *turingv1.ToolPolicyDecision {

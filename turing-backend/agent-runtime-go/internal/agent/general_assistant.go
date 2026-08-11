@@ -46,6 +46,11 @@ const (
 
 var errRunTerminalized = errors.New("run already terminalized")
 
+type terminalizedRunExitError struct{}
+
+func (terminalizedRunExitError) Error() string     { return errRunTerminalized.Error() }
+func (terminalizedRunExitError) RunTerminal() bool { return true }
+
 type GeneralAssistant struct {
 	providers          map[turingv1.ModelProvider]llm.Provider
 	messages           MessageClient
@@ -243,7 +248,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			successfulToolSideEffect = successfulToolSideEffect || outcome.SuccessfulSideEffect
 			if err != nil {
 				if errors.Is(err, errRunTerminalized) {
-					return nil
+					return terminalizedRunExitError{}
 				}
 				return err
 			}
@@ -546,10 +551,20 @@ func (a *GeneralAssistant) tryDebugTool(ctx context.Context, job *turingv1.Agent
 	if isNilToolLister(client) {
 		return true, emitRunFailed(emit, job, "tool_call_failed", "MCP client is not configured", false)
 	}
-	result, err := a.tools.Runner.Run(ctx, tools.RunInput{AgentID: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, RunID: job.GetRunId(), TraceID: job.GetTraceId(), ServerName: serverName, ToolName: toolName, Args: args, MCPClient: client, Timeout: a.toolTimeout()})
+	result, err := a.tools.Runner.Run(ctx, tools.RunInput{
+		AgentID:      turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		RunID:        job.GetRunId(),
+		TraceID:      job.GetTraceId(),
+		ServerName:   serverName,
+		ToolName:     toolName,
+		Args:         args,
+		MCPClient:    client,
+		Timeout:      a.toolTimeout(),
+		TotalTimeout: a.totalToolTimeout(),
+	})
 	if err != nil {
 		if tools.RunWasTerminalized(err) {
-			return true, nil
+			return true, terminalizedRunExitError{}
 		}
 		if tools.SideEffectWasCommitted(err) || tools.SideEffectWasUncertain(err) ||
 			tools.ApprovalWaitFailed(err) || tools.ReportingFailed(err) {

@@ -27,6 +27,7 @@ type Config struct {
 	MaxToolCallsPerRun       int
 	ModelTimeoutMS           int
 	ToolTimeoutMS            int
+	ApprovalTTLMS            int
 	LogLevel                 string
 }
 
@@ -124,6 +125,13 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	approvalTTL, err := intValue("TURING_APPROVAL_TIMEOUT_MS", 65000)
+	if err != nil {
+		return Config{}, err
+	}
+	if approvalTTL <= 0 {
+		return Config{}, fmt.Errorf("invalid integer env var TURING_APPROVAL_TIMEOUT_MS")
+	}
 
 	return Config{
 		ClientAPIKey:             clientKey,
@@ -146,6 +154,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		MaxToolCallsPerRun:       maxTools,
 		ModelTimeoutMS:           modelTimeout,
 		ToolTimeoutMS:            toolTimeout,
+		ApprovalTTLMS:            approvalTTL,
 		LogLevel:                 stringValue("LOG_LEVEL", "info"),
 	}, nil
 }

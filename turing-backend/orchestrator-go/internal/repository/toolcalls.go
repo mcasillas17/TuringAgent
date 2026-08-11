@@ -7,15 +7,30 @@ import (
 )
 
 var (
-	ErrToolCallConflict = errors.New("tool call conflict")
-	ErrToolCallNotFound = errors.New("tool call not found")
+	ErrToolCallConflict          = errors.New("tool call conflict")
+	ErrToolCallNotFound          = errors.New("tool call not found")
+	ErrToolCallInvalidTransition = errors.New("tool call transition is invalid")
 )
 
 type ToolCallRecord struct {
-	ToolCallID string
-	RunID      string
-	Status     string
-	ApprovalID string
+	ToolCallID      string
+	RunID           string
+	Status          string
+	ApprovalID      string
+	ModelToolCallID string
+}
+
+type ToolCallAfterRecord struct {
+	ToolCallID      string
+	RunID           string
+	ServerName      string
+	ToolName        string
+	ModelToolCallID string
+	Status          string
+	ResultSummary   string
+	ErrorCode       string
+	ErrorMessage    string
+	DurationMS      int64
 }
 
 func (r *Repository) RecordToolCallBefore(ctx context.Context, record ToolCallRecord, agentID string, serverName string, toolName string, argsJSON string, argsHash string) error {
@@ -34,9 +49,10 @@ func (r *Repository) RecordToolCallBeforeNew(ctx context.Context, record ToolCal
 	}
 	defer func() { _ = tx.Rollback() }()
 	var existingRunID, existingAgentID, existingServerName, existingToolName, existingArgsHash string
-	err = tx.QueryRowContext(ctx, `SELECT run_id, agent_id, server_name, tool_name, args_hash FROM tool_calls WHERE id = ?`, record.ToolCallID).Scan(&existingRunID, &existingAgentID, &existingServerName, &existingToolName, &existingArgsHash)
+	var existingModelToolCallID sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT run_id, agent_id, server_name, tool_name, args_hash, model_tool_call_id FROM tool_calls WHERE id = ?`, record.ToolCallID).Scan(&existingRunID, &existingAgentID, &existingServerName, &existingToolName, &existingArgsHash, &existingModelToolCallID)
 	if err == nil {
-		if existingRunID == record.RunID && existingAgentID == agentID && existingServerName == serverName && existingToolName == toolName && existingArgsHash == argsHash {
+		if existingRunID == record.RunID && existingAgentID == agentID && existingServerName == serverName && existingToolName == toolName && existingArgsHash == argsHash && nullableStringValue(existingModelToolCallID) == record.ModelToolCallID {
 			return false, tx.Commit()
 		}
 		return false, ErrToolCallConflict
@@ -48,7 +64,7 @@ func (r *Repository) RecordToolCallBeforeNew(ctx context.Context, record ToolCal
 	if record.ApprovalID != "" {
 		approvalID = record.ApprovalID
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO tool_calls (id, run_id, agent_id, server_name, tool_name, args_json, args_hash, status, approval_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ToolCallID, record.RunID, agentID, serverName, toolName, argsJSON, argsHash, status, approvalID, now()); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO tool_calls (id, run_id, agent_id, server_name, tool_name, model_tool_call_id, args_json, args_hash, status, approval_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ToolCallID, record.RunID, agentID, serverName, toolName, nullableText(record.ModelToolCallID), argsJSON, argsHash, status, approvalID, now()); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -57,23 +73,73 @@ func (r *Repository) RecordToolCallBeforeNew(ctx context.Context, record ToolCal
 	return true, nil
 }
 
-func (r *Repository) RecordToolCallAfter(ctx context.Context, toolCallID string, runID string, status string, resultSummary string, errorCode string, errorMessage string, durationMS int64) error {
-	if status == "" {
-		status = "completed"
+func (r *Repository) RecordToolCallAfter(ctx context.Context, record ToolCallAfterRecord) (bool, error) {
+	if record.Status == "" {
+		record.Status = "completed"
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	result, err := tx.ExecContext(ctx, `UPDATE tool_calls SET status = ?, result_summary = ?, error_code = ?, error_message = ?, duration_ms = ?, completed_at = ? WHERE id = ? AND run_id = ?`, status, nullableText(resultSummary), nullableText(errorCode), nullableText(errorMessage), durationMS, now(), toolCallID, runID)
+	defer tx.Rollback()
+	var serverName, toolName, currentStatus, resultSummary, errorCode, errorMessage string
+	var modelToolCallID sql.NullString
+	var durationMS int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT server_name, tool_name, model_tool_call_id, status,
+			COALESCE(result_summary, ''), COALESCE(error_code, ''), COALESCE(error_message, ''), COALESCE(duration_ms, 0)
+		FROM tool_calls
+		WHERE id = ? AND run_id = ?
+	`, record.ToolCallID, record.RunID).Scan(&serverName, &toolName, &modelToolCallID, &currentStatus, &resultSummary, &errorCode, &errorMessage, &durationMS)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrToolCallNotFound
+	}
 	if err != nil {
-		return err
+		return false, err
 	}
-	if err := expectOneRowErr(result, ErrToolCallNotFound); err != nil {
-		return err
+	if serverName != record.ServerName || toolName != record.ToolName || nullableStringValue(modelToolCallID) != record.ModelToolCallID {
+		return false, ErrToolCallInvalidTransition
 	}
-	return tx.Commit()
+	if !isOpenToolCallStatus(currentStatus) {
+		if currentStatus == record.Status && resultSummary == record.ResultSummary && errorCode == record.ErrorCode && errorMessage == record.ErrorMessage && durationMS == record.DurationMS {
+			if err := tx.Commit(); err != nil {
+				return false, err
+			}
+			return false, nil
+		}
+		return false, ErrToolCallInvalidTransition
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE tool_calls
+		SET status = ?, result_summary = ?, error_code = ?, error_message = ?, duration_ms = ?, completed_at = ?
+		WHERE id = ? AND run_id = ? AND status IN ('requested', 'allowed', 'approval_required')
+	`, record.Status, nullableText(record.ResultSummary), nullableText(record.ErrorCode), nullableText(record.ErrorMessage), record.DurationMS, now(), record.ToolCallID, record.RunID)
+	if err != nil {
+		return false, err
+	}
+	if err := expectOneRowErr(result, ErrToolCallInvalidTransition); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func isOpenToolCallStatus(status string) bool {
+	switch status {
+	case "requested", "allowed", "approval_required":
+		return true
+	default:
+		return false
+	}
+}
+
+func nullableStringValue(value sql.NullString) string {
+	if value.Valid {
+		return value.String
+	}
+	return ""
 }
 
 func nullableText(value string) any {

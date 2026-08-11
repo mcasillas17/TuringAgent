@@ -922,8 +922,8 @@ func TestExecuteStopsSilentlyWhenApprovalAlreadyTerminalizedRun(t *testing.T) {
 		return nil
 	})
 
-	if err != nil {
-		t.Fatalf("Execute error = %v, want nil for externally terminalized run", err)
+	if err == nil || !tools.RunWasTerminalized(err) {
+		t.Fatalf("Execute error = %T %v, want terminalized-run signal", err, err)
 	}
 	if len(provider.requests) != 1 {
 		t.Fatalf("provider requests = %d, want no model follow-up", len(provider.requests))
@@ -1363,8 +1363,12 @@ func TestExecuteStopsAfterPostedBeforeBeaconDecisionFailure(t *testing.T) {
 	if len(client.calls) != 0 {
 		t.Fatalf("MCP calls = %d, want 0", len(client.calls))
 	}
-	if len(beacons) != 1 || beacons[0].GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
-		t.Fatalf("beacons = %+v, want exactly one BEFORE beacon", beacons)
+	if len(beacons) != 2 ||
+		beacons[0].GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE ||
+		beacons[1].GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER ||
+		beacons[1].GetStatus() != turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED ||
+		beacons[1].GetError().GetCode() != "tool_policy_decision_failed" {
+		t.Fatalf("beacons = %+v, want BEFORE then failed AFTER beacon", beacons)
 	}
 	for _, update := range updates {
 		if update.GetRunFailed() != nil || update.GetRunCompleted() != nil {
@@ -2355,6 +2359,55 @@ func TestExecutePreservesDebugToolPath(t *testing.T) {
 	}
 	if completed := updates[len(updates)-1].GetRunCompleted(); completed == nil || completed.Content != `{"time":"12:00"}` {
 		t.Fatalf("terminal update = %+v", updates[len(updates)-1])
+	}
+}
+
+func TestExecuteDebugToolUsesWholeToolTimeoutAndReportsAfter(t *testing.T) {
+	var beacons []*turingv1.ToolCallBeacon
+	runner := &tools.Runner{
+		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+			beacons = append(beacons, beacon)
+			if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
+				return allowToolCall(context.Background(), beacon)
+			}
+			return approvalToolCall(beacon), nil
+		},
+		WaitApproval: func(ctx context.Context, _ string) (string, error) {
+			if _, ok := ctx.Deadline(); !ok {
+				return "", errors.New("debug tool did not receive a whole-tool deadline")
+			}
+			<-ctx.Done()
+			return "", ctx.Err()
+		},
+	}
+	client := &assistantTestToolLister{definitions: []map[string]any{{"name": "files.create"}}}
+	assistant := NewGeneralAssistant(
+		nil,
+		fakeMessageClient{},
+		&GeneralAssistantTools{
+			FilesMCP:         client,
+			Runner:           runner,
+			ToolTimeout:      time.Second,
+			TotalToolTimeout: 10 * time.Millisecond,
+		},
+	)
+	job := testJob()
+	job.UserText = "/tool files.create"
+
+	err := assistant.Execute(context.Background(), job, discardUpdate)
+
+	if !errors.Is(err, context.DeadlineExceeded) || !tools.ApprovalWaitFailed(err) {
+		t.Fatalf("Execute error = %T %v, want whole-tool approval deadline", err, err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("MCP calls = %d, want none after approval timeout", len(client.calls))
+	}
+	if len(beacons) != 2 ||
+		beacons[0].GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE ||
+		beacons[1].GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER ||
+		beacons[1].GetStatus() != turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED ||
+		beacons[1].GetError().GetCode() != "approval_wait_failed" {
+		t.Fatalf("beacons = %+v, want BEFORE then failed AFTER", beacons)
 	}
 }
 

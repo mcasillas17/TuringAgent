@@ -616,7 +616,7 @@ func (s *Server) handleRunCancelledAck(ctx context.Context, ack *turingv1.Runtim
 	if err != nil {
 		return err
 	}
-	if run.Status != "cancelled" {
+	if run.Status != "cancelled" && run.Status != "failed" {
 		return status.Error(codes.FailedPrecondition, "run is not cancelled")
 	}
 	return nil
@@ -761,7 +761,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "tool_disabled")
 	}
 	if policy == tools.PolicyApprovalRequired {
-		inserted, err := s.repo.RecordToolCallBeforeNew(ctx, repository.ToolCallRecord{ToolCallID: beacon.ToolCallId, RunID: beacon.RunId}, "general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash)
+		inserted, err := s.repo.RecordToolCallBeforeNew(ctx, repository.ToolCallRecord{ToolCallID: beacon.ToolCallId, RunID: beacon.RunId, ModelToolCallID: beacon.ModelToolCallId}, "general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash)
 		if err != nil {
 			return nil, mapToolCallError(err)
 		}
@@ -785,7 +785,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 	if policy == tools.PolicySafe {
 		statusValue = "allowed"
 	}
-	inserted, err := s.repo.RecordToolCallBeforeNew(ctx, repository.ToolCallRecord{ToolCallID: beacon.ToolCallId, RunID: beacon.RunId, Status: statusValue}, "general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash)
+	inserted, err := s.repo.RecordToolCallBeforeNew(ctx, repository.ToolCallRecord{ToolCallID: beacon.ToolCallId, RunID: beacon.RunId, Status: statusValue, ModelToolCallID: beacon.ModelToolCallId}, "general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash)
 	if err != nil {
 		return nil, mapToolCallError(err)
 	}
@@ -819,7 +819,7 @@ func (s *Server) appendToolStartedEvent(ctx context.Context, beacon *turingv1.To
 }
 
 func (s *Server) denyToolBefore(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run, argsJSON string, argsHash string, reason string) (*turingv1.ToolPolicyDecision, error) {
-	if err := s.repo.RecordToolCallBefore(ctx, repository.ToolCallRecord{ToolCallID: beacon.ToolCallId, RunID: beacon.RunId, Status: "denied"}, "general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash); err != nil {
+	if err := s.repo.RecordToolCallBefore(ctx, repository.ToolCallRecord{ToolCallID: beacon.ToolCallId, RunID: beacon.RunId, Status: "denied", ModelToolCallID: beacon.ModelToolCallId}, "general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash); err != nil {
 		return nil, mapToolCallError(err)
 	}
 	deniedPayload := map[string]any{
@@ -852,8 +852,23 @@ func (s *Server) handleToolAfter(ctx context.Context, beacon *turingv1.ToolCallB
 		errorCode = beacon.Error.Code
 		errorMessage = beacon.Error.Message
 	}
-	if err := s.repo.RecordToolCallAfter(ctx, beacon.ToolCallId, beacon.RunId, statusValue, beacon.ResultSummary, errorCode, errorMessage, beacon.DurationMs); err != nil {
+	changed, err := s.repo.RecordToolCallAfter(ctx, repository.ToolCallAfterRecord{
+		ToolCallID:      beacon.ToolCallId,
+		RunID:           beacon.RunId,
+		ServerName:      beaconServerName(beacon),
+		ToolName:        beacon.ToolName,
+		ModelToolCallID: beacon.ModelToolCallId,
+		Status:          statusValue,
+		ResultSummary:   beacon.ResultSummary,
+		ErrorCode:       errorCode,
+		ErrorMessage:    errorMessage,
+		DurationMS:      beacon.DurationMs,
+	})
+	if err != nil {
 		return nil, mapToolCallError(err)
+	}
+	if !changed {
+		return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: beacon.ToolCallId}, nil
 	}
 	payload := map[string]any{
 		"toolCallId":    beacon.ToolCallId,
@@ -892,12 +907,6 @@ func (s *Server) NotifyApprovalUpdated(ctx context.Context, runID string, approv
 	}}}); err != nil {
 		return err
 	}
-	if approvalStatus == "denied" || approvalStatus == "expired" {
-		owner.releaseRun(runID)
-		if err := s.DispatchPending(ctx); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -907,6 +916,8 @@ func mapToolCallError(err error) error {
 		return status.Error(codes.AlreadyExists, err.Error())
 	case errors.Is(err, repository.ErrToolCallNotFound):
 		return status.Error(codes.NotFound, err.Error())
+	case errors.Is(err, repository.ErrToolCallInvalidTransition):
+		return status.Error(codes.FailedPrecondition, err.Error())
 	default:
 		return err
 	}

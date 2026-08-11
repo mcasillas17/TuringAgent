@@ -65,6 +65,135 @@ func TestWorkerCancelsActiveRunAndAcknowledges(t *testing.T) {
 	}
 }
 
+func TestWorkerCancelsApprovalDeniedRunAndAcknowledgesExit(t *testing.T) {
+	executor := &approvalWaitingExecutor{waiting: make(chan struct{}), cancelled: make(chan struct{})}
+	stream := newFakeStream()
+	worker := New(Options{WorkerID: "worker-approval", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, executor)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+
+	_ = nextSent(t, stream)
+	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: &turingv1.AgentJob{JobId: "job_1", RunId: "run_1", TraceId: "trace_1"}}}
+	beacon := nextSent(t, stream).GetToolBeacon()
+	if beacon == nil || beacon.GetToolCallId() != "call_approval" {
+		t.Fatalf("tool beacon = %+v, want approval beacon", beacon)
+	}
+	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_ToolPolicyDecision{ToolPolicyDecision: &turingv1.ToolPolicyDecision{
+		Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+		ToolCallId: beacon.GetToolCallId(),
+		ApprovalId: "approval_1",
+	}}}
+	select {
+	case <-executor.waiting:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not wait for approval")
+	}
+
+	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_ApprovalUpdated{ApprovalUpdated: &turingv1.RuntimeApprovalUpdated{
+		ApprovalId: "approval_1",
+		Status:     "denied",
+	}}}
+	select {
+	case <-executor.cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("approval denial did not cancel active run")
+	}
+	ack := nextSent(t, stream)
+	if ack.GetRunCancelledAck() == nil || ack.GetRunCancelledAck().GetRunId() != "run_1" {
+		t.Fatalf("approval cancellation update = %+v, want run_cancelled_ack", ack)
+	}
+
+	cancel()
+	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run returned %v", err)
+	}
+}
+
+func TestWorkerHonorsLocalConcurrencyLimit(t *testing.T) {
+	executor := &blockingExecutor{started: make(chan string, 2)}
+	stream := newFakeStream()
+	worker := New(Options{WorkerID: "worker-capacity", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, executor)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+
+	_ = nextSent(t, stream)
+	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: &turingv1.AgentJob{JobId: "job_1", RunId: "run_1"}}}
+	select {
+	case runID := <-executor.started:
+		if runID != "run_1" {
+			t.Fatalf("first started run = %q, want run_1", runID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first run did not start")
+	}
+	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: &turingv1.AgentJob{JobId: "job_2", RunId: "run_2"}}}
+	select {
+	case runID := <-executor.started:
+		t.Fatalf("second run started while capacity was full: %q", runID)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
+	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run returned %v", err)
+	}
+}
+
+func TestWorkerReportsTerminalUpdateOnlyAfterExecutionExits(t *testing.T) {
+	executor := &terminalBlockingExecutor{reported: make(chan struct{}), release: make(chan struct{})}
+	stream := newFakeStream()
+	worker := New(Options{WorkerID: "worker-terminal", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, executor)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+
+	_ = nextSent(t, stream)
+	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: &turingv1.AgentJob{JobId: "job_1", RunId: "run_1", AssistantMessageId: "msg_1"}}}
+	select {
+	case <-executor.reported:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not emit terminal update")
+	}
+	select {
+	case update := <-stream.sent:
+		t.Fatalf("terminal update sent before execution exited: %+v", update)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(executor.release)
+	update := nextSent(t, stream)
+	if update.GetRunCompleted() == nil || update.GetRunCompleted().GetRunId() != "run_1" {
+		t.Fatalf("terminal update = %+v, want run_completed", update)
+	}
+
+	cancel()
+	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run returned %v", err)
+	}
+}
+
+func TestWorkerAcknowledgesExternallyTerminalizedRunAfterExecutionExits(t *testing.T) {
+	stream := newFakeStream()
+	worker := New(Options{WorkerID: "worker-external-terminal", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalizedExecutor{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+
+	_ = nextSent(t, stream)
+	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: &turingv1.AgentJob{JobId: "job_1", RunId: "run_1"}}}
+	update := nextSent(t, stream)
+	if update.GetRunCancelledAck() == nil || update.GetRunCancelledAck().GetRunId() != "run_1" {
+		t.Fatalf("terminalized run update = %+v, want run_cancelled_ack", update)
+	}
+
+	cancel()
+	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run returned %v", err)
+	}
+}
+
 func TestWorkerDoesNotSendDerivedMessageCompletedEvent(t *testing.T) {
 	stream := newFakeStream()
 	worker := New(Options{WorkerID: "worker-1", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
@@ -165,6 +294,78 @@ func TestDelayedDecisionFromCancelledAttemptCannotSatisfyRetry(t *testing.T) {
 }
 
 type providerExecutor struct{ provider llm.Provider }
+
+type approvalWaitingExecutor struct {
+	poster    func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error)
+	waiting   chan struct{}
+	cancelled chan struct{}
+}
+
+type blockingExecutor struct {
+	started chan string
+}
+
+func (e *blockingExecutor) Execute(ctx context.Context, job *turingv1.AgentJob, _ func(*turingv1.RuntimeUpdate) error) error {
+	e.started <- job.GetRunId()
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type terminalBlockingExecutor struct {
+	reported chan struct{}
+	release  chan struct{}
+}
+
+type terminalizedExecutor struct{}
+
+func (terminalizedExecutor) Execute(context.Context, *turingv1.AgentJob, func(*turingv1.RuntimeUpdate) error) error {
+	return terminalizedWorkerError{}
+}
+
+type terminalizedWorkerError struct{}
+
+func (terminalizedWorkerError) Error() string     { return "run already terminal" }
+func (terminalizedWorkerError) RunTerminal() bool { return true }
+
+func (e *terminalBlockingExecutor) Execute(_ context.Context, job *turingv1.AgentJob, emit func(*turingv1.RuntimeUpdate) error) error {
+	if err := emit(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{RunCompleted: &turingv1.RuntimeRunCompleted{
+		RunId: job.GetRunId(), AssistantMessageId: job.GetAssistantMessageId(), Content: "done",
+	}}}); err != nil {
+		return err
+	}
+	close(e.reported)
+	<-e.release
+	return nil
+}
+
+func (e *approvalWaitingExecutor) SetToolBeaconPoster(post func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error)) {
+	e.poster = post
+}
+
+func (e *approvalWaitingExecutor) Execute(ctx context.Context, job *turingv1.AgentJob, _ func(*turingv1.RuntimeUpdate) error) error {
+	if e.poster == nil {
+		return errors.New("tool beacon poster is not configured")
+	}
+	decision, err := e.poster(ctx, &turingv1.ToolCallBeacon{
+		RunId:      job.GetRunId(),
+		TraceId:    job.GetTraceId(),
+		ToolCallId: "call_approval",
+		AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName: "files",
+		ToolName:   "files.update",
+		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+	})
+	if err != nil {
+		return err
+	}
+	if decision.GetDecision() != turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED {
+		return errors.New("approval decision is required")
+	}
+	close(e.waiting)
+	<-ctx.Done()
+	close(e.cancelled)
+	return ctx.Err()
+}
 
 func (e providerExecutor) Execute(ctx context.Context, job *turingv1.AgentJob, emit func(*turingv1.RuntimeUpdate) error) error {
 	events, err := e.provider.StreamChat(ctx, llm.ChatRequest{Model: job.Model})

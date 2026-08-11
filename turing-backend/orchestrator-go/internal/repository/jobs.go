@@ -124,6 +124,23 @@ func (r *Repository) ClaimNextJob(ctx context.Context, agentID string, leaseOwne
 		FROM jobs j
 		JOIN agent_runs r ON r.id = j.run_id
 		WHERE j.agent_id = ? AND j.status = 'pending' AND r.status = 'queued'
+			AND NOT EXISTS (
+				SELECT 1
+				FROM agent_runs earlier
+				JOIN messages earlier_assistant ON earlier_assistant.id = earlier.assistant_message_id
+				JOIN messages candidate_assistant ON candidate_assistant.id = r.assistant_message_id
+				WHERE earlier.session_id = r.session_id
+					AND earlier_assistant.sequence < candidate_assistant.sequence
+					AND (
+						earlier.status NOT IN ('completed', 'failed', 'cancelled')
+						OR EXISTS (
+							SELECT 1
+							FROM jobs earlier_job
+							WHERE earlier_job.run_id = earlier.id
+								AND earlier_job.status NOT IN ('completed', 'failed', 'cancelled')
+						)
+					)
+			)
 		ORDER BY j.created_at, j.id
 		LIMIT 1
 	`, agentID).Scan(

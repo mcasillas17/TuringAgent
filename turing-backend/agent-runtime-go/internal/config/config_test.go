@@ -83,6 +83,29 @@ func TestLoadFromEnvDefaultsTimeouts(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvRequiresTotalToolTimeoutBeyondApprovalWait(t *testing.T) {
+	_, err := LoadFromEnv(mapEnv(map[string]string{
+		"TURING_INTERNAL_TOKEN":        "internal",
+		"TURING_APPROVAL_TIMEOUT_MS":   "1000",
+		"TURING_TOOL_TOTAL_TIMEOUT_MS": "1000",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "TURING_TOOL_TOTAL_TIMEOUT_MS") {
+		t.Fatalf("LoadFromEnv error = %v, want total-tool timeout safety error", err)
+	}
+}
+
+func TestLoadFromEnvRequiresTotalToolBudgetForApprovalLifecycle(t *testing.T) {
+	_, err := LoadFromEnv(mapEnv(map[string]string{
+		"TURING_INTERNAL_TOKEN":        "internal",
+		"TURING_TOOL_TIMEOUT_MS":       "30000",
+		"TURING_APPROVAL_TIMEOUT_MS":   "65000",
+		"TURING_TOOL_TOTAL_TIMEOUT_MS": "70000",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "TURING_TOOL_TOTAL_TIMEOUT_MS") {
+		t.Fatalf("LoadFromEnv error = %v, want complete approval lifecycle budget error", err)
+	}
+}
+
 func TestLoadFromEnvRejectsNonPositiveTimeouts(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -113,8 +136,6 @@ func TestLoadFromEnvAcceptsLargestRepresentableTimeoutMilliseconds(t *testing.T)
 	value := strconv.FormatInt(maxMilliseconds, 10)
 	for _, env := range []string{
 		"TURING_MODEL_TIMEOUT_MS",
-		"TURING_TOOL_TIMEOUT_MS",
-		"TURING_APPROVAL_TIMEOUT_MS",
 		"TURING_TOOL_TOTAL_TIMEOUT_MS",
 	} {
 		t.Run(env, func(t *testing.T) {

@@ -68,6 +68,9 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	if totalToolTimeout <= approvalTimeout || toolTimeout > (totalToolTimeout-approvalTimeout)/3 {
+		return Config{}, errors.New("TURING_TOOL_TOTAL_TIMEOUT_MS must cover approval and tool lifecycle stages")
+	}
 	ollamaBaseURL, err := endpointURLValue(getenv, "OLLAMA_BASE_URL", "http://host.docker.internal:11434")
 	if err != nil {
 		return Config{}, err
