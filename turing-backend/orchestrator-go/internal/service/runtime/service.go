@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
@@ -29,6 +30,7 @@ import (
 const (
 	defaultMaxConcurrentRuns = 1
 	maxWorkerConcurrentRuns  = 128
+	commandSendTimeout       = 5 * time.Second
 )
 
 type Server struct {
@@ -50,11 +52,14 @@ type approvalCreator interface {
 
 type worker struct {
 	commands      chan *turingv1.RuntimeCommand
+	done          chan struct{}
 	maxConcurrent int
 	assignments   map[string]assignment
 	updateMu      sync.Mutex
 	mu            sync.Mutex
 	closed        bool
+	lastHeartbeat time.Time
+	sender        *runtimeCommandSender
 }
 
 type workerToolset struct {
@@ -71,6 +76,62 @@ type assignment struct {
 type DispatchConfig struct {
 	MaxConcurrentRuns int
 	LeaseDuration     time.Duration
+}
+
+var errRuntimeCommandSenderClosed = errors.New("runtime command sender closed")
+
+type runtimeCommandSender struct {
+	stream turingv1.RuntimeService_ConnectWorkerServer
+	gate   chan struct{}
+	closed atomic.Bool
+}
+
+func newRuntimeCommandSender(stream turingv1.RuntimeService_ConnectWorkerServer) *runtimeCommandSender {
+	sender := &runtimeCommandSender{stream: stream, gate: make(chan struct{}, 1)}
+	sender.gate <- struct{}{}
+	return sender
+}
+
+func (s *runtimeCommandSender) send(ctx context.Context, command *turingv1.RuntimeCommand) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s.closed.Load() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return errRuntimeCommandSenderClosed
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.gate:
+	}
+	if s.closed.Load() {
+		s.gate <- struct{}{}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return errRuntimeCommandSenderClosed
+	}
+	result := make(chan error, 1)
+	go func() {
+		result <- s.stream.Send(command)
+		s.gate <- struct{}{}
+	}()
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		s.closed.Store(true)
+		return ctx.Err()
+	}
+}
+
+func (s *runtimeCommandSender) close() {
+	if s != nil {
+		s.closed.Store(true)
+	}
 }
 
 func New(repo *repository.Repository, bus *events.Bus, approvalServices ...approvalCreator) *Server {
@@ -140,7 +201,13 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 		s.mu.Unlock()
 		return status.Error(codes.AlreadyExists, "worker already connected")
 	}
-	connectedWorker := &worker{commands: commands, maxConcurrent: maxConcurrent, assignments: map[string]assignment{}}
+	connectedWorker := &worker{
+		commands:      commands,
+		done:          make(chan struct{}),
+		maxConcurrent: maxConcurrent,
+		assignments:   map[string]assignment{},
+		lastHeartbeat: time.Now().UTC(),
+	}
 	s.workers[ready.WorkerId] = connectedWorker
 	s.mu.Unlock()
 	s.persistDiscoveredTools(ctx, ready.GetWorkerId(), connectedWorker, discovered)
@@ -162,7 +229,12 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 			}
 		}
 	}()
-	if err := stream.Send(&turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_WorkerAccepted{WorkerAccepted: &turingv1.RuntimeWorkerAccepted{WorkerId: ready.WorkerId}}}); err != nil {
+	acceptedCtx, cancelAccepted := withDefaultTimeout(ctx, commandSendTimeout)
+	err = connectedWorker.commandSender(stream).send(acceptedCtx, &turingv1.RuntimeCommand{
+		Command: &turingv1.RuntimeCommand_WorkerAccepted{WorkerAccepted: &turingv1.RuntimeWorkerAccepted{WorkerId: ready.WorkerId}},
+	})
+	cancelAccepted()
+	if err != nil {
 		return err
 	}
 	if err := s.DispatchPending(ctx); err != nil {
@@ -390,6 +462,9 @@ func (s *Server) renewWorkerLeases(ctx context.Context, workerID string, connect
 	}
 	assignments := connectedWorker.assignmentSnapshot(workerID)
 	_, err := s.repo.RenewAssignments(ctx, assignments, time.Now().UTC().Add(s.dispatch.LeaseDuration))
+	if err == nil {
+		connectedWorker.recordHeartbeat(time.Now().UTC())
+	}
 	return err
 }
 
@@ -460,9 +535,11 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 	if cmd == nil {
 		return status.Error(codes.Canceled, "worker command queue closed")
 	}
+	sendCtx, cancel := withDefaultTimeout(ctx, commandSendTimeout)
+	defer cancel()
 	assigned := cmd.GetRunAssigned()
 	if assigned == nil {
-		return stream.Send(cmd)
+		return connectedWorker.commandSender(stream).send(sendCtx, cmd)
 	}
 	assignment, ok := connectedWorker.assignmentForRun(assigned.RunId)
 	if !ok {
@@ -476,7 +553,7 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 		_ = s.repo.AbortPendingAssignment(context.Background(), repositoryAssignment)
 		return err
 	}
-	if err := stream.Send(cmd); err != nil {
+	if err := connectedWorker.commandSender(stream).send(sendCtx, cmd); err != nil {
 		recoveryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return errors.Join(err, s.repo.MarkAssignmentDeliveryUncertain(recoveryCtx, repositoryAssignment))
@@ -623,11 +700,12 @@ func (s *Server) snapshotWorkers() []workerSnapshot {
 }
 
 func (s *Server) hasLiveAssignment(candidate repository.Assignment) bool {
+	now := time.Now().UTC()
 	for _, entry := range s.snapshotWorkers() {
 		if entry.workerID != candidate.WorkerID {
 			continue
 		}
-		if entry.worker.hasAssignmentAttempt(candidate.RunID, candidate.AttemptID) {
+		if entry.worker.hasLiveAssignmentAttempt(candidate.RunID, candidate.AttemptID, now, s.dispatch.LeaseDuration) {
 			return true
 		}
 	}
@@ -706,13 +784,18 @@ func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Con
 
 func (w *worker) send(ctx context.Context, command *turingv1.RuntimeCommand) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.closed {
+		w.mu.Unlock()
 		return nil
 	}
+	commands := w.commands
+	done := w.done
+	w.mu.Unlock()
 	select {
-	case w.commands <- command:
+	case commands <- command:
 		return nil
+	case <-done:
+		return status.Error(codes.Canceled, "worker is disconnected")
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -763,6 +846,36 @@ func (w *worker) hasAssignmentAttempt(runID string, attemptID string) bool {
 	return ok && (attemptID == "" || assignment.attemptID == attemptID)
 }
 
+func (w *worker) hasLiveAssignmentAttempt(runID string, attemptID string, now time.Time, leaseDuration time.Duration) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed || w.lastHeartbeat.IsZero() {
+		return false
+	}
+	assignment, ok := w.assignments[runID]
+	if !ok || (attemptID != "" && assignment.attemptID != attemptID) {
+		return false
+	}
+	return now.Before(w.lastHeartbeat.Add(leaseDuration))
+}
+
+func (w *worker) recordHeartbeat(at time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.closed {
+		w.lastHeartbeat = at
+	}
+}
+
+func (w *worker) commandSender(stream turingv1.RuntimeService_ConnectWorkerServer) *runtimeCommandSender {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.sender == nil {
+		w.sender = newRuntimeCommandSender(stream)
+	}
+	return w.sender
+}
+
 func (w *worker) assignmentForRun(runID string) (assignment, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -799,7 +912,12 @@ func (w *worker) close() []assignment {
 		return nil
 	}
 	w.closed = true
-	close(w.commands)
+	if w.done != nil {
+		close(w.done)
+	}
+	if w.sender != nil {
+		w.sender.close()
+	}
 	assignments := make([]assignment, 0, len(w.assignments))
 	for runID, assignment := range w.assignments {
 		assignment.runID = runID
