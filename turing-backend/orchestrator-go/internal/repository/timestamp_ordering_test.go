@@ -2,7 +2,9 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -97,6 +99,84 @@ func TestRecoverStaleAssignmentsOrdersLegacyFractionPrefixesChronologically(t *t
 				t.Fatalf("recovery result = %+v, want running active run", run)
 			}
 		})
+	}
+}
+
+func TestTerminalRunOrdersLegacyDependentTimestampsChronologically(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Legacy dependent ordering")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "cancel legacy dependents", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-legacy", 1, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+
+	type dependent struct {
+		toolCallID string
+		createdAt  string
+		approvalID string
+	}
+	dependents := []dependent{
+		{toolCallID: "call_legacy_early", createdAt: "2030-01-02T03:04:05.1Z"},
+		{toolCallID: "call_legacy_late", createdAt: "2030-01-02T03:04:05.100000001Z"},
+	}
+	for index := range dependents {
+		item := &dependents[index]
+		if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
+			ToolCallID: item.toolCallID, RunID: enqueued.RunID, Status: "approval_required",
+		}, "general_assistant", "files", "files.update", `{}`, "sha256:test"); err != nil {
+			t.Fatal(err)
+		}
+		approval, err := repo.CreateApproval(
+			ctx, enqueued.RunID, item.toolCallID, "general_assistant", "files.update",
+			`{}`, "sha256:test", "2099-01-01T00:00:00Z",
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		item.approvalID = approval.ApprovalID
+		if _, err := database.ExecContext(ctx, `UPDATE tool_calls SET created_at = ? WHERE id = ?`, item.createdAt, item.toolCallID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.ExecContext(ctx, `UPDATE approvals SET created_at = ? WHERE id = ?`, item.createdAt, item.approvalID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	events, err := repo.CancelRunWithEvent(ctx, enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var approvalOrder, toolOrder []string
+	for _, event := range events {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+			t.Fatal(err)
+		}
+		switch event.Type {
+		case "approval.expired":
+			approvalOrder = append(approvalOrder, payload["approvalId"].(string))
+		case "tool.call.failed":
+			toolOrder = append(toolOrder, payload["toolCallId"].(string))
+		}
+	}
+	wantApprovals := []string{dependents[0].approvalID, dependents[1].approvalID}
+	if !reflect.DeepEqual(approvalOrder, wantApprovals) {
+		t.Fatalf("approval event order = %v, want %v", approvalOrder, wantApprovals)
+	}
+	wantTools := []string{dependents[0].toolCallID, dependents[1].toolCallID}
+	if !reflect.DeepEqual(toolOrder, wantTools) {
+		t.Fatalf("tool event order = %v, want %v", toolOrder, wantTools)
 	}
 }
 

@@ -429,7 +429,7 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 		FROM approvals a
 		LEFT JOIN tool_calls tc ON tc.id = a.tool_call_id AND tc.run_id = a.run_id
 		WHERE a.run_id = ? AND a.status IN ('pending', 'approved')
-		ORDER BY a.created_at, a.id
+		ORDER BY `+sqliteTimestampNanos("a.created_at")+`, a.id
 	`, runID)
 	if err != nil {
 		return nil, err
@@ -456,7 +456,7 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 		SELECT id, server_name, tool_name
 		FROM tool_calls
 		WHERE run_id = ? AND status IN ('requested', 'allowed', 'approval_required')
-		ORDER BY created_at, id
+		ORDER BY `+sqliteTimestampNanos("created_at")+`, id
 	`, runID)
 	if err != nil {
 		return nil, err

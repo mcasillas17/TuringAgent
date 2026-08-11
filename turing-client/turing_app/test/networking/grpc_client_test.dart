@@ -1,4 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:grpc/grpc.dart' as grpc;
+import 'package:turing_flutter_app/generated/turing/v1/sessions.pb.dart'
+    as sessionpb;
+import 'package:turing_flutter_app/generated/turing/v1/sessions.pbgrpc.dart'
+    as sessiongrpc;
 import 'package:turing_flutter_app/networking/grpc_client.dart';
 
 void main() {
@@ -7,4 +12,52 @@ void main() {
 
     expect(metadata['authorization'], 'Bearer client-key');
   });
+
+  test('listMessages forwards the before anchor', () async {
+    final service = _CapturingSessionService();
+    final server = grpc.Server.create(services: [service]);
+    await server.serve(address: '127.0.0.1', port: 0);
+    final channel = grpc.ClientChannel(
+      '127.0.0.1',
+      port: server.port!,
+      options: const grpc.ChannelOptions(
+        credentials: grpc.ChannelCredentials.insecure(),
+      ),
+    );
+    addTearDown(() async {
+      await channel.shutdown();
+      await server.shutdown();
+    });
+    final api = TuringGrpcApi(
+      baseUrl: 'http://127.0.0.1:${server.port}',
+      apiKey: 'client-key',
+      channel: channel,
+    );
+
+    await api.listMessages(
+      sessionId: 'session-1',
+      limit: 25,
+      before: 'message-anchor',
+    );
+
+    expect(service.request?.sessionId, 'session-1');
+    expect(service.request?.limit, 25);
+    expect(service.request?.beforeMessageId, 'message-anchor');
+  });
+}
+
+class _CapturingSessionService extends sessiongrpc.SessionServiceBase {
+  sessionpb.ListMessagesRequest? request;
+
+  @override
+  Future<sessionpb.ListMessagesResponse> listMessages(
+    grpc.ServiceCall call,
+    sessionpb.ListMessagesRequest request,
+  ) async {
+    this.request = request;
+    return sessionpb.ListMessagesResponse();
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

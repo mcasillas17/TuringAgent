@@ -138,7 +138,11 @@ class TuringGrpcApi implements ClosableTuringApi {
     String? before,
   }) async {
     final response = await _sessions.listMessages(
-      sessionpb.ListMessagesRequest(sessionId: sessionId, limit: limit),
+      sessionpb.ListMessagesRequest(
+        sessionId: sessionId,
+        limit: limit,
+        beforeMessageId: before ?? '',
+      ),
     );
     return response.messages.map(GrpcMappers.messageToModel).toList();
   }
