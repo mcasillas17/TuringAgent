@@ -112,21 +112,23 @@ func (r *Repository) ListMessagesBefore(ctx context.Context, sessionID, beforeMe
 	if beforeMessageID == "" {
 		return r.ListMessages(ctx, sessionID, limit)
 	}
+	var boundarySequence int64
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT sequence
+		FROM messages
+		WHERE session_id = ? AND id = ?
+	`, sessionID, beforeMessageID).Scan(&boundarySequence); err != nil {
+		return nil, err
+	}
 	query := `
-		WITH boundary AS (
-			SELECT sequence
-			FROM messages
-			WHERE session_id = ? AND id = ?
-		)
 		SELECT m.id, COALESCE(m.run_id, ''), m.role, m.content, m.content_type, m.sequence, m.created_at
 		FROM messages m
-		JOIN boundary b
 		WHERE m.session_id = ?
-			AND m.sequence < b.sequence
-		ORDER BY ` + sqliteTimestampNanos("m.created_at") + ` DESC, m.id DESC
+			AND m.sequence < ?
+		ORDER BY m.sequence DESC, m.id DESC
 		LIMIT ?
 	`
-	rows, err := r.db.QueryContext(ctx, query, sessionID, beforeMessageID, sessionID, limit)
+	rows, err := r.db.QueryContext(ctx, query, sessionID, boundarySequence, limit)
 	if err != nil {
 		return nil, err
 	}
