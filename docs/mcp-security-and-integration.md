@@ -113,9 +113,10 @@ advertise nonblank string constraints.
   (default and maximum 64 KiB, range 1 byte–64 KiB).
 - Result:
   `{ "path": string, "content": string, "truncated": bool, "bytesRead": number }`.
-- Files larger than 64 KiB are rejected. The whole accepted file must be
-  UTF-8. `content` is truncated to `maxBytes` on a UTF-8 boundary, while
-  `bytesRead` reports the full accepted file length.
+- Reads return at most `maxBytes`, so larger files remain inspectable through a
+  bounded prefix with `truncated: true`. Returned content must be UTF-8 and is
+  trimmed to a valid UTF-8 boundary. `bytesRead` reports the opened file's full
+  length.
 
 ### `files.create` and `files.update`
 

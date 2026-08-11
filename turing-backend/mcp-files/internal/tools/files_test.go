@@ -220,14 +220,20 @@ func TestReadRejectsSymlinkEvenWhenTargetRemainsInsideSandbox(t *testing.T) {
 	}
 }
 
-func TestReadRejectsFileTooLarge(t *testing.T) {
+func TestReadReturnsBoundedPrefixForFileLargerThanReadLimit(t *testing.T) {
 	root := t.TempDir()
 	content := strings.Repeat("x", maxReadBytes+1)
 	if err := os.WriteFile(filepath.Join(root, "large.txt"), []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewFilesTools(root).Read(map[string]any{"path": "large.txt"}); err == nil {
-		t.Fatalf("expected max file size rejection")
+	result, err := NewFilesTools(root).Read(map[string]any{"path": "large.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result["content"].(string)) != maxReadBytes ||
+		result["truncated"] != true ||
+		result["bytesRead"] != int64(maxReadBytes+1) {
+		t.Fatalf("large read result = %#v, want bounded truncated prefix", result)
 	}
 }
 

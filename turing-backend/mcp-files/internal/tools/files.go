@@ -99,23 +99,17 @@ func (f FilesTools) ReadContext(ctx context.Context, args map[string]any) (map[s
 		return nil, err
 	}
 	defer unlock()
-	file, _, _, err := f.openRegularFileContext(ctx, clean)
+	file, _, stat, err := f.openRegularFileContext(ctx, clean)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = file.Close() }()
-	content, bytesRead, _, err := readBoundedContext(ctx, file, maxReadBytes+1)
+	content, _, _, err := readBoundedContext(ctx, file, int64(limit)+1)
 	if err != nil {
 		return nil, err
 	}
-	if len(content) > maxReadBytes {
-		return nil, errors.New("file too large")
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
-	}
-	if !utf8.Valid(content) {
-		return nil, errors.New("unsupported media type")
 	}
 	truncated := len(content) > limit
 	if truncated {
@@ -124,7 +118,10 @@ func (f FilesTools) ReadContext(ctx context.Context, args map[string]any) (map[s
 			content = content[:len(content)-1]
 		}
 	}
-	return map[string]any{"path": pathValue, "content": string(content), "truncated": truncated, "bytesRead": bytesRead}, nil
+	if !utf8.Valid(content) {
+		return nil, errors.New("unsupported media type")
+	}
+	return map[string]any{"path": pathValue, "content": string(content), "truncated": truncated, "bytesRead": stat.Size}, nil
 }
 
 func (f FilesTools) List(args map[string]any) (map[string]any, error) {
