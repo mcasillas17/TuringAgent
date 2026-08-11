@@ -33,6 +33,10 @@ func Dial(_ context.Context, addr string, token string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	// NewClient starts the channel IDLE; DialContext connected eagerly in the
+	// background. Connect() keeps startup behaviour unchanged so the first RPC
+	// does not also pay for the handshake.
+	conn.Connect()
 	return New(conn, token), nil
 }
 
