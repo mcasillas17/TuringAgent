@@ -310,6 +310,23 @@ func TestInitRejectsGroupOrWorldWritableSandbox(t *testing.T) {
 	}
 }
 
+func TestInitSecuresExistingSandboxMode(t *testing.T) {
+	result := executeInitWithSetup(t, "501", "20", "", 0, func(t *testing.T, root string) {
+		sandbox := filepath.Join(root, "sandbox")
+		if err := os.Mkdir(sandbox, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(sandbox, 0755); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	if result.err != nil {
+		t.Fatalf("init.sh failed to secure existing sandbox: %v\n%s", result.err, result.output)
+	}
+	assertMode(t, result.sandbox, 0700)
+}
+
 func TestInitRejectsGroupOrWorldWritableSandboxEntries(t *testing.T) {
 	tests := []struct {
 		name   string

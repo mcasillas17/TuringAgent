@@ -302,7 +302,6 @@ func TestMcpHandlerStrictlyValidatesJSONRPCEnvelope(t *testing.T) {
 		{name: "malformed JSON", body: `{`, code: -32700},
 		{name: "root array", body: `[]`, code: -32600},
 		{name: "wrong version", body: `{"jsonrpc":"1.0","id":1,"method":"tools/list"}`, code: -32600},
-		{name: "missing id", body: `{"jsonrpc":"2.0","method":"tools/list"}`, code: -32600},
 		{name: "null id", body: `{"jsonrpc":"2.0","id":null,"method":"tools/list"}`, code: -32600},
 		{name: "boolean id", body: `{"jsonrpc":"2.0","id":true,"method":"tools/list"}`, code: -32600},
 		{name: "fractional id", body: `{"jsonrpc":"2.0","id":1.5,"method":"tools/list"}`, code: -32600},
@@ -322,6 +321,19 @@ func TestMcpHandlerStrictlyValidatesJSONRPCEnvelope(t *testing.T) {
 			}
 			assertRPCErrorCode(t, response, test.code)
 		})
+	}
+}
+
+func TestMcpHandlerAcceptsNotificationWithoutResponse(t *testing.T) {
+	handler := testFilesHandler(t)
+
+	status, response := callFilesMCP(t, handler, `{"jsonrpc":"2.0","method":"tools/list"}`)
+
+	if status != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; response=%s", status, response)
+	}
+	if len(response) != 0 {
+		t.Fatalf("notification response = %q, want empty body", response)
 	}
 }
 

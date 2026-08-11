@@ -118,6 +118,15 @@ func TestComposeLaunchRejectsUnsafeSandboxBindSource(t *testing.T) {
 			},
 			wantOutput: "sandbox must not be group- or world-writable",
 		},
+		{
+			name: "group and world readable",
+			setup: func(t *testing.T, root string) {
+				if err := os.Chmod(filepath.Join(root, "sandbox"), 0755); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "sandbox must have mode 0700",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

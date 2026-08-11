@@ -135,6 +135,10 @@ provision_sandbox() {
     printf 'Initialization failed: sandbox must not be group- or world-writable.\n' >&2
     return 1
   fi
+  if [[ "$(path_mode "$sandbox_path")" != "700" ]] && ! chmod 0700 "$sandbox_path"; then
+    printf 'Initialization failed: could not secure sandbox directory.\n' >&2
+    return 1
+  fi
   validate_sandbox_entries "$sandbox_path" "$sandbox_path"
 }
 

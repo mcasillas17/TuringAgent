@@ -157,18 +157,18 @@ func handleMCP(w http.ResponseWriter, r *http.Request, filesTools tools.FilesToo
 	switch req.Method {
 	case "tools/list":
 		if paramsErr := validateToolsListParams(req); paramsErr != nil {
-			writeJSONRPC(w, jsonrpc.Response{
+			writeJSONRPCForRequest(w, req, jsonrpc.Response{
 				JSONRPC: "2.0",
 				ID:      req.ID,
 				Error:   map[string]any{"code": paramsErr.Code, "message": paramsErr.Message},
 			})
 			return
 		}
-		writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": listTools()}})
+		writeJSONRPCForRequest(w, req, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": listTools()}})
 	case "tools/call":
 		name, args, approvalToken, paramsErr := parseToolCallParams(req)
 		if paramsErr != nil {
-			writeJSONRPC(w, jsonrpc.Response{
+			writeJSONRPCForRequest(w, req, jsonrpc.Response{
 				JSONRPC: "2.0",
 				ID:      req.ID,
 				Error:   map[string]any{"code": paramsErr.Code, "message": paramsErr.Message},
@@ -181,13 +181,21 @@ func handleMCP(w http.ResponseWriter, r *http.Request, filesTools tools.FilesToo
 			if tools.IsInvalidParams(err) {
 				code = -32602
 			}
-			writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Error: map[string]any{"code": code, "message": err.Error()}})
+			writeJSONRPCForRequest(w, req, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Error: map[string]any{"code": code, "message": err.Error()}})
 			return
 		}
-		writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: result})
+		writeJSONRPCForRequest(w, req, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: result})
 	default:
-		writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Error: map[string]any{"code": -32601, "message": "method not found"}})
+		writeJSONRPCForRequest(w, req, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Error: map[string]any{"code": -32601, "message": "method not found"}})
 	}
+}
+
+func writeJSONRPCForRequest(w http.ResponseWriter, req jsonrpc.Request, response jsonrpc.Response) {
+	if req.Notification {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	writeJSONRPC(w, response)
 }
 
 func listTools() []map[string]any {

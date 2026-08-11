@@ -34,6 +34,10 @@ validate_sandbox_bind_source() {
     printf 'Compose launch failed: sandbox must not be group- or world-writable.\n' >&2
     return 1
   fi
+  if [[ "$(path_mode "$sandbox_path")" != "700" ]]; then
+    printf 'Compose launch failed: sandbox must have mode 0700.\n' >&2
+    return 1
+  fi
 }
 
 path_mode() {

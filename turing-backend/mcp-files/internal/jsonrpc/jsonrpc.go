@@ -11,10 +11,11 @@ import (
 )
 
 type Request struct {
-	JSONRPC string
-	ID      any
-	Method  string
-	Params  map[string]any
+	JSONRPC      string
+	ID           any
+	Method       string
+	Params       map[string]any
+	Notification bool
 }
 
 type Response struct {
@@ -73,9 +74,14 @@ func DecodeRequest(reader io.Reader) (Request, *RequestError) {
 	if len(raw.JSONRPC) == 0 || json.Unmarshal(raw.JSONRPC, &version) != nil || version != "2.0" {
 		return Request{}, requestError(-32600, "jsonrpc must be \"2.0\"", nil, nil)
 	}
-	id, err := decodeID(raw.ID)
-	if err != nil {
-		return Request{}, requestError(-32600, err.Error(), nil, err)
+	notification := len(raw.ID) == 0
+	var id any
+	if !notification {
+		var err error
+		id, err = decodeID(raw.ID)
+		if err != nil {
+			return Request{}, requestError(-32600, err.Error(), nil, err)
+		}
 	}
 	var method string
 	if len(raw.Method) == 0 || json.Unmarshal(raw.Method, &method) != nil || strings.TrimSpace(method) == "" {
@@ -90,7 +96,7 @@ func DecodeRequest(reader io.Reader) (Request, *RequestError) {
 			return Request{}, requestError(-32602, "params must be an object", id, err)
 		}
 	}
-	return Request{JSONRPC: version, ID: id, Method: method, Params: params}, nil
+	return Request{JSONRPC: version, ID: id, Method: method, Params: params, Notification: notification}, nil
 }
 
 func InvalidParams(id any, message string) *RequestError {
@@ -102,7 +108,7 @@ func requestError(code int, message string, id any, cause error) *RequestError {
 }
 
 func decodeID(raw json.RawMessage) (any, error) {
-	if len(raw) == 0 || string(raw) == "null" {
+	if string(raw) == "null" {
 		return nil, errors.New("id must be a string or integer")
 	}
 	if len(raw) > maxIDBytes {
