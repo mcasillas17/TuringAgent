@@ -5,7 +5,142 @@ import (
 	"testing"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"google.golang.org/protobuf/types/known/structpb"
 )
+
+func TestMatchingTerminalUpdateRequiresValidCompletion(t *testing.T) {
+	run := repository.Run{Status: "completed", AssistantMessageID: "message_1"}
+	update := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{RunCompleted: &turingv1.RuntimeRunCompleted{
+		RunId: "run_1", AssistantMessageId: run.AssistantMessageID,
+	}}}
+	if isMatchingTerminalUpdate(run, update) {
+		t.Fatal("empty completion matched a terminal run")
+	}
+
+	update.GetRunCompleted().Content = "complete"
+	if !isMatchingTerminalUpdate(run, update) {
+		t.Fatal("valid completion did not match a terminal run")
+	}
+}
+
+func TestTerminalizedAssignedRunDropsLateUpdatesWithoutClosingWorkerStream(t *testing.T) {
+	h := newHarness(t)
+	first := h.enqueueRun(t, "terminalized assigned run")
+	second := h.enqueueRun(t, "assigned after exit acknowledgement")
+	client := h.runtimeClient(t)
+	stream, err := client.ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.CloseSend() }()
+	if err := stream.Send(workerReady("worker-terminalized-assigned")); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetRunAssigned() != nil && command.GetRunAssigned().GetRunId() == first.RunID
+	})
+
+	if _, err := h.repo.CancelRunWithEvent(context.Background(), first.RunID, "client_cancelled", `{"reason":"client_cancelled"}`); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := structpb.NewStruct(map[string]any{"delta": "late"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
+		RunId: first.RunID, Type: turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA, Payload: payload,
+	}}}); err != nil {
+		t.Fatalf("send late delta: %v", err)
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
+		RunId: first.RunID, Type: turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_CANCELLED,
+	}}}); err != nil {
+		t.Fatalf("send late generic terminal event: %v", err)
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{RunCompleted: &turingv1.RuntimeRunCompleted{
+		RunId: first.RunID, AssistantMessageId: "msg_conflicting", Content: "too late",
+	}}}); err != nil {
+		t.Fatalf("send conflicting late completion: %v", err)
+	}
+
+	run, err := h.repo.GetRun(context.Background(), first.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "cancelled" || !run.ExecutionActive || run.ExecutionState != "delivered" {
+		t.Fatalf("late updates mutated terminal execution fence: %+v", run)
+	}
+	queued, err := h.repo.GetRun(context.Background(), second.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.Status != "queued" {
+		t.Fatalf("second run status = %q, want queued until execution exit acknowledgement", queued.Status)
+	}
+
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{
+		RunId: first.RunID,
+	}}}); err != nil {
+		t.Fatalf("send execution exit acknowledgement: %v", err)
+	}
+	recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetRunAssigned() != nil && command.GetRunAssigned().GetRunId() == second.RunID
+	})
+
+	run, err = h.repo.GetRun(context.Background(), first.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "cancelled" || run.ExecutionActive || run.ExecutionState != "exited" {
+		t.Fatalf("execution exit acknowledgement did not release terminal run: %+v", run)
+	}
+}
+
+func TestTerminalizedAssignedRunReconcilesMatchingLateTerminalUpdate(t *testing.T) {
+	h := newHarness(t)
+	first := h.enqueueRun(t, "failed while assigned")
+	second := h.enqueueRun(t, "assigned after matching late failure")
+	client := h.runtimeClient(t)
+	stream, err := client.ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.CloseSend() }()
+	if err := stream.Send(workerReady("worker-terminalized-matching")); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetRunAssigned() != nil && command.GetRunAssigned().GetRunId() == first.RunID
+	})
+
+	if _, err := h.repo.FailRunWithEventPreservingExecution(context.Background(), first.RunID, "persisted_failure", "terminalized elsewhere", `{"code":"persisted_failure"}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
+		RunId: first.RunID, Code: "runtime_failure", Message: "late worker exit",
+	}}}); err != nil {
+		t.Fatalf("send matching late failure: %v", err)
+	}
+	recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetRunAssigned() != nil && command.GetRunAssigned().GetRunId() == second.RunID
+	})
+
+	run, err := h.repo.GetRun(context.Background(), first.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "failed" || run.ExecutionActive || run.ExecutionState != "exited" {
+		t.Fatalf("matching terminal update did not reconcile execution exit: %+v", run)
+	}
+	var failedEvents int
+	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'agent.run.failed'`, first.RunID).Scan(&failedEvents); err != nil {
+		t.Fatal(err)
+	}
+	if failedEvents != 1 {
+		t.Fatalf("late matching failure appended %d terminal events, want one", failedEvents)
+	}
+}
 
 func TestLateTerminalUpdatesForReleasedRunKeepWorkerStreamUsable(t *testing.T) {
 	tests := []struct {

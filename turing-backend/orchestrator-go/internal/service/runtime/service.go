@@ -211,7 +211,23 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 			}
 			err = func() error {
 				defer release()
+				if terminalRunID(update) != "" {
+					handled, reconcileErr := s.reconcileLateAssignedUpdate(ctx, connectedWorker, update)
+					if reconcileErr != nil {
+						return reconcileErr
+					}
+					if handled {
+						return nil
+					}
+				}
 				if err := s.applyUpdate(ctx, update); err != nil {
+					handled, reconcileErr := s.reconcileLateAssignedUpdate(ctx, connectedWorker, update)
+					if reconcileErr != nil {
+						return reconcileErr
+					}
+					if handled {
+						return nil
+					}
 					return err
 				}
 				if runID := terminalRunID(update); runID != "" {
@@ -895,16 +911,46 @@ func (s *Server) isLateMatchingTerminalUpdate(ctx context.Context, update *turin
 	if err != nil {
 		return false, err
 	}
+	return isMatchingTerminalUpdate(run, update), nil
+}
+
+func isMatchingTerminalUpdate(run repository.Run, update *turingv1.RuntimeUpdate) bool {
 	switch {
 	case update.GetRunCompleted() != nil:
-		return run.Status == "completed", nil
+		completed := update.GetRunCompleted()
+		return run.Status == "completed" && completed.Content != "" && (completed.AssistantMessageId == "" || completed.AssistantMessageId == run.AssistantMessageID)
 	case update.GetRunFailed() != nil:
-		return run.Status == "failed", nil
+		return run.Status == "failed"
 	case update.GetRunCancelledAck() != nil:
-		return isTerminalRunStatus(run.Status), nil
+		return isTerminalRunStatus(run.Status)
 	default:
+		return false
+	}
+}
+
+func (s *Server) reconcileLateAssignedUpdate(ctx context.Context, connectedWorker *worker, update *turingv1.RuntimeUpdate) (bool, error) {
+	runID := updateRunID(update)
+	if runID == "" {
 		return false, nil
 	}
+	run, err := s.repo.GetRun(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	if !isTerminalRunStatus(run.Status) {
+		return false, nil
+	}
+	if terminalRunID(update) == "" || !isMatchingTerminalUpdate(run, update) {
+		return true, nil
+	}
+	if err := s.repo.AcknowledgeExecutionExit(ctx, runID); err != nil {
+		return false, mapRunStateError(err)
+	}
+	connectedWorker.releaseRun(runID)
+	if err := s.DispatchPending(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func isTerminalRunStatus(runStatus string) bool {
