@@ -144,14 +144,15 @@ func TestRecoveryReclaimsAssignmentWithoutTimelyWorkerHeartbeat(t *testing.T) {
 	if err := h.repo.MarkAssignmentDelivered(context.Background(), repoAssignment); err != nil {
 		t.Fatal(err)
 	}
-	h.service.mu.Lock()
-	h.service.workers[repoAssignment.WorkerID] = &worker{
+	connected := &worker{
 		commands:      make(chan *turingv1.RuntimeCommand, 1),
 		maxConcurrent: 1,
 		assignments: map[string]assignment{
 			repoAssignment.RunID: {jobID: repoAssignment.JobID, runID: repoAssignment.RunID, attemptID: repoAssignment.AttemptID},
 		},
 	}
+	h.service.mu.Lock()
+	h.service.workers[repoAssignment.WorkerID] = connected
 	h.service.mu.Unlock()
 	expired := time.Now().Add(-time.Second)
 	if _, err := h.database.ExecContext(context.Background(), `
@@ -171,6 +172,9 @@ func TestRecoveryReclaimsAssignmentWithoutTimelyWorkerHeartbeat(t *testing.T) {
 	}
 	if run.Status != "queued" || run.ExecutionActive {
 		t.Fatalf("stale-heartbeat assignment = %+v, want queued inactive", run)
+	}
+	if connected.hasAssignment(enqueued.RunID) {
+		t.Fatal("stale-heartbeat recovery retained the worker's in-memory assignment")
 	}
 }
 

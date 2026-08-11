@@ -362,9 +362,12 @@ func (w *Worker) Run(ctx context.Context) error {
 		case err := <-fatal:
 			return err
 		case <-heartbeat.C:
-			if err := w.send(streamCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Heartbeat{Heartbeat: &turingv1.RuntimeHeartbeat{
+			sendCtx, cancel := context.WithTimeout(streamCtx, w.options.UpdateSendTimeout)
+			err := w.send(sendCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Heartbeat{Heartbeat: &turingv1.RuntimeHeartbeat{
 				WorkerId: w.options.WorkerID,
-			}}}); err != nil {
+			}}})
+			cancel()
+			if err != nil {
 				return err
 			}
 		case result := <-received:

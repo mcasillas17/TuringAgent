@@ -678,10 +678,11 @@ func (s *Server) RecoverOrphanedAssignments(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		released := s.releaseRecoveredAssignment(assignment)
 		for _, event := range result.Events {
 			s.publishEvent(event)
 		}
-		recovered = recovered || result.Requeued || result.Cleared
+		recovered = recovered || result.Requeued || result.Cleared || released
 	}
 	if recovered {
 		return s.DispatchPending(recoveryCtx)
@@ -736,7 +737,10 @@ func (s *Server) hasLiveAssignment(candidate repository.Assignment) bool {
 func (s *Server) dispatchToWorker(ctx context.Context, workerID string, worker *worker) (assigned bool, noJob bool, err error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
-	if worker.closed || len(worker.assignments) >= worker.maxConcurrent {
+	if worker.closed ||
+		worker.lastHeartbeat.IsZero() ||
+		!time.Now().UTC().Before(worker.lastHeartbeat.Add(s.dispatch.LeaseDuration)) ||
+		len(worker.assignments) >= worker.maxConcurrent {
 		return false, false, nil
 	}
 	job, err := s.repo.ClaimNextJobWithLimit(ctx, "general_assistant", workerID, s.dispatch.MaxConcurrentRuns, s.dispatch.LeaseDuration)
@@ -915,6 +919,30 @@ func (w *worker) releaseRun(runID string) bool {
 	_, existed := w.assignments[runID]
 	delete(w.assignments, runID)
 	return existed
+}
+
+func (s *Server) releaseRecoveredAssignment(recovered repository.Assignment) bool {
+	if recovered.WorkerID == "" || recovered.RunID == "" {
+		return false
+	}
+	for _, entry := range s.snapshotWorkers() {
+		if entry.workerID == recovered.WorkerID &&
+			entry.worker.releaseAssignmentAttempt(recovered.RunID, recovered.AttemptID) {
+			return true
+		}
+	}
+	return false
+}
+
+func (w *worker) releaseAssignmentAttempt(runID string, attemptID string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	assigned, ok := w.assignments[runID]
+	if !ok || (attemptID != "" && assigned.attemptID != attemptID) {
+		return false
+	}
+	delete(w.assignments, runID)
+	return true
 }
 
 func (w *worker) close() []assignment {

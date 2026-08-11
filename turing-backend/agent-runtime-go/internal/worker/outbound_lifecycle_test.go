@@ -81,6 +81,41 @@ func TestWorkerNonterminalUpdateSendTimeoutReleasesActiveRun(t *testing.T) {
 	}
 }
 
+func TestWorkerHeartbeatSendTimeoutStopsBlockedConnection(t *testing.T) {
+	stream := &connectionCancellationStream{
+		sent:    make(chan *turingv1.RuntimeUpdate, 1),
+		recv:    make(chan *turingv1.RuntimeCommand, 1),
+		blocked: make(chan struct{}),
+	}
+	worker := New(Options{
+		WorkerID:          "worker-heartbeat-timeout",
+		HeartbeatInterval: time.Millisecond,
+		UpdateSendTimeout: 20 * time.Millisecond,
+	}, &connectionCancellationClient{stream: stream}, terminalExecutor{})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+
+	if ready := <-stream.sent; ready.GetWorkerReady() == nil {
+		t.Fatalf("first update = %+v, want worker ready", ready)
+	}
+	select {
+	case <-stream.blocked:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat Send did not begin")
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Worker.Run returned %v, want heartbeat send deadline", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("Worker.Run remained blocked after heartbeat send timeout")
+	}
+	waitForOutboundWriterExit(t, worker)
+}
+
 func TestWorkerDisconnectCancelsAndJoinsActiveExecutorBeforeReturning(t *testing.T) {
 	stream := &disconnectingStream{
 		sent:       make(chan *turingv1.RuntimeUpdate, 1),
