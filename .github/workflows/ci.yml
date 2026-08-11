@@ -67,9 +67,9 @@ jobs:
         with:
           go-version: "1.23.x"
           cache: true
-          cache-dependency-path: |
-            go.sum
-            turing-backend/mcp-system/go.sum
+          # mcp-system is stdlib-only and has no go.sum of its own, so the root
+          # go.sum is the only real cache key available here.
+          cache-dependency-path: go.sum
 
       - name: Test MCP system module
         run: |
@@ -91,12 +91,18 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23.x"
+          # Deliberately ahead of the 1.23.x the other jobs pin: golangci-lint
+          # v2.12.2's own go.mod requires go >= 1.25.0, so a 1.23 toolchain can
+          # only build it by silently auto-switching via GOTOOLCHAIN=auto. Pin
+          # the version that actually builds the linter instead of depending on
+          # that default. The language level of the analyzed code is unaffected —
+          # it stays capped by each module's own `go 1.23` directive.
+          go-version: "1.25.x"
           cache: true
+          # mcp-system is stdlib-only and has no go.sum, so it contributes no key.
           cache-dependency-path: |
             go.sum
             turing-backend/mcp-files/go.sum
-            turing-backend/mcp-system/go.sum
 
       - name: Install golangci-lint
         run: |
@@ -108,8 +114,15 @@ jobs:
       # own defaults and this job would stop checking what the repo configured.
       # The root module is linted with the same build tag it is built with, so
       # the analysis sees exactly the code that ships.
+      #
+      # ./.github/workflows is listed separately because Go's `./...` pattern
+      # skips directories starting with `.` — the same reason the workflow
+      # coverage test needs its own `go test ./.github/workflows` step below.
+      # Without it, ci_test.go (the file guarding every check in this workflow)
+      # would be the one root-module package that is compiled and tested but
+      # never linted.
       - name: Lint root module
-        run: golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" --build-tags sqlite_fts5 ./...
+        run: golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" --build-tags sqlite_fts5 ./... ./.github/workflows
 
       - name: Lint MCP files module
         run: |

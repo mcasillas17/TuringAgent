@@ -15,7 +15,7 @@ go build -tags sqlite_fts5 ./...
 # 2. mcp-files (separate module)
 ( cd turing-backend/mcp-files && go test ./... -count=1 && go build ./cmd/server )
 
-# 3. mcp-system (separate module, NOT covered by CI — always run manually)
+# 3. mcp-system (separate module — the root ./... never reaches it)
 ( cd turing-backend/mcp-system && go test ./... -count=1 && go build ./... )
 
 # 4. Flutter client
@@ -23,9 +23,18 @@ go build -tags sqlite_fts5 ./...
 
 # 5. Proto contract — regenerates and fails on any git diff
 tools/proto/check.sh
+
+# 6. Lint — all three Go modules, same commands as CI's `lint` job.
+#    The root module is linted with the build tag it ships with. ./.github/workflows
+#    is listed separately because `./...` skips dot-directories, which would
+#    otherwise leave the CI self-guard test itself unlinted.
+golangci-lint run --build-tags sqlite_fts5 ./... ./.github/workflows
+( cd turing-backend/mcp-files  && golangci-lint run ./... )
+( cd turing-backend/mcp-system && golangci-lint run ./... )
 ```
 
 Notes:
 - If you changed a `.proto`, run `tools/proto/generate.sh` and commit the regenerated code first; otherwise step 5 will fail on the diff.
-- Only steps 1, 2, 4, and 5 run in CI. Step 3 (mcp-system) is not in CI — running it here is the only automatic coverage it gets.
+- Every step above now has a CI counterpart (jobs: `go`, `mcp-files`, `mcp-system`, `flutter`, `proto-and-scripts`, `lint`), so a failure here is a failure that will block the PR. Running the matrix locally is about finding it first, not about covering a CI gap.
+- Step 6 needs golangci-lint v2 on PATH (`golangci-lint --version`). If it is missing, say so rather than skipping silently — CI will still run it.
 - If a step is skipped for a reason (e.g. Flutter not installed locally), say so explicitly rather than silently passing.

@@ -15,17 +15,28 @@ func TestCIWorkflowCoversCoreChecks(t *testing.T) {
 
 	requireContains(t, workflow, "go test -tags sqlite_fts5 ./... -count=1")
 	requireContains(t, workflow, "go build -tags sqlite_fts5 ./...")
-	requireContains(t, workflow, "cd turing-backend/mcp-files")
-	requireContains(t, workflow, "go test ./... -count=1")
-	requireContains(t, workflow, "go build ./cmd/server")
+
+	// The per-module commands below are asserted as `cd <dir>` + the command on
+	// the next line, not as two independent substrings. The modules share command
+	// text ("go test ./... -count=1" is identical in mcp-files and mcp-system), so
+	// unpaired assertions are satisfied by whichever module still has the step and
+	// deleting the other module's step would go unnoticed.
+	requireRunsIn(t, workflow, "turing-backend/mcp-files", "go test ./... -count=1")
+	requireRunsIn(t, workflow, "turing-backend/mcp-files", "go build ./cmd/server")
 	// mcp-system is a separate module; nothing else in CI compiles it.
-	requireContains(t, workflow, "cd turing-backend/mcp-system")
-	requireContains(t, workflow, "go build ./...")
+	requireRunsIn(t, workflow, "turing-backend/mcp-system", "go test ./... -count=1")
+	requireRunsIn(t, workflow, "turing-backend/mcp-system", "go build ./...")
+
 	// Lint must cover all three modules, with the repo config pinned explicitly
 	// so a missed config lookup cannot silently downgrade this to defaults.
 	requireContains(t, workflow, "go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@")
-	requireContains(t, workflow, `golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" --build-tags sqlite_fts5 ./...`)
-	requireContains(t, workflow, `golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" ./...`)
+	// The trailing ./.github/workflows is load-bearing and is asserted as part of
+	// the same string: `./...` skips dot-directories, so dropping it would leave
+	// this very file unlinted while the command still looked correct.
+	requireContains(t, workflow, `golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" --build-tags sqlite_fts5 ./... ./.github/workflows`)
+	requireRunsIn(t, workflow, "turing-backend/mcp-files", `golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" ./...`)
+	requireRunsIn(t, workflow, "turing-backend/mcp-system", `golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" ./...`)
+
 	requireContains(t, workflow, "tools/proto/check.sh")
 	requireContains(t, workflow, "uses: dart-lang/setup-dart@v1")
 	requireContains(t, workflow, "dart pub global activate protoc_plugin 22.5.0")
@@ -33,6 +44,18 @@ func TestCIWorkflowCoversCoreChecks(t *testing.T) {
 	requireContains(t, workflow, "go test -tags sqlite_fts5 ./.github/workflows")
 	requireContains(t, workflow, "flutter test")
 	requireContains(t, workflow, "bash -n turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/smoke-grpc.sh")
+}
+
+// stepIndent is the column commands sit at inside ci.yml's `run: |` blocks
+// (6 for the step, 2 for the block scalar, 2 for the script body).
+const stepIndent = "\n          "
+
+// requireRunsIn asserts that command is the line immediately after `cd dir`,
+// so the assertion is pinned to one specific job step rather than being
+// satisfiable by an identical command in some other module's job.
+func requireRunsIn(t *testing.T, workflow string, dir string, command string) {
+	t.Helper()
+	requireContains(t, workflow, "cd "+dir+stepIndent+command)
 }
 
 func requireContains(t *testing.T, text string, snippet string) {
