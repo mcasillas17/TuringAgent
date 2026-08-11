@@ -200,6 +200,14 @@ func (r *Repository) FailRun(ctx context.Context, runID string, code string, mes
 }
 
 func (r *Repository) FailRunWithEvent(ctx context.Context, runID string, code string, message string, payloadJSON string) (Event, error) {
+	return r.failRunWithEvent(ctx, runID, code, message, payloadJSON, false)
+}
+
+func (r *Repository) FailRunWithEventPreservingExecution(ctx context.Context, runID string, code string, message string, payloadJSON string) (Event, error) {
+	return r.failRunWithEvent(ctx, runID, code, message, payloadJSON, true)
+}
+
+func (r *Repository) failRunWithEvent(ctx context.Context, runID string, code string, message string, payloadJSON string, preserveExecution bool) (Event, error) {
 	finishedAt := now()
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -210,19 +218,38 @@ func (r *Repository) FailRunWithEvent(ctx context.Context, runID string, code st
 	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&sessionID, &traceID); err != nil {
 		return Event{}, err
 	}
-	result, err := tx.ExecContext(ctx, `
-		UPDATE agent_runs
-		SET status = 'failed',
-			error_code = ?,
-			error_message = ?,
-			finished_at = ?,
-			execution_active = 0,
-			execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
-			execution_state = 'exited',
-			execution_lease_expires_at = NULL,
-			execution_lease_expires_at_ns = NULL
-		WHERE id = ? AND status IN ('queued','running','waiting_approval')
-	`, code, message, finishedAt, finishedAt, runID)
+	var result sql.Result
+	if preserveExecution {
+		result, err = tx.ExecContext(ctx, `
+			UPDATE agent_runs
+			SET status = 'failed',
+				error_code = ?,
+				error_message = ?,
+				finished_at = ?,
+				execution_exit_acknowledged_at = CASE
+					WHEN execution_active = 1 THEN execution_exit_acknowledged_at
+					ELSE COALESCE(execution_exit_acknowledged_at, ?)
+				END,
+				execution_state = CASE WHEN execution_active = 1 THEN 'uncertain' ELSE 'exited' END,
+				execution_lease_expires_at = CASE WHEN execution_active = 1 THEN execution_lease_expires_at ELSE NULL END,
+				execution_lease_expires_at_ns = CASE WHEN execution_active = 1 THEN execution_lease_expires_at_ns ELSE NULL END
+			WHERE id = ? AND status IN ('queued','running','waiting_approval')
+		`, code, message, finishedAt, finishedAt, runID)
+	} else {
+		result, err = tx.ExecContext(ctx, `
+			UPDATE agent_runs
+			SET status = 'failed',
+				error_code = ?,
+				error_message = ?,
+				finished_at = ?,
+				execution_active = 0,
+				execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
+				execution_state = 'exited',
+				execution_lease_expires_at = NULL,
+				execution_lease_expires_at_ns = NULL
+			WHERE id = ? AND status IN ('queued','running','waiting_approval')
+		`, code, message, finishedAt, finishedAt, runID)
+	}
 	if err != nil {
 		return Event{}, err
 	}

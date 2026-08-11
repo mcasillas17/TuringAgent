@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -21,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	runtimetestkit "github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/testkit"
 	orchestratortestkit "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/testkit"
@@ -56,6 +58,7 @@ type grpcHarness struct {
 	publicConn   *grpc.ClientConn
 	internalConn *grpc.ClientConn
 	app          *orchestratortestkit.App
+	databasePath string
 	publicLis    *bufconn.Listener
 	internalLis  *bufconn.Listener
 	workerCancel context.CancelFunc
@@ -106,6 +109,7 @@ type harnessOption func(*harnessConfig)
 type harnessConfig struct {
 	blockModelUntilCancel bool
 	approvalTTL           time.Duration
+	startRuntimeWorker    bool
 }
 
 func TestMain(m *testing.M) {
@@ -124,9 +128,13 @@ func withApprovalTTL(ttl time.Duration) harnessOption {
 	return func(cfg *harnessConfig) { cfg.approvalTTL = ttl }
 }
 
+func withoutRuntimeWorker() harnessOption {
+	return func(cfg *harnessConfig) { cfg.startRuntimeWorker = false }
+}
+
 func newGRPCHarness(t *testing.T, opts ...harnessOption) *grpcHarness {
 	t.Helper()
-	cfg := harnessConfig{}
+	cfg := harnessConfig{startRuntimeWorker: true}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -161,13 +169,14 @@ func newGRPCHarness(t *testing.T, opts ...harnessOption) *grpcHarness {
 	go serveBufconn(app.InternalServer, internalLis)
 
 	h := &grpcHarness{
-		repo:        app.Repository,
-		fakeModel:   fakeModel,
-		systemMCP:   systemMCP,
-		filesMCP:    filesMCP,
-		app:         app,
-		publicLis:   publicLis,
-		internalLis: internalLis,
+		repo:         app.Repository,
+		fakeModel:    fakeModel,
+		systemMCP:    systemMCP,
+		filesMCP:     filesMCP,
+		app:          app,
+		databasePath: dbPath,
+		publicLis:    publicLis,
+		internalLis:  internalLis,
 	}
 	t.Cleanup(h.close)
 
@@ -179,7 +188,9 @@ func newGRPCHarness(t *testing.T, opts ...harnessOption) *grpcHarness {
 	h.approvals = turingv1.NewApprovalServiceClient(h.publicConn)
 	h.filesMCP.approvalClient = turingv1.NewApprovalServiceClient(h.internalConn)
 	h.waitForHealth(t)
-	h.startRuntimeWorker()
+	if cfg.startRuntimeWorker {
+		h.startRuntimeWorker()
+	}
 	return h
 }
 
@@ -969,6 +980,309 @@ func TestDiscoveredToolsAppearInListTools(t *testing.T) {
 			t.Fatalf("ListTools[%q] = %v, want %v", name, got[name], policy)
 		}
 	}
+}
+
+func TestQueuedTurnsUseCausalModelHistory(t *testing.T) {
+	harness := newGRPCHarness(t, withoutRuntimeWorker())
+	defer harness.close()
+
+	sessionID := harness.createSession(t, "causal model history")
+	queue := func(content string) (turingv1.ChatService_SendMessageClient, context.CancelFunc) {
+		ctx, cancel := context.WithTimeout(harness.clientContext(), 15*time.Second)
+		stream, err := harness.chat.SendMessage(ctx, &turingv1.SendMessageRequest{
+			SessionId:     sessionID,
+			Content:       content,
+			ContentType:   "text",
+			AgentId:       turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+			ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
+			Model:         "fake-model",
+		})
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		event, err := stream.Recv()
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		if queued := event.GetRunQueued(); queued == nil || queued.GetRunId() == "" {
+			cancel()
+			t.Fatalf("first queued event = %+v, want run_queued", event)
+		}
+		return stream, cancel
+	}
+	firstStream, cancelFirst := queue("turn one")
+	defer cancelFirst()
+	secondStream, cancelSecond := queue("turn two")
+	defer cancelSecond()
+
+	harness.startRuntimeWorker()
+	readTerminal := func(stream turingv1.ChatService_SendMessageClient) {
+		for {
+			event, err := stream.Recv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if event.GetRunCompleted() != nil {
+				return
+			}
+			if event.GetRunFailed() != nil || event.GetRunCancelled() != nil {
+				t.Fatalf("queued turn terminal event = %+v, want completion", event)
+			}
+		}
+	}
+	readTerminal(firstStream)
+	readTerminal(secondStream)
+
+	bodies := harness.fakeModel.bodies()
+	if len(bodies) != 2 {
+		t.Fatalf("OpenAI request count = %d, want 2", len(bodies))
+	}
+	assertMessages := func(body map[string]any, want []map[string]any) {
+		raw, ok := body["messages"].([]any)
+		if !ok {
+			t.Fatalf("OpenAI messages = %#v, want array", body["messages"])
+		}
+		got := make([]map[string]any, 0, len(raw))
+		for _, entry := range raw {
+			message, ok := entry.(map[string]any)
+			if !ok {
+				t.Fatalf("OpenAI message = %#v, want object", entry)
+			}
+			got = append(got, map[string]any{"role": message["role"], "content": message["content"]})
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("OpenAI messages = %#v, want %#v", got, want)
+		}
+	}
+	assertMessages(bodies[0], []map[string]any{
+		{"role": "user", "content": "turn one"},
+	})
+	assertMessages(bodies[1], []map[string]any{
+		{"role": "user", "content": "turn one"},
+		{"role": "assistant", "content": "Hello"},
+		{"role": "user", "content": "turn two"},
+	})
+}
+
+func TestApprovalPersistenceFailureFencesRealWorkerUntilExecutorExit(t *testing.T) {
+	harness := newGRPCHarness(t, withoutRuntimeWorker())
+	defer harness.close()
+	database, err := sql.Open("sqlite3", harness.databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.Exec(`
+		CREATE TRIGGER fail_real_worker_approval_requested
+		BEFORE INSERT ON events
+		WHEN NEW.type = 'approval.requested'
+		BEGIN
+			SELECT RAISE(ABORT, 'approval requested persistence failed');
+		END
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	queue := func(sessionID, content string) (string, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(harness.clientContext())
+		stream, streamErr := harness.chat.SendMessage(ctx, &turingv1.SendMessageRequest{
+			SessionId:     sessionID,
+			Content:       content,
+			ContentType:   "text",
+			AgentId:       turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+			ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
+			Model:         "fake-model",
+		})
+		if streamErr != nil {
+			cancel()
+			t.Fatal(streamErr)
+		}
+		event, streamErr := stream.Recv()
+		if streamErr != nil {
+			cancel()
+			t.Fatal(streamErr)
+		}
+		if queued := event.GetRunQueued(); queued != nil && queued.GetRunId() != "" {
+			return queued.GetRunId(), cancel
+		}
+		cancel()
+		t.Fatalf("queued event = %+v, want run_queued", event)
+		return "", nil
+	}
+	sessionID := harness.createSession(t, "real worker approval failure")
+	firstRunID, cancelFirst := queue(sessionID, "first approval")
+	defer cancelFirst()
+	secondRunID, cancelSecond := queue(sessionID, "same-session follow-up")
+	defer cancelSecond()
+	globalSessionID := harness.createSession(t, "global capacity follow-up")
+	globalRunID, cancelGlobal := queue(globalSessionID, "global follow-up")
+	defer cancelGlobal()
+
+	firstExecutor := &terminalDecisionBlockingExecutor{
+		firstRunID:   firstRunID,
+		started:      make(chan struct{}),
+		decisionSeen: make(chan error, 1),
+		release:      make(chan struct{}),
+		exited:       make(chan struct{}),
+		afterStarted: make(chan string, 2),
+	}
+	startWorker := func(workerID string, executor runtimetestkit.WorkerExecutor) (context.CancelFunc, <-chan error, *grpc.ClientConn) {
+		ctx, cancel := context.WithCancel(context.Background())
+		conn := dialBufconn(t, harness.internalLis)
+		done := make(chan error, 1)
+		go func() {
+			done <- runtimetestkit.RunWorkerWithExecutor(ctx, runtimetestkit.WorkerConfig{
+				Conn:               conn,
+				InternalToken:      integrationInternalToken,
+				WorkerID:           workerID,
+				MaxConcurrentRuns:  1,
+				TotalToolTimeout:   time.Second,
+				MaxToolCallsPerRun: 1,
+			}, executor)
+		}()
+		t.Cleanup(func() {
+			cancel()
+			_ = conn.Close()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Errorf("worker %q did not stop", workerID)
+			}
+		})
+		return cancel, done, conn
+	}
+	_, _, _ = startWorker("worker-approval-failure-real", firstExecutor)
+	select {
+	case <-firstExecutor.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first real worker executor did not start")
+	}
+	select {
+	case decisionErr := <-firstExecutor.decisionSeen:
+		if decisionErr != nil {
+			t.Fatal(decisionErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("first real worker did not receive terminal approval decision")
+	}
+
+	_, _, _ = startWorker("worker-approval-failure-waiter", passiveExecutor{started: firstExecutor.afterStarted})
+	time.Sleep(100 * time.Millisecond)
+	for _, runID := range []string{secondRunID, globalRunID} {
+		run, getErr := harness.repo.GetRun(context.Background(), runID)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		if run.Status != "queued" {
+			t.Fatalf("run %q status = %q, want queued before first executor exits", runID, run.Status)
+		}
+	}
+	select {
+	case runID := <-firstExecutor.afterStarted:
+		t.Fatalf("later run %q started before first executor exited", runID)
+	default:
+	}
+
+	close(firstExecutor.release)
+	select {
+	case <-firstExecutor.exited:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first real worker executor did not exit")
+	}
+	select {
+	case runID := <-firstExecutor.afterStarted:
+		if runID != secondRunID {
+			t.Fatalf("first released assignment = %q, want same-session run %q", runID, secondRunID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("capacity did not release after first executor exit")
+	}
+	global, err := harness.repo.GetRun(context.Background(), globalRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if global.Status != "queued" {
+		t.Fatalf("global run status = %q, want queued behind the released same-session run", global.Status)
+	}
+}
+
+type terminalDecisionBlockingExecutor struct {
+	firstRunID   string
+	poster       func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error)
+	started      chan struct{}
+	decisionSeen chan error
+	release      chan struct{}
+	exited       chan struct{}
+	afterStarted chan string
+}
+
+func (e *terminalDecisionBlockingExecutor) SetToolBeaconPoster(post func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error)) {
+	e.poster = post
+}
+
+func (e *terminalDecisionBlockingExecutor) Execute(ctx context.Context, job *turingv1.AgentJob, _ func(*turingv1.RuntimeUpdate) error) error {
+	if job.GetRunId() != e.firstRunID {
+		select {
+		case e.afterStarted <- job.GetRunId():
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if e.poster == nil {
+		return errors.New("tool beacon poster was not configured")
+	}
+	args, err := structpb.NewStruct(map[string]any{"path": "note.txt", "content": "hello"})
+	if err != nil {
+		return err
+	}
+	close(e.started)
+	decision, err := e.poster(ctx, &turingv1.ToolCallBeacon{
+		RunId:      job.GetRunId(),
+		TraceId:    job.GetTraceId(),
+		ToolCallId: "call_real_worker_terminal",
+		AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName: "files",
+		ToolName:   "files.update",
+		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		Args:       args,
+	})
+	if err == nil && (decision == nil || !decision.GetTerminalRun()) {
+		err = errors.New("approval persistence failure did not return a terminal decision")
+	}
+	e.decisionSeen <- err
+	if err != nil {
+		return err
+	}
+	select {
+	case <-e.release:
+		close(e.exited)
+		return terminalWorkerExitError{}
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+type terminalWorkerExitError struct{}
+
+func (terminalWorkerExitError) Error() string     { return "terminalized by orchestrator" }
+func (terminalWorkerExitError) RunTerminal() bool { return true }
+
+type passiveExecutor struct {
+	started chan<- string
+}
+
+func (e passiveExecutor) Execute(ctx context.Context, job *turingv1.AgentJob, _ func(*turingv1.RuntimeUpdate) error) error {
+	select {
+	case e.started <- job.GetRunId():
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func TestEmptyFinalModelResponsePersistsFallback(t *testing.T) {

@@ -77,6 +77,13 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 		}
 		return RunOutcome{}, operationErr
 	}
+	if decision.GetTerminalRun() {
+		reason := decision.GetReason()
+		if reason == "" {
+			reason = "run terminalized by tool policy"
+		}
+		return RunOutcome{}, terminalRunError{err: errors.New(reason)}
+	}
 	approvalToken := ""
 	sideEffecting := false
 	switch decision.GetDecision() {

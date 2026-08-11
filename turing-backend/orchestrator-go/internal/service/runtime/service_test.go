@@ -40,12 +40,16 @@ type harness struct {
 var runtimeTestDatabaseSequence atomic.Uint64
 
 func newHarness(t *testing.T) *harness {
+	return newHarnessWithDispatch(t, DispatchConfig{})
+}
+
+func newHarnessWithDispatch(t *testing.T, dispatch DispatchConfig) *harness {
 	t.Helper()
 	database := openRuntimeTestDB(t)
 	repo := repository.New(database)
 	bus := events.NewBus(8)
 	approvals := approvalsvc.New(repo, bus, "approval-secret")
-	service := New(repo, bus, approvals)
+	service := NewWithConfig(repo, bus, dispatch, approvals)
 	lis := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer(grpc.StreamInterceptor(auth.StreamInterceptor("internal-token")))
 	turingv1.RegisterRuntimeServiceServer(grpcServer, service)
@@ -893,7 +897,7 @@ func TestConnectWorkerTerminalizesApprovalWhenDecisionSendFails(t *testing.T) {
 	}
 }
 
-func TestConnectWorkerReconcilesTerminalDecisionFailureBeforeFreshWorkerClaimsLaterSameSessionJob(t *testing.T) {
+func TestConnectWorkerFencesTerminalDecisionFailureUntilRecovery(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	session, err := h.repo.CreateSession(ctx, "Decision delivery recovery")
@@ -929,13 +933,12 @@ func TestConnectWorkerReconcilesTerminalDecisionFailureBeforeFreshWorkerClaimsLa
 	if err == nil || !strings.Contains(err.Error(), "tool policy decision send failed") {
 		t.Fatalf("ConnectWorker error = %v, want tool policy decision send failure", err)
 	}
-	var executionActive int
-	var acknowledgedAt sql.NullString
-	if err := h.database.QueryRowContext(ctx, `SELECT execution_active, execution_exit_acknowledged_at FROM agent_runs WHERE id = ?`, first.RunID).Scan(&executionActive, &acknowledgedAt); err != nil {
+	firstRun, err := h.repo.GetRun(ctx, first.RunID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if executionActive != 0 || !acknowledgedAt.Valid {
-		t.Fatalf("terminal decision failure exit state active=%d acknowledged=%q, want inactive acknowledged", executionActive, acknowledgedAt.String)
+	if firstRun.Status != "failed" || !firstRun.ExecutionActive || firstRun.ExecutionState != "uncertain" {
+		t.Fatalf("terminal decision failure state = %+v, want failed active uncertain fence", firstRun)
 	}
 
 	client := h.runtimeClient(t)
@@ -949,6 +952,28 @@ func TestConnectWorkerReconcilesTerminalDecisionFailureBeforeFreshWorkerClaimsLa
 	if err := fresh.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
 		WorkerId: "worker-after-terminal-decision-failure", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
 	}}}); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, fresh, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetWorkerAccepted() != nil
+	})
+	time.Sleep(20 * time.Millisecond)
+	secondRun, err := h.repo.GetRun(ctx, second.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondRun.Status != "queued" {
+		t.Fatalf("fresh worker claimed %q before stale execution recovery", secondRun.RunID)
+	}
+	expired := time.Now().Add(-time.Second)
+	if _, err := h.database.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET execution_lease_expires_at = ?, execution_lease_expires_at_ns = ?
+		WHERE id = ?
+	`, expired.Format("2006-01-02T15:04:05.000000000Z"), expired.UnixNano(), first.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.service.RecoverOrphanedAssignments(ctx); err != nil {
 		t.Fatal(err)
 	}
 	assigned := recvUntil(t, fresh, func(cmd *turingv1.RuntimeCommand) bool {
@@ -986,6 +1011,7 @@ func TestToolBeaconTerminalizesPostCommitApprovalCreationFailure(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
+
 	published, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
 	defer unsubscribe()
 	args, err := structpb.NewStruct(map[string]any{"path": "note.txt", "content": "hello"})
@@ -1039,6 +1065,117 @@ func TestToolBeaconTerminalizesPostCommitApprovalCreationFailure(t *testing.T) {
 	_ = recvBusEvent(t, published, func(event events.Event) bool {
 		return event.RunID == enqueued.RunID && event.Type == "agent.run.failed"
 	})
+}
+
+func TestApprovalCreationFailureKeepsCapacityUntilWorkerExitAck(t *testing.T) {
+	h := newHarnessWithDispatch(t, DispatchConfig{MaxConcurrentRuns: 1})
+	ctx := context.Background()
+	session, err := h.repo.CreateSession(ctx, "Approval creation failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "first approval", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "later same-session work", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	global := h.enqueueRun(t, "later global work")
+	client := h.runtimeClient(t)
+	firstWorker, err := client.ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = firstWorker.CloseSend() }()
+	if err := firstWorker.Send(workerReady("worker-approval-failure")); err != nil {
+		t.Fatal(err)
+	}
+	assigned := recvUntil(t, firstWorker, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetRunAssigned() != nil && command.GetRunAssigned().GetRunId() == first.RunID
+	}).GetRunAssigned()
+	secondWorker, err := client.ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = secondWorker.CloseSend() }()
+	if err := secondWorker.Send(workerReady("worker-capacity-waiter")); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, secondWorker, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetWorkerAccepted() != nil
+	})
+	if _, err := h.database.ExecContext(ctx, `
+		CREATE TRIGGER fail_approval_requested_capacity
+		BEFORE INSERT ON events
+		WHEN NEW.type = 'approval.requested'
+		BEGIN
+			SELECT RAISE(ABORT, 'approval request event unavailable');
+		END
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstWorker.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+		RunId:      assigned.GetRunId(),
+		TraceId:    assigned.GetTraceId(),
+		ToolCallId: "call_capacity_terminal",
+		AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName: "files",
+		ToolName:   "files.update",
+		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		Args:       mustStruct(t, map[string]any{"path": "note.txt", "content": "hello"}),
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	decision := recvUntil(t, firstWorker, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetToolPolicyDecision() != nil && command.GetToolPolicyDecision().GetToolCallId() == "call_capacity_terminal"
+	}).GetToolPolicyDecision()
+	if !decision.GetTerminalRun() || decision.GetDecision() != turingv1.ToolPolicyDecision_DECISION_DENY {
+		t.Fatalf("approval failure decision = %+v, want terminal deny", decision)
+	}
+	run, err := h.repo.GetRun(ctx, first.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "failed" || !run.ExecutionActive || run.ExecutionAttemptID == "" {
+		t.Fatalf("terminalized run = %+v, want failed active owned attempt", run)
+	}
+	time.Sleep(50 * time.Millisecond)
+	for _, queued := range []repository.EnqueueUserMessageResult{second, global} {
+		candidate, getErr := h.repo.GetRun(ctx, queued.RunID)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		if candidate.Status != "queued" {
+			t.Fatalf("run %q status = %q, want queued until old worker exits", queued.RunID, candidate.Status)
+		}
+	}
+	if err := firstWorker.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{
+		RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: first.RunID},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		candidate, getErr := h.repo.GetRun(ctx, second.RunID)
+		if getErr == nil && candidate.Status == "running" {
+			globalRun, globalErr := h.repo.GetRun(ctx, global.RunID)
+			if globalErr != nil {
+				t.Fatal(globalErr)
+			}
+			if globalRun.Status != "queued" {
+				t.Fatalf("global run status = %q, want queued behind recovered capacity", globalRun.Status)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("same-session run was not assigned after worker exit acknowledgement")
 }
 
 func TestToolBeaconTerminalizesPostCommitApprovalCreationFailureAfterCancellation(t *testing.T) {
@@ -2876,7 +3013,7 @@ func TestCancelRunWaitsForCommandBufferSpace(t *testing.T) {
 	}
 }
 
-func TestWorkerDisconnectRequeuesAssignedJob(t *testing.T) {
+func TestWorkerDisconnectFencesDeliveredJobUntilRecovery(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.enqueueRun(t, "disconnect")
 	client := h.runtimeClient(t)
@@ -2897,22 +3034,22 @@ func TestWorkerDisconnectRequeuesAssignedJob(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
-		if err == nil && run.Status == "queued" {
+		if err == nil && run.Status == "running" && run.ExecutionActive && run.ExecutionState == "uncertain" {
 			var jobStatus string
 			if err := h.database.QueryRowContext(context.Background(), `SELECT status FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus); err != nil {
 				t.Fatal(err)
 			}
-			if jobStatus != "pending" {
-				t.Fatalf("job status = %q, want pending", jobStatus)
+			if jobStatus != "in_progress" {
+				t.Fatalf("job status = %q, want in_progress while execution is uncertain", jobStatus)
 			}
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("assigned job was not requeued after worker disconnect")
+	t.Fatal("assigned job was not fenced after worker disconnect")
 }
 
-func TestWorkerDisconnectTerminalizesPendingApprovalAndAcknowledgesExit(t *testing.T) {
+func TestWorkerDisconnectTerminalizesPendingApprovalAndFencesExecution(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.enqueueRun(t, "disconnect pending approval")
 	client := h.runtimeClient(t)
@@ -2948,14 +3085,43 @@ func TestWorkerDisconnectTerminalizesPendingApprovalAndAcknowledgesExit(t *testi
 	for time.Now().Before(deadline) {
 		var statusValue string
 		var active int
+		var executionState string
 		var acknowledgedAt sql.NullString
-		if err := h.database.QueryRowContext(context.Background(), `SELECT status, execution_active, execution_exit_acknowledged_at FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&statusValue, &active, &acknowledgedAt); err == nil &&
-			statusValue == "failed" && active == 0 && acknowledgedAt.Valid {
+		if err := h.database.QueryRowContext(context.Background(), `SELECT status, execution_active, execution_state, execution_exit_acknowledged_at FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&statusValue, &active, &executionState, &acknowledgedAt); err == nil &&
+			statusValue == "failed" && active == 1 && executionState == "uncertain" && !acknowledgedAt.Valid {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	var statusValue string
+	var active int
+	var executionState string
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status, execution_active, execution_state FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&statusValue, &active, &executionState); err != nil {
+		t.Fatal(err)
+	}
+	if statusValue != "failed" || active != 1 || executionState != "uncertain" {
+		t.Fatalf("pending approval disconnect state status=%q active=%d execution_state=%q, want failed/1/uncertain", statusValue, active, executionState)
+	}
+	expired := time.Now().Add(-time.Second)
+	if _, err := h.database.ExecContext(context.Background(), `
+		UPDATE agent_runs
+		SET execution_lease_expires_at = ?, execution_lease_expires_at_ns = ?
+		WHERE id = ?
+	`, expired.Format("2006-01-02T15:04:05.000000000Z"), expired.UnixNano(), enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.service.RecoverOrphanedAssignments(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+		if err == nil && !run.ExecutionActive {
 			return
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatal("pending approval remained active after worker disconnect")
+	t.Fatal("pending approval execution fence was not released by stale recovery")
 }
 
 func (h *harness) enqueueRun(t *testing.T, content string) repository.EnqueueUserMessageResult {

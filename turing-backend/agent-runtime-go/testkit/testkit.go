@@ -33,6 +33,10 @@ type WorkerConfig struct {
 	MCPFilesToken      string
 }
 
+type WorkerExecutor interface {
+	Execute(context.Context, *turingv1.AgentJob, func(*turingv1.RuntimeUpdate) error) error
+}
+
 func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 	client := orchestrator.New(cfg.Conn, cfg.InternalToken)
 	providers := map[turingv1.ModelProvider]llm.Provider{
@@ -51,7 +55,23 @@ func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 		TotalToolTimeout:   cfg.totalToolTimeout(),
 	}
 	executor := agent.NewGeneralAssistant(providers, client, toolset)
-	runtimeWorker := worker.New(worker.Options{WorkerID: cfg.WorkerID, AgentID: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: cfg.MaxConcurrentRuns}, runtimeClientAdapter{client: client}, executor)
+	runtimeWorker := worker.New(worker.Options{
+		WorkerID:                 cfg.WorkerID,
+		AgentID:                  turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		MaxConcurrentRuns:        cfg.MaxConcurrentRuns,
+		DisconnectCleanupTimeout: cfg.totalToolTimeout(),
+	}, runtimeClientAdapter{client: client}, executor)
+	return runtimeWorker.Run(ctx)
+}
+
+func RunWorkerWithExecutor(ctx context.Context, cfg WorkerConfig, executor WorkerExecutor) error {
+	client := orchestrator.New(cfg.Conn, cfg.InternalToken)
+	runtimeWorker := worker.New(worker.Options{
+		WorkerID:                 cfg.WorkerID,
+		AgentID:                  turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		MaxConcurrentRuns:        cfg.MaxConcurrentRuns,
+		DisconnectCleanupTimeout: cfg.totalToolTimeout(),
+	}, runtimeClientAdapter{client: client}, executor)
 	return runtimeWorker.Run(ctx)
 }
 

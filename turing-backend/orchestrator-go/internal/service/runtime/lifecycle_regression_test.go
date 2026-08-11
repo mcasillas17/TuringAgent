@@ -55,7 +55,7 @@ func TestAmbiguousAssignmentSendKeepsAttemptFenced(t *testing.T) {
 	}
 }
 
-func TestDisconnectRedispatchesRequeuedAssignmentToIdleWorker(t *testing.T) {
+func TestDisconnectFencesDeliveredAssignmentUntilRecovery(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.enqueueRun(t, "redispatch after disconnect")
 	client := h.runtimeClient(t)
@@ -87,15 +87,63 @@ func TestDisconnectRedispatchesRequeuedAssignmentToIdleWorker(t *testing.T) {
 	if err := first.CloseSend(); err != nil {
 		t.Fatal(err)
 	}
-	assigned := recvUntil(t, second, func(command *turingv1.RuntimeCommand) bool {
-		return command.GetRunAssigned() != nil
-	}).GetRunAssigned()
-	if assigned.GetRunId() != enqueued.RunID {
-		t.Fatalf("redispatched run = %q, want %q", assigned.GetRunId(), enqueued.RunID)
+	next := make(chan struct {
+		command *turingv1.RuntimeCommand
+		err     error
+	}, 1)
+	go func() {
+		command, recvErr := second.Recv()
+		next <- struct {
+			command *turingv1.RuntimeCommand
+			err     error
+		}{command: command, err: recvErr}
+	}()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		run, getErr := h.repo.GetRun(context.Background(), enqueued.RunID)
+		if getErr == nil && run.Status == "running" && run.ExecutionActive && run.ExecutionState == "uncertain" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "running" || !run.ExecutionActive || run.ExecutionState != "uncertain" {
+		t.Fatalf("disconnected delivered run = %+v, want active uncertain fence", run)
+	}
+	select {
+	case result := <-next:
+		t.Fatalf("idle worker received retry before old execution was fenced: command=%+v error=%v", result.command, result.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	expired := time.Now().Add(-time.Second)
+	if _, err := h.database.ExecContext(context.Background(), `
+		UPDATE agent_runs
+		SET execution_lease_expires_at = ?, execution_lease_expires_at_ns = ?
+		WHERE id = ?
+	`, expired.Format("2006-01-02T15:04:05.000000000Z"), expired.UnixNano(), enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.service.RecoverOrphanedAssignments(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-next:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		assigned := result.command.GetRunAssigned()
+		if assigned == nil || assigned.GetRunId() != enqueued.RunID {
+			t.Fatalf("recovered assignment = %+v, want %q", result.command, enqueued.RunID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("idle worker did not receive retry after stale execution recovery")
 	}
 }
 
-func TestDisconnectReconciliationRacingDenialLeavesNoExecutionGate(t *testing.T) {
+func TestDisconnectReconciliationRacingDenialPreservesExecutionFence(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.enqueueRun(t, "disconnect and deny")
 	claimed, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-disconnect-race")
@@ -144,7 +192,7 @@ func TestDisconnectReconciliationRacingDenialLeavesNoExecutionGate(t *testing.T)
 		}
 	}
 
-	var approvalStatus, toolStatus, runStatus, jobStatus string
+	var approvalStatus, toolStatus, runStatus, jobStatus, executionState string
 	var active int
 	if err := h.database.QueryRowContext(context.Background(), `SELECT status FROM approvals WHERE id = ?`, decision.GetApprovalId()).Scan(&approvalStatus); err != nil {
 		t.Fatal(err)
@@ -152,14 +200,14 @@ func TestDisconnectReconciliationRacingDenialLeavesNoExecutionGate(t *testing.T)
 	if err := h.database.QueryRowContext(context.Background(), `SELECT status FROM tool_calls WHERE id = ?`, before.ToolCallId).Scan(&toolStatus); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.database.QueryRowContext(context.Background(), `SELECT status, execution_active FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&runStatus, &active); err != nil {
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status, execution_active, execution_state FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&runStatus, &active, &executionState); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.database.QueryRowContext(context.Background(), `SELECT status FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus); err != nil {
 		t.Fatal(err)
 	}
-	if approvalStatus != "denied" || toolStatus == "approval_required" || runStatus != "failed" || jobStatus != "failed" || active != 0 {
-		t.Fatalf("disconnect/denial race left lifecycle inconsistent: approval=%q tool=%q run=%q job=%q active=%d", approvalStatus, toolStatus, runStatus, jobStatus, active)
+	if approvalStatus != "denied" || toolStatus == "approval_required" || runStatus != "failed" || jobStatus != "failed" || active != 1 || executionState != "uncertain" {
+		t.Fatalf("disconnect/denial race lifecycle: approval=%q tool=%q run=%q job=%q active=%d execution_state=%q", approvalStatus, toolStatus, runStatus, jobStatus, active, executionState)
 	}
 	var failedEvents int
 	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'agent.run.failed'`, enqueued.RunID).Scan(&failedEvents); err != nil {
@@ -167,6 +215,24 @@ func TestDisconnectReconciliationRacingDenialLeavesNoExecutionGate(t *testing.T)
 	}
 	if failedEvents != 1 {
 		t.Fatalf("disconnect/denial failed events = %d, want one", failedEvents)
+	}
+	expired := time.Now().Add(-time.Second)
+	if _, err := h.database.ExecContext(context.Background(), `
+		UPDATE agent_runs
+		SET execution_lease_expires_at = ?, execution_lease_expires_at_ns = ?
+		WHERE id = ?
+	`, expired.Format("2006-01-02T15:04:05.000000000Z"), expired.UnixNano(), enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.service.RecoverOrphanedAssignments(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.ExecutionActive {
+		t.Fatalf("stale terminal execution remained active: %+v", run)
 	}
 }
 

@@ -50,6 +50,15 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 
 	switch runStatus {
 	case "completed", "failed", "cancelled":
+		if !staleRecovery && active == 1 {
+			if err := fenceExecutionTx(ctx, tx, assignment.RunID); err != nil {
+				return AssignmentReconciliation{}, err
+			}
+			if err := tx.Commit(); err != nil {
+				return AssignmentReconciliation{}, err
+			}
+			return AssignmentReconciliation{Fenced: true}, nil
+		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE agent_runs
 			SET execution_active = 0,
@@ -66,7 +75,7 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 		}
 		return AssignmentReconciliation{Cleared: true}, nil
 	case "waiting_approval":
-		reconciliation, err := reconcileWaitingApprovalTx(ctx, tx, assignment.RunID, sessionID, traceID)
+		reconciliation, err := reconcileWaitingApprovalTx(ctx, tx, assignment.RunID, sessionID, traceID, !staleRecovery && active == 1)
 		if err != nil {
 			return AssignmentReconciliation{}, err
 		}
@@ -75,7 +84,10 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 		}
 		return reconciliation, nil
 	case "running":
-		if !staleRecovery && (executionState == "sending" || executionState == "uncertain") {
+		if !staleRecovery && executionState != "pending_send" {
+			if err := fenceExecutionTx(ctx, tx, assignment.RunID); err != nil {
+				return AssignmentReconciliation{}, err
+			}
 			if err := tx.Commit(); err != nil {
 				return AssignmentReconciliation{}, err
 			}
@@ -120,6 +132,18 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 	default:
 		return AssignmentReconciliation{}, ErrAssignmentFenced
 	}
+}
+
+func fenceExecutionTx(ctx context.Context, tx *sql.Tx, runID string) error {
+	result, err := tx.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET execution_state = 'uncertain'
+		WHERE id = ? AND execution_active = 1
+	`, runID)
+	if err != nil {
+		return err
+	}
+	return expectOneRowErr(result, ErrAssignmentFenced)
 }
 
 func requeueAssignmentTx(ctx context.Context, tx *sql.Tx, runID, jobID, attemptID string) error {
@@ -169,7 +193,7 @@ func requeueAssignmentTx(ctx context.Context, tx *sql.Tx, runID, jobID, attemptI
 	return expectOneRowErr(result, ErrAssignmentFenced)
 }
 
-func reconcileWaitingApprovalTx(ctx context.Context, tx *sql.Tx, runID, sessionID, traceID string) (AssignmentReconciliation, error) {
+func reconcileWaitingApprovalTx(ctx context.Context, tx *sql.Tx, runID, sessionID, traceID string, preserveExecution bool) (AssignmentReconciliation, error) {
 	const code = "approval_delivery_failed"
 	const message = "Worker disconnected while waiting for approval"
 	finishedAt := now()
@@ -191,19 +215,29 @@ func reconcileWaitingApprovalTx(ctx context.Context, tx *sql.Tx, runID, sessionI
 	`, code, message, finishedAt, runID); err != nil {
 		return AssignmentReconciliation{}, err
 	}
-	result, err := tx.ExecContext(ctx, `
+	runUpdate := `
 		UPDATE agent_runs
 		SET status = 'failed',
 			error_code = ?,
 			error_message = ?,
-			finished_at = ?,
+			finished_at = ?`
+	args := []any{code, message, finishedAt}
+	if preserveExecution {
+		runUpdate += `,
+			execution_state = 'uncertain'`
+	} else {
+		runUpdate += `,
 			execution_active = 0,
 			execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
 			execution_state = 'exited',
 			execution_lease_expires_at = NULL,
-			execution_lease_expires_at_ns = NULL
-		WHERE id = ? AND status = 'waiting_approval'
-	`, code, message, finishedAt, finishedAt, runID)
+			execution_lease_expires_at_ns = NULL`
+		args = append(args, finishedAt)
+	}
+	runUpdate += `
+		WHERE id = ? AND status = 'waiting_approval'`
+	args = append(args, runID)
+	result, err := tx.ExecContext(ctx, runUpdate, args...)
 	if err != nil {
 		return AssignmentReconciliation{}, err
 	}
@@ -233,7 +267,7 @@ func reconcileWaitingApprovalTx(ctx context.Context, tx *sql.Tx, runID, sessionI
 	if err != nil {
 		return AssignmentReconciliation{}, err
 	}
-	return AssignmentReconciliation{Cleared: true, RunFailedEvent: event}, nil
+	return AssignmentReconciliation{Cleared: !preserveExecution, Fenced: preserveExecution, RunFailedEvent: event}, nil
 }
 
 func (r *Repository) RecoverStaleAssignments(ctx context.Context, cutoff time.Time) ([]Event, error) {
@@ -274,7 +308,18 @@ func (r *Repository) RecoverableAssignments(ctx context.Context, cutoff time.Tim
 		LEFT JOIN jobs j ON j.run_id = r.id AND j.status = 'in_progress'
 		WHERE r.execution_active = 1
 			AND (
-				r.status IN ('completed', 'failed', 'cancelled', 'queued')
+				r.status = 'queued'
+				OR (
+					r.status IN ('completed', 'failed', 'cancelled')
+					AND (
+						r.execution_state != 'uncertain'
+						OR r.execution_lease_expires_at IS NULL
+						OR COALESCE(
+							r.execution_lease_expires_at_ns,
+							` + sqliteTimestampNanos("r.execution_lease_expires_at") + `
+						) <= ?
+					)
+				)
 				OR (
 					r.status IN ('running', 'waiting_approval')
 					AND (
@@ -289,7 +334,7 @@ func (r *Repository) RecoverableAssignments(ctx context.Context, cutoff time.Tim
 			)
 		ORDER BY ` + sqliteTimestampNanos("r.created_at") + `, r.id
 	`
-	rows, err := r.db.QueryContext(ctx, query, cutoff.UTC().UnixNano())
+	rows, err := r.db.QueryContext(ctx, query, cutoff.UTC().UnixNano(), cutoff.UTC().UnixNano())
 	if err != nil {
 		return nil, err
 	}

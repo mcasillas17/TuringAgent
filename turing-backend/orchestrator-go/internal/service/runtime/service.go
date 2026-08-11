@@ -187,7 +187,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 				}
 				decision, beaconErr := s.handleToolBeaconForWorker(ctx, beacon, ready.WorkerId, connectedWorker)
 				release()
-				if beaconErr != nil {
+				if beaconErr != nil && decision == nil {
 					decision = protocolErrorDecision(beacon)
 				}
 				if err := s.sendBeaconDecision(ctx, connectedWorker, beacon, decision); err != nil {
@@ -373,6 +373,15 @@ func protocolErrorDecision(beacon *turingv1.ToolCallBeacon) *turingv1.ToolPolicy
 		Decision:   turingv1.ToolPolicyDecision_DECISION_DENY,
 		ToolCallId: beacon.GetToolCallId(),
 		Reason:     "invalid_tool_beacon",
+	}
+}
+
+func terminalRunDecision(beacon *turingv1.ToolCallBeacon, reason string) *turingv1.ToolPolicyDecision {
+	return &turingv1.ToolPolicyDecision{
+		Decision:    turingv1.ToolPolicyDecision_DECISION_DENY,
+		ToolCallId:  beacon.GetToolCallId(),
+		Reason:      reason,
+		TerminalRun: true,
 	}
 }
 
@@ -633,6 +642,9 @@ func (s *Server) CancelRun(ctx context.Context, runID string, reason string) {
 func (s *Server) releaseUnownedTerminalRun(ctx context.Context, runID string) {
 	run, err := s.repo.GetRun(ctx, runID)
 	if err != nil || !isTerminalRunStatus(run.Status) {
+		return
+	}
+	if run.ExecutionActive && run.ExecutionState != "pending_send" {
 		return
 	}
 	if err := s.repo.AcknowledgeExecutionExit(ctx, runID); err != nil {
@@ -1063,7 +1075,10 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 		}
 		approvalID, err := s.approvals.CreateApprovalForTool(ctx, beacon.RunId, beacon.ToolCallId, "general_assistant", beacon.ToolName, args)
 		if err != nil {
-			return nil, errors.Join(err, s.terminalizePostCommitApprovalFailure(ctx, beacon.RunId, beacon.ToolCallId))
+			if terminalizeErr := s.terminalizePostCommitApprovalFailure(ctx, beacon.RunId, beacon.ToolCallId); terminalizeErr != nil {
+				return nil, errors.Join(err, terminalizeErr)
+			}
+			return terminalRunDecision(beacon, "approval_delivery_failed"), err
 		}
 		return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED, ToolCallId: beacon.ToolCallId, ApprovalId: approvalID}, nil
 	}
@@ -1104,7 +1119,7 @@ func (s *Server) terminalizePostCommitApprovalFailure(_ context.Context, runID s
 		if payloadErr != nil {
 			return payloadErr
 		}
-		event, failErr := s.repo.FailRunWithEvent(recoveryCtx, runID, "approval_delivery_failed", "Approval lifecycle event could not be recorded", payloadJSON)
+		event, failErr := s.repo.FailRunWithEventPreservingExecution(recoveryCtx, runID, "approval_delivery_failed", "Approval lifecycle event could not be recorded", payloadJSON)
 		if failErr != nil {
 			return failErr
 		}

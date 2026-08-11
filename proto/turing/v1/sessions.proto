@@ -40,6 +40,7 @@ message GetSessionRequest {
 message ListMessagesRequest {
   string session_id = 1;
   int32 limit = 2;
+  string before_message_id = 3;
 }
 
 message ListMessagesResponse {

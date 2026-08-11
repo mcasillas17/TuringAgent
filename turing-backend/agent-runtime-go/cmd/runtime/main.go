@@ -55,7 +55,12 @@ func run() error {
 		TotalToolTimeout:   cfg.TotalToolTimeout,
 	}
 	executor := agent.NewGeneralAssistant(providers, client, toolset)
-	runtimeWorker := worker.New(worker.Options{WorkerID: cfg.WorkerID, AgentID: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: cfg.MaxConcurrentRuns}, runtimeClientAdapter{client: client}, executor)
+	runtimeWorker := worker.New(worker.Options{
+		WorkerID:                 cfg.WorkerID,
+		AgentID:                  turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		MaxConcurrentRuns:        cfg.MaxConcurrentRuns,
+		DisconnectCleanupTimeout: cfg.TotalToolTimeout,
+	}, runtimeClientAdapter{client: client}, executor)
 	return runtimeWorker.Run(ctx)
 }
 

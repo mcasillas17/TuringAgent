@@ -14,7 +14,6 @@ import (
 type RuntimeStream interface {
 	Send(*turingv1.RuntimeUpdate) error
 	Recv() (*turingv1.RuntimeCommand, error)
-	CloseSend() error
 }
 
 type RuntimeClient interface {
@@ -30,9 +29,10 @@ type BeaconPosterSetter interface {
 }
 
 type Options struct {
-	WorkerID          string
-	AgentID           turingv1.AgentId
-	MaxConcurrentRuns int
+	WorkerID                 string
+	AgentID                  turingv1.AgentId
+	MaxConcurrentRuns        int
+	DisconnectCleanupTimeout time.Duration
 }
 
 type Worker struct {
@@ -68,6 +68,7 @@ const terminalUpdateSendTimeout = 5 * time.Second
 
 var errOutboundWriterStopped = errors.New("runtime outbound writer stopped")
 var errShutdownRequested = errors.New("runtime shutdown requested")
+var errRuntimeDisconnected = errors.New("runtime stream disconnected")
 
 type outboundWriter struct {
 	stream RuntimeStream
@@ -273,13 +274,24 @@ func (w *Worker) Run(ctx context.Context) error {
 	if w.executor == nil {
 		return errors.New("executor is required")
 	}
-	stream, err := w.client.ConnectWorker(ctx)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	streamCtx, cancelStream := context.WithCancelCause(ctx)
+	runCtx, cancelRuns := context.WithCancelCause(context.WithoutCancel(ctx))
+	stream, err := w.client.ConnectWorker(streamCtx)
 	if err != nil {
+		cancelRuns(errRuntimeDisconnected)
+		cancelStream(errRuntimeDisconnected)
 		return err
 	}
 	w.startOutboundWriter(stream)
 	defer func() {
-		w.stopOutboundWriter(stream)
+		entries := w.cancelActiveRuns(errRuntimeDisconnected)
+		cancelRuns(errRuntimeDisconnected)
+		w.waitForActiveRuns(entries, w.disconnectCleanupTimeout())
+		cancelStream(errRuntimeDisconnected)
+		w.stopOutboundWriter()
 	}()
 	fatal := make(chan error, 1)
 	w.setFatalChannel(fatal)
@@ -289,7 +301,7 @@ func (w *Worker) Run(ctx context.Context) error {
 			return w.postToolBeacon(ctx, stream, beacon)
 		})
 	}
-	if err := w.send(ctx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{WorkerId: w.options.WorkerID, AgentId: w.options.AgentID, MaxConcurrentRuns: int32(w.options.MaxConcurrentRuns)}}}); err != nil {
+	if err := w.send(streamCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{WorkerId: w.options.WorkerID, AgentId: w.options.AgentID, MaxConcurrentRuns: int32(w.options.MaxConcurrentRuns)}}}); err != nil {
 		return err
 	}
 	type receiveResult struct {
@@ -322,14 +334,66 @@ func (w *Worker) Run(ctx context.Context) error {
 			if result.err != nil {
 				return result.err
 			}
-			if err := w.handleCommand(ctx, stream, result.command); err != nil {
+			if err := w.handleCommand(runCtx, stream, result.command); err != nil {
 				if errors.Is(err, errShutdownRequested) {
 					return nil
 				}
+
 				return err
 			}
 		}
 	}
+}
+
+func (w *Worker) cancelActiveRuns(cause error) map[string]*activeRun {
+	if cause == nil {
+		cause = errRuntimeDisconnected
+	}
+	w.mu.Lock()
+	entries := make(map[string]*activeRun, len(w.active))
+	for runID, entry := range w.active {
+		entries[runID] = entry
+		entry.markStopping()
+	}
+	w.mu.Unlock()
+	for _, entry := range entries {
+		entry.cancel(cause)
+	}
+	return entries
+}
+
+func (w *Worker) waitForActiveRuns(entries map[string]*activeRun, timeout time.Duration) {
+	if len(entries) == 0 {
+		return
+	}
+	if timeout <= 0 {
+		timeout = terminalUpdateSendTimeout
+	}
+	exited := make(chan string, len(entries))
+	for runID, entry := range entries {
+		go func(runID string, entry *activeRun) {
+			<-entry.done
+			w.deleteActiveEntry(runID, entry)
+			exited <- runID
+		}(runID, entry)
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for len(entries) > 0 {
+		select {
+		case runID := <-exited:
+			delete(entries, runID)
+		case <-timer.C:
+			return
+		}
+	}
+}
+
+func (w *Worker) disconnectCleanupTimeout() time.Duration {
+	if w.options.DisconnectCleanupTimeout > 0 {
+		return w.options.DisconnectCleanupTimeout
+	}
+	return terminalUpdateSendTimeout
 }
 
 func (w *Worker) handleCommand(ctx context.Context, stream RuntimeStream, cmd *turingv1.RuntimeCommand) error {
@@ -459,8 +523,18 @@ func (w *Worker) cancelApprovalRun(ctx context.Context, stream RuntimeStream, ap
 }
 
 func (w *Worker) deleteActive(runID string) {
+	w.deleteActiveEntry(runID, nil)
+}
+
+func (w *Worker) deleteActiveEntry(runID string, expected *activeRun) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if expected != nil && w.active[runID] != expected {
+		return
+	}
+	if _, exists := w.active[runID]; !exists {
+		return
+	}
 	delete(w.active, runID)
 	for approvalID, approvalRunID := range w.approvals {
 		if approvalRunID == runID {
@@ -483,13 +557,12 @@ func (w *Worker) startOutboundWriter(stream RuntimeStream) {
 	w.writer = newOutboundWriter(stream)
 }
 
-func (w *Worker) stopOutboundWriter(stream RuntimeStream) {
+func (w *Worker) stopOutboundWriter() {
 	w.writerMu.Lock()
 	writer := w.writer
 	w.writerMu.Unlock()
 	if writer != nil {
 		writer.stop(nil)
-		_ = stream.CloseSend()
 		<-writer.exited
 	}
 }

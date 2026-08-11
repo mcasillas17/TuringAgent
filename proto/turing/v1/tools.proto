@@ -52,4 +52,5 @@ message ToolPolicyDecision {
   string tool_call_id = 2;
   string approval_id = 3;
   string reason = 4;
+  bool terminal_run = 5;
 }

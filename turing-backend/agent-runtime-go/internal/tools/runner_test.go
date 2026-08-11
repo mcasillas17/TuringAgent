@@ -38,6 +38,23 @@ func TestNewToolCallIDIsUniqueAcrossConcurrentSamples(t *testing.T) {
 	}
 }
 
+func TestRunTreatsTerminalPolicyDecisionAsTerminalRun(t *testing.T) {
+	runner := &Runner{PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+		return &turingv1.ToolPolicyDecision{
+			Decision:    turingv1.ToolPolicyDecision_DECISION_DENY,
+			ToolCallId:  beacon.GetToolCallId(),
+			Reason:      "approval_delivery_failed",
+			TerminalRun: true,
+		}, nil
+	}}
+
+	_, err := runner.RunWithOutcome(context.Background(), RunInput{ToolName: "files.create"})
+
+	if !RunWasTerminalized(err) {
+		t.Fatalf("RunWithOutcome error = %T %v, want terminal run error", err, err)
+	}
+}
+
 func TestRunGeneratesFreshBeaconIDForEveryExecutionAttempt(t *testing.T) {
 	var attemptIDs []string
 	runner := &Runner{PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {

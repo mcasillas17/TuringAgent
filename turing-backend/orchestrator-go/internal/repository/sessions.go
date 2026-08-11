@@ -105,6 +105,49 @@ func (r *Repository) ListMessages(ctx context.Context, sessionID string, limit i
 	return reversed, nil
 }
 
+func (r *Repository) ListMessagesBefore(ctx context.Context, sessionID, beforeMessageID string, limit int) ([]Message, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if beforeMessageID == "" {
+		return r.ListMessages(ctx, sessionID, limit)
+	}
+	query := `
+		WITH boundary AS (
+			SELECT sequence
+			FROM messages
+			WHERE session_id = ? AND id = ?
+		)
+		SELECT m.id, COALESCE(m.run_id, ''), m.role, m.content, m.content_type, m.sequence, m.created_at
+		FROM messages m
+		JOIN boundary b
+		WHERE m.session_id = ?
+			AND m.sequence < b.sequence
+		ORDER BY ` + sqliteTimestampNanos("m.created_at") + ` DESC, m.id DESC
+		LIMIT ?
+	`
+	rows, err := r.db.QueryContext(ctx, query, sessionID, beforeMessageID, sessionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var reversed []Message
+	for rows.Next() {
+		var msg Message
+		if err := rows.Scan(&msg.MessageID, &msg.RunID, &msg.Role, &msg.Content, &msg.ContentType, &msg.Sequence, &msg.CreatedAt); err != nil {
+			return nil, err
+		}
+		reversed = append(reversed, msg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+		reversed[i], reversed[j] = reversed[j], reversed[i]
+	}
+	return reversed, nil
+}
+
 func (r *Repository) SearchMessages(ctx context.Context, sessionID, query string, limit int) ([]Message, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20

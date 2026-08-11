@@ -22,7 +22,7 @@ import (
 )
 
 type MessageClient interface {
-	FetchMessages(ctx context.Context, sessionID string, excludeMessageIDs ...string) ([]llm.ChatMessage, error)
+	FetchMessages(ctx context.Context, sessionID string, beforeMessageID string) ([]llm.ChatMessage, error)
 }
 
 type GeneralAssistantTools struct {
@@ -97,7 +97,6 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		ctx,
 		job.GetSessionId(),
 		job.GetUserMessageId(),
-		job.GetAssistantMessageId(),
 	)
 	if err != nil {
 		if ctx.Err() != nil {

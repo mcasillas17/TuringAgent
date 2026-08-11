@@ -146,13 +146,11 @@ func TestSearchMessagesReturnsTheRPCError(t *testing.T) {
 	}
 }
 
-func TestFetchMessagesPreservesChronologicalOrderAndExcludesOnlyExactIDs(t *testing.T) {
+func TestFetchMessagesRequestsCausalHistoryBeforeCurrentUserMessage(t *testing.T) {
 	sessions := &messageListClient{messages: []*turingv1.Message{
 		{MessageId: "msg_system", Role: turingv1.MessageRole_MESSAGE_ROLE_SYSTEM, Content: "instructions"},
 		{MessageId: "msg_older_user", Role: turingv1.MessageRole_MESSAGE_ROLE_USER, Content: "repeat me"},
 		{MessageId: "msg_older_empty_assistant", Role: turingv1.MessageRole_MESSAGE_ROLE_ASSISTANT, Content: ""},
-		{MessageId: "msg_current_user", Role: turingv1.MessageRole_MESSAGE_ROLE_USER, Content: "repeat me"},
-		{MessageId: "msg_current_assistant", Role: turingv1.MessageRole_MESSAGE_ROLE_ASSISTANT, Content: ""},
 	}}
 	client := &Client{sessions: sessions}
 
@@ -160,7 +158,6 @@ func TestFetchMessagesPreservesChronologicalOrderAndExcludesOnlyExactIDs(t *test
 		context.Background(),
 		"session_1",
 		"msg_current_user",
-		"msg_current_assistant",
 	)
 	if err != nil {
 		t.Fatalf("FetchMessages returned error: %v", err)
@@ -173,14 +170,17 @@ func TestFetchMessagesPreservesChronologicalOrderAndExcludesOnlyExactIDs(t *test
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("FetchMessages = %#v, want %#v", got, want)
 	}
-	if got := sessions.lastRequest.GetLimit(); got != 52 {
-		t.Fatalf("ListMessages limit = %d, want 52", got)
+	if got := sessions.lastRequest.GetBeforeMessageId(); got != "msg_current_user" {
+		t.Fatalf("ListMessages before_message_id = %q, want current user ID", got)
+	}
+	if got := sessions.lastRequest.GetLimit(); got != 50 {
+		t.Fatalf("ListMessages limit = %d, want 50", got)
 	}
 }
 
-func TestFetchMessagesRetainsFiftyEntriesAfterExcludingCurrentTurn(t *testing.T) {
-	messages := make([]*turingv1.Message, 0, 52)
-	for i := 0; i < 52; i++ {
+func TestFetchMessagesRetainsFiftyCausallyBoundEntries(t *testing.T) {
+	messages := make([]*turingv1.Message, 0, 50)
+	for i := 0; i < 50; i++ {
 		messages = append(messages, &turingv1.Message{
 			MessageId: fmt.Sprintf("msg_%02d", i),
 			Role:      turingv1.MessageRole_MESSAGE_ROLE_USER,
@@ -190,7 +190,7 @@ func TestFetchMessagesRetainsFiftyEntriesAfterExcludingCurrentTurn(t *testing.T)
 	sessions := &messageListClient{messages: messages}
 	client := &Client{sessions: sessions}
 
-	got, err := client.FetchMessages(context.Background(), "session_1", "msg_50", "msg_51")
+	got, err := client.FetchMessages(context.Background(), "session_1", "msg_current")
 	if err != nil {
 		t.Fatalf("FetchMessages returned error: %v", err)
 	}
@@ -203,12 +203,15 @@ func TestFetchMessagesRetainsFiftyEntriesAfterExcludingCurrentTurn(t *testing.T)
 			t.Fatalf("FetchMessages[%d] = %#v, want user %q", i, message, want)
 		}
 	}
-	if got := sessions.lastRequest.GetLimit(); got != 52 {
-		t.Fatalf("ListMessages limit = %d, want 52", got)
+	if got := sessions.lastRequest.GetBeforeMessageId(); got != "msg_current" {
+		t.Fatalf("ListMessages before_message_id = %q, want current user ID", got)
+	}
+	if got := sessions.lastRequest.GetLimit(); got != 50 {
+		t.Fatalf("ListMessages limit = %d, want 50", got)
 	}
 }
 
-func TestFetchMessagesDeduplicatesNonemptyExclusionsAndKeepsMostRecentFifty(t *testing.T) {
+func TestFetchMessagesKeepsMostRecentFiftyFromCausalResponse(t *testing.T) {
 	messages := make([]*turingv1.Message, 0, 51)
 	for i := 0; i < 51; i++ {
 		messages = append(messages, &turingv1.Message{
@@ -220,7 +223,7 @@ func TestFetchMessagesDeduplicatesNonemptyExclusionsAndKeepsMostRecentFifty(t *t
 	sessions := &messageListClient{messages: messages}
 	client := &Client{sessions: sessions}
 
-	got, err := client.FetchMessages(context.Background(), "session_1", "", "msg_missing", "msg_missing", "")
+	got, err := client.FetchMessages(context.Background(), "session_1", "msg_current")
 	if err != nil {
 		t.Fatalf("FetchMessages returned error: %v", err)
 	}
@@ -233,8 +236,11 @@ func TestFetchMessagesDeduplicatesNonemptyExclusionsAndKeepsMostRecentFifty(t *t
 			t.Fatalf("FetchMessages[%d] = %#v, want assistant %q", i, message, want)
 		}
 	}
-	if got := sessions.lastRequest.GetLimit(); got != 51 {
-		t.Fatalf("ListMessages limit = %d, want 51", got)
+	if got := sessions.lastRequest.GetBeforeMessageId(); got != "msg_current" {
+		t.Fatalf("ListMessages before_message_id = %q, want current user ID", got)
+	}
+	if got := sessions.lastRequest.GetLimit(); got != 50 {
+		t.Fatalf("ListMessages limit = %d, want 50", got)
 	}
 }
 

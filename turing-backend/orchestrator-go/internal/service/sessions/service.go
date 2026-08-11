@@ -75,7 +75,7 @@ func (s *Server) ListMessages(ctx context.Context, req *turingv1.ListMessagesReq
 	if req == nil || req.SessionId == "" {
 		return nil, status.Error(codes.InvalidArgument, "session_id is required")
 	}
-	messages, err := s.repo.ListMessages(ctx, req.SessionId, int(req.Limit))
+	messages, err := s.repo.ListMessagesBefore(ctx, req.SessionId, req.BeforeMessageId, int(req.Limit))
 	if err != nil {
 		return nil, status.Error(codes.Internal, "list messages failed")
 	}

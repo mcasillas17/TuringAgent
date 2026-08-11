@@ -292,6 +292,43 @@ func TestSessionServiceSearchMessagesHidesDatabaseErrors(t *testing.T) {
 	}
 }
 
+func TestSessionServiceListsMessagesOnlyBeforeBoundary(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	session, err := h.repo.CreateSession(ctx, "Causal messages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, message := range []struct {
+		id      string
+		content string
+	}{
+		{id: "msg_a", content: "earlier"},
+		{id: "msg_b", content: "current"},
+		{id: "msg_c", content: "future"},
+	} {
+		if _, err := h.database.ExecContext(ctx, `
+			INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at)
+			VALUES (?, ?, 'user', ?, 'text', ?, '2026-08-10T22:42:30.000000000Z')
+		`, message.id, session.SessionID, message.content, index+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	response, err := client.ListMessages(ctx, &turingv1.ListMessagesRequest{
+		SessionId:       session.SessionID,
+		BeforeMessageId: "msg_b",
+		Limit:           50,
+	})
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(response.Messages) != 1 || response.Messages[0].GetMessageId() != "msg_a" {
+		t.Fatalf("causal response = %+v, want only msg_a", response.Messages)
+	}
+}
+
 func insertServiceSearchSession(t *testing.T, ctx context.Context, database *db.DB, id string) {
 	t.Helper()
 	_, err := database.ExecContext(ctx, `INSERT INTO sessions (id, created_at, updated_at) VALUES (?, '2026-08-10T00:00:00Z', '2026-08-10T00:00:00Z')`, id)

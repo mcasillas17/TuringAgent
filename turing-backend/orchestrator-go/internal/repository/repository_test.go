@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"testing"
+	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
@@ -110,6 +111,42 @@ func TestSessionMessageRunJobTransaction(t *testing.T) {
 	}
 	if replayed[0].EventID != result.QueuedEvent.EventID || replayed[0].Type != "agent.run.queued" {
 		t.Fatalf("bad queued replay event: %+v", replayed[0])
+	}
+}
+
+func TestListMessagesBeforeReturnsOnlyStablePredecessors(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Causal messages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []struct {
+		id       string
+		role     string
+		content  string
+		sequence int
+	}{
+		{id: "msg_a", role: "system", content: "instructions", sequence: 1},
+		{id: "msg_b", role: "user", content: "earlier turn", sequence: 2},
+		{id: "msg_c", role: "user", content: "current turn", sequence: 3},
+		{id: "msg_d", role: "assistant", content: "future placeholder", sequence: 4},
+	} {
+		if _, err := database.ExecContext(ctx, `
+			INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at)
+			VALUES (?, ?, ?, ?, 'text', ?, '2026-08-10T22:42:30.000000000Z')
+		`, message.id, session.SessionID, message.role, message.content, message.sequence); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	messages, err := repo.ListMessagesBefore(ctx, session.SessionID, "msg_c", 50)
+	if err != nil {
+		t.Fatalf("ListMessagesBefore: %v", err)
+	}
+	if len(messages) != 2 || messages[0].MessageID != "msg_a" || messages[1].MessageID != "msg_b" {
+		t.Fatalf("causal messages = %+v, want msg_a then msg_b", messages)
 	}
 }
 
@@ -291,6 +328,95 @@ func TestAcknowledgeExecutionExitClearsTerminalGateIdempotently(t *testing.T) {
 	}
 	if active != 0 || !acknowledgedAt.Valid {
 		t.Fatalf("execution exit state active=%d acknowledged=%q, want inactive acknowledged", active, acknowledgedAt.String)
+	}
+}
+
+func TestFailRunWithEventPreservingExecutionHoldsGlobalCapacityUntilExitAck(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	firstSession, err := repo.CreateSession(ctx, "Preserved execution")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: firstSession.SessionID, Content: "first", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSession, err := repo.CreateSession(ctx, "Later global work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: secondSession.SessionID, Content: "second", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-1", 1, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.RunID != first.RunID {
+		t.Fatalf("claimed run = %q, want %q", claimed.RunID, first.RunID)
+	}
+	if _, err := repo.FailRunWithEventPreservingExecution(ctx, first.RunID, "approval_delivery_failed", "approval event failed", `{"code":"approval_delivery_failed"}`); err != nil {
+		t.Fatalf("FailRunWithEventPreservingExecution: %v", err)
+	}
+	run, err := repo.GetRun(ctx, first.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "failed" || !run.ExecutionActive || run.WorkerID != "worker-1" || run.ExecutionAttemptID != claimed.AssignmentAttemptID {
+		t.Fatalf("preserved terminal run = %+v, want failed active worker-owned attempt", run)
+	}
+	blocked, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-2", 1, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked.JobID != "" {
+		t.Fatalf("claimed global work %+v before execution exit acknowledgement", blocked)
+	}
+	if err := repo.AcknowledgeExecutionExit(ctx, first.RunID); err != nil {
+		t.Fatal(err)
+	}
+	released, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-2", 1, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if released.RunID != second.RunID {
+		t.Fatalf("claim after execution exit = %+v, want %q", released, second.RunID)
+	}
+}
+
+func TestFailRunWithEventPreservingExecutionFinalizesInactiveRun(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Inactive terminalization")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "inactive", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.FailRunWithEventPreservingExecution(ctx, enqueued.RunID, "approval_delivery_failed", "approval event failed", `{"code":"approval_delivery_failed"}`); err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.GetRun(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.ExecutionActive || run.ExecutionState != "exited" {
+		t.Fatalf("inactive terminal run = %+v, want inactive exited run", run)
 	}
 }
 

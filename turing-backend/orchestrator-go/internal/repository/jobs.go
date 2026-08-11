@@ -54,7 +54,7 @@ type Assignment struct {
 var ErrAssignmentFenced = errors.New("assignment attempt is fenced")
 
 func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMessageInput) (EnqueueUserMessageResult, error) {
-	createdAt := now()
+	created := time.Now().UTC()
 	userMessageID := ids.New("msg")
 	assistantMessageID := ids.New("msg")
 	runID := ids.New("run")
@@ -69,10 +69,27 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence), 0) + 1 FROM messages WHERE session_id = ?`, input.SessionID).Scan(&next); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
+	var latestCreatedAt string
+	latestQuery := `SELECT created_at FROM messages WHERE session_id = ? ORDER BY ` + sqliteTimestampNanos("created_at") + ` DESC, id DESC LIMIT 1`
+	err = tx.QueryRowContext(ctx, latestQuery, input.SessionID).Scan(&latestCreatedAt)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return EnqueueUserMessageResult{}, err
+	}
+	if latestCreatedAt != "" {
+		latest, parseErr := time.Parse(time.RFC3339Nano, latestCreatedAt)
+		if parseErr != nil {
+			return EnqueueUserMessageResult{}, parseErr
+		}
+		if !created.After(latest) {
+			created = latest.Add(time.Nanosecond)
+		}
+	}
+	createdAt := FormatTimestamp(created)
+	assistantCreatedAt := FormatTimestamp(created.Add(time.Nanosecond))
 	if _, err := tx.ExecContext(ctx, `INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at) VALUES (?, ?, 'user', ?, 'text', ?, ?)`, userMessageID, input.SessionID, input.Content, next, createdAt); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO messages (id, session_id, run_id, role, content, content_type, sequence, created_at) VALUES (?, ?, ?, 'assistant', '', 'text', ?, ?)`, assistantMessageID, input.SessionID, runID, next+1, createdAt); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO messages (id, session_id, run_id, role, content, content_type, sequence, created_at) VALUES (?, ?, ?, 'assistant', '', 'text', ?, ?)`, assistantMessageID, input.SessionID, runID, next+1, assistantCreatedAt); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status, model_provider, model_name, created_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`, runID, input.SessionID, userMessageID, assistantMessageID, input.AgentID, traceID, input.ModelProvider, input.Model, createdAt); err != nil {

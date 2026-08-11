@@ -2450,14 +2450,14 @@ func TestExecuteDebugToolRejectsTypedNilMCPClient(t *testing.T) {
 func TestGeneralAssistantStreamsDeltasAndCompletesRun(t *testing.T) {
 	provider := &scriptedProvider{events: []llm.StreamEvent{{Type: "delta", Text: "Hel"}, {Type: "delta", Text: "lo"}, {Type: "completed", FinishReason: "stop"}}}
 	var fetchedSessionID string
-	var fetchedExclusions []string
+	var fetchedBeforeMessageID string
 	assistant := NewGeneralAssistant(
 		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
 		fakeMessageClient{
 			messages: []llm.ChatMessage{{Role: "system", Content: "Be helpful"}},
-			onFetch: func(sessionID string, excludeMessageIDs []string) {
+			onFetch: func(sessionID string, beforeMessageID string) {
 				fetchedSessionID = sessionID
-				fetchedExclusions = append([]string(nil), excludeMessageIDs...)
+				fetchedBeforeMessageID = beforeMessageID
 			},
 		},
 		nil,
@@ -2476,8 +2476,8 @@ func TestGeneralAssistantStreamsDeltasAndCompletesRun(t *testing.T) {
 	if completed := updates[4].GetRunCompleted(); completed == nil || completed.Content != "Hello" || completed.AssistantMessageId != "msg_assistant" {
 		t.Fatalf("terminal update = %+v, want run_completed content", updates[4])
 	}
-	if fetchedSessionID != "sess_1" || !reflect.DeepEqual(fetchedExclusions, []string{"msg_user", "msg_assistant"}) {
-		t.Fatalf("FetchMessages(sessionID, exclusions) = (%q, %#v), want (%q, %#v)", fetchedSessionID, fetchedExclusions, "sess_1", []string{"msg_user", "msg_assistant"})
+	if fetchedSessionID != "sess_1" || fetchedBeforeMessageID != "msg_user" {
+		t.Fatalf("FetchMessages(sessionID, before_message_id) = (%q, %q), want (%q, %q)", fetchedSessionID, fetchedBeforeMessageID, "sess_1", "msg_user")
 	}
 	wantMessages := []llm.ChatMessage{
 		{Role: "system", Content: "Be helpful"},
@@ -2583,12 +2583,12 @@ func (p *scriptedProvider) StreamChat(ctx context.Context, req llm.ChatRequest) 
 type fakeMessageClient struct {
 	messages []llm.ChatMessage
 	err      error
-	onFetch  func(sessionID string, excludeMessageIDs []string)
+	onFetch  func(sessionID string, beforeMessageID string)
 }
 
-func (c fakeMessageClient) FetchMessages(ctx context.Context, sessionID string, excludeMessageIDs ...string) ([]llm.ChatMessage, error) {
+func (c fakeMessageClient) FetchMessages(ctx context.Context, sessionID string, beforeMessageID string) ([]llm.ChatMessage, error) {
 	if c.onFetch != nil {
-		c.onFetch(sessionID, excludeMessageIDs)
+		c.onFetch(sessionID, beforeMessageID)
 	}
 	return c.messages, c.err
 }

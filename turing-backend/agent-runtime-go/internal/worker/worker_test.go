@@ -237,7 +237,7 @@ func TestPostToolBeaconDoesNotMarkQueueRejectedBeaconPosted(t *testing.T) {
 	stream := newFakeStream()
 	worker := New(Options{WorkerID: "worker-1", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
 	worker.startOutboundWriter(stream)
-	defer worker.stopOutboundWriter(stream)
+	defer worker.stopOutboundWriter()
 	worker.writerMu.Lock()
 	writer := worker.writer
 	worker.writerMu.Unlock()
@@ -294,7 +294,7 @@ func TestWorkerMarksStartedBlockedBeaconAndAttemptsFailedAfter(t *testing.T) {
 	}
 	worker := New(Options{WorkerID: "worker-blocked-send", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
 	worker.startOutboundWriter(stream)
-	defer worker.stopOutboundWriter(stream)
+	defer worker.stopOutboundWriter()
 	runner := &tools.Runner{PostBeacon: func(ctx context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 		return worker.postToolBeacon(ctx, stream, beacon)
 	}}
@@ -378,7 +378,7 @@ func TestWorkerBoundsCleanupBehindBlockedStartedBeacon(t *testing.T) {
 		if !released {
 			close(releaseSend)
 		}
-		worker.stopOutboundWriter(stream)
+		worker.stopOutboundWriter()
 		waitForOutboundWriterExit(t, worker)
 	}()
 	runner := &tools.Runner{PostBeacon: func(ctx context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
@@ -467,7 +467,7 @@ func TestDelayedDecisionFromCancelledAttemptCannotSatisfyRetry(t *testing.T) {
 	stream := newFakeStream()
 	worker := New(Options{WorkerID: "worker-1", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
 	worker.startOutboundWriter(stream)
-	defer worker.stopOutboundWriter(stream)
+	defer worker.stopOutboundWriter()
 
 	firstCtx, cancelFirst := context.WithCancel(context.Background())
 	firstDone := make(chan error, 1)
@@ -516,7 +516,7 @@ func TestDelayedBeforeDecisionWithSameToolCallIDCannotSatisfyAfter(t *testing.T)
 	stream := newFakeStream()
 	worker := New(Options{WorkerID: "worker-1", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
 	worker.startOutboundWriter(stream)
-	defer worker.stopOutboundWriter(stream)
+	defer worker.stopOutboundWriter()
 	beforeCtx, cancelBefore := context.WithCancel(context.Background())
 	afterCtx, cancelAfter := context.WithCancel(context.Background())
 	defer cancelAfter()
@@ -871,8 +871,6 @@ func (s *fakeStream) Recv() (*turingv1.RuntimeCommand, error) {
 		return nil, s.ctx.Err()
 	}
 }
-
-func (s *fakeStream) CloseSend() error { return nil }
 
 func nextSent(t *testing.T, stream *fakeStream) *turingv1.RuntimeUpdate {
 	t.Helper()

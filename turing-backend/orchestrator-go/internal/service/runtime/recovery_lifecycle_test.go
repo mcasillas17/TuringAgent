@@ -9,7 +9,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 )
 
-func TestCancelRunClearsUnownedUncertainExecutionGate(t *testing.T) {
+func TestCancelRunFencesUnownedUncertainExecutionUntilRecovery(t *testing.T) {
 	h := newHarness(t)
 	first := h.enqueueRun(t, "cancel uncertain attempt")
 	second := h.enqueueRun(t, "claim after uncertain cancellation")
@@ -36,15 +36,33 @@ func TestCancelRunClearsUnownedUncertainExecutionGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != "cancelled" || run.ExecutionActive {
-		t.Fatalf("cancelled orphan run = %+v, want terminal inactive run", run)
+	if run.Status != "cancelled" || !run.ExecutionActive || run.ExecutionState != "uncertain" {
+		t.Fatalf("cancelled orphan run = %+v, want terminal active uncertain fence", run)
 	}
 	next, err := h.repo.ClaimNextJobWithLimit(context.Background(), "general_assistant", "worker-after-cancel", 1, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if next.JobID != "" {
+		t.Fatalf("claim after uncertain cancellation = %+v, want fenced capacity", next)
+	}
+	expired := time.Now().Add(-time.Second)
+	if _, err := h.database.ExecContext(context.Background(), `
+		UPDATE agent_runs
+		SET execution_lease_expires_at = ?, execution_lease_expires_at_ns = ?
+		WHERE id = ?
+	`, expired.Format("2006-01-02T15:04:05.000000000Z"), expired.UnixNano(), first.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.service.RecoverOrphanedAssignments(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	next, err = h.repo.ClaimNextJobWithLimit(context.Background(), "general_assistant", "worker-after-cancel", 1, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if next.RunID != second.RunID {
-		t.Fatalf("claim after orphan cancellation = %+v, want %q", next, second.RunID)
+		t.Fatalf("claim after orphan recovery = %+v, want %q", next, second.RunID)
 	}
 }
 
