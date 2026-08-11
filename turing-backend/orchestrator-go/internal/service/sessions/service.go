@@ -118,12 +118,33 @@ func (s *Server) ListAgents(context.Context, *turingv1.ListAgentsRequest) (*turi
 	return &turingv1.ListAgentsResponse{Agents: agents}, nil
 }
 
-func (s *Server) ListTools(context.Context, *turingv1.ListToolsRequest) (*turingv1.ListToolsResponse, error) {
-	tools := []*turingv1.ToolDescriptor{
-		{ServerName: "system", ToolName: "system.time", Policy: turingv1.ToolPolicy_TOOL_POLICY_SAFE},
-		{ServerName: "files", ToolName: "files.create", Policy: turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED},
+func (s *Server) ListTools(ctx context.Context, _ *turingv1.ListToolsRequest) (*turingv1.ListToolsResponse, error) {
+	discovered, err := s.repo.ListEnabledTools(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "list tools failed")
+	}
+	tools := make([]*turingv1.ToolDescriptor, 0, len(discovered))
+	for _, tool := range discovered {
+		tools = append(tools, &turingv1.ToolDescriptor{
+			ServerName: tool.ServerName,
+			ToolName:   tool.ToolName,
+			Policy:     toProtoToolPolicy(tool.Policy),
+		})
 	}
 	return &turingv1.ListToolsResponse{Tools: tools}, nil
+}
+
+func toProtoToolPolicy(policy string) turingv1.ToolPolicy {
+	switch policy {
+	case "safe":
+		return turingv1.ToolPolicy_TOOL_POLICY_SAFE
+	case "approval_required":
+		return turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED
+	case "disabled":
+		return turingv1.ToolPolicy_TOOL_POLICY_DISABLED
+	default:
+		return turingv1.ToolPolicy_TOOL_POLICY_UNSPECIFIED
+	}
 }
 
 func mapSession(session repository.Session) *turingv1.Session {

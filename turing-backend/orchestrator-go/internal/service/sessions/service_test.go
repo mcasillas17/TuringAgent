@@ -142,19 +142,32 @@ func TestSessionServiceServesPublicReadEndpoints(t *testing.T) {
 		t.Fatalf("agents = %+v", agents.Agents)
 	}
 
+	if err := h.repo.UpsertTools(ctx, []repository.DiscoveredTool{
+		{ServerName: "custom", ToolName: "custom.scan", SchemaJSON: `{}`, Policy: "approval_required"},
+		{ServerName: "files", ToolName: "files.create", SchemaJSON: `{}`, Policy: "disabled"},
+		{ServerName: "system", ToolName: "system.time", SchemaJSON: `{}`, Policy: "safe"},
+	}); err != nil {
+		t.Fatalf("seed tools: %v", err)
+	}
 	tools, err := client.ListTools(ctx, &turingv1.ListToolsRequest{})
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
 	gotTools := map[string]turingv1.ToolPolicy{}
 	for _, tool := range tools.Tools {
-		gotTools[tool.ToolName] = tool.Policy
+		gotTools[tool.ServerName+"/"+tool.ToolName] = tool.Policy
 	}
-	if gotTools["system.time"] != turingv1.ToolPolicy_TOOL_POLICY_SAFE {
-		t.Fatalf("system.time policy = %v", gotTools["system.time"])
+	if len(gotTools) != 3 {
+		t.Fatalf("tools = %+v, want exact database snapshot", tools.Tools)
 	}
-	if gotTools["files.create"] != turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED {
-		t.Fatalf("files.create policy = %v", gotTools["files.create"])
+	if gotTools["system/system.time"] != turingv1.ToolPolicy_TOOL_POLICY_SAFE {
+		t.Fatalf("system.time policy = %v", gotTools["system/system.time"])
+	}
+	if gotTools["files/files.create"] != turingv1.ToolPolicy_TOOL_POLICY_DISABLED {
+		t.Fatalf("files.create policy = %v", gotTools["files/files.create"])
+	}
+	if gotTools["custom/custom.scan"] != turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED {
+		t.Fatalf("custom.scan policy = %v", gotTools["custom/custom.scan"])
 	}
 }
 
