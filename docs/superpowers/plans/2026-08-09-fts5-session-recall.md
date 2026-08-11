@@ -80,7 +80,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Verify CI self-guard passes locally**
 
-Run: `cd turing-backend && go test ./.github/workflows/ -count=1` (the CI-asserting test) — Expected: PASS after updating both `ci.yml` and `ci_test.go`.
+Run from the repository root: `go test ./.github/workflows/ -count=1` (the CI-asserting test) — Expected: PASS after updating both `ci.yml` and `ci_test.go`.
 
 - [ ] **Step 6: Commit**
 
@@ -259,7 +259,7 @@ tools/proto/generate.sh && tools/proto/check.sh
 - [ ] **Step 5: Run (with tag) → PASS**, then `tools/proto/check.sh` clean.
 - [ ] **Step 6: Commit** (include regenerated `gen/` + Dart).
 ```bash
-git add proto/ gen/ turing-client/turing_app/lib/gen/ turing-backend/orchestrator-go/internal/service/sessions/ turing-backend/tests/proto_contract_test.go
+git add proto/ gen/ turing-client/turing_app/lib/generated/ turing-backend/orchestrator-go/internal/service/sessions/ turing-backend/tests/proto_contract_test.go
 git commit -m "feat(orchestrator): SearchMessages RPC for cross-session recall"
 ```
 

@@ -35,11 +35,65 @@ func TestMessagesFTSStaysInSync(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertFTSMessageIDs(t, ctx, database, "mitochondria", 1, []string{"m-update"})
+	if _, err := database.ExecContext(ctx,
+		`UPDATE messages SET content = 'cellular respiration produces energy' WHERE id = 'm-update'`); err != nil {
+		t.Fatal(err)
+	}
+	assertFTSMessageIDs(t, ctx, database, "mitochondria", 0, []string{})
+	assertFTSMessageIDs(t, ctx, database, "respiration", 1, []string{"m-update"})
 
 	if _, err := database.ExecContext(ctx, `DELETE FROM messages WHERE id = 'm-update'`); err != nil {
 		t.Fatal(err)
 	}
-	assertFTSMessageIDs(t, ctx, database, "mitochondria", 0, []string{})
+	assertFTSMessageIDs(t, ctx, database, "respiration", 0, []string{})
+}
+
+func TestMessagesFTSCascadeDeletePreservesOtherSessions(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	insertTestSession(t, ctx, database, "delete-me")
+	insertTestSession(t, ctx, database, "keep-me")
+	for _, row := range []struct{ id, sessionID string }{{"m-delete", "delete-me"}, {"m-keep", "keep-me"}} {
+		if _, err := database.ExecContext(ctx, `
+			INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at)
+			VALUES (?, ?, 'user', 'shared cascade token', 'text', 1, datetime('now'))`, row.id, row.sessionID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertFTSMessageIDs(t, ctx, database, "cascade", 2, []string{"m-delete", "m-keep"})
+	if _, err := database.ExecContext(ctx, `DELETE FROM sessions WHERE id = 'delete-me'`); err != nil {
+		t.Fatal(err)
+	}
+	assertFTSMessageIDs(t, ctx, database, "cascade", 1, []string{"m-keep"})
+}
+
+func TestApplyMigrationsIsIdempotentWithFTSData(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	insertTestSession(t, ctx, database, "s1")
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at)
+		VALUES ('m-idempotent', 's1', 'user', 'idempotent quasar', 'text', 1, datetime('now'))`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatalf("second ApplyMigrations: %v", err)
+	}
+	assertFTSMessageIDs(t, ctx, database, "quasar", 1, []string{"m-idempotent"})
 }
 
 func TestMessagesFTSBackfillsMessagesFromBeforeMigration(t *testing.T) {

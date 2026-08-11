@@ -20,6 +20,9 @@ func TestSearchMessagesRanksAndScopes(t *testing.T) {
 	insertSearchMessage(t, ctx, database, "m-rank-s1", "s1", "rankterm", 2)
 	insertSearchMessage(t, ctx, database, "m-rank-s2", "s2", "rankterm", 1)
 	insertSearchMessage(t, ctx, database, "m-not-a-match", "s2", "unrelated", 2)
+	if _, err := database.ExecContext(ctx, `UPDATE messages SET run_id = 'run-rank-high' WHERE id = 'm-rank-high'`); err != nil {
+		t.Fatalf("set message run_id: %v", err)
+	}
 
 	global, err := repo.SearchMessages(ctx, "", "rankterm", 10)
 	if err != nil {
@@ -28,6 +31,9 @@ func TestSearchMessagesRanksAndScopes(t *testing.T) {
 	assertSearchMessageIDs(t, global, []string{"m-rank-high", "m-rank-s1", "m-rank-s2"})
 	if got := []string{global[0].SessionID, global[1].SessionID, global[2].SessionID}; !reflect.DeepEqual(got, []string{"s1", "s1", "s2"}) {
 		t.Fatalf("global session IDs = %v, want [s1 s1 s2]", got)
+	}
+	if global[0].RunID != "run-rank-high" {
+		t.Fatalf("global run ID = %q, want run-rank-high", global[0].RunID)
 	}
 
 	scoped, err := repo.SearchMessages(ctx, "s2", "rankterm", 10)

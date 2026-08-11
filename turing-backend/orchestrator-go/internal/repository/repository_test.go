@@ -59,6 +59,9 @@ func TestSessionMessageRunJobTransaction(t *testing.T) {
 	if messages[1].MessageID != result.AssistantMessageID || messages[1].Role != "assistant" || messages[1].Content != "" {
 		t.Fatalf("bad assistant message: %+v", messages[1])
 	}
+	if messages[1].RunID != result.RunID {
+		t.Fatalf("assistant message run ID = %q, want %q", messages[1].RunID, result.RunID)
+	}
 	var runStatus, runUserMessageID, runAssistantMessageID, runTraceID, runAgentID, runProvider, runModel string
 	if err := database.QueryRowContext(ctx, `
 		SELECT status, user_message_id, assistant_message_id, trace_id, agent_id, model_provider, model_name

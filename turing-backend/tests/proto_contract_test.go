@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 func TestProtoContractsDefineRequiredServices(t *testing.T) {
@@ -30,6 +33,49 @@ func TestProtoContractsDefineRequiredServices(t *testing.T) {
 				t.Fatalf("%s missing %q", file, snippet)
 			}
 		}
+	}
+}
+
+func TestSearchMessagesProtoContract(t *testing.T) {
+	file := turingv1.File_turing_v1_sessions_proto
+	request := file.Messages().ByName("SearchMessagesRequest")
+	assertProtoField(t, request, "query", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, request, "session_id", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, request, "limit", 3, protoreflect.Int32Kind, false, "")
+
+	response := file.Messages().ByName("SearchMessagesResponse")
+	assertProtoField(t, response, "messages", 1, protoreflect.MessageKind, true, "turing.v1.Message")
+
+	service := file.Services().ByName("SessionService")
+	if service == nil {
+		t.Fatal("SessionService descriptor is missing")
+	}
+	method := service.Methods().ByName("SearchMessages")
+	if method == nil {
+		t.Fatal("SearchMessages method descriptor is missing")
+	}
+	if got := string(method.Input().FullName()); got != "turing.v1.SearchMessagesRequest" {
+		t.Fatalf("SearchMessages input = %q, want turing.v1.SearchMessagesRequest", got)
+	}
+	if got := string(method.Output().FullName()); got != "turing.v1.SearchMessagesResponse" {
+		t.Fatalf("SearchMessages output = %q, want turing.v1.SearchMessagesResponse", got)
+	}
+}
+
+func assertProtoField(t *testing.T, message protoreflect.MessageDescriptor, name protoreflect.Name, number protoreflect.FieldNumber, kind protoreflect.Kind, repeated bool, messageType protoreflect.FullName) {
+	t.Helper()
+	if message == nil {
+		t.Fatal("message descriptor is missing")
+	}
+	field := message.Fields().ByName(name)
+	if field == nil {
+		t.Fatalf("%s.%s is missing", message.Name(), name)
+	}
+	if field.Number() != number || field.Kind() != kind || field.Cardinality() == protoreflect.Repeated != repeated {
+		t.Fatalf("%s.%s descriptor = number %d kind %s cardinality %s", message.Name(), name, field.Number(), field.Kind(), field.Cardinality())
+	}
+	if messageType != "" && field.Message().FullName() != messageType {
+		t.Fatalf("%s.%s message type = %q, want %q", message.Name(), name, field.Message().FullName(), messageType)
 	}
 }
 

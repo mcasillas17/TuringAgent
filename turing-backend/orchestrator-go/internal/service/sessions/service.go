@@ -144,6 +144,7 @@ func mapMessage(sessionID string, message repository.Message) *turingv1.Message 
 	return &turingv1.Message{
 		MessageId:   message.MessageID,
 		SessionId:   sessionID,
+		RunId:       message.RunID,
 		Role:        mapRole(message.Role),
 		Content:     message.Content,
 		ContentType: message.ContentType,

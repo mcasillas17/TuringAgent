@@ -18,6 +18,12 @@ require protoc-gen-go
 require protoc-gen-go-grpc
 require dart
 
+protoc_version="$(protoc --version 2>/dev/null || true)"
+if [[ "$protoc_version" != "libprotoc 34.1" ]]; then
+  echo "protoc 34.1 is required (found: ${protoc_version:-unknown}); install protoc 34.1 and ensure it is first on PATH" >&2
+  exit 1
+fi
+
 dart_pub_cache="${PUB_CACHE:-$HOME/.pub-cache}"
 if [[ "$dart_pub_cache" != /* ]]; then
   dart_pub_cache="$PWD/$dart_pub_cache"

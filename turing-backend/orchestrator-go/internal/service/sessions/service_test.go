@@ -186,6 +186,9 @@ func TestSessionServiceSearchMessagesReturnsGlobalAndScopedResults(t *testing.T)
 	insertServiceSearchMessage(t, ctx, h.database, "message-a", "session-a", "assistant", "recallneedle alpha", 1)
 	insertServiceSearchMessage(t, ctx, h.database, "message-b", "session-b", "user", "recallneedle beta", 1)
 	insertServiceSearchMessage(t, ctx, h.database, "message-c", "session-b", "tool", "unrelated", 2)
+	if _, err := h.database.ExecContext(ctx, `UPDATE messages SET run_id = 'run-message-a' WHERE id = 'message-a'`); err != nil {
+		t.Fatalf("set message run_id: %v", err)
+	}
 
 	global, err := client.SearchMessages(ctx, &turingv1.SearchMessagesRequest{Query: "recallneedle", Limit: 10})
 	if err != nil {
@@ -198,7 +201,7 @@ func TestSessionServiceSearchMessagesReturnsGlobalAndScopedResults(t *testing.T)
 	for _, message := range global.Messages {
 		got[message.MessageId] = message
 	}
-	if message := got["message-a"]; message == nil || message.SessionId != "session-a" || message.Content != "recallneedle alpha" || message.Role != turingv1.MessageRole_MESSAGE_ROLE_ASSISTANT {
+	if message := got["message-a"]; message == nil || message.SessionId != "session-a" || message.RunId != "run-message-a" || message.Content != "recallneedle alpha" || message.Role != turingv1.MessageRole_MESSAGE_ROLE_ASSISTANT {
 		t.Fatalf("global message-a = %+v", message)
 	}
 	if message := got["message-b"]; message == nil || message.SessionId != "session-b" || message.Content != "recallneedle beta" || message.Role != turingv1.MessageRole_MESSAGE_ROLE_USER {
@@ -229,6 +232,26 @@ func TestSessionServiceSearchMessagesHonorsLimit(t *testing.T) {
 	}
 	if len(response.Messages) != 2 {
 		t.Fatalf("message count = %d, want 2", len(response.Messages))
+	}
+}
+
+func TestSessionServiceSearchMessagesHidesDatabaseErrors(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	if err := h.database.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+
+	_, err := client.SearchMessages(context.Background(), &turingv1.SearchMessagesRequest{Query: "needle"})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("SearchMessages error = %v, want Internal", err)
+	}
+	if got := status.Convert(err).Message(); got != "search messages failed" {
+		t.Fatalf("SearchMessages message = %q, want %q", got, "search messages failed")
+	}
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "sqlite") || strings.Contains(lower, "database is closed") {
+		t.Fatalf("SearchMessages leaked database details: %v", err)
 	}
 }
 

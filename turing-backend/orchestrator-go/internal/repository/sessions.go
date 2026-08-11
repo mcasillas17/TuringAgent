@@ -29,6 +29,7 @@ type Session struct {
 type Message struct {
 	MessageID   string
 	SessionID   string
+	RunID       string
 	Role        string
 	Content     string
 	ContentType string
@@ -80,7 +81,7 @@ func (r *Repository) ListMessages(ctx context.Context, sessionID string, limit i
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id, role, content, content_type, sequence, created_at FROM messages WHERE session_id = ? ORDER BY sequence DESC LIMIT ?`, sessionID, limit)
+	rows, err := r.db.QueryContext(ctx, `SELECT id, COALESCE(run_id, ''), role, content, content_type, sequence, created_at FROM messages WHERE session_id = ? ORDER BY sequence DESC LIMIT ?`, sessionID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +89,7 @@ func (r *Repository) ListMessages(ctx context.Context, sessionID string, limit i
 	var reversed []Message
 	for rows.Next() {
 		var msg Message
-		if err := rows.Scan(&msg.MessageID, &msg.Role, &msg.Content, &msg.ContentType, &msg.Sequence, &msg.CreatedAt); err != nil {
+		if err := rows.Scan(&msg.MessageID, &msg.RunID, &msg.Role, &msg.Content, &msg.ContentType, &msg.Sequence, &msg.CreatedAt); err != nil {
 			return nil, err
 		}
 		reversed = append(reversed, msg)
@@ -112,7 +113,7 @@ func (r *Repository) SearchMessages(ctx context.Context, sessionID, query string
 	}
 
 	sqlQuery := `
-		SELECT m.id, m.session_id, m.role, m.content, m.content_type, m.sequence, m.created_at
+		SELECT m.id, m.session_id, COALESCE(m.run_id, ''), m.role, m.content, m.content_type, m.sequence, m.created_at
 		FROM messages_fts
 		JOIN messages m ON m.rowid = messages_fts.rowid
 		WHERE messages_fts MATCH ?`
@@ -133,7 +134,7 @@ func (r *Repository) SearchMessages(ctx context.Context, sessionID, query string
 	var messages []Message
 	for rows.Next() {
 		var message Message
-		if err := rows.Scan(&message.MessageID, &message.SessionID, &message.Role, &message.Content, &message.ContentType, &message.Sequence, &message.CreatedAt); err != nil {
+		if err := rows.Scan(&message.MessageID, &message.SessionID, &message.RunID, &message.Role, &message.Content, &message.ContentType, &message.Sequence, &message.CreatedAt); err != nil {
 			return nil, err
 		}
 		messages = append(messages, message)
