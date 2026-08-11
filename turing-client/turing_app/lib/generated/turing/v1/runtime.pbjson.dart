@@ -14,6 +14,22 @@ import 'dart:convert' as $convert;
 import 'dart:core' as $core;
 import 'dart:typed_data' as $typed_data;
 
+@$core.Deprecated('Use toolDiscoveryStatusDescriptor instead')
+const ToolDiscoveryStatus$json = {
+  '1': 'ToolDiscoveryStatus',
+  '2': [
+    {'1': 'TOOL_DISCOVERY_STATUS_UNSPECIFIED', '2': 0},
+    {'1': 'TOOL_DISCOVERY_STATUS_COMPLETE', '2': 1},
+    {'1': 'TOOL_DISCOVERY_STATUS_FAILED', '2': 2},
+  ],
+};
+
+/// Descriptor for `ToolDiscoveryStatus`. Decode as a `google.protobuf.EnumDescriptorProto`.
+final $typed_data.Uint8List toolDiscoveryStatusDescriptor = $convert.base64Decode(
+    'ChNUb29sRGlzY292ZXJ5U3RhdHVzEiUKIVRPT0xfRElTQ09WRVJZX1NUQVRVU19VTlNQRUNJRk'
+    'lFRBAAEiIKHlRPT0xfRElTQ09WRVJZX1NUQVRVU19DT01QTEVURRABEiAKHFRPT0xfRElTQ09W'
+    'RVJZX1NUQVRVU19GQUlMRUQQAg==');
+
 @$core.Deprecated('Use agentJobDescriptor instead')
 const AgentJob$json = {
   '1': 'AgentJob',
@@ -64,6 +80,29 @@ final $typed_data.Uint8List agentJobDescriptor = $convert.base64Decode(
     'bW9kZWwSGwoJdXNlcl90ZXh0GAogASgJUgh1c2VyVGV4dBInCg9yZXF1ZXN0ZWRfdG9vbHMYCy'
     'ADKAlSDnJlcXVlc3RlZFRvb2xzEhgKB2F0dGVtcHQYDCABKAVSB2F0dGVtcHQ=');
 
+@$core.Deprecated('Use discoveredToolDescriptor instead')
+const DiscoveredTool$json = {
+  '1': 'DiscoveredTool',
+  '2': [
+    {'1': 'server_name', '3': 1, '4': 1, '5': 9, '10': 'serverName'},
+    {'1': 'tool_name', '3': 2, '4': 1, '5': 9, '10': 'toolName'},
+    {
+      '1': 'schema',
+      '3': 3,
+      '4': 1,
+      '5': 11,
+      '6': '.google.protobuf.Struct',
+      '10': 'schema'
+    },
+  ],
+};
+
+/// Descriptor for `DiscoveredTool`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List discoveredToolDescriptor = $convert.base64Decode(
+    'Cg5EaXNjb3ZlcmVkVG9vbBIfCgtzZXJ2ZXJfbmFtZRgBIAEoCVIKc2VydmVyTmFtZRIbCgl0b2'
+    '9sX25hbWUYAiABKAlSCHRvb2xOYW1lEi8KBnNjaGVtYRgDIAEoCzIXLmdvb2dsZS5wcm90b2J1'
+    'Zi5TdHJ1Y3RSBnNjaGVtYQ==');
+
 @$core.Deprecated('Use runtimeWorkerReadyDescriptor instead')
 const RuntimeWorkerReady$json = {
   '1': 'RuntimeWorkerReady',
@@ -84,6 +123,22 @@ const RuntimeWorkerReady$json = {
       '5': 5,
       '10': 'maxConcurrentRuns'
     },
+    {
+      '1': 'tools',
+      '3': 4,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.DiscoveredTool',
+      '10': 'tools'
+    },
+    {
+      '1': 'tool_discovery_status',
+      '3': 5,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.ToolDiscoveryStatus',
+      '10': 'toolDiscoveryStatus'
+    },
   ],
 };
 
@@ -91,7 +146,10 @@ const RuntimeWorkerReady$json = {
 final $typed_data.Uint8List runtimeWorkerReadyDescriptor = $convert.base64Decode(
     'ChJSdW50aW1lV29ya2VyUmVhZHkSGwoJd29ya2VyX2lkGAEgASgJUgh3b3JrZXJJZBItCghhZ2'
     'VudF9pZBgCIAEoDjISLnR1cmluZy52MS5BZ2VudElkUgdhZ2VudElkEi4KE21heF9jb25jdXJy'
-    'ZW50X3J1bnMYAyABKAVSEW1heENvbmN1cnJlbnRSdW5z');
+    'ZW50X3J1bnMYAyABKAVSEW1heENvbmN1cnJlbnRSdW5zEi8KBXRvb2xzGAQgAygLMhkudHVyaW'
+    '5nLnYxLkRpc2NvdmVyZWRUb29sUgV0b29scxJSChV0b29sX2Rpc2NvdmVyeV9zdGF0dXMYBSAB'
+    'KA4yHi50dXJpbmcudjEuVG9vbERpc2NvdmVyeVN0YXR1c1ITdG9vbERpc2NvdmVyeVN0YXR1cw'
+    '==');
 
 @$core.Deprecated('Use runtimeHeartbeatDescriptor instead')
 const RuntimeHeartbeat$json = {

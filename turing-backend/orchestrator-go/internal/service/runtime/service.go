@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +22,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/tools"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -35,6 +39,8 @@ type Server struct {
 	audit     *auditsvc.Server
 	mu        sync.Mutex
 	workers   map[string]*worker
+	toolsMu   sync.Mutex
+	toolsets  map[string]workerToolset
 }
 
 type approvalCreator interface {
@@ -49,6 +55,11 @@ type worker struct {
 	closed        bool
 }
 
+type workerToolset struct {
+	owner *worker
+	tools []repository.DiscoveredTool
+}
+
 type assignment struct {
 	jobID string
 	runID string
@@ -59,7 +70,10 @@ func New(repo *repository.Repository, bus *events.Bus, approvalServices ...appro
 	if len(approvalServices) > 0 {
 		approvals = approvalServices[0]
 	}
-	server := &Server{repo: repo, bus: bus, approvals: approvals, audit: auditsvc.New(repo), workers: map[string]*worker{}}
+	server := &Server{
+		repo: repo, bus: bus, approvals: approvals, audit: auditsvc.New(repo),
+		workers: map[string]*worker{}, toolsets: map[string]workerToolset{},
+	}
 	if setter, ok := approvals.(interface{ SetNotifier(approvalsvc.Notifier) }); ok {
 		setter.SetNotifier(server)
 	}
@@ -75,6 +89,28 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 	ready := first.GetWorkerReady()
 	if ready == nil || ready.WorkerId == "" || ready.AgentId != turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT {
 		return status.Error(codes.InvalidArgument, "worker_ready is required")
+	}
+	reportsDiscovery := false
+	switch ready.GetToolDiscoveryStatus() {
+	case turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_UNSPECIFIED:
+		// Legacy workers leave the status unset. A non-empty snapshot is still
+		// authoritative for compatibility with transitional implementations.
+		reportsDiscovery = len(ready.GetTools()) > 0
+	case turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_COMPLETE:
+		reportsDiscovery = true
+	case turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_FAILED:
+		return status.Error(codes.FailedPrecondition, "worker tool discovery failed")
+	default:
+		return status.Error(codes.InvalidArgument, "worker tool discovery status is invalid")
+	}
+	var discovered []repository.DiscoveredTool
+	if reportsDiscovery {
+		discovered, err = decodeDiscoveredTools(ready.GetTools())
+		if err != nil {
+			return status.Error(codes.InvalidArgument, "worker tool discovery snapshot is invalid")
+		}
+	} else {
+		discovered = legacyDiscoveredTools()
 	}
 	maxConcurrent := int(ready.MaxConcurrentRuns)
 	if maxConcurrent <= 0 {
@@ -92,10 +128,12 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 	connectedWorker := &worker{commands: commands, maxConcurrent: maxConcurrent, assignments: map[string]string{}}
 	s.workers[ready.WorkerId] = connectedWorker
 	s.mu.Unlock()
+	s.persistDiscoveredTools(ctx, ready.GetWorkerId(), connectedWorker, discovered)
 	defer func() {
 		s.mu.Lock()
 		delete(s.workers, ready.WorkerId)
 		s.mu.Unlock()
+		s.removeDiscoveredTools(ready.GetWorkerId(), connectedWorker)
 		s.requeueAssignments(connectedWorker.close())
 	}()
 	if err := stream.Send(&turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_WorkerAccepted{WorkerAccepted: &turingv1.RuntimeWorkerAccepted{WorkerId: ready.WorkerId}}}); err != nil {
@@ -117,7 +155,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 				return
 			}
 			if beacon := update.GetToolBeacon(); beacon != nil {
-				decision, err := s.handleToolBeacon(ctx, beacon)
+				decision, err := s.handleToolBeacon(ctx, beacon, ready.GetWorkerId(), connectedWorker)
 				if err != nil {
 					recvErr <- err
 					return
@@ -154,6 +192,121 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 			}
 		}
 	}
+}
+
+func decodeDiscoveredTools(reported []*turingv1.DiscoveredTool) ([]repository.DiscoveredTool, error) {
+	discovered := make([]repository.DiscoveredTool, 0, len(reported))
+	type toolKey struct {
+		serverName string
+		toolName   string
+	}
+	seen := make(map[toolKey]struct{}, len(reported))
+	for _, tool := range reported {
+		if tool == nil || tool.GetServerName() == "" || tool.GetServerName() != strings.TrimSpace(tool.GetServerName()) ||
+			tool.GetToolName() == "" || tool.GetToolName() != strings.TrimSpace(tool.GetToolName()) || tool.GetSchema() == nil {
+			return nil, errors.New("tool identity and schema are required")
+		}
+		key := toolKey{serverName: tool.GetServerName(), toolName: tool.GetToolName()}
+		if _, ok := seen[key]; ok {
+			return nil, errors.New("duplicate discovered tool")
+		}
+		seen[key] = struct{}{}
+		schemaJSON, err := protojson.Marshal(tool.GetSchema())
+		if err != nil {
+			return nil, err
+		}
+		discovered = append(discovered, repository.DiscoveredTool{
+			ServerName: tool.GetServerName(),
+			ToolName:   tool.GetToolName(),
+			SchemaJSON: string(schemaJSON),
+			Policy:     string(tools.DefaultPolicyFor(tool.GetServerName(), tool.GetToolName())),
+		})
+	}
+	return discovered, nil
+}
+
+func legacyDiscoveredTools() []repository.DiscoveredTool {
+	defaults := tools.LegacyPolicyDefaults()
+	discovered := make([]repository.DiscoveredTool, 0, len(defaults))
+	for _, tool := range defaults {
+		discovered = append(discovered, repository.DiscoveredTool{
+			ServerName: tool.ServerName,
+			ToolName:   tool.ToolName,
+			SchemaJSON: `{}`,
+			Policy:     string(tool.Policy),
+		})
+	}
+	return discovered
+}
+
+func (s *Server) persistDiscoveredTools(ctx context.Context, workerID string, owner *worker, discovered []repository.DiscoveredTool) {
+	s.toolsMu.Lock()
+	defer s.toolsMu.Unlock()
+	s.toolsets[workerID] = workerToolset{owner: owner, tools: discovered}
+	if err := s.repo.UpsertTools(ctx, unionToolsets(s.toolsets)); err != nil {
+		log.Printf("runtime tool discovery: persist snapshot: %v", err)
+	}
+}
+
+func (s *Server) removeDiscoveredTools(workerID string, owner *worker) {
+	s.toolsMu.Lock()
+	defer s.toolsMu.Unlock()
+	toolset, ok := s.toolsets[workerID]
+	if !ok || toolset.owner != owner {
+		return
+	}
+	delete(s.toolsets, workerID)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.repo.UpsertTools(ctx, unionToolsets(s.toolsets)); err != nil {
+		log.Printf("runtime tool discovery: persist snapshot after worker disconnect: %v", err)
+	}
+}
+
+func unionToolsets(toolsets map[string]workerToolset) []repository.DiscoveredTool {
+	workerIDs := make([]string, 0, len(toolsets))
+	for workerID := range toolsets {
+		workerIDs = append(workerIDs, workerID)
+	}
+	sort.Strings(workerIDs)
+
+	type key struct{ serverName, toolName string }
+	union := make(map[key]repository.DiscoveredTool)
+	for _, workerID := range workerIDs {
+		for _, tool := range toolsets[workerID].tools {
+			union[key{serverName: tool.ServerName, toolName: tool.ToolName}] = tool
+		}
+	}
+	keys := make([]key, 0, len(union))
+	for toolKey := range union {
+		keys = append(keys, toolKey)
+	}
+	sort.Slice(keys, func(i int, j int) bool {
+		if keys[i].serverName == keys[j].serverName {
+			return keys[i].toolName < keys[j].toolName
+		}
+		return keys[i].serverName < keys[j].serverName
+	})
+	out := make([]repository.DiscoveredTool, 0, len(keys))
+	for _, toolKey := range keys {
+		out = append(out, union[toolKey])
+	}
+	return out
+}
+
+func (s *Server) workerHasTool(workerID string, owner *worker, serverName string, toolName string) bool {
+	s.toolsMu.Lock()
+	defer s.toolsMu.Unlock()
+	toolset, ok := s.toolsets[workerID]
+	if !ok || toolset.owner != owner {
+		return false
+	}
+	for _, tool := range toolset.tools {
+		if tool.ServerName == serverName && tool.ToolName == toolName {
+			return true
+		}
+	}
+	return false
 }
 
 func terminalRunID(update *turingv1.RuntimeUpdate) string {
@@ -370,7 +523,7 @@ func (s *Server) applyUpdate(ctx context.Context, update *turingv1.RuntimeUpdate
 		s.publishEvent(event)
 		return nil
 	case *turingv1.RuntimeUpdate_ToolBeacon:
-		_, err := s.handleToolBeacon(ctx, value.ToolBeacon)
+		_, err := s.handleToolBeacon(ctx, value.ToolBeacon, "", nil)
 		return err
 	case *turingv1.RuntimeUpdate_RunCompleted:
 		return s.handleRunCompleted(ctx, value.RunCompleted)
@@ -547,7 +700,7 @@ func mapRunStateError(err error) error {
 	}
 }
 
-func (s *Server) handleToolBeacon(ctx context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+func (s *Server) handleToolBeacon(ctx context.Context, beacon *turingv1.ToolCallBeacon, workerID string, owner *worker) (*turingv1.ToolPolicyDecision, error) {
 	if beacon == nil || beacon.RunId == "" {
 		return nil, status.Error(codes.InvalidArgument, "tool_beacon is required")
 	}
@@ -577,7 +730,7 @@ func (s *Server) handleToolBeacon(ctx context.Context, beacon *turingv1.ToolCall
 	}
 	switch beacon.Phase {
 	case turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE:
-		return s.handleToolBefore(ctx, beacon, run)
+		return s.handleToolBefore(ctx, beacon, run, workerID, owner)
 	case turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER:
 		return s.handleToolAfter(ctx, beacon, run)
 	default:
@@ -585,13 +738,19 @@ func (s *Server) handleToolBeacon(ctx context.Context, beacon *turingv1.ToolCall
 	}
 }
 
-func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run) (*turingv1.ToolPolicyDecision, error) {
+func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run, workerID string, owner *worker) (*turingv1.ToolPolicyDecision, error) {
 	args := beaconArgs(beacon)
 	argsJSON, argsHash, err := canonicalArgs(args)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "tool args are not valid JSON")
 	}
-	policy, ok := tools.GetPolicy(beacon.ToolName)
+	if workerID != "" && !s.workerHasTool(workerID, owner, beaconServerName(beacon), beacon.ToolName) {
+		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "unknown_tool")
+	}
+	policy, ok, err := tools.GetPolicy(ctx, s.repo, beaconServerName(beacon), beacon.ToolName)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "get tool policy failed")
+	}
 	if !ok {
 		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "unknown_tool")
 	}

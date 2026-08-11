@@ -1,5 +1,7 @@
 package tools
 
+import "context"
+
 type Policy string
 
 const (
@@ -8,15 +10,34 @@ const (
 	PolicyDisabled         Policy = "disabled"
 )
 
-var policies = map[string]Policy{
-	"system.time":   PolicySafe,
-	"system.health": PolicySafe,
-	"system.echo":   PolicySafe,
-	"files.create":  PolicyApprovalRequired,
-	"files.update":  PolicyApprovalRequired,
+type PolicyLookup interface {
+	GetToolPolicy(ctx context.Context, serverName string, toolName string) (policy string, enabled bool, found bool, err error)
+	ToolRegistryInitialized(ctx context.Context) (bool, error)
 }
 
-func GetPolicy(toolName string) (Policy, bool) {
-	policy, ok := policies[toolName]
-	return policy, ok
+func GetPolicy(ctx context.Context, lookup PolicyLookup, serverName string, toolName string) (Policy, bool, error) {
+	if permanentlyDisabled(serverName, toolName) {
+		return PolicyDisabled, true, nil
+	}
+	if lookup != nil {
+		policy, enabled, found, err := lookup.GetToolPolicy(ctx, serverName, toolName)
+		if err != nil {
+			return "", false, err
+		}
+		if found && enabled {
+			return Policy(policy), true, nil
+		}
+		if found {
+			return "", false, nil
+		}
+		initialized, err := lookup.ToolRegistryInitialized(ctx)
+		if err != nil {
+			return "", false, err
+		}
+		if initialized {
+			return "", false, nil
+		}
+	}
+	policy, ok := seedPolicies[policyKey{serverName: serverName, toolName: toolName}]
+	return policy, ok, nil
 }

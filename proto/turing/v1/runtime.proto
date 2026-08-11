@@ -24,10 +24,28 @@ message AgentJob {
   int32 attempt = 12;
 }
 
+message DiscoveredTool {
+  string server_name = 1;
+  string tool_name = 2;
+  google.protobuf.Struct schema = 3;
+}
+
+enum ToolDiscoveryStatus {
+  // Legacy runtime that cannot report an authoritative capability snapshot.
+  TOOL_DISCOVERY_STATUS_UNSPECIFIED = 0;
+  // Discovery succeeded; tools is authoritative, including when it is empty.
+  TOOL_DISCOVERY_STATUS_COMPLETE = 1;
+  // Discovery was attempted but failed. The orchestrator rejects the worker.
+  TOOL_DISCOVERY_STATUS_FAILED = 2;
+}
+
 message RuntimeWorkerReady {
   string worker_id = 1;
   AgentId agent_id = 2;
   int32 max_concurrent_runs = 3;
+  // Complete snapshot of tools discovered by this worker.
+  repeated DiscoveredTool tools = 4;
+  ToolDiscoveryStatus tool_discovery_status = 5;
 }
 
 message RuntimeHeartbeat {

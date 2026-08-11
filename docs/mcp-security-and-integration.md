@@ -463,6 +463,46 @@ A concise mapping from rejection to threat:
 The orchestrator implements the signing side and the gRPC consume method that
 the Files MCP verifier calls.
 
+#### Dynamic tool discovery and policy
+
+The runtime is the only component that connects to MCP servers, so it reports
+its `tools/list` results in the first `RuntimeWorkerReady` message. Each entry
+contains only `server_name`, `tool_name`, and the JSON argument schema. Policy
+is never accepted from the runtime; the orchestrator remains authoritative.
+
+`RuntimeWorkerReady.tool_discovery_status` makes the snapshot semantics
+explicit:
+
+- `TOOL_DISCOVERY_STATUS_COMPLETE` means `tools` is authoritative, including
+  when it is empty.
+- `TOOL_DISCOVERY_STATUS_FAILED` rejects the worker before admission. A failed
+  discovery therefore cannot fall back to a permissive compatibility catalog.
+- `TOOL_DISCOVERY_STATUS_UNSPECIFIED` is reserved for runtimes that predate
+  discovery. An admitted legacy worker contributes the static v1 compatibility
+  catalog while it remains connected.
+
+The orchestrator validates a complete snapshot before admitting the worker,
+rejecting blank identities, missing or invalid schemas, and duplicate
+`(server_name, tool_name)` pairs. It reconciles the union of all active
+workers' snapshots into the SQLite `tools` registry. Re-reporting updates the
+schema and enabled state without overwriting an operator-set policy; tools no
+longer present in the active union are disabled rather than deleted. On a
+fresh database with no connected worker, `ListTools` returns an empty list.
+
+Policy lookup always uses the exact `(server_name, tool_name)` pair. Known v1
+read-only tools seed as `safe`, files mutations seed as
+`approval_required`, and unknown tools seed as `approval_required` rather
+than `safe`. `files.delete` and `files.move` remain permanently disabled.
+Once discovery initializes the registry, absent or disabled tools are denied;
+they cannot fall through to legacy defaults. Authorization is also scoped to
+the authenticated worker connection, so one worker cannot borrow a capability
+reported only by another worker even though `ListTools` exposes their union.
+
+The separately owned runtime integration must send `COMPLETE` after every
+successful discovery (including a successful empty result) and `FAILED` when
+any required discovery attempt fails. Until that runtime change ships, the
+current runtime is intentionally treated as legacy through `UNSPECIFIED`.
+
 JWT signing requirements:
 
 - Algorithm: **HS256** only. The header must be `{"alg":"HS256","typ":"JWT"}`.
