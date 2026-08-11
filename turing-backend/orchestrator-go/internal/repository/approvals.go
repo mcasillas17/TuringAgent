@@ -333,6 +333,17 @@ func (r *Repository) terminalizeApproval(
 			}
 		}
 	}
+	record, err = approvalByID(ctx, tx, approvalID)
+	if err != nil {
+		return ApprovalTerminalization{}, err
+	}
+	var approvalEvent Event
+	if approvalEventType != "" {
+		approvalEvent, err = appendApprovalLifecycleEventTx(ctx, tx, record, approvalEventType, decidedAt)
+		if err != nil {
+			return ApprovalTerminalization{}, err
+		}
+	}
 	var event Event
 	if !lateRuntimeFailure {
 		runStatusPredicate := "status = 'waiting_approval'"
@@ -370,17 +381,6 @@ func (r *Repository) terminalizeApproval(
 			return ApprovalTerminalization{}, err
 		}
 		event, err = appendRunEventTx(ctx, tx, sessionID, record.RunID, traceID, "agent.run.failed", string(payloadJSON), decidedAt)
-		if err != nil {
-			return ApprovalTerminalization{}, err
-		}
-	}
-	record, err = approvalByID(ctx, tx, approvalID)
-	if err != nil {
-		return ApprovalTerminalization{}, err
-	}
-	var approvalEvent Event
-	if approvalEventType != "" {
-		approvalEvent, err = appendApprovalLifecycleEventTx(ctx, tx, record, approvalEventType, decidedAt)
 		if err != nil {
 			return ApprovalTerminalization{}, err
 		}

@@ -179,11 +179,11 @@ func (s *Server) DenyApproval(ctx context.Context, req *turingv1.DenyApprovalReq
 	if !transition.Changed {
 		return &turingv1.ApprovalResponse{ApprovalId: denied.ApprovalID, Status: turingv1.ApprovalStatus_APPROVAL_STATUS_DENIED}, nil
 	}
-	if transition.RunFailedEvent.EventID != "" {
-		s.publishEvent(transition.RunFailedEvent)
-	}
 	if transition.ApprovalEvent.EventID != "" {
 		s.publishEvent(transition.ApprovalEvent)
+	}
+	if transition.RunFailedEvent.EventID != "" {
+		s.publishEvent(transition.RunFailedEvent)
 	}
 	if denied.Status == "expired" {
 		s.finishPostCommit(denied, "system", "approval.expired", "expired", "")
@@ -263,11 +263,11 @@ func (s *Server) expireApproval(ctx context.Context, approvalID string) (reposit
 	if !transition.Changed {
 		return expiredApproval, nil
 	}
-	if transition.RunFailedEvent.EventID != "" {
-		s.publishEvent(transition.RunFailedEvent)
-	}
 	if transition.ApprovalEvent.EventID != "" {
 		s.publishEvent(transition.ApprovalEvent)
+	}
+	if transition.RunFailedEvent.EventID != "" {
+		s.publishEvent(transition.RunFailedEvent)
 	}
 	s.finishPostCommit(expiredApproval, "system", "approval.expired", "expired", "")
 	return expiredApproval, nil
@@ -296,11 +296,11 @@ func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeAppro
 	transition, err := s.repo.ConsumeApprovalWithEvent(ctx, req.ApprovalId, "")
 	if errors.Is(err, repository.ErrApprovalExpired) {
 		expiredApproval := transition.Approval
-		if transition.RunFailedEvent.EventID != "" {
-			s.publishEvent(transition.RunFailedEvent)
-		}
 		if transition.ApprovalEvent.EventID != "" {
 			s.publishEvent(transition.ApprovalEvent)
+		}
+		if transition.RunFailedEvent.EventID != "" {
+			s.publishEvent(transition.RunFailedEvent)
 		}
 		s.finishPostCommit(expiredApproval, "system", "approval.expired", "expired", "")
 		return nil, status.Error(codes.FailedPrecondition, "approval expired")
