@@ -224,6 +224,51 @@ func TestConnectWorkerWithoutDiscoveryCapabilityPreservesRegistry(t *testing.T) 
 	}
 }
 
+func TestWorkerReadyDistinguishesCompletedEmptyDiscoveryFromLegacy(t *testing.T) {
+	t.Run("completed empty discovery", func(t *testing.T) {
+		h := newHarness(t)
+		stream, err := h.runtimeClient(t).ConnectWorker(h.internalContext())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = stream.CloseSend() }()
+		if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+			WorkerId: "worker-empty-complete", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+			MaxConcurrentRuns: 1, ToolDiscoveryComplete: true,
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+		recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool { return cmd.GetWorkerAccepted() != nil })
+		assertEnabledToolNames(t, h.repo, nil)
+	})
+
+	t.Run("legacy handshake", func(t *testing.T) {
+		h := newHarness(t)
+		stream, err := h.runtimeClient(t).ConnectWorker(h.internalContext())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = stream.CloseSend() }()
+		if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+			WorkerId: "worker-empty-legacy", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+		recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool { return cmd.GetWorkerAccepted() != nil })
+		tools, err := h.repo.ListEnabledTools(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]bool{}
+		for _, tool := range tools {
+			got[tool.ServerName+"/"+tool.ToolName] = true
+		}
+		if !got["system/system.time"] || !got["files/files.create"] {
+			t.Fatalf("legacy registry = %+v, want compatibility capabilities", got)
+		}
+	})
+}
+
 func TestConnectWorkerCombinesLegacyCompatibilityToolsWithDiscoveredTools(t *testing.T) {
 	h := newHarness(t)
 	client := h.runtimeClient(t)

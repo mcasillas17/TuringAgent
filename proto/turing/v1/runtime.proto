@@ -34,7 +34,10 @@ message RuntimeWorkerReady {
   string worker_id = 1;
   AgentId agent_id = 2;
   int32 max_concurrent_runs = 3;
+  // Complete snapshot of tools discovered by this worker.
   repeated DiscoveredTool tools = 4;
+  // Must be true after successful discovery, including when tools is empty.
+  // False means this worker predates dynamic discovery and uses compatibility defaults.
   bool tool_discovery_complete = 5;
 }
 

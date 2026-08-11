@@ -171,33 +171,15 @@ func TestSessionServiceServesPublicReadEndpoints(t *testing.T) {
 	}
 }
 
-func TestListToolsReturnsLegacyCatalogBeforeDiscoveryInitializes(t *testing.T) {
+func TestListToolsIsEmptyBeforeAnyWorkerReportsCapabilities(t *testing.T) {
 	h := newSessionHarness(t)
 	client := turingv1.NewSessionServiceClient(h.conn)
 	listed, err := client.ListTools(context.Background(), &turingv1.ListToolsRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]turingv1.ToolPolicy{}
-	for _, tool := range listed.Tools {
-		got[tool.ServerName+"/"+tool.ToolName] = tool.Policy
-	}
-	if got["system/system.time"] != turingv1.ToolPolicy_TOOL_POLICY_SAFE {
-		t.Fatalf("legacy system.time policy = %v, tools=%+v", got["system/system.time"], listed.Tools)
-	}
-	if got["files/files.create"] != turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED {
-		t.Fatalf("legacy files.create policy = %v, tools=%+v", got["files/files.create"], listed.Tools)
-	}
-
-	if err := h.repo.UpsertTools(context.Background(), nil); err != nil {
-		t.Fatal(err)
-	}
-	listed, err = client.ListTools(context.Background(), &turingv1.ListToolsRequest{})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if len(listed.Tools) != 0 {
-		t.Fatalf("ListTools after complete empty snapshot = %+v, want empty", listed.Tools)
+		t.Fatalf("ListTools before a worker handshake = %+v, want empty", listed.Tools)
 	}
 }
 

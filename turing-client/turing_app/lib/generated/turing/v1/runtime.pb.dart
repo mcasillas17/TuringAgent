@@ -383,9 +383,12 @@ class RuntimeWorkerReady extends $pb.GeneratedMessage {
   @$pb.TagNumber(3)
   void clearMaxConcurrentRuns() => $_clearField(3);
 
+  /// Complete snapshot of tools discovered by this worker.
   @$pb.TagNumber(4)
   $pb.PbList<DiscoveredTool> get tools => $_getList(3);
 
+  /// Must be true after successful discovery, including when tools is empty.
+  /// False means this worker predates dynamic discovery and uses compatibility defaults.
   @$pb.TagNumber(5)
   $core.bool get toolDiscoveryComplete => $_getBF(4);
   @$pb.TagNumber(5)

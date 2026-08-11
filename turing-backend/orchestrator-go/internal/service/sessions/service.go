@@ -10,7 +10,6 @@ import (
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
-	toolsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/tools"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -120,22 +119,6 @@ func (s *Server) ListAgents(context.Context, *turingv1.ListAgentsRequest) (*turi
 }
 
 func (s *Server) ListTools(ctx context.Context, _ *turingv1.ListToolsRequest) (*turingv1.ListToolsResponse, error) {
-	initialized, err := s.repo.ToolRegistryInitialized(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "get tool registry state failed")
-	}
-	if !initialized {
-		defaults := toolsvc.LegacyPolicyDefaults()
-		tools := make([]*turingv1.ToolDescriptor, 0, len(defaults))
-		for _, tool := range defaults {
-			tools = append(tools, &turingv1.ToolDescriptor{
-				ServerName: tool.ServerName,
-				ToolName:   tool.ToolName,
-				Policy:     toProtoToolPolicy(string(tool.Policy)),
-			})
-		}
-		return &turingv1.ListToolsResponse{Tools: tools}, nil
-	}
 	discovered, err := s.repo.ListEnabledTools(ctx)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "list tools failed")

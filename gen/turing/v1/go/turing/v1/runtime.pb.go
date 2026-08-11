@@ -215,12 +215,15 @@ func (x *DiscoveredTool) GetSchema() *structpb.Struct {
 }
 
 type RuntimeWorkerReady struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	WorkerId              string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
-	AgentId               AgentId                `protobuf:"varint,2,opt,name=agent_id,json=agentId,proto3,enum=turing.v1.AgentId" json:"agent_id,omitempty"`
-	MaxConcurrentRuns     int32                  `protobuf:"varint,3,opt,name=max_concurrent_runs,json=maxConcurrentRuns,proto3" json:"max_concurrent_runs,omitempty"`
-	Tools                 []*DiscoveredTool      `protobuf:"bytes,4,rep,name=tools,proto3" json:"tools,omitempty"`
-	ToolDiscoveryComplete bool                   `protobuf:"varint,5,opt,name=tool_discovery_complete,json=toolDiscoveryComplete,proto3" json:"tool_discovery_complete,omitempty"`
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	WorkerId          string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	AgentId           AgentId                `protobuf:"varint,2,opt,name=agent_id,json=agentId,proto3,enum=turing.v1.AgentId" json:"agent_id,omitempty"`
+	MaxConcurrentRuns int32                  `protobuf:"varint,3,opt,name=max_concurrent_runs,json=maxConcurrentRuns,proto3" json:"max_concurrent_runs,omitempty"`
+	// Complete snapshot of tools discovered by this worker.
+	Tools []*DiscoveredTool `protobuf:"bytes,4,rep,name=tools,proto3" json:"tools,omitempty"`
+	// Must be true after successful discovery, including when tools is empty.
+	// False means this worker predates dynamic discovery and uses compatibility defaults.
+	ToolDiscoveryComplete bool `protobuf:"varint,5,opt,name=tool_discovery_complete,json=toolDiscoveryComplete,proto3" json:"tool_discovery_complete,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
