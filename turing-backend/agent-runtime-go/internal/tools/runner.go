@@ -54,12 +54,21 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 	if input.Args == nil {
 		input.Args = map[string]any{}
 	}
+	arguments, err := safejson.ToStruct(input.Args)
+	if err != nil {
+		return RunOutcome{}, fmt.Errorf("serialize tool arguments: %w", err)
+	}
+	input.Args = arguments.AsMap()
 	if err := r.fetchMetadata(ctx, input.Timeout); err != nil {
 		return RunOutcome{}, err
 	}
 	toolCallID := NewToolCallID()
 	started := time.Now()
-	decision, err := r.postWithTimeout(ctx, input.Timeout, beacon(input, toolCallID, turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, turingv1.ToolCallStatus_TOOL_CALL_STATUS_UNSPECIFIED, "", nil, 0))
+	beforeBeacon, err := beacon(input, toolCallID, turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, turingv1.ToolCallStatus_TOOL_CALL_STATUS_UNSPECIFIED, "", nil, 0)
+	if err != nil {
+		return RunOutcome{}, err
+	}
+	decision, err := r.postWithTimeout(ctx, input.Timeout, beforeBeacon)
 	if err != nil {
 		operationErr := beaconReportingError{err: err}
 		if !beaconWasPosted(err) {
@@ -161,7 +170,11 @@ func (r *Runner) fetchMetadata(ctx context.Context, timeout time.Duration) error
 func (r *Runner) postAfter(ctx context.Context, input RunInput, toolCallID string, status turingv1.ToolCallStatus, summary string, callErr *turingv1.ToolCallError, started time.Time) error {
 	reportCtx, cancel := afterReportContext(ctx, input.Timeout)
 	defer cancel()
-	decision, err := r.postWithTimeout(reportCtx, input.Timeout, beacon(input, toolCallID, turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER, status, summary, callErr, time.Since(started).Milliseconds()))
+	afterBeacon, err := beacon(input, toolCallID, turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER, status, summary, callErr, time.Since(started).Milliseconds())
+	if err != nil {
+		return err
+	}
+	decision, err := r.postWithTimeout(reportCtx, input.Timeout, afterBeacon)
 	if err == nil {
 		err = validatePolicyDecision(decision, toolCallID)
 		if err == nil && decision.GetDecision() != turingv1.ToolPolicyDecision_DECISION_ALLOW {
@@ -396,8 +409,11 @@ func markBeaconPosted(err error) error {
 	return beaconPostedError{err: err}
 }
 
-func beacon(input RunInput, toolCallID string, phase turingv1.ToolCallPhase, status turingv1.ToolCallStatus, summary string, callErr *turingv1.ToolCallError, durationMS int64) *turingv1.ToolCallBeacon {
-	args, _ := safejson.ToStruct(input.Args)
+func beacon(input RunInput, toolCallID string, phase turingv1.ToolCallPhase, status turingv1.ToolCallStatus, summary string, callErr *turingv1.ToolCallError, durationMS int64) (*turingv1.ToolCallBeacon, error) {
+	args, err := safejson.ToStruct(input.Args)
+	if err != nil {
+		return nil, fmt.Errorf("serialize tool arguments: %w", err)
+	}
 	return &turingv1.ToolCallBeacon{
 		Phase:           phase,
 		ToolCallId:      toolCallID,
@@ -412,7 +428,7 @@ func beacon(input RunInput, toolCallID string, phase turingv1.ToolCallPhase, sta
 		RunId:           input.RunID,
 		TraceId:         input.TraceID,
 		ModelToolCallId: input.ModelToolCallID,
-	}
+	}, nil
 }
 
 func NewToolCallID() string {

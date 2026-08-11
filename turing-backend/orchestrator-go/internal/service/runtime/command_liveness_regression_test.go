@@ -86,6 +86,63 @@ func TestConnectWorkerBoundsBlockedAssignmentSendAndRecovers(t *testing.T) {
 	}
 }
 
+func TestTerminalUpdateCannotOvertakeAssignmentDeliveryMark(t *testing.T) {
+	h := newHarnessWithDispatch(t, DispatchConfig{LeaseDuration: time.Second})
+	enqueued := h.enqueueRun(t, "fast terminal update")
+	streamCtx, cancel := context.WithCancel(context.Background())
+	stream := &fastTerminalUpdateStream{
+		ctx:      streamCtx,
+		repo:     h.repo,
+		service:  h.service,
+		workerID: "worker-fast-terminal",
+		ready: &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+			WorkerId: "worker-fast-terminal", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+		}}},
+		completed: &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{RunCompleted: &turingv1.RuntimeRunCompleted{
+			RunId: enqueued.RunID, AssistantMessageId: enqueued.AssistantMessageID, Content: "done",
+		}}},
+		runID:             enqueued.RunID,
+		assignmentStarted: make(chan struct{}),
+	}
+	done := make(chan error, 1)
+	go func() { done <- h.service.ConnectWorker(stream) }()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run.Status == "completed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("run status = %q, want completed", run.Status)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if stream.deliveryWasUnserialized.Load() {
+		t.Fatal("assignment send and delivery marking did not exclude terminal updates")
+	}
+	if stream.completedBeforeDelivery.Load() {
+		t.Fatal("terminal update committed before assignment delivery marking completed")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("worker disconnected after successful terminal update: %v", err)
+	default:
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) && status.Code(err) != codes.Canceled {
+			t.Fatalf("ConnectWorker exit = %v, want canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not exit after cancellation")
+	}
+}
+
 func TestClosedWorkerSendReportsDisconnected(t *testing.T) {
 	worker := &worker{
 		commands:    make(chan *turingv1.RuntimeCommand, 1),
@@ -370,6 +427,60 @@ func TestHeartbeatReconcilesAssignmentThatDatabaseCannotRenew(t *testing.T) {
 	}
 }
 
+func TestConnectWorkerReplacesExpiredIdleSameIDRegistration(t *testing.T) {
+	h := newHarnessWithDispatch(t, DispatchConfig{LeaseDuration: time.Second})
+	const workerID = "worker-idle-reconnect"
+	stale := &worker{
+		commands:      make(chan *turingv1.RuntimeCommand, 1),
+		done:          make(chan struct{}),
+		maxConcurrent: 1,
+		assignments:   map[string]assignment{},
+		lastHeartbeat: time.Now().Add(-time.Minute),
+	}
+	h.service.mu.Lock()
+	h.service.workers[workerID] = stale
+	h.service.mu.Unlock()
+	streamCtx, cancel := context.WithCancel(context.Background())
+	stream := &reconnectAcceptanceStream{
+		ctx: streamCtx,
+		ready: &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+			WorkerId: workerID, AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+		}}},
+		accepted: make(chan struct{}),
+	}
+	done := make(chan error, 1)
+	go func() { done <- h.service.ConnectWorker(stream) }()
+
+	select {
+	case <-stream.accepted:
+	case err := <-done:
+		t.Fatalf("replacement worker rejected: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("replacement worker was not accepted")
+	}
+	stale.mu.Lock()
+	staleClosed := stale.closed
+	stale.mu.Unlock()
+	if !staleClosed {
+		t.Fatal("replacement admission left stale registration open")
+	}
+	h.service.mu.Lock()
+	replacement := h.service.workers[workerID]
+	h.service.mu.Unlock()
+	if replacement == nil || replacement == stale {
+		t.Fatalf("worker registration = %p, want replacement distinct from %p", replacement, stale)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("replacement worker exit = %v, want context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("replacement worker did not exit")
+	}
+}
+
 type blockedAssignmentSendStream struct {
 	grpc.ServerStream
 	ctx               context.Context
@@ -432,3 +543,90 @@ func (s *serialBlockingCommandStream) Recv() (*turingv1.RuntimeUpdate, error) {
 }
 
 func (s *serialBlockingCommandStream) Context() context.Context { return s.ctx }
+
+type reconnectAcceptanceStream struct {
+	grpc.ServerStream
+	ctx       context.Context
+	ready     *turingv1.RuntimeUpdate
+	readySent bool
+	accepted  chan struct{}
+	once      sync.Once
+}
+
+func (s *reconnectAcceptanceStream) Send(command *turingv1.RuntimeCommand) error {
+	if command.GetWorkerAccepted() != nil {
+		s.once.Do(func() { close(s.accepted) })
+	}
+	return nil
+}
+
+func (s *reconnectAcceptanceStream) Recv() (*turingv1.RuntimeUpdate, error) {
+	if !s.readySent {
+		s.readySent = true
+		return s.ready, nil
+	}
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
+func (s *reconnectAcceptanceStream) Context() context.Context { return s.ctx }
+
+type fastTerminalUpdateStream struct {
+	grpc.ServerStream
+	ctx                     context.Context
+	repo                    *repository.Repository
+	service                 *Server
+	workerID                string
+	ready                   *turingv1.RuntimeUpdate
+	completed               *turingv1.RuntimeUpdate
+	runID                   string
+	assignmentStarted       chan struct{}
+	recvCount               int
+	completedBeforeDelivery atomic.Bool
+	deliveryWasUnserialized atomic.Bool
+	assignmentOnce          sync.Once
+}
+
+func (s *fastTerminalUpdateStream) Send(command *turingv1.RuntimeCommand) error {
+	if command.GetRunAssigned() == nil {
+		return nil
+	}
+	s.service.mu.Lock()
+	connectedWorker := s.service.workers[s.workerID]
+	s.service.mu.Unlock()
+	if connectedWorker != nil && connectedWorker.updateMu.TryLock() {
+		s.deliveryWasUnserialized.Store(true)
+		connectedWorker.updateMu.Unlock()
+	}
+	s.assignmentOnce.Do(func() { close(s.assignmentStarted) })
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		run, err := s.repo.GetRun(context.Background(), s.runID)
+		if err == nil && run.Status == "completed" {
+			s.completedBeforeDelivery.Store(true)
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return nil
+}
+
+func (s *fastTerminalUpdateStream) Recv() (*turingv1.RuntimeUpdate, error) {
+	s.recvCount++
+	switch s.recvCount {
+	case 1:
+		return s.ready, nil
+	case 2:
+		select {
+		case <-s.assignmentStarted:
+			return s.completed, nil
+		case <-s.ctx.Done():
+			return nil, s.ctx.Err()
+		}
+	default:
+		<-s.ctx.Done()
+		return nil, s.ctx.Err()
+	}
+}
+
+func (s *fastTerminalUpdateStream) Context() context.Context { return s.ctx }

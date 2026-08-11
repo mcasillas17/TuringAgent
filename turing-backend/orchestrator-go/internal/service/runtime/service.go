@@ -216,11 +216,6 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 		maxConcurrent = maxWorkerConcurrentRuns
 	}
 	commands := make(chan *turingv1.RuntimeCommand, maxConcurrent)
-	s.mu.Lock()
-	if _, ok := s.workers[ready.WorkerId]; ok {
-		s.mu.Unlock()
-		return status.Error(codes.AlreadyExists, "worker already connected")
-	}
 	connectedWorker := &worker{
 		commands:      commands,
 		done:          make(chan struct{}),
@@ -228,8 +223,26 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 		assignments:   map[string]assignment{},
 		lastHeartbeat: time.Now().UTC(),
 	}
-	s.workers[ready.WorkerId] = connectedWorker
-	s.mu.Unlock()
+	for {
+		s.mu.Lock()
+		existing := s.workers[ready.WorkerId]
+		if existing == nil {
+			s.workers[ready.WorkerId] = connectedWorker
+			s.mu.Unlock()
+			break
+		}
+		s.mu.Unlock()
+		if !existing.closeIfExpiredIdle(time.Now().UTC(), s.dispatch.LeaseDuration) {
+			return status.Error(codes.AlreadyExists, "worker already connected")
+		}
+		s.mu.Lock()
+		if s.workers[ready.WorkerId] == existing {
+			s.workers[ready.WorkerId] = connectedWorker
+			s.mu.Unlock()
+			break
+		}
+		s.mu.Unlock()
+	}
 	s.persistDiscoveredTools(ctx, ready.GetWorkerId(), connectedWorker, discovered)
 	defer func() {
 		assignments := connectedWorker.close()
@@ -587,6 +600,8 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 	if assigned == nil {
 		return connectedWorker.commandSender(stream).send(sendCtx, cmd)
 	}
+	connectedWorker.updateMu.Lock()
+	defer connectedWorker.updateMu.Unlock()
 	assignment, ok := connectedWorker.assignmentForRun(assigned.RunId)
 	if !ok {
 		return repository.ErrAssignmentFenced
@@ -1024,6 +1039,24 @@ func (w *worker) closeForStaleAssignment(runID string, attemptID string, now tim
 		return nil, false, true
 	}
 	return w.closeLocked(), true, false
+}
+
+func (w *worker) closeIfExpiredIdle(now time.Time, leaseDuration time.Duration) bool {
+	w.updateMu.Lock()
+	defer w.updateMu.Unlock()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return true
+	}
+	if len(w.assignments) != 0 {
+		return false
+	}
+	if !w.lastHeartbeat.IsZero() && now.Before(w.lastHeartbeat.Add(leaseDuration)) {
+		return false
+	}
+	w.closeLocked()
+	return true
 }
 
 func (w *worker) closeLocked() []assignment {

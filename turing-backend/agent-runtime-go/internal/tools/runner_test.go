@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -52,6 +53,34 @@ func TestRunTreatsTerminalPolicyDecisionAsTerminalRun(t *testing.T) {
 
 	if !RunWasTerminalized(err) {
 		t.Fatalf("RunWithOutcome error = %T %v, want terminal run error", err, err)
+	}
+}
+
+func TestRunRejectsUnserializableArgumentsBeforeBeaconOrExecution(t *testing.T) {
+	beaconPosted := false
+	toolCalled := false
+	runner := &Runner{PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+		beaconPosted = true
+		return allowToolDecision(context.Background(), beacon)
+	}}
+
+	_, err := runner.Run(context.Background(), RunInput{
+		ToolName: "system.echo",
+		Args:     map[string]any{"value": math.Inf(1)},
+		MCPClient: mcpClientFunc(func(context.Context, string, map[string]any, ...string) (map[string]any, error) {
+			toolCalled = true
+			return map[string]any{"ok": true}, nil
+		}),
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "non-finite") {
+		t.Fatalf("Run error = %v, want argument serialization failure", err)
+	}
+	if beaconPosted {
+		t.Fatal("invalid arguments were posted in a policy beacon")
+	}
+	if toolCalled {
+		t.Fatal("tool executed with arguments omitted from the policy beacon")
 	}
 }
 

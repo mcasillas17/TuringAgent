@@ -604,11 +604,14 @@ func (w *Worker) startOutboundWriter(stream RuntimeStream) {
 
 func (w *Worker) stopOutboundWriter() {
 	w.writerMu.Lock()
+	defer w.writerMu.Unlock()
 	writer := w.writer
-	w.writerMu.Unlock()
 	if writer != nil {
 		writer.stop(nil)
 		<-writer.exited
+		if w.writer == writer {
+			w.writer = nil
+		}
 	}
 }
 

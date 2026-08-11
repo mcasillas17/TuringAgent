@@ -311,6 +311,28 @@ func TestPostToolBeaconDoesNotMarkQueueRejectedBeaconPosted(t *testing.T) {
 	}
 }
 
+func TestOutboundWriterCanRestartForASubsequentStream(t *testing.T) {
+	firstStream := newFakeStream()
+	worker := New(Options{WorkerID: "worker-reconnect", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: firstStream}, terminalExecutor{})
+	worker.startOutboundWriter(firstStream)
+	if err := worker.send(context.Background(), firstStream, &turingv1.RuntimeUpdate{}); err != nil {
+		t.Fatalf("send on first stream: %v", err)
+	}
+	worker.stopOutboundWriter()
+
+	secondStream := newFakeStream()
+	worker.startOutboundWriter(secondStream)
+	defer worker.stopOutboundWriter()
+	if err := worker.send(context.Background(), secondStream, &turingv1.RuntimeUpdate{}); err != nil {
+		t.Fatalf("send on second stream: %v", err)
+	}
+	select {
+	case <-secondStream.sent:
+	case <-time.After(time.Second):
+		t.Fatal("second stream did not receive update")
+	}
+}
+
 func TestWorkerMarksStartedBlockedBeaconAndAttemptsFailedAfter(t *testing.T) {
 	stream := newFakeStream()
 	blockedSend := make(chan struct{})
@@ -977,7 +999,7 @@ func waitForOutboundWriterExit(t *testing.T, worker *Worker) {
 	writer := worker.writer
 	worker.writerMu.Unlock()
 	if writer == nil {
-		t.Fatal("worker outbound writer was not initialized")
+		return
 	}
 	select {
 	case <-writer.exited:
