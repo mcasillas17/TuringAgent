@@ -17,9 +17,12 @@ import 'package:protobuf/protobuf.dart' as $pb;
 import '../../google/protobuf/struct.pb.dart' as $1;
 import 'common.pbenum.dart' as $4;
 import 'events.pb.dart' as $2;
+import 'runtime.pbenum.dart';
 import 'tools.pb.dart' as $3;
 
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
+
+export 'runtime.pbenum.dart';
 
 class AgentJob extends $pb.GeneratedMessage {
   factory AgentJob({
@@ -298,15 +301,15 @@ class RuntimeWorkerReady extends $pb.GeneratedMessage {
     $4.AgentId? agentId,
     $core.int? maxConcurrentRuns,
     $core.Iterable<DiscoveredTool>? tools,
-    $core.bool? toolDiscoveryComplete,
+    ToolDiscoveryStatus? toolDiscoveryStatus,
   }) {
     final result = create();
     if (workerId != null) result.workerId = workerId;
     if (agentId != null) result.agentId = agentId;
     if (maxConcurrentRuns != null) result.maxConcurrentRuns = maxConcurrentRuns;
     if (tools != null) result.tools.addAll(tools);
-    if (toolDiscoveryComplete != null)
-      result.toolDiscoveryComplete = toolDiscoveryComplete;
+    if (toolDiscoveryStatus != null)
+      result.toolDiscoveryStatus = toolDiscoveryStatus;
     return result;
   }
 
@@ -332,7 +335,11 @@ class RuntimeWorkerReady extends $pb.GeneratedMessage {
         3, _omitFieldNames ? '' : 'maxConcurrentRuns', $pb.PbFieldType.O3)
     ..pc<DiscoveredTool>(4, _omitFieldNames ? '' : 'tools', $pb.PbFieldType.PM,
         subBuilder: DiscoveredTool.create)
-    ..aOB(5, _omitFieldNames ? '' : 'toolDiscoveryComplete')
+    ..e<ToolDiscoveryStatus>(
+        5, _omitFieldNames ? '' : 'toolDiscoveryStatus', $pb.PbFieldType.OE,
+        defaultOrMaker: ToolDiscoveryStatus.TOOL_DISCOVERY_STATUS_UNSPECIFIED,
+        valueOf: ToolDiscoveryStatus.valueOf,
+        enumValues: ToolDiscoveryStatus.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -387,16 +394,14 @@ class RuntimeWorkerReady extends $pb.GeneratedMessage {
   @$pb.TagNumber(4)
   $pb.PbList<DiscoveredTool> get tools => $_getList(3);
 
-  /// Must be true after successful discovery, including when tools is empty.
-  /// False means this worker predates dynamic discovery and uses compatibility defaults.
   @$pb.TagNumber(5)
-  $core.bool get toolDiscoveryComplete => $_getBF(4);
+  ToolDiscoveryStatus get toolDiscoveryStatus => $_getN(4);
   @$pb.TagNumber(5)
-  set toolDiscoveryComplete($core.bool value) => $_setBool(4, value);
+  set toolDiscoveryStatus(ToolDiscoveryStatus value) => $_setField(5, value);
   @$pb.TagNumber(5)
-  $core.bool hasToolDiscoveryComplete() => $_has(4);
+  $core.bool hasToolDiscoveryStatus() => $_has(4);
   @$pb.TagNumber(5)
-  void clearToolDiscoveryComplete() => $_clearField(5);
+  void clearToolDiscoveryStatus() => $_clearField(5);
 }
 
 class RuntimeHeartbeat extends $pb.GeneratedMessage {

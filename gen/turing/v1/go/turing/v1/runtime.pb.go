@@ -22,6 +22,58 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type ToolDiscoveryStatus int32
+
+const (
+	// Legacy runtime that cannot report an authoritative capability snapshot.
+	ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_UNSPECIFIED ToolDiscoveryStatus = 0
+	// Discovery succeeded; tools is authoritative, including when it is empty.
+	ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_COMPLETE ToolDiscoveryStatus = 1
+	// Discovery was attempted but failed. The orchestrator rejects the worker.
+	ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_FAILED ToolDiscoveryStatus = 2
+)
+
+// Enum value maps for ToolDiscoveryStatus.
+var (
+	ToolDiscoveryStatus_name = map[int32]string{
+		0: "TOOL_DISCOVERY_STATUS_UNSPECIFIED",
+		1: "TOOL_DISCOVERY_STATUS_COMPLETE",
+		2: "TOOL_DISCOVERY_STATUS_FAILED",
+	}
+	ToolDiscoveryStatus_value = map[string]int32{
+		"TOOL_DISCOVERY_STATUS_UNSPECIFIED": 0,
+		"TOOL_DISCOVERY_STATUS_COMPLETE":    1,
+		"TOOL_DISCOVERY_STATUS_FAILED":      2,
+	}
+)
+
+func (x ToolDiscoveryStatus) Enum() *ToolDiscoveryStatus {
+	p := new(ToolDiscoveryStatus)
+	*p = x
+	return p
+}
+
+func (x ToolDiscoveryStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ToolDiscoveryStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_turing_v1_runtime_proto_enumTypes[0].Descriptor()
+}
+
+func (ToolDiscoveryStatus) Type() protoreflect.EnumType {
+	return &file_turing_v1_runtime_proto_enumTypes[0]
+}
+
+func (x ToolDiscoveryStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ToolDiscoveryStatus.Descriptor instead.
+func (ToolDiscoveryStatus) EnumDescriptor() ([]byte, []int) {
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{0}
+}
+
 type AgentJob struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	JobId              string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
@@ -220,12 +272,10 @@ type RuntimeWorkerReady struct {
 	AgentId           AgentId                `protobuf:"varint,2,opt,name=agent_id,json=agentId,proto3,enum=turing.v1.AgentId" json:"agent_id,omitempty"`
 	MaxConcurrentRuns int32                  `protobuf:"varint,3,opt,name=max_concurrent_runs,json=maxConcurrentRuns,proto3" json:"max_concurrent_runs,omitempty"`
 	// Complete snapshot of tools discovered by this worker.
-	Tools []*DiscoveredTool `protobuf:"bytes,4,rep,name=tools,proto3" json:"tools,omitempty"`
-	// Must be true after successful discovery, including when tools is empty.
-	// False means this worker predates dynamic discovery and uses compatibility defaults.
-	ToolDiscoveryComplete bool `protobuf:"varint,5,opt,name=tool_discovery_complete,json=toolDiscoveryComplete,proto3" json:"tool_discovery_complete,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	Tools               []*DiscoveredTool   `protobuf:"bytes,4,rep,name=tools,proto3" json:"tools,omitempty"`
+	ToolDiscoveryStatus ToolDiscoveryStatus `protobuf:"varint,5,opt,name=tool_discovery_status,json=toolDiscoveryStatus,proto3,enum=turing.v1.ToolDiscoveryStatus" json:"tool_discovery_status,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *RuntimeWorkerReady) Reset() {
@@ -286,11 +336,11 @@ func (x *RuntimeWorkerReady) GetTools() []*DiscoveredTool {
 	return nil
 }
 
-func (x *RuntimeWorkerReady) GetToolDiscoveryComplete() bool {
+func (x *RuntimeWorkerReady) GetToolDiscoveryStatus() ToolDiscoveryStatus {
 	if x != nil {
-		return x.ToolDiscoveryComplete
+		return x.ToolDiscoveryStatus
 	}
-	return false
+	return ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_UNSPECIFIED
 }
 
 type RuntimeHeartbeat struct {
@@ -1049,13 +1099,13 @@ const file_turing_v1_runtime_proto_rawDesc = "" +
 	"\vserver_name\x18\x01 \x01(\tR\n" +
 	"serverName\x12\x1b\n" +
 	"\ttool_name\x18\x02 \x01(\tR\btoolName\x12/\n" +
-	"\x06schema\x18\x03 \x01(\v2\x17.google.protobuf.StructR\x06schema\"\xf9\x01\n" +
+	"\x06schema\x18\x03 \x01(\v2\x17.google.protobuf.StructR\x06schema\"\x95\x02\n" +
 	"\x12RuntimeWorkerReady\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12-\n" +
 	"\bagent_id\x18\x02 \x01(\x0e2\x12.turing.v1.AgentIdR\aagentId\x12.\n" +
 	"\x13max_concurrent_runs\x18\x03 \x01(\x05R\x11maxConcurrentRuns\x12/\n" +
-	"\x05tools\x18\x04 \x03(\v2\x19.turing.v1.DiscoveredToolR\x05tools\x126\n" +
-	"\x17tool_discovery_complete\x18\x05 \x01(\bR\x15toolDiscoveryComplete\"/\n" +
+	"\x05tools\x18\x04 \x03(\v2\x19.turing.v1.DiscoveredToolR\x05tools\x12R\n" +
+	"\x15tool_discovery_status\x18\x05 \x01(\x0e2\x1e.turing.v1.ToolDiscoveryStatusR\x13toolDiscoveryStatus\"/\n" +
 	"\x10RuntimeHeartbeat\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\"\xa7\x01\n" +
 	"\x13RuntimeRunCompleted\x12\x15\n" +
@@ -1100,7 +1150,11 @@ const file_turing_v1_runtime_proto_rawDesc = "" +
 	"\x10approval_updated\x18\x04 \x01(\v2!.turing.v1.RuntimeApprovalUpdatedH\x00R\x0fapprovalUpdated\x12T\n" +
 	"\x12shutdown_requested\x18\x05 \x01(\v2#.turing.v1.RuntimeShutdownRequestedH\x00R\x11shutdownRequested\x12Q\n" +
 	"\x14tool_policy_decision\x18\x06 \x01(\v2\x1d.turing.v1.ToolPolicyDecisionH\x00R\x12toolPolicyDecisionB\t\n" +
-	"\acommand2Z\n" +
+	"\acommand*\x82\x01\n" +
+	"\x13ToolDiscoveryStatus\x12%\n" +
+	"!TOOL_DISCOVERY_STATUS_UNSPECIFIED\x10\x00\x12\"\n" +
+	"\x1eTOOL_DISCOVERY_STATUS_COMPLETE\x10\x01\x12 \n" +
+	"\x1cTOOL_DISCOVERY_STATUS_FAILED\x10\x022Z\n" +
 	"\x0eRuntimeService\x12H\n" +
 	"\rConnectWorker\x12\x18.turing.v1.RuntimeUpdate\x1a\x19.turing.v1.RuntimeCommand(\x010\x01B>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
 
@@ -1116,55 +1170,58 @@ func file_turing_v1_runtime_proto_rawDescGZIP() []byte {
 	return file_turing_v1_runtime_proto_rawDescData
 }
 
+var file_turing_v1_runtime_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_turing_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_turing_v1_runtime_proto_goTypes = []any{
-	(*AgentJob)(nil),                 // 0: turing.v1.AgentJob
-	(*DiscoveredTool)(nil),           // 1: turing.v1.DiscoveredTool
-	(*RuntimeWorkerReady)(nil),       // 2: turing.v1.RuntimeWorkerReady
-	(*RuntimeHeartbeat)(nil),         // 3: turing.v1.RuntimeHeartbeat
-	(*RuntimeRunCompleted)(nil),      // 4: turing.v1.RuntimeRunCompleted
-	(*RuntimeRunFailed)(nil),         // 5: turing.v1.RuntimeRunFailed
-	(*RuntimeCancelledAck)(nil),      // 6: turing.v1.RuntimeCancelledAck
-	(*RuntimeUpdate)(nil),            // 7: turing.v1.RuntimeUpdate
-	(*RuntimeWorkerAccepted)(nil),    // 8: turing.v1.RuntimeWorkerAccepted
-	(*RuntimeRunCancelled)(nil),      // 9: turing.v1.RuntimeRunCancelled
-	(*RuntimeApprovalUpdated)(nil),   // 10: turing.v1.RuntimeApprovalUpdated
-	(*RuntimeShutdownRequested)(nil), // 11: turing.v1.RuntimeShutdownRequested
-	(*RuntimeCommand)(nil),           // 12: turing.v1.RuntimeCommand
-	(AgentId)(0),                     // 13: turing.v1.AgentId
-	(ModelProvider)(0),               // 14: turing.v1.ModelProvider
-	(*structpb.Struct)(nil),          // 15: google.protobuf.Struct
-	(*TuringEvent)(nil),              // 16: turing.v1.TuringEvent
-	(*ToolCallBeacon)(nil),           // 17: turing.v1.ToolCallBeacon
-	(*ToolPolicyDecision)(nil),       // 18: turing.v1.ToolPolicyDecision
+	(ToolDiscoveryStatus)(0),         // 0: turing.v1.ToolDiscoveryStatus
+	(*AgentJob)(nil),                 // 1: turing.v1.AgentJob
+	(*DiscoveredTool)(nil),           // 2: turing.v1.DiscoveredTool
+	(*RuntimeWorkerReady)(nil),       // 3: turing.v1.RuntimeWorkerReady
+	(*RuntimeHeartbeat)(nil),         // 4: turing.v1.RuntimeHeartbeat
+	(*RuntimeRunCompleted)(nil),      // 5: turing.v1.RuntimeRunCompleted
+	(*RuntimeRunFailed)(nil),         // 6: turing.v1.RuntimeRunFailed
+	(*RuntimeCancelledAck)(nil),      // 7: turing.v1.RuntimeCancelledAck
+	(*RuntimeUpdate)(nil),            // 8: turing.v1.RuntimeUpdate
+	(*RuntimeWorkerAccepted)(nil),    // 9: turing.v1.RuntimeWorkerAccepted
+	(*RuntimeRunCancelled)(nil),      // 10: turing.v1.RuntimeRunCancelled
+	(*RuntimeApprovalUpdated)(nil),   // 11: turing.v1.RuntimeApprovalUpdated
+	(*RuntimeShutdownRequested)(nil), // 12: turing.v1.RuntimeShutdownRequested
+	(*RuntimeCommand)(nil),           // 13: turing.v1.RuntimeCommand
+	(AgentId)(0),                     // 14: turing.v1.AgentId
+	(ModelProvider)(0),               // 15: turing.v1.ModelProvider
+	(*structpb.Struct)(nil),          // 16: google.protobuf.Struct
+	(*TuringEvent)(nil),              // 17: turing.v1.TuringEvent
+	(*ToolCallBeacon)(nil),           // 18: turing.v1.ToolCallBeacon
+	(*ToolPolicyDecision)(nil),       // 19: turing.v1.ToolPolicyDecision
 }
 var file_turing_v1_runtime_proto_depIdxs = []int32{
-	13, // 0: turing.v1.AgentJob.agent_id:type_name -> turing.v1.AgentId
-	14, // 1: turing.v1.AgentJob.model_provider:type_name -> turing.v1.ModelProvider
-	15, // 2: turing.v1.DiscoveredTool.schema:type_name -> google.protobuf.Struct
-	13, // 3: turing.v1.RuntimeWorkerReady.agent_id:type_name -> turing.v1.AgentId
-	1,  // 4: turing.v1.RuntimeWorkerReady.tools:type_name -> turing.v1.DiscoveredTool
-	15, // 5: turing.v1.RuntimeRunCompleted.usage:type_name -> google.protobuf.Struct
-	2,  // 6: turing.v1.RuntimeUpdate.worker_ready:type_name -> turing.v1.RuntimeWorkerReady
-	3,  // 7: turing.v1.RuntimeUpdate.heartbeat:type_name -> turing.v1.RuntimeHeartbeat
-	16, // 8: turing.v1.RuntimeUpdate.event:type_name -> turing.v1.TuringEvent
-	17, // 9: turing.v1.RuntimeUpdate.tool_beacon:type_name -> turing.v1.ToolCallBeacon
-	4,  // 10: turing.v1.RuntimeUpdate.run_completed:type_name -> turing.v1.RuntimeRunCompleted
-	5,  // 11: turing.v1.RuntimeUpdate.run_failed:type_name -> turing.v1.RuntimeRunFailed
-	6,  // 12: turing.v1.RuntimeUpdate.run_cancelled_ack:type_name -> turing.v1.RuntimeCancelledAck
-	8,  // 13: turing.v1.RuntimeCommand.worker_accepted:type_name -> turing.v1.RuntimeWorkerAccepted
-	0,  // 14: turing.v1.RuntimeCommand.run_assigned:type_name -> turing.v1.AgentJob
-	9,  // 15: turing.v1.RuntimeCommand.run_cancelled:type_name -> turing.v1.RuntimeRunCancelled
-	10, // 16: turing.v1.RuntimeCommand.approval_updated:type_name -> turing.v1.RuntimeApprovalUpdated
-	11, // 17: turing.v1.RuntimeCommand.shutdown_requested:type_name -> turing.v1.RuntimeShutdownRequested
-	18, // 18: turing.v1.RuntimeCommand.tool_policy_decision:type_name -> turing.v1.ToolPolicyDecision
-	7,  // 19: turing.v1.RuntimeService.ConnectWorker:input_type -> turing.v1.RuntimeUpdate
-	12, // 20: turing.v1.RuntimeService.ConnectWorker:output_type -> turing.v1.RuntimeCommand
-	20, // [20:21] is the sub-list for method output_type
-	19, // [19:20] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	14, // 0: turing.v1.AgentJob.agent_id:type_name -> turing.v1.AgentId
+	15, // 1: turing.v1.AgentJob.model_provider:type_name -> turing.v1.ModelProvider
+	16, // 2: turing.v1.DiscoveredTool.schema:type_name -> google.protobuf.Struct
+	14, // 3: turing.v1.RuntimeWorkerReady.agent_id:type_name -> turing.v1.AgentId
+	2,  // 4: turing.v1.RuntimeWorkerReady.tools:type_name -> turing.v1.DiscoveredTool
+	0,  // 5: turing.v1.RuntimeWorkerReady.tool_discovery_status:type_name -> turing.v1.ToolDiscoveryStatus
+	16, // 6: turing.v1.RuntimeRunCompleted.usage:type_name -> google.protobuf.Struct
+	3,  // 7: turing.v1.RuntimeUpdate.worker_ready:type_name -> turing.v1.RuntimeWorkerReady
+	4,  // 8: turing.v1.RuntimeUpdate.heartbeat:type_name -> turing.v1.RuntimeHeartbeat
+	17, // 9: turing.v1.RuntimeUpdate.event:type_name -> turing.v1.TuringEvent
+	18, // 10: turing.v1.RuntimeUpdate.tool_beacon:type_name -> turing.v1.ToolCallBeacon
+	5,  // 11: turing.v1.RuntimeUpdate.run_completed:type_name -> turing.v1.RuntimeRunCompleted
+	6,  // 12: turing.v1.RuntimeUpdate.run_failed:type_name -> turing.v1.RuntimeRunFailed
+	7,  // 13: turing.v1.RuntimeUpdate.run_cancelled_ack:type_name -> turing.v1.RuntimeCancelledAck
+	9,  // 14: turing.v1.RuntimeCommand.worker_accepted:type_name -> turing.v1.RuntimeWorkerAccepted
+	1,  // 15: turing.v1.RuntimeCommand.run_assigned:type_name -> turing.v1.AgentJob
+	10, // 16: turing.v1.RuntimeCommand.run_cancelled:type_name -> turing.v1.RuntimeRunCancelled
+	11, // 17: turing.v1.RuntimeCommand.approval_updated:type_name -> turing.v1.RuntimeApprovalUpdated
+	12, // 18: turing.v1.RuntimeCommand.shutdown_requested:type_name -> turing.v1.RuntimeShutdownRequested
+	19, // 19: turing.v1.RuntimeCommand.tool_policy_decision:type_name -> turing.v1.ToolPolicyDecision
+	8,  // 20: turing.v1.RuntimeService.ConnectWorker:input_type -> turing.v1.RuntimeUpdate
+	13, // 21: turing.v1.RuntimeService.ConnectWorker:output_type -> turing.v1.RuntimeCommand
+	21, // [21:22] is the sub-list for method output_type
+	20, // [20:21] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_runtime_proto_init() }
@@ -1197,13 +1254,14 @@ func file_turing_v1_runtime_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_runtime_proto_rawDesc), len(file_turing_v1_runtime_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_turing_v1_runtime_proto_goTypes,
 		DependencyIndexes: file_turing_v1_runtime_proto_depIdxs,
+		EnumInfos:         file_turing_v1_runtime_proto_enumTypes,
 		MessageInfos:      file_turing_v1_runtime_proto_msgTypes,
 	}.Build()
 	File_turing_v1_runtime_proto = out.File

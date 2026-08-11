@@ -15,7 +15,7 @@
 ## Design decisions (locked)
 
 1. **Runtime-reported, not orchestrator-introspected.** The orchestrator has no MCP client and shouldn't gain one (that would breach the network-isolation model where only the runtime reaches MCP servers). The runtime is the only component that can call `tools/list`, so it reports.
-2. **Transport: extend `RuntimeWorkerReady`** with `repeated DiscoveredTool tools` and `bool tool_discovery_complete`. This rides the existing first-message handshake — no new RPC, no new `RuntimeUpdate` variant. The runtime MUST set `tool_discovery_complete = true` after a successful discovery attempt, including when it discovered zero tools; `false` identifies a legacy runtime that cannot report capabilities. (`ConnectWorker` already validates `RuntimeWorkerReady` first.)
+2. **Transport: extend `RuntimeWorkerReady`** with `repeated DiscoveredTool tools` and `ToolDiscoveryStatus tool_discovery_status`. This rides the existing first-message handshake — no new RPC, no new `RuntimeUpdate` variant. A runtime MUST send `COMPLETE` after a successful discovery attempt, including when it discovered zero tools, and `FAILED` when an attempted discovery fails. `UNSPECIFIED` is reserved for legacy runtimes that cannot report capabilities. The orchestrator rejects `FAILED` workers so a discovery failure can never activate compatibility defaults. (`ConnectWorker` already validates `RuntimeWorkerReady` first.)
 3. **Policy stays authoritative in the orchestrator.** The runtime reports `server_name`, `tool_name`, and the tool's JSON schema — NOT its policy. The orchestrator assigns policy via a `defaultPolicyFor(toolName)` function on first discovery (default-deny bias: unknown → `approval_required`, never `safe`), and thereafter the DB row is the source of truth. This preserves "the orchestrator owns security decisions."
 4. **Upsert semantics.** `(server_name, tool_name)` is unique; re-reporting updates `schema_json`/`discovered_at`/`enabled` but never downgrades an operator-set policy. Tools no longer reported are marked `enabled = 0`, not deleted (audit trail).
 5. **`AgentId` stays a closed enum.** Dynamic *agent* discovery is explicitly out of scope — `AGENT_ID_GENERAL_ASSISTANT` remains the only agent (the plan defers multi-agent). `ListAgents` stays as-is. This plan is tools-only despite the "discovery" name.
@@ -54,12 +54,18 @@ message DiscoveredTool {
   google.protobuf.Struct schema = 3; // JSON Schema for the tool's arguments
 }
 
+enum ToolDiscoveryStatus {
+  TOOL_DISCOVERY_STATUS_UNSPECIFIED = 0; // Legacy runtime without discovery support
+  TOOL_DISCOVERY_STATUS_COMPLETE = 1;    // Authoritative snapshot, including empty
+  TOOL_DISCOVERY_STATUS_FAILED = 2;      // Discovery attempted but failed
+}
+
 message RuntimeWorkerReady {
   string worker_id = 1;
   AgentId agent_id = 2;
   int32 max_concurrent_runs = 3;
   repeated DiscoveredTool tools = 4; // NEW: tools the runtime discovered from its MCP servers
-  bool tool_discovery_complete = 5; // NEW: true after successful discovery, even when tools is empty
+  ToolDiscoveryStatus tool_discovery_status = 5; // NEW: discovery outcome and snapshot authority
 }
 ```
 
@@ -318,7 +324,7 @@ git commit -am "feat(orchestrator): ListTools and policy enforcement read the to
 
 - [ ] **Step 1: Failing test** — worker unit test asserting the `RuntimeWorkerReady` sent on connect carries the tools from an injected registry.
 - [ ] **Step 2: Run → FAIL.**
-- [ ] **Step 3: Implement** — pass the Plan #1 `ToolRegistry` (or a `[]DiscoveredTool` snapshot) into `worker.Options`; when building `RuntimeWorkerReady`, populate `Tools` from registry entries (`server_name`, `tool_name`, `schema` as `structpb.Struct` from the tool's `Parameters`) and set `ToolDiscoveryComplete: true` after discovery succeeds. The flag MUST be true when the resulting snapshot is empty; leaving it false opts into legacy compatibility defaults and would advertise tools the worker did not discover. Build the registry once at startup in `main.go` (it already exists post-Plan #1) and hand it to the worker.
+- [ ] **Step 3: Implement** — pass the Plan #1 `ToolRegistry` (or a `[]DiscoveredTool` snapshot) into `worker.Options`; when building `RuntimeWorkerReady`, populate `Tools` from registry entries (`server_name`, `tool_name`, `schema` as `structpb.Struct` from the tool's `Parameters`) and set `ToolDiscoveryStatus: TOOL_DISCOVERY_STATUS_COMPLETE` after discovery succeeds. `COMPLETE` is required when the resulting snapshot is empty. If discovery fails, send `TOOL_DISCOVERY_STATUS_FAILED` (or do not connect and retry); never leave the status `UNSPECIFIED`, because that is reserved for legacy compatibility defaults. Build the registry once at startup in `main.go` (it already exists post-Plan #1) and hand it to the worker.
 - [ ] **Step 4: Run → PASS**, then `cd turing-backend/agent-runtime-go && go test ./... -count=1 && go build ./...`.
 - [ ] **Step 5: Commit.**
 ```bash

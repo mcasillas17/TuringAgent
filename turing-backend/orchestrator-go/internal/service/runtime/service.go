@@ -90,7 +90,19 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 	if ready == nil || ready.WorkerId == "" || ready.AgentId != turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT {
 		return status.Error(codes.InvalidArgument, "worker_ready is required")
 	}
-	reportsDiscovery := ready.GetToolDiscoveryComplete() || len(ready.GetTools()) > 0
+	reportsDiscovery := false
+	switch ready.GetToolDiscoveryStatus() {
+	case turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_UNSPECIFIED:
+		// Legacy workers leave the status unset. A non-empty snapshot is still
+		// authoritative for compatibility with transitional implementations.
+		reportsDiscovery = len(ready.GetTools()) > 0
+	case turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_COMPLETE:
+		reportsDiscovery = true
+	case turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_FAILED:
+		return status.Error(codes.FailedPrecondition, "worker tool discovery failed")
+	default:
+		return status.Error(codes.InvalidArgument, "worker tool discovery status is invalid")
+	}
 	var discovered []repository.DiscoveredTool
 	if reportsDiscovery {
 		discovered, err = decodeDiscoveredTools(ready.GetTools())
@@ -184,13 +196,17 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 
 func decodeDiscoveredTools(reported []*turingv1.DiscoveredTool) ([]repository.DiscoveredTool, error) {
 	discovered := make([]repository.DiscoveredTool, 0, len(reported))
-	seen := make(map[string]struct{}, len(reported))
+	type toolKey struct {
+		serverName string
+		toolName   string
+	}
+	seen := make(map[toolKey]struct{}, len(reported))
 	for _, tool := range reported {
 		if tool == nil || tool.GetServerName() == "" || tool.GetServerName() != strings.TrimSpace(tool.GetServerName()) ||
 			tool.GetToolName() == "" || tool.GetToolName() != strings.TrimSpace(tool.GetToolName()) || tool.GetSchema() == nil {
 			return nil, errors.New("tool identity and schema are required")
 		}
-		key := tool.GetServerName() + "\x00" + tool.GetToolName()
+		key := toolKey{serverName: tool.GetServerName(), toolName: tool.GetToolName()}
 		if _, ok := seen[key]; ok {
 			return nil, errors.New("duplicate discovered tool")
 		}
