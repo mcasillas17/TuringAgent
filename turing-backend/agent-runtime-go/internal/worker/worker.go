@@ -64,11 +64,11 @@ type decisionWaiter struct {
 }
 
 type activeRun struct {
-	cancel             context.CancelCauseFunc
-	done               chan struct{}
-	mu                 sync.Mutex
-	stop               bool
-	terminalReportOnce sync.Once
+	cancel                context.CancelCauseFunc
+	done                  chan struct{}
+	mu                    sync.Mutex
+	stop                  bool
+	terminalReportClaimed bool
 }
 
 const (
@@ -536,14 +536,17 @@ func (w *Worker) cancelRunWithCause(ctx context.Context, stream RuntimeStream, r
 	if cause == nil {
 		cause = context.Canceled
 	}
-	if !entry.markStopping() {
+	started, ownsTerminalReport := entry.beginCancellation()
+	if !started {
 		return nil
 	}
 	entry.cancel(cause)
 	go func() {
 		<-entry.done
 		w.deleteActive(runID)
-		w.sendTerminalOnce(entry, context.Background(), stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: runID}}})
+		if ownsTerminalReport {
+			w.sendTerminalOrReport(context.Background(), stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: runID}}})
+		}
 	}()
 	return nil
 }
@@ -730,13 +733,24 @@ func (w *Worker) deliverDecision(decision *turingv1.ToolPolicyDecision) {
 		w.decisionMu.Unlock()
 		return
 	}
-	waiter := waiters[0]
+	match := -1
+	for index, waiter := range waiters {
+		if waiter.phase == decision.GetPhase() {
+			match = index
+			break
+		}
+	}
+	if match < 0 {
+		w.decisionMu.Unlock()
+		return
+	}
+	waiter := waiters[match]
 	tombstone := waiter.tombstone
 	if len(waiters) == 1 {
 		delete(w.decisions, decision.ToolCallId)
 		delete(w.generations, decision.ToolCallId)
 	} else {
-		w.decisions[decision.ToolCallId] = waiters[1:]
+		w.decisions[decision.ToolCallId] = append(waiters[:match], waiters[match+1:]...)
 	}
 	w.decisionMu.Unlock()
 	if tombstone {
@@ -764,8 +778,8 @@ func (w *Worker) retireDecisionWaiter(toolCallID string, target *decisionWaiter,
 			continue
 		}
 		if sent {
-			// Responses carry no phase or generation. Preserve this slot so a
-			// delayed response cannot be delivered to a later same-ID request.
+			// Preserve this generation so a delayed same-phase response cannot
+			// be delivered to a later request that reuses the tool call ID.
 			waiter.tombstone = true
 			waiter.expiresAt = time.Now().Add(w.options.DecisionTombstoneTTL)
 			w.decisionMu.Unlock()
@@ -825,10 +839,26 @@ func (r *activeRun) isStopping() bool {
 	return r.stop
 }
 
+func (r *activeRun) beginCancellation() (bool, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stop {
+		return false, false
+	}
+	r.stop = true
+	if r.terminalReportClaimed {
+		return true, false
+	}
+	r.terminalReportClaimed = true
+	return true, true
+}
+
 func (r *activeRun) claimTerminalReport() bool {
-	claimed := false
-	r.terminalReportOnce.Do(func() {
-		claimed = true
-	})
-	return claimed
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stop || r.terminalReportClaimed {
+		return false
+	}
+	r.terminalReportClaimed = true
+	return true
 }

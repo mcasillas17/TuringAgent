@@ -228,9 +228,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 	s.persistDiscoveredTools(ctx, ready.GetWorkerId(), connectedWorker, discovered)
 	defer func() {
 		assignments := connectedWorker.close()
-		s.mu.Lock()
-		delete(s.workers, ready.WorkerId)
-		s.mu.Unlock()
+		s.removeWorkerRegistration(ready.WorkerId, connectedWorker)
 		s.removeDiscoveredTools(ready.GetWorkerId(), connectedWorker)
 		reconciled, err := s.reconcileAssignments(assignments, ready.WorkerId)
 		if err != nil {
@@ -343,6 +341,8 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 		select {
 		case <-ctx.Done():
 			return status.Error(codes.Canceled, "worker stream cancelled")
+		case <-connectedWorker.done:
+			return status.Error(codes.Canceled, "worker is disconnected")
 		case err := <-recvErr:
 			return err
 		case cmd := <-commands:
@@ -499,8 +499,8 @@ func (s *Server) renewWorkerLeases(ctx context.Context, workerID string, connect
 		}
 		reconciled = reconciled || result.Requeued || result.Cleared || released
 	}
-	connectedWorker.recordHeartbeat(time.Now().UTC())
-	if reconciled {
+	revived := connectedWorker.recordHeartbeat(time.Now().UTC(), s.dispatch.LeaseDuration)
+	if reconciled || revived {
 		return s.DispatchPending(ctx)
 	}
 	return nil
@@ -509,7 +509,10 @@ func (s *Server) renewWorkerLeases(ctx context.Context, workerID string, connect
 func (s *Server) sendBeaconDecision(ctx context.Context, connectedWorker *worker, beacon *turingv1.ToolCallBeacon, decision *turingv1.ToolPolicyDecision) error {
 	if decision == nil {
 		decision = protocolErrorDecision(beacon)
+	} else {
+		decision = proto.Clone(decision).(*turingv1.ToolPolicyDecision)
 	}
+	decision.Phase = beacon.GetPhase()
 	if err := connectedWorker.send(ctx, &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_ToolPolicyDecision{ToolPolicyDecision: decision}}); err != nil {
 		return errors.Join(err, s.terminalizeApprovalDeliveryFailure(ctx, decision.GetApprovalId(), connectedWorker))
 	}
@@ -688,20 +691,40 @@ func (s *Server) DispatchPending(ctx context.Context) error {
 func (s *Server) RecoverOrphanedAssignments(ctx context.Context) error {
 	recoveryCtx, cancel := withDefaultTimeout(ctx, 5*time.Second)
 	defer cancel()
-	assignments, err := s.repo.RecoverableAssignments(recoveryCtx, time.Now().UTC())
+	cutoff := time.Now().UTC()
+	assignments, err := s.repo.RecoverableAssignments(recoveryCtx, cutoff)
 	if err != nil {
 		return err
 	}
 	recovered := false
-	for _, assignment := range assignments {
-		if s.hasLiveAssignment(assignment) {
+	for _, candidate := range assignments {
+		if s.hasLiveAssignment(candidate) {
 			continue
 		}
-		result, err := s.repo.RecoverAssignment(recoveryCtx, assignment)
+		released := false
+		if connected := s.registeredWorker(candidate.WorkerID); connected != nil {
+			closedAssignments, closed := connected.closeForStaleAssignment(
+				candidate.RunID, candidate.AttemptID, cutoff, s.dispatch.LeaseDuration,
+			)
+			if !closed {
+				continue
+			}
+			s.removeWorkerRegistration(candidate.WorkerID, connected)
+			released = true
+			var remaining []assignment
+			for _, assigned := range closedAssignments {
+				if assigned.runID != candidate.RunID || assigned.attemptID != candidate.AttemptID {
+					remaining = append(remaining, assigned)
+				}
+			}
+			if _, err := s.reconcileAssignments(remaining, candidate.WorkerID); err != nil {
+				return err
+			}
+		}
+		result, err := s.repo.RecoverAssignmentAtCutoff(recoveryCtx, candidate, cutoff)
 		if err != nil {
 			return err
 		}
-		released := s.releaseRecoveredAssignment(assignment)
 		for _, event := range result.Events {
 			s.publishEvent(event)
 		}
@@ -711,6 +734,23 @@ func (s *Server) RecoverOrphanedAssignments(ctx context.Context) error {
 		return s.DispatchPending(recoveryCtx)
 	}
 	return nil
+}
+
+func (s *Server) registeredWorker(workerID string) *worker {
+	if workerID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.workers[workerID]
+}
+
+func (s *Server) removeWorkerRegistration(workerID string, target *worker) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.workers[workerID] == target {
+		delete(s.workers, workerID)
+	}
 }
 
 func (s *Server) RunRecoveryLoop(ctx context.Context, interval time.Duration) {
@@ -898,12 +938,15 @@ func (w *worker) hasLiveAssignmentAttempt(runID string, attemptID string, now ti
 	return now.Before(w.lastHeartbeat.Add(leaseDuration))
 }
 
-func (w *worker) recordHeartbeat(at time.Time) {
+func (w *worker) recordHeartbeat(at time.Time, leaseDuration time.Duration) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if !w.closed {
-		w.lastHeartbeat = at
+	if w.closed {
+		return false
 	}
+	revived := w.lastHeartbeat.IsZero() || !at.Before(w.lastHeartbeat.Add(leaseDuration))
+	w.lastHeartbeat = at
+	return revived
 }
 
 func (w *worker) commandSender(stream turingv1.RuntimeService_ConnectWorkerServer) *runtimeCommandSender {
@@ -942,19 +985,6 @@ func (w *worker) releaseRun(runID string) bool {
 	return existed
 }
 
-func (s *Server) releaseRecoveredAssignment(recovered repository.Assignment) bool {
-	if recovered.WorkerID == "" || recovered.RunID == "" {
-		return false
-	}
-	for _, entry := range s.snapshotWorkers() {
-		if entry.workerID == recovered.WorkerID &&
-			entry.worker.releaseAssignmentAttempt(recovered.RunID, recovered.AttemptID) {
-			return true
-		}
-	}
-	return false
-}
-
 func (w *worker) releaseAssignmentAttempt(runID string, attemptID string) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -971,6 +1001,25 @@ func (w *worker) close() []assignment {
 	defer w.updateMu.Unlock()
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	return w.closeLocked()
+}
+
+func (w *worker) closeForStaleAssignment(runID string, attemptID string, now time.Time, leaseDuration time.Duration) ([]assignment, bool) {
+	w.updateMu.Lock()
+	defer w.updateMu.Unlock()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	assigned, ok := w.assignments[runID]
+	if w.closed ||
+		!ok ||
+		(attemptID != "" && assigned.attemptID != attemptID) ||
+		(!w.lastHeartbeat.IsZero() && now.Before(w.lastHeartbeat.Add(leaseDuration))) {
+		return nil, false
+	}
+	return w.closeLocked(), true
+}
+
+func (w *worker) closeLocked() []assignment {
 	if w.closed {
 		return nil
 	}

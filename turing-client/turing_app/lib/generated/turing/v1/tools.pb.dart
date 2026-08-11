@@ -313,6 +313,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
     $core.String? approvalId,
     $core.String? reason,
     $core.bool? terminalRun,
+    ToolCallPhase? phase,
   }) {
     final result = create();
     if (decision != null) result.decision = decision;
@@ -320,6 +321,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
     if (approvalId != null) result.approvalId = approvalId;
     if (reason != null) result.reason = reason;
     if (terminalRun != null) result.terminalRun = terminalRun;
+    if (phase != null) result.phase = phase;
     return result;
   }
 
@@ -345,6 +347,10 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
     ..aOS(3, _omitFieldNames ? '' : 'approvalId')
     ..aOS(4, _omitFieldNames ? '' : 'reason')
     ..aOB(5, _omitFieldNames ? '' : 'terminalRun')
+    ..e<ToolCallPhase>(6, _omitFieldNames ? '' : 'phase', $pb.PbFieldType.OE,
+        defaultOrMaker: ToolCallPhase.TOOL_CALL_PHASE_UNSPECIFIED,
+        valueOf: ToolCallPhase.valueOf,
+        enumValues: ToolCallPhase.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -412,6 +418,15 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
   $core.bool hasTerminalRun() => $_has(4);
   @$pb.TagNumber(5)
   void clearTerminalRun() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  ToolCallPhase get phase => $_getN(5);
+  @$pb.TagNumber(6)
+  set phase(ToolCallPhase value) => $_setField(6, value);
+  @$pb.TagNumber(6)
+  $core.bool hasPhase() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearPhase() => $_clearField(6);
 }
 
 const $core.bool _omitFieldNames =

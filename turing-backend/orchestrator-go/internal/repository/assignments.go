@@ -89,14 +89,19 @@ func (r *Repository) RenewAssignments(ctx context.Context, assignments []Assignm
 }
 
 func (r *Repository) ReconcileAssignment(ctx context.Context, assignment Assignment) (AssignmentReconciliation, error) {
-	return r.reconcileAssignment(ctx, assignment, false)
+	return r.reconcileAssignment(ctx, assignment, false, nil)
 }
 
 func (r *Repository) RecoverAssignment(ctx context.Context, assignment Assignment) (AssignmentReconciliation, error) {
-	return r.reconcileAssignment(ctx, assignment, true)
+	return r.reconcileAssignment(ctx, assignment, true, nil)
 }
 
-func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignment, staleRecovery bool) (AssignmentReconciliation, error) {
+func (r *Repository) RecoverAssignmentAtCutoff(ctx context.Context, assignment Assignment, cutoff time.Time) (AssignmentReconciliation, error) {
+	cutoff = cutoff.UTC()
+	return r.reconcileAssignment(ctx, assignment, true, &cutoff)
+}
+
+func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignment, staleRecovery bool, cutoff *time.Time) (AssignmentReconciliation, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return AssignmentReconciliation{}, err
@@ -105,12 +110,16 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 
 	var runStatus, executionState, executionAttemptID, sessionID, traceID string
 	var workerID sql.NullString
+	var leaseExpiresAtNanos sql.NullInt64
 	var active int
 	err = tx.QueryRowContext(ctx, `
-		SELECT status, execution_state, COALESCE(execution_attempt_id, ''), worker_id, execution_active, session_id, trace_id
+		SELECT status, execution_state, COALESCE(execution_attempt_id, ''), worker_id, execution_active, session_id, trace_id,
+			COALESCE(execution_lease_expires_at_ns, `+sqliteTimestampNanos("execution_lease_expires_at")+`)
 		FROM agent_runs
 		WHERE id = ?
-	`, assignment.RunID).Scan(&runStatus, &executionState, &executionAttemptID, &workerID, &active, &sessionID, &traceID)
+	`, assignment.RunID).Scan(
+		&runStatus, &executionState, &executionAttemptID, &workerID, &active, &sessionID, &traceID, &leaseExpiresAtNanos,
+	)
 	if err != nil {
 		return AssignmentReconciliation{}, err
 	}
@@ -118,6 +127,14 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 		return AssignmentReconciliation{Fenced: true}, tx.Commit()
 	}
 	if assignment.WorkerID != "" && (!workerID.Valid || workerID.String != assignment.WorkerID) {
+		return AssignmentReconciliation{Fenced: true}, tx.Commit()
+	}
+	if cutoff != nil &&
+		active == 1 &&
+		(runStatus == "running" || runStatus == "waiting_approval") &&
+		executionState != "fenced" &&
+		leaseExpiresAtNanos.Valid &&
+		leaseExpiresAtNanos.Int64 > cutoff.UnixNano() {
 		return AssignmentReconciliation{Fenced: true}, tx.Commit()
 	}
 
@@ -588,7 +605,7 @@ func (r *Repository) RecoverStaleAssignments(ctx context.Context, cutoff time.Ti
 	if err != nil {
 		return nil, err
 	}
-	return r.recoverAssignments(ctx, assignments)
+	return r.recoverAssignments(ctx, assignments, &cutoff)
 }
 
 func (r *Repository) RecoverAllActiveAssignments(ctx context.Context) ([]Event, error) {
@@ -611,7 +628,7 @@ func (r *Repository) RecoverAllActiveAssignments(ctx context.Context) ([]Event, 
 	if err != nil {
 		return nil, err
 	}
-	return r.recoverAssignments(ctx, assignments)
+	return r.recoverAssignments(ctx, assignments, nil)
 }
 
 func (r *Repository) RecoverableAssignments(ctx context.Context, cutoff time.Time) ([]Assignment, error) {
@@ -699,10 +716,16 @@ func (r *Repository) startupRecoveryAssignments(ctx context.Context) ([]Assignme
 	return assignments, nil
 }
 
-func (r *Repository) recoverAssignments(ctx context.Context, assignments []Assignment) ([]Event, error) {
+func (r *Repository) recoverAssignments(ctx context.Context, assignments []Assignment, cutoff *time.Time) ([]Event, error) {
 	var events []Event
 	for _, assignment := range assignments {
-		reconciliation, err := r.RecoverAssignment(ctx, assignment)
+		var reconciliation AssignmentReconciliation
+		var err error
+		if cutoff == nil {
+			reconciliation, err = r.RecoverAssignment(ctx, assignment)
+		} else {
+			reconciliation, err = r.RecoverAssignmentAtCutoff(ctx, assignment, *cutoff)
+		}
 		if err != nil {
 			return events, err
 		}

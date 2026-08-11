@@ -131,6 +131,7 @@ func TestWorkerCancelsApprovalDeniedRunAndAcknowledgesExit(t *testing.T) {
 		Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
 		ToolCallId: beacon.GetToolCallId(),
 		ApprovalId: "approval_1",
+		Phase:      beacon.GetPhase(),
 	}}}
 	select {
 	case <-executor.waiting:
@@ -385,10 +386,12 @@ func TestWorkerMarksStartedBlockedBeaconAndAttemptsFailedAfter(t *testing.T) {
 	worker.deliverDecision(&turingv1.ToolPolicyDecision{
 		Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
 		ToolCallId: before.GetToolCallId(),
+		Phase:      before.GetPhase(),
 	})
 	worker.deliverDecision(&turingv1.ToolPolicyDecision{
 		Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
 		ToolCallId: after.GetToolCallId(),
+		Phase:      after.GetPhase(),
 	})
 	got := <-result
 	if !errors.Is(got.err, context.Canceled) || !tools.BeaconWasPosted(got.err) {
@@ -602,6 +605,7 @@ func TestDelayedBeforeDecisionWithSameToolCallIDCannotSatisfyAfter(t *testing.T)
 	worker.deliverDecision(&turingv1.ToolPolicyDecision{
 		Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
 		ToolCallId: "call_same",
+		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
 	})
 	select {
 	case result := <-afterDone:
@@ -612,6 +616,7 @@ func TestDelayedBeforeDecisionWithSameToolCallIDCannotSatisfyAfter(t *testing.T)
 	worker.deliverDecision(&turingv1.ToolPolicyDecision{
 		Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
 		ToolCallId: "call_same",
+		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER,
 	})
 	select {
 	case result := <-afterDone:
@@ -645,7 +650,7 @@ func TestWorkerContinuesReceivingCleanupDecisionWhileCancellationWaitsForExecuto
 		t.Fatalf("first update = %+v, want BEFORE beacon", before)
 	}
 	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_ToolPolicyDecision{ToolPolicyDecision: &turingv1.ToolPolicyDecision{
-		Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: before.GetToolCallId(),
+		Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: before.GetToolCallId(), Phase: before.GetPhase(),
 	}}}
 	select {
 	case <-executor.waitingForCancel:
@@ -666,7 +671,7 @@ func TestWorkerContinuesReceivingCleanupDecisionWhileCancellationWaitsForExecuto
 		t.Fatal("executor did not wait for cleanup decision")
 	}
 	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_ToolPolicyDecision{ToolPolicyDecision: &turingv1.ToolPolicyDecision{
-		Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: after.GetToolCallId(),
+		Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: after.GetToolCallId(), Phase: after.GetPhase(),
 	}}}
 	select {
 	case <-executor.cleanupFinished:

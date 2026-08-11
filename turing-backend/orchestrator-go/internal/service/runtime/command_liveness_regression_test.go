@@ -171,6 +171,7 @@ func TestRecoveryReclaimsAssignmentWithoutTimelyWorkerHeartbeat(t *testing.T) {
 	}
 	connected := &worker{
 		commands:      make(chan *turingv1.RuntimeCommand, 1),
+		done:          make(chan struct{}),
 		maxConcurrent: 1,
 		assignments: map[string]assignment{
 			repoAssignment.RunID: {jobID: repoAssignment.JobID, runID: repoAssignment.RunID, attemptID: repoAssignment.AttemptID},
@@ -200,6 +201,57 @@ func TestRecoveryReclaimsAssignmentWithoutTimelyWorkerHeartbeat(t *testing.T) {
 	}
 	if connected.hasAssignment(enqueued.RunID) {
 		t.Fatal("stale-heartbeat recovery retained the worker's in-memory assignment")
+	}
+	connected.mu.Lock()
+	closed := connected.closed
+	connected.mu.Unlock()
+	if !closed {
+		t.Fatal("stale-heartbeat recovery left the ambiguous worker stream open")
+	}
+	h.service.mu.Lock()
+	registered := h.service.workers[repoAssignment.WorkerID]
+	h.service.mu.Unlock()
+	if registered != nil {
+		t.Fatal("stale-heartbeat recovery retained the worker registration")
+	}
+	if release, err := connected.beginUpdate(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Event{
+		Event: &turingv1.TuringEvent{RunId: enqueued.RunID, Type: turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA},
+	}}); status.Code(err) != codes.Canceled {
+		if release != nil {
+			release()
+		}
+		t.Fatalf("stale worker update error = %v, want Canceled", err)
+	}
+}
+
+func TestHeartbeatRevivalDispatchesQueuedWorkToIdleWorker(t *testing.T) {
+	h := newHarnessWithDispatch(t, DispatchConfig{LeaseDuration: time.Second})
+	enqueued := h.enqueueRun(t, "dispatch after heartbeat revival")
+	connected := &worker{
+		commands:      make(chan *turingv1.RuntimeCommand, 1),
+		done:          make(chan struct{}),
+		maxConcurrent: 1,
+		assignments:   map[string]assignment{},
+		lastHeartbeat: time.Now().Add(-time.Minute),
+	}
+	const workerID = "worker-revived"
+	h.service.mu.Lock()
+	h.service.workers[workerID] = connected
+	h.service.mu.Unlock()
+
+	if err := h.service.renewWorkerLeases(context.Background(), workerID, connected, &turingv1.RuntimeHeartbeat{
+		WorkerId: workerID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case command := <-connected.commands:
+		if assigned := command.GetRunAssigned(); assigned == nil || assigned.GetRunId() != enqueued.RunID {
+			t.Fatalf("revival command = %+v, want assignment for %q", command, enqueued.RunID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat revival did not dispatch queued work")
 	}
 }
 

@@ -374,6 +374,7 @@ type ToolPolicyDecision struct {
 	ApprovalId    string                      `protobuf:"bytes,3,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
 	Reason        string                      `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
 	TerminalRun   bool                        `protobuf:"varint,5,opt,name=terminal_run,json=terminalRun,proto3" json:"terminal_run,omitempty"`
+	Phase         ToolCallPhase               `protobuf:"varint,6,opt,name=phase,proto3,enum=turing.v1.ToolCallPhase" json:"phase,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -443,6 +444,13 @@ func (x *ToolPolicyDecision) GetTerminalRun() bool {
 	return false
 }
 
+func (x *ToolPolicyDecision) GetPhase() ToolCallPhase {
+	if x != nil {
+		return x.Phase
+	}
+	return ToolCallPhase_TOOL_CALL_PHASE_UNSPECIFIED
+}
+
 var File_turing_v1_tools_proto protoreflect.FileDescriptor
 
 const file_turing_v1_tools_proto_rawDesc = "" +
@@ -468,7 +476,7 @@ const file_turing_v1_tools_proto_rawDesc = "" +
 	" \x01(\v2\x18.turing.v1.ToolCallErrorR\x05error\x12\x15\n" +
 	"\x06run_id\x18\v \x01(\tR\x05runId\x12\x19\n" +
 	"\btrace_id\x18\f \x01(\tR\atraceId\x12+\n" +
-	"\x12model_tool_call_id\x18\r \x01(\tR\x0fmodelToolCallId\"\xc3\x02\n" +
+	"\x12model_tool_call_id\x18\r \x01(\tR\x0fmodelToolCallId\"\xf3\x02\n" +
 	"\x12ToolPolicyDecision\x12B\n" +
 	"\bdecision\x18\x01 \x01(\x0e2&.turing.v1.ToolPolicyDecision.DecisionR\bdecision\x12 \n" +
 	"\ftool_call_id\x18\x02 \x01(\tR\n" +
@@ -476,7 +484,8 @@ const file_turing_v1_tools_proto_rawDesc = "" +
 	"\vapproval_id\x18\x03 \x01(\tR\n" +
 	"approvalId\x12\x16\n" +
 	"\x06reason\x18\x04 \x01(\tR\x06reason\x12!\n" +
-	"\fterminal_run\x18\x05 \x01(\bR\vterminalRun\"k\n" +
+	"\fterminal_run\x18\x05 \x01(\bR\vterminalRun\x12.\n" +
+	"\x05phase\x18\x06 \x01(\x0e2\x18.turing.v1.ToolCallPhaseR\x05phase\"k\n" +
 	"\bDecision\x12\x18\n" +
 	"\x14DECISION_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eDECISION_ALLOW\x10\x01\x12\x11\n" +
@@ -523,11 +532,12 @@ var file_turing_v1_tools_proto_depIdxs = []int32{
 	1, // 3: turing.v1.ToolCallBeacon.status:type_name -> turing.v1.ToolCallStatus
 	3, // 4: turing.v1.ToolCallBeacon.error:type_name -> turing.v1.ToolCallError
 	2, // 5: turing.v1.ToolPolicyDecision.decision:type_name -> turing.v1.ToolPolicyDecision.Decision
-	6, // [6:6] is the sub-list for method output_type
-	6, // [6:6] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	0, // 6: turing.v1.ToolPolicyDecision.phase:type_name -> turing.v1.ToolCallPhase
+	7, // [7:7] is the sub-list for method output_type
+	7, // [7:7] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_tools_proto_init() }

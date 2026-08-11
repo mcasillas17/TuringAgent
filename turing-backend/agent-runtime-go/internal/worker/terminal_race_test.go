@@ -39,6 +39,20 @@ func TestActiveRunClaimsExactlyOneTerminalReportAcrossConcurrentExitAndCancellat
 	}
 }
 
+func TestActiveRunCancellationReservesTerminalReportAfterExitCheck(t *testing.T) {
+	entry := &activeRun{}
+	if entry.isStopping() {
+		t.Fatal("new active run is stopping")
+	}
+	started, ownsTerminalReport := entry.beginCancellation()
+	if !started || !ownsTerminalReport {
+		t.Fatalf("beginCancellation = (%v, %v), want (true, true)", started, ownsTerminalReport)
+	}
+	if entry.claimTerminalReport() {
+		t.Fatal("terminal completion claimed report after cancellation started")
+	}
+}
+
 func TestWorkerSendsOneTerminalUpdateAcrossConcurrentExitAndCancellation(t *testing.T) {
 	const interleavings = 200
 
