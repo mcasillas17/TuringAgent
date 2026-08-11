@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 )
 
@@ -23,6 +24,13 @@ type ToolCallRecord struct {
 type ToolCallBeforeResult struct {
 	Record   ToolCallRecord
 	Inserted bool
+}
+
+type ToolCallBeforeEvent struct {
+	SessionID   string
+	TraceID     string
+	Type        string
+	PayloadJSON string
 }
 
 type ToolCallAfterRecord struct {
@@ -46,18 +54,56 @@ func (r *Repository) RecordToolCallBefore(ctx context.Context, record ToolCallRe
 }
 
 func (r *Repository) RecordToolCallBeforeNew(ctx context.Context, record ToolCallRecord, agentID string, serverName string, toolName string, argsJSON string, argsHash string) (ToolCallBeforeResult, error) {
-	status := record.Status
-	if status == "" {
-		status = "requested"
-	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ToolCallBeforeResult{}, err
 	}
 	defer tx.Rollback()
+	result, err := recordToolCallBeforeTx(ctx, tx, record, agentID, serverName, toolName, argsJSON, argsHash)
+	if err != nil {
+		return ToolCallBeforeResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ToolCallBeforeResult{}, err
+	}
+	return result, nil
+}
+
+func (r *Repository) RecordToolCallBeforeWithEvent(ctx context.Context, record ToolCallRecord, agentID string, serverName string, toolName string, argsJSON string, argsHash string, eventInput ToolCallBeforeEvent) (ToolCallBeforeResult, Event, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ToolCallBeforeResult{}, Event{}, err
+	}
+	defer tx.Rollback()
+	result, err := recordToolCallBeforeTx(ctx, tx, record, agentID, serverName, toolName, argsJSON, argsHash)
+	if err != nil {
+		return ToolCallBeforeResult{}, Event{}, err
+	}
+	exists, err := toolCallEventExistsTx(ctx, tx, result.Record.RunID, eventInput.Type, result.Record.ToolCallID)
+	if err != nil {
+		return ToolCallBeforeResult{}, Event{}, err
+	}
+	var event Event
+	if !exists {
+		event, err = appendRunEventTx(ctx, tx, eventInput.SessionID, result.Record.RunID, eventInput.TraceID, eventInput.Type, eventInput.PayloadJSON, now())
+		if err != nil {
+			return ToolCallBeforeResult{}, Event{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return ToolCallBeforeResult{}, Event{}, err
+	}
+	return result, event, nil
+}
+
+func recordToolCallBeforeTx(ctx context.Context, tx *sql.Tx, record ToolCallRecord, agentID string, serverName string, toolName string, argsJSON string, argsHash string) (ToolCallBeforeResult, error) {
+	status := record.Status
+	if status == "" {
+		status = "requested"
+	}
 	var existingRunID, existingAgentID, existingServerName, existingToolName, existingArgsHash, existingStatus string
 	var existingModelToolCallID, existingApprovalID sql.NullString
-	err = tx.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, `
 		SELECT run_id, agent_id, server_name, tool_name, args_hash, model_tool_call_id, status, approval_id
 		FROM tool_calls WHERE id = ?
 	`, record.ToolCallID).Scan(
@@ -68,9 +114,6 @@ func (r *Repository) RecordToolCallBeforeNew(ctx context.Context, record ToolCal
 		if existingRunID == record.RunID && existingAgentID == agentID && existingServerName == serverName && existingToolName == toolName && existingArgsHash == argsHash && nullableStringValue(existingModelToolCallID) == record.ModelToolCallID {
 			record.Status = existingStatus
 			record.ApprovalID = nullableStringValue(existingApprovalID)
-			if err := tx.Commit(); err != nil {
-				return ToolCallBeforeResult{}, err
-			}
 			return ToolCallBeforeResult{Record: record}, nil
 		}
 		return ToolCallBeforeResult{}, ErrToolCallConflict
@@ -85,11 +128,30 @@ func (r *Repository) RecordToolCallBeforeNew(ctx context.Context, record ToolCal
 	if _, err := tx.ExecContext(ctx, `INSERT INTO tool_calls (id, run_id, agent_id, server_name, tool_name, model_tool_call_id, args_json, args_hash, status, approval_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ToolCallID, record.RunID, agentID, serverName, toolName, nullableText(record.ModelToolCallID), argsJSON, argsHash, status, approvalID, now()); err != nil {
 		return ToolCallBeforeResult{}, err
 	}
-	if err := tx.Commit(); err != nil {
-		return ToolCallBeforeResult{}, err
-	}
 	record.Status = status
 	return ToolCallBeforeResult{Record: record, Inserted: true}, nil
+}
+
+func toolCallEventExistsTx(ctx context.Context, tx *sql.Tx, runID string, eventType string, toolCallID string) (bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT payload_json FROM events WHERE run_id = ? AND type = ?`, runID, eventType)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var payloadJSON string
+		if err := rows.Scan(&payloadJSON); err != nil {
+			return false, err
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+			return false, err
+		}
+		if recordedToolCallID, _ := payload["toolCallId"].(string); recordedToolCallID == toolCallID {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func (r *Repository) RecordToolCallAfter(ctx context.Context, record ToolCallAfterRecord) (bool, error) {

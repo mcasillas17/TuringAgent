@@ -1279,21 +1279,21 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "tool_disabled")
 	}
 	if policy == tools.PolicyApprovalRequired {
-		recorded, err := s.repo.RecordToolCallBeforeNew(ctx, repository.ToolCallRecord{ToolCallID: beacon.ToolCallId, RunID: beacon.RunId, ModelToolCallID: beacon.ModelToolCallId}, "general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash)
+		eventInput, err := toolStartedEventInput(beacon, run, args)
+		if err != nil {
+			return nil, err
+		}
+		recorded, event, err := s.repo.RecordToolCallBeforeWithEvent(ctx, repository.ToolCallRecord{ToolCallID: beacon.ToolCallId, RunID: beacon.RunId, ModelToolCallID: beacon.ModelToolCallId}, "general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash, eventInput)
 		if err != nil {
 			return nil, mapToolCallError(err)
+		}
+		if event.EventID != "" {
+			s.publishEvent(event)
 		}
 		if !recorded.Inserted {
 			if decision, handled := existingToolBeforeDecision(recorded.Record, "tool_denied"); handled {
 				return decision, nil
 			}
-		}
-		if recorded.Inserted {
-			event, err := s.appendToolStartedEvent(ctx, beacon, run, args)
-			if err != nil {
-				return nil, err
-			}
-			s.publishEvent(event)
 		}
 		if s.approvals == nil {
 			return nil, status.Error(codes.FailedPrecondition, "approval service is not configured")
@@ -1311,9 +1311,16 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 	if policy == tools.PolicySafe {
 		statusValue = "allowed"
 	}
-	recorded, err := s.repo.RecordToolCallBeforeNew(ctx, repository.ToolCallRecord{ToolCallID: beacon.ToolCallId, RunID: beacon.RunId, Status: statusValue, ModelToolCallID: beacon.ModelToolCallId}, "general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash)
+	eventInput, err := toolStartedEventInput(beacon, run, args)
+	if err != nil {
+		return nil, err
+	}
+	recorded, event, err := s.repo.RecordToolCallBeforeWithEvent(ctx, repository.ToolCallRecord{ToolCallID: beacon.ToolCallId, RunID: beacon.RunId, Status: statusValue, ModelToolCallID: beacon.ModelToolCallId}, "general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash, eventInput)
 	if err != nil {
 		return nil, mapToolCallError(err)
+	}
+	if event.EventID != "" {
+		s.publishEvent(event)
 	}
 	if !recorded.Inserted {
 		if decision, handled := existingToolBeforeDecision(recorded.Record, "tool_denied"); handled {
@@ -1321,13 +1328,8 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 		}
 	}
 	if recorded.Inserted {
-		event, err := s.appendToolStartedEvent(ctx, beacon, run, args)
-		if err != nil {
-			return nil, err
-		}
-		s.publishEvent(event)
 		if err := s.audit.Record(ctx, beacon.RunId, "runtime", "", "tool.call.before", beacon.ToolCallId, toolAuditPayload(beacon)); err != nil {
-			return nil, err
+			log.Printf("record tool before audit for %s: %v", beacon.ToolCallId, err)
 		}
 	}
 	switch policy {
@@ -1362,7 +1364,7 @@ func (s *Server) terminalizePostCommitApprovalFailure(_ context.Context, runID s
 	return s.terminalizeApprovalDeliveryFailure(recoveryCtx, approval.ApprovalID, nil)
 }
 
-func (s *Server) appendToolStartedEvent(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run, args map[string]any) (repository.Event, error) {
+func toolStartedEventInput(beacon *turingv1.ToolCallBeacon, run repository.Run, args map[string]any) (repository.ToolCallBeforeEvent, error) {
 	payload := map[string]any{
 		"toolCallId": beacon.ToolCallId,
 		"serverName": beaconServerName(beacon),
@@ -1370,7 +1372,13 @@ func (s *Server) appendToolStartedEvent(ctx context.Context, beacon *turingv1.To
 		"args":       args,
 	}
 	addModelToolCallID(payload, beacon)
-	return s.appendToolEvent(ctx, run, "tool.call.started", payload)
+	payloadJSON, err := safejson.MarshalCanonical(payload)
+	if err != nil {
+		return repository.ToolCallBeforeEvent{}, err
+	}
+	return repository.ToolCallBeforeEvent{
+		SessionID: run.SessionID, TraceID: run.TraceID, Type: "tool.call.started", PayloadJSON: string(payloadJSON),
+	}, nil
 }
 
 func (s *Server) denyToolBefore(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run, argsJSON string, argsHash string, reason string) (*turingv1.ToolPolicyDecision, error) {
@@ -1407,8 +1415,7 @@ func existingToolBeforeDecision(record repository.ToolCallRecord, deniedReason s
 	decision := &turingv1.ToolPolicyDecision{ToolCallId: record.ToolCallID}
 	switch record.Status {
 	case "allowed":
-		decision.Decision = turingv1.ToolPolicyDecision_DECISION_DENY
-		decision.Reason = "tool_call_already_allowed"
+		decision.Decision = turingv1.ToolPolicyDecision_DECISION_ALLOW
 	case "approval_required":
 		decision.Decision = turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED
 		decision.ApprovalId = record.ApprovalID
