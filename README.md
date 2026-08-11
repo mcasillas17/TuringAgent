@@ -66,8 +66,8 @@ cd turing-backend
 Run developer checks from the repository root:
 
 ```bash
-go test ./... -count=1
-go build ./...
+go test -tags sqlite_fts5 ./... -count=1
+go build -tags sqlite_fts5 ./...
 cd turing-backend/mcp-files && go test ./... -count=1 && go build ./cmd/server
 cd ../../turing-client/turing_app && flutter test
 ```

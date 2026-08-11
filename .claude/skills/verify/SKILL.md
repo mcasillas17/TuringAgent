@@ -3,14 +3,14 @@ name: verify
 description: Run the full multi-module verification matrix (root Go, mcp-files, mcp-system, Flutter, proto check) before considering work complete. Use before committing, opening a PR, or claiming a change works.
 ---
 
-Run the full verification matrix from the repo root. This repo has multiple Go modules; the root `go test ./...` does NOT cover the mcp-* modules, so each must be run explicitly.
+Run the full verification matrix from the repo root. This repo has multiple Go modules; the root `go test -tags sqlite_fts5 ./...` does NOT cover the mcp-* modules, so each must be run explicitly.
 
 Run these in order and report the outcome of each. Stop and surface failures — do not claim success unless every step passes.
 
 ```bash
 # 1. Root module
-go test ./... -count=1
-go build ./...
+go test -tags sqlite_fts5 ./... -count=1
+go build -tags sqlite_fts5 ./...
 
 # 2. mcp-files (separate module)
 ( cd turing-backend/mcp-files && go test ./... -count=1 && go build ./cmd/server )

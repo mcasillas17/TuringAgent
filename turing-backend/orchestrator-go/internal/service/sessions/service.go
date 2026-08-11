@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
@@ -85,6 +86,21 @@ func (s *Server) ListMessages(ctx context.Context, req *turingv1.ListMessagesReq
 	return &turingv1.ListMessagesResponse{Messages: out}, nil
 }
 
+func (s *Server) SearchMessages(ctx context.Context, req *turingv1.SearchMessagesRequest) (*turingv1.SearchMessagesResponse, error) {
+	if req == nil || strings.TrimSpace(req.Query) == "" {
+		return nil, status.Error(codes.InvalidArgument, "query is required")
+	}
+	messages, err := s.repo.SearchMessages(ctx, req.SessionId, req.Query, int(req.Limit))
+	if err != nil {
+		return nil, status.Error(codes.Internal, "search messages failed")
+	}
+	out := make([]*turingv1.Message, 0, len(messages))
+	for _, message := range messages {
+		out = append(out, mapMessage(message.SessionID, message))
+	}
+	return &turingv1.SearchMessagesResponse{Messages: out}, nil
+}
+
 func (s *Server) GetConfig(context.Context, *turingv1.GetConfigRequest) (*turingv1.GetConfigResponse, error) {
 	providers := []*turingv1.ProviderConfig{
 		{Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Enabled: s.cfg.OllamaModel != "", DefaultModel: s.cfg.OllamaModel},
@@ -128,6 +144,7 @@ func mapMessage(sessionID string, message repository.Message) *turingv1.Message 
 	return &turingv1.Message{
 		MessageId:   message.MessageID,
 		SessionId:   sessionID,
+		RunId:       message.RunID,
 		Role:        mapRole(message.Role),
 		Content:     message.Content,
 		ContentType: message.ContentType,

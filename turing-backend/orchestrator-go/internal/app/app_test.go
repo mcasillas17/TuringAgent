@@ -66,6 +66,14 @@ func TestPublicServerRequiresClientToken(t *testing.T) {
 
 func TestPublicServerReportsVersion(t *testing.T) {
 	app := newTestApp(t)
+	var wantSchemaVersion string
+	if err := app.database.QueryRow(`
+		SELECT CASE WHEN instr(version, '_') > 0 THEN substr(version, 1, instr(version, '_') - 1) ELSE version END
+		FROM schema_migrations
+		ORDER BY version DESC
+		LIMIT 1`).Scan(&wantSchemaVersion); err != nil {
+		t.Fatalf("read latest applied schema version: %v", err)
+	}
 	conn := newBufconnClient(t, app.PublicServer)
 	client := turingv1.NewHealthServiceClient(conn)
 	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("authorization", "Bearer client"))
@@ -73,8 +81,11 @@ func TestPublicServerReportsVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Version != "1.0.0-go" || res.SchemaVersion != "0002" {
-		t.Fatalf("unexpected version response: %#v", res)
+	if res.Version != "1.0.0-go" {
+		t.Errorf("version = %q, want %q", res.Version, "1.0.0-go")
+	}
+	if res.SchemaVersion != wantSchemaVersion {
+		t.Errorf("schema version = %q, want %q", res.SchemaVersion, wantSchemaVersion)
 	}
 }
 

@@ -19,13 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SessionService_CreateSession_FullMethodName = "/turing.v1.SessionService/CreateSession"
-	SessionService_ListSessions_FullMethodName  = "/turing.v1.SessionService/ListSessions"
-	SessionService_GetSession_FullMethodName    = "/turing.v1.SessionService/GetSession"
-	SessionService_ListMessages_FullMethodName  = "/turing.v1.SessionService/ListMessages"
-	SessionService_GetConfig_FullMethodName     = "/turing.v1.SessionService/GetConfig"
-	SessionService_ListAgents_FullMethodName    = "/turing.v1.SessionService/ListAgents"
-	SessionService_ListTools_FullMethodName     = "/turing.v1.SessionService/ListTools"
+	SessionService_CreateSession_FullMethodName  = "/turing.v1.SessionService/CreateSession"
+	SessionService_ListSessions_FullMethodName   = "/turing.v1.SessionService/ListSessions"
+	SessionService_GetSession_FullMethodName     = "/turing.v1.SessionService/GetSession"
+	SessionService_ListMessages_FullMethodName   = "/turing.v1.SessionService/ListMessages"
+	SessionService_SearchMessages_FullMethodName = "/turing.v1.SessionService/SearchMessages"
+	SessionService_GetConfig_FullMethodName      = "/turing.v1.SessionService/GetConfig"
+	SessionService_ListAgents_FullMethodName     = "/turing.v1.SessionService/ListAgents"
+	SessionService_ListTools_FullMethodName      = "/turing.v1.SessionService/ListTools"
 )
 
 // SessionServiceClient is the client API for SessionService service.
@@ -36,6 +37,7 @@ type SessionServiceClient interface {
 	ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error)
 	GetSession(ctx context.Context, in *GetSessionRequest, opts ...grpc.CallOption) (*Session, error)
 	ListMessages(ctx context.Context, in *ListMessagesRequest, opts ...grpc.CallOption) (*ListMessagesResponse, error)
+	SearchMessages(ctx context.Context, in *SearchMessagesRequest, opts ...grpc.CallOption) (*SearchMessagesResponse, error)
 	GetConfig(ctx context.Context, in *GetConfigRequest, opts ...grpc.CallOption) (*GetConfigResponse, error)
 	ListAgents(ctx context.Context, in *ListAgentsRequest, opts ...grpc.CallOption) (*ListAgentsResponse, error)
 	ListTools(ctx context.Context, in *ListToolsRequest, opts ...grpc.CallOption) (*ListToolsResponse, error)
@@ -89,6 +91,16 @@ func (c *sessionServiceClient) ListMessages(ctx context.Context, in *ListMessage
 	return out, nil
 }
 
+func (c *sessionServiceClient) SearchMessages(ctx context.Context, in *SearchMessagesRequest, opts ...grpc.CallOption) (*SearchMessagesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SearchMessagesResponse)
+	err := c.cc.Invoke(ctx, SessionService_SearchMessages_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *sessionServiceClient) GetConfig(ctx context.Context, in *GetConfigRequest, opts ...grpc.CallOption) (*GetConfigResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetConfigResponse)
@@ -127,6 +139,7 @@ type SessionServiceServer interface {
 	ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error)
 	GetSession(context.Context, *GetSessionRequest) (*Session, error)
 	ListMessages(context.Context, *ListMessagesRequest) (*ListMessagesResponse, error)
+	SearchMessages(context.Context, *SearchMessagesRequest) (*SearchMessagesResponse, error)
 	GetConfig(context.Context, *GetConfigRequest) (*GetConfigResponse, error)
 	ListAgents(context.Context, *ListAgentsRequest) (*ListAgentsResponse, error)
 	ListTools(context.Context, *ListToolsRequest) (*ListToolsResponse, error)
@@ -151,6 +164,9 @@ func (UnimplementedSessionServiceServer) GetSession(context.Context, *GetSession
 }
 func (UnimplementedSessionServiceServer) ListMessages(context.Context, *ListMessagesRequest) (*ListMessagesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListMessages not implemented")
+}
+func (UnimplementedSessionServiceServer) SearchMessages(context.Context, *SearchMessagesRequest) (*SearchMessagesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SearchMessages not implemented")
 }
 func (UnimplementedSessionServiceServer) GetConfig(context.Context, *GetConfigRequest) (*GetConfigResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetConfig not implemented")
@@ -254,6 +270,24 @@ func _SessionService_ListMessages_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SessionService_SearchMessages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SearchMessagesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SessionServiceServer).SearchMessages(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SessionService_SearchMessages_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SessionServiceServer).SearchMessages(ctx, req.(*SearchMessagesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SessionService_GetConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetConfigRequest)
 	if err := dec(in); err != nil {
@@ -330,6 +364,10 @@ var SessionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListMessages",
 			Handler:    _SessionService_ListMessages_Handler,
+		},
+		{
+			MethodName: "SearchMessages",
+			Handler:    _SessionService_SearchMessages_Handler,
 		},
 		{
 			MethodName: "GetConfig",

@@ -16,6 +16,8 @@ TuringAgent is split into four local runtime pieces:
 
 The client talks to the orchestrator through gRPC. The agent runtime talks to MCP servers over internal HTTP JSON-RPC. MCP servers are not published to the host.
 
+For what the shipped session-recall capability does—and the two intentionally deferred model-context and summary layers—see [Session recall scope](session-recall.md).
+
 ## gRPC and protobuf
 
 Protocol definitions live under `proto/turing/v1/`.
@@ -23,14 +25,14 @@ Protocol definitions live under `proto/turing/v1/`.
 Generated code:
 
 - Go: `gen/turing/v1/go/turing/v1/`
-- Dart: `turing-client/turing_app/lib/gen/turing/v1/`
+- Dart: `turing-client/turing_app/lib/generated/turing/v1/`
 
 Useful commands:
 
 ```bash
 tools/proto/check.sh
-go test ./... -count=1
-go build ./...
+go test -tags sqlite_fts5 ./... -count=1
+go build -tags sqlite_fts5 ./...
 ```
 
 The public orchestrator gRPC port defaults to `3000`. The internal runtime gRPC port defaults to `3001`.
@@ -95,8 +97,8 @@ Do not commit generated secrets, local databases, or sandbox files.
 Run from the repository root unless noted:
 
 ```bash
-go test ./... -count=1
-go build ./...
+go test -tags sqlite_fts5 ./... -count=1
+go build -tags sqlite_fts5 ./...
 cd turing-backend/mcp-files && go test ./... -count=1 && go build ./cmd/server
 cd ../../turing-client/turing_app && flutter test
 cd ../.. && tools/proto/check.sh

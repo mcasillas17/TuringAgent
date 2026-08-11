@@ -430,6 +430,110 @@ func (x *ListMessagesResponse) GetMessages() []*Message {
 	return nil
 }
 
+type SearchMessagesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Query         string                 `protobuf:"bytes,1,opt,name=query,proto3" json:"query,omitempty"`
+	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"` // optional scope; empty = all sessions
+	Limit         int32                  `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SearchMessagesRequest) Reset() {
+	*x = SearchMessagesRequest{}
+	mi := &file_turing_v1_sessions_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SearchMessagesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SearchMessagesRequest) ProtoMessage() {}
+
+func (x *SearchMessagesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_sessions_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SearchMessagesRequest.ProtoReflect.Descriptor instead.
+func (*SearchMessagesRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *SearchMessagesRequest) GetQuery() string {
+	if x != nil {
+		return x.Query
+	}
+	return ""
+}
+
+func (x *SearchMessagesRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *SearchMessagesRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+type SearchMessagesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Messages      []*Message             `protobuf:"bytes,1,rep,name=messages,proto3" json:"messages,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SearchMessagesResponse) Reset() {
+	*x = SearchMessagesResponse{}
+	mi := &file_turing_v1_sessions_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SearchMessagesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SearchMessagesResponse) ProtoMessage() {}
+
+func (x *SearchMessagesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_sessions_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SearchMessagesResponse.ProtoReflect.Descriptor instead.
+func (*SearchMessagesResponse) Descriptor() ([]byte, []int) {
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *SearchMessagesResponse) GetMessages() []*Message {
+	if x != nil {
+		return x.Messages
+	}
+	return nil
+}
+
 type GetConfigRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -438,7 +542,7 @@ type GetConfigRequest struct {
 
 func (x *GetConfigRequest) Reset() {
 	*x = GetConfigRequest{}
-	mi := &file_turing_v1_sessions_proto_msgTypes[8]
+	mi := &file_turing_v1_sessions_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -450,7 +554,7 @@ func (x *GetConfigRequest) String() string {
 func (*GetConfigRequest) ProtoMessage() {}
 
 func (x *GetConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_sessions_proto_msgTypes[8]
+	mi := &file_turing_v1_sessions_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -463,7 +567,7 @@ func (x *GetConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConfigRequest.ProtoReflect.Descriptor instead.
 func (*GetConfigRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{8}
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{10}
 }
 
 type GetConfigResponse struct {
@@ -477,7 +581,7 @@ type GetConfigResponse struct {
 
 func (x *GetConfigResponse) Reset() {
 	*x = GetConfigResponse{}
-	mi := &file_turing_v1_sessions_proto_msgTypes[9]
+	mi := &file_turing_v1_sessions_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -489,7 +593,7 @@ func (x *GetConfigResponse) String() string {
 func (*GetConfigResponse) ProtoMessage() {}
 
 func (x *GetConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_sessions_proto_msgTypes[9]
+	mi := &file_turing_v1_sessions_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -502,7 +606,7 @@ func (x *GetConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConfigResponse.ProtoReflect.Descriptor instead.
 func (*GetConfigResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{9}
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GetConfigResponse) GetProviders() []*ProviderConfig {
@@ -534,7 +638,7 @@ type ListAgentsRequest struct {
 
 func (x *ListAgentsRequest) Reset() {
 	*x = ListAgentsRequest{}
-	mi := &file_turing_v1_sessions_proto_msgTypes[10]
+	mi := &file_turing_v1_sessions_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -546,7 +650,7 @@ func (x *ListAgentsRequest) String() string {
 func (*ListAgentsRequest) ProtoMessage() {}
 
 func (x *ListAgentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_sessions_proto_msgTypes[10]
+	mi := &file_turing_v1_sessions_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -559,7 +663,7 @@ func (x *ListAgentsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAgentsRequest.ProtoReflect.Descriptor instead.
 func (*ListAgentsRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{10}
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{12}
 }
 
 type ListAgentsResponse struct {
@@ -571,7 +675,7 @@ type ListAgentsResponse struct {
 
 func (x *ListAgentsResponse) Reset() {
 	*x = ListAgentsResponse{}
-	mi := &file_turing_v1_sessions_proto_msgTypes[11]
+	mi := &file_turing_v1_sessions_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -583,7 +687,7 @@ func (x *ListAgentsResponse) String() string {
 func (*ListAgentsResponse) ProtoMessage() {}
 
 func (x *ListAgentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_sessions_proto_msgTypes[11]
+	mi := &file_turing_v1_sessions_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -596,7 +700,7 @@ func (x *ListAgentsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAgentsResponse.ProtoReflect.Descriptor instead.
 func (*ListAgentsResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{11}
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ListAgentsResponse) GetAgents() []*AgentDescriptor {
@@ -617,7 +721,7 @@ type ToolDescriptor struct {
 
 func (x *ToolDescriptor) Reset() {
 	*x = ToolDescriptor{}
-	mi := &file_turing_v1_sessions_proto_msgTypes[12]
+	mi := &file_turing_v1_sessions_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -629,7 +733,7 @@ func (x *ToolDescriptor) String() string {
 func (*ToolDescriptor) ProtoMessage() {}
 
 func (x *ToolDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_sessions_proto_msgTypes[12]
+	mi := &file_turing_v1_sessions_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -642,7 +746,7 @@ func (x *ToolDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolDescriptor.ProtoReflect.Descriptor instead.
 func (*ToolDescriptor) Descriptor() ([]byte, []int) {
-	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{12}
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ToolDescriptor) GetServerName() string {
@@ -674,7 +778,7 @@ type ListToolsRequest struct {
 
 func (x *ListToolsRequest) Reset() {
 	*x = ListToolsRequest{}
-	mi := &file_turing_v1_sessions_proto_msgTypes[13]
+	mi := &file_turing_v1_sessions_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -686,7 +790,7 @@ func (x *ListToolsRequest) String() string {
 func (*ListToolsRequest) ProtoMessage() {}
 
 func (x *ListToolsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_sessions_proto_msgTypes[13]
+	mi := &file_turing_v1_sessions_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -699,7 +803,7 @@ func (x *ListToolsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListToolsRequest.ProtoReflect.Descriptor instead.
 func (*ListToolsRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{13}
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{15}
 }
 
 type ListToolsResponse struct {
@@ -711,7 +815,7 @@ type ListToolsResponse struct {
 
 func (x *ListToolsResponse) Reset() {
 	*x = ListToolsResponse{}
-	mi := &file_turing_v1_sessions_proto_msgTypes[14]
+	mi := &file_turing_v1_sessions_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -723,7 +827,7 @@ func (x *ListToolsResponse) String() string {
 func (*ListToolsResponse) ProtoMessage() {}
 
 func (x *ListToolsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_sessions_proto_msgTypes[14]
+	mi := &file_turing_v1_sessions_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -736,7 +840,7 @@ func (x *ListToolsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListToolsResponse.ProtoReflect.Descriptor instead.
 func (*ListToolsResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{14}
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ListToolsResponse) GetTools() []*ToolDescriptor {
@@ -780,6 +884,13 @@ const file_turing_v1_sessions_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x14\n" +
 	"\x05limit\x18\x02 \x01(\x05R\x05limit\"F\n" +
 	"\x14ListMessagesResponse\x12.\n" +
+	"\bmessages\x18\x01 \x03(\v2\x12.turing.v1.MessageR\bmessages\"b\n" +
+	"\x15SearchMessagesRequest\x12\x14\n" +
+	"\x05query\x18\x01 \x01(\tR\x05query\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x14\n" +
+	"\x05limit\x18\x03 \x01(\x05R\x05limit\"H\n" +
+	"\x16SearchMessagesResponse\x12.\n" +
 	"\bmessages\x18\x01 \x03(\v2\x12.turing.v1.MessageR\bmessages\"\x12\n" +
 	"\x10GetConfigRequest\"\xa5\x01\n" +
 	"\x11GetConfigResponse\x127\n" +
@@ -796,13 +907,14 @@ const file_turing_v1_sessions_proto_rawDesc = "" +
 	"\x06policy\x18\x03 \x01(\x0e2\x15.turing.v1.ToolPolicyR\x06policy\"\x12\n" +
 	"\x10ListToolsRequest\"D\n" +
 	"\x11ListToolsResponse\x12/\n" +
-	"\x05tools\x18\x01 \x03(\v2\x19.turing.v1.ToolDescriptorR\x05tools2\xa1\x04\n" +
+	"\x05tools\x18\x01 \x03(\v2\x19.turing.v1.ToolDescriptorR\x05tools2\xf8\x04\n" +
 	"\x0eSessionService\x12R\n" +
 	"\rCreateSession\x12\x1f.turing.v1.CreateSessionRequest\x1a .turing.v1.CreateSessionResponse\x12O\n" +
 	"\fListSessions\x12\x1e.turing.v1.ListSessionsRequest\x1a\x1f.turing.v1.ListSessionsResponse\x12>\n" +
 	"\n" +
 	"GetSession\x12\x1c.turing.v1.GetSessionRequest\x1a\x12.turing.v1.Session\x12O\n" +
-	"\fListMessages\x12\x1e.turing.v1.ListMessagesRequest\x1a\x1f.turing.v1.ListMessagesResponse\x12F\n" +
+	"\fListMessages\x12\x1e.turing.v1.ListMessagesRequest\x1a\x1f.turing.v1.ListMessagesResponse\x12U\n" +
+	"\x0eSearchMessages\x12 .turing.v1.SearchMessagesRequest\x1a!.turing.v1.SearchMessagesResponse\x12F\n" +
 	"\tGetConfig\x12\x1b.turing.v1.GetConfigRequest\x1a\x1c.turing.v1.GetConfigResponse\x12I\n" +
 	"\n" +
 	"ListAgents\x12\x1c.turing.v1.ListAgentsRequest\x1a\x1d.turing.v1.ListAgentsResponse\x12F\n" +
@@ -820,62 +932,67 @@ func file_turing_v1_sessions_proto_rawDescGZIP() []byte {
 	return file_turing_v1_sessions_proto_rawDescData
 }
 
-var file_turing_v1_sessions_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_turing_v1_sessions_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_turing_v1_sessions_proto_goTypes = []any{
-	(*Session)(nil),               // 0: turing.v1.Session
-	(*CreateSessionRequest)(nil),  // 1: turing.v1.CreateSessionRequest
-	(*CreateSessionResponse)(nil), // 2: turing.v1.CreateSessionResponse
-	(*ListSessionsRequest)(nil),   // 3: turing.v1.ListSessionsRequest
-	(*ListSessionsResponse)(nil),  // 4: turing.v1.ListSessionsResponse
-	(*GetSessionRequest)(nil),     // 5: turing.v1.GetSessionRequest
-	(*ListMessagesRequest)(nil),   // 6: turing.v1.ListMessagesRequest
-	(*ListMessagesResponse)(nil),  // 7: turing.v1.ListMessagesResponse
-	(*GetConfigRequest)(nil),      // 8: turing.v1.GetConfigRequest
-	(*GetConfigResponse)(nil),     // 9: turing.v1.GetConfigResponse
-	(*ListAgentsRequest)(nil),     // 10: turing.v1.ListAgentsRequest
-	(*ListAgentsResponse)(nil),    // 11: turing.v1.ListAgentsResponse
-	(*ToolDescriptor)(nil),        // 12: turing.v1.ToolDescriptor
-	(*ListToolsRequest)(nil),      // 13: turing.v1.ListToolsRequest
-	(*ListToolsResponse)(nil),     // 14: turing.v1.ListToolsResponse
-	(*timestamppb.Timestamp)(nil), // 15: google.protobuf.Timestamp
-	(*PageRequest)(nil),           // 16: turing.v1.PageRequest
-	(*PageResponse)(nil),          // 17: turing.v1.PageResponse
-	(*Message)(nil),               // 18: turing.v1.Message
-	(*ProviderConfig)(nil),        // 19: turing.v1.ProviderConfig
-	(*AgentDescriptor)(nil),       // 20: turing.v1.AgentDescriptor
-	(ToolPolicy)(0),               // 21: turing.v1.ToolPolicy
+	(*Session)(nil),                // 0: turing.v1.Session
+	(*CreateSessionRequest)(nil),   // 1: turing.v1.CreateSessionRequest
+	(*CreateSessionResponse)(nil),  // 2: turing.v1.CreateSessionResponse
+	(*ListSessionsRequest)(nil),    // 3: turing.v1.ListSessionsRequest
+	(*ListSessionsResponse)(nil),   // 4: turing.v1.ListSessionsResponse
+	(*GetSessionRequest)(nil),      // 5: turing.v1.GetSessionRequest
+	(*ListMessagesRequest)(nil),    // 6: turing.v1.ListMessagesRequest
+	(*ListMessagesResponse)(nil),   // 7: turing.v1.ListMessagesResponse
+	(*SearchMessagesRequest)(nil),  // 8: turing.v1.SearchMessagesRequest
+	(*SearchMessagesResponse)(nil), // 9: turing.v1.SearchMessagesResponse
+	(*GetConfigRequest)(nil),       // 10: turing.v1.GetConfigRequest
+	(*GetConfigResponse)(nil),      // 11: turing.v1.GetConfigResponse
+	(*ListAgentsRequest)(nil),      // 12: turing.v1.ListAgentsRequest
+	(*ListAgentsResponse)(nil),     // 13: turing.v1.ListAgentsResponse
+	(*ToolDescriptor)(nil),         // 14: turing.v1.ToolDescriptor
+	(*ListToolsRequest)(nil),       // 15: turing.v1.ListToolsRequest
+	(*ListToolsResponse)(nil),      // 16: turing.v1.ListToolsResponse
+	(*timestamppb.Timestamp)(nil),  // 17: google.protobuf.Timestamp
+	(*PageRequest)(nil),            // 18: turing.v1.PageRequest
+	(*PageResponse)(nil),           // 19: turing.v1.PageResponse
+	(*Message)(nil),                // 20: turing.v1.Message
+	(*ProviderConfig)(nil),         // 21: turing.v1.ProviderConfig
+	(*AgentDescriptor)(nil),        // 22: turing.v1.AgentDescriptor
+	(ToolPolicy)(0),                // 23: turing.v1.ToolPolicy
 }
 var file_turing_v1_sessions_proto_depIdxs = []int32{
-	15, // 0: turing.v1.Session.created_at:type_name -> google.protobuf.Timestamp
-	15, // 1: turing.v1.Session.updated_at:type_name -> google.protobuf.Timestamp
-	15, // 2: turing.v1.CreateSessionResponse.created_at:type_name -> google.protobuf.Timestamp
-	16, // 3: turing.v1.ListSessionsRequest.page:type_name -> turing.v1.PageRequest
+	17, // 0: turing.v1.Session.created_at:type_name -> google.protobuf.Timestamp
+	17, // 1: turing.v1.Session.updated_at:type_name -> google.protobuf.Timestamp
+	17, // 2: turing.v1.CreateSessionResponse.created_at:type_name -> google.protobuf.Timestamp
+	18, // 3: turing.v1.ListSessionsRequest.page:type_name -> turing.v1.PageRequest
 	0,  // 4: turing.v1.ListSessionsResponse.sessions:type_name -> turing.v1.Session
-	17, // 5: turing.v1.ListSessionsResponse.page:type_name -> turing.v1.PageResponse
-	18, // 6: turing.v1.ListMessagesResponse.messages:type_name -> turing.v1.Message
-	19, // 7: turing.v1.GetConfigResponse.providers:type_name -> turing.v1.ProviderConfig
-	20, // 8: turing.v1.ListAgentsResponse.agents:type_name -> turing.v1.AgentDescriptor
-	21, // 9: turing.v1.ToolDescriptor.policy:type_name -> turing.v1.ToolPolicy
-	12, // 10: turing.v1.ListToolsResponse.tools:type_name -> turing.v1.ToolDescriptor
-	1,  // 11: turing.v1.SessionService.CreateSession:input_type -> turing.v1.CreateSessionRequest
-	3,  // 12: turing.v1.SessionService.ListSessions:input_type -> turing.v1.ListSessionsRequest
-	5,  // 13: turing.v1.SessionService.GetSession:input_type -> turing.v1.GetSessionRequest
-	6,  // 14: turing.v1.SessionService.ListMessages:input_type -> turing.v1.ListMessagesRequest
-	8,  // 15: turing.v1.SessionService.GetConfig:input_type -> turing.v1.GetConfigRequest
-	10, // 16: turing.v1.SessionService.ListAgents:input_type -> turing.v1.ListAgentsRequest
-	13, // 17: turing.v1.SessionService.ListTools:input_type -> turing.v1.ListToolsRequest
-	2,  // 18: turing.v1.SessionService.CreateSession:output_type -> turing.v1.CreateSessionResponse
-	4,  // 19: turing.v1.SessionService.ListSessions:output_type -> turing.v1.ListSessionsResponse
-	0,  // 20: turing.v1.SessionService.GetSession:output_type -> turing.v1.Session
-	7,  // 21: turing.v1.SessionService.ListMessages:output_type -> turing.v1.ListMessagesResponse
-	9,  // 22: turing.v1.SessionService.GetConfig:output_type -> turing.v1.GetConfigResponse
-	11, // 23: turing.v1.SessionService.ListAgents:output_type -> turing.v1.ListAgentsResponse
-	14, // 24: turing.v1.SessionService.ListTools:output_type -> turing.v1.ListToolsResponse
-	18, // [18:25] is the sub-list for method output_type
-	11, // [11:18] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	19, // 5: turing.v1.ListSessionsResponse.page:type_name -> turing.v1.PageResponse
+	20, // 6: turing.v1.ListMessagesResponse.messages:type_name -> turing.v1.Message
+	20, // 7: turing.v1.SearchMessagesResponse.messages:type_name -> turing.v1.Message
+	21, // 8: turing.v1.GetConfigResponse.providers:type_name -> turing.v1.ProviderConfig
+	22, // 9: turing.v1.ListAgentsResponse.agents:type_name -> turing.v1.AgentDescriptor
+	23, // 10: turing.v1.ToolDescriptor.policy:type_name -> turing.v1.ToolPolicy
+	14, // 11: turing.v1.ListToolsResponse.tools:type_name -> turing.v1.ToolDescriptor
+	1,  // 12: turing.v1.SessionService.CreateSession:input_type -> turing.v1.CreateSessionRequest
+	3,  // 13: turing.v1.SessionService.ListSessions:input_type -> turing.v1.ListSessionsRequest
+	5,  // 14: turing.v1.SessionService.GetSession:input_type -> turing.v1.GetSessionRequest
+	6,  // 15: turing.v1.SessionService.ListMessages:input_type -> turing.v1.ListMessagesRequest
+	8,  // 16: turing.v1.SessionService.SearchMessages:input_type -> turing.v1.SearchMessagesRequest
+	10, // 17: turing.v1.SessionService.GetConfig:input_type -> turing.v1.GetConfigRequest
+	12, // 18: turing.v1.SessionService.ListAgents:input_type -> turing.v1.ListAgentsRequest
+	15, // 19: turing.v1.SessionService.ListTools:input_type -> turing.v1.ListToolsRequest
+	2,  // 20: turing.v1.SessionService.CreateSession:output_type -> turing.v1.CreateSessionResponse
+	4,  // 21: turing.v1.SessionService.ListSessions:output_type -> turing.v1.ListSessionsResponse
+	0,  // 22: turing.v1.SessionService.GetSession:output_type -> turing.v1.Session
+	7,  // 23: turing.v1.SessionService.ListMessages:output_type -> turing.v1.ListMessagesResponse
+	9,  // 24: turing.v1.SessionService.SearchMessages:output_type -> turing.v1.SearchMessagesResponse
+	11, // 25: turing.v1.SessionService.GetConfig:output_type -> turing.v1.GetConfigResponse
+	13, // 26: turing.v1.SessionService.ListAgents:output_type -> turing.v1.ListAgentsResponse
+	16, // 27: turing.v1.SessionService.ListTools:output_type -> turing.v1.ListToolsResponse
+	20, // [20:28] is the sub-list for method output_type
+	12, // [12:20] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_sessions_proto_init() }
@@ -890,7 +1007,7 @@ func file_turing_v1_sessions_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_sessions_proto_rawDesc), len(file_turing_v1_sessions_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   15,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

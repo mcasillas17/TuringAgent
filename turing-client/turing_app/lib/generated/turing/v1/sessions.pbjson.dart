@@ -1,13 +1,14 @@
+// This is a generated file - do not edit.
 //
-//  Generated code. Do not modify.
-//  source: turing/v1/sessions.proto
-//
+// Generated from turing/v1/sessions.proto.
+
 // @dart = 3.3
 
 // ignore_for_file: annotate_overrides, camel_case_types, comment_references
-// ignore_for_file: constant_identifier_names, library_prefixes
-// ignore_for_file: non_constant_identifier_names, prefer_final_fields
-// ignore_for_file: unnecessary_import, unnecessary_this, unused_import
+// ignore_for_file: constant_identifier_names
+// ignore_for_file: curly_braces_in_flow_control_structures
+// ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
+// ignore_for_file: non_constant_identifier_names, unused_import
 
 import 'dart:convert' as $convert;
 import 'dart:core' as $core;
@@ -175,6 +176,42 @@ const ListMessagesResponse$json = {
 final $typed_data.Uint8List listMessagesResponseDescriptor = $convert.base64Decode(
     'ChRMaXN0TWVzc2FnZXNSZXNwb25zZRIuCghtZXNzYWdlcxgBIAMoCzISLnR1cmluZy52MS5NZX'
     'NzYWdlUghtZXNzYWdlcw==');
+
+@$core.Deprecated('Use searchMessagesRequestDescriptor instead')
+const SearchMessagesRequest$json = {
+  '1': 'SearchMessagesRequest',
+  '2': [
+    {'1': 'query', '3': 1, '4': 1, '5': 9, '10': 'query'},
+    {'1': 'session_id', '3': 2, '4': 1, '5': 9, '10': 'sessionId'},
+    {'1': 'limit', '3': 3, '4': 1, '5': 5, '10': 'limit'},
+  ],
+};
+
+/// Descriptor for `SearchMessagesRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List searchMessagesRequestDescriptor = $convert.base64Decode(
+    'ChVTZWFyY2hNZXNzYWdlc1JlcXVlc3QSFAoFcXVlcnkYASABKAlSBXF1ZXJ5Eh0KCnNlc3Npb2'
+    '5faWQYAiABKAlSCXNlc3Npb25JZBIUCgVsaW1pdBgDIAEoBVIFbGltaXQ=');
+
+@$core.Deprecated('Use searchMessagesResponseDescriptor instead')
+const SearchMessagesResponse$json = {
+  '1': 'SearchMessagesResponse',
+  '2': [
+    {
+      '1': 'messages',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.Message',
+      '10': 'messages'
+    },
+  ],
+};
+
+/// Descriptor for `SearchMessagesResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List searchMessagesResponseDescriptor =
+    $convert.base64Decode(
+        'ChZTZWFyY2hNZXNzYWdlc1Jlc3BvbnNlEi4KCG1lc3NhZ2VzGAEgAygLMhIudHVyaW5nLnYxLk'
+        '1lc3NhZ2VSCG1lc3NhZ2Vz');
 
 @$core.Deprecated('Use getConfigRequestDescriptor instead')
 const GetConfigRequest$json = {

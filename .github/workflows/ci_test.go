@@ -13,12 +13,16 @@ func TestCIWorkflowCoversCoreChecks(t *testing.T) {
 	}
 	workflow := string(data)
 
-	requireContains(t, workflow, "go test ./... -count=1")
-	requireContains(t, workflow, "go build ./...")
+	requireContains(t, workflow, "go test -tags sqlite_fts5 ./... -count=1")
+	requireContains(t, workflow, "go build -tags sqlite_fts5 ./...")
 	requireContains(t, workflow, "cd turing-backend/mcp-files")
 	requireContains(t, workflow, "go test ./... -count=1")
 	requireContains(t, workflow, "go build ./cmd/server")
 	requireContains(t, workflow, "tools/proto/check.sh")
+	requireContains(t, workflow, "uses: dart-lang/setup-dart@v1")
+	requireContains(t, workflow, "dart pub global activate protoc_plugin 22.5.0")
+	requireContains(t, workflow, `echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"`)
+	requireContains(t, workflow, "go test -tags sqlite_fts5 ./.github/workflows")
 	requireContains(t, workflow, "flutter test")
 	requireContains(t, workflow, "bash -n turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/smoke-grpc.sh")
 }

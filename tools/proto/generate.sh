@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROTO_DIR="$ROOT/proto"
 OUT_DIR="$ROOT/gen/turing/v1"
+FLUTTER_OUT_DIR="$ROOT/turing-client/turing_app/lib/generated"
 
 require() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -15,34 +16,78 @@ require() {
 require protoc
 require protoc-gen-go
 require protoc-gen-go-grpc
+require dart
 
-mkdir -p "$OUT_DIR/go" "$OUT_DIR/dart" "$OUT_DIR/swift" "$OUT_DIR/csharp" "$OUT_DIR/kotlin"
+protoc_version="$(protoc --version 2>/dev/null || true)"
+if [[ "$protoc_version" != "libprotoc 34.1" ]]; then
+  echo "protoc 34.1 is required (found: ${protoc_version:-unknown}); install protoc 34.1 and ensure it is first on PATH" >&2
+  exit 1
+fi
+
+protoc_gen_go_version="$(protoc-gen-go --version 2>/dev/null || true)"
+if [[ "$protoc_gen_go_version" != "protoc-gen-go v1.36.11" ]]; then
+  echo "protoc-gen-go v1.36.11 is required (found: ${protoc_gen_go_version:-unknown}); install it with: go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11" >&2
+  exit 1
+fi
+
+protoc_gen_go_grpc_version="$(protoc-gen-go-grpc --version 2>/dev/null || true)"
+if [[ "$protoc_gen_go_grpc_version" != "protoc-gen-go-grpc 1.6.2" ]]; then
+  echo "protoc-gen-go-grpc 1.6.2 is required (found: ${protoc_gen_go_grpc_version:-unknown}); install it with: go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2" >&2
+  exit 1
+fi
+
+if [[ -n "${PUB_CACHE:-}" ]]; then
+  dart_pub_cache="$PUB_CACHE"
+elif [[ "${OS:-}" == "Windows_NT" && -n "${LOCALAPPDATA:-}" ]]; then
+  dart_pub_cache="$LOCALAPPDATA/Pub/Cache"
+else
+  dart_pub_cache="$HOME/.pub-cache"
+fi
+if [[ "$dart_pub_cache" =~ ^[A-Za-z]:[\\/] ]]; then
+  if ! command -v cygpath >/dev/null 2>&1; then
+    echo "Windows pub cache path $dart_pub_cache requires cygpath; install Git for Windows or set PUB_CACHE to a POSIX-style absolute path" >&2
+    exit 1
+  fi
+  dart_pub_cache="$(cygpath -u "$dart_pub_cache")"
+elif [[ "$dart_pub_cache" != /* ]]; then
+  dart_pub_cache="$PWD/$dart_pub_cache"
+fi
+
+dart_plugin=""
+for candidate in \
+  "$dart_pub_cache/bin/protoc-gen-dart" \
+  "$dart_pub_cache/bin/protoc-gen-dart.bat" \
+  "$dart_pub_cache/bin/protoc-gen-dart.cmd" \
+  "$dart_pub_cache/bin/protoc-gen-dart.exe"; do
+  if [[ -x "$candidate" || ( "${OS:-}" == "Windows_NT" && -f "$candidate" ) ]]; then
+    dart_plugin="$candidate"
+    break
+  fi
+done
+
+if [[ -z "$dart_plugin" ]]; then
+  echo "missing required Dart protobuf plugin under $dart_pub_cache/bin; install it with: PUB_CACHE=\"$dart_pub_cache\" dart pub global activate protoc_plugin 22.5.0" >&2
+  exit 127
+fi
+
+dart_plugin_version="$(PUB_CACHE="$dart_pub_cache" dart pub global list 2>/dev/null | awk '$1 == "protoc_plugin" { print $2; exit }')"
+if [[ "$dart_plugin_version" != "22.5.0" ]]; then
+  echo "protoc-gen-dart requires protoc_plugin 22.5.0 in $dart_pub_cache (found: ${dart_plugin_version:-not globally activated}); run: PUB_CACHE=\"$dart_pub_cache\" dart pub global activate protoc_plugin 22.5.0" >&2
+  exit 1
+fi
+
+mkdir -p "$OUT_DIR/go" "$FLUTTER_OUT_DIR"
 
 protoc -I "$PROTO_DIR" \
   --go_out="$OUT_DIR/go" --go_opt=paths=source_relative \
   --go-grpc_out="$OUT_DIR/go" --go-grpc_opt=paths=source_relative \
   "$PROTO_DIR"/turing/v1/*.proto
 
-if command -v protoc-gen-dart >/dev/null 2>&1; then
-  protoc -I "$PROTO_DIR" --dart_out=grpc:"$OUT_DIR/dart" "$PROTO_DIR"/turing/v1/*.proto
+if [[ "${OS:-}" == "Windows_NT" ]]; then
+  # Protoc's Windows PATH lookup knows how to launch Dart's .bat shim through
+  # cmd.exe; an explicit --plugin mapping would pass the batch file directly
+  # to CreateProcessW and fail.
+  PATH="$dart_pub_cache/bin:$PATH" protoc -I "$PROTO_DIR" --dart_out=grpc:"$FLUTTER_OUT_DIR" "$PROTO_DIR"/turing/v1/*.proto
 else
-  echo "protoc-gen-dart not installed; skipping Dart generation" >&2
-fi
-
-if command -v protoc-gen-swift >/dev/null 2>&1 && command -v protoc-gen-grpc-swift >/dev/null 2>&1; then
-  protoc -I "$PROTO_DIR" --swift_out="$OUT_DIR/swift" --grpc-swift_out="$OUT_DIR/swift" "$PROTO_DIR"/turing/v1/*.proto
-else
-  echo "Swift protoc plugins not installed; skipping Swift generation" >&2
-fi
-
-if command -v grpc_csharp_plugin >/dev/null 2>&1; then
-  protoc -I "$PROTO_DIR" --csharp_out="$OUT_DIR/csharp" --grpc_out="$OUT_DIR/csharp" --plugin=protoc-gen-grpc="$(command -v grpc_csharp_plugin)" "$PROTO_DIR"/turing/v1/*.proto
-else
-  echo "grpc_csharp_plugin not installed; skipping C# generation" >&2
-fi
-
-if command -v protoc-gen-grpc-java >/dev/null 2>&1; then
-  protoc -I "$PROTO_DIR" --java_out="$OUT_DIR/kotlin" --grpc-java_out="$OUT_DIR/kotlin" "$PROTO_DIR"/turing/v1/*.proto
-else
-  echo "protoc-gen-grpc-java not installed; skipping Android Java/Kotlin-compatible generation" >&2
+  protoc -I "$PROTO_DIR" --plugin=protoc-gen-dart="$dart_plugin" --dart_out=grpc:"$FLUTTER_OUT_DIR" "$PROTO_DIR"/turing/v1/*.proto
 fi
