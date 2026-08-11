@@ -70,6 +70,11 @@ class _ChatScreenState extends State<ChatScreen> {
   /// drop notice is raised from the subscription — no signal at all. Degrade to
   /// "no history" instead, and say so.
   Future<void> _start() async {
+    // Snapshot the persisted event boundary before history starts loading.
+    // Events committed during that RPC remain above the cursor and replay as
+    // live after history is seeded.
+    await _loadReplayWatermark();
+    if (!mounted) return;
     try {
       await _loadInitialMessages();
     } catch (_) {
@@ -78,15 +83,11 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) setState(() => _historyLoadFailed = true);
     }
     if (!mounted) return;
-    await _loadReplayWatermark();
-    if (!mounted) return;
-    // `lastSequence` is deliberately left unset even though the watermark above
-    // now knows a sequence: subscribing from it would DROP every event the
-    // runtime emits between the two RPCs. A full replay plus a client-side
-    // filter keeps that window covered. Duplicate history text is filtered by
-    // messageId instead, which also survives the server's 500-event replay cap.
     _subscription = widget.eventSource
-        .connect(sessionId: widget.sessionId)
+        .connect(
+          sessionId: widget.sessionId,
+          lastSequence: _replayWatermarkSequence,
+        )
         .listen(
           _applyEvent,
           onError: _handleStreamEnded,

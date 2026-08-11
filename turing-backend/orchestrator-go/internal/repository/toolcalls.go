@@ -289,6 +289,34 @@ func (r *Repository) RecordToolCallAfterWithEvent(ctx context.Context, record To
 		}
 		return false, Event{}, nil
 	}
+	committedCorrection, err := terminalCommittedToolCallCorrectionAllowed(
+		ctx, tx, approvalID, currentStatus, runStatus, workerID, toolCompletedAt, runFinishedAt, record,
+	)
+	if err != nil {
+		return false, Event{}, err
+	}
+	if committedCorrection {
+		result, err := tx.ExecContext(ctx, `
+			UPDATE tool_calls
+			SET status = 'completed', result_summary = ?, error_code = NULL, error_message = NULL,
+				duration_ms = ?, completed_at = ?
+			WHERE id = ? AND run_id = ? AND status = 'failed'
+		`, nullableText(record.ResultSummary), record.DurationMS, now(), record.ToolCallID, record.RunID)
+		if err != nil {
+			return false, Event{}, err
+		}
+		if err := expectOneRowErr(result, ErrToolCallInvalidTransition); err != nil {
+			return false, Event{}, err
+		}
+		event, err := appendRunEventTx(ctx, tx, sessionID, record.RunID, traceID, eventType, payloadJSON, now())
+		if err != nil {
+			return false, Event{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return false, Event{}, err
+		}
+		return true, event, nil
+	}
 	if !isOpenToolCallStatus(currentStatus) {
 		if currentStatus == record.Status && resultSummary == record.ResultSummary && errorCode == record.ErrorCode && errorMessage == record.ErrorMessage && durationMS == record.DurationMS {
 			if err := tx.Commit(); err != nil {
@@ -404,6 +432,51 @@ func terminalSafeToolCallCleanupAllowed(ctx context.Context, tx *sql.Tx, approva
 	case "completed", "failed", "cancelled":
 	default:
 		return false, nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT payload_json FROM events WHERE run_id = ? AND type = 'tool.call.failed'`, record.RunID)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var payloadJSON string
+		if err := rows.Scan(&payloadJSON); err != nil {
+			return false, err
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+			return false, err
+		}
+		if toolCallID, _ := payload["toolCallId"].(string); toolCallID == record.ToolCallID {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func terminalCommittedToolCallCorrectionAllowed(ctx context.Context, tx *sql.Tx, approvalID sql.NullString, currentStatus string, runStatus string, workerID string, toolCompletedAt string, runFinishedAt string, record ToolCallAfterRecord) (bool, error) {
+	if !approvalID.Valid ||
+		currentStatus != "failed" ||
+		record.Status != "completed" ||
+		record.WorkerID == "" ||
+		record.WorkerID != workerID ||
+		toolCompletedAt == "" ||
+		toolCompletedAt != runFinishedAt {
+		return false, nil
+	}
+	switch runStatus {
+	case "completed", "failed", "cancelled":
+	default:
+		return false, nil
+	}
+	if err := approvalAllowsCompletion(ctx, tx, approvalID); err != nil {
+		if errors.Is(err, ErrToolCallInvalidTransition) {
+			return false, nil
+		}
+		return false, err
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT payload_json FROM events WHERE run_id = ? AND type = 'tool.call.failed'`, record.RunID)
 	if err != nil {

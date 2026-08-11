@@ -1257,7 +1257,10 @@ func (s *Server) reconcileLateAssignedUpdate(ctx context.Context, connectedWorke
 	if !isTerminalRunStatus(run.Status) {
 		return false, nil
 	}
-	if terminalRunID(update) == "" || !isMatchingTerminalUpdate(run, update) {
+	if terminalRunID(update) == "" {
+		return true, nil
+	}
+	if run.Status != "cancelled" && !isMatchingTerminalUpdate(run, update) {
 		return true, nil
 	}
 	assignment, assigned := connectedWorker.assignmentForRun(runID)
@@ -1269,6 +1272,9 @@ func (s *Server) reconcileLateAssignedUpdate(ctx context.Context, connectedWorke
 		!run.ExecutionActive {
 		return true, nil
 	}
+	// A terminal update from the worker that still owns this exact assignment
+	// proves execution exited even when another request won the persisted run
+	// outcome (for example, cancellation racing completion).
 	if err := s.repo.AcknowledgeExecutionExit(ctx, runID); err != nil {
 		return false, mapRunStateError(err)
 	}

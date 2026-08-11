@@ -27,7 +27,7 @@ func TestMatchingTerminalUpdateRequiresPersistedIdentity(t *testing.T) {
 	}
 }
 
-func TestTerminalizedAssignedRunDropsLateUpdatesWithoutClosingWorkerStream(t *testing.T) {
+func TestTerminalizedAssignedRunUsesLateTerminalUpdateAsExitAcknowledgement(t *testing.T) {
 	h := newHarness(t)
 	first := h.enqueueRun(t, "terminalized assigned run")
 	second := h.enqueueRun(t, "assigned after exit acknowledgement")
@@ -66,37 +66,16 @@ func TestTerminalizedAssignedRunDropsLateUpdatesWithoutClosingWorkerStream(t *te
 	}}}); err != nil {
 		t.Fatalf("send conflicting late completion: %v", err)
 	}
+	recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetRunAssigned() != nil && command.GetRunAssigned().GetRunId() == second.RunID
+	})
 
 	run, err := h.repo.GetRun(context.Background(), first.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != "cancelled" || !run.ExecutionActive || run.ExecutionState != "delivered" {
-		t.Fatalf("late updates mutated terminal execution fence: %+v", run)
-	}
-	queued, err := h.repo.GetRun(context.Background(), second.RunID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if queued.Status != "queued" {
-		t.Fatalf("second run status = %q, want queued until execution exit acknowledgement", queued.Status)
-	}
-
-	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{
-		RunId: first.RunID,
-	}}}); err != nil {
-		t.Fatalf("send execution exit acknowledgement: %v", err)
-	}
-	recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
-		return command.GetRunAssigned() != nil && command.GetRunAssigned().GetRunId() == second.RunID
-	})
-
-	run, err = h.repo.GetRun(context.Background(), first.RunID)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if run.Status != "cancelled" || run.ExecutionActive || run.ExecutionState != "exited" {
-		t.Fatalf("execution exit acknowledgement did not release terminal run: %+v", run)
+		t.Fatalf("late updates mutated terminal execution fence: %+v", run)
 	}
 }
 

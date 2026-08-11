@@ -610,6 +610,47 @@ void main() {
     unawaited(events.close());
   });
 
+  testWidgets('tool events committed while history loads remain live', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final gate = Completer<List<Message>>();
+    final apiClient = _FakeApiClient()
+      ..messagesGate = gate
+      ..latestEventSequence = 100;
+    final eventSource = _FakeEventSource(events.stream);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: eventSource,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    apiClient.latestEventSequence = 101;
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 101,
+        payload: {'toolCallId': 'call_live', 'toolName': 'system.time'},
+      ),
+    );
+    gate.complete(const []);
+    await tester.pump();
+    await tester.pump();
+
+    expect(eventSource.lastSequence, 100);
+    expect(find.byType(ToolCallCard), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
   testWidgets('a failed history load still opens the event subscription', (
     tester,
   ) async {
@@ -2035,10 +2076,13 @@ class _FakeEventSource implements TuringEventSource {
 
   final Stream<TuringEvent> _events;
   bool closed = false;
+  int? lastSequence;
 
   @override
-  Stream<TuringEvent> connect({required String sessionId, int? lastSequence}) =>
-      _events;
+  Stream<TuringEvent> connect({required String sessionId, int? lastSequence}) {
+    this.lastSequence = lastSequence;
+    return _events;
+  }
 
   @override
   void close() {
