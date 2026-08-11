@@ -34,27 +34,32 @@ type Options struct {
 	MaxConcurrentRuns        int
 	HeartbeatInterval        time.Duration
 	DisconnectCleanupTimeout time.Duration
+	DecisionTombstoneTTL     time.Duration
 }
 
 type Worker struct {
-	options    Options
-	client     RuntimeClient
-	executor   Executor
-	mu         sync.Mutex
-	active     map[string]*activeRun
-	approvals  map[string]string
-	toolCalls  map[string]string
-	decisionMu sync.Mutex
-	decisions  map[string][]*decisionWaiter
-	writerMu   sync.Mutex
-	writer     *outboundWriter
-	fatalMu    sync.Mutex
-	fatal      chan error
+	options     Options
+	client      RuntimeClient
+	executor    Executor
+	mu          sync.Mutex
+	active      map[string]*activeRun
+	approvals   map[string]string
+	toolCalls   map[string]string
+	decisionMu  sync.Mutex
+	decisions   map[string][]*decisionWaiter
+	generations map[string]uint64
+	writerMu    sync.Mutex
+	writer      *outboundWriter
+	fatalMu     sync.Mutex
+	fatal       chan error
 }
 
 type decisionWaiter struct {
-	decision  chan *turingv1.ToolPolicyDecision
-	tombstone bool
+	decision   chan *turingv1.ToolPolicyDecision
+	phase      turingv1.ToolCallPhase
+	generation uint64
+	tombstone  bool
+	expiresAt  time.Time
 }
 
 type activeRun struct {
@@ -66,9 +71,10 @@ type activeRun struct {
 }
 
 const (
-	terminalUpdateSendTimeout = 5 * time.Second
-	defaultHeartbeatInterval  = 30 * time.Second
-	maxConcurrentRuns         = 128
+	terminalUpdateSendTimeout   = 5 * time.Second
+	defaultHeartbeatInterval    = 30 * time.Second
+	defaultDecisionTombstoneTTL = 100 * time.Millisecond
+	maxConcurrentRuns           = 128
 )
 
 var errOutboundWriterStopped = errors.New("runtime outbound writer stopped")
@@ -272,7 +278,14 @@ func New(options Options, client RuntimeClient, executor Executor) *Worker {
 	if options.HeartbeatInterval <= 0 {
 		options.HeartbeatInterval = defaultHeartbeatInterval
 	}
-	return &Worker{options: options, client: client, executor: executor, active: map[string]*activeRun{}, approvals: map[string]string{}, toolCalls: map[string]string{}, decisions: map[string][]*decisionWaiter{}}
+	if options.DecisionTombstoneTTL <= 0 {
+		options.DecisionTombstoneTTL = defaultDecisionTombstoneTTL
+	}
+	return &Worker{
+		options: options, client: client, executor: executor, active: map[string]*activeRun{},
+		approvals: map[string]string{}, toolCalls: map[string]string{}, decisions: map[string][]*decisionWaiter{},
+		generations: map[string]uint64{},
+	}
 }
 
 func (w *Worker) Run(ctx context.Context) error {
@@ -644,9 +657,16 @@ func (w *Worker) postToolBeacon(ctx context.Context, stream RuntimeStream, beaco
 	if beacon == nil || beacon.ToolCallId == "" {
 		return nil, errors.New("tool beacon with tool_call_id is required")
 	}
-	waiter := &decisionWaiter{decision: make(chan *turingv1.ToolPolicyDecision, 1)}
 	sent := false
 	w.decisionMu.Lock()
+	w.reapDecisionTombstonesLocked(time.Now())
+	generation := w.generations[beacon.ToolCallId] + 1
+	w.generations[beacon.ToolCallId] = generation
+	waiter := &decisionWaiter{
+		decision:   make(chan *turingv1.ToolPolicyDecision, 1),
+		phase:      beacon.Phase,
+		generation: generation,
+	}
 	w.decisions[beacon.ToolCallId] = append(w.decisions[beacon.ToolCallId], waiter)
 	w.decisionMu.Unlock()
 	defer func() {
@@ -694,6 +714,7 @@ func (w *Worker) deliverDecision(decision *turingv1.ToolPolicyDecision) {
 		return
 	}
 	w.decisionMu.Lock()
+	w.reapDecisionTombstonesLocked(time.Now())
 	waiters := w.decisions[decision.ToolCallId]
 	if len(waiters) == 0 {
 		w.decisionMu.Unlock()
@@ -703,6 +724,7 @@ func (w *Worker) deliverDecision(decision *turingv1.ToolPolicyDecision) {
 	tombstone := waiter.tombstone
 	if len(waiters) == 1 {
 		delete(w.decisions, decision.ToolCallId)
+		delete(w.generations, decision.ToolCallId)
 	} else {
 		w.decisions[decision.ToolCallId] = waiters[1:]
 	}
@@ -725,7 +747,7 @@ func (w *Worker) deliverDecision(decision *turingv1.ToolPolicyDecision) {
 
 func (w *Worker) retireDecisionWaiter(toolCallID string, target *decisionWaiter, sent bool) {
 	w.decisionMu.Lock()
-	defer w.decisionMu.Unlock()
+	w.reapDecisionTombstonesLocked(time.Now())
 	waiters := w.decisions[toolCallID]
 	for index, waiter := range waiters {
 		if waiter != target {
@@ -735,15 +757,45 @@ func (w *Worker) retireDecisionWaiter(toolCallID string, target *decisionWaiter,
 			// Responses carry no phase or generation. Preserve this slot so a
 			// delayed response cannot be delivered to a later same-ID request.
 			waiter.tombstone = true
+			waiter.expiresAt = time.Now().Add(w.options.DecisionTombstoneTTL)
+			w.decisionMu.Unlock()
+			time.AfterFunc(w.options.DecisionTombstoneTTL, w.reapDecisionTombstones)
 			return
 		}
 		waiters = append(waiters[:index], waiters[index+1:]...)
 		if len(waiters) == 0 {
 			delete(w.decisions, toolCallID)
+			delete(w.generations, toolCallID)
 		} else {
 			w.decisions[toolCallID] = waiters
 		}
+		w.decisionMu.Unlock()
 		return
+	}
+	w.decisionMu.Unlock()
+}
+
+func (w *Worker) reapDecisionTombstones() {
+	w.decisionMu.Lock()
+	defer w.decisionMu.Unlock()
+	w.reapDecisionTombstonesLocked(time.Now())
+}
+
+func (w *Worker) reapDecisionTombstonesLocked(now time.Time) {
+	for toolCallID, waiters := range w.decisions {
+		kept := waiters[:0]
+		for _, waiter := range waiters {
+			if waiter.tombstone && !waiter.expiresAt.After(now) {
+				continue
+			}
+			kept = append(kept, waiter)
+		}
+		if len(kept) == 0 {
+			delete(w.decisions, toolCallID)
+			delete(w.generations, toolCallID)
+			continue
+		}
+		w.decisions[toolCallID] = kept
 	}
 }
 
