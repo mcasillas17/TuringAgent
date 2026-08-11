@@ -215,8 +215,90 @@ func TestConnectWorkerWithoutDiscoveryCapabilityPreservesRegistry(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ListEnabledTools: %v", err)
 	}
-	if len(got) != 1 || got[0].ServerName != "system" || got[0].ToolName != "system.time" {
-		t.Fatalf("registry after legacy handshake = %+v, want existing system.time", got)
+	gotNames := map[string]bool{}
+	for _, tool := range got {
+		gotNames[tool.ServerName+"/"+tool.ToolName] = true
+	}
+	if !gotNames["system/system.time"] || !gotNames["files/files.create"] {
+		t.Fatalf("registry after legacy handshake = %+v, want compatibility tools", got)
+	}
+}
+
+func TestConnectWorkerCombinesLegacyCompatibilityToolsWithDiscoveredTools(t *testing.T) {
+	h := newHarness(t)
+	client := h.runtimeClient(t)
+	ctx, cancel := context.WithTimeout(h.internalContext(), 3*time.Second)
+	defer cancel()
+
+	legacy, err := client.ConnectWorker(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = legacy.CloseSend() }()
+	if err := legacy.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId: "worker-mixed-legacy", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, legacy, func(cmd *turingv1.RuntimeCommand) bool { return cmd.GetWorkerAccepted() != nil })
+
+	discovered, err := client.ConnectWorker(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = discovered.CloseSend() }()
+	if err := discovered.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId: "worker-mixed-discovered", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+		Tools: []*turingv1.DiscoveredTool{{ServerName: "custom", ToolName: "custom.inspect", Schema: &structpb.Struct{}}}, ToolDiscoveryComplete: true,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, discovered, func(cmd *turingv1.RuntimeCommand) bool { return cmd.GetWorkerAccepted() != nil })
+
+	tools, err := h.repo.ListEnabledTools(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, tool := range tools {
+		got[tool.ServerName+"/"+tool.ToolName] = true
+	}
+	if !got["system/system.time"] || !got["files/files.create"] || !got["custom/custom.inspect"] {
+		t.Fatalf("mixed-version registry = %+v, want legacy and discovered capabilities", got)
+	}
+}
+
+func TestConnectWorkerRejectsMalformedDiscoverySnapshotWithoutMutation(t *testing.T) {
+	invalidSchema := &structpb.Struct{Fields: map[string]*structpb.Value{"bad": {}}}
+	tests := map[string]*turingv1.DiscoveredTool{
+		"blank server":   {ServerName: " ", ToolName: "custom.inspect", Schema: &structpb.Struct{}},
+		"blank tool":     {ServerName: "custom", ToolName: "\t", Schema: &structpb.Struct{}},
+		"invalid schema": {ServerName: "custom", ToolName: "custom.inspect", Schema: invalidSchema},
+	}
+	for name, invalidTool := range tests {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			if err := h.repo.UpsertTools(context.Background(), []repository.DiscoveredTool{{
+				ServerName: "system", ToolName: "system.time", SchemaJSON: `{}`, Policy: "safe",
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			stream, err := h.runtimeClient(t).ConnectWorker(h.internalContext())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = stream.CloseSend() }()
+			if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+				WorkerId: "worker-invalid-" + strings.ReplaceAll(name, " ", "-"), AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+				MaxConcurrentRuns: 1, Tools: []*turingv1.DiscoveredTool{invalidTool}, ToolDiscoveryComplete: true,
+			}}}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := stream.Recv(); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("malformed snapshot error = %v, want InvalidArgument", err)
+			}
+			assertEnabledToolNames(t, h.repo, []string{"system/system.time"})
+		})
 	}
 }
 
@@ -287,6 +369,75 @@ func TestConnectWorkerReconcilesUnionOfActiveWorkerTools(t *testing.T) {
 	}
 }
 
+func TestRemoveDiscoveredToolsDoesNotDeleteReplacementOwner(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	oldConnection := &worker{}
+	replacement := &worker{}
+	h.service.persistDiscoveredTools(ctx, "worker-reconnect", oldConnection, []repository.DiscoveredTool{{
+		ServerName: "system", ToolName: "system.time", SchemaJSON: `{}`, Policy: "safe",
+	}})
+	h.service.persistDiscoveredTools(ctx, "worker-reconnect", replacement, []repository.DiscoveredTool{{
+		ServerName: "files", ToolName: "files.create", SchemaJSON: `{}`, Policy: "approval_required",
+	}})
+	h.service.removeDiscoveredTools("worker-reconnect", oldConnection)
+	assertEnabledToolNames(t, h.repo, []string{"files/files.create"})
+}
+
+func TestConnectWorkerDeniesToolDiscoveredOnlyByAnotherWorker(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "worker scoped tools")
+	client := h.runtimeClient(t)
+	ctx, cancel := context.WithTimeout(h.internalContext(), 3*time.Second)
+	defer cancel()
+	objectSchema := &structpb.Struct{}
+
+	workerA, err := client.ConnectWorker(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = workerA.CloseSend() }()
+	if err := workerA.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId: "worker-scoped-a", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+		Tools: []*turingv1.DiscoveredTool{{ServerName: "custom", ToolName: "custom.inspect", Schema: objectSchema}}, ToolDiscoveryComplete: true,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	assigned := recvUntil(t, workerA, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetRunAssigned() != nil
+	}).GetRunAssigned()
+	if assigned.GetRunId() != enqueued.RunID {
+		t.Fatalf("assigned run = %q, want %q", assigned.GetRunId(), enqueued.RunID)
+	}
+
+	workerB, err := client.ConnectWorker(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = workerB.CloseSend() }()
+	if err := workerB.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId: "worker-scoped-b", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+		Tools: []*turingv1.DiscoveredTool{{ServerName: "system", ToolName: "system.time", Schema: objectSchema}}, ToolDiscoveryComplete: true,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, workerB, func(cmd *turingv1.RuntimeCommand) bool { return cmd.GetWorkerAccepted() != nil })
+
+	if err := workerA.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+		RunId: assigned.GetRunId(), TraceId: assigned.GetTraceId(), ToolCallId: "call-cross-worker",
+		AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "system", ToolName: "system.time",
+		Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, Args: objectSchema,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	decision := recvUntil(t, workerA, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetToolPolicyDecision() != nil
+	}).GetToolPolicyDecision()
+	if decision.GetDecision() != turingv1.ToolPolicyDecision_DECISION_DENY || decision.GetReason() != "unknown_tool" {
+		t.Fatalf("cross-worker decision = %+v, want unknown_tool denial", decision)
+	}
+}
+
 func TestToolBeaconDeniesToolRemovedFromDiscoverySnapshot(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -307,7 +458,7 @@ func TestToolBeaconDeniesToolRemovedFromDiscoverySnapshot(t *testing.T) {
 		RunId: enqueued.RunID, TraceId: enqueued.TraceID, ToolCallId: "call-removed-tool",
 		AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "system", ToolName: "system.time",
 		Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, Args: &structpb.Struct{},
-	}, run)
+	}, run, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

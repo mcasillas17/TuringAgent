@@ -1,8 +1,16 @@
 package tools
 
+import "sort"
+
 type policyKey struct {
 	serverName string
 	toolName   string
+}
+
+type PolicyDefault struct {
+	ServerName string
+	ToolName   string
+	Policy     Policy
 }
 
 var seedPolicies = map[policyKey]Policy{
@@ -31,4 +39,18 @@ func DefaultPolicyFor(serverName string, toolName string) Policy {
 
 func permanentlyDisabled(serverName string, toolName string) bool {
 	return serverName == "files" && (toolName == "files.delete" || toolName == "files.move")
+}
+
+func LegacyPolicyDefaults() []PolicyDefault {
+	defaults := make([]PolicyDefault, 0, len(seedPolicies))
+	for key, policy := range seedPolicies {
+		defaults = append(defaults, PolicyDefault{ServerName: key.serverName, ToolName: key.toolName, Policy: policy})
+	}
+	sort.Slice(defaults, func(i int, j int) bool {
+		if defaults[i].ServerName == defaults[j].ServerName {
+			return defaults[i].ToolName < defaults[j].ToolName
+		}
+		return defaults[i].ServerName < defaults[j].ServerName
+	})
+	return defaults
 }

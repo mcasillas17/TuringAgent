@@ -473,6 +473,13 @@ func TestDiscoveredToolsAppearInListTools(t *testing.T) {
 	want := map[string]turingv1.ToolPolicy{
 		"custom/custom.inspect": turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
 		"files/files.create":    turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
+		"files/files.list":      turingv1.ToolPolicy_TOOL_POLICY_SAFE,
+		"files/files.read":      turingv1.ToolPolicy_TOOL_POLICY_SAFE,
+		"files/files.search":    turingv1.ToolPolicy_TOOL_POLICY_SAFE,
+		"files/files.update":    turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
+		"system/system.echo":    turingv1.ToolPolicy_TOOL_POLICY_SAFE,
+		"system/system.health":  turingv1.ToolPolicy_TOOL_POLICY_SAFE,
+		"system/system.info":    turingv1.ToolPolicy_TOOL_POLICY_SAFE,
 		"system/system.time":    turingv1.ToolPolicy_TOOL_POLICY_SAFE,
 	}
 	if len(got) != len(want) {
