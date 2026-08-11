@@ -488,6 +488,48 @@ func TestRunApprovalGatedMCPFailurePostsFailedAfter(t *testing.T) {
 	)
 }
 
+func TestRunRecognizesTerminalApprovalCancellationCauseWithoutFailedAfter(t *testing.T) {
+	var beacons []*turingv1.ToolCallBeacon
+	waiting := make(chan struct{})
+	runner := &Runner{
+		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+			beacons = append(beacons, beacon)
+			return &turingv1.ToolPolicyDecision{
+				Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+				ApprovalId: "approval_1",
+				ToolCallId: beacon.GetToolCallId(),
+			}, nil
+		},
+		WaitApproval: func(ctx context.Context, _ string) (string, error) {
+			close(waiting)
+			<-ctx.Done()
+			return "", ctx.Err()
+		},
+	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	result := make(chan error, 1)
+	go func() {
+		_, err := runner.Run(ctx, RunInput{ToolName: "files.create", MCPClient: fakeMCPClient{}})
+		result <- err
+	}()
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("runner did not begin waiting for approval")
+	}
+	cancel(terminalApprovalCancellation{status: "denied"})
+	err := <-result
+
+	var terminal interface{ TerminalApproval() bool }
+	if !errors.As(err, &terminal) || !terminal.TerminalApproval() || err.Error() != "approval denied" || !RunWasTerminalized(err) {
+		t.Fatalf("Run error = %T %v, want terminal approval cancellation", err, err)
+	}
+	if len(beacons) != 1 || beacons[0].GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+		t.Fatalf("beacons = %+v, want only BEFORE after terminal approval cancellation", beacons)
+	}
+}
+
 func TestRunReturnsTerminalApprovalErrorWithoutPostingAfterBeacon(t *testing.T) {
 	var beacons []*turingv1.ToolCallBeacon
 	var mcpCalls int
@@ -919,6 +961,13 @@ type terminalRunTestError struct {
 
 func (e terminalRunTestError) Error() string     { return e.message }
 func (e terminalRunTestError) RunTerminal() bool { return true }
+
+type terminalApprovalCancellation struct {
+	status string
+}
+
+func (e terminalApprovalCancellation) Error() string          { return "approval " + e.status }
+func (e terminalApprovalCancellation) TerminalApproval() bool { return true }
 
 func (e beaconPostedTestError) Error() string { return e.err.Error() }
 func (e beaconPostedTestError) Unwrap() error { return e.err }

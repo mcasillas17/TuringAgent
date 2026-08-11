@@ -29,6 +29,7 @@ type Run struct {
 	Status             string
 	TraceID            string
 	AssistantMessageID string
+	ExecutionActive    bool
 }
 
 func (r *Repository) MarkRunRunning(ctx context.Context, runID string) error {
@@ -275,7 +276,7 @@ func (r *Repository) CancelRunWithEvent(ctx context.Context, runID string, reaso
 
 func (r *Repository) GetRun(ctx context.Context, runID string) (Run, error) {
 	var run Run
-	err := r.db.QueryRowContext(ctx, `SELECT id, session_id, status, trace_id, COALESCE(assistant_message_id, '') FROM agent_runs WHERE id = ?`, runID).Scan(&run.RunID, &run.SessionID, &run.Status, &run.TraceID, &run.AssistantMessageID)
+	err := r.db.QueryRowContext(ctx, `SELECT id, session_id, status, trace_id, COALESCE(assistant_message_id, ''), execution_active FROM agent_runs WHERE id = ?`, runID).Scan(&run.RunID, &run.SessionID, &run.Status, &run.TraceID, &run.AssistantMessageID, &run.ExecutionActive)
 	return run, err
 }
 

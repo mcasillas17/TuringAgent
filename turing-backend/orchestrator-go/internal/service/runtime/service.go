@@ -51,6 +51,7 @@ type worker struct {
 	commands      chan *turingv1.RuntimeCommand
 	maxConcurrent int
 	assignments   map[string]string
+	updateMu      sync.Mutex
 	mu            sync.Mutex
 	closed        bool
 }
@@ -130,12 +131,13 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 	s.mu.Unlock()
 	s.persistDiscoveredTools(ctx, ready.GetWorkerId(), connectedWorker, discovered)
 	defer func() {
+		assignments := connectedWorker.close()
 		s.mu.Lock()
 		delete(s.workers, ready.WorkerId)
 		s.mu.Unlock()
 		s.removeDiscoveredTools(ready.GetWorkerId(), connectedWorker)
-		if err := s.requeueAssignments(connectedWorker.close()); err != nil {
-			returnErr = errors.Join(returnErr, fmt.Errorf("requeue worker assignments: %w", err))
+		if err := s.reconcileAssignments(assignments); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("reconcile worker assignments: %w", err))
 		}
 	}()
 	if err := stream.Send(&turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_WorkerAccepted{WorkerAccepted: &turingv1.RuntimeWorkerAccepted{WorkerId: ready.WorkerId}}}); err != nil {
@@ -152,32 +154,37 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 				recvErr <- err
 				return
 			}
-			if err := connectedWorker.validateUpdate(update); err != nil {
+			release, err := connectedWorker.beginUpdate(update)
+			if err != nil {
 				recvErr <- err
 				return
 			}
-			if beacon := update.GetToolBeacon(); beacon != nil {
-				decision, err := s.handleToolBeacon(ctx, beacon, ready.GetWorkerId(), connectedWorker)
-				if err != nil {
-					recvErr <- err
-					return
+			err = func() error {
+				defer release()
+				if beacon := update.GetToolBeacon(); beacon != nil {
+					decision, err := s.handleToolBeacon(ctx, beacon, ready.GetWorkerId(), connectedWorker)
+					if err != nil {
+						return err
+					}
+					if err := connectedWorker.send(ctx, &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_ToolPolicyDecision{ToolPolicyDecision: decision}}); err != nil {
+						return errors.Join(err, s.terminalizeApprovalDeliveryFailure(ctx, decision.GetApprovalId(), connectedWorker))
+					}
+					return nil
 				}
-				if err := connectedWorker.send(ctx, &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_ToolPolicyDecision{ToolPolicyDecision: decision}}); err != nil {
-					recvErr <- errors.Join(err, s.terminalizeApprovalDeliveryFailure(ctx, decision.GetApprovalId(), connectedWorker))
-					return
+				if err := s.applyUpdate(ctx, update); err != nil {
+					return err
 				}
-				continue
-			}
-			if err := s.applyUpdate(ctx, update); err != nil {
+				if runID := terminalRunID(update); runID != "" {
+					connectedWorker.releaseRun(runID)
+					if err := s.DispatchPending(ctx); err != nil {
+						return err
+					}
+				}
+				return nil
+			}()
+			if err != nil {
 				recvErr <- err
 				return
-			}
-			if runID := terminalRunID(update); runID != "" {
-				connectedWorker.releaseRun(runID)
-				if err := s.DispatchPending(ctx); err != nil {
-					recvErr <- err
-					return
-				}
 			}
 		}
 	}()
@@ -385,6 +392,46 @@ func (s *Server) requeueAssignments(assignments []assignment) error {
 	return errors.Join(errs...)
 }
 
+func (s *Server) reconcileAssignments(assignments []assignment) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var errs []error
+	for _, assignment := range assignments {
+		run, err := s.repo.GetRun(ctx, assignment.runID)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("get run %s for job %s: %w", assignment.runID, assignment.jobID, err))
+			continue
+		}
+		switch run.Status {
+		case "completed", "failed", "cancelled":
+			if err := s.repo.AcknowledgeExecutionExit(ctx, assignment.runID); err != nil {
+				errs = append(errs, fmt.Errorf("acknowledge terminal run %s: %w", assignment.runID, err))
+			}
+		case "running":
+			if err := s.repo.RequeueClaimedJob(ctx, assignment.jobID, assignment.runID); err != nil {
+				errs = append(errs, fmt.Errorf("requeue running job %s for run %s: %w", assignment.jobID, assignment.runID, err))
+			}
+		case "waiting_approval":
+			approval, err := s.repo.GetPendingApprovalForRun(ctx, assignment.runID)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("find pending approval for disconnected run %s: %w", assignment.runID, err))
+				continue
+			}
+			if err := s.terminalizeApprovalDeliveryFailure(ctx, approval.ApprovalID, nil); err != nil {
+				errs = append(errs, fmt.Errorf("terminalize disconnected approval %s: %w", approval.ApprovalID, err))
+				continue
+			}
+			if err := s.repo.AcknowledgeExecutionExit(ctx, assignment.runID); err != nil {
+				errs = append(errs, fmt.Errorf("acknowledge terminalized approval run %s: %w", assignment.runID, err))
+			}
+		case "queued":
+		default:
+			errs = append(errs, fmt.Errorf("cannot reconcile run %s in status %q", assignment.runID, run.Status))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func (s *Server) DispatchPending(ctx context.Context) error {
 	dispatchCtx, cancel := withDefaultTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -488,17 +535,32 @@ func (w *worker) send(ctx context.Context, command *turingv1.RuntimeCommand) err
 	}
 }
 
-func (w *worker) validateUpdate(update *turingv1.RuntimeUpdate) error {
+func (w *worker) beginUpdate(update *turingv1.RuntimeUpdate) (func(), error) {
 	runID := updateRunID(update)
+	w.updateMu.Lock()
 	if runID == "" {
-		return nil
+		w.mu.Lock()
+		closed := w.closed
+		w.mu.Unlock()
+		if closed {
+			w.updateMu.Unlock()
+			return nil, status.Error(codes.Canceled, "worker is disconnected")
+		}
+		return w.updateMu.Unlock, nil
 	}
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	if _, ok := w.assignments[runID]; ok {
-		return nil
+	_, assigned := w.assignments[runID]
+	closed := w.closed
+	w.mu.Unlock()
+	if closed {
+		w.updateMu.Unlock()
+		return nil, status.Error(codes.Canceled, "worker is disconnected")
 	}
-	return status.Error(codes.PermissionDenied, "run is not assigned to worker")
+	if !assigned {
+		w.updateMu.Unlock()
+		return nil, status.Error(codes.PermissionDenied, "run is not assigned to worker")
+	}
+	return w.updateMu.Unlock, nil
 }
 
 func (w *worker) hasAssignment(runID string) bool {
@@ -515,6 +577,8 @@ func (w *worker) releaseRun(runID string) {
 }
 
 func (w *worker) close() []assignment {
+	w.updateMu.Lock()
+	defer w.updateMu.Unlock()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {

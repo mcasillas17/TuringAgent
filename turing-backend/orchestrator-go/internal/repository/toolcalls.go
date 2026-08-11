@@ -100,6 +100,16 @@ func (r *Repository) RecordToolCallAfter(ctx context.Context, record ToolCallAft
 	if serverName != record.ServerName || toolName != record.ToolName || nullableStringValue(modelToolCallID) != record.ModelToolCallID {
 		return false, ErrToolCallInvalidTransition
 	}
+	cleanup, err := terminalApprovalCleanupAllowed(ctx, tx, approvalID, currentStatus, record.Status)
+	if err != nil {
+		return false, err
+	}
+	if cleanup {
+		if err := tx.Commit(); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
 	if !isOpenToolCallStatus(currentStatus) {
 		if currentStatus == record.Status && resultSummary == record.ResultSummary && errorCode == record.ErrorCode && errorMessage == record.ErrorMessage && durationMS == record.DurationMS {
 			if err := tx.Commit(); err != nil {
@@ -167,6 +177,16 @@ func (r *Repository) RecordToolCallAfterWithEvent(ctx context.Context, record To
 	if serverName != record.ServerName || toolName != record.ToolName || nullableStringValue(modelToolCallID) != record.ModelToolCallID {
 		return false, Event{}, ErrToolCallInvalidTransition
 	}
+	cleanup, err := terminalApprovalCleanupAllowed(ctx, tx, approvalID, currentStatus, record.Status)
+	if err != nil {
+		return false, Event{}, err
+	}
+	if cleanup {
+		if err := tx.Commit(); err != nil {
+			return false, Event{}, err
+		}
+		return false, Event{}, nil
+	}
 	if !isOpenToolCallStatus(currentStatus) {
 		if currentStatus == record.Status && resultSummary == record.ResultSummary && errorCode == record.ErrorCode && errorMessage == record.ErrorMessage && durationMS == record.DurationMS {
 			if err := tx.Commit(); err != nil {
@@ -232,6 +252,21 @@ func isOpenToolCallStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func terminalApprovalCleanupAllowed(ctx context.Context, tx *sql.Tx, approvalID sql.NullString, currentStatus string, recordStatus string) (bool, error) {
+	if recordStatus != "failed" || !approvalID.Valid {
+		return false, nil
+	}
+	var approvalStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM approvals WHERE id = ?`, approvalID.String).Scan(&approvalStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return (currentStatus == "denied" && approvalStatus == "denied") ||
+		(currentStatus == "failed" && approvalStatus == "expired"), nil
 }
 
 func toolCallCanComplete(status string) bool {

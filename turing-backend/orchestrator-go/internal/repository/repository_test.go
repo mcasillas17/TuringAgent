@@ -257,6 +257,43 @@ func TestCancelRunFailsForTerminalRun(t *testing.T) {
 	}
 }
 
+func TestAcknowledgeExecutionExitClearsTerminalGateIdempotently(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Acknowledge execution exit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "terminalized elsewhere", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET status = 'failed', execution_active = 1, execution_exit_acknowledged_at = NULL
+		WHERE id = ?
+	`, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AcknowledgeExecutionExit(ctx, enqueued.RunID); err != nil {
+		t.Fatalf("first AcknowledgeExecutionExit: %v", err)
+	}
+	if err := repo.AcknowledgeExecutionExit(ctx, enqueued.RunID); err != nil {
+		t.Fatalf("idempotent AcknowledgeExecutionExit: %v", err)
+	}
+	var active int
+	var acknowledgedAt sql.NullString
+	if err := database.QueryRowContext(ctx, `SELECT execution_active, execution_exit_acknowledged_at FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&active, &acknowledgedAt); err != nil {
+		t.Fatal(err)
+	}
+	if active != 0 || !acknowledgedAt.Valid {
+		t.Fatalf("execution exit state active=%d acknowledged=%q, want inactive acknowledged", active, acknowledgedAt.String)
+	}
+}
+
 func TestClaimNextJobMarksRunAndJobRunning(t *testing.T) {
 	database := openTestDB(t)
 	repo := New(database)

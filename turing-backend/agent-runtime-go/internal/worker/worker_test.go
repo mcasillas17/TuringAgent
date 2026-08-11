@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -69,7 +70,7 @@ func TestWorkerCancelsActiveRunAndAcknowledges(t *testing.T) {
 }
 
 func TestWorkerCancelsApprovalDeniedRunAndAcknowledgesExit(t *testing.T) {
-	executor := &approvalWaitingExecutor{waiting: make(chan struct{}), cancelled: make(chan struct{})}
+	executor := &approvalWaitingExecutor{waiting: make(chan struct{}), cancelled: make(chan struct{}), cause: make(chan error, 1)}
 	stream := newFakeStream()
 	worker := New(Options{WorkerID: "worker-approval", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, executor)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -102,6 +103,15 @@ func TestWorkerCancelsApprovalDeniedRunAndAcknowledgesExit(t *testing.T) {
 	case <-executor.cancelled:
 	case <-time.After(time.Second):
 		t.Fatal("approval denial did not cancel active run")
+	}
+	select {
+	case cause := <-executor.cause:
+		var terminal interface{ TerminalApproval() bool }
+		if !errors.As(cause, &terminal) || !terminal.TerminalApproval() || cause.Error() != "approval denied" {
+			t.Fatalf("approval cancellation cause = %T %v, want terminal approval denial", cause, cause)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("approval denial did not preserve a terminal cancellation cause")
 	}
 	ack := nextSent(t, stream)
 	if ack.GetRunCancelledAck() == nil || ack.GetRunCancelledAck().GetRunId() != "run_1" {
@@ -223,15 +233,18 @@ func TestWorkerDoesNotSendDerivedMessageCompletedEvent(t *testing.T) {
 	}
 }
 
-func TestPostToolBeaconDoesNotMarkCancelledUnsentBeaconPosted(t *testing.T) {
+func TestPostToolBeaconDoesNotMarkQueueRejectedBeaconPosted(t *testing.T) {
 	stream := newFakeStream()
 	worker := New(Options{WorkerID: "worker-1", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
 	worker.startOutboundWriter(stream)
 	defer worker.stopOutboundWriter(stream)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	worker.writerMu.Lock()
+	writer := worker.writer
+	worker.writerMu.Unlock()
+	writer.stop(errors.New("queue rejected"))
+	waitForOutboundWriterExit(t, worker)
 
-	_, err := worker.postToolBeacon(ctx, stream, &turingv1.ToolCallBeacon{
+	_, err := worker.postToolBeacon(context.Background(), stream, &turingv1.ToolCallBeacon{
 		RunId:      "run_1",
 		TraceId:    "trace_1",
 		ToolCallId: "call_1",
@@ -241,15 +254,20 @@ func TestPostToolBeaconDoesNotMarkCancelledUnsentBeaconPosted(t *testing.T) {
 		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
 	})
 
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("postToolBeacon error = %v, want context.Canceled", err)
+	if err == nil || !strings.Contains(err.Error(), "queue rejected") {
+		t.Fatalf("postToolBeacon error = %v, want queue rejection", err)
 	}
 	if tools.BeaconWasPosted(err) {
-		t.Fatalf("postToolBeacon error = %T %[1]v, must not claim cancelled beacon was sent", err)
+		t.Fatalf("postToolBeacon error = %T %[1]v, must not claim queue-rejected beacon was sent", err)
+	}
+	select {
+	case update := <-stream.sent:
+		t.Fatalf("queue-rejected beacon reached Send: %+v", update)
+	default:
 	}
 }
 
-func TestWorkerBoundsBlockedToolBeaconSendAndReleasesLocalCapacity(t *testing.T) {
+func TestWorkerMarksStartedBlockedBeaconAndAttemptsFailedAfter(t *testing.T) {
 	stream := newFakeStream()
 	blockedSend := make(chan struct{})
 	releaseSend := make(chan struct{})
@@ -263,7 +281,7 @@ func TestWorkerBoundsBlockedToolBeaconSendAndReleasesLocalCapacity(t *testing.T)
 			}
 		}
 		defer inFlight.Add(-1)
-		if update.GetToolBeacon() != nil {
+		if beacon := update.GetToolBeacon(); beacon != nil && beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
 			select {
 			case <-blockedSend:
 			default:
@@ -274,46 +292,136 @@ func TestWorkerBoundsBlockedToolBeaconSendAndReleasesLocalCapacity(t *testing.T)
 		stream.sent <- update
 		return nil
 	}
-	executor := newTimeoutBeaconExecutor(20*time.Millisecond, 40*time.Millisecond)
-	worker := New(Options{WorkerID: "worker-blocked-send", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, executor)
-	ctx, cancel := context.WithCancel(context.Background())
+	worker := New(Options{WorkerID: "worker-blocked-send", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+	worker.startOutboundWriter(stream)
+	defer worker.stopOutboundWriter(stream)
+	runner := &tools.Runner{PostBeacon: func(ctx context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+		return worker.postToolBeacon(ctx, stream, beacon)
+	}}
+	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- worker.Run(ctx) }()
-
-	_ = nextSent(t, stream)
-	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: &turingv1.AgentJob{
-		JobId: "job_1", RunId: "run_1", TraceId: "trace_1",
-	}}}
-	waitForStartedRun(t, executor.started, "run_1")
+	result := make(chan struct {
+		err     error
+		elapsed time.Duration
+	}, 1)
+	started := time.Now()
+	go func() {
+		_, err := runner.Run(runCtx, tools.RunInput{
+			AgentID:      turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+			RunID:        "run_1",
+			TraceID:      "trace_1",
+			ServerName:   "system",
+			ToolName:     "system.echo",
+			MCPClient:    workerMCPClient{},
+			Timeout:      100 * time.Millisecond,
+			TotalTimeout: 500 * time.Millisecond,
+		})
+		result <- struct {
+			err     error
+			elapsed time.Duration
+		}{err: err, elapsed: time.Since(started)}
+	}()
 	select {
 	case <-blockedSend:
 	case <-time.After(time.Second):
 		t.Fatal("tool beacon send did not block")
 	}
-	result := waitForRunnerResult(t, executor.results)
-	if !errors.Is(result.err, context.DeadlineExceeded) || tools.BeaconWasPosted(result.err) {
-		t.Fatalf("blocked send result = %T %v, want bounded uncommitted deadline error", result.err, result.err)
+	cancel()
+	waitForQueuedOutboundRequest(t, worker, 1)
+	close(releaseSend)
+	before := nextSent(t, stream).GetToolBeacon()
+	if before == nil || before.GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+		t.Fatalf("started beacon = %+v, want delivered BEFORE", before)
 	}
-	if result.elapsed > 500*time.Millisecond {
-		t.Fatalf("blocked send operation took %v, want bounded timeout", result.elapsed)
+	after := nextSent(t, stream).GetToolBeacon()
+	if after == nil || after.GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER ||
+		after.GetStatus() != turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED ||
+		after.GetError().GetCode() != "tool_policy_decision_failed" {
+		t.Fatalf("cleanup beacon = %+v, want failed AFTER", after)
 	}
-	waitForInactiveRun(t, worker, "run_1")
-
-	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: &turingv1.AgentJob{
-		JobId: "job_2", RunId: "run_2", TraceId: "trace_2",
-	}}}
-	waitForStartedRun(t, executor.started, "run_2")
+	worker.deliverDecision(&turingv1.ToolPolicyDecision{
+		Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
+		ToolCallId: before.GetToolCallId(),
+	})
+	worker.deliverDecision(&turingv1.ToolPolicyDecision{
+		Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
+		ToolCallId: after.GetToolCallId(),
+	})
+	got := <-result
+	if !errors.Is(got.err, context.Canceled) || !tools.BeaconWasPosted(got.err) {
+		t.Fatalf("blocked send result = %T %v, want delivery-unknown cancellation", got.err, got.err)
+	}
+	if got.elapsed > time.Second {
+		t.Fatalf("blocked send operation took %v, want bounded cleanup", got.elapsed)
+	}
 	if got := maxInFlight.Load(); got != 1 {
 		t.Fatalf("concurrent stream sends = %d, want 1", got)
 	}
+}
 
-	close(releaseSend)
-	cancel()
-	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
-		t.Fatalf("Run returned %v", err)
+func TestWorkerBoundsCleanupBehindBlockedStartedBeacon(t *testing.T) {
+	stream := newFakeStream()
+	blockedSend := make(chan struct{})
+	releaseSend := make(chan struct{})
+	released := false
+	stream.sendFn = func(update *turingv1.RuntimeUpdate) error {
+		if beacon := update.GetToolBeacon(); beacon != nil && beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+			close(blockedSend)
+			<-releaseSend
+		}
+		stream.sent <- update
+		return nil
 	}
-	waitForOutboundWriterExit(t, worker)
+	worker := New(Options{WorkerID: "worker-blocked-cleanup", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+	worker.startOutboundWriter(stream)
+	defer func() {
+		if !released {
+			close(releaseSend)
+		}
+		worker.stopOutboundWriter(stream)
+		waitForOutboundWriterExit(t, worker)
+	}()
+	runner := &tools.Runner{PostBeacon: func(ctx context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+		return worker.postToolBeacon(ctx, stream, beacon)
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	started := time.Now()
+	go func() {
+		_, err := runner.Run(ctx, tools.RunInput{
+			AgentID:      turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+			RunID:        "run_1",
+			TraceID:      "trace_1",
+			ServerName:   "system",
+			ToolName:     "system.echo",
+			MCPClient:    workerMCPClient{},
+			Timeout:      20 * time.Millisecond,
+			TotalTimeout: 100 * time.Millisecond,
+		})
+		result <- err
+	}()
+	select {
+	case <-blockedSend:
+	case <-time.After(time.Second):
+		t.Fatal("tool beacon send did not block")
+	}
+	cancel()
+	waitForQueuedOutboundRequest(t, worker, 1)
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, context.DeadlineExceeded) ||
+			!tools.BeaconWasPosted(err) || !tools.ReportingFailed(err) {
+			t.Fatalf("blocked cleanup result = %T %v, want combined delivery-unknown/reporting failure", err, err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("blocked cleanup did not respect reporting timeout")
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("blocked cleanup took %v, want bounded reporting timeout", elapsed)
+	}
+	close(releaseSend)
+	released = true
 }
 
 func TestWorkerAttemptsFailedAfterWhenAcceptedBeforeResponseTimesOut(t *testing.T) {
@@ -476,6 +584,7 @@ type approvalWaitingExecutor struct {
 	poster    func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error)
 	waiting   chan struct{}
 	cancelled chan struct{}
+	cause     chan error
 }
 
 type blockingExecutor struct {
@@ -540,6 +649,9 @@ func (e *approvalWaitingExecutor) Execute(ctx context.Context, job *turingv1.Age
 	}
 	close(e.waiting)
 	<-ctx.Done()
+	if e.cause != nil {
+		e.cause <- context.Cause(ctx)
+	}
 	close(e.cancelled)
 	return ctx.Err()
 }
@@ -717,5 +829,29 @@ func waitForOutboundWriterExit(t *testing.T, worker *Worker) {
 	case <-writer.exited:
 	case <-time.After(time.Second):
 		t.Fatal("worker outbound writer did not exit")
+	}
+}
+
+func waitForQueuedOutboundRequest(t *testing.T, worker *Worker, want int) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		worker.writerMu.Lock()
+		writer := worker.writer
+		queued := 0
+		if writer != nil {
+			queued = len(writer.queue)
+		}
+		worker.writerMu.Unlock()
+		if queued >= want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("outbound queue length remained %d, want at least %d", queued, want)
+		case <-ticker.C:
+		}
 	}
 }

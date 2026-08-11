@@ -98,6 +98,9 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 		}
 		approvalToken, err = r.WaitApproval(ctx, decision.GetApprovalId())
 		if err != nil {
+			if cause := terminalApprovalCause(ctx); cause != nil {
+				return RunOutcome{}, terminalRunError{err: cause}
+			}
 			if runWasTerminalized(err) {
 				return RunOutcome{}, terminalRunError{err: err}
 			}
@@ -218,9 +221,25 @@ type terminalRunState interface {
 	RunTerminal() bool
 }
 
+type terminalApprovalState interface {
+	TerminalApproval() bool
+}
+
 func runWasTerminalized(err error) bool {
 	var terminal terminalRunState
 	return errors.As(err, &terminal) && terminal.RunTerminal()
+}
+
+func terminalApprovalCause(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	cause := context.Cause(ctx)
+	var terminal terminalApprovalState
+	if errors.As(cause, &terminal) && terminal.TerminalApproval() {
+		return cause
+	}
+	return nil
 }
 
 func RunWasTerminalized(err error) bool {
@@ -320,6 +339,22 @@ func (e ApprovalWaitError) Error() string            { return fmt.Sprintf("wait 
 func (e ApprovalWaitError) Unwrap() error            { return e.err }
 func (e ApprovalWaitError) BeaconPosted() bool       { return true }
 func (e ApprovalWaitError) ApprovalWaitFailed() bool { return true }
+
+type TerminalApprovalError struct {
+	Status string
+}
+
+func (e TerminalApprovalError) Error() string {
+	return "approval " + e.Status
+}
+
+func (e TerminalApprovalError) TerminalApproval() bool {
+	return e.Status == "denied" || e.Status == "expired"
+}
+
+func (e TerminalApprovalError) RunTerminal() bool {
+	return e.TerminalApproval()
+}
 
 type SideEffectCommittedError struct {
 	err error

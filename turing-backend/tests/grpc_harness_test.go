@@ -100,7 +100,10 @@ type fakeMCPServer struct {
 }
 
 type harnessOption func(*harnessConfig)
-type harnessConfig struct{ blockModelUntilCancel bool }
+type harnessConfig struct {
+	blockModelUntilCancel bool
+	approvalTTL           time.Duration
+}
 
 func TestMain(m *testing.M) {
 	code := m.Run()
@@ -112,6 +115,10 @@ func TestMain(m *testing.M) {
 
 func withBlockingModel() harnessOption {
 	return func(cfg *harnessConfig) { cfg.blockModelUntilCancel = true }
+}
+
+func withApprovalTTL(ttl time.Duration) harnessOption {
+	return func(cfg *harnessConfig) { cfg.approvalTTL = ttl }
 }
 
 func newGRPCHarness(t *testing.T, opts ...harnessOption) *grpcHarness {
@@ -140,6 +147,7 @@ func newGRPCHarness(t *testing.T, opts ...harnessOption) *grpcHarness {
 		OpenAIModel:              "fake-model",
 		MaxConcurrentRunsGeneral: 1,
 		MaxToolCallsPerRun:       10,
+		ApprovalTTLMS:            int(cfg.approvalTTL / time.Millisecond),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1222,6 +1230,94 @@ func TestApprovalRequiredToolFlow(t *testing.T) {
 	}
 }
 
+func TestTerminalApprovalKeepsRuntimeWorkerLiveAndUnblocksSameSession(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		apply func(*grpcHarness, string)
+	}{
+		{
+			name: "denied",
+			apply: func(h *grpcHarness, approvalID string) {
+				response, err := h.approvals.DenyApproval(h.clientContext(), &turingv1.DenyApprovalRequest{ApprovalId: approvalID, Reason: "no"})
+				if err != nil || response.GetStatus() != turingv1.ApprovalStatus_APPROVAL_STATUS_DENIED {
+					t.Fatalf("DenyApproval = %+v, %v", response, err)
+				}
+			},
+		},
+		{
+			name: "expired",
+			apply: func(h *grpcHarness, approvalID string) {
+				deadline := time.Now().Add(3 * time.Second)
+				for time.Now().Before(deadline) {
+					state, err := h.approvals.GetApprovalForRuntime(h.clientContext(), &turingv1.GetApprovalForRuntimeRequest{ApprovalId: approvalID})
+					if err == nil && state.GetStatus() == turingv1.ApprovalStatus_APPROVAL_STATUS_EXPIRED {
+						return
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				t.Fatalf("approval %q did not expire", approvalID)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			harness := newGRPCHarness(t, withApprovalTTL(time.Millisecond))
+			defer harness.close()
+			sessionID := harness.createSession(t, "terminal approval keeps worker")
+			ctx, cancel := context.WithTimeout(harness.clientContext(), 10*time.Second)
+			defer cancel()
+			stream, err := harness.chat.SendMessage(ctx, &turingv1.SendMessageRequest{
+				SessionId:     sessionID,
+				Content:       "/tool files.create",
+				ContentType:   "text",
+				AgentId:       turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+				ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
+				Model:         "fake-model",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			runID := ""
+			for {
+				event, err := stream.Recv()
+				if err != nil {
+					t.Fatalf("terminal approval stream: %v", err)
+				}
+				if persisted := event.GetPersistedEvent(); persisted != nil && persisted.Type == turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_REQUESTED {
+					runID = event.GetRunId()
+					approvalID := stringField(persisted.Payload, "approvalId")
+					if runID == "" || approvalID == "" {
+						t.Fatalf("approval.requested event = %+v, want run and approval IDs", event)
+					}
+					test.apply(harness, approvalID)
+				}
+				if failed := event.GetRunFailed(); failed != nil {
+					if failed.GetRunId() != runID {
+						t.Fatalf("failed run = %q, want %q", failed.GetRunId(), runID)
+					}
+					break
+				}
+			}
+			run := waitForInactiveTerminalRun(t, harness, runID)
+			if run.Status != "failed" {
+				t.Fatalf("terminal approval run = %+v, want failed", run)
+			}
+			select {
+			case workerErr := <-harness.workerDone:
+				t.Fatalf("runtime worker exited after terminal approval: %v", workerErr)
+			default:
+			}
+			later := harness.sendMessageToCompletion(t, sessionID, "later same-session message")
+			started := false
+			for _, event := range later {
+				started = started || event.GetRunStarted() != nil
+			}
+			if !started || !hasRunCompleted(later) {
+				t.Fatalf("later same-session events did not start and complete: %+v", later)
+			}
+		})
+	}
+}
+
 func TestSubscribeSessionEventsReplaysAfterSequence(t *testing.T) {
 	harness := newGRPCHarness(t)
 	defer harness.close()
@@ -1300,6 +1396,24 @@ func (h *grpcHarness) sendMessageToCompletion(t *testing.T, sessionID string, co
 		}
 	}
 	return got
+}
+
+func waitForInactiveTerminalRun(t *testing.T, harness *grpcHarness, runID string) orchestratortestkit.Run {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		run, err := harness.repo.GetRun(context.Background(), runID)
+		if err == nil && !run.ExecutionActive {
+			return run
+		}
+		time.Sleep(time.Millisecond)
+	}
+	run, err := harness.repo.GetRun(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Fatalf("run %q remained execution_active: %+v", runID, run)
+	return orchestratortestkit.Run{}
 }
 
 func runCompletedPersistedContent(t *testing.T, harness *grpcHarness, sessionID string, events []*turingv1.ChatStreamEvent) string {

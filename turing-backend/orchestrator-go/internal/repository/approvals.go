@@ -92,6 +92,14 @@ func (r *Repository) GetApprovalByToolCall(ctx context.Context, runID string, to
 	return approvalByID(ctx, r.db, approvalID)
 }
 
+func (r *Repository) GetPendingApprovalForRun(ctx context.Context, runID string) (ApprovalRecord, error) {
+	var approvalID string
+	if err := r.db.QueryRowContext(ctx, `SELECT id FROM approvals WHERE run_id = ? AND status = 'pending' ORDER BY created_at DESC, id DESC LIMIT 1`, runID).Scan(&approvalID); err != nil {
+		return ApprovalRecord{}, err
+	}
+	return approvalByID(ctx, r.db, approvalID)
+}
+
 func (r *Repository) ApproveApproval(ctx context.Context, approvalID string, approvalToken string, decidedAt string) (ApprovalRecord, error) {
 	if decidedAt == "" {
 		decidedAt = now()

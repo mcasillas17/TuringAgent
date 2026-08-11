@@ -8,6 +8,7 @@ import (
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
 )
 
 type RuntimeStream interface {
@@ -54,7 +55,7 @@ type decisionWaiter struct {
 }
 
 type activeRun struct {
-	cancel context.CancelFunc
+	cancel context.CancelCauseFunc
 	done   chan struct{}
 	mu     sync.Mutex
 	stop   bool
@@ -75,9 +76,27 @@ type outboundWriter struct {
 }
 
 type outboundRequest struct {
-	ctx    context.Context
-	update *turingv1.RuntimeUpdate
-	result chan error
+	ctx     context.Context
+	update  *turingv1.RuntimeUpdate
+	result  chan error
+	started chan struct{}
+}
+
+type outboundSendStartedError struct {
+	err error
+}
+
+func (e outboundSendStartedError) Error() string     { return e.err.Error() }
+func (e outboundSendStartedError) Unwrap() error     { return e.err }
+func (e outboundSendStartedError) SendStarted() bool { return true }
+
+type outboundSendState interface {
+	SendStarted() bool
+}
+
+func outboundSendStarted(err error) bool {
+	var state outboundSendState
+	return errors.As(err, &state) && state.SendStarted()
 }
 
 func newOutboundWriter(stream RuntimeStream) *outboundWriter {
@@ -107,6 +126,7 @@ func (w *outboundWriter) run() {
 				request.complete(err)
 				continue
 			}
+			request.markStarted()
 			err := w.stream.Send(request.update)
 			request.complete(err)
 			if err != nil {
@@ -121,7 +141,7 @@ func (w *outboundWriter) send(ctx context.Context, update *turingv1.RuntimeUpdat
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	request := &outboundRequest{ctx: ctx, update: update, result: make(chan error, 1)}
+	request := &outboundRequest{ctx: ctx, update: update, result: make(chan error, 1), started: make(chan struct{})}
 	select {
 	case <-w.done:
 		return w.error()
@@ -136,11 +156,11 @@ func (w *outboundWriter) send(ctx context.Context, update *turingv1.RuntimeUpdat
 	}
 	select {
 	case err := <-request.result:
-		return err
+		return request.classify(err)
 	case <-ctx.Done():
-		return ctx.Err()
+		return request.classify(ctx.Err())
 	case <-w.done:
-		return w.error()
+		return request.classify(w.error())
 	}
 }
 
@@ -170,6 +190,26 @@ func (r *outboundRequest) complete(err error) {
 	case r.result <- err:
 	default:
 	}
+}
+
+func (r *outboundRequest) markStarted() {
+	close(r.started)
+}
+
+func (r *outboundRequest) sendStarted() bool {
+	select {
+	case <-r.started:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *outboundRequest) classify(err error) error {
+	if err != nil && r.sendStarted() {
+		return outboundSendStartedError{err: err}
+	}
+	return err
 }
 
 func New(options Options, client RuntimeClient, executor Executor) *Worker {
@@ -231,7 +271,7 @@ func (w *Worker) Run(ctx context.Context) error {
 			w.deliverDecision(value.ToolPolicyDecision)
 		case *turingv1.RuntimeCommand_ApprovalUpdated:
 			if value.ApprovalUpdated != nil && (value.ApprovalUpdated.Status == "denied" || value.ApprovalUpdated.Status == "expired") {
-				if err := w.cancelApprovalRun(ctx, stream, value.ApprovalUpdated.ApprovalId); err != nil {
+				if err := w.cancelApprovalRun(ctx, stream, value.ApprovalUpdated.ApprovalId, value.ApprovalUpdated.Status); err != nil {
 					return err
 				}
 			}
@@ -240,12 +280,12 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) startRun(parent context.Context, stream RuntimeStream, job *turingv1.AgentJob) {
-	runCtx, cancel := context.WithCancel(parent)
+	runCtx, cancel := context.WithCancelCause(parent)
 	entry := &activeRun{cancel: cancel, done: make(chan struct{})}
 	w.mu.Lock()
 	if _, exists := w.active[job.GetRunId()]; exists || len(w.active) >= w.options.MaxConcurrentRuns {
 		w.mu.Unlock()
-		cancel()
+		cancel(context.Canceled)
 		return
 	}
 	w.active[job.GetRunId()] = entry
@@ -301,12 +341,19 @@ func runWasTerminalized(err error) bool {
 }
 
 func (w *Worker) cancelRun(ctx context.Context, stream RuntimeStream, runID string) error {
+	return w.cancelRunWithCause(ctx, stream, runID, context.Canceled)
+}
+
+func (w *Worker) cancelRunWithCause(ctx context.Context, stream RuntimeStream, runID string, cause error) error {
 	entry := w.activeRun(runID)
 	if entry == nil {
 		return nil
 	}
+	if cause == nil {
+		cause = context.Canceled
+	}
 	entry.markStopping()
-	entry.cancel()
+	entry.cancel(cause)
 	select {
 	case <-entry.done:
 	case <-ctx.Done():
@@ -322,14 +369,14 @@ func (w *Worker) activeRun(runID string) *activeRun {
 	return w.active[runID]
 }
 
-func (w *Worker) cancelApprovalRun(ctx context.Context, stream RuntimeStream, approvalID string) error {
+func (w *Worker) cancelApprovalRun(ctx context.Context, stream RuntimeStream, approvalID string, approvalStatus string) error {
 	w.mu.Lock()
 	runID := w.approvals[approvalID]
 	w.mu.Unlock()
 	if runID == "" {
 		return nil
 	}
-	return w.cancelRun(ctx, stream, runID)
+	return w.cancelRunWithCause(ctx, stream, runID, tools.TerminalApprovalError{Status: approvalStatus})
 }
 
 func (w *Worker) deleteActive(runID string) {
@@ -404,6 +451,10 @@ func (w *Worker) postToolBeacon(ctx context.Context, stream RuntimeStream, beaco
 	w.toolCalls[beacon.ToolCallId] = beacon.RunId
 	w.mu.Unlock()
 	if err := w.send(ctx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: beacon}}); err != nil {
+		if outboundSendStarted(err) {
+			sent = true
+			return nil, sentBeaconError{err: err}
+		}
 		return nil, err
 	}
 	sent = true
