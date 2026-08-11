@@ -941,6 +941,87 @@ func TestApprovalLifecycleRecordsTokenAndUpdatesRun(t *testing.T) {
 	}
 }
 
+func TestCreateApprovalWithEventIsIdempotentUnderConcurrency(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Concurrent approval creation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "approval tool", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	const toolCallID = "call_concurrent_approval"
+	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
+		ToolCallID: toolCallID, RunID: enqueued.RunID,
+	}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:concurrent"); err != nil {
+		t.Fatal(err)
+	}
+
+	const callers = 8
+	start := make(chan struct{})
+	type result struct {
+		approval ApprovalRecord
+		event    Event
+		err      error
+	}
+	results := make(chan result, callers)
+	for range callers {
+		go func() {
+			<-start
+			approval, event, err := repo.CreateApprovalWithEvent(
+				ctx,
+				enqueued.RunID,
+				toolCallID,
+				"general_assistant",
+				"files.update",
+				`{"path":"note.txt"}`,
+				"sha256:concurrent",
+				"2099-01-01T00:00:00Z",
+			)
+			results <- result{approval: approval, event: event, err: err}
+		}()
+	}
+	close(start)
+
+	approvalID := ""
+	createdEvents := 0
+	for range callers {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("concurrent approval creation: %v", result.err)
+		}
+		if approvalID == "" {
+			approvalID = result.approval.ApprovalID
+		} else if result.approval.ApprovalID != approvalID {
+			t.Fatalf("concurrent approval IDs = %q and %q", approvalID, result.approval.ApprovalID)
+		}
+		if result.event.EventID != "" {
+			createdEvents++
+		}
+	}
+	if createdEvents != 1 {
+		t.Fatalf("created approval events = %d, want 1", createdEvents)
+	}
+	var approvalCount, eventCount int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM approvals WHERE tool_call_id = ?`, toolCallID).Scan(&approvalCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'approval.requested'`, enqueued.RunID).Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if approvalCount != 1 || eventCount != 1 {
+		t.Fatalf("approval/event counts = %d/%d, want 1/1", approvalCount, eventCount)
+	}
+}
+
 func TestRecordToolCallAfterRejectsApprovedButUnconsumedCompletion(t *testing.T) {
 	database := openTestDB(t)
 	repo := New(database)

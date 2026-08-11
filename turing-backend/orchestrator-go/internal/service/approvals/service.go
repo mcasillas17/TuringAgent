@@ -120,8 +120,10 @@ func (s *Server) CreateApprovalForTool(ctx context.Context, runID string, toolCa
 	if err != nil {
 		return "", err
 	}
-	s.publishEvent(event)
-	_ = s.audit.Record(ctx, approval.RunID, "runtime", "", "approval.requested", approval.ApprovalID, map[string]any{"toolName": approval.ToolName})
+	if event.EventID != "" {
+		s.publishEvent(event)
+		_ = s.audit.Record(ctx, approval.RunID, "runtime", "", "approval.requested", approval.ApprovalID, map[string]any{"toolName": approval.ToolName})
+	}
 	return approval.ApprovalID, nil
 }
 

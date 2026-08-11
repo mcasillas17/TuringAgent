@@ -110,11 +110,33 @@ func (r *Repository) CreateApprovalWithEvent(ctx context.Context, runID string, 
 	if toolCallID != "" {
 		nullableToolCallID = toolCallID
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO approvals (id, run_id, tool_call_id, agent_id, tool_name, args_json, args_hash, status, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`, record.ApprovalID, runID, nullableToolCallID, agentID, toolName, argsJSON, argsHash, expiresAt, createdAt); err != nil {
+	result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO approvals (id, run_id, tool_call_id, agent_id, tool_name, args_json, args_hash, status, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`, record.ApprovalID, runID, nullableToolCallID, agentID, toolName, argsJSON, argsHash, expiresAt, createdAt)
+	if err != nil {
 		return ApprovalRecord{}, Event{}, err
 	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return ApprovalRecord{}, Event{}, err
+	}
+	if inserted == 0 {
+		var existingID string
+		if err := tx.QueryRowContext(ctx, `SELECT id FROM approvals WHERE run_id = ? AND tool_call_id = ?`, runID, toolCallID).Scan(&existingID); err != nil {
+			return ApprovalRecord{}, Event{}, err
+		}
+		existing, err := approvalByID(ctx, tx, existingID)
+		if err != nil {
+			return ApprovalRecord{}, Event{}, err
+		}
+		if existing.AgentID != agentID || existing.ToolName != toolName || existing.ArgsHash != argsHash {
+			return ApprovalRecord{}, Event{}, errors.New("approval tool context conflicts with existing approval")
+		}
+		if err := tx.Commit(); err != nil {
+			return ApprovalRecord{}, Event{}, err
+		}
+		return existing, Event{}, nil
+	}
 	if toolCallID != "" {
-		result, err := tx.ExecContext(ctx, `UPDATE tool_calls SET approval_id = ?, status = 'approval_required' WHERE id = ? AND run_id = ?`, record.ApprovalID, toolCallID, runID)
+		result, err = tx.ExecContext(ctx, `UPDATE tool_calls SET approval_id = ?, status = 'approval_required' WHERE id = ? AND run_id = ?`, record.ApprovalID, toolCallID, runID)
 		if err != nil {
 			return ApprovalRecord{}, Event{}, err
 		}
@@ -122,7 +144,7 @@ func (r *Repository) CreateApprovalWithEvent(ctx context.Context, runID string, 
 			return ApprovalRecord{}, Event{}, err
 		}
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'waiting_approval' WHERE id = ? AND status IN ('queued','running','waiting_approval')`, runID)
+	result, err = tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'waiting_approval' WHERE id = ? AND status IN ('queued','running','waiting_approval')`, runID)
 	if err != nil {
 		return ApprovalRecord{}, Event{}, err
 	}
