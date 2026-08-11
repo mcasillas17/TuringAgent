@@ -734,6 +734,76 @@ func TestDenyApprovalPublishesCommittedTerminalRunEventOnlyOnce(t *testing.T) {
 	}
 }
 
+func TestApprovalTerminalizationPublishesRunFailureWhenApprovalEventAppendFails(t *testing.T) {
+	tests := []struct {
+		name        string
+		eventType   string
+		terminalize func(context.Context, *approvalHarness, string) error
+	}{
+		{
+			name:      "denial",
+			eventType: "approval.denied",
+			terminalize: func(ctx context.Context, h *approvalHarness, approvalID string) error {
+				_, err := h.service.DenyApproval(ctx, &turingv1.DenyApprovalRequest{ApprovalId: approvalID})
+				return err
+			},
+		},
+		{
+			name:      "expiry",
+			eventType: "approval.expired",
+			terminalize: func(ctx context.Context, h *approvalHarness, approvalID string) error {
+				if _, err := h.database.ExecContext(ctx, `UPDATE approvals SET expires_at = ? WHERE id = ?`, time.Now().Add(-time.Minute).Format(time.RFC3339Nano), approvalID); err != nil {
+					return err
+				}
+				_, err := h.service.GetApprovalForRuntime(ctx, &turingv1.GetApprovalForRuntimeRequest{ApprovalId: approvalID})
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newApprovalHarness(t)
+			enqueued := h.createRunningToolCall(t)
+			approvalID, err := h.service.CreateApprovalForTool(context.Background(), enqueued.RunID, "call_1", "general_assistant", "files.update", map[string]any{"path": "note.txt"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.database.ExecContext(context.Background(), fmt.Sprintf(`
+				CREATE TRIGGER fail_%s_event
+				BEFORE INSERT ON events
+				WHEN NEW.type = '%s'
+				BEGIN
+					SELECT RAISE(ABORT, 'append approval event failed');
+				END
+			`, test.name, test.eventType)); err != nil {
+				t.Fatal(err)
+			}
+			published, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
+			defer unsubscribe()
+
+			err = test.terminalize(context.Background(), h, approvalID)
+			if err == nil || !strings.Contains(err.Error(), "append approval event failed") {
+				t.Fatalf("terminalization error = %v, want approval event append failure", err)
+			}
+
+			select {
+			case event := <-published:
+				if event.Type != "agent.run.failed" || event.RunID != enqueued.RunID {
+					t.Fatalf("published event = %+v, want agent.run.failed for %q", event, enqueued.RunID)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("committed agent.run.failed event was not published")
+			}
+			select {
+			case event := <-published:
+				t.Fatalf("duplicate terminal event published: %+v", event)
+			case <-time.After(50 * time.Millisecond):
+			}
+		})
+	}
+}
+
 func TestApproveExpiredApprovalFailsPrecondition(t *testing.T) {
 	h := newApprovalHarness(t)
 	enqueued := h.createRunningToolCall(t)

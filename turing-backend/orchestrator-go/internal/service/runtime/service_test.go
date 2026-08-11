@@ -1971,6 +1971,106 @@ func TestToolBeaconAfterRecordsCompletionEvent(t *testing.T) {
 	}
 }
 
+func TestToolBeaconAfterRetriesTerminalEventAppendFailure(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "retry terminal event")
+	before := &turingv1.ToolCallBeacon{
+		RunId:      enqueued.RunID,
+		TraceId:    enqueued.TraceID,
+		ToolCallId: "call_retry_terminal_event",
+		AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName: "system",
+		ToolName:   "system.echo",
+		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+	}
+	if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: before}}); err != nil {
+		t.Fatal(err)
+	}
+	after := &turingv1.ToolCallBeacon{
+		RunId:         enqueued.RunID,
+		TraceId:       enqueued.TraceID,
+		ToolCallId:    before.ToolCallId,
+		AgentId:       turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName:    "system",
+		ToolName:      "system.echo",
+		Phase:         turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER,
+		Status:        turingv1.ToolCallStatus_TOOL_CALL_STATUS_COMPLETED,
+		ResultSummary: "echoed hello",
+		DurationMs:    12,
+	}
+	if _, err := h.database.ExecContext(context.Background(), `
+		CREATE TRIGGER fail_terminal_tool_event
+		BEFORE INSERT ON events
+		WHEN NEW.type = 'tool.call.completed'
+		BEGIN
+			SELECT RAISE(ABORT, 'append terminal tool event failed');
+		END
+	`); err != nil {
+		t.Fatal(err)
+	}
+	update := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: after}}
+	err := h.service.applyUpdate(context.Background(), update)
+	if err == nil || !strings.Contains(err.Error(), "append terminal tool event failed") {
+		t.Fatalf("first terminal beacon error = %v, want append failure", err)
+	}
+	if _, err := h.database.ExecContext(context.Background(), `DROP TRIGGER fail_terminal_tool_event`); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.service.applyUpdate(context.Background(), update); err != nil {
+		t.Fatalf("identical terminal retry: %v", err)
+	}
+	var events int
+	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'tool.call.completed'`, enqueued.RunID).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 {
+		t.Fatalf("terminal tool events = %d, want 1", events)
+	}
+}
+
+func TestToolBeaconAfterRejectsCompletedPendingApproval(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "pending approval completion")
+	args, err := structpb.NewStruct(map[string]any{"path": "note.txt", "content": "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := &turingv1.ToolCallBeacon{
+		RunId:      enqueued.RunID,
+		TraceId:    enqueued.TraceID,
+		ToolCallId: "call_pending_approval",
+		AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName: "files",
+		ToolName:   "files.update",
+		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		Args:       args,
+	}
+	if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: before}}); err != nil {
+		t.Fatal(err)
+	}
+	err = h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+		RunId:         enqueued.RunID,
+		TraceId:       enqueued.TraceID,
+		ToolCallId:    before.ToolCallId,
+		AgentId:       turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName:    "files",
+		ToolName:      "files.update",
+		Phase:         turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER,
+		Status:        turingv1.ToolCallStatus_TOOL_CALL_STATUS_COMPLETED,
+		ResultSummary: "updated",
+	}}})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("pending approval completion error = %v, want FailedPrecondition", err)
+	}
+	var toolCallStatus string
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status FROM tool_calls WHERE id = ?`, before.ToolCallId).Scan(&toolCallStatus); err != nil {
+		t.Fatal(err)
+	}
+	if toolCallStatus != "approval_required" {
+		t.Fatalf("tool call status = %q, want approval_required", toolCallStatus)
+	}
+}
+
 func TestToolBeaconAfterRequiresImmutableIdentityAndSingleTerminalTransition(t *testing.T) {
 	newCompletedBeacon := func(enqueued repository.EnqueueUserMessageResult) *turingv1.ToolCallBeacon {
 		return &turingv1.ToolCallBeacon{
@@ -2047,6 +2147,35 @@ func TestToolBeaconAfterRequiresImmutableIdentityAndSingleTerminalTransition(t *
 		}
 		if err := h.service.applyUpdate(context.Background(), update); err != nil {
 			t.Fatalf("identical after retry: %v", err)
+		}
+		var events int
+		if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'tool.call.completed'`, enqueued.RunID).Scan(&events); err != nil {
+			t.Fatal(err)
+		}
+		if events != 1 {
+			t.Fatalf("terminal tool events = %d, want 1", events)
+		}
+	})
+
+	t.Run("retries identical terminal outcome after run completes", func(t *testing.T) {
+		h := newHarness(t)
+		enqueued := h.createRunningRunResult(t, "completed idempotent")
+		recordBefore(t, h, enqueued)
+		after := newCompletedBeacon(enqueued)
+		update := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: after}}
+		if err := h.service.applyUpdate(context.Background(), update); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.repo.CompleteRun(context.Background(), enqueued.RunID, "", ""); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.service.applyUpdate(context.Background(), update); err != nil {
+			t.Fatalf("identical after retry after completion: %v", err)
+		}
+		after.ResultSummary = "different"
+		err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: after}})
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("conflicting terminal retry after completion error = %v, want FailedPrecondition", err)
 		}
 		var events int
 		if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'tool.call.completed'`, enqueued.RunID).Scan(&events); err != nil {

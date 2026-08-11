@@ -22,6 +22,8 @@ type Client struct {
 	approvals turingv1.ApprovalServiceClient
 }
 
+const defaultApprovalWaitTimeout = 71 * time.Second
+
 // Dial builds the orchestrator client. The dial is lazy: the connection is
 // established on the first RPC, and the worker loop already retries, so no
 // blocking wait is needed here.
@@ -143,7 +145,7 @@ func (c *Client) WaitForApprovalToken(ctx context.Context, approvalID string, po
 		pollInterval = time.Second
 	}
 	if timeout <= 0 {
-		timeout = 65 * time.Second
+		timeout = defaultApprovalWaitTimeout
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

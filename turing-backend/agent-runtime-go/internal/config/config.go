@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+const (
+	defaultApprovalTTL              = 65 * time.Second
+	approvalExpiryRoundingMargin    = time.Second
+	approvalWaitPollTransportMargin = 5 * time.Second
+)
+
 type Config struct {
 	OrchestratorGRPCAddr string
 	InternalToken        string
@@ -60,7 +66,11 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	approvalTimeout, err := durationMillisecondsValue(getenv, "TURING_APPROVAL_TIMEOUT_MS", 65000)
+	approvalTTL, err := durationMillisecondsValue(getenv, "TURING_APPROVAL_TIMEOUT_MS", defaultApprovalTTL.Milliseconds())
+	if err != nil {
+		return Config{}, err
+	}
+	approvalTimeout, err := approvalWaitTimeout(getenv, approvalTTL)
 	if err != nil {
 		return Config{}, err
 	}
@@ -164,6 +174,22 @@ func durationMillisecondsValue(getenv func(string) string, name string, defaultV
 		return 0, fmt.Errorf("%s exceeds maximum duration of %d milliseconds", name, maxMilliseconds)
 	}
 	return time.Duration(milliseconds) * time.Millisecond, nil
+}
+
+func approvalWaitTimeout(getenv func(string) string, approvalTTL time.Duration) (time.Duration, error) {
+	margin := approvalExpiryRoundingMargin + approvalWaitPollTransportMargin
+	if approvalTTL > time.Duration(math.MaxInt64)-margin {
+		return 0, fmt.Errorf("TURING_APPROVAL_TIMEOUT_MS must leave room for approval wait margin")
+	}
+	minimum := approvalTTL + margin
+	timeout, err := durationMillisecondsValue(getenv, "TURING_APPROVAL_WAIT_TIMEOUT_MS", minimum.Milliseconds())
+	if err != nil {
+		return 0, err
+	}
+	if timeout < minimum {
+		return 0, fmt.Errorf("TURING_APPROVAL_WAIT_TIMEOUT_MS must cover effective approval expiry plus poll and transport margin")
+	}
+	return timeout, nil
 }
 
 func maxDurationMilliseconds() int64 {

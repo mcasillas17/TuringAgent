@@ -722,7 +722,7 @@ func (s *Server) handleToolBeacon(ctx context.Context, beacon *turingv1.ToolCall
 	if err != nil {
 		return nil, err
 	}
-	if !isActiveRunStatus(run.Status) {
+	if !isActiveRunStatus(run.Status) && beacon.Phase != turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
 		return nil, status.Error(codes.FailedPrecondition, "run is not active")
 	}
 	if beacon.TraceId != run.TraceID {
@@ -852,24 +852,6 @@ func (s *Server) handleToolAfter(ctx context.Context, beacon *turingv1.ToolCallB
 		errorCode = beacon.Error.Code
 		errorMessage = beacon.Error.Message
 	}
-	changed, err := s.repo.RecordToolCallAfter(ctx, repository.ToolCallAfterRecord{
-		ToolCallID:      beacon.ToolCallId,
-		RunID:           beacon.RunId,
-		ServerName:      beaconServerName(beacon),
-		ToolName:        beacon.ToolName,
-		ModelToolCallID: beacon.ModelToolCallId,
-		Status:          statusValue,
-		ResultSummary:   beacon.ResultSummary,
-		ErrorCode:       errorCode,
-		ErrorMessage:    errorMessage,
-		DurationMS:      beacon.DurationMs,
-	})
-	if err != nil {
-		return nil, mapToolCallError(err)
-	}
-	if !changed {
-		return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: beacon.ToolCallId}, nil
-	}
 	payload := map[string]any{
 		"toolCallId":    beacon.ToolCallId,
 		"serverName":    beaconServerName(beacon),
@@ -882,9 +864,27 @@ func (s *Server) handleToolAfter(ctx context.Context, beacon *turingv1.ToolCallB
 	if beacon.Error != nil {
 		payload["error"] = map[string]any{"code": beacon.Error.Code, "message": beacon.Error.Message}
 	}
-	event, err := s.appendToolEvent(ctx, run, eventType, payload)
+	payloadJSON, err := safejson.MarshalCanonical(payload)
 	if err != nil {
 		return nil, err
+	}
+	changed, event, err := s.repo.RecordToolCallAfterWithEvent(ctx, repository.ToolCallAfterRecord{
+		ToolCallID:      beacon.ToolCallId,
+		RunID:           beacon.RunId,
+		ServerName:      beaconServerName(beacon),
+		ToolName:        beacon.ToolName,
+		ModelToolCallID: beacon.ModelToolCallId,
+		Status:          statusValue,
+		ResultSummary:   beacon.ResultSummary,
+		ErrorCode:       errorCode,
+		ErrorMessage:    errorMessage,
+		DurationMS:      beacon.DurationMs,
+	}, eventType, string(payloadJSON))
+	if err != nil {
+		return nil, mapToolCallError(err)
+	}
+	if !changed {
+		return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: beacon.ToolCallId}, nil
 	}
 	s.publishEvent(event)
 	if err := s.audit.Record(ctx, beacon.RunId, "runtime", "", "tool.call.after", beacon.ToolCallId, toolAuditPayload(beacon)); err != nil {

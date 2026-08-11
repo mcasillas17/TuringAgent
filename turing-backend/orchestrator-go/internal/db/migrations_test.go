@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -173,9 +175,80 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"0001_initial", "0002_go_runtime", "0003_messages_fts"}
+	want := []string{"0001_initial", "0002_go_runtime", "0003_messages_fts", "0003_tool_call_model_identity"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("applied migrations = %v, want %v", got, want)
+	}
+}
+
+func TestApplyMigrationsUpgradesPopulated0002DatabaseWithNullableModelToolCallID(t *testing.T) {
+	ctx := context.Background()
+	sqlDB, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?mode=memory&cache=shared&_foreign_keys=on", t.Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	database := &DB{DB: sqlDB}
+	t.Cleanup(func() { _ = database.Close() })
+
+	applyThrough := func(name string) {
+		t.Helper()
+		sqlText, err := migrationFS.ReadFile("schema/" + name + ".sql")
+		if err != nil {
+			t.Fatal(err)
+		}
+		tx, err := database.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		if _, err := tx.ExecContext(ctx, string(sqlText)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (version, applied_at) VALUES (?, datetime('now'))`, name); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	applyThrough("0001_initial")
+	applyThrough("0002_go_runtime")
+
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO sessions (id, title, status, created_at, updated_at)
+		VALUES ('session_1', 'Upgrade', 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+		INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at)
+		VALUES ('message_1', 'session_1', 'user', 'hello', 'text', 1, '2026-01-01T00:00:00Z');
+		INSERT INTO agent_runs (id, session_id, user_message_id, agent_id, trace_id, status, model_provider, model_name, created_at)
+		VALUES ('run_1', 'session_1', 'message_1', 'general_assistant', 'trace_1', 'running', 'ollama', 'llama3.2', '2026-01-01T00:00:00Z');
+		INSERT INTO tool_calls (id, run_id, agent_id, server_name, tool_name, args_json, args_hash, status, result_summary, created_at)
+		VALUES ('call_1', 'run_1', 'general_assistant', 'system', 'system.echo', '{"value":"hello"}', 'sha256:args', 'completed', 'hello', '2026-01-01T00:00:00Z');
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+
+	var status, resultSummary string
+	var modelToolCallID sql.NullString
+	if err := database.QueryRowContext(ctx, `SELECT status, result_summary, model_tool_call_id FROM tool_calls WHERE id = 'call_1'`).Scan(&status, &resultSummary, &modelToolCallID); err != nil {
+		t.Fatal(err)
+	}
+	if status != "completed" || resultSummary != "hello" {
+		t.Fatalf("upgraded tool call = status %q result %q, want preserved completed/hello", status, resultSummary)
+	}
+	if modelToolCallID.Valid {
+		t.Fatalf("model_tool_call_id = %q, want NULL for pre-upgrade row", modelToolCallID.String)
+	}
+	var applied int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = '0003_tool_call_model_identity'`).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if applied != 1 {
+		t.Fatalf("0003 migration count = %d, want 1", applied)
 	}
 }
 

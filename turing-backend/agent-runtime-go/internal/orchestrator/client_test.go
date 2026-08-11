@@ -10,6 +10,7 @@ import (
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/memory"
 	"google.golang.org/grpc"
@@ -300,6 +301,62 @@ func TestWaitForApprovalTokenReturnsLazyExpiryBeforeWaitTimeout(t *testing.T) {
 	}
 }
 
+func TestApprovalWaitConfigurationObservesLazyExpiryBeforeDeadline(t *testing.T) {
+	cfg, err := config.LoadFromEnv(func(name string) string {
+		return map[string]string{
+			"TURING_INTERNAL_TOKEN":        "internal",
+			"TURING_TOOL_TIMEOUT_MS":       "1000",
+			"TURING_APPROVAL_TIMEOUT_MS":   "1000",
+			"TURING_TOOL_TOTAL_TIMEOUT_MS": "12000",
+		}[name]
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientState := &approvalStateClient{
+		minimumWait: 6 * time.Second,
+		statuses: []turingv1.ApprovalStatus{
+			turingv1.ApprovalStatus_APPROVAL_STATUS_PENDING,
+			turingv1.ApprovalStatus_APPROVAL_STATUS_EXPIRED,
+		},
+	}
+	client := &Client{approvals: clientState}
+
+	_, err = client.WaitForApprovalToken(context.Background(), "approval_1", time.Millisecond, cfg.ApprovalTimeout)
+
+	if err == nil || err.Error() != "approval expired" {
+		t.Fatalf("WaitForApprovalToken error = %v, want terminal approval expiry", err)
+	}
+	var terminal interface{ RunTerminal() bool }
+	if !errors.As(err, &terminal) || !terminal.RunTerminal() {
+		t.Fatalf("WaitForApprovalToken error = %T %v, want terminal-run error", err, err)
+	}
+	if got := clientState.callCount(); got != 2 {
+		t.Fatalf("GetApprovalForRuntime calls = %d, want pending then expired", got)
+	}
+}
+
+func TestWaitForApprovalTokenDefaultTimeoutIncludesExpiryMargin(t *testing.T) {
+	clientState := &approvalStateClient{
+		minimumWait: 70 * time.Second,
+		statuses: []turingv1.ApprovalStatus{
+			turingv1.ApprovalStatus_APPROVAL_STATUS_PENDING,
+			turingv1.ApprovalStatus_APPROVAL_STATUS_EXPIRED,
+		},
+	}
+	client := &Client{approvals: clientState}
+
+	_, err := client.WaitForApprovalToken(context.Background(), "approval_1", time.Millisecond, 0)
+
+	if err == nil || err.Error() != "approval expired" {
+		t.Fatalf("WaitForApprovalToken error = %v, want terminal approval expiry", err)
+	}
+	var terminal interface{ RunTerminal() bool }
+	if !errors.As(err, &terminal) || !terminal.RunTerminal() {
+		t.Fatalf("WaitForApprovalToken error = %T %v, want terminal-run error", err, err)
+	}
+}
+
 func TestWaitForApprovalTokenContextDeadlineIsNotTerminalDenial(t *testing.T) {
 	client := &Client{approvals: &approvalStateClient{status: turingv1.ApprovalStatus_APPROVAL_STATUS_PENDING}}
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
@@ -332,19 +389,26 @@ func (c *messageListClient) ListMessages(
 }
 
 type approvalStateClient struct {
-	mu       sync.Mutex
-	status   turingv1.ApprovalStatus
-	statuses []turingv1.ApprovalStatus
-	calls    int
+	mu          sync.Mutex
+	status      turingv1.ApprovalStatus
+	statuses    []turingv1.ApprovalStatus
+	calls       int
+	minimumWait time.Duration
 }
 
 func (c *approvalStateClient) GetApprovalForRuntime(
-	context.Context,
-	*turingv1.GetApprovalForRuntimeRequest,
-	...grpc.CallOption,
+	ctx context.Context,
+	_ *turingv1.GetApprovalForRuntimeRequest,
+	_ ...grpc.CallOption,
 ) (*turingv1.RuntimeApprovalState, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.minimumWait > 0 {
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) < c.minimumWait {
+			return nil, errors.New("approval wait deadline does not include expiry margin")
+		}
+	}
 	c.calls++
 	status := c.status
 	if len(c.statuses) > 0 {

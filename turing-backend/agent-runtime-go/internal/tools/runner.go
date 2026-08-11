@@ -109,7 +109,7 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 		}
 	default:
 		err = errors.New("unsupported tool policy decision")
-		if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_DENIED, "", &turingv1.ToolCallError{Code: "tool_denied", Message: err.Error()}, started); reportErr != nil {
+		if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "tool_policy_decision_invalid", Message: err.Error()}, started); reportErr != nil {
 			return RunOutcome{}, ReportingFailureError{operationErr: err, reportErr: reportErr}
 		}
 		return RunOutcome{}, markBeaconPosted(err)

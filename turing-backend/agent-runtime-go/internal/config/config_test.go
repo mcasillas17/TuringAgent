@@ -75,11 +75,34 @@ func TestLoadFromEnvDefaultsTimeouts(t *testing.T) {
 	if cfg.ToolTimeout != 30*time.Second {
 		t.Fatalf("ToolTimeout = %v, want 30s", cfg.ToolTimeout)
 	}
-	if cfg.ApprovalTimeout != 65*time.Second {
-		t.Fatalf("ApprovalTimeout = %v, want 65s", cfg.ApprovalTimeout)
+	if cfg.ApprovalTimeout != 71*time.Second {
+		t.Fatalf("ApprovalTimeout = %v, want 71s", cfg.ApprovalTimeout)
 	}
 	if cfg.TotalToolTimeout != 180*time.Second {
 		t.Fatalf("TotalToolTimeout = %v, want 180s", cfg.TotalToolTimeout)
+	}
+}
+
+func TestLoadFromEnvKeepsApprovalWaitBeyondEffectiveApprovalExpiry(t *testing.T) {
+	baseEnv := map[string]string{
+		"TURING_INTERNAL_TOKEN":           "internal",
+		"TURING_TOOL_TIMEOUT_MS":          "1000",
+		"TURING_APPROVAL_TIMEOUT_MS":      "1000",
+		"TURING_TOOL_TOTAL_TIMEOUT_MS":    "12000",
+		"TURING_APPROVAL_WAIT_TIMEOUT_MS": "7000",
+	}
+	cfg, err := LoadFromEnv(mapEnv(baseEnv))
+	if err != nil {
+		t.Fatalf("LoadFromEnv failed: %v", err)
+	}
+	if cfg.ApprovalTimeout != 7*time.Second {
+		t.Fatalf("ApprovalTimeout = %v, want 7s effective expiry plus margin", cfg.ApprovalTimeout)
+	}
+
+	baseEnv["TURING_APPROVAL_WAIT_TIMEOUT_MS"] = "6999"
+	_, err = LoadFromEnv(mapEnv(baseEnv))
+	if err == nil || !strings.Contains(err.Error(), "TURING_APPROVAL_WAIT_TIMEOUT_MS") {
+		t.Fatalf("LoadFromEnv error = %v, want approval wait ordering validation", err)
 	}
 }
 

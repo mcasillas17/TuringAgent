@@ -231,6 +231,51 @@ func TestRunRejectsMissingOrMismatchedBeforeDecisionID(t *testing.T) {
 	}
 }
 
+func TestRunPostsFailedAfterForUnsupportedBeforePolicyDecision(t *testing.T) {
+	for _, decision := range []turingv1.ToolPolicyDecision_Decision{
+		turingv1.ToolPolicyDecision_DECISION_UNSPECIFIED,
+		turingv1.ToolPolicyDecision_Decision(99),
+	} {
+		t.Run(decision.String(), func(t *testing.T) {
+			var beacons []*turingv1.ToolCallBeacon
+			mcpCalls := 0
+			runner := &Runner{PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+				beacons = append(beacons, beacon)
+				if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
+					return allowDecision(beacon), nil
+				}
+				return &turingv1.ToolPolicyDecision{
+					Decision:   decision,
+					ToolCallId: beacon.GetToolCallId(),
+				}, nil
+			}}
+
+			_, err := runner.Run(context.Background(), RunInput{
+				ToolName: "system.echo",
+				MCPClient: mcpClientFunc(func(context.Context, string, map[string]any, ...string) (map[string]any, error) {
+					mcpCalls++
+					return map[string]any{"ok": true}, nil
+				}),
+			})
+
+			if err == nil || !strings.Contains(err.Error(), "unsupported tool policy decision") || !BeaconWasPosted(err) {
+				t.Fatalf("Run error = %T %v, want unsupported posted policy error", err, err)
+			}
+			if mcpCalls != 0 {
+				t.Fatalf("MCP calls = %d, want 0", mcpCalls)
+			}
+			assertBeaconSequence(t, beacons,
+				beaconExpectation{phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE},
+				beaconExpectation{
+					phase:  turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER,
+					status: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED,
+					code:   "tool_policy_decision_invalid",
+				},
+			)
+		})
+	}
+}
+
 func TestRunClassifiesMismatchedAfterDecisionID(t *testing.T) {
 	for _, test := range []struct {
 		name          string
@@ -513,7 +558,7 @@ func TestRunReturnsReportingFailureWhenFailedAfterCannotBePosted(t *testing.T) {
 			name:       "unsupported decision",
 			decision:   &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_UNSPECIFIED},
 			client:     fakeMCPClient{},
-			wantStatus: turingv1.ToolCallStatus_TOOL_CALL_STATUS_DENIED,
+			wantStatus: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED,
 		},
 	}
 	for _, test := range tests {
