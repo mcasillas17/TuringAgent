@@ -215,13 +215,14 @@ func (x *DiscoveredTool) GetSchema() *structpb.Struct {
 }
 
 type RuntimeWorkerReady struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	WorkerId          string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
-	AgentId           AgentId                `protobuf:"varint,2,opt,name=agent_id,json=agentId,proto3,enum=turing.v1.AgentId" json:"agent_id,omitempty"`
-	MaxConcurrentRuns int32                  `protobuf:"varint,3,opt,name=max_concurrent_runs,json=maxConcurrentRuns,proto3" json:"max_concurrent_runs,omitempty"`
-	Tools             []*DiscoveredTool      `protobuf:"bytes,4,rep,name=tools,proto3" json:"tools,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	WorkerId              string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	AgentId               AgentId                `protobuf:"varint,2,opt,name=agent_id,json=agentId,proto3,enum=turing.v1.AgentId" json:"agent_id,omitempty"`
+	MaxConcurrentRuns     int32                  `protobuf:"varint,3,opt,name=max_concurrent_runs,json=maxConcurrentRuns,proto3" json:"max_concurrent_runs,omitempty"`
+	Tools                 []*DiscoveredTool      `protobuf:"bytes,4,rep,name=tools,proto3" json:"tools,omitempty"`
+	ToolDiscoveryComplete bool                   `protobuf:"varint,5,opt,name=tool_discovery_complete,json=toolDiscoveryComplete,proto3" json:"tool_discovery_complete,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *RuntimeWorkerReady) Reset() {
@@ -280,6 +281,13 @@ func (x *RuntimeWorkerReady) GetTools() []*DiscoveredTool {
 		return x.Tools
 	}
 	return nil
+}
+
+func (x *RuntimeWorkerReady) GetToolDiscoveryComplete() bool {
+	if x != nil {
+		return x.ToolDiscoveryComplete
+	}
+	return false
 }
 
 type RuntimeHeartbeat struct {
@@ -1038,12 +1046,13 @@ const file_turing_v1_runtime_proto_rawDesc = "" +
 	"\vserver_name\x18\x01 \x01(\tR\n" +
 	"serverName\x12\x1b\n" +
 	"\ttool_name\x18\x02 \x01(\tR\btoolName\x12/\n" +
-	"\x06schema\x18\x03 \x01(\v2\x17.google.protobuf.StructR\x06schema\"\xc1\x01\n" +
+	"\x06schema\x18\x03 \x01(\v2\x17.google.protobuf.StructR\x06schema\"\xf9\x01\n" +
 	"\x12RuntimeWorkerReady\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12-\n" +
 	"\bagent_id\x18\x02 \x01(\x0e2\x12.turing.v1.AgentIdR\aagentId\x12.\n" +
 	"\x13max_concurrent_runs\x18\x03 \x01(\x05R\x11maxConcurrentRuns\x12/\n" +
-	"\x05tools\x18\x04 \x03(\v2\x19.turing.v1.DiscoveredToolR\x05tools\"/\n" +
+	"\x05tools\x18\x04 \x03(\v2\x19.turing.v1.DiscoveredToolR\x05tools\x126\n" +
+	"\x17tool_discovery_complete\x18\x05 \x01(\bR\x15toolDiscoveryComplete\"/\n" +
 	"\x10RuntimeHeartbeat\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\"\xa7\x01\n" +
 	"\x13RuntimeRunCompleted\x12\x15\n" +

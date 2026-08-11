@@ -71,6 +71,7 @@ func TestRuntimeWorkerReadyReportsDiscoveredTools(t *testing.T) {
 
 	workerReady := file.Messages().ByName("RuntimeWorkerReady")
 	assertProtoField(t, workerReady, "tools", 4, protoreflect.MessageKind, true, "turing.v1.DiscoveredTool")
+	assertProtoField(t, workerReady, "tool_discovery_complete", 5, protoreflect.BoolKind, false, "")
 }
 
 func assertProtoField(t *testing.T, message protoreflect.MessageDescriptor, name protoreflect.Name, number protoreflect.FieldNumber, kind protoreflect.Kind, repeated bool, messageType protoreflect.FullName) {

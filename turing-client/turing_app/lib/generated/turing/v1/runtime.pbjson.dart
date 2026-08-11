@@ -115,6 +115,13 @@ const RuntimeWorkerReady$json = {
       '6': '.turing.v1.DiscoveredTool',
       '10': 'tools'
     },
+    {
+      '1': 'tool_discovery_complete',
+      '3': 5,
+      '4': 1,
+      '5': 8,
+      '10': 'toolDiscoveryComplete'
+    },
   ],
 };
 
@@ -123,7 +130,8 @@ final $typed_data.Uint8List runtimeWorkerReadyDescriptor = $convert.base64Decode
     'ChJSdW50aW1lV29ya2VyUmVhZHkSGwoJd29ya2VyX2lkGAEgASgJUgh3b3JrZXJJZBItCghhZ2'
     'VudF9pZBgCIAEoDjISLnR1cmluZy52MS5BZ2VudElkUgdhZ2VudElkEi4KE21heF9jb25jdXJy'
     'ZW50X3J1bnMYAyABKAVSEW1heENvbmN1cnJlbnRSdW5zEi8KBXRvb2xzGAQgAygLMhkudHVyaW'
-    '5nLnYxLkRpc2NvdmVyZWRUb29sUgV0b29scw==');
+    '5nLnYxLkRpc2NvdmVyZWRUb29sUgV0b29scxI2Chd0b29sX2Rpc2NvdmVyeV9jb21wbGV0ZRgF'
+    'IAEoCFIVdG9vbERpc2NvdmVyeUNvbXBsZXRl');
 
 @$core.Deprecated('Use runtimeHeartbeatDescriptor instead')
 const RuntimeHeartbeat$json = {

@@ -4,21 +4,24 @@ import "testing"
 
 func TestDefaultPolicyForDiscoveredToolIsDenyBiased(t *testing.T) {
 	tests := []struct {
-		name string
-		want Policy
+		serverName string
+		toolName   string
+		want       Policy
 	}{
-		{name: "system.time", want: PolicySafe},
-		{name: "system.info", want: PolicySafe},
-		{name: "files.read", want: PolicySafe},
-		{name: "files.create", want: PolicyApprovalRequired},
-		{name: "files.delete", want: PolicyDisabled},
-		{name: "files.move", want: PolicyDisabled},
-		{name: "brand.new.tool", want: PolicyApprovalRequired},
+		{serverName: "system", toolName: "system.time", want: PolicySafe},
+		{serverName: "system", toolName: "system.info", want: PolicySafe},
+		{serverName: "files", toolName: "files.read", want: PolicySafe},
+		{serverName: "files", toolName: "files.create", want: PolicyApprovalRequired},
+		{serverName: "files", toolName: "files.delete", want: PolicyDisabled},
+		{serverName: "files", toolName: "files.move", want: PolicyDisabled},
+		{serverName: "custom", toolName: "brand.new.tool", want: PolicyApprovalRequired},
+		{serverName: "untrusted", toolName: "system.time", want: PolicyApprovalRequired},
+		{serverName: "untrusted", toolName: "files.delete", want: PolicyApprovalRequired},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := DefaultPolicyFor(test.name); got != test.want {
-				t.Fatalf("DefaultPolicyFor(%q) = %q, want %q", test.name, got, test.want)
+		t.Run(test.serverName+"/"+test.toolName, func(t *testing.T) {
+			if got := DefaultPolicyFor(test.serverName, test.toolName); got != test.want {
+				t.Fatalf("DefaultPolicyFor(%q, %q) = %q, want %q", test.serverName, test.toolName, got, test.want)
 			}
 		})
 	}

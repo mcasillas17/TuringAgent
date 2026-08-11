@@ -7,6 +7,8 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 )
 
+const toolRegistryInitializedKey = "tool_registry_initialized"
+
 type DiscoveredTool struct {
 	ServerName string
 	ToolName   string
@@ -23,10 +25,10 @@ func (r *Repository) UpsertTools(ctx context.Context, tools []DiscoveredTool) er
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	discoveredAt := now()
 	if _, err := tx.ExecContext(ctx, `UPDATE tools SET enabled = 0 WHERE enabled = 1`); err != nil {
 		return err
 	}
-	discoveredAt := now()
 	for _, tool := range tools {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO tools (id, server_name, tool_name, policy, schema_json, enabled, discovered_at)
@@ -38,6 +40,13 @@ func (r *Repository) UpsertTools(ctx context.Context, tools []DiscoveredTool) er
 		`, ids.New("tool"), tool.ServerName, tool.ToolName, tool.Policy, tool.SchemaJSON, discoveredAt); err != nil {
 			return err
 		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO settings (key, value_json, updated_at)
+		VALUES (?, 'true', ?)
+		ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+	`, toolRegistryInitializedKey, discoveredAt); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -68,18 +77,29 @@ func (r *Repository) ListEnabledTools(ctx context.Context) ([]DiscoveredTool, er
 	return tools, nil
 }
 
-func (r *Repository) GetToolPolicy(ctx context.Context, serverName string, toolName string) (string, bool, error) {
+func (r *Repository) GetToolPolicy(ctx context.Context, serverName string, toolName string) (string, bool, bool, error) {
 	var policy string
+	var enabled int
 	err := r.db.QueryRowContext(ctx, `
-		SELECT policy
+		SELECT policy, enabled
 		FROM tools
-		WHERE server_name = ? AND tool_name = ? AND enabled = 1
-	`, serverName, toolName).Scan(&policy)
+		WHERE server_name = ? AND tool_name = ?
+	`, serverName, toolName).Scan(&policy, &enabled)
 	if err == nil {
-		return policy, true, nil
+		return policy, enabled == 1, true, nil
 	}
 	if err == sql.ErrNoRows {
-		return "", false, nil
+		return "", false, false, nil
 	}
-	return "", false, err
+	return "", false, false, err
+}
+
+func (r *Repository) ToolRegistryInitialized(ctx context.Context) (bool, error) {
+	var initialized bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM settings WHERE key = ? AND value_json = 'true'
+		)
+	`, toolRegistryInitializedKey).Scan(&initialized)
+	return initialized, err
 }

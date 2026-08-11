@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -37,6 +38,8 @@ type Server struct {
 	audit     *auditsvc.Server
 	mu        sync.Mutex
 	workers   map[string]*worker
+	toolsMu   sync.Mutex
+	toolsets  map[string][]repository.DiscoveredTool
 }
 
 type approvalCreator interface {
@@ -61,7 +64,10 @@ func New(repo *repository.Repository, bus *events.Bus, approvalServices ...appro
 	if len(approvalServices) > 0 {
 		approvals = approvalServices[0]
 	}
-	server := &Server{repo: repo, bus: bus, approvals: approvals, audit: auditsvc.New(repo), workers: map[string]*worker{}}
+	server := &Server{
+		repo: repo, bus: bus, approvals: approvals, audit: auditsvc.New(repo),
+		workers: map[string]*worker{}, toolsets: map[string][]repository.DiscoveredTool{},
+	}
 	if setter, ok := approvals.(interface{ SetNotifier(approvalsvc.Notifier) }); ok {
 		setter.SetNotifier(server)
 	}
@@ -78,7 +84,6 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 	if ready == nil || ready.WorkerId == "" || ready.AgentId != turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT {
 		return status.Error(codes.InvalidArgument, "worker_ready is required")
 	}
-	s.persistDiscoveredTools(ctx, ready.GetTools())
 	maxConcurrent := int(ready.MaxConcurrentRuns)
 	if maxConcurrent <= 0 {
 		maxConcurrent = defaultMaxConcurrentRuns
@@ -95,10 +100,14 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 	connectedWorker := &worker{commands: commands, maxConcurrent: maxConcurrent, assignments: map[string]string{}}
 	s.workers[ready.WorkerId] = connectedWorker
 	s.mu.Unlock()
+	if ready.GetToolDiscoveryComplete() || len(ready.GetTools()) > 0 {
+		s.persistDiscoveredTools(ctx, ready.GetWorkerId(), ready.GetTools())
+	}
 	defer func() {
 		s.mu.Lock()
 		delete(s.workers, ready.WorkerId)
 		s.mu.Unlock()
+		s.removeDiscoveredTools(ready.GetWorkerId())
 		s.requeueAssignments(connectedWorker.close())
 	}()
 	if err := stream.Send(&turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_WorkerAccepted{WorkerAccepted: &turingv1.RuntimeWorkerAccepted{WorkerId: ready.WorkerId}}}); err != nil {
@@ -159,7 +168,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 	}
 }
 
-func (s *Server) persistDiscoveredTools(ctx context.Context, reported []*turingv1.DiscoveredTool) {
+func (s *Server) persistDiscoveredTools(ctx context.Context, workerID string, reported []*turingv1.DiscoveredTool) {
 	discovered := make([]repository.DiscoveredTool, 0, len(reported))
 	for _, tool := range reported {
 		schemaJSON, err := protojson.Marshal(tool.GetSchema())
@@ -171,12 +180,60 @@ func (s *Server) persistDiscoveredTools(ctx context.Context, reported []*turingv
 			ServerName: tool.GetServerName(),
 			ToolName:   tool.GetToolName(),
 			SchemaJSON: string(schemaJSON),
-			Policy:     string(tools.DefaultPolicyFor(tool.GetToolName())),
+			Policy:     string(tools.DefaultPolicyFor(tool.GetServerName(), tool.GetToolName())),
 		})
 	}
-	if err := s.repo.UpsertTools(ctx, discovered); err != nil {
+	s.toolsMu.Lock()
+	defer s.toolsMu.Unlock()
+	s.toolsets[workerID] = discovered
+	if err := s.repo.UpsertTools(ctx, unionToolsets(s.toolsets)); err != nil {
 		log.Printf("runtime tool discovery: persist snapshot: %v", err)
 	}
+}
+
+func (s *Server) removeDiscoveredTools(workerID string) {
+	s.toolsMu.Lock()
+	defer s.toolsMu.Unlock()
+	if _, ok := s.toolsets[workerID]; !ok {
+		return
+	}
+	delete(s.toolsets, workerID)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.repo.UpsertTools(ctx, unionToolsets(s.toolsets)); err != nil {
+		log.Printf("runtime tool discovery: persist snapshot after worker disconnect: %v", err)
+	}
+}
+
+func unionToolsets(toolsets map[string][]repository.DiscoveredTool) []repository.DiscoveredTool {
+	workerIDs := make([]string, 0, len(toolsets))
+	for workerID := range toolsets {
+		workerIDs = append(workerIDs, workerID)
+	}
+	sort.Strings(workerIDs)
+
+	type key struct{ serverName, toolName string }
+	union := make(map[key]repository.DiscoveredTool)
+	for _, workerID := range workerIDs {
+		for _, tool := range toolsets[workerID] {
+			union[key{serverName: tool.ServerName, toolName: tool.ToolName}] = tool
+		}
+	}
+	keys := make([]key, 0, len(union))
+	for toolKey := range union {
+		keys = append(keys, toolKey)
+	}
+	sort.Slice(keys, func(i int, j int) bool {
+		if keys[i].serverName == keys[j].serverName {
+			return keys[i].toolName < keys[j].toolName
+		}
+		return keys[i].serverName < keys[j].serverName
+	})
+	out := make([]repository.DiscoveredTool, 0, len(keys))
+	for _, toolKey := range keys {
+		out = append(out, union[toolKey])
+	}
+	return out
 }
 
 func terminalRunID(update *turingv1.RuntimeUpdate) string {

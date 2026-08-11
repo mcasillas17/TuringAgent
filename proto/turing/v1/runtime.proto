@@ -35,6 +35,7 @@ message RuntimeWorkerReady {
   AgentId agent_id = 2;
   int32 max_concurrent_runs = 3;
   repeated DiscoveredTool tools = 4;
+  bool tool_discovery_complete = 5;
 }
 
 message RuntimeHeartbeat {

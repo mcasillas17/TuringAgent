@@ -11,22 +11,33 @@ const (
 )
 
 type PolicyLookup interface {
-	GetToolPolicy(ctx context.Context, serverName string, toolName string) (string, bool, error)
+	GetToolPolicy(ctx context.Context, serverName string, toolName string) (policy string, enabled bool, found bool, err error)
+	ToolRegistryInitialized(ctx context.Context) (bool, error)
 }
 
 func GetPolicy(ctx context.Context, lookup PolicyLookup, serverName string, toolName string) (Policy, bool, error) {
-	if permanentlyDisabled(toolName) {
+	if permanentlyDisabled(serverName, toolName) {
 		return PolicyDisabled, true, nil
 	}
 	if lookup != nil {
-		policy, ok, err := lookup.GetToolPolicy(ctx, serverName, toolName)
+		policy, enabled, found, err := lookup.GetToolPolicy(ctx, serverName, toolName)
 		if err != nil {
 			return "", false, err
 		}
-		if ok {
+		if found && enabled {
 			return Policy(policy), true, nil
 		}
+		if found {
+			return "", false, nil
+		}
+		initialized, err := lookup.ToolRegistryInitialized(ctx)
+		if err != nil {
+			return "", false, err
+		}
+		if initialized {
+			return "", false, nil
+		}
 	}
-	policy, ok := seedPolicies[toolName]
+	policy, ok := seedPolicies[policyKey{serverName: serverName, toolName: toolName}]
 	return policy, ok, nil
 }

@@ -38,11 +38,11 @@ func TestUpsertToolsStoresSnapshotAndPreservesExistingPolicy(t *testing.T) {
 	if got := tools[0]; got.ServerName != "files" || got.ToolName != "files.create" || got.Policy != "disabled" || got.SchemaJSON != `{"type":"object","required":["path"]}` {
 		t.Fatalf("refreshed tool = %+v", got)
 	}
-	if _, ok, err := repo.GetToolPolicy(ctx, "system", "system.time"); err != nil || ok {
-		t.Fatalf("omitted tool policy resolved: ok=%v err=%v", ok, err)
+	if policy, enabled, found, err := repo.GetToolPolicy(ctx, "system", "system.time"); err != nil || !found || enabled || policy != "safe" {
+		t.Fatalf("omitted tool state: policy=%q enabled=%v found=%v err=%v", policy, enabled, found, err)
 	}
-	if policy, ok, err := repo.GetToolPolicy(ctx, "files", "files.create"); err != nil || !ok || policy != "disabled" {
-		t.Fatalf("files.create policy = %q ok=%v err=%v", policy, ok, err)
+	if policy, enabled, found, err := repo.GetToolPolicy(ctx, "files", "files.create"); err != nil || !found || !enabled || policy != "disabled" {
+		t.Fatalf("files.create state: policy=%q enabled=%v found=%v err=%v", policy, enabled, found, err)
 	}
 }
 
@@ -56,12 +56,28 @@ func TestGetToolPolicyScopesLookupToServer(t *testing.T) {
 		t.Fatalf("UpsertTools: %v", err)
 	}
 
-	policy, ok, err := repo.GetToolPolicy(ctx, "untrusted", "shared.name")
-	if err != nil || !ok || policy != "disabled" {
-		t.Fatalf("untrusted policy = %q ok=%v err=%v", policy, ok, err)
+	policy, enabled, found, err := repo.GetToolPolicy(ctx, "untrusted", "shared.name")
+	if err != nil || !found || !enabled || policy != "disabled" {
+		t.Fatalf("untrusted state: policy=%q enabled=%v found=%v err=%v", policy, enabled, found, err)
 	}
-	if _, ok, err := repo.GetToolPolicy(ctx, "missing", "shared.name"); err != nil || ok {
-		t.Fatalf("missing server policy resolved: ok=%v err=%v", ok, err)
+	if _, _, found, err := repo.GetToolPolicy(ctx, "missing", "shared.name"); err != nil || found {
+		t.Fatalf("missing server policy resolved: found=%v err=%v", found, err)
+	}
+}
+
+func TestUpsertToolsMarksRegistryInitializedForEmptySnapshot(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	initialized, err := repo.ToolRegistryInitialized(ctx)
+	if err != nil || initialized {
+		t.Fatalf("initial registry state = %v err=%v, want false", initialized, err)
+	}
+	if err := repo.UpsertTools(ctx, nil); err != nil {
+		t.Fatalf("UpsertTools empty snapshot: %v", err)
+	}
+	initialized, err = repo.ToolRegistryInitialized(ctx)
+	if err != nil || !initialized {
+		t.Fatalf("registry state after empty snapshot = %v err=%v, want true", initialized, err)
 	}
 }
 
@@ -75,8 +91,8 @@ func TestUpsertToolsRollsBackSnapshotOnInvalidTool(t *testing.T) {
 		t.Fatal("UpsertTools accepted an invalid policy")
 	}
 
-	policy, ok, err := repo.GetToolPolicy(ctx, "system", "system.time")
-	if err != nil || !ok || policy != "safe" {
-		t.Fatalf("previous snapshot was not restored: policy=%q ok=%v err=%v", policy, ok, err)
+	policy, enabled, found, err := repo.GetToolPolicy(ctx, "system", "system.time")
+	if err != nil || !found || !enabled || policy != "safe" {
+		t.Fatalf("previous snapshot was not restored: policy=%q enabled=%v found=%v err=%v", policy, enabled, found, err)
 	}
 }
