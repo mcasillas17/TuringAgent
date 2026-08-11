@@ -69,6 +69,31 @@ func TestGenerateResolvesWindowsPubCacheShim(t *testing.T) {
 	}
 }
 
+func TestGenerateRejectsWindowsDrivePathWithoutCygpath(t *testing.T) {
+	binDir := t.TempDir()
+	writeTool(t, binDir, "dirname", "#!/bin/sh\nexec /usr/bin/dirname \"$@\"\n")
+	writeTool(t, binDir, "protoc", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'libprotoc 34.1'; fi\n")
+	writeTool(t, binDir, "protoc-gen-go", "#!/bin/sh\nexit 0\n")
+	writeTool(t, binDir, "protoc-gen-go-grpc", "#!/bin/sh\nexit 0\n")
+	writeTool(t, binDir, "dart", "#!/bin/sh\nexit 0\n")
+
+	cmd := exec.Command("bash", "./generate.sh")
+	cmd.Env = append(os.Environ(),
+		"PATH="+binDir,
+		"PUB_CACHE=",
+		"OS=Windows_NT",
+		`LOCALAPPDATA=C:\Users\developer\AppData\Local`,
+	)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("generate.sh succeeded with an unresolvable Windows drive path")
+	}
+	want := "requires cygpath; install Git for Windows or set PUB_CACHE to a POSIX-style absolute path"
+	if !strings.Contains(string(output), want) {
+		t.Fatalf("generate.sh output = %q, want it to contain %q", output, want)
+	}
+}
+
 func TestGenerateExcludesUnpinnedOptionalGenerators(t *testing.T) {
 	data, err := os.ReadFile("generate.sh")
 	if err != nil {

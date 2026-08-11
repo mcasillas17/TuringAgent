@@ -31,7 +31,11 @@ elif [[ "${OS:-}" == "Windows_NT" && -n "${LOCALAPPDATA:-}" ]]; then
 else
   dart_pub_cache="$HOME/.pub-cache"
 fi
-if [[ "$dart_pub_cache" =~ ^[A-Za-z]:[\\/] ]] && command -v cygpath >/dev/null 2>&1; then
+if [[ "$dart_pub_cache" =~ ^[A-Za-z]:[\\/] ]]; then
+  if ! command -v cygpath >/dev/null 2>&1; then
+    echo "Windows pub cache path $dart_pub_cache requires cygpath; install Git for Windows or set PUB_CACHE to a POSIX-style absolute path" >&2
+    exit 1
+  fi
   dart_pub_cache="$(cygpath -u "$dart_pub_cache")"
 elif [[ "$dart_pub_cache" != /* ]]; then
   dart_pub_cache="$PWD/$dart_pub_cache"
