@@ -8,6 +8,7 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
+	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/memory"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -75,6 +76,42 @@ func (c *Client) FetchMessages(ctx context.Context, sessionID string) ([]llm.Cha
 			continue
 		}
 		out = append(out, llm.ChatMessage{Role: role, Content: message.GetContent()})
+	}
+	return out, nil
+}
+
+// Recall is wired up only once the tool-calling loop lands, so nothing yet
+// forces this client to keep satisfying the interface it will be passed as.
+// Assert it here instead of discovering the mismatch at wiring time.
+var _ memory.Searcher = (*Client)(nil)
+
+// SearchMessages finds messages across ALL of the user's sessions. The empty
+// SessionId is deliberate: scoping to one session would defeat the point, which
+// is recalling what was said in earlier ones.
+//
+// Note the orchestrator treats the query as an exact phrase, so callers should
+// pass a single term rather than a sentence (see the memory package).
+func (c *Client) SearchMessages(ctx context.Context, query string, limit int) ([]memory.Excerpt, error) {
+	resp, err := c.sessions.SearchMessages(c.withAuth(ctx), &turingv1.SearchMessagesRequest{
+		Query: query,
+		Limit: int32(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	messages := resp.GetMessages()
+	out := make([]memory.Excerpt, 0, len(messages))
+	for _, message := range messages {
+		role, ok := chatRole(message.GetRole())
+		if !ok {
+			continue
+		}
+		out = append(out, memory.Excerpt{
+			SessionID: message.GetSessionId(),
+			Role:      role,
+			Content:   message.GetContent(),
+			CreatedAt: message.GetCreatedAt().AsTime(),
+		})
 	}
 	return out, nil
 }
