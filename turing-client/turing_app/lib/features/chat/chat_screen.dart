@@ -42,8 +42,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Sequence of the newest event already persisted when this screen opened.
   /// The subscription replays the log from its start, so every event at or
   /// below this sequence is a REPLAY of business that finished before the
-  /// screen existed — see [_applyToolCall]. Null when the tail could not be
-  /// read (fresh session, or the call failed), which suppresses nothing.
+  /// screen existed — see [_applyToolCall]. Null until the boundary is loaded.
   int? _replayWatermarkSequence;
   StreamSubscription<TuringEvent>? _subscription;
   String _modelProvider = 'ollama';
@@ -73,7 +72,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // Snapshot the persisted event boundary before history starts loading.
     // Events committed during that RPC remain above the cursor and replay as
     // live after history is seeded.
-    await _loadReplayWatermark();
+    final replayBoundaryLoaded = await _loadReplayWatermark();
     if (!mounted) return;
     try {
       await _loadInitialMessages();
@@ -83,10 +82,17 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) setState(() => _historyLoadFailed = true);
     }
     if (!mounted) return;
+    if (!replayBoundaryLoaded) {
+      _handleStreamEnded();
+      return;
+    }
     _subscription = widget.eventSource
         .connect(
           sessionId: widget.sessionId,
-          lastSequence: _replayWatermarkSequence,
+          // Replay approval lifecycle events so an unresolved request is
+          // reconstructed after reopening. Historical tool events remain
+          // suppressed by the independently captured watermark.
+          lastSequence: 0,
         )
         .listen(
           _applyEvent,
@@ -144,17 +150,16 @@ class _ChatScreenState extends State<ChatScreen> {
   /// never restamps them, so a finished turn's messages are stamped BEFORE its
   /// own tool events.
   ///
-  /// Fails open (watermark left unset, nothing suppressed) on any error: this
-  /// screen must survive an unreachable backend, and re-rendering a stale card
-  /// is a far smaller harm than silently hiding every live tool call.
-  Future<void> _loadReplayWatermark() async {
+  /// Without this boundary a replayed tool event is indistinguishable from a
+  /// live one, so startup must not open the event stream on failure.
+  Future<bool> _loadReplayWatermark() async {
     final TuringEventPage page;
     try {
       page = await widget.apiClient.listEvents(sessionId: widget.sessionId);
     } catch (_) {
-      return;
+      return false;
     }
-    if (!mounted) return;
+    if (!mounted) return false;
     // `latestSequence` covers persisted rows beyond the 500-event response
     // page. Taking the max also keeps alternate API implementations honest.
     var watermark = page.latestSequence;
@@ -162,6 +167,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (event.sequence > watermark) watermark = event.sequence;
     }
     _replayWatermarkSequence = watermark;
+    return true;
   }
 
   Future<void> _loadInitialMessages() async {

@@ -129,6 +129,50 @@ void main() {
     unawaited(events.close());
   });
 
+  testWidgets('persisted pending approvals are replayed when reopening', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final requested = _event(
+      type: 'approval.requested',
+      sequence: 7,
+      payload: {
+        'approvalId': 'appr_pending',
+        'toolName': 'files.update',
+        'argsSummary': 'Update note.txt',
+      },
+    );
+    final apiClient = _FakeApiClient()..initialEvents = [requested];
+    final eventSource = _FakeEventSource(events.stream);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: eventSource,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      eventSource.lastSequence,
+      0,
+      reason:
+          'approval lifecycle replay must start at the beginning even though '
+          'historical tool cards are bounded by the startup watermark',
+    );
+    events.add(requested);
+    await tester.pump();
+
+    expect(find.text('Approval requested: files.update'), findsOneWidget);
+    expect(find.text('Update note.txt'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
   testWidgets('tool.call.started renders a running tool card', (tester) async {
     final events = StreamController<TuringEvent>(sync: true);
 
@@ -643,7 +687,7 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(eventSource.lastSequence, 100);
+    expect(eventSource.lastSequence, 0);
     expect(find.byType(ToolCallCard), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
 
@@ -1778,11 +1822,10 @@ void main() {
     unawaited(events.close());
   });
 
-  testWidgets('an unreadable event tail suppresses nothing', (tester) async {
+  testWidgets('an unreadable event tail does not replay stale tool events', (
+    tester,
+  ) async {
     final events = StreamController<TuringEvent>(sync: true);
-    // The backend is routinely unreachable in a local-first stack. Without a
-    // watermark the filter must fail OPEN: a possibly stale card beats hiding
-    // every live tool call.
     final apiClient = _FakeApiClient()
       ..eventsError = const TuringApiException(
         code: 'UNAVAILABLE',
@@ -1797,13 +1840,14 @@ void main() {
           createdAt: _fixedDate,
         ),
       ];
+    final eventSource = _FakeEventSource(events.stream);
 
     await tester.pumpWidget(
       MaterialApp(
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
-          eventSource: _FakeEventSource(events.stream),
+          eventSource: eventSource,
         ),
       ),
     );
@@ -1818,14 +1862,16 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.byType(ToolCallCard), findsOneWidget);
+    expect(eventSource.connectCount, 0);
+    expect(find.byType(ToolCallCard), findsNothing);
     expect(
       find.text(
-        'Earlier messages could not be loaded. This session is live from here '
-        'on.',
+        'Connection to the session lost. Reopen the session to continue.',
       ),
-      findsNothing,
-      reason: 'the tail is an internal detail; history itself loaded fine',
+      findsOneWidget,
+      reason:
+          'without a replay boundary the client cannot distinguish stale tool '
+          'events from live ones',
     );
 
     await tester.pumpWidget(const SizedBox.shrink());
@@ -2076,10 +2122,12 @@ class _FakeEventSource implements TuringEventSource {
 
   final Stream<TuringEvent> _events;
   bool closed = false;
+  int connectCount = 0;
   int? lastSequence;
 
   @override
   Stream<TuringEvent> connect({required String sessionId, int? lastSequence}) {
+    connectCount++;
     this.lastSequence = lastSequence;
     return _events;
   }
