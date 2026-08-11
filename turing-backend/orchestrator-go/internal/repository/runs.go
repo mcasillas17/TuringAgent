@@ -73,7 +73,8 @@ func (r *Repository) CompleteRun(ctx context.Context, runID string, assistantMes
 			execution_active = 0,
 			execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
 			execution_state = 'exited',
-			execution_lease_expires_at = NULL
+			execution_lease_expires_at = NULL,
+			execution_lease_expires_at_ns = NULL
 		WHERE id = ? AND status IN ('running','waiting_approval')
 	`, finishedAt, finishedAt, runID)
 	if err != nil {
@@ -91,7 +92,7 @@ func (r *Repository) CompleteRun(ctx context.Context, runID string, assistantMes
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'completed', finished_at = ? WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, runID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'completed', finished_at = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, runID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -115,7 +116,8 @@ func (r *Repository) CompleteRunWithEvent(ctx context.Context, runID string, ass
 			execution_active = 0,
 			execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
 			execution_state = 'exited',
-			execution_lease_expires_at = NULL
+			execution_lease_expires_at = NULL,
+			execution_lease_expires_at_ns = NULL
 		WHERE id = ? AND status IN ('running','waiting_approval')
 	`, finishedAt, finishedAt, runID)
 	if err != nil {
@@ -133,7 +135,7 @@ func (r *Repository) CompleteRunWithEvent(ctx context.Context, runID string, ass
 			return nil, err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'completed', finished_at = ? WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, runID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'completed', finished_at = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, runID); err != nil {
 		return nil, err
 	}
 	events := make([]Event, 0, 2)
@@ -178,7 +180,8 @@ func (r *Repository) FailRun(ctx context.Context, runID string, code string, mes
 			execution_active = 0,
 			execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
 			execution_state = 'exited',
-			execution_lease_expires_at = NULL
+			execution_lease_expires_at = NULL,
+			execution_lease_expires_at_ns = NULL
 		WHERE id = ? AND status IN ('queued','running','waiting_approval')
 	`, code, message, finishedAt, finishedAt, runID)
 	if err != nil {
@@ -190,7 +193,7 @@ func (r *Repository) FailRun(ctx context.Context, runID string, code string, mes
 	if err := failPendingApprovalLifecycleTx(ctx, tx, runID, code, message, finishedAt); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'failed', finished_at = ?, error_code = ?, error_message = ? WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, code, message, runID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'failed', finished_at = ?, error_code = ?, error_message = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, code, message, runID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -216,7 +219,8 @@ func (r *Repository) FailRunWithEvent(ctx context.Context, runID string, code st
 			execution_active = 0,
 			execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
 			execution_state = 'exited',
-			execution_lease_expires_at = NULL
+			execution_lease_expires_at = NULL,
+			execution_lease_expires_at_ns = NULL
 		WHERE id = ? AND status IN ('queued','running','waiting_approval')
 	`, code, message, finishedAt, finishedAt, runID)
 	if err != nil {
@@ -228,7 +232,7 @@ func (r *Repository) FailRunWithEvent(ctx context.Context, runID string, code st
 	if err := failPendingApprovalLifecycleTx(ctx, tx, runID, code, message, finishedAt); err != nil {
 		return Event{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'failed', finished_at = ?, error_code = ?, error_message = ? WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, code, message, runID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'failed', finished_at = ?, error_code = ?, error_message = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, code, message, runID); err != nil {
 		return Event{}, err
 	}
 	event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.failed", payloadJSON, finishedAt)
@@ -258,7 +262,7 @@ func (r *Repository) CancelRun(ctx context.Context, runID string, reason string)
 	if err := failPendingApprovalLifecycleTx(ctx, tx, runID, "cancelled", reason, finishedAt); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'cancelled', finished_at = ?, error_code = 'cancelled', error_message = ? WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, reason, runID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'cancelled', finished_at = ?, error_code = 'cancelled', error_message = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, reason, runID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -276,7 +280,8 @@ func (r *Repository) AcknowledgeExecutionExit(ctx context.Context, runID string)
 		SET execution_active = 0,
 			execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
 			execution_state = 'exited',
-			execution_lease_expires_at = NULL
+			execution_lease_expires_at = NULL,
+			execution_lease_expires_at_ns = NULL
 		WHERE id = ? AND status IN ('completed', 'failed', 'cancelled') AND execution_active = 1
 	`, acknowledgedAt, runID)
 	if err != nil {
@@ -319,7 +324,7 @@ func (r *Repository) CancelRunWithEvent(ctx context.Context, runID string, reaso
 	if err := failPendingApprovalLifecycleTx(ctx, tx, runID, "cancelled", reason, finishedAt); err != nil {
 		return Event{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'cancelled', finished_at = ?, error_code = 'cancelled', error_message = ? WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, reason, runID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'cancelled', finished_at = ?, error_code = 'cancelled', error_message = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, reason, runID); err != nil {
 		return Event{}, err
 	}
 	event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.cancelled", payloadJSON, finishedAt)

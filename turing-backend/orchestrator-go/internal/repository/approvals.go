@@ -150,7 +150,8 @@ func (r *Repository) GetApprovalByToolCall(ctx context.Context, runID string, to
 
 func (r *Repository) GetPendingApprovalForRun(ctx context.Context, runID string) (ApprovalRecord, error) {
 	var approvalID string
-	if err := r.db.QueryRowContext(ctx, `SELECT id FROM approvals WHERE run_id = ? AND status = 'pending' ORDER BY created_at DESC, id DESC LIMIT 1`, runID).Scan(&approvalID); err != nil {
+	query := `SELECT id FROM approvals WHERE run_id = ? AND status = 'pending' ORDER BY ` + sqliteTimestampNanos("created_at") + ` DESC, id DESC LIMIT 1`
+	if err := r.db.QueryRowContext(ctx, query, runID).Scan(&approvalID); err != nil {
 		return ApprovalRecord{}, err
 	}
 	return approvalByID(ctx, r.db, approvalID)
@@ -322,7 +323,7 @@ func (r *Repository) terminalizeApproval(
 		}
 		result, err = tx.ExecContext(ctx, `
 			UPDATE jobs
-			SET status = 'failed', finished_at = ?, error_code = ?, error_message = ?, lease_owner = NULL, lease_expires_at = NULL
+			SET status = 'failed', finished_at = ?, error_code = ?, error_message = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL
 			WHERE run_id = ? AND status IN ('pending', 'in_progress')
 		`, decidedAt, errorCode, errorMessage, record.RunID)
 		if err != nil {

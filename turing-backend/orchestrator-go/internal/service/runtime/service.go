@@ -198,6 +198,14 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 			}
 			release, err := connectedWorker.beginUpdate(update)
 			if err != nil {
+				ignored, duplicateErr := s.isLateMatchingTerminalUpdate(ctx, update)
+				if duplicateErr != nil {
+					recvErr <- duplicateErr
+					return
+				}
+				if ignored {
+					continue
+				}
 				recvErr <- err
 				return
 			}
@@ -512,6 +520,49 @@ func (s *Server) DispatchPending(ctx context.Context) error {
 	return nil
 }
 
+func (s *Server) RecoverOrphanedAssignments(ctx context.Context) error {
+	recoveryCtx, cancel := withDefaultTimeout(ctx, 5*time.Second)
+	defer cancel()
+	assignments, err := s.repo.RecoverableAssignments(recoveryCtx, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	recovered := false
+	for _, assignment := range assignments {
+		if s.hasLiveAssignment(assignment) {
+			continue
+		}
+		result, err := s.repo.RecoverAssignment(recoveryCtx, assignment)
+		if err != nil {
+			return err
+		}
+		if result.RunFailedEvent.EventID != "" {
+			s.publishEvent(result.RunFailedEvent)
+		}
+		recovered = recovered || result.Requeued || result.Cleared
+	}
+	if recovered {
+		return s.DispatchPending(recoveryCtx)
+	}
+	return nil
+}
+
+func (s *Server) RunRecoveryLoop(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_ = s.RecoverOrphanedAssignments(ctx)
+		}
+	}
+}
+
 type workerSnapshot struct {
 	workerID string
 	worker   *worker
@@ -525,6 +576,18 @@ func (s *Server) snapshotWorkers() []workerSnapshot {
 		workers = append(workers, workerSnapshot{workerID: workerID, worker: worker})
 	}
 	return workers
+}
+
+func (s *Server) hasLiveAssignment(candidate repository.Assignment) bool {
+	for _, entry := range s.snapshotWorkers() {
+		if entry.workerID != candidate.WorkerID {
+			continue
+		}
+		if entry.worker.hasAssignmentAttempt(candidate.RunID, candidate.AttemptID) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) dispatchToWorker(ctx context.Context, workerID string, worker *worker) (assigned bool, noJob bool, err error) {
@@ -558,12 +621,24 @@ func (s *Server) CancelRun(ctx context.Context, runID string, reason string) {
 	}
 	owner := s.workerForRun(runID)
 	if owner == nil {
+		s.releaseUnownedTerminalRun(ctx, runID)
 		return
 	}
 	sendCtx, cancel := withDefaultTimeout(ctx, 5*time.Second)
 	defer cancel()
 	command := &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunCancelled{RunCancelled: &turingv1.RuntimeRunCancelled{RunId: runID, Reason: reason}}}
 	_ = owner.send(sendCtx, command)
+}
+
+func (s *Server) releaseUnownedTerminalRun(ctx context.Context, runID string) {
+	run, err := s.repo.GetRun(ctx, runID)
+	if err != nil || !isTerminalRunStatus(run.Status) {
+		return
+	}
+	if err := s.repo.AcknowledgeExecutionExit(ctx, runID); err != nil {
+		return
+	}
+	_ = s.DispatchPending(ctx)
 }
 
 func (s *Server) workerForRun(runID string) *worker {
@@ -632,6 +707,13 @@ func (w *worker) hasAssignment(runID string) bool {
 	defer w.mu.Unlock()
 	_, ok := w.assignments[runID]
 	return ok
+}
+
+func (w *worker) hasAssignmentAttempt(runID string, attemptID string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	assignment, ok := w.assignments[runID]
+	return ok && (attemptID == "" || assignment.attemptID == attemptID)
 }
 
 func (w *worker) assignmentForRun(runID string) (assignment, bool) {
@@ -783,13 +865,43 @@ func (s *Server) handleRunCancelledAck(ctx context.Context, ack *turingv1.Runtim
 	if err != nil {
 		return err
 	}
-	if run.Status != "cancelled" && run.Status != "failed" {
+	if !isTerminalRunStatus(run.Status) {
 		return status.Error(codes.FailedPrecondition, "run is not cancelled")
 	}
 	if err := s.repo.AcknowledgeExecutionExit(ctx, ack.RunId); err != nil {
 		return mapRunStateError(err)
 	}
 	return nil
+}
+
+func (s *Server) isLateMatchingTerminalUpdate(ctx context.Context, update *turingv1.RuntimeUpdate) (bool, error) {
+	runID := terminalRunID(update)
+	if runID == "" {
+		return false, nil
+	}
+	run, err := s.repo.GetRun(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	switch {
+	case update.GetRunCompleted() != nil:
+		return run.Status == "completed", nil
+	case update.GetRunFailed() != nil:
+		return run.Status == "failed", nil
+	case update.GetRunCancelledAck() != nil:
+		return isTerminalRunStatus(run.Status), nil
+	default:
+		return false, nil
+	}
+}
+
+func isTerminalRunStatus(runStatus string) bool {
+	switch runStatus {
+	case "completed", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleRunCompleted(ctx context.Context, completed *turingv1.RuntimeRunCompleted) error {
@@ -1100,6 +1212,9 @@ func (s *Server) handleToolAfter(ctx context.Context, beacon *turingv1.ToolCallB
 func (s *Server) NotifyApprovalUpdated(ctx context.Context, runID string, approvalID string, approvalStatus string, approvalToken string) error {
 	owner := s.workerForRun(runID)
 	if owner == nil {
+		if approvalStatus == "denied" || approvalStatus == "expired" {
+			s.releaseUnownedTerminalRun(ctx, runID)
+		}
 		return nil
 	}
 	sendCtx, cancel := withDefaultTimeout(ctx, 5*time.Second)

@@ -37,8 +37,10 @@ type App struct {
 	AuditService    *auditsvc.Server
 	HealthService   *HealthServer
 
-	database *db.DB
-	stopOnce sync.Once
+	database     *db.DB
+	stopOnce     sync.Once
+	reaperCancel context.CancelFunc
+	reaperDone   chan struct{}
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -58,7 +60,7 @@ func New(cfg config.Config) (*App, error) {
 
 	repo := repository.New(database)
 	eventBus := eventsvc.NewBus(128)
-	recoveredEvents, err := repo.RecoverStaleAssignments(context.Background(), time.Now().UTC())
+	recoveredEvents, err := repo.RecoverAllActiveAssignments(context.Background())
 	if err != nil {
 		_ = database.Close()
 		return nil, err
@@ -106,7 +108,7 @@ func New(cfg config.Config) (*App, error) {
 	turingv1.RegisterApprovalServiceServer(internalServer, approvalService)
 	turingv1.RegisterRuntimeServiceServer(internalServer, runtimeService)
 
-	return &App{
+	application := &App{
 		PublicServer:    publicServer,
 		InternalServer:  internalServer,
 		Repository:      repo,
@@ -119,7 +121,20 @@ func New(cfg config.Config) (*App, error) {
 		AuditService:    auditService,
 		HealthService:   healthService,
 		database:        database,
-	}, nil
+		reaperDone:      make(chan struct{}),
+	}
+	reaperCtx, reaperCancel := context.WithCancel(context.Background())
+	application.reaperCancel = reaperCancel
+	if cfg.JobReaperIntervalMS > 0 {
+		go func() {
+			defer close(application.reaperDone)
+			runtimeService.RunRecoveryLoop(reaperCtx, time.Duration(cfg.JobReaperIntervalMS)*time.Millisecond)
+		}()
+	} else {
+		reaperCancel()
+		close(application.reaperDone)
+	}
+	return application, nil
 }
 
 func (a *App) Stop() {
@@ -127,6 +142,12 @@ func (a *App) Stop() {
 		return
 	}
 	a.stopOnce.Do(func() {
+		if a.reaperCancel != nil {
+			a.reaperCancel()
+		}
+		if a.reaperDone != nil {
+			<-a.reaperDone
+		}
 		var wg sync.WaitGroup
 		if a.PublicServer != nil {
 			wg.Add(1)

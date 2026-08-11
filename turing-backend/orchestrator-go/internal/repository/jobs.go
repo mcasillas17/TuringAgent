@@ -121,7 +121,9 @@ func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, 
 	if leaseDuration <= 0 {
 		leaseDuration = 5 * time.Minute
 	}
-	leaseExpiresAt := time.Now().UTC().Add(leaseDuration).Format(time.RFC3339Nano)
+	leaseExpires := time.Now().UTC().Add(leaseDuration)
+	leaseExpiresAt := FormatTimestamp(leaseExpires)
+	leaseExpiresAtNanos := leaseExpires.UnixNano()
 	assignmentAttemptID := ids.New("attempt")
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -144,7 +146,7 @@ func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, 
 	}
 	var job Job
 	var payloadJSON string
-	err = tx.QueryRowContext(ctx, `
+	claimQuery := `
 		SELECT
 			j.id,
 			j.run_id,
@@ -178,9 +180,10 @@ func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, 
 						)
 					)
 			)
-		ORDER BY j.created_at, j.id
+		ORDER BY ` + sqliteTimestampNanos("j.created_at") + `, j.id
 		LIMIT 1
-	`, agentID).Scan(
+	`
+	err = tx.QueryRowContext(ctx, claimQuery, agentID).Scan(
 		&job.JobID,
 		&job.RunID,
 		&job.SessionID,
@@ -207,9 +210,9 @@ func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, 
 	job.UserText = payload.UserText
 	result, err := tx.ExecContext(ctx, `
 		UPDATE jobs
-		SET status = 'in_progress', lease_owner = ?, lease_expires_at = ?, picked_up_at = ?, assignment_attempt_id = ?
+		SET status = 'in_progress', lease_owner = ?, lease_expires_at = ?, lease_expires_at_ns = ?, picked_up_at = ?, assignment_attempt_id = ?
 		WHERE id = ? AND status = 'pending'
-	`, leaseOwner, leaseExpiresAt, pickedUpAt, assignmentAttemptID, job.JobID)
+	`, leaseOwner, leaseExpiresAt, leaseExpiresAtNanos, pickedUpAt, assignmentAttemptID, job.JobID)
 	if err != nil {
 		return Job{}, err
 	}
@@ -225,9 +228,10 @@ func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, 
 			execution_exit_acknowledged_at = NULL,
 			execution_attempt_id = ?,
 			execution_state = 'pending_send',
-			execution_lease_expires_at = ?
+			execution_lease_expires_at = ?,
+			execution_lease_expires_at_ns = ?
 		WHERE id = ? AND status = 'queued'
-	`, pickedUpAt, leaseOwner, assignmentAttemptID, leaseExpiresAt, job.RunID)
+	`, pickedUpAt, leaseOwner, assignmentAttemptID, leaseExpiresAt, leaseExpiresAtNanos, job.RunID)
 	if err != nil {
 		return Job{}, err
 	}
@@ -298,6 +302,7 @@ func (r *Repository) requeueAssignment(ctx context.Context, assignment Assignmen
 		SET status = 'pending',
 			lease_owner = NULL,
 			lease_expires_at = NULL,
+			lease_expires_at_ns = NULL,
 			picked_up_at = NULL,
 			assignment_attempt_id = NULL,
 			attempt = attempt + 1
@@ -318,7 +323,8 @@ func (r *Repository) requeueAssignment(ctx context.Context, assignment Assignmen
 			execution_exit_acknowledged_at = NULL,
 			execution_attempt_id = NULL,
 			execution_state = 'none',
-			execution_lease_expires_at = NULL
+			execution_lease_expires_at = NULL,
+			execution_lease_expires_at_ns = NULL
 		WHERE id = ? AND status = 'running'
 	`, assignment.RunID)
 	if err != nil {

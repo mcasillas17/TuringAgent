@@ -62,7 +62,7 @@ func (s *Server) CreateApprovalForTool(ctx context.Context, runID string, toolCa
 	if err != nil {
 		return "", status.Error(codes.InvalidArgument, "tool args are not valid JSON")
 	}
-	approval, event, err := s.repo.CreateApprovalWithEvent(ctx, runID, toolCallID, agentID, toolName, argsJSON, argsHash, approvalExpiry(time.Now(), s.approvalTTL).Format(time.RFC3339Nano))
+	approval, event, err := s.repo.CreateApprovalWithEvent(ctx, runID, toolCallID, agentID, toolName, argsJSON, argsHash, repository.FormatTimestamp(approvalExpiry(time.Now(), s.approvalTTL)))
 	if err != nil {
 		return "", err
 	}

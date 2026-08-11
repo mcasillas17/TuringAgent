@@ -264,6 +264,12 @@ func TestApplyMigrationsUpgradesPopulated0002DatabaseWithNullableModelToolCallID
 	if applied != 1 {
 		t.Fatalf("0004 migration count = %d, want 1", applied)
 	}
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = '0005_timestamp_ordering'`).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if applied != 1 {
+		t.Fatalf("0005 migration count = %d, want 1", applied)
+	}
 }
 
 func applyMigration(t *testing.T, ctx context.Context, database *DB, name string) {

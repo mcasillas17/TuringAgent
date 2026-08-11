@@ -43,7 +43,8 @@ func TestRecoverStaleUncertainAssignmentFencesAndRequeuesAtInjectedCutoff(t *tes
 	}
 
 	cutoff := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
-	if _, err := database.ExecContext(ctx, `UPDATE agent_runs SET execution_lease_expires_at = ? WHERE id = ?`, cutoff.Add(-time.Second).Format(time.RFC3339Nano), enqueued.RunID); err != nil {
+	expiredLease := cutoff.Add(-time.Second)
+	if _, err := database.ExecContext(ctx, `UPDATE agent_runs SET execution_lease_expires_at = ?, execution_lease_expires_at_ns = ? WHERE id = ?`, FormatTimestamp(expiredLease), expiredLease.UnixNano(), enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repo.RecoverStaleAssignments(ctx, cutoff); err != nil {

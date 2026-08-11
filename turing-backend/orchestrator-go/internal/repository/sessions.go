@@ -39,7 +39,7 @@ type Message struct {
 }
 
 func now() string {
-	return time.Now().UTC().Format(time.RFC3339Nano)
+	return FormatTimestamp(time.Now())
 }
 
 func (r *Repository) CreateSession(ctx context.Context, title string) (Session, error) {
@@ -56,7 +56,8 @@ func (r *Repository) ListSessions(ctx context.Context, limit int) ([]Session, er
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id, title, status, created_at, updated_at FROM sessions ORDER BY updated_at DESC LIMIT ?`, limit)
+	query := `SELECT id, title, status, created_at, updated_at FROM sessions ORDER BY ` + sqliteTimestampNanos("updated_at") + ` DESC, id DESC LIMIT ?`
+	rows, err := r.db.QueryContext(ctx, query, limit)
 	if err != nil {
 		return nil, err
 	}

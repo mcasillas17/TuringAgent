@@ -57,10 +57,11 @@ type decisionWaiter struct {
 }
 
 type activeRun struct {
-	cancel context.CancelCauseFunc
-	done   chan struct{}
-	mu     sync.Mutex
-	stop   bool
+	cancel             context.CancelCauseFunc
+	done               chan struct{}
+	mu                 sync.Mutex
+	stop               bool
+	terminalReportOnce sync.Once
 }
 
 const terminalUpdateSendTimeout = 5 * time.Second
@@ -385,15 +386,15 @@ func (w *Worker) startRun(parent context.Context, stream RuntimeStream, job *tur
 		}
 		w.deleteActive(job.GetRunId())
 		if terminal != nil {
-			w.sendTerminalOrReport(runCtx, stream, terminal)
+			w.sendTerminalOnce(entry, runCtx, stream, terminal)
 			return
 		}
 		if runWasTerminalized(err) {
-			w.sendTerminalOrReport(runCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: job.GetRunId()}}})
+			w.sendTerminalOnce(entry, runCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: job.GetRunId()}}})
 			return
 		}
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(runCtx.Err(), context.Canceled) {
-			w.sendTerminalOrReport(runCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{RunId: job.GetRunId(), Code: "runtime_error", Message: err.Error(), Retryable: false}}})
+			w.sendTerminalOnce(entry, runCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{RunId: job.GetRunId(), Code: "runtime_error", Message: err.Error(), Retryable: false}}})
 		}
 	}()
 }
@@ -436,7 +437,7 @@ func (w *Worker) cancelRunWithCause(ctx context.Context, stream RuntimeStream, r
 	go func() {
 		<-entry.done
 		w.deleteActive(runID)
-		w.sendTerminalOrReport(context.Background(), stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: runID}}})
+		w.sendTerminalOnce(entry, context.Background(), stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: runID}}})
 	}()
 	return nil
 }
@@ -516,6 +517,13 @@ func (w *Worker) sendTerminalOrReport(ctx context.Context, stream RuntimeStream,
 	if err := w.sendTerminalUpdate(ctx, stream, update); err != nil {
 		w.reportFatal(err)
 	}
+}
+
+func (w *Worker) sendTerminalOnce(entry *activeRun, ctx context.Context, stream RuntimeStream, update *turingv1.RuntimeUpdate) {
+	if entry == nil || !entry.claimTerminalReport() {
+		return
+	}
+	w.sendTerminalOrReport(ctx, stream, update)
 }
 
 func (w *Worker) setFatalChannel(ch chan error) {
@@ -661,4 +669,12 @@ func (r *activeRun) isStopping() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.stop
+}
+
+func (r *activeRun) claimTerminalReport() bool {
+	claimed := false
+	r.terminalReportOnce.Do(func() {
+		claimed = true
+	})
+	return claimed
 }
