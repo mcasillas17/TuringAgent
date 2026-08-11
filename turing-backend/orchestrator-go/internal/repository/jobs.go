@@ -146,7 +146,7 @@ func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, 
 	if err != nil {
 		return Job{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if globalLimit > 0 {
 		var active int
 		if err := tx.QueryRowContext(ctx, `
@@ -291,7 +291,7 @@ func (r *Repository) requeueAssignment(ctx context.Context, assignment Assignmen
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var attemptID, executionState string
 	var workerID sql.NullString
 	err = tx.QueryRowContext(ctx, `

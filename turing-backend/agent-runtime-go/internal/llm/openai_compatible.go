@@ -153,9 +153,7 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 			if field != "data" {
 				continue
 			}
-			if strings.HasPrefix(value, " ") {
-				value = value[1:]
-			}
+			value = strings.TrimPrefix(value, " ")
 			additionalBytes := len(value)
 			if len(dataLines) > 0 {
 				additionalBytes++
@@ -255,10 +253,11 @@ func openAIMessages(messages []ChatMessage, aliases map[string]string) ([]openAI
 			Content: &content,
 			Name:    message.Name,
 		}
-		if message.Role == "tool" {
+		switch message.Role {
+		case "tool":
 			result.Name = ""
 			result.ToolCallID = message.ToolCallID
-		} else if message.Role == "assistant" {
+		case "assistant":
 			if message.Content == "" && len(message.ToolCalls) > 0 {
 				result.Content = nil
 			}

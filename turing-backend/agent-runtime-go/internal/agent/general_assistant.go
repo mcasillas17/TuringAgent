@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"strings"
 	"sync"
@@ -646,15 +645,7 @@ func retryableProviderStartError(err error) bool {
 		return false
 	}
 	var invalidHostError url.InvalidHostError
-	if errors.As(err, &invalidHostError) {
-		return false
-	}
-
-	var networkError net.Error
-	if errors.As(err, &networkError) && (networkError.Timeout() || networkError.Temporary()) {
-		return true
-	}
-	return true
+	return !errors.As(err, &invalidHostError)
 }
 
 func (a *GeneralAssistant) modelTimeout() time.Duration {

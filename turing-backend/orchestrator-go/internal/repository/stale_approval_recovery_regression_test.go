@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -82,4 +83,22 @@ func TestRecoverStaleApprovedAuthorizationTerminalizesInsteadOfRequeueing(t *tes
 	if toolStatus != "failed" || jobStatus != "failed" || jobCode.String != "side_effect_uncertain" {
 		t.Fatalf("stale approval terminal state tool=%q job=%q/%q", toolStatus, jobStatus, jobCode.String)
 	}
+	replayed, _, err := repo.ReplayEvents(ctx, enqueued.SessionID, 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range replayed {
+		if event.Type != "tool.call.failed" {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["error"] != "Stale assignment may have executed an approved tool call" {
+			t.Fatalf("stale tool failure error = %#v, want string", payload["error"])
+		}
+		return
+	}
+	t.Fatal("stale recovery did not persist tool.call.failed")
 }

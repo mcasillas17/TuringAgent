@@ -150,7 +150,7 @@ func TestTerminalRunEmitsFailureEventForActiveSafeToolCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	if payload["toolCallId"] != "call_safe_active" || payload["modelToolCallId"] != "model_safe_active" ||
-		payload["reason"] != "run_cancelled" {
+		payload["reason"] != "run_cancelled" || payload["error"] != "client_cancelled" {
 		t.Fatalf("safe tool failure payload = %#v", payload)
 	}
 }

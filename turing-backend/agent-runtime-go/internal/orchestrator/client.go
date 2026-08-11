@@ -10,8 +10,10 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/memory"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 type Client struct {
@@ -158,26 +160,40 @@ func (c *Client) WaitForApprovalToken(ctx context.Context, approvalID string, po
 	for {
 		state, err := c.GetApprovalState(ctx, approvalID)
 		if err != nil {
-			return "", err
-		}
-		switch state.GetStatus() {
-		case turingv1.ApprovalStatus_APPROVAL_STATUS_APPROVED:
-			if state.GetApprovalToken() == "" {
-				return "", errors.New("approval token is missing")
+			if !isTransientApprovalPollError(ctx, err) {
+				return "", err
 			}
-			return state.GetApprovalToken(), nil
-		case turingv1.ApprovalStatus_APPROVAL_STATUS_DENIED:
-			return "", terminalApprovalError{message: "approval denied"}
-		case turingv1.ApprovalStatus_APPROVAL_STATUS_EXPIRED:
-			return "", terminalApprovalError{message: "approval expired"}
-		case turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED:
-			return "", errors.New("approval already consumed")
+		} else {
+			switch state.GetStatus() {
+			case turingv1.ApprovalStatus_APPROVAL_STATUS_APPROVED:
+				if state.GetApprovalToken() == "" {
+					return "", errors.New("approval token is missing")
+				}
+				return state.GetApprovalToken(), nil
+			case turingv1.ApprovalStatus_APPROVAL_STATUS_DENIED:
+				return "", terminalApprovalError{message: "approval denied"}
+			case turingv1.ApprovalStatus_APPROVAL_STATUS_EXPIRED:
+				return "", terminalApprovalError{message: "approval expired"}
+			case turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED:
+				return "", errors.New("approval already consumed")
+			}
 		}
 		select {
 		case <-ctx.Done():
 			return "", fmt.Errorf("approval timed out: %w", ctx.Err())
 		case <-ticker.C:
 		}
+	}
+}
+
+func isTransientApprovalPollError(ctx context.Context, err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.ResourceExhausted, codes.Aborted:
+		return true
+	case codes.DeadlineExceeded:
+		return ctx.Err() == nil
+	default:
+		return false
 	}
 }
 

@@ -115,7 +115,7 @@ func TestRecordAuditUsesDeterministicallySortedFixedWidthTimestampsAtHighVolume(
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var previous time.Time
 	count := 0
 	for rows.Next() {

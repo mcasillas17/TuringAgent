@@ -287,7 +287,7 @@ func classifyListToolsError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if direct := directContextError(nil, err); direct != nil {
+	if direct := directContextError(context.Background(), err); direct != nil {
 		return direct
 	}
 	var classified RetryableError

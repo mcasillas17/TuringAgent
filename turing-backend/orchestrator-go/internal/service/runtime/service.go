@@ -31,6 +31,7 @@ const (
 	defaultMaxConcurrentRuns = 1
 	maxWorkerConcurrentRuns  = 128
 	commandSendTimeout       = 5 * time.Second
+	commandSendCancelGrace   = 50 * time.Millisecond
 )
 
 type Server struct {
@@ -123,6 +124,20 @@ func (s *runtimeCommandSender) send(ctx context.Context, command *turingv1.Runti
 	case err := <-result:
 		return err
 	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.Canceled) {
+			timer := time.NewTimer(commandSendCancelGrace)
+			select {
+			case err := <-result:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return err
+			case <-timer.C:
+			}
+		}
 		s.closed.Store(true)
 		return ctx.Err()
 	}
@@ -839,13 +854,6 @@ func (w *worker) hasAssignment(runID string) bool {
 	return ok
 }
 
-func (w *worker) hasAssignmentAttempt(runID string, attemptID string) bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	assignment, ok := w.assignments[runID]
-	return ok && (attemptID == "" || assignment.attemptID == attemptID)
-}
-
 func (w *worker) hasLiveAssignmentAttempt(runID string, attemptID string, now time.Time, leaseDuration time.Duration) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -1396,6 +1404,7 @@ func (s *Server) denyToolBefore(ctx context.Context, beacon *turingv1.ToolCallBe
 		"serverName": beaconServerName(beacon),
 		"toolName":   beacon.ToolName,
 		"reason":     reason,
+		"error":      reason,
 	}
 	addModelToolCallID(deniedPayload, beacon)
 	event, err := s.appendToolEvent(ctx, run, "tool.call.denied", deniedPayload)
@@ -1458,7 +1467,14 @@ func (s *Server) handleToolAfter(ctx context.Context, beacon *turingv1.ToolCallB
 	}
 	addModelToolCallID(payload, beacon)
 	if beacon.Error != nil {
-		payload["error"] = map[string]any{"code": beacon.Error.Code, "message": beacon.Error.Message}
+		errorText := beacon.Error.Message
+		if errorText == "" {
+			errorText = beacon.Error.Code
+		}
+		payload["error"] = errorText
+		if beacon.Error.Code != "" {
+			payload["errorCode"] = beacon.Error.Code
+		}
 	}
 	payloadJSON, err := safejson.MarshalCanonical(payload)
 	if err != nil {

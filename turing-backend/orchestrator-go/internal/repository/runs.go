@@ -68,7 +68,7 @@ func (r *Repository) CompleteRun(ctx context.Context, runID string, assistantMes
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	result, err := tx.ExecContext(ctx, `
 		UPDATE agent_runs
 		SET status = 'completed',
@@ -179,7 +179,7 @@ func (r *Repository) FailRun(ctx context.Context, runID string, code string, mes
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	result, err := tx.ExecContext(ctx, `
 		UPDATE agent_runs
 		SET status = 'failed',
@@ -310,7 +310,7 @@ func (r *Repository) AcknowledgeExecutionExit(ctx context.Context, runID string)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	result, err := tx.ExecContext(ctx, `
 		UPDATE agent_runs
 		SET execution_active = 0,
@@ -437,14 +437,12 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 	for rows.Next() {
 		var approval approvalToRevoke
 		if err := rows.Scan(&approval.id, &approval.toolCallID, &approval.toolName, &approval.modelToolCallID); err != nil {
-			rows.Close()
-			return err
+			return errors.Join(err, rows.Close())
 		}
 		approvals = append(approvals, approval)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
+		return errors.Join(err, rows.Close())
 	}
 	if err := rows.Close(); err != nil {
 		return err
@@ -466,14 +464,12 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 	for toolRows.Next() {
 		var toolCall toolCallToFail
 		if err := toolRows.Scan(&toolCall.id, &toolCall.toolName, &toolCall.modelToolCallID, &toolCall.approvalID); err != nil {
-			toolRows.Close()
-			return err
+			return errors.Join(err, toolRows.Close())
 		}
 		toolCalls = append(toolCalls, toolCall)
 	}
 	if err := toolRows.Err(); err != nil {
-		toolRows.Close()
-		return err
+		return errors.Join(err, toolRows.Close())
 	}
 	if err := toolRows.Close(); err != nil {
 		return err
@@ -524,9 +520,8 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 			"toolName":   toolCall.toolName,
 			"status":     "failed",
 			"reason":     code,
-			"error": map[string]any{
-				"code": code, "message": message,
-			},
+			"error":      message,
+			"errorCode":  code,
 		}
 		if toolCall.modelToolCallID != "" {
 			payload["modelToolCallId"] = toolCall.modelToolCallID

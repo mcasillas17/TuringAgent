@@ -14,7 +14,9 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/memory"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -402,6 +404,55 @@ func TestWaitForApprovalTokenContextDeadlineIsNotTerminalDenial(t *testing.T) {
 	}
 }
 
+func TestWaitForApprovalTokenRetriesIntermittentTransientGRPCErrors(t *testing.T) {
+	for _, code := range []codes.Code{
+		codes.Unavailable,
+		codes.DeadlineExceeded,
+		codes.ResourceExhausted,
+		codes.Aborted,
+	} {
+		t.Run(code.String(), func(t *testing.T) {
+			clientState := &approvalStateClient{
+				status:        turingv1.ApprovalStatus_APPROVAL_STATUS_APPROVED,
+				approvalToken: "approval-token",
+				rpcErrors:     []error{status.Error(code, "transient")},
+			}
+			client := &Client{approvals: clientState}
+
+			token, err := client.WaitForApprovalToken(context.Background(), "approval_1", time.Millisecond, time.Second)
+
+			if err != nil {
+				t.Fatalf("WaitForApprovalToken returned error: %v", err)
+			}
+			if token != "approval-token" {
+				t.Fatalf("WaitForApprovalToken token = %q, want approval-token", token)
+			}
+			if got := clientState.callCount(); got != 2 {
+				t.Fatalf("GetApprovalForRuntime calls = %d, want transient failure then success", got)
+			}
+		})
+	}
+}
+
+func TestWaitForApprovalTokenReturnsPermanentGRPCErrorImmediately(t *testing.T) {
+	permanent := status.Error(codes.PermissionDenied, "permanent")
+	clientState := &approvalStateClient{
+		status:        turingv1.ApprovalStatus_APPROVAL_STATUS_APPROVED,
+		approvalToken: "must-not-be-returned",
+		rpcErrors:     []error{permanent},
+	}
+	client := &Client{approvals: clientState}
+
+	_, err := client.WaitForApprovalToken(context.Background(), "approval_1", time.Millisecond, time.Second)
+
+	if !errors.Is(err, permanent) {
+		t.Fatalf("WaitForApprovalToken error = %v, want permanent error", err)
+	}
+	if got := clientState.callCount(); got != 1 {
+		t.Fatalf("GetApprovalForRuntime calls = %d, want one", got)
+	}
+}
+
 type messageListClient struct {
 	turingv1.SessionServiceClient
 	messages    []*turingv1.Message
@@ -418,11 +469,13 @@ func (c *messageListClient) ListMessages(
 }
 
 type approvalStateClient struct {
-	mu          sync.Mutex
-	status      turingv1.ApprovalStatus
-	statuses    []turingv1.ApprovalStatus
-	calls       int
-	minimumWait time.Duration
+	mu            sync.Mutex
+	status        turingv1.ApprovalStatus
+	statuses      []turingv1.ApprovalStatus
+	calls         int
+	minimumWait   time.Duration
+	approvalToken string
+	rpcErrors     []error
 }
 
 func (c *approvalStateClient) GetApprovalForRuntime(
@@ -439,12 +492,17 @@ func (c *approvalStateClient) GetApprovalForRuntime(
 		}
 	}
 	c.calls++
+	if len(c.rpcErrors) > 0 {
+		err := c.rpcErrors[0]
+		c.rpcErrors = c.rpcErrors[1:]
+		return nil, err
+	}
 	status := c.status
 	if len(c.statuses) > 0 {
 		status = c.statuses[0]
 		c.statuses = c.statuses[1:]
 	}
-	return &turingv1.RuntimeApprovalState{Status: status}, nil
+	return &turingv1.RuntimeApprovalState{Status: status, ApprovalToken: c.approvalToken}, nil
 }
 
 func (c *approvalStateClient) callCount() int {

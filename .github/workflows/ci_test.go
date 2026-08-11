@@ -62,6 +62,27 @@ func requireRunsIn(t *testing.T, workflow string, dir string, command string) {
 	requireContains(t, workflow, "cd "+dir+stepIndent+command)
 }
 
+func TestCIWorkflowRunsPinnedLintInRootAndNestedModules(t *testing.T) {
+	data, err := os.ReadFile("ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lintJob := requireIndentedBlock(t, string(data), "  lint:", 2)
+	requireContains(t, lintJob, `go-version: "1.25.x"`)
+	requireContains(t, lintJob, "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2")
+	if got := strings.Count(lintJob, "golangci-lint run ./..."); got != 3 {
+		t.Fatalf("lint command count = %d, want 3", got)
+	}
+	requireInOrder(t, lintJob,
+		"working-directory: .",
+		"golangci-lint run ./...",
+		"working-directory: turing-backend/mcp-files",
+		"golangci-lint run ./...",
+		"working-directory: turing-backend/mcp-system",
+		"golangci-lint run ./...",
+	)
+}
+
 func TestMCPFilesImagePreparesSandboxBeforeDroppingPrivileges(t *testing.T) {
 	data, err := os.ReadFile("../../turing-backend/mcp-files/Dockerfile")
 	if err != nil {

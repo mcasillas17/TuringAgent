@@ -71,7 +71,7 @@ func checkHealth(ctx context.Context, endpoint string) error {
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("MCP health endpoint returned %s", response.Status)
 	}

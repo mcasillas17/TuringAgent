@@ -113,7 +113,8 @@ func TestVerifyHS256ExpirationBoundary(t *testing.T) {
 
 func TestValidateRejectsConsumeReplayConflict(t *testing.T) {
 	args := map[string]any{"content": "hello", "path": "note.txt"}
-	_, dialer := startApprovalServer(t, &recordingApprovalService{err: status.Error(codes.FailedPrecondition, "approval is not approved")})
+	server := &recordingApprovalService{oneShot: true}
+	_, dialer := startApprovalServer(t, server)
 	consumer := Consumer{
 		OrchestratorGRPCAddr: "bufnet",
 		InternalToken:        "internal",
@@ -124,8 +125,37 @@ func TestValidateRejectsConsumeReplayConflict(t *testing.T) {
 		},
 	}
 	token := signTestToken(t, "secret", Claims{Iss: "turing.orchestrator", Sub: "general_assistant", Aud: "mcp-files", JTI: "appr_1", Tool: "files.create", ArgsHash: hashArgs(t, args), Exp: time.Now().Add(time.Minute).Unix(), Iat: time.Now().Unix()})
+	if err := consumer.Validate(token, "files.create", args, "general_assistant"); err != nil {
+		t.Fatalf("first validation failed: %v", err)
+	}
+	if err := consumer.Validate(token, "files.create", args, "general_assistant"); err == nil || !strings.Contains(err.Error(), "already consumed") {
+		t.Fatalf("second application validation error = %v, want consumed replay rejection", err)
+	}
+	if server.consumeCalls != 2 {
+		t.Fatalf("ConsumeApproval calls = %d, want one call per application validation", server.consumeCalls)
+	}
+}
+
+func TestValidateDoesNotRetryConsumeTransportFailureWithOneShotToken(t *testing.T) {
+	args := map[string]any{"content": "hello", "path": "note.txt"}
+	server := &recordingApprovalService{err: status.Error(codes.Unavailable, "transport interrupted")}
+	_, dialer := startApprovalServer(t, server)
+	consumer := Consumer{
+		OrchestratorGRPCAddr: "bufnet",
+		InternalToken:        "internal",
+		JWTSecret:            "secret",
+		DialOptions: []grpc.DialOption{
+			grpc.WithContextDialer(dialer),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+	}
+	token := signTestToken(t, "secret", Claims{Iss: "turing.orchestrator", Sub: "general_assistant", Aud: "mcp-files", JTI: "appr_1", Tool: "files.create", ArgsHash: hashArgs(t, args), Exp: time.Now().Add(time.Minute).Unix(), Iat: time.Now().Unix()})
+
 	if err := consumer.Validate(token, "files.create", args, "general_assistant"); err == nil {
-		t.Fatalf("expected replay/consume conflict")
+		t.Fatal("Validate returned nil error for interrupted consume")
+	}
+	if server.consumeCalls != 1 {
+		t.Fatalf("ConsumeApproval calls = %d, want no transport retry with a one-shot token", server.consumeCalls)
 	}
 }
 
@@ -231,11 +261,17 @@ type recordingApprovalService struct {
 	authorization string
 	status        turingv1.ApprovalStatus
 	err           error
+	consumeCalls  int
+	oneShot       bool
 }
 
 func (s *recordingApprovalService) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeApprovalRequest) (*turingv1.ApprovalResponse, error) {
+	s.consumeCalls++
 	if s.err != nil {
 		return nil, s.err
+	}
+	if s.oneShot && s.consumeCalls > 1 {
+		return nil, status.Error(codes.FailedPrecondition, "approval already consumed")
 	}
 	s.approvalID = req.GetApprovalId()
 	if md, ok := metadata.FromIncomingContext(ctx); ok {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -934,6 +935,9 @@ func TestApprovalLifecycleRecordsTokenAndUpdatesRun(t *testing.T) {
 	}
 	if consumed.Status != "consumed" {
 		t.Fatalf("approval status after consume = %q", consumed.Status)
+	}
+	if _, err := repo.ConsumeApproval(ctx, approval.ApprovalID, "2026-05-15T00:01:01Z"); !errors.Is(err, ErrApprovalAlreadyConsumed) {
+		t.Fatalf("second consume error = %v, want ErrApprovalAlreadyConsumed", err)
 	}
 }
 

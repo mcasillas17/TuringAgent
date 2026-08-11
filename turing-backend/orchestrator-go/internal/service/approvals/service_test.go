@@ -429,11 +429,11 @@ func TestGetApprovalForRuntimeReturnsApprovedTokenAndConsumeConsumesOnce(t *test
 		t.Fatalf("consume status = %s", consumed.Status)
 	}
 	again, err := client.ConsumeApproval(context.Background(), &turingv1.ConsumeApprovalRequest{ApprovalId: approvalID})
-	if err != nil {
-		t.Fatalf("second ConsumeApproval error = %v", err)
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("second ConsumeApproval error = %v, want FailedPrecondition", err)
 	}
-	if again.GetStatus() != turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED {
-		t.Fatalf("second ConsumeApproval response = %+v, want consumed", again)
+	if again != nil {
+		t.Fatalf("second ConsumeApproval response = %+v, want nil", again)
 	}
 }
 

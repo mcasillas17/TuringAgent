@@ -163,7 +163,7 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var got []string
 	for rows.Next() {
 		var version string
@@ -325,7 +325,7 @@ func assertFTSMessageIDs(t *testing.T, ctx context.Context, database *DB, query 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	got := make([]string, 0)
 	for rows.Next() {

@@ -1928,8 +1928,8 @@ func assertStreamedApprovalToolLifecycle(t *testing.T, events []*turingv1.ChatSt
 		t.Fatalf("approval lifecycle counts: started=%d requested=%d approved=%d consumed=%d completed=%d, want 1 each",
 			len(started), len(requested), len(approved), len(consumed), len(completed))
 	}
-	if !(startedIndex < requestedIndex && requestedIndex < approvedIndex && approvedIndex < consumedIndex &&
-		consumedIndex < completedIndex && completedIndex < messageCompletedIndex && messageCompletedIndex < runCompletedIndex) {
+	if startedIndex >= requestedIndex || requestedIndex >= approvedIndex || approvedIndex >= consumedIndex ||
+		consumedIndex >= completedIndex || completedIndex >= messageCompletedIndex || messageCompletedIndex >= runCompletedIndex {
 		t.Fatalf("approval lifecycle order: started=%d requested=%d approved=%d consumed=%d completed=%d message=%d run=%d",
 			startedIndex, requestedIndex, approvedIndex, consumedIndex, completedIndex, messageCompletedIndex, runCompletedIndex)
 	}

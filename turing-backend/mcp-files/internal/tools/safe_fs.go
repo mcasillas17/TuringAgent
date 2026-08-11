@@ -226,10 +226,6 @@ func (f FilesTools) openDirectoryPathContext(ctx context.Context, input string, 
 	return current, clean, nil
 }
 
-func (f FilesTools) openParentPath(input string, create bool) (*os.File, string, string, error) {
-	return f.openParentPathContext(context.Background(), input, create)
-}
-
 func (f FilesTools) openParentPathContext(ctx context.Context, input string, create bool) (*os.File, string, string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, "", "", err
@@ -250,10 +246,6 @@ func (f FilesTools) openParentPathContext(ctx context.Context, input string, cre
 		return nil, "", "", err
 	}
 	return parent, components[len(components)-1], clean, nil
-}
-
-func (f FilesTools) openPath(input string, flags int) (*os.File, string, error) {
-	return f.openPathContext(context.Background(), input, flags)
 }
 
 func (f FilesTools) openPathContext(ctx context.Context, input string, flags int) (*os.File, string, error) {
@@ -278,7 +270,7 @@ func (f FilesTools) openPathContext(ctx context.Context, input string, flags int
 	if err != nil {
 		return nil, "", err
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
 	}
@@ -296,10 +288,6 @@ func (f FilesTools) openPathContext(ctx context.Context, input string, flags int
 		return nil, "", err
 	}
 	return file, clean, nil
-}
-
-func (f FilesTools) openRegularFile(input string) (*os.File, string, *unix.Stat_t, error) {
-	return f.openRegularFileContext(context.Background(), input)
 }
 
 func (f FilesTools) openRegularFileContext(ctx context.Context, input string) (*os.File, string, *unix.Stat_t, error) {

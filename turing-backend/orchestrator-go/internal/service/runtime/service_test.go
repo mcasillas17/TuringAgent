@@ -2578,7 +2578,7 @@ func TestToolBeaconDeniedBeforeExactDuplicateSuppressesSideEffects(t *testing.T)
 	}
 }
 
-func TestToolBeaconSafeBeforeExactDuplicateDoesNotIssueSecondAllow(t *testing.T) {
+func TestToolBeaconSafeBeforeExactDuplicateReturnsSameAllowDecision(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.createRunningRunResult(t, "duplicate safe before")
 	args, err := structpb.NewStruct(map[string]any{"value": "hello"})
@@ -2598,8 +2598,8 @@ func TestToolBeaconSafeBeforeExactDuplicateDoesNotIssueSecondAllow(t *testing.T)
 	if err != nil {
 		t.Fatalf("duplicate safe BEFORE returned error: %v", err)
 	}
-	if duplicate.GetDecision() != turingv1.ToolPolicyDecision_DECISION_DENY || duplicate.GetReason() != "tool_call_already_allowed" {
-		t.Fatalf("duplicate safe BEFORE = %+v, want non-executing existing allowed state", duplicate)
+	if duplicate.GetDecision() != turingv1.ToolPolicyDecision_DECISION_ALLOW {
+		t.Fatalf("duplicate safe BEFORE = %+v, want same allow decision", duplicate)
 	}
 }
 

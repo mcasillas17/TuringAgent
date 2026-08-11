@@ -15,10 +15,15 @@ type DB struct {
 }
 
 func Open(path string) (*DB, error) {
-	if err := secureSQLiteFile(path, true); err != nil {
-		return nil, err
+	inMemory := path == ":memory:"
+	dsn := "file::memory:?_foreign_keys=on"
+	if !inMemory {
+		if err := secureSQLiteFile(path, true); err != nil {
+			return nil, err
+		}
+		dsn = fmt.Sprintf("file:%s?_foreign_keys=on&_journal_mode=WAL", path)
 	}
-	database, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?_foreign_keys=on&_journal_mode=WAL", path))
+	database, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -27,9 +32,11 @@ func Open(path string) (*DB, error) {
 		_ = database.Close()
 		return nil, err
 	}
-	if err := secureSQLiteArtifacts(path); err != nil {
-		_ = database.Close()
-		return nil, err
+	if !inMemory {
+		if err := secureSQLiteArtifacts(path); err != nil {
+			_ = database.Close()
+			return nil, err
+		}
 	}
 	return &DB{DB: database}, nil
 }
@@ -52,7 +59,7 @@ func secureSQLiteFile(path string, create bool) error {
 	if err != nil {
 		return fmt.Errorf("open SQLite file securely: %w", err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 
 	var stat unix.Stat_t
 	if err := unix.Fstat(fd, &stat); err != nil {

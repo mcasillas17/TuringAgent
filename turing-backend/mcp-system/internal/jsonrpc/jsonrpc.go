@@ -77,7 +77,7 @@ func DecodeRequest(reader io.Reader) (Request, *RequestError) {
 	}
 	var method string
 	if len(raw.Method) == 0 || json.Unmarshal(raw.Method, &method) != nil || strings.TrimSpace(method) == "" {
-		return Request{}, requestError(-32600, "method must be a non-empty string", nil, nil)
+		return Request{}, requestError(-32600, "method must be a non-empty string", id, nil)
 	}
 	params := map[string]any{}
 	if len(raw.Params) > 0 {

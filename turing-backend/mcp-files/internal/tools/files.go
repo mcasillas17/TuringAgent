@@ -103,7 +103,7 @@ func (f FilesTools) ReadContext(ctx context.Context, args map[string]any) (map[s
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	content, bytesRead, _, err := readBoundedContext(ctx, file, maxReadBytes+1)
 	if err != nil {
 		return nil, err
@@ -143,7 +143,7 @@ func (f FilesTools) ListContext(ctx context.Context, args map[string]any) (map[s
 	if err != nil {
 		return nil, err
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	entries := make([]safeDirectoryEntry, 0, limit+1)
 	entriesScanned := 0
 	exhausted := false
@@ -471,7 +471,7 @@ func (f FilesTools) CreateContext(ctx context.Context, args map[string]any, appr
 	if err != nil {
 		return nil, err
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	temporary, temporaryName, err := createTemporaryFile(parent, createStagingPrefix, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("stage create %q: %w", pathValue, err)
@@ -538,7 +538,7 @@ func (f FilesTools) checkCreatePreconditions(ctx context.Context, path string) e
 	if err != nil {
 		return err
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	var stat unix.Stat_t
 	err = unix.Fstatat(int(parent.Fd()), leaf, &stat, unix.AT_SYMLINK_NOFOLLOW)
 	if errors.Is(err, unix.ENOENT) {
@@ -578,7 +578,7 @@ func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, appr
 	if err != nil {
 		return nil, err
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	openFlags := unix.O_WRONLY
 	if expectedHash != "" {
 		openFlags = unix.O_RDWR
@@ -597,7 +597,7 @@ func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, appr
 		_ = unix.Close(fd)
 		return nil, errors.New("open existing file: invalid descriptor")
 	}
-	defer currentFile.Close()
+	defer func() { _ = currentFile.Close() }()
 	var originalStat unix.Stat_t
 	if err := unix.Fstat(fd, &originalStat); err != nil {
 		return nil, err

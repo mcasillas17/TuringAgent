@@ -28,6 +28,31 @@ func TestOpenCreatesSQLiteFilesWithPrivateModesRegardlessOfUmask(t *testing.T) {
 	}
 }
 
+func TestOpenMemoryDoesNotCreateFilesystemArtifact(t *testing.T) {
+	originalDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalDirectory); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
+
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	if _, err := os.Lstat(":memory:"); !os.IsNotExist(err) {
+		t.Fatalf("in-memory database created filesystem artifact: %v", err)
+	}
+}
+
 func TestOpenRestrictsExistingSQLiteFileMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.db")
 	if err := os.WriteFile(path, nil, 0644); err != nil {

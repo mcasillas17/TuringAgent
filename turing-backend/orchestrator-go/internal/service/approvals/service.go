@@ -399,6 +399,9 @@ func mapApprovalError(err error) error {
 	if errors.Is(err, sql.ErrNoRows) {
 		return status.Error(codes.NotFound, "approval not found")
 	}
+	if errors.Is(err, repository.ErrApprovalAlreadyConsumed) {
+		return status.Error(codes.FailedPrecondition, "approval already consumed")
+	}
 	if strings.Contains(err.Error(), "not pending") || strings.Contains(err.Error(), "not approved") || strings.Contains(err.Error(), "not waiting") || strings.Contains(err.Error(), "not found for approval") {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	}

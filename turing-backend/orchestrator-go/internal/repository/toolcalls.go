@@ -58,7 +58,7 @@ func (r *Repository) RecordToolCallBeforeNew(ctx context.Context, record ToolCal
 	if err != nil {
 		return ToolCallBeforeResult{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	result, err := recordToolCallBeforeTx(ctx, tx, record, agentID, serverName, toolName, argsJSON, argsHash)
 	if err != nil {
 		return ToolCallBeforeResult{}, err
@@ -74,7 +74,7 @@ func (r *Repository) RecordToolCallBeforeWithEvent(ctx context.Context, record T
 	if err != nil {
 		return ToolCallBeforeResult{}, Event{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	result, err := recordToolCallBeforeTx(ctx, tx, record, agentID, serverName, toolName, argsJSON, argsHash)
 	if err != nil {
 		return ToolCallBeforeResult{}, Event{}, err
@@ -137,7 +137,7 @@ func toolCallEventExistsTx(ctx context.Context, tx *sql.Tx, runID string, eventT
 	if err != nil {
 		return false, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var payloadJSON string
 		if err := rows.Scan(&payloadJSON); err != nil {
@@ -162,7 +162,7 @@ func (r *Repository) RecordToolCallAfter(ctx context.Context, record ToolCallAft
 	if err != nil {
 		return false, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var serverName, toolName, argsHash, currentStatus, resultSummary, errorCode, errorMessage string
 	var modelToolCallID, approvalID sql.NullString
 	var durationMS int64
@@ -236,7 +236,7 @@ func (r *Repository) RecordToolCallAfterWithEvent(ctx context.Context, record To
 	if err != nil {
 		return false, Event{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var serverName, toolName, argsHash, currentStatus, resultSummary, errorCode, errorMessage, runStatus, sessionID, traceID, workerID string
 	var modelToolCallID, approvalID sql.NullString
 	var durationMS int64
@@ -272,6 +272,16 @@ func (r *Repository) RecordToolCallAfterWithEvent(ctx context.Context, record To
 		return false, Event{}, err
 	}
 	if cleanup {
+		if err := tx.Commit(); err != nil {
+			return false, Event{}, err
+		}
+		return false, Event{}, nil
+	}
+	safeCleanup, err := terminalSafeToolCallCleanupAllowed(ctx, tx, approvalID, currentStatus, runStatus, workerID, resultSummary, record)
+	if err != nil {
+		return false, Event{}, err
+	}
+	if safeCleanup {
 		if err := tx.Commit(); err != nil {
 			return false, Event{}, err
 		}
@@ -357,6 +367,46 @@ func terminalApprovalCleanupAllowed(ctx context.Context, tx *sql.Tx, approvalID 
 	}
 	return (currentStatus == "denied" && approvalStatus == "denied") ||
 		(currentStatus == "failed" && approvalStatus == "expired"), nil
+}
+
+func terminalSafeToolCallCleanupAllowed(ctx context.Context, tx *sql.Tx, approvalID sql.NullString, currentStatus string, runStatus string, workerID string, resultSummary string, record ToolCallAfterRecord) (bool, error) {
+	if approvalID.Valid ||
+		currentStatus != "failed" ||
+		record.Status != "failed" ||
+		record.WorkerID == "" ||
+		record.WorkerID != workerID ||
+		record.ResultSummary != resultSummary {
+		return false, nil
+	}
+	switch runStatus {
+	case "completed", "failed", "cancelled":
+	default:
+		return false, nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT payload_json FROM events WHERE run_id = ? AND type = 'tool.call.failed'`, record.RunID)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var payloadJSON string
+		if err := rows.Scan(&payloadJSON); err != nil {
+			return false, err
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+			return false, err
+		}
+		if toolCallID, _ := payload["toolCallId"].(string); toolCallID == record.ToolCallID {
+			if reason, _ := payload["reason"].(string); reason != "" {
+				return true, nil
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 func toolCallCanComplete(status string) bool {

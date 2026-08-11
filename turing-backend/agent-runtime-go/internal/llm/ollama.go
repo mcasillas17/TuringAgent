@@ -452,10 +452,11 @@ func ollamaMessages(messages []ChatMessage) []ollamaMessage {
 	converted := make([]ollamaMessage, 0, len(messages))
 	for _, message := range messages {
 		result := ollamaMessage{Role: message.Role, Content: message.Content}
-		if message.Role == "tool" {
+		switch message.Role {
+		case "tool":
 			result.ToolName = message.Name
 			result.ToolCallID = message.ToolCallID
-		} else if message.Role == "assistant" {
+		case "assistant":
 			for index, call := range message.ToolCalls {
 				arguments := call.Arguments
 				if arguments == nil {

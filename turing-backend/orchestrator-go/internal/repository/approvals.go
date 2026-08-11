@@ -10,7 +10,10 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 )
 
-var ErrApprovalExpired = errors.New("approval expired")
+var (
+	ErrApprovalExpired         = errors.New("approval expired")
+	ErrApprovalAlreadyConsumed = errors.New("approval already consumed")
+)
 
 type ApprovalRecord struct {
 	ApprovalID      string
@@ -101,7 +104,7 @@ func (r *Repository) CreateApprovalWithEvent(ctx context.Context, runID string, 
 	if err != nil {
 		return ApprovalRecord{}, Event{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var nullableToolCallID any
 	if toolCallID != "" {
 		nullableToolCallID = toolCallID
@@ -173,7 +176,7 @@ func (r *Repository) ApproveApprovalWithEvent(ctx context.Context, approvalID st
 	if err != nil {
 		return ApprovalTerminalization{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	record, err := approvalByID(ctx, tx, approvalID)
 	if err != nil {
 		return ApprovalTerminalization{}, err
@@ -258,7 +261,7 @@ func (r *Repository) terminalizeApproval(
 	if err != nil {
 		return ApprovalTerminalization{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	record, err := approvalByID(ctx, tx, approvalID)
 	if err != nil {
 		return ApprovalTerminalization{}, err
@@ -285,7 +288,7 @@ func (r *Repository) terminalizeApproval(
 		return ApprovalTerminalization{}, err
 	}
 	lateRuntimeFailure := runStatus == "failed"
-	if runStatus != "waiting_approval" && !lateRuntimeFailure && !(approvedExpiration && runStatus == "running") {
+	if runStatus != "waiting_approval" && !lateRuntimeFailure && (!approvedExpiration || runStatus != "running") {
 		return ApprovalTerminalization{}, errors.New("run not found for approval")
 	}
 	if lateRuntimeFailure {
@@ -456,16 +459,13 @@ func (r *Repository) ConsumeApprovalWithEvent(ctx context.Context, approvalID st
 	if err != nil {
 		return ApprovalTerminalization{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	current, err := approvalByID(ctx, tx, approvalID)
 	if err != nil {
 		return ApprovalTerminalization{}, err
 	}
 	if current.Status == "consumed" {
-		if err := tx.Commit(); err != nil {
-			return ApprovalTerminalization{}, err
-		}
-		return ApprovalTerminalization{Approval: current}, nil
+		return ApprovalTerminalization{Approval: current}, ErrApprovalAlreadyConsumed
 	}
 	if current.Status != "approved" {
 		return ApprovalTerminalization{}, errors.New("approval is not approved")

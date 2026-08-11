@@ -512,22 +512,6 @@ func assertIntegerBounds(t *testing.T, tools []map[string]any, toolName, propert
 	t.Fatalf("tool %s was not advertised", toolName)
 }
 
-func assertStringMaxLength(t *testing.T, advertised []map[string]any, toolName, property string, maximum int) {
-	t.Helper()
-	for _, tool := range advertised {
-		if tool["name"] != toolName {
-			continue
-		}
-		schema := tool["inputSchema"].(map[string]any)
-		definition := schema["properties"].(map[string]any)[property].(map[string]any)
-		if definition["type"] != "string" || definition["maxLength"] != maximum {
-			t.Fatalf("%s %s schema = %#v, want string maxLength %d", toolName, property, definition, maximum)
-		}
-		return
-	}
-	t.Fatalf("tool %s was not advertised", toolName)
-}
-
 func toolPropertySchema(t *testing.T, advertised []map[string]any, toolName, property string) map[string]any {
 	t.Helper()
 	for _, tool := range advertised {

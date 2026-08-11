@@ -384,9 +384,10 @@ func isNilToolLister(client ToolLister) bool {
 	}
 	value := reflect.ValueOf(client)
 	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Slice:
 		return value.IsNil()
 	default:
-		return false
+		pointerKind := reflect.TypeOf((*struct{})(nil)).Kind()
+		return value.Kind() == pointerKind && value.IsNil()
 	}
 }

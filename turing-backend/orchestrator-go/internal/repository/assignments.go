@@ -27,7 +27,7 @@ func (r *Repository) RenewAssignments(ctx context.Context, assignments []Assignm
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	renewed := 0
 	for _, assignment := range assignments {
@@ -101,7 +101,7 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 	if err != nil {
 		return AssignmentReconciliation{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	var runStatus, executionState, executionAttemptID, sessionID, traceID string
 	var workerID sql.NullString
@@ -245,14 +245,12 @@ func terminalizeStaleApprovedAuthorizationTx(
 	for rows.Next() {
 		var approval approvalAuthorization
 		if err := rows.Scan(&approval.id, &approval.toolCallID, &approval.toolName, &approval.modelToolCallID); err != nil {
-			rows.Close()
-			return AssignmentReconciliation{}, false, err
+			return AssignmentReconciliation{}, false, errors.Join(err, rows.Close())
 		}
 		approvals = append(approvals, approval)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
-		return AssignmentReconciliation{}, false, err
+		return AssignmentReconciliation{}, false, errors.Join(err, rows.Close())
 	}
 	if err := rows.Close(); err != nil {
 		return AssignmentReconciliation{}, false, err
@@ -277,14 +275,12 @@ func terminalizeStaleApprovedAuthorizationTx(
 	for toolRows.Next() {
 		var toolCall openToolCall
 		if err := toolRows.Scan(&toolCall.id, &toolCall.toolName, &toolCall.modelToolCallID, &toolCall.approvalID); err != nil {
-			toolRows.Close()
-			return AssignmentReconciliation{}, false, err
+			return AssignmentReconciliation{}, false, errors.Join(err, toolRows.Close())
 		}
 		toolCalls = append(toolCalls, toolCall)
 	}
 	if err := toolRows.Err(); err != nil {
-		toolRows.Close()
-		return AssignmentReconciliation{}, false, err
+		return AssignmentReconciliation{}, false, errors.Join(err, toolRows.Close())
 	}
 	if err := toolRows.Close(); err != nil {
 		return AssignmentReconciliation{}, false, err
@@ -377,9 +373,8 @@ func terminalizeStaleApprovedAuthorizationTx(
 			"toolName":   toolCall.toolName,
 			"status":     "failed",
 			"reason":     code,
-			"error": map[string]any{
-				"code": code, "message": message,
-			},
+			"error":      message,
+			"errorCode":  code,
 		}
 		if toolCall.modelToolCallID != "" {
 			payload["modelToolCallId"] = toolCall.modelToolCallID
@@ -557,7 +552,7 @@ func (r *Repository) RecoverAllActiveAssignments(ctx context.Context) ([]Event, 
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE agent_runs
 		SET execution_state = 'fenced'
@@ -612,7 +607,7 @@ func (r *Repository) RecoverableAssignments(ctx context.Context, cutoff time.Tim
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var assignments []Assignment
 	for rows.Next() {
 		var assignment Assignment
@@ -642,7 +637,7 @@ func (r *Repository) startupRecoveryAssignments(ctx context.Context) ([]Assignme
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var assignments []Assignment
 	for rows.Next() {
 		var assignment Assignment
