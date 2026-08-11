@@ -116,7 +116,9 @@ func (c Consumer) consume(jti string) error {
 		return err
 	}
 	if closeClient != nil {
-		defer closeClient()
+		// The connection is short-lived and the approval result is already
+		// determined by the time it closes, so a close error is not actionable.
+		defer func() { _ = closeClient() }()
 	}
 	if c.InternalToken != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.InternalToken)
@@ -145,6 +147,13 @@ func (c Consumer) approvalClient(ctx context.Context) (ApprovalClient, func() er
 	if len(options) == 0 {
 		options = []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 	}
+	// TODO: migrate to grpc.NewClient. Deliberately not a drive-by change:
+	// NewClient defaults to the DNS resolver where DialContext used passthrough,
+	// which alters name resolution for the Docker service address this consumes
+	// (ORCHESTRATOR_GRPC_ADDR). Since this is the approval-consumption path and
+	// no test exercises real dialing, the swap needs verification against the
+	// compose stack. DialContext remains supported throughout gRPC 1.x.
+	//nolint:staticcheck // SA1019: see TODO above.
 	conn, err := grpc.DialContext(ctx, c.OrchestratorGRPCAddr, options...)
 	if err != nil {
 		return nil, nil, err

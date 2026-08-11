@@ -173,3 +173,4 @@ Desktop.ini
 turing-backend/.runtime/
 data/turing.db*
 turing-backend/data/turing.db*
+.claude/worktrees/
