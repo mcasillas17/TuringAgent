@@ -57,6 +57,10 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatalf("dial bufconn: %v", err)
 	}
+	// NewClient starts the channel IDLE; DialContext connected eagerly in the
+	// background. Connect() restores that so handshake latency does not land
+	// inside a test's deadline.
+	conn.Connect()
 	t.Cleanup(func() {
 		grpcServer.Stop()
 		_ = conn.Close()

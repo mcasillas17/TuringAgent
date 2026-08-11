@@ -154,6 +154,10 @@ func (c Consumer) approvalClient() (ApprovalClient, func() error, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	// NewClient starts the channel IDLE; DialContext connected eagerly. Connect()
+	// keeps that, so the approval consume RPC does not also pay for the
+	// handshake inside its 10s budget.
+	conn.Connect()
 	return turingv1.NewApprovalServiceClient(conn), conn.Close, nil
 }
 
