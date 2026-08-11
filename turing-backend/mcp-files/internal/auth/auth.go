@@ -19,9 +19,10 @@ func AgentFromBearer(r *http.Request, systemToken string) (string, error) {
 	return "general_assistant", nil
 }
 
-// equalTokens compares in constant time. A plain != returns as soon as two bytes
-// differ, so the time it takes leaks how much of a guess was correct — enough to
-// recover a token byte by byte given enough attempts.
+// equalTokens compares in time independent of the token's CONTENT. A plain !=
+// returns as soon as two bytes differ, leaking how much of a guess was correct.
+// Note subtle.ConstantTimeCompare still returns early when the lengths differ,
+// so the length of the expected token is not hidden — the accepted tradeoff.
 func equalTokens(got string, want string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }

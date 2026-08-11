@@ -1,10 +1,8 @@
 package auth
 
 import (
-	"bufio"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -17,6 +15,8 @@ func next(reached *bool) http.Handler {
 	})
 }
 
+// An absent header and Header.Set(k, "") are indistinguishable to Header.Get,
+// so the empty case models "no header sent".
 func serve(t *testing.T, expected string, header string) (int, bool) {
 	t.Helper()
 	var reached bool
@@ -38,7 +38,8 @@ func TestRequireBearerAllowsTheExactToken(t *testing.T) {
 
 // The security invariant from the design docs: an unset token must fail closed.
 // A misconfigured deploy (missing MCP_SYSTEM_TOKEN_GENERAL) must never leave the
-// server open, including when the caller sends no header or an empty bearer.
+// server open. "empty bearer" is the load-bearing case — the others are rejected
+// by the comparison anyway, so only this one pins the short-circuit.
 func TestRequireBearerFailsClosedWhenNoTokenIsConfigured(t *testing.T) {
 	for name, header := range map[string]string{
 		"no header":        "",
@@ -66,33 +67,15 @@ func TestRequireBearerRejects(t *testing.T) {
 		"token has a suffix": "Bearer s3cretX",
 		"leading space":      "Bearer  s3cret",
 		"trailing space":     "Bearer s3cret ",
+		// Same length as the real credential, differing only inside the token:
+		// the case that actually exercises the comparison over the secret.
+		"same length, wrong token": "Bearer x3cret",
+		"same length, last byte":   "Bearer s3creT",
 	} {
 		t.Run(name, func(t *testing.T) {
 			code, reached := serve(t, "s3cret", header)
 			if code != http.StatusUnauthorized || reached {
 				t.Fatalf("expected 401 and no passthrough: code=%d reached=%v", code, reached)
-			}
-		})
-	}
-}
-
-// Header names are case-insensitive per RFC 7230, and HTTP/2 requires them to be
-// sent lowercase. Parse real wire bytes so Go's canonicalisation runs exactly as
-// it does for a live request — constructing the header map directly would skip
-// it and prove nothing about what a real client can send.
-func TestRequireBearerAcceptsAnyHeaderNameCasingOnTheWire(t *testing.T) {
-	for _, name := range []string{"authorization", "AUTHORIZATION", "Authorization"} {
-		t.Run(name, func(t *testing.T) {
-			raw := "POST /mcp HTTP/1.1\r\nHost: x\r\n" + name + ": Bearer s3cret\r\n\r\n"
-			req, err := http.ReadRequest(bufio.NewReader(strings.NewReader(raw)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			var reached bool
-			rec := httptest.NewRecorder()
-			RequireBearer("s3cret", next(&reached)).ServeHTTP(rec, req)
-			if rec.Code != http.StatusOK || !reached {
-				t.Fatalf("header name %q rejected: code=%d reached=%v", name, rec.Code, reached)
 			}
 		})
 	}

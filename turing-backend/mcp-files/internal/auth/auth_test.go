@@ -40,8 +40,12 @@ func TestAgentFromBearerFailsClosedWhenNoTokenIsConfigured(t *testing.T) {
 			if header != "" {
 				req.Header.Set("Authorization", header)
 			}
-			if _, err := AgentFromBearer(req, ""); err == nil {
+			agent, err := AgentFromBearer(req, "")
+			if err == nil {
 				t.Fatal("empty configured token did not fail closed")
+			}
+			if agent != "" {
+				t.Fatalf("rejected call still returned agent %q", agent)
 			}
 		})
 	}
@@ -56,14 +60,21 @@ func TestAgentFromBearerRejectsMalformedCredentials(t *testing.T) {
 		"token is a prefix":  "Bearer expecte",
 		"token has a suffix": "Bearer expectedX",
 		"trailing space":     "Bearer expected ",
+		// Same length as the real credential, differing only inside the token:
+		// the case that actually exercises the comparison over the secret.
+		"same length, wrong token": "Bearer expectee",
 	} {
 		t.Run(name, func(t *testing.T) {
 			req := httptest.NewRequest("POST", "/mcp", nil)
 			if header != "" {
 				req.Header.Set("Authorization", header)
 			}
-			if _, err := AgentFromBearer(req, "expected"); err == nil {
+			agent, err := AgentFromBearer(req, "expected")
+			if err == nil {
 				t.Fatalf("accepted malformed credential %q", header)
+			}
+			if agent != "" {
+				t.Fatalf("rejected call still returned agent %q", agent)
 			}
 		})
 	}
