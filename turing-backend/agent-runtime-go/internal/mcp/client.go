@@ -75,7 +75,7 @@ func (c *Client) request(ctx context.Context, method string, params map[string]a
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("MCP HTTP %d", resp.StatusCode)
 	}

@@ -63,7 +63,7 @@ func run(args []string) error {
 	// as DialContext did, so dialLocalGRPC still receives host:port verbatim.
 	conn, err := grpc.NewClient("passthrough:///"+cfg.addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(dialLocalGRPC))
 	if err != nil {
-		return fmt.Errorf("dial %s: %w", cfg.addr, err)
+		return fmt.Errorf("create client for %s: %w", cfg.addr, err)
 	}
 	conn.Connect()
 	defer func() { _ = conn.Close() }()

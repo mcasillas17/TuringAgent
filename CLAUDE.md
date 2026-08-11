@@ -15,14 +15,18 @@ This is a **multi-module** Go repo. `go build ./...` / `go test ./...` at the ro
 
 ## Verification (run the full matrix before claiming work is done)
 
+Run each from the repo root. Subshells, not `cd X && ... && cd ../..` — on failure `&&` short-circuits and strands you in the subdirectory.
+
 ```bash
 go test ./... -count=1
 go build ./...
-cd turing-backend/mcp-files && go test ./... -count=1 && go build ./cmd/server && cd ../..
-cd turing-client/turing_app && flutter test && cd ../..
+( cd turing-backend/mcp-files  && go test ./... -count=1 && go build ./cmd/server )
+( cd turing-backend/mcp-system && go test ./... -count=1 && go build ./... )   # not covered by CI
+( cd turing-client/turing_app  && flutter test )
 tools/proto/check.sh
-# if you changed turing-backend/mcp-system:
-cd turing-backend/mcp-system && go test ./... -count=1 && go build ./... && cd ../..
+golangci-lint run ./...
+( cd turing-backend/mcp-files  && golangci-lint run ./... )
+( cd turing-backend/mcp-system && golangci-lint run ./... )
 ```
 The `/verify` skill runs this matrix.
 

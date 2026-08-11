@@ -403,7 +403,7 @@ func (s *Server) normalizeRuntimeEvent(ctx context.Context, event *turingv1.Turi
 	// Clone rather than dereference: a generated message embeds protoimpl state
 	// (including a mutex), so copying it by value is unsafe and trips govet's
 	// copylocks check.
-	out, _ := proto.Clone(event).(*turingv1.TuringEvent)
+	out := proto.Clone(event).(*turingv1.TuringEvent)
 	out.SessionId = run.SessionID
 	out.TraceId = run.TraceID
 	return out, nil

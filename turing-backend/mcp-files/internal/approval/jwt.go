@@ -111,7 +111,7 @@ func (c Consumer) Validate(token string, tool string, args map[string]any, agent
 func (c Consumer) consume(jti string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	client, closeClient, err := c.approvalClient(ctx)
+	client, closeClient, err := c.approvalClient()
 	if err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ func (c Consumer) consume(jti string) error {
 	return nil
 }
 
-func (c Consumer) approvalClient(ctx context.Context) (ApprovalClient, func() error, error) {
+func (c Consumer) approvalClient() (ApprovalClient, func() error, error) {
 	if c.ApprovalClient != nil {
 		return c.ApprovalClient, nil, nil
 	}

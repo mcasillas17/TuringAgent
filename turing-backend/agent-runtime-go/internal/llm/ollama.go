@@ -49,7 +49,7 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 	out := make(chan StreamEvent)
 	go func() {
 		defer close(out)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_unavailable", Message: fmt.Sprintf("Ollama returned %d", resp.StatusCode)})
 			return

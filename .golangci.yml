@@ -23,8 +23,11 @@ linters:
     - unused
     - misspell
   exclusions:
-    paths:
-      - gen
+    # NOTE: `paths` entries are unanchored regexes matched against the whole
+    # path, so a bare `gen` also matches turing-backend/aGENt-runtime-go and
+    # silently skips that entire tree. golangci-lint already skips generated
+    # files by their header, so gen/ needs no entry at all — do not add one back
+    # without anchoring it (`^gen/`).
     rules:
       # Test files: relax unchecked-error noise.
       - path: _test\.go

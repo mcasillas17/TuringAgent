@@ -21,8 +21,15 @@ type Client struct {
 	approvals turingv1.ApprovalServiceClient
 }
 
-func Dial(ctx context.Context, addr string, token string) (*Client, error) {
-	conn, err := grpc.DialContext(ctx, addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+// Dial builds the orchestrator client. The dial is lazy: the connection is
+// established on the first RPC, and the worker loop already retries, so no
+// blocking wait is needed here.
+//
+// "passthrough:///" preserves DialContext's resolver behaviour — addr is the
+// Docker service name in ORCHESTRATOR_GRPC_ADDR and must reach the dialer
+// verbatim rather than going through NewClient's default DNS resolver.
+func Dial(_ context.Context, addr string, token string) (*Client, error) {
+	conn, err := grpc.NewClient("passthrough:///"+addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, err
 	}

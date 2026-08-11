@@ -558,6 +558,50 @@ func TestRuntimeEventUsesPersistedRunSessionAndTrace(t *testing.T) {
 	t.Fatalf("message.delta not replayed for run session: %+v", replayed)
 }
 
+// normalizeRuntimeEvent must not write through to the worker's event. It clones
+// rather than dereferencing (a generated message embeds a mutex, so copying by
+// value is unsafe), and this pins the observable half of that: the caller's
+// message keeps whatever it sent, and the returned one carries the run's
+// authoritative session/trace.
+func TestNormalizeRuntimeEventDoesNotMutateCallerEvent(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "normalize session")
+	otherSession, err := h.repo.CreateSession(context.Background(), "Other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := structpb.NewStruct(map[string]any{"delta": "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := &turingv1.TuringEvent{
+		SessionId: otherSession.SessionID,
+		RunId:     enqueued.RunID,
+		TraceId:   "trace_spoofed",
+		Type:      turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA,
+		Payload:   payload,
+	}
+
+	out, err := h.service.normalizeRuntimeEvent(context.Background(), event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out == event {
+		t.Fatal("normalizeRuntimeEvent returned the caller's event; it must return a copy")
+	}
+	// Deep, not shallow: a `*event` dereference would share this pointer (and
+	// would also be copying the message's embedded mutex).
+	if out.Payload == event.Payload {
+		t.Fatal("returned event shares the caller's payload; the copy must be deep")
+	}
+	if out.SessionId != enqueued.SessionID || out.TraceId != enqueued.TraceID {
+		t.Fatalf("returned event did not adopt the run's session/trace: %+v", out)
+	}
+	if event.SessionId != otherSession.SessionID || event.TraceId != "trace_spoofed" {
+		t.Fatalf("caller's event was mutated: %+v", event)
+	}
+}
+
 func TestRuntimeRejectsEventsWithoutRunID(t *testing.T) {
 	h := newHarness(t)
 	session, err := h.repo.CreateSession(context.Background(), "Runtime")
