@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -348,12 +350,20 @@ func TestAuthenticationFailuresAreAuditedWithoutCredentials(t *testing.T) {
 	}
 
 	var actorType, correlationID, target, payloadJSON string
-	if err := app.database.QueryRowContext(context.Background(), `
-		SELECT actor_type, correlation_id, target, payload_json
-		FROM audit_logs
-		WHERE action = 'auth.failed' AND correlation_id = ?
-	`, requestID).Scan(&actorType, &correlationID, &target, &payloadJSON); err != nil {
-		t.Fatalf("query auth audit: %v", err)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		err = app.database.QueryRowContext(context.Background(), `
+			SELECT actor_type, correlation_id, target, payload_json
+			FROM audit_logs
+			WHERE action = 'auth.failed' AND correlation_id = ?
+		`, requestID).Scan(&actorType, &correlationID, &target, &payloadJSON)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, sql.ErrNoRows) || !time.Now().Before(deadline) {
+			t.Fatalf("query auth audit: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if actorType != "client" || correlationID != requestID || target != turingv1.HealthService_Check_FullMethodName {
 		t.Fatalf("auth audit identity = actor:%q correlation:%q target:%q", actorType, correlationID, target)

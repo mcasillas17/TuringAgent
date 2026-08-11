@@ -150,7 +150,9 @@ func TestCreateApprovalForToolPersistsEventAndAudit(t *testing.T) {
 	if err := json.Unmarshal([]byte(requested.PayloadJSON), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["approvalId"] != approvalID || payload["toolName"] != "files.update" || payload["argsSummary"] == "" {
+	if payload["approvalId"] != approvalID || payload["toolName"] != "files.update" ||
+		payload["argsSummary"] != "Requested change to note.txt" ||
+		strings.Contains(payload["argsSummary"], "hello") {
 		t.Fatalf("approval.requested payload = %+v", payload)
 	}
 	var auditAction string

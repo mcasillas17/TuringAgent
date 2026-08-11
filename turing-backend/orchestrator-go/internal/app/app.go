@@ -61,7 +61,7 @@ func New(cfg config.Config) (*App, error) {
 
 	repo := repository.New(database)
 	eventBus := eventsvc.NewBus(128)
-	recoveredEvents, err := repo.RecoverAllActiveAssignments(context.Background())
+	recoveredEvents, err := repo.RecoverAllActiveAssignmentsWithLimit(context.Background(), cfg.JobMaxAttempts)
 	if err != nil {
 		_ = database.Close()
 		return nil, err
@@ -74,6 +74,7 @@ func New(cfg config.Config) (*App, error) {
 	runtimeService := runtimesvc.NewWithConfig(repo, eventBus, runtimesvc.DispatchConfig{
 		MaxConcurrentRuns: maxConcurrentRuns,
 		LeaseDuration:     time.Duration(cfg.JobTimeoutMS) * time.Millisecond,
+		MaxAttempts:       cfg.JobMaxAttempts,
 	}, approvalService)
 	sessionService := sessionsvc.New(repo, cfg)
 	eventService := eventsvc.NewServer(repo, eventBus)

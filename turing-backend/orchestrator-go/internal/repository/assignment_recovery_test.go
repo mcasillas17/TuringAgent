@@ -134,6 +134,80 @@ func TestRecoverAssignmentAtCutoffDoesNotRequeueRenewedLease(t *testing.T) {
 	}
 }
 
+func TestRecoverAssignmentAtCutoffFailsAtConfiguredMaximumAttempt(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Exhausted assignment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "exhaust retries", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-expired")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignment := Assignment{
+		JobID: claimed.JobID, RunID: claimed.RunID, WorkerID: "worker-expired", AttemptID: claimed.AssignmentAttemptID,
+	}
+	if err := repo.BeginAssignmentSend(ctx, assignment); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkAssignmentDelivered(ctx, assignment); err != nil {
+		t.Fatal(err)
+	}
+	cutoff := time.Now().UTC()
+	expired := cutoff.Add(-time.Second)
+	if _, err := database.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET execution_lease_expires_at = ?, execution_lease_expires_at_ns = ?
+		WHERE id = ?
+	`, FormatTimestamp(expired), expired.UnixNano(), enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+
+	reconciliation, err := repo.RecoverAssignmentAtCutoffWithLimit(ctx, assignment, cutoff, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciliation.Requeued || !reconciliation.Cleared {
+		t.Fatalf("exhausted reconciliation = %+v, want terminal cleanup", reconciliation)
+	}
+	var eventTypes []string
+	for _, event := range reconciliation.Events {
+		eventTypes = append(eventTypes, event.Type)
+	}
+	if want := []string{"agent.run.failed"}; !reflect.DeepEqual(eventTypes, want) {
+		t.Fatalf("exhausted recovery events = %v, want %v", eventTypes, want)
+	}
+	run, err := repo.GetRun(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "failed" || run.ExecutionActive {
+		t.Fatalf("exhausted recovery run = %+v, want failed inactive", run)
+	}
+	var jobStatus, jobErrorCode, runErrorCode string
+	var attempt int
+	if err := database.QueryRowContext(ctx, `
+		SELECT j.status, j.attempt, j.error_code, r.error_code
+		FROM jobs j
+		JOIN agent_runs r ON r.id = j.run_id
+		WHERE j.id = ?
+	`, claimed.JobID).Scan(&jobStatus, &attempt, &jobErrorCode, &runErrorCode); err != nil {
+		t.Fatal(err)
+	}
+	if jobStatus != "failed" || attempt != 1 || jobErrorCode != "job_timeout" || runErrorCode != "job_timeout" {
+		t.Fatalf("exhausted recovery job = status:%q attempt:%d job code:%q run code:%q", jobStatus, attempt, jobErrorCode, runErrorCode)
+	}
+}
+
 func TestReconcileWaitingApprovalReturnsExactLifecycleEventsInOrder(t *testing.T) {
 	database := openTestDB(t)
 	repo := New(database)

@@ -29,6 +29,7 @@ import (
 
 const (
 	defaultMaxConcurrentRuns = 1
+	defaultJobMaxAttempts    = 3
 	maxWorkerConcurrentRuns  = 128
 	commandSendTimeout       = 5 * time.Second
 	commandSendCancelGrace   = 50 * time.Millisecond
@@ -77,6 +78,7 @@ type assignment struct {
 type DispatchConfig struct {
 	MaxConcurrentRuns int
 	LeaseDuration     time.Duration
+	MaxAttempts       int
 }
 
 var errRuntimeCommandSenderClosed = errors.New("runtime command sender closed")
@@ -160,6 +162,9 @@ func NewWithConfig(repo *repository.Repository, bus *events.Bus, dispatch Dispat
 	}
 	if dispatch.LeaseDuration <= 0 {
 		dispatch.LeaseDuration = 5 * time.Minute
+	}
+	if dispatch.MaxAttempts <= 0 {
+		dispatch.MaxAttempts = defaultJobMaxAttempts
 	}
 	server := &Server{
 		repo: repo, bus: bus, approvals: approvals, audit: auditsvc.New(repo),
@@ -489,7 +494,7 @@ func (s *Server) renewWorkerLeases(ctx context.Context, workerID string, connect
 		if _, ok := renewedSet[assignment]; ok {
 			continue
 		}
-		result, err := s.repo.RecoverAssignment(ctx, assignment)
+		result, err := s.repo.RecoverAssignmentWithLimit(ctx, assignment, s.dispatch.MaxAttempts)
 		if err != nil {
 			return err
 		}
@@ -652,9 +657,9 @@ func (s *Server) reconcileAssignments(assignments []assignment, workerID string)
 	var errs []error
 	reconciled := false
 	for _, assignment := range assignments {
-		result, err := s.repo.ReconcileAssignment(ctx, repository.Assignment{
+		result, err := s.repo.ReconcileAssignmentWithLimit(ctx, repository.Assignment{
 			JobID: assignment.jobID, RunID: assignment.runID, WorkerID: workerID, AttemptID: assignment.attemptID,
-		})
+		}, s.dispatch.MaxAttempts)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("reconcile run %s for job %s: %w", assignment.runID, assignment.jobID, err))
 			continue
@@ -721,7 +726,7 @@ func (s *Server) RecoverOrphanedAssignments(ctx context.Context) error {
 				return err
 			}
 		}
-		result, err := s.repo.RecoverAssignmentAtCutoff(recoveryCtx, candidate, cutoff)
+		result, err := s.repo.RecoverAssignmentAtCutoffWithLimit(recoveryCtx, candidate, cutoff, s.dispatch.MaxAttempts)
 		if err != nil {
 			return err
 		}

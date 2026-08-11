@@ -601,7 +601,7 @@ func appendApprovalLifecycleEventTx(ctx context.Context, tx *sql.Tx, approval Ap
 		"traceId":    traceID,
 	}
 	if eventType == "approval.requested" {
-		payload["argsSummary"] = "Requested tool use"
+		payload["argsSummary"] = approvalArgsSummary(approval.ArgsJSON)
 	}
 	if approval.ModelToolCallID != "" {
 		payload["modelToolCallId"] = approval.ModelToolCallID
@@ -611,6 +611,16 @@ func appendApprovalLifecycleEventTx(ctx context.Context, tx *sql.Tx, approval Ap
 		return Event{}, err
 	}
 	return appendRunEventTx(ctx, tx, sessionID, approval.RunID, traceID, eventType, string(payloadJSON), createdAt)
+}
+
+func approvalArgsSummary(argsJSON string) string {
+	var args map[string]any
+	if err := json.Unmarshal([]byte(argsJSON), &args); err == nil {
+		if path, ok := args["path"].(string); ok && path != "" {
+			return "Requested change to " + path
+		}
+	}
+	return "Requested tool use"
 }
 
 func expectOneRow(result sql.Result, message string) error {

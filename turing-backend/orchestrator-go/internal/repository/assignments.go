@@ -16,6 +16,8 @@ type AssignmentReconciliation struct {
 	Events   []Event
 }
 
+const defaultAssignmentMaxAttempts = 3
+
 func (r *Repository) RenewAssignments(ctx context.Context, assignments []Assignment, leaseExpires time.Time) ([]Assignment, error) {
 	if len(assignments) == 0 {
 		return nil, nil
@@ -89,19 +91,34 @@ func (r *Repository) RenewAssignments(ctx context.Context, assignments []Assignm
 }
 
 func (r *Repository) ReconcileAssignment(ctx context.Context, assignment Assignment) (AssignmentReconciliation, error) {
-	return r.reconcileAssignment(ctx, assignment, false, nil)
+	return r.ReconcileAssignmentWithLimit(ctx, assignment, defaultAssignmentMaxAttempts)
+}
+
+func (r *Repository) ReconcileAssignmentWithLimit(ctx context.Context, assignment Assignment, maxAttempts int) (AssignmentReconciliation, error) {
+	return r.reconcileAssignment(ctx, assignment, false, nil, maxAttempts)
 }
 
 func (r *Repository) RecoverAssignment(ctx context.Context, assignment Assignment) (AssignmentReconciliation, error) {
-	return r.reconcileAssignment(ctx, assignment, true, nil)
+	return r.RecoverAssignmentWithLimit(ctx, assignment, defaultAssignmentMaxAttempts)
+}
+
+func (r *Repository) RecoverAssignmentWithLimit(ctx context.Context, assignment Assignment, maxAttempts int) (AssignmentReconciliation, error) {
+	return r.reconcileAssignment(ctx, assignment, true, nil, maxAttempts)
 }
 
 func (r *Repository) RecoverAssignmentAtCutoff(ctx context.Context, assignment Assignment, cutoff time.Time) (AssignmentReconciliation, error) {
-	cutoff = cutoff.UTC()
-	return r.reconcileAssignment(ctx, assignment, true, &cutoff)
+	return r.RecoverAssignmentAtCutoffWithLimit(ctx, assignment, cutoff, defaultAssignmentMaxAttempts)
 }
 
-func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignment, staleRecovery bool, cutoff *time.Time) (AssignmentReconciliation, error) {
+func (r *Repository) RecoverAssignmentAtCutoffWithLimit(ctx context.Context, assignment Assignment, cutoff time.Time, maxAttempts int) (AssignmentReconciliation, error) {
+	cutoff = cutoff.UTC()
+	return r.reconcileAssignment(ctx, assignment, true, &cutoff, maxAttempts)
+}
+
+func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignment, staleRecovery bool, cutoff *time.Time, maxAttempts int) (AssignmentReconciliation, error) {
+	if maxAttempts <= 0 {
+		maxAttempts = defaultAssignmentMaxAttempts
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return AssignmentReconciliation{}, err
@@ -201,6 +218,18 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 				return reconciliation, nil
 			}
 		}
+		reconciliation, terminalized, err := terminalizeExhaustedAssignmentTx(
+			ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, sessionID, traceID, maxAttempts,
+		)
+		if err != nil {
+			return AssignmentReconciliation{}, err
+		}
+		if terminalized {
+			if err := tx.Commit(); err != nil {
+				return AssignmentReconciliation{}, err
+			}
+			return reconciliation, nil
+		}
 		if err := requeueAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID); err != nil {
 			return AssignmentReconciliation{}, err
 		}
@@ -234,6 +263,97 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 	default:
 		return AssignmentReconciliation{}, ErrAssignmentFenced
 	}
+}
+
+func terminalizeExhaustedAssignmentTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	runID string,
+	jobID string,
+	attemptID string,
+	sessionID string,
+	traceID string,
+	maxAttempts int,
+) (AssignmentReconciliation, bool, error) {
+	var attempt int
+	err := tx.QueryRowContext(ctx, `
+		SELECT id, attempt
+		FROM jobs
+		WHERE run_id = ?
+			AND status = 'in_progress'
+			AND (? = '' OR id = ?)
+			AND (? = '' OR COALESCE(assignment_attempt_id, '') = ?)
+	`, runID, jobID, jobID, attemptID, attemptID).Scan(&jobID, &attempt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return AssignmentReconciliation{}, false, ErrAssignmentFenced
+		}
+		return AssignmentReconciliation{}, false, err
+	}
+	if attempt < maxAttempts {
+		return AssignmentReconciliation{}, false, nil
+	}
+
+	const code = "job_timeout"
+	const message = "Job timed out"
+	finishedAt := now()
+	result, err := tx.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET status = 'failed',
+			error_code = ?,
+			error_message = ?,
+			finished_at = ?,
+			execution_active = 0,
+			execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
+			execution_state = 'exited',
+			execution_lease_expires_at = NULL,
+			execution_lease_expires_at_ns = NULL
+		WHERE id = ?
+			AND status = 'running'
+			AND (? = '' OR COALESCE(execution_attempt_id, '') = ?)
+	`, code, message, finishedAt, finishedAt, runID, attemptID, attemptID)
+	if err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+	events, err := failPendingApprovalLifecycleTx(ctx, tx, runID, code, message, finishedAt)
+	if err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+	result, err = tx.ExecContext(ctx, `
+		UPDATE jobs
+		SET status = 'failed',
+			finished_at = ?,
+			error_code = ?,
+			error_message = ?,
+			lease_owner = NULL,
+			lease_expires_at = NULL,
+			lease_expires_at_ns = NULL
+		WHERE id = ?
+			AND run_id = ?
+			AND status = 'in_progress'
+			AND (? = '' OR COALESCE(assignment_attempt_id, '') = ?)
+	`, finishedAt, code, message, jobID, runID, attemptID, attemptID)
+	if err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+	payloadJSON, err := json.Marshal(map[string]any{
+		"runId": runID, "code": code, "message": message, "retryable": false,
+	})
+	if err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+	event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.failed", string(payloadJSON), finishedAt)
+	if err != nil {
+		return AssignmentReconciliation{}, false, err
+	}
+	events = append(events, event)
+	return AssignmentReconciliation{Cleared: true, Events: events}, true, nil
 }
 
 func terminalizeStaleApprovedAuthorizationTx(
@@ -601,14 +721,22 @@ func reconcileWaitingApprovalTx(ctx context.Context, tx *sql.Tx, runID, sessionI
 }
 
 func (r *Repository) RecoverStaleAssignments(ctx context.Context, cutoff time.Time) ([]Event, error) {
+	return r.RecoverStaleAssignmentsWithLimit(ctx, cutoff, defaultAssignmentMaxAttempts)
+}
+
+func (r *Repository) RecoverStaleAssignmentsWithLimit(ctx context.Context, cutoff time.Time, maxAttempts int) ([]Event, error) {
 	assignments, err := r.RecoverableAssignments(ctx, cutoff)
 	if err != nil {
 		return nil, err
 	}
-	return r.recoverAssignments(ctx, assignments, &cutoff)
+	return r.recoverAssignments(ctx, assignments, &cutoff, maxAttempts)
 }
 
 func (r *Repository) RecoverAllActiveAssignments(ctx context.Context) ([]Event, error) {
+	return r.RecoverAllActiveAssignmentsWithLimit(ctx, defaultAssignmentMaxAttempts)
+}
+
+func (r *Repository) RecoverAllActiveAssignmentsWithLimit(ctx context.Context, maxAttempts int) ([]Event, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -628,7 +756,7 @@ func (r *Repository) RecoverAllActiveAssignments(ctx context.Context) ([]Event, 
 	if err != nil {
 		return nil, err
 	}
-	return r.recoverAssignments(ctx, assignments, nil)
+	return r.recoverAssignments(ctx, assignments, nil, maxAttempts)
 }
 
 func (r *Repository) RecoverableAssignments(ctx context.Context, cutoff time.Time) ([]Assignment, error) {
@@ -716,15 +844,15 @@ func (r *Repository) startupRecoveryAssignments(ctx context.Context) ([]Assignme
 	return assignments, nil
 }
 
-func (r *Repository) recoverAssignments(ctx context.Context, assignments []Assignment, cutoff *time.Time) ([]Event, error) {
+func (r *Repository) recoverAssignments(ctx context.Context, assignments []Assignment, cutoff *time.Time, maxAttempts int) ([]Event, error) {
 	var events []Event
 	for _, assignment := range assignments {
 		var reconciliation AssignmentReconciliation
 		var err error
 		if cutoff == nil {
-			reconciliation, err = r.RecoverAssignment(ctx, assignment)
+			reconciliation, err = r.RecoverAssignmentWithLimit(ctx, assignment, maxAttempts)
 		} else {
-			reconciliation, err = r.RecoverAssignmentAtCutoff(ctx, assignment, *cutoff)
+			reconciliation, err = r.RecoverAssignmentAtCutoffWithLimit(ctx, assignment, *cutoff, maxAttempts)
 		}
 		if err != nil {
 			return events, err
