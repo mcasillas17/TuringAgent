@@ -1,6 +1,8 @@
 import 'package:fixnum/fixnum.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/generated/turing/v1/chat.pb.dart';
+import 'package:turing_flutter_app/generated/turing/v1/common.pb.dart'
+    as commonpb;
 import 'package:turing_flutter_app/generated/turing/v1/events.pb.dart'
     as eventpb;
 import 'package:turing_flutter_app/models/grpc_mappers.dart';
@@ -52,5 +54,18 @@ void main() {
     expect(mapped.sequence, 42);
     expect(mapped.payload['messageId'], 'msg_2');
     expect(mapped.payload['delta'], 'Hel');
+  });
+
+  test('maps a message run id for history correlation', () {
+    final mapped = GrpcMappers.messageToModel(
+      commonpb.Message(
+        messageId: 'message_1',
+        runId: 'run_1',
+        role: commonpb.MessageRole.MESSAGE_ROLE_ASSISTANT,
+        content: 'done',
+      ),
+    );
+
+    expect(mapped.runId, 'run_1');
   });
 }

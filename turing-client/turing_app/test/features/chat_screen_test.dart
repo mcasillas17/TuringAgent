@@ -695,6 +695,71 @@ void main() {
     unawaited(events.close());
   });
 
+  testWidgets(
+    'tool events for a completed run loaded after the watermark stay hidden',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final gate = Completer<List<Message>>();
+      final apiClient = _FakeApiClient()
+        ..messagesGate = gate
+        ..latestEventSequence = 100;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      gate.complete([
+        Message.fromJson({
+          'id': 'msg_complete',
+          'runId': 'run_complete',
+          'role': 'assistant',
+          'content': 'Finished answer',
+          'sequence': 2,
+          'createdAt': _fixedDate.toIso8601String(),
+        }),
+      ]);
+      await tester.pump();
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'tool.call.started',
+          sequence: 101,
+          runId: 'run_complete',
+          payload: {'toolCallId': 'call_old', 'toolName': 'system.time'},
+        ),
+      );
+      events.add(
+        _event(
+          type: 'tool.call.completed',
+          sequence: 102,
+          runId: 'run_complete',
+          payload: {'toolCallId': 'call_old', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('Finished answer'), findsOneWidget);
+      expect(
+        find.byType(ToolCallCard),
+        findsNothing,
+        reason:
+            'history and replay must not render two representations of the '
+            'same completed run',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
   testWidgets('a failed history load still opens the event subscription', (
     tester,
   ) async {

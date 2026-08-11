@@ -22,6 +22,7 @@ class GrpcMappers {
   static model_message.Message messageToModel(commonpb.Message message) {
     return model_message.Message(
       messageId: message.messageId,
+      runId: message.runId.isEmpty ? null : message.runId,
       role: messageRoleToString(message.role),
       content: message.content,
       sequence: message.sequence.toInt(),

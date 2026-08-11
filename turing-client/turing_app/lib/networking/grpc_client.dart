@@ -19,6 +19,8 @@ import '../models/session.dart';
 import '../models/turing_event.dart';
 import 'api_client.dart';
 
+const _startupUnaryTimeout = Duration(seconds: 10);
+
 class GrpcAuthMetadata {
   const GrpcAuthMetadata({required this.apiKey});
 
@@ -143,6 +145,7 @@ class TuringGrpcApi implements ClosableTuringApi {
         limit: limit,
         beforeMessageId: before ?? '',
       ),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
     );
     return response.messages.map(GrpcMappers.messageToModel).toList();
   }
@@ -159,6 +162,7 @@ class TuringGrpcApi implements ClosableTuringApi {
         afterSequence: Int64(after ?? 0),
         limit: limit,
       ),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
     );
     return TuringEventPage(
       events: response.events

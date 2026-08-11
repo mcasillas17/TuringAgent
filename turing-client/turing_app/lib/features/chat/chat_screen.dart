@@ -33,6 +33,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final Map<String, _MessageEntry> _assistantEntries = {};
   final Map<String, _ToolCallEntry> _toolEntries = {};
   final List<_PendingApproval> _approvals = [];
+  final Set<String> _completedHistoryRunIds = {};
 
   /// Ids of history messages whose text is already complete on screen. The
   /// stream replays the deltas that produced them, and those must not be
@@ -187,6 +188,10 @@ class _ChatScreenState extends State<ChatScreen> {
         _assistantEntries[message.messageId] = entry;
       } else {
         _completedHistoryMessageIds.add(message.messageId);
+        final runId = message.runId;
+        if (message.role == 'assistant' && runId != null) {
+          _completedHistoryRunIds.add(runId);
+        }
       }
     }
     // Seed history non-destructively: prepend it above any live entries. A
@@ -239,11 +244,13 @@ class _ChatScreenState extends State<ChatScreen> {
   void _applyToolCall(TuringEvent event, ToolCallStatus status) {
     // The subscription replays the whole persisted log (see [_start]), so every
     // tool call that happened before this screen opened is re-delivered. Deltas
-    // are de-duplicated by messageId; tool events have no equivalent identity
-    // in history, so they are filtered by the event sequence captured in
-    // [_loadReplayWatermark] instead. Recreating a card for one of them would
-    // append it BELOW every later message (history is prepended, cards are
-    // appended) and — because the create path seals live bubbles via
+    // are de-duplicated by messageId; tool events are filtered by the event
+    // sequence captured in [_loadReplayWatermark]. A run that completed while
+    // history loaded is also filtered by its immutable runId, because its tool
+    // events are newer than that earlier watermark even though its final answer
+    // is already present in history. Recreating either card would append it
+    // BELOW every later message (history is prepended, cards are appended) and
+    // — because the create path seals live bubbles via
     // `_assistantEntries.clear()` — would orphan an adopted, still-streaming
     // assistant row into an empty pill with a duplicate bubble under it.
     //
@@ -253,6 +260,8 @@ class _ChatScreenState extends State<ChatScreen> {
     // against — so the past renders as text only.
     final watermark = _replayWatermarkSequence;
     if (watermark != null && event.sequence <= watermark) return;
+    final runId = event.runId;
+    if (runId != null && _completedHistoryRunIds.contains(runId)) return;
     final toolCallId = _asString(event.payload['toolCallId']);
     if (toolCallId == null || toolCallId.isEmpty) return;
     // The frozen proto contract carries `toolName` as a non-nullable scalar, so
@@ -267,7 +276,6 @@ class _ChatScreenState extends State<ChatScreen> {
     // the correlation key by the event's own runId so turn 2's `call_1` cannot
     // hijack turn 1's card — the payload contract is untouched, and
     // `toolCallId` stays the entry's own field.
-    final runId = event.runId;
     final key = (runId == null || runId.isEmpty)
         ? toolCallId
         : '$runId:$toolCallId';
