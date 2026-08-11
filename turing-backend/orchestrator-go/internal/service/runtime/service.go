@@ -476,11 +476,34 @@ func (s *Server) renewWorkerLeases(ctx context.Context, workerID string, connect
 		return status.Error(codes.PermissionDenied, "heartbeat worker_id does not match connected worker")
 	}
 	assignments := connectedWorker.assignmentSnapshot(workerID)
-	_, err := s.repo.RenewAssignments(ctx, assignments, time.Now().UTC().Add(s.dispatch.LeaseDuration))
-	if err == nil {
-		connectedWorker.recordHeartbeat(time.Now().UTC())
+	renewed, err := s.repo.RenewAssignments(ctx, assignments, time.Now().UTC().Add(s.dispatch.LeaseDuration))
+	if err != nil {
+		return err
 	}
-	return err
+	renewedSet := make(map[repository.Assignment]struct{}, len(renewed))
+	for _, assignment := range renewed {
+		renewedSet[assignment] = struct{}{}
+	}
+	reconciled := false
+	for _, assignment := range assignments {
+		if _, ok := renewedSet[assignment]; ok {
+			continue
+		}
+		result, err := s.repo.RecoverAssignment(ctx, assignment)
+		if err != nil {
+			return err
+		}
+		released := connectedWorker.releaseAssignmentAttempt(assignment.RunID, assignment.AttemptID)
+		for _, event := range result.Events {
+			s.publishEvent(event)
+		}
+		reconciled = reconciled || result.Requeued || result.Cleared || released
+	}
+	connectedWorker.recordHeartbeat(time.Now().UTC())
+	if reconciled {
+		return s.DispatchPending(ctx)
+	}
+	return nil
 }
 
 func (s *Server) sendBeaconDecision(ctx context.Context, connectedWorker *worker, beacon *turingv1.ToolCallBeacon, decision *turingv1.ToolPolicyDecision) error {

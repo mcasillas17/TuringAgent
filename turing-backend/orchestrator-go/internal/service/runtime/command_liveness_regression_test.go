@@ -178,6 +178,60 @@ func TestRecoveryReclaimsAssignmentWithoutTimelyWorkerHeartbeat(t *testing.T) {
 	}
 }
 
+func TestHeartbeatReconcilesAssignmentThatDatabaseCannotRenew(t *testing.T) {
+	h := newHarnessWithDispatch(t, DispatchConfig{LeaseDuration: time.Minute})
+	enqueued := h.enqueueRun(t, "terminalized approval heartbeat")
+	claimed, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-terminal-heartbeat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoAssignment := repository.Assignment{
+		JobID: claimed.JobID, RunID: claimed.RunID, WorkerID: "worker-terminal-heartbeat", AttemptID: claimed.AssignmentAttemptID,
+	}
+	if err := h.repo.BeginAssignmentSend(context.Background(), repoAssignment); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.MarkAssignmentDelivered(context.Background(), repoAssignment); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.RecordToolCallBefore(context.Background(), repository.ToolCallRecord{
+		ToolCallID: "call_terminal_heartbeat", RunID: enqueued.RunID, Status: "approval_required",
+	}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:test"); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := h.repo.CreateApproval(context.Background(), enqueued.RunID, "call_terminal_heartbeat", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:test", "2099-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.DenyApprovalWithEvent(context.Background(), approval.ApprovalID, ""); err != nil {
+		t.Fatal(err)
+	}
+	connected := &worker{
+		commands:      make(chan *turingv1.RuntimeCommand, 1),
+		maxConcurrent: 1,
+		assignments: map[string]assignment{
+			repoAssignment.RunID: {jobID: repoAssignment.JobID, runID: repoAssignment.RunID, attemptID: repoAssignment.AttemptID},
+		},
+		lastHeartbeat: time.Now().UTC(),
+	}
+
+	if err := h.service.renewWorkerLeases(context.Background(), repoAssignment.WorkerID, connected, &turingv1.RuntimeHeartbeat{
+		WorkerId: repoAssignment.WorkerID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if connected.hasAssignment(enqueued.RunID) {
+		t.Fatal("heartbeat retained an assignment that the database could not renew")
+	}
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.ExecutionActive {
+		t.Fatalf("terminalized run remained execution-active after heartbeat reconciliation: %+v", run)
+	}
+}
+
 type blockedAssignmentSendStream struct {
 	grpc.ServerStream
 	ctx               context.Context

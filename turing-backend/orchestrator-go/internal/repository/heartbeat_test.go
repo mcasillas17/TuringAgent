@@ -31,8 +31,8 @@ func TestRenewAssignmentsExtendsOnlyMatchingAttemptLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if renewed != 1 {
-		t.Fatalf("renewed assignments = %d, want 1", renewed)
+	if len(renewed) != 1 || renewed[0].AttemptID != job.AssignmentAttemptID {
+		t.Fatalf("renewed assignments = %+v, want matching attempt", renewed)
 	}
 
 	renewed, err = repo.RenewAssignments(ctx, []Assignment{{
@@ -41,7 +41,7 @@ func TestRenewAssignmentsExtendsOnlyMatchingAttemptLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if renewed != 0 {
-		t.Fatalf("stale attempt renewed assignments = %d, want 0", renewed)
+	if len(renewed) != 0 {
+		t.Fatalf("stale attempt renewed assignments = %+v, want none", renewed)
 	}
 }

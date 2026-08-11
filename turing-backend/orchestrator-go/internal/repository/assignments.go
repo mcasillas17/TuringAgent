@@ -16,23 +16,23 @@ type AssignmentReconciliation struct {
 	Events   []Event
 }
 
-func (r *Repository) RenewAssignments(ctx context.Context, assignments []Assignment, leaseExpires time.Time) (int, error) {
+func (r *Repository) RenewAssignments(ctx context.Context, assignments []Assignment, leaseExpires time.Time) ([]Assignment, error) {
 	if len(assignments) == 0 {
-		return 0, nil
+		return nil, nil
 	}
 	leaseExpires = leaseExpires.UTC()
 	leaseExpiresAt := FormatTimestamp(leaseExpires)
 	leaseExpiresAtNanos := leaseExpires.UnixNano()
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	renewed := 0
+	renewed := make([]Assignment, 0, len(assignments))
 	for _, assignment := range assignments {
 		if assignment.JobID == "" || assignment.RunID == "" || assignment.WorkerID == "" || assignment.AttemptID == "" {
-			return 0, errors.New("complete assignment identity is required for lease renewal")
+			return nil, errors.New("complete assignment identity is required for lease renewal")
 		}
 		result, err := tx.ExecContext(ctx, `
 			UPDATE agent_runs
@@ -52,11 +52,11 @@ func (r *Repository) RenewAssignments(ctx context.Context, assignments []Assignm
 		`, leaseExpiresAt, leaseExpiresAtNanos, assignment.RunID, assignment.WorkerID,
 			assignment.AttemptID, assignment.JobID, assignment.WorkerID, assignment.AttemptID)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		runRows, err := result.RowsAffected()
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		if runRows == 0 {
 			continue
@@ -71,19 +71,19 @@ func (r *Repository) RenewAssignments(ctx context.Context, assignments []Assignm
 		`, leaseExpiresAt, leaseExpiresAtNanos, assignment.JobID, assignment.RunID,
 			assignment.WorkerID, assignment.AttemptID)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		jobRows, err := result.RowsAffected()
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		if jobRows != 1 {
-			return 0, fmt.Errorf("renew assignment %s: matching job disappeared", assignment.AttemptID)
+			return nil, fmt.Errorf("renew assignment %s: matching job disappeared", assignment.AttemptID)
 		}
-		renewed++
+		renewed = append(renewed, assignment)
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		return nil, err
 	}
 	return renewed, nil
 }
