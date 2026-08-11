@@ -25,6 +25,16 @@ Use this checklist to validate the integrated v1.0 stack on `pturing-v1-base`.
 
 ## 4. MCP & Tools (Task 11-14)
 - [ ] MCP servers (`system` and `files`) validate the per-agent bearer token.
+- [ ] A discovery-capable runtime sends `RuntimeWorkerReady` with
+  `TOOL_DISCOVERY_STATUS_COMPLETE` and its authoritative `tools/list`
+  snapshot; a failed discovery sends `TOOL_DISCOVERY_STATUS_FAILED` and the
+  orchestrator rejects the worker.
+- [ ] `ListTools` reflects the union of connected workers' discovered tools;
+  disconnecting the last owner disables an omitted tool, and a fresh registry
+  with no workers is empty.
+- [ ] Tool authorization is scoped to the reporting worker: a worker cannot
+  call a tool discovered only by another worker, and disabled or missing tools
+  do not fall back to legacy policy defaults.
 - [ ] Files MCP correctly rejects path traversal (e.g., `../../etc/passwd`).
 - [ ] Safe tools complete successfully and emit `tool.call.completed`.
 - [ ] Approval-required tools (e.g., `files.update`) block execution and emit `approval.requested`.
