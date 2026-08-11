@@ -151,6 +151,15 @@ func TestDisconnectReconciliationRacingDenialPreservesExecutionFence(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	assignment := repository.Assignment{
+		JobID: claimed.JobID, RunID: claimed.RunID, WorkerID: "worker-disconnect-race", AttemptID: claimed.AssignmentAttemptID,
+	}
+	if err := h.repo.BeginAssignmentSend(context.Background(), assignment); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.MarkAssignmentDelivered(context.Background(), assignment); err != nil {
+		t.Fatal(err)
+	}
 	before := &turingv1.ToolCallBeacon{
 		RunId:      enqueued.RunID,
 		TraceId:    enqueued.TraceID,
@@ -173,9 +182,7 @@ func TestDisconnectReconciliationRacingDenialPreservesExecutionFence(t *testing.
 	go func() {
 		defer wg.Done()
 		<-start
-		_, err := h.repo.ReconcileAssignment(context.Background(), repository.Assignment{
-			JobID: claimed.JobID, RunID: claimed.RunID, WorkerID: "worker-disconnect-race", AttemptID: claimed.AssignmentAttemptID,
-		})
+		_, err := h.repo.ReconcileAssignment(context.Background(), assignment)
 		errs <- err
 	}()
 	go func() {
