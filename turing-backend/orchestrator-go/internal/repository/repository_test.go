@@ -1063,22 +1063,21 @@ func TestDenyApprovalTerminalizesRunWhenToolCallAlreadyFailed(t *testing.T) {
 	}
 }
 
-func TestLateApprovalTerminalizationPreservesPriorRuntimeFailure(t *testing.T) {
+func TestRuntimeFailureTerminalizesPendingApprovalBeforeLateResolution(t *testing.T) {
 	tests := []struct {
 		name        string
-		status      string
+		expectError bool
 		terminalize func(*Repository, context.Context, string) (ApprovalTerminalization, error)
 	}{
 		{
-			name:   "denial",
-			status: "denied",
+			name:        "conflicting denial",
+			expectError: true,
 			terminalize: func(repo *Repository, ctx context.Context, approvalID string) (ApprovalTerminalization, error) {
 				return repo.DenyApprovalWithEvent(ctx, approvalID, "2026-05-15T00:00:00Z")
 			},
 		},
 		{
-			name:   "expiry",
-			status: "expired",
+			name: "idempotent expiry",
 			terminalize: func(repo *Repository, ctx context.Context, approvalID string) (ApprovalTerminalization, error) {
 				return repo.ExpireApprovalWithEvent(ctx, approvalID, "2026-05-15T00:00:00Z")
 			},
@@ -1121,21 +1120,27 @@ func TestLateApprovalTerminalizationPreservesPriorRuntimeFailure(t *testing.T) {
 			}
 
 			transition, err := test.terminalize(repo, ctx, approval.ApprovalID)
-			if err != nil {
+			if test.expectError {
+				if err == nil {
+					t.Fatal("conflicting late resolution succeeded")
+				}
+			} else if err != nil {
 				t.Fatalf("terminalize late approval: %v", err)
 			}
-			if !transition.Changed || transition.Approval.Status != test.status {
-				t.Fatalf("late terminalization = %+v, want changed %q approval", transition, test.status)
+			if !test.expectError && (transition.Changed || transition.Approval.Status != "expired") {
+				t.Fatalf("late terminalization = %+v, want idempotent expired approval", transition)
 			}
-			if transition.RunFailedEvent.EventID != "" {
+			if !test.expectError && transition.RunFailedEvent.EventID != "" {
 				t.Fatalf("late terminalization appended duplicate run failure event: %+v", transition.RunFailedEvent)
 			}
-			repeated, err := test.terminalize(repo, ctx, approval.ApprovalID)
-			if err != nil {
-				t.Fatalf("repeated late terminalization: %v", err)
-			}
-			if repeated.Changed {
-				t.Fatalf("repeated late terminalization changed state: %+v", repeated)
+			if !test.expectError {
+				repeated, err := test.terminalize(repo, ctx, approval.ApprovalID)
+				if err != nil {
+					t.Fatalf("repeated late terminalization: %v", err)
+				}
+				if repeated.Changed {
+					t.Fatalf("repeated late terminalization changed state: %+v", repeated)
+				}
 			}
 
 			var approvalStatus, toolCallStatus, runStatus, jobStatus string
@@ -1151,7 +1156,7 @@ func TestLateApprovalTerminalizationPreservesPriorRuntimeFailure(t *testing.T) {
 			if err := database.QueryRowContext(ctx, `SELECT status FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus); err != nil {
 				t.Fatal(err)
 			}
-			if approvalStatus != test.status || toolCallStatus != "failed" || runStatus != "failed" || jobStatus != "failed" {
+			if approvalStatus != "expired" || toolCallStatus != "failed" || runStatus != "failed" || jobStatus != "failed" {
 				t.Fatalf("terminal states approval=%q tool=%q run=%q job=%q", approvalStatus, toolCallStatus, runStatus, jobStatus)
 			}
 			var runFailures int

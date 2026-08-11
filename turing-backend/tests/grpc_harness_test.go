@@ -89,10 +89,13 @@ type fakeMCPServer struct {
 	name             string
 	token            string
 	approvalTokens   chan string
+	createStarted    chan struct{}
+	createCancelled  chan struct{}
 	mu               sync.Mutex
 	advertiseTime    bool
 	advertiseCreate  bool
 	validateApproval bool
+	blockCreate      bool
 	approvalClient   turingv1.ApprovalServiceClient
 	requests         []fakeMCPRequest
 	handlerErrorOnce sync.Once
@@ -555,6 +558,12 @@ func (f *fakeModelServer) enableModelDrivenFilesCreate() {
 	f.modelDrivenTool = "files.create"
 }
 
+func (f *fakeModelServer) disableModelDrivenToolCall() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.modelDrivenTool = ""
+}
+
 func (f *fakeModelServer) enableEmptyFinalResponse() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -587,10 +596,12 @@ func writeOpenAIChunk(w http.ResponseWriter, token string, finishReason string) 
 
 func newFakeMCPServer(name string, token string) *fakeMCPServer {
 	fake := &fakeMCPServer{
-		name:           name,
-		token:          token,
-		approvalTokens: make(chan string, 4),
-		handlerErrors:  make(chan error, 1),
+		name:            name,
+		token:           token,
+		approvalTokens:  make(chan string, 4),
+		createStarted:   make(chan struct{}),
+		createCancelled: make(chan struct{}),
+		handlerErrors:   make(chan error, 1),
 	}
 	fake.server = httptest.NewServer(http.HandlerFunc(fake.handle))
 	return fake
@@ -649,6 +660,7 @@ func (f *fakeMCPServer) handle(w http.ResponseWriter, r *http.Request) {
 	advertiseTime := f.advertiseTime
 	advertiseCreate := f.advertiseCreate
 	validateApproval := f.validateApproval
+	blockCreate := f.blockCreate
 	f.mu.Unlock()
 	if req.Method == "tools/list" {
 		tools := []any{}
@@ -699,6 +711,20 @@ func (f *fakeMCPServer) handle(w http.ResponseWriter, r *http.Request) {
 		if validateApproval {
 			if len(meta) != 1 {
 				f.reject(w, http.StatusBadRequest, fmt.Errorf("files MCP _meta = %#v, want only approvalToken", meta))
+				return
+			}
+			if blockCreate {
+				select {
+				case <-f.createStarted:
+				default:
+					close(f.createStarted)
+				}
+				<-r.Context().Done()
+				select {
+				case <-f.createCancelled:
+				default:
+					close(f.createCancelled)
+				}
 				return
 			}
 			approvalID, err := validateIntegrationApprovalToken(approvalToken, args)
@@ -773,6 +799,12 @@ func (f *fakeMCPServer) enableCreateToolWithApprovalValidation() {
 	defer f.mu.Unlock()
 	f.advertiseCreate = true
 	f.validateApproval = true
+}
+
+func (f *fakeMCPServer) blockCreateCallUntilCancelled() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.blockCreate = true
 }
 
 func validateIntegrationApprovalToken(token string, args map[string]any) (string, error) {

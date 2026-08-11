@@ -524,6 +524,7 @@ func TestDelayedBeforeDecisionWithSameToolCallIDCannotSatisfyAfter(t *testing.T)
 		decision *turingv1.ToolPolicyDecision
 		err      error
 	}
+
 	beforeDone := make(chan result, 1)
 	afterDone := make(chan result, 1)
 
@@ -541,6 +542,7 @@ func TestDelayedBeforeDecisionWithSameToolCallIDCannotSatisfyAfter(t *testing.T)
 		if !errors.Is(result.err, context.Canceled) {
 			t.Fatalf("cancelled BEFORE result = %+v, want context.Canceled", result)
 		}
+
 	case <-time.After(time.Second):
 		t.Fatal("BEFORE waiter did not cancel")
 	}
@@ -578,6 +580,68 @@ func TestDelayedBeforeDecisionWithSameToolCallIDCannotSatisfyAfter(t *testing.T)
 	}
 }
 
+func TestWorkerContinuesReceivingCleanupDecisionWhileCancellationWaitsForExecutor(t *testing.T) {
+	executor := &cancelCleanupExecutor{
+		waitingForCancel: make(chan struct{}),
+		cleanupStarted:   make(chan struct{}),
+		cleanupFinished:  make(chan struct{}),
+	}
+	stream := newFakeStream()
+	worker := New(Options{WorkerID: "worker-cancel-cleanup", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, executor)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+
+	_ = nextSent(t, stream)
+	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: &turingv1.AgentJob{
+		JobId: "job_1", RunId: "run_1", TraceId: "trace_1",
+	}}}
+	before := nextSent(t, stream).GetToolBeacon()
+	if before == nil || before.GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+		t.Fatalf("first update = %+v, want BEFORE beacon", before)
+	}
+	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_ToolPolicyDecision{ToolPolicyDecision: &turingv1.ToolPolicyDecision{
+		Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: before.GetToolCallId(),
+	}}}
+	select {
+	case <-executor.waitingForCancel:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not begin waiting for cancellation")
+	}
+
+	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunCancelled{RunCancelled: &turingv1.RuntimeRunCancelled{
+		RunId: "run_1", Reason: "client_cancelled",
+	}}}
+	after := nextSent(t, stream).GetToolBeacon()
+	if after == nil || after.GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
+		t.Fatalf("cleanup update = %+v, want AFTER beacon", after)
+	}
+	select {
+	case <-executor.cleanupStarted:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not wait for cleanup decision")
+	}
+	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_ToolPolicyDecision{ToolPolicyDecision: &turingv1.ToolPolicyDecision{
+		Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: after.GetToolCallId(),
+	}}}
+	select {
+	case <-executor.cleanupFinished:
+	case <-time.After(time.Second):
+		t.Fatal("receive loop did not deliver cleanup decision during cancellation")
+	}
+	ack := nextSent(t, stream)
+	if ack.GetRunCancelledAck() == nil || ack.GetRunCancelledAck().GetRunId() != "run_1" {
+		t.Fatalf("terminal update = %+v, want cancellation acknowledgement", ack)
+	}
+
+	cancel()
+	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run returned %v", err)
+	}
+	waitForOutboundWriterExit(t, worker)
+}
+
 type providerExecutor struct{ provider llm.Provider }
 
 type approvalWaitingExecutor struct {
@@ -585,6 +649,13 @@ type approvalWaitingExecutor struct {
 	waiting   chan struct{}
 	cancelled chan struct{}
 	cause     chan error
+}
+
+type cancelCleanupExecutor struct {
+	poster           func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error)
+	waitingForCancel chan struct{}
+	cleanupStarted   chan struct{}
+	cleanupFinished  chan struct{}
 }
 
 type blockingExecutor struct {
@@ -626,6 +697,43 @@ func (e *terminalBlockingExecutor) Execute(_ context.Context, job *turingv1.Agen
 
 func (e *approvalWaitingExecutor) SetToolBeaconPoster(post func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error)) {
 	e.poster = post
+}
+
+func (e *cancelCleanupExecutor) SetToolBeaconPoster(post func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error)) {
+	e.poster = post
+}
+
+func (e *cancelCleanupExecutor) Execute(ctx context.Context, job *turingv1.AgentJob, _ func(*turingv1.RuntimeUpdate) error) error {
+	if e.poster == nil {
+		return errors.New("tool beacon poster is not configured")
+	}
+	before, err := e.poster(ctx, &turingv1.ToolCallBeacon{
+		RunId: job.GetRunId(), TraceId: job.GetTraceId(), ToolCallId: "call_cancel_cleanup",
+		AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "system", ToolName: "system.time",
+		Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+	})
+	if err != nil {
+		return err
+	}
+	if before.GetDecision() != turingv1.ToolPolicyDecision_DECISION_ALLOW {
+		return errors.New("before decision was not allow")
+	}
+	close(e.waitingForCancel)
+	<-ctx.Done()
+	close(e.cleanupStarted)
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err = e.poster(cleanupCtx, &turingv1.ToolCallBeacon{
+		RunId: job.GetRunId(), TraceId: job.GetTraceId(), ToolCallId: "call_cancel_cleanup",
+		AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "system", ToolName: "system.time",
+		Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER, Status: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED,
+		Error: &turingv1.ToolCallError{Code: "cancelled", Message: "cancelled"},
+	})
+	if err != nil {
+		return err
+	}
+	close(e.cleanupFinished)
+	return terminalizedWorkerError{}
 }
 
 func (e *approvalWaitingExecutor) Execute(ctx context.Context, job *turingv1.AgentJob, _ func(*turingv1.RuntimeUpdate) error) error {

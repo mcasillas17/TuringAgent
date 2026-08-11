@@ -248,8 +248,8 @@ func TestApplyMigrationsUpgradesPopulated0002DatabaseWithNullableModelToolCallID
 	if err := database.QueryRowContext(ctx, `SELECT execution_active, execution_exit_acknowledged_at FROM agent_runs WHERE id = 'run_1'`).Scan(&executionActive, &executionExitAcknowledgedAt); err != nil {
 		t.Fatal(err)
 	}
-	if executionActive != 0 || executionExitAcknowledgedAt.Valid {
-		t.Fatalf("upgraded execution gate = active %d exit_ack %q, want inactive and NULL", executionActive, executionExitAcknowledgedAt.String)
+	if executionActive != 1 || executionExitAcknowledgedAt.Valid {
+		t.Fatalf("upgraded execution gate = active %d exit_ack %q, want fenced active attempt and NULL", executionActive, executionExitAcknowledgedAt.String)
 	}
 	var applied int
 	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = '0003_tool_call_model_identity'`).Scan(&applied); err != nil {

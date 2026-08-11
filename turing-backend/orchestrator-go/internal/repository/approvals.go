@@ -25,6 +25,7 @@ type ApprovalRecord struct {
 
 type ApprovalTerminalization struct {
 	Approval       ApprovalRecord
+	ApprovalEvent  Event
 	RunFailedEvent Event
 	Changed        bool
 }
@@ -80,6 +81,61 @@ func (r *Repository) CreateApproval(ctx context.Context, runID string, toolCallI
 	return record, nil
 }
 
+func (r *Repository) CreateApprovalWithEvent(ctx context.Context, runID string, toolCallID string, agentID string, toolName string, argsJSON string, argsHash string, expiresAt string) (ApprovalRecord, Event, error) {
+	createdAt := now()
+	record := ApprovalRecord{
+		ApprovalID: ids.New("appr"),
+		RunID:      runID,
+		ToolCallID: toolCallID,
+		AgentID:    agentID,
+		ToolName:   toolName,
+		ArgsJSON:   argsJSON,
+		ArgsHash:   argsHash,
+		Status:     "pending",
+		ExpiresAt:  expiresAt,
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ApprovalRecord{}, Event{}, err
+	}
+	defer tx.Rollback()
+	var nullableToolCallID any
+	if toolCallID != "" {
+		nullableToolCallID = toolCallID
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO approvals (id, run_id, tool_call_id, agent_id, tool_name, args_json, args_hash, status, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`, record.ApprovalID, runID, nullableToolCallID, agentID, toolName, argsJSON, argsHash, expiresAt, createdAt); err != nil {
+		return ApprovalRecord{}, Event{}, err
+	}
+	if toolCallID != "" {
+		result, err := tx.ExecContext(ctx, `UPDATE tool_calls SET approval_id = ?, status = 'approval_required' WHERE id = ? AND run_id = ?`, record.ApprovalID, toolCallID, runID)
+		if err != nil {
+			return ApprovalRecord{}, Event{}, err
+		}
+		if err := expectOneRow(result, "tool call not found"); err != nil {
+			return ApprovalRecord{}, Event{}, err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'waiting_approval' WHERE id = ? AND status IN ('queued','running','waiting_approval')`, runID)
+	if err != nil {
+		return ApprovalRecord{}, Event{}, err
+	}
+	if err := expectOneRow(result, "run cannot wait for approval"); err != nil {
+		return ApprovalRecord{}, Event{}, err
+	}
+	record, err = approvalByID(ctx, tx, record.ApprovalID)
+	if err != nil {
+		return ApprovalRecord{}, Event{}, err
+	}
+	event, err := appendApprovalLifecycleEventTx(ctx, tx, record, "approval.requested", createdAt)
+	if err != nil {
+		return ApprovalRecord{}, Event{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ApprovalRecord{}, Event{}, err
+	}
+	return record, event, nil
+}
+
 func (r *Repository) GetApproval(ctx context.Context, approvalID string) (ApprovalRecord, error) {
 	return approvalByID(ctx, r.db, approvalID)
 }
@@ -101,36 +157,58 @@ func (r *Repository) GetPendingApprovalForRun(ctx context.Context, runID string)
 }
 
 func (r *Repository) ApproveApproval(ctx context.Context, approvalID string, approvalToken string, decidedAt string) (ApprovalRecord, error) {
+	transition, err := r.ApproveApprovalWithEvent(ctx, approvalID, approvalToken, decidedAt)
+	return transition.Approval, err
+}
+
+func (r *Repository) ApproveApprovalWithEvent(ctx context.Context, approvalID string, approvalToken string, decidedAt string) (ApprovalTerminalization, error) {
 	if decidedAt == "" {
 		decidedAt = now()
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return ApprovalRecord{}, err
+		return ApprovalTerminalization{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer tx.Rollback()
+	record, err := approvalByID(ctx, tx, approvalID)
+	if err != nil {
+		return ApprovalTerminalization{}, err
+	}
+	if record.Status == "approved" {
+		if err := tx.Commit(); err != nil {
+			return ApprovalTerminalization{}, err
+		}
+		return ApprovalTerminalization{Approval: record}, nil
+	}
+	if record.Status != "pending" {
+		return ApprovalTerminalization{}, errors.New("approval is not pending")
+	}
 	result, err := tx.ExecContext(ctx, `UPDATE approvals SET status = 'approved', approval_jti = ?, approval_token = ?, decided_at = ? WHERE id = ? AND status = 'pending'`, approvalID, approvalToken, decidedAt, approvalID)
 	if err != nil {
-		return ApprovalRecord{}, err
+		return ApprovalTerminalization{}, err
 	}
 	if err := expectOneRow(result, "approval is not pending"); err != nil {
-		return ApprovalRecord{}, err
+		return ApprovalTerminalization{}, err
 	}
 	result, err = tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'running' WHERE id = (SELECT run_id FROM approvals WHERE id = ?) AND status = 'waiting_approval'`, approvalID)
 	if err != nil {
-		return ApprovalRecord{}, err
+		return ApprovalTerminalization{}, err
 	}
 	if err := expectOneRow(result, "run is not waiting for approval"); err != nil {
-		return ApprovalRecord{}, err
+		return ApprovalTerminalization{}, err
 	}
-	record, err := approvalByID(ctx, tx, approvalID)
+	record, err = approvalByID(ctx, tx, approvalID)
 	if err != nil {
-		return ApprovalRecord{}, err
+		return ApprovalTerminalization{}, err
+	}
+	event, err := appendApprovalLifecycleEventTx(ctx, tx, record, "approval.approved", decidedAt)
+	if err != nil {
+		return ApprovalTerminalization{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return ApprovalRecord{}, err
+		return ApprovalTerminalization{}, err
 	}
-	return record, nil
+	return ApprovalTerminalization{Approval: record, ApprovalEvent: event, Changed: true}, nil
 }
 
 func (r *Repository) ExpireApproval(ctx context.Context, approvalID string, decidedAt string) (ApprovalRecord, error) {
@@ -144,15 +222,15 @@ func (r *Repository) DenyApproval(ctx context.Context, approvalID string, decide
 }
 
 func (r *Repository) ExpireApprovalWithEvent(ctx context.Context, approvalID string, decidedAt string) (ApprovalTerminalization, error) {
-	return r.terminalizeApproval(ctx, approvalID, decidedAt, "expired", "approval_expired", "Approval expired", "failed")
+	return r.terminalizeApproval(ctx, approvalID, decidedAt, "expired", "approval_expired", "Approval expired", "failed", "approval.expired")
 }
 
 func (r *Repository) DenyApprovalWithEvent(ctx context.Context, approvalID string, decidedAt string) (ApprovalTerminalization, error) {
-	return r.terminalizeApproval(ctx, approvalID, decidedAt, "denied", "approval_denied", "User denied approval", "denied")
+	return r.terminalizeApproval(ctx, approvalID, decidedAt, "denied", "approval_denied", "User denied approval", "denied", "approval.denied")
 }
 
 func (r *Repository) FailApprovalDeliveryWithEvent(ctx context.Context, approvalID string, decidedAt string) (ApprovalTerminalization, error) {
-	return r.terminalizeApproval(ctx, approvalID, decidedAt, "denied", "approval_delivery_failed", "Tool policy decision delivery failed", "failed")
+	return r.terminalizeApproval(ctx, approvalID, decidedAt, "denied", "approval_delivery_failed", "Tool policy decision delivery failed", "failed", "")
 }
 
 func (r *Repository) terminalizeApproval(
@@ -163,6 +241,7 @@ func (r *Repository) terminalizeApproval(
 	errorCode string,
 	errorMessage string,
 	toolCallStatus string,
+	approvalEventType string,
 ) (ApprovalTerminalization, error) {
 	if decidedAt == "" {
 		decidedAt = now()
@@ -270,10 +349,17 @@ func (r *Repository) terminalizeApproval(
 	if err != nil {
 		return ApprovalTerminalization{}, err
 	}
+	var approvalEvent Event
+	if approvalEventType != "" {
+		approvalEvent, err = appendApprovalLifecycleEventTx(ctx, tx, record, approvalEventType, decidedAt)
+		if err != nil {
+			return ApprovalTerminalization{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return ApprovalTerminalization{}, err
 	}
-	return ApprovalTerminalization{Approval: record, RunFailedEvent: event, Changed: true}, nil
+	return ApprovalTerminalization{Approval: record, ApprovalEvent: approvalEvent, RunFailedEvent: event, Changed: true}, nil
 }
 
 func validateLateApprovalRuntimeFailure(ctx context.Context, tx *sql.Tx, record ApprovalRecord) error {
@@ -313,29 +399,51 @@ func isTerminalToolCallStatus(status string) bool {
 }
 
 func (r *Repository) ConsumeApproval(ctx context.Context, approvalID string, consumedAt string) (ApprovalRecord, error) {
+	transition, err := r.ConsumeApprovalWithEvent(ctx, approvalID, consumedAt)
+	return transition.Approval, err
+}
+
+func (r *Repository) ConsumeApprovalWithEvent(ctx context.Context, approvalID string, consumedAt string) (ApprovalTerminalization, error) {
 	if consumedAt == "" {
 		consumedAt = now()
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return ApprovalRecord{}, err
+		return ApprovalTerminalization{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer tx.Rollback()
+	current, err := approvalByID(ctx, tx, approvalID)
+	if err != nil {
+		return ApprovalTerminalization{}, err
+	}
+	if current.Status == "consumed" {
+		if err := tx.Commit(); err != nil {
+			return ApprovalTerminalization{}, err
+		}
+		return ApprovalTerminalization{Approval: current}, nil
+	}
+	if current.Status != "approved" {
+		return ApprovalTerminalization{}, errors.New("approval is not approved")
+	}
 	result, err := tx.ExecContext(ctx, `UPDATE approvals SET status = 'consumed', consumed_at = ? WHERE id = ? AND status = 'approved'`, consumedAt, approvalID)
 	if err != nil {
-		return ApprovalRecord{}, err
+		return ApprovalTerminalization{}, err
 	}
 	if err := expectOneRow(result, "approval is not approved"); err != nil {
-		return ApprovalRecord{}, err
+		return ApprovalTerminalization{}, err
 	}
 	record, err := approvalByID(ctx, tx, approvalID)
 	if err != nil {
-		return ApprovalRecord{}, err
+		return ApprovalTerminalization{}, err
+	}
+	event, err := appendApprovalLifecycleEventTx(ctx, tx, record, "approval.consumed", consumedAt)
+	if err != nil {
+		return ApprovalTerminalization{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return ApprovalRecord{}, err
+		return ApprovalTerminalization{}, err
 	}
-	return record, nil
+	return ApprovalTerminalization{Approval: record, ApprovalEvent: event, Changed: true}, nil
 }
 
 type approvalQuerier interface {
@@ -367,6 +475,31 @@ func approvalByID(ctx context.Context, q approvalQuerier, approvalID string) (Ap
 		record.ModelToolCallID = modelToolCallID.String
 	}
 	return record, nil
+}
+
+func appendApprovalLifecycleEventTx(ctx context.Context, tx *sql.Tx, approval ApprovalRecord, eventType string, createdAt string) (Event, error) {
+	var sessionID, traceID string
+	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, approval.RunID).Scan(&sessionID, &traceID); err != nil {
+		return Event{}, err
+	}
+	payload := map[string]any{
+		"approvalId": approval.ApprovalID,
+		"toolCallId": approval.ToolCallID,
+		"toolName":   approval.ToolName,
+		"runId":      approval.RunID,
+		"traceId":    traceID,
+	}
+	if eventType == "approval.requested" {
+		payload["argsSummary"] = "Requested tool use"
+	}
+	if approval.ModelToolCallID != "" {
+		payload["modelToolCallId"] = approval.ModelToolCallID
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return Event{}, err
+	}
+	return appendRunEventTx(ctx, tx, sessionID, approval.RunID, traceID, eventType, string(payloadJSON), createdAt)
 }
 
 func expectOneRow(result sql.Result, message string) error {

@@ -58,13 +58,31 @@ func New(cfg config.Config) (*App, error) {
 
 	repo := repository.New(database)
 	eventBus := eventsvc.NewBus(128)
+	recoveredEvents, err := repo.RecoverStaleAssignments(context.Background(), time.Now().UTC())
+	if err != nil {
+		_ = database.Close()
+		return nil, err
+	}
 	approvalService := approvalsvc.New(repo, eventBus, cfg.ApprovalJWTSecret, time.Duration(cfg.ApprovalTTLMS)*time.Millisecond)
-	runtimeService := runtimesvc.New(repo, eventBus, approvalService)
+	maxConcurrentRuns := cfg.MaxConcurrentRunsGeneral
+	if maxConcurrentRuns <= 0 {
+		maxConcurrentRuns = 1
+	}
+	runtimeService := runtimesvc.NewWithConfig(repo, eventBus, runtimesvc.DispatchConfig{
+		MaxConcurrentRuns: maxConcurrentRuns,
+		LeaseDuration:     time.Duration(cfg.JobTimeoutMS) * time.Millisecond,
+	}, approvalService)
 	sessionService := sessionsvc.New(repo, cfg)
 	eventService := eventsvc.NewServer(repo, eventBus)
 	chatService := chatsvc.New(repo, eventBus, runtimeService, cfg.OllamaModel, cfg.OpenAIModel)
 	auditService := auditsvc.New(repo)
 	healthService := &HealthServer{schemaVersion: schemaVersion}
+	for _, event := range recoveredEvents {
+		eventBus.Publish(eventsvc.Event{
+			EventID: event.EventID, SessionID: event.SessionID, RunID: event.RunID.String,
+			TraceID: event.TraceID, Sequence: event.Sequence, Type: event.Type, CreatedAt: event.CreatedAt, PayloadJSON: event.PayloadJSON,
+		})
+	}
 
 	publicServer := grpc.NewServer(
 		grpc.UnaryInterceptor(auth.UnaryInterceptor(cfg.ClientAPIKey)),

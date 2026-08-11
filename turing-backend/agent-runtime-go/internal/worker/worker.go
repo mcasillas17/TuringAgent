@@ -47,6 +47,8 @@ type Worker struct {
 	decisions  map[string][]*decisionWaiter
 	writerMu   sync.Mutex
 	writer     *outboundWriter
+	fatalMu    sync.Mutex
+	fatal      chan error
 }
 
 type decisionWaiter struct {
@@ -64,6 +66,7 @@ type activeRun struct {
 const terminalUpdateSendTimeout = 5 * time.Second
 
 var errOutboundWriterStopped = errors.New("runtime outbound writer stopped")
+var errShutdownRequested = errors.New("runtime shutdown requested")
 
 type outboundWriter struct {
 	stream RuntimeStream
@@ -80,7 +83,18 @@ type outboundRequest struct {
 	update  *turingv1.RuntimeUpdate
 	result  chan error
 	started chan struct{}
+	mu      sync.Mutex
+	state   outboundRequestState
+	err     error
 }
+
+type outboundRequestState uint8
+
+const (
+	outboundRequestQueued outboundRequestState = iota
+	outboundRequestStarted
+	outboundRequestAbandoned
+)
 
 type outboundSendStartedError struct {
 	err error
@@ -122,11 +136,10 @@ func (w *outboundWriter) run() {
 				return
 			default:
 			}
-			if err := request.ctx.Err(); err != nil {
+			if err := request.begin(); err != nil {
 				request.complete(err)
 				continue
 			}
-			request.markStarted()
 			err := w.stream.Send(request.update)
 			request.complete(err)
 			if err != nil {
@@ -158,9 +171,9 @@ func (w *outboundWriter) send(ctx context.Context, update *turingv1.RuntimeUpdat
 	case err := <-request.result:
 		return request.classify(err)
 	case <-ctx.Done():
-		return request.classify(ctx.Err())
+		return request.cancel(ctx.Err())
 	case <-w.done:
-		return request.classify(w.error())
+		return request.cancel(w.error())
 	}
 }
 
@@ -192,21 +205,48 @@ func (r *outboundRequest) complete(err error) {
 	}
 }
 
-func (r *outboundRequest) markStarted() {
+func (r *outboundRequest) begin() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.state == outboundRequestAbandoned {
+		if r.err != nil {
+			return r.err
+		}
+		return errOutboundWriterStopped
+	}
+	if err := r.ctx.Err(); err != nil {
+		r.state = outboundRequestAbandoned
+		return err
+	}
+	r.state = outboundRequestStarted
 	close(r.started)
+	return nil
 }
 
 func (r *outboundRequest) sendStarted() bool {
-	select {
-	case <-r.started:
-		return true
-	default:
-		return false
-	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.state == outboundRequestStarted
 }
 
 func (r *outboundRequest) classify(err error) error {
 	if err != nil && r.sendStarted() {
+		return outboundSendStartedError{err: err}
+	}
+	return err
+}
+
+func (r *outboundRequest) cancel(err error) error {
+	r.mu.Lock()
+	if r.state == outboundRequestQueued {
+		r.state = outboundRequestAbandoned
+		r.err = err
+		r.mu.Unlock()
+		return err
+	}
+	started := r.state == outboundRequestStarted
+	r.mu.Unlock()
+	if started && err != nil {
 		return outboundSendStartedError{err: err}
 	}
 	return err
@@ -239,8 +279,10 @@ func (w *Worker) Run(ctx context.Context) error {
 	w.startOutboundWriter(stream)
 	defer func() {
 		w.stopOutboundWriter(stream)
-		_ = stream.CloseSend()
 	}()
+	fatal := make(chan error, 1)
+	w.setFatalChannel(fatal)
+	defer w.setFatalChannel(nil)
 	if setter, ok := w.executor.(BeaconPosterSetter); ok {
 		setter.SetToolBeaconPoster(func(ctx context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 			return w.postToolBeacon(ctx, stream, beacon)
@@ -249,34 +291,69 @@ func (w *Worker) Run(ctx context.Context) error {
 	if err := w.send(ctx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{WorkerId: w.options.WorkerID, AgentId: w.options.AgentID, MaxConcurrentRuns: int32(w.options.MaxConcurrentRuns)}}}); err != nil {
 		return err
 	}
-	for {
-		cmd, err := stream.Recv()
-		if err != nil {
-			return err
+	type receiveResult struct {
+		command *turingv1.RuntimeCommand
+		err     error
+	}
+	received := make(chan receiveResult, 1)
+	stopReceive := make(chan struct{})
+	defer close(stopReceive)
+	go func() {
+		for {
+			command, err := stream.Recv()
+			select {
+			case received <- receiveResult{command: command, err: err}:
+			case <-stopReceive:
+				return
+			}
+			if err != nil {
+				return
+			}
 		}
-		switch value := cmd.GetCommand().(type) {
-		case *turingv1.RuntimeCommand_RunAssigned:
-			if value.RunAssigned != nil {
-				w.startRun(ctx, stream, value.RunAssigned)
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-fatal:
+			return err
+		case result := <-received:
+			if result.err != nil {
+				return result.err
 			}
-		case *turingv1.RuntimeCommand_RunCancelled:
-			if value.RunCancelled != nil {
-				if err := w.cancelRun(ctx, stream, value.RunCancelled.GetRunId()); err != nil {
-					return err
+			if err := w.handleCommand(ctx, stream, result.command); err != nil {
+				if errors.Is(err, errShutdownRequested) {
+					return nil
 				}
-			}
-		case *turingv1.RuntimeCommand_ShutdownRequested:
-			return nil
-		case *turingv1.RuntimeCommand_ToolPolicyDecision:
-			w.deliverDecision(value.ToolPolicyDecision)
-		case *turingv1.RuntimeCommand_ApprovalUpdated:
-			if value.ApprovalUpdated != nil && (value.ApprovalUpdated.Status == "denied" || value.ApprovalUpdated.Status == "expired") {
-				if err := w.cancelApprovalRun(ctx, stream, value.ApprovalUpdated.ApprovalId, value.ApprovalUpdated.Status); err != nil {
-					return err
-				}
+				return err
 			}
 		}
 	}
+}
+
+func (w *Worker) handleCommand(ctx context.Context, stream RuntimeStream, cmd *turingv1.RuntimeCommand) error {
+	if cmd == nil {
+		return errors.New("runtime command is required")
+	}
+	switch value := cmd.GetCommand().(type) {
+	case *turingv1.RuntimeCommand_RunAssigned:
+		if value.RunAssigned != nil {
+			w.startRun(ctx, stream, value.RunAssigned)
+		}
+	case *turingv1.RuntimeCommand_RunCancelled:
+		if value.RunCancelled != nil {
+			return w.cancelRun(ctx, stream, value.RunCancelled.GetRunId())
+		}
+	case *turingv1.RuntimeCommand_ShutdownRequested:
+		return errShutdownRequested
+	case *turingv1.RuntimeCommand_ToolPolicyDecision:
+		w.deliverDecision(value.ToolPolicyDecision)
+	case *turingv1.RuntimeCommand_ApprovalUpdated:
+		if value.ApprovalUpdated != nil && (value.ApprovalUpdated.Status == "denied" || value.ApprovalUpdated.Status == "expired") {
+			return w.cancelApprovalRun(ctx, stream, value.ApprovalUpdated.ApprovalId, value.ApprovalUpdated.Status)
+		}
+	}
+	return nil
 }
 
 func (w *Worker) startRun(parent context.Context, stream RuntimeStream, job *turingv1.AgentJob) {
@@ -308,15 +385,15 @@ func (w *Worker) startRun(parent context.Context, stream RuntimeStream, job *tur
 		}
 		w.deleteActive(job.GetRunId())
 		if terminal != nil {
-			_ = w.sendTerminalUpdate(runCtx, stream, terminal)
+			w.sendTerminalOrReport(runCtx, stream, terminal)
 			return
 		}
 		if runWasTerminalized(err) {
-			_ = w.sendTerminalUpdate(runCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: job.GetRunId()}}})
+			w.sendTerminalOrReport(runCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: job.GetRunId()}}})
 			return
 		}
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(runCtx.Err(), context.Canceled) {
-			_ = w.sendTerminalUpdate(runCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{RunId: job.GetRunId(), Code: "runtime_error", Message: err.Error(), Retryable: false}}})
+			w.sendTerminalOrReport(runCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{RunId: job.GetRunId(), Code: "runtime_error", Message: err.Error(), Retryable: false}}})
 		}
 	}()
 }
@@ -352,15 +429,16 @@ func (w *Worker) cancelRunWithCause(ctx context.Context, stream RuntimeStream, r
 	if cause == nil {
 		cause = context.Canceled
 	}
-	entry.markStopping()
-	entry.cancel(cause)
-	select {
-	case <-entry.done:
-	case <-ctx.Done():
-		return ctx.Err()
+	if !entry.markStopping() {
+		return nil
 	}
-	w.deleteActive(runID)
-	return w.sendTerminalUpdate(ctx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: runID}}})
+	entry.cancel(cause)
+	go func() {
+		<-entry.done
+		w.deleteActive(runID)
+		w.sendTerminalOrReport(context.Background(), stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: runID}}})
+	}()
+	return nil
 }
 
 func (w *Worker) activeRun(runID string) *activeRun {
@@ -404,12 +482,14 @@ func (w *Worker) startOutboundWriter(stream RuntimeStream) {
 	w.writer = newOutboundWriter(stream)
 }
 
-func (w *Worker) stopOutboundWriter(_ RuntimeStream) {
+func (w *Worker) stopOutboundWriter(stream RuntimeStream) {
 	w.writerMu.Lock()
 	writer := w.writer
 	w.writerMu.Unlock()
 	if writer != nil {
 		writer.stop(nil)
+		_ = stream.CloseSend()
+		<-writer.exited
 	}
 }
 
@@ -430,6 +510,34 @@ func (w *Worker) sendTerminalUpdate(ctx context.Context, stream RuntimeStream, u
 	reportCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), terminalUpdateSendTimeout)
 	defer cancel()
 	return w.send(reportCtx, stream, update)
+}
+
+func (w *Worker) sendTerminalOrReport(ctx context.Context, stream RuntimeStream, update *turingv1.RuntimeUpdate) {
+	if err := w.sendTerminalUpdate(ctx, stream, update); err != nil {
+		w.reportFatal(err)
+	}
+}
+
+func (w *Worker) setFatalChannel(ch chan error) {
+	w.fatalMu.Lock()
+	defer w.fatalMu.Unlock()
+	w.fatal = ch
+}
+
+func (w *Worker) reportFatal(err error) {
+	if err == nil {
+		return
+	}
+	w.fatalMu.Lock()
+	fatal := w.fatal
+	w.fatalMu.Unlock()
+	if fatal == nil {
+		return
+	}
+	select {
+	case fatal <- err:
+	default:
+	}
 }
 
 func (w *Worker) postToolBeacon(ctx context.Context, stream RuntimeStream, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
@@ -539,10 +647,14 @@ func (w *Worker) retireDecisionWaiter(toolCallID string, target *decisionWaiter,
 	}
 }
 
-func (r *activeRun) markStopping() {
+func (r *activeRun) markStopping() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.stop {
+		return false
+	}
 	r.stop = true
+	return true
 }
 
 func (r *activeRun) isStopping() bool {

@@ -26,6 +26,8 @@ type ToolCallAfterRecord struct {
 	ServerName      string
 	ToolName        string
 	ModelToolCallID string
+	ArgsHash        string
+	WorkerID        string
 	Status          string
 	ResultSummary   string
 	ErrorCode       string
@@ -82,15 +84,15 @@ func (r *Repository) RecordToolCallAfter(ctx context.Context, record ToolCallAft
 		return false, err
 	}
 	defer tx.Rollback()
-	var serverName, toolName, currentStatus, resultSummary, errorCode, errorMessage string
+	var serverName, toolName, argsHash, currentStatus, resultSummary, errorCode, errorMessage string
 	var modelToolCallID, approvalID sql.NullString
 	var durationMS int64
 	err = tx.QueryRowContext(ctx, `
-		SELECT server_name, tool_name, model_tool_call_id, status,
+		SELECT server_name, tool_name, args_hash, model_tool_call_id, status,
 			approval_id, COALESCE(result_summary, ''), COALESCE(error_code, ''), COALESCE(error_message, ''), COALESCE(duration_ms, 0)
 		FROM tool_calls
 		WHERE id = ? AND run_id = ?
-	`, record.ToolCallID, record.RunID).Scan(&serverName, &toolName, &modelToolCallID, &currentStatus, &approvalID, &resultSummary, &errorCode, &errorMessage, &durationMS)
+	`, record.ToolCallID, record.RunID).Scan(&serverName, &toolName, &argsHash, &modelToolCallID, &currentStatus, &approvalID, &resultSummary, &errorCode, &errorMessage, &durationMS)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, ErrToolCallNotFound
 	}
@@ -98,6 +100,9 @@ func (r *Repository) RecordToolCallAfter(ctx context.Context, record ToolCallAft
 		return false, err
 	}
 	if serverName != record.ServerName || toolName != record.ToolName || nullableStringValue(modelToolCallID) != record.ModelToolCallID {
+		return false, ErrToolCallInvalidTransition
+	}
+	if record.ArgsHash != "" && argsHash != record.ArgsHash {
 		return false, ErrToolCallInvalidTransition
 	}
 	cleanup, err := terminalApprovalCleanupAllowed(ctx, tx, approvalID, currentStatus, record.Status)
@@ -153,20 +158,20 @@ func (r *Repository) RecordToolCallAfterWithEvent(ctx context.Context, record To
 		return false, Event{}, err
 	}
 	defer tx.Rollback()
-	var serverName, toolName, currentStatus, resultSummary, errorCode, errorMessage, runStatus, sessionID, traceID string
+	var serverName, toolName, argsHash, currentStatus, resultSummary, errorCode, errorMessage, runStatus, sessionID, traceID, workerID string
 	var modelToolCallID, approvalID sql.NullString
 	var durationMS int64
 	err = tx.QueryRowContext(ctx, `
-		SELECT tc.server_name, tc.tool_name, tc.model_tool_call_id, tc.status,
+		SELECT tc.server_name, tc.tool_name, tc.args_hash, tc.model_tool_call_id, tc.status,
 			tc.approval_id, COALESCE(tc.result_summary, ''), COALESCE(tc.error_code, ''), COALESCE(tc.error_message, ''), COALESCE(tc.duration_ms, 0),
-			ar.status, ar.session_id, ar.trace_id
+			ar.status, ar.session_id, ar.trace_id, COALESCE(ar.worker_id, '')
 		FROM tool_calls tc
 		JOIN agent_runs ar ON ar.id = tc.run_id
 		WHERE tc.id = ? AND tc.run_id = ?
 	`, record.ToolCallID, record.RunID).Scan(
-		&serverName, &toolName, &modelToolCallID, &currentStatus, &approvalID,
+		&serverName, &toolName, &argsHash, &modelToolCallID, &currentStatus, &approvalID,
 		&resultSummary, &errorCode, &errorMessage, &durationMS,
-		&runStatus, &sessionID, &traceID,
+		&runStatus, &sessionID, &traceID, &workerID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, Event{}, ErrToolCallNotFound
@@ -175,6 +180,12 @@ func (r *Repository) RecordToolCallAfterWithEvent(ctx context.Context, record To
 		return false, Event{}, err
 	}
 	if serverName != record.ServerName || toolName != record.ToolName || nullableStringValue(modelToolCallID) != record.ModelToolCallID {
+		return false, Event{}, ErrToolCallInvalidTransition
+	}
+	if record.ArgsHash != "" && argsHash != record.ArgsHash {
+		return false, Event{}, ErrToolCallInvalidTransition
+	}
+	if record.WorkerID != "" && workerID != record.WorkerID {
 		return false, Event{}, ErrToolCallInvalidTransition
 	}
 	cleanup, err := terminalApprovalCleanupAllowed(ctx, tx, approvalID, currentStatus, record.Status)

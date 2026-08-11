@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 )
@@ -28,18 +30,28 @@ type EnqueueUserMessageResult struct {
 }
 
 type Job struct {
-	JobID              string
-	RunID              string
-	SessionID          string
-	UserMessageID      string
-	AssistantMessageID string
-	TraceID            string
-	ModelProvider      string
-	Model              string
-	UserText           string
-	Attempt            int
-	StartedEvent       Event
+	JobID               string
+	RunID               string
+	SessionID           string
+	UserMessageID       string
+	AssistantMessageID  string
+	TraceID             string
+	ModelProvider       string
+	Model               string
+	UserText            string
+	Attempt             int
+	AssignmentAttemptID string
+	StartedEvent        Event
 }
+
+type Assignment struct {
+	JobID     string
+	RunID     string
+	WorkerID  string
+	AttemptID string
+}
+
+var ErrAssignmentFenced = errors.New("assignment attempt is fenced")
 
 func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMessageInput) (EnqueueUserMessageResult, error) {
 	createdAt := now()
@@ -101,12 +113,35 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 }
 
 func (r *Repository) ClaimNextJob(ctx context.Context, agentID string, leaseOwner string) (Job, error) {
+	return r.ClaimNextJobWithLimit(ctx, agentID, leaseOwner, 0, 5*time.Minute)
+}
+
+func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, leaseOwner string, globalLimit int, leaseDuration time.Duration) (Job, error) {
 	pickedUpAt := now()
+	if leaseDuration <= 0 {
+		leaseDuration = 5 * time.Minute
+	}
+	leaseExpiresAt := time.Now().UTC().Add(leaseDuration).Format(time.RFC3339Nano)
+	assignmentAttemptID := ids.New("attempt")
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Job{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer tx.Rollback()
+	if globalLimit > 0 {
+		var active int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM agent_runs
+			WHERE agent_id = ?
+				AND execution_active = 1
+		`, agentID).Scan(&active); err != nil {
+			return Job{}, err
+		}
+		if active >= globalLimit {
+			return Job{}, nil
+		}
+	}
 	var job Job
 	var payloadJSON string
 	err = tx.QueryRowContext(ctx, `
@@ -170,14 +205,29 @@ func (r *Repository) ClaimNextJob(ctx context.Context, agentID string, leaseOwne
 		return Job{}, err
 	}
 	job.UserText = payload.UserText
-	result, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'in_progress', lease_owner = ?, picked_up_at = ? WHERE id = ? AND status = 'pending'`, leaseOwner, pickedUpAt, job.JobID)
+	result, err := tx.ExecContext(ctx, `
+		UPDATE jobs
+		SET status = 'in_progress', lease_owner = ?, lease_expires_at = ?, picked_up_at = ?, assignment_attempt_id = ?
+		WHERE id = ? AND status = 'pending'
+	`, leaseOwner, leaseExpiresAt, pickedUpAt, assignmentAttemptID, job.JobID)
 	if err != nil {
 		return Job{}, err
 	}
 	if err := expectOneRow(result, "pending job not found for claim"); err != nil {
 		return Job{}, err
 	}
-	result, err = tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'running', started_at = COALESCE(started_at, ?), worker_id = ?, execution_active = 1, execution_exit_acknowledged_at = NULL WHERE id = ? AND status = 'queued'`, pickedUpAt, leaseOwner, job.RunID)
+	result, err = tx.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET status = 'running',
+			started_at = COALESCE(started_at, ?),
+			worker_id = ?,
+			execution_active = 1,
+			execution_exit_acknowledged_at = NULL,
+			execution_attempt_id = ?,
+			execution_state = 'pending_send',
+			execution_lease_expires_at = ?
+		WHERE id = ? AND status = 'queued'
+	`, pickedUpAt, leaseOwner, assignmentAttemptID, leaseExpiresAt, job.RunID)
 	if err != nil {
 		return Job{}, err
 	}
@@ -185,11 +235,12 @@ func (r *Repository) ClaimNextJob(ctx context.Context, agentID string, leaseOwne
 		return Job{}, err
 	}
 	startedPayload, err := json.Marshal(map[string]any{
-		"runId":   job.RunID,
-		"jobId":   job.JobID,
-		"status":  "running",
-		"agentId": agentID,
-		"attempt": job.Attempt,
+		"runId":               job.RunID,
+		"jobId":               job.JobID,
+		"status":              "running",
+		"agentId":             agentID,
+		"attempt":             job.Attempt,
+		"assignmentAttemptId": assignmentAttemptID,
 	})
 	if err != nil {
 		return Job{}, err
@@ -198,6 +249,7 @@ func (r *Repository) ClaimNextJob(ctx context.Context, agentID string, leaseOwne
 	if err != nil {
 		return Job{}, err
 	}
+	job.AssignmentAttemptID = assignmentAttemptID
 	job.StartedEvent = startedEvent
 	if err := tx.Commit(); err != nil {
 		return Job{}, err
@@ -206,19 +258,69 @@ func (r *Repository) ClaimNextJob(ctx context.Context, agentID string, leaseOwne
 }
 
 func (r *Repository) RequeueClaimedJob(ctx context.Context, jobID string, runID string) error {
+	return r.requeueAssignment(ctx, Assignment{JobID: jobID, RunID: runID}, false)
+}
+
+func (r *Repository) AbortPendingAssignment(ctx context.Context, assignment Assignment) error {
+	return r.requeueAssignment(ctx, assignment, true)
+}
+
+func (r *Repository) requeueAssignment(ctx context.Context, assignment Assignment, onlyPendingSend bool) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
-	result, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'pending', lease_owner = NULL, lease_expires_at = NULL, picked_up_at = NULL, attempt = attempt + 1 WHERE id = ? AND run_id = ? AND status = 'in_progress'`, jobID, runID)
+	defer tx.Rollback()
+	var attemptID, executionState string
+	var workerID sql.NullString
+	err = tx.QueryRowContext(ctx, `
+		SELECT COALESCE(execution_attempt_id, ''), execution_state, worker_id
+		FROM agent_runs
+		WHERE id = ?
+	`, assignment.RunID).Scan(&attemptID, &executionState, &workerID)
+	if err != nil {
+		return err
+	}
+	if assignment.AttemptID != "" && attemptID != assignment.AttemptID {
+		return ErrAssignmentFenced
+	}
+	if assignment.WorkerID != "" && (!workerID.Valid || workerID.String != assignment.WorkerID) {
+		return ErrAssignmentFenced
+	}
+	if onlyPendingSend && executionState != "pending_send" {
+		return ErrAssignmentFenced
+	}
+	if executionState == "sending" || executionState == "uncertain" {
+		return ErrAssignmentFenced
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE jobs
+		SET status = 'pending',
+			lease_owner = NULL,
+			lease_expires_at = NULL,
+			picked_up_at = NULL,
+			assignment_attempt_id = NULL,
+			attempt = attempt + 1
+		WHERE id = ? AND run_id = ? AND status = 'in_progress'
+	`, assignment.JobID, assignment.RunID)
 	if err != nil {
 		return err
 	}
 	if err := expectOneRow(result, "claimed job not found for requeue"); err != nil {
 		return err
 	}
-	result, err = tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'queued', started_at = NULL, worker_id = NULL, execution_active = 0, execution_exit_acknowledged_at = NULL WHERE id = ? AND status = 'running'`, runID)
+	result, err = tx.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET status = 'queued',
+			started_at = NULL,
+			worker_id = NULL,
+			execution_active = 0,
+			execution_exit_acknowledged_at = NULL,
+			execution_attempt_id = NULL,
+			execution_state = 'none',
+			execution_lease_expires_at = NULL
+		WHERE id = ? AND status = 'running'
+	`, assignment.RunID)
 	if err != nil {
 		return err
 	}
@@ -226,4 +328,52 @@ func (r *Repository) RequeueClaimedJob(ctx context.Context, jobID string, runID 
 		return err
 	}
 	return tx.Commit()
+}
+
+func (r *Repository) BeginAssignmentSend(ctx context.Context, assignment Assignment) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET execution_state = 'sending'
+		WHERE id = ?
+			AND worker_id = ?
+			AND execution_attempt_id = ?
+			AND execution_active = 1
+			AND execution_state = 'pending_send'
+	`, assignment.RunID, assignment.WorkerID, assignment.AttemptID)
+	if err != nil {
+		return err
+	}
+	return expectOneRowErr(result, ErrAssignmentFenced)
+}
+
+func (r *Repository) MarkAssignmentDelivered(ctx context.Context, assignment Assignment) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET execution_state = 'delivered'
+		WHERE id = ?
+			AND worker_id = ?
+			AND execution_attempt_id = ?
+			AND execution_active = 1
+			AND execution_state = 'sending'
+	`, assignment.RunID, assignment.WorkerID, assignment.AttemptID)
+	if err != nil {
+		return err
+	}
+	return expectOneRowErr(result, ErrAssignmentFenced)
+}
+
+func (r *Repository) MarkAssignmentDeliveryUncertain(ctx context.Context, assignment Assignment) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET execution_state = 'uncertain'
+		WHERE id = ?
+			AND worker_id = ?
+			AND execution_attempt_id = ?
+			AND execution_active = 1
+			AND execution_state IN ('sending', 'delivered')
+	`, assignment.RunID, assignment.WorkerID, assignment.AttemptID)
+	if err != nil {
+		return err
+	}
+	return expectOneRowErr(result, ErrAssignmentFenced)
 }

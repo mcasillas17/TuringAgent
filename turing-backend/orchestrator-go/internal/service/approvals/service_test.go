@@ -428,9 +428,12 @@ func TestGetApprovalForRuntimeReturnsApprovedTokenAndConsumeConsumesOnce(t *test
 	if consumed.Status != turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED {
 		t.Fatalf("consume status = %s", consumed.Status)
 	}
-	_, err = client.ConsumeApproval(context.Background(), &turingv1.ConsumeApprovalRequest{ApprovalId: approvalID})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("second ConsumeApproval error = %v, want FailedPrecondition", err)
+	again, err := client.ConsumeApproval(context.Background(), &turingv1.ConsumeApprovalRequest{ApprovalId: approvalID})
+	if err != nil {
+		t.Fatalf("second ConsumeApproval error = %v", err)
+	}
+	if again.GetStatus() != turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED {
+		t.Fatalf("second ConsumeApproval response = %+v, want consumed", again)
 	}
 }
 
@@ -537,13 +540,13 @@ func TestGetApprovalForRuntimeLazilyExpiresOnceAndTerminalizesRunAndJob(t *testi
 	}
 }
 
-func TestGetApprovalForRuntimeReturnsPostCommitExpirationErrors(t *testing.T) {
+func TestGetApprovalForRuntimeKeepsExpirationAtomicAndAncillaryFailuresNonFatal(t *testing.T) {
 	notifierErr := status.Error(codes.Unavailable, "notify expiration failed: not pending")
 	tests := []struct {
 		name      string
 		setup     func(t *testing.T, h *approvalHarness) error
 		wantError string
-		wantCause error
+		wantState turingv1.ApprovalStatus
 	}{
 		{
 			name: "append event",
@@ -573,7 +576,7 @@ func TestGetApprovalForRuntimeReturnsPostCommitExpirationErrors(t *testing.T) {
 				`)
 				return err
 			},
-			wantError: "record expiration audit failed",
+			wantState: turingv1.ApprovalStatus_APPROVAL_STATUS_EXPIRED,
 		},
 		{
 			name: "notifier",
@@ -581,8 +584,7 @@ func TestGetApprovalForRuntimeReturnsPostCommitExpirationErrors(t *testing.T) {
 				h.service.SetNotifier(failingApprovalNotifier{err: notifierErr})
 				return nil
 			},
-			wantError: "notify expiration failed: not pending",
-			wantCause: notifierErr,
+			wantState: turingv1.ApprovalStatus_APPROVAL_STATUS_EXPIRED,
 		},
 	}
 
@@ -602,21 +604,25 @@ func TestGetApprovalForRuntimeReturnsPostCommitExpirationErrors(t *testing.T) {
 			}
 
 			state, err := h.service.GetApprovalForRuntime(context.Background(), &turingv1.GetApprovalForRuntimeRequest{ApprovalId: approvalID})
-			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
-				t.Fatalf("GetApprovalForRuntime state/error = %+v/%v, want error containing %q", state, err, tt.wantError)
-			}
-			if tt.wantCause != nil && !errors.Is(err, tt.wantCause) {
-				t.Fatalf("GetApprovalForRuntime error = %v, want wrapped cause %v", err, tt.wantCause)
-			}
-			if tt.wantCause != nil && status.Code(err) != status.Code(tt.wantCause) {
-				t.Fatalf("GetApprovalForRuntime status code = %s, want %s", status.Code(err), status.Code(tt.wantCause))
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Fatalf("GetApprovalForRuntime state/error = %+v/%v, want error containing %q", state, err, tt.wantError)
+				}
+			} else if err != nil {
+				t.Fatalf("GetApprovalForRuntime reported ancillary failure: %v", err)
+			} else if state.GetStatus() != tt.wantState {
+				t.Fatalf("GetApprovalForRuntime state = %+v, want %s", state, tt.wantState)
 			}
 			current, err := h.repo.GetApproval(context.Background(), approvalID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if current.Status != "expired" {
-				t.Fatalf("approval status = %q, want expired", current.Status)
+			wantStatus := "expired"
+			if tt.wantError != "" {
+				wantStatus = "pending"
+			}
+			if current.Status != wantStatus {
+				t.Fatalf("approval status = %q, want %s", current.Status, wantStatus)
 			}
 		})
 	}
@@ -734,7 +740,7 @@ func TestDenyApprovalPublishesCommittedTerminalRunEventOnlyOnce(t *testing.T) {
 	}
 }
 
-func TestApprovalTerminalizationPublishesRunFailureWhenApprovalEventAppendFails(t *testing.T) {
+func TestApprovalTerminalizationRollsBackWhenRequiredApprovalEventAppendFails(t *testing.T) {
 	tests := []struct {
 		name        string
 		eventType   string
@@ -779,26 +785,20 @@ func TestApprovalTerminalizationPublishesRunFailureWhenApprovalEventAppendFails(
 			`, test.name, test.eventType)); err != nil {
 				t.Fatal(err)
 			}
-			published, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
-			defer unsubscribe()
-
 			err = test.terminalize(context.Background(), h, approvalID)
 			if err == nil || !strings.Contains(err.Error(), "append approval event failed") {
 				t.Fatalf("terminalization error = %v, want approval event append failure", err)
 			}
-
-			select {
-			case event := <-published:
-				if event.Type != "agent.run.failed" || event.RunID != enqueued.RunID {
-					t.Fatalf("published event = %+v, want agent.run.failed for %q", event, enqueued.RunID)
-				}
-			case <-time.After(time.Second):
-				t.Fatal("committed agent.run.failed event was not published")
+			approval, err := h.repo.GetApproval(context.Background(), approvalID)
+			if err != nil {
+				t.Fatal(err)
 			}
-			select {
-			case event := <-published:
-				t.Fatalf("duplicate terminal event published: %+v", event)
-			case <-time.After(50 * time.Millisecond):
+			run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if approval.Status != "pending" || run.Status != "waiting_approval" {
+				t.Fatalf("required event failure leaked terminal state: approval=%q run=%q", approval.Status, run.Status)
 			}
 		})
 	}

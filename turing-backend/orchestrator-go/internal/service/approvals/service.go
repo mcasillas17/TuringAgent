@@ -62,22 +62,12 @@ func (s *Server) CreateApprovalForTool(ctx context.Context, runID string, toolCa
 	if err != nil {
 		return "", status.Error(codes.InvalidArgument, "tool args are not valid JSON")
 	}
-	approval, err := s.repo.CreateApproval(ctx, runID, toolCallID, agentID, toolName, argsJSON, argsHash, approvalExpiry(time.Now(), s.approvalTTL).Format(time.RFC3339Nano))
-	if err != nil {
-		return "", err
-	}
-	event, err := s.appendApprovalEvent(ctx, approval, "approval.requested", map[string]any{
-		"approvalId":  approval.ApprovalID,
-		"toolName":    approval.ToolName,
-		"argsSummary": summarizeArgs(args),
-	})
+	approval, event, err := s.repo.CreateApprovalWithEvent(ctx, runID, toolCallID, agentID, toolName, argsJSON, argsHash, approvalExpiry(time.Now(), s.approvalTTL).Format(time.RFC3339Nano))
 	if err != nil {
 		return "", err
 	}
 	s.publishEvent(event)
-	if err := s.audit.Record(ctx, approval.RunID, "runtime", "", "approval.requested", approval.ApprovalID, map[string]any{"toolName": approval.ToolName}); err != nil {
-		return "", err
-	}
+	_ = s.audit.Record(ctx, approval.RunID, "runtime", "", "approval.requested", approval.ApprovalID, map[string]any{"toolName": approval.ToolName})
 	return approval.ApprovalID, nil
 }
 
@@ -90,6 +80,9 @@ func (s *Server) ApproveApproval(ctx context.Context, req *turingv1.ApproveAppro
 		return nil, mapApprovalError(err)
 	}
 	if approval.Status != "pending" {
+		if approval.Status == "approved" {
+			return &turingv1.ApprovalResponse{ApprovalId: approval.ApprovalID, Status: turingv1.ApprovalStatus_APPROVAL_STATUS_APPROVED}, nil
+		}
 		return nil, status.Error(codes.FailedPrecondition, "approval is not pending")
 	}
 	if expired(approval.ExpiresAt) {
@@ -102,22 +95,17 @@ func (s *Server) ApproveApproval(ctx context.Context, req *turingv1.ApproveAppro
 	if err != nil {
 		return nil, err
 	}
-	approved, err := s.repo.ApproveApproval(ctx, req.ApprovalId, token, "")
+	transition, err := s.repo.ApproveApprovalWithEvent(ctx, req.ApprovalId, token, "")
 	if err != nil {
 		return nil, mapApprovalError(err)
 	}
-	event, err := s.appendApprovalEvent(ctx, approved, "approval.approved", map[string]any{"approvalId": approved.ApprovalID, "toolName": approved.ToolName})
-	if err != nil {
-		return nil, err
+	approved := transition.Approval
+	if transition.ApprovalEvent.EventID != "" {
+		s.publishEvent(transition.ApprovalEvent)
 	}
-	s.publishEvent(event)
-	if err := s.audit.Record(ctx, approved.RunID, "client", "", "approval.approved", approved.ApprovalID, map[string]any{"toolName": approved.ToolName}); err != nil {
-		return nil, err
-	}
+	_ = s.audit.Record(ctx, approved.RunID, "client", "", "approval.approved", approved.ApprovalID, map[string]any{"toolName": approved.ToolName})
 	if s.notifier != nil {
-		if err := s.notifier.NotifyApprovalUpdated(ctx, approved.RunID, approved.ApprovalID, "approved", approved.ApprovalToken); err != nil {
-			return nil, err
-		}
+		_ = s.notifier.NotifyApprovalUpdated(ctx, approved.RunID, approved.ApprovalID, "approved", approved.ApprovalToken)
 	}
 	return &turingv1.ApprovalResponse{ApprovalId: approved.ApprovalID, Status: turingv1.ApprovalStatus_APPROVAL_STATUS_APPROVED}, nil
 }
@@ -137,18 +125,12 @@ func (s *Server) DenyApproval(ctx context.Context, req *turingv1.DenyApprovalReq
 	if transition.RunFailedEvent.EventID != "" {
 		s.publishEvent(transition.RunFailedEvent)
 	}
-	event, err := s.appendApprovalEvent(ctx, denied, "approval.denied", map[string]any{"approvalId": denied.ApprovalID, "toolName": denied.ToolName})
-	if err != nil {
-		return nil, err
+	if transition.ApprovalEvent.EventID != "" {
+		s.publishEvent(transition.ApprovalEvent)
 	}
-	s.publishEvent(event)
-	if err := s.audit.Record(ctx, denied.RunID, "client", "", "approval.denied", denied.ApprovalID, map[string]any{"toolName": denied.ToolName}); err != nil {
-		return nil, err
-	}
+	_ = s.audit.Record(ctx, denied.RunID, "client", "", "approval.denied", denied.ApprovalID, map[string]any{"toolName": denied.ToolName})
 	if s.notifier != nil {
-		if err := s.notifier.NotifyApprovalUpdated(ctx, denied.RunID, denied.ApprovalID, "denied", ""); err != nil {
-			return nil, err
-		}
+		_ = s.notifier.NotifyApprovalUpdated(ctx, denied.RunID, denied.ApprovalID, "denied", "")
 	}
 	return &turingv1.ApprovalResponse{ApprovalId: denied.ApprovalID, Status: turingv1.ApprovalStatus_APPROVAL_STATUS_DENIED}, nil
 }
@@ -226,18 +208,12 @@ func (s *Server) expireApproval(ctx context.Context, approvalID string) (reposit
 	if transition.RunFailedEvent.EventID != "" {
 		s.publishEvent(transition.RunFailedEvent)
 	}
-	event, err := s.appendApprovalEvent(ctx, expiredApproval, "approval.expired", map[string]any{"approvalId": expiredApproval.ApprovalID, "toolName": expiredApproval.ToolName})
-	if err != nil {
-		return repository.ApprovalRecord{}, &postCommitExpirationError{err: err}
+	if transition.ApprovalEvent.EventID != "" {
+		s.publishEvent(transition.ApprovalEvent)
 	}
-	s.publishEvent(event)
-	if err := s.audit.Record(ctx, expiredApproval.RunID, "system", "", "approval.expired", expiredApproval.ApprovalID, map[string]any{"toolName": expiredApproval.ToolName}); err != nil {
-		return repository.ApprovalRecord{}, &postCommitExpirationError{err: err}
-	}
+	_ = s.audit.Record(ctx, expiredApproval.RunID, "system", "", "approval.expired", expiredApproval.ApprovalID, map[string]any{"toolName": expiredApproval.ToolName})
 	if s.notifier != nil {
-		if err := s.notifier.NotifyApprovalUpdated(ctx, expiredApproval.RunID, expiredApproval.ApprovalID, "expired", ""); err != nil {
-			return repository.ApprovalRecord{}, &postCommitExpirationError{err: err}
-		}
+		_ = s.notifier.NotifyApprovalUpdated(ctx, expiredApproval.RunID, expiredApproval.ApprovalID, "expired", "")
 	}
 	return expiredApproval, nil
 }
@@ -246,18 +222,15 @@ func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeAppro
 	if req == nil || req.ApprovalId == "" {
 		return nil, status.Error(codes.InvalidArgument, "approval_id is required")
 	}
-	consumed, err := s.repo.ConsumeApproval(ctx, req.ApprovalId, "")
+	transition, err := s.repo.ConsumeApprovalWithEvent(ctx, req.ApprovalId, "")
 	if err != nil {
 		return nil, mapApprovalError(err)
 	}
-	event, err := s.appendApprovalEvent(ctx, consumed, "approval.consumed", map[string]any{"approvalId": consumed.ApprovalID, "toolName": consumed.ToolName})
-	if err != nil {
-		return nil, err
+	consumed := transition.Approval
+	if transition.ApprovalEvent.EventID != "" {
+		s.publishEvent(transition.ApprovalEvent)
 	}
-	s.publishEvent(event)
-	if err := s.audit.Record(ctx, consumed.RunID, "mcp", "", "approval.consumed", consumed.ApprovalID, map[string]any{"toolName": consumed.ToolName}); err != nil {
-		return nil, err
-	}
+	_ = s.audit.Record(ctx, consumed.RunID, "mcp", "", "approval.consumed", consumed.ApprovalID, map[string]any{"toolName": consumed.ToolName})
 	return &turingv1.ApprovalResponse{ApprovalId: consumed.ApprovalID, Status: turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED}, nil
 }
 
@@ -268,13 +241,6 @@ func canonicalArgs(args map[string]any) (string, string, error) {
 	}
 	hash := sha256.Sum256(data)
 	return string(data), "sha256:" + fmt.Sprintf("%x", hash[:]), nil
-}
-
-func summarizeArgs(args map[string]any) string {
-	if path, ok := args["path"].(string); ok && path != "" {
-		return "Requested change to " + path
-	}
-	return "Requested tool use"
 }
 
 func expired(expiresAt string) bool {
@@ -325,30 +291,6 @@ func (s *Server) signApprovalToken(approval repository.ApprovalRecord) (string, 
 	mac := hmac.New(sha256.New, []byte(s.jwtSecret))
 	_, _ = mac.Write([]byte(signingInput))
 	return signingInput + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
-}
-
-func (s *Server) appendApprovalEvent(ctx context.Context, approval repository.ApprovalRecord, eventType string, payload map[string]any) (repository.Event, error) {
-	run, err := s.repo.GetRun(ctx, approval.RunID)
-	if err != nil {
-		return repository.Event{}, err
-	}
-	payload["toolCallId"] = approval.ToolCallID
-	payload["runId"] = approval.RunID
-	payload["traceId"] = run.TraceID
-	if approval.ModelToolCallID != "" {
-		payload["modelToolCallId"] = approval.ModelToolCallID
-	}
-	payloadJSON, err := safejson.MarshalCanonical(payload)
-	if err != nil {
-		return repository.Event{}, err
-	}
-	return s.repo.AppendEvent(ctx, repository.AppendEventInput{
-		SessionID:   run.SessionID,
-		RunID:       approval.RunID,
-		TraceID:     run.TraceID,
-		Type:        eventType,
-		PayloadJSON: string(payloadJSON),
-	})
 }
 
 func (s *Server) publishEvent(event repository.Event) {
