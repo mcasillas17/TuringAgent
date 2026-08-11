@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
@@ -108,7 +109,7 @@ func (r *Repository) SearchMessages(ctx context.Context, sessionID, query string
 		limit = 20
 	}
 	query = strings.ReplaceAll(query, "\x00", " ")
-	if query == "" {
+	if !hasFTS5Token(query) {
 		return []Message{}, nil
 	}
 
@@ -147,6 +148,15 @@ func (r *Repository) SearchMessages(ctx context.Context, sessionID, query string
 
 func fts5Phrase(query string) string {
 	return `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
+}
+
+func hasFTS5Token(query string) bool {
+	for _, r := range query {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.In(r, unicode.Co) {
+			return true
+		}
+	}
+	return false
 }
 
 func nullableString(value sql.NullString) any {

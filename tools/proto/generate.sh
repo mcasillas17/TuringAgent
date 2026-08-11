@@ -71,4 +71,11 @@ protoc -I "$PROTO_DIR" \
   --go-grpc_out="$OUT_DIR/go" --go-grpc_opt=paths=source_relative \
   "$PROTO_DIR"/turing/v1/*.proto
 
-protoc -I "$PROTO_DIR" --plugin=protoc-gen-dart="$dart_plugin" --dart_out=grpc:"$FLUTTER_OUT_DIR" "$PROTO_DIR"/turing/v1/*.proto
+if [[ "${OS:-}" == "Windows_NT" ]]; then
+  # Protoc's Windows PATH lookup knows how to launch Dart's .bat shim through
+  # cmd.exe; an explicit --plugin mapping would pass the batch file directly
+  # to CreateProcessW and fail.
+  PATH="$dart_pub_cache/bin:$PATH" protoc -I "$PROTO_DIR" --dart_out=grpc:"$FLUTTER_OUT_DIR" "$PROTO_DIR"/turing/v1/*.proto
+else
+  protoc -I "$PROTO_DIR" --plugin=protoc-gen-dart="$dart_plugin" --dart_out=grpc:"$FLUTTER_OUT_DIR" "$PROTO_DIR"/turing/v1/*.proto
+fi

@@ -20,7 +20,7 @@ tools/proto/generate.sh
 tools/proto/check.sh
 ```
 
-`generate.sh` resolves the global pub cache from `PUB_CACHE`; when unset it uses `$HOME/.pub-cache` on Unix-like systems and `%LOCALAPPDATA%\Pub\Cache` on Windows. It accepts the platform's extensionless, `.bat`, `.cmd`, or `.exe` `protoc-gen-dart` shim, verifies that the selected cache has `protoc_plugin` 22.5.0 globally activated, and passes the absolute executable path directly to protoc. A different `protoc-gen-dart` earlier on `PATH` is ignored. Missing or mismatched installations fail with the exact `PUB_CACHE=... dart pub global activate protoc_plugin 22.5.0` repair command.
+`generate.sh` resolves the global pub cache from `PUB_CACHE`; when unset it uses `$HOME/.pub-cache` on Unix-like systems and `%LOCALAPPDATA%\Pub\Cache` on Windows. It accepts the platform's extensionless, `.bat`, `.cmd`, or `.exe` `protoc-gen-dart` shim and verifies that the selected cache has `protoc_plugin` 22.5.0 globally activated. Unix-like systems pass that absolute executable directly to protoc. On Windows, the selected cache's `bin` directory is prepended to `PATH` for protoc's platform-aware lookup, which is required to launch Dart's `.bat` shim through `cmd.exe`. In both cases a different `protoc-gen-dart` elsewhere on `PATH` cannot win. Missing or mismatched installations fail with the exact `PUB_CACHE=... dart pub global activate protoc_plugin 22.5.0` repair command.
 
 Canonical generation is deliberately limited to pinned Go and Dart outputs. Unpinned platform generators are not run implicitly, so installing unrelated Swift, C#, or Java tooling cannot change `tools/proto/check.sh` results. The reserved platform directories remain placeholders until their generators and outputs are pinned:
 

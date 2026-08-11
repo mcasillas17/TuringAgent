@@ -134,6 +134,41 @@ func TestSearchMessagesNULOnlyInputReturnsNoMatches(t *testing.T) {
 	assertSearchMessageIDs(t, results, []string{})
 }
 
+func TestSearchMessagesPunctuationOnlyInputReturnsNoMatches(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	insertSearchSession(t, ctx, database, "s1")
+	insertSearchMessage(t, ctx, database, "m-punctuation", "s1", "ordinary searchable content", 1)
+
+	for _, query := range []string{"...", "!!!", "🤖"} {
+		results, err := repo.SearchMessages(ctx, "", query, 10)
+		if err != nil {
+			t.Fatalf("SearchMessages punctuation-only query %q: %v", query, err)
+		}
+		assertSearchMessageIDs(t, results, []string{})
+	}
+}
+
+func TestHasFTS5Token(t *testing.T) {
+	for _, test := range []struct {
+		query string
+		want  bool
+	}{
+		{query: "...", want: false},
+		{query: "🤖", want: false},
+		{query: "\u0301", want: false},
+		{query: "letter", want: true},
+		{query: "123", want: true},
+		{query: "東京", want: true},
+		{query: "\ue000", want: true},
+	} {
+		if got := hasFTS5Token(test.query); got != test.want {
+			t.Errorf("hasFTS5Token(%q) = %v, want %v", test.query, got, test.want)
+		}
+	}
+}
+
 func TestSearchMessagesReturnsQueryErrors(t *testing.T) {
 	database := openTestDB(t)
 	repo := New(database)

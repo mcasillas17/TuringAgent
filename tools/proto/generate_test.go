@@ -30,10 +30,11 @@ func TestGenerateRejectsUnsupportedProtocVersion(t *testing.T) {
 	}
 }
 
-func TestGenerateResolvesWindowsPubCacheShim(t *testing.T) {
+func TestGenerateExecutesWindowsPubCacheShimViaPATH(t *testing.T) {
 	binDir := t.TempDir()
 	protocLog := filepath.Join(t.TempDir(), "protoc.log")
-	writeTool(t, binDir, "protoc", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'libprotoc 34.1'; else printf '%s\\n' \"$*\" >> \"$PROTO_LOG\"; fi\n")
+	dartPluginLog := filepath.Join(t.TempDir(), "dart-plugin.log")
+	writeTool(t, binDir, "protoc", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo 'libprotoc 34.1'\n  exit 0\nfi\nprintf '%s\\n' \"$*\" >> \"$PROTO_LOG\"\ncase \"$*\" in\n  *--dart_out=*)\n    case \"$*\" in *--plugin=protoc-gen-dart=*) exit 41 ;; esac\n    old_ifs=$IFS\n    IFS=:\n    for directory in $PATH; do\n      candidate=\"$directory/protoc-gen-dart.bat\"\n      if [ -f \"$candidate\" ]; then\n        IFS=$old_ifs\n        /bin/sh \"$candidate\"\n        exit $?\n      fi\n    done\n    IFS=$old_ifs\n    exit 42\n    ;;\nesac\n")
 	writeTool(t, binDir, "protoc-gen-go", "#!/bin/sh\nexit 0\n")
 	writeTool(t, binDir, "protoc-gen-go-grpc", "#!/bin/sh\nexit 0\n")
 	writeTool(t, binDir, "dart", "#!/bin/sh\nif [ \"$1 $2 $3\" = 'pub global list' ]; then echo 'protoc_plugin 22.5.0'; fi\n")
@@ -44,7 +45,7 @@ func TestGenerateResolvesWindowsPubCacheShim(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(plugin), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(plugin, []byte("@echo off\n"), 0o644); err != nil {
+	if err := os.WriteFile(plugin, []byte("#!/bin/sh\nprintf 'invoked\\n' > \"$DART_PLUGIN_LOG\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -55,6 +56,7 @@ func TestGenerateResolvesWindowsPubCacheShim(t *testing.T) {
 		"OS=Windows_NT",
 		"LOCALAPPDATA="+localAppData,
 		"PROTO_LOG="+protocLog,
+		"DART_PLUGIN_LOG="+dartPluginLog,
 	)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("generate.sh: %v\n%s", err, output)
@@ -63,9 +65,15 @@ func TestGenerateResolvesWindowsPubCacheShim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "--plugin=protoc-gen-dart=" + plugin
-	if !strings.Contains(string(logData), want) {
-		t.Fatalf("protoc calls = %q, want them to contain %q", logData, want)
+	if strings.Contains(string(logData), "--plugin=protoc-gen-dart=") {
+		t.Fatalf("Windows protoc call used an explicit batch-file mapping: %q", logData)
+	}
+	pluginData, err := os.ReadFile(dartPluginLog)
+	if err != nil {
+		t.Fatalf("read Dart plugin execution log: %v", err)
+	}
+	if got := strings.TrimSpace(string(pluginData)); got != "invoked" {
+		t.Fatalf("Dart plugin execution log = %q, want invoked", got)
 	}
 }
 

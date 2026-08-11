@@ -175,6 +175,14 @@ func TestSessionServiceSearchMessagesValidatesQuery(t *testing.T) {
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("SearchMessages nil request error = %v, want InvalidArgument", err)
 	}
+
+	response, err := client.SearchMessages(ctx, &turingv1.SearchMessagesRequest{Query: "..."})
+	if err != nil {
+		t.Fatalf("SearchMessages punctuation-only query: %v", err)
+	}
+	if len(response.Messages) != 0 {
+		t.Fatalf("SearchMessages punctuation-only results = %+v, want none", response.Messages)
+	}
 }
 
 func TestSessionServiceSearchMessagesReturnsGlobalAndScopedResults(t *testing.T) {
