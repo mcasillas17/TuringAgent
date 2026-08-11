@@ -53,8 +53,12 @@ func TestRecoverStaleApprovedAuthorizationTerminalizesInsteadOfRequeueing(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 || events[0].Type != "agent.run.failed" {
-		t.Fatalf("recovery events = %+v, want one run failure", events)
+	var eventTypes []string
+	for _, event := range events {
+		eventTypes = append(eventTypes, event.Type)
+	}
+	if want := []string{"approval.expired", "tool.call.failed", "agent.run.failed"}; !reflect.DeepEqual(eventTypes, want) {
+		t.Fatalf("recovery event types = %v, want %v", eventTypes, want)
 	}
 	run, err := repo.GetRun(ctx, enqueued.RunID)
 	if err != nil {

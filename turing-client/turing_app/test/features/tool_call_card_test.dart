@@ -72,6 +72,30 @@ void main() {
     expect(find.byIcon(Icons.block), findsOneWidget);
   });
 
+  testWidgets('denied card renders and announces a stored error', (
+    tester,
+  ) async {
+    final handle = tester.ensureSemantics();
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: ToolCallCard(
+            toolName: 'files.create',
+            status: ToolCallStatus.denied,
+            error: 'User denied approval',
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('User denied approval'), findsOneWidget);
+    expect(
+      find.bySemanticsLabel(RegExp('Error: User denied approval')),
+      findsOneWidget,
+    );
+    handle.dispose();
+  });
+
   testWidgets('exposes a distinct status label per status to screen readers', (
     tester,
   ) async {
@@ -86,10 +110,7 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
-            body: ToolCallCard(
-              toolName: 'system.time',
-              status: entry.key,
-            ),
+            body: ToolCallCard(toolName: 'system.time', status: entry.key),
           ),
         ),
       );

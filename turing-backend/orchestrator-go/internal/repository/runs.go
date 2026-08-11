@@ -98,7 +98,7 @@ func (r *Repository) CompleteRun(ctx context.Context, runID string, assistantMes
 	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'completed', finished_at = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, runID); err != nil {
 		return err
 	}
-	if err := failPendingApprovalLifecycleTx(ctx, tx, runID, "run_completed", "Run completed before tool call finished", finishedAt); err != nil {
+	if _, err := failPendingApprovalLifecycleTx(ctx, tx, runID, "run_completed", "Run completed before tool call finished", finishedAt); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -144,10 +144,10 @@ func (r *Repository) CompleteRunWithEvent(ctx context.Context, runID string, ass
 	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'completed', finished_at = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, runID); err != nil {
 		return nil, err
 	}
-	if err := failPendingApprovalLifecycleTx(ctx, tx, runID, "run_completed", "Run completed before tool call finished", finishedAt); err != nil {
+	events, err := failPendingApprovalLifecycleTx(ctx, tx, runID, "run_completed", "Run completed before tool call finished", finishedAt)
+	if err != nil {
 		return nil, err
 	}
-	events := make([]Event, 0, 2)
 	if assistantMessageID != "" && content != "" {
 		messagePayload, err := json.Marshal(map[string]any{
 			"messageId": assistantMessageID,
@@ -199,7 +199,7 @@ func (r *Repository) FailRun(ctx context.Context, runID string, code string, mes
 	if err := expectOneRowErr(result, ErrRunNotFailable); err != nil {
 		return err
 	}
-	if err := failPendingApprovalLifecycleTx(ctx, tx, runID, code, message, finishedAt); err != nil {
+	if _, err := failPendingApprovalLifecycleTx(ctx, tx, runID, code, message, finishedAt); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'failed', finished_at = ?, error_code = ?, error_message = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, code, message, runID); err != nil {
@@ -208,24 +208,24 @@ func (r *Repository) FailRun(ctx context.Context, runID string, code string, mes
 	return tx.Commit()
 }
 
-func (r *Repository) FailRunWithEvent(ctx context.Context, runID string, code string, message string, payloadJSON string) (Event, error) {
+func (r *Repository) FailRunWithEvent(ctx context.Context, runID string, code string, message string, payloadJSON string) ([]Event, error) {
 	return r.failRunWithEvent(ctx, runID, code, message, payloadJSON, false)
 }
 
-func (r *Repository) FailRunWithEventPreservingExecution(ctx context.Context, runID string, code string, message string, payloadJSON string) (Event, error) {
+func (r *Repository) FailRunWithEventPreservingExecution(ctx context.Context, runID string, code string, message string, payloadJSON string) ([]Event, error) {
 	return r.failRunWithEvent(ctx, runID, code, message, payloadJSON, true)
 }
 
-func (r *Repository) failRunWithEvent(ctx context.Context, runID string, code string, message string, payloadJSON string, preserveExecution bool) (Event, error) {
+func (r *Repository) failRunWithEvent(ctx context.Context, runID string, code string, message string, payloadJSON string, preserveExecution bool) ([]Event, error) {
 	finishedAt := now()
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return Event{}, err
+		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	var sessionID, traceID string
 	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&sessionID, &traceID); err != nil {
-		return Event{}, err
+		return nil, err
 	}
 	var result sql.Result
 	if preserveExecution {
@@ -260,25 +260,27 @@ func (r *Repository) failRunWithEvent(ctx context.Context, runID string, code st
 		`, code, message, finishedAt, finishedAt, runID)
 	}
 	if err != nil {
-		return Event{}, err
+		return nil, err
 	}
 	if err := expectOneRowErr(result, ErrRunNotFailable); err != nil {
-		return Event{}, err
+		return nil, err
 	}
-	if err := failPendingApprovalLifecycleTx(ctx, tx, runID, code, message, finishedAt); err != nil {
-		return Event{}, err
+	events, err := failPendingApprovalLifecycleTx(ctx, tx, runID, code, message, finishedAt)
+	if err != nil {
+		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'failed', finished_at = ?, error_code = ?, error_message = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, code, message, runID); err != nil {
-		return Event{}, err
+		return nil, err
 	}
 	event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.failed", payloadJSON, finishedAt)
 	if err != nil {
-		return Event{}, err
+		return nil, err
 	}
+	events = append(events, event)
 	if err := tx.Commit(); err != nil {
-		return Event{}, err
+		return nil, err
 	}
-	return event, nil
+	return events, nil
 }
 
 func (r *Repository) CancelRun(ctx context.Context, runID string, reason string) error {
@@ -295,7 +297,7 @@ func (r *Repository) CancelRun(ctx context.Context, runID string, reason string)
 	if err := expectOneRowErr(result, ErrRunNotCancellable); err != nil {
 		return err
 	}
-	if err := failPendingApprovalLifecycleTx(ctx, tx, runID, "run_cancelled", reason, finishedAt); err != nil {
+	if _, err := failPendingApprovalLifecycleTx(ctx, tx, runID, "run_cancelled", reason, finishedAt); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'cancelled', finished_at = ?, error_code = 'cancelled', error_message = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, reason, runID); err != nil {
@@ -339,38 +341,40 @@ func (r *Repository) AcknowledgeExecutionExit(ctx context.Context, runID string)
 	return tx.Commit()
 }
 
-func (r *Repository) CancelRunWithEvent(ctx context.Context, runID string, reason string, payloadJSON string) (Event, error) {
+func (r *Repository) CancelRunWithEvent(ctx context.Context, runID string, reason string, payloadJSON string) ([]Event, error) {
 	finishedAt := now()
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return Event{}, err
+		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	var sessionID, traceID string
 	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&sessionID, &traceID); err != nil {
-		return Event{}, err
+		return nil, err
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'cancelled', cancellation_reason = ?, finished_at = ? WHERE id = ? AND status IN ('queued','running','waiting_approval')`, reason, finishedAt, runID)
 	if err != nil {
-		return Event{}, err
+		return nil, err
 	}
 	if err := expectOneRowErr(result, ErrRunNotCancellable); err != nil {
-		return Event{}, err
+		return nil, err
 	}
-	if err := failPendingApprovalLifecycleTx(ctx, tx, runID, "run_cancelled", reason, finishedAt); err != nil {
-		return Event{}, err
+	events, err := failPendingApprovalLifecycleTx(ctx, tx, runID, "run_cancelled", reason, finishedAt)
+	if err != nil {
+		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'cancelled', finished_at = ?, error_code = 'cancelled', error_message = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, reason, runID); err != nil {
-		return Event{}, err
+		return nil, err
 	}
 	event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.cancelled", payloadJSON, finishedAt)
 	if err != nil {
-		return Event{}, err
+		return nil, err
 	}
+	events = append(events, event)
 	if err := tx.Commit(); err != nil {
-		return Event{}, err
+		return nil, err
 	}
-	return event, nil
+	return events, nil
 }
 
 func (r *Repository) GetRun(ctx context.Context, runID string) (Run, error) {
@@ -415,10 +419,10 @@ func (r *Repository) GetRun(ctx context.Context, runID string) (Run, error) {
 	return run, err
 }
 
-func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID string, code string, message string, finishedAt string) error {
+func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID string, code string, message string, finishedAt string) ([]Event, error) {
 	var sessionID, traceID string
 	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&sessionID, &traceID); err != nil {
-		return err
+		return nil, err
 	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT a.id, COALESCE(a.tool_call_id, ''), a.tool_name, COALESCE(tc.model_tool_call_id, '')
@@ -428,7 +432,7 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 		ORDER BY a.created_at, a.id
 	`, runID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	type approvalToRevoke struct {
 		id, toolCallID, toolName, modelToolCallID string
@@ -437,15 +441,15 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 	for rows.Next() {
 		var approval approvalToRevoke
 		if err := rows.Scan(&approval.id, &approval.toolCallID, &approval.toolName, &approval.modelToolCallID); err != nil {
-			return errors.Join(err, rows.Close())
+			return nil, errors.Join(err, rows.Close())
 		}
 		approvals = append(approvals, approval)
 	}
 	if err := rows.Err(); err != nil {
-		return errors.Join(err, rows.Close())
+		return nil, errors.Join(err, rows.Close())
 	}
 	if err := rows.Close(); err != nil {
-		return err
+		return nil, err
 	}
 
 	toolRows, err := tx.QueryContext(ctx, `
@@ -455,7 +459,7 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 		ORDER BY created_at, id
 	`, runID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	type toolCallToFail struct {
 		id, serverName, toolName string
@@ -464,15 +468,15 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 	for toolRows.Next() {
 		var toolCall toolCallToFail
 		if err := toolRows.Scan(&toolCall.id, &toolCall.serverName, &toolCall.toolName); err != nil {
-			return errors.Join(err, toolRows.Close())
+			return nil, errors.Join(err, toolRows.Close())
 		}
 		toolCalls = append(toolCalls, toolCall)
 	}
 	if err := toolRows.Err(); err != nil {
-		return errors.Join(err, toolRows.Close())
+		return nil, errors.Join(err, toolRows.Close())
 	}
 	if err := toolRows.Close(); err != nil {
-		return err
+		return nil, err
 	}
 
 	if _, err := tx.ExecContext(ctx, `
@@ -481,7 +485,7 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 			decided_at = COALESCE(decided_at, ?)
 		WHERE run_id = ? AND status IN ('pending', 'approved')
 	`, finishedAt, runID); err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE tool_calls
@@ -492,8 +496,9 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 		WHERE run_id = ?
 			AND status IN ('requested', 'allowed', 'approval_required')
 	`, code, message, finishedAt, runID); err != nil {
-		return err
+		return nil, err
 	}
+	events := make([]Event, 0, len(approvals)+len(toolCalls))
 	for _, approval := range approvals {
 		payload := map[string]any{
 			"approvalId": approval.id,
@@ -508,22 +513,26 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 		}
 		payloadJSON, err := json.Marshal(payload)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if _, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "approval.expired", string(payloadJSON), finishedAt); err != nil {
-			return err
+		event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "approval.expired", string(payloadJSON), finishedAt)
+		if err != nil {
+			return nil, err
 		}
+		events = append(events, event)
 	}
 	for _, toolCall := range toolCalls {
 		payloadJSON, err := marshalToolLifecyclePayload(toolCall.id, toolCall.serverName, toolCall.toolName, message)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if _, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "tool.call.failed", payloadJSON, finishedAt); err != nil {
-			return err
+		event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "tool.call.failed", payloadJSON, finishedAt)
+		if err != nil {
+			return nil, err
 		}
+		events = append(events, event)
 	}
-	return nil
+	return events, nil
 }
 
 func appendRunEventTx(ctx context.Context, tx *sql.Tx, sessionID string, runID string, traceID string, eventType string, payloadJSON string, createdAt string) (Event, error) {

@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -14,6 +16,7 @@ func TestRecoverStaleUncertainAssignmentFencesAndRequeuesAtInjectedCutoff(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
 		SessionID: session.SessionID, Content: "recover stale attempt", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
 	})
@@ -63,5 +66,72 @@ func TestRecoverStaleUncertainAssignmentFencesAndRequeuesAtInjectedCutoff(t *tes
 	}
 	if recovered.RunID != enqueued.RunID || recovered.Attempt != 2 {
 		t.Fatalf("recovered assignment = %+v, want second attempt for %q", recovered, enqueued.RunID)
+	}
+}
+
+func TestReconcileWaitingApprovalReturnsExactLifecycleEventsInOrder(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Waiting approval recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "recover approval", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-lost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
+		ToolCallID: "call_recovery", RunID: enqueued.RunID, ModelToolCallID: "model_recovery",
+		Status: "approval_required",
+	}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:test"); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := repo.CreateApproval(ctx, enqueued.RunID, "call_recovery", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:test", "2099-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reconciliation, err := repo.ReconcileAssignment(ctx, Assignment{
+		JobID: claimed.JobID, RunID: claimed.RunID, WorkerID: "worker-lost", AttemptID: claimed.AssignmentAttemptID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var eventTypes []string
+	for _, event := range reconciliation.Events {
+		eventTypes = append(eventTypes, event.Type)
+	}
+	if want := []string{"approval.denied", "tool.call.failed", "agent.run.failed"}; !reflect.DeepEqual(eventTypes, want) {
+		t.Fatalf("reconciliation events = %v, want %v", eventTypes, want)
+	}
+	var approvalPayload map[string]any
+	if err := json.Unmarshal([]byte(reconciliation.Events[0].PayloadJSON), &approvalPayload); err != nil {
+		t.Fatal(err)
+	}
+	wantApprovalPayload := map[string]any{
+		"approvalId": approval.ApprovalID, "toolCallId": "call_recovery", "toolName": "files.update",
+		"runId": enqueued.RunID, "traceId": enqueued.TraceID, "modelToolCallId": "model_recovery",
+	}
+	if !reflect.DeepEqual(approvalPayload, wantApprovalPayload) {
+		t.Fatalf("approval payload = %#v, want %#v", approvalPayload, wantApprovalPayload)
+	}
+	var toolPayload map[string]any
+	if err := json.Unmarshal([]byte(reconciliation.Events[1].PayloadJSON), &toolPayload); err != nil {
+		t.Fatal(err)
+	}
+	wantToolPayload := map[string]any{
+		"toolCallId": "call_recovery", "toolName": "files.update", "serverName": "files",
+		"error": "Worker disconnected while waiting for approval",
+	}
+	if !reflect.DeepEqual(toolPayload, wantToolPayload) {
+		t.Fatalf("tool payload = %#v, want %#v", toolPayload, wantToolPayload)
 	}
 }

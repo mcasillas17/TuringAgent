@@ -263,7 +263,7 @@ func (r *Repository) DenyApprovalWithEvent(ctx context.Context, approvalID strin
 }
 
 func (r *Repository) FailApprovalDeliveryWithEvent(ctx context.Context, approvalID string, decidedAt string) (ApprovalTerminalization, error) {
-	return r.terminalizeApproval(ctx, approvalID, decidedAt, "denied", "approval_delivery_failed", "Tool policy decision delivery failed", "failed", "", false)
+	return r.terminalizeApproval(ctx, approvalID, decidedAt, "denied", "approval_delivery_failed", "Tool policy decision delivery failed", "failed", "approval.denied", false)
 }
 
 func (r *Repository) terminalizeApproval(

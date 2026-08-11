@@ -206,7 +206,7 @@ func (s *Server) GetApprovalForRuntime(ctx context.Context, req *turingv1.GetApp
 	if err != nil {
 		return nil, mapApprovalError(err)
 	}
-	if approval.Status == "pending" && expired(approval.ExpiresAt) {
+	if (approval.Status == "pending" || approval.Status == "approved") && expired(approval.ExpiresAt) {
 		approval, err = s.expireApproval(ctx, req.ApprovalId)
 		if err != nil {
 			if isPostCommitExpirationError(err) {
@@ -236,7 +236,7 @@ func recoverExpirationConflict(
 	if currentErr != nil {
 		return repository.ApprovalRecord{}, currentErr
 	}
-	if current.Status == "pending" {
+	if current.Status == "pending" || current.Status == "approved" {
 		return repository.ApprovalRecord{}, expirationErr
 	}
 	return current, nil

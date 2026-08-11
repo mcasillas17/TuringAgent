@@ -135,6 +135,29 @@ func TestMcpResponseWriterRejectsOversizedEncodedResponse(t *testing.T) {
 	assertRPCErrorCode(t, response.Body.Bytes(), -32603)
 }
 
+func TestMcpResponseWriterDropsOversizedIDFromFallback(t *testing.T) {
+	response := httptest.NewRecorder()
+
+	writeJSONRPC(response, jsonrpc.Response{
+		JSONRPC: "2.0",
+		ID:      strings.Repeat("x", expectedSystemResponseLimit),
+		Result:  map[string]any{"text": "ok"},
+	})
+
+	if response.Body.Len() > expectedSystemResponseLimit {
+		t.Fatalf("response body = %d bytes, exceeds %d-byte cap", response.Body.Len(), expectedSystemResponseLimit)
+	}
+	var envelope struct {
+		ID any `json:"id"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.ID != nil {
+		t.Fatalf("fallback response id = %#v, want null", envelope.ID)
+	}
+}
+
 func TestEchoCharacterBoundaryFitsTransportAndAggregateBudgets(t *testing.T) {
 	result, err := systemtools.Call("system.echo", map[string]any{
 		"text": strings.Repeat("\x01", systemtools.MaxEchoCharacters),

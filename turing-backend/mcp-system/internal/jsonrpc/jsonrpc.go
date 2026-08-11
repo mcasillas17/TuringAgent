@@ -48,6 +48,8 @@ type rawRequest struct {
 
 var integerIDPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
 
+const maxIDBytes = 256
+
 func DecodeRequest(reader io.Reader) (Request, *RequestError) {
 	decoder := json.NewDecoder(reader)
 	var envelope json.RawMessage
@@ -102,6 +104,9 @@ func requestError(code int, message string, id any, cause error) *RequestError {
 func decodeID(raw json.RawMessage) (any, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, errors.New("id must be a string or integer")
+	}
+	if len(raw) > maxIDBytes {
+		return nil, fmt.Errorf("id exceeds %d-byte limit", maxIDBytes)
 	}
 	var value any
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))

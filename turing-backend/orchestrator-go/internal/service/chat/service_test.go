@@ -29,6 +29,7 @@ type harness struct {
 	database   *db.DB
 	bus        *events.Bus
 	runtime    *runtimesvc.Server
+	service    *Server
 	chatClient turingv1.ChatServiceClient
 	conn       *grpc.ClientConn
 	ctx        context.Context
@@ -67,7 +68,7 @@ func newHarness(t *testing.T) *harness {
 		grpcServer.Stop()
 		_ = conn.Close()
 	})
-	return &harness{repo: repo, database: database, bus: bus, runtime: runtimeServer, chatClient: turingv1.NewChatServiceClient(conn), conn: conn, ctx: ctx}
+	return &harness{repo: repo, database: database, bus: bus, runtime: runtimeServer, service: chatServer, chatClient: turingv1.NewChatServiceClient(conn), conn: conn, ctx: ctx}
 }
 
 func openChatTestDB(t *testing.T) *db.DB {
@@ -704,6 +705,55 @@ func TestSendMessageReplaysPersistedTerminalEventWithoutBusWake(t *testing.T) {
 	}
 	if completed.Sequence != appended.Sequence || completed.GetRunCompleted().GetRunId() != queued.GetRunQueued().RunId {
 		t.Fatalf("run_completed = %+v, appended = %+v", completed, appended)
+	}
+}
+
+func TestCancelRunPublishesDependentLifecycleEventsInOrder(t *testing.T) {
+	h := newHarness(t)
+	session, err := h.repo.CreateSession(context.Background(), "Cancel pending approval")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "cancel me", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.MarkRunRunning(context.Background(), enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.RecordToolCallBefore(context.Background(), repository.ToolCallRecord{
+		ToolCallID: "call_cancelled", RunID: enqueued.RunID, Status: "approval_required",
+	}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.CreateApproval(context.Background(), enqueued.RunID, "call_cancelled", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:test", "2099-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	ch, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
+	defer unsubscribe()
+
+	h.service.cancelRun(enqueued.RunID)
+
+	var got []string
+	for len(got) < 3 {
+		select {
+		case event := <-ch:
+			if event.RunID == enqueued.RunID &&
+				(event.Type == "approval.expired" || event.Type == "tool.call.failed" || event.Type == "agent.run.cancelled") {
+				got = append(got, event.Type)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("published cancellation lifecycle = %v, want dependent and terminal events", got)
+		}
+	}
+	want := []string{"approval.expired", "tool.call.failed", "agent.run.cancelled"}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("published cancellation lifecycle = %v, want %v", got, want)
+		}
 	}
 }
 

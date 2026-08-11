@@ -129,10 +129,11 @@ func TestTerminalRunEmitsFailureEventForActiveSafeToolCall(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	terminal, err := repo.CancelRunWithEvent(ctx, enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`)
+	events, err := repo.CancelRunWithEvent(ctx, enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
+	terminal := events[len(events)-1]
 	replayed, _, err := repo.ReplayEvents(ctx, enqueued.SessionID, 0, 20)
 	if err != nil {
 		t.Fatal(err)

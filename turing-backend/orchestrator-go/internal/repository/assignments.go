@@ -10,10 +10,10 @@ import (
 )
 
 type AssignmentReconciliation struct {
-	Requeued       bool
-	Cleared        bool
-	Fenced         bool
-	RunFailedEvent Event
+	Requeued bool
+	Cleared  bool
+	Fenced   bool
+	Events   []Event
 }
 
 func (r *Repository) RenewAssignments(ctx context.Context, assignments []Assignment, leaseExpires time.Time) (int, error) {
@@ -349,6 +349,7 @@ func terminalizeStaleApprovedAuthorizationTx(
 	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
 		return AssignmentReconciliation{}, false, err
 	}
+	events := make([]Event, 0, len(approvals)+len(toolCalls)+1)
 	for _, approval := range approvals {
 		payload := map[string]any{
 			"approvalId": approval.id,
@@ -363,18 +364,22 @@ func terminalizeStaleApprovedAuthorizationTx(
 		if err != nil {
 			return AssignmentReconciliation{}, false, err
 		}
-		if _, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "approval.expired", string(payloadJSON), finishedAt); err != nil {
+		event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "approval.expired", string(payloadJSON), finishedAt)
+		if err != nil {
 			return AssignmentReconciliation{}, false, err
 		}
+		events = append(events, event)
 	}
 	for _, toolCall := range toolCalls {
 		payloadJSON, err := marshalToolLifecyclePayload(toolCall.id, toolCall.serverName, toolCall.toolName, message)
 		if err != nil {
 			return AssignmentReconciliation{}, false, err
 		}
-		if _, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "tool.call.failed", payloadJSON, finishedAt); err != nil {
+		event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "tool.call.failed", payloadJSON, finishedAt)
+		if err != nil {
 			return AssignmentReconciliation{}, false, err
 		}
+		events = append(events, event)
 	}
 	payloadJSON, err := json.Marshal(map[string]any{
 		"runId": runID, "code": code, "message": message, "retryable": false,
@@ -386,7 +391,8 @@ func terminalizeStaleApprovedAuthorizationTx(
 	if err != nil {
 		return AssignmentReconciliation{}, false, err
 	}
-	return AssignmentReconciliation{Cleared: true, RunFailedEvent: event}, true, nil
+	events = append(events, event)
+	return AssignmentReconciliation{Cleared: true, Events: events}, true, nil
 }
 
 func fenceExecutionTx(ctx context.Context, tx *sql.Tx, runID string) error {
@@ -452,6 +458,7 @@ func reconcileWaitingApprovalTx(ctx context.Context, tx *sql.Tx, runID, sessionI
 	const code = "approval_delivery_failed"
 	const message = "Worker disconnected while waiting for approval"
 	finishedAt := now()
+	var approval ApprovalRecord
 	var approvalID string
 	approvalQuery := `SELECT id FROM approvals WHERE run_id = ? AND status = 'pending' ORDER BY ` + sqliteTimestampNanos("created_at") + ` DESC, id DESC LIMIT 1`
 	err := tx.QueryRowContext(ctx, approvalQuery, runID).Scan(&approvalID)
@@ -459,9 +466,39 @@ func reconcileWaitingApprovalTx(ctx context.Context, tx *sql.Tx, runID, sessionI
 		return AssignmentReconciliation{}, err
 	}
 	if err == nil {
+		approval, err = approvalByID(ctx, tx, approvalID)
+		if err != nil {
+			return AssignmentReconciliation{}, err
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE approvals SET status = 'denied', decided_at = ? WHERE id = ? AND status = 'pending'`, finishedAt, approvalID); err != nil {
 			return AssignmentReconciliation{}, err
 		}
+	}
+	type openToolCall struct {
+		id, serverName, toolName string
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, server_name, tool_name
+		FROM tool_calls
+		WHERE run_id = ? AND status IN ('requested', 'allowed', 'approval_required')
+		ORDER BY `+sqliteTimestampNanos("created_at")+`, id
+	`, runID)
+	if err != nil {
+		return AssignmentReconciliation{}, err
+	}
+	var toolCalls []openToolCall
+	for rows.Next() {
+		var toolCall openToolCall
+		if err := rows.Scan(&toolCall.id, &toolCall.serverName, &toolCall.toolName); err != nil {
+			return AssignmentReconciliation{}, errors.Join(err, rows.Close())
+		}
+		toolCalls = append(toolCalls, toolCall)
+	}
+	if err := rows.Err(); err != nil {
+		return AssignmentReconciliation{}, errors.Join(err, rows.Close())
+	}
+	if err := rows.Close(); err != nil {
+		return AssignmentReconciliation{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE tool_calls
@@ -512,6 +549,26 @@ func reconcileWaitingApprovalTx(ctx context.Context, tx *sql.Tx, runID, sessionI
 	`, finishedAt, code, message, runID); err != nil {
 		return AssignmentReconciliation{}, err
 	}
+	events := make([]Event, 0, len(toolCalls)+2)
+	if approvalID != "" {
+		approval.Status = "denied"
+		event, err := appendApprovalLifecycleEventTx(ctx, tx, approval, "approval.denied", finishedAt)
+		if err != nil {
+			return AssignmentReconciliation{}, err
+		}
+		events = append(events, event)
+	}
+	for _, toolCall := range toolCalls {
+		payloadJSON, err := marshalToolLifecyclePayload(toolCall.id, toolCall.serverName, toolCall.toolName, message)
+		if err != nil {
+			return AssignmentReconciliation{}, err
+		}
+		event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "tool.call.failed", payloadJSON, finishedAt)
+		if err != nil {
+			return AssignmentReconciliation{}, err
+		}
+		events = append(events, event)
+	}
 	payload, err := json.Marshal(map[string]any{
 		"runId": runID, "code": code, "message": message, "retryable": false,
 	})
@@ -522,7 +579,8 @@ func reconcileWaitingApprovalTx(ctx context.Context, tx *sql.Tx, runID, sessionI
 	if err != nil {
 		return AssignmentReconciliation{}, err
 	}
-	return AssignmentReconciliation{Cleared: !preserveExecution, Fenced: preserveExecution, RunFailedEvent: event}, nil
+	events = append(events, event)
+	return AssignmentReconciliation{Cleared: !preserveExecution, Fenced: preserveExecution, Events: events}, nil
 }
 
 func (r *Repository) RecoverStaleAssignments(ctx context.Context, cutoff time.Time) ([]Event, error) {
@@ -648,9 +706,7 @@ func (r *Repository) recoverAssignments(ctx context.Context, assignments []Assig
 		if err != nil {
 			return events, err
 		}
-		if reconciliation.RunFailedEvent.EventID != "" {
-			events = append(events, reconciliation.RunFailedEvent)
-		}
+		events = append(events, reconciliation.Events...)
 	}
 	return events, nil
 }

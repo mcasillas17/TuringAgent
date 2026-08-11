@@ -577,6 +577,38 @@ func TestGetApprovalForRuntimeLazilyExpiresOnceAndTerminalizesRunAndJob(t *testi
 	}
 }
 
+func TestGetApprovalForRuntimeExpiresApprovedTokenBeforeReturningIt(t *testing.T) {
+	h := newApprovalHarness(t)
+	enqueued := h.createRunningToolCall(t)
+	approvalID, err := h.service.CreateApprovalForTool(context.Background(), enqueued.RunID, "call_1", "general_assistant", "files.update", map[string]any{"path": "note.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := turingv1.NewApprovalServiceClient(h.conn)
+	if _, err := client.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.database.ExecContext(context.Background(), `UPDATE approvals SET expires_at = ? WHERE id = ?`, time.Now().Add(-time.Minute).Format(time.RFC3339Nano), approvalID); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := h.service.GetApprovalForRuntime(context.Background(), &turingv1.GetApprovalForRuntimeRequest{ApprovalId: approvalID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.GetStatus() != turingv1.ApprovalStatus_APPROVAL_STATUS_EXPIRED || state.GetApprovalToken() != "" {
+		t.Fatalf("runtime approval state = %+v, want expired with no token", state)
+	}
+	var statusValue string
+	var token sql.NullString
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status, approval_token FROM approvals WHERE id = ?`, approvalID).Scan(&statusValue, &token); err != nil {
+		t.Fatal(err)
+	}
+	if statusValue != "expired" || token.Valid {
+		t.Fatalf("stored approval status/token = %q/%q, want expired/NULL", statusValue, token.String)
+	}
+}
+
 func TestGetApprovalForRuntimeKeepsExpirationAtomicAndAncillaryFailuresNonFatal(t *testing.T) {
 	notifierErr := status.Error(codes.Unavailable, "notify expiration failed: not pending")
 	tests := []struct {

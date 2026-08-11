@@ -159,6 +159,7 @@ func writeJSONRPCStatus(w http.ResponseWriter, statusCode int, res jsonrpc.Respo
 	}
 	if payload.Len() > maxMCPResponseBytes {
 		payload.Reset()
+		res.ID = nil
 		res.Result = nil
 		res.Error = map[string]any{"code": -32603, "message": "response body too large"}
 		if err := json.NewEncoder(&payload).Encode(res); err != nil {

@@ -633,8 +633,8 @@ func (s *Server) reconcileAssignments(assignments []assignment, workerID string)
 			errs = append(errs, fmt.Errorf("reconcile run %s for job %s: %w", assignment.runID, assignment.jobID, err))
 			continue
 		}
-		if result.RunFailedEvent.EventID != "" {
-			s.publishEvent(result.RunFailedEvent)
+		for _, event := range result.Events {
+			s.publishEvent(event)
 		}
 		reconciled = reconciled || result.Requeued || result.Cleared
 	}
@@ -678,8 +678,8 @@ func (s *Server) RecoverOrphanedAssignments(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if result.RunFailedEvent.EventID != "" {
-			s.publishEvent(result.RunFailedEvent)
+		for _, event := range result.Events {
+			s.publishEvent(event)
 		}
 		recovered = recovered || result.Requeued || result.Cleared
 	}
@@ -1200,11 +1200,13 @@ func (s *Server) handleRunFailed(ctx context.Context, failed *turingv1.RuntimeRu
 	if err != nil {
 		return err
 	}
-	event, err := s.repo.FailRunWithEvent(ctx, failed.RunId, failed.Code, failed.Message, payloadJSON)
+	events, err := s.repo.FailRunWithEvent(ctx, failed.RunId, failed.Code, failed.Message, payloadJSON)
 	if err != nil {
 		return mapRunStateError(err)
 	}
-	s.publishEvent(event)
+	for _, event := range events {
+		s.publishEvent(event)
+	}
 	return nil
 }
 
@@ -1365,11 +1367,13 @@ func (s *Server) terminalizePostCommitApprovalFailure(_ context.Context, runID s
 		if payloadErr != nil {
 			return payloadErr
 		}
-		event, failErr := s.repo.FailRunWithEventPreservingExecution(recoveryCtx, runID, "approval_delivery_failed", "Approval lifecycle event could not be recorded", payloadJSON)
+		events, failErr := s.repo.FailRunWithEventPreservingExecution(recoveryCtx, runID, "approval_delivery_failed", "Approval lifecycle event could not be recorded", payloadJSON)
 		if failErr != nil {
 			return failErr
 		}
-		s.publishEvent(event)
+		for _, event := range events {
+			s.publishEvent(event)
+		}
 		return nil
 	}
 	if err != nil {
@@ -1394,30 +1398,42 @@ func toolStartedEventInput(beacon *turingv1.ToolCallBeacon, run repository.Run) 
 }
 
 func (s *Server) denyToolBefore(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run, argsJSON string, argsHash string, reason string) (*turingv1.ToolPolicyDecision, error) {
-	recorded, err := s.repo.RecordToolCallBeforeNew(ctx, repository.ToolCallRecord{ToolCallID: beacon.ToolCallId, RunID: beacon.RunId, Status: "denied", ModelToolCallID: beacon.ModelToolCallId}, "general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash)
+	deniedPayload, err := safejson.MarshalCanonical(map[string]any{
+		"toolCallId": beacon.ToolCallId,
+		"serverName": beaconServerName(beacon),
+		"toolName":   beacon.ToolName,
+		"error":      reason,
+	})
+	if err != nil {
+		return nil, err
+	}
+	recorded, event, err := s.repo.RecordToolCallBeforeWithEvent(
+		ctx,
+		repository.ToolCallRecord{
+			ToolCallID: beacon.ToolCallId, RunID: beacon.RunId, Status: "denied",
+			ModelToolCallID: beacon.ModelToolCallId,
+		},
+		"general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash,
+		repository.ToolCallBeforeEvent{
+			SessionID: run.SessionID, TraceID: run.TraceID,
+			Type: "tool.call.denied", PayloadJSON: string(deniedPayload),
+		},
+	)
 	if err != nil {
 		return nil, mapToolCallError(err)
+	}
+	if event.EventID != "" {
+		s.publishEvent(event)
 	}
 	if !recorded.Inserted {
 		if decision, handled := existingToolBeforeDecision(recorded.Record, reason); handled {
 			return decision, nil
 		}
 	}
-	deniedPayload := map[string]any{
-		"toolCallId": beacon.ToolCallId,
-		"serverName": beaconServerName(beacon),
-		"toolName":   beacon.ToolName,
-		"error":      reason,
-	}
-	event, err := s.appendToolEvent(ctx, run, "tool.call.denied", deniedPayload)
-	if err != nil {
-		return nil, err
-	}
-	s.publishEvent(event)
 	payload := toolAuditPayload(beacon)
 	payload["reason"] = reason
 	if err := s.audit.Record(ctx, beacon.RunId, "runtime", "", "tool.call.before", beacon.ToolCallId, payload); err != nil {
-		return nil, err
+		log.Printf("record denied tool before audit for %s: %v", beacon.ToolCallId, err)
 	}
 	return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_DENY, ToolCallId: beacon.ToolCallId, Reason: reason}, nil
 }
@@ -1493,7 +1509,7 @@ func (s *Server) handleToolAfter(ctx context.Context, beacon *turingv1.ToolCallB
 	}
 	s.publishEvent(event)
 	if err := s.audit.Record(ctx, beacon.RunId, "runtime", "", "tool.call.after", beacon.ToolCallId, toolAuditPayload(beacon)); err != nil {
-		return nil, err
+		log.Printf("record tool after audit for %s: %v", beacon.ToolCallId, err)
 	}
 	return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: beacon.ToolCallId}, nil
 }
@@ -1624,20 +1640,6 @@ func addModelToolCallID(payload map[string]any, beacon *turingv1.ToolCallBeacon)
 	if beacon.GetModelToolCallId() != "" {
 		payload["modelToolCallId"] = beacon.GetModelToolCallId()
 	}
-}
-
-func (s *Server) appendToolEvent(ctx context.Context, run repository.Run, eventType string, payload map[string]any) (repository.Event, error) {
-	payloadJSON, err := safejson.MarshalCanonical(payload)
-	if err != nil {
-		return repository.Event{}, err
-	}
-	return s.repo.AppendEvent(ctx, repository.AppendEventInput{
-		SessionID:   run.SessionID,
-		RunID:       run.RunID,
-		TraceID:     run.TraceID,
-		Type:        eventType,
-		PayloadJSON: string(payloadJSON),
-	})
 }
 
 func (s *Server) publishEvent(event repository.Event) {

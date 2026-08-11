@@ -937,16 +937,17 @@ func TestConnectWorkerTerminalizesApprovalWhenDecisionSendFails(t *testing.T) {
 		t.Fatalf("agent.run.failed event count = %d, want 1", terminalEvents)
 	}
 	var publishedTypes []string
-	for len(publishedTypes) < 2 {
+	for len(publishedTypes) < 3 {
 		event := recvBusEvent(t, published, func(event events.Event) bool {
-			return event.RunID == enqueued.RunID && (event.Type == "tool.call.failed" || event.Type == "agent.run.failed")
+			return event.RunID == enqueued.RunID &&
+				(event.Type == "approval.denied" || event.Type == "tool.call.failed" || event.Type == "agent.run.failed")
 		})
 		if event.TraceID != enqueued.TraceID {
 			t.Fatalf("%s trace_id = %q, want %q", event.Type, event.TraceID, enqueued.TraceID)
 		}
 		publishedTypes = append(publishedTypes, event.Type)
 	}
-	if want := []string{"tool.call.failed", "agent.run.failed"}; !reflect.DeepEqual(publishedTypes, want) {
+	if want := []string{"approval.denied", "tool.call.failed", "agent.run.failed"}; !reflect.DeepEqual(publishedTypes, want) {
 		t.Fatalf("published delivery-failure events = %v, want %v", publishedTypes, want)
 	}
 }
@@ -3324,6 +3325,40 @@ func TestRunFailedPublishesTerminalEvent(t *testing.T) {
 	}
 	if payload.RunID != enqueued.RunID || payload.Code != "model_error" || payload.Message != "model failed" || !payload.Retryable {
 		t.Fatalf("payload = %+v", payload)
+	}
+}
+
+func TestRunFailedPublishesDependentLifecycleEventsInOrder(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "fail pending approval")
+	if err := h.repo.RecordToolCallBefore(context.Background(), repository.ToolCallRecord{
+		ToolCallID: "call_run_failed", RunID: enqueued.RunID, ModelToolCallID: "model_run_failed",
+		Status: "approval_required",
+	}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.CreateApproval(context.Background(), enqueued.RunID, "call_run_failed", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:test", "2099-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	ch, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
+	defer unsubscribe()
+
+	err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
+		RunId: enqueued.RunID, Code: "model_error", Message: "model failed",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for len(got) < 3 {
+		event := recvBusEvent(t, ch, func(event events.Event) bool {
+			return event.RunID == enqueued.RunID &&
+				(event.Type == "approval.expired" || event.Type == "tool.call.failed" || event.Type == "agent.run.failed")
+		})
+		got = append(got, event.Type)
+	}
+	if want := []string{"approval.expired", "tool.call.failed", "agent.run.failed"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("published failure lifecycle = %v, want %v", got, want)
 	}
 }
 
