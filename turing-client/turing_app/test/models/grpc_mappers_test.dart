@@ -1,9 +1,41 @@
 import 'package:fixnum/fixnum.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/generated/turing/v1/chat.pb.dart';
+import 'package:turing_flutter_app/generated/turing/v1/events.pb.dart'
+    as eventpb;
 import 'package:turing_flutter_app/models/grpc_mappers.dart';
 
 void main() {
+  // Guards the tool-call UI: the chat screen switches on these dotted strings,
+  // and its switch has no default, so a mapping regression would silently drop
+  // every tool-call event instead of failing loudly.
+  test('maps TOOL_CALL_* event types to their dotted strings', () {
+    expect(
+      GrpcMappers.eventTypeToString(
+        eventpb.TuringEventType.TURING_EVENT_TYPE_TOOL_CALL_STARTED,
+      ),
+      'tool.call.started',
+    );
+    expect(
+      GrpcMappers.eventTypeToString(
+        eventpb.TuringEventType.TURING_EVENT_TYPE_TOOL_CALL_COMPLETED,
+      ),
+      'tool.call.completed',
+    );
+    expect(
+      GrpcMappers.eventTypeToString(
+        eventpb.TuringEventType.TURING_EVENT_TYPE_TOOL_CALL_FAILED,
+      ),
+      'tool.call.failed',
+    );
+    expect(
+      GrpcMappers.eventTypeToString(
+        eventpb.TuringEventType.TURING_EVENT_TYPE_TOOL_CALL_DENIED,
+      ),
+      'tool.call.denied',
+    );
+  });
+
   test('maps token deltas into assistant message content', () {
     final event = ChatStreamEvent(
       sessionId: 'sess_1',
