@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 )
@@ -43,11 +44,13 @@ type Worker struct {
 	toolCalls  map[string]string
 	decisionMu sync.Mutex
 	decisions  map[string][]*decisionWaiter
-	sendMu     sync.Mutex
+	writerMu   sync.Mutex
+	writer     *outboundWriter
 }
 
 type decisionWaiter struct {
-	decision chan *turingv1.ToolPolicyDecision
+	decision  chan *turingv1.ToolPolicyDecision
+	tombstone bool
 }
 
 type activeRun struct {
@@ -55,6 +58,118 @@ type activeRun struct {
 	done   chan struct{}
 	mu     sync.Mutex
 	stop   bool
+}
+
+const terminalUpdateSendTimeout = 5 * time.Second
+
+var errOutboundWriterStopped = errors.New("runtime outbound writer stopped")
+
+type outboundWriter struct {
+	stream RuntimeStream
+	queue  chan *outboundRequest
+	done   chan struct{}
+	exited chan struct{}
+	once   sync.Once
+	mu     sync.Mutex
+	err    error
+}
+
+type outboundRequest struct {
+	ctx    context.Context
+	update *turingv1.RuntimeUpdate
+	result chan error
+}
+
+func newOutboundWriter(stream RuntimeStream) *outboundWriter {
+	writer := &outboundWriter{
+		stream: stream,
+		queue:  make(chan *outboundRequest, 64),
+		done:   make(chan struct{}),
+		exited: make(chan struct{}),
+	}
+	go writer.run()
+	return writer
+}
+
+func (w *outboundWriter) run() {
+	defer close(w.exited)
+	for {
+		select {
+		case <-w.done:
+			return
+		case request := <-w.queue:
+			select {
+			case <-w.done:
+				return
+			default:
+			}
+			if err := request.ctx.Err(); err != nil {
+				request.complete(err)
+				continue
+			}
+			err := w.stream.Send(request.update)
+			request.complete(err)
+			if err != nil {
+				w.stop(err)
+				return
+			}
+		}
+	}
+}
+
+func (w *outboundWriter) send(ctx context.Context, update *turingv1.RuntimeUpdate) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	request := &outboundRequest{ctx: ctx, update: update, result: make(chan error, 1)}
+	select {
+	case <-w.done:
+		return w.error()
+	default:
+	}
+	select {
+	case w.queue <- request:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-w.done:
+		return w.error()
+	}
+	select {
+	case err := <-request.result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-w.done:
+		return w.error()
+	}
+}
+
+func (w *outboundWriter) stop(err error) {
+	if err == nil {
+		err = errOutboundWriterStopped
+	}
+	w.once.Do(func() {
+		w.mu.Lock()
+		w.err = err
+		w.mu.Unlock()
+		close(w.done)
+	})
+}
+
+func (w *outboundWriter) error() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.err == nil {
+		return errOutboundWriterStopped
+	}
+	return w.err
+}
+
+func (r *outboundRequest) complete(err error) {
+	select {
+	case r.result <- err:
+	default:
+	}
 }
 
 func New(options Options, client RuntimeClient, executor Executor) *Worker {
@@ -81,13 +196,17 @@ func (w *Worker) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = stream.CloseSend() }()
+	w.startOutboundWriter(stream)
+	defer func() {
+		w.stopOutboundWriter(stream)
+		_ = stream.CloseSend()
+	}()
 	if setter, ok := w.executor.(BeaconPosterSetter); ok {
 		setter.SetToolBeaconPoster(func(ctx context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 			return w.postToolBeacon(ctx, stream, beacon)
 		})
 	}
-	if err := w.send(stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{WorkerId: w.options.WorkerID, AgentId: w.options.AgentID, MaxConcurrentRuns: int32(w.options.MaxConcurrentRuns)}}}); err != nil {
+	if err := w.send(ctx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{WorkerId: w.options.WorkerID, AgentId: w.options.AgentID, MaxConcurrentRuns: int32(w.options.MaxConcurrentRuns)}}}); err != nil {
 		return err
 	}
 	for {
@@ -142,22 +261,22 @@ func (w *Worker) startRun(parent context.Context, stream RuntimeStream, job *tur
 				terminal = update
 				return nil
 			}
-			return w.send(stream, update)
+			return w.send(runCtx, stream, update)
 		})
 		if entry.isStopping() {
 			return
 		}
 		w.deleteActive(job.GetRunId())
 		if terminal != nil {
-			_ = w.send(stream, terminal)
+			_ = w.sendTerminalUpdate(runCtx, stream, terminal)
 			return
 		}
 		if runWasTerminalized(err) {
-			_ = w.send(stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: job.GetRunId()}}})
+			_ = w.sendTerminalUpdate(runCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: job.GetRunId()}}})
 			return
 		}
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(runCtx.Err(), context.Canceled) {
-			_ = w.send(stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{RunId: job.GetRunId(), Code: "runtime_error", Message: err.Error(), Retryable: false}}})
+			_ = w.sendTerminalUpdate(runCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{RunId: job.GetRunId(), Code: "runtime_error", Message: err.Error(), Retryable: false}}})
 		}
 	}()
 }
@@ -194,7 +313,7 @@ func (w *Worker) cancelRun(ctx context.Context, stream RuntimeStream, runID stri
 		return ctx.Err()
 	}
 	w.deleteActive(runID)
-	return w.send(stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: runID}}})
+	return w.sendTerminalUpdate(ctx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: runID}}})
 }
 
 func (w *Worker) activeRun(runID string) *activeRun {
@@ -229,13 +348,41 @@ func (w *Worker) deleteActive(runID string) {
 	}
 }
 
-func (w *Worker) send(stream RuntimeStream, update *turingv1.RuntimeUpdate) error {
+func (w *Worker) startOutboundWriter(stream RuntimeStream) {
+	w.writerMu.Lock()
+	defer w.writerMu.Unlock()
+	if w.writer != nil {
+		return
+	}
+	w.writer = newOutboundWriter(stream)
+}
+
+func (w *Worker) stopOutboundWriter(_ RuntimeStream) {
+	w.writerMu.Lock()
+	writer := w.writer
+	w.writerMu.Unlock()
+	if writer != nil {
+		writer.stop(nil)
+	}
+}
+
+func (w *Worker) send(ctx context.Context, _ RuntimeStream, update *turingv1.RuntimeUpdate) error {
 	if update == nil {
 		return fmt.Errorf("runtime update is required")
 	}
-	w.sendMu.Lock()
-	defer w.sendMu.Unlock()
-	return stream.Send(update)
+	w.writerMu.Lock()
+	writer := w.writer
+	w.writerMu.Unlock()
+	if writer == nil {
+		return errors.New("runtime outbound writer is not initialized")
+	}
+	return writer.send(ctx, update)
+}
+
+func (w *Worker) sendTerminalUpdate(ctx context.Context, stream RuntimeStream, update *turingv1.RuntimeUpdate) error {
+	reportCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), terminalUpdateSendTimeout)
+	defer cancel()
+	return w.send(reportCtx, stream, update)
 }
 
 func (w *Worker) postToolBeacon(ctx context.Context, stream RuntimeStream, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
@@ -243,11 +390,12 @@ func (w *Worker) postToolBeacon(ctx context.Context, stream RuntimeStream, beaco
 		return nil, errors.New("tool beacon with tool_call_id is required")
 	}
 	waiter := &decisionWaiter{decision: make(chan *turingv1.ToolPolicyDecision, 1)}
+	sent := false
 	w.decisionMu.Lock()
 	w.decisions[beacon.ToolCallId] = append(w.decisions[beacon.ToolCallId], waiter)
 	w.decisionMu.Unlock()
 	defer func() {
-		w.removeDecisionWaiter(beacon.ToolCallId, waiter)
+		w.retireDecisionWaiter(beacon.ToolCallId, waiter, sent)
 		w.mu.Lock()
 		delete(w.toolCalls, beacon.ToolCallId)
 		w.mu.Unlock()
@@ -255,9 +403,10 @@ func (w *Worker) postToolBeacon(ctx context.Context, stream RuntimeStream, beaco
 	w.mu.Lock()
 	w.toolCalls[beacon.ToolCallId] = beacon.RunId
 	w.mu.Unlock()
-	if err := w.send(stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: beacon}}); err != nil {
+	if err := w.send(ctx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: beacon}}); err != nil {
 		return nil, err
 	}
+	sent = true
 	select {
 	case decision := <-waiter.decision:
 		if decision.GetDecision() == turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED && decision.GetApprovalId() != "" && beacon.GetRunId() != "" {
@@ -292,12 +441,16 @@ func (w *Worker) deliverDecision(decision *turingv1.ToolPolicyDecision) {
 		return
 	}
 	waiter := waiters[0]
+	tombstone := waiter.tombstone
 	if len(waiters) == 1 {
 		delete(w.decisions, decision.ToolCallId)
 	} else {
 		w.decisions[decision.ToolCallId] = waiters[1:]
 	}
 	w.decisionMu.Unlock()
+	if tombstone {
+		return
+	}
 	if decision.GetDecision() == turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED && decision.GetApprovalId() != "" {
 		w.mu.Lock()
 		if runID := w.toolCalls[decision.GetToolCallId()]; runID != "" {
@@ -311,13 +464,19 @@ func (w *Worker) deliverDecision(decision *turingv1.ToolPolicyDecision) {
 	}
 }
 
-func (w *Worker) removeDecisionWaiter(toolCallID string, target *decisionWaiter) {
+func (w *Worker) retireDecisionWaiter(toolCallID string, target *decisionWaiter, sent bool) {
 	w.decisionMu.Lock()
 	defer w.decisionMu.Unlock()
 	waiters := w.decisions[toolCallID]
 	for index, waiter := range waiters {
 		if waiter != target {
 			continue
+		}
+		if sent {
+			// Responses carry no phase or generation. Preserve this slot so a
+			// delayed response cannot be delivered to a later same-ID request.
+			waiter.tombstone = true
+			return
 		}
 		waiters = append(waiters[:index], waiters[index+1:]...)
 		if len(waiters) == 0 {

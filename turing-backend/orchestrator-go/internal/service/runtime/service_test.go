@@ -1897,6 +1897,110 @@ func TestDenyingApprovalWaitsForWorkerExitBeforeReleasingCapacity(t *testing.T) 
 	}
 }
 
+func TestDenyingApprovalKeepsLaterSameSessionRunBlockedUntilExecutionExitAck(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	session, err := h.repo.CreateSession(ctx, "Causal approval exit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "first approval", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "second after denial", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := h.runtimeClient(t)
+	firstCtx, cancelFirst := context.WithTimeout(h.internalContext(), 2*time.Second)
+	defer cancelFirst()
+	firstWorker, err := client.ConnectWorker(firstCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = firstWorker.CloseSend() }()
+	if err := firstWorker.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId: "worker-blocked-executor", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	assignedFirst := recvUntil(t, firstWorker, func(cmd *turingv1.RuntimeCommand) bool {
+		assigned := cmd.GetRunAssigned()
+		return assigned != nil && assigned.RunId == first.RunID
+	}).GetRunAssigned()
+
+	secondCtx, cancelSecond := context.WithTimeout(h.internalContext(), 2*time.Second)
+	defer cancelSecond()
+	secondWorker, err := client.ConnectWorker(secondCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = secondWorker.CloseSend() }()
+	if err := secondWorker.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId: "worker-available-capacity", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, secondWorker, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetWorkerAccepted() != nil
+	})
+
+	args, err := structpb.NewStruct(map[string]any{"path": "note.txt", "content": "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := firstWorker.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+		RunId:      assignedFirst.RunId,
+		TraceId:    assignedFirst.TraceId,
+		ToolCallId: "call_causal_denial",
+		AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName: "files",
+		ToolName:   "files.update",
+		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		Args:       args,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	decision := recvUntil(t, firstWorker, func(cmd *turingv1.RuntimeCommand) bool {
+		toolDecision := cmd.GetToolPolicyDecision()
+		return toolDecision != nil && toolDecision.ToolCallId == "call_causal_denial"
+	}).GetToolPolicyDecision()
+	if _, err := h.approvals.DenyApproval(ctx, &turingv1.DenyApprovalRequest{ApprovalId: decision.ApprovalId, Reason: "no"}); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, firstWorker, func(cmd *turingv1.RuntimeCommand) bool {
+		update := cmd.GetApprovalUpdated()
+		return update != nil && update.ApprovalId == decision.ApprovalId && update.Status == "denied"
+	})
+
+	if err := h.service.DispatchPending(ctx); err != nil {
+		t.Fatal(err)
+	}
+	secondRun, err := h.repo.GetRun(ctx, second.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondRun.Status != "queued" {
+		t.Fatalf("later same-session run status = %q, want queued until blocked execution exits", secondRun.Status)
+	}
+
+	if err := firstWorker.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: first.RunID}}}); err != nil {
+		t.Fatal(err)
+	}
+	assignedSecond := recvUntilEither(t, firstWorker, secondWorker, func(cmd *turingv1.RuntimeCommand) bool {
+		assigned := cmd.GetRunAssigned()
+		return assigned != nil && assigned.RunId == second.RunID
+	}).GetRunAssigned()
+	if assignedSecond.RunId != second.RunID {
+		t.Fatalf("assigned run = %q, want %q", assignedSecond.RunId, second.RunID)
+	}
+}
+
 func TestExpiredApprovalWaitsForWorkerExitBeforeReleasingCapacity(t *testing.T) {
 	h := newHarness(t)
 	first := h.enqueueRun(t, "first approval")
@@ -2704,4 +2808,44 @@ func recvUntil(t *testing.T, stream turingv1.RuntimeService_ConnectWorkerClient,
 			}
 		}
 	}
+}
+
+func recvUntilEither(t *testing.T, first turingv1.RuntimeService_ConnectWorkerClient, second turingv1.RuntimeService_ConnectWorkerClient, match func(*turingv1.RuntimeCommand) bool) *turingv1.RuntimeCommand {
+	t.Helper()
+	type receivedCommand struct {
+		cmd *turingv1.RuntimeCommand
+		err error
+	}
+	received := make(chan receivedCommand, 2)
+	for _, stream := range []turingv1.RuntimeService_ConnectWorkerClient{first, second} {
+		stream := stream
+		go func() {
+			cmd, err := stream.Recv()
+			received <- receivedCommand{cmd: cmd, err: err}
+		}()
+	}
+	select {
+	case result := <-received:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if match(result.cmd) {
+			return result.cmd
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for runtime command")
+	}
+	select {
+	case result := <-received:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if match(result.cmd) {
+			return result.cmd
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for runtime command")
+	}
+	t.Fatal("received no matching runtime command")
+	return nil
 }

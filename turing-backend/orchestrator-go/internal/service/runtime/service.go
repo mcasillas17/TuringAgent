@@ -355,7 +355,7 @@ func (s *Server) handleUndeliveredCommand(ctx context.Context, cmd *turingv1.Run
 	return s.requeueIfAssignmentFailed(cmd, worker)
 }
 
-func (s *Server) terminalizeApprovalDeliveryFailure(_ context.Context, approvalID string, worker *worker) error {
+func (s *Server) terminalizeApprovalDeliveryFailure(_ context.Context, approvalID string, _ *worker) error {
 	if approvalID == "" {
 		return nil
 	}
@@ -366,10 +366,9 @@ func (s *Server) terminalizeApprovalDeliveryFailure(_ context.Context, approvalI
 		return fmt.Errorf("terminalize undelivered approval: %w", err)
 	}
 	if transition.Changed {
-		s.publishEvent(transition.RunFailedEvent)
-	}
-	if worker != nil {
-		worker.releaseRun(transition.Approval.RunID)
+		if transition.RunFailedEvent.EventID != "" {
+			s.publishEvent(transition.RunFailedEvent)
+		}
 	}
 	return nil
 }
@@ -648,6 +647,9 @@ func (s *Server) handleRunCancelledAck(ctx context.Context, ack *turingv1.Runtim
 	}
 	if run.Status != "cancelled" && run.Status != "failed" {
 		return status.Error(codes.FailedPrecondition, "run is not cancelled")
+	}
+	if err := s.repo.AcknowledgeExecutionExit(ctx, ack.RunId); err != nil {
+		return mapRunStateError(err)
 	}
 	return nil
 }

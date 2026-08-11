@@ -61,8 +61,8 @@ func (r *Repository) CompleteRun(ctx context.Context, runID string, assistantMes
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
-	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'completed', finished_at = ? WHERE id = ? AND status IN ('running','waiting_approval')`, finishedAt, runID)
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'completed', finished_at = ?, execution_active = 0, execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?) WHERE id = ? AND status IN ('running','waiting_approval')`, finishedAt, finishedAt, runID)
 	if err != nil {
 		return err
 	}
@@ -95,7 +95,7 @@ func (r *Repository) CompleteRunWithEvent(ctx context.Context, runID string, ass
 	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&sessionID, &traceID); err != nil {
 		return nil, err
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'completed', finished_at = ? WHERE id = ? AND status IN ('running','waiting_approval')`, finishedAt, runID)
+	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'completed', finished_at = ?, execution_active = 0, execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?) WHERE id = ? AND status IN ('running','waiting_approval')`, finishedAt, finishedAt, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -146,8 +146,8 @@ func (r *Repository) FailRun(ctx context.Context, runID string, code string, mes
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
-	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'failed', error_code = ?, error_message = ?, finished_at = ? WHERE id = ? AND status IN ('queued','running','waiting_approval')`, code, message, finishedAt, runID)
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'failed', error_code = ?, error_message = ?, finished_at = ?, execution_active = 0, execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?) WHERE id = ? AND status IN ('queued','running','waiting_approval')`, code, message, finishedAt, finishedAt, runID)
 	if err != nil {
 		return err
 	}
@@ -171,7 +171,7 @@ func (r *Repository) FailRunWithEvent(ctx context.Context, runID string, code st
 	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&sessionID, &traceID); err != nil {
 		return Event{}, err
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'failed', error_code = ?, error_message = ?, finished_at = ? WHERE id = ? AND status IN ('queued','running','waiting_approval')`, code, message, finishedAt, runID)
+	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'failed', error_code = ?, error_message = ?, finished_at = ?, execution_active = 0, execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?) WHERE id = ? AND status IN ('queued','running','waiting_approval')`, code, message, finishedAt, finishedAt, runID)
 	if err != nil {
 		return Event{}, err
 	}
@@ -207,6 +207,37 @@ func (r *Repository) CancelRun(ctx context.Context, runID string, reason string)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'cancelled', finished_at = ?, error_code = 'cancelled', error_message = ? WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, reason, runID); err != nil {
 		return err
+	}
+	return tx.Commit()
+}
+
+func (r *Repository) AcknowledgeExecutionExit(ctx context.Context, runID string) error {
+	acknowledgedAt := now()
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET execution_active = 0, execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?)
+		WHERE id = ? AND status IN ('completed', 'failed', 'cancelled') AND execution_active = 1
+	`, acknowledgedAt, runID)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed == 0 {
+		var status string
+		if err := tx.QueryRowContext(ctx, `SELECT status FROM agent_runs WHERE id = ?`, runID).Scan(&status); err != nil {
+			return err
+		}
+		if status != "completed" && status != "failed" && status != "cancelled" {
+			return ErrRunNotActive
+		}
 	}
 	return tx.Commit()
 }

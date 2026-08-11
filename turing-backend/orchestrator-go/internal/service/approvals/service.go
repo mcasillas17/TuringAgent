@@ -134,7 +134,9 @@ func (s *Server) DenyApproval(ctx context.Context, req *turingv1.DenyApprovalReq
 	if !transition.Changed {
 		return &turingv1.ApprovalResponse{ApprovalId: denied.ApprovalID, Status: turingv1.ApprovalStatus_APPROVAL_STATUS_DENIED}, nil
 	}
-	s.publishEvent(transition.RunFailedEvent)
+	if transition.RunFailedEvent.EventID != "" {
+		s.publishEvent(transition.RunFailedEvent)
+	}
 	event, err := s.appendApprovalEvent(ctx, denied, "approval.denied", map[string]any{"approvalId": denied.ApprovalID, "toolName": denied.ToolName})
 	if err != nil {
 		return nil, err
@@ -221,7 +223,9 @@ func (s *Server) expireApproval(ctx context.Context, approvalID string) (reposit
 	if !transition.Changed {
 		return expiredApproval, nil
 	}
-	s.publishEvent(transition.RunFailedEvent)
+	if transition.RunFailedEvent.EventID != "" {
+		s.publishEvent(transition.RunFailedEvent)
+	}
 	event, err := s.appendApprovalEvent(ctx, expiredApproval, "approval.expired", map[string]any{"approvalId": expiredApproval.ApprovalID, "toolName": expiredApproval.ToolName})
 	if err != nil {
 		return repository.ApprovalRecord{}, &postCommitExpirationError{err: err}

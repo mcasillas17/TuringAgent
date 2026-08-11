@@ -1025,3 +1025,105 @@ func TestDenyApprovalTerminalizesRunWhenToolCallAlreadyFailed(t *testing.T) {
 		t.Fatalf("terminal states approval=%q tool=%q run=%q job=%q", approvalStatus, toolCallStatus, runStatus, jobStatus)
 	}
 }
+
+func TestLateApprovalTerminalizationPreservesPriorRuntimeFailure(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      string
+		terminalize func(*Repository, context.Context, string) (ApprovalTerminalization, error)
+	}{
+		{
+			name:   "denial",
+			status: "denied",
+			terminalize: func(repo *Repository, ctx context.Context, approvalID string) (ApprovalTerminalization, error) {
+				return repo.DenyApprovalWithEvent(ctx, approvalID, "2026-05-15T00:00:00Z")
+			},
+		},
+		{
+			name:   "expiry",
+			status: "expired",
+			terminalize: func(repo *Repository, ctx context.Context, approvalID string) (ApprovalTerminalization, error) {
+				return repo.ExpireApprovalWithEvent(ctx, approvalID, "2026-05-15T00:00:00Z")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			database := openTestDB(t)
+			repo := New(database)
+			ctx := context.Background()
+			session, err := repo.CreateSession(ctx, "Late approval terminalization")
+			if err != nil {
+				t.Fatal(err)
+			}
+			enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+				SessionID: session.SessionID, Content: "needs approval", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
+				t.Fatal(err)
+			}
+			const toolCallID = "call_late_terminal"
+			if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{ToolCallID: toolCallID, RunID: enqueued.RunID}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:args"); err != nil {
+				t.Fatal(err)
+			}
+			approval, err := repo.CreateApproval(ctx, enqueued.RunID, toolCallID, "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:args", "2099-01-01T00:00:00Z")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := repo.RecordToolCallAfterWithEvent(ctx, ToolCallAfterRecord{
+				ToolCallID: toolCallID, RunID: enqueued.RunID, ServerName: "files", ToolName: "files.update",
+				Status: "failed", ErrorCode: "approval_wait_failed", ErrorMessage: "approval transport failed",
+			}, "tool.call.failed", `{"code":"approval_wait_failed"}`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := repo.FailRunWithEvent(ctx, enqueued.RunID, "runtime_error", "approval transport failed", `{"code":"runtime_error"}`); err != nil {
+				t.Fatal(err)
+			}
+
+			transition, err := test.terminalize(repo, ctx, approval.ApprovalID)
+			if err != nil {
+				t.Fatalf("terminalize late approval: %v", err)
+			}
+			if !transition.Changed || transition.Approval.Status != test.status {
+				t.Fatalf("late terminalization = %+v, want changed %q approval", transition, test.status)
+			}
+			if transition.RunFailedEvent.EventID != "" {
+				t.Fatalf("late terminalization appended duplicate run failure event: %+v", transition.RunFailedEvent)
+			}
+			repeated, err := test.terminalize(repo, ctx, approval.ApprovalID)
+			if err != nil {
+				t.Fatalf("repeated late terminalization: %v", err)
+			}
+			if repeated.Changed {
+				t.Fatalf("repeated late terminalization changed state: %+v", repeated)
+			}
+
+			var approvalStatus, toolCallStatus, runStatus, jobStatus string
+			if err := database.QueryRowContext(ctx, `SELECT status FROM approvals WHERE id = ?`, approval.ApprovalID).Scan(&approvalStatus); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.QueryRowContext(ctx, `SELECT status FROM tool_calls WHERE id = ?`, toolCallID).Scan(&toolCallStatus); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.QueryRowContext(ctx, `SELECT status FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&runStatus); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.QueryRowContext(ctx, `SELECT status FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus); err != nil {
+				t.Fatal(err)
+			}
+			if approvalStatus != test.status || toolCallStatus != "failed" || runStatus != "failed" || jobStatus != "failed" {
+				t.Fatalf("terminal states approval=%q tool=%q run=%q job=%q", approvalStatus, toolCallStatus, runStatus, jobStatus)
+			}
+			var runFailures int
+			if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'agent.run.failed'`, enqueued.RunID).Scan(&runFailures); err != nil {
+				t.Fatal(err)
+			}
+			if runFailures != 1 {
+				t.Fatalf("agent.run.failed events = %d, want 1", runFailures)
+			}
+		})
+	}
+}

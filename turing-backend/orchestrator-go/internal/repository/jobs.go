@@ -132,6 +132,8 @@ func (r *Repository) ClaimNextJob(ctx context.Context, agentID string, leaseOwne
 				WHERE earlier.session_id = r.session_id
 					AND earlier_assistant.sequence < candidate_assistant.sequence
 					AND (
+						earlier.execution_active = 1
+						OR
 						earlier.status NOT IN ('completed', 'failed', 'cancelled')
 						OR EXISTS (
 							SELECT 1
@@ -175,7 +177,7 @@ func (r *Repository) ClaimNextJob(ctx context.Context, agentID string, leaseOwne
 	if err := expectOneRow(result, "pending job not found for claim"); err != nil {
 		return Job{}, err
 	}
-	result, err = tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'running', started_at = COALESCE(started_at, ?), worker_id = ? WHERE id = ? AND status = 'queued'`, pickedUpAt, leaseOwner, job.RunID)
+	result, err = tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'running', started_at = COALESCE(started_at, ?), worker_id = ?, execution_active = 1, execution_exit_acknowledged_at = NULL WHERE id = ? AND status = 'queued'`, pickedUpAt, leaseOwner, job.RunID)
 	if err != nil {
 		return Job{}, err
 	}
@@ -216,7 +218,7 @@ func (r *Repository) RequeueClaimedJob(ctx context.Context, jobID string, runID 
 	if err := expectOneRow(result, "claimed job not found for requeue"); err != nil {
 		return err
 	}
-	result, err = tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'queued', started_at = NULL, worker_id = NULL WHERE id = ? AND status = 'running'`, runID)
+	result, err = tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'queued', started_at = NULL, worker_id = NULL, execution_active = 0, execution_exit_acknowledged_at = NULL WHERE id = ? AND status = 'running'`, runID)
 	if err != nil {
 		return err
 	}

@@ -177,9 +177,18 @@ func (r *Repository) terminalizeApproval(
 	if record.Status != "pending" {
 		return ApprovalTerminalization{}, errors.New("approval is not pending")
 	}
-	var sessionID, traceID string
-	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, record.RunID).Scan(&sessionID, &traceID); err != nil {
+	var sessionID, traceID, runStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id, status FROM agent_runs WHERE id = ?`, record.RunID).Scan(&sessionID, &traceID, &runStatus); err != nil {
 		return ApprovalTerminalization{}, err
+	}
+	lateRuntimeFailure := runStatus == "failed"
+	if runStatus != "waiting_approval" && !lateRuntimeFailure {
+		return ApprovalTerminalization{}, errors.New("run not found for approval")
+	}
+	if lateRuntimeFailure {
+		if err := validateLateApprovalRuntimeFailure(ctx, tx, record); err != nil {
+			return ApprovalTerminalization{}, err
+		}
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE approvals SET status = ?, decided_at = ? WHERE id = ? AND status = 'pending'`, approvalStatus, decidedAt, approvalID)
 	if err != nil {
@@ -211,40 +220,43 @@ func (r *Repository) terminalizeApproval(
 			}
 		}
 	}
-	result, err = tx.ExecContext(ctx, `
-		UPDATE agent_runs
-		SET status = 'failed', error_code = ?, error_message = ?, finished_at = ?
-		WHERE id = ? AND status = 'waiting_approval'
-	`, errorCode, errorMessage, decidedAt, record.RunID)
-	if err != nil {
-		return ApprovalTerminalization{}, err
-	}
-	if err := expectOneRow(result, "run not found for approval"); err != nil {
-		return ApprovalTerminalization{}, err
-	}
-	result, err = tx.ExecContext(ctx, `
-		UPDATE jobs
-		SET status = 'failed', finished_at = ?, error_code = ?, error_message = ?, lease_owner = NULL, lease_expires_at = NULL
-		WHERE run_id = ? AND status IN ('pending', 'in_progress')
-	`, decidedAt, errorCode, errorMessage, record.RunID)
-	if err != nil {
-		return ApprovalTerminalization{}, err
-	}
-	if err := expectOneRow(result, "job not found for approval"); err != nil {
-		return ApprovalTerminalization{}, err
-	}
-	payloadJSON, err := json.Marshal(map[string]any{
-		"runId":     record.RunID,
-		"code":      errorCode,
-		"message":   errorMessage,
-		"retryable": false,
-	})
-	if err != nil {
-		return ApprovalTerminalization{}, err
-	}
-	event, err := appendRunEventTx(ctx, tx, sessionID, record.RunID, traceID, "agent.run.failed", string(payloadJSON), decidedAt)
-	if err != nil {
-		return ApprovalTerminalization{}, err
+	var event Event
+	if !lateRuntimeFailure {
+		result, err = tx.ExecContext(ctx, `
+			UPDATE agent_runs
+			SET status = 'failed', error_code = ?, error_message = ?, finished_at = ?
+			WHERE id = ? AND status = 'waiting_approval'
+		`, errorCode, errorMessage, decidedAt, record.RunID)
+		if err != nil {
+			return ApprovalTerminalization{}, err
+		}
+		if err := expectOneRow(result, "run not found for approval"); err != nil {
+			return ApprovalTerminalization{}, err
+		}
+		result, err = tx.ExecContext(ctx, `
+			UPDATE jobs
+			SET status = 'failed', finished_at = ?, error_code = ?, error_message = ?, lease_owner = NULL, lease_expires_at = NULL
+			WHERE run_id = ? AND status IN ('pending', 'in_progress')
+		`, decidedAt, errorCode, errorMessage, record.RunID)
+		if err != nil {
+			return ApprovalTerminalization{}, err
+		}
+		if err := expectOneRow(result, "job not found for approval"); err != nil {
+			return ApprovalTerminalization{}, err
+		}
+		payloadJSON, err := json.Marshal(map[string]any{
+			"runId":     record.RunID,
+			"code":      errorCode,
+			"message":   errorMessage,
+			"retryable": false,
+		})
+		if err != nil {
+			return ApprovalTerminalization{}, err
+		}
+		event, err = appendRunEventTx(ctx, tx, sessionID, record.RunID, traceID, "agent.run.failed", string(payloadJSON), decidedAt)
+		if err != nil {
+			return ApprovalTerminalization{}, err
+		}
 	}
 	record, err = approvalByID(ctx, tx, approvalID)
 	if err != nil {
@@ -254,6 +266,33 @@ func (r *Repository) terminalizeApproval(
 		return ApprovalTerminalization{}, err
 	}
 	return ApprovalTerminalization{Approval: record, RunFailedEvent: event, Changed: true}, nil
+}
+
+func validateLateApprovalRuntimeFailure(ctx context.Context, tx *sql.Tx, record ApprovalRecord) error {
+	if record.ToolCallID != "" {
+		var toolCallStatus string
+		if err := tx.QueryRowContext(ctx, `SELECT status FROM tool_calls WHERE id = ? AND run_id = ?`, record.ToolCallID, record.RunID).Scan(&toolCallStatus); err != nil {
+			return err
+		}
+		if toolCallStatus != "failed" {
+			return errors.New("run failed before approval terminalization is inconsistent")
+		}
+	}
+	var jobStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM jobs WHERE run_id = ?`, record.RunID).Scan(&jobStatus); err != nil {
+		return err
+	}
+	if jobStatus != "failed" {
+		return errors.New("run failed before approval terminalization is inconsistent")
+	}
+	var failedEvents int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'agent.run.failed'`, record.RunID).Scan(&failedEvents); err != nil {
+		return err
+	}
+	if failedEvents != 1 {
+		return errors.New("run failed before approval terminalization is inconsistent")
+	}
+	return nil
 }
 
 func isTerminalToolCallStatus(status string) bool {
