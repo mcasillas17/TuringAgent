@@ -45,6 +45,42 @@ func TestWorkerConnectionCancellationUnblocksStartedSendAndJoinsWriter(t *testin
 	waitForOutboundWriterExit(t, worker)
 }
 
+func TestWorkerNonterminalUpdateSendTimeoutReleasesActiveRun(t *testing.T) {
+	stream := &boundedUpdateStream{
+		sent:    make(chan *turingv1.RuntimeUpdate, 1),
+		recv:    make(chan *turingv1.RuntimeCommand, 1),
+		blocked: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	worker := New(Options{
+		WorkerID:          "worker-update-timeout",
+		UpdateSendTimeout: 20 * time.Millisecond,
+	}, &boundedUpdateClient{stream: stream}, emitBlockingUpdateExecutor{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	t.Cleanup(func() { stream.releaseOnce.Do(func() { close(stream.release) }) })
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+
+	if ready := <-stream.sent; ready.GetWorkerReady() == nil {
+		t.Fatalf("first update = %+v, want worker ready", ready)
+	}
+	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: &turingv1.AgentJob{RunId: "run_update_timeout"}}}
+	select {
+	case <-stream.blocked:
+	case <-time.After(time.Second):
+		t.Fatal("nonterminal update Send did not begin")
+	}
+	waitForInactiveRun(t, worker, "run_update_timeout")
+	stream.releaseOnce.Do(func() { close(stream.release) })
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not exit after the blocked update was released")
+	}
+}
+
 func TestWorkerDisconnectCancelsAndJoinsActiveExecutorBeforeReturning(t *testing.T) {
 	stream := &disconnectingStream{
 		sent:       make(chan *turingv1.RuntimeUpdate, 1),
@@ -207,6 +243,44 @@ func TestWorkerRunTerminationNeverClosesSendDuringBlockedOutboundSend(t *testing
 
 type connectionCancellationClient struct {
 	stream *connectionCancellationStream
+}
+
+type boundedUpdateClient struct{ stream *boundedUpdateStream }
+
+func (c *boundedUpdateClient) ConnectWorker(ctx context.Context) (RuntimeStream, error) {
+	c.stream.ctx = ctx
+	return c.stream, nil
+}
+
+type boundedUpdateStream struct {
+	ctx         context.Context
+	sent        chan *turingv1.RuntimeUpdate
+	recv        chan *turingv1.RuntimeCommand
+	blocked     chan struct{}
+	release     chan struct{}
+	releaseOnce sync.Once
+	sendCount   atomic.Int32
+}
+
+func (s *boundedUpdateStream) Send(update *turingv1.RuntimeUpdate) error {
+	if update.GetWorkerReady() != nil {
+		s.sent <- update
+		return nil
+	}
+	if s.sendCount.Add(1) == 1 {
+		close(s.blocked)
+		<-s.release
+	}
+	return nil
+}
+
+func (s *boundedUpdateStream) Recv() (*turingv1.RuntimeCommand, error) {
+	select {
+	case command := <-s.recv:
+		return command, nil
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
+	}
 }
 
 func (c *connectionCancellationClient) ConnectWorker(ctx context.Context) (RuntimeStream, error) {

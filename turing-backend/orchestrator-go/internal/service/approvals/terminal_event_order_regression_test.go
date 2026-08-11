@@ -56,11 +56,16 @@ func TestApprovalTerminalOutcomePublishesBeforeRunFailure(t *testing.T) {
 			test.terminalize(t, h, approvalID)
 			first := nextApprovalTerminalEvent(t, stream)
 			second := nextApprovalTerminalEvent(t, stream)
-			if first.Type != test.terminalType || second.Type != "agent.run.failed" {
-				t.Fatalf("stream order = %q then %q, want %q then agent.run.failed", first.Type, second.Type, test.terminalType)
+			third := nextApprovalTerminalEvent(t, stream)
+			wantToolType := "tool.call.failed"
+			if test.name == "denied" {
+				wantToolType = "tool.call.denied"
 			}
-			if first.Sequence >= second.Sequence {
-				t.Fatalf("stream sequences = %d then %d, want approval before run failure", first.Sequence, second.Sequence)
+			if first.Type != test.terminalType || second.Type != wantToolType || third.Type != "agent.run.failed" {
+				t.Fatalf("stream order = %q, %q, %q; want %q, %q, agent.run.failed", first.Type, second.Type, third.Type, test.terminalType, wantToolType)
+			}
+			if first.Sequence >= second.Sequence || second.Sequence >= third.Sequence {
+				t.Fatalf("stream sequences = %d, %d, %d; want approval before tool before run failure", first.Sequence, second.Sequence, third.Sequence)
 			}
 			if _, err := h.service.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{ApprovalId: approvalID, Reason: "retry"}); test.name == "denied" && err != nil {
 				t.Fatalf("idempotent denial retry: %v", err)

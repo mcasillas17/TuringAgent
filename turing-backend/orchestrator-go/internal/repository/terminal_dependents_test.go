@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -149,8 +150,13 @@ func TestTerminalRunEmitsFailureEventForActiveSafeToolCall(t *testing.T) {
 	if err := json.Unmarshal([]byte(toolFailure.PayloadJSON), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["toolCallId"] != "call_safe_active" || payload["modelToolCallId"] != "model_safe_active" ||
-		payload["reason"] != "run_cancelled" || payload["error"] != "client_cancelled" {
-		t.Fatalf("safe tool failure payload = %#v", payload)
+	want := map[string]any{
+		"toolCallId": "call_safe_active",
+		"toolName":   "system.echo",
+		"serverName": "system",
+		"error":      "client_cancelled",
+	}
+	if !reflect.DeepEqual(payload, want) {
+		t.Fatalf("safe tool failure payload = %#v, want %#v", payload, want)
 	}
 }

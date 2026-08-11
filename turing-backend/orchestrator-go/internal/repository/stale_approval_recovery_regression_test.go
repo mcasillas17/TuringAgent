@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -95,8 +96,14 @@ func TestRecoverStaleApprovedAuthorizationTerminalizesInsteadOfRequeueing(t *tes
 		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
 			t.Fatal(err)
 		}
-		if payload["error"] != "Stale assignment may have executed an approved tool call" {
-			t.Fatalf("stale tool failure error = %#v, want string", payload["error"])
+		want := map[string]any{
+			"toolCallId": "call_stale_approved",
+			"toolName":   "files.update",
+			"serverName": "files",
+			"error":      "Stale assignment may have executed an approved tool call",
+		}
+		if !reflect.DeepEqual(payload, want) {
+			t.Fatalf("stale tool failure payload = %#v, want %#v", payload, want)
 		}
 		return
 	}

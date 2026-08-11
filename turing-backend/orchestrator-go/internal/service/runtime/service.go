@@ -593,6 +593,12 @@ func (s *Server) terminalizeApprovalDeliveryFailure(_ context.Context, approvalI
 		return fmt.Errorf("terminalize undelivered approval: %w", err)
 	}
 	if transition.Changed {
+		if transition.ApprovalEvent.EventID != "" {
+			s.publishEvent(transition.ApprovalEvent)
+		}
+		if transition.ToolEvent.EventID != "" {
+			s.publishEvent(transition.ToolEvent)
+		}
 		if transition.RunFailedEvent.EventID != "" {
 			s.publishEvent(transition.RunFailedEvent)
 		}
@@ -1287,7 +1293,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "tool_disabled")
 	}
 	if policy == tools.PolicyApprovalRequired {
-		eventInput, err := toolStartedEventInput(beacon, run, args)
+		eventInput, err := toolStartedEventInput(beacon, run)
 		if err != nil {
 			return nil, err
 		}
@@ -1319,7 +1325,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 	if policy == tools.PolicySafe {
 		statusValue = "allowed"
 	}
-	eventInput, err := toolStartedEventInput(beacon, run, args)
+	eventInput, err := toolStartedEventInput(beacon, run)
 	if err != nil {
 		return nil, err
 	}
@@ -1372,14 +1378,12 @@ func (s *Server) terminalizePostCommitApprovalFailure(_ context.Context, runID s
 	return s.terminalizeApprovalDeliveryFailure(recoveryCtx, approval.ApprovalID, nil)
 }
 
-func toolStartedEventInput(beacon *turingv1.ToolCallBeacon, run repository.Run, args map[string]any) (repository.ToolCallBeforeEvent, error) {
+func toolStartedEventInput(beacon *turingv1.ToolCallBeacon, run repository.Run) (repository.ToolCallBeforeEvent, error) {
 	payload := map[string]any{
 		"toolCallId": beacon.ToolCallId,
 		"serverName": beaconServerName(beacon),
 		"toolName":   beacon.ToolName,
-		"args":       args,
 	}
-	addModelToolCallID(payload, beacon)
 	payloadJSON, err := safejson.MarshalCanonical(payload)
 	if err != nil {
 		return repository.ToolCallBeforeEvent{}, err
@@ -1403,10 +1407,8 @@ func (s *Server) denyToolBefore(ctx context.Context, beacon *turingv1.ToolCallBe
 		"toolCallId": beacon.ToolCallId,
 		"serverName": beaconServerName(beacon),
 		"toolName":   beacon.ToolName,
-		"reason":     reason,
 		"error":      reason,
 	}
-	addModelToolCallID(deniedPayload, beacon)
 	event, err := s.appendToolEvent(ctx, run, "tool.call.denied", deniedPayload)
 	if err != nil {
 		return nil, err
@@ -1458,23 +1460,12 @@ func (s *Server) handleToolAfter(ctx context.Context, beacon *turingv1.ToolCallB
 		errorMessage = beacon.Error.Message
 	}
 	payload := map[string]any{
-		"toolCallId":    beacon.ToolCallId,
-		"serverName":    beaconServerName(beacon),
-		"toolName":      beacon.ToolName,
-		"status":        statusValue,
-		"resultSummary": beacon.ResultSummary,
-		"durationMs":    beacon.DurationMs,
+		"toolCallId": beacon.ToolCallId,
+		"serverName": beaconServerName(beacon),
+		"toolName":   beacon.ToolName,
 	}
-	addModelToolCallID(payload, beacon)
-	if beacon.Error != nil {
-		errorText := beacon.Error.Message
-		if errorText == "" {
-			errorText = beacon.Error.Code
-		}
+	if errorText := publicToolEventError(statusValue, beacon.Error); errorText != "" {
 		payload["error"] = errorText
-		if beacon.Error.Code != "" {
-			payload["errorCode"] = beacon.Error.Code
-		}
 	}
 	payloadJSON, err := safejson.MarshalCanonical(payload)
 	if err != nil {
@@ -1550,6 +1541,25 @@ func toolAfterStatus(beacon *turingv1.ToolCallBeacon) (string, string, error) {
 		return "denied", "tool.call.denied", nil
 	default:
 		return "", "", status.Error(codes.InvalidArgument, "tool_call status is required")
+	}
+}
+
+func publicToolEventError(statusValue string, toolError *turingv1.ToolCallError) string {
+	if toolError != nil {
+		if toolError.Message != "" {
+			return toolError.Message
+		}
+		if toolError.Code != "" {
+			return toolError.Code
+		}
+	}
+	switch statusValue {
+	case "failed":
+		return "Tool call failed"
+	case "denied":
+		return "Tool call denied"
+	default:
+		return ""
 	}
 }
 

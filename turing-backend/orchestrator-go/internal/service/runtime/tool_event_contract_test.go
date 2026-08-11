@@ -18,11 +18,13 @@ func TestToolLifecyclePersistedAndStreamedEventContract(t *testing.T) {
 		eventType string
 		toolName  string
 		errorText string
+		withError bool
 		terminal  turingv1.ToolCallStatus
 	}{
 		{name: "started", eventType: "tool.call.started", toolName: "system.time"},
 		{name: "completed", eventType: "tool.call.completed", toolName: "system.time", terminal: turingv1.ToolCallStatus_TOOL_CALL_STATUS_COMPLETED},
-		{name: "failed", eventType: "tool.call.failed", toolName: "system.time", errorText: "tool exploded", terminal: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED},
+		{name: "failed", eventType: "tool.call.failed", toolName: "system.time", errorText: "tool exploded", withError: true, terminal: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED},
+		{name: "failed without error", eventType: "tool.call.failed", toolName: "system.time", errorText: "Tool call failed", terminal: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED},
 		{name: "denied", eventType: "tool.call.denied", toolName: "system.shell", errorText: "unknown_tool"},
 	}
 
@@ -34,20 +36,24 @@ func TestToolLifecyclePersistedAndStreamedEventContract(t *testing.T) {
 			defer unsubscribe()
 			toolCallID := "call_contract_" + test.name
 			before := &turingv1.ToolCallBeacon{
-				RunId:      enqueued.RunID,
-				TraceId:    enqueued.TraceID,
-				ToolCallId: toolCallID,
-				AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
-				ServerName: "system",
-				ToolName:   test.toolName,
-				Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+				RunId:           enqueued.RunID,
+				TraceId:         enqueued.TraceID,
+				ToolCallId:      toolCallID,
+				AgentId:         turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+				ServerName:      "system",
+				ToolName:        test.toolName,
+				Phase:           turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+				ModelToolCallId: "provider_" + test.name,
+				Args:            mustStruct(t, map[string]any{"secret": "not public"}),
 			}
 			applyToolBeaconForContract(t, h, before)
 			if test.terminal != turingv1.ToolCallStatus_TOOL_CALL_STATUS_UNSPECIFIED {
 				after := proto.Clone(before).(*turingv1.ToolCallBeacon)
 				after.Phase = turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER
 				after.Status = test.terminal
-				if test.terminal == turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED {
+				after.ResultSummary = "private result"
+				after.DurationMs = 42
+				if test.withError {
 					after.Error = &turingv1.ToolCallError{Code: "mcp_call_failed", Message: test.errorText}
 				}
 				applyToolBeaconForContract(t, h, after)
@@ -118,7 +124,10 @@ func assertToolEventPayloadContract(t *testing.T, payloadJSON, toolCallID, toolN
 			t.Fatalf("serverName = %#v, want system string", serverName)
 		}
 	}
-	for _, forbidden := range []string{"tool_call_id", "tool_name", "server_name"} {
+	for _, forbidden := range []string{
+		"tool_call_id", "tool_name", "server_name", "args", "status", "resultSummary",
+		"durationMs", "errorCode", "reason", "modelToolCallId",
+	} {
 		if _, exists := payload[forbidden]; exists {
 			t.Fatalf("payload uses forbidden key %q: %#v", forbidden, payload)
 		}
@@ -131,5 +140,8 @@ func assertToolEventPayloadContract(t *testing.T, payloadJSON, toolCallID, toolN
 	}
 	if got, ok := payload["error"].(string); !ok || got != errorText {
 		t.Fatalf("error = %#v, want %q string", payload["error"], errorText)
+	}
+	if len(payload) != 4 {
+		t.Fatalf("terminal error payload keys = %#v, want only toolCallId/toolName/serverName/error", payload)
 	}
 }

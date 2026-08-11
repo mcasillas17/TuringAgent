@@ -238,19 +238,21 @@ func (r *Repository) RecordToolCallAfterWithEvent(ctx context.Context, record To
 	}
 	defer func() { _ = tx.Rollback() }()
 	var serverName, toolName, argsHash, currentStatus, resultSummary, errorCode, errorMessage, runStatus, sessionID, traceID, workerID string
+	var toolCompletedAt, runFinishedAt string
 	var modelToolCallID, approvalID sql.NullString
 	var durationMS int64
 	err = tx.QueryRowContext(ctx, `
 		SELECT tc.server_name, tc.tool_name, tc.args_hash, tc.model_tool_call_id, tc.status,
 			tc.approval_id, COALESCE(tc.result_summary, ''), COALESCE(tc.error_code, ''), COALESCE(tc.error_message, ''), COALESCE(tc.duration_ms, 0),
-			ar.status, ar.session_id, ar.trace_id, COALESCE(ar.worker_id, '')
+			ar.status, ar.session_id, ar.trace_id, COALESCE(ar.worker_id, ''),
+			COALESCE(tc.completed_at, ''), COALESCE(ar.finished_at, '')
 		FROM tool_calls tc
 		JOIN agent_runs ar ON ar.id = tc.run_id
 		WHERE tc.id = ? AND tc.run_id = ?
 	`, record.ToolCallID, record.RunID).Scan(
 		&serverName, &toolName, &argsHash, &modelToolCallID, &currentStatus, &approvalID,
 		&resultSummary, &errorCode, &errorMessage, &durationMS,
-		&runStatus, &sessionID, &traceID, &workerID,
+		&runStatus, &sessionID, &traceID, &workerID, &toolCompletedAt, &runFinishedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, Event{}, ErrToolCallNotFound
@@ -277,7 +279,7 @@ func (r *Repository) RecordToolCallAfterWithEvent(ctx context.Context, record To
 		}
 		return false, Event{}, nil
 	}
-	safeCleanup, err := terminalSafeToolCallCleanupAllowed(ctx, tx, approvalID, currentStatus, runStatus, workerID, resultSummary, record)
+	safeCleanup, err := terminalSafeToolCallCleanupAllowed(ctx, tx, approvalID, currentStatus, runStatus, workerID, resultSummary, toolCompletedAt, runFinishedAt, record)
 	if err != nil {
 		return false, Event{}, err
 	}
@@ -339,10 +341,28 @@ func approvalAllowsCompletion(ctx context.Context, tx *sql.Tx, approvalID sql.Nu
 		}
 		return err
 	}
-	if approvalStatus != "approved" && approvalStatus != "consumed" {
+	if approvalStatus != "consumed" {
 		return ErrToolCallInvalidTransition
 	}
 	return nil
+}
+
+func marshalToolLifecyclePayload(toolCallID string, serverName string, toolName string, errorMessage string) (string, error) {
+	payload := map[string]any{
+		"toolCallId": toolCallID,
+		"toolName":   toolName,
+	}
+	if serverName != "" {
+		payload["serverName"] = serverName
+	}
+	if errorMessage != "" {
+		payload["error"] = errorMessage
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(payloadJSON), nil
 }
 
 func isOpenToolCallStatus(status string) bool {
@@ -369,13 +389,15 @@ func terminalApprovalCleanupAllowed(ctx context.Context, tx *sql.Tx, approvalID 
 		(currentStatus == "failed" && approvalStatus == "expired"), nil
 }
 
-func terminalSafeToolCallCleanupAllowed(ctx context.Context, tx *sql.Tx, approvalID sql.NullString, currentStatus string, runStatus string, workerID string, resultSummary string, record ToolCallAfterRecord) (bool, error) {
+func terminalSafeToolCallCleanupAllowed(ctx context.Context, tx *sql.Tx, approvalID sql.NullString, currentStatus string, runStatus string, workerID string, resultSummary string, toolCompletedAt string, runFinishedAt string, record ToolCallAfterRecord) (bool, error) {
 	if approvalID.Valid ||
 		currentStatus != "failed" ||
 		record.Status != "failed" ||
 		record.WorkerID == "" ||
 		record.WorkerID != workerID ||
-		record.ResultSummary != resultSummary {
+		record.ResultSummary != resultSummary ||
+		toolCompletedAt == "" ||
+		toolCompletedAt != runFinishedAt {
 		return false, nil
 	}
 	switch runStatus {
@@ -398,9 +420,7 @@ func terminalSafeToolCallCleanupAllowed(ctx context.Context, tx *sql.Tx, approva
 			return false, err
 		}
 		if toolCallID, _ := payload["toolCallId"].(string); toolCallID == record.ToolCallID {
-			if reason, _ := payload["reason"].(string); reason != "" {
-				return true, nil
-			}
+			return true, nil
 		}
 	}
 	if err := rows.Err(); err != nil {

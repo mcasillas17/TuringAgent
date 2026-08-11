@@ -936,11 +936,18 @@ func TestConnectWorkerTerminalizesApprovalWhenDecisionSendFails(t *testing.T) {
 	if terminalEvents != 1 {
 		t.Fatalf("agent.run.failed event count = %d, want 1", terminalEvents)
 	}
-	event := recvBusEvent(t, published, func(event events.Event) bool {
-		return event.RunID == enqueued.RunID && event.Type == "agent.run.failed"
-	})
-	if event.TraceID != enqueued.TraceID {
-		t.Fatalf("agent.run.failed trace_id = %q, want %q", event.TraceID, enqueued.TraceID)
+	var publishedTypes []string
+	for len(publishedTypes) < 2 {
+		event := recvBusEvent(t, published, func(event events.Event) bool {
+			return event.RunID == enqueued.RunID && (event.Type == "tool.call.failed" || event.Type == "agent.run.failed")
+		})
+		if event.TraceID != enqueued.TraceID {
+			t.Fatalf("%s trace_id = %q, want %q", event.Type, event.TraceID, enqueued.TraceID)
+		}
+		publishedTypes = append(publishedTypes, event.Type)
+	}
+	if want := []string{"tool.call.failed", "agent.run.failed"}; !reflect.DeepEqual(publishedTypes, want) {
+		t.Fatalf("published delivery-failure events = %v, want %v", publishedTypes, want)
 	}
 }
 
@@ -2030,9 +2037,11 @@ func TestToolBeaconRequiresApprovalForFilesTool(t *testing.T) {
 	if want := []string{"tool.call.started", "approval.requested"}; !reflect.DeepEqual(lifecycle, want) {
 		t.Fatalf("approval start lifecycle = %v, want %v", lifecycle, want)
 	}
-	if startedPayload["toolCallId"] != "call_files_update" || startedPayload["serverName"] != "files" ||
-		startedPayload["modelToolCallId"] != "provider_call_1" ||
-		startedPayload["toolName"] != "files.update" || !reflect.DeepEqual(startedPayload["args"], args.AsMap()) {
+	if want := map[string]any{
+		"toolCallId": "call_files_update",
+		"serverName": "files",
+		"toolName":   "files.update",
+	}; !reflect.DeepEqual(startedPayload, want) {
 		t.Fatalf("tool.call.started payload = %#v", startedPayload)
 	}
 	var auditAction string
@@ -2509,7 +2518,12 @@ func TestToolBeaconDeniesUnknownToolWithDurableEvent(t *testing.T) {
 	if err := json.Unmarshal([]byte(denied.PayloadJSON), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["toolCallId"] != "call_unknown" || payload["reason"] != "unknown_tool" {
+	if want := map[string]string{
+		"toolCallId": "call_unknown",
+		"serverName": "system",
+		"toolName":   "system.shell",
+		"error":      "unknown_tool",
+	}; !reflect.DeepEqual(payload, want) {
 		t.Fatalf("tool.call.denied payload = %+v", payload)
 	}
 }
@@ -2699,7 +2713,11 @@ func TestToolBeaconAfterRecordsCompletionEvent(t *testing.T) {
 	if err := json.Unmarshal([]byte(completed.PayloadJSON), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["toolCallId"] != "call_echo" || payload["resultSummary"] != "echoed hello" || payload["durationMs"] != float64(12) {
+	if want := map[string]any{
+		"toolCallId": "call_echo",
+		"serverName": "system",
+		"toolName":   "system.echo",
+	}; !reflect.DeepEqual(payload, want) {
 		t.Fatalf("tool.call.completed payload = %+v", payload)
 	}
 }

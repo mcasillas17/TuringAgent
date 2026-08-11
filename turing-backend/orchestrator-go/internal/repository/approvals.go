@@ -32,6 +32,7 @@ type ApprovalRecord struct {
 type ApprovalTerminalization struct {
 	Approval       ApprovalRecord
 	ApprovalEvent  Event
+	ToolEvent      Event
 	RunFailedEvent Event
 	Changed        bool
 }
@@ -313,6 +314,8 @@ func (r *Repository) terminalizeApproval(
 	if err := expectOneRow(result, "approval is not pending"); err != nil {
 		return ApprovalTerminalization{}, err
 	}
+	toolCallChanged := false
+	toolCallServerName := ""
 	if record.ToolCallID != "" {
 		result, err = tx.ExecContext(ctx, `
 			UPDATE tool_calls
@@ -326,6 +329,7 @@ func (r *Repository) terminalizeApproval(
 		if err != nil {
 			return ApprovalTerminalization{}, err
 		}
+		toolCallChanged = changed == 1
 		if changed != 1 {
 			var currentStatus string
 			if err := tx.QueryRowContext(ctx, `SELECT status FROM tool_calls WHERE id = ? AND run_id = ?`, record.ToolCallID, record.RunID).Scan(&currentStatus); err != nil {
@@ -333,6 +337,11 @@ func (r *Repository) terminalizeApproval(
 			}
 			if !isTerminalToolCallStatus(currentStatus) {
 				return ApprovalTerminalization{}, errors.New("tool call not found for approval")
+			}
+		}
+		if toolCallChanged {
+			if err := tx.QueryRowContext(ctx, `SELECT server_name FROM tool_calls WHERE id = ? AND run_id = ?`, record.ToolCallID, record.RunID).Scan(&toolCallServerName); err != nil {
+				return ApprovalTerminalization{}, err
 			}
 		}
 	}
@@ -343,6 +352,21 @@ func (r *Repository) terminalizeApproval(
 	var approvalEvent Event
 	if approvalEventType != "" {
 		approvalEvent, err = appendApprovalLifecycleEventTx(ctx, tx, record, approvalEventType, decidedAt)
+		if err != nil {
+			return ApprovalTerminalization{}, err
+		}
+	}
+	var toolEvent Event
+	if toolCallChanged {
+		payloadJSON, err := marshalToolLifecyclePayload(record.ToolCallID, toolCallServerName, record.ToolName, errorMessage)
+		if err != nil {
+			return ApprovalTerminalization{}, err
+		}
+		toolEventType := "tool.call.failed"
+		if toolCallStatus == "denied" {
+			toolEventType = "tool.call.denied"
+		}
+		toolEvent, err = appendRunEventTx(ctx, tx, sessionID, record.RunID, traceID, toolEventType, payloadJSON, decidedAt)
 		if err != nil {
 			return ApprovalTerminalization{}, err
 		}
@@ -391,7 +415,7 @@ func (r *Repository) terminalizeApproval(
 	if err := tx.Commit(); err != nil {
 		return ApprovalTerminalization{}, err
 	}
-	return ApprovalTerminalization{Approval: record, ApprovalEvent: approvalEvent, RunFailedEvent: event, Changed: true}, nil
+	return ApprovalTerminalization{Approval: record, ApprovalEvent: approvalEvent, ToolEvent: toolEvent, RunFailedEvent: event, Changed: true}, nil
 }
 
 func approvalExpiredAtDecision(expiresAt string, decidedAt string) bool {

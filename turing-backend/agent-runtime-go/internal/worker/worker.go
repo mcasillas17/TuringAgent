@@ -35,6 +35,7 @@ type Options struct {
 	HeartbeatInterval        time.Duration
 	DisconnectCleanupTimeout time.Duration
 	DecisionTombstoneTTL     time.Duration
+	UpdateSendTimeout        time.Duration
 }
 
 type Worker struct {
@@ -72,6 +73,7 @@ type activeRun struct {
 
 const (
 	terminalUpdateSendTimeout   = 5 * time.Second
+	defaultUpdateSendTimeout    = 5 * time.Second
 	defaultHeartbeatInterval    = 30 * time.Second
 	defaultDecisionTombstoneTTL = 100 * time.Millisecond
 	maxConcurrentRuns           = 128
@@ -281,6 +283,9 @@ func New(options Options, client RuntimeClient, executor Executor) *Worker {
 	if options.DecisionTombstoneTTL <= 0 {
 		options.DecisionTombstoneTTL = defaultDecisionTombstoneTTL
 	}
+	if options.UpdateSendTimeout <= 0 {
+		options.UpdateSendTimeout = defaultUpdateSendTimeout
+	}
 	return &Worker{
 		options: options, client: client, executor: executor, active: map[string]*activeRun{},
 		approvals: map[string]string{}, toolCalls: map[string]string{}, decisions: map[string][]*decisionWaiter{},
@@ -475,7 +480,9 @@ func (w *Worker) startRun(parent context.Context, stream RuntimeStream, job *tur
 				terminal = update
 				return nil
 			}
-			return w.send(runCtx, stream, update)
+			sendCtx, cancel := context.WithTimeout(runCtx, w.options.UpdateSendTimeout)
+			defer cancel()
+			return w.send(sendCtx, stream, update)
 		})
 		if entry.isStopping() {
 			return

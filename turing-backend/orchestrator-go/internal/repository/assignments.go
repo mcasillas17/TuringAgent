@@ -260,10 +260,10 @@ func terminalizeStaleApprovedAuthorizationTx(
 	}
 
 	type openToolCall struct {
-		id, toolName, modelToolCallID, approvalID string
+		id, serverName, toolName string
 	}
 	toolRows, err := tx.QueryContext(ctx, `
-		SELECT id, tool_name, COALESCE(model_tool_call_id, ''), COALESCE(approval_id, '')
+		SELECT id, server_name, tool_name
 		FROM tool_calls
 		WHERE run_id = ? AND status IN ('requested', 'allowed', 'approval_required')
 		ORDER BY `+sqliteTimestampNanos("created_at")+`, id
@@ -274,7 +274,7 @@ func terminalizeStaleApprovedAuthorizationTx(
 	var toolCalls []openToolCall
 	for toolRows.Next() {
 		var toolCall openToolCall
-		if err := toolRows.Scan(&toolCall.id, &toolCall.toolName, &toolCall.modelToolCallID, &toolCall.approvalID); err != nil {
+		if err := toolRows.Scan(&toolCall.id, &toolCall.serverName, &toolCall.toolName); err != nil {
 			return AssignmentReconciliation{}, false, errors.Join(err, toolRows.Close())
 		}
 		toolCalls = append(toolCalls, toolCall)
@@ -368,25 +368,11 @@ func terminalizeStaleApprovedAuthorizationTx(
 		}
 	}
 	for _, toolCall := range toolCalls {
-		payload := map[string]any{
-			"toolCallId": toolCall.id,
-			"toolName":   toolCall.toolName,
-			"status":     "failed",
-			"reason":     code,
-			"error":      message,
-			"errorCode":  code,
-		}
-		if toolCall.modelToolCallID != "" {
-			payload["modelToolCallId"] = toolCall.modelToolCallID
-		}
-		if toolCall.approvalID != "" {
-			payload["approvalId"] = toolCall.approvalID
-		}
-		payloadJSON, err := json.Marshal(payload)
+		payloadJSON, err := marshalToolLifecyclePayload(toolCall.id, toolCall.serverName, toolCall.toolName, message)
 		if err != nil {
 			return AssignmentReconciliation{}, false, err
 		}
-		if _, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "tool.call.failed", string(payloadJSON), finishedAt); err != nil {
+		if _, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "tool.call.failed", payloadJSON, finishedAt); err != nil {
 			return AssignmentReconciliation{}, false, err
 		}
 	}

@@ -182,6 +182,9 @@ func (s *Server) DenyApproval(ctx context.Context, req *turingv1.DenyApprovalReq
 	if transition.ApprovalEvent.EventID != "" {
 		s.publishEvent(transition.ApprovalEvent)
 	}
+	if transition.ToolEvent.EventID != "" {
+		s.publishEvent(transition.ToolEvent)
+	}
 	if transition.RunFailedEvent.EventID != "" {
 		s.publishEvent(transition.RunFailedEvent)
 	}
@@ -266,6 +269,9 @@ func (s *Server) expireApproval(ctx context.Context, approvalID string) (reposit
 	if transition.ApprovalEvent.EventID != "" {
 		s.publishEvent(transition.ApprovalEvent)
 	}
+	if transition.ToolEvent.EventID != "" {
+		s.publishEvent(transition.ToolEvent)
+	}
 	if transition.RunFailedEvent.EventID != "" {
 		s.publishEvent(transition.RunFailedEvent)
 	}
@@ -298,6 +304,9 @@ func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeAppro
 		expiredApproval := transition.Approval
 		if transition.ApprovalEvent.EventID != "" {
 			s.publishEvent(transition.ApprovalEvent)
+		}
+		if transition.ToolEvent.EventID != "" {
+			s.publishEvent(transition.ToolEvent)
 		}
 		if transition.RunFailedEvent.EventID != "" {
 			s.publishEvent(transition.RunFailedEvent)

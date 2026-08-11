@@ -941,6 +941,55 @@ func TestApprovalLifecycleRecordsTokenAndUpdatesRun(t *testing.T) {
 	}
 }
 
+func TestRecordToolCallAfterRejectsApprovedButUnconsumedCompletion(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Unconsumed approval completion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "approval tool", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	const toolCallID = "call_approved_not_consumed"
+	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
+		ToolCallID: toolCallID, RunID: enqueued.RunID, Status: "approval_required",
+	}, "general_assistant", "files", "files.update", `{}`, "sha256:approved"); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := repo.CreateApproval(ctx, enqueued.RunID, toolCallID, "general_assistant", "files.update", `{}`, "sha256:approved", "2099-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ApproveApproval(ctx, approval.ApprovalID, "approved-token", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, _, err := repo.RecordToolCallAfterWithEvent(ctx, ToolCallAfterRecord{
+		ToolCallID: toolCallID, RunID: enqueued.RunID, ServerName: "files", ToolName: "files.update", Status: "completed",
+	}, "tool.call.completed", `{"toolCallId":"call_approved_not_consumed","toolName":"files.update","serverName":"files"}`)
+	if !errors.Is(err, ErrToolCallInvalidTransition) {
+		t.Fatalf("approved-but-unconsumed completion error = %v, want ErrToolCallInvalidTransition", err)
+	}
+	if changed {
+		t.Fatal("approved-but-unconsumed completion changed the tool call")
+	}
+	var status string
+	if err := database.QueryRowContext(ctx, `SELECT status FROM tool_calls WHERE id = ?`, toolCallID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "approval_required" {
+		t.Fatalf("tool call status = %q, want approval_required", status)
+	}
+}
+
 func TestRecordToolCallAfterRejectsCompletionFromRequested(t *testing.T) {
 	database := openTestDB(t)
 	repo := New(database)

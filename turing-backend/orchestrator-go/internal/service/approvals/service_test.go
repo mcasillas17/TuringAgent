@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -437,6 +438,42 @@ func TestGetApprovalForRuntimeReturnsApprovedTokenAndConsumeConsumesOnce(t *test
 	}
 }
 
+func TestConsumeExpiredApprovalPublishesToolFailureBeforeRunFailure(t *testing.T) {
+	h := newApprovalHarness(t)
+	enqueued := h.createRunningToolCall(t)
+	approvalID, err := h.service.CreateApprovalForTool(context.Background(), enqueued.RunID, "call_1", "general_assistant", "files.update", map[string]any{"path": "note.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := turingv1.NewApprovalServiceClient(h.conn)
+	if _, err := client.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.database.ExecContext(context.Background(), `UPDATE approvals SET expires_at = ? WHERE id = ?`, time.Now().Add(-time.Minute).Format(time.RFC3339Nano), approvalID); err != nil {
+		t.Fatal(err)
+	}
+	published, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
+	defer unsubscribe()
+
+	if response, err := client.ConsumeApproval(context.Background(), &turingv1.ConsumeApprovalRequest{ApprovalId: approvalID}); status.Code(err) != codes.FailedPrecondition || response != nil {
+		t.Fatalf("ConsumeApproval response/error = %+v/%v, want nil/FailedPrecondition", response, err)
+	}
+	var publishedTypes []string
+	for len(publishedTypes) < 3 {
+		select {
+		case event := <-published:
+			if event.RunID == enqueued.RunID && (event.Type == "approval.expired" || event.Type == "tool.call.failed" || event.Type == "agent.run.failed") {
+				publishedTypes = append(publishedTypes, event.Type)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("published consume-expiry lifecycle = %v", publishedTypes)
+		}
+	}
+	if want := []string{"approval.expired", "tool.call.failed", "agent.run.failed"}; !reflect.DeepEqual(publishedTypes, want) {
+		t.Fatalf("published consume-expiry lifecycle = %v, want %v", publishedTypes, want)
+	}
+}
+
 func TestGetApprovalForRuntimeLazilyExpiresOnceAndTerminalizesRunAndJob(t *testing.T) {
 	h := newApprovalHarness(t)
 	enqueued := h.createRunningToolCall(t)
@@ -519,19 +556,19 @@ func TestGetApprovalForRuntimeLazilyExpiresOnceAndTerminalizesRunAndJob(t *testi
 	if got := notifier.snapshot(); got.count != 1 || got.runID != enqueued.RunID || got.approvalID != approvalID || got.status != "expired" || got.approvalToken != "" {
 		t.Fatalf("expiration notification = %+v, want one expired notification", got)
 	}
-	publishedTypes := map[string]int{}
-	for len(publishedTypes) < 2 {
+	var publishedTypes []string
+	for len(publishedTypes) < 3 {
 		select {
 		case event := <-published:
-			if event.RunID == enqueued.RunID && (event.Type == "approval.expired" || event.Type == "agent.run.failed") {
-				publishedTypes[event.Type]++
+			if event.RunID == enqueued.RunID && (event.Type == "approval.expired" || event.Type == "tool.call.failed" || event.Type == "agent.run.failed") {
+				publishedTypes = append(publishedTypes, event.Type)
 			}
 		case <-time.After(time.Second):
-			t.Fatalf("published expiration lifecycle = %v, want approval.expired and agent.run.failed", publishedTypes)
+			t.Fatalf("published expiration lifecycle = %v", publishedTypes)
 		}
 	}
-	if publishedTypes["approval.expired"] != 1 || publishedTypes["agent.run.failed"] != 1 {
-		t.Fatalf("published expiration lifecycle = %v, want one of each", publishedTypes)
+	if want := []string{"approval.expired", "tool.call.failed", "agent.run.failed"}; !reflect.DeepEqual(publishedTypes, want) {
+		t.Fatalf("published expiration lifecycle = %v, want %v", publishedTypes, want)
 	}
 	select {
 	case event := <-published:
@@ -779,19 +816,34 @@ func TestDenyApprovalPublishesCommittedTerminalRunEventOnlyOnce(t *testing.T) {
 	if _, err := client.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{ApprovalId: approvalID}); err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]int{}
-	for len(got) < 2 {
+	var publishedTypes []string
+	for len(publishedTypes) < 3 {
 		select {
 		case event := <-published:
-			if event.RunID == enqueued.RunID && (event.Type == "approval.denied" || event.Type == "agent.run.failed") {
-				got[event.Type]++
+			if event.RunID == enqueued.RunID && (event.Type == "approval.denied" || event.Type == "tool.call.denied" || event.Type == "agent.run.failed") {
+				publishedTypes = append(publishedTypes, event.Type)
+				if event.Type == "tool.call.denied" {
+					var payload map[string]any
+					if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+						t.Fatal(err)
+					}
+					want := map[string]any{
+						"toolCallId": "call_1",
+						"toolName":   "files.update",
+						"serverName": "files",
+						"error":      "User denied approval",
+					}
+					if !reflect.DeepEqual(payload, want) {
+						t.Fatalf("tool.call.denied payload = %#v, want %#v", payload, want)
+					}
+				}
 			}
 		case <-time.After(time.Second):
-			t.Fatalf("published lifecycle events = %v, want approval.denied and agent.run.failed", got)
+			t.Fatalf("published lifecycle events = %v", publishedTypes)
 		}
 	}
-	if got["approval.denied"] != 1 || got["agent.run.failed"] != 1 {
-		t.Fatalf("published lifecycle events = %v, want one of each", got)
+	if want := []string{"approval.denied", "tool.call.denied", "agent.run.failed"}; !reflect.DeepEqual(publishedTypes, want) {
+		t.Fatalf("published lifecycle events = %v, want %v", publishedTypes, want)
 	}
 
 	if _, err := client.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{ApprovalId: approvalID}); err != nil {

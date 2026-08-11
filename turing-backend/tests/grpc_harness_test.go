@@ -1521,6 +1521,7 @@ func TestModelDrivenFilesCreateCompletesApprovalFlow(t *testing.T) {
 func TestApprovalRequiredToolFlow(t *testing.T) {
 	harness := newGRPCHarness(t)
 	defer harness.close()
+	harness.filesMCP.enableCreateToolWithApprovalValidation()
 
 	sessionID := harness.createSession(t, "approval flow")
 	ctx, cancel := context.WithTimeout(harness.clientContext(), 15*time.Second)
