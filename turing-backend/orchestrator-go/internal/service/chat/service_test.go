@@ -401,7 +401,7 @@ func TestSendMessageCancellationCancelsRun(t *testing.T) {
 	t.Fatalf("agent.run.cancelled event not replayed: %+v", replayed)
 }
 
-func TestSendMessageDoesNotBroadcastCancellationWhenPersistenceFails(t *testing.T) {
+func TestSendMessageStillCancelsRuntimeWhenPersistenceFails(t *testing.T) {
 	h := newHarness(t)
 	sessionID := h.createSession(t)
 	chatCtx, cancelChat := context.WithCancel(h.clientContext())
@@ -470,10 +470,12 @@ func TestSendMessageDoesNotBroadcastCancellationWhenPersistenceFails(t *testing.
 		if result.err != nil {
 			t.Fatal(result.err)
 		}
-		if cancel := result.cmd.GetRunCancelled(); cancel != nil && cancel.RunId == runID {
-			t.Fatalf("received runtime cancellation despite persistence failure: %+v", cancel)
+		cancel := result.cmd.GetRunCancelled()
+		if cancel == nil || cancel.RunId != runID || cancel.Reason != "client_cancelled" {
+			t.Fatalf("runtime command = %+v, want cancellation for %q", result.cmd, runID)
 		}
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(time.Second):
+		t.Fatal("runtime cancellation was skipped after persistence failure")
 	}
 }
 

@@ -137,6 +137,12 @@ func (s *Server) ApproveApproval(ctx context.Context, req *turingv1.ApproveAppro
 	}
 	if approval.Status != "pending" {
 		if approval.Status == "approved" {
+			if expired(approval.ExpiresAt) {
+				if _, err := s.expireApproval(ctx, req.ApprovalId); err != nil {
+					return nil, mapApprovalError(err)
+				}
+				return nil, status.Error(codes.FailedPrecondition, "approval expired")
+			}
 			return &turingv1.ApprovalResponse{ApprovalId: approval.ApprovalID, Status: turingv1.ApprovalStatus_APPROVAL_STATUS_APPROVED}, nil
 		}
 		return nil, status.Error(codes.FailedPrecondition, "approval is not pending")

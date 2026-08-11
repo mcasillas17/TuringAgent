@@ -228,11 +228,10 @@ func (s *Server) cancelRun(runID string) {
 		return
 	}
 	events, err := s.repo.CancelRunWithEvent(ctx, runID, "client_cancelled", string(payload))
-	if err != nil {
-		return
-	}
-	for _, event := range events {
-		s.bus.Publish(busEventFromRepository(event))
+	if err == nil {
+		for _, event := range events {
+			s.bus.Publish(busEventFromRepository(event))
+		}
 	}
 	if s.runtime != nil {
 		s.runtime.CancelRun(ctx, runID, "client_cancelled")

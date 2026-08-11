@@ -11,6 +11,8 @@ import (
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestConnectWorkerBoundsBlockedAssignmentSendAndRecovers(t *testing.T) {
@@ -81,6 +83,29 @@ func TestConnectWorkerBoundsBlockedAssignmentSendAndRecovers(t *testing.T) {
 	}
 	if run.Status != "queued" || run.ExecutionActive {
 		t.Fatalf("recovered blocked-send run = %+v, want queued inactive", run)
+	}
+}
+
+func TestClosedWorkerSendReportsDisconnected(t *testing.T) {
+	worker := &worker{
+		commands:    make(chan *turingv1.RuntimeCommand, 1),
+		done:        make(chan struct{}),
+		assignments: map[string]assignment{},
+	}
+	worker.close()
+
+	err := worker.send(context.Background(), &turingv1.RuntimeCommand{
+		Command: &turingv1.RuntimeCommand_ShutdownRequested{
+			ShutdownRequested: &turingv1.RuntimeShutdownRequested{Reason: "test"},
+		},
+	})
+	if status.Code(err) != codes.Canceled {
+		t.Fatalf("closed worker send error = %v, want Canceled", err)
+	}
+	select {
+	case command := <-worker.commands:
+		t.Fatalf("closed worker accepted command: %+v", command)
+	default:
 	}
 }
 

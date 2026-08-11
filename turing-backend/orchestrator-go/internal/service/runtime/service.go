@@ -834,17 +834,15 @@ func (w *worker) send(ctx context.Context, command *turingv1.RuntimeCommand) err
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
-		return nil
+		return status.Error(codes.Canceled, "worker is disconnected")
 	}
 	commands := w.commands
-	done := w.done
-	w.mu.Unlock()
 	select {
 	case commands <- command:
+		w.mu.Unlock()
 		return nil
-	case <-done:
-		return status.Error(codes.Canceled, "worker is disconnected")
 	case <-ctx.Done():
+		w.mu.Unlock()
 		return ctx.Err()
 	}
 }

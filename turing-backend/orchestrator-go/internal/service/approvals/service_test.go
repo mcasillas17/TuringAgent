@@ -959,6 +959,7 @@ func TestApproveExpiredApprovalFailsPrecondition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := h.database.ExecContext(context.Background(), `UPDATE approvals SET expires_at = ? WHERE id = ?`, time.Now().Add(-time.Minute).Format(time.RFC3339Nano), approvalID); err != nil {
 		t.Fatal(err)
 	}
@@ -974,5 +975,33 @@ func TestApproveExpiredApprovalFailsPrecondition(t *testing.T) {
 	}
 	if approval.Status != "expired" {
 		t.Fatalf("approval status = %q, want expired", approval.Status)
+	}
+}
+
+func TestReapproveExpiredApprovedApprovalRevokesToken(t *testing.T) {
+	h := newApprovalHarness(t)
+	enqueued := h.createRunningToolCall(t)
+	approvalID, err := h.service.CreateApprovalForTool(context.Background(), enqueued.RunID, "call_1", "general_assistant", "files.update", map[string]any{"path": "note.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := turingv1.NewApprovalServiceClient(h.conn)
+	if _, err := client.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.database.ExecContext(context.Background(), `UPDATE approvals SET expires_at = ? WHERE id = ?`, time.Now().Add(-time.Minute).Format(time.RFC3339Nano), approvalID); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("reapprove expired approval error = %v, want FailedPrecondition", err)
+	}
+	approval, err := h.repo.GetApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval.Status != "expired" || approval.ApprovalToken != "" {
+		t.Fatalf("approval after reapprove = %+v, want expired with revoked token", approval)
 	}
 }
