@@ -614,7 +614,10 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "tool args are not valid JSON")
 	}
-	policy, ok := tools.GetPolicy(beacon.ToolName)
+	policy, ok, err := tools.GetPolicy(ctx, s.repo, beaconServerName(beacon), beacon.ToolName)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "get tool policy failed")
+	}
 	if !ok {
 		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "unknown_tool")
 	}

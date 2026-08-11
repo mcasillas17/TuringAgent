@@ -15,12 +15,15 @@ var seedPolicies = map[string]Policy{
 // DefaultPolicyFor assigns an orchestrator-owned policy to a tool when it is
 // first discovered. Unknown tools require approval and are never assumed safe.
 func DefaultPolicyFor(toolName string) Policy {
-	switch toolName {
-	case "files.delete", "files.move":
+	if permanentlyDisabled(toolName) {
 		return PolicyDisabled
 	}
 	if policy, ok := seedPolicies[toolName]; ok {
 		return policy
 	}
 	return PolicyApprovalRequired
+}
+
+func permanentlyDisabled(toolName string) bool {
+	return toolName == "files.delete" || toolName == "files.move"
 }
