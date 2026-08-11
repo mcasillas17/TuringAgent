@@ -256,12 +256,14 @@ func validateInputSchemaShape(schema map[string]any) error {
 			return errors.New("properties must be an object")
 		}
 		for name, rawDefinition := range properties {
-			definition, ok := rawDefinition.(map[string]any)
-			if !ok {
-				return fmt.Errorf("property %q definition must be an object", name)
-			}
-			if err := validateInputSchemaShape(definition); err != nil {
-				return fmt.Errorf("property %q: %w", name, err)
+			switch definition := rawDefinition.(type) {
+			case bool:
+			case map[string]any:
+				if err := validateInputSchemaShape(definition); err != nil {
+					return fmt.Errorf("property %q: %w", name, err)
+				}
+			default:
+				return fmt.Errorf("property %q definition must be a boolean or schema object", name)
 			}
 		}
 	}
@@ -272,12 +274,8 @@ func validateInputSchemaShape(schema map[string]any) error {
 			return errors.New("required must be an array")
 		}
 		for index, rawName := range required {
-			name, ok := rawName.(string)
-			if !ok {
+			if _, ok := rawName.(string); !ok {
 				return fmt.Errorf("required entry %d must be a string", index)
-			}
-			if _, present := properties[name]; !present {
-				return fmt.Errorf("required name %q is absent from properties", name)
 			}
 		}
 	}

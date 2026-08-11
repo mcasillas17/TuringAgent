@@ -430,6 +430,43 @@ func TestBuildRegistryRejectsInvalidInputSchema(t *testing.T) {
 	}
 }
 
+func TestBuildRegistryAcceptsBooleanPropertiesAndComposedRequiredNames(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema map[string]any
+	}{
+		{
+			name: "boolean property schema",
+			schema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"flag": true},
+			},
+		},
+		{
+			name: "required property supplied by composition",
+			schema: map[string]any{
+				"type":     "object",
+				"required": []any{"value"},
+				"allOf": []any{map[string]any{
+					"properties": map[string]any{"value": map[string]any{"type": "string"}},
+				}},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := BuildToolRegistry(context.Background(), map[string]ToolLister{
+				"schema-server": &registryTestClient{tools: []map[string]any{{
+					"name":        "valid_schema",
+					"inputSchema": tt.schema,
+				}}},
+			}); err != nil {
+				t.Fatalf("BuildToolRegistry rejected valid JSON Schema: %v", err)
+			}
+		})
+	}
+}
+
 func TestBuildRegistryRejectsMalformedInputSchemaStructure(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -464,15 +501,6 @@ func TestBuildRegistryRejectsMalformedInputSchemaStructure(t *testing.T) {
 			wantMessage: "required entry 0",
 		},
 		{
-			name: "required name is absent from properties",
-			schema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-				"required":   []any{"value"},
-			},
-			wantMessage: `required name "value"`,
-		},
-		{
 			name:        "additionalProperties is null",
 			schema:      map[string]any{"type": "object", "additionalProperties": nil},
 			wantMessage: "additionalProperties",
@@ -505,7 +533,7 @@ func TestBuildRegistryRejectsMalformedInputSchemaStructure(t *testing.T) {
 
 func TestBuildRegistryRejectsMalformedSchemasNestedUnderSchemaKeywords(t *testing.T) {
 	malformed := func() map[string]any {
-		return map[string]any{"required": []any{"missing"}}
+		return map[string]any{"required": []any{7}}
 	}
 	tests := []struct {
 		name        string
@@ -539,7 +567,7 @@ func TestBuildRegistryRejectsMalformedSchemasNestedUnderSchemaKeywords(t *testin
 			if err == nil {
 				t.Fatal("BuildToolRegistry returned nil error")
 			}
-			assertErrorContains(t, err, "inputSchema", tt.wantMessage, `required name "missing"`)
+			assertErrorContains(t, err, "inputSchema", tt.wantMessage, "required entry 0")
 			if ToolDiscoveryRetryable(err) {
 				t.Fatalf("BuildToolRegistry error = %T %v, want permanent catalog error", err, err)
 			}

@@ -708,22 +708,24 @@ func (s *Server) RecoverOrphanedAssignments(ctx context.Context) error {
 		}
 		released := false
 		if connected := s.registeredWorker(candidate.WorkerID); connected != nil {
-			closedAssignments, closed := connected.closeForStaleAssignment(
+			closedAssignments, closed, live := connected.closeForStaleAssignment(
 				candidate.RunID, candidate.AttemptID, cutoff, s.dispatch.LeaseDuration,
 			)
-			if !closed {
+			if live {
 				continue
 			}
-			s.removeWorkerRegistration(candidate.WorkerID, connected)
-			released = true
-			var remaining []assignment
-			for _, assigned := range closedAssignments {
-				if assigned.runID != candidate.RunID || assigned.attemptID != candidate.AttemptID {
-					remaining = append(remaining, assigned)
+			if closed {
+				s.removeWorkerRegistration(candidate.WorkerID, connected)
+				released = true
+				var remaining []assignment
+				for _, assigned := range closedAssignments {
+					if assigned.runID != candidate.RunID || assigned.attemptID != candidate.AttemptID {
+						remaining = append(remaining, assigned)
+					}
 				}
-			}
-			if _, err := s.reconcileAssignments(remaining, candidate.WorkerID); err != nil {
-				return err
+				if _, err := s.reconcileAssignments(remaining, candidate.WorkerID); err != nil {
+					return err
+				}
 			}
 		}
 		result, err := s.repo.RecoverAssignmentAtCutoffWithLimit(recoveryCtx, candidate, cutoff, s.dispatch.MaxAttempts)
@@ -1009,19 +1011,19 @@ func (w *worker) close() []assignment {
 	return w.closeLocked()
 }
 
-func (w *worker) closeForStaleAssignment(runID string, attemptID string, now time.Time, leaseDuration time.Duration) ([]assignment, bool) {
+func (w *worker) closeForStaleAssignment(runID string, attemptID string, now time.Time, leaseDuration time.Duration) ([]assignment, bool, bool) {
 	w.updateMu.Lock()
 	defer w.updateMu.Unlock()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	assigned, ok := w.assignments[runID]
-	if w.closed ||
-		!ok ||
-		(attemptID != "" && assigned.attemptID != attemptID) ||
-		(!w.lastHeartbeat.IsZero() && now.Before(w.lastHeartbeat.Add(leaseDuration))) {
-		return nil, false
+	if w.closed || !ok || (attemptID != "" && assigned.attemptID != attemptID) {
+		return nil, false, false
 	}
-	return w.closeLocked(), true
+	if !w.lastHeartbeat.IsZero() && now.Before(w.lastHeartbeat.Add(leaseDuration)) {
+		return nil, false, true
+	}
+	return w.closeLocked(), true, false
 }
 
 func (w *worker) closeLocked() []assignment {

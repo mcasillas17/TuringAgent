@@ -70,12 +70,13 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"TURING_APPROVAL_JWT_SECRET:",
 		"TURING_INTERNAL_TOKEN:",
 		"ORCHESTRATOR_GRPC_ADDR:",
-		"FILES_SANDBOX_ROOT:",
+		"FILES_SANDBOX_ROOT: /sandbox",
 	)
 	requireContainsNone(t, "turing-mcp-files", files,
 		"TURING_CLIENT_API_KEY:",
 		"OPENAI_API_KEY:",
 		"ORCHESTRATOR_INTERNAL_BASE_URL:",
+		"${FILES_SANDBOX_ROOT",
 	)
 }
 

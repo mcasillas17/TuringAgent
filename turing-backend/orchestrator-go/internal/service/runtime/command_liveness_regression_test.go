@@ -224,6 +224,67 @@ func TestRecoveryReclaimsAssignmentWithoutTimelyWorkerHeartbeat(t *testing.T) {
 	}
 }
 
+func TestRecoveryReclaimsAssignmentAfterSameIDWorkerReconnects(t *testing.T) {
+	h := newHarnessWithDispatch(t, DispatchConfig{LeaseDuration: time.Second})
+	enqueued := h.enqueueRun(t, "same worker ID reconnect")
+	const workerID = "worker-reconnected"
+	claimed, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", workerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleAssignment := repository.Assignment{
+		JobID: claimed.JobID, RunID: claimed.RunID, WorkerID: workerID, AttemptID: claimed.AssignmentAttemptID,
+	}
+	if err := h.repo.BeginAssignmentSend(context.Background(), staleAssignment); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.MarkAssignmentDelivered(context.Background(), staleAssignment); err != nil {
+		t.Fatal(err)
+	}
+	reconnected := &worker{
+		commands:      make(chan *turingv1.RuntimeCommand, 1),
+		done:          make(chan struct{}),
+		maxConcurrent: 1,
+		assignments:   map[string]assignment{},
+		lastHeartbeat: time.Now().UTC(),
+	}
+	h.service.mu.Lock()
+	h.service.workers[workerID] = reconnected
+	h.service.mu.Unlock()
+	expired := time.Now().Add(-time.Second)
+	if _, err := h.database.ExecContext(context.Background(), `
+		UPDATE agent_runs
+		SET execution_lease_expires_at = ?, execution_lease_expires_at_ns = ?
+		WHERE id = ?
+	`, expired.Format("2006-01-02T15:04:05.000000000Z"), expired.UnixNano(), enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.service.RecoverOrphanedAssignments(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case command := <-reconnected.commands:
+		assigned := command.GetRunAssigned()
+		if assigned == nil || assigned.GetRunId() != enqueued.RunID || assigned.GetAttempt() != 2 {
+			t.Fatalf("reconnected worker command = %+v, want second assignment for %q", command, enqueued.RunID)
+		}
+	default:
+		run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Fatalf("reconnected worker received no recovered assignment; run = %+v", run)
+	}
+	reconnected.mu.Lock()
+	closed := reconnected.closed
+	reconnected.mu.Unlock()
+	if closed {
+		t.Fatal("recovery closed the replacement worker stream")
+	}
+}
+
 func TestHeartbeatRevivalDispatchesQueuedWorkToIdleWorker(t *testing.T) {
 	h := newHarnessWithDispatch(t, DispatchConfig{LeaseDuration: time.Second})
 	enqueued := h.enqueueRun(t, "dispatch after heartbeat revival")
