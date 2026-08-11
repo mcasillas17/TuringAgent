@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const (
@@ -420,6 +421,67 @@ func TestSendMessageStreamsTokensToCompletion(t *testing.T) {
 	}
 	if !hasRunCompleted(events) {
 		t.Fatal("stream did not include run_completed")
+	}
+}
+
+func TestDiscoveredToolsAppearInListTools(t *testing.T) {
+	harness := newGRPCHarness(t)
+	defer harness.close()
+
+	internalCtx, cancelInternal := context.WithTimeout(
+		metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+integrationInternalToken),
+		5*time.Second,
+	)
+	defer cancelInternal()
+	stream, err := turingv1.NewRuntimeServiceClient(harness.internalConn).ConnectWorker(internalCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.CloseSend() }()
+	objectSchema, err := structpb.NewStruct(map[string]any{"type": "object"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId:          "worker-discovery-e2e",
+		AgentId:           turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		MaxConcurrentRuns: 1,
+		Tools: []*turingv1.DiscoveredTool{
+			{ServerName: "system", ToolName: "system.time", Schema: objectSchema},
+			{ServerName: "files", ToolName: "files.create", Schema: objectSchema},
+			{ServerName: "custom", ToolName: "custom.inspect", Schema: objectSchema},
+		},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := stream.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accepted.GetWorkerAccepted() == nil {
+		t.Fatalf("first runtime command = %+v, want worker_accepted", accepted)
+	}
+
+	listed, err := harness.sessions.ListTools(harness.clientContext(), &turingv1.ListToolsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]turingv1.ToolPolicy, len(listed.Tools))
+	for _, tool := range listed.Tools {
+		got[tool.ServerName+"/"+tool.ToolName] = tool.Policy
+	}
+	want := map[string]turingv1.ToolPolicy{
+		"custom/custom.inspect": turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
+		"files/files.create":    turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
+		"system/system.time":    turingv1.ToolPolicy_TOOL_POLICY_SAFE,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ListTools = %+v, want exactly %+v", got, want)
+	}
+	for name, policy := range want {
+		if got[name] != policy {
+			t.Fatalf("ListTools[%q] = %v, want %v", name, got[name], policy)
+		}
 	}
 }
 
