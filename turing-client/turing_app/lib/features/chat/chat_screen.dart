@@ -136,29 +136,28 @@ class _ChatScreenState extends State<ChatScreen> {
   /// heal the card (see [_applyToolCall]).
   static const _placeholderToolName = 'tool';
 
-  /// Reads the already-persisted event tail so [_applyToolCall] can tell a
-  /// replayed event from a live one by SEQUENCE. Sequence is exact and free of
-  /// clock skew; message timestamps are not usable for this — the backend
-  /// stamps a turn's rows at enqueue time and never restamps them, so a
-  /// finished turn's messages are stamped BEFORE its own tool events.
+  /// Reads the already-persisted event page and its authoritative latest
+  /// sequence so [_applyToolCall] can tell a replayed event from a live one.
+  /// Sequence is exact and free of clock skew; message timestamps are not
+  /// usable for this — the backend stamps a turn's rows at enqueue time and
+  /// never restamps them, so a finished turn's messages are stamped BEFORE its
+  /// own tool events.
   ///
   /// Fails open (watermark left unset, nothing suppressed) on any error: this
   /// screen must survive an unreachable backend, and re-rendering a stale card
-  /// is a far smaller harm than silently hiding every live tool call. The
-  /// server's `limit` cap errs the same way — a truncated tail only lowers the
-  /// watermark, which suppresses less.
+  /// is a far smaller harm than silently hiding every live tool call.
   Future<void> _loadReplayWatermark() async {
-    final List<TuringEvent> events;
+    final TuringEventPage page;
     try {
-      events = await widget.apiClient.listEvents(sessionId: widget.sessionId);
+      page = await widget.apiClient.listEvents(sessionId: widget.sessionId);
     } catch (_) {
       return;
     }
-    if (!mounted || events.isEmpty) return;
-    // Ordering is the server's business; a max costs nothing and does not
-    // depend on it.
-    var watermark = events.first.sequence;
-    for (final event in events) {
+    if (!mounted) return;
+    // `latestSequence` covers persisted rows beyond the 500-event response
+    // page. Taking the max also keeps alternate API implementations honest.
+    var watermark = page.latestSequence;
+    for (final event in page.events) {
       if (event.sequence > watermark) watermark = event.sequence;
     }
     _replayWatermarkSequence = watermark;
@@ -428,8 +427,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ),
-          if (_historyLoadFailed)
-            _SessionNotice(message: _historyFailedNotice),
+          if (_historyLoadFailed) _SessionNotice(message: _historyFailedNotice),
           if (_streamEnded) _SessionNotice(message: _streamEndedNotice),
           for (final approval in _approvals)
             ApprovalCard(

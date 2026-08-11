@@ -1692,6 +1692,51 @@ void main() {
     unawaited(events.close());
   });
 
+  testWidgets('replayed tool calls past a truncated event page stay hidden', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..initialEvents = [
+        _event(
+          type: 'message.delta',
+          sequence: 500,
+          payload: {'messageId': 'msg_old', 'delta': 'old'},
+        ),
+      ]
+      ..latestEventSequence = 1000;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 700,
+        payload: {'toolCallId': 'call_old', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.byType(ToolCallCard),
+      findsNothing,
+      reason:
+          'latest_sequence must suppress persisted events beyond the first page',
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
   testWidgets('an unreadable event tail suppresses nothing', (tester) async {
     final events = StreamController<TuringEvent>(sync: true);
     // The backend is routinely unreachable in a local-first stack. Without a
@@ -1897,8 +1942,9 @@ class _FakeApiClient implements TuringApi {
   List<Message> initialMessages = const [];
 
   /// The event log already persisted when the screen opens. The screen reads
-  /// its tail to learn which sequences the subscription will merely REPLAY.
+  /// its latest sequence to learn which events the subscription will REPLAY.
   List<TuringEvent> initialEvents = const [];
+  int? latestEventSequence;
 
   /// When set, `listEvents` fails with it.
   Object? eventsError;
@@ -1932,14 +1978,20 @@ class _FakeApiClient implements TuringApi {
   }
 
   @override
-  Future<List<TuringEvent>> listEvents({
+  Future<TuringEventPage> listEvents({
     required String sessionId,
     int? after,
     int limit = 500,
   }) {
     final error = eventsError;
     if (error != null) return Future.error(error);
-    return Future.value(initialEvents);
+    var latest = latestEventSequence ?? 0;
+    for (final event in initialEvents) {
+      if (event.sequence > latest) latest = event.sequence;
+    }
+    return Future.value(
+      TuringEventPage(events: initialEvents, latestSequence: latest),
+    );
   }
 
   @override

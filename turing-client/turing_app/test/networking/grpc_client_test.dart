@@ -1,5 +1,10 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:fixnum/fixnum.dart';
 import 'package:grpc/grpc.dart' as grpc;
+import 'package:turing_flutter_app/generated/turing/v1/events.pb.dart'
+    as eventpb;
+import 'package:turing_flutter_app/generated/turing/v1/events.pbgrpc.dart'
+    as eventgrpc;
 import 'package:turing_flutter_app/generated/turing/v1/sessions.pb.dart'
     as sessionpb;
 import 'package:turing_flutter_app/generated/turing/v1/sessions.pbgrpc.dart'
@@ -44,6 +49,32 @@ void main() {
     expect(service.request?.limit, 25);
     expect(service.request?.beforeMessageId, 'message-anchor');
   });
+
+  test('listEvents preserves the server latest sequence', () async {
+    final service = _LatestSequenceEventService();
+    final server = grpc.Server.create(services: [service]);
+    await server.serve(address: '127.0.0.1', port: 0);
+    final channel = grpc.ClientChannel(
+      '127.0.0.1',
+      port: server.port!,
+      options: const grpc.ChannelOptions(
+        credentials: grpc.ChannelCredentials.insecure(),
+      ),
+    );
+    addTearDown(() async {
+      await channel.shutdown();
+      await server.shutdown();
+    });
+    final api = TuringGrpcApi(
+      baseUrl: 'http://127.0.0.1:${server.port}',
+      apiKey: 'client-key',
+      channel: channel,
+    );
+
+    final page = await api.listEvents(sessionId: 'session-1');
+
+    expect(page.latestSequence, 700);
+  });
 }
 
 class _CapturingSessionService extends sessiongrpc.SessionServiceBase {
@@ -56,6 +87,19 @@ class _CapturingSessionService extends sessiongrpc.SessionServiceBase {
   ) async {
     this.request = request;
     return sessionpb.ListMessagesResponse();
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _LatestSequenceEventService extends eventgrpc.EventServiceBase {
+  @override
+  Future<eventpb.ListEventsResponse> listEvents(
+    grpc.ServiceCall call,
+    eventpb.ListEventsRequest request,
+  ) async {
+    return eventpb.ListEventsResponse(latestSequence: Int64(700));
   }
 
   @override

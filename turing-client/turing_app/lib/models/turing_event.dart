@@ -32,3 +32,10 @@ class TuringEvent {
     );
   }
 }
+
+class TuringEventPage {
+  const TuringEventPage({required this.events, required this.latestSequence});
+
+  final List<TuringEvent> events;
+  final int latestSequence;
+}

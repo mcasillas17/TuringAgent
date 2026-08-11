@@ -148,7 +148,7 @@ class TuringGrpcApi implements ClosableTuringApi {
   }
 
   @override
-  Future<List<TuringEvent>> listEvents({
+  Future<TuringEventPage> listEvents({
     required String sessionId,
     int? after,
     int limit = 500,
@@ -160,7 +160,12 @@ class TuringGrpcApi implements ClosableTuringApi {
         limit: limit,
       ),
     );
-    return response.events.map(GrpcMappers.turingEventToTuringEvent).toList();
+    return TuringEventPage(
+      events: response.events
+          .map(GrpcMappers.turingEventToTuringEvent)
+          .toList(),
+      latestSequence: response.latestSequence.toInt(),
+    );
   }
 
   @override
