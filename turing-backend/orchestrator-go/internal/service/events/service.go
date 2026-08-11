@@ -56,6 +56,13 @@ func (s *Server) SubscribeSessionEvents(req *turingv1.SubscribeSessionEventsRequ
 		return status.Error(codes.InvalidArgument, "after_sequence must be non-negative")
 	}
 	ctx := stream.Context()
+	_, latest, err := s.repo.ReplayEvents(ctx, req.SessionId, req.AfterSequence, 1)
+	if err != nil {
+		return status.Error(codes.Internal, "replay events failed")
+	}
+	if req.AfterSequence > latest {
+		return status.Error(codes.FailedPrecondition, "resync required")
+	}
 	lastSent := req.AfterSequence
 	if err := s.replayAvailable(ctx, req.SessionId, &lastSent, stream); err != nil {
 		var sendErr *eventStreamSendError
