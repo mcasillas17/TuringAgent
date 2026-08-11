@@ -24,10 +24,17 @@ message AgentJob {
   int32 attempt = 12;
 }
 
+message DiscoveredTool {
+  string server_name = 1;
+  string tool_name = 2;
+  google.protobuf.Struct schema = 3;
+}
+
 message RuntimeWorkerReady {
   string worker_id = 1;
   AgentId agent_id = 2;
   int32 max_concurrent_runs = 3;
+  repeated DiscoveredTool tools = 4;
 }
 
 message RuntimeHeartbeat {

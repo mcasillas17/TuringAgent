@@ -209,16 +209,101 @@ class AgentJob extends $pb.GeneratedMessage {
   void clearAttempt() => $_clearField(12);
 }
 
+class DiscoveredTool extends $pb.GeneratedMessage {
+  factory DiscoveredTool({
+    $core.String? serverName,
+    $core.String? toolName,
+    $1.Struct? schema,
+  }) {
+    final result = create();
+    if (serverName != null) result.serverName = serverName;
+    if (toolName != null) result.toolName = toolName;
+    if (schema != null) result.schema = schema;
+    return result;
+  }
+
+  DiscoveredTool._();
+
+  factory DiscoveredTool.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory DiscoveredTool.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'DiscoveredTool',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'serverName')
+    ..aOS(2, _omitFieldNames ? '' : 'toolName')
+    ..aOM<$1.Struct>(3, _omitFieldNames ? '' : 'schema',
+        subBuilder: $1.Struct.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  DiscoveredTool clone() => DiscoveredTool()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  DiscoveredTool copyWith(void Function(DiscoveredTool) updates) =>
+      super.copyWith((message) => updates(message as DiscoveredTool))
+          as DiscoveredTool;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static DiscoveredTool create() => DiscoveredTool._();
+  @$core.override
+  DiscoveredTool createEmptyInstance() => create();
+  static $pb.PbList<DiscoveredTool> createRepeated() =>
+      $pb.PbList<DiscoveredTool>();
+  @$core.pragma('dart2js:noInline')
+  static DiscoveredTool getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<DiscoveredTool>(create);
+  static DiscoveredTool? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get serverName => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set serverName($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasServerName() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearServerName() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get toolName => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set toolName($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasToolName() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearToolName() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $1.Struct get schema => $_getN(2);
+  @$pb.TagNumber(3)
+  set schema($1.Struct value) => $_setField(3, value);
+  @$pb.TagNumber(3)
+  $core.bool hasSchema() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearSchema() => $_clearField(3);
+  @$pb.TagNumber(3)
+  $1.Struct ensureSchema() => $_ensure(2);
+}
+
 class RuntimeWorkerReady extends $pb.GeneratedMessage {
   factory RuntimeWorkerReady({
     $core.String? workerId,
     $4.AgentId? agentId,
     $core.int? maxConcurrentRuns,
+    $core.Iterable<DiscoveredTool>? tools,
   }) {
     final result = create();
     if (workerId != null) result.workerId = workerId;
     if (agentId != null) result.agentId = agentId;
     if (maxConcurrentRuns != null) result.maxConcurrentRuns = maxConcurrentRuns;
+    if (tools != null) result.tools.addAll(tools);
     return result;
   }
 
@@ -242,6 +327,8 @@ class RuntimeWorkerReady extends $pb.GeneratedMessage {
         enumValues: $4.AgentId.values)
     ..a<$core.int>(
         3, _omitFieldNames ? '' : 'maxConcurrentRuns', $pb.PbFieldType.O3)
+    ..pc<DiscoveredTool>(4, _omitFieldNames ? '' : 'tools', $pb.PbFieldType.PM,
+        subBuilder: DiscoveredTool.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -291,6 +378,9 @@ class RuntimeWorkerReady extends $pb.GeneratedMessage {
   $core.bool hasMaxConcurrentRuns() => $_has(2);
   @$pb.TagNumber(3)
   void clearMaxConcurrentRuns() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $pb.PbList<DiscoveredTool> get tools => $_getList(3);
 }
 
 class RuntimeHeartbeat extends $pb.GeneratedMessage {

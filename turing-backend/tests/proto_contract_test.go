@@ -62,6 +62,17 @@ func TestSearchMessagesProtoContract(t *testing.T) {
 	}
 }
 
+func TestRuntimeWorkerReadyReportsDiscoveredTools(t *testing.T) {
+	file := turingv1.File_turing_v1_runtime_proto
+	discoveredTool := file.Messages().ByName("DiscoveredTool")
+	assertProtoField(t, discoveredTool, "server_name", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, discoveredTool, "tool_name", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, discoveredTool, "schema", 3, protoreflect.MessageKind, false, "google.protobuf.Struct")
+
+	workerReady := file.Messages().ByName("RuntimeWorkerReady")
+	assertProtoField(t, workerReady, "tools", 4, protoreflect.MessageKind, true, "turing.v1.DiscoveredTool")
+}
+
 func assertProtoField(t *testing.T, message protoreflect.MessageDescriptor, name protoreflect.Name, number protoreflect.FieldNumber, kind protoreflect.Kind, repeated bool, messageType protoreflect.FullName) {
 	t.Helper()
 	if message == nil {
