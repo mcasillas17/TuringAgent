@@ -11,8 +11,8 @@ import (
 func TestGenerateRejectsUnsupportedProtocVersion(t *testing.T) {
 	binDir := t.TempDir()
 	writeTool(t, binDir, "protoc", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'libprotoc 99.0'; fi\n")
-	writeTool(t, binDir, "protoc-gen-go", "#!/bin/sh\nexit 0\n")
-	writeTool(t, binDir, "protoc-gen-go-grpc", "#!/bin/sh\nexit 0\n")
+	writeTool(t, binDir, "protoc-gen-go", "#!/bin/sh\necho 'protoc-gen-go v1.36.11'\n")
+	writeTool(t, binDir, "protoc-gen-go-grpc", "#!/bin/sh\necho 'protoc-gen-go-grpc 1.6.2'\n")
 	writeTool(t, binDir, "dart", "#!/bin/sh\nexit 0\n")
 
 	cmd := exec.Command("./generate.sh")
@@ -30,13 +30,56 @@ func TestGenerateRejectsUnsupportedProtocVersion(t *testing.T) {
 	}
 }
 
+func TestGenerateRejectsUnsupportedGoPluginVersions(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		goVersion      string
+		grpcVersion    string
+		wantDiagnostic string
+	}{
+		{
+			name:           "protoc-gen-go",
+			goVersion:      "protoc-gen-go v9.9.9",
+			grpcVersion:    "protoc-gen-go-grpc 1.6.2",
+			wantDiagnostic: "protoc-gen-go v1.36.11 is required (found: protoc-gen-go v9.9.9)",
+		},
+		{
+			name:           "protoc-gen-go-grpc",
+			goVersion:      "protoc-gen-go v1.36.11",
+			grpcVersion:    "protoc-gen-go-grpc 9.9.9",
+			wantDiagnostic: "protoc-gen-go-grpc 1.6.2 is required (found: protoc-gen-go-grpc 9.9.9)",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			binDir := t.TempDir()
+			writeTool(t, binDir, "protoc", "#!/bin/sh\necho 'libprotoc 34.1'\n")
+			writeTool(t, binDir, "protoc-gen-go", "#!/bin/sh\necho '"+test.goVersion+"'\n")
+			writeTool(t, binDir, "protoc-gen-go-grpc", "#!/bin/sh\necho '"+test.grpcVersion+"'\n")
+			writeTool(t, binDir, "dart", "#!/bin/sh\nexit 0\n")
+
+			cmd := exec.Command("./generate.sh")
+			cmd.Env = append(os.Environ(),
+				"PATH="+binDir+":/usr/bin:/bin",
+				"PUB_CACHE="+filepath.Join(t.TempDir(), "pub-cache"),
+			)
+			output, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("generate.sh succeeded with unsupported %s version", test.name)
+			}
+			if !strings.Contains(string(output), test.wantDiagnostic) {
+				t.Fatalf("generate.sh output = %q, want it to contain %q", output, test.wantDiagnostic)
+			}
+		})
+	}
+}
+
 func TestGenerateExecutesWindowsPubCacheShimViaPATH(t *testing.T) {
 	binDir := t.TempDir()
 	protocLog := filepath.Join(t.TempDir(), "protoc.log")
 	dartPluginLog := filepath.Join(t.TempDir(), "dart-plugin.log")
 	writeTool(t, binDir, "protoc", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo 'libprotoc 34.1'\n  exit 0\nfi\nprintf '%s\\n' \"$*\" >> \"$PROTO_LOG\"\ncase \"$*\" in\n  *--dart_out=*)\n    case \"$*\" in *--plugin=protoc-gen-dart=*) exit 41 ;; esac\n    old_ifs=$IFS\n    IFS=:\n    for directory in $PATH; do\n      candidate=\"$directory/protoc-gen-dart.bat\"\n      if [ -f \"$candidate\" ]; then\n        IFS=$old_ifs\n        /bin/sh \"$candidate\"\n        exit $?\n      fi\n    done\n    IFS=$old_ifs\n    exit 42\n    ;;\nesac\n")
-	writeTool(t, binDir, "protoc-gen-go", "#!/bin/sh\nexit 0\n")
-	writeTool(t, binDir, "protoc-gen-go-grpc", "#!/bin/sh\nexit 0\n")
+	writeTool(t, binDir, "protoc-gen-go", "#!/bin/sh\necho 'protoc-gen-go v1.36.11'\n")
+	writeTool(t, binDir, "protoc-gen-go-grpc", "#!/bin/sh\necho 'protoc-gen-go-grpc 1.6.2'\n")
 	writeTool(t, binDir, "dart", "#!/bin/sh\nif [ \"$1 $2 $3\" = 'pub global list' ]; then echo 'protoc_plugin 22.5.0'; fi\n")
 
 	localAppData := t.TempDir()
@@ -81,8 +124,8 @@ func TestGenerateRejectsWindowsDrivePathWithoutCygpath(t *testing.T) {
 	binDir := t.TempDir()
 	writeTool(t, binDir, "dirname", "#!/bin/sh\nexec /usr/bin/dirname \"$@\"\n")
 	writeTool(t, binDir, "protoc", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'libprotoc 34.1'; fi\n")
-	writeTool(t, binDir, "protoc-gen-go", "#!/bin/sh\nexit 0\n")
-	writeTool(t, binDir, "protoc-gen-go-grpc", "#!/bin/sh\nexit 0\n")
+	writeTool(t, binDir, "protoc-gen-go", "#!/bin/sh\necho 'protoc-gen-go v1.36.11'\n")
+	writeTool(t, binDir, "protoc-gen-go-grpc", "#!/bin/sh\necho 'protoc-gen-go-grpc 1.6.2'\n")
 	writeTool(t, binDir, "dart", "#!/bin/sh\nexit 0\n")
 
 	cmd := exec.Command("bash", "./generate.sh")

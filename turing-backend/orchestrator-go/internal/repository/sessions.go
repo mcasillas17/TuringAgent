@@ -130,7 +130,7 @@ func (r *Repository) SearchMessages(ctx context.Context, sessionID, query string
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var messages []Message
 	for rows.Next() {

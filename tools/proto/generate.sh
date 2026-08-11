@@ -24,6 +24,18 @@ if [[ "$protoc_version" != "libprotoc 34.1" ]]; then
   exit 1
 fi
 
+protoc_gen_go_version="$(protoc-gen-go --version 2>/dev/null || true)"
+if [[ "$protoc_gen_go_version" != "protoc-gen-go v1.36.11" ]]; then
+  echo "protoc-gen-go v1.36.11 is required (found: ${protoc_gen_go_version:-unknown}); install it with: go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11" >&2
+  exit 1
+fi
+
+protoc_gen_go_grpc_version="$(protoc-gen-go-grpc --version 2>/dev/null || true)"
+if [[ "$protoc_gen_go_grpc_version" != "protoc-gen-go-grpc 1.6.2" ]]; then
+  echo "protoc-gen-go-grpc 1.6.2 is required (found: ${protoc_gen_go_grpc_version:-unknown}); install it with: go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2" >&2
+  exit 1
+fi
+
 if [[ -n "${PUB_CACHE:-}" ]]; then
   dart_pub_cache="$PUB_CACHE"
 elif [[ "${OS:-}" == "Windows_NT" && -n "${LOCALAPPDATA:-}" ]]; then
