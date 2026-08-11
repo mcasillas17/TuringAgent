@@ -24,15 +24,18 @@ var (
 )
 
 type Run struct {
-	RunID              string
-	SessionID          string
-	Status             string
-	TraceID            string
-	AssistantMessageID string
-	ExecutionActive    bool
-	WorkerID           string
-	ExecutionAttemptID string
-	ExecutionState     string
+	RunID                string
+	SessionID            string
+	Status               string
+	TraceID              string
+	AssistantMessageID   string
+	AssistantContent     string
+	TerminalEventType    string
+	TerminalEventPayload string
+	ExecutionActive      bool
+	WorkerID             string
+	ExecutionAttemptID   string
+	ExecutionState       string
 }
 
 func (r *Repository) MarkRunRunning(ctx context.Context, runID string) error {
@@ -373,16 +376,37 @@ func (r *Repository) CancelRunWithEvent(ctx context.Context, runID string, reaso
 func (r *Repository) GetRun(ctx context.Context, runID string) (Run, error) {
 	var run Run
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id, session_id, status, trace_id, COALESCE(assistant_message_id, ''), execution_active,
-			COALESCE(worker_id, ''), COALESCE(execution_attempt_id, ''), execution_state
-		FROM agent_runs
-		WHERE id = ?
+		SELECT r.id, r.session_id, r.status, r.trace_id, COALESCE(r.assistant_message_id, ''),
+			COALESCE(m.content, ''),
+			COALESCE((
+				SELECT e.type
+				FROM events e
+				WHERE e.run_id = r.id
+					AND e.type IN ('agent.run.completed', 'agent.run.failed', 'agent.run.cancelled')
+				ORDER BY e.sequence DESC
+				LIMIT 1
+			), ''),
+			COALESCE((
+				SELECT e.payload_json
+				FROM events e
+				WHERE e.run_id = r.id
+					AND e.type IN ('agent.run.completed', 'agent.run.failed', 'agent.run.cancelled')
+				ORDER BY e.sequence DESC
+				LIMIT 1
+			), ''),
+			r.execution_active, COALESCE(r.worker_id, ''), COALESCE(r.execution_attempt_id, ''), r.execution_state
+		FROM agent_runs r
+		LEFT JOIN messages m ON m.id = r.assistant_message_id
+		WHERE r.id = ?
 	`, runID).Scan(
 		&run.RunID,
 		&run.SessionID,
 		&run.Status,
 		&run.TraceID,
 		&run.AssistantMessageID,
+		&run.AssistantContent,
+		&run.TerminalEventType,
+		&run.TerminalEventPayload,
 		&run.ExecutionActive,
 		&run.WorkerID,
 		&run.ExecutionAttemptID,

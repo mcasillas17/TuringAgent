@@ -9,18 +9,21 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-func TestMatchingTerminalUpdateRequiresValidCompletion(t *testing.T) {
+func TestMatchingTerminalUpdateRequiresPersistedIdentity(t *testing.T) {
 	run := repository.Run{Status: "completed", AssistantMessageID: "message_1"}
 	update := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{RunCompleted: &turingv1.RuntimeRunCompleted{
 		RunId: "run_1", AssistantMessageId: run.AssistantMessageID,
 	}}}
-	if isMatchingTerminalUpdate(run, update) {
-		t.Fatal("empty completion matched a terminal run")
-	}
-
 	update.GetRunCompleted().Content = "complete"
-	if !isMatchingTerminalUpdate(run, update) {
-		t.Fatal("valid completion did not match a terminal run")
+	if isMatchingTerminalUpdate(run, update) {
+		t.Fatal("completion without persisted content matched a terminal run")
+	}
+	if isMatchingTerminalUpdate(repository.Run{Status: "failed"}, &turingv1.RuntimeUpdate{
+		Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
+			RunId: "run_1", Code: "runtime_error", Message: "failed", Retryable: false,
+		}},
+	}) {
+		t.Fatal("failure without persisted payload matched a terminal run")
 	}
 }
 
@@ -114,11 +117,17 @@ func TestTerminalizedAssignedRunReconcilesMatchingLateTerminalUpdate(t *testing.
 		return command.GetRunAssigned() != nil && command.GetRunAssigned().GetRunId() == first.RunID
 	})
 
-	if _, err := h.repo.FailRunWithEventPreservingExecution(context.Background(), first.RunID, "persisted_failure", "terminalized elsewhere", `{"code":"persisted_failure"}`); err != nil {
+	payload, err := encodePayload(map[string]any{
+		"runId": first.RunID, "code": "persisted_failure", "message": "terminalized elsewhere", "retryable": false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.FailRunWithEventPreservingExecution(context.Background(), first.RunID, "persisted_failure", "terminalized elsewhere", payload); err != nil {
 		t.Fatal(err)
 	}
 	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
-		RunId: first.RunID, Code: "runtime_failure", Message: "late worker exit",
+		RunId: first.RunID, Code: "persisted_failure", Message: "terminalized elsewhere", Retryable: false,
 	}}}); err != nil {
 		t.Fatalf("send matching late failure: %v", err)
 	}

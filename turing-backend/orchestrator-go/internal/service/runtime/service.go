@@ -219,7 +219,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 			err = func() error {
 				defer release()
 				if terminalRunID(update) != "" {
-					handled, reconcileErr := s.reconcileLateAssignedUpdate(ctx, connectedWorker, update)
+					handled, reconcileErr := s.reconcileLateAssignedUpdate(ctx, connectedWorker, ready.WorkerId, update)
 					if reconcileErr != nil {
 						return reconcileErr
 					}
@@ -228,7 +228,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 					}
 				}
 				if err := s.applyUpdate(ctx, update); err != nil {
-					handled, reconcileErr := s.reconcileLateAssignedUpdate(ctx, connectedWorker, update)
+					handled, reconcileErr := s.reconcileLateAssignedUpdate(ctx, connectedWorker, ready.WorkerId, update)
 					if reconcileErr != nil {
 						return reconcileErr
 					}
@@ -949,9 +949,25 @@ func isMatchingTerminalUpdate(run repository.Run, update *turingv1.RuntimeUpdate
 	switch {
 	case update.GetRunCompleted() != nil:
 		completed := update.GetRunCompleted()
-		return run.Status == "completed" && completed.Content != "" && (completed.AssistantMessageId == "" || completed.AssistantMessageId == run.AssistantMessageID)
+		assistantMessageID := completed.AssistantMessageId
+		if assistantMessageID == "" {
+			assistantMessageID = run.AssistantMessageID
+		}
+		return run.Status == "completed" &&
+			run.TerminalEventType == "agent.run.completed" &&
+			assistantMessageID != "" &&
+			assistantMessageID == run.AssistantMessageID &&
+			completed.Content != "" &&
+			completed.Content == run.AssistantContent
 	case update.GetRunFailed() != nil:
-		return run.Status == "failed"
+		failed := update.GetRunFailed()
+		payload, err := encodePayload(map[string]any{
+			"runId": failed.RunId, "code": failed.Code, "message": failed.Message, "retryable": failed.Retryable,
+		})
+		return err == nil &&
+			run.Status == "failed" &&
+			run.TerminalEventType == "agent.run.failed" &&
+			payload == run.TerminalEventPayload
 	case update.GetRunCancelledAck() != nil:
 		return isTerminalRunStatus(run.Status)
 	default:
@@ -959,7 +975,7 @@ func isMatchingTerminalUpdate(run repository.Run, update *turingv1.RuntimeUpdate
 	}
 }
 
-func (s *Server) reconcileLateAssignedUpdate(ctx context.Context, connectedWorker *worker, update *turingv1.RuntimeUpdate) (bool, error) {
+func (s *Server) reconcileLateAssignedUpdate(ctx context.Context, connectedWorker *worker, workerID string, update *turingv1.RuntimeUpdate) (bool, error) {
 	runID := updateRunID(update)
 	if runID == "" {
 		return false, nil
@@ -972,6 +988,15 @@ func (s *Server) reconcileLateAssignedUpdate(ctx context.Context, connectedWorke
 		return false, nil
 	}
 	if terminalRunID(update) == "" || !isMatchingTerminalUpdate(run, update) {
+		return true, nil
+	}
+	assignment, assigned := connectedWorker.assignmentForRun(runID)
+	if !assigned ||
+		workerID == "" ||
+		run.WorkerID != workerID ||
+		run.ExecutionAttemptID == "" ||
+		assignment.attemptID != run.ExecutionAttemptID ||
+		!run.ExecutionActive {
 		return true, nil
 	}
 	if err := s.repo.AcknowledgeExecutionExit(ctx, runID); err != nil {
