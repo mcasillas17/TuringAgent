@@ -107,6 +107,9 @@ func (c *Client) SearchMessages(ctx context.Context, query string, limit int) ([
 			continue
 		}
 		out = append(out, memory.Excerpt{
+			// Carry the row id through: recall dedupes on it, and two distinct rows
+			// can share a session, a timestamp and a body.
+			MessageID: message.GetMessageId(),
 			SessionID: message.GetSessionId(),
 			Role:      role,
 			Content:   message.GetContent(),
