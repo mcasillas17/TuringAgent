@@ -138,6 +138,55 @@ func (h *harness) createRunningRunResult(t *testing.T, content string) repositor
 	return enqueued
 }
 
+func TestConnectWorkerPersistsReportedToolsWithOrchestratorPolicies(t *testing.T) {
+	h := newHarness(t)
+	client := h.runtimeClient(t)
+	stream, err := client.ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.CloseSend() }()
+	schema, err := structpb.NewStruct(map[string]any{"type": "object", "required": []any{"path"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId:          "worker-discovery",
+		AgentId:           turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		MaxConcurrentRuns: 1,
+		Tools: []*turingv1.DiscoveredTool{
+			{ServerName: "system", ToolName: "system.time", Schema: &structpb.Struct{}},
+			{ServerName: "files", ToolName: "files.create", Schema: schema},
+			{ServerName: "custom", ToolName: "custom.unrecognized", Schema: &structpb.Struct{}},
+		},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool { return cmd.GetWorkerAccepted() != nil })
+
+	got, err := h.repo.ListEnabledTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListEnabledTools: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("enabled tools = %+v, want 3", got)
+	}
+	wantPolicies := map[string]string{
+		"custom/custom.unrecognized": "approval_required",
+		"files/files.create":         "approval_required",
+		"system/system.time":         "safe",
+	}
+	for _, tool := range got {
+		key := tool.ServerName + "/" + tool.ToolName
+		if tool.Policy != wantPolicies[key] {
+			t.Fatalf("tool %s policy = %q, want %q", key, tool.Policy, wantPolicies[key])
+		}
+		if !json.Valid([]byte(tool.SchemaJSON)) {
+			t.Fatalf("tool %s schema is invalid JSON: %q", key, tool.SchemaJSON)
+		}
+	}
+}
+
 func TestAssignsPendingJobToReadyWorker(t *testing.T) {
 	h := newHarness(t)
 	sessionID := h.createSessionAndRun(t, "hello")

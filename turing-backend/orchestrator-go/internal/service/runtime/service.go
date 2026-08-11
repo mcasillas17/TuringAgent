@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/tools"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -76,6 +78,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 	if ready == nil || ready.WorkerId == "" || ready.AgentId != turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT {
 		return status.Error(codes.InvalidArgument, "worker_ready is required")
 	}
+	s.persistDiscoveredTools(ctx, ready.GetTools())
 	maxConcurrent := int(ready.MaxConcurrentRuns)
 	if maxConcurrent <= 0 {
 		maxConcurrent = defaultMaxConcurrentRuns
@@ -153,6 +156,26 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 				return err
 			}
 		}
+	}
+}
+
+func (s *Server) persistDiscoveredTools(ctx context.Context, reported []*turingv1.DiscoveredTool) {
+	discovered := make([]repository.DiscoveredTool, 0, len(reported))
+	for _, tool := range reported {
+		schemaJSON, err := protojson.Marshal(tool.GetSchema())
+		if err != nil {
+			log.Printf("runtime tool discovery: skipping %s/%s with invalid schema: %v", tool.GetServerName(), tool.GetToolName(), err)
+			continue
+		}
+		discovered = append(discovered, repository.DiscoveredTool{
+			ServerName: tool.GetServerName(),
+			ToolName:   tool.GetToolName(),
+			SchemaJSON: string(schemaJSON),
+			Policy:     string(tools.DefaultPolicyFor(tool.GetToolName())),
+		})
+	}
+	if err := s.repo.UpsertTools(ctx, discovered); err != nil {
+		log.Printf("runtime tool discovery: persist snapshot: %v", err)
 	}
 }
 
