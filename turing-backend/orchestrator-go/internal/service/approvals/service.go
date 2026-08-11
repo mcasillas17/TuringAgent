@@ -150,6 +150,12 @@ func (s *Server) ApproveApproval(ctx context.Context, req *turingv1.ApproveAppro
 		return nil, err
 	}
 	transition, err := s.repo.ApproveApprovalWithEvent(ctx, req.ApprovalId, token, "")
+	if errors.Is(err, repository.ErrApprovalExpired) {
+		if _, expireErr := s.expireApproval(ctx, req.ApprovalId); expireErr != nil {
+			return nil, mapApprovalError(expireErr)
+		}
+		return nil, status.Error(codes.FailedPrecondition, "approval expired")
+	}
 	if err != nil {
 		return nil, mapApprovalError(err)
 	}

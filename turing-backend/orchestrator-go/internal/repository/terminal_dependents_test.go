@@ -58,6 +58,51 @@ func TestTerminalRunRevokesApprovedToolLifecycle(t *testing.T) {
 	}
 }
 
+func TestApproveApprovalRejectsDatabaseExpiryBoundary(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Approval boundary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "boundary", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-boundary", 1, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
+		ToolCallID: "call_boundary", RunID: enqueued.RunID, Status: "approval_required",
+	}, "general_assistant", "files", "files.update", `{}`, "sha256:test"); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := repo.CreateApproval(ctx, enqueued.RunID, "call_boundary", "general_assistant", "files.update", `{}`, "sha256:test", "2099-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		UPDATE approvals SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?
+	`, approval.ApprovalID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.ApproveApprovalWithEvent(ctx, approval.ApprovalID, "must-not-issue", ""); err == nil {
+		t.Fatal("ApproveApprovalWithEvent accepted an approval at its database expiry boundary")
+	}
+	current, err := repo.GetApproval(ctx, approval.ApprovalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != "pending" || current.ApprovalToken != "" {
+		t.Fatalf("boundary approval = %+v, want unchanged pending state", current)
+	}
+}
+
 func TestTerminalRunEmitsFailureEventForActiveSafeToolCall(t *testing.T) {
 	database := openTestDB(t)
 	repo := New(database)

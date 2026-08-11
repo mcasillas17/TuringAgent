@@ -10,6 +10,8 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 )
 
+var ErrApprovalExpired = errors.New("approval expired")
+
 type ApprovalRecord struct {
 	ApprovalID      string
 	RunID           string
@@ -184,6 +186,9 @@ func (r *Repository) ApproveApprovalWithEvent(ctx context.Context, approvalID st
 	}
 	if record.Status != "pending" {
 		return ApprovalTerminalization{}, errors.New("approval is not pending")
+	}
+	if approvalExpiredAtDecision(record.ExpiresAt, decidedAt) {
+		return ApprovalTerminalization{Approval: record}, ErrApprovalExpired
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE approvals SET status = 'approved', approval_jti = ?, approval_token = ?, decided_at = ? WHERE id = ? AND status = 'pending'`, approvalID, approvalToken, decidedAt, approvalID)
 	if err != nil {
