@@ -38,7 +38,9 @@ type GeneralAssistantTools struct {
 const (
 	maxToolIterations         = 5
 	defaultMaxToolCallsPerRun = 10
-	maxModelOutputBytes       = 4 * 1024 * 1024
+	maxRuntimeMessageBytes    = 4 * 1024 * 1024
+	runtimeUpdateHeadroom     = 64 * 1024
+	maxModelOutputBytes       = maxRuntimeMessageBytes - runtimeUpdateHeadroom
 	maxToolResultBytes        = 4 * 1024 * 1024
 	toolIterationFallback     = "Tool iteration limit reached before a final response."
 	emptyFinalFallback        = "The model returned an empty response."
@@ -273,13 +275,14 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			})); err != nil {
 				return err
 			}
-			if content.Len() == 0 {
+			if strings.TrimSpace(content.String()) == "" {
 				if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA, map[string]any{
 					"messageId": job.GetAssistantMessageId(),
 					"delta":     toolIterationFallback,
 				})); err != nil {
 					return err
 				}
+				content.Reset()
 				content.WriteString(toolIterationFallback)
 			}
 			return completeRun(emit, job, content.String())

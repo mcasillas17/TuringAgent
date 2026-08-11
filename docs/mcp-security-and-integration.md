@@ -18,8 +18,10 @@ Compose also makes both MCP root filesystems read-only, drops all Linux
 capabilities, and sets `no-new-privileges`. The `mcp-files` `/sandbox` bind
 mount remains writable. Neither service needs a writable temporary filesystem.
 The servers bound request bodies and configure header, read, write, and idle
-HTTP timeouts. Responses are ordinary bounded JSON responses, not open-ended
-streams, so a finite write timeout is appropriate.
+HTTP timeouts. `mcp-system` accepts at most 1 MiB per request; `mcp-files`
+allows the worst-case escaped 512 KiB mutation envelope (about 3.1 MiB). Both
+cap encoded responses at 1 MiB. Responses are ordinary bounded JSON responses,
+not open-ended streams, so a finite write timeout is appropriate.
 
 Both services accept JSON-RPC 2.0 `tools/list` and `tools/call` requests at
 `/mcp`. Malformed tool arguments use `-32602`; operational tool failures use
@@ -34,7 +36,7 @@ responses.
 |---|---|---|
 | `system.health` | none | `{ "ok": true, "service": "turing-mcp-system" }` |
 | `system.time` | none | `{ "iso": string, "unixMs": number, "timezone": "UTC" }` |
-| `system.echo` | optional `text: string` | `{ "text": string }` |
+| `system.echo` | optional `text: string`, at most 65,536 Unicode characters | `{ "text": string }` |
 | `system.info` | none | `{ "os": string, "arch": string, "runtime": string }` |
 
 `system.info` deliberately omits environment variables.
@@ -60,11 +62,20 @@ of both model definitions and runtime lookup. Policies `safe` and
 `approval_required` remain callable; an unknown or non-string policy makes
 discovery fail closed.
 
+The 64 KiB `files.read` content cap and 65,536-character `system.echo` cap are
+chosen so their worst-case `encoding/json` escaping fits the runtime client's
+1 MiB per-response limit. Even with a maximum-length escaped file path, ten
+worst-case results fit the runtime's 4 MiB aggregate tool-result budget.
+
 ## File request and result shapes
 
-Paths are sandbox-relative. Unix absolute paths, volume-qualified paths, and
+Paths are sandbox-relative and limited to 4,096 input bytes, 255 bytes per
+component, and 64 components. Unix absolute paths, volume-qualified paths, and
 any cleaned `..` component are rejected rather than rewritten. Unknown
-arguments and wrong types are rejected rather than ignored.
+arguments and wrong types are rejected rather than ignored. These are byte
+limits; tool schemas document them rather than misrepresenting them with JSON
+Schema `maxLength`, which counts characters. Required paths and search queries
+advertise nonblank string constraints.
 
 ### `files.list`
 
@@ -73,8 +84,9 @@ arguments and wrong types are rejected rather than ignored.
 - Result:
   `{ "items": [{ "name": string, "isDir": bool }], "truncated": bool }`.
 - Scanning is bounded to 4,000 directory entries. Internal staging names are
-  omitted. `truncated` is true when the requested result limit or scan budget
-  prevents an exhaustive listing.
+  omitted. Encoded collection data is capped at 384 KiB. `truncated` is true
+  when the requested result limit, scan budget, or result budget prevents an
+  exhaustive listing.
 
 ### `files.search`
 
@@ -90,6 +102,7 @@ arguments and wrong types are rejected rather than ignored.
     `filesScanned`, `skippedFiles`, and `bytesScanned`.
 - Search budgets are 2,000 visited entries, 1,000 opened files, 8 MiB of
   aggregate reads, and 512 KiB per file. At most 20 error details are returned.
+  Matches and error details share a 384 KiB encoded collection budget.
   Symlinks and non-UTF-8 files are skipped. Snippets contain the first match
   with up to 40 bytes of context on each side, adjusted to valid UTF-8
   boundaries.
@@ -97,10 +110,10 @@ arguments and wrong types are rejected rather than ignored.
 ### `files.read`
 
 - Arguments: required non-empty `path` and optional integer `maxBytes`
-  (default 64 KiB, range 1 byte–512 KiB).
+  (default and maximum 64 KiB, range 1 byte–64 KiB).
 - Result:
   `{ "path": string, "content": string, "truncated": bool, "bytesRead": number }`.
-- Files larger than 512 KiB are rejected. The whole accepted file must be
+- Files larger than 64 KiB are rejected. The whole accepted file must be
   UTF-8. `content` is truncated to `maxBytes` on a UTF-8 boundary, while
   `bytesRead` reports the full accepted file length.
 
@@ -108,12 +121,15 @@ arguments and wrong types are rejected rather than ignored.
 
 - `create` arguments: required `path` and `content`.
 - `update` arguments: required `path` and `content`, plus optional
-  `expectedHash` in `sha256:<hex>` form.
+  `expectedHash` matching exactly `sha256:[0-9a-f]{64}`.
 - Content is limited to 512 KiB by bytes.
+- Content schemas describe the byte limit without a misleading
+  character-based `maxLength`.
 - Result: `{ "path": string, "sha256": "sha256:<hex>" }`.
 - `create` is exclusive and never overwrites an existing path.
 - `update` rejects non-regular files and files with no write permission bit.
-  When supplied, `expectedHash` provides compare-and-swap behavior.
+  When supplied, `expectedHash` validates the observed content before approval
+  and again before replacement.
 
 ## Descriptor-relative confinement
 
@@ -127,8 +143,10 @@ directory descriptor:
    `O_NOFOLLOW`.
 3. Type and identity checks use `fstat`/`fstatat`; mutations use
    descriptor-relative `linkat`, `renameat`, and `unlinkat`.
-4. Search performs a bounded descriptor-relative breadth-first traversal and
-   never follows symlink entries.
+4. Directory batches are read as names, then classified with
+   descriptor-relative `fstatat(..., AT_SYMLINK_NOFOLLOW)`. This avoids
+   `ReadDir`'s path-based unknown-type fallback and never follows a symlink.
+5. Search performs a bounded descriptor-relative breadth-first traversal.
 
 This avoids check/use races caused by repeatedly resolving absolute path
 strings. A parent renamed concurrently remains the directory represented by
@@ -136,6 +154,11 @@ the already-open descriptor; replacing it with a symlink does not redirect
 the operation outside the sandbox. Reserved, case-folded
 `.turing-create-*` and `.turing-update-*` path components are rejected so
 callers cannot address staging files.
+
+Long walks check request cancellation between descriptor opens, directory
+creation, and synchronization work. Creation synchronizes the containing
+directory and each required ancestor before success; ancestor descriptors are
+reopened and closed one at a time rather than retained for the full path depth.
 
 The sandbox restricts path reachability; it is not a substitute for operating
 system permissions, container isolation, or careful mount selection.
@@ -190,26 +213,44 @@ these attributes is nonportable and can reintroduce privilege or race hazards;
 callers that require such metadata must manage it outside this
 content-oriented tool.
 
+The process-wide normalized path lock serializes `read`, `create`, and `update`
+operations made by cooperating `mcp-files` callers in that server process.
+Accordingly, `expectedHash` acts as compare-and-replace protection among those
+cooperating calls. It is not globally atomic against a host process that writes
+the sandbox directly: such a writer does not take the lock and can modify the
+target after the final hash/identity validation but before `renameat`. Callers
+must not treat `expectedHash` as coordination with non-cooperating host
+writers.
+
 ## Bind-mount identities and host security systems
 
-The standalone `mcp-files` image uses UID/GID 1000. Repository Compose launches
-override only that service with the current host account's UID/GID so its
-bind-mounted `sandbox/` remains writable without making it world-writable.
+The standalone `mcp-files` and orchestrator images use non-root UID/GID 1000.
+Repository Compose overrides both bind-mount writers with the validated current
+host UID/GID so `sandbox/` and `data/` remain writable without broadening their
+permissions.
 
 `scripts/init.sh` accepts only canonical positive UID/GID values for the
 current process and rejects root, invalid, or out-of-range identities before it
 mutates the sandbox or `.env`. It always rewrites `HOST_UID` and `HOST_GID` to
 the current host values; manual or stale values are not supported. It rejects a
-pre-existing sandbox symlink, creates a real directory when absent, and checks
-that the root and existing nested directories/files are owned and accessible
-to the host user. Symlink entries are not followed. The script reports legacy
-inaccessible content and exits; it never recursively runs `chmod` or `chown`.
+pre-existing sandbox symlink, creates real mode-`0700` sandbox and data
+directories independently of the caller's umask, and checks that the sandbox
+root and existing nested
+directories/files are owned, accessible, and not group/world-writable. Symlink
+entries are not followed. Data and configured SQLite files must have safe types
+and ownership; owned database files are restricted to mode `0600`. A
+pre-existing `.env` must be a regular non-symlink file before the script changes
+its mode or content. The script reports unsafe legacy content and exits; it
+never recursively runs `chmod` or `chown`.
 
 All repository launch scripts delegate to `scripts/compose.sh`. That wrapper
 revalidates the current non-root identity and supplies it directly to Compose,
 overriding both exported and `.env` `HOST_UID`/`HOST_GID` values. Direct
 `docker compose` invocation is unsupported because shell variables take
-precedence over `.env` and can bypass that preflight.
+precedence over `.env` and can bypass that preflight. Immediately before a
+launch, the wrapper also verifies that `sandbox/` and `data/` are real, owned,
+restrictive directories and that SQLite files are regular, owned, mode-`0600`
+files.
 
 Rootless Docker and daemon `userns-remap` translate container IDs through
 daemon-specific subordinate-ID mappings. A host UID copied into Compose is
@@ -604,7 +645,9 @@ Consume method requirements:
 The repository-root `.dockerignore` excludes Git/agent state, `.env` and key
 material, runtime data, sandbox contents, dependency caches, and generated
 build/test output from root-context backend image builds. Required Go modules
-and generated protobuf sources remain in the context.
+and generated protobuf sources remain in the context. Because Compose builds
+`mcp-system` from its module subdirectory, that module has its own
+`.dockerignore` with equivalent credential and build-artifact exclusions.
 
 ## Local verification
 
@@ -614,8 +657,8 @@ sandbox, read limits, approval verifier, and auth middleware:
 ```sh
 go test ./.github/workflows -count=1
 go test ./turing-backend/scripts -count=1
-(cd turing-backend/mcp-system && go test ./... -count=1 && go build ./cmd/server)
-(cd turing-backend/mcp-files && go test ./... -count=1 && go build ./cmd/server)
+(cd turing-backend/mcp-system && go test ./... -count=1 && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server)
+(cd turing-backend/mcp-files && go test ./... -count=1 && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server)
 ```
 
 The Docker smoke path is optional and requires Docker plus its configured

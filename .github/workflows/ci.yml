@@ -23,8 +23,11 @@ jobs:
           go-version: "1.23.x"
           cache: true
 
-      - name: Run Go tests
-        run: go test -tags sqlite_fts5 ./... -count=1
+      - name: Run Go race tests
+        run: go test -tags sqlite_fts5 -race ./... -count=1
+
+      - name: Run Go vet
+        run: go vet -tags sqlite_fts5 ./...
 
       - name: Build Go packages
         run: go build -tags sqlite_fts5 ./...
@@ -45,10 +48,15 @@ jobs:
             go.sum
             turing-backend/mcp-files/go.sum
 
-      - name: Test MCP files module
+      - name: Race test MCP files module
         run: |
           cd turing-backend/mcp-files
-          go test ./... -count=1
+          go test -race ./... -count=1
+
+      - name: Vet MCP files module
+        run: |
+          cd turing-backend/mcp-files
+          go vet ./...
 
       - name: Build MCP files server
         run: |
@@ -71,10 +79,15 @@ jobs:
           # go.sum is the only real cache key available here.
           cache-dependency-path: go.sum
 
-      - name: Test MCP system module
+      - name: Race test MCP system module
         run: |
           cd turing-backend/mcp-system
-          go test ./... -count=1
+          go test -race ./... -count=1
+
+      - name: Vet MCP system module
+        run: |
+          cd turing-backend/mcp-system
+          go vet ./...
 
       - name: Build MCP system server
         run: |
@@ -195,6 +208,9 @@ jobs:
 
       - name: Install Flutter dependencies
         run: flutter pub get
+
+      - name: Analyze Flutter sources
+        run: flutter analyze
 
       - name: Run Flutter tests
         run: flutter test

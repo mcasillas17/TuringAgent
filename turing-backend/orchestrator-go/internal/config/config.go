@@ -6,6 +6,11 @@ import (
 	"strconv"
 )
 
+const (
+	maxConcurrentRunsLimit = 128
+	maxApprovalTTLMS       = 24 * 60 * 60 * 1000
+)
+
 type Config struct {
 	ClientAPIKey             string
 	InternalToken            string
@@ -113,6 +118,9 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	if maxRuns < 1 || maxRuns > maxConcurrentRunsLimit {
+		return Config{}, fmt.Errorf("TURING_MAX_CONCURRENT_RUNS_GENERAL must be between 1 and %d", maxConcurrentRunsLimit)
+	}
 	maxTools, err := intValue("TURING_MAX_TOOL_CALLS_PER_RUN", 10)
 	if err != nil {
 		return Config{}, err
@@ -129,7 +137,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	if approvalTTL <= 0 {
+	if approvalTTL <= 0 || approvalTTL > maxApprovalTTLMS {
 		return Config{}, fmt.Errorf("invalid integer env var TURING_APPROVAL_TIMEOUT_MS")
 	}
 

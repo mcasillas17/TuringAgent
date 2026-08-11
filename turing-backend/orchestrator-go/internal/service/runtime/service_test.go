@@ -575,6 +575,53 @@ func TestAssignsPendingJobToReadyWorker(t *testing.T) {
 	}
 }
 
+func TestWorkerHeartbeatRenewsActiveAssignmentLease(t *testing.T) {
+	h := newHarnessWithDispatch(t, DispatchConfig{MaxConcurrentRuns: 1, LeaseDuration: time.Second})
+	enqueued := h.enqueueRun(t, "heartbeat")
+	stream, err := h.runtimeClient(t).ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.CloseSend() }()
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId: "worker-heartbeat", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
+		assigned := command.GetRunAssigned()
+		return assigned != nil && assigned.RunId == enqueued.RunID
+	})
+	var before int64
+	if err := h.database.QueryRowContext(context.Background(), `
+		SELECT execution_lease_expires_at_ns FROM agent_runs WHERE id = ?
+	`, enqueued.RunID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Heartbeat{Heartbeat: &turingv1.RuntimeHeartbeat{
+		WorkerId: "worker-heartbeat",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		var after int64
+		if err := h.database.QueryRowContext(context.Background(), `
+			SELECT execution_lease_expires_at_ns FROM agent_runs WHERE id = ?
+		`, enqueued.RunID).Scan(&after); err != nil {
+			t.Fatal(err)
+		}
+		if after > before {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("heartbeat did not extend lease beyond %d", before)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestDispatchPendingPublishesRunStartedEvent(t *testing.T) {
 	h := newHarness(t)
 	sessionID := h.createSessionAndRun(t, "hello")
@@ -2499,6 +2546,60 @@ func TestToolBeaconConflictMapsToAlreadyExists(t *testing.T) {
 	}}})
 	if status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("tool call conflict error = %v, want AlreadyExists", err)
+	}
+}
+
+func TestToolBeaconDeniedBeforeExactDuplicateSuppressesSideEffects(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "duplicate denied before")
+	beacon := &turingv1.ToolCallBeacon{
+		RunId: enqueued.RunID, TraceId: enqueued.TraceID, ToolCallId: "call_duplicate_denied",
+		AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "system",
+		ToolName: "system.unknown", Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		decision, err := h.service.handleToolBeacon(context.Background(), beacon)
+		if err != nil {
+			t.Fatalf("duplicate denied BEFORE attempt %d: %v", attempt+1, err)
+		}
+		if decision.GetDecision() != turingv1.ToolPolicyDecision_DECISION_DENY || decision.GetReason() != "unknown_tool" {
+			t.Fatalf("duplicate denied decision = %+v", decision)
+		}
+	}
+	var eventCount, auditCount int
+	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'tool.call.denied'`, enqueued.RunID).Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM audit_logs WHERE target = ? AND action = 'tool.call.before'`, beacon.ToolCallId).Scan(&auditCount); err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 1 || auditCount != 1 {
+		t.Fatalf("duplicate denied BEFORE event/audit counts = %d/%d, want 1/1", eventCount, auditCount)
+	}
+}
+
+func TestToolBeaconSafeBeforeExactDuplicateDoesNotIssueSecondAllow(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "duplicate safe before")
+	args, err := structpb.NewStruct(map[string]any{"value": "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beacon := &turingv1.ToolCallBeacon{
+		RunId: enqueued.RunID, TraceId: enqueued.TraceID, ToolCallId: "call_duplicate_safe",
+		AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "system",
+		ToolName: "system.echo", Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, Args: args,
+	}
+	first, err := h.service.handleToolBeacon(context.Background(), beacon)
+	if err != nil || first.GetDecision() != turingv1.ToolPolicyDecision_DECISION_ALLOW {
+		t.Fatalf("first safe BEFORE = %+v/%v, want allow", first, err)
+	}
+	duplicate, err := h.service.handleToolBeacon(context.Background(), beacon)
+	if err != nil {
+		t.Fatalf("duplicate safe BEFORE returned error: %v", err)
+	}
+	if duplicate.GetDecision() != turingv1.ToolPolicyDecision_DECISION_DENY || duplicate.GetReason() != "tool_call_already_allowed" {
+		t.Fatalf("duplicate safe BEFORE = %+v, want non-executing existing allowed state", duplicate)
 	}
 }
 

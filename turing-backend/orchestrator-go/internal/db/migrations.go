@@ -71,6 +71,10 @@ func LatestSchemaVersion() (string, error) {
 	return version, nil
 }
 
+func CurrentSchemaVersion() (string, error) {
+	return LatestSchemaVersion()
+}
+
 func migrationNames() ([]string, error) {
 	entries, err := migrationFS.ReadDir("schema")
 	if err != nil {

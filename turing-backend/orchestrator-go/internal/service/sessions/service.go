@@ -75,8 +75,19 @@ func (s *Server) ListMessages(ctx context.Context, req *turingv1.ListMessagesReq
 	if req == nil || req.SessionId == "" {
 		return nil, status.Error(codes.InvalidArgument, "session_id is required")
 	}
-	messages, err := s.repo.ListMessagesBefore(ctx, req.SessionId, req.BeforeMessageId, int(req.Limit))
+	var (
+		messages []repository.Message
+		err      error
+	)
+	if req.BeforeMessageId == "" {
+		messages, err = s.repo.ListMessages(ctx, req.SessionId, int(req.Limit))
+	} else {
+		messages, err = s.repo.ListMessagesBefore(ctx, req.SessionId, req.BeforeMessageId, int(req.Limit))
+	}
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, status.Error(codes.NotFound, "before_message_id not found in session")
+		}
 		return nil, status.Error(codes.Internal, "list messages failed")
 	}
 	out := make([]*turingv1.Message, 0, len(messages))

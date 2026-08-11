@@ -149,13 +149,15 @@ const ListMessagesRequest$json = {
   '2': [
     {'1': 'session_id', '3': 1, '4': 1, '5': 9, '10': 'sessionId'},
     {'1': 'limit', '3': 2, '4': 1, '5': 5, '10': 'limit'},
+    {'1': 'before_message_id', '3': 3, '4': 1, '5': 9, '10': 'beforeMessageId'},
   ],
 };
 
 /// Descriptor for `ListMessagesRequest`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List listMessagesRequestDescriptor = $convert.base64Decode(
     'ChNMaXN0TWVzc2FnZXNSZXF1ZXN0Eh0KCnNlc3Npb25faWQYASABKAlSCXNlc3Npb25JZBIUCg'
-    'VsaW1pdBgCIAEoBVIFbGltaXQ=');
+    'VsaW1pdBgCIAEoBVIFbGltaXQSKgoRYmVmb3JlX21lc3NhZ2VfaWQYAyABKAlSD2JlZm9yZU1l'
+    'c3NhZ2VJZA==');
 
 @$core.Deprecated('Use listMessagesResponseDescriptor instead')
 const ListMessagesResponse$json = {

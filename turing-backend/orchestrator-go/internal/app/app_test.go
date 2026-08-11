@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -307,6 +309,64 @@ func TestInternalServerRequiresInternalToken(t *testing.T) {
 	}
 	if _, err := stream.Recv(); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected runtime service to reject invalid worker_ready, got %v", err)
+	}
+}
+
+func TestApprovalRPCsAreSeparatedAcrossPublicAndInternalServers(t *testing.T) {
+	app := newTestApp(t)
+	publicClient := turingv1.NewApprovalServiceClient(newBufconnClient(t, app.PublicServer))
+	publicContext := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+"client"))
+	if _, err := publicClient.GetApprovalForRuntime(publicContext, &turingv1.GetApprovalForRuntimeRequest{ApprovalId: "missing"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("public GetApprovalForRuntime error = %v, want PermissionDenied", err)
+	}
+	if _, err := publicClient.ConsumeApproval(publicContext, &turingv1.ConsumeApprovalRequest{ApprovalId: "missing"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("public ConsumeApproval error = %v, want PermissionDenied", err)
+	}
+
+	internalClient := turingv1.NewApprovalServiceClient(newBufconnClient(t, app.InternalServer))
+	internalContext := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+"internal"))
+	if _, err := internalClient.ApproveApproval(internalContext, &turingv1.ApproveApprovalRequest{ApprovalId: "missing"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("internal ApproveApproval error = %v, want PermissionDenied", err)
+	}
+	if _, err := internalClient.DenyApproval(internalContext, &turingv1.DenyApprovalRequest{ApprovalId: "missing"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("internal DenyApproval error = %v, want PermissionDenied", err)
+	}
+}
+
+func TestAuthenticationFailuresAreAuditedWithoutCredentials(t *testing.T) {
+	app := newTestApp(t)
+	const requestID = "request-public-invalid"
+	const secret = "invalid-public-secret"
+	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(
+		"authorization", "Bearer "+secret,
+		"x-request-id", requestID,
+		"user-agent", "auth-audit-test",
+	))
+	_, err := turingv1.NewHealthServiceClient(newBufconnClient(t, app.PublicServer)).Check(ctx, &turingv1.HealthCheckRequest{})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("Check error = %v, want Unauthenticated", err)
+	}
+
+	var actorType, correlationID, target, payloadJSON string
+	if err := app.database.QueryRowContext(context.Background(), `
+		SELECT actor_type, correlation_id, target, payload_json
+		FROM audit_logs
+		WHERE action = 'auth.failed' AND correlation_id = ?
+	`, requestID).Scan(&actorType, &correlationID, &target, &payloadJSON); err != nil {
+		t.Fatalf("query auth audit: %v", err)
+	}
+	if actorType != "client" || correlationID != requestID || target != turingv1.HealthService_Check_FullMethodName {
+		t.Fatalf("auth audit identity = actor:%q correlation:%q target:%q", actorType, correlationID, target)
+	}
+	if len(payloadJSON) > 1024 || strings.Contains(payloadJSON, secret) || strings.Contains(strings.ToLower(payloadJSON), "authorization") {
+		t.Fatalf("auth audit payload leaked or exceeded bounds: %q", payloadJSON)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["requestId"] != requestID || payload["userAgent"] == "" {
+		t.Fatalf("auth audit payload = %#v", payload)
 	}
 }
 

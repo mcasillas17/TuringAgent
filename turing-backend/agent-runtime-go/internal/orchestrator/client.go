@@ -74,7 +74,7 @@ func (c *Client) FetchMessages(ctx context.Context, sessionID string, beforeMess
 	if err != nil {
 		return nil, err
 	}
-	messages := resp.GetMessages()
+	messages := messagesBeforeAnchor(resp.GetMessages(), beforeMessageID)
 	out := make([]llm.ChatMessage, 0, len(messages))
 	for _, message := range messages {
 		role, ok := chatRole(message.GetRole())
@@ -126,6 +126,18 @@ func (c *Client) SearchMessages(ctx context.Context, query string, limit int) ([
 		})
 	}
 	return out, nil
+}
+
+func messagesBeforeAnchor(messages []*turingv1.Message, beforeMessageID string) []*turingv1.Message {
+	if beforeMessageID == "" {
+		return messages
+	}
+	for index, message := range messages {
+		if message.GetMessageId() == beforeMessageID {
+			return messages[:index]
+		}
+	}
+	return messages
 }
 
 func (c *Client) GetApprovalState(ctx context.Context, approvalID string) (*turingv1.RuntimeApprovalState, error) {

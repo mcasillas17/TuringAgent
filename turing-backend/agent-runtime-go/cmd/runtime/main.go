@@ -59,6 +59,7 @@ func run() error {
 		WorkerID:                 cfg.WorkerID,
 		AgentID:                  turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
 		MaxConcurrentRuns:        cfg.MaxConcurrentRuns,
+		HeartbeatInterval:        cfg.HeartbeatInterval,
 		DisconnectCleanupTimeout: cfg.TotalToolTimeout,
 	}, runtimeClientAdapter{client: client}, executor)
 	return runtimeWorker.Run(ctx)

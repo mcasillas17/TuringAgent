@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"golang.org/x/sys/unix"
 )
 
 const mutationContentByteLimit = 512 * 1024
@@ -40,6 +43,124 @@ func TestReadRejectsTraversal(t *testing.T) {
 	_, err := NewFilesTools(root).Read(map[string]any{"path": "../outside.txt"})
 	if err == nil {
 		t.Fatalf("expected traversal rejection")
+	}
+}
+
+func TestNormalizeSandboxPathEnforcesResourceLimits(t *testing.T) {
+	const (
+		maxPathBytes      = 4096
+		maxComponentBytes = 255
+		maxDepth          = 64
+	)
+	components := make([]string, 17)
+	for index := range components {
+		components[index] = strings.Repeat("x", 240)
+	}
+	pathAtByteBoundary := strings.Join(components, "/")
+	if len(pathAtByteBoundary) != maxPathBytes {
+		t.Fatalf("path boundary fixture is %d bytes, want %d", len(pathAtByteBoundary), maxPathBytes)
+	}
+
+	depthBoundary := make([]string, maxDepth)
+	for index := range depthBoundary {
+		depthBoundary[index] = "d"
+	}
+	tests := []struct {
+		name    string
+		path    string
+		wantErr string
+	}{
+		{name: "path byte boundary", path: pathAtByteBoundary},
+		{name: "path byte overflow", path: pathAtByteBoundary + "x", wantErr: "4096-byte"},
+		{name: "component byte boundary", path: strings.Repeat("x", maxComponentBytes)},
+		{name: "component byte overflow", path: strings.Repeat("x", maxComponentBytes+1), wantErr: "255-byte"},
+		{name: "depth boundary", path: strings.Join(depthBoundary, "/")},
+		{name: "depth overflow", path: strings.Join(append(depthBoundary, "d"), "/"), wantErr: "64 components"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, err := normalizeSandboxPath(test.path)
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatalf("normalizeSandboxPath returned error at boundary: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("normalizeSandboxPath error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestAllFileToolsEnforceSandboxPathLimits(t *testing.T) {
+	components := make([]string, 17)
+	for index := range components {
+		components[index] = strings.Repeat("x", 240)
+	}
+	overLimit := strings.Join(components, "/") + "x"
+	validator := &recordingApprovalValidator{}
+	files := NewFilesTools(t.TempDir()).WithApprovalValidator(validator)
+	calls := map[string]func() error{
+		"list": func() error {
+			_, err := files.List(map[string]any{"path": overLimit})
+			return err
+		},
+		"search": func() error {
+			_, err := files.Search(map[string]any{"path": overLimit, "query": "needle"})
+			return err
+		},
+		"read": func() error {
+			_, err := files.Read(map[string]any{"path": overLimit})
+			return err
+		},
+		"create": func() error {
+			_, err := files.Create(
+				map[string]any{"path": overLimit, "content": "content"},
+				"approval-token",
+				"general_assistant",
+			)
+			return err
+		},
+		"update": func() error {
+			_, err := files.Update(
+				map[string]any{"path": overLimit, "content": "content"},
+				"approval-token",
+				"general_assistant",
+			)
+			return err
+		},
+	}
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			if err := call(); err == nil || !IsInvalidParams(err) {
+				t.Fatalf("%s error = %v, want invalid path parameters", name, err)
+			}
+		})
+	}
+	if validator.callCount() != 0 {
+		t.Fatalf("path-limit failures consumed %d approvals, want 0", validator.callCount())
+	}
+}
+
+func TestSearchCancellationClosesInitialDirectoryDescriptor(t *testing.T) {
+	root := t.TempDir()
+	files := NewFilesTools(root)
+	before := countOpenFileDescriptors(t)
+
+	for iteration := 0; iteration < 16; iteration++ {
+		// The fourth check occurs after the initial directory has been queued
+		// and before it is dequeued for scanning.
+		ctx := &cancelAfterErrChecksContext{allowed: 3}
+		_, err := files.SearchContext(ctx, map[string]any{"path": ".", "query": "missing"})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("SearchContext error = %v, want context.Canceled", err)
+		}
+	}
+
+	after := countOpenFileDescriptors(t)
+	if after > before+2 {
+		t.Fatalf("open descriptors grew from %d to %d after canceled searches", before, after)
 	}
 }
 
@@ -121,6 +242,20 @@ func TestReadHonorsMaxBytesWithTruncation(t *testing.T) {
 	}
 	if result["content"] != "abc" || result["truncated"] != true || result["bytesRead"] != int64(6) {
 		t.Fatalf("expected truncated content, got %#v", result)
+	}
+}
+
+func TestReadTransportSafeByteLimitBoundary(t *testing.T) {
+	const transportSafeReadBytes = 64 * 1024
+	if _, limit, err := validateReadArgs(map[string]any{
+		"path": "note.txt", "maxBytes": transportSafeReadBytes,
+	}); err != nil || limit != transportSafeReadBytes {
+		t.Fatalf("validateReadArgs rejected boundary: limit=%d err=%v", limit, err)
+	}
+	if _, _, err := validateReadArgs(map[string]any{
+		"path": "note.txt", "maxBytes": transportSafeReadBytes + 1,
+	}); err == nil {
+		t.Fatalf("validateReadArgs accepted %d bytes above transport-safe limit", transportSafeReadBytes+1)
 	}
 }
 
@@ -316,6 +451,33 @@ func TestListBoundsScanningWhenDirectoryContainsOnlyInternalStagingNames(t *test
 	}
 }
 
+func TestListResultFitsCoordinatedToolResultBudget(t *testing.T) {
+	const coordinatedResultBytes = 4 * 1024 * 1024 / 10
+	root := t.TempDir()
+	for index := 0; index < 400; index++ {
+		name := strings.Repeat("\x01", 240) + fmt.Sprintf("%03d", index)
+		if err := os.WriteFile(filepath.Join(root, name), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := NewFilesTools(root).List(map[string]any{"limit": 1000})
+
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > coordinatedResultBytes {
+		t.Fatalf("encoded List result = %d bytes, exceeds coordinated %d-byte budget", len(encoded), coordinatedResultBytes)
+	}
+	if result["truncated"] != true {
+		t.Fatalf("List result = %#v, want truncation at response budget", result)
+	}
+}
+
 func TestListRejectsSymlinkedDirectory(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "target"), 0700); err != nil {
@@ -327,6 +489,61 @@ func TestListRejectsSymlinkedDirectory(t *testing.T) {
 
 	if _, err := NewFilesTools(root).List(map[string]any{"path": "link"}); err == nil {
 		t.Fatal("List followed a symlinked directory")
+	}
+}
+
+func TestReadDirectoryEntriesUsesDescriptorRelativeNoFollowMetadata(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "nested", "child"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "nested", "note.txt"), []byte("content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("child", filepath.Join(root, "nested", "child-link")); err != nil {
+		t.Fatal(err)
+	}
+	conflictingCWD := t.TempDir()
+	if err := os.Mkdir(filepath.Join(conflictingCWD, "nested"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(conflictingCWD, "nested", "child"), []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	originalCWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(conflictingCWD); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalCWD); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
+
+	directory, _, err := NewFilesTools(root).openDirectoryPath("nested", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer directory.Close()
+	entries, readErr := readDirectoryEntriesAt(context.Background(), directory, 10)
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		t.Fatalf("readDirectoryEntriesAt returned error: %v", readErr)
+	}
+	byName := make(map[string]safeDirectoryEntry, len(entries))
+	for _, entry := range entries {
+		byName[entry.name] = entry
+	}
+	if got := byName["child"].mode & unix.S_IFMT; got != unix.S_IFDIR {
+		t.Fatalf("nested child mode = %#o, want directory", got)
+	}
+	if got := byName["note.txt"].mode & unix.S_IFMT; got != unix.S_IFREG {
+		t.Fatalf("nested note mode = %#o, want regular file", got)
+	}
+	if got := byName["child-link"].mode & unix.S_IFMT; got != unix.S_IFLNK {
+		t.Fatalf("nested symlink mode = %#o, want symlink without following it", got)
 	}
 }
 
@@ -344,6 +561,31 @@ func TestSearchStopsAtTraversalBudget(t *testing.T) {
 	}
 	if result["truncated"] != true {
 		t.Fatalf("Search result = %#v, want truncated=true at traversal budget", result)
+	}
+}
+
+func TestSearchResultFitsCoordinatedToolResultBudget(t *testing.T) {
+	const coordinatedResultBytes = 4 * 1024 * 1024 / 10
+	root := t.TempDir()
+	query := strings.Repeat("\x01", 70*1024)
+	if err := os.WriteFile(filepath.Join(root, "match.txt"), []byte(query), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := NewFilesTools(root).Search(map[string]any{"query": query})
+
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > coordinatedResultBytes {
+		t.Fatalf("encoded Search result = %d bytes, exceeds coordinated %d-byte budget", len(encoded), coordinatedResultBytes)
+	}
+	if result["truncated"] != true {
+		t.Fatalf("Search result = %#v, want truncation at response budget", result)
 	}
 }
 
@@ -625,7 +867,7 @@ func TestUpdateExpectedHashIsCompareAndSwapUnderConcurrency(t *testing.T) {
 
 func TestCreatePublishesOnlyFsyncedContentAndSerializesRead(t *testing.T) {
 	root := t.TempDir()
-	content := strings.Repeat("complete-content-", 16*1024)
+	content := strings.Repeat("complete-content-", 2*1024)
 	staged := make(chan struct{})
 	release := make(chan struct{})
 	files := NewFilesTools(root).WithApprovalValidator(fakeApprovalValidator{valid: true})
@@ -1007,6 +1249,77 @@ func TestCreateFsyncsNewDirectoryHierarchy(t *testing.T) {
 	}
 }
 
+func TestSyncCreateAncestorsKeepsDescriptorUseBounded(t *testing.T) {
+	root := t.TempDir()
+	components := make([]string, 32)
+	for index := range components {
+		components[index] = fmt.Sprintf("directory-%02d", index)
+	}
+	if err := os.MkdirAll(filepath.Join(append([]string{root}, components...)...), 0700); err != nil {
+		t.Fatal(err)
+	}
+	files := NewFilesTools(root)
+	baseline := countOpenFileDescriptors(t)
+	peak := baseline
+	files.syncDirectory = func(*os.File) error {
+		if current := countOpenFileDescriptors(t); current > peak {
+			peak = current
+		}
+		return nil
+	}
+
+	if err := files.syncCreateAncestors(filepath.Join(filepath.Join(components...), "note.txt")); err != nil {
+		t.Fatalf("syncCreateAncestors returned error: %v", err)
+	}
+
+	if peak > baseline+6 {
+		t.Fatalf("ancestor sync retained descriptors: baseline=%d peak=%d", baseline, peak)
+	}
+}
+
+func TestOpenDirectoryPathChecksCancellationDuringTraversal(t *testing.T) {
+	root := t.TempDir()
+	components := make([]string, 32)
+	for index := range components {
+		components[index] = fmt.Sprintf("directory-%02d", index)
+	}
+	ctx := &cancelAfterErrChecksContext{allowed: 8}
+	files := NewFilesTools(root)
+
+	directory, _, err := files.openDirectoryPathContext(ctx, filepath.Join(components...), true)
+
+	if directory != nil {
+		_ = directory.Close()
+		t.Fatal("canceled traversal returned an open directory")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("openDirectoryPathContext error = %v, want context.Canceled", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(append([]string{root}, components...)...)); !os.IsNotExist(statErr) {
+		t.Fatalf("canceled traversal created the full hierarchy: %v", statErr)
+	}
+}
+
+func TestOpenDirectoryPathChecksCancellationAfterDirectorySync(t *testing.T) {
+	root := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	files := NewFilesTools(root)
+	files.syncDirectory = func(*os.File) error {
+		cancel()
+		return nil
+	}
+
+	directory, _, err := files.openDirectoryPathContext(ctx, "new-directory", true)
+
+	if directory != nil {
+		_ = directory.Close()
+		t.Fatal("canceled directory sync returned an open directory")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("openDirectoryPathContext error = %v, want context.Canceled", err)
+	}
+}
+
 func TestMutationsDoNotAcknowledgeDirectorySyncFailure(t *testing.T) {
 	syncFailure := errors.New("directory sync failed")
 	for _, mutation := range []string{"create", "update"} {
@@ -1132,6 +1445,41 @@ func waitForPathLockRefs(t *testing.T, path string, want int) {
 		}
 		runtime.Gosched()
 	}
+}
+
+func countOpenFileDescriptors(t *testing.T) int {
+	t.Helper()
+	var limit unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_NOFILE, &limit); err != nil {
+		t.Fatal(err)
+	}
+	maximum := limit.Cur
+	if maximum > 16*1024 {
+		maximum = 16 * 1024
+	}
+	count := 0
+	for descriptor := uint64(0); descriptor < maximum; descriptor++ {
+		if _, err := unix.FcntlInt(uintptr(descriptor), unix.F_GETFD, 0); err == nil {
+			count++
+		}
+	}
+	return count
+}
+
+type cancelAfterErrChecksContext struct {
+	allowed int32
+	checks  atomic.Int32
+}
+
+func (*cancelAfterErrChecksContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (*cancelAfterErrChecksContext) Done() <-chan struct{}       { return nil }
+func (*cancelAfterErrChecksContext) Value(any) any               { return nil }
+
+func (c *cancelAfterErrChecksContext) Err() error {
+	if c.checks.Add(1) > c.allowed {
+		return context.Canceled
+	}
+	return nil
 }
 
 func TestUpdatePreservesExistingPermissions(t *testing.T) {
@@ -1412,6 +1760,30 @@ func TestUpdateValidatesArgumentsBeforeApprovalAndMutation(t *testing.T) {
 		if readErr != nil || string(content) != "original" {
 			t.Fatalf("Update(%#v) content = %q, %v; want original", args, content, readErr)
 		}
+	}
+}
+
+func TestUpdateExpectedHashAcceptsOnlyCanonicalLowercaseDigest(t *testing.T) {
+	lowercase := "sha256:" + strings.Repeat("a", sha256.Size*2)
+	if _, _, got, err := validateUpdateArgs(map[string]any{
+		"path": "note.txt", "content": "updated", "expectedHash": lowercase,
+	}); err != nil || got != lowercase {
+		t.Fatalf("validateUpdateArgs rejected canonical hash: hash=%q err=%v", got, err)
+	}
+
+	for name, hash := range map[string]string{
+		"uppercase": "sha256:" + strings.Repeat("A", sha256.Size*2),
+		"short":     "sha256:" + strings.Repeat("a", sha256.Size*2-1),
+		"no prefix": strings.Repeat("a", sha256.Size*2),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, _, err := validateUpdateArgs(map[string]any{
+				"path": "note.txt", "content": "updated", "expectedHash": hash,
+			})
+			if err == nil {
+				t.Fatalf("validateUpdateArgs accepted non-canonical expectedHash %q", hash)
+			}
+		})
 	}
 }
 

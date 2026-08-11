@@ -36,12 +36,16 @@ func NewOllama(baseURL string, client *http.Client) *Ollama {
 func (p *Ollama) ID() string { return "ollama" }
 
 func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
-	body, err := json.Marshal(ollamaChatRequest{
-		Model:    req.Model,
-		Messages: ollamaMessages(req.Messages),
-		Stream:   true,
-		Options:  ollamaRequestOptions(req.Temperature, req.MaxTokens),
-		Tools:    ollamaTools(req.Tools),
+	options := ollamaRequestOptions(req.Temperature, req.MaxTokens)
+	tools := ollamaTools(req.Tools)
+	body, err := marshalProviderRequest("Ollama", req.Messages, func(messages []ChatMessage) ([]byte, error) {
+		return json.Marshal(ollamaChatRequest{
+			Model:    req.Model,
+			Messages: ollamaMessages(messages),
+			Stream:   true,
+			Options:  options,
+			Tools:    tools,
+		})
 	})
 	if err != nil {
 		return nil, err

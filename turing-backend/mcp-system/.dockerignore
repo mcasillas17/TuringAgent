@@ -1,0 +1,18 @@
+# Version control and editor state
+.git
+.github
+.copilot
+.DS_Store
+
+# Local configuration and credentials
+.env
+.env.*
+*.pem
+*.key
+*.cert
+
+# Build and test output
+server
+*.test
+*.prof
+coverage

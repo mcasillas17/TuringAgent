@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,10 +13,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/project-turing/mcp-files/internal/jsonrpc"
 	filetools "github.com/project-turing/mcp-files/internal/tools"
 )
 
 const expectedFilesRequestLimit = 6*524288 + 64*1024
+const expectedMCPResponseLimit = 1024 * 1024
+const expectedAggregateToolResultLimit = 4 * 1024 * 1024
+const expectedToolCallsPerRun = 10
 
 func TestLoadConfigRequiresApprovalJWTSecret(t *testing.T) {
 	t.Setenv("TURING_APPROVAL_JWT_SECRET", "")
@@ -70,6 +75,40 @@ func TestMcpHandlerRejectsUnauthorizedRequests(t *testing.T) {
 
 	if res.Code != http.StatusUnauthorized {
 		t.Fatalf("expected unauthorized without bearer token, got %d", res.Code)
+	}
+}
+
+func TestHealthEndpointIsAvailableWithoutBearerToken(t *testing.T) {
+	handler := newHandler(serverConfig{
+		filesToken:           "files-token",
+		approvalJwtSecret:    "jwt-secret",
+		orchestratorGRPCAddr: "orchestrator:3001",
+		internalToken:        "internal-token",
+		sandboxRoot:          t.TempDir(),
+	})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	res := httptest.NewRecorder()
+
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("health status = %d, want %d", res.Code, http.StatusNoContent)
+	}
+}
+
+func TestHealthcheckProbeAcceptsReadyEndpoint(t *testing.T) {
+	handler := newHandler(serverConfig{
+		filesToken:           "files-token",
+		approvalJwtSecret:    "jwt-secret",
+		orchestratorGRPCAddr: "orchestrator:3001",
+		internalToken:        "internal-token",
+		sandboxRoot:          t.TempDir(),
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	if err := checkHealth(context.Background(), server.URL+"/healthz"); err != nil {
+		t.Fatalf("checkHealth failed: %v", err)
 	}
 }
 
@@ -168,6 +207,66 @@ func TestMcpHandlerAllowsWorstCaseEscapedMaximumFileContent(t *testing.T) {
 		t.Fatalf("status = %d, want 200; response=%s", status, response)
 	}
 	assertRPCErrorCode(t, response, -32000)
+}
+
+func TestAdvertisedReadLimitFitsTransportAndAggregateBudgets(t *testing.T) {
+	const wantReadLimit = 64 * 1024
+	readSchema := toolPropertySchema(t, listTools(), "files.read", "maxBytes")
+	advertisedMaximum, ok := readSchema["maximum"].(int)
+	if !ok {
+		t.Fatalf("files.read maxBytes maximum = %#v, want integer", readSchema["maximum"])
+	}
+	if advertisedMaximum != wantReadLimit {
+		t.Errorf("files.read maximum = %d, want %d", advertisedMaximum, wantReadLimit)
+	}
+	pathComponents := make([]string, 17)
+	for index := range pathComponents {
+		pathComponents[index] = strings.Repeat("\x01", 240)
+	}
+	path := strings.Join(pathComponents, "/")
+	if len(path) != filetools.MaxSandboxPathBytes {
+		t.Fatalf("worst-case path fixture = %d bytes, want %d", len(path), filetools.MaxSandboxPathBytes)
+	}
+	result := map[string]any{
+		"path":      path,
+		"content":   strings.Repeat("\x01", advertisedMaximum),
+		"truncated": false,
+		"bytesRead": advertisedMaximum,
+	}
+	encodedResult, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedResponse, err := json.Marshal(jsonrpc.Response{JSONRPC: "2.0", ID: float64(1), Result: result})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encodedResponse) > expectedMCPResponseLimit {
+		t.Errorf("worst-case files.read response = %d bytes, exceeds %d-byte MCP cap", len(encodedResponse), expectedMCPResponseLimit)
+	}
+	if len(encodedResult)*expectedToolCallsPerRun > expectedAggregateToolResultLimit {
+		t.Errorf(
+			"%d worst-case results total %d bytes, exceed %d-byte run aggregate",
+			expectedToolCallsPerRun,
+			len(encodedResult)*expectedToolCallsPerRun,
+			expectedAggregateToolResultLimit,
+		)
+	}
+}
+
+func TestMcpResponseWriterRejectsOversizedEncodedResponse(t *testing.T) {
+	response := httptest.NewRecorder()
+
+	writeJSONRPC(response, jsonrpc.Response{
+		JSONRPC: "2.0",
+		ID:      float64(1),
+		Result:  map[string]any{"content": strings.Repeat("\x01", expectedMCPResponseLimit)},
+	})
+
+	if response.Body.Len() > expectedMCPResponseLimit {
+		t.Fatalf("response body = %d bytes, exceeds %d-byte cap", response.Body.Len(), expectedMCPResponseLimit)
+	}
+	assertRPCErrorCode(t, response.Body.Bytes(), -32603)
 }
 
 func TestMcpHandlerStrictlyValidatesJSONRPCEnvelope(t *testing.T) {
@@ -353,9 +452,48 @@ func TestListToolsAdvertisesOnlyCallableToolsWithAccurateSchemas(t *testing.T) {
 
 	assertIntegerBounds(t, tools, "files.list", "limit", 1, 1000)
 	assertIntegerBounds(t, tools, "files.search", "limit", 1, 200)
-	assertIntegerBounds(t, tools, "files.read", "maxBytes", 1, 524288)
-	assertStringMaxLength(t, tools, "files.create", "content", 524288)
-	assertStringMaxLength(t, tools, "files.update", "content", 524288)
+	assertIntegerBounds(t, tools, "files.read", "maxBytes", 1, 65536)
+}
+
+func TestListToolsAdvertisesStringConstraintsConsistentWithValidators(t *testing.T) {
+	advertised := listTools()
+	for _, toolName := range []string{"files.list", "files.search", "files.read", "files.create", "files.update"} {
+		path := toolPropertySchema(t, advertised, toolName, "path")
+		if path["minLength"] != 1 || path["pattern"] != `\S` {
+			t.Errorf("%s path schema = %#v, want nonblank string constraints", toolName, path)
+		}
+		description, _ := path["description"].(string)
+		for _, detail := range []string{"4096 bytes", "255 bytes", "64 components"} {
+			if !strings.Contains(description, detail) {
+				t.Errorf("%s path description %q does not document %s", toolName, description, detail)
+			}
+		}
+		if _, present := path["maxLength"]; present {
+			t.Errorf("%s path schema uses character maxLength for a byte limit: %#v", toolName, path)
+		}
+	}
+
+	query := toolPropertySchema(t, advertised, "files.search", "query")
+	if query["minLength"] != 1 || query["pattern"] != `\S` {
+		t.Errorf("files.search query schema = %#v, want nonblank constraints", query)
+	}
+
+	for _, toolName := range []string{"files.create", "files.update"} {
+		content := toolPropertySchema(t, advertised, toolName, "content")
+		if _, present := content["maxLength"]; present {
+			t.Errorf("%s content schema uses character maxLength for a byte limit: %#v", toolName, content)
+		}
+		if description, _ := content["description"].(string); !strings.Contains(description, "524288-byte") {
+			t.Errorf("%s content description = %q, want byte limit", toolName, description)
+		}
+	}
+
+	expectedHash := toolPropertySchema(t, advertised, "files.update", "expectedHash")
+	if expectedHash["minLength"] != 71 ||
+		expectedHash["maxLength"] != 71 ||
+		expectedHash["pattern"] != `^sha256:[0-9a-f]{64}$` {
+		t.Errorf("files.update expectedHash schema = %#v, want exact lowercase SHA-256 constraints", expectedHash)
+	}
 }
 
 func assertIntegerBounds(t *testing.T, tools []map[string]any, toolName, property string, minimum, maximum int) {
@@ -388,6 +526,23 @@ func assertStringMaxLength(t *testing.T, advertised []map[string]any, toolName, 
 		return
 	}
 	t.Fatalf("tool %s was not advertised", toolName)
+}
+
+func toolPropertySchema(t *testing.T, advertised []map[string]any, toolName, property string) map[string]any {
+	t.Helper()
+	for _, tool := range advertised {
+		if tool["name"] != toolName {
+			continue
+		}
+		schema := tool["inputSchema"].(map[string]any)
+		definition, ok := schema["properties"].(map[string]any)[property].(map[string]any)
+		if !ok {
+			t.Fatalf("%s property %s is not advertised", toolName, property)
+		}
+		return definition
+	}
+	t.Fatalf("tool %s was not advertised", toolName)
+	return nil
 }
 
 func testFilesHandler(t *testing.T) http.Handler {

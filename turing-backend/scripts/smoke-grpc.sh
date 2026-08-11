@@ -8,7 +8,7 @@ compose() {
   ./scripts/compose.sh "$@"
 }
 
-compose up --build -d
+compose up --build -d --wait --wait-timeout 60
 trap 'compose down' EXIT
 
 ready=0

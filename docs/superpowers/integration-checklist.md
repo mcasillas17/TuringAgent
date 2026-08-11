@@ -1,63 +1,113 @@
-# TuringAgent v1.0 Integration Checklist
+# TuringAgent Integration Checklist
 
-Use this checklist to validate the integrated v1.0 stack on `pturing-v1-base`.
+Use this checklist against the current Go gRPC, MCP, and Flutter architecture.
 
-## 1. Foundation (Task 1-2)
-- [ ] `turing-backend/scripts/init.sh` exists and generates a valid `.env` with random secrets.
-- [ ] `turing-backend/scripts/dev.sh` exists and starts the local v1 backend stack.
-- [ ] `turing-backend/infra/docker-compose.yml` is valid (`cd turing-backend && ./scripts/compose.sh config --quiet`) and starts the orchestrator, runtime, and MCP services by default.
-- [ ] `turing-backend/shared-types` exists and `npm run build` generates `dist/` with valid type declarations.
-- [ ] `turing-client/turing_app` contains the preserved Flutter shell and backend-connected client surfaces.
+## 1. Initialization and Compose
 
-## 2. Orchestrator (Task 3-6)
-- [ ] `turing-orchestrator` container builds and starts without immediate crash.
-- [ ] Orchestrator logs show "WAL mode" and migration application for `0001_initial.sql`.
-- [ ] `GET /health` returns `{ ok: true }`.
-- [ ] `POST /api/sessions` requires valid `Bearer` auth and persists to SQLite.
-- [ ] Internal port 3001 is reachable from other containers but NOT published to host.
+- [ ] `turing-backend/scripts/init.sh` creates mode-`0700` data and sandbox
+  directories, mode-`0600` SQLite files, and a mode-`0600` regular `.env` while
+  running as a non-root host user.
+- [ ] Initialization rejects symlinked, non-owned, inaccessible, or
+  group/world-writable sandbox roots and unsafe writable legacy entries.
+- [ ] `turing-backend/scripts/compose.sh` revalidates the sandbox bind source
+  and data/SQLite modes immediately before a launch, then injects the current
+  host UID/GID for both bind-mount writers.
+- [ ] `cd turing-backend && ./scripts/compose.sh config --quiet` resolves the
+  orchestrator, agent runtime, `mcp-system`, and `mcp-files` services.
+- [ ] MCP containers are non-root, read-only, capability-free, and reachable
+  only on their intended internal Docker networks.
+- [ ] MCP healthchecks run through the service binaries without write access or
+  extra image utilities, and the runtime waits for both services to be healthy.
 
-## 3. Agent Runtime & Streaming (Task 7-10)
-- [ ] `turing-agent-runtime-general` container logs show successful job polling from orchestrator.
-- [ ] Enqueuing a message results in an `agent_runs` entry with status `running`.
-- [ ] WebSocket connection remains open during agent execution.
-- [ ] `message.delta` events contain cumulative text chunks that match the model output.
-- [ ] Replay handshake (`hello` with `lastSequence`) correctly serves missed events from the database.
+## 2. Protobuf and gRPC Contracts
 
-## 4. MCP & Tools (Task 11-14)
-- [ ] MCP servers (`system` and `files`) validate the per-agent bearer token.
-- [ ] A discovery-capable runtime sends `RuntimeWorkerReady` with
-  `TOOL_DISCOVERY_STATUS_COMPLETE` and its authoritative `tools/list`
-  snapshot; a failed discovery sends `TOOL_DISCOVERY_STATUS_FAILED` and the
-  orchestrator rejects the worker.
-- [ ] `ListTools` reflects the union of connected workers' discovered tools;
-  disconnecting the last owner disables an omitted tool, and a fresh registry
-  with no workers is empty.
-- [ ] Tool authorization is scoped to the reporting worker: a worker cannot
-  call a tool discovered only by another worker, and disabled or missing tools
-  do not fall back to legacy policy defaults.
-- [ ] Files MCP correctly rejects path traversal (e.g., `../../etc/passwd`).
-- [ ] Safe tools complete successfully and emit `tool.call.completed`.
-- [ ] Approval-required tools (e.g., `files.update`) block execution and emit `approval.requested`.
-- [ ] Orchestrator signs a valid HS256 JWT for approved tools.
-- [ ] `audit_logs` table contains entries for `auth.failed`, `tool.call.before`, and `tool.call.after`.
+- [ ] `proto/turing/v1/` is the source of truth for public and internal APIs.
+- [ ] `tools/proto/check.sh` leaves the Go generated output unchanged; the
+  Flutter contract test separately verifies checked-in Dart fields.
+- [ ] The orchestrator exposes the public gRPC API on port `3000` and its
+  authenticated runtime API only on the internal port `3001`.
+- [ ] Health, session creation, message sending, event replay/subscription, and
+  approval RPCs reject missing or invalid bearer credentials.
 
-## 5. Flutter Client (Task 15)
-- [ ] Flutter-specific setup and behavior are documented in `turing-client/turing_app/README.md`.
-- [ ] The existing polished `ResponsiveShell` remains the main authenticated app surface.
-- [ ] The Chat and Settings tabs use backend-connected client surfaces once credentials are configured.
-- [ ] Devices, Stats, and Integrations remain placeholder tabs until their backend contracts are defined.
+## 3. Agent Runtime and Tool Loop
 
-## 6. End-to-End (Task 16)
-- [ ] `turing-backend/scripts/smoke.sh` passes 100% in a clean Docker environment.
-- [ ] All `README.md` setup steps result in a working system.
-- [ ] Verification scripts (`smoke-ws.mjs`) correctly handle network timeouts and retries.
+- [ ] The runtime leases jobs over internal gRPC and streams model updates back
+  to the orchestrator.
+- [ ] Ollama and OpenAI-compatible providers preserve model tool-call IDs and
+  reject malformed or over-budget streamed tool calls.
+- [ ] Tool discovery validates MCP catalogs and retains supported JSON Schema
+  constraints.
+- [ ] A discovery-capable runtime reports `TOOL_DISCOVERY_STATUS_COMPLETE`
+  with its authoritative snapshot; failed discovery is rejected.
+- [ ] `ListTools` reflects the persisted union of connected workers' tools,
+  and disabled or absent registry entries fail closed without legacy fallback.
+- [ ] Authorization is scoped to the worker that reported the capability.
+- [ ] Per-run tool-call, model-output, tool-result, request/response, and timeout
+  budgets fail closed.
+- [ ] BEFORE and AFTER tool beacons correlate the runtime call ID and model tool
+  call ID through protobuf.
 
----
+## 4. MCP and Approval Boundary
 
-## Verification Best Practices
+- [ ] `mcp-system` and `mcp-files` require their per-agent bearer tokens.
+- [ ] `system.echo` and file tools enforce the bounds advertised by
+  `tools/list`.
+- [ ] File paths reject absolute paths, traversal, reserved staging names, and
+  byte/component/depth overflows.
+- [ ] Directory metadata and file operations remain descriptor-relative and do
+  not follow symlinks.
+- [ ] `files.create` and `files.update` validate and consume a single-use
+  approval JWT before mutation.
+- [ ] `expectedHash` is treated as serialization for cooperating MCP writers,
+  not as a global atomic guarantee against direct host writers.
+- [ ] Audit records include authentication and tool lifecycle events.
 
-- **Log Monitoring**: During full backend smoke tests, keep a terminal open with `cd turing-backend && ./scripts/compose.sh logs -f`.
-- **Database Inspection**: Use `sqlite3 turing-backend/data/turing.db` to verify that tables are being populated as expected.
-- **Network Isolation**: Verify that `turing-agent-runtime-general` cannot reach MCP servers it is not authorized for by checking Docker network configurations.
-- **Ollama Mocking**: If Ollama is unavailable, verify that the runtime fails gracefully with a `model_unavailable` error code rather than an unhandled exception.
-- **Clean Starts**: Use `cd turing-backend && ./scripts/compose.sh down -v` carefully when you need to reset local containers and volumes.
+## 5. Flutter Client
+
+- [ ] `ResponsiveShell` remains the primary app surface.
+- [ ] Settings, sessions, chat, event streaming, model selection, and approval
+  cards use generated gRPC clients.
+- [ ] `ToolCallBeacon.modelToolCallId` survives Dart protobuf serialization.
+- [ ] Devices, Stats, and Integrations remain placeholders until contracts are
+  defined.
+
+## 6. Automated Verification
+
+Run from the repository root:
+
+```bash
+go test -race ./... -count=1
+go vet ./...
+go build ./...
+go test ./.github/workflows -count=1
+go test ./turing-backend/scripts -count=1
+
+(cd turing-backend/mcp-files &&
+  go test -race ./... -count=1 &&
+  go vet ./... &&
+  go build ./cmd/server)
+
+(cd turing-backend/mcp-system &&
+  go test -race ./... -count=1 &&
+  go vet ./... &&
+  go build ./cmd/server)
+
+bash -n turing-backend/scripts/*.sh tools/proto/*.sh
+tools/proto/check.sh
+
+(cd turing-client/turing_app &&
+  flutter analyze &&
+  flutter test)
+```
+
+For a Docker-backed end-to-end check:
+
+```bash
+cd turing-backend
+./scripts/smoke-grpc.sh
+```
+
+Compose first waits (with a 60-second bound) for the MCP healthchecks. The smoke
+client then waits for `HealthService.Check`, creates a session, sends a
+deterministic `system.time` tool request, observes streamed events, and verifies
+event replay. `scripts/smoke.sh` is an alias for this gRPC smoke path.

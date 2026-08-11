@@ -178,6 +178,29 @@ func TestFetchMessagesRequestsCausalHistoryBeforeCurrentUserMessage(t *testing.T
 	}
 }
 
+func TestFetchMessagesFiltersLegacyResponseAtAssignedAnchor(t *testing.T) {
+	sessions := &messageListClient{messages: []*turingv1.Message{
+		{MessageId: "msg_older_user", Role: turingv1.MessageRole_MESSAGE_ROLE_USER, Content: "older", Sequence: 1},
+		{MessageId: "msg_older_assistant", Role: turingv1.MessageRole_MESSAGE_ROLE_ASSISTANT, Content: "answer", Sequence: 2},
+		{MessageId: "msg_assigned_user", Role: turingv1.MessageRole_MESSAGE_ROLE_USER, Content: "current", Sequence: 3},
+		{MessageId: "msg_assigned_assistant", Role: turingv1.MessageRole_MESSAGE_ROLE_ASSISTANT, Content: "", Sequence: 4},
+		{MessageId: "msg_later_user", Role: turingv1.MessageRole_MESSAGE_ROLE_USER, Content: "later", Sequence: 5},
+	}}
+	client := &Client{sessions: sessions}
+
+	got, err := client.FetchMessages(context.Background(), "session_1", "msg_assigned_user")
+	if err != nil {
+		t.Fatalf("FetchMessages returned error: %v", err)
+	}
+	want := []llm.ChatMessage{
+		{Role: "user", Content: "older"},
+		{Role: "assistant", Content: "answer"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("FetchMessages legacy response = %#v, want only pre-anchor history %#v", got, want)
+	}
+}
+
 func TestFetchMessagesRetainsFiftyCausallyBoundEntries(t *testing.T) {
 	messages := make([]*turingv1.Message, 0, 50)
 	for i := 0; i < 50; i++ {

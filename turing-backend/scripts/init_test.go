@@ -77,6 +77,123 @@ func TestInitCreatesRealOwnedWritableTraversableSandboxWithoutChown(t *testing.T
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		t.Fatalf("sandbox mode = %v, want a real directory", info.Mode())
 	}
+	if info.Mode().Perm() != 0700 {
+		t.Fatalf("fresh sandbox permissions = %04o, want 0700 independent of umask", info.Mode().Perm())
+	}
+}
+
+func TestInitCreatesPrivateDataDirectoryWithoutChown(t *testing.T) {
+	result := runInit(t, "501", "20", "")
+
+	assertChownCalls(t, result)
+	info, err := os.Lstat(result.data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("data mode = %v, want a real directory", info.Mode())
+	}
+	if info.Mode().Perm() != 0700 {
+		t.Fatalf("fresh data permissions = %04o, want 0700 independent of umask", info.Mode().Perm())
+	}
+}
+
+func TestInitSecuresOwnedLegacyDataAndSQLiteFiles(t *testing.T) {
+	result := executeInitWithSetup(t, "501", "20", "", 0, func(t *testing.T, root string) {
+		data := filepath.Join(root, "data")
+		if err := os.Mkdir(data, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(data, 0755); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"turing.db", "turing.db-wal", "turing.db-shm"} {
+			path := filepath.Join(data, name)
+			if err := os.WriteFile(path, []byte("legacy"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	if result.err != nil {
+		t.Fatalf("init.sh failed: %v\n%s", result.err, result.output)
+	}
+
+	assertMode(t, result.data, 0700)
+	for _, name := range []string{"turing.db", "turing.db-wal", "turing.db-shm"} {
+		assertMode(t, filepath.Join(result.data, name), 0600)
+	}
+	assertChownCalls(t, result)
+}
+
+func TestInitRejectsUnsafeDataTypes(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(*testing.T, string)
+		wantOutput string
+	}{
+		{
+			name: "data symlink",
+			setup: func(t *testing.T, root string) {
+				target := filepath.Join(root, "outside-data")
+				if err := os.Mkdir(target, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, filepath.Join(root, "data")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "data must be a real directory, not a symlink",
+		},
+		{
+			name: "database symlink",
+			setup: func(t *testing.T, root string) {
+				data := filepath.Join(root, "data")
+				if err := os.Mkdir(data, 0700); err != nil {
+					t.Fatal(err)
+				}
+				target := filepath.Join(root, "outside.db")
+				if err := os.WriteFile(target, []byte("outside"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, filepath.Join(data, "turing.db")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "database file must be a regular file, not a symlink",
+		},
+		{
+			name: "database directory",
+			setup: func(t *testing.T, root string) {
+				data := filepath.Join(root, "data")
+				if err := os.Mkdir(data, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(filepath.Join(data, "turing.db"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "database file must be a regular file",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := executeInitWithSetup(t, "501", "20", "", 0, test.setup)
+			if result.err == nil {
+				t.Fatalf("init.sh accepted unsafe data type; output:\n%s", result.output)
+			}
+			if !strings.Contains(result.output, test.wantOutput) {
+				t.Fatalf("failure did not explain unsafe data type:\n%s", result.output)
+			}
+			if strings.Contains(result.output, "backend initialized") {
+				t.Fatalf("init.sh claimed readiness with unsafe data:\n%s", result.output)
+			}
+			assertChownCalls(t, result)
+		})
+	}
 }
 
 func TestInitRejectsPreExistingSandboxSymlink(t *testing.T) {
@@ -167,9 +284,149 @@ func TestInitRejectsInaccessibleLegacySandboxEntries(t *testing.T) {
 	}
 }
 
+func TestInitRejectsGroupOrWorldWritableSandbox(t *testing.T) {
+	for name, mode := range map[string]os.FileMode{
+		"group writable": 0770,
+		"world writable": 0702,
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := executeInitWithSetup(t, "501", "20", "", 0, func(t *testing.T, root string) {
+				sandbox := filepath.Join(root, "sandbox")
+				if err := os.Mkdir(sandbox, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(sandbox, mode); err != nil {
+					t.Fatal(err)
+				}
+			})
+
+			if result.err == nil {
+				t.Fatalf("init.sh accepted sandbox mode %04o", mode)
+			}
+			if !strings.Contains(result.output, "sandbox must not be group- or world-writable") {
+				t.Fatalf("failure did not explain unsafe sandbox permissions:\n%s", result.output)
+			}
+		})
+	}
+}
+
+func TestInitRejectsGroupOrWorldWritableSandboxEntries(t *testing.T) {
+	tests := []struct {
+		name   string
+		create func(*testing.T, string)
+	}{
+		{
+			name: "directory",
+			create: func(t *testing.T, sandbox string) {
+				path := filepath.Join(sandbox, "shared")
+				if err := os.Mkdir(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(path, 0770); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "file",
+			create: func(t *testing.T, sandbox string) {
+				path := filepath.Join(sandbox, "shared.txt")
+				if err := os.WriteFile(path, []byte("shared"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(path, 0602); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := executeInitWithSetup(t, "501", "20", "", 0, func(t *testing.T, root string) {
+				sandbox := filepath.Join(root, "sandbox")
+				if err := os.Mkdir(sandbox, 0700); err != nil {
+					t.Fatal(err)
+				}
+				test.create(t, sandbox)
+			})
+
+			if result.err == nil {
+				t.Fatalf("init.sh accepted unsafe %s permissions", test.name)
+			}
+			if !strings.Contains(result.output, "must not be group- or world-writable") {
+				t.Fatalf("failure did not explain unsafe entry permissions:\n%s", result.output)
+			}
+		})
+	}
+}
+
+func TestInitRejectsEnvSymlinkBeforeMutation(t *testing.T) {
+	var target string
+	const original = "EXTERNAL=keep\n"
+	result := executeInitWithSetup(t, "501", "20", "", 0, func(t *testing.T, root string) {
+		if err := os.Remove(filepath.Join(root, ".env")); err != nil {
+			t.Fatal(err)
+		}
+		target = filepath.Join(root, "outside.env")
+		if err := os.WriteFile(target, []byte(original), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(root, ".env")); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	if result.err == nil {
+		t.Fatalf("init.sh accepted .env symlink:\n%s", result.output)
+	}
+	if !strings.Contains(result.output, ".env must be a regular file, not a symlink") {
+		t.Fatalf("failure did not explain .env symlink rejection:\n%s", result.output)
+	}
+	content, err := os.ReadFile(target)
+	if err != nil || string(content) != original {
+		t.Fatalf(".env symlink target changed: content=%q err=%v", content, err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0644 {
+		t.Fatalf(".env symlink target mode changed to %04o", info.Mode().Perm())
+	}
+}
+
+func TestInitRejectsNonRegularEnvBeforeChmod(t *testing.T) {
+	var envDirectory string
+	result := executeInitWithSetup(t, "501", "20", "", 0, func(t *testing.T, root string) {
+		if err := os.Remove(filepath.Join(root, ".env")); err != nil {
+			t.Fatal(err)
+		}
+		envDirectory = filepath.Join(root, ".env")
+		if err := os.Mkdir(envDirectory, 0700); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	if result.err == nil {
+		t.Fatalf("init.sh accepted non-regular .env:\n%s", result.output)
+	}
+	if !strings.Contains(result.output, ".env must be a regular file") {
+		t.Fatalf("failure did not explain non-regular .env rejection:\n%s", result.output)
+	}
+	info, err := os.Stat(envDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0700 {
+		t.Fatalf("non-regular .env was chmodded to %04o", info.Mode().Perm())
+	}
+}
+
 type initResult struct {
 	sandbox  string
+	data     string
 	env      string
+	envErr   error
 	output   string
 	chownLog string
 	err      error
@@ -180,6 +437,9 @@ func runInit(t *testing.T, uid, gid, identityConfig string) initResult {
 	result := executeInit(t, uid, gid, identityConfig, 0)
 	if result.err != nil {
 		t.Fatalf("init.sh failed: %v\n%s", result.err, result.output)
+	}
+	if result.envErr != nil {
+		t.Fatalf("read initialized .env: %v", result.envErr)
 	}
 	return result
 }
@@ -239,15 +499,25 @@ func executeInitWithSetup(t *testing.T, uid, gid, identityConfig string, chownEx
 	)
 	output, commandErr := command.CombinedOutput()
 	updated, err := os.ReadFile(filepath.Join(root, ".env"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	return initResult{
 		sandbox:  filepath.Join(root, "sandbox"),
+		data:     filepath.Join(root, "data"),
 		env:      string(updated),
+		envErr:   err,
 		output:   string(output),
 		chownLog: chownLog,
 		err:      commandErr,
+	}
+}
+
+func assertMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("%s permissions = %04o, want %04o", path, got, want)
 	}
 }
 

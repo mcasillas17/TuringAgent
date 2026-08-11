@@ -79,6 +79,16 @@ func New(cfg config.Config) (*App, error) {
 	chatService := chatsvc.New(repo, eventBus, runtimeService, cfg.OllamaModel, cfg.OpenAIModel)
 	auditService := auditsvc.New(repo)
 	healthService := &HealthServer{schemaVersion: schemaVersion}
+	authFailureRecorder := func(ctx context.Context, failure auth.Failure) error {
+		return auditService.Record(ctx, failure.RequestID, failure.ActorType, failure.Peer, "auth.failed", failure.Method, map[string]any{
+			"method":    failure.Method,
+			"requestId": failure.RequestID,
+			"userAgent": failure.UserAgent,
+			"peer":      failure.Peer,
+		})
+	}
+	publicAuth := auth.InterceptorOptions{ActorType: "client", FailureRecorder: authFailureRecorder}
+	internalAuth := auth.InterceptorOptions{ActorType: "runtime", FailureRecorder: authFailureRecorder}
 	for _, event := range recoveredEvents {
 		eventBus.Publish(eventsvc.Event{
 			EventID: event.EventID, SessionID: event.SessionID, RunID: event.RunID.String,
@@ -87,14 +97,14 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	publicServer := grpc.NewServer(
-		grpc.UnaryInterceptor(auth.UnaryInterceptor(cfg.ClientAPIKey)),
-		grpc.StreamInterceptor(auth.StreamInterceptor(cfg.ClientAPIKey)),
+		grpc.UnaryInterceptor(auth.UnaryInterceptor(cfg.ClientAPIKey, publicAuth)),
+		grpc.StreamInterceptor(auth.StreamInterceptor(cfg.ClientAPIKey, publicAuth)),
 		grpc.MaxRecvMsgSize(maxGRPCMessageSize),
 		grpc.MaxSendMsgSize(maxGRPCMessageSize),
 	)
 	internalServer := grpc.NewServer(
-		grpc.UnaryInterceptor(auth.UnaryInterceptor(cfg.InternalToken)),
-		grpc.StreamInterceptor(auth.StreamInterceptor(cfg.InternalToken)),
+		grpc.UnaryInterceptor(auth.UnaryInterceptor(cfg.InternalToken, internalAuth)),
+		grpc.StreamInterceptor(auth.StreamInterceptor(cfg.InternalToken, internalAuth)),
 		grpc.MaxRecvMsgSize(maxGRPCMessageSize),
 		grpc.MaxSendMsgSize(maxGRPCMessageSize),
 	)
@@ -103,9 +113,9 @@ func New(cfg config.Config) (*App, error) {
 	turingv1.RegisterSessionServiceServer(publicServer, sessionService)
 	turingv1.RegisterEventServiceServer(publicServer, eventService)
 	turingv1.RegisterChatServiceServer(publicServer, chatService)
-	turingv1.RegisterApprovalServiceServer(publicServer, approvalService)
+	turingv1.RegisterApprovalServiceServer(publicServer, approvalsvc.NewPublicServer(approvalService))
 	turingv1.RegisterSessionServiceServer(internalServer, sessionService)
-	turingv1.RegisterApprovalServiceServer(internalServer, approvalService)
+	turingv1.RegisterApprovalServiceServer(internalServer, approvalsvc.NewInternalServer(approvalService))
 	turingv1.RegisterRuntimeServiceServer(internalServer, runtimeService)
 
 	application := &App{

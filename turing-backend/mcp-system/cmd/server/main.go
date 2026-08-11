@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -15,8 +18,19 @@ import (
 )
 
 const maxMCPRequestBytes = 1024 * 1024
+const maxMCPResponseBytes = 1024 * 1024
+const healthcheckTimeout = time.Second
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
+		ctx, cancel := context.WithTimeout(context.Background(), healthcheckTimeout)
+		defer cancel()
+		if err := checkHealth(ctx, "http://127.0.0.1:"+envOrDefault("PORT", "7100")+"/healthz"); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	addr := ":" + envOrDefault("PORT", "7100")
 	log.Printf("starting mcp-system on %s", addr)
 	if err := newHTTPServer(addr, newHandler(os.Getenv("MCP_SYSTEM_TOKEN_GENERAL"))).ListenAndServe(); err != nil {
@@ -37,8 +51,31 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 
 func newHandler(token string) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.Handle("/mcp", auth.RequireBearer(token, http.HandlerFunc(handleMCP)))
 	return mux
+}
+
+func checkHealth(ctx context.Context, endpoint string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("MCP health endpoint returned %s", response.Status)
+	}
+	return nil
 }
 
 func handleMCP(w http.ResponseWriter, r *http.Request) {
@@ -115,11 +152,23 @@ func writeJSONRPC(w http.ResponseWriter, res jsonrpc.Response) {
 }
 
 func writeJSONRPCStatus(w http.ResponseWriter, statusCode int, res jsonrpc.Response) {
+	var payload bytes.Buffer
+	if err := json.NewEncoder(&payload).Encode(res); err != nil {
+		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		return
+	}
+	if payload.Len() > maxMCPResponseBytes {
+		payload.Reset()
+		res.Result = nil
+		res.Error = map[string]any{"code": -32603, "message": "response body too large"}
+		if err := json.NewEncoder(&payload).Encode(res); err != nil {
+			http.Error(w, "failed to encode response", http.StatusInternalServerError)
+			return
+		}
+	}
 	w.Header().Set("content-type", "application/json")
 	w.WriteHeader(statusCode)
-	if err := json.NewEncoder(w).Encode(res); err != nil {
-		http.Error(w, "failed to encode response", http.StatusInternalServerError)
-	}
+	_, _ = w.Write(payload.Bytes())
 }
 
 func parseToolCallParams(req jsonrpc.Request) (string, map[string]any, *jsonrpc.RequestError) {

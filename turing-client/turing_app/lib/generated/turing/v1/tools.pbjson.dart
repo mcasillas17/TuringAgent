@@ -111,6 +111,13 @@ const ToolCallBeacon$json = {
     },
     {'1': 'run_id', '3': 11, '4': 1, '5': 9, '10': 'runId'},
     {'1': 'trace_id', '3': 12, '4': 1, '5': 9, '10': 'traceId'},
+    {
+      '1': 'model_tool_call_id',
+      '3': 13,
+      '4': 1,
+      '5': 9,
+      '10': 'modelToolCallId'
+    },
   ],
 };
 
@@ -124,7 +131,8 @@ final $typed_data.Uint8List toolCallBeaconDescriptor = $convert.base64Decode(
     '52MS5Ub29sQ2FsbFN0YXR1c1IGc3RhdHVzEiUKDnJlc3VsdF9zdW1tYXJ5GAggASgJUg1yZXN1'
     'bHRTdW1tYXJ5Eh8KC2R1cmF0aW9uX21zGAkgASgDUgpkdXJhdGlvbk1zEi4KBWVycm9yGAogAS'
     'gLMhgudHVyaW5nLnYxLlRvb2xDYWxsRXJyb3JSBWVycm9yEhUKBnJ1bl9pZBgLIAEoCVIFcnVu'
-    'SWQSGQoIdHJhY2VfaWQYDCABKAlSB3RyYWNlSWQ=');
+    'SWQSGQoIdHJhY2VfaWQYDCABKAlSB3RyYWNlSWQSKwoSbW9kZWxfdG9vbF9jYWxsX2lkGA0gAS'
+    'gJUg9tb2RlbFRvb2xDYWxsSWQ=');
 
 @$core.Deprecated('Use toolPolicyDecisionDescriptor instead')
 const ToolPolicyDecision$json = {
@@ -141,6 +149,7 @@ const ToolPolicyDecision$json = {
     {'1': 'tool_call_id', '3': 2, '4': 1, '5': 9, '10': 'toolCallId'},
     {'1': 'approval_id', '3': 3, '4': 1, '5': 9, '10': 'approvalId'},
     {'1': 'reason', '3': 4, '4': 1, '5': 9, '10': 'reason'},
+    {'1': 'terminal_run', '3': 5, '4': 1, '5': 8, '10': 'terminalRun'},
   ],
   '4': [ToolPolicyDecision_Decision$json],
 };
@@ -161,6 +170,6 @@ final $typed_data.Uint8List toolPolicyDecisionDescriptor = $convert.base64Decode
     'ChJUb29sUG9saWN5RGVjaXNpb24SQgoIZGVjaXNpb24YASABKA4yJi50dXJpbmcudjEuVG9vbF'
     'BvbGljeURlY2lzaW9uLkRlY2lzaW9uUghkZWNpc2lvbhIgCgx0b29sX2NhbGxfaWQYAiABKAlS'
     'CnRvb2xDYWxsSWQSHwoLYXBwcm92YWxfaWQYAyABKAlSCmFwcHJvdmFsSWQSFgoGcmVhc29uGA'
-    'QgASgJUgZyZWFzb24iawoIRGVjaXNpb24SGAoUREVDSVNJT05fVU5TUEVDSUZJRUQQABISCg5E'
-    'RUNJU0lPTl9BTExPVxABEhEKDURFQ0lTSU9OX0RFTlkQAhIeChpERUNJU0lPTl9BUFBST1ZBTF'
-    '9SRVFVSVJFRBAD');
+    'QgASgJUgZyZWFzb24SIQoMdGVybWluYWxfcnVuGAUgASgIUgt0ZXJtaW5hbFJ1biJrCghEZWNp'
+    'c2lvbhIYChRERUNJU0lPTl9VTlNQRUNJRklFRBAAEhIKDkRFQ0lTSU9OX0FMTE9XEAESEQoNRE'
+    'VDSVNJT05fREVOWRACEh4KGkRFQ0lTSU9OX0FQUFJPVkFMX1JFUVVJUkVEEAM=');

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -229,6 +230,95 @@ func TestEventServiceCatchesEventsPublishedBetweenReplayAndSubscribe(t *testing.
 	}
 }
 
+func TestEventServiceReplaysOverflowGapAndDeliversTerminalExactlyOnce(t *testing.T) {
+	database := openEventTestDB(t)
+	repo := repository.New(database)
+	bus := NewBus(128)
+	server := NewServer(repo, bus)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	session, err := repo.CreateSession(ctx, "Slow subscriber")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &slowEventStream{
+		ctx: ctx, cancel: cancel, firstStarted: make(chan struct{}), releaseFirst: make(chan struct{}),
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- server.SubscribeSessionEvents(&turingv1.SubscribeSessionEventsRequest{SessionId: session.SessionID}, stream)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		bus.mu.Lock()
+		subscribers := len(bus.subs)
+		bus.mu.Unlock()
+		if subscribers == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("event service did not subscribe to bus")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	appendAndPublish := func(eventType string, payload string) {
+		t.Helper()
+		event, err := repo.AppendEvent(context.Background(), repository.AppendEventInput{
+			SessionID: session.SessionID, TraceID: "trace_slow", Type: eventType, PayloadJSON: payload,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		bus.Publish(Event{
+			EventID: event.EventID, SessionID: event.SessionID, TraceID: event.TraceID,
+			Sequence: event.Sequence, Type: event.Type, CreatedAt: event.CreatedAt, PayloadJSON: event.PayloadJSON,
+		})
+	}
+	appendAndPublish("message.delta", `{"delta":"1"}`)
+	select {
+	case <-stream.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("slow subscriber did not block on first event")
+	}
+	for sequence := 2; sequence <= 140; sequence++ {
+		eventType := "message.delta"
+		payload := fmt.Sprintf(`{"delta":"%d"}`, sequence)
+		if sequence == 140 {
+			eventType = "agent.run.completed"
+			payload = `{"runId":"run_slow"}`
+		}
+		appendAndPublish(eventType, payload)
+	}
+	close(stream.releaseFirst)
+	select {
+	case err := <-done:
+		if status.Code(err) != codes.Canceled {
+			t.Fatalf("SubscribeSessionEvents error = %v, want canceled after terminal delivery", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("slow subscriber was stranded after event bus overflow")
+	}
+
+	sent := stream.snapshot()
+	if len(sent) != 140 {
+		t.Fatalf("delivered %d events, want durable sequences 1..140 exactly once", len(sent))
+	}
+	terminalCount := 0
+	for index, event := range sent {
+		wantSequence := int64(index + 1)
+		if event.GetSequence() != wantSequence {
+			t.Fatalf("sent[%d] sequence = %d, want %d", index, event.GetSequence(), wantSequence)
+		}
+		if event.GetType() == turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_COMPLETED {
+			terminalCount++
+		}
+	}
+	if terminalCount != 1 {
+		t.Fatalf("terminal event count = %d, want exactly 1", terminalCount)
+	}
+}
+
 type fakeEventStream struct {
 	ctx       context.Context
 	sent      []*turingv1.TuringEvent
@@ -258,3 +348,42 @@ func (s *fakeEventStream) Context() context.Context { return s.ctx }
 func (s *fakeEventStream) SendMsg(any) error { return nil }
 
 func (s *fakeEventStream) RecvMsg(any) error { return nil }
+
+type slowEventStream struct {
+	ctx          context.Context
+	cancel       context.CancelFunc
+	firstStarted chan struct{}
+	releaseFirst chan struct{}
+	firstOnce    sync.Once
+	mu           sync.Mutex
+	sent         []*turingv1.TuringEvent
+}
+
+func (s *slowEventStream) Send(event *turingv1.TuringEvent) error {
+	if event.GetSequence() == 1 {
+		s.firstOnce.Do(func() {
+			close(s.firstStarted)
+			<-s.releaseFirst
+		})
+	}
+	s.mu.Lock()
+	s.sent = append(s.sent, event)
+	s.mu.Unlock()
+	if event.GetType() == turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_COMPLETED {
+		s.cancel()
+	}
+	return nil
+}
+
+func (s *slowEventStream) snapshot() []*turingv1.TuringEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*turingv1.TuringEvent(nil), s.sent...)
+}
+
+func (s *slowEventStream) SetHeader(metadata.MD) error  { return nil }
+func (s *slowEventStream) SendHeader(metadata.MD) error { return nil }
+func (s *slowEventStream) SetTrailer(metadata.MD)       {}
+func (s *slowEventStream) Context() context.Context     { return s.ctx }
+func (s *slowEventStream) SendMsg(any) error            { return nil }
+func (s *slowEventStream) RecvMsg(any) error            { return nil }

@@ -19,6 +19,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestExecuteRejectsNilJob(t *testing.T) {
@@ -64,6 +65,30 @@ func TestExecuteAddsFallbackWhenIterationCapHasNoVisibleContent(t *testing.T) {
 	completed := updates[len(updates)-1].GetRunCompleted()
 	if completed == nil || completed.Content != fallback {
 		t.Fatalf("run completion = %+v, want fallback content", completed)
+	}
+}
+
+func TestExecuteReplacesWhitespaceOnlyIterationCapContentWithFallback(t *testing.T) {
+	provider := &whitespaceLoopingToolProvider{}
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{"name": "system.repeat"}},
+		result:      map[string]any{"ok": true},
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{SystemMCP: client, Runner: &tools.Runner{PostBeacon: allowToolCall}},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	completed := updates[len(updates)-1].GetRunCompleted()
+	if completed == nil || completed.Content != toolIterationFallback {
+		t.Fatalf("run completion = %+v, want fallback %q", completed, toolIterationFallback)
+	}
+	fallbackDelta := updates[len(updates)-3].GetEvent()
+	if fallbackDelta == nil || fallbackDelta.GetPayload().AsMap()["delta"] != toolIterationFallback {
+		t.Fatalf("fallback delta = %+v, want %q", fallbackDelta, toolIterationFallback)
 	}
 }
 
@@ -142,6 +167,41 @@ func TestExecuteRejectsModelOutputBeyondAggregateByteLimit(t *testing.T) {
 		turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA,
 	}) {
 		t.Fatalf("event types = %v, want started and only the in-limit delta", got)
+	}
+}
+
+func TestMaximumModelOutputCompletionUpdatesFitGRPCTransport(t *testing.T) {
+	const maxGRPCMessageBytes = 4 * 1024 * 1024
+	job := testJob()
+	job.RunId = "run_" + strings.Repeat("r", 26)
+	job.SessionId = "sess_" + strings.Repeat("s", 26)
+	job.AssistantMessageId = "msg_" + strings.Repeat("m", 26)
+	job.TraceId = "trace_" + strings.Repeat("t", 26)
+
+	var updates []*turingv1.RuntimeUpdate
+	err := completeRun(func(update *turingv1.RuntimeUpdate) error {
+		updates = append(updates, update)
+		return nil
+	}, job, strings.Repeat("x", maxModelOutputBytes))
+	if err != nil {
+		t.Fatalf("completeRun returned error: %v", err)
+	}
+	if len(updates) != 2 {
+		t.Fatalf("completion updates = %d, want message.completed and run_completed", len(updates))
+	}
+	for index, update := range updates {
+		encoded, err := proto.Marshal(update)
+		if err != nil {
+			t.Fatalf("marshal completion update %d: %v", index, err)
+		}
+		if len(encoded) >= maxGRPCMessageBytes {
+			t.Errorf(
+				"completion update %d serialized bytes = %d, want below %d-byte gRPC transport limit",
+				index,
+				len(encoded),
+				maxGRPCMessageBytes,
+			)
+		}
 	}
 }
 
@@ -2778,6 +2838,23 @@ func (p *loopingToolProvider) StreamChat(context.Context, llm.ChatRequest) (<-ch
 
 type silentLoopingToolProvider struct {
 	calls int
+}
+
+type whitespaceLoopingToolProvider struct {
+	calls int
+}
+
+func (p *whitespaceLoopingToolProvider) ID() string { return "whitespace-looping" }
+
+func (p *whitespaceLoopingToolProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	p.calls++
+	out := make(chan llm.StreamEvent, 2)
+	out <- llm.StreamEvent{Type: "delta", Text: " \n\t"}
+	out <- llm.StreamEvent{Type: "tool_call", ToolCalls: []llm.ToolCall{{
+		ID: fmt.Sprintf("call_%d", p.calls), Name: "system.repeat",
+	}}}
+	close(out)
+	return out, nil
 }
 
 func (p *silentLoopingToolProvider) ID() string { return "silent-looping" }

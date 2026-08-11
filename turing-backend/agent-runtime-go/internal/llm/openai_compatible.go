@@ -45,17 +45,20 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 	if err != nil {
 		return nil, err
 	}
-	messages, err := openAIMessages(req.Messages, aliases.byOriginal)
-	if err != nil {
-		return nil, err
-	}
-	body, err := json.Marshal(openAIChatRequest{
-		Model:       req.Model,
-		Messages:    messages,
-		Stream:      true,
-		Temperature: req.Temperature,
-		MaxTokens:   req.MaxTokens,
-		Tools:       openAITools(req.Tools, aliases.byOriginal),
+	tools := openAITools(req.Tools, aliases.byOriginal)
+	body, err := marshalProviderRequest("OpenAI-compatible", req.Messages, func(messages []ChatMessage) ([]byte, error) {
+		converted, err := openAIMessages(messages, aliases.byOriginal)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(openAIChatRequest{
+			Model:       req.Model,
+			Messages:    converted,
+			Stream:      true,
+			Temperature: req.Temperature,
+			MaxTokens:   req.MaxTokens,
+			Tools:       tools,
+		})
 	})
 	if err != nil {
 		return nil, err

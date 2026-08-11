@@ -329,6 +329,69 @@ func TestSessionServiceListsMessagesOnlyBeforeBoundary(t *testing.T) {
 	}
 }
 
+func TestListToolsFiltersUnavailableMCPServers(t *testing.T) {
+	h := newSessionHarness(t)
+	server := New(h.repo, config.Config{MCPSystemTokenGeneral: "system-token"})
+
+	response, err := server.ListTools(context.Background(), &turingv1.ListToolsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Tools) != 4 {
+		t.Fatalf("system-only tool count = %d, want 4: %+v", len(response.Tools), response.Tools)
+	}
+	for _, tool := range response.Tools {
+		if tool.ServerName != "system" || !strings.HasPrefix(tool.ToolName, "system.") {
+			t.Fatalf("unavailable server tool was advertised: %+v", tool)
+		}
+	}
+}
+
+func TestListMessagesBeforeAssignedTurnExcludesRapidlyQueuedLaterTurns(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	created, err := client.CreateSession(ctx, &turingv1.CreateSessionRequest{Title: "Rapid send"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: created.SessionId, Content: "first", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: created.SessionId, Content: "second", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: created.SessionId, Content: "third", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := client.ListMessages(ctx, &turingv1.ListMessagesRequest{
+		SessionId:       created.SessionId,
+		Limit:           50,
+		BeforeMessageId: second.UserMessageID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 2 {
+		t.Fatalf("message count = %d, want first turn only: %+v", len(got.Messages), got.Messages)
+	}
+	if got.Messages[0].MessageId != first.UserMessageID || got.Messages[0].Sequence != 1 {
+		t.Fatalf("messages[0] = %+v, want first user at sequence 1", got.Messages[0])
+	}
+	if got.Messages[1].MessageId != first.AssistantMessageID || got.Messages[1].Sequence != 2 {
+		t.Fatalf("messages[1] = %+v, want first assistant at sequence 2", got.Messages[1])
+	}
+}
+
 func insertServiceSearchSession(t *testing.T, ctx context.Context, database *db.DB, id string) {
 	t.Helper()
 	_, err := database.ExecContext(ctx, `INSERT INTO sessions (id, created_at, updated_at) VALUES (?, '2026-08-10T00:00:00Z', '2026-08-10T00:00:00Z')`, id)

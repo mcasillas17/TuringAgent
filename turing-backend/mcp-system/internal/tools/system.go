@@ -3,7 +3,10 @@ package tools
 import (
 	"runtime"
 	"time"
+	"unicode/utf8"
 )
+
+const MaxEchoCharacters = 64 * 1024
 
 func List() []map[string]any {
 	emptySchema := map[string]any{
@@ -18,8 +21,12 @@ func List() []map[string]any {
 			"name":        "system.echo",
 			"description": "Echo the supplied text, or an empty string when text is omitted.",
 			"inputSchema": map[string]any{
-				"type":                 "object",
-				"properties":           map[string]any{"text": map[string]any{"type": "string"}},
+				"type": "object",
+				"properties": map[string]any{"text": map[string]any{
+					"type":        "string",
+					"maxLength":   MaxEchoCharacters,
+					"description": "Text to echo, limited to 65536 Unicode characters.",
+				}},
 				"additionalProperties": false,
 			},
 			"policy": "safe",
@@ -53,6 +60,9 @@ func Call(name string, args map[string]any) (map[string]any, error) {
 			text, valid = value.(string)
 			if !valid {
 				return nil, invalidParams("text must be a string")
+			}
+			if utf8.RuneCountInString(text) > MaxEchoCharacters {
+				return nil, invalidParamsf("text exceeds %d-character limit", MaxEchoCharacters)
 			}
 		}
 		return map[string]any{"text": text}, nil

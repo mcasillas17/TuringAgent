@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestAmbiguousAssignmentSendKeepsAttemptFenced(t *testing.T) {
@@ -383,11 +384,11 @@ func TestDelayedIdenticalAfterDoesNotCloseWorkerStream(t *testing.T) {
 	recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
 		return command.GetToolPolicyDecision() != nil && command.GetToolPolicyDecision().GetToolCallId() == beacon.ToolCallId
 	})
-	after := *beacon
+	after := proto.Clone(beacon).(*turingv1.ToolCallBeacon)
 	after.Phase = turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER
 	after.Status = turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED
 	after.Error = &turingv1.ToolCallError{Code: "cancelled", Message: "cancelled"}
-	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &after}}); err != nil {
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: after}}); err != nil {
 		t.Fatal(err)
 	}
 	recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
@@ -399,7 +400,7 @@ func TestDelayedIdenticalAfterDoesNotCloseWorkerStream(t *testing.T) {
 	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: first.RunID}}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &after}}); err != nil {
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: after}}); err != nil {
 		t.Fatal(err)
 	}
 	decision := recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
@@ -409,7 +410,7 @@ func TestDelayedIdenticalAfterDoesNotCloseWorkerStream(t *testing.T) {
 		t.Fatalf("late cleanup decision = %+v, want allow", decision)
 	}
 	after.Error = &turingv1.ToolCallError{Code: "cancelled", Message: "conflicting cleanup"}
-	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &after}}); err != nil {
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: after}}); err != nil {
 		t.Fatal(err)
 	}
 	conflict := recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {

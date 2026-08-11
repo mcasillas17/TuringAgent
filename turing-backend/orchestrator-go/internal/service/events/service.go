@@ -3,6 +3,7 @@ package events
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -55,33 +56,22 @@ func (s *Server) SubscribeSessionEvents(req *turingv1.SubscribeSessionEventsRequ
 		return status.Error(codes.InvalidArgument, "after_sequence must be non-negative")
 	}
 	ctx := stream.Context()
-	events, _, err := s.repo.ReplayEvents(ctx, req.SessionId, req.AfterSequence, 500)
-	if err != nil {
-		return status.Error(codes.Internal, "replay events failed")
-	}
 	lastSent := req.AfterSequence
-	for _, event := range events {
-		if err := stream.Send(mapEvent(event)); err != nil {
-			return err
+	if err := s.replayAvailable(ctx, req.SessionId, &lastSent, stream); err != nil {
+		var sendErr *eventStreamSendError
+		if errors.As(err, &sendErr) {
+			return sendErr.err
 		}
-		if event.Sequence > lastSent {
-			lastSent = event.Sequence
-		}
+		return status.Error(codes.Internal, "replay events failed")
 	}
 	ch, unsubscribe := s.bus.Subscribe(req.SessionId)
 	defer unsubscribe()
-	catchup, _, err := s.repo.ReplayEvents(ctx, req.SessionId, lastSent, 500)
-	if err != nil {
+	if err := s.replayAvailable(ctx, req.SessionId, &lastSent, stream); err != nil {
+		var sendErr *eventStreamSendError
+		if errors.As(err, &sendErr) {
+			return sendErr.err
+		}
 		return status.Error(codes.Internal, "replay events failed")
-	}
-	for _, event := range catchup {
-		if event.Sequence <= lastSent {
-			continue
-		}
-		if err := stream.Send(mapEvent(event)); err != nil {
-			return err
-		}
-		lastSent = event.Sequence
 	}
 	for {
 		select {
@@ -94,12 +84,61 @@ func (s *Server) SubscribeSessionEvents(req *turingv1.SubscribeSessionEventsRequ
 			if event.Sequence <= lastSent {
 				continue
 			}
+			if event.Sequence > lastSent+1 {
+				if err := s.replayAvailable(ctx, req.SessionId, &lastSent, stream); err != nil {
+					var sendErr *eventStreamSendError
+					if errors.As(err, &sendErr) {
+						return sendErr.err
+					}
+					if ctx.Err() != nil {
+						return status.Error(codes.Canceled, "client cancelled event stream")
+					}
+					return status.Error(codes.Internal, "replay events failed")
+				}
+				if event.Sequence <= lastSent {
+					continue
+				}
+			}
 			if err := stream.Send(mapBusEvent(event)); err != nil {
 				return err
 			}
 			lastSent = event.Sequence
 		}
 	}
+}
+
+func (s *Server) replayAvailable(ctx context.Context, sessionID string, lastSent *int64, stream turingv1.EventService_SubscribeSessionEventsServer) error {
+	const replayLimit = 500
+	for {
+		replayed, _, err := s.repo.ReplayEvents(ctx, sessionID, *lastSent, replayLimit)
+		if err != nil {
+			return err
+		}
+		for _, event := range replayed {
+			if event.Sequence <= *lastSent {
+				continue
+			}
+			if err := stream.Send(mapEvent(event)); err != nil {
+				return &eventStreamSendError{err: err}
+			}
+			*lastSent = event.Sequence
+		}
+		if len(replayed) < replayLimit {
+			return nil
+		}
+	}
+}
+
+type eventStreamSendError struct {
+	err error
+}
+
+func (e *eventStreamSendError) Error() string {
+	return e.err.Error()
+}
+
+func (e *eventStreamSendError) Unwrap() error {
+	return e.err
 }
 
 func mapEvent(event repository.Event) *turingv1.TuringEvent {

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 )
@@ -223,15 +224,15 @@ func (r *Repository) DenyApproval(ctx context.Context, approvalID string, decide
 }
 
 func (r *Repository) ExpireApprovalWithEvent(ctx context.Context, approvalID string, decidedAt string) (ApprovalTerminalization, error) {
-	return r.terminalizeApproval(ctx, approvalID, decidedAt, "expired", "approval_expired", "Approval expired", "failed", "approval.expired")
+	return r.terminalizeApproval(ctx, approvalID, decidedAt, "expired", "approval_expired", "Approval expired", "failed", "approval.expired", false)
 }
 
 func (r *Repository) DenyApprovalWithEvent(ctx context.Context, approvalID string, decidedAt string) (ApprovalTerminalization, error) {
-	return r.terminalizeApproval(ctx, approvalID, decidedAt, "denied", "approval_denied", "User denied approval", "denied", "approval.denied")
+	return r.terminalizeApproval(ctx, approvalID, decidedAt, "denied", "approval_denied", "User denied approval", "denied", "approval.denied", true)
 }
 
 func (r *Repository) FailApprovalDeliveryWithEvent(ctx context.Context, approvalID string, decidedAt string) (ApprovalTerminalization, error) {
-	return r.terminalizeApproval(ctx, approvalID, decidedAt, "denied", "approval_delivery_failed", "Tool policy decision delivery failed", "failed", "")
+	return r.terminalizeApproval(ctx, approvalID, decidedAt, "denied", "approval_delivery_failed", "Tool policy decision delivery failed", "failed", "", false)
 }
 
 func (r *Repository) terminalizeApproval(
@@ -243,6 +244,7 @@ func (r *Repository) terminalizeApproval(
 	errorMessage string,
 	toolCallStatus string,
 	approvalEventType string,
+	expireAtDeadline bool,
 ) (ApprovalTerminalization, error) {
 	if decidedAt == "" {
 		decidedAt = now()
@@ -264,6 +266,13 @@ func (r *Repository) terminalizeApproval(
 	}
 	if record.Status != "pending" {
 		return ApprovalTerminalization{}, errors.New("approval is not pending")
+	}
+	if expireAtDeadline && approvalExpiredAtDecision(record.ExpiresAt, decidedAt) {
+		approvalStatus = "expired"
+		errorCode = "approval_expired"
+		errorMessage = "Approval expired"
+		toolCallStatus = "failed"
+		approvalEventType = "approval.expired"
 	}
 	var sessionID, traceID, runStatus string
 	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id, status FROM agent_runs WHERE id = ?`, record.RunID).Scan(&sessionID, &traceID, &runStatus); err != nil {
@@ -361,6 +370,18 @@ func (r *Repository) terminalizeApproval(
 		return ApprovalTerminalization{}, err
 	}
 	return ApprovalTerminalization{Approval: record, ApprovalEvent: approvalEvent, RunFailedEvent: event, Changed: true}, nil
+}
+
+func approvalExpiredAtDecision(expiresAt string, decidedAt string) bool {
+	expiry, err := time.Parse(time.RFC3339Nano, expiresAt)
+	if err != nil {
+		return true
+	}
+	decision, err := time.Parse(time.RFC3339Nano, decidedAt)
+	if err != nil {
+		return true
+	}
+	return !expiry.After(decision)
 }
 
 func validateLateApprovalRuntimeFailure(ctx context.Context, tx *sql.Tx, record ApprovalRecord) error {

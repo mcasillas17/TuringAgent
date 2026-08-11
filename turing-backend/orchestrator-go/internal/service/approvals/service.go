@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -31,11 +32,24 @@ type Server struct {
 	approvalTTL time.Duration
 }
 
+type PublicServer struct {
+	turingv1.UnimplementedApprovalServiceServer
+	service *Server
+}
+
+type InternalServer struct {
+	turingv1.UnimplementedApprovalServiceServer
+	service *Server
+}
+
 type Notifier interface {
 	NotifyApprovalUpdated(ctx context.Context, runID string, approvalID string, status string, approvalToken string) error
 }
 
-const defaultApprovalTTL = 65 * time.Second
+const (
+	defaultApprovalTTL = 65 * time.Second
+	postCommitTimeout  = 5 * time.Second
+)
 
 func New(repo *repository.Repository, bus *events.Bus, jwtSecret string, approvalTTLs ...time.Duration) *Server {
 	approvalTTL := defaultApprovalTTL
@@ -43,6 +57,46 @@ func New(repo *repository.Repository, bus *events.Bus, jwtSecret string, approva
 		approvalTTL = approvalTTLs[0]
 	}
 	return &Server{repo: repo, bus: bus, audit: audit.New(repo), jwtSecret: jwtSecret, approvalTTL: approvalTTL}
+}
+
+func NewPublicServer(service *Server) *PublicServer {
+	return &PublicServer{service: service}
+}
+
+func NewInternalServer(service *Server) *InternalServer {
+	return &InternalServer{service: service}
+}
+
+func (s *PublicServer) ApproveApproval(ctx context.Context, req *turingv1.ApproveApprovalRequest) (*turingv1.ApprovalResponse, error) {
+	return s.service.ApproveApproval(ctx, req)
+}
+
+func (s *PublicServer) DenyApproval(ctx context.Context, req *turingv1.DenyApprovalRequest) (*turingv1.ApprovalResponse, error) {
+	return s.service.DenyApproval(ctx, req)
+}
+
+func (*PublicServer) GetApprovalForRuntime(context.Context, *turingv1.GetApprovalForRuntimeRequest) (*turingv1.RuntimeApprovalState, error) {
+	return nil, status.Error(codes.PermissionDenied, "runtime approval method is internal")
+}
+
+func (*PublicServer) ConsumeApproval(context.Context, *turingv1.ConsumeApprovalRequest) (*turingv1.ApprovalResponse, error) {
+	return nil, status.Error(codes.PermissionDenied, "runtime approval method is internal")
+}
+
+func (*InternalServer) ApproveApproval(context.Context, *turingv1.ApproveApprovalRequest) (*turingv1.ApprovalResponse, error) {
+	return nil, status.Error(codes.PermissionDenied, "human approval method is public")
+}
+
+func (*InternalServer) DenyApproval(context.Context, *turingv1.DenyApprovalRequest) (*turingv1.ApprovalResponse, error) {
+	return nil, status.Error(codes.PermissionDenied, "human approval method is public")
+}
+
+func (s *InternalServer) GetApprovalForRuntime(ctx context.Context, req *turingv1.GetApprovalForRuntimeRequest) (*turingv1.RuntimeApprovalState, error) {
+	return s.service.GetApprovalForRuntime(ctx, req)
+}
+
+func (s *InternalServer) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeApprovalRequest) (*turingv1.ApprovalResponse, error) {
+	return s.service.ConsumeApproval(ctx, req)
 }
 
 func (s *Server) SetNotifier(notifier Notifier) {
@@ -103,10 +157,7 @@ func (s *Server) ApproveApproval(ctx context.Context, req *turingv1.ApproveAppro
 	if transition.ApprovalEvent.EventID != "" {
 		s.publishEvent(transition.ApprovalEvent)
 	}
-	_ = s.audit.Record(ctx, approved.RunID, "client", "", "approval.approved", approved.ApprovalID, map[string]any{"toolName": approved.ToolName})
-	if s.notifier != nil {
-		_ = s.notifier.NotifyApprovalUpdated(ctx, approved.RunID, approved.ApprovalID, "approved", approved.ApprovalToken)
-	}
+	s.finishPostCommit(approved, "client", "approval.approved", "approved", approved.ApprovalToken)
 	return &turingv1.ApprovalResponse{ApprovalId: approved.ApprovalID, Status: turingv1.ApprovalStatus_APPROVAL_STATUS_APPROVED}, nil
 }
 
@@ -128,10 +179,11 @@ func (s *Server) DenyApproval(ctx context.Context, req *turingv1.DenyApprovalReq
 	if transition.ApprovalEvent.EventID != "" {
 		s.publishEvent(transition.ApprovalEvent)
 	}
-	_ = s.audit.Record(ctx, denied.RunID, "client", "", "approval.denied", denied.ApprovalID, map[string]any{"toolName": denied.ToolName})
-	if s.notifier != nil {
-		_ = s.notifier.NotifyApprovalUpdated(ctx, denied.RunID, denied.ApprovalID, "denied", "")
+	if denied.Status == "expired" {
+		s.finishPostCommit(denied, "system", "approval.expired", "expired", "")
+		return nil, status.Error(codes.FailedPrecondition, "approval expired")
 	}
+	s.finishPostCommit(denied, "client", "approval.denied", "denied", "")
 	return &turingv1.ApprovalResponse{ApprovalId: denied.ApprovalID, Status: turingv1.ApprovalStatus_APPROVAL_STATUS_DENIED}, nil
 }
 
@@ -211,11 +263,24 @@ func (s *Server) expireApproval(ctx context.Context, approvalID string) (reposit
 	if transition.ApprovalEvent.EventID != "" {
 		s.publishEvent(transition.ApprovalEvent)
 	}
-	_ = s.audit.Record(ctx, expiredApproval.RunID, "system", "", "approval.expired", expiredApproval.ApprovalID, map[string]any{"toolName": expiredApproval.ToolName})
-	if s.notifier != nil {
-		_ = s.notifier.NotifyApprovalUpdated(ctx, expiredApproval.RunID, expiredApproval.ApprovalID, "expired", "")
-	}
+	s.finishPostCommit(expiredApproval, "system", "approval.expired", "expired", "")
 	return expiredApproval, nil
+}
+
+func (s *Server) finishPostCommit(approval repository.ApprovalRecord, actorType string, action string, approvalStatus string, approvalToken string) {
+	auditCtx, cancelAudit := context.WithTimeout(context.Background(), postCommitTimeout)
+	if err := s.audit.Record(auditCtx, approval.RunID, actorType, "", action, approval.ApprovalID, map[string]any{"toolName": approval.ToolName}); err != nil {
+		log.Printf("record %s audit for %s: %v", action, approval.ApprovalID, err)
+	}
+	cancelAudit()
+	if s.notifier == nil {
+		return
+	}
+	notifyCtx, cancelNotify := context.WithTimeout(context.Background(), postCommitTimeout)
+	if err := s.notifier.NotifyApprovalUpdated(notifyCtx, approval.RunID, approval.ApprovalID, approvalStatus, approvalToken); err != nil {
+		log.Printf("notify %s approval %s: %v", approvalStatus, approval.ApprovalID, err)
+	}
+	cancelNotify()
 }
 
 func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeApprovalRequest) (*turingv1.ApprovalResponse, error) {

@@ -105,6 +105,7 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
     ToolCallError? error,
     $core.String? runId,
     $core.String? traceId,
+    $core.String? modelToolCallId,
   }) {
     final result = create();
     if (phase != null) result.phase = phase;
@@ -119,6 +120,7 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
     if (error != null) result.error = error;
     if (runId != null) result.runId = runId;
     if (traceId != null) result.traceId = traceId;
+    if (modelToolCallId != null) result.modelToolCallId = modelToolCallId;
     return result;
   }
 
@@ -158,6 +160,7 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
         subBuilder: ToolCallError.create)
     ..aOS(11, _omitFieldNames ? '' : 'runId')
     ..aOS(12, _omitFieldNames ? '' : 'traceId')
+    ..aOS(13, _omitFieldNames ? '' : 'modelToolCallId')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -292,6 +295,15 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
   $core.bool hasTraceId() => $_has(11);
   @$pb.TagNumber(12)
   void clearTraceId() => $_clearField(12);
+
+  @$pb.TagNumber(13)
+  $core.String get modelToolCallId => $_getSZ(12);
+  @$pb.TagNumber(13)
+  set modelToolCallId($core.String value) => $_setString(12, value);
+  @$pb.TagNumber(13)
+  $core.bool hasModelToolCallId() => $_has(12);
+  @$pb.TagNumber(13)
+  void clearModelToolCallId() => $_clearField(13);
 }
 
 class ToolPolicyDecision extends $pb.GeneratedMessage {
@@ -300,12 +312,14 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
     $core.String? toolCallId,
     $core.String? approvalId,
     $core.String? reason,
+    $core.bool? terminalRun,
   }) {
     final result = create();
     if (decision != null) result.decision = decision;
     if (toolCallId != null) result.toolCallId = toolCallId;
     if (approvalId != null) result.approvalId = approvalId;
     if (reason != null) result.reason = reason;
+    if (terminalRun != null) result.terminalRun = terminalRun;
     return result;
   }
 
@@ -330,6 +344,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
     ..aOS(2, _omitFieldNames ? '' : 'toolCallId')
     ..aOS(3, _omitFieldNames ? '' : 'approvalId')
     ..aOS(4, _omitFieldNames ? '' : 'reason')
+    ..aOB(5, _omitFieldNames ? '' : 'terminalRun')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -388,6 +403,15 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
   $core.bool hasReason() => $_has(3);
   @$pb.TagNumber(4)
   void clearReason() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.bool get terminalRun => $_getBF(4);
+  @$pb.TagNumber(5)
+  set terminalRun($core.bool value) => $_setBool(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasTerminalRun() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearTerminalRun() => $_clearField(5);
 }
 
 const $core.bool _omitFieldNames =

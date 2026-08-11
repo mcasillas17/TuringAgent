@@ -32,6 +32,7 @@ type Options struct {
 	WorkerID                 string
 	AgentID                  turingv1.AgentId
 	MaxConcurrentRuns        int
+	HeartbeatInterval        time.Duration
 	DisconnectCleanupTimeout time.Duration
 }
 
@@ -64,7 +65,11 @@ type activeRun struct {
 	terminalReportOnce sync.Once
 }
 
-const terminalUpdateSendTimeout = 5 * time.Second
+const (
+	terminalUpdateSendTimeout = 5 * time.Second
+	defaultHeartbeatInterval  = 30 * time.Second
+	maxConcurrentRuns         = 128
+)
 
 var errOutboundWriterStopped = errors.New("runtime outbound writer stopped")
 var errShutdownRequested = errors.New("runtime shutdown requested")
@@ -264,6 +269,9 @@ func New(options Options, client RuntimeClient, executor Executor) *Worker {
 	if options.MaxConcurrentRuns <= 0 {
 		options.MaxConcurrentRuns = 1
 	}
+	if options.HeartbeatInterval <= 0 {
+		options.HeartbeatInterval = defaultHeartbeatInterval
+	}
 	return &Worker{options: options, client: client, executor: executor, active: map[string]*activeRun{}, approvals: map[string]string{}, toolCalls: map[string]string{}, decisions: map[string][]*decisionWaiter{}}
 }
 
@@ -273,6 +281,9 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 	if w.executor == nil {
 		return errors.New("executor is required")
+	}
+	if w.options.MaxConcurrentRuns < 1 || w.options.MaxConcurrentRuns > maxConcurrentRuns {
+		return errors.New("max concurrent runs must be between 1 and 128")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -309,6 +320,8 @@ func (w *Worker) Run(ctx context.Context) error {
 		err     error
 	}
 	received := make(chan receiveResult, 1)
+	heartbeat := time.NewTicker(w.options.HeartbeatInterval)
+	defer heartbeat.Stop()
 	stopReceive := make(chan struct{})
 	defer close(stopReceive)
 	go func() {
@@ -330,6 +343,12 @@ func (w *Worker) Run(ctx context.Context) error {
 			return ctx.Err()
 		case err := <-fatal:
 			return err
+		case <-heartbeat.C:
+			if err := w.send(streamCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Heartbeat{Heartbeat: &turingv1.RuntimeHeartbeat{
+				WorkerId: w.options.WorkerID,
+			}}}); err != nil {
+				return err
+			}
 		case result := <-received:
 			if result.err != nil {
 				return result.err

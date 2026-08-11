@@ -77,7 +77,7 @@ func TestClientCancellationTerminalizesApprovalAndKeepsWorkerUsable(t *testing.T
 	cancel()
 
 	waitForCancelledRun(t, harness, runID)
-	state, err := harness.approvals.GetApprovalForRuntime(harness.clientContext(), &turingv1.GetApprovalForRuntimeRequest{ApprovalId: approvalID})
+	state, err := harness.runtimeApprovals.GetApprovalForRuntime(harness.internalContext(), &turingv1.GetApprovalForRuntimeRequest{ApprovalId: approvalID})
 	if err != nil {
 		t.Fatal(err)
 	}

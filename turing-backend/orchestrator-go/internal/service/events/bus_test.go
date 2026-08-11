@@ -34,3 +34,50 @@ func TestBusPublishesOnlyMatchingSessionAndUnsubscribes(t *testing.T) {
 		t.Fatal("channel did not close")
 	}
 }
+
+func TestBusOverflowRetainsLatestTerminalNotification(t *testing.T) {
+	bus := NewBus(128)
+	ch, unsubscribe := bus.Subscribe("sess_slow")
+	defer unsubscribe()
+
+	for sequence := int64(1); sequence <= 140; sequence++ {
+		eventType := "message.delta"
+		if sequence == 140 {
+			eventType = "agent.run.completed"
+		}
+		bus.Publish(Event{SessionID: "sess_slow", Sequence: sequence, Type: eventType})
+	}
+
+	var terminal Event
+	for {
+		select {
+		case event := <-ch:
+			if event.Type == "agent.run.completed" {
+				terminal = event
+			}
+		default:
+			if terminal.Sequence != 140 {
+				t.Fatalf("terminal notification = %+v, want retained sequence 140 after overflow", terminal)
+			}
+			return
+		}
+	}
+}
+
+func TestBusOverflowDoesNotLetDelayedEventEvictNewerTerminal(t *testing.T) {
+	bus := NewBus(1)
+	ch, unsubscribe := bus.Subscribe("sess_out_of_order")
+	defer unsubscribe()
+
+	bus.Publish(Event{SessionID: "sess_out_of_order", Sequence: 3, Type: "agent.run.completed"})
+	bus.Publish(Event{SessionID: "sess_out_of_order", Sequence: 2, Type: "message.delta"})
+
+	select {
+	case event := <-ch:
+		if event.Sequence != 3 || event.Type != "agent.run.completed" {
+			t.Fatalf("overflow retained %+v, want newer terminal sequence 3", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for retained terminal notification")
+	}
+}

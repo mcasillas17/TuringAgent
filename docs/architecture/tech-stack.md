@@ -31,8 +31,15 @@ Useful commands:
 
 ```bash
 tools/proto/check.sh
-go test -tags sqlite_fts5 ./... -count=1
+go test -tags sqlite_fts5 -race ./... -count=1
+go vet -tags sqlite_fts5 ./...
 go build -tags sqlite_fts5 ./...
+(cd turing-backend/mcp-files && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server)
+(cd turing-backend/mcp-system && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server)
+go test -tags sqlite_fts5 ./.github/workflows -count=1
+go test -tags sqlite_fts5 ./turing-backend/scripts -count=1
+bash -n turing-backend/scripts/*.sh tools/proto/*.sh
+(cd turing-client/turing_app && flutter analyze && flutter test)
 ```
 
 The public orchestrator gRPC port defaults to `3000`. The internal runtime gRPC port defaults to `3001`.
@@ -104,12 +111,16 @@ databases, or sandbox files.
 Run from the repository root unless noted:
 
 ```bash
-go test -tags sqlite_fts5 ./... -count=1
+go test -tags sqlite_fts5 -race ./... -count=1
+go vet -tags sqlite_fts5 ./...
 go build -tags sqlite_fts5 ./...
-cd turing-backend/mcp-files && go test ./... -count=1 && go build ./cmd/server
-cd ../../turing-client/turing_app && flutter test
-cd ../.. && tools/proto/check.sh
-cd turing-backend && ./scripts/smoke-grpc.sh
+(cd turing-backend/mcp-files && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server)
+(cd turing-backend/mcp-system && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server)
+go test -tags sqlite_fts5 ./.github/workflows -count=1
+go test -tags sqlite_fts5 ./turing-backend/scripts -count=1
+tools/proto/check.sh
+(cd turing-client/turing_app && flutter analyze && flutter test)
+(cd turing-backend && ./scripts/smoke-grpc.sh)
 ```
 
 The smoke script initializes local secrets, builds the Compose stack, checks `HealthService.Check`, creates a session, sends a deterministic `/tool system.time` message, waits for streamed events, and verifies replay with `EventService.ListEvents`.

@@ -5,6 +5,7 @@ services:
       dockerfile: turing-backend/orchestrator-go/Dockerfile
       args:
         GOFLAGS: -tags=sqlite_fts5
+    user: "${HOST_UID:?Use scripts/compose.sh to launch}:${HOST_GID:?Use scripts/compose.sh to launch}"
     environment:
       TURING_CLIENT_API_KEY: ${TURING_CLIENT_API_KEY}
       TURING_INTERNAL_TOKEN: ${TURING_INTERNAL_TOKEN}
@@ -29,7 +30,7 @@ services:
       TURING_APPROVAL_TIMEOUT_MS: ${TURING_APPROVAL_TIMEOUT_MS:-65000}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
-      - "${ORCHESTRATOR_PUBLIC_PORT:-3000}:3000"
+      - "${ORCHESTRATOR_PUBLIC_BIND_HOST:-127.0.0.1}:${ORCHESTRATOR_PUBLIC_PORT:-3000}:3000"
     expose:
       - "3001"
     volumes:
@@ -46,6 +47,7 @@ services:
       TURING_INTERNAL_TOKEN: ${TURING_INTERNAL_TOKEN}
       ORCHESTRATOR_GRPC_ADDR: ${ORCHESTRATOR_GRPC_ADDR:-turing-orchestrator:3001}
       TURING_WORKER_ID: ${TURING_WORKER_ID:-worker-general-go}
+      TURING_JOB_TIMEOUT_MS: ${TURING_JOB_TIMEOUT_MS:-300000}
       TURING_MAX_CONCURRENT_RUNS_GENERAL: ${TURING_MAX_CONCURRENT_RUNS_GENERAL:-1}
       TURING_MAX_TOOL_CALLS_PER_RUN: ${TURING_MAX_TOOL_CALLS_PER_RUN:-10}
       TURING_MODEL_TIMEOUT_MS: ${TURING_MODEL_TIMEOUT_MS:-120000}
@@ -64,9 +66,12 @@ services:
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
-      - turing-orchestrator
-      - turing-mcp-system
-      - turing-mcp-files
+      turing-orchestrator:
+        condition: service_started
+      turing-mcp-system:
+        condition: service_healthy
+      turing-mcp-files:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -86,6 +91,12 @@ services:
       LOG_PRETTY: ${LOG_PRETTY:-false}
     expose:
       - "7100"
+    healthcheck:
+      test: ["CMD", "/app/server", "healthcheck"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
     networks:
       - net-system
 
@@ -109,6 +120,12 @@ services:
       LOG_PRETTY: ${LOG_PRETTY:-false}
     expose:
       - "7110"
+    healthcheck:
+      test: ["CMD", "/app/server", "healthcheck"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
     volumes:
       - ../sandbox:/sandbox
     networks:

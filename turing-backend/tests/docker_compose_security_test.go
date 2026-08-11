@@ -182,14 +182,20 @@ func TestRepositoryDockerignoreExcludesSensitiveAndGeneratedContent(t *testing.T
 
 func composeServiceBlock(t *testing.T, compose string, serviceName string) string {
 	t.Helper()
-	startMarker := "  " + serviceName + ":\n"
-	start := strings.Index(compose, startMarker)
-	if start < 0 {
+	header := "  " + serviceName + ":"
+	allLines := strings.Split(compose, "\n")
+	start := -1
+	for index, line := range allLines {
+		if line == header {
+			start = index
+			break
+		}
+	}
+	if start == -1 {
 		t.Fatalf("service %q not found", serviceName)
 	}
-	lines := strings.Split(compose[start+len(startMarker):], "\n")
 	var block []string
-	for _, line := range lines {
+	for _, line := range allLines[start+1:] {
 		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "    ") && strings.HasSuffix(strings.TrimSpace(line), ":") {
 			break
 		}

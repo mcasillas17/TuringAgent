@@ -14,6 +14,8 @@ const (
 	defaultApprovalTTL              = 65 * time.Second
 	approvalExpiryRoundingMargin    = time.Second
 	approvalWaitPollTransportMargin = 5 * time.Second
+	maxConcurrentRunsLimit          = 128
+	maxHeartbeatInterval            = 30 * time.Second
 )
 
 type Config struct {
@@ -31,6 +33,7 @@ type Config struct {
 	MCPFilesToken        string
 	MaxConcurrentRuns    int
 	MaxToolCallsPerRun   int
+	HeartbeatInterval    time.Duration
 	ModelTimeout         time.Duration
 	ToolTimeout          time.Duration
 	ApprovalTimeout      time.Duration
@@ -51,12 +54,23 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	if maxConcurrentRuns < 1 || maxConcurrentRuns > maxConcurrentRunsLimit {
+		return Config{}, fmt.Errorf("TURING_MAX_CONCURRENT_RUNS_GENERAL must be between 1 and %d", maxConcurrentRunsLimit)
+	}
 	maxToolCalls, err := intValue(getenv, "TURING_MAX_TOOL_CALLS_PER_RUN", 10)
 	if err != nil {
 		return Config{}, err
 	}
 	if maxToolCalls <= 0 {
 		return Config{}, errors.New("TURING_MAX_TOOL_CALLS_PER_RUN must be greater than 0")
+	}
+	jobTimeout, err := durationMillisecondsValue(getenv, "TURING_JOB_TIMEOUT_MS", 300000)
+	if err != nil {
+		return Config{}, err
+	}
+	heartbeatInterval := jobTimeout / 3
+	if heartbeatInterval > maxHeartbeatInterval {
+		heartbeatInterval = maxHeartbeatInterval
 	}
 	modelTimeout, err := durationMillisecondsValue(getenv, "TURING_MODEL_TIMEOUT_MS", 120000)
 	if err != nil {
@@ -112,6 +126,7 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 		MCPFilesToken:        getenv("MCP_FILES_TOKEN_GENERAL"),
 		MaxConcurrentRuns:    maxConcurrentRuns,
 		MaxToolCallsPerRun:   maxToolCalls,
+		HeartbeatInterval:    heartbeatInterval,
 		ModelTimeout:         modelTimeout,
 		ToolTimeout:          toolTimeout,
 		ApprovalTimeout:      approvalTimeout,

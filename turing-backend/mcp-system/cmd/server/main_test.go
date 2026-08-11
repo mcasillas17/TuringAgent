@@ -2,15 +2,22 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/project-turing/mcp-system/internal/jsonrpc"
+	systemtools "github.com/project-turing/mcp-system/internal/tools"
 )
 
 const expectedSystemRequestLimit = 1024 * 1024
+const expectedSystemResponseLimit = 1024 * 1024
+const expectedSystemAggregateResultLimit = 4 * 1024 * 1024
+const expectedSystemToolCallsPerRun = 10
 
 func TestHTTPServerConfiguresConnectionTimeouts(t *testing.T) {
 	server := newHTTPServer(":7100", http.NotFoundHandler())
@@ -39,6 +46,27 @@ func TestMcpHandlerRequiresBearerToken(t *testing.T) {
 
 	if res.Code != http.StatusUnauthorized {
 		t.Fatalf("expected unauthorized without bearer token, got %d", res.Code)
+	}
+}
+
+func TestHealthEndpointIsAvailableWithoutBearerToken(t *testing.T) {
+	handler := newHandler("system-token")
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	res := httptest.NewRecorder()
+
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("health status = %d, want %d", res.Code, http.StatusNoContent)
+	}
+}
+
+func TestHealthcheckProbeAcceptsReadyEndpoint(t *testing.T) {
+	server := httptest.NewServer(newHandler("system-token"))
+	defer server.Close()
+
+	if err := checkHealth(context.Background(), server.URL+"/healthz"); err != nil {
+		t.Fatalf("checkHealth failed: %v", err)
 	}
 }
 
@@ -89,6 +117,53 @@ func TestMcpHandlerRejectsOversizedRequestBody(t *testing.T) {
 			}
 			assertRPCErrorCode(t, response, -32600)
 		})
+	}
+}
+
+func TestMcpResponseWriterRejectsOversizedEncodedResponse(t *testing.T) {
+	response := httptest.NewRecorder()
+
+	writeJSONRPC(response, jsonrpc.Response{
+		JSONRPC: "2.0",
+		ID:      float64(1),
+		Result:  map[string]any{"text": strings.Repeat("\x01", expectedSystemResponseLimit)},
+	})
+
+	if response.Body.Len() > expectedSystemResponseLimit {
+		t.Fatalf("response body = %d bytes, exceeds %d-byte cap", response.Body.Len(), expectedSystemResponseLimit)
+	}
+	assertRPCErrorCode(t, response.Body.Bytes(), -32603)
+}
+
+func TestEchoCharacterBoundaryFitsTransportAndAggregateBudgets(t *testing.T) {
+	result, err := systemtools.Call("system.echo", map[string]any{
+		"text": strings.Repeat("\x01", systemtools.MaxEchoCharacters),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedResult, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedResponse, err := json.Marshal(jsonrpc.Response{
+		JSONRPC: "2.0",
+		ID:      float64(1),
+		Result:  result,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encodedResponse) > expectedSystemResponseLimit {
+		t.Fatalf("worst-case echo response = %d bytes, exceeds %d-byte MCP cap", len(encodedResponse), expectedSystemResponseLimit)
+	}
+	if len(encodedResult)*expectedSystemToolCallsPerRun > expectedSystemAggregateResultLimit {
+		t.Fatalf(
+			"%d worst-case echo results total %d bytes, exceed %d-byte run aggregate",
+			expectedSystemToolCallsPerRun,
+			len(encodedResult)*expectedSystemToolCallsPerRun,
+			expectedSystemAggregateResultLimit,
+		)
 	}
 }
 

@@ -47,23 +47,24 @@ const (
 var integrationArtifacts string
 
 type grpcHarness struct {
-	repo         *orchestratortestkit.Repository
-	fakeModel    *fakeModelServer
-	systemMCP    *fakeMCPServer
-	filesMCP     *fakeMCPServer
-	chat         turingv1.ChatServiceClient
-	sessions     turingv1.SessionServiceClient
-	events       turingv1.EventServiceClient
-	approvals    turingv1.ApprovalServiceClient
-	publicConn   *grpc.ClientConn
-	internalConn *grpc.ClientConn
-	app          *orchestratortestkit.App
-	databasePath string
-	publicLis    *bufconn.Listener
-	internalLis  *bufconn.Listener
-	workerCancel context.CancelFunc
-	workerDone   chan error
-	closeOnce    sync.Once
+	repo             *orchestratortestkit.Repository
+	fakeModel        *fakeModelServer
+	systemMCP        *fakeMCPServer
+	filesMCP         *fakeMCPServer
+	chat             turingv1.ChatServiceClient
+	sessions         turingv1.SessionServiceClient
+	events           turingv1.EventServiceClient
+	approvals        turingv1.ApprovalServiceClient
+	runtimeApprovals turingv1.ApprovalServiceClient
+	publicConn       *grpc.ClientConn
+	internalConn     *grpc.ClientConn
+	app              *orchestratortestkit.App
+	databasePath     string
+	publicLis        *bufconn.Listener
+	internalLis      *bufconn.Listener
+	workerCancel     context.CancelFunc
+	workerDone       chan error
+	closeOnce        sync.Once
 }
 
 type fakeModelServer struct {
@@ -186,6 +187,7 @@ func newGRPCHarness(t *testing.T, opts ...harnessOption) *grpcHarness {
 	h.sessions = turingv1.NewSessionServiceClient(h.publicConn)
 	h.events = turingv1.NewEventServiceClient(h.publicConn)
 	h.approvals = turingv1.NewApprovalServiceClient(h.publicConn)
+	h.runtimeApprovals = turingv1.NewApprovalServiceClient(h.internalConn)
 	h.filesMCP.approvalClient = turingv1.NewApprovalServiceClient(h.internalConn)
 	h.waitForHealth(t)
 	if cfg.startRuntimeWorker {
@@ -1595,7 +1597,7 @@ func TestTerminalApprovalKeepsRuntimeWorkerLiveAndUnblocksSameSession(t *testing
 			apply: func(h *grpcHarness, approvalID string) {
 				deadline := time.Now().Add(3 * time.Second)
 				for time.Now().Before(deadline) {
-					state, err := h.approvals.GetApprovalForRuntime(h.clientContext(), &turingv1.GetApprovalForRuntimeRequest{ApprovalId: approvalID})
+					state, err := h.runtimeApprovals.GetApprovalForRuntime(h.internalContext(), &turingv1.GetApprovalForRuntimeRequest{ApprovalId: approvalID})
 					if err == nil && state.GetStatus() == turingv1.ApprovalStatus_APPROVAL_STATUS_EXPIRED {
 						return
 					}

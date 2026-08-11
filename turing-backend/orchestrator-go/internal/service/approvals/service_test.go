@@ -643,6 +643,7 @@ type recordingApprovalNotifier struct {
 	approvalID    string
 	status        string
 	approvalToken string
+	contextErr    error
 }
 
 func (n *recordingApprovalNotifier) NotifyApprovalUpdated(ctx context.Context, runID string, approvalID string, status string, approvalToken string) error {
@@ -653,6 +654,7 @@ func (n *recordingApprovalNotifier) NotifyApprovalUpdated(ctx context.Context, r
 	n.approvalID = approvalID
 	n.status = status
 	n.approvalToken = approvalToken
+	n.contextErr = ctx.Err()
 	return nil
 }
 
@@ -662,6 +664,7 @@ type approvalNotificationSnapshot struct {
 	approvalID    string
 	status        string
 	approvalToken string
+	contextErr    error
 }
 
 func (n *recordingApprovalNotifier) snapshot() approvalNotificationSnapshot {
@@ -673,6 +676,67 @@ func (n *recordingApprovalNotifier) snapshot() approvalNotificationSnapshot {
 		approvalID:    n.approvalID,
 		status:        n.status,
 		approvalToken: n.approvalToken,
+		contextErr:    n.contextErr,
+	}
+}
+
+func TestPostCommitApprovalWorkUsesIndependentContext(t *testing.T) {
+	h := newApprovalHarness(t)
+	enqueued := h.createRunningToolCall(t)
+	approvalID, err := h.service.CreateApprovalForTool(context.Background(), enqueued.RunID, "call_1", "general_assistant", "files.update", map[string]any{"path": "note.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := h.repo.GetApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notifier := &recordingApprovalNotifier{}
+	h.service.SetNotifier(notifier)
+
+	h.service.finishPostCommit(approval, "client", "approval.approved", "approved", "token")
+
+	got := notifier.snapshot()
+	if got.count != 1 || got.contextErr != nil || got.status != "approved" {
+		t.Fatalf("post-commit notification = %+v, want independent live context", got)
+	}
+}
+
+func TestDenyApprovalAtExpiryBoundaryTakesExpirationPath(t *testing.T) {
+	h := newApprovalHarness(t)
+	enqueued := h.createRunningToolCall(t)
+	approvalID, err := h.service.CreateApprovalForTool(context.Background(), enqueued.RunID, "call_1", "general_assistant", "files.update", map[string]any{"path": "note.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.database.ExecContext(context.Background(), `
+		UPDATE approvals
+		SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+		WHERE id = ?
+	`, approvalID); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := h.service.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{ApprovalId: approvalID, Reason: "too late"})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("DenyApproval boundary response/error = %+v/%v, want FailedPrecondition", response, err)
+	}
+	approval, err := h.repo.GetApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval.Status != "expired" {
+		t.Fatalf("approval status = %q, want expired", approval.Status)
+	}
+	var expiredEvents, deniedEvents int
+	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'approval.expired'`, enqueued.RunID).Scan(&expiredEvents); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'approval.denied'`, enqueued.RunID).Scan(&deniedEvents); err != nil {
+		t.Fatal(err)
+	}
+	if expiredEvents != 1 || deniedEvents != 0 {
+		t.Fatalf("expiry/denial event counts = %d/%d, want 1/0", expiredEvents, deniedEvents)
 	}
 }
 

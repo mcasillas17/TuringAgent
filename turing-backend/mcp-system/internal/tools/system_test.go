@@ -48,6 +48,23 @@ func TestCallEchoEnforcesAdvertisedSchema(t *testing.T) {
 	}
 }
 
+func TestCallEchoEnforcesCharacterBudget(t *testing.T) {
+	const maxEchoCharacters = 64 * 1024
+	boundary := strings.Repeat("界", maxEchoCharacters)
+	result, err := Call("system.echo", map[string]any{"text": boundary})
+	if err != nil {
+		t.Fatalf("Call rejected echo character boundary: %v", err)
+	}
+	if result["text"] != boundary {
+		t.Fatal("Call changed echo text at the character boundary")
+	}
+	if _, err := Call("system.echo", map[string]any{
+		"text": strings.Repeat("界", maxEchoCharacters+1),
+	}); err == nil {
+		t.Fatalf("Call accepted more than %d echo characters", maxEchoCharacters)
+	}
+}
+
 func TestSystemInfoDoesNotExposeSecrets(t *testing.T) {
 	result, err := Call("system.info", map[string]any{})
 	if err != nil {
@@ -81,7 +98,11 @@ func TestListAdvertisesDocumentedObjectSchemas(t *testing.T) {
 			t.Errorf("%s policy = %#v, want safe", name, tool["policy"])
 		}
 		if name == "system.echo" {
-			want := map[string]any{"text": map[string]any{"type": "string"}}
+			want := map[string]any{"text": map[string]any{
+				"type":        "string",
+				"maxLength":   64 * 1024,
+				"description": "Text to echo, limited to 65536 Unicode characters.",
+			}}
 			if !reflect.DeepEqual(schema["properties"], want) {
 				t.Errorf("system.echo properties = %#v, want %#v", schema["properties"], want)
 			}

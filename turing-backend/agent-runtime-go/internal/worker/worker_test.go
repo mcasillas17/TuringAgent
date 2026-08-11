@@ -69,6 +69,49 @@ func TestWorkerCancelsActiveRunAndAcknowledges(t *testing.T) {
 	waitForOutboundWriterExit(t, worker)
 }
 
+func TestWorkerEmitsPeriodicAuthenticatedHeartbeat(t *testing.T) {
+	stream := newFakeStream()
+	worker := New(Options{
+		WorkerID: "worker-heartbeat", MaxConcurrentRuns: 1, HeartbeatInterval: time.Millisecond,
+	}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+	_ = nextSent(t, stream)
+
+	update := nextSent(t, stream)
+	heartbeat := update.GetHeartbeat()
+	if heartbeat == nil || heartbeat.GetWorkerId() != "worker-heartbeat" {
+		t.Fatalf("periodic update = %+v, want authenticated heartbeat", update)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Worker.Run returned %v, want context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Worker.Run did not stop after heartbeat test")
+	}
+}
+
+func TestWorkerRejectsMaxConcurrentRunsAboveWireAndServerBound(t *testing.T) {
+	stream := newFakeStream()
+	worker := New(Options{
+		WorkerID: "worker-overflow", MaxConcurrentRuns: 2147483648,
+	}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+
+	err := worker.Run(context.Background())
+	if err == nil || err.Error() != "max concurrent runs must be between 1 and 128" {
+		t.Fatalf("Worker.Run max concurrent error = %v, want bounded validation", err)
+	}
+	select {
+	case update := <-stream.sent:
+		t.Fatalf("invalid max concurrent reached protobuf send: %+v", update)
+	default:
+	}
+}
+
 func TestWorkerCancelsApprovalDeniedRunAndAcknowledgesExit(t *testing.T) {
 	executor := &approvalWaitingExecutor{waiting: make(chan struct{}), cancelled: make(chan struct{}), cause: make(chan error, 1)}
 	stream := newFakeStream()

@@ -20,6 +20,11 @@ type ToolCallRecord struct {
 	ModelToolCallID string
 }
 
+type ToolCallBeforeResult struct {
+	Record   ToolCallRecord
+	Inserted bool
+}
+
 type ToolCallAfterRecord struct {
 	ToolCallID      string
 	RunID           string
@@ -40,39 +45,51 @@ func (r *Repository) RecordToolCallBefore(ctx context.Context, record ToolCallRe
 	return err
 }
 
-func (r *Repository) RecordToolCallBeforeNew(ctx context.Context, record ToolCallRecord, agentID string, serverName string, toolName string, argsJSON string, argsHash string) (bool, error) {
+func (r *Repository) RecordToolCallBeforeNew(ctx context.Context, record ToolCallRecord, agentID string, serverName string, toolName string, argsJSON string, argsHash string) (ToolCallBeforeResult, error) {
 	status := record.Status
 	if status == "" {
 		status = "requested"
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, err
+		return ToolCallBeforeResult{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	var existingRunID, existingAgentID, existingServerName, existingToolName, existingArgsHash string
-	var existingModelToolCallID sql.NullString
-	err = tx.QueryRowContext(ctx, `SELECT run_id, agent_id, server_name, tool_name, args_hash, model_tool_call_id FROM tool_calls WHERE id = ?`, record.ToolCallID).Scan(&existingRunID, &existingAgentID, &existingServerName, &existingToolName, &existingArgsHash, &existingModelToolCallID)
+	defer tx.Rollback()
+	var existingRunID, existingAgentID, existingServerName, existingToolName, existingArgsHash, existingStatus string
+	var existingModelToolCallID, existingApprovalID sql.NullString
+	err = tx.QueryRowContext(ctx, `
+		SELECT run_id, agent_id, server_name, tool_name, args_hash, model_tool_call_id, status, approval_id
+		FROM tool_calls WHERE id = ?
+	`, record.ToolCallID).Scan(
+		&existingRunID, &existingAgentID, &existingServerName, &existingToolName,
+		&existingArgsHash, &existingModelToolCallID, &existingStatus, &existingApprovalID,
+	)
 	if err == nil {
 		if existingRunID == record.RunID && existingAgentID == agentID && existingServerName == serverName && existingToolName == toolName && existingArgsHash == argsHash && nullableStringValue(existingModelToolCallID) == record.ModelToolCallID {
-			return false, tx.Commit()
+			record.Status = existingStatus
+			record.ApprovalID = nullableStringValue(existingApprovalID)
+			if err := tx.Commit(); err != nil {
+				return ToolCallBeforeResult{}, err
+			}
+			return ToolCallBeforeResult{Record: record}, nil
 		}
-		return false, ErrToolCallConflict
+		return ToolCallBeforeResult{}, ErrToolCallConflict
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return false, err
+		return ToolCallBeforeResult{}, err
 	}
 	var approvalID any
 	if record.ApprovalID != "" {
 		approvalID = record.ApprovalID
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO tool_calls (id, run_id, agent_id, server_name, tool_name, model_tool_call_id, args_json, args_hash, status, approval_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ToolCallID, record.RunID, agentID, serverName, toolName, nullableText(record.ModelToolCallID), argsJSON, argsHash, status, approvalID, now()); err != nil {
-		return false, err
+		return ToolCallBeforeResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return false, err
+		return ToolCallBeforeResult{}, err
 	}
-	return true, nil
+	record.Status = status
+	return ToolCallBeforeResult{Record: record, Inserted: true}, nil
 }
 
 func (r *Repository) RecordToolCallAfter(ctx context.Context, record ToolCallAfterRecord) (bool, error) {

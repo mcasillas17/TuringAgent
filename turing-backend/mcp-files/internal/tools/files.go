@@ -23,9 +23,11 @@ import (
 
 const (
 	MaxMutationContentBytes = 512 * 1024
+	MaxReadBytes            = 64 * 1024
 
 	defaultReadBytes      = 64 * 1024
-	maxReadBytes          = 512 * 1024
+	maxReadBytes          = MaxReadBytes
+	maxSearchFileBytes    = 512 * 1024
 	defaultListEntries    = 200
 	maxListEntries        = 1000
 	maxListEntriesScanned = 4 * maxListEntries
@@ -36,6 +38,8 @@ const (
 	maxSearchBytes        = 8 * 1024 * 1024
 	searchDirBatchSize    = 64
 	maxSearchErrorDetails = 20
+
+	maxCollectionResultJSONBytes = 384 * 1024
 )
 
 type ApprovalValidator interface {
@@ -95,7 +99,7 @@ func (f FilesTools) ReadContext(ctx context.Context, args map[string]any) (map[s
 		return nil, err
 	}
 	defer unlock()
-	file, _, _, err := f.openRegularFile(clean)
+	file, _, _, err := f.openRegularFileContext(ctx, clean)
 	if err != nil {
 		return nil, err
 	}
@@ -135,12 +139,12 @@ func (f FilesTools) ListContext(ctx context.Context, args map[string]any) (map[s
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	directory, _, err := f.openDirectoryPath(pathValue, false)
+	directory, _, err := f.openDirectoryPathContext(ctx, pathValue, false)
 	if err != nil {
 		return nil, err
 	}
 	defer directory.Close()
-	entries := make([]os.DirEntry, 0, limit+1)
+	entries := make([]safeDirectoryEntry, 0, limit+1)
 	entriesScanned := 0
 	exhausted := false
 	for len(entries) <= limit && entriesScanned < maxListEntriesScanned {
@@ -151,10 +155,13 @@ func (f FilesTools) ListContext(ctx context.Context, args map[string]any) (map[s
 		if remaining := maxListEntriesScanned - entriesScanned; remaining < batchSize {
 			batchSize = remaining
 		}
-		batch, readErr := directory.ReadDir(batchSize)
+		batch, readErr := readDirectoryEntriesAt(ctx, directory, batchSize)
 		entriesScanned += len(batch)
 		for _, entry := range batch {
-			if !isInternalStagingName(entry.Name()) {
+			if entry.err != nil {
+				return nil, fmt.Errorf("inspect directory entry %q: %w", entry.name, entry.err)
+			}
+			if !isInternalStagingName(entry.name) {
 				entries = append(entries, entry)
 			}
 			if len(entries) > limit {
@@ -169,14 +176,23 @@ func (f FilesTools) ListContext(ctx context.Context, args map[string]any) (map[s
 			break
 		}
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
 	truncated := len(entries) > limit || !exhausted
 	if len(entries) > limit {
 		entries = entries[:limit]
 	}
 	items := make([]map[string]any, 0, len(entries))
+	resultJSONBytes := 0
 	for _, entry := range entries {
-		items = append(items, map[string]any{"name": entry.Name(), "isDir": entry.IsDir()})
+		item := map[string]any{
+			"name":  entry.name,
+			"isDir": entry.mode&unix.S_IFMT == unix.S_IFDIR,
+		}
+		if !reserveCollectionResultJSON(&resultJSONBytes, item) {
+			truncated = true
+			break
+		}
+		items = append(items, item)
 	}
 	return map[string]any{"items": items, "truncated": truncated}, nil
 }
@@ -202,6 +218,13 @@ func (f FilesTools) SearchContext(ctx context.Context, args map[string]any) (map
 		directory *os.File
 	}
 	directories := []directoryTask{}
+	defer func() {
+		for _, task := range directories {
+			if task.directory != nil {
+				_ = task.directory.Close()
+			}
+		}
+	}()
 	matches := []map[string]any{}
 	errorDetails := []map[string]any{}
 	entriesVisited := 0
@@ -211,16 +234,20 @@ func (f FilesTools) SearchContext(ctx context.Context, args map[string]any) (map
 	skippedFiles := 0
 	bytesScanned := int64(0)
 	errorCount := 0
+	resultJSONBytes := 0
 	truncated := false
 	stop := false
 	recordFailure := func(path, operation string, failure error) {
 		errorCount++
 		if len(errorDetails) < maxSearchErrorDetails {
-			errorDetails = append(errorDetails, map[string]any{
+			detail := map[string]any{
 				"path":      filepath.ToSlash(path),
 				"operation": operation,
 				"error":     failure.Error(),
-			})
+			}
+			if reserveCollectionResultJSON(&resultJSONBytes, detail) {
+				errorDetails = append(errorDetails, detail)
+			}
 		}
 	}
 	scanFile := func(file *os.File, rel string) {
@@ -238,7 +265,7 @@ func (f FilesTools) SearchContext(ctx context.Context, args map[string]any) (map
 			stop = true
 			return
 		}
-		readLimit := int64(maxReadBytes + 1)
+		readLimit := int64(maxSearchFileBytes + 1)
 		aggregateLimited := remainingBytes < readLimit
 		if aggregateLimited {
 			readLimit = remainingBytes
@@ -254,7 +281,7 @@ func (f FilesTools) SearchContext(ctx context.Context, args map[string]any) (map
 			recordFailure(rel, "close file", closeErr)
 			return
 		}
-		if len(content) > maxReadBytes {
+		if len(content) > maxSearchFileBytes {
 			recordFailure(rel, "read file", errors.New("file exceeds per-file byte limit"))
 			return
 		}
@@ -269,21 +296,27 @@ func (f FilesTools) SearchContext(ctx context.Context, args map[string]any) (map
 		}
 		text := string(content)
 		if strings.Contains(text, query) {
-			matches = append(matches, map[string]any{
+			match := map[string]any{
 				"path":    filepath.ToSlash(rel),
 				"snippet": firstSnippet(text, query),
-			})
+			}
+			if !reserveCollectionResultJSON(&resultJSONBytes, match) {
+				truncated = true
+				stop = true
+				return
+			}
+			matches = append(matches, match)
 		}
 	}
 	openAndScanFile := func(rel string) {
-		file, _, _, openErr := f.openRegularFile(rel)
+		file, _, _, openErr := f.openRegularFileContext(ctx, rel)
 		if openErr != nil {
 			recordFailure(rel, "open file", openErr)
 			return
 		}
 		scanFile(file, rel)
 	}
-	initial, _, openErr := f.openPath(clean, unix.O_RDONLY|unix.O_NONBLOCK)
+	initial, _, openErr := f.openPathContext(ctx, clean, unix.O_RDONLY|unix.O_NONBLOCK)
 	if openErr != nil {
 		return nil, openErr
 	}
@@ -311,7 +344,7 @@ func (f FilesTools) SearchContext(ctx context.Context, args map[string]any) (map
 		directories = directories[1:]
 		directory := task.directory
 		if directory == nil {
-			directory, _, openErr = f.openDirectoryPath(task.path, false)
+			directory, _, openErr = f.openDirectoryPathContext(ctx, task.path, false)
 			if openErr != nil {
 				recordFailure(task.path, "open directory", openErr)
 				continue
@@ -333,27 +366,31 @@ func (f FilesTools) SearchContext(ctx context.Context, args map[string]any) (map
 			if remainingEntries < batchSize {
 				batchSize = remainingEntries
 			}
-			entries, readErr := directory.ReadDir(batchSize)
+			entries, readErr := readDirectoryEntriesAt(ctx, directory, batchSize)
 			directoryEntriesRead += len(entries)
-			sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+			sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
 			for _, entry := range entries {
 				if err := ctx.Err(); err != nil {
 					_ = directory.Close()
 					return nil, err
 				}
 				entriesVisited++
-				if isInternalStagingName(entry.Name()) {
+				if isInternalStagingName(entry.name) {
 					continue
 				}
-				rel := entry.Name()
+				rel := entry.name
 				if task.path != "." {
-					rel = filepath.Join(task.path, entry.Name())
+					rel = filepath.Join(task.path, entry.name)
 				}
-				if entry.Type()&os.ModeSymlink != 0 {
+				if entry.err != nil {
+					recordFailure(rel, "inspect entry", entry.err)
+					continue
+				}
+				if entry.mode&unix.S_IFMT == unix.S_IFLNK {
 					skippedFiles++
 					continue
 				}
-				if entry.IsDir() {
+				if entry.mode&unix.S_IFMT == unix.S_IFDIR {
 					directories = append(directories, directoryTask{path: rel})
 					continue
 				}
@@ -421,7 +458,7 @@ func (f FilesTools) CreateContext(ctx context.Context, args map[string]any, appr
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := f.checkCreatePreconditions(clean); err != nil {
+	if err := f.checkCreatePreconditions(ctx, clean); err != nil {
 		return nil, err
 	}
 	if err := f.validateApproval(ctx, "files.create", args, approvalToken, agentID); err != nil {
@@ -430,7 +467,7 @@ func (f FilesTools) CreateContext(ctx context.Context, args map[string]any, appr
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	parent, leaf, _, err := f.openParentPath(clean, true)
+	parent, leaf, _, err := f.openParentPathContext(ctx, clean, true)
 	if err != nil {
 		return nil, err
 	}
@@ -471,13 +508,19 @@ func (f FilesTools) CreateContext(ctx context.Context, args map[string]any, appr
 	if err := f.syncDirectory(parent); err != nil {
 		return nil, fmt.Errorf("sync directory after create %q: %w", pathValue, err)
 	}
-	if err := f.syncCreateAncestors(clean); err != nil {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := f.syncCreateAncestorsContext(ctx, clean); err != nil {
 		return nil, fmt.Errorf("sync directory hierarchy after create %q: %w", pathValue, err)
 	}
 	return map[string]any{"path": pathValue, "sha256": contentHash(content)}, nil
 }
 
-func (f FilesTools) checkCreatePreconditions(path string) error {
+func (f FilesTools) checkCreatePreconditions(ctx context.Context, path string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	root, err := f.openRoot()
 	if err != nil {
 		return err
@@ -485,7 +528,10 @@ func (f FilesTools) checkCreatePreconditions(path string) error {
 	if err := root.Close(); err != nil {
 		return err
 	}
-	parent, leaf, _, err := f.openParentPath(path, false)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	parent, leaf, _, err := f.openParentPathContext(ctx, path, false)
 	if errors.Is(err, unix.ENOENT) {
 		return nil
 	}
@@ -528,7 +574,7 @@ func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, appr
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	parent, leaf, _, err := f.openParentPath(clean, false)
+	parent, leaf, _, err := f.openParentPathContext(ctx, clean, false)
 	if err != nil {
 		return nil, err
 	}
@@ -636,6 +682,9 @@ func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, appr
 	removeTemporary = false
 	if err := f.syncDirectory(parent); err != nil {
 		return nil, fmt.Errorf("sync directory after update %q: %w", pathValue, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return map[string]any{"path": pathValue, "sha256": contentHash(content)}, nil
 }
@@ -822,8 +871,28 @@ func validContentHash(value string) bool {
 	if !strings.HasPrefix(value, prefix) || len(value) != len(prefix)+sha256.Size*2 {
 		return false
 	}
-	_, err := hex.DecodeString(strings.TrimPrefix(value, prefix))
-	return err == nil
+	for _, character := range value[len(prefix):] {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func reserveCollectionResultJSON(used *int, value any) bool {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return false
+	}
+	required := len(encoded)
+	if *used > 0 {
+		required++
+	}
+	if required > maxCollectionResultJSONBytes-*used {
+		return false
+	}
+	*used += required
+	return true
 }
 
 func readBoundedContext(ctx context.Context, reader io.Reader, limit int64) ([]byte, int64, bool, error) {

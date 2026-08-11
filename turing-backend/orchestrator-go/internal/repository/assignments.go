@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -13,6 +14,78 @@ type AssignmentReconciliation struct {
 	Cleared        bool
 	Fenced         bool
 	RunFailedEvent Event
+}
+
+func (r *Repository) RenewAssignments(ctx context.Context, assignments []Assignment, leaseExpires time.Time) (int, error) {
+	if len(assignments) == 0 {
+		return 0, nil
+	}
+	leaseExpires = leaseExpires.UTC()
+	leaseExpiresAt := FormatTimestamp(leaseExpires)
+	leaseExpiresAtNanos := leaseExpires.UnixNano()
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	renewed := 0
+	for _, assignment := range assignments {
+		if assignment.JobID == "" || assignment.RunID == "" || assignment.WorkerID == "" || assignment.AttemptID == "" {
+			return 0, errors.New("complete assignment identity is required for lease renewal")
+		}
+		result, err := tx.ExecContext(ctx, `
+			UPDATE agent_runs
+			SET execution_lease_expires_at = ?, execution_lease_expires_at_ns = ?
+			WHERE id = ?
+				AND status IN ('running', 'waiting_approval')
+				AND execution_active = 1
+				AND worker_id = ?
+				AND execution_attempt_id = ?
+				AND EXISTS (
+					SELECT 1 FROM jobs
+					WHERE id = ? AND run_id = agent_runs.id
+						AND status = 'in_progress'
+						AND lease_owner = ?
+						AND assignment_attempt_id = ?
+				)
+		`, leaseExpiresAt, leaseExpiresAtNanos, assignment.RunID, assignment.WorkerID,
+			assignment.AttemptID, assignment.JobID, assignment.WorkerID, assignment.AttemptID)
+		if err != nil {
+			return 0, err
+		}
+		runRows, err := result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		if runRows == 0 {
+			continue
+		}
+		result, err = tx.ExecContext(ctx, `
+			UPDATE jobs
+			SET lease_expires_at = ?, lease_expires_at_ns = ?
+			WHERE id = ? AND run_id = ?
+				AND status = 'in_progress'
+				AND lease_owner = ?
+				AND assignment_attempt_id = ?
+		`, leaseExpiresAt, leaseExpiresAtNanos, assignment.JobID, assignment.RunID,
+			assignment.WorkerID, assignment.AttemptID)
+		if err != nil {
+			return 0, err
+		}
+		jobRows, err := result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		if jobRows != 1 {
+			return 0, fmt.Errorf("renew assignment %s: matching job disappeared", assignment.AttemptID)
+		}
+		renewed++
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return renewed, nil
 }
 
 func (r *Repository) ReconcileAssignment(ctx context.Context, assignment Assignment) (AssignmentReconciliation, error) {

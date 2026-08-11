@@ -55,6 +55,203 @@ func TestComposeLaunchRejectsRootOrInvalidCurrentIdentity(t *testing.T) {
 	}
 }
 
+func TestComposeLaunchRejectsUnsafeSandboxBindSource(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(*testing.T, string)
+		wantOutput string
+	}{
+		{
+			name: "missing",
+			setup: func(t *testing.T, root string) {
+				if err := os.Remove(filepath.Join(root, "sandbox")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "sandbox must be a real directory",
+		},
+		{
+			name: "symlink",
+			setup: func(t *testing.T, root string) {
+				sandbox := filepath.Join(root, "sandbox")
+				if err := os.Remove(sandbox); err != nil {
+					t.Fatal(err)
+				}
+				target := filepath.Join(root, "outside")
+				if err := os.Mkdir(target, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, sandbox); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "sandbox must be a real directory, not a symlink",
+		},
+		{
+			name: "not a directory",
+			setup: func(t *testing.T, root string) {
+				sandbox := filepath.Join(root, "sandbox")
+				if err := os.Remove(sandbox); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(sandbox, []byte("not a directory"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "sandbox must be a real directory",
+		},
+		{
+			name: "not writable",
+			setup: func(t *testing.T, root string) {
+				if err := os.Chmod(filepath.Join(root, "sandbox"), 0500); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "sandbox is not owned, readable, writable, and traversable",
+		},
+		{
+			name: "group writable",
+			setup: func(t *testing.T, root string) {
+				if err := os.Chmod(filepath.Join(root, "sandbox"), 0770); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "sandbox must not be group- or world-writable",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := executeComposeWithSetup(t, true, "501", "20", "501", "20", test.setup, "up")
+			if result.err == nil {
+				t.Fatalf("compose.sh accepted unsafe sandbox; docker log:\n%s", result.dockerLog)
+			}
+			if !strings.Contains(result.output, test.wantOutput) {
+				t.Fatalf("failure did not explain unsafe sandbox:\n%s", result.output)
+			}
+			if result.dockerLog != "" {
+				t.Fatalf("docker was called before sandbox rejection:\n%s", result.dockerLog)
+			}
+		})
+	}
+}
+
+func TestComposeLaunchRejectsUnsafeDataBindSource(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(*testing.T, string)
+		wantOutput string
+	}{
+		{
+			name: "missing",
+			setup: func(t *testing.T, root string) {
+				if err := os.Remove(filepath.Join(root, "data")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "data must be a real directory",
+		},
+		{
+			name: "symlink",
+			setup: func(t *testing.T, root string) {
+				data := filepath.Join(root, "data")
+				if err := os.Remove(data); err != nil {
+					t.Fatal(err)
+				}
+				target := filepath.Join(root, "outside-data")
+				if err := os.Mkdir(target, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, data); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "data must be a real directory, not a symlink",
+		},
+		{
+			name: "not a directory",
+			setup: func(t *testing.T, root string) {
+				data := filepath.Join(root, "data")
+				if err := os.Remove(data); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(data, []byte("not a directory"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "data must be a real directory",
+		},
+		{
+			name: "not mode 0700",
+			setup: func(t *testing.T, root string) {
+				if err := os.Chmod(filepath.Join(root, "data"), 0755); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "data must have mode 0700",
+		},
+		{
+			name: "database not mode 0600",
+			setup: func(t *testing.T, root string) {
+				path := filepath.Join(root, "data", "turing.db")
+				if err := os.WriteFile(path, []byte("database"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(path, 0644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "database file must have mode 0600",
+		},
+		{
+			name: "database symlink",
+			setup: func(t *testing.T, root string) {
+				target := filepath.Join(root, "outside.db")
+				if err := os.WriteFile(target, []byte("outside"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, filepath.Join(root, "data", "turing.db")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "database file must be a regular file, not a symlink",
+		},
+		{
+			name: "database directory",
+			setup: func(t *testing.T, root string) {
+				if err := os.Mkdir(filepath.Join(root, "data", "turing.db"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "database file must be a regular file",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := executeComposeWithSetup(t, true, "501", "20", "501", "20", test.setup, "up")
+			if result.err == nil {
+				t.Fatalf("compose.sh accepted unsafe data; docker log:\n%s", result.dockerLog)
+			}
+			if !strings.Contains(result.output, test.wantOutput) {
+				t.Fatalf("failure did not explain unsafe data:\n%s", result.output)
+			}
+			if result.dockerLog != "" {
+				t.Fatalf("docker was called before data rejection:\n%s", result.dockerLog)
+			}
+		})
+	}
+}
+
+func TestSmokeWaitsForComposeHealthchecks(t *testing.T) {
+	data, err := os.ReadFile("smoke-grpc.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(data)
+	if !strings.Contains(script, "compose up --build -d --wait --wait-timeout 60") {
+		t.Fatal("smoke-grpc.sh does not bound its wait for Compose service healthchecks")
+	}
+}
+
 func TestRepositoryComposeLaunchersUseValidatedWrapper(t *testing.T) {
 	for _, name := range []string{"dev.sh", "reset.sh", "smoke-grpc.sh"} {
 		data, err := os.ReadFile(name)
@@ -147,6 +344,17 @@ func executeCompose(t *testing.T, uid, gid, exportedUID, exportedGID string, arg
 
 func executeComposeWithEnv(t *testing.T, withEnv bool, uid, gid, exportedUID, exportedGID string, args ...string) composeResult {
 	t.Helper()
+	return executeComposeWithSetup(t, withEnv, uid, gid, exportedUID, exportedGID, nil, args...)
+}
+
+func executeComposeWithSetup(
+	t *testing.T,
+	withEnv bool,
+	uid, gid, exportedUID, exportedGID string,
+	setup func(*testing.T, string),
+	args ...string,
+) composeResult {
+	t.Helper()
 	root := t.TempDir()
 	scriptsDir := filepath.Join(root, "scripts")
 	if err := os.Mkdir(scriptsDir, 0700); err != nil {
@@ -158,6 +366,15 @@ func executeComposeWithEnv(t *testing.T, withEnv bool, uid, gid, exportedUID, ex
 		if err := os.WriteFile(filepath.Join(root, ".env"), []byte("TURING_CLIENT_API_KEY=client\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.Mkdir(filepath.Join(root, "sandbox"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "data"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if setup != nil {
+		setup(t, root)
 	}
 
 	binDir := filepath.Join(root, "bin")

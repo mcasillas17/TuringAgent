@@ -175,9 +175,26 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"0001_initial", "0002_go_runtime", "0003_messages_fts", "0003_tool_call_model_identity"}
+	want := []string{
+		"0001_initial",
+		"0002_go_runtime",
+		"0003_messages_fts",
+		"0003_tool_call_model_identity",
+		"0004_execution_exit_gate",
+		"0005_timestamp_ordering",
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("applied migrations = %v, want %v", got, want)
+	}
+}
+
+func TestCurrentSchemaVersionUsesLatestEmbeddedMigrationPrefix(t *testing.T) {
+	got, err := CurrentSchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "0005" {
+		t.Fatalf("CurrentSchemaVersion = %q, want 0005", got)
 	}
 }
 

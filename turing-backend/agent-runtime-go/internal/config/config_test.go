@@ -46,6 +46,30 @@ func TestLoadFromEnvDefaultsEmptyMaxToolCallsPerRun(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvValidatesMaxConcurrentRunsWithinServerAndProtobufBounds(t *testing.T) {
+	cfg, err := LoadFromEnv(mapEnv(map[string]string{
+		"TURING_INTERNAL_TOKEN":              "internal",
+		"TURING_MAX_CONCURRENT_RUNS_GENERAL": "128",
+	}))
+	if err != nil {
+		t.Fatalf("LoadFromEnv upper bound failed: %v", err)
+	}
+	if cfg.MaxConcurrentRuns != 128 {
+		t.Fatalf("MaxConcurrentRuns = %d, want 128", cfg.MaxConcurrentRuns)
+	}
+	for _, value := range []string{"0", "-1", "129", "2147483648"} {
+		t.Run(value, func(t *testing.T) {
+			_, err := LoadFromEnv(mapEnv(map[string]string{
+				"TURING_INTERNAL_TOKEN":              "internal",
+				"TURING_MAX_CONCURRENT_RUNS_GENERAL": value,
+			}))
+			if err == nil || !strings.Contains(err.Error(), "between 1 and 128") {
+				t.Fatalf("LoadFromEnv max concurrent %s error = %v, want bounded validation", value, err)
+			}
+		})
+	}
+}
+
 func TestLoadFromEnvRejectsNonPositiveMaxToolCallsPerRun(t *testing.T) {
 	for _, value := range []string{"0", "-1"} {
 		t.Run(value, func(t *testing.T) {
@@ -80,6 +104,22 @@ func TestLoadFromEnvDefaultsTimeouts(t *testing.T) {
 	}
 	if cfg.TotalToolTimeout != 180*time.Second {
 		t.Fatalf("TotalToolTimeout = %v, want 180s", cfg.TotalToolTimeout)
+	}
+	if cfg.HeartbeatInterval != 30*time.Second {
+		t.Fatalf("HeartbeatInterval = %v, want capped default 30s", cfg.HeartbeatInterval)
+	}
+}
+
+func TestLoadFromEnvDerivesHeartbeatBelowConfiguredJobLease(t *testing.T) {
+	cfg, err := LoadFromEnv(mapEnv(map[string]string{
+		"TURING_INTERNAL_TOKEN": "internal",
+		"TURING_JOB_TIMEOUT_MS": "30",
+	}))
+	if err != nil {
+		t.Fatalf("LoadFromEnv failed: %v", err)
+	}
+	if cfg.HeartbeatInterval != 10*time.Millisecond {
+		t.Fatalf("HeartbeatInterval = %v, want one third of 30ms lease", cfg.HeartbeatInterval)
 	}
 }
 
