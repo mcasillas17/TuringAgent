@@ -30,6 +30,57 @@ func TestGenerateRejectsUnsupportedProtocVersion(t *testing.T) {
 	}
 }
 
+func TestGenerateResolvesWindowsPubCacheShim(t *testing.T) {
+	binDir := t.TempDir()
+	protocLog := filepath.Join(t.TempDir(), "protoc.log")
+	writeTool(t, binDir, "protoc", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'libprotoc 34.1'; else printf '%s\\n' \"$*\" >> \"$PROTO_LOG\"; fi\n")
+	writeTool(t, binDir, "protoc-gen-go", "#!/bin/sh\nexit 0\n")
+	writeTool(t, binDir, "protoc-gen-go-grpc", "#!/bin/sh\nexit 0\n")
+	writeTool(t, binDir, "dart", "#!/bin/sh\nif [ \"$1 $2 $3\" = 'pub global list' ]; then echo 'protoc_plugin 22.5.0'; fi\n")
+
+	localAppData := t.TempDir()
+	pubCache := filepath.Join(localAppData, "Pub", "Cache")
+	plugin := filepath.Join(pubCache, "bin", "protoc-gen-dart.bat")
+	if err := os.MkdirAll(filepath.Dir(plugin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plugin, []byte("@echo off\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("./generate.sh")
+	cmd.Env = append(os.Environ(),
+		"PATH="+binDir+":/usr/bin:/bin",
+		"PUB_CACHE=",
+		"OS=Windows_NT",
+		"LOCALAPPDATA="+localAppData,
+		"PROTO_LOG="+protocLog,
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generate.sh: %v\n%s", err, output)
+	}
+	logData, err := os.ReadFile(protocLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "--plugin=protoc-gen-dart=" + plugin
+	if !strings.Contains(string(logData), want) {
+		t.Fatalf("protoc calls = %q, want them to contain %q", logData, want)
+	}
+}
+
+func TestGenerateExcludesUnpinnedOptionalGenerators(t *testing.T) {
+	data, err := os.ReadFile("generate.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range []string{"--swift_out", "--csharp_out", "--java_out", "--grpc-swift_out", "--grpc-java_out"} {
+		if strings.Contains(string(data), flag) {
+			t.Fatalf("canonical generation contains unpinned optional flag %q", flag)
+		}
+	}
+}
+
 func writeTool(t *testing.T, dir, name, contents string) {
 	t.Helper()
 	path := filepath.Join(dir, name)
