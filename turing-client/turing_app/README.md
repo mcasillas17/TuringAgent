@@ -12,6 +12,8 @@ Implemented in the client:
 - Backend URL and API key settings stored through secure client storage.
 - gRPC client for config, sessions, messages, event replay, streaming session events, and approval actions.
 - Chat tab wired to backend sessions and streamed message deltas.
+- Inline tool-call status cards for live `tool.call.*` events.
+- Inline notices when a live agent run reaches its tool-iteration limit.
 - Approval cards for `approval.requested` events, cleared by approval terminal events.
 - Model provider selector for `ollama` or `openai_compatible` per sent message.
 
@@ -81,7 +83,9 @@ The Chat tab uses the generated gRPC services for commands, queries, and streame
 - `EventService.ListEvents` and `EventService.SubscribeSessionEvents` for replay and live updates.
 - `ApprovalService.ApproveApproval` and `ApprovalService.DenyApproval` for approval cards.
 
-When a session opens, `ChatScreen` loads persisted messages and subscribes to the session event stream. Incoming `message.delta` events update the active assistant message locally rather than making the client own model execution.
+When a session opens, `ChatScreen` loads persisted messages and subscribes to the session event stream. Incoming `message.delta` events update the active assistant message locally rather than making the client own model execution. Live tool calls render in order between message bubbles, and an `agent.run.step` event renders the runtime-provided note as accessible meta text when the tool-iteration limit cuts a run short.
+
+Historical tool cards and run notices are suppressed during event replay because persisted messages do not carry event sequence values that could place those artifacts back into the transcript correctly. Live events committed after the screen's startup watermark still render normally.
 
 Approval cards appear from `approval.requested` and are removed on `approval.approved`, `approval.denied`, `approval.expired`, or `approval.consumed`.
 
@@ -91,7 +95,9 @@ Approval cards appear from `approval.requested` and are removed on `approval.app
 - `lib/ui/shell/responsive_shell.dart`: polished TuringAgent shell and tab integration.
 - `lib/features/settings/settings_screen.dart`: backend URL/API key form.
 - `lib/features/sessions/session_list_screen.dart`: backend session list and new-chat flow.
-- `lib/features/chat/chat_screen.dart`: active backend-connected chat screen for message loading, sending, streaming deltas, and approvals.
+- `lib/features/chat/chat_screen.dart`: active backend-connected chat screen for message loading, sending, streaming deltas, inline run/tool activity, and approvals.
+- `lib/features/chat/tool_call_card.dart`: inline live tool-call lifecycle UI.
+- `lib/features/chat/run_notice_card.dart`: accessible inline metadata for a truncated live run.
 - `lib/features/approvals/approval_card.dart`: approve/deny UI.
 - `lib/features/chat/model_provider_selector.dart`: provider selection control.
 - `lib/models/`: typed client models for sessions, messages, approvals, config, and streamed Turing events.

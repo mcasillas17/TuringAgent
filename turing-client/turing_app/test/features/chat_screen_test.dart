@@ -202,6 +202,48 @@ void main() {
     unawaited(events.close());
   });
 
+  testWidgets('the run notice renders below the last tool card', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.completed',
+        sequence: 1,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'agent.run.step',
+        sequence: 2,
+        payload: {'note': 'maximum tool iterations reached'},
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      tester.getTopLeft(find.byType(RunNoticeCard)).dy,
+      greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
   testWidgets('a replayed agent.run.step is not appended to history', (
     tester,
   ) async {
