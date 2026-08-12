@@ -38,6 +38,15 @@ void main() {
     );
   });
 
+  test('maps AGENT_RUN_STEP to the chat event string', () {
+    expect(
+      GrpcMappers.eventTypeToString(
+        eventpb.TuringEventType.TURING_EVENT_TYPE_AGENT_RUN_STEP,
+      ),
+      'agent.run.step',
+    );
+  });
+
   test('maps token deltas into assistant message content', () {
     final event = ChatStreamEvent(
       sessionId: 'sess_1',
