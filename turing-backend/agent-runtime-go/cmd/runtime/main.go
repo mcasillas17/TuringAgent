@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/orchestrator"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/worker"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func main() {
@@ -68,6 +70,7 @@ func run() error {
 		MaxConcurrentRuns:        cfg.MaxConcurrentRuns,
 		HeartbeatInterval:        cfg.HeartbeatInterval,
 		DisconnectCleanupTimeout: cfg.TotalToolTimeout,
+		DiscoverTools:            discoverToolsFor(executor),
 	}, runtimeClientAdapter{client: client}, executor)
 	return serve(ctx, runtimeWorker)
 }
@@ -165,6 +168,34 @@ func jitter(d time.Duration) time.Duration {
 	}
 	half := d / 2
 	return half + time.Duration(rand.Int63n(int64(half)+1))
+}
+
+// discoverToolsFor adapts the agent's tool snapshot to the handshake. The
+// orchestrator persists it as its registry and derives policy from it, so it
+// must come from the same discovery the agent executes against.
+func discoverToolsFor(executor *agent.GeneralAssistant) func(context.Context) ([]*turingv1.DiscoveredTool, error) {
+	return func(ctx context.Context) ([]*turingv1.DiscoveredTool, error) {
+		discovered, err := executor.DiscoveredTools(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]*turingv1.DiscoveredTool, 0, len(discovered))
+		for _, tool := range discovered {
+			schema, err := structpb.NewStruct(tool.Schema)
+			if err != nil {
+				// A schema we cannot represent would register a tool the
+				// orchestrator cannot store faithfully; fail the snapshot rather
+				// than report a partial one it would treat as authoritative.
+				return nil, fmt.Errorf("encode schema for %s/%s: %w", tool.ServerName, tool.ToolName, err)
+			}
+			out = append(out, &turingv1.DiscoveredTool{
+				ServerName: tool.ServerName,
+				ToolName:   tool.ToolName,
+				Schema:     schema,
+			})
+		}
+		return out, nil
+	}
 }
 
 type runtimeClientAdapter struct{ client *orchestrator.Client }

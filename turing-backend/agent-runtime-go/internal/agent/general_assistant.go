@@ -105,6 +105,20 @@ func (a *GeneralAssistant) SetToolBeaconPoster(post func(context.Context, *turin
 	a.tools.Runner.PostBeacon = post
 }
 
+// DiscoveredTools is the snapshot the worker reports on connect. It reuses the
+// same discovery Execute serves from, so what the orchestrator registers and
+// what the agent will actually run can never diverge — reporting one tool set
+// and executing against another would let a tool run under a policy that was
+// never registered for it. The registry is cached, so a reconnect does not
+// re-list every MCP server.
+func (a *GeneralAssistant) DiscoveredTools(ctx context.Context) ([]DiscoveredTool, error) {
+	registry, err := a.discoverTools(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return registry.Discovered(), nil
+}
+
 func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, emit func(*turingv1.RuntimeUpdate) error) error {
 	if job == nil {
 		return fmt.Errorf("job is required")

@@ -36,6 +36,15 @@ type Options struct {
 	DisconnectCleanupTimeout time.Duration
 	DecisionTombstoneTTL     time.Duration
 	UpdateSendTimeout        time.Duration
+
+	// DiscoverTools enumerates the tools this worker can execute, reported to the
+	// orchestrator on every connect. The orchestrator persists the snapshot as
+	// its registry and derives policy from it, so a reconnect must re-report
+	// rather than leave a stale one behind.
+	//
+	// Optional: without it the worker reports UNSPECIFIED and the orchestrator
+	// applies its compatibility defaults.
+	DiscoverTools func(context.Context) ([]*turingv1.DiscoveredTool, error)
 }
 
 type Worker struct {
@@ -335,7 +344,26 @@ func (w *Worker) Run(ctx context.Context) error {
 			return w.postToolBeacon(ctx, stream, beacon)
 		})
 	}
-	if err := w.send(streamCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{WorkerId: w.options.WorkerID, AgentId: w.options.AgentID, MaxConcurrentRuns: int32(w.options.MaxConcurrentRuns)}}}); err != nil {
+	ready := &turingv1.RuntimeWorkerReady{
+		WorkerId:          w.options.WorkerID,
+		AgentId:           w.options.AgentID,
+		MaxConcurrentRuns: int32(w.options.MaxConcurrentRuns),
+	}
+	if w.options.DiscoverTools != nil {
+		discovered, err := w.options.DiscoverTools(streamCtx)
+		if err != nil {
+			// Report the failure rather than registering a snapshot we do not
+			// have: the orchestrator rejects a FAILED worker, and the caller's
+			// reconnect loop retries — which is what should happen while an MCP
+			// server is briefly unreachable. Claiming an empty tool set instead
+			// would look authoritative and wipe the orchestrator's registry.
+			ready.ToolDiscoveryStatus = turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_FAILED
+		} else {
+			ready.Tools = discovered
+			ready.ToolDiscoveryStatus = turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_COMPLETE
+		}
+	}
+	if err := w.send(streamCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: ready}}); err != nil {
 		return err
 	}
 	type receiveResult struct {
