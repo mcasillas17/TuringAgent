@@ -275,10 +275,13 @@ func (state *ollamaStreamState) appendToolCallFragments(value any) error {
 		// non-null, non-object value is a protocol error.
 		arguments := map[string]any{}
 		if rawArguments, present := function["arguments"]; present && rawArguments != nil {
-			arguments, ok = rawArguments.(map[string]any)
-			if !ok {
+			// Scoped so a failed assertion cannot leave `arguments` nil for the
+			// caller, and so the loop's outer `ok` is not clobbered.
+			parsed, isObject := rawArguments.(map[string]any)
+			if !isObject {
 				return fmt.Errorf("tool call %d function arguments must be an object", index)
 			}
+			arguments = parsed
 		}
 		if err := state.appendToolCallFragment(index, id, name, arguments); err != nil {
 			return err

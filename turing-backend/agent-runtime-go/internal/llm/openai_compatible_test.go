@@ -970,6 +970,34 @@ func TestOpenAIStreamsToolCallsSortedByIndex(t *testing.T) {
 	}
 }
 
+// The fragment-level guard: `arguments` is a JSON *string* carrying a fragment
+// of the eventual object. Null now means "no fragment", but anything else
+// non-string is still a protocol error and must not be coerced to empty — that
+// would dispatch the call with no arguments instead of failing. This is the only
+// coverage of that guard now that the null case is legal.
+func TestOpenAIRejectsNonStringToolArgumentFragments(t *testing.T) {
+	for name, arguments := range map[string]string{
+		"object":  `{"city":"Paris"}`,
+		"array":   `[]`,
+		"number":  `3`,
+		"boolean": `true`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","function":{"name":"bad","arguments":` + arguments + `}}]}}]}` + "\n\n" +
+				`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n"
+
+			got := streamOpenAIEvents(t, body)
+			assertOpenAIEventTypes(t, got, "error")
+			// Assert the message, not just the code: the finalize-level guard
+			// reports "must be a JSON object" for a different input class, and
+			// the two must not be confusable.
+			if got[0].Code != "model_bad_chunk" || !strings.Contains(got[0].Message, "arguments must be a string") {
+				t.Fatalf("events = %+v, want fragment-level model_bad_chunk", got)
+			}
+		})
+	}
+}
+
 func TestOpenAIRejectsNonObjectToolArguments(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
