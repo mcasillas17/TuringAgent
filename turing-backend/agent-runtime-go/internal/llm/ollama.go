@@ -267,13 +267,18 @@ func (state *ollamaStreamState) appendToolCallFragments(value any) error {
 			}
 		}
 
-		rawArguments, present := function["arguments"]
-		if !present {
-			return fmt.Errorf("tool call %d function arguments must be an object", index)
-		}
-		arguments, ok := rawArguments.(map[string]any)
-		if !ok {
-			return fmt.Errorf("tool call %d function arguments must be an object", index)
+		// A tool that takes no arguments is not malformed, and it is the common
+		// case here: every mcp-system tool declares an empty schema, and Ollama's
+		// ToolCallFunction has no omitempty on Arguments, so such a call arrives
+		// as `"arguments":null` (or absent, from other servers). Rejecting those
+		// fails the entire run without ever dispatching the tool. Only a present,
+		// non-null, non-object value is a protocol error.
+		arguments := map[string]any{}
+		if rawArguments, present := function["arguments"]; present && rawArguments != nil {
+			arguments, ok = rawArguments.(map[string]any)
+			if !ok {
+				return fmt.Errorf("tool call %d function arguments must be an object", index)
+			}
 		}
 		if err := state.appendToolCallFragment(index, id, name, arguments); err != nil {
 			return err

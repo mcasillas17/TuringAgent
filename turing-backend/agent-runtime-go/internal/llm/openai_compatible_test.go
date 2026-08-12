@@ -467,6 +467,55 @@ func TestOpenAIToolCallDeltaAcceptsRepeatedIDAndName(t *testing.T) {
 	}
 }
 
+// A zero-argument tool (every mcp-system tool is one) may stream its arguments
+// as a JSON null from servers that send the field regardless. That means the
+// same as omitting it, which this parser already accepts, so it must not fail
+// the run before the tool is dispatched. Mirrors the Ollama-side case.
+func TestOpenAIAcceptsNullArgumentsForZeroArgumentToolCall(t *testing.T) {
+	for name, fragment := range map[string]string{
+		"null arguments":   `{"name":"system.time","arguments":null}`,
+		"absent arguments": `{"name":"system.time"}`,
+		"empty arguments":  `{"name":"system.time","arguments":""}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("content-type", "text/event-stream")
+				fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":`+fragment+`}]}}]}`+"\n\n")
+				fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
+				fmt.Fprint(w, "data: [DONE]\n\n")
+			}))
+			t.Cleanup(server.Close)
+
+			provider := NewOpenAICompatible(server.URL, "", server.Client())
+			events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "gpt-4o-mini"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := collectEvents(events)
+			for _, event := range got {
+				if event.Type == "error" {
+					t.Fatalf("zero-argument tool call rejected: %s: %s", event.Code, event.Message)
+				}
+			}
+			if len(got) == 0 || got[0].Type != "tool_call" || len(got[0].ToolCalls) != 1 {
+				t.Fatalf("want one tool_call event, got %+v", got)
+			}
+			call := got[0].ToolCalls[0]
+			if call.Name != "system.time" {
+				t.Fatalf("tool name = %q, want system.time", call.Name)
+			}
+			// Marshalled straight into the MCP request downstream, so it must be
+			// an empty object rather than nil.
+			if call.Arguments == nil {
+				t.Fatal("arguments must be an empty map, not nil")
+			}
+			if len(call.Arguments) != 0 {
+				t.Fatalf("arguments = %v, want empty", call.Arguments)
+			}
+		})
+	}
+}
+
 func TestOpenAIRejectsConflictingToolCallIdentityFragments(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -918,17 +967,6 @@ func TestOpenAIStreamsToolCallsSortedByIndex(t *testing.T) {
 	calls := got[0].ToolCalls
 	if len(calls) != 2 || calls[0].ID != "call_0" || calls[1].ID != "call_1" {
 		t.Fatalf("tool calls = %+v, want index order", calls)
-	}
-}
-
-func TestOpenAIRejectsNullToolArguments(t *testing.T) {
-	body := `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","function":{"name":"bad","arguments":null}}]}}]}` + "\n\n" +
-		`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n"
-
-	got := streamOpenAIEvents(t, body)
-	assertOpenAIEventTypes(t, got, "error")
-	if got[0].Code != "model_bad_chunk" || !strings.Contains(got[0].Message, "arguments must be a string") {
-		t.Fatalf("events = %+v, want null arguments model_bad_chunk and no completion", got)
 	}
 }
 

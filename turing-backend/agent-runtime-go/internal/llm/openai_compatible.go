@@ -744,10 +744,17 @@ func (state *openAIStreamState) appendToolCallFragment(index int, fragment openA
 		if err := json.Unmarshal(fragment.Function.Arguments, &decoded); err != nil {
 			return fmt.Errorf("tool call %d arguments must be a string: %w", index, err)
 		}
-		var ok bool
-		argumentFragment, ok = decoded.(string)
-		if !ok {
-			return fmt.Errorf("tool call %d arguments must be a string", index)
+		// A JSON null carries no fragment, which is what a zero-argument call
+		// looks like from servers that send the field anyway. It means the same
+		// as omitting the field, which this function already accepts, so leave
+		// the fragment empty rather than failing the run before the tool is ever
+		// dispatched. Anything else non-string is still a protocol error.
+		if decoded != nil {
+			var ok bool
+			argumentFragment, ok = decoded.(string)
+			if !ok {
+				return fmt.Errorf("tool call %d arguments must be a string", index)
+			}
 		}
 	}
 
