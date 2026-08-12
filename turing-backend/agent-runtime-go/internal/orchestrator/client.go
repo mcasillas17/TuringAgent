@@ -91,9 +91,9 @@ func (c *Client) FetchMessages(ctx context.Context, sessionID string, beforeMess
 	return out, nil
 }
 
-// Recall is wired up only once the tool-calling loop lands, so nothing yet
-// forces this client to keep satisfying the interface it will be passed as.
-// Assert it here instead of discovering the mismatch at wiring time.
+// cmd/runtime passes this client as the recaller's Searcher. Asserted here so a
+// change to either side is caught at compile time in this package, rather than
+// only where they are wired together.
 var _ memory.Searcher = (*Client)(nil)
 
 // SearchMessages finds messages across ALL of the user's sessions. The empty

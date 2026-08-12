@@ -6,26 +6,18 @@
 // no supersession or staleness problem. Persistent facts about the user are a
 // separate concern and deliberately not built here.
 //
-// # Wiring (deferred)
+// # Wiring
 //
-// Recall is dormant until the agent calls it. Once the tool-calling loop lands,
-// construct the recaller (in cmd/runtime/main.go, alongside the orchestrator
-// client, which satisfies Searcher):
+// cmd/runtime/main.go constructs the recaller with the orchestrator client,
+// which satisfies Searcher:
 //
-//	recaller := memory.NewRecaller(orchestratorClient)
+//	Recall: memory.NewRecaller(client)
 //
-// and prepend the block to the request messages in general_assistant.go:
-//
-//	if block, ok := a.recall.Recall(ctx, job.GetSessionId(), job.GetUserText(), requestMessages); ok {
-//		requestMessages = append([]llm.ChatMessage{block}, requestMessages...)
-//	}
-//
-// It is prepended rather than appended so recalled material sits before the
-// live conversation and cannot be mistaken for the user's latest turn.
-//
-// Pass the request messages as they stand: that is how Recall knows which of the
-// current session's own messages are already in front of the model. Passing nil
-// is safe but coarse — see Recall.
+// and GeneralAssistant.Execute prepends the block to the request messages.
+// Prepended, not appended, so recalled material sits before the live
+// conversation and cannot be read as the user's latest turn. Execute passes the
+// request as built, which is how Recall knows what is already in front of the
+// model.
 package memory
 
 import (
