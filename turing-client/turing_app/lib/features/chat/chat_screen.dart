@@ -8,6 +8,7 @@ import '../../networking/api_client.dart';
 import '../../networking/event_source.dart';
 import '../approvals/approval_card.dart';
 import 'model_provider_selector.dart';
+import 'run_notice_card.dart';
 import 'tool_call_card.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -107,6 +108,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   static const _historyFailedNotice =
       'Earlier messages could not be loaded. This session is live from here on.';
+
+  static const _runStepFallbackNotice =
+      'This run stopped after reaching its tool iteration limit.';
 
   /// The event stream is the only source of terminal `tool.call.*` events, so
   /// once it errors (gRPC disconnect, deadline, auth failure) or closes, any
@@ -217,6 +221,9 @@ class _ChatScreenState extends State<ChatScreen> {
       case 'message.delta':
         _applyMessageDelta(event);
         break;
+      case 'agent.run.step':
+        _applyRunStep(event);
+        break;
       case 'approval.requested':
         _addApproval(event);
         break;
@@ -241,6 +248,29 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  void _applyRunStep(TuringEvent event) {
+    if (_isHistoricalRunEvent(event)) return;
+
+    final rawNote = _asString(event.payload['note'])?.trim();
+    final note = (rawNote == null || rawNote.isEmpty)
+        ? _runStepFallbackNotice
+        : rawNote;
+    final entry = _RunNoticeEntry(note);
+    setState(() => _messages.add(entry));
+    _scrollToBottom();
+  }
+
+  /// Whether an inline run artifact belongs to history that is already on
+  /// screen. Approvals deliberately replay to rebuild pending state, while
+  /// tool cards and run notices cannot be interleaved into message history and
+  /// therefore stay hidden once that history is complete.
+  bool _isHistoricalRunEvent(TuringEvent event) {
+    final watermark = _replayWatermarkSequence;
+    if (watermark != null && event.sequence <= watermark) return true;
+    final runId = event.runId;
+    return runId != null && _completedHistoryRunIds.contains(runId);
+  }
+
   void _applyToolCall(TuringEvent event, ToolCallStatus status) {
     // The subscription replays the whole persisted log (see [_start]), so every
     // tool call that happened before this screen opened is re-delivered. Deltas
@@ -258,10 +288,8 @@ class _ChatScreenState extends State<ChatScreen> {
     // calls the log already holds. There is no ordering key that could place
     // them correctly anyway — `Message` carries no event sequence to interleave
     // against — so the past renders as text only.
-    final watermark = _replayWatermarkSequence;
-    if (watermark != null && event.sequence <= watermark) return;
+    if (_isHistoricalRunEvent(event)) return;
     final runId = event.runId;
-    if (runId != null && _completedHistoryRunIds.contains(runId)) return;
     final toolCallId = _asString(event.payload['toolCallId']);
     if (toolCallId == null || toolCallId.isEmpty) return;
     // The frozen proto contract carries `toolName` as a non-nullable scalar, so
@@ -549,6 +577,8 @@ class _ChatMessageTile extends StatelessWidget {
             error: state.error,
           ),
         );
+      case _RunNoticeEntry notice:
+        return RunNoticeCard(note: notice.note);
     }
   }
 }
@@ -710,6 +740,15 @@ class _ToolCallEntry extends _ChatEntry {
 
   @override
   void dispose() => state.dispose();
+}
+
+class _RunNoticeEntry extends _ChatEntry {
+  _RunNoticeEntry(this.note);
+
+  final String note;
+
+  @override
+  void dispose() {}
 }
 
 class _PendingApproval {

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:turing_flutter_app/features/chat/run_notice_card.dart';
 import 'package:turing_flutter_app/features/chat/chat_screen.dart';
 import 'package:turing_flutter_app/features/chat/tool_call_card.dart';
 import 'package:turing_flutter_app/models/message.dart';
@@ -46,6 +47,243 @@ void main() {
     await tester.pump();
 
     expect(find.text('Hello'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('agent.run.step renders the runtime note', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'agent.run.step',
+        sequence: 1,
+        payload: {
+          'note': 'maximum tool iterations reached',
+          'maxToolIterations': 5.0,
+        },
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(RunNoticeCard), findsOneWidget);
+    expect(find.text('maximum tool iterations reached'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a malformed agent.run.step does not break the stream', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'agent.run.step',
+        sequence: 1,
+        payload: {'note': 42, 'maxToolIterations': 'five'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 2,
+        payload: {'messageId': 'm1', 'delta': 'still alive'},
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.text('This run stopped after reaching its tool iteration limit.'),
+      findsOneWidget,
+    );
+    expect(find.text('still alive'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('agent.run.step falls back for absent and empty notes', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(_event(type: 'agent.run.step', sequence: 1, payload: const {}));
+    await tester.pump();
+    events.add(
+      _event(type: 'agent.run.step', sequence: 2, payload: const {'note': ''}),
+    );
+    await tester.pump();
+
+    expect(
+      find.text('This run stopped after reaching its tool iteration limit.'),
+      findsNWidgets(2),
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('the run notice renders below earlier assistant text', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: {'messageId': 'm1', 'delta': 'Let me check.'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'agent.run.step',
+        sequence: 2,
+        payload: {'note': 'maximum tool iterations reached'},
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      tester.getTopLeft(find.byType(RunNoticeCard)).dy,
+      greaterThan(tester.getTopLeft(find.text('Let me check.')).dy),
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a replayed agent.run.step is not appended to history', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final persistedNotice = _event(
+      type: 'agent.run.step',
+      sequence: 7,
+      payload: {'note': 'maximum tool iterations reached'},
+    );
+    final apiClient = _FakeApiClient()..initialEvents = [persistedNotice];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(persistedNotice);
+    await tester.pump();
+
+    expect(find.byType(RunNoticeCard), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a run notice for completed history stays hidden', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..initialEvents = [
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: {'messageId': 'msg_a1', 'delta': 'finished'},
+        ),
+      ]
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_a1',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'finished',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'agent.run.step',
+        sequence: 2,
+        payload: {'note': 'maximum tool iterations reached'},
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.byType(RunNoticeCard),
+      findsNothing,
+      reason:
+          'a notice for a run already represented by complete history would '
+          'be appended below newer conversation content',
+    );
+
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());
   });
