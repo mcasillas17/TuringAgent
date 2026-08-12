@@ -907,9 +907,20 @@ func (workerMCPClient) CallTool(context.Context, string, map[string]any, ...stri
 	return map[string]any{"ok": true}, nil
 }
 
-type fakeRuntimeClient struct{ stream *fakeStream }
+type fakeRuntimeClient struct {
+	stream *fakeStream
+	// queued streams are handed out in order before falling back to stream, so a
+	// test can drive more than one connection (see the reuse test).
+	queued []*fakeStream
+}
 
 func (c *fakeRuntimeClient) ConnectWorker(ctx context.Context) (RuntimeStream, error) {
+	if len(c.queued) > 0 {
+		next := c.queued[0]
+		c.queued = c.queued[1:]
+		next.ctx = ctx
+		return next, nil
+	}
 	c.stream.ctx = ctx
 	return c.stream, nil
 }
@@ -1030,4 +1041,99 @@ func waitForQueuedOutboundRequest(t *testing.T, worker *Worker, want int) {
 		case <-ticker.C:
 		}
 	}
+}
+
+// A worker that cannot take an assignment must say so. Silence is
+// indistinguishable from "accepted and running", so the orchestrator waits on a
+// run that will never start. Reachable once the runtime reconnects: a run still
+// draining from the previous stream can outlive DisconnectCleanupTimeout and
+// keep the concurrency slot occupied.
+func TestWorkerRejectsAssignmentItCannotRun(t *testing.T) {
+	provider := &blockingProvider{started: make(chan struct{}), cancelled: make(chan struct{})}
+	stream := newFakeStream()
+	worker := New(Options{WorkerID: "worker-1", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, providerExecutor{provider: provider})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+	nextSent(t, stream) // worker_ready
+
+	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: &turingv1.AgentJob{JobId: "job_1", RunId: "run_1", Model: "llama3.2"}}}
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first run never started")
+	}
+
+	// The slot is full; this second assignment cannot be served.
+	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: &turingv1.AgentJob{JobId: "job_2", RunId: "run_2", Model: "llama3.2"}}}
+
+	update := nextSent(t, stream)
+	failed := update.GetRunFailed()
+	if failed == nil {
+		t.Fatalf("update = %+v, want a run_failed rejecting the assignment", update)
+	}
+	if failed.RunId != "run_2" {
+		t.Fatalf("rejected run_id = %q, want run_2", failed.RunId)
+	}
+	if !failed.Retryable {
+		t.Fatal("rejection must be retryable: the worker was busy, the run is not broken")
+	}
+	cancel()
+	<-done
+}
+
+// The reconnect loop calls Run repeatedly on the SAME Worker, and Worker carries
+// state across calls (active runs, the outbound writer, the fatal channel).
+// Nothing else exercises a second Run, so nothing else would catch a change that
+// breaks reuse — which is the entire premise of reconnecting.
+func TestWorkerCanRunAgainAfterStreamLoss(t *testing.T) {
+	provider := &blockingProvider{started: make(chan struct{}), cancelled: make(chan struct{})}
+	first, second := newFakeStream(), newFakeStream()
+	client := &fakeRuntimeClient{stream: second, queued: []*fakeStream{first}}
+	worker := New(Options{WorkerID: "worker-1", MaxConcurrentRuns: 1, DisconnectCleanupTimeout: time.Second}, client, providerExecutor{provider: provider})
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(firstCtx) }()
+
+	if ready := nextSent(t, first); ready.GetWorkerReady() == nil {
+		t.Fatalf("first stream: update = %+v, want worker_ready", ready)
+	}
+	first.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: &turingv1.AgentJob{JobId: "job_1", RunId: "run_1", Model: "llama3.2"}}}
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run never started on the first stream")
+	}
+
+	// Lose the connection with a run in flight — the case reconnect exists for.
+	cancelFirst()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return after the stream was lost")
+	}
+
+	// Same Worker, second stream.
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	defer cancelSecond()
+	go func() { done <- worker.Run(secondCtx) }()
+
+	if ready := nextSent(t, second); ready.GetWorkerReady() == nil {
+		t.Fatalf("second stream: update = %+v, want a fresh worker_ready", ready)
+	}
+
+	// And it must actually accept work: a stale entry left in w.active would make
+	// the reconnected worker silently refuse every assignment.
+	restarted := &blockingProvider{started: make(chan struct{}), cancelled: make(chan struct{})}
+	worker.executor = providerExecutor{provider: restarted}
+	second.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: &turingv1.AgentJob{JobId: "job_2", RunId: "run_2", Model: "llama3.2"}}}
+	select {
+	case <-restarted.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reconnected worker did not accept a new run")
+	}
+	cancelSecond()
+	<-done
 }

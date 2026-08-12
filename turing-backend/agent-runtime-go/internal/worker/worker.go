@@ -468,6 +468,21 @@ func (w *Worker) startRun(parent context.Context, stream RuntimeStream, job *tur
 	if _, exists := w.active[job.GetRunId()]; exists || len(w.active) >= w.options.MaxConcurrentRuns {
 		w.mu.Unlock()
 		cancel(context.Canceled)
+		// Say so rather than dropping it. Silence is indistinguishable from
+		// "accepted and running", so the orchestrator would wait on a run that
+		// never starts. Retryable because the worker was busy — the run itself is
+		// fine. Reachable after a reconnect, when a run still draining from the
+		// previous stream can outlive DisconnectCleanupTimeout and keep the slot.
+		sendCtx, sendCancel := context.WithTimeout(parent, w.options.UpdateSendTimeout)
+		defer sendCancel()
+		_ = w.send(sendCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{
+			RunFailed: &turingv1.RuntimeRunFailed{
+				RunId:     job.GetRunId(),
+				Code:      "worker_busy",
+				Message:   "worker cannot accept the run",
+				Retryable: true,
+			},
+		}})
 		return
 	}
 	w.active[job.GetRunId()] = entry

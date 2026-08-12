@@ -1,5 +1,8 @@
 services:
   turing-orchestrator:
+    # The in-process reconnect loop covers stream failures; this covers what it
+    # cannot: a panic, an OOM kill, or a fatal config error at startup.
+    restart: unless-stopped
     build:
       context: ../..
       dockerfile: turing-backend/orchestrator-go/Dockerfile
@@ -40,6 +43,9 @@ services:
       - net-files
 
   turing-agent-runtime-general:
+    # The in-process reconnect loop covers stream failures; this covers what it
+    # cannot: a panic, an OOM kill, or a fatal config error at startup.
+    restart: unless-stopped
     build:
       context: ../..
       dockerfile: turing-backend/agent-runtime-go/Dockerfile
@@ -79,6 +85,9 @@ services:
       - net-files
 
   turing-mcp-system:
+    # The in-process reconnect loop covers stream failures; this covers what it
+    # cannot: a panic, an OOM kill, or a fatal config error at startup.
+    restart: unless-stopped
     build: ../mcp-system
     read_only: true
     cap_drop:
@@ -101,6 +110,9 @@ services:
       - net-system
 
   turing-mcp-files:
+    # The in-process reconnect loop covers stream failures; this covers what it
+    # cannot: a panic, an OOM kill, or a fatal config error at startup.
+    restart: unless-stopped
     build:
       context: ../..
       dockerfile: turing-backend/mcp-files/Dockerfile
