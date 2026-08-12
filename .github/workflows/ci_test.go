@@ -47,7 +47,7 @@ func TestCIWorkflowCoversCoreChecks(t *testing.T) {
 	requireContains(t, workflow, "go test -tags sqlite_fts5 ./.github/workflows")
 	requireContains(t, workflow, "flutter analyze")
 	requireContains(t, workflow, "flutter test")
-	requireContains(t, workflow, "bash -n turing-backend/scripts/compose.sh turing-backend/scripts/dev.sh turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/rotate-client-key.sh turing-backend/scripts/smoke-grpc.sh turing-backend/scripts/smoke.sh")
+	requireContains(t, workflow, "bash -n turing-backend/scripts/compose.sh turing-backend/scripts/dev.sh turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/rotate-client-key.sh turing-backend/scripts/smoke-grpc.sh turing-backend/scripts/smoke.sh turing-backend/scripts/verify-tool-loop.sh")
 }
 
 // stepIndent is the column commands sit at inside ci.yml's `run: |` blocks

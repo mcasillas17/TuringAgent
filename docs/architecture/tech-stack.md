@@ -128,6 +128,22 @@ golangci-lint run --config .golangci.yml --build-tags sqlite_fts5 ./... ./.githu
 tools/proto/check.sh
 (cd turing-client/turing_app && flutter analyze && flutter test)
 (cd turing-backend && ./scripts/smoke-grpc.sh)
+(cd turing-backend && ./scripts/verify-tool-loop.sh)
 ```
 
 The smoke script initializes local secrets, builds the Compose stack, checks `HealthService.Check`, creates a session, sends a deterministic `/tool system.time` message, waits for streamed events, and verifies replay with `EventService.ListEvents`.
+
+`verify-tool-loop.sh` is the on-demand, non-CI companion that asks a real Ollama
+model to choose `system.time` from a natural-language prompt. A pass requires a
+correlated completion and a later answer reflecting the tool's returned UTC
+time in ISO, clock, or Unix epoch form; pre-tool text cannot satisfy this
+correlation. It distinguishes a broken exercised
+loop (`FAIL`, exit `1`) from
+setup, timeout, model-capability, alternate-tool, or uncorrelated-answer
+outcomes (`INCONCLUSIVE`, exit `2`). Host Ollama overrides are propagated to
+Compose with localhost translated to `host.docker.internal`, and a rejected
+model-generated argument remains recoverable when a later valid call succeeds.
+Model provider/stream failures and output or tool call/result guardrails remain
+inconclusive rather than being reported as pipeline defects.
+The macOS application enables the sandbox's outbound-network entitlement so
+its production gRPC client can connect to the local orchestrator.

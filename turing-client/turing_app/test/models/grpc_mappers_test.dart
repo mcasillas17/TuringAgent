@@ -6,6 +6,8 @@ import 'package:turing_flutter_app/generated/turing/v1/common.pb.dart'
 import 'package:turing_flutter_app/generated/turing/v1/events.pb.dart'
     as eventpb;
 import 'package:turing_flutter_app/models/grpc_mappers.dart';
+import 'package:turing_flutter_app/generated/google/protobuf/struct.pb.dart'
+    as structpb;
 
 void main() {
   // Guards the tool-call UI: the chat screen switches on these dotted strings,
@@ -63,6 +65,32 @@ void main() {
     expect(mapped.sequence, 42);
     expect(mapped.payload['messageId'], 'msg_2');
     expect(mapped.payload['delta'], 'Hel');
+  });
+
+  test('maps persisted live tool events with the frozen payload keys', () {
+    final event = ChatStreamEvent(
+      sessionId: 'sess_1',
+      runId: 'run_1',
+      traceId: 'trace_1',
+      sequence: Int64(43),
+      persistedEvent: eventpb.TuringEvent(
+        type: eventpb.TuringEventType.TURING_EVENT_TYPE_TOOL_CALL_STARTED,
+        payload: structpb.Struct(
+          fields: <String, structpb.Value>{
+            'toolCallId': structpb.Value(stringValue: 'call_1'),
+            'toolName': structpb.Value(stringValue: 'system.time'),
+            'serverName': structpb.Value(stringValue: 'system'),
+          }.entries,
+        ),
+      ),
+    );
+
+    final mapped = GrpcMappers.chatStreamEventToTuringEvent(event);
+
+    expect(mapped.type, 'tool.call.started');
+    expect(mapped.payload['toolCallId'], 'call_1');
+    expect(mapped.payload['toolName'], 'system.time');
+    expect(mapped.payload['serverName'], 'system');
   });
 
   test('maps a message run id for history correlation', () {

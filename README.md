@@ -64,6 +64,9 @@ On first launch, enter:
 - **Backend URL:** `http://localhost:3000`
 - **API key:** the `Flutter client API key` printed by `./scripts/init.sh`
 
+The sandboxed macOS builds include the outbound-network entitlement required to
+reach the local backend.
+
 ## Verify the stack
 
 Run the backend smoke test:
@@ -72,6 +75,33 @@ Run the backend smoke test:
 cd turing-backend
 ./scripts/smoke-grpc.sh
 ```
+
+To verify that a real Ollama model chooses `system.time` from a natural-language
+prompt and uses its result, run the on-demand live check:
+
+```bash
+cd turing-backend
+TURING_VERIFY_MODEL=llama3.2 TURING_VERIFY_ATTEMPTS=3 ./scripts/verify-tool-loop.sh
+```
+
+The live check prints `PASS`, `FAIL`, or `INCONCLUSIVE`. Exit code `0` means
+`system.time` completed and the later final answer reflected the returned UTC
+timestamp in post-tool output using ISO, clock, or Unix epoch form. Exit code
+`1` means that exercised
+lifecycle was broken; this includes a timeout after `system.time` starts. Exit
+code `2` means the proof could not exercise that lifecycle, including
+unavailable Ollama or model, setup failure, a pre-tool timeout, a different tool
+choice, no tool choice, or an answer that could not be correlated to the
+returned time.
+Set `TURING_VERIFY_OLLAMA_URL` when Ollama is exposed at a non-default host URL.
+The wrapper maps localhost to `host.docker.internal` for Compose; set
+`TURING_VERIFY_OLLAMA_CONTAINER_URL` only when containers need a different URL.
+Recoverable model-generated tool arguments are retried within the same run and
+remain inconclusive unless a later `system.time` call succeeds. Explicit model
+provider failures and output/tool-call guardrails are also inconclusive rather
+than loop failures. This non-deterministic check is intentionally not run in CI.
+
+![Live macOS system.time tool card and final answer](docs/assets/live-tool-loop-verification.png)
 
 Run developer checks from the repository root:
 
