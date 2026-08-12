@@ -2965,3 +2965,103 @@ type agentBeaconPostedTestError struct {
 func (e agentBeaconPostedTestError) Error() string      { return e.err.Error() }
 func (e agentBeaconPostedTestError) Unwrap() error      { return e.err }
 func (e agentBeaconPostedTestError) BeaconPosted() bool { return true }
+
+// capturingProvider records the messages it was asked to complete, so a test can
+// assert what actually reached the model.
+type capturingProvider struct {
+	seen []llm.ChatMessage
+}
+
+func (p *capturingProvider) ID() string { return "ollama" }
+
+func (p *capturingProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	p.seen = append([]llm.ChatMessage{}, req.Messages...)
+	out := make(chan llm.StreamEvent, 2)
+	out <- llm.StreamEvent{Type: "delta", Text: "done"}
+	out <- llm.StreamEvent{Type: "completed", FinishReason: "stop"}
+	close(out)
+	return out, nil
+}
+
+type fakeRecaller struct {
+	block     llm.ChatMessage
+	ok        bool
+	sessionID string
+	userText  string
+	inContext []llm.ChatMessage
+	callCount int
+}
+
+func (r *fakeRecaller) Recall(_ context.Context, sessionID string, userText string, inContext []llm.ChatMessage) (llm.ChatMessage, bool) {
+	r.callCount++
+	r.sessionID, r.userText = sessionID, userText
+	r.inContext = append([]llm.ChatMessage{}, inContext...)
+	return r.block, r.ok
+}
+
+func TestExecutePrependsRecalledContext(t *testing.T) {
+	provider := &capturingProvider{}
+	recaller := &fakeRecaller{block: llm.ChatMessage{Role: "system", Content: "recalled material"}, ok: true}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{Recall: recaller},
+	)
+
+	collectUpdates(t, assistant, testJob())
+
+	if recaller.callCount != 1 {
+		t.Fatalf("Recall called %d times, want 1", recaller.callCount)
+	}
+	if len(provider.seen) == 0 {
+		t.Fatal("provider saw no messages")
+	}
+	// Prepended, not appended: recalled material must sit before the live
+	// conversation so it cannot be read as the user's latest turn.
+	if provider.seen[0].Role != "system" || provider.seen[0].Content != "recalled material" {
+		t.Fatalf("first message = %+v, want the recalled block first", provider.seen[0])
+	}
+	if last := provider.seen[len(provider.seen)-1]; last.Role != "user" {
+		t.Fatalf("last message = %+v, want the user's turn last", last)
+	}
+	// Recall needs the request as built, to know what is already in front of the
+	// model; passing nil would make it exclude the whole session instead.
+	if len(recaller.inContext) == 0 {
+		t.Fatal("Recall was not given the request messages")
+	}
+}
+
+func TestExecuteRunsWithoutARecaller(t *testing.T) {
+	provider := &capturingProvider{}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{},
+	)
+	updates := collectUpdates(t, assistant, testJob())
+	if len(updates) == 0 {
+		t.Fatal("run produced no updates without a recaller configured")
+	}
+	for _, message := range provider.seen {
+		if message.Role == "system" {
+			t.Fatalf("unconfigured recall injected a system message: %+v", message)
+		}
+	}
+}
+
+// Recall returning nothing is the common case and must be invisible.
+func TestExecuteIgnoresEmptyRecall(t *testing.T) {
+	provider := &capturingProvider{}
+	recaller := &fakeRecaller{ok: false}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{Recall: recaller},
+	)
+	collectUpdates(t, assistant, testJob())
+	for _, message := range provider.seen {
+		if message.Role == "system" {
+			t.Fatalf("empty recall still injected a message: %+v", message)
+		}
+	}
+}

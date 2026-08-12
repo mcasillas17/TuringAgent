@@ -15,6 +15,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/mcp"
+	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/memory"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/orchestrator"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/worker"
@@ -48,7 +49,11 @@ func run() error {
 		return client.WaitForApprovalToken(ctx, approvalID, time.Second, cfg.ApprovalTimeout)
 	}}
 	toolset := &agent.GeneralAssistantTools{
-		SystemMCP:          mcp.NewClient(cfg.MCPSystemBaseURL, cfg.MCPSystemToken, http.DefaultClient),
+		SystemMCP: mcp.NewClient(cfg.MCPSystemBaseURL, cfg.MCPSystemToken, http.DefaultClient),
+		// The orchestrator client is the Searcher: recall queries SearchMessages
+		// across the user's earlier sessions. NewRecaller rather than a struct
+		// literal, because an unset budget would silently recall nothing.
+		Recall:             memory.NewRecaller(client),
 		FilesMCP:           mcp.NewClient(cfg.MCPFilesBaseURL, cfg.MCPFilesToken, http.DefaultClient),
 		Runner:             toolRunner,
 		MaxToolCallsPerRun: cfg.MaxToolCallsPerRun,

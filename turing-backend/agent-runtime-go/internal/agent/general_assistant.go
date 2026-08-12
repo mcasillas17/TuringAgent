@@ -24,10 +24,19 @@ type MessageClient interface {
 	FetchMessages(ctx context.Context, sessionID string, beforeMessageID string) ([]llm.ChatMessage, error)
 }
 
+// ContextRecaller supplies material from the user's earlier sessions. Kept as an
+// interface here so the agent does not depend on the memory package's concrete
+// type and a test can substitute a fake. Optional: a nil recaller simply means
+// no recall.
+type ContextRecaller interface {
+	Recall(ctx context.Context, sessionID string, userText string, inContext []llm.ChatMessage) (llm.ChatMessage, bool)
+}
+
 type GeneralAssistantTools struct {
 	SystemMCP          ToolLister
 	FilesMCP           ToolLister
 	Runner             *tools.Runner
+	Recall             ContextRecaller
 	MaxToolCallsPerRun int
 	ModelTimeout       time.Duration
 	ToolTimeout        time.Duration
@@ -56,6 +65,7 @@ type GeneralAssistant struct {
 	providers          map[turingv1.ModelProvider]llm.Provider
 	messages           MessageClient
 	tools              *GeneralAssistantTools
+	recall             ContextRecaller
 	maxToolCallsPerRun int
 
 	registryMu sync.Mutex
@@ -75,10 +85,15 @@ func NewGeneralAssistant(providers map[turingv1.ModelProvider]llm.Provider, mess
 	if toolset != nil && toolset.MaxToolCallsPerRun > 0 {
 		maxToolCallsPerRun = toolset.MaxToolCallsPerRun
 	}
+	var recall ContextRecaller
+	if toolset != nil {
+		recall = toolset.Recall
+	}
 	return &GeneralAssistant{
 		providers:          providers,
 		messages:           messages,
 		tools:              toolset,
+		recall:             recall,
 		maxToolCallsPerRun: maxToolCallsPerRun,
 	}
 }
@@ -125,6 +140,16 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	}
 	requestMessages := append([]llm.ChatMessage{}, messages...)
 	requestMessages = append(requestMessages, llm.ChatMessage{Role: "user", Content: job.GetUserText()})
+	// Recalled material is prepended so it sits before the live conversation and
+	// cannot be read as the user's latest turn. Recall is given the request as
+	// built, which is how it knows what is already in front of the model; it
+	// never returns an error, degrading to "no block" instead, so a slow or
+	// unavailable search cannot fail the run.
+	if a.recall != nil {
+		if block, ok := a.recall.Recall(ctx, job.GetSessionId(), job.GetUserText(), requestMessages); ok {
+			requestMessages = append([]llm.ChatMessage{block}, requestMessages...)
+		}
+	}
 	var content strings.Builder
 	toolCallCount := 0
 	successfulToolSideEffect := false
