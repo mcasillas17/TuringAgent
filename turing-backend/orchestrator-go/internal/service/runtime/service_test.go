@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,13 +37,19 @@ type harness struct {
 	conn      *grpc.ClientConn
 }
 
+var runtimeTestDatabaseSequence atomic.Uint64
+
 func newHarness(t *testing.T) *harness {
+	return newHarnessWithDispatch(t, DispatchConfig{})
+}
+
+func newHarnessWithDispatch(t *testing.T, dispatch DispatchConfig) *harness {
 	t.Helper()
 	database := openRuntimeTestDB(t)
 	repo := repository.New(database)
 	bus := events.NewBus(8)
 	approvals := approvalsvc.New(repo, bus, "approval-secret")
-	service := New(repo, bus, approvals)
+	service := NewWithConfig(repo, bus, dispatch, approvals)
 	lis := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer(grpc.StreamInterceptor(auth.StreamInterceptor("internal-token")))
 	turingv1.RegisterRuntimeServiceServer(grpcServer, service)
@@ -70,7 +78,7 @@ func newHarness(t *testing.T) *harness {
 
 func openRuntimeTestDB(t *testing.T) *db.DB {
 	t.Helper()
-	name := strings.NewReplacer("/", "_", " ", "_", ":", "_").Replace(t.Name())
+	name := strings.NewReplacer("/", "_", " ", "_", ":", "_").Replace(t.Name()) + fmt.Sprintf("_%d", runtimeTestDatabaseSequence.Add(1))
 	sqlDB, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?mode=memory&cache=shared&_foreign_keys=on", name))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -567,6 +575,53 @@ func TestAssignsPendingJobToReadyWorker(t *testing.T) {
 	}
 }
 
+func TestWorkerHeartbeatRenewsActiveAssignmentLease(t *testing.T) {
+	h := newHarnessWithDispatch(t, DispatchConfig{MaxConcurrentRuns: 1, LeaseDuration: time.Second})
+	enqueued := h.enqueueRun(t, "heartbeat")
+	stream, err := h.runtimeClient(t).ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.CloseSend() }()
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId: "worker-heartbeat", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
+		assigned := command.GetRunAssigned()
+		return assigned != nil && assigned.RunId == enqueued.RunID
+	})
+	var before int64
+	if err := h.database.QueryRowContext(context.Background(), `
+		SELECT execution_lease_expires_at_ns FROM agent_runs WHERE id = ?
+	`, enqueued.RunID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Heartbeat{Heartbeat: &turingv1.RuntimeHeartbeat{
+		WorkerId: "worker-heartbeat",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		var after int64
+		if err := h.database.QueryRowContext(context.Background(), `
+			SELECT execution_lease_expires_at_ns FROM agent_runs WHERE id = ?
+		`, enqueued.RunID).Scan(&after); err != nil {
+			t.Fatal(err)
+		}
+		if after > before {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("heartbeat did not extend lease beyond %d", before)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestDispatchPendingPublishesRunStartedEvent(t *testing.T) {
 	h := newHarness(t)
 	sessionID := h.createSessionAndRun(t, "hello")
@@ -765,7 +820,7 @@ func TestDuplicateWorkerIDIsRejected(t *testing.T) {
 	}
 }
 
-func TestConnectWorkerRequeuesJobWhenAssignmentSendFails(t *testing.T) {
+func TestConnectWorkerFencesJobWhenAssignmentSendFails(t *testing.T) {
 	h := newHarness(t)
 	session, err := h.repo.CreateSession(context.Background(), "Runtime")
 	if err != nil {
@@ -798,17 +853,431 @@ func TestConnectWorkerRequeuesJobWhenAssignmentSendFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != "queued" {
-		t.Fatalf("run status = %q, want queued after send failure", run.Status)
+	if run.Status != "running" || !run.ExecutionActive {
+		t.Fatalf("run = %+v, want running fenced after ambiguous send failure", run)
 	}
 	var jobStatus string
 	var leaseOwner sql.NullString
 	if err := h.database.QueryRowContext(context.Background(), `SELECT status, lease_owner FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus, &leaseOwner); err != nil {
 		t.Fatal(err)
 	}
-	if jobStatus != "pending" || leaseOwner.Valid {
+	if jobStatus != "in_progress" || !leaseOwner.Valid {
 		t.Fatalf("job after send failure: status=%q lease_owner=%q", jobStatus, leaseOwner.String)
 	}
+}
+
+func TestConnectWorkerTerminalizesApprovalWhenDecisionSendFails(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "approval decision send failure")
+	published, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
+	defer unsubscribe()
+	args, err := structpb.NewStruct(map[string]any{"path": "note.txt", "content": "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err = h.service.ConnectWorker(&failingApprovalDecisionStream{
+		ctx:    ctx,
+		cancel: cancel,
+		ready: &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+			WorkerId:          "worker-decision-send-fails",
+			AgentId:           turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+			MaxConcurrentRuns: 1,
+		}}},
+		beacon: &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+			RunId:      enqueued.RunID,
+			TraceId:    enqueued.TraceID,
+			ToolCallId: "call_delivery_failure",
+			AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+			ServerName: "files",
+			ToolName:   "files.update",
+			Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+			Args:       args,
+		}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "tool policy decision send failed") {
+		t.Fatalf("ConnectWorker error = %v, want tool policy decision send failure", err)
+	}
+
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runCode sql.NullString
+	if err := h.database.QueryRowContext(context.Background(), `SELECT error_code FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&runCode); err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "failed" || runCode.String != "approval_delivery_failed" {
+		t.Fatalf("run status/code = %q/%q, want failed/approval_delivery_failed", run.Status, runCode.String)
+	}
+	approval, err := h.repo.GetApprovalByToolCall(context.Background(), enqueued.RunID, "call_delivery_failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval.Status != "denied" {
+		t.Fatalf("approval status = %q, want denied", approval.Status)
+	}
+	var jobStatus, jobCode, toolCallStatus string
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status, error_code FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus, &jobCode); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status FROM tool_calls WHERE id = ?`, "call_delivery_failure").Scan(&toolCallStatus); err != nil {
+		t.Fatal(err)
+	}
+	if jobStatus != "failed" || jobCode != "approval_delivery_failed" || toolCallStatus != "failed" {
+		t.Fatalf("terminal states job=%q/%q tool_call=%q, want failed/approval_delivery_failed/failed", jobStatus, jobCode, toolCallStatus)
+	}
+	var terminalEvents int
+	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'agent.run.failed'`, enqueued.RunID).Scan(&terminalEvents); err != nil {
+		t.Fatal(err)
+	}
+	if terminalEvents != 1 {
+		t.Fatalf("agent.run.failed event count = %d, want 1", terminalEvents)
+	}
+	var publishedTypes []string
+	for len(publishedTypes) < 3 {
+		event := recvBusEvent(t, published, func(event events.Event) bool {
+			return event.RunID == enqueued.RunID &&
+				(event.Type == "approval.denied" || event.Type == "tool.call.failed" || event.Type == "agent.run.failed")
+		})
+		if event.TraceID != enqueued.TraceID {
+			t.Fatalf("%s trace_id = %q, want %q", event.Type, event.TraceID, enqueued.TraceID)
+		}
+		publishedTypes = append(publishedTypes, event.Type)
+	}
+	if want := []string{"approval.denied", "tool.call.failed", "agent.run.failed"}; !reflect.DeepEqual(publishedTypes, want) {
+		t.Fatalf("published delivery-failure events = %v, want %v", publishedTypes, want)
+	}
+}
+
+func TestConnectWorkerFencesTerminalDecisionFailureUntilRecovery(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	session, err := h.repo.CreateSession(ctx, "Decision delivery recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "first approval", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "second after decision failure", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err = h.service.ConnectWorker(&failingApprovalDecisionStream{
+		ctx:    streamCtx,
+		cancel: cancel,
+		ready: &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+			WorkerId: "worker-terminal-decision-send-fails", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+		}}},
+		beacon: &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+			RunId: first.RunID, TraceId: first.TraceID, ToolCallId: "call_terminal_decision_failure",
+			AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "files", ToolName: "files.update",
+			Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, Args: mustStruct(t, map[string]any{"path": "note.txt", "content": "hello"}),
+		}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "tool policy decision send failed") {
+		t.Fatalf("ConnectWorker error = %v, want tool policy decision send failure", err)
+	}
+	firstRun, err := h.repo.GetRun(ctx, first.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstRun.Status != "failed" || !firstRun.ExecutionActive || firstRun.ExecutionState != "uncertain" {
+		t.Fatalf("terminal decision failure state = %+v, want failed active uncertain fence", firstRun)
+	}
+
+	client := h.runtimeClient(t)
+	freshCtx, cancelFresh := context.WithTimeout(h.internalContext(), 2*time.Second)
+	defer cancelFresh()
+	fresh, err := client.ConnectWorker(freshCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = fresh.CloseSend() }()
+	if err := fresh.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId: "worker-after-terminal-decision-failure", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, fresh, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetWorkerAccepted() != nil
+	})
+	time.Sleep(20 * time.Millisecond)
+	secondRun, err := h.repo.GetRun(ctx, second.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondRun.Status != "queued" {
+		t.Fatalf("fresh worker claimed %q before stale execution recovery", secondRun.RunID)
+	}
+	expired := time.Now().Add(-time.Second)
+	if _, err := h.database.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET execution_lease_expires_at = ?, execution_lease_expires_at_ns = ?
+		WHERE id = ?
+	`, expired.Format("2006-01-02T15:04:05.000000000Z"), expired.UnixNano(), first.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.service.RecoverOrphanedAssignments(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assigned := recvUntil(t, fresh, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetRunAssigned() != nil
+	}).GetRunAssigned()
+	if assigned.RunId != second.RunID {
+		t.Fatalf("fresh worker assigned run %q, want later same-session run %q", assigned.RunId, second.RunID)
+	}
+	if err := fresh.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{RunCompleted: &turingv1.RuntimeRunCompleted{
+		RunId: second.RunID, AssistantMessageId: second.AssistantMessageID, Content: "done",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		run, getErr := h.repo.GetRun(ctx, second.RunID)
+		if getErr == nil && run.Status == "completed" {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("fresh worker did not complete later same-session run")
+}
+
+func TestToolBeaconTerminalizesPostCommitApprovalCreationFailure(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "approval creation event failure")
+	if _, err := h.database.ExecContext(context.Background(), `
+		CREATE TRIGGER fail_approval_requested_event
+		BEFORE INSERT ON events
+		WHEN NEW.type = 'approval.requested'
+		BEGIN
+			SELECT RAISE(ABORT, 'append approval requested event failed');
+		END
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	published, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
+	defer unsubscribe()
+	args, err := structpb.NewStruct(map[string]any{"path": "note.txt", "content": "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+		RunId:      enqueued.RunID,
+		TraceId:    enqueued.TraceID,
+		ToolCallId: "call_post_commit_failure",
+		AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName: "files",
+		ToolName:   "files.update",
+		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		Args:       args,
+	}}})
+	if err == nil || !strings.Contains(err.Error(), "append approval requested event failed") {
+		t.Fatalf("tool beacon error = %v, want post-commit approval event failure", err)
+	}
+
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.GetApprovalByToolCall(context.Background(), enqueued.RunID, "call_post_commit_failure"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("approval after atomic creation failure = %v, want no approval row", err)
+	}
+	var runCode, jobCode sql.NullString
+	var jobStatus, toolCallStatus string
+	if err := h.database.QueryRowContext(context.Background(), `SELECT error_code FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&runCode); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status, error_code FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus, &jobCode); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status FROM tool_calls WHERE id = ?`, "call_post_commit_failure").Scan(&toolCallStatus); err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "failed" || runCode.String != "approval_delivery_failed" ||
+		jobStatus != "failed" || jobCode.String != "approval_delivery_failed" || toolCallStatus != "failed" {
+		t.Fatalf("terminal states run=%q/%q job=%q/%q tool_call=%q", run.Status, runCode.String, jobStatus, jobCode.String, toolCallStatus)
+	}
+	var terminalEvents int
+	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'agent.run.failed'`, enqueued.RunID).Scan(&terminalEvents); err != nil {
+		t.Fatal(err)
+	}
+	if terminalEvents != 1 {
+		t.Fatalf("agent.run.failed event count = %d, want 1", terminalEvents)
+	}
+	_ = recvBusEvent(t, published, func(event events.Event) bool {
+		return event.RunID == enqueued.RunID && event.Type == "agent.run.failed"
+	})
+}
+
+func TestApprovalCreationFailureKeepsCapacityUntilWorkerExitAck(t *testing.T) {
+	h := newHarnessWithDispatch(t, DispatchConfig{MaxConcurrentRuns: 1})
+	ctx := context.Background()
+	session, err := h.repo.CreateSession(ctx, "Approval creation failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "first approval", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "later same-session work", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	global := h.enqueueRun(t, "later global work")
+	client := h.runtimeClient(t)
+	firstWorker, err := client.ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = firstWorker.CloseSend() }()
+	if err := firstWorker.Send(workerReady("worker-approval-failure")); err != nil {
+		t.Fatal(err)
+	}
+	assigned := recvUntil(t, firstWorker, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetRunAssigned() != nil && command.GetRunAssigned().GetRunId() == first.RunID
+	}).GetRunAssigned()
+	secondWorker, err := client.ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = secondWorker.CloseSend() }()
+	if err := secondWorker.Send(workerReady("worker-capacity-waiter")); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, secondWorker, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetWorkerAccepted() != nil
+	})
+	if _, err := h.database.ExecContext(ctx, `
+		CREATE TRIGGER fail_approval_requested_capacity
+		BEFORE INSERT ON events
+		WHEN NEW.type = 'approval.requested'
+		BEGIN
+			SELECT RAISE(ABORT, 'approval request event unavailable');
+		END
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstWorker.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+		RunId:      assigned.GetRunId(),
+		TraceId:    assigned.GetTraceId(),
+		ToolCallId: "call_capacity_terminal",
+		AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName: "files",
+		ToolName:   "files.update",
+		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		Args:       mustStruct(t, map[string]any{"path": "note.txt", "content": "hello"}),
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	decision := recvUntil(t, firstWorker, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetToolPolicyDecision() != nil && command.GetToolPolicyDecision().GetToolCallId() == "call_capacity_terminal"
+	}).GetToolPolicyDecision()
+	if !decision.GetTerminalRun() || decision.GetDecision() != turingv1.ToolPolicyDecision_DECISION_DENY {
+		t.Fatalf("approval failure decision = %+v, want terminal deny", decision)
+	}
+	run, err := h.repo.GetRun(ctx, first.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "failed" || !run.ExecutionActive || run.ExecutionAttemptID == "" {
+		t.Fatalf("terminalized run = %+v, want failed active owned attempt", run)
+	}
+	time.Sleep(50 * time.Millisecond)
+	for _, queued := range []repository.EnqueueUserMessageResult{second, global} {
+		candidate, getErr := h.repo.GetRun(ctx, queued.RunID)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		if candidate.Status != "queued" {
+			t.Fatalf("run %q status = %q, want queued until old worker exits", queued.RunID, candidate.Status)
+		}
+	}
+	if err := firstWorker.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{
+		RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: first.RunID},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		candidate, getErr := h.repo.GetRun(ctx, second.RunID)
+		if getErr == nil && candidate.Status == "running" {
+			globalRun, globalErr := h.repo.GetRun(ctx, global.RunID)
+			if globalErr != nil {
+				t.Fatal(globalErr)
+			}
+			if globalRun.Status != "queued" {
+				t.Fatalf("global run status = %q, want queued behind recovered capacity", globalRun.Status)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("same-session run was not assigned after worker exit acknowledgement")
+}
+
+func TestToolBeaconTerminalizesPostCommitApprovalCreationFailureAfterCancellation(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "cancelled post-commit approval failure")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service := New(h.repo, h.bus, cancellingApprovalCreator{repo: h.repo, cancel: cancel})
+	published, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
+	defer unsubscribe()
+
+	err := service.applyUpdate(ctx, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+		RunId:      enqueued.RunID,
+		TraceId:    enqueued.TraceID,
+		ToolCallId: "call_cancelled_post_commit_failure",
+		AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName: "files",
+		ToolName:   "files.update",
+		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		Args:       mustStruct(t, map[string]any{"path": "note.txt", "content": "hello"}),
+	}}})
+	if err == nil || !strings.Contains(err.Error(), "post-commit approval creation failed") {
+		t.Fatalf("tool beacon error = %v, want post-commit approval creation failure", err)
+	}
+
+	approval, err := h.repo.GetApprovalByToolCall(context.Background(), enqueued.RunID, "call_cancelled_post_commit_failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runCode, jobCode sql.NullString
+	var runStatus, jobStatus, toolCallStatus string
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status, error_code FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&runStatus, &runCode); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status, error_code FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus, &jobCode); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status FROM tool_calls WHERE id = ?`, "call_cancelled_post_commit_failure").Scan(&toolCallStatus); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus != "failed" || runCode.String != "approval_delivery_failed" || approval.Status != "denied" ||
+		jobStatus != "failed" || jobCode.String != "approval_delivery_failed" || toolCallStatus != "failed" {
+		t.Fatalf("terminal states run=%q/%q approval=%q job=%q/%q tool_call=%q", runStatus, runCode.String, approval.Status, jobStatus, jobCode.String, toolCallStatus)
+	}
+	_ = recvBusEvent(t, published, func(event events.Event) bool {
+		return event.RunID == enqueued.RunID && event.Type == "agent.run.failed"
+	})
 }
 
 type failingAssignmentStream struct {
@@ -838,6 +1307,55 @@ func (s *failingAssignmentStream) Recv() (*turingv1.RuntimeUpdate, error) {
 }
 
 func (s *failingAssignmentStream) Context() context.Context { return s.ctx }
+
+type failingApprovalDecisionStream struct {
+	grpc.ServerStream
+	ctx        context.Context
+	cancel     context.CancelFunc
+	ready      *turingv1.RuntimeUpdate
+	beacon     *turingv1.RuntimeUpdate
+	readySent  bool
+	beaconSent bool
+}
+
+func (s *failingApprovalDecisionStream) Send(cmd *turingv1.RuntimeCommand) error {
+	if cmd.GetToolPolicyDecision() != nil {
+		if s.cancel != nil {
+			s.cancel()
+		}
+		return errors.New("tool policy decision send failed")
+	}
+	return nil
+}
+
+func (s *failingApprovalDecisionStream) Recv() (*turingv1.RuntimeUpdate, error) {
+	if !s.readySent {
+		s.readySent = true
+		return s.ready, nil
+	}
+	if !s.beaconSent {
+		s.beaconSent = true
+		return s.beacon, nil
+	}
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
+func (s *failingApprovalDecisionStream) Context() context.Context { return s.ctx }
+
+type cancellingApprovalCreator struct {
+	repo   *repository.Repository
+	cancel context.CancelFunc
+}
+
+func (c cancellingApprovalCreator) CreateApprovalForTool(ctx context.Context, runID string, toolCallID string, agentID string, toolName string, _ map[string]any) (string, error) {
+	approval, err := c.repo.CreateApproval(ctx, runID, toolCallID, agentID, toolName, `{}`, "sha256:cancelled", "2099-01-01T00:00:00Z")
+	if err != nil {
+		return "", err
+	}
+	c.cancel()
+	return approval.ApprovalID, errors.New("post-commit approval creation failed")
+}
 
 func TestDispatchPendingRespectsWorkerMaxConcurrentRuns(t *testing.T) {
 	h := newHarness(t)
@@ -1450,14 +1968,15 @@ func TestToolBeaconRequiresApprovalForFilesTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
-		RunId:      enqueued.RunID,
-		TraceId:    enqueued.TraceID,
-		ToolCallId: "call_files_update",
-		AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
-		ServerName: "files",
-		ToolName:   "files.update",
-		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
-		Args:       args,
+		RunId:           enqueued.RunID,
+		TraceId:         enqueued.TraceID,
+		ToolCallId:      "call_files_update",
+		ModelToolCallId: "provider_call_1",
+		AgentId:         turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName:      "files",
+		ToolName:        "files.update",
+		Phase:           turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		Args:            args,
 	}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -1467,6 +1986,21 @@ func TestToolBeaconRequiresApprovalForFilesTool(t *testing.T) {
 	}).GetToolPolicyDecision()
 	if decision.Decision != turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED || decision.ApprovalId == "" {
 		t.Fatalf("tool policy decision = %+v", decision)
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+		RunId: enqueued.RunID, TraceId: enqueued.TraceID, ToolCallId: "call_files_update",
+		ModelToolCallId: "provider_call_1",
+		AgentId:         turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "files",
+		ToolName: "files.update", Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, Args: args,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	repeated := recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+		decision := cmd.GetToolPolicyDecision()
+		return decision != nil && decision.ToolCallId == "call_files_update"
+	}).GetToolPolicyDecision()
+	if repeated.ApprovalId != decision.ApprovalId {
+		t.Fatalf("repeated approval ID = %q, want %q", repeated.ApprovalId, decision.ApprovalId)
 	}
 	var toolCallStatus, approvalID string
 	if err := h.database.QueryRowContext(context.Background(), `SELECT status, approval_id FROM tool_calls WHERE id = ?`, "call_files_update").Scan(&toolCallStatus, &approvalID); err != nil {
@@ -1486,17 +2020,30 @@ func TestToolBeaconRequiresApprovalForFilesTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var sawRequested bool
+	var lifecycle []string
+	var startedPayload map[string]any
 	for _, event := range replayed {
-		if event.Type == "approval.requested" && event.RunID.Valid && event.RunID.String == enqueued.RunID {
-			sawRequested = true
+		if !event.RunID.Valid || event.RunID.String != enqueued.RunID {
+			continue
 		}
-		if event.Type == "tool.call.started" && event.RunID.Valid && event.RunID.String == enqueued.RunID {
-			t.Fatal("approval-required tool emitted tool.call.started before approval")
+		if event.Type == "tool.call.started" || event.Type == "approval.requested" {
+			lifecycle = append(lifecycle, event.Type)
+		}
+		if event.Type == "tool.call.started" {
+			if err := json.Unmarshal([]byte(event.PayloadJSON), &startedPayload); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	if !sawRequested {
-		t.Fatal("approval.requested event was not persisted")
+	if want := []string{"tool.call.started", "approval.requested"}; !reflect.DeepEqual(lifecycle, want) {
+		t.Fatalf("approval start lifecycle = %v, want %v", lifecycle, want)
+	}
+	if want := map[string]any{
+		"toolCallId": "call_files_update",
+		"serverName": "files",
+		"toolName":   "files.update",
+	}; !reflect.DeepEqual(startedPayload, want) {
+		t.Fatalf("tool.call.started payload = %#v", startedPayload)
 	}
 	var auditAction string
 	if err := h.database.QueryRowContext(context.Background(), `SELECT action FROM audit_logs WHERE target = 'call_files_update'`).Scan(&auditAction); err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -1557,7 +2104,7 @@ func TestApprovingApprovalNotifiesAssignedWorkerWithToken(t *testing.T) {
 	}
 }
 
-func TestDenyingApprovalReleasesWorkerAndFailsJob(t *testing.T) {
+func TestDenyingApprovalWaitsForWorkerExitBeforeReleasingCapacity(t *testing.T) {
 	h := newHarness(t)
 	first := h.enqueueRun(t, "first approval")
 	second := h.enqueueRun(t, "second after denial")
@@ -1603,6 +2150,16 @@ func TestDenyingApprovalReleasesWorkerAndFailsJob(t *testing.T) {
 		update := cmd.GetApprovalUpdated()
 		return update != nil && update.ApprovalId == decision.ApprovalId && update.Status == "denied"
 	})
+	secondRun, err := h.repo.GetRun(context.Background(), second.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondRun.Status != "queued" {
+		t.Fatalf("second run status = %q, want queued until denied run exits", secondRun.Status)
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: first.RunID}}}); err != nil {
+		t.Fatal(err)
+	}
 	recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
 		assigned := cmd.GetRunAssigned()
 		return assigned != nil && assigned.RunId == second.RunID
@@ -1616,7 +2173,176 @@ func TestDenyingApprovalReleasesWorkerAndFailsJob(t *testing.T) {
 	}
 }
 
-func TestExpiredApprovalReleasesWorkerAndFailsJob(t *testing.T) {
+func TestDenyingApprovalKeepsLaterSameSessionRunBlockedUntilExecutionExitAck(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	session, err := h.repo.CreateSession(ctx, "Causal approval exit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "first approval", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "second after denial", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := h.runtimeClient(t)
+	firstCtx, cancelFirst := context.WithTimeout(h.internalContext(), 2*time.Second)
+	defer cancelFirst()
+	firstWorker, err := client.ConnectWorker(firstCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = firstWorker.CloseSend() }()
+	if err := firstWorker.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId: "worker-blocked-executor", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	assignedFirst := recvUntil(t, firstWorker, func(cmd *turingv1.RuntimeCommand) bool {
+		assigned := cmd.GetRunAssigned()
+		return assigned != nil && assigned.RunId == first.RunID
+	}).GetRunAssigned()
+
+	secondCtx, cancelSecond := context.WithTimeout(h.internalContext(), 2*time.Second)
+	defer cancelSecond()
+	secondWorker, err := client.ConnectWorker(secondCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = secondWorker.CloseSend() }()
+	if err := secondWorker.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId: "worker-available-capacity", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, secondWorker, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetWorkerAccepted() != nil
+	})
+
+	args, err := structpb.NewStruct(map[string]any{"path": "note.txt", "content": "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := firstWorker.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+		RunId:      assignedFirst.RunId,
+		TraceId:    assignedFirst.TraceId,
+		ToolCallId: "call_causal_denial",
+		AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName: "files",
+		ToolName:   "files.update",
+		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		Args:       args,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	decision := recvUntil(t, firstWorker, func(cmd *turingv1.RuntimeCommand) bool {
+		toolDecision := cmd.GetToolPolicyDecision()
+		return toolDecision != nil && toolDecision.ToolCallId == "call_causal_denial"
+	}).GetToolPolicyDecision()
+	if _, err := h.approvals.DenyApproval(ctx, &turingv1.DenyApprovalRequest{ApprovalId: decision.ApprovalId, Reason: "no"}); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, firstWorker, func(cmd *turingv1.RuntimeCommand) bool {
+		update := cmd.GetApprovalUpdated()
+		return update != nil && update.ApprovalId == decision.ApprovalId && update.Status == "denied"
+	})
+
+	if err := h.service.DispatchPending(ctx); err != nil {
+		t.Fatal(err)
+	}
+	secondRun, err := h.repo.GetRun(ctx, second.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondRun.Status != "queued" {
+		t.Fatalf("later same-session run status = %q, want queued until blocked execution exits", secondRun.Status)
+	}
+
+	if err := firstWorker.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: first.RunID}}}); err != nil {
+		t.Fatal(err)
+	}
+	assignedSecond := recvUntilEither(t, firstWorker, secondWorker, func(cmd *turingv1.RuntimeCommand) bool {
+		assigned := cmd.GetRunAssigned()
+		return assigned != nil && assigned.RunId == second.RunID
+	}).GetRunAssigned()
+	if assignedSecond.RunId != second.RunID {
+		t.Fatalf("assigned run = %q, want %q", assignedSecond.RunId, second.RunID)
+	}
+}
+
+func TestTerminalApprovalCleanupAfterKeepsWorkerStreamUsable(t *testing.T) {
+	h := newHarness(t)
+	first := h.enqueueRun(t, "first approval")
+	second := h.enqueueRun(t, "later work")
+	client := h.runtimeClient(t)
+	ctx, cancel := context.WithTimeout(h.internalContext(), 2*time.Second)
+	defer cancel()
+	stream, err := client.ConnectWorker(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.CloseSend() }()
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId: "worker-terminal-cleanup", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	assigned := recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetRunAssigned() != nil && cmd.GetRunAssigned().RunId == first.RunID
+	}).GetRunAssigned()
+	before := &turingv1.ToolCallBeacon{
+		RunId: assigned.RunId, TraceId: assigned.TraceId, ToolCallId: "call_terminal_cleanup_stream",
+		AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "files", ToolName: "files.update",
+		Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, Args: mustStruct(t, map[string]any{"path": "note.txt", "content": "hello"}),
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: before}}); err != nil {
+		t.Fatal(err)
+	}
+	decision := recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetToolPolicyDecision() != nil && cmd.GetToolPolicyDecision().ToolCallId == before.ToolCallId
+	}).GetToolPolicyDecision()
+	if _, err := h.approvals.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{ApprovalId: decision.ApprovalId, Reason: "no"}); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+		update := cmd.GetApprovalUpdated()
+		return update != nil && update.ApprovalId == decision.ApprovalId && update.Status == "denied"
+	})
+	cleanup := &turingv1.ToolCallBeacon{
+		RunId: before.RunId, TraceId: before.TraceId, ToolCallId: before.ToolCallId,
+		AgentId: before.AgentId, ServerName: before.ServerName, ToolName: before.ToolName,
+		Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER, Status: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED,
+		Args:  before.Args,
+		Error: &turingv1.ToolCallError{Code: "approval_wait_failed", Message: "context canceled"},
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: cleanup}}); err != nil {
+		t.Fatal(err)
+	}
+	afterDecision := recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetToolPolicyDecision() != nil && cmd.GetToolPolicyDecision().ToolCallId == cleanup.ToolCallId
+	}).GetToolPolicyDecision()
+	if afterDecision.Decision != turingv1.ToolPolicyDecision_DECISION_ALLOW {
+		t.Fatalf("cleanup decision = %+v, want allow", afterDecision)
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: first.RunID}}}); err != nil {
+		t.Fatal(err)
+	}
+	next := recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetRunAssigned() != nil && cmd.GetRunAssigned().RunId == second.RunID
+	}).GetRunAssigned()
+	if next.RunId != second.RunID {
+		t.Fatalf("next assignment = %+v, want later run", next)
+	}
+}
+
+func TestExpiredApprovalWaitsForWorkerExitBeforeReleasingCapacity(t *testing.T) {
 	h := newHarness(t)
 	first := h.enqueueRun(t, "first approval")
 	second := h.enqueueRun(t, "second after expiry")
@@ -1665,6 +2391,16 @@ func TestExpiredApprovalReleasesWorkerAndFailsJob(t *testing.T) {
 		update := cmd.GetApprovalUpdated()
 		return update != nil && update.ApprovalId == decision.ApprovalId && update.Status == "expired"
 	})
+	secondRun, err := h.repo.GetRun(context.Background(), second.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondRun.Status != "queued" {
+		t.Fatalf("second run status = %q, want queued until expired run exits", secondRun.Status)
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: first.RunID}}}); err != nil {
+		t.Fatal(err)
+	}
 	recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
 		assigned := cmd.GetRunAssigned()
 		return assigned != nil && assigned.RunId == second.RunID
@@ -1783,7 +2519,12 @@ func TestToolBeaconDeniesUnknownToolWithDurableEvent(t *testing.T) {
 	if err := json.Unmarshal([]byte(denied.PayloadJSON), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["toolCallId"] != "call_unknown" || payload["reason"] != "unknown_tool" {
+	if want := map[string]string{
+		"toolCallId": "call_unknown",
+		"serverName": "system",
+		"toolName":   "system.shell",
+		"error":      "unknown_tool",
+	}; !reflect.DeepEqual(payload, want) {
 		t.Fatalf("tool.call.denied payload = %+v", payload)
 	}
 }
@@ -1820,6 +2561,60 @@ func TestToolBeaconConflictMapsToAlreadyExists(t *testing.T) {
 	}}})
 	if status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("tool call conflict error = %v, want AlreadyExists", err)
+	}
+}
+
+func TestToolBeaconDeniedBeforeExactDuplicateSuppressesSideEffects(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "duplicate denied before")
+	beacon := &turingv1.ToolCallBeacon{
+		RunId: enqueued.RunID, TraceId: enqueued.TraceID, ToolCallId: "call_duplicate_denied",
+		AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "system",
+		ToolName: "system.unknown", Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		decision, err := h.service.handleToolBeacon(context.Background(), beacon)
+		if err != nil {
+			t.Fatalf("duplicate denied BEFORE attempt %d: %v", attempt+1, err)
+		}
+		if decision.GetDecision() != turingv1.ToolPolicyDecision_DECISION_DENY || decision.GetReason() != "unknown_tool" {
+			t.Fatalf("duplicate denied decision = %+v", decision)
+		}
+	}
+	var eventCount, auditCount int
+	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'tool.call.denied'`, enqueued.RunID).Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM audit_logs WHERE target = ? AND action = 'tool.call.before'`, beacon.ToolCallId).Scan(&auditCount); err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 1 || auditCount != 1 {
+		t.Fatalf("duplicate denied BEFORE event/audit counts = %d/%d, want 1/1", eventCount, auditCount)
+	}
+}
+
+func TestToolBeaconSafeBeforeExactDuplicateReturnsSameAllowDecision(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "duplicate safe before")
+	args, err := structpb.NewStruct(map[string]any{"value": "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beacon := &turingv1.ToolCallBeacon{
+		RunId: enqueued.RunID, TraceId: enqueued.TraceID, ToolCallId: "call_duplicate_safe",
+		AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "system",
+		ToolName: "system.echo", Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, Args: args,
+	}
+	first, err := h.service.handleToolBeacon(context.Background(), beacon)
+	if err != nil || first.GetDecision() != turingv1.ToolPolicyDecision_DECISION_ALLOW {
+		t.Fatalf("first safe BEFORE = %+v/%v, want allow", first, err)
+	}
+	duplicate, err := h.service.handleToolBeacon(context.Background(), beacon)
+	if err != nil {
+		t.Fatalf("duplicate safe BEFORE returned error: %v", err)
+	}
+	if duplicate.GetDecision() != turingv1.ToolPolicyDecision_DECISION_ALLOW {
+		t.Fatalf("duplicate safe BEFORE = %+v, want same allow decision", duplicate)
 	}
 }
 
@@ -1870,6 +2665,7 @@ func TestToolBeaconAfterRecordsCompletionEvent(t *testing.T) {
 		ToolName:      "system.echo",
 		Phase:         turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER,
 		Status:        turingv1.ToolCallStatus_TOOL_CALL_STATUS_COMPLETED,
+		Args:          beforeArgs,
 		ResultSummary: "echoed hello",
 		DurationMs:    12,
 	}}}); err != nil {
@@ -1918,8 +2714,335 @@ func TestToolBeaconAfterRecordsCompletionEvent(t *testing.T) {
 	if err := json.Unmarshal([]byte(completed.PayloadJSON), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["toolCallId"] != "call_echo" || payload["resultSummary"] != "echoed hello" || payload["durationMs"] != float64(12) {
+	if want := map[string]any{
+		"toolCallId": "call_echo",
+		"serverName": "system",
+		"toolName":   "system.echo",
+	}; !reflect.DeepEqual(payload, want) {
 		t.Fatalf("tool.call.completed payload = %+v", payload)
+	}
+}
+
+func TestToolBeaconAfterRetriesTerminalEventAppendFailure(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "retry terminal event")
+	before := &turingv1.ToolCallBeacon{
+		RunId:      enqueued.RunID,
+		TraceId:    enqueued.TraceID,
+		ToolCallId: "call_retry_terminal_event",
+		AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName: "system",
+		ToolName:   "system.echo",
+		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+	}
+	if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: before}}); err != nil {
+		t.Fatal(err)
+	}
+	after := &turingv1.ToolCallBeacon{
+		RunId:         enqueued.RunID,
+		TraceId:       enqueued.TraceID,
+		ToolCallId:    before.ToolCallId,
+		AgentId:       turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName:    "system",
+		ToolName:      "system.echo",
+		Phase:         turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER,
+		Status:        turingv1.ToolCallStatus_TOOL_CALL_STATUS_COMPLETED,
+		ResultSummary: "echoed hello",
+		DurationMs:    12,
+	}
+	if _, err := h.database.ExecContext(context.Background(), `
+		CREATE TRIGGER fail_terminal_tool_event
+		BEFORE INSERT ON events
+		WHEN NEW.type = 'tool.call.completed'
+		BEGIN
+			SELECT RAISE(ABORT, 'append terminal tool event failed');
+		END
+	`); err != nil {
+		t.Fatal(err)
+	}
+	update := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: after}}
+	err := h.service.applyUpdate(context.Background(), update)
+	if err == nil || !strings.Contains(err.Error(), "append terminal tool event failed") {
+		t.Fatalf("first terminal beacon error = %v, want append failure", err)
+	}
+	if _, err := h.database.ExecContext(context.Background(), `DROP TRIGGER fail_terminal_tool_event`); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.service.applyUpdate(context.Background(), update); err != nil {
+		t.Fatalf("identical terminal retry: %v", err)
+	}
+	var events int
+	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'tool.call.completed'`, enqueued.RunID).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 {
+		t.Fatalf("terminal tool events = %d, want 1", events)
+	}
+}
+
+func TestToolBeaconAfterRejectsCompletedPendingApproval(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "pending approval completion")
+	args, err := structpb.NewStruct(map[string]any{"path": "note.txt", "content": "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := &turingv1.ToolCallBeacon{
+		RunId:      enqueued.RunID,
+		TraceId:    enqueued.TraceID,
+		ToolCallId: "call_pending_approval",
+		AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName: "files",
+		ToolName:   "files.update",
+		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		Args:       args,
+	}
+	if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: before}}); err != nil {
+		t.Fatal(err)
+	}
+	err = h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+		RunId:         enqueued.RunID,
+		TraceId:       enqueued.TraceID,
+		ToolCallId:    before.ToolCallId,
+		AgentId:       turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName:    "files",
+		ToolName:      "files.update",
+		Phase:         turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER,
+		Status:        turingv1.ToolCallStatus_TOOL_CALL_STATUS_COMPLETED,
+		Args:          args,
+		ResultSummary: "updated",
+	}}})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("pending approval completion error = %v, want FailedPrecondition", err)
+	}
+	var toolCallStatus string
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status FROM tool_calls WHERE id = ?`, before.ToolCallId).Scan(&toolCallStatus); err != nil {
+		t.Fatal(err)
+	}
+	if toolCallStatus != "approval_required" {
+		t.Fatalf("tool call status = %q, want approval_required", toolCallStatus)
+	}
+}
+
+func TestToolBeaconAfterRequiresImmutableIdentityAndSingleTerminalTransition(t *testing.T) {
+	newCompletedBeacon := func(enqueued repository.EnqueueUserMessageResult) *turingv1.ToolCallBeacon {
+		return &turingv1.ToolCallBeacon{
+			RunId:           enqueued.RunID,
+			TraceId:         enqueued.TraceID,
+			ToolCallId:      "call_identity",
+			ModelToolCallId: "provider_call_1",
+			AgentId:         turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+			ServerName:      "system",
+			ToolName:        "system.time",
+			Phase:           turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER,
+			Status:          turingv1.ToolCallStatus_TOOL_CALL_STATUS_COMPLETED,
+			ResultSummary:   "noon",
+			DurationMs:      12,
+		}
+	}
+	recordBefore := func(t *testing.T, h *harness, enqueued repository.EnqueueUserMessageResult) {
+		t.Helper()
+		if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+			RunId:           enqueued.RunID,
+			TraceId:         enqueued.TraceID,
+			ToolCallId:      "call_identity",
+			ModelToolCallId: "provider_call_1",
+			AgentId:         turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+			ServerName:      "system",
+			ToolName:        "system.time",
+			Phase:           turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("rejects mismatched identity", func(t *testing.T) {
+		h := newHarness(t)
+		enqueued := h.createRunningRunResult(t, "identity")
+		recordBefore(t, h, enqueued)
+		after := newCompletedBeacon(enqueued)
+		after.ModelToolCallId = "provider_call_other"
+		err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: after}})
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("mismatched after identity error = %v, want FailedPrecondition", err)
+		}
+	})
+
+	t.Run("rejects unexpected model identity", func(t *testing.T) {
+		h := newHarness(t)
+		enqueued := h.createRunningRunResult(t, "identity")
+		if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+			RunId:      enqueued.RunID,
+			TraceId:    enqueued.TraceID,
+			ToolCallId: "call_identity",
+			AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+			ServerName: "system",
+			ToolName:   "system.time",
+			Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+		after := newCompletedBeacon(enqueued)
+		err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: after}})
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("unexpected model identity error = %v, want FailedPrecondition", err)
+		}
+	})
+
+	t.Run("retries identical terminal outcome without duplicate event", func(t *testing.T) {
+		h := newHarness(t)
+		enqueued := h.createRunningRunResult(t, "idempotent")
+		recordBefore(t, h, enqueued)
+		after := newCompletedBeacon(enqueued)
+		update := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: after}}
+		if err := h.service.applyUpdate(context.Background(), update); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.service.applyUpdate(context.Background(), update); err != nil {
+			t.Fatalf("identical after retry: %v", err)
+		}
+		var events int
+		if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'tool.call.completed'`, enqueued.RunID).Scan(&events); err != nil {
+			t.Fatal(err)
+		}
+		if events != 1 {
+			t.Fatalf("terminal tool events = %d, want 1", events)
+		}
+	})
+
+	t.Run("retries identical terminal outcome after run completes", func(t *testing.T) {
+		h := newHarness(t)
+		enqueued := h.createRunningRunResult(t, "completed idempotent")
+		recordBefore(t, h, enqueued)
+		after := newCompletedBeacon(enqueued)
+		update := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: after}}
+		if err := h.service.applyUpdate(context.Background(), update); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.repo.CompleteRun(context.Background(), enqueued.RunID, "", ""); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.service.applyUpdate(context.Background(), update); err != nil {
+			t.Fatalf("identical after retry after completion: %v", err)
+		}
+		after.ResultSummary = "different"
+		err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: after}})
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("conflicting terminal retry after completion error = %v, want FailedPrecondition", err)
+		}
+		var events int
+		if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'tool.call.completed'`, enqueued.RunID).Scan(&events); err != nil {
+			t.Fatal(err)
+		}
+		if events != 1 {
+			t.Fatalf("terminal tool events = %d, want 1", events)
+		}
+	})
+
+	t.Run("rejects conflicting terminal retry", func(t *testing.T) {
+		h := newHarness(t)
+		enqueued := h.createRunningRunResult(t, "conflict")
+		recordBefore(t, h, enqueued)
+		after := newCompletedBeacon(enqueued)
+		if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: after}}); err != nil {
+			t.Fatal(err)
+		}
+		after.ResultSummary = "different"
+		err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: after}})
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("conflicting terminal retry error = %v, want FailedPrecondition", err)
+		}
+	})
+
+	t.Run("rejects after from denied call", func(t *testing.T) {
+		h := newHarness(t)
+		enqueued := h.createRunningRunResult(t, "illegal transition")
+		if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+			RunId:      enqueued.RunID,
+			TraceId:    enqueued.TraceID,
+			ToolCallId: "call_denied_transition",
+			AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+			ServerName: "system",
+			ToolName:   "system.shell",
+			Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+		err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+			RunId:      enqueued.RunID,
+			TraceId:    enqueued.TraceID,
+			ToolCallId: "call_denied_transition",
+			AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+			ServerName: "system",
+			ToolName:   "system.shell",
+			Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER,
+			Status:     turingv1.ToolCallStatus_TOOL_CALL_STATUS_COMPLETED,
+		}}})
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("after denied call error = %v, want FailedPrecondition", err)
+		}
+	})
+}
+
+func TestToolBeaconAfterAcceptsFailedCleanupForTerminalApproval(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		terminal func(*harness, string) error
+	}{
+		{
+			name: "denied",
+			terminal: func(h *harness, approvalID string) error {
+				_, err := h.approvals.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{ApprovalId: approvalID, Reason: "no"})
+				return err
+			},
+		},
+		{
+			name: "expired",
+			terminal: func(h *harness, approvalID string) error {
+				if _, err := h.database.ExecContext(context.Background(), `UPDATE approvals SET expires_at = ? WHERE id = ?`, time.Now().Add(-time.Second).Format(time.RFC3339Nano), approvalID); err != nil {
+					return err
+				}
+				_, err := h.approvals.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID})
+				if status.Code(err) != codes.FailedPrecondition {
+					return fmt.Errorf("ApproveApproval error = %v, want FailedPrecondition", err)
+				}
+				return nil
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := newHarness(t)
+			enqueued := h.createRunningRunResult(t, "terminal approval cleanup")
+			before := &turingv1.ToolCallBeacon{
+				RunId: enqueued.RunID, TraceId: enqueued.TraceID, ToolCallId: "call_terminal_approval_cleanup",
+				AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "files", ToolName: "files.update",
+				Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, Args: mustStruct(t, map[string]any{"path": "note.txt", "content": "hello"}),
+			}
+			decision, err := h.service.handleToolBeacon(context.Background(), before)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.GetApprovalId() == "" {
+				t.Fatalf("before decision = %+v, want approval", decision)
+			}
+			if err := test.terminal(h, decision.GetApprovalId()); err != nil {
+				t.Fatal(err)
+			}
+			cleanup := &turingv1.ToolCallBeacon{
+				RunId: before.RunId, TraceId: before.TraceId, ToolCallId: before.ToolCallId,
+				AgentId: before.AgentId, ServerName: before.ServerName, ToolName: before.ToolName,
+				Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER, Status: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED,
+				Args:  before.Args,
+				Error: &turingv1.ToolCallError{Code: "approval_wait_failed", Message: "context canceled"},
+			}
+			if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: cleanup}}); err != nil {
+				t.Fatalf("failed cleanup AFTER = %v", err)
+			}
+			cleanup.Status = turingv1.ToolCallStatus_TOOL_CALL_STATUS_COMPLETED
+			if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: cleanup}}); status.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("conflicting terminal cleanup AFTER = %v, want FailedPrecondition", err)
+			}
+		})
 	}
 }
 
@@ -1927,7 +3050,7 @@ func TestNotifyApprovalUpdatedSendsTokenToAssignedWorker(t *testing.T) {
 	h := newHarness(t)
 	commands := make(chan *turingv1.RuntimeCommand, 1)
 	h.service.mu.Lock()
-	h.service.workers["worker-approval-update"] = &worker{commands: commands, maxConcurrent: 1, assignments: map[string]string{"run_approval": "job_approval"}}
+	h.service.workers["worker-approval-update"] = &worker{commands: commands, maxConcurrent: 1, assignments: map[string]assignment{"run_approval": {runID: "run_approval", jobID: "job_approval"}}}
 	h.service.mu.Unlock()
 
 	if err := h.service.NotifyApprovalUpdated(context.Background(), "run_approval", "appr_1", "approved", "header.payload.signature"); err != nil {
@@ -1945,12 +3068,40 @@ func TestNotifyApprovalUpdatedSendsTokenToAssignedWorker(t *testing.T) {
 	}
 }
 
+func TestWorkerCloseWaitsForInFlightUpdate(t *testing.T) {
+	connectedWorker := &worker{commands: make(chan *turingv1.RuntimeCommand), assignments: map[string]assignment{"run_1": {runID: "run_1", jobID: "job_1"}}}
+	release, err := connectedWorker.beginUpdate(&turingv1.RuntimeUpdate{
+		Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: "run_1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan []assignment, 1)
+	go func() {
+		closed <- connectedWorker.close()
+	}()
+	select {
+	case assignments := <-closed:
+		t.Fatalf("worker close completed while update was in flight: %+v", assignments)
+	case <-time.After(20 * time.Millisecond):
+	}
+	release()
+	select {
+	case assignments := <-closed:
+		if len(assignments) != 1 || assignments[0] != (assignment{jobID: "job_1", runID: "run_1"}) {
+			t.Fatalf("closed assignments = %+v, want run_1", assignments)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker close did not finish after update completed")
+	}
+}
+
 func TestCancelRunWaitsForCommandBufferSpace(t *testing.T) {
 	h := newHarness(t)
 	commands := make(chan *turingv1.RuntimeCommand, 1)
 	commands <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_WorkerAccepted{WorkerAccepted: &turingv1.RuntimeWorkerAccepted{WorkerId: "worker-buffered"}}}
 	h.service.mu.Lock()
-	h.service.workers["worker-buffered"] = &worker{commands: commands, maxConcurrent: 1, assignments: map[string]string{"run_buffered": "job_buffered"}}
+	h.service.workers["worker-buffered"] = &worker{commands: commands, maxConcurrent: 1, assignments: map[string]assignment{"run_buffered": {runID: "run_buffered", jobID: "job_buffered"}}}
 	h.service.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -1982,7 +3133,7 @@ func TestCancelRunWaitsForCommandBufferSpace(t *testing.T) {
 	}
 }
 
-func TestWorkerDisconnectRequeuesAssignedJob(t *testing.T) {
+func TestWorkerDisconnectFencesDeliveredJobUntilRecovery(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.enqueueRun(t, "disconnect")
 	client := h.runtimeClient(t)
@@ -2003,19 +3154,94 @@ func TestWorkerDisconnectRequeuesAssignedJob(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
-		if err == nil && run.Status == "queued" {
+		if err == nil && run.Status == "running" && run.ExecutionActive && run.ExecutionState == "uncertain" {
 			var jobStatus string
 			if err := h.database.QueryRowContext(context.Background(), `SELECT status FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus); err != nil {
 				t.Fatal(err)
 			}
-			if jobStatus != "pending" {
-				t.Fatalf("job status = %q, want pending", jobStatus)
+			if jobStatus != "in_progress" {
+				t.Fatalf("job status = %q, want in_progress while execution is uncertain", jobStatus)
 			}
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("assigned job was not requeued after worker disconnect")
+	t.Fatal("assigned job was not fenced after worker disconnect")
+}
+
+func TestWorkerDisconnectTerminalizesPendingApprovalAndFencesExecution(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "disconnect pending approval")
+	client := h.runtimeClient(t)
+	stream, err := client.ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId: "worker-disconnect-pending-approval", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetRunAssigned() != nil && cmd.GetRunAssigned().RunId == enqueued.RunID
+	})
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+		RunId: enqueued.RunID, TraceId: enqueued.TraceID, ToolCallId: "call_disconnect_pending_approval",
+		AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "files", ToolName: "files.update",
+		Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, Args: mustStruct(t, map[string]any{"path": "note.txt", "content": "hello"}),
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	decision := recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetToolPolicyDecision() != nil && cmd.GetToolPolicyDecision().ToolCallId == "call_disconnect_pending_approval"
+	}).GetToolPolicyDecision()
+	if decision.GetApprovalId() == "" {
+		t.Fatalf("approval decision = %+v, want approval ID", decision)
+	}
+	if err := stream.CloseSend(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var statusValue string
+		var active int
+		var executionState string
+		var acknowledgedAt sql.NullString
+		if err := h.database.QueryRowContext(context.Background(), `SELECT status, execution_active, execution_state, execution_exit_acknowledged_at FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&statusValue, &active, &executionState, &acknowledgedAt); err == nil &&
+			statusValue == "failed" && active == 1 && executionState == "uncertain" && !acknowledgedAt.Valid {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	var statusValue string
+	var active int
+	var executionState string
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status, execution_active, execution_state FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&statusValue, &active, &executionState); err != nil {
+		t.Fatal(err)
+	}
+	if statusValue != "failed" || active != 1 || executionState != "uncertain" {
+		t.Fatalf("pending approval disconnect state status=%q active=%d execution_state=%q, want failed/1/uncertain", statusValue, active, executionState)
+	}
+	expired := time.Now().Add(-time.Second)
+	if _, err := h.database.ExecContext(context.Background(), `
+		UPDATE agent_runs
+		SET execution_lease_expires_at = ?, execution_lease_expires_at_ns = ?
+		WHERE id = ?
+	`, expired.Format("2006-01-02T15:04:05.000000000Z"), expired.UnixNano(), enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.service.RecoverOrphanedAssignments(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+		if err == nil && !run.ExecutionActive {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("pending approval execution fence was not released by stale recovery")
 }
 
 func (h *harness) enqueueRun(t *testing.T, content string) repository.EnqueueUserMessageResult {
@@ -2102,6 +3328,40 @@ func TestRunFailedPublishesTerminalEvent(t *testing.T) {
 	}
 }
 
+func TestRunFailedPublishesDependentLifecycleEventsInOrder(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "fail pending approval")
+	if err := h.repo.RecordToolCallBefore(context.Background(), repository.ToolCallRecord{
+		ToolCallID: "call_run_failed", RunID: enqueued.RunID, ModelToolCallID: "model_run_failed",
+		Status: "approval_required",
+	}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.CreateApproval(context.Background(), enqueued.RunID, "call_run_failed", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:test", "2099-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	ch, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
+	defer unsubscribe()
+
+	err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
+		RunId: enqueued.RunID, Code: "model_error", Message: "model failed",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for len(got) < 3 {
+		event := recvBusEvent(t, ch, func(event events.Event) bool {
+			return event.RunID == enqueued.RunID &&
+				(event.Type == "approval.expired" || event.Type == "tool.call.failed" || event.Type == "agent.run.failed")
+		})
+		got = append(got, event.Type)
+	}
+	if want := []string{"approval.expired", "tool.call.failed", "agent.run.failed"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("published failure lifecycle = %v, want %v", got, want)
+	}
+}
+
 func mustStruct(t *testing.T, values map[string]any) *structpb.Struct {
 	t.Helper()
 	out, err := structpb.NewStruct(values)
@@ -2153,4 +3413,44 @@ func recvUntil(t *testing.T, stream turingv1.RuntimeService_ConnectWorkerClient,
 			}
 		}
 	}
+}
+
+func recvUntilEither(t *testing.T, first turingv1.RuntimeService_ConnectWorkerClient, second turingv1.RuntimeService_ConnectWorkerClient, match func(*turingv1.RuntimeCommand) bool) *turingv1.RuntimeCommand {
+	t.Helper()
+	type receivedCommand struct {
+		cmd *turingv1.RuntimeCommand
+		err error
+	}
+	received := make(chan receivedCommand, 2)
+	for _, stream := range []turingv1.RuntimeService_ConnectWorkerClient{first, second} {
+		stream := stream
+		go func() {
+			cmd, err := stream.Recv()
+			received <- receivedCommand{cmd: cmd, err: err}
+		}()
+	}
+	select {
+	case result := <-received:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if match(result.cmd) {
+			return result.cmd
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for runtime command")
+	}
+	select {
+	case result := <-received:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if match(result.cmd) {
+			return result.cmd
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for runtime command")
+	}
+	t.Fatal("received no matching runtime command")
+	return nil
 }

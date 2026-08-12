@@ -24,32 +24,77 @@ type Runner struct {
 }
 
 type RunInput struct {
-	AgentID    turingv1.AgentId
-	RunID      string
-	TraceID    string
-	ServerName string
-	ToolName   string
-	Args       map[string]any
-	MCPClient  MCPClient
+	AgentID         turingv1.AgentId
+	RunID           string
+	TraceID         string
+	ModelToolCallID string
+	ServerName      string
+	ToolName        string
+	Args            map[string]any
+	MCPClient       MCPClient
+	Timeout         time.Duration
+	TotalTimeout    time.Duration
 }
 
 func (r *Runner) Run(ctx context.Context, input RunInput) (map[string]any, error) {
+	outcome, err := r.RunWithOutcome(ctx, input)
+	return outcome.Result, err
+}
+
+type RunOutcome struct {
+	Result        map[string]any
+	SideEffecting bool
+}
+
+const fallbackAfterReportTimeout = 5 * time.Second
+
+func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome, error) {
+	ctx, cancel := stageContext(ctx, input.TotalTimeout)
+	defer cancel()
 	if input.Args == nil {
 		input.Args = map[string]any{}
 	}
-	if err := r.fetchMetadata(ctx); err != nil {
-		return nil, err
-	}
-	toolCallID := newToolCallID()
-	started := time.Now()
-	decision, err := r.post(ctx, beacon(input, toolCallID, turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, turingv1.ToolCallStatus_TOOL_CALL_STATUS_UNSPECIFIED, "", nil, 0))
+	arguments, err := safejson.ToStruct(input.Args)
 	if err != nil {
-		if beaconWasPosted(err) {
-			_ = r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "tool_policy_decision_failed", Message: err.Error()}, started)
+		return RunOutcome{}, fmt.Errorf("serialize tool arguments: %w", err)
+	}
+	input.Args = arguments.AsMap()
+	if err := r.fetchMetadata(ctx, input.Timeout); err != nil {
+		return RunOutcome{}, err
+	}
+	toolCallID := NewToolCallID()
+	started := time.Now()
+	beforeBeacon, err := beacon(input, toolCallID, turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, turingv1.ToolCallStatus_TOOL_CALL_STATUS_UNSPECIFIED, "", nil, 0)
+	if err != nil {
+		return RunOutcome{}, err
+	}
+	decision, err := r.postWithTimeout(ctx, input.Timeout, beforeBeacon)
+	if err != nil {
+		operationErr := beaconReportingError{err: err}
+		if !beaconWasPosted(err) {
+			return RunOutcome{}, operationErr
 		}
-		return nil, err
+		if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "tool_policy_decision_failed", Message: err.Error()}, started); reportErr != nil {
+			return RunOutcome{}, ReportingFailureError{operationErr: operationErr, reportErr: reportErr}
+		}
+		return RunOutcome{}, operationErr
+	}
+	if err := validatePolicyDecision(decision, toolCallID); err != nil {
+		operationErr := beaconReportingError{err: markBeaconPosted(err)}
+		if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "tool_policy_decision_invalid", Message: err.Error()}, started); reportErr != nil {
+			return RunOutcome{}, ReportingFailureError{operationErr: operationErr, reportErr: reportErr}
+		}
+		return RunOutcome{}, operationErr
+	}
+	if decision.GetTerminalRun() {
+		reason := decision.GetReason()
+		if reason == "" {
+			reason = "run terminalized by tool policy"
+		}
+		return RunOutcome{}, terminalRunError{err: errors.New(reason)}
 	}
 	approvalToken := ""
+	sideEffecting := false
 	switch decision.GetDecision() {
 	case turingv1.ToolPolicyDecision_DECISION_ALLOW:
 	case turingv1.ToolPolicyDecision_DECISION_DENY:
@@ -57,34 +102,63 @@ func (r *Runner) Run(ctx context.Context, input RunInput) (map[string]any, error
 		if reason == "" {
 			reason = "tool_denied"
 		}
-		_ = r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_DENIED, "", &turingv1.ToolCallError{Code: "tool_denied", Message: reason}, started)
-		return nil, fmt.Errorf("tool denied: %s", reason)
+		return RunOutcome{}, ToolRejectedError{Reason: reason}
 	case turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED:
+		sideEffecting = true
 		if r.WaitApproval == nil {
-			_ = r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_DENIED, "", &turingv1.ToolCallError{Code: "approval_unavailable", Message: "approval waiter is not configured"}, started)
-			return nil, errors.New("approval waiter is not configured")
+			err = ApprovalWaitError{err: errors.New("approval waiter is not configured")}
+			if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "approval_wait_failed", Message: err.Error()}, started); reportErr != nil {
+				return RunOutcome{}, ReportingFailureError{operationErr: err, reportErr: reportErr}
+			}
+			return RunOutcome{}, err
 		}
 		approvalToken, err = r.WaitApproval(ctx, decision.GetApprovalId())
 		if err != nil {
-			_ = r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_DENIED, "", &turingv1.ToolCallError{Code: "approval_denied", Message: err.Error()}, started)
-			return nil, err
+			if cause := terminalApprovalCause(ctx); cause != nil {
+				return RunOutcome{}, terminalRunError{err: cause}
+			}
+			if runWasTerminalized(err) {
+				return RunOutcome{}, terminalRunError{err: err}
+			}
+			operationErr := ApprovalWaitError{err: err}
+			if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "approval_wait_failed", Message: err.Error()}, started); reportErr != nil {
+				return RunOutcome{}, ReportingFailureError{operationErr: operationErr, reportErr: reportErr}
+			}
+			return RunOutcome{}, operationErr
 		}
 	default:
-		_ = r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_DENIED, "", &turingv1.ToolCallError{Code: "tool_denied", Message: "unsupported policy decision"}, started)
-		return nil, errors.New("unsupported tool policy decision")
+		err = errors.New("unsupported tool policy decision")
+		if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "tool_policy_decision_invalid", Message: err.Error()}, started); reportErr != nil {
+			return RunOutcome{}, ReportingFailureError{operationErr: err, reportErr: reportErr}
+		}
+		return RunOutcome{}, markBeaconPosted(err)
 	}
-	result, err := input.MCPClient.CallTool(ctx, input.ToolName, input.Args, approvalToken)
+	callCtx, cancel := stageContext(ctx, input.Timeout)
+	result, err := input.MCPClient.CallTool(callCtx, input.ToolName, input.Args, approvalToken)
+	cancel()
 	if err != nil {
-		_ = r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "mcp_call_failed", Message: err.Error()}, started)
-		return nil, err
+		var operationErr error = RecoverableToolError{err: err}
+		if sideEffecting {
+			operationErr = SideEffectUnknownError{err: err}
+		}
+		if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "mcp_call_failed", Message: err.Error()}, started); reportErr != nil {
+			return RunOutcome{}, ReportingFailureError{operationErr: operationErr, reportErr: reportErr}
+		}
+		return RunOutcome{}, operationErr
 	}
+	outcome := RunOutcome{Result: result, SideEffecting: sideEffecting}
 	if err := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_COMPLETED, safejson.Summary(result, 500), nil, started); err != nil {
-		return nil, err
+		if sideEffecting {
+			return outcome, SideEffectCommittedError{err: err}
+		}
+		return outcome, ReportingFailureError{operationErr: errors.New("safe tool call completed"), reportErr: err}
 	}
-	return result, nil
+	return outcome, nil
 }
 
-func (r *Runner) fetchMetadata(ctx context.Context) error {
+func (r *Runner) fetchMetadata(ctx context.Context, timeout time.Duration) error {
+	ctx, cancel := stageContext(ctx, timeout)
+	defer cancel()
 	group, ctx := errgroup.WithContext(ctx)
 	for _, fetch := range r.MetadataFetchers {
 		fetch := fetch
@@ -94,15 +168,60 @@ func (r *Runner) fetchMetadata(ctx context.Context) error {
 }
 
 func (r *Runner) postAfter(ctx context.Context, input RunInput, toolCallID string, status turingv1.ToolCallStatus, summary string, callErr *turingv1.ToolCallError, started time.Time) error {
-	_, err := r.post(ctx, beacon(input, toolCallID, turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER, status, summary, callErr, time.Since(started).Milliseconds()))
+	reportCtx, cancel := afterReportContext(ctx, input.Timeout)
+	defer cancel()
+	afterBeacon, err := beacon(input, toolCallID, turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER, status, summary, callErr, time.Since(started).Milliseconds())
+	if err != nil {
+		return err
+	}
+	decision, err := r.postWithTimeout(reportCtx, input.Timeout, afterBeacon)
+	if err == nil {
+		err = validatePolicyDecision(decision, toolCallID)
+		if err == nil && decision.GetDecision() != turingv1.ToolPolicyDecision_DECISION_ALLOW {
+			err = fmt.Errorf("after tool policy decision must be allow, got %s", decision.GetDecision().String())
+		}
+
+		if err != nil {
+			err = markBeaconPosted(err)
+		}
+	}
 	return err
 }
 
-func (r *Runner) post(ctx context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+func afterReportContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		timeout = fallbackAfterReportTimeout
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), timeout)
+}
+
+func validatePolicyDecision(decision *turingv1.ToolPolicyDecision, toolCallID string) error {
+	if decision == nil {
+		return errors.New("tool policy decision is required")
+	}
+	if decision.GetToolCallId() == "" {
+		return errors.New("tool policy decision tool_call_id is required")
+	}
+	if decision.GetToolCallId() != toolCallID {
+		return fmt.Errorf("tool policy decision tool_call_id %q does not match beacon %q", decision.GetToolCallId(), toolCallID)
+	}
+	return nil
+}
+
+func (r *Runner) postWithTimeout(ctx context.Context, timeout time.Duration, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 	if r.PostBeacon == nil {
 		return nil, errors.New("tool beacon poster is not configured")
 	}
-	return r.PostBeacon(ctx, beacon)
+	stageCtx, cancel := stageContext(ctx, timeout)
+	defer cancel()
+	return r.PostBeacon(stageCtx, beacon)
+}
+
+func stageContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return parent, func() {}
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 type postedBeaconError interface {
@@ -114,24 +233,204 @@ func beaconWasPosted(err error) bool {
 	return errors.As(err, &posted) && posted.BeaconPosted()
 }
 
-func beacon(input RunInput, toolCallID string, phase turingv1.ToolCallPhase, status turingv1.ToolCallStatus, summary string, callErr *turingv1.ToolCallError, durationMS int64) *turingv1.ToolCallBeacon {
-	args, _ := safejson.ToStruct(input.Args)
-	return &turingv1.ToolCallBeacon{
-		Phase:         phase,
-		ToolCallId:    toolCallID,
-		AgentId:       input.AgentID,
-		ServerName:    input.ServerName,
-		ToolName:      input.ToolName,
-		Args:          args,
-		Status:        status,
-		ResultSummary: summary,
-		DurationMs:    durationMS,
-		Error:         callErr,
-		RunId:         input.RunID,
-		TraceId:       input.TraceID,
-	}
+func BeaconWasPosted(err error) bool {
+	return beaconWasPosted(err)
 }
 
-func newToolCallID() string {
+type terminalRunState interface {
+	RunTerminal() bool
+}
+
+type terminalApprovalState interface {
+	TerminalApproval() bool
+}
+
+func runWasTerminalized(err error) bool {
+	var terminal terminalRunState
+	return errors.As(err, &terminal) && terminal.RunTerminal()
+}
+
+func terminalApprovalCause(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	cause := context.Cause(ctx)
+	var terminal terminalApprovalState
+	if errors.As(cause, &terminal) && terminal.TerminalApproval() {
+		return cause
+	}
+	return nil
+}
+
+func RunWasTerminalized(err error) bool {
+	return runWasTerminalized(err)
+}
+
+type committedSideEffect interface {
+	SideEffectCommitted() bool
+}
+
+func SideEffectWasCommitted(err error) bool {
+	var committed committedSideEffect
+	return errors.As(err, &committed) && committed.SideEffectCommitted()
+}
+
+type reportingFailure interface {
+	ReportingFailed() bool
+}
+
+func ReportingFailed(err error) bool {
+	var reporting reportingFailure
+	return errors.As(err, &reporting) && reporting.ReportingFailed()
+}
+
+type ReportingFailureError struct {
+	operationErr error
+	reportErr    error
+}
+
+func (e ReportingFailureError) Error() string {
+	return fmt.Sprintf("%v; report tool outcome: %v", e.operationErr, e.reportErr)
+}
+func (e ReportingFailureError) Unwrap() []error       { return []error{e.operationErr, e.reportErr} }
+func (e ReportingFailureError) BeaconPosted() bool    { return true }
+func (e ReportingFailureError) ReportingFailed() bool { return true }
+
+type beaconReportingError struct {
+	err error
+}
+
+func (e beaconReportingError) Error() string         { return e.err.Error() }
+func (e beaconReportingError) Unwrap() error         { return e.err }
+func (e beaconReportingError) BeaconPosted() bool    { return beaconWasPosted(e.err) }
+func (e beaconReportingError) ReportingFailed() bool { return true }
+
+type uncertainSideEffect interface {
+	SideEffectUncertain() bool
+}
+
+func SideEffectWasUncertain(err error) bool {
+	var uncertain uncertainSideEffect
+	return errors.As(err, &uncertain) && uncertain.SideEffectUncertain()
+}
+
+type SideEffectUnknownError struct {
+	err error
+}
+
+func (e SideEffectUnknownError) Error() string             { return e.err.Error() }
+func (e SideEffectUnknownError) Unwrap() error             { return e.err }
+func (e SideEffectUnknownError) BeaconPosted() bool        { return true }
+func (e SideEffectUnknownError) SideEffectUncertain() bool { return true }
+
+type RecoverableToolError struct {
+	err error
+}
+
+func (e RecoverableToolError) Error() string      { return e.err.Error() }
+func (e RecoverableToolError) Unwrap() error      { return e.err }
+func (e RecoverableToolError) BeaconPosted() bool { return true }
+func (e RecoverableToolError) Recoverable() bool  { return true }
+
+type ToolRejectedError struct {
+	Reason string
+}
+
+func (e ToolRejectedError) Error() string {
+	return fmt.Sprintf("tool denied: %s", e.Reason)
+}
+func (e ToolRejectedError) BeaconPosted() bool { return true }
+func (e ToolRejectedError) Recoverable() bool  { return true }
+
+type approvalWaitFailure interface {
+	ApprovalWaitFailed() bool
+}
+
+func ApprovalWaitFailed(err error) bool {
+	var waitFailure approvalWaitFailure
+	return errors.As(err, &waitFailure) && waitFailure.ApprovalWaitFailed()
+}
+
+type ApprovalWaitError struct {
+	err error
+}
+
+func (e ApprovalWaitError) Error() string            { return fmt.Sprintf("wait for tool approval: %v", e.err) }
+func (e ApprovalWaitError) Unwrap() error            { return e.err }
+func (e ApprovalWaitError) BeaconPosted() bool       { return true }
+func (e ApprovalWaitError) ApprovalWaitFailed() bool { return true }
+
+type TerminalApprovalError struct {
+	Status string
+}
+
+func (e TerminalApprovalError) Error() string {
+	return "approval " + e.Status
+}
+
+func (e TerminalApprovalError) TerminalApproval() bool {
+	return e.Status == "denied" || e.Status == "expired"
+}
+
+func (e TerminalApprovalError) RunTerminal() bool {
+	return e.TerminalApproval()
+}
+
+type SideEffectCommittedError struct {
+	err error
+}
+
+func (e SideEffectCommittedError) Error() string             { return e.err.Error() }
+func (e SideEffectCommittedError) Unwrap() error             { return e.err }
+func (e SideEffectCommittedError) BeaconPosted() bool        { return true }
+func (e SideEffectCommittedError) SideEffectCommitted() bool { return true }
+
+type terminalRunError struct {
+	err error
+}
+
+func (e terminalRunError) Error() string      { return e.err.Error() }
+func (e terminalRunError) Unwrap() error      { return e.err }
+func (e terminalRunError) BeaconPosted() bool { return true }
+func (e terminalRunError) RunTerminal() bool  { return true }
+
+type beaconPostedError struct {
+	err error
+}
+
+func (e beaconPostedError) Error() string      { return e.err.Error() }
+func (e beaconPostedError) Unwrap() error      { return e.err }
+func (e beaconPostedError) BeaconPosted() bool { return true }
+
+func markBeaconPosted(err error) error {
+	if err == nil || beaconWasPosted(err) {
+		return err
+	}
+	return beaconPostedError{err: err}
+}
+
+func beacon(input RunInput, toolCallID string, phase turingv1.ToolCallPhase, status turingv1.ToolCallStatus, summary string, callErr *turingv1.ToolCallError, durationMS int64) (*turingv1.ToolCallBeacon, error) {
+	args, err := safejson.ToStruct(input.Args)
+	if err != nil {
+		return nil, fmt.Errorf("serialize tool arguments: %w", err)
+	}
+	return &turingv1.ToolCallBeacon{
+		Phase:           phase,
+		ToolCallId:      toolCallID,
+		AgentId:         input.AgentID,
+		ServerName:      input.ServerName,
+		ToolName:        input.ToolName,
+		Args:            args,
+		Status:          status,
+		ResultSummary:   summary,
+		DurationMs:      durationMS,
+		Error:           callErr,
+		RunId:           input.RunID,
+		TraceId:         input.TraceID,
+		ModelToolCallId: input.ModelToolCallID,
+	}, nil
+}
+
+func NewToolCallID() string {
 	return "call_" + ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader).String()
 }

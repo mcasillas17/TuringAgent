@@ -129,6 +129,50 @@ void main() {
     unawaited(events.close());
   });
 
+  testWidgets('persisted pending approvals are replayed when reopening', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final requested = _event(
+      type: 'approval.requested',
+      sequence: 7,
+      payload: {
+        'approvalId': 'appr_pending',
+        'toolName': 'files.update',
+        'argsSummary': 'Update note.txt',
+      },
+    );
+    final apiClient = _FakeApiClient()..initialEvents = [requested];
+    final eventSource = _FakeEventSource(events.stream);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: eventSource,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      eventSource.lastSequence,
+      0,
+      reason:
+          'approval lifecycle replay must start at the beginning even though '
+          'historical tool cards are bounded by the startup watermark',
+    );
+    events.add(requested);
+    await tester.pump();
+
+    expect(find.text('Approval requested: files.update'), findsOneWidget);
+    expect(find.text('Update note.txt'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
   testWidgets('tool.call.started renders a running tool card', (tester) async {
     final events = StreamController<TuringEvent>(sync: true);
 
@@ -609,6 +653,112 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());
   });
+
+  testWidgets('tool events committed while history loads remain live', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final gate = Completer<List<Message>>();
+    final apiClient = _FakeApiClient()
+      ..messagesGate = gate
+      ..latestEventSequence = 100;
+    final eventSource = _FakeEventSource(events.stream);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: eventSource,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    apiClient.latestEventSequence = 101;
+    events.add(
+      _event(
+        type: 'tool.call.started',
+        sequence: 101,
+        payload: {'toolCallId': 'call_live', 'toolName': 'system.time'},
+      ),
+    );
+    gate.complete(const []);
+    await tester.pump();
+    await tester.pump();
+
+    expect(eventSource.lastSequence, 0);
+    expect(find.byType(ToolCallCard), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets(
+    'tool events for a completed run loaded after the watermark stay hidden',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final gate = Completer<List<Message>>();
+      final apiClient = _FakeApiClient()
+        ..messagesGate = gate
+        ..latestEventSequence = 100;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      gate.complete([
+        Message.fromJson({
+          'id': 'msg_complete',
+          'runId': 'run_complete',
+          'role': 'assistant',
+          'content': 'Finished answer',
+          'sequence': 2,
+          'createdAt': _fixedDate.toIso8601String(),
+        }),
+      ]);
+      await tester.pump();
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'tool.call.started',
+          sequence: 101,
+          runId: 'run_complete',
+          payload: {'toolCallId': 'call_old', 'toolName': 'system.time'},
+        ),
+      );
+      events.add(
+        _event(
+          type: 'tool.call.completed',
+          sequence: 102,
+          runId: 'run_complete',
+          payload: {'toolCallId': 'call_old', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('Finished answer'), findsOneWidget);
+      expect(
+        find.byType(ToolCallCard),
+        findsNothing,
+        reason:
+            'history and replay must not render two representations of the '
+            'same completed run',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
 
   testWidgets('a failed history load still opens the event subscription', (
     tester,
@@ -1692,25 +1842,19 @@ void main() {
     unawaited(events.close());
   });
 
-  testWidgets('an unreadable event tail suppresses nothing', (tester) async {
+  testWidgets('replayed tool calls past a truncated event page stay hidden', (
+    tester,
+  ) async {
     final events = StreamController<TuringEvent>(sync: true);
-    // The backend is routinely unreachable in a local-first stack. Without a
-    // watermark the filter must fail OPEN: a possibly stale card beats hiding
-    // every live tool call.
     final apiClient = _FakeApiClient()
-      ..eventsError = const TuringApiException(
-        code: 'UNAVAILABLE',
-        message: 'no backend',
-      )
-      ..initialMessages = [
-        Message(
-          messageId: 'msg_user',
-          role: 'user',
-          content: 'what time is it',
-          sequence: 1,
-          createdAt: _fixedDate,
+      ..initialEvents = [
+        _event(
+          type: 'message.delta',
+          sequence: 500,
+          payload: {'messageId': 'msg_old', 'delta': 'old'},
         ),
-      ];
+      ]
+      ..latestEventSequence = 1000;
 
     await tester.pumpWidget(
       MaterialApp(
@@ -1726,20 +1870,73 @@ void main() {
     events.add(
       _event(
         type: 'tool.call.started',
+        sequence: 700,
+        payload: {'toolCallId': 'call_old', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.byType(ToolCallCard),
+      findsNothing,
+      reason:
+          'latest_sequence must suppress persisted events beyond the first page',
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('an unreadable event tail does not replay stale tool events', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..eventsError = const TuringApiException(
+        code: 'UNAVAILABLE',
+        message: 'no backend',
+      )
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_user',
+          role: 'user',
+          content: 'what time is it',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+      ];
+    final eventSource = _FakeEventSource(events.stream);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: eventSource,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.started',
         sequence: 1,
         payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
       ),
     );
     await tester.pump();
 
-    expect(find.byType(ToolCallCard), findsOneWidget);
+    expect(eventSource.connectCount, 0);
+    expect(find.byType(ToolCallCard), findsNothing);
     expect(
       find.text(
-        'Earlier messages could not be loaded. This session is live from here '
-        'on.',
+        'Connection to the session lost. Reopen the session to continue.',
       ),
-      findsNothing,
-      reason: 'the tail is an internal detail; history itself loaded fine',
+      findsOneWidget,
+      reason:
+          'without a replay boundary the client cannot distinguish stale tool '
+          'events from live ones',
     );
 
     await tester.pumpWidget(const SizedBox.shrink());
@@ -1897,8 +2094,9 @@ class _FakeApiClient implements TuringApi {
   List<Message> initialMessages = const [];
 
   /// The event log already persisted when the screen opens. The screen reads
-  /// its tail to learn which sequences the subscription will merely REPLAY.
+  /// its latest sequence to learn which events the subscription will REPLAY.
   List<TuringEvent> initialEvents = const [];
+  int? latestEventSequence;
 
   /// When set, `listEvents` fails with it.
   Object? eventsError;
@@ -1932,14 +2130,20 @@ class _FakeApiClient implements TuringApi {
   }
 
   @override
-  Future<List<TuringEvent>> listEvents({
+  Future<TuringEventPage> listEvents({
     required String sessionId,
     int? after,
     int limit = 500,
   }) {
     final error = eventsError;
     if (error != null) return Future.error(error);
-    return Future.value(initialEvents);
+    var latest = latestEventSequence ?? 0;
+    for (final event in initialEvents) {
+      if (event.sequence > latest) latest = event.sequence;
+    }
+    return Future.value(
+      TuringEventPage(events: initialEvents, latestSequence: latest),
+    );
   }
 
   @override
@@ -1983,10 +2187,15 @@ class _FakeEventSource implements TuringEventSource {
 
   final Stream<TuringEvent> _events;
   bool closed = false;
+  int connectCount = 0;
+  int? lastSequence;
 
   @override
-  Stream<TuringEvent> connect({required String sessionId, int? lastSequence}) =>
-      _events;
+  Stream<TuringEvent> connect({required String sessionId, int? lastSequence}) {
+    connectCount++;
+    this.lastSequence = lastSequence;
+    return _events;
+  }
 
   @override
   void close() {

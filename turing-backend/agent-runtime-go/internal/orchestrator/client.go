@@ -10,8 +10,10 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/memory"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 type Client struct {
@@ -21,6 +23,8 @@ type Client struct {
 	sessions  turingv1.SessionServiceClient
 	approvals turingv1.ApprovalServiceClient
 }
+
+const defaultApprovalWaitTimeout = 71 * time.Second
 
 // Dial builds the orchestrator client. The dial is lazy: the connection is
 // established on the first RPC, and the worker loop already retries, so no
@@ -62,20 +66,27 @@ func (c *Client) ConnectWorker(ctx context.Context) (turingv1.RuntimeService_Con
 	return c.runtime.ConnectWorker(c.withAuth(ctx))
 }
 
-func (c *Client) FetchMessages(ctx context.Context, sessionID string) ([]llm.ChatMessage, error) {
-	resp, err := c.sessions.ListMessages(c.withAuth(ctx), &turingv1.ListMessagesRequest{SessionId: sessionID, Limit: 50})
+func (c *Client) FetchMessages(ctx context.Context, sessionID string, beforeMessageID string) ([]llm.ChatMessage, error) {
+	const historyLimit = 50
+	resp, err := c.sessions.ListMessages(c.withAuth(ctx), &turingv1.ListMessagesRequest{
+		SessionId:       sessionID,
+		BeforeMessageId: beforeMessageID,
+		Limit:           int32(historyLimit),
+	})
 	if err != nil {
 		return nil, err
 	}
-	messages := resp.GetMessages()
+	messages := messagesBeforeAnchor(resp.GetMessages(), beforeMessageID)
 	out := make([]llm.ChatMessage, 0, len(messages))
-	for i := len(messages) - 1; i >= 0; i-- {
-		message := messages[i]
+	for _, message := range messages {
 		role, ok := chatRole(message.GetRole())
 		if !ok {
 			continue
 		}
 		out = append(out, llm.ChatMessage{Role: role, Content: message.GetContent()})
+	}
+	if len(out) > historyLimit {
+		out = out[len(out)-historyLimit:]
 	}
 	return out, nil
 }
@@ -119,6 +130,18 @@ func (c *Client) SearchMessages(ctx context.Context, query string, limit int) ([
 	return out, nil
 }
 
+func messagesBeforeAnchor(messages []*turingv1.Message, beforeMessageID string) []*turingv1.Message {
+	if beforeMessageID == "" {
+		return messages
+	}
+	for index, message := range messages {
+		if message.GetMessageId() == beforeMessageID {
+			return messages[:index]
+		}
+	}
+	return messages
+}
+
 func (c *Client) GetApprovalState(ctx context.Context, approvalID string) (*turingv1.RuntimeApprovalState, error) {
 	return c.approvals.GetApprovalForRuntime(c.withAuth(ctx), &turingv1.GetApprovalForRuntimeRequest{ApprovalId: approvalID})
 }
@@ -128,7 +151,7 @@ func (c *Client) WaitForApprovalToken(ctx context.Context, approvalID string, po
 		pollInterval = time.Second
 	}
 	if timeout <= 0 {
-		timeout = 65 * time.Second
+		timeout = defaultApprovalWaitTimeout
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -137,20 +160,23 @@ func (c *Client) WaitForApprovalToken(ctx context.Context, approvalID string, po
 	for {
 		state, err := c.GetApprovalState(ctx, approvalID)
 		if err != nil {
-			return "", err
-		}
-		switch state.GetStatus() {
-		case turingv1.ApprovalStatus_APPROVAL_STATUS_APPROVED:
-			if state.GetApprovalToken() == "" {
-				return "", errors.New("approval token is missing")
+			if !isTransientApprovalPollError(ctx, err) {
+				return "", err
 			}
-			return state.GetApprovalToken(), nil
-		case turingv1.ApprovalStatus_APPROVAL_STATUS_DENIED:
-			return "", errors.New("approval denied")
-		case turingv1.ApprovalStatus_APPROVAL_STATUS_EXPIRED:
-			return "", errors.New("approval expired")
-		case turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED:
-			return "", errors.New("approval already consumed")
+		} else {
+			switch state.GetStatus() {
+			case turingv1.ApprovalStatus_APPROVAL_STATUS_APPROVED:
+				if state.GetApprovalToken() == "" {
+					return "", errors.New("approval token is missing")
+				}
+				return state.GetApprovalToken(), nil
+			case turingv1.ApprovalStatus_APPROVAL_STATUS_DENIED:
+				return "", terminalApprovalError{message: "approval denied"}
+			case turingv1.ApprovalStatus_APPROVAL_STATUS_EXPIRED:
+				return "", terminalApprovalError{message: "approval expired"}
+			case turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED:
+				return "", errors.New("approval already consumed")
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -159,6 +185,24 @@ func (c *Client) WaitForApprovalToken(ctx context.Context, approvalID string, po
 		}
 	}
 }
+
+func isTransientApprovalPollError(ctx context.Context, err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.ResourceExhausted, codes.Aborted:
+		return true
+	case codes.DeadlineExceeded:
+		return ctx.Err() == nil
+	default:
+		return false
+	}
+}
+
+type terminalApprovalError struct {
+	message string
+}
+
+func (e terminalApprovalError) Error() string     { return e.message }
+func (e terminalApprovalError) RunTerminal() bool { return true }
 
 func (c *Client) ConsumeApproval(ctx context.Context, approvalID string) error {
 	_, err := c.approvals.ConsumeApproval(c.withAuth(ctx), &turingv1.ConsumeApprovalRequest{ApprovalId: approvalID})

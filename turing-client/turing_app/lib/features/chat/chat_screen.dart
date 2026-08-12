@@ -33,6 +33,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final Map<String, _MessageEntry> _assistantEntries = {};
   final Map<String, _ToolCallEntry> _toolEntries = {};
   final List<_PendingApproval> _approvals = [];
+  final Set<String> _completedHistoryRunIds = {};
 
   /// Ids of history messages whose text is already complete on screen. The
   /// stream replays the deltas that produced them, and those must not be
@@ -42,8 +43,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Sequence of the newest event already persisted when this screen opened.
   /// The subscription replays the log from its start, so every event at or
   /// below this sequence is a REPLAY of business that finished before the
-  /// screen existed — see [_applyToolCall]. Null when the tail could not be
-  /// read (fresh session, or the call failed), which suppresses nothing.
+  /// screen existed — see [_applyToolCall]. Null until the boundary is loaded.
   int? _replayWatermarkSequence;
   StreamSubscription<TuringEvent>? _subscription;
   String _modelProvider = 'ollama';
@@ -70,6 +70,11 @@ class _ChatScreenState extends State<ChatScreen> {
   /// drop notice is raised from the subscription — no signal at all. Degrade to
   /// "no history" instead, and say so.
   Future<void> _start() async {
+    // Snapshot the persisted event boundary before history starts loading.
+    // Events committed during that RPC remain above the cursor and replay as
+    // live after history is seeded.
+    final replayBoundaryLoaded = await _loadReplayWatermark();
+    if (!mounted) return;
     try {
       await _loadInitialMessages();
     } catch (_) {
@@ -78,15 +83,18 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) setState(() => _historyLoadFailed = true);
     }
     if (!mounted) return;
-    await _loadReplayWatermark();
-    if (!mounted) return;
-    // `lastSequence` is deliberately left unset even though the watermark above
-    // now knows a sequence: subscribing from it would DROP every event the
-    // runtime emits between the two RPCs. A full replay plus a client-side
-    // filter keeps that window covered. Duplicate history text is filtered by
-    // messageId instead, which also survives the server's 500-event replay cap.
+    if (!replayBoundaryLoaded) {
+      _handleStreamEnded();
+      return;
+    }
     _subscription = widget.eventSource
-        .connect(sessionId: widget.sessionId)
+        .connect(
+          sessionId: widget.sessionId,
+          // Replay approval lifecycle events so an unresolved request is
+          // reconstructed after reopening. Historical tool events remain
+          // suppressed by the independently captured watermark.
+          lastSequence: 0,
+        )
         .listen(
           _applyEvent,
           onError: _handleStreamEnded,
@@ -136,32 +144,31 @@ class _ChatScreenState extends State<ChatScreen> {
   /// heal the card (see [_applyToolCall]).
   static const _placeholderToolName = 'tool';
 
-  /// Reads the already-persisted event tail so [_applyToolCall] can tell a
-  /// replayed event from a live one by SEQUENCE. Sequence is exact and free of
-  /// clock skew; message timestamps are not usable for this — the backend
-  /// stamps a turn's rows at enqueue time and never restamps them, so a
-  /// finished turn's messages are stamped BEFORE its own tool events.
+  /// Reads the already-persisted event page and its authoritative latest
+  /// sequence so [_applyToolCall] can tell a replayed event from a live one.
+  /// Sequence is exact and free of clock skew; message timestamps are not
+  /// usable for this — the backend stamps a turn's rows at enqueue time and
+  /// never restamps them, so a finished turn's messages are stamped BEFORE its
+  /// own tool events.
   ///
-  /// Fails open (watermark left unset, nothing suppressed) on any error: this
-  /// screen must survive an unreachable backend, and re-rendering a stale card
-  /// is a far smaller harm than silently hiding every live tool call. The
-  /// server's `limit` cap errs the same way — a truncated tail only lowers the
-  /// watermark, which suppresses less.
-  Future<void> _loadReplayWatermark() async {
-    final List<TuringEvent> events;
+  /// Without this boundary a replayed tool event is indistinguishable from a
+  /// live one, so startup must not open the event stream on failure.
+  Future<bool> _loadReplayWatermark() async {
+    final TuringEventPage page;
     try {
-      events = await widget.apiClient.listEvents(sessionId: widget.sessionId);
+      page = await widget.apiClient.listEvents(sessionId: widget.sessionId);
     } catch (_) {
-      return;
+      return false;
     }
-    if (!mounted || events.isEmpty) return;
-    // Ordering is the server's business; a max costs nothing and does not
-    // depend on it.
-    var watermark = events.first.sequence;
-    for (final event in events) {
+    if (!mounted) return false;
+    // `latestSequence` covers persisted rows beyond the 500-event response
+    // page. Taking the max also keeps alternate API implementations honest.
+    var watermark = page.latestSequence;
+    for (final event in page.events) {
       if (event.sequence > watermark) watermark = event.sequence;
     }
     _replayWatermarkSequence = watermark;
+    return true;
   }
 
   Future<void> _loadInitialMessages() async {
@@ -181,6 +188,10 @@ class _ChatScreenState extends State<ChatScreen> {
         _assistantEntries[message.messageId] = entry;
       } else {
         _completedHistoryMessageIds.add(message.messageId);
+        final runId = message.runId;
+        if (message.role == 'assistant' && runId != null) {
+          _completedHistoryRunIds.add(runId);
+        }
       }
     }
     // Seed history non-destructively: prepend it above any live entries. A
@@ -233,11 +244,13 @@ class _ChatScreenState extends State<ChatScreen> {
   void _applyToolCall(TuringEvent event, ToolCallStatus status) {
     // The subscription replays the whole persisted log (see [_start]), so every
     // tool call that happened before this screen opened is re-delivered. Deltas
-    // are de-duplicated by messageId; tool events have no equivalent identity
-    // in history, so they are filtered by the event sequence captured in
-    // [_loadReplayWatermark] instead. Recreating a card for one of them would
-    // append it BELOW every later message (history is prepended, cards are
-    // appended) and — because the create path seals live bubbles via
+    // are de-duplicated by messageId; tool events are filtered by the event
+    // sequence captured in [_loadReplayWatermark]. A run that completed while
+    // history loaded is also filtered by its immutable runId, because its tool
+    // events are newer than that earlier watermark even though its final answer
+    // is already present in history. Recreating either card would append it
+    // BELOW every later message (history is prepended, cards are appended) and
+    // — because the create path seals live bubbles via
     // `_assistantEntries.clear()` — would orphan an adopted, still-streaming
     // assistant row into an empty pill with a duplicate bubble under it.
     //
@@ -247,6 +260,8 @@ class _ChatScreenState extends State<ChatScreen> {
     // against — so the past renders as text only.
     final watermark = _replayWatermarkSequence;
     if (watermark != null && event.sequence <= watermark) return;
+    final runId = event.runId;
+    if (runId != null && _completedHistoryRunIds.contains(runId)) return;
     final toolCallId = _asString(event.payload['toolCallId']);
     if (toolCallId == null || toolCallId.isEmpty) return;
     // The frozen proto contract carries `toolName` as a non-nullable scalar, so
@@ -261,7 +276,6 @@ class _ChatScreenState extends State<ChatScreen> {
     // the correlation key by the event's own runId so turn 2's `call_1` cannot
     // hijack turn 1's card — the payload contract is untouched, and
     // `toolCallId` stays the entry's own field.
-    final runId = event.runId;
     final key = (runId == null || runId.isEmpty)
         ? toolCallId
         : '$runId:$toolCallId';
@@ -428,8 +442,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ),
-          if (_historyLoadFailed)
-            _SessionNotice(message: _historyFailedNotice),
+          if (_historyLoadFailed) _SessionNotice(message: _historyFailedNotice),
           if (_streamEnded) _SessionNotice(message: _streamEndedNotice),
           for (final approval in _approvals)
             ApprovalCard(

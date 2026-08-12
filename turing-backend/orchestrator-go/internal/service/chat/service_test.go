@@ -29,6 +29,7 @@ type harness struct {
 	database   *db.DB
 	bus        *events.Bus
 	runtime    *runtimesvc.Server
+	service    *Server
 	chatClient turingv1.ChatServiceClient
 	conn       *grpc.ClientConn
 	ctx        context.Context
@@ -67,7 +68,7 @@ func newHarness(t *testing.T) *harness {
 		grpcServer.Stop()
 		_ = conn.Close()
 	})
-	return &harness{repo: repo, database: database, bus: bus, runtime: runtimeServer, chatClient: turingv1.NewChatServiceClient(conn), conn: conn, ctx: ctx}
+	return &harness{repo: repo, database: database, bus: bus, runtime: runtimeServer, service: chatServer, chatClient: turingv1.NewChatServiceClient(conn), conn: conn, ctx: ctx}
 }
 
 func openChatTestDB(t *testing.T) *db.DB {
@@ -97,6 +98,61 @@ func (h *harness) createSession(t *testing.T) string {
 		t.Fatalf("CreateSession: %v", err)
 	}
 	return session.SessionID
+}
+
+func TestSendMessageDispatchContextSurvivesClientCancellation(t *testing.T) {
+	database := openChatTestDB(t)
+	repo := repository.New(database)
+	bus := events.NewBus(8)
+	dispatcher := &dispatchContextRecorder{}
+	service := New(repo, bus, dispatcher, "llama3.2", "gpt-4o-mini")
+	session, err := repo.CreateSession(context.Background(), "Cancelled dispatch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamCtx, cancel := context.WithCancel(context.Background())
+	stream := &cancellingChatStream{ctx: streamCtx, cancel: cancel}
+
+	err = service.SendMessage(&turingv1.SendMessageRequest{
+		SessionId:     session.SessionID,
+		Content:       "keep global dispatch alive",
+		ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:         "llama3.2",
+	}, stream)
+	if status.Code(err) != codes.Canceled {
+		t.Fatalf("SendMessage error = %v, want Canceled", err)
+	}
+	if dispatcher.contextErr != nil {
+		t.Fatalf("DispatchPending received cancelled client context: %v", dispatcher.contextErr)
+	}
+}
+
+type dispatchContextRecorder struct {
+	contextErr error
+}
+
+func (d *dispatchContextRecorder) DispatchPending(ctx context.Context) error {
+	d.contextErr = ctx.Err()
+	return nil
+}
+
+func (d *dispatchContextRecorder) CancelRun(context.Context, string, string) {}
+
+type cancellingChatStream struct {
+	grpc.ServerStream
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func (s *cancellingChatStream) Context() context.Context {
+	return s.ctx
+}
+
+func (s *cancellingChatStream) Send(event *turingv1.ChatStreamEvent) error {
+	if event.GetRunQueued() != nil {
+		s.cancel()
+	}
+	return nil
 }
 
 func TestSendMessageStreamsQueuedEvent(t *testing.T) {
@@ -400,7 +456,7 @@ func TestSendMessageCancellationCancelsRun(t *testing.T) {
 	t.Fatalf("agent.run.cancelled event not replayed: %+v", replayed)
 }
 
-func TestSendMessageDoesNotBroadcastCancellationWhenPersistenceFails(t *testing.T) {
+func TestSendMessageStillCancelsRuntimeWhenPersistenceFails(t *testing.T) {
 	h := newHarness(t)
 	sessionID := h.createSession(t)
 	chatCtx, cancelChat := context.WithCancel(h.clientContext())
@@ -469,10 +525,12 @@ func TestSendMessageDoesNotBroadcastCancellationWhenPersistenceFails(t *testing.
 		if result.err != nil {
 			t.Fatal(result.err)
 		}
-		if cancel := result.cmd.GetRunCancelled(); cancel != nil && cancel.RunId == runID {
-			t.Fatalf("received runtime cancellation despite persistence failure: %+v", cancel)
+		cancel := result.cmd.GetRunCancelled()
+		if cancel == nil || cancel.RunId != runID || cancel.Reason != "client_cancelled" {
+			t.Fatalf("runtime command = %+v, want cancellation for %q", result.cmd, runID)
 		}
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(time.Second):
+		t.Fatal("runtime cancellation was skipped after persistence failure")
 	}
 }
 
@@ -704,6 +762,55 @@ func TestSendMessageReplaysPersistedTerminalEventWithoutBusWake(t *testing.T) {
 	}
 	if completed.Sequence != appended.Sequence || completed.GetRunCompleted().GetRunId() != queued.GetRunQueued().RunId {
 		t.Fatalf("run_completed = %+v, appended = %+v", completed, appended)
+	}
+}
+
+func TestCancelRunPublishesDependentLifecycleEventsInOrder(t *testing.T) {
+	h := newHarness(t)
+	session, err := h.repo.CreateSession(context.Background(), "Cancel pending approval")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "cancel me", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.MarkRunRunning(context.Background(), enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.RecordToolCallBefore(context.Background(), repository.ToolCallRecord{
+		ToolCallID: "call_cancelled", RunID: enqueued.RunID, Status: "approval_required",
+	}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.CreateApproval(context.Background(), enqueued.RunID, "call_cancelled", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:test", "2099-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	ch, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
+	defer unsubscribe()
+
+	h.service.cancelRun(enqueued.RunID)
+
+	var got []string
+	for len(got) < 3 {
+		select {
+		case event := <-ch:
+			if event.RunID == enqueued.RunID &&
+				(event.Type == "approval.expired" || event.Type == "tool.call.failed" || event.Type == "agent.run.cancelled") {
+				got = append(got, event.Type)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("published cancellation lifecycle = %v, want dependent and terminal events", got)
+		}
+	}
+	want := []string{"approval.expired", "tool.call.failed", "agent.run.cancelled"}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("published cancellation lifecycle = %v, want %v", got, want)
+		}
 	}
 }
 

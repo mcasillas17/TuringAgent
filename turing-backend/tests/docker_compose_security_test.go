@@ -70,25 +70,133 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"TURING_APPROVAL_JWT_SECRET:",
 		"TURING_INTERNAL_TOKEN:",
 		"ORCHESTRATOR_GRPC_ADDR:",
-		"FILES_SANDBOX_ROOT:",
+		"FILES_SANDBOX_ROOT: /sandbox",
 	)
 	requireContainsNone(t, "turing-mcp-files", files,
 		"TURING_CLIENT_API_KEY:",
 		"OPENAI_API_KEY:",
 		"ORCHESTRATOR_INTERNAL_BASE_URL:",
+		"${FILES_SANDBOX_ROOT",
 	)
+}
+
+func TestMCPFilesImageRunsAsFixedNonRootUser(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "mcp-files", "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dockerfile := string(data)
+	for _, snippet := range []string{
+		"addgroup -g 1000 -S mcp-files",
+		"adduser -u 1000 -S -G mcp-files mcp-files",
+		"USER mcp-files:mcp-files",
+	} {
+		if !strings.Contains(dockerfile, snippet) {
+			t.Fatalf("mcp-files Dockerfile missing %q", snippet)
+		}
+	}
+}
+
+func TestMCPComposeServicesUseRuntimeHardening(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "infra", "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := string(data)
+
+	for _, serviceName := range []string{"turing-mcp-system", "turing-mcp-files"} {
+		block := composeServiceBlock(t, compose, serviceName)
+		requireContainsAll(t, serviceName, block,
+			"read_only: true",
+			"cap_drop:",
+			"- ALL",
+			"security_opt:",
+			"- no-new-privileges:true",
+		)
+	}
+
+	files := composeServiceBlock(t, compose, "turing-mcp-files")
+	requireContainsAll(t, "turing-mcp-files", files, "- ../sandbox:/sandbox")
+	if strings.Contains(files, "../sandbox:/sandbox:ro") {
+		t.Fatal("turing-mcp-files sandbox mount is read-only")
+	}
+}
+
+func TestMCPFilesComposeRequiresValidatedHostIdentity(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "infra", "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := composeServiceBlock(t, string(data), "turing-mcp-files")
+	requireContainsAll(t, "turing-mcp-files", files,
+		"${HOST_UID:?",
+		"${HOST_GID:?",
+	)
+	if strings.Contains(files, "HOST_UID:-") || strings.Contains(files, "HOST_GID:-") {
+		t.Fatal("turing-mcp-files permits a fallback identity instead of requiring validated host IDs")
+	}
+}
+
+func TestRepositoryDockerignoreExcludesSensitiveAndGeneratedContent(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".dockerignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := make(map[string]bool)
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			lines[line] = true
+		}
+	}
+	for _, pattern := range []string{
+		".git",
+		".worktrees",
+		".copilot",
+		".env",
+		".env.*",
+		"**/.env",
+		"**/.env.*",
+		"**/.runtime",
+		"**/data",
+		"**/sandbox",
+		"**/node_modules",
+		"**/.dart_tool",
+		"**/build",
+		"**/dist",
+		"**/coverage",
+		"**/*.log",
+		"**/*.pem",
+		"**/*.key",
+		"**/*.cert",
+	} {
+		if !lines[pattern] {
+			t.Errorf(".dockerignore missing %q", pattern)
+		}
+	}
+	for _, requiredInput := range []string{"go.mod", "go.sum", "gen", "turing-backend"} {
+		if lines[requiredInput] {
+			t.Errorf(".dockerignore excludes required Dockerfile input %q", requiredInput)
+		}
+	}
 }
 
 func composeServiceBlock(t *testing.T, compose string, serviceName string) string {
 	t.Helper()
-	startMarker := "  " + serviceName + ":\n"
-	start := strings.Index(compose, startMarker)
-	if start < 0 {
+	header := "  " + serviceName + ":"
+	allLines := strings.Split(compose, "\n")
+	start := -1
+	for index, line := range allLines {
+		if line == header {
+			start = index
+			break
+		}
+	}
+	if start == -1 {
 		t.Fatalf("service %q not found", serviceName)
 	}
-	lines := strings.Split(compose[start+len(startMarker):], "\n")
 	var block []string
-	for _, line := range lines {
+	for _, line := range allLines[start+1:] {
 		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "    ") && strings.HasSuffix(strings.TrimSpace(line), ":") {
 			break
 		}

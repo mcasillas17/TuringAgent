@@ -26,7 +26,8 @@ class ToolCallCard extends StatelessWidget {
     final theme = Theme.of(context);
     final hasServer = serverName != null && serverName!.isNotEmpty;
     final hasError =
-        status == ToolCallStatus.failed && (error?.isNotEmpty ?? false);
+        (status == ToolCallStatus.failed || status == ToolCallStatus.denied) &&
+        (error?.isNotEmpty ?? false);
     final qualifiedName = hasServer ? '$serverName / $toolName' : toolName;
     final semanticsLabel =
         'Tool call $qualifiedName: $_statusLabel'

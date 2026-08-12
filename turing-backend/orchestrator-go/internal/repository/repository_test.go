@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
@@ -110,6 +112,42 @@ func TestSessionMessageRunJobTransaction(t *testing.T) {
 	}
 	if replayed[0].EventID != result.QueuedEvent.EventID || replayed[0].Type != "agent.run.queued" {
 		t.Fatalf("bad queued replay event: %+v", replayed[0])
+	}
+}
+
+func TestListMessagesBeforeReturnsOnlyStablePredecessors(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Causal messages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []struct {
+		id       string
+		role     string
+		content  string
+		sequence int
+	}{
+		{id: "msg_a", role: "system", content: "instructions", sequence: 1},
+		{id: "msg_b", role: "user", content: "earlier turn", sequence: 2},
+		{id: "msg_c", role: "user", content: "current turn", sequence: 3},
+		{id: "msg_d", role: "assistant", content: "future placeholder", sequence: 4},
+	} {
+		if _, err := database.ExecContext(ctx, `
+			INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at)
+			VALUES (?, ?, ?, ?, 'text', ?, '2026-08-10T22:42:30.000000000Z')
+		`, message.id, session.SessionID, message.role, message.content, message.sequence); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	messages, err := repo.ListMessagesBefore(ctx, session.SessionID, "msg_c", 50)
+	if err != nil {
+		t.Fatalf("ListMessagesBefore: %v", err)
+	}
+	if len(messages) != 2 || messages[0].MessageID != "msg_a" || messages[1].MessageID != "msg_b" {
+		t.Fatalf("causal messages = %+v, want msg_a then msg_b", messages)
 	}
 }
 
@@ -257,6 +295,132 @@ func TestCancelRunFailsForTerminalRun(t *testing.T) {
 	}
 }
 
+func TestAcknowledgeExecutionExitClearsTerminalGateIdempotently(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Acknowledge execution exit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "terminalized elsewhere", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET status = 'failed', execution_active = 1, execution_exit_acknowledged_at = NULL
+		WHERE id = ?
+	`, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AcknowledgeExecutionExit(ctx, enqueued.RunID); err != nil {
+		t.Fatalf("first AcknowledgeExecutionExit: %v", err)
+	}
+	if err := repo.AcknowledgeExecutionExit(ctx, enqueued.RunID); err != nil {
+		t.Fatalf("idempotent AcknowledgeExecutionExit: %v", err)
+	}
+	var active int
+	var acknowledgedAt sql.NullString
+	if err := database.QueryRowContext(ctx, `SELECT execution_active, execution_exit_acknowledged_at FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&active, &acknowledgedAt); err != nil {
+		t.Fatal(err)
+	}
+	if active != 0 || !acknowledgedAt.Valid {
+		t.Fatalf("execution exit state active=%d acknowledged=%q, want inactive acknowledged", active, acknowledgedAt.String)
+	}
+}
+
+func TestFailRunWithEventPreservingExecutionHoldsGlobalCapacityUntilExitAck(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	firstSession, err := repo.CreateSession(ctx, "Preserved execution")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: firstSession.SessionID, Content: "first", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSession, err := repo.CreateSession(ctx, "Later global work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: secondSession.SessionID, Content: "second", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-1", 1, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.RunID != first.RunID {
+		t.Fatalf("claimed run = %q, want %q", claimed.RunID, first.RunID)
+	}
+	if _, err := repo.FailRunWithEventPreservingExecution(ctx, first.RunID, "approval_delivery_failed", "approval event failed", `{"code":"approval_delivery_failed"}`); err != nil {
+		t.Fatalf("FailRunWithEventPreservingExecution: %v", err)
+	}
+	run, err := repo.GetRun(ctx, first.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "failed" || !run.ExecutionActive || run.WorkerID != "worker-1" || run.ExecutionAttemptID != claimed.AssignmentAttemptID {
+		t.Fatalf("preserved terminal run = %+v, want failed active worker-owned attempt", run)
+	}
+	blocked, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-2", 1, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked.JobID != "" {
+		t.Fatalf("claimed global work %+v before execution exit acknowledgement", blocked)
+	}
+	if err := repo.AcknowledgeExecutionExit(ctx, first.RunID); err != nil {
+		t.Fatal(err)
+	}
+	released, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-2", 1, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if released.RunID != second.RunID {
+		t.Fatalf("claim after execution exit = %+v, want %q", released, second.RunID)
+	}
+}
+
+func TestFailRunWithEventPreservingExecutionFinalizesInactiveRun(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Inactive terminalization")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "inactive", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.FailRunWithEventPreservingExecution(ctx, enqueued.RunID, "approval_delivery_failed", "approval event failed", `{"code":"approval_delivery_failed"}`); err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.GetRun(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.ExecutionActive || run.ExecutionState != "exited" {
+		t.Fatalf("inactive terminal run = %+v, want inactive exited run", run)
+	}
+}
+
 func TestClaimNextJobMarksRunAndJobRunning(t *testing.T) {
 	database := openTestDB(t)
 	repo := New(database)
@@ -320,6 +484,54 @@ func TestClaimNextJobMarksRunAndJobRunning(t *testing.T) {
 	}
 	if startedPayload["runId"] != enqueued.RunID || startedPayload["jobId"] != enqueued.JobID || startedPayload["status"] != "running" || startedPayload["agentId"] != "general_assistant" || startedPayload["attempt"] != float64(1) {
 		t.Fatalf("bad started event payload: %+v", startedPayload)
+	}
+}
+
+func TestClaimNextJobWaitsForEarlierSessionRunToTerminalize(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Causal job claims")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "first", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "second", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	claimedFirst, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimedFirst.RunID != first.RunID {
+		t.Fatalf("first claim run = %q, want %q", claimedFirst.RunID, first.RunID)
+	}
+	blocked, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked.JobID != "" {
+		t.Fatalf("claimed later same-session job while earlier run was active: %+v", blocked)
+	}
+
+	if err := repo.CompleteRun(ctx, first.RunID, first.AssistantMessageID, "first done"); err != nil {
+		t.Fatal(err)
+	}
+	claimedSecond, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimedSecond.RunID != second.RunID {
+		t.Fatalf("second claim run = %q, want %q", claimedSecond.RunID, second.RunID)
 	}
 }
 
@@ -724,6 +936,182 @@ func TestApprovalLifecycleRecordsTokenAndUpdatesRun(t *testing.T) {
 	if consumed.Status != "consumed" {
 		t.Fatalf("approval status after consume = %q", consumed.Status)
 	}
+	if _, err := repo.ConsumeApproval(ctx, approval.ApprovalID, "2026-05-15T00:01:01Z"); !errors.Is(err, ErrApprovalAlreadyConsumed) {
+		t.Fatalf("second consume error = %v, want ErrApprovalAlreadyConsumed", err)
+	}
+}
+
+func TestCreateApprovalWithEventIsIdempotentUnderConcurrency(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Concurrent approval creation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "approval tool", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	const toolCallID = "call_concurrent_approval"
+	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
+		ToolCallID: toolCallID, RunID: enqueued.RunID,
+	}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:concurrent"); err != nil {
+		t.Fatal(err)
+	}
+
+	const callers = 8
+	start := make(chan struct{})
+	type result struct {
+		approval ApprovalRecord
+		event    Event
+		err      error
+	}
+	results := make(chan result, callers)
+	for range callers {
+		go func() {
+			<-start
+			approval, event, err := repo.CreateApprovalWithEvent(
+				ctx,
+				enqueued.RunID,
+				toolCallID,
+				"general_assistant",
+				"files.update",
+				`{"path":"note.txt"}`,
+				"sha256:concurrent",
+				"2099-01-01T00:00:00Z",
+			)
+			results <- result{approval: approval, event: event, err: err}
+		}()
+	}
+	close(start)
+
+	approvalID := ""
+	createdEvents := 0
+	for range callers {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("concurrent approval creation: %v", result.err)
+		}
+		if approvalID == "" {
+			approvalID = result.approval.ApprovalID
+		} else if result.approval.ApprovalID != approvalID {
+			t.Fatalf("concurrent approval IDs = %q and %q", approvalID, result.approval.ApprovalID)
+		}
+		if result.event.EventID != "" {
+			createdEvents++
+		}
+	}
+	if createdEvents != 1 {
+		t.Fatalf("created approval events = %d, want 1", createdEvents)
+	}
+	var approvalCount, eventCount int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM approvals WHERE tool_call_id = ?`, toolCallID).Scan(&approvalCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'approval.requested'`, enqueued.RunID).Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if approvalCount != 1 || eventCount != 1 {
+		t.Fatalf("approval/event counts = %d/%d, want 1/1", approvalCount, eventCount)
+	}
+}
+
+func TestRecordToolCallAfterRejectsApprovedButUnconsumedCompletion(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Unconsumed approval completion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "approval tool", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	const toolCallID = "call_approved_not_consumed"
+	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
+		ToolCallID: toolCallID, RunID: enqueued.RunID, Status: "approval_required",
+	}, "general_assistant", "files", "files.update", `{}`, "sha256:approved"); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := repo.CreateApproval(ctx, enqueued.RunID, toolCallID, "general_assistant", "files.update", `{}`, "sha256:approved", "2099-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ApproveApproval(ctx, approval.ApprovalID, "approved-token", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, _, err := repo.RecordToolCallAfterWithEvent(ctx, ToolCallAfterRecord{
+		ToolCallID: toolCallID, RunID: enqueued.RunID, ServerName: "files", ToolName: "files.update", Status: "completed",
+	}, "tool.call.completed", `{"toolCallId":"call_approved_not_consumed","toolName":"files.update","serverName":"files"}`)
+	if !errors.Is(err, ErrToolCallInvalidTransition) {
+		t.Fatalf("approved-but-unconsumed completion error = %v, want ErrToolCallInvalidTransition", err)
+	}
+	if changed {
+		t.Fatal("approved-but-unconsumed completion changed the tool call")
+	}
+	var status string
+	if err := database.QueryRowContext(ctx, `SELECT status FROM tool_calls WHERE id = ?`, toolCallID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "approval_required" {
+		t.Fatalf("tool call status = %q, want approval_required", status)
+	}
+}
+
+func TestRecordToolCallAfterRejectsCompletionFromRequested(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Requested completion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "safe tool", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{ToolCallID: "call_requested", RunID: enqueued.RunID, Status: "requested"}, "general_assistant", "system", "system.echo", `{"value":"hello"}`, "sha256:requested"); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, _, err := repo.RecordToolCallAfterWithEvent(ctx, ToolCallAfterRecord{
+		ToolCallID: "call_requested",
+		RunID:      enqueued.RunID,
+		ServerName: "system",
+		ToolName:   "system.echo",
+		Status:     "completed",
+	}, "tool.call.completed", `{"toolCallId":"call_requested"}`)
+	if err != ErrToolCallInvalidTransition {
+		t.Fatalf("RecordToolCallAfterWithEvent error = %v, want ErrToolCallInvalidTransition", err)
+	}
+	if changed {
+		t.Fatal("RecordToolCallAfterWithEvent changed a requested call to completed")
+	}
+	var toolCallStatus string
+	if err := database.QueryRowContext(ctx, `SELECT status FROM tool_calls WHERE id = ?`, "call_requested").Scan(&toolCallStatus); err != nil {
+		t.Fatal(err)
+	}
+	if toolCallStatus != "requested" {
+		t.Fatalf("tool call status = %q, want requested", toolCallStatus)
+	}
 }
 
 func TestRecordToolCallBeforeRejectsConflictingID(t *testing.T) {
@@ -793,6 +1181,7 @@ func TestDenyApprovalDoesNotMutateNonWaitingRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
 		SessionID: session.SessionID, Content: "needs approval", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
 	})
@@ -822,5 +1211,221 @@ func TestDenyApprovalDoesNotMutateNonWaitingRun(t *testing.T) {
 	}
 	if approvalStatus != "pending" {
 		t.Fatalf("approval status = %q, want pending", approvalStatus)
+	}
+}
+
+func TestDenyApprovalAtomicallyTerminalizesToolRunJobAndEvent(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Deny terminalization")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "needs approval", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{ToolCallID: "call_denied", RunID: enqueued.RunID}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:args"); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := repo.CreateApproval(ctx, enqueued.RunID, "call_denied", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:args", "2099-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.DenyApproval(ctx, approval.ApprovalID, "2026-05-15T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.DenyApproval(ctx, approval.ApprovalID, "2026-05-15T00:00:00Z"); err != nil {
+		t.Fatalf("repeated denial: %v", err)
+	}
+
+	var approvalStatus, toolCallStatus, runStatus, jobStatus string
+	if err := database.QueryRowContext(ctx, `SELECT status FROM approvals WHERE id = ?`, approval.ApprovalID).Scan(&approvalStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `SELECT status FROM tool_calls WHERE id = 'call_denied'`).Scan(&toolCallStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `SELECT status FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&runStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `SELECT status FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus); err != nil {
+		t.Fatal(err)
+	}
+	if approvalStatus != "denied" || toolCallStatus != "denied" || runStatus != "failed" || jobStatus != "failed" {
+		t.Fatalf("terminal states approval=%q tool=%q run=%q job=%q", approvalStatus, toolCallStatus, runStatus, jobStatus)
+	}
+	var terminalEvents int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'agent.run.failed'`, enqueued.RunID).Scan(&terminalEvents); err != nil {
+		t.Fatal(err)
+	}
+	if terminalEvents != 1 {
+		t.Fatalf("agent.run.failed events = %d, want 1", terminalEvents)
+	}
+}
+
+func TestDenyApprovalTerminalizesRunWhenToolCallAlreadyFailed(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Deny after tool failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "needs approval", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{ToolCallID: "call_already_failed", RunID: enqueued.RunID}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:args"); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := repo.CreateApproval(ctx, enqueued.RunID, "call_already_failed", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:args", "2099-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.RecordToolCallAfter(ctx, ToolCallAfterRecord{
+		ToolCallID: "call_already_failed", RunID: enqueued.RunID, ServerName: "files", ToolName: "files.update",
+		Status: "failed", ErrorCode: "approval_wait_failed", ErrorMessage: "approval polling timed out",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.DenyApproval(ctx, approval.ApprovalID, "2026-05-15T00:00:00Z"); err != nil {
+		t.Fatalf("DenyApproval after failed tool call: %v", err)
+	}
+	var approvalStatus, toolCallStatus, runStatus, jobStatus string
+	if err := database.QueryRowContext(ctx, `SELECT status FROM approvals WHERE id = ?`, approval.ApprovalID).Scan(&approvalStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `SELECT status FROM tool_calls WHERE id = 'call_already_failed'`).Scan(&toolCallStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `SELECT status FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&runStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `SELECT status FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus); err != nil {
+		t.Fatal(err)
+	}
+	if approvalStatus != "denied" || toolCallStatus != "failed" || runStatus != "failed" || jobStatus != "failed" {
+		t.Fatalf("terminal states approval=%q tool=%q run=%q job=%q", approvalStatus, toolCallStatus, runStatus, jobStatus)
+	}
+}
+
+func TestRuntimeFailureTerminalizesPendingApprovalBeforeLateResolution(t *testing.T) {
+	tests := []struct {
+		name        string
+		expectError bool
+		terminalize func(*Repository, context.Context, string) (ApprovalTerminalization, error)
+	}{
+		{
+			name:        "conflicting denial",
+			expectError: true,
+			terminalize: func(repo *Repository, ctx context.Context, approvalID string) (ApprovalTerminalization, error) {
+				return repo.DenyApprovalWithEvent(ctx, approvalID, "2026-05-15T00:00:00Z")
+			},
+		},
+		{
+			name: "idempotent expiry",
+			terminalize: func(repo *Repository, ctx context.Context, approvalID string) (ApprovalTerminalization, error) {
+				return repo.ExpireApprovalWithEvent(ctx, approvalID, "2026-05-15T00:00:00Z")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			database := openTestDB(t)
+			repo := New(database)
+			ctx := context.Background()
+			session, err := repo.CreateSession(ctx, "Late approval terminalization")
+			if err != nil {
+				t.Fatal(err)
+			}
+			enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+				SessionID: session.SessionID, Content: "needs approval", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
+				t.Fatal(err)
+			}
+			const toolCallID = "call_late_terminal"
+			if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{ToolCallID: toolCallID, RunID: enqueued.RunID}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:args"); err != nil {
+				t.Fatal(err)
+			}
+			approval, err := repo.CreateApproval(ctx, enqueued.RunID, toolCallID, "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:args", "2099-01-01T00:00:00Z")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := repo.RecordToolCallAfterWithEvent(ctx, ToolCallAfterRecord{
+				ToolCallID: toolCallID, RunID: enqueued.RunID, ServerName: "files", ToolName: "files.update",
+				Status: "failed", ErrorCode: "approval_wait_failed", ErrorMessage: "approval transport failed",
+			}, "tool.call.failed", `{"code":"approval_wait_failed"}`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := repo.FailRunWithEvent(ctx, enqueued.RunID, "runtime_error", "approval transport failed", `{"code":"runtime_error"}`); err != nil {
+				t.Fatal(err)
+			}
+
+			transition, err := test.terminalize(repo, ctx, approval.ApprovalID)
+			if test.expectError {
+				if err == nil {
+					t.Fatal("conflicting late resolution succeeded")
+				}
+			} else if err != nil {
+				t.Fatalf("terminalize late approval: %v", err)
+			}
+			if !test.expectError && (transition.Changed || transition.Approval.Status != "expired") {
+				t.Fatalf("late terminalization = %+v, want idempotent expired approval", transition)
+			}
+			if !test.expectError && transition.RunFailedEvent.EventID != "" {
+				t.Fatalf("late terminalization appended duplicate run failure event: %+v", transition.RunFailedEvent)
+			}
+			if !test.expectError {
+				repeated, err := test.terminalize(repo, ctx, approval.ApprovalID)
+				if err != nil {
+					t.Fatalf("repeated late terminalization: %v", err)
+				}
+				if repeated.Changed {
+					t.Fatalf("repeated late terminalization changed state: %+v", repeated)
+				}
+			}
+
+			var approvalStatus, toolCallStatus, runStatus, jobStatus string
+			if err := database.QueryRowContext(ctx, `SELECT status FROM approvals WHERE id = ?`, approval.ApprovalID).Scan(&approvalStatus); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.QueryRowContext(ctx, `SELECT status FROM tool_calls WHERE id = ?`, toolCallID).Scan(&toolCallStatus); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.QueryRowContext(ctx, `SELECT status FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&runStatus); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.QueryRowContext(ctx, `SELECT status FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus); err != nil {
+				t.Fatal(err)
+			}
+			if approvalStatus != "expired" || toolCallStatus != "failed" || runStatus != "failed" || jobStatus != "failed" {
+				t.Fatalf("terminal states approval=%q tool=%q run=%q job=%q", approvalStatus, toolCallStatus, runStatus, jobStatus)
+			}
+			var runFailures int
+			if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'agent.run.failed'`, enqueued.RunID).Scan(&runFailures); err != nil {
+				t.Fatal(err)
+			}
+			if runFailures != 1 {
+				t.Fatalf("agent.run.failed events = %d, want 1", runFailures)
+			}
+		})
 	}
 }

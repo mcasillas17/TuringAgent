@@ -39,7 +39,7 @@ type Message struct {
 }
 
 func now() string {
-	return time.Now().UTC().Format(time.RFC3339Nano)
+	return FormatTimestamp(time.Now())
 }
 
 func (r *Repository) CreateSession(ctx context.Context, title string) (Session, error) {
@@ -56,7 +56,8 @@ func (r *Repository) ListSessions(ctx context.Context, limit int) ([]Session, er
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id, title, status, created_at, updated_at FROM sessions ORDER BY updated_at DESC LIMIT ?`, limit)
+	query := `SELECT id, title, status, created_at, updated_at FROM sessions ORDER BY ` + sqliteTimestampNanos("updated_at") + ` DESC, id DESC LIMIT ?`
+	rows, err := r.db.QueryContext(ctx, query, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -83,6 +84,51 @@ func (r *Repository) ListMessages(ctx context.Context, sessionID string, limit i
 		limit = 50
 	}
 	rows, err := r.db.QueryContext(ctx, `SELECT id, COALESCE(run_id, ''), role, content, content_type, sequence, created_at FROM messages WHERE session_id = ? ORDER BY sequence DESC LIMIT ?`, sessionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var reversed []Message
+	for rows.Next() {
+		var msg Message
+		if err := rows.Scan(&msg.MessageID, &msg.RunID, &msg.Role, &msg.Content, &msg.ContentType, &msg.Sequence, &msg.CreatedAt); err != nil {
+			return nil, err
+		}
+		reversed = append(reversed, msg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+		reversed[i], reversed[j] = reversed[j], reversed[i]
+	}
+	return reversed, nil
+}
+
+func (r *Repository) ListMessagesBefore(ctx context.Context, sessionID, beforeMessageID string, limit int) ([]Message, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if beforeMessageID == "" {
+		return r.ListMessages(ctx, sessionID, limit)
+	}
+	var boundarySequence int64
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT sequence
+		FROM messages
+		WHERE session_id = ? AND id = ?
+	`, sessionID, beforeMessageID).Scan(&boundarySequence); err != nil {
+		return nil, err
+	}
+	query := `
+		SELECT m.id, COALESCE(m.run_id, ''), m.role, m.content, m.content_type, m.sequence, m.created_at
+		FROM messages m
+		WHERE m.session_id = ?
+			AND m.sequence < ?
+		ORDER BY m.sequence DESC, m.id DESC
+		LIMIT ?
+	`
+	rows, err := r.db.QueryContext(ctx, query, sessionID, boundarySequence, limit)
 	if err != nil {
 		return nil, err
 	}

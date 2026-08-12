@@ -5,10 +5,10 @@ cd "$(dirname "$0")/.."
 ./scripts/init.sh
 
 compose() {
-  docker compose --env-file .env -f infra/docker-compose.yml "$@"
+  ./scripts/compose.sh "$@"
 }
 
-compose up --build -d
+compose up --build -d --wait --wait-timeout 60
 trap 'compose down' EXIT
 
 ready=0

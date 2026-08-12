@@ -58,6 +58,22 @@ func (b *Bus) Publish(event Event) {
 		select {
 		case sub.ch <- event:
 		default:
+			latest := event
+			draining := true
+			for draining {
+				select {
+				case queued := <-sub.ch:
+					if queued.Sequence >= latest.Sequence {
+						latest = queued
+					}
+				default:
+					draining = false
+				}
+			}
+			select {
+			case sub.ch <- latest:
+			default:
+			}
 		}
 	}
 }

@@ -28,7 +28,7 @@ func TestParityForSessionMessageEventShapes(t *testing.T) {
 			t.Fatalf("delta[%d] mismatch: chat=%+v events=%+v", i, chatDeltas[i], eventDeltas[i])
 		}
 	}
-	if got, want := messageCompletedContent(chatEvents), messageCompletedPayload(listed.Events); got != want || got != "Hello" {
+	if got, want := messageCompletedContent(t, chatEvents), messageCompletedPayload(listed.Events); got != want || got != "Hello" {
 		t.Fatalf("message.completed parity got chat=%q events=%q, want Hello", got, want)
 	}
 }
@@ -77,13 +77,18 @@ func messageDeltaPayloads(events []*turingv1.TuringEvent) []deltaShape {
 	return out
 }
 
-func messageCompletedContent(events []*turingv1.ChatStreamEvent) string {
+func messageCompletedContent(t *testing.T, events []*turingv1.ChatStreamEvent) string {
+	t.Helper()
+	var completedMessages []*turingv1.MessageCompleted
 	for _, event := range events {
 		if completed := event.GetMessageCompleted(); completed != nil {
-			return completed.Content
+			completedMessages = append(completedMessages, completed)
 		}
 	}
-	return ""
+	if len(completedMessages) != 1 {
+		t.Fatalf("stream message.completed count = %d, want 1", len(completedMessages))
+	}
+	return completedMessages[0].Content
 }
 
 func messageCompletedPayload(events []*turingv1.TuringEvent) string {

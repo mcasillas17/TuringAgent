@@ -43,15 +43,25 @@ func run() error {
 		providers[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE] = llm.NewOpenAICompatible(cfg.OpenAIBaseURL, cfg.OpenAIAPIKey, http.DefaultClient)
 	}
 	toolRunner := &tools.Runner{WaitApproval: func(ctx context.Context, approvalID string) (string, error) {
-		return client.WaitForApprovalToken(ctx, approvalID, time.Second, 65*time.Second)
+		return client.WaitForApprovalToken(ctx, approvalID, time.Second, cfg.ApprovalTimeout)
 	}}
 	toolset := &agent.GeneralAssistantTools{
-		SystemMCP: mcp.NewClient(cfg.MCPSystemBaseURL, cfg.MCPSystemToken, http.DefaultClient),
-		FilesMCP:  mcp.NewClient(cfg.MCPFilesBaseURL, cfg.MCPFilesToken, http.DefaultClient),
-		Runner:    toolRunner,
+		SystemMCP:          mcp.NewClient(cfg.MCPSystemBaseURL, cfg.MCPSystemToken, http.DefaultClient),
+		FilesMCP:           mcp.NewClient(cfg.MCPFilesBaseURL, cfg.MCPFilesToken, http.DefaultClient),
+		Runner:             toolRunner,
+		MaxToolCallsPerRun: cfg.MaxToolCallsPerRun,
+		ModelTimeout:       cfg.ModelTimeout,
+		ToolTimeout:        cfg.ToolTimeout,
+		TotalToolTimeout:   cfg.TotalToolTimeout,
 	}
 	executor := agent.NewGeneralAssistant(providers, client, toolset)
-	runtimeWorker := worker.New(worker.Options{WorkerID: cfg.WorkerID, AgentID: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: cfg.MaxConcurrentRuns}, runtimeClientAdapter{client: client}, executor)
+	runtimeWorker := worker.New(worker.Options{
+		WorkerID:                 cfg.WorkerID,
+		AgentID:                  turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		MaxConcurrentRuns:        cfg.MaxConcurrentRuns,
+		HeartbeatInterval:        cfg.HeartbeatInterval,
+		DisconnectCleanupTimeout: cfg.TotalToolTimeout,
+	}, runtimeClientAdapter{client: client}, executor)
 	return runtimeWorker.Run(ctx)
 }
 

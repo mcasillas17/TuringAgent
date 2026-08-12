@@ -2,10 +2,39 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/project-turing/mcp-system/internal/jsonrpc"
+	systemtools "github.com/project-turing/mcp-system/internal/tools"
 )
+
+const expectedSystemRequestLimit = 1024 * 1024
+const expectedSystemResponseLimit = 1024 * 1024
+const expectedSystemAggregateResultLimit = 4 * 1024 * 1024
+const expectedSystemToolCallsPerRun = 10
+
+func TestHTTPServerConfiguresConnectionTimeouts(t *testing.T) {
+	server := newHTTPServer(":7100", http.NotFoundHandler())
+
+	if server.ReadHeaderTimeout != 5*time.Second {
+		t.Fatalf("ReadHeaderTimeout = %v, want 5s", server.ReadHeaderTimeout)
+	}
+	if server.ReadTimeout != 30*time.Second {
+		t.Fatalf("ReadTimeout = %v, want 30s", server.ReadTimeout)
+	}
+	if server.WriteTimeout != 2*time.Minute {
+		t.Fatalf("WriteTimeout = %v, want 2m", server.WriteTimeout)
+	}
+	if server.IdleTimeout != 60*time.Second {
+		t.Fatalf("IdleTimeout = %v, want 60s", server.IdleTimeout)
+	}
+}
 
 func TestMcpHandlerRequiresBearerToken(t *testing.T) {
 	handler := newHandler("system-token")
@@ -17,6 +46,27 @@ func TestMcpHandlerRequiresBearerToken(t *testing.T) {
 
 	if res.Code != http.StatusUnauthorized {
 		t.Fatalf("expected unauthorized without bearer token, got %d", res.Code)
+	}
+}
+
+func TestHealthEndpointIsAvailableWithoutBearerToken(t *testing.T) {
+	handler := newHandler("system-token")
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	res := httptest.NewRecorder()
+
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("health status = %d, want %d", res.Code, http.StatusNoContent)
+	}
+}
+
+func TestHealthcheckProbeAcceptsReadyEndpoint(t *testing.T) {
+	server := httptest.NewServer(newHandler("system-token"))
+	defer server.Close()
+
+	if err := checkHealth(context.Background(), server.URL+"/healthz"); err != nil {
+		t.Fatalf("checkHealth failed: %v", err)
 	}
 }
 
@@ -51,5 +101,250 @@ func TestMcpHandlerCallsSystemTool(t *testing.T) {
 	}
 	if !bytes.Contains(res.Body.Bytes(), []byte(`"text":"hello"`)) {
 		t.Fatalf("expected system.echo result, got %s", res.Body.String())
+	}
+}
+
+func TestMcpHandlerRejectsOversizedRequestBody(t *testing.T) {
+	handler := newHandler("system-token")
+	for name, body := range map[string]string{
+		"valid JSON":      `{"jsonrpc":"2.0","id":1,"method":"tools/list","padding":"` + strings.Repeat("x", expectedSystemRequestLimit) + `"}`,
+		"early malformed": `x` + strings.Repeat(" ", expectedSystemRequestLimit),
+	} {
+		t.Run(name, func(t *testing.T) {
+			status, response := callSystemMCP(t, handler, body)
+			if status != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status = %d, want %d; response=%s", status, http.StatusRequestEntityTooLarge, response)
+			}
+			assertRPCErrorCode(t, response, -32600)
+		})
+	}
+}
+
+func TestMcpResponseWriterRejectsOversizedEncodedResponse(t *testing.T) {
+	response := httptest.NewRecorder()
+
+	writeJSONRPC(response, jsonrpc.Response{
+		JSONRPC: "2.0",
+		ID:      float64(1),
+		Result:  map[string]any{"text": strings.Repeat("\x01", expectedSystemResponseLimit)},
+	})
+
+	if response.Body.Len() > expectedSystemResponseLimit {
+		t.Fatalf("response body = %d bytes, exceeds %d-byte cap", response.Body.Len(), expectedSystemResponseLimit)
+	}
+	assertRPCErrorCode(t, response.Body.Bytes(), -32603)
+}
+
+func TestMcpResponseWriterDropsOversizedIDFromFallback(t *testing.T) {
+	response := httptest.NewRecorder()
+
+	writeJSONRPC(response, jsonrpc.Response{
+		JSONRPC: "2.0",
+		ID:      strings.Repeat("x", expectedSystemResponseLimit),
+		Result:  map[string]any{"text": "ok"},
+	})
+
+	if response.Body.Len() > expectedSystemResponseLimit {
+		t.Fatalf("response body = %d bytes, exceeds %d-byte cap", response.Body.Len(), expectedSystemResponseLimit)
+	}
+	var envelope struct {
+		ID any `json:"id"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.ID != nil {
+		t.Fatalf("fallback response id = %#v, want null", envelope.ID)
+	}
+}
+
+func TestEchoCharacterBoundaryFitsTransportAndAggregateBudgets(t *testing.T) {
+	result, err := systemtools.Call("system.echo", map[string]any{
+		"text": strings.Repeat("\x01", systemtools.MaxEchoCharacters),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedResult, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedResponse, err := json.Marshal(jsonrpc.Response{
+		JSONRPC: "2.0",
+		ID:      float64(1),
+		Result:  result,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encodedResponse) > expectedSystemResponseLimit {
+		t.Fatalf("worst-case echo response = %d bytes, exceeds %d-byte MCP cap", len(encodedResponse), expectedSystemResponseLimit)
+	}
+	if len(encodedResult)*expectedSystemToolCallsPerRun > expectedSystemAggregateResultLimit {
+		t.Fatalf(
+			"%d worst-case echo results total %d bytes, exceed %d-byte run aggregate",
+			expectedSystemToolCallsPerRun,
+			len(encodedResult)*expectedSystemToolCallsPerRun,
+			expectedSystemAggregateResultLimit,
+		)
+	}
+}
+
+func TestMcpHandlerStrictlyValidatesJSONRPCEnvelope(t *testing.T) {
+	handler := newHandler("system-token")
+	tests := []struct {
+		name string
+		body string
+		code int
+	}{
+		{name: "malformed JSON", body: `{`, code: -32700},
+		{name: "root array", body: `[]`, code: -32600},
+		{name: "wrong version", body: `{"jsonrpc":"1.0","id":1,"method":"tools/list"}`, code: -32600},
+		{name: "null id", body: `{"jsonrpc":"2.0","id":null,"method":"tools/list"}`, code: -32600},
+		{name: "boolean id", body: `{"jsonrpc":"2.0","id":true,"method":"tools/list"}`, code: -32600},
+		{name: "fractional id", body: `{"jsonrpc":"2.0","id":1.5,"method":"tools/list"}`, code: -32600},
+		{name: "missing method", body: `{"jsonrpc":"2.0","id":1}`, code: -32600},
+		{name: "empty method", body: `{"jsonrpc":"2.0","id":1,"method":""}`, code: -32600},
+		{name: "array params", body: `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":[]}`, code: -32602},
+		{name: "null params", body: `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":null}`, code: -32602},
+		{name: "unknown envelope field", body: `{"jsonrpc":"2.0","id":1,"method":"tools/list","extra":true}`, code: -32600},
+		{name: "second object", body: `{"jsonrpc":"2.0","id":1,"method":"tools/list"} {}`, code: -32600},
+		{name: "trailing garbage", body: `{"jsonrpc":"2.0","id":1,"method":"tools/list"} garbage`, code: -32700},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			status, response := callSystemMCP(t, handler, test.body)
+			if status != http.StatusOK {
+				t.Fatalf("status = %d, want 200; response=%s", status, response)
+			}
+			assertRPCErrorCode(t, response, test.code)
+		})
+	}
+}
+
+func TestMcpHandlerAcceptsNotificationWithoutResponse(t *testing.T) {
+	handler := newHandler("system-token")
+
+	status, response := callSystemMCP(t, handler, `{"jsonrpc":"2.0","method":"tools/list"}`)
+
+	if status != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; response=%s", status, response)
+	}
+	if len(response) != 0 {
+		t.Fatalf("notification response = %q, want empty body", response)
+	}
+}
+
+func TestMcpHandlerRejectsNonObjectToolArguments(t *testing.T) {
+	handler := newHandler("system-token")
+	for _, arguments := range []string{`null`, `"text"`, `[]`, `1`, `true`} {
+		t.Run(arguments, func(t *testing.T) {
+			body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"system.health","arguments":` + arguments + `}}`
+			status, response := callSystemMCP(t, handler, body)
+			if status != http.StatusOK {
+				t.Fatalf("status = %d, want 200; response=%s", status, response)
+			}
+			assertRPCErrorCode(t, response, -32602)
+		})
+	}
+}
+
+func TestMcpHandlerRejectsMalformedToolCallParams(t *testing.T) {
+	handler := newHandler("system-token")
+	for name, params := range map[string]string{
+		"missing name":        `{}`,
+		"non-string name":     `{"name":1}`,
+		"empty name":          `{"name":" "}`,
+		"non-object metadata": `{"name":"system.health","_meta":[]}`,
+		"unknown parameter":   `{"name":"system.health","unexpected":true}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":` + params + `}`
+			status, response := callSystemMCP(t, handler, body)
+			if status != http.StatusOK {
+				t.Fatalf("status = %d, want 200; response=%s", status, response)
+			}
+			assertRPCErrorCode(t, response, -32602)
+		})
+	}
+}
+
+func TestMcpHandlerMapsToolArgumentErrorsToInvalidParams(t *testing.T) {
+	handler := newHandler("system-token")
+	for name, body := range map[string]string{
+		"unknown argument":    `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"system.health","arguments":{"unexpected":true}}}`,
+		"wrong argument type": `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"system.echo","arguments":{"text":1}}}`,
+		"unknown tool":        `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"system.missing"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			status, response := callSystemMCP(t, handler, body)
+			if status != http.StatusOK {
+				t.Fatalf("status = %d, want 200; response=%s", status, response)
+			}
+			assertRPCErrorCode(t, response, -32602)
+		})
+	}
+}
+
+func TestMcpHandlerRejectsMalformedToolsListParams(t *testing.T) {
+	handler := newHandler("system-token")
+	for name, params := range map[string]string{
+		"non-string cursor":   `{"cursor":1}`,
+		"non-object metadata": `{"_meta":[]}`,
+		"unknown parameter":   `{"unexpected":true}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":` + params + `}`
+			status, response := callSystemMCP(t, handler, body)
+			if status != http.StatusOK {
+				t.Fatalf("status = %d, want 200; response=%s", status, response)
+			}
+			assertRPCErrorCode(t, response, -32602)
+		})
+	}
+}
+
+func TestMcpHandlerAllowsOmittedToolArguments(t *testing.T) {
+	handler := newHandler("system-token")
+
+	status, response := callSystemMCP(t, handler, `{"jsonrpc":"2.0","id":"request-1","method":"tools/call","params":{"name":"system.health"}}`)
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; response=%s", status, response)
+	}
+	var envelope struct {
+		ID     string         `json:"id"`
+		Result map[string]any `json:"result"`
+		Error  map[string]any `json:"error"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.ID != "request-1" || envelope.Result == nil || envelope.Error != nil {
+		t.Fatalf("response = %s, want successful correlated result", response)
+	}
+}
+
+func callSystemMCP(t *testing.T, handler http.Handler, body string) (int, []byte) {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+"system-token")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response.Code, response.Body.Bytes()
+}
+
+func assertRPCErrorCode(t *testing.T, response []byte, want int) {
+	t.Helper()
+	var envelope struct {
+		Error *struct {
+			Code int `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		t.Fatalf("decode response %q: %v", response, err)
+	}
+	if envelope.Error == nil || envelope.Error.Code != want {
+		t.Fatalf("response = %s, want JSON-RPC error code %d", response, want)
 	}
 }

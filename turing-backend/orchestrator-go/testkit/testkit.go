@@ -20,6 +20,7 @@ type Config struct {
 	OpenAIModel              string
 	MaxConcurrentRunsGeneral int
 	MaxToolCallsPerRun       int
+	ApprovalTTLMS            int
 }
 
 type App struct {
@@ -31,7 +32,10 @@ type App struct {
 
 type Repository struct{ inner *repository.Repository }
 
-type Run struct{ Status string }
+type Run struct {
+	Status          string
+	ExecutionActive bool
+}
 
 func NewApp(cfg Config) (*App, error) {
 	inner, err := app.New(config.Config{
@@ -45,6 +49,7 @@ func NewApp(cfg Config) (*App, error) {
 		OpenAIModel:              cfg.OpenAIModel,
 		MaxConcurrentRunsGeneral: cfg.MaxConcurrentRunsGeneral,
 		MaxToolCallsPerRun:       cfg.MaxToolCallsPerRun,
+		ApprovalTTLMS:            cfg.ApprovalTTLMS,
 	})
 	if err != nil {
 		return nil, err
@@ -63,5 +68,5 @@ func (r *Repository) GetRun(ctx context.Context, runID string) (Run, error) {
 	if err != nil {
 		return Run{}, err
 	}
-	return Run{Status: run.Status}, nil
+	return Run{Status: run.Status, ExecutionActive: run.ExecutionActive}, nil
 }

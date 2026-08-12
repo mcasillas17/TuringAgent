@@ -18,6 +18,7 @@ The project is designed for local development first: secrets stay in your local 
 - Go 1.23+
 - Flutter
 - Ollama running on the host for the default local model path
+- A non-root host account for backend initialization and Compose launches
 
 By default, containers reach Ollama at `http://host.docker.internal:11434`.
 
@@ -31,7 +32,11 @@ cd TuringAgent/turing-backend
 ./scripts/init.sh
 ```
 
-`init.sh` creates `turing-backend/.env`, generates local bearer tokens, creates `data/` and `sandbox/`, and prints the Flutter client API key. Do not commit `.env`.
+`init.sh` rejects root execution, creates `turing-backend/.env`, generates local
+bearer tokens, records the current non-root UID/GID for the bind-mounted
+sandbox, creates `data/` and a real (non-symlink) `sandbox/`, and prints the
+Flutter client API key. It fails rather than changing ownership or permissions
+when existing sandbox content is inaccessible. Do not commit `.env`.
 
 Start the backend stack:
 
@@ -40,6 +45,11 @@ Start the backend stack:
 ```
 
 This builds and runs the orchestrator, agent runtime, and MCP servers through Docker Compose. The public gRPC API listens on `localhost:3000` by default.
+
+Use the repository scripts rather than invoking this Compose file directly.
+`scripts/compose.sh` validates and injects the current non-root host UID/GID;
+this prevents stale `.env` values or exported `HOST_UID`/`HOST_GID` variables
+from selecting the identity used for the sandbox bind mount.
 
 In another terminal, run the Flutter app:
 
@@ -66,10 +76,12 @@ cd turing-backend
 Run developer checks from the repository root:
 
 ```bash
-go test -tags sqlite_fts5 ./... -count=1
+go test -tags sqlite_fts5 -race ./... -count=1
+go vet -tags sqlite_fts5 ./...
 go build -tags sqlite_fts5 ./...
-cd turing-backend/mcp-files && go test ./... -count=1 && go build ./cmd/server
-cd ../../turing-client/turing_app && flutter test
+cd turing-backend/mcp-files && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server
+cd ../mcp-system && go test -race ./... -count=1 && go vet ./... && go build ./...
+cd ../../turing-client/turing_app && flutter analyze && flutter test
 ```
 
 ## Configuration
@@ -83,6 +95,10 @@ Common values:
 | `TURING_CLIENT_API_KEY` | Bearer token for Flutter and other public gRPC clients |
 | `TURING_INTERNAL_TOKEN` | Bearer token for internal runtime and approval gRPC calls |
 | `TURING_APPROVAL_JWT_SECRET` | HS256 secret used for approval tokens |
+| `TURING_APPROVAL_TIMEOUT_MS` / `TURING_APPROVAL_WAIT_TIMEOUT_MS` | Approval lifetime and the longer runtime observation bound (defaults: 65s / 71s) |
+| `TURING_TOOL_TIMEOUT_MS` / `TURING_TOOL_TOTAL_TIMEOUT_MS` | Per-request MCP timeout and whole-tool lifecycle timeout (defaults: 30s / 180s) |
+| `HOST_IDENTITY_MODE` | Managed compatibility marker; `init.sh` always resets it to `auto` |
+| `HOST_UID` / `HOST_GID` | Current canonical non-root host IDs, managed by `init.sh` and overridden safely by `scripts/compose.sh` at launch |
 | `ORCHESTRATOR_GRPC_ADDR` | Internal orchestrator gRPC address, usually `turing-orchestrator:3001` |
 | `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Local model endpoint and default model |
 | `OPENAI_API_KEY` / `OPENAI_MODEL` | Optional OpenAI-compatible model configuration |
@@ -93,7 +109,9 @@ Common values:
 - **Authentication fails:** confirm the Flutter API key matches `TURING_CLIENT_API_KEY` in `turing-backend/.env`.
 - **No model response:** ensure Ollama is running on the host and the configured model is available.
 - **Smoke test times out:** inspect the `turing-orchestrator` and `turing-agent-runtime-general` container logs.
-- **File tools fail:** confirm `turing-backend/sandbox/` exists and that approval-required write tools were approved in the client.
+- **Initialization refuses root:** run it from the non-root host account that owns the checkout and sandbox; do not use `sudo`.
+- **Initialization reports legacy sandbox content:** restore ownership and owner read/write access (plus directory traversal) outside the script, or move the content aside, then rerun `scripts/init.sh`. The script deliberately does not recurse with `chmod` or `chown`.
+- **File tools fail:** confirm `turing-backend/sandbox/` is a real directory, rerun `scripts/init.sh`, and confirm approval-required writes were approved. Rootless Docker, `userns-remap`, and SELinux may require daemon-specific ownership/mapping or labeling; see the MCP security guide.
 
 ## Documentation
 

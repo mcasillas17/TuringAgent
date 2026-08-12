@@ -335,11 +335,12 @@ func (x *GetSessionRequest) GetSessionId() string {
 }
 
 type ListMessagesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	Limit         int32                  `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SessionId       string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Limit           int32                  `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
+	BeforeMessageId string                 `protobuf:"bytes,3,opt,name=before_message_id,json=beforeMessageId,proto3" json:"before_message_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ListMessagesRequest) Reset() {
@@ -384,6 +385,13 @@ func (x *ListMessagesRequest) GetLimit() int32 {
 		return x.Limit
 	}
 	return 0
+}
+
+func (x *ListMessagesRequest) GetBeforeMessageId() string {
+	if x != nil {
+		return x.BeforeMessageId
+	}
+	return ""
 }
 
 type ListMessagesResponse struct {
@@ -878,11 +886,12 @@ const file_turing_v1_sessions_proto_rawDesc = "" +
 	"\x04page\x18\x02 \x01(\v2\x17.turing.v1.PageResponseR\x04page\"2\n" +
 	"\x11GetSessionRequest\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\"J\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\"v\n" +
 	"\x13ListMessagesRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x14\n" +
-	"\x05limit\x18\x02 \x01(\x05R\x05limit\"F\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\x12*\n" +
+	"\x11before_message_id\x18\x03 \x01(\tR\x0fbeforeMessageId\"F\n" +
 	"\x14ListMessagesResponse\x12.\n" +
 	"\bmessages\x18\x01 \x03(\v2\x12.turing.v1.MessageR\bmessages\"b\n" +
 	"\x15SearchMessagesRequest\x12\x14\n" +

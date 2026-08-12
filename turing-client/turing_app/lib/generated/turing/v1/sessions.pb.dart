@@ -443,10 +443,12 @@ class ListMessagesRequest extends $pb.GeneratedMessage {
   factory ListMessagesRequest({
     $core.String? sessionId,
     $core.int? limit,
+    $core.String? beforeMessageId,
   }) {
     final result = create();
     if (sessionId != null) result.sessionId = sessionId;
     if (limit != null) result.limit = limit;
+    if (beforeMessageId != null) result.beforeMessageId = beforeMessageId;
     return result;
   }
 
@@ -465,6 +467,7 @@ class ListMessagesRequest extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'sessionId')
     ..a<$core.int>(2, _omitFieldNames ? '' : 'limit', $pb.PbFieldType.O3)
+    ..aOS(3, _omitFieldNames ? '' : 'beforeMessageId')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -505,6 +508,15 @@ class ListMessagesRequest extends $pb.GeneratedMessage {
   $core.bool hasLimit() => $_has(1);
   @$pb.TagNumber(2)
   void clearLimit() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get beforeMessageId => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set beforeMessageId($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasBeforeMessageId() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearBeforeMessageId() => $_clearField(3);
 }
 
 class ListMessagesResponse extends $pb.GeneratedMessage {

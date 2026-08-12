@@ -37,8 +37,11 @@ type App struct {
 	AuditService    *auditsvc.Server
 	HealthService   *HealthServer
 
-	database *db.DB
-	stopOnce sync.Once
+	database     *db.DB
+	stopOnce     sync.Once
+	reaperCancel context.CancelFunc
+	reaperDone   chan struct{}
+	authFailures *auth.AsyncFailureRecorder
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -58,23 +61,53 @@ func New(cfg config.Config) (*App, error) {
 
 	repo := repository.New(database)
 	eventBus := eventsvc.NewBus(128)
-	approvalService := approvalsvc.New(repo, eventBus, cfg.ApprovalJWTSecret)
-	runtimeService := runtimesvc.New(repo, eventBus, approvalService)
+	recoveredEvents, err := repo.RecoverAllActiveAssignmentsWithLimit(context.Background(), cfg.JobMaxAttempts)
+	if err != nil {
+		_ = database.Close()
+		return nil, err
+	}
+	approvalService := approvalsvc.New(repo, eventBus, cfg.ApprovalJWTSecret, time.Duration(cfg.ApprovalTTLMS)*time.Millisecond)
+	maxConcurrentRuns := cfg.MaxConcurrentRunsGeneral
+	if maxConcurrentRuns <= 0 {
+		maxConcurrentRuns = 1
+	}
+	runtimeService := runtimesvc.NewWithConfig(repo, eventBus, runtimesvc.DispatchConfig{
+		MaxConcurrentRuns: maxConcurrentRuns,
+		LeaseDuration:     time.Duration(cfg.JobTimeoutMS) * time.Millisecond,
+		MaxAttempts:       cfg.JobMaxAttempts,
+	}, approvalService)
 	sessionService := sessionsvc.New(repo, cfg)
 	eventService := eventsvc.NewServer(repo, eventBus)
 	chatService := chatsvc.New(repo, eventBus, runtimeService, cfg.OllamaModel, cfg.OpenAIModel)
 	auditService := auditsvc.New(repo)
 	healthService := &HealthServer{schemaVersion: schemaVersion}
+	persistAuthFailure := func(ctx context.Context, failure auth.Failure) error {
+		return auditService.Record(ctx, failure.RequestID, failure.ActorType, failure.Peer, "auth.failed", failure.Method, map[string]any{
+			"method":    failure.Method,
+			"requestId": failure.RequestID,
+			"userAgent": failure.UserAgent,
+			"peer":      failure.Peer,
+		})
+	}
+	authFailures := auth.NewAsyncFailureRecorder(persistAuthFailure)
+	publicAuth := auth.InterceptorOptions{ActorType: "client", FailureRecorder: authFailures.Record}
+	internalAuth := auth.InterceptorOptions{ActorType: "runtime", FailureRecorder: authFailures.Record}
+	for _, event := range recoveredEvents {
+		eventBus.Publish(eventsvc.Event{
+			EventID: event.EventID, SessionID: event.SessionID, RunID: event.RunID.String,
+			TraceID: event.TraceID, Sequence: event.Sequence, Type: event.Type, CreatedAt: event.CreatedAt, PayloadJSON: event.PayloadJSON,
+		})
+	}
 
 	publicServer := grpc.NewServer(
-		grpc.UnaryInterceptor(auth.UnaryInterceptor(cfg.ClientAPIKey)),
-		grpc.StreamInterceptor(auth.StreamInterceptor(cfg.ClientAPIKey)),
+		grpc.UnaryInterceptor(auth.UnaryInterceptor(cfg.ClientAPIKey, publicAuth)),
+		grpc.StreamInterceptor(auth.StreamInterceptor(cfg.ClientAPIKey, publicAuth)),
 		grpc.MaxRecvMsgSize(maxGRPCMessageSize),
 		grpc.MaxSendMsgSize(maxGRPCMessageSize),
 	)
 	internalServer := grpc.NewServer(
-		grpc.UnaryInterceptor(auth.UnaryInterceptor(cfg.InternalToken)),
-		grpc.StreamInterceptor(auth.StreamInterceptor(cfg.InternalToken)),
+		grpc.UnaryInterceptor(auth.UnaryInterceptor(cfg.InternalToken, internalAuth)),
+		grpc.StreamInterceptor(auth.StreamInterceptor(cfg.InternalToken, internalAuth)),
 		grpc.MaxRecvMsgSize(maxGRPCMessageSize),
 		grpc.MaxSendMsgSize(maxGRPCMessageSize),
 	)
@@ -83,12 +116,12 @@ func New(cfg config.Config) (*App, error) {
 	turingv1.RegisterSessionServiceServer(publicServer, sessionService)
 	turingv1.RegisterEventServiceServer(publicServer, eventService)
 	turingv1.RegisterChatServiceServer(publicServer, chatService)
-	turingv1.RegisterApprovalServiceServer(publicServer, approvalService)
+	turingv1.RegisterApprovalServiceServer(publicServer, approvalsvc.NewPublicServer(approvalService))
 	turingv1.RegisterSessionServiceServer(internalServer, sessionService)
-	turingv1.RegisterApprovalServiceServer(internalServer, approvalService)
+	turingv1.RegisterApprovalServiceServer(internalServer, approvalsvc.NewInternalServer(approvalService))
 	turingv1.RegisterRuntimeServiceServer(internalServer, runtimeService)
 
-	return &App{
+	application := &App{
 		PublicServer:    publicServer,
 		InternalServer:  internalServer,
 		Repository:      repo,
@@ -101,7 +134,21 @@ func New(cfg config.Config) (*App, error) {
 		AuditService:    auditService,
 		HealthService:   healthService,
 		database:        database,
-	}, nil
+		authFailures:    authFailures,
+		reaperDone:      make(chan struct{}),
+	}
+	reaperCtx, reaperCancel := context.WithCancel(context.Background())
+	application.reaperCancel = reaperCancel
+	if cfg.JobReaperIntervalMS > 0 {
+		go func() {
+			defer close(application.reaperDone)
+			runtimeService.RunRecoveryLoop(reaperCtx, time.Duration(cfg.JobReaperIntervalMS)*time.Millisecond)
+		}()
+	} else {
+		reaperCancel()
+		close(application.reaperDone)
+	}
+	return application, nil
 }
 
 func (a *App) Stop() {
@@ -109,6 +156,12 @@ func (a *App) Stop() {
 		return
 	}
 	a.stopOnce.Do(func() {
+		if a.reaperCancel != nil {
+			a.reaperCancel()
+		}
+		if a.reaperDone != nil {
+			<-a.reaperDone
+		}
 		var wg sync.WaitGroup
 		if a.PublicServer != nil {
 			wg.Add(1)
@@ -125,6 +178,11 @@ func (a *App) Stop() {
 			}()
 		}
 		wg.Wait()
+		if a.authFailures != nil {
+			closeCtx, cancel := context.WithTimeout(context.Background(), gracefulStopTimeout)
+			_ = a.authFailures.Close(closeCtx)
+			cancel()
+		}
 		if a.database != nil {
 			_ = a.database.Close()
 		}

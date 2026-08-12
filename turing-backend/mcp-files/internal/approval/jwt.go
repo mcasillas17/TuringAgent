@@ -21,6 +21,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+const (
+	approvalTokenIssuer = "turing.orchestrator"
+	approvalTokenType   = "JWT"
+)
+
 type Claims struct {
 	Iss      string `json:"iss"`
 	Sub      string `json:"sub"`
@@ -33,6 +38,10 @@ type Claims struct {
 }
 
 func VerifyHS256(token string, secret string) (Claims, error) {
+	return verifyHS256At(token, secret, time.Now())
+}
+
+func verifyHS256At(token string, secret string, now time.Time) (Claims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return Claims{}, errors.New("invalid token")
@@ -51,6 +60,9 @@ func VerifyHS256(token string, secret string) (Claims, error) {
 	if header.Alg != "HS256" {
 		return Claims{}, errors.New("invalid token algorithm")
 	}
+	if header.Typ != approvalTokenType {
+		return Claims{}, errors.New("invalid token type")
+	}
 	signingInput := parts[0] + "." + parts[1]
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(signingInput))
@@ -66,7 +78,10 @@ func VerifyHS256(token string, secret string) (Claims, error) {
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return Claims{}, err
 	}
-	if claims.Exp < time.Now().Unix() {
+	if claims.Iss != approvalTokenIssuer {
+		return Claims{}, errors.New("invalid token issuer")
+	}
+	if claims.Exp <= now.Unix() {
 		return Claims{}, errors.New("token expired")
 	}
 	return claims, nil
@@ -85,6 +100,13 @@ type ApprovalClient interface {
 }
 
 func (c Consumer) Validate(token string, tool string, args map[string]any, agentID string) error {
+	return c.ValidateContext(context.Background(), token, tool, args, agentID)
+}
+
+func (c Consumer) ValidateContext(ctx context.Context, token string, tool string, args map[string]any, agentID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	claims, err := VerifyHS256(token, c.JWTSecret)
 	if err != nil {
 		return err
@@ -105,11 +127,11 @@ func (c Consumer) Validate(token string, tool string, args map[string]any, agent
 	if claims.ArgsHash != argsHash {
 		return errors.New("approval args_hash does not match call")
 	}
-	return c.consume(claims.JTI)
+	return c.consume(ctx, claims.JTI)
 }
 
-func (c Consumer) consume(jti string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func (c Consumer) consume(parent context.Context, jti string) error {
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 	client, closeClient, err := c.approvalClient()
 	if err != nil {

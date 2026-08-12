@@ -1,194 +1,274 @@
 # MCP Security and Integration Guide
 
-This document describes the two Go-based MCP (Model Context Protocol) servers
-delivered for TuringAgent v1.0 — `mcp-system` and `mcp-files` — and the
-security model that bounds what the assistant runtime can do through them. It
-is paired with the integrated v1 runtime/orchestrator implementation on
-`pturing-v1-base`.
+This guide describes the implemented security boundary for the Go
+`mcp-system` and `mcp-files` servers and their integration with the agent
+runtime and orchestrator.
 
-The intent of this guide is that a reviewer can evaluate the security posture
-without reading the Go source.
+## Deployment boundary
 
-## Overview
+| Service | Endpoint | Bearer-token environment variable | Purpose |
+|---|---|---|---|
+| `mcp-system` | `:7100/mcp` | `MCP_SYSTEM_TOKEN_GENERAL` | Read-only system tools |
+| `mcp-files` | `:7110/mcp` | `MCP_FILES_TOKEN_GENERAL` | Sandboxed file tools |
 
-TuringAgent v1.0 splits agent execution out of the orchestrator. The agent
-runtime calls a small number of MCP servers over JSON-RPC 2.0 (Streamable HTTP)
-on the internal Docker network. Two MCP servers are in scope for v1.0:
+Compose exposes these ports only to internal Docker networks; it does not
+publish them to the host. An empty configured bearer token denies every
+request rather than opening the service. Both images run as non-root users.
+Compose also makes both MCP root filesystems read-only, drops all Linux
+capabilities, and sets `no-new-privileges`. The `mcp-files` `/sandbox` bind
+mount remains writable. Neither service needs a writable temporary filesystem.
+The servers bound request bodies and configure header, read, write, and idle
+HTTP timeouts. `mcp-system` accepts at most 1 MiB per request; `mcp-files`
+allows the worst-case escaped 512 KiB mutation envelope (about 3.1 MiB). Both
+cap encoded responses at 1 MiB. Responses are ordinary bounded JSON responses,
+not open-ended streams, so a finite write timeout is appropriate.
 
-| Service       | Port            | Bearer token env              | Purpose                                                |
-|---------------|-----------------|-------------------------------|--------------------------------------------------------|
-| `mcp-system`  | `:7100/mcp`     | `MCP_SYSTEM_TOKEN_GENERAL`    | Safe "beacon" tools the runtime can call without approval. |
-| `mcp-files`   | `:7110/mcp`     | `MCP_FILES_TOKEN_GENERAL`     | Sandboxed filesystem access; mutating tools are approval-gated. |
+Both services accept JSON-RPC 2.0 `tools/list` and `tools/call` requests at
+`/mcp`. Malformed tool arguments use `-32602`; operational tool failures use
+`-32000`; an unknown JSON-RPC method uses `-32601`. Request IDs are echoed in
+responses.
 
-Both servers expect to be reachable only from the orchestrator and the agent
-runtime over the internal Docker network. Neither server is published to the
-host in the expected v1.0 compose layout.
+## Catalog discovery and filtering
 
-The default Compose stack starts both servers internally; neither `/mcp`
-endpoint is published to the host.
+`mcp-system` advertises four `safe` tools:
 
-## System MCP server (`mcp-system`)
+| Tool | Arguments | Result |
+|---|---|---|
+| `system.health` | none | `{ "ok": true, "service": "turing-mcp-system" }` |
+| `system.time` | none | `{ "iso": string, "unixMs": number, "timezone": "UTC" }` |
+| `system.echo` | optional `text: string`, at most 65,536 Unicode characters | `{ "text": string }` |
+| `system.info` | none | `{ "os": string, "arch": string, "runtime": string }` |
 
-`mcp-system` exposes four read-only tools that the runtime can invoke without
-involving the approval pipeline. All four are labeled `safe` in the server's
-own `tools/list` response.
+`system.info` deliberately omits environment variables.
 
-### Tools
+`mcp-files` advertises only the five callable tools:
 
-| Name            | Policy | Request fields | Response fields                                           |
-|-----------------|--------|----------------|-----------------------------------------------------------|
-| `system.health` | `safe` | (none)         | `ok: bool`, `service: "turing-mcp-system"`                |
-| `system.time`   | `safe` | (none)         | `iso: string` (RFC3339Nano UTC), `unixMs: int`, `timezone: "UTC"` |
-| `system.echo`   | `safe` | `text: string` | `text: string`                                            |
-| `system.info`   | `safe` | (none)         | `os: string`, `arch: string`, `runtime: string` (Go version) |
-
-Deliberate omissions:
-
-- `system.info` does **not** expose process environment variables. There is a
-  unit test (`TestSystemInfoDoesNotExposeSecrets`) that asserts the response
-  has no `env` key. Adding an `env` field would be a regression.
-- `system.time` always reports UTC. The `timezone` field is hard-coded.
-
-### Authentication
-
-All `/mcp` requests must include `Authorization: Bearer <MCP_SYSTEM_TOKEN_GENERAL>`.
-The middleware (`internal/auth/auth.go`) treats an **empty configured token**
-as outright rejection — that is, if `MCP_SYSTEM_TOKEN_GENERAL` is unset, every
-request is denied with `401 Unauthorized`. This prevents accidental
-"no token = open" deployments.
-
-There is no per-agent identity in `mcp-system`; the single bearer is enough
-because every tool is safe and read-only.
-
-### JSON-RPC 2.0 envelope
-
-Both servers speak JSON-RPC 2.0 with a single HTTP endpoint at `/mcp`. The
-request and response shapes are identical across both services.
-
-`tools/list` request:
-
-```json
-{ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }
-```
-
-`tools/list` response (system server):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": {
-    "tools": [
-      { "name": "system.health", "policy": "safe" },
-      { "name": "system.time",   "policy": "safe" },
-      { "name": "system.echo",   "policy": "safe" },
-      { "name": "system.info",   "policy": "safe" }
-    ]
-  }
-}
-```
-
-`tools/call` request (echo example):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 2,
-  "method": "tools/call",
-  "params": {
-    "name": "system.echo",
-    "arguments": { "text": "hello" }
-  }
-}
-```
-
-`tools/call` response:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 2,
-  "result": { "text": "hello" }
-}
-```
-
-Unknown tools return a JSON-RPC error with code `-32601` (`method not found`)
-and message `unknown tool`. Unknown methods return the same code with message
-`method not found`.
-
-## Files MCP server (`mcp-files`)
-
-`mcp-files` exposes a sandboxed filesystem under a single configurable root.
-The server returns a tool list that is the contract between runtime, policy
-engine, and operators:
-
-| Name           | Policy              |
-|----------------|---------------------|
-| `files.list`   | `safe`              |
-| `files.search` | `safe`              |
-| `files.read`   | `safe`              |
+| Tool | Policy |
+|---|---|
+| `files.list` | `safe` |
+| `files.search` | `safe` |
+| `files.read` | `safe` |
 | `files.create` | `approval_required` |
 | `files.update` | `approval_required` |
-| `files.delete` | `disabled`          |
-| `files.move`   | `disabled`          |
 
-`files.delete` and `files.move` are advertised in `tools/list` but the dispatcher
-returns `tool disabled` for any `tools/call` against them. They cannot be enabled
-without a code change.
+`files.delete` and `files.move` are not advertised. Their dispatcher cases
+remain defensive and return `tool disabled` if called directly.
 
-### Tool request and response shapes
+The runtime follows paginated `tools/list` responses in order, with limits of
+100 pages, 10,000 tools, and 4 MiB of aggregate encoded descriptors. It
+validates names, descriptions, object-rooted input schemas, and duplicate
+names across servers. Catalog entries with policy `disabled` are filtered out
+of both model definitions and runtime lookup. Policies `safe` and
+`approval_required` remain callable; an unknown or non-string policy makes
+discovery fail closed.
 
-All paths are interpreted relative to the sandbox root. A leading `/` is
-trimmed by the resolver, so `"/notes/today.md"` and `"notes/today.md"` both
-resolve to the same location under the sandbox.
+The 64 KiB `files.read` content cap and 65,536-character `system.echo` cap are
+chosen so their worst-case `encoding/json` escaping fits the runtime client's
+1 MiB per-response limit. Even with a maximum-length escaped file path, ten
+worst-case results fit the runtime's 4 MiB aggregate tool-result budget.
 
-`files.list`:
+## File request and result shapes
 
-- Request: `{ "path": string }`
-- Response: `{ "items": [ { "name": string, "isDir": bool }, ... ] }`
+Paths are sandbox-relative and limited to 4,096 input bytes, 255 bytes per
+component, and 64 components. Unix absolute paths, volume-qualified paths, and
+any cleaned `..` component are rejected rather than rewritten. Unknown
+arguments and wrong types are rejected rather than ignored. These are byte
+limits; tool schemas document them rather than misrepresenting them with JSON
+Schema `maxLength`, which counts characters. Required paths and search queries
+advertise nonblank string constraints.
 
-`files.search`:
+### `files.list`
 
-- Request: `{ "path": string, "query": string, "limit"?: number }`
-- Response: `{ "matches": [ { "path": string, "snippet": string }, ... ] }`
-- `query` is required; an empty string is rejected.
-- `limit` defaults to `50` and is clamped to `200`.
-- `snippet` is up to 40 characters either side of the first match in each file.
+- Arguments: optional `path` (defaults to `"."`) and optional integer `limit`
+  (default 200, range 1–1000).
+- Result:
+  `{ "items": [{ "name": string, "isDir": bool }], "truncated": bool }`.
+- Scanning is bounded to 4,000 directory entries. Internal staging names are
+  omitted. Encoded collection data is capped at 384 KiB. `truncated` is true
+  when the requested result limit, scan budget, or result budget prevents an
+  exhaustive listing.
 
-`files.read`:
+### `files.search`
 
-- Request: `{ "path": string, "maxBytes"?: number }`
-- Response: `{ "path": string, "content": string, "truncated": bool }`
-- See "Read limits and content rules" below.
+- Arguments: optional `path` (defaults to `"."`), required non-empty `query`,
+  and optional integer `limit` (default 50, range 1–200).
+- A regular file may be supplied as the starting path.
+- Result fields are:
+  - `matches`: `{path, snippet}` entries;
+  - `truncated`: a result or traversal budget stopped the search;
+  - `incomplete`: one or more traversal/read/close failures occurred;
+  - `errors`, `errorCount`, and `errorDetailsTruncated`;
+  - `entriesVisited`, `directoryEntriesRead`, `directoriesScanned`,
+    `filesScanned`, `skippedFiles`, and `bytesScanned`.
+- Search budgets are 2,000 visited entries, 1,000 opened files, 8 MiB of
+  aggregate reads, and 512 KiB per file. At most 20 error details are returned.
+  Matches and error details share a 384 KiB encoded collection budget.
+  Symlinks and non-UTF-8 files are skipped. Snippets contain the first match
+  with up to 40 bytes of context on each side, adjusted to valid UTF-8
+  boundaries.
 
-`files.create` and `files.update`:
+### `files.read`
 
-- Request: `{ "path": string, "content": string, "expectedHash"?: string }`
-  (`expectedHash` is honored only by `files.update`.)
-- Response: `{ "path": string, "sha256": string }` where `sha256` is the
-  `sha256:<hex>` digest of the written content.
-- Both require an approval JWT delivered out-of-band on the JSON-RPC envelope
-  (see below). Neither will touch disk before the approval has been validated
-  *and* consumed.
+- Arguments: required non-empty `path` and optional integer `maxBytes`
+  (default and maximum 64 KiB, range 1 byte–64 KiB).
+- Result:
+  `{ "path": string, "content": string, "truncated": bool, "bytesRead": number }`.
+- Reads return at most `maxBytes`, so larger files remain inspectable through a
+  bounded prefix with `truncated: true`. Returned content must be UTF-8 and is
+  trimmed to a valid UTF-8 boundary. `bytesRead` reports the opened file's full
+  length.
 
-#### `_meta.approvalToken` channel
+### `files.create` and `files.update`
 
-For `files.create` and `files.update`, the caller must place the approval JWT
-on the `params._meta.approvalToken` field of the JSON-RPC request, not inside
-`arguments`. Example:
+- `create` arguments: required `path` and `content`.
+- `update` arguments: required `path` and `content`, plus optional
+  `expectedHash` matching exactly `sha256:[0-9a-f]{64}`.
+- Content is limited to 512 KiB by bytes.
+- Content schemas describe the byte limit without a misleading
+  character-based `maxLength`.
+- Result: `{ "path": string, "sha256": "sha256:<hex>" }`.
+- `create` is exclusive and never overwrites an existing path.
+- `update` rejects non-regular files and files with no write permission bit.
+  When supplied, `expectedHash` validates the observed content before approval
+  and again before replacement.
 
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 7,
-  "method": "tools/call",
-  "params": {
-    "name": "files.create",
-    "arguments": { "path": "notes/today.md", "content": "..." },
-    "_meta": { "approvalToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." }
-  }
-}
-```
+## Descriptor-relative confinement
+
+The configured root is made absolute and canonicalized once when possible.
+Every operation then normalizes the relative input and walks from an open root
+directory descriptor:
+
+1. Each directory component is opened with `openat`, `O_DIRECTORY`, and
+   `O_NOFOLLOW`.
+2. Leaf files are opened relative to the verified parent descriptor with
+   `O_NOFOLLOW`.
+3. Type and identity checks use `fstat`/`fstatat`; mutations use
+   descriptor-relative `linkat`, `renameat`, and `unlinkat`.
+4. Directory batches are read as names, then classified with
+   descriptor-relative `fstatat(..., AT_SYMLINK_NOFOLLOW)`. This avoids
+   `ReadDir`'s path-based unknown-type fallback and never follows a symlink.
+5. Search performs a bounded descriptor-relative breadth-first traversal.
+
+This avoids check/use races caused by repeatedly resolving absolute path
+strings. A parent renamed concurrently remains the directory represented by
+the already-open descriptor; replacing it with a symlink does not redirect
+the operation outside the sandbox. Reserved, case-folded
+`.turing-create-*` and `.turing-update-*` path components are rejected so
+callers cannot address staging files.
+
+Long walks check request cancellation between descriptor opens, directory
+creation, and synchronization work. Creation synchronizes the containing
+directory and each required ancestor before success; ancestor descriptors are
+reopened and closed one at a time rather than retained for the full path depth.
+
+The sandbox restricts path reachability; it is not a substitute for operating
+system permissions, container isolation, or careful mount selection.
+
+## Approval ordering
+
+The runtime and file server both enforce ordering:
+
+1. The runtime posts a BEFORE tool-call beacon to the orchestrator.
+2. A deny stops immediately. For `APPROVAL_REQUIRED`, the runtime waits for an
+   approved token; it does not call MCP while approval is pending.
+3. The runtime calls MCP with the JWT in `params._meta.approvalToken`, outside
+   `arguments`, so the token is not included in the argument hash.
+4. `mcp-files` validates arguments and performs only non-mutating precondition
+   checks (for example, existence/type/permission and optional current-hash
+   checks) before approval consumption.
+5. The server requires `TURING_APPROVAL_JWT_SECRET` at startup. It verifies the
+   HS256 signature, `typ == "JWT"`, `iss == "turing.orchestrator"`, and expiry
+   (`exp <= now` is expired), then binds `aud` to `mcp-files`, `sub` to the
+   bearer-derived agent, `tool` to the requested tool, and `args_hash` to
+   canonical JSON of the exact arguments.
+6. It synchronously consumes the JWT `jti` through the orchestrator's
+   `ApprovalService.ConsumeApproval`. Only `APPROVAL_STATUS_CONSUMED`
+   succeeds; replay/not-approved maps to `FailedPrecondition`.
+7. Only after successful consumption can file content or namespace state be
+   mutated. A later write failure does not restore the single-use approval.
+8. The runtime posts an AFTER beacon with the result or failure.
+
+The canonical argument digest is `sha256:<hex>` over Go `encoding/json`
+output with HTML escaping disabled and the trailing newline removed. Map keys
+are deterministically sorted by the encoder.
+
+The current file bearer maps to `general_assistant`; approval JWTs must use
+that subject. Approval consumption uses the internal gRPC bearer and has its
+own 10-second timeout. The default approval lifetime is 65 seconds, the runtime
+wait bound is 71 seconds, an individual MCP request is bounded to 30 seconds,
+and the whole tool lifecycle retains a 180-second timeout.
+
+## Atomic creation and replacement
+
+Both mutation paths stage content in a randomly named file in the destination
+directory, write it completely, `fsync` it, publish it atomically, and
+`fsync` the directory. `create` publishes with `linkat` so an existing target
+cannot be overwritten. `update` revalidates the original device/inode and,
+when requested, its hash before publishing with `renameat`.
+
+`update` preserves only the target's ordinary `0777` permission bits. It
+deliberately strips setuid, setgid, and sticky bits from the replacement.
+Atomic replacement creates a new inode whose ownership follows the MCP
+process and parent-directory creation rules. It therefore does not preserve
+the old inode number, old owner/group, old POSIX ACL, extended attributes,
+file flags, hard-link identity, or other inode metadata. Attempting to copy
+these attributes is nonportable and can reintroduce privilege or race hazards;
+callers that require such metadata must manage it outside this
+content-oriented tool.
+
+The process-wide normalized path lock serializes `read`, `create`, and `update`
+operations made by cooperating `mcp-files` callers in that server process.
+Accordingly, `expectedHash` acts as compare-and-replace protection among those
+cooperating calls. It is not globally atomic against a host process that writes
+the sandbox directly: such a writer does not take the lock and can modify the
+target after the final hash/identity validation but before `renameat`. Callers
+must not treat `expectedHash` as coordination with non-cooperating host
+writers.
+
+## Bind-mount identities and host security systems
+
+The standalone `mcp-files` and orchestrator images use non-root UID/GID 1000.
+Repository Compose overrides both bind-mount writers with the validated current
+host UID/GID so `sandbox/` and `data/` remain writable without broadening their
+permissions.
+
+`scripts/init.sh` accepts only canonical positive UID/GID values for the
+current process and rejects root, invalid, or out-of-range identities before it
+mutates the sandbox or `.env`. It always rewrites `HOST_UID` and `HOST_GID` to
+the current host values; manual or stale values are not supported. It rejects a
+pre-existing sandbox symlink, creates real mode-`0700` sandbox and data
+directories independently of the caller's umask, and checks that the sandbox
+root and existing nested
+directories/files are owned, accessible, and not group/world-writable. Symlink
+entries are not followed. Data and configured SQLite files must have safe types
+and ownership; owned database files are restricted to mode `0600`. A
+pre-existing `.env` must be a regular non-symlink file before the script changes
+its mode or content. The script reports unsafe legacy content and exits; it
+never recursively runs `chmod` or `chown`.
+
+All repository launch scripts delegate to `scripts/compose.sh`. That wrapper
+revalidates the current non-root identity and supplies it directly to Compose,
+overriding both exported and `.env` `HOST_UID`/`HOST_GID` values. Direct
+`docker compose` invocation is unsupported because shell variables take
+precedence over `.env` and can bypass that preflight. Immediately before a
+launch, the wrapper also verifies that `sandbox/` and `data/` are real, owned,
+restrictive directories and that SQLite files are regular, owned, mode-`0600`
+files.
+
+Rootless Docker and daemon `userns-remap` translate container IDs through
+daemon-specific subordinate-ID mappings. A host UID copied into Compose is
+therefore not guaranteed to map back to that same host account, and bind-mount
+writes may fail. Configure the daemon/user namespace and mount ownership
+together, or use a pre-provisioned named volume; do not solve mapping failures
+by running the service as root or making the sandbox world-writable.
+
+On SELinux-enforcing hosts, DAC ownership can be correct while the bind mount
+is still denied by its label. The shared Compose file intentionally does not
+append `:Z`, because private relabeling is platform- and deployment-specific
+and can be harmful for shared host paths. Apply an appropriate persistent
+label, or use a local Compose override with `:Z` for a private mount or `:z`
+for a deliberately shared mount. Never relabel an unrelated or sensitive host
+directory merely to make it available to the agent.
 
 Keeping the token outside `arguments` is what allows the approval to bind to
 a hash of `arguments` without that hash including the token itself (see
@@ -217,13 +297,18 @@ An empty configured token is treated as rejection, identical to `mcp-system`.
 ## Sandbox model
 
 The sandbox is the security heart of `mcp-files`. Every path-bearing tool
-(read, list, search, create, update) routes through a single `resolve` step
-that is designed to fail closed against both `..` traversal and symlink
-confused-deputy escapes.
+normalizes its relative input, rejects absolute/traversing/reserved paths, and
+walks from an open root descriptor without following symlinks.
 
 ### Sandbox root
 
 The sandbox root is configured by `FILES_SANDBOX_ROOT` (default `/sandbox`).
+The standalone image runs as its fixed non-root UID/GID 1000. For the local
+Compose workflow, `scripts/init.sh` records the host account as `HOST_UID` and
+`HOST_GID`, and `scripts/compose.sh` requires and reinjects that current
+identity so the process can write to the host-owned `sandbox/` bind mount.
+Unset or stale identity values are not accepted; the sandbox is not made
+world-writable.
 On construction, the root is processed in two steps:
 
 1. `filepath.Abs(root)` — make it absolute.
@@ -239,43 +324,34 @@ only `filepath.Abs`; the implementation does both. This is a **spec
 correction** worth flagging: tests on macOS will not pass against the
 plan's literal pseudocode, but they do pass against the shipped resolver.
 
-### Per-call resolve algorithm
+### Per-call descriptor walk
 
 For a caller-supplied `path`:
 
-1. Strip a leading `/`, then `filepath.Clean` to fold out `.` and `..`.
-2. Join with the sandbox root.
-3. Walk up the path until an existing ancestor is found, accumulating the
-   missing trailing components. If the walk reaches the filesystem root
-   (`parent == existing`) without finding an existing ancestor, reject with
-   `path escapes sandbox`.
-4. `filepath.EvalSymlinks` on the existing ancestor.
-5. Rejoin the resolved ancestor with the missing trailing components.
-6. `filepath.Rel(root, resolved)`. Reject with `path escapes sandbox` if
-   the relative path starts with `..` or is absolute.
+1. Reject an absolute/volume-qualified path, `..`, empty required path, reserved
+   staging component, or a byte/component/depth overflow.
+2. Open the configured root as a directory descriptor.
+3. Open each directory component relative to the preceding descriptor with
+   `O_DIRECTORY|O_NOFOLLOW`.
+4. Open or inspect the leaf relative to the verified parent with `O_NOFOLLOW`
+   and descriptor-relative type/identity checks.
+5. Publish and clean up through `linkat`, `renameat`, and `unlinkat`, never by
+   reconstructing a trusted absolute leaf path.
 
 Two consequences:
 
-- Traversal (`"../../etc/passwd"`) and symlink escape (a `link.txt` inside
-  the sandbox whose target is outside) both fail at step 6. There is a unit
-  test for each (`TestReadRejectsTraversal`, `TestReadRejectsSymlinkEscape`).
-- `files.create` can target a path whose directory does not yet exist —
-  step 3 is what supports that — because the resolver canonicalizes the
-  deepest existing ancestor instead of requiring the full path to exist.
+- Traversal (`"../../etc/passwd"`) is rejected during normalization, while a
+  symlinked parent or leaf fails the no-follow descriptor open.
+- `files.create` may create missing parent directories, reopening and
+  synchronizing one verified descriptor at a time.
 
 ### Search and symlinks
 
-`files.search` walks the resolved root with `filepath.WalkDir`. For each
-entry it:
-
-- Skips directories.
-- Skips any entry whose `os.DirEntry.Type()` reports the symlink bit
-  (`os.ModeSymlink`). Symlinks are never followed during the walk.
-- Re-resolves the candidate via `EvalSymlinks` and the same `filepath.Rel`
-  check as the resolver. If the resolved candidate falls outside the root
-  (which it should not, because we already filtered symlinks, but the check
-  is defensive), the entry is skipped.
-- Skips files larger than `maxReadBytes` and skips non-UTF-8 files.
+`files.search` uses a bounded descriptor-relative breadth-first walk. Directory
+entry names are classified with `fstatat(..., AT_SYMLINK_NOFOLLOW)`, including
+when `ReadDir` reports `DT_UNKNOWN`; symlinks are skipped and never opened.
+Regular files are opened relative to their verified parent and bounded by the
+per-file and aggregate read budgets.
 
 The result: symlink-bearing entries cannot produce search hits, and search
 cannot leak content from outside the sandbox even if a symlink was somehow
@@ -286,17 +362,10 @@ walked. `TestSearchRejectsSymlinkEscape` exercises this path.
 `files.read` enforces three layers of size and content discipline:
 
 - **Default cap:** `defaultReadBytes = 64 * 1024` (64 KiB).
-- **Maximum honored cap:** `maxReadBytes = 512 * 1024` (512 KiB). The caller's
-  `maxBytes` argument is clamped to this value and then used as the truncation
-  threshold.
-- **Hard rejection on stat:** if `os.Stat().Size()` exceeds `maxReadBytes`,
-  the read is rejected with `file too large` — the file is not opened, not
-  read, not truncated. This is the DoS bound. `TestReadRejectsFileTooLarge`
-  asserts this behavior.
-- **UTF-8 enforcement:** the entire file must be valid UTF-8. If
-  `utf8.Valid(content)` is false, the read is rejected with
-  `unsupported media type`. Binary blobs and files containing invalid UTF-8
-  sequences never reach the caller. `TestReadRejectsBinaryContent` asserts this.
+- **Maximum honored cap:** 64 KiB. Larger regular files return a bounded prefix
+  and `truncated: true`; `bytesRead` still reports the full opened-file size.
+- **UTF-8 enforcement:** the returned prefix must be valid UTF-8. Binary data
+  is rejected rather than exposed to the model.
 - **Truncation hygiene:** when truncation does fire, the content is sliced to
   the byte cap and then trailing bytes are trimmed off until the result is
   again valid UTF-8. This prevents partial code points from being returned
@@ -309,8 +378,8 @@ walked. `TestSearchRejectsSymlinkEscape` exercises this path.
 
 `files.create` and `files.update` are the only mutating tools, and both are
 gated by an approval JWT that the orchestrator signs. The JWT verifier lives
-in `internal/approval/jwt.go` and is invoked from the tool dispatcher before
-any file I/O. Verification has six steps; **none of them fails open**.
+in `internal/approval/jwt.go` and is invoked before any mutation. Non-mutating
+precondition checks may run first; **none of the verification steps fails open**.
 
 ### Algorithm
 
@@ -328,7 +397,7 @@ any file I/O. Verification has six steps; **none of them fails open**.
 ### Time bound
 
 The decoded payload's `exp` claim is compared to `time.Now().Unix()`. If
-`exp < now`, the verifier returns `token expired`. There is no skew
+`exp <= now`, the verifier returns `token expired`. There is no skew
 tolerance.
 
 ### Bound claims
@@ -404,13 +473,14 @@ The verification pipeline is, in order:
 1. Wrong segment count or non-base64url segments — `invalid token`.
 2. Wrong `alg` — `invalid token algorithm`.
 3. Invalid signature — `invalid signature`.
-4. Expired (`exp < now`) — `token expired`.
-5. `aud != "mcp-files"` — `invalid approval audience`.
-6. `sub != agentID` — `approval subject does not match agent`.
-7. `tool != params.name` — `approval tool does not match call`.
-8.  `args_hash` mismatch — `approval args_hash does not match call`.
-9.  Consume returns gRPC `FailedPrecondition` — `approval already consumed or not approved`.
-10. Consume returns any other gRPC error — `approval consume failed: <error>`.
+4. Missing or unexpected `iss` — `invalid token issuer`.
+5. Expired (`exp <= now`) — `token expired`.
+6. `aud != "mcp-files"` — `invalid approval audience`.
+7. `sub != agentID` — `approval subject does not match agent`.
+8. `tool != params.name` — `approval tool does not match call`.
+9. `args_hash` mismatch — `approval args_hash does not match call`.
+10. Consume returns gRPC `FailedPrecondition` — `approval already consumed or not approved`.
+11. Consume returns any other gRPC error — `approval consume failed: <error>`.
 
 None of these branches fall through to the I/O path.
 
@@ -418,15 +488,14 @@ None of these branches fall through to the I/O path.
 
 A concise mapping from rejection to threat:
 
-- **Path traversal (`..` segments).** Resolver step 6 (`Rel` + `..`/absolute
-  check) refuses to return paths outside the sandbox root.
-- **Symlink confused deputy.** Two layers: the resolver canonicalizes via
-  `EvalSymlinks` and re-validates with `Rel`; `files.search` additionally
-  refuses to walk symlink entries at all.
-- **Oversized read DoS.** `os.Stat().Size() > maxReadBytes` is a hard
-  rejection before any read occurs. Memory ceiling is 512 KiB per read.
-- **Binary / non-UTF-8 leakage to the model.** Whole-file UTF-8 validation
-  refuses non-UTF-8 content. Truncation trims trailing partial code points.
+- **Path traversal (`..` or absolute paths).** Input normalization rejects the
+  request before descriptor traversal begins.
+- **Symlink confused deputy.** Directory and leaf opens use no-follow,
+  descriptor-relative operations; search classifies entries without following.
+- **Oversized read DoS.** Reads return at most a 64 KiB prefix; search also has
+  per-file, aggregate-byte, entry, and file-count budgets.
+- **Binary / non-UTF-8 leakage to the model.** The bounded returned prefix must
+  be valid UTF-8. Truncation trims trailing partial code points.
 - **Approval replay across tools.** `tool` claim must equal the JSON-RPC
   method's `name` argument.
 - **Approval replay across arguments.** `args_hash` claim must equal the
@@ -444,6 +513,13 @@ A concise mapping from rejection to threat:
   by the dispatcher; cannot be enabled without a code change.
 
 ## Runtime / orchestrator integration
+
+Flutter consumes four public event types:
+`tool.call.started`, `tool.call.completed`, `tool.call.failed`, and
+`tool.call.denied`. Their payload contract uses camelCase keys and contains
+`toolCallId`, `toolName`, optional `serverName`, and `error` only on failed or
+denied events. Provider IDs, arguments, status, duration, and result summaries
+remain in persisted tool/audit state rather than this UI payload.
 
 ### Agent runtime (Tasks 8 and 11)
 
@@ -498,10 +574,9 @@ they cannot fall through to legacy defaults. Authorization is also scoped to
 the authenticated worker connection, so one worker cannot borrow a capability
 reported only by another worker even though `ListTools` exposes their union.
 
-The separately owned runtime integration must send `COMPLETE` after every
-successful discovery (including a successful empty result) and `FAILED` when
-any required discovery attempt fails. Until that runtime change ships, the
-current runtime is intentionally treated as legacy through `UNSPECIFIED`.
+The shipped runtime sends `COMPLETE` after every successful discovery,
+including a successful empty result, and `FAILED` when a required discovery
+attempt fails.
 
 JWT signing requirements:
 
@@ -511,15 +586,14 @@ JWT signing requirements:
 - Claims:
   - `aud`: `"mcp-files"`.
   - `sub`: the agent identity (currently always `"general_assistant"`).
-  - `tool`: the exact `name` from the upcoming JSON-RPC `tools/call`
+  - `tool`: the exact `name` from the JSON-RPC `tools/call`
     (e.g. `"files.create"`).
   - `args_hash`: `sha256:<hex>` of `canonicalJSON(arguments)` (see below).
   - `jti`: a unique identifier per approval. Must be passed as
     `ConsumeApproval.approval_id`.
-  - `exp`: short enough to make replay risk negligible. A few minutes is
-    appropriate; longer than that is a policy choice that the security
-    review should be aware of.
-  - `iat` and `iss` are accepted by the verifier but not validated.
+  - `exp`: the configured approval expiry (65 seconds by default).
+  - `iss`: exactly `"turing.orchestrator"`; the verifier rejects any other
+    value. `iat` is included for audit context but is not a separate gate.
 
 Canonical-hash parity:
 
@@ -557,22 +631,33 @@ Consume method requirements:
   orchestrator must always set `sub: "general_assistant"` in approvals
   destined for `mcp-files`. There is an inline comment in
   `internal/auth/auth.go` to that effect.
-- **`files.delete` and `files.move`.** Currently advertised but disabled.
-  Re-enabling them is a code change plus a policy decision.
+- **`files.delete` and `files.move`.** They remain permanently disabled and
+  are not advertised. Re-enabling them is a code change plus a policy decision.
 
-## Verifying locally
+The repository-root `.dockerignore` excludes Git/agent state, `.env` and key
+material, runtime data, sandbox contents, dependency caches, and generated
+build/test output from root-context backend image builds. Required Go modules
+and generated protobuf sources remain in the context. Because Compose builds
+`mcp-system` from its module subdirectory, that module has its own
+`.dockerignore` with equivalent credential and build-artifact exclusions.
+
+## Local verification
 
 The two services have Go test suites that exercise the server entrypoints,
 sandbox, read limits, approval verifier, and auth middleware:
 
 ```sh
-cd turing-backend/mcp-system && go test ./... && go vet ./... && go build ./...
-cd turing-backend/mcp-files  && go test ./... && go vet ./... && go build ./...
+go test -tags sqlite_fts5 ./.github/workflows -count=1
+go test -tags sqlite_fts5 ./turing-backend/scripts -count=1
+(cd turing-backend/mcp-system && go test -race ./... -count=1 && go vet ./... && go build ./...)
+(cd turing-backend/mcp-files && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server)
+golangci-lint run --config .golangci.yml --build-tags sqlite_fts5 ./... ./.github/workflows
+(cd turing-backend/mcp-files && golangci-lint run --config ../../.golangci.yml ./...)
+(cd turing-backend/mcp-system && golangci-lint run --config ../../.golangci.yml ./...)
 ```
 
-The full runtime path — runtime calling MCP, orchestrator signing approvals,
-and the consume endpoint returning `200`/`409` — is covered by the local
-Compose smoke path when Docker and Ollama are available:
+The Docker smoke path is optional and requires Docker plus its configured
+model endpoint:
 
 ```sh
 cd turing-backend

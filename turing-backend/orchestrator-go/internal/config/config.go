@@ -2,8 +2,15 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
+	"time"
+)
+
+const (
+	maxConcurrentRunsLimit = 128
+	maxApprovalTTLMS       = 24 * 60 * 60 * 1000
 )
 
 type Config struct {
@@ -27,6 +34,7 @@ type Config struct {
 	MaxToolCallsPerRun       int
 	ModelTimeoutMS           int
 	ToolTimeoutMS            int
+	ApprovalTTLMS            int
 	LogLevel                 string
 }
 
@@ -58,6 +66,27 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 0 {
 			return 0, fmt.Errorf("invalid integer env var %s", name)
+		}
+		return n, nil
+	}
+	positiveIntValue := func(name string, fallback int) (int, error) {
+		n, err := intValue(name, fallback)
+		if err != nil {
+			return 0, err
+		}
+		if n <= 0 {
+			return 0, fmt.Errorf("%s must be greater than 0", name)
+		}
+		return n, nil
+	}
+	durationMillisecondsValue := func(name string, fallback int) (int, error) {
+		n, err := positiveIntValue(name, fallback)
+		if err != nil {
+			return 0, err
+		}
+		maxMilliseconds := int64(math.MaxInt64 / int64(time.Millisecond))
+		if int64(n) > maxMilliseconds {
+			return 0, fmt.Errorf("%s exceeds maximum duration of %d milliseconds", name, maxMilliseconds)
 		}
 		return n, nil
 	}
@@ -96,7 +125,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	jobTimeout, err := intValue("TURING_JOB_TIMEOUT_MS", 300000)
+	jobTimeout, err := durationMillisecondsValue("TURING_JOB_TIMEOUT_MS", 300000)
 	if err != nil {
 		return Config{}, err
 	}
@@ -112,17 +141,27 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	maxTools, err := intValue("TURING_MAX_TOOL_CALLS_PER_RUN", 10)
+	if maxRuns < 1 || maxRuns > maxConcurrentRunsLimit {
+		return Config{}, fmt.Errorf("TURING_MAX_CONCURRENT_RUNS_GENERAL must be between 1 and %d", maxConcurrentRunsLimit)
+	}
+	maxTools, err := positiveIntValue("TURING_MAX_TOOL_CALLS_PER_RUN", 10)
 	if err != nil {
 		return Config{}, err
 	}
-	modelTimeout, err := intValue("TURING_MODEL_TIMEOUT_MS", 120000)
+	modelTimeout, err := durationMillisecondsValue("TURING_MODEL_TIMEOUT_MS", 120000)
 	if err != nil {
 		return Config{}, err
 	}
-	toolTimeout, err := intValue("TURING_TOOL_TIMEOUT_MS", 30000)
+	toolTimeout, err := durationMillisecondsValue("TURING_TOOL_TIMEOUT_MS", 30000)
 	if err != nil {
 		return Config{}, err
+	}
+	approvalTTL, err := intValue("TURING_APPROVAL_TIMEOUT_MS", 65000)
+	if err != nil {
+		return Config{}, err
+	}
+	if approvalTTL <= 0 || approvalTTL > maxApprovalTTLMS {
+		return Config{}, fmt.Errorf("invalid integer env var TURING_APPROVAL_TIMEOUT_MS")
 	}
 
 	return Config{
@@ -146,6 +185,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		MaxToolCallsPerRun:       maxTools,
 		ModelTimeoutMS:           modelTimeout,
 		ToolTimeoutMS:            toolTimeout,
+		ApprovalTTLMS:            approvalTTL,
 		LogLevel:                 stringValue("LOG_LEVEL", "info"),
 	}, nil
 }

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
@@ -28,7 +29,10 @@ import (
 
 const (
 	defaultMaxConcurrentRuns = 1
+	defaultJobMaxAttempts    = 3
 	maxWorkerConcurrentRuns  = 128
+	commandSendTimeout       = 5 * time.Second
+	commandSendCancelGrace   = 50 * time.Millisecond
 )
 
 type Server struct {
@@ -41,6 +45,7 @@ type Server struct {
 	workers   map[string]*worker
 	toolsMu   sync.Mutex
 	toolsets  map[string]workerToolset
+	dispatch  DispatchConfig
 }
 
 type approvalCreator interface {
@@ -49,10 +54,14 @@ type approvalCreator interface {
 
 type worker struct {
 	commands      chan *turingv1.RuntimeCommand
+	done          chan struct{}
 	maxConcurrent int
-	assignments   map[string]string
+	assignments   map[string]assignment
+	updateMu      sync.Mutex
 	mu            sync.Mutex
 	closed        bool
+	lastHeartbeat time.Time
+	sender        *runtimeCommandSender
 }
 
 type workerToolset struct {
@@ -61,18 +70,105 @@ type workerToolset struct {
 }
 
 type assignment struct {
-	jobID string
-	runID string
+	jobID     string
+	runID     string
+	attemptID string
+}
+
+type DispatchConfig struct {
+	MaxConcurrentRuns int
+	LeaseDuration     time.Duration
+	MaxAttempts       int
+}
+
+var errRuntimeCommandSenderClosed = errors.New("runtime command sender closed")
+
+type runtimeCommandSender struct {
+	stream turingv1.RuntimeService_ConnectWorkerServer
+	gate   chan struct{}
+	closed atomic.Bool
+}
+
+func newRuntimeCommandSender(stream turingv1.RuntimeService_ConnectWorkerServer) *runtimeCommandSender {
+	sender := &runtimeCommandSender{stream: stream, gate: make(chan struct{}, 1)}
+	sender.gate <- struct{}{}
+	return sender
+}
+
+func (s *runtimeCommandSender) send(ctx context.Context, command *turingv1.RuntimeCommand) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s.closed.Load() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return errRuntimeCommandSenderClosed
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.gate:
+	}
+	if s.closed.Load() {
+		s.gate <- struct{}{}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return errRuntimeCommandSenderClosed
+	}
+	result := make(chan error, 1)
+	go func() {
+		result <- s.stream.Send(command)
+		s.gate <- struct{}{}
+	}()
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.Canceled) {
+			timer := time.NewTimer(commandSendCancelGrace)
+			select {
+			case err := <-result:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return err
+			case <-timer.C:
+			}
+		}
+		s.closed.Store(true)
+		return ctx.Err()
+	}
+}
+
+func (s *runtimeCommandSender) close() {
+	if s != nil {
+		s.closed.Store(true)
+	}
 }
 
 func New(repo *repository.Repository, bus *events.Bus, approvalServices ...approvalCreator) *Server {
+	return NewWithConfig(repo, bus, DispatchConfig{}, approvalServices...)
+}
+
+func NewWithConfig(repo *repository.Repository, bus *events.Bus, dispatch DispatchConfig, approvalServices ...approvalCreator) *Server {
 	var approvals approvalCreator
 	if len(approvalServices) > 0 {
 		approvals = approvalServices[0]
 	}
+	if dispatch.LeaseDuration <= 0 {
+		dispatch.LeaseDuration = 5 * time.Minute
+	}
+	if dispatch.MaxAttempts <= 0 {
+		dispatch.MaxAttempts = defaultJobMaxAttempts
+	}
 	server := &Server{
 		repo: repo, bus: bus, approvals: approvals, audit: auditsvc.New(repo),
-		workers: map[string]*worker{}, toolsets: map[string]workerToolset{},
+		workers: map[string]*worker{}, toolsets: map[string]workerToolset{}, dispatch: dispatch,
 	}
 	if setter, ok := approvals.(interface{ SetNotifier(approvalsvc.Notifier) }); ok {
 		setter.SetNotifier(server)
@@ -80,7 +176,7 @@ func New(repo *repository.Repository, bus *events.Bus, approvalServices ...appro
 	return server
 }
 
-func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServer) error {
+func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServer) (returnErr error) {
 	ctx := stream.Context()
 	first, err := stream.Recv()
 	if err != nil {
@@ -120,23 +216,56 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 		maxConcurrent = maxWorkerConcurrentRuns
 	}
 	commands := make(chan *turingv1.RuntimeCommand, maxConcurrent)
-	s.mu.Lock()
-	if _, ok := s.workers[ready.WorkerId]; ok {
-		s.mu.Unlock()
-		return status.Error(codes.AlreadyExists, "worker already connected")
+	connectedWorker := &worker{
+		commands:      commands,
+		done:          make(chan struct{}),
+		maxConcurrent: maxConcurrent,
+		assignments:   map[string]assignment{},
+		lastHeartbeat: time.Now().UTC(),
 	}
-	connectedWorker := &worker{commands: commands, maxConcurrent: maxConcurrent, assignments: map[string]string{}}
-	s.workers[ready.WorkerId] = connectedWorker
-	s.mu.Unlock()
+	for {
+		s.mu.Lock()
+		existing := s.workers[ready.WorkerId]
+		if existing == nil {
+			s.workers[ready.WorkerId] = connectedWorker
+			s.mu.Unlock()
+			break
+		}
+		s.mu.Unlock()
+		if !existing.closeIfExpiredIdle(time.Now().UTC(), s.dispatch.LeaseDuration) {
+			return status.Error(codes.AlreadyExists, "worker already connected")
+		}
+		s.mu.Lock()
+		if s.workers[ready.WorkerId] == existing {
+			s.workers[ready.WorkerId] = connectedWorker
+			s.mu.Unlock()
+			break
+		}
+		s.mu.Unlock()
+	}
 	s.persistDiscoveredTools(ctx, ready.GetWorkerId(), connectedWorker, discovered)
 	defer func() {
-		s.mu.Lock()
-		delete(s.workers, ready.WorkerId)
-		s.mu.Unlock()
+		assignments := connectedWorker.close()
+		s.removeWorkerRegistration(ready.WorkerId, connectedWorker)
 		s.removeDiscoveredTools(ready.GetWorkerId(), connectedWorker)
-		s.requeueAssignments(connectedWorker.close())
+		reconciled, err := s.reconcileAssignments(assignments, ready.WorkerId)
+		if err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("reconcile worker assignments: %w", err))
+		}
+		if reconciled {
+			recoveryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := s.DispatchPending(recoveryCtx); err != nil {
+				returnErr = errors.Join(returnErr, fmt.Errorf("dispatch reconciled assignments: %w", err))
+			}
+		}
 	}()
-	if err := stream.Send(&turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_WorkerAccepted{WorkerAccepted: &turingv1.RuntimeWorkerAccepted{WorkerId: ready.WorkerId}}}); err != nil {
+	acceptedCtx, cancelAccepted := withDefaultTimeout(ctx, commandSendTimeout)
+	err = connectedWorker.commandSender(stream).send(acceptedCtx, &turingv1.RuntimeCommand{
+		Command: &turingv1.RuntimeCommand_WorkerAccepted{WorkerAccepted: &turingv1.RuntimeWorkerAccepted{WorkerId: ready.WorkerId}},
+	})
+	cancelAccepted()
+	if err != nil {
 		return err
 	}
 	if err := s.DispatchPending(ctx); err != nil {
@@ -150,32 +279,79 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 				recvErr <- err
 				return
 			}
-			if err := connectedWorker.validateUpdate(update); err != nil {
-				recvErr <- err
-				return
-			}
-			if beacon := update.GetToolBeacon(); beacon != nil {
-				decision, err := s.handleToolBeacon(ctx, beacon, ready.GetWorkerId(), connectedWorker)
-				if err != nil {
-					recvErr <- err
-					return
-				}
-				if err := connectedWorker.send(ctx, &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_ToolPolicyDecision{ToolPolicyDecision: decision}}); err != nil {
+			if heartbeat := update.GetHeartbeat(); heartbeat != nil {
+				if err := s.renewWorkerLeases(ctx, ready.WorkerId, connectedWorker, heartbeat); err != nil {
 					recvErr <- err
 					return
 				}
 				continue
 			}
-			if err := s.applyUpdate(ctx, update); err != nil {
-				recvErr <- err
-				return
-			}
-			if runID := terminalRunID(update); runID != "" {
-				connectedWorker.releaseRun(runID)
-				if err := s.DispatchPending(ctx); err != nil {
+			if beacon := update.GetToolBeacon(); beacon != nil {
+				release, beginErr := connectedWorker.beginUpdate(update)
+				if beginErr != nil {
+					if err := s.sendBeaconDecision(ctx, connectedWorker, beacon, protocolErrorDecision(beacon)); err != nil {
+						recvErr <- err
+						return
+					}
+					continue
+				}
+				decision, beaconErr := s.handleToolBeaconForWorker(ctx, beacon, ready.WorkerId, connectedWorker)
+				release()
+				if beaconErr != nil && decision == nil {
+					decision = protocolErrorDecision(beacon)
+				}
+				if err := s.sendBeaconDecision(ctx, connectedWorker, beacon, decision); err != nil {
 					recvErr <- err
 					return
 				}
+				continue
+			}
+			release, err := connectedWorker.beginUpdate(update)
+			if err != nil {
+				ignored, duplicateErr := s.isLateMatchingTerminalUpdate(ctx, update)
+				if duplicateErr != nil {
+					recvErr <- duplicateErr
+					return
+				}
+				if ignored {
+					continue
+				}
+				recvErr <- err
+				return
+			}
+			err = func() error {
+				defer release()
+				if terminalRunID(update) != "" {
+					handled, reconcileErr := s.reconcileLateAssignedUpdate(ctx, connectedWorker, ready.WorkerId, update)
+					if reconcileErr != nil {
+						return reconcileErr
+					}
+					if handled {
+						return nil
+					}
+				}
+				if err := s.applyUpdate(ctx, update); err != nil {
+					handled, reconcileErr := s.reconcileLateAssignedUpdate(ctx, connectedWorker, ready.WorkerId, update)
+					if reconcileErr != nil {
+						return reconcileErr
+					}
+					if handled {
+						return nil
+					}
+					return err
+				}
+				if runID := terminalRunID(update); runID != "" {
+					connectedWorker.releaseRun(runID)
+					if err := s.DispatchPending(ctx); err != nil {
+						return err
+					}
+				}
+
+				return nil
+			}()
+			if err != nil {
+				recvErr <- err
+				return
 			}
 		}
 	}()
@@ -183,12 +359,13 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 		select {
 		case <-ctx.Done():
 			return status.Error(codes.Canceled, "worker stream cancelled")
+		case <-connectedWorker.done:
+			return status.Error(codes.Canceled, "worker is disconnected")
 		case err := <-recvErr:
 			return err
 		case cmd := <-commands:
-			if err := stream.Send(cmd); err != nil {
-				s.requeueIfAssignmentFailed(cmd, connectedWorker)
-				return err
+			if err := s.sendCommand(ctx, stream, cmd, connectedWorker, ready.WorkerId); err != nil {
+				return errors.Join(err, s.handleUndeliveredCommand(ctx, cmd, connectedWorker))
 			}
 		}
 	}
@@ -309,6 +486,74 @@ func (s *Server) workerHasTool(workerID string, owner *worker, serverName string
 	return false
 }
 
+func (s *Server) renewWorkerLeases(ctx context.Context, workerID string, connectedWorker *worker, heartbeat *turingv1.RuntimeHeartbeat) error {
+	if heartbeat == nil || heartbeat.GetWorkerId() == "" {
+		return status.Error(codes.InvalidArgument, "heartbeat worker_id is required")
+	}
+	if heartbeat.GetWorkerId() != workerID {
+		return status.Error(codes.PermissionDenied, "heartbeat worker_id does not match connected worker")
+	}
+	assignments := connectedWorker.assignmentSnapshot(workerID)
+	renewed, err := s.repo.RenewAssignments(ctx, assignments, time.Now().UTC().Add(s.dispatch.LeaseDuration))
+	if err != nil {
+		return err
+	}
+	renewedSet := make(map[repository.Assignment]struct{}, len(renewed))
+	for _, assignment := range renewed {
+		renewedSet[assignment] = struct{}{}
+	}
+	reconciled := false
+	for _, assignment := range assignments {
+		if _, ok := renewedSet[assignment]; ok {
+			continue
+		}
+		result, err := s.repo.RecoverAssignmentWithLimit(ctx, assignment, s.dispatch.MaxAttempts)
+		if err != nil {
+			return err
+		}
+		released := connectedWorker.releaseAssignmentAttempt(assignment.RunID, assignment.AttemptID)
+		for _, event := range result.Events {
+			s.publishEvent(event)
+		}
+		reconciled = reconciled || result.Requeued || result.Cleared || released
+	}
+	revived := connectedWorker.recordHeartbeat(time.Now().UTC(), s.dispatch.LeaseDuration)
+	if reconciled || revived {
+		return s.DispatchPending(ctx)
+	}
+	return nil
+}
+
+func (s *Server) sendBeaconDecision(ctx context.Context, connectedWorker *worker, beacon *turingv1.ToolCallBeacon, decision *turingv1.ToolPolicyDecision) error {
+	if decision == nil {
+		decision = protocolErrorDecision(beacon)
+	} else {
+		decision = proto.Clone(decision).(*turingv1.ToolPolicyDecision)
+	}
+	decision.Phase = beacon.GetPhase()
+	if err := connectedWorker.send(ctx, &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_ToolPolicyDecision{ToolPolicyDecision: decision}}); err != nil {
+		return errors.Join(err, s.terminalizeApprovalDeliveryFailure(ctx, decision.GetApprovalId(), connectedWorker))
+	}
+	return nil
+}
+
+func protocolErrorDecision(beacon *turingv1.ToolCallBeacon) *turingv1.ToolPolicyDecision {
+	return &turingv1.ToolPolicyDecision{
+		Decision:   turingv1.ToolPolicyDecision_DECISION_DENY,
+		ToolCallId: beacon.GetToolCallId(),
+		Reason:     "invalid_tool_beacon",
+	}
+}
+
+func terminalRunDecision(beacon *turingv1.ToolCallBeacon, reason string) *turingv1.ToolPolicyDecision {
+	return &turingv1.ToolPolicyDecision{
+		Decision:    turingv1.ToolPolicyDecision_DECISION_DENY,
+		ToolCallId:  beacon.GetToolCallId(),
+		Reason:      reason,
+		TerminalRun: true,
+	}
+}
+
 func terminalRunID(update *turingv1.RuntimeUpdate) string {
 	if update == nil {
 		return ""
@@ -338,21 +583,108 @@ func updateRunID(update *turingv1.RuntimeUpdate) string {
 	return terminalRunID(update)
 }
 
-func (s *Server) requeueIfAssignmentFailed(cmd *turingv1.RuntimeCommand, worker *worker) {
-	assigned := cmd.GetRunAssigned()
-	if assigned == nil {
-		return
+func (s *Server) handleUndeliveredCommand(ctx context.Context, cmd *turingv1.RuntimeCommand, worker *worker) error {
+	if decision := cmd.GetToolPolicyDecision(); decision != nil && decision.GetApprovalId() != "" {
+		return s.terminalizeApprovalDeliveryFailure(ctx, decision.GetApprovalId(), worker)
 	}
-	worker.releaseRun(assigned.RunId)
-	s.requeueAssignments([]assignment{{jobID: assigned.JobId, runID: assigned.RunId}})
+	return nil
 }
 
-func (s *Server) requeueAssignments(assignments []assignment) {
+func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService_ConnectWorkerServer, cmd *turingv1.RuntimeCommand, connectedWorker *worker, workerID string) error {
+	if cmd == nil {
+		return status.Error(codes.Canceled, "worker command queue closed")
+	}
+	sendCtx, cancel := withDefaultTimeout(ctx, commandSendTimeout)
+	defer cancel()
+	assigned := cmd.GetRunAssigned()
+	if assigned == nil {
+		return connectedWorker.commandSender(stream).send(sendCtx, cmd)
+	}
+	connectedWorker.updateMu.Lock()
+	defer connectedWorker.updateMu.Unlock()
+	assignment, ok := connectedWorker.assignmentForRun(assigned.RunId)
+	if !ok {
+		return repository.ErrAssignmentFenced
+	}
+	repositoryAssignment := repository.Assignment{
+		JobID: assignment.jobID, RunID: assignment.runID, WorkerID: workerID, AttemptID: assignment.attemptID,
+	}
+	if err := s.repo.BeginAssignmentSend(ctx, repositoryAssignment); err != nil {
+		_ = connectedWorker.releaseRun(assigned.RunId)
+		_ = s.repo.AbortPendingAssignment(context.Background(), repositoryAssignment)
+		return err
+	}
+	if err := connectedWorker.commandSender(stream).send(sendCtx, cmd); err != nil {
+		recoveryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return errors.Join(err, s.repo.MarkAssignmentDeliveryUncertain(recoveryCtx, repositoryAssignment))
+	}
+	if err := s.repo.MarkAssignmentDelivered(ctx, repositoryAssignment); err != nil {
+		recoveryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = s.repo.MarkAssignmentDeliveryUncertain(recoveryCtx, repositoryAssignment)
+		return err
+	}
+	return nil
+}
+
+func (s *Server) terminalizeApprovalDeliveryFailure(_ context.Context, approvalID string, _ *worker) error {
+	if approvalID == "" {
+		return nil
+	}
+	recoveryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	transition, err := s.repo.FailApprovalDeliveryWithEvent(recoveryCtx, approvalID, "")
+	if err != nil {
+		return fmt.Errorf("terminalize undelivered approval: %w", err)
+	}
+	if transition.Changed {
+		if transition.ApprovalEvent.EventID != "" {
+			s.publishEvent(transition.ApprovalEvent)
+		}
+		if transition.ToolEvent.EventID != "" {
+			s.publishEvent(transition.ToolEvent)
+		}
+		if transition.RunFailedEvent.EventID != "" {
+			s.publishEvent(transition.RunFailedEvent)
+		}
+	}
+	return nil
+}
+
+func (s *Server) requeueAssignments(assignments []assignment) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	var errs []error
 	for _, assignment := range assignments {
-		_ = s.repo.RequeueClaimedJob(ctx, assignment.jobID, assignment.runID)
+		if err := s.repo.AbortPendingAssignment(ctx, repository.Assignment{
+			JobID: assignment.jobID, RunID: assignment.runID, AttemptID: assignment.attemptID,
+		}); err != nil {
+			errs = append(errs, fmt.Errorf("requeue job %s for run %s: %w", assignment.jobID, assignment.runID, err))
+		}
 	}
+	return errors.Join(errs...)
+}
+
+func (s *Server) reconcileAssignments(assignments []assignment, workerID string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var errs []error
+	reconciled := false
+	for _, assignment := range assignments {
+		result, err := s.repo.ReconcileAssignmentWithLimit(ctx, repository.Assignment{
+			JobID: assignment.jobID, RunID: assignment.runID, WorkerID: workerID, AttemptID: assignment.attemptID,
+		}, s.dispatch.MaxAttempts)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("reconcile run %s for job %s: %w", assignment.runID, assignment.jobID, err))
+			continue
+		}
+		for _, event := range result.Events {
+			s.publishEvent(event)
+		}
+		reconciled = reconciled || result.Requeued || result.Cleared
+	}
+	return reconciled, errors.Join(errs...)
 }
 
 func (s *Server) DispatchPending(ctx context.Context) error {
@@ -376,6 +708,89 @@ func (s *Server) DispatchPending(ctx context.Context) error {
 	return nil
 }
 
+func (s *Server) RecoverOrphanedAssignments(ctx context.Context) error {
+	recoveryCtx, cancel := withDefaultTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cutoff := time.Now().UTC()
+	assignments, err := s.repo.RecoverableAssignments(recoveryCtx, cutoff)
+	if err != nil {
+		return err
+	}
+	recovered := false
+	for _, candidate := range assignments {
+		if s.hasLiveAssignment(candidate) {
+			continue
+		}
+		released := false
+		if connected := s.registeredWorker(candidate.WorkerID); connected != nil {
+			closedAssignments, closed, live := connected.closeForStaleAssignment(
+				candidate.RunID, candidate.AttemptID, cutoff, s.dispatch.LeaseDuration,
+			)
+			if live {
+				continue
+			}
+			if closed {
+				s.removeWorkerRegistration(candidate.WorkerID, connected)
+				released = true
+				var remaining []assignment
+				for _, assigned := range closedAssignments {
+					if assigned.runID != candidate.RunID || assigned.attemptID != candidate.AttemptID {
+						remaining = append(remaining, assigned)
+					}
+				}
+				if _, err := s.reconcileAssignments(remaining, candidate.WorkerID); err != nil {
+					return err
+				}
+			}
+		}
+		result, err := s.repo.RecoverAssignmentAtCutoffWithLimit(recoveryCtx, candidate, cutoff, s.dispatch.MaxAttempts)
+		if err != nil {
+			return err
+		}
+		for _, event := range result.Events {
+			s.publishEvent(event)
+		}
+		recovered = recovered || result.Requeued || result.Cleared || released
+	}
+	if recovered {
+		return s.DispatchPending(recoveryCtx)
+	}
+	return nil
+}
+
+func (s *Server) registeredWorker(workerID string) *worker {
+	if workerID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.workers[workerID]
+}
+
+func (s *Server) removeWorkerRegistration(workerID string, target *worker) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.workers[workerID] == target {
+		delete(s.workers, workerID)
+	}
+}
+
+func (s *Server) RunRecoveryLoop(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_ = s.RecoverOrphanedAssignments(ctx)
+		}
+	}
+}
+
 type workerSnapshot struct {
 	workerID string
 	worker   *worker
@@ -391,27 +806,44 @@ func (s *Server) snapshotWorkers() []workerSnapshot {
 	return workers
 }
 
+func (s *Server) hasLiveAssignment(candidate repository.Assignment) bool {
+	now := time.Now().UTC()
+	for _, entry := range s.snapshotWorkers() {
+		if entry.workerID != candidate.WorkerID {
+			continue
+		}
+		if entry.worker.hasLiveAssignmentAttempt(candidate.RunID, candidate.AttemptID, now, s.dispatch.LeaseDuration) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) dispatchToWorker(ctx context.Context, workerID string, worker *worker) (assigned bool, noJob bool, err error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
-	if worker.closed || len(worker.assignments) >= worker.maxConcurrent {
+	if worker.closed ||
+		worker.lastHeartbeat.IsZero() ||
+		!time.Now().UTC().Before(worker.lastHeartbeat.Add(s.dispatch.LeaseDuration)) ||
+		len(worker.assignments) >= worker.maxConcurrent {
 		return false, false, nil
 	}
-	job, err := s.repo.ClaimNextJob(ctx, "general_assistant", workerID)
+	job, err := s.repo.ClaimNextJobWithLimit(ctx, "general_assistant", workerID, s.dispatch.MaxConcurrentRuns, s.dispatch.LeaseDuration)
 	if err != nil {
 		return false, false, err
 	}
 	if job.JobID == "" {
 		return false, true, nil
 	}
+	claimedAssignment := assignment{jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID}
+	worker.assignments[job.RunID] = claimedAssignment
 	select {
 	case worker.commands <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: mapJob(job)}}:
-		worker.assignments[job.RunID] = job.JobID
 		s.publishEvent(job.StartedEvent)
 		return true, false, nil
 	case <-ctx.Done():
-		s.requeueAssignments([]assignment{{jobID: job.JobID, runID: job.RunID}})
-		return false, false, ctx.Err()
+		delete(worker.assignments, job.RunID)
+		return false, false, errors.Join(ctx.Err(), s.requeueAssignments([]assignment{claimedAssignment}))
 	}
 }
 
@@ -421,12 +853,27 @@ func (s *Server) CancelRun(ctx context.Context, runID string, reason string) {
 	}
 	owner := s.workerForRun(runID)
 	if owner == nil {
+		s.releaseUnownedTerminalRun(ctx, runID)
 		return
 	}
 	sendCtx, cancel := withDefaultTimeout(ctx, 5*time.Second)
 	defer cancel()
 	command := &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunCancelled{RunCancelled: &turingv1.RuntimeRunCancelled{RunId: runID, Reason: reason}}}
 	_ = owner.send(sendCtx, command)
+}
+
+func (s *Server) releaseUnownedTerminalRun(ctx context.Context, runID string) {
+	run, err := s.repo.GetRun(ctx, runID)
+	if err != nil || !isTerminalRunStatus(run.Status) {
+		return
+	}
+	if run.ExecutionActive && run.ExecutionState != "pending_send" {
+		return
+	}
+	if err := s.repo.AcknowledgeExecutionExit(ctx, runID); err != nil {
+		return
+	}
+	_ = s.DispatchPending(ctx)
 }
 
 func (s *Server) workerForRun(runID string) *worker {
@@ -447,29 +894,50 @@ func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Con
 
 func (w *worker) send(ctx context.Context, command *turingv1.RuntimeCommand) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.closed {
-		return nil
+		w.mu.Unlock()
+		return status.Error(codes.Canceled, "worker is disconnected")
 	}
+	commands := w.commands
 	select {
-	case w.commands <- command:
+	case commands <- command:
+		w.mu.Unlock()
 		return nil
 	case <-ctx.Done():
+		w.mu.Unlock()
 		return ctx.Err()
 	}
 }
 
-func (w *worker) validateUpdate(update *turingv1.RuntimeUpdate) error {
+func (w *worker) beginUpdate(update *turingv1.RuntimeUpdate) (func(), error) {
 	runID := updateRunID(update)
+	w.updateMu.Lock()
 	if runID == "" {
-		return nil
+		w.mu.Lock()
+		closed := w.closed
+		w.mu.Unlock()
+		if closed {
+			w.updateMu.Unlock()
+			return nil, status.Error(codes.Canceled, "worker is disconnected")
+		}
+		return w.updateMu.Unlock, nil
 	}
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	if _, ok := w.assignments[runID]; ok {
-		return nil
+	_, assigned := w.assignments[runID]
+	closed := w.closed
+	w.mu.Unlock()
+	if closed {
+		w.updateMu.Unlock()
+		return nil, status.Error(codes.Canceled, "worker is disconnected")
 	}
-	return status.Error(codes.PermissionDenied, "run is not assigned to worker")
+	if !assigned {
+		if beacon := update.GetToolBeacon(); beacon != nil && beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
+			return w.updateMu.Unlock, nil
+		}
+		w.updateMu.Unlock()
+		return nil, status.Error(codes.PermissionDenied, "run is not assigned to worker")
+	}
+	return w.updateMu.Unlock, nil
 }
 
 func (w *worker) hasAssignment(runID string) bool {
@@ -479,25 +947,135 @@ func (w *worker) hasAssignment(runID string) bool {
 	return ok
 }
 
-func (w *worker) releaseRun(runID string) {
+func (w *worker) hasLiveAssignmentAttempt(runID string, attemptID string, now time.Time, leaseDuration time.Duration) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.closed || w.lastHeartbeat.IsZero() {
+		return false
+	}
+	assignment, ok := w.assignments[runID]
+	if !ok || (attemptID != "" && assignment.attemptID != attemptID) {
+		return false
+	}
+	return now.Before(w.lastHeartbeat.Add(leaseDuration))
+}
+
+func (w *worker) recordHeartbeat(at time.Time, leaseDuration time.Duration) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return false
+	}
+	revived := w.lastHeartbeat.IsZero() || !at.Before(w.lastHeartbeat.Add(leaseDuration))
+	w.lastHeartbeat = at
+	return revived
+}
+
+func (w *worker) commandSender(stream turingv1.RuntimeService_ConnectWorkerServer) *runtimeCommandSender {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.sender == nil {
+		w.sender = newRuntimeCommandSender(stream)
+	}
+	return w.sender
+}
+
+func (w *worker) assignmentForRun(runID string) (assignment, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	assignment, ok := w.assignments[runID]
+	return assignment, ok
+}
+
+func (w *worker) assignmentSnapshot(workerID string) []repository.Assignment {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	assignments := make([]repository.Assignment, 0, len(w.assignments))
+	for _, assigned := range w.assignments {
+		assignments = append(assignments, repository.Assignment{
+			JobID: assigned.jobID, RunID: assigned.runID, WorkerID: workerID, AttemptID: assigned.attemptID,
+		})
+	}
+	return assignments
+}
+
+func (w *worker) releaseRun(runID string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_, existed := w.assignments[runID]
 	delete(w.assignments, runID)
+	return existed
+}
+
+func (w *worker) releaseAssignmentAttempt(runID string, attemptID string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	assigned, ok := w.assignments[runID]
+	if !ok || (attemptID != "" && assigned.attemptID != attemptID) {
+		return false
+	}
+	delete(w.assignments, runID)
+	return true
 }
 
 func (w *worker) close() []assignment {
+	w.updateMu.Lock()
+	defer w.updateMu.Unlock()
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	return w.closeLocked()
+}
+
+func (w *worker) closeForStaleAssignment(runID string, attemptID string, now time.Time, leaseDuration time.Duration) ([]assignment, bool, bool) {
+	w.updateMu.Lock()
+	defer w.updateMu.Unlock()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	assigned, ok := w.assignments[runID]
+	if w.closed || !ok || (attemptID != "" && assigned.attemptID != attemptID) {
+		return nil, false, false
+	}
+	if !w.lastHeartbeat.IsZero() && now.Before(w.lastHeartbeat.Add(leaseDuration)) {
+		return nil, false, true
+	}
+	return w.closeLocked(), true, false
+}
+
+func (w *worker) closeIfExpiredIdle(now time.Time, leaseDuration time.Duration) bool {
+	w.updateMu.Lock()
+	defer w.updateMu.Unlock()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return true
+	}
+	if len(w.assignments) != 0 {
+		return false
+	}
+	if !w.lastHeartbeat.IsZero() && now.Before(w.lastHeartbeat.Add(leaseDuration)) {
+		return false
+	}
+	w.closeLocked()
+	return true
+}
+
+func (w *worker) closeLocked() []assignment {
 	if w.closed {
 		return nil
 	}
 	w.closed = true
-	close(w.commands)
-	assignments := make([]assignment, 0, len(w.assignments))
-	for runID, jobID := range w.assignments {
-		assignments = append(assignments, assignment{jobID: jobID, runID: runID})
+	if w.done != nil {
+		close(w.done)
 	}
-	w.assignments = map[string]string{}
+	if w.sender != nil {
+		w.sender.close()
+	}
+	assignments := make([]assignment, 0, len(w.assignments))
+	for runID, assignment := range w.assignments {
+		assignment.runID = runID
+		assignments = append(assignments, assignment)
+	}
+	w.assignments = map[string]assignment{}
 	return assignments
 }
 
@@ -507,7 +1085,7 @@ func (s *Server) applyUpdate(ctx context.Context, update *turingv1.RuntimeUpdate
 	}
 	switch value := update.Update.(type) {
 	case *turingv1.RuntimeUpdate_Heartbeat:
-		return nil
+		return status.Error(codes.InvalidArgument, "heartbeat is only valid on an authenticated worker stream")
 	case *turingv1.RuntimeUpdate_Event:
 		if isGenericTerminalEvent(value.Event) {
 			return status.Error(codes.InvalidArgument, "terminal run events must use runtime terminal updates")
@@ -523,7 +1101,7 @@ func (s *Server) applyUpdate(ctx context.Context, update *turingv1.RuntimeUpdate
 		s.publishEvent(event)
 		return nil
 	case *turingv1.RuntimeUpdate_ToolBeacon:
-		_, err := s.handleToolBeacon(ctx, value.ToolBeacon, "", nil)
+		_, err := s.handleToolBeacon(ctx, value.ToolBeacon)
 		return err
 	case *turingv1.RuntimeUpdate_RunCompleted:
 		return s.handleRunCompleted(ctx, value.RunCompleted)
@@ -616,10 +1194,104 @@ func (s *Server) handleRunCancelledAck(ctx context.Context, ack *turingv1.Runtim
 	if err != nil {
 		return err
 	}
-	if run.Status != "cancelled" {
+	if !isTerminalRunStatus(run.Status) {
 		return status.Error(codes.FailedPrecondition, "run is not cancelled")
 	}
+	if err := s.repo.AcknowledgeExecutionExit(ctx, ack.RunId); err != nil {
+		return mapRunStateError(err)
+	}
 	return nil
+}
+
+func (s *Server) isLateMatchingTerminalUpdate(ctx context.Context, update *turingv1.RuntimeUpdate) (bool, error) {
+	runID := terminalRunID(update)
+	if runID == "" {
+		return false, nil
+	}
+	run, err := s.repo.GetRun(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	return isMatchingTerminalUpdate(run, update), nil
+}
+
+func isMatchingTerminalUpdate(run repository.Run, update *turingv1.RuntimeUpdate) bool {
+	switch {
+	case update.GetRunCompleted() != nil:
+		completed := update.GetRunCompleted()
+		assistantMessageID := completed.AssistantMessageId
+		if assistantMessageID == "" {
+			assistantMessageID = run.AssistantMessageID
+		}
+		return run.Status == "completed" &&
+			run.TerminalEventType == "agent.run.completed" &&
+			assistantMessageID != "" &&
+			assistantMessageID == run.AssistantMessageID &&
+			completed.Content != "" &&
+			completed.Content == run.AssistantContent
+	case update.GetRunFailed() != nil:
+		failed := update.GetRunFailed()
+		payload, err := encodePayload(map[string]any{
+			"runId": failed.RunId, "code": failed.Code, "message": failed.Message, "retryable": failed.Retryable,
+		})
+		return err == nil &&
+			run.Status == "failed" &&
+			run.TerminalEventType == "agent.run.failed" &&
+			payload == run.TerminalEventPayload
+	case update.GetRunCancelledAck() != nil:
+		return isTerminalRunStatus(run.Status)
+	default:
+		return false
+	}
+}
+
+func (s *Server) reconcileLateAssignedUpdate(ctx context.Context, connectedWorker *worker, workerID string, update *turingv1.RuntimeUpdate) (bool, error) {
+	runID := updateRunID(update)
+	if runID == "" {
+		return false, nil
+	}
+	run, err := s.repo.GetRun(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	if !isTerminalRunStatus(run.Status) {
+		return false, nil
+	}
+	if terminalRunID(update) == "" {
+		return true, nil
+	}
+	if run.Status != "cancelled" && !isMatchingTerminalUpdate(run, update) {
+		return true, nil
+	}
+	assignment, assigned := connectedWorker.assignmentForRun(runID)
+	if !assigned ||
+		workerID == "" ||
+		run.WorkerID != workerID ||
+		run.ExecutionAttemptID == "" ||
+		assignment.attemptID != run.ExecutionAttemptID ||
+		!run.ExecutionActive {
+		return true, nil
+	}
+	// A terminal update from the worker that still owns this exact assignment
+	// proves execution exited even when another request won the persisted run
+	// outcome (for example, cancellation racing completion).
+	if err := s.repo.AcknowledgeExecutionExit(ctx, runID); err != nil {
+		return false, mapRunStateError(err)
+	}
+	connectedWorker.releaseRun(runID)
+	if err := s.DispatchPending(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func isTerminalRunStatus(runStatus string) bool {
+	switch runStatus {
+	case "completed", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleRunCompleted(ctx context.Context, completed *turingv1.RuntimeRunCompleted) error {
@@ -672,11 +1344,13 @@ func (s *Server) handleRunFailed(ctx context.Context, failed *turingv1.RuntimeRu
 	if err != nil {
 		return err
 	}
-	event, err := s.repo.FailRunWithEvent(ctx, failed.RunId, failed.Code, failed.Message, payloadJSON)
+	events, err := s.repo.FailRunWithEvent(ctx, failed.RunId, failed.Code, failed.Message, payloadJSON)
 	if err != nil {
 		return mapRunStateError(err)
 	}
-	s.publishEvent(event)
+	for _, event := range events {
+		s.publishEvent(event)
+	}
 	return nil
 }
 
@@ -700,7 +1374,11 @@ func mapRunStateError(err error) error {
 	}
 }
 
-func (s *Server) handleToolBeacon(ctx context.Context, beacon *turingv1.ToolCallBeacon, workerID string, owner *worker) (*turingv1.ToolPolicyDecision, error) {
+func (s *Server) handleToolBeacon(ctx context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+	return s.handleToolBeaconForWorker(ctx, beacon, "", nil)
+}
+
+func (s *Server) handleToolBeaconForWorker(ctx context.Context, beacon *turingv1.ToolCallBeacon, workerID string, owner *worker) (*turingv1.ToolPolicyDecision, error) {
 	if beacon == nil || beacon.RunId == "" {
 		return nil, status.Error(codes.InvalidArgument, "tool_beacon is required")
 	}
@@ -722,7 +1400,7 @@ func (s *Server) handleToolBeacon(ctx context.Context, beacon *turingv1.ToolCall
 	if err != nil {
 		return nil, err
 	}
-	if !isActiveRunStatus(run.Status) {
+	if !isActiveRunStatus(run.Status) && beacon.Phase != turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
 		return nil, status.Error(codes.FailedPrecondition, "run is not active")
 	}
 	if beacon.TraceId != run.TraceID {
@@ -732,7 +1410,7 @@ func (s *Server) handleToolBeacon(ctx context.Context, beacon *turingv1.ToolCall
 	case turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE:
 		return s.handleToolBefore(ctx, beacon, run, workerID, owner)
 	case turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER:
-		return s.handleToolAfter(ctx, beacon, run)
+		return s.handleToolAfter(ctx, beacon, run, workerID)
 	default:
 		return nil, status.Error(codes.InvalidArgument, "tool_call phase is required")
 	}
@@ -761,15 +1439,31 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "tool_disabled")
 	}
 	if policy == tools.PolicyApprovalRequired {
-		if err := s.repo.RecordToolCallBefore(ctx, repository.ToolCallRecord{ToolCallID: beacon.ToolCallId, RunID: beacon.RunId}, "general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash); err != nil {
+		eventInput, err := toolStartedEventInput(beacon, run)
+		if err != nil {
+			return nil, err
+		}
+		recorded, event, err := s.repo.RecordToolCallBeforeWithEvent(ctx, repository.ToolCallRecord{ToolCallID: beacon.ToolCallId, RunID: beacon.RunId, ModelToolCallID: beacon.ModelToolCallId}, "general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash, eventInput)
+		if err != nil {
 			return nil, mapToolCallError(err)
+		}
+		if event.EventID != "" {
+			s.publishEvent(event)
+		}
+		if !recorded.Inserted {
+			if decision, handled := existingToolBeforeDecision(recorded.Record, "tool_denied"); handled {
+				return decision, nil
+			}
 		}
 		if s.approvals == nil {
 			return nil, status.Error(codes.FailedPrecondition, "approval service is not configured")
 		}
 		approvalID, err := s.approvals.CreateApprovalForTool(ctx, beacon.RunId, beacon.ToolCallId, "general_assistant", beacon.ToolName, args)
 		if err != nil {
-			return nil, err
+			if terminalizeErr := s.terminalizePostCommitApprovalFailure(ctx, beacon.RunId, beacon.ToolCallId); terminalizeErr != nil {
+				return nil, errors.Join(err, terminalizeErr)
+			}
+			return terminalRunDecision(beacon, "approval_delivery_failed"), err
 		}
 		return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED, ToolCallId: beacon.ToolCallId, ApprovalId: approvalID}, nil
 	}
@@ -777,21 +1471,26 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 	if policy == tools.PolicySafe {
 		statusValue = "allowed"
 	}
-	if err := s.repo.RecordToolCallBefore(ctx, repository.ToolCallRecord{ToolCallID: beacon.ToolCallId, RunID: beacon.RunId, Status: statusValue}, "general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash); err != nil {
-		return nil, mapToolCallError(err)
-	}
-	event, err := s.appendToolEvent(ctx, run, "tool.call.started", map[string]any{
-		"toolCallId": beacon.ToolCallId,
-		"serverName": beaconServerName(beacon),
-		"toolName":   beacon.ToolName,
-		"args":       args,
-	})
+	eventInput, err := toolStartedEventInput(beacon, run)
 	if err != nil {
 		return nil, err
 	}
-	s.publishEvent(event)
-	if err := s.audit.Record(ctx, beacon.RunId, "runtime", "", "tool.call.before", beacon.ToolCallId, toolAuditPayload(beacon)); err != nil {
-		return nil, err
+	recorded, event, err := s.repo.RecordToolCallBeforeWithEvent(ctx, repository.ToolCallRecord{ToolCallID: beacon.ToolCallId, RunID: beacon.RunId, Status: statusValue, ModelToolCallID: beacon.ModelToolCallId}, "general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash, eventInput)
+	if err != nil {
+		return nil, mapToolCallError(err)
+	}
+	if event.EventID != "" {
+		s.publishEvent(event)
+	}
+	if !recorded.Inserted {
+		if decision, handled := existingToolBeforeDecision(recorded.Record, "tool_denied"); handled {
+			return decision, nil
+		}
+	}
+	if recorded.Inserted {
+		if err := s.audit.Record(ctx, beacon.RunId, "runtime", "", "tool.call.before", beacon.ToolCallId, toolAuditPayload(beacon)); err != nil {
+			log.Printf("record tool before audit for %s: %v", beacon.ToolCallId, err)
+		}
 	}
 	switch policy {
 	case tools.PolicySafe:
@@ -801,59 +1500,160 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 	}
 }
 
-func (s *Server) denyToolBefore(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run, argsJSON string, argsHash string, reason string) (*turingv1.ToolPolicyDecision, error) {
-	if err := s.repo.RecordToolCallBefore(ctx, repository.ToolCallRecord{ToolCallID: beacon.ToolCallId, RunID: beacon.RunId, Status: "denied"}, "general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash); err != nil {
-		return nil, mapToolCallError(err)
+func (s *Server) terminalizePostCommitApprovalFailure(_ context.Context, runID string, toolCallID string) error {
+	recoveryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	approval, err := s.repo.GetApprovalByToolCall(recoveryCtx, runID, toolCallID)
+	if errors.Is(err, sql.ErrNoRows) {
+		payloadJSON, payloadErr := encodePayload(map[string]any{
+			"runId": runID, "code": "approval_delivery_failed", "message": "Approval lifecycle event could not be recorded", "retryable": false,
+		})
+		if payloadErr != nil {
+			return payloadErr
+		}
+		events, failErr := s.repo.FailRunWithEventPreservingExecution(recoveryCtx, runID, "approval_delivery_failed", "Approval lifecycle event could not be recorded", payloadJSON)
+		if failErr != nil {
+			return failErr
+		}
+		for _, event := range events {
+			s.publishEvent(event)
+		}
+		return nil
 	}
-	event, err := s.appendToolEvent(ctx, run, "tool.call.denied", map[string]any{
+	if err != nil {
+		return fmt.Errorf("find approval after creation failure: %w", err)
+	}
+	return s.terminalizeApprovalDeliveryFailure(recoveryCtx, approval.ApprovalID, nil)
+}
+
+func toolStartedEventInput(beacon *turingv1.ToolCallBeacon, run repository.Run) (repository.ToolCallBeforeEvent, error) {
+	payload := map[string]any{
 		"toolCallId": beacon.ToolCallId,
 		"serverName": beaconServerName(beacon),
 		"toolName":   beacon.ToolName,
-		"reason":     reason,
+	}
+	payloadJSON, err := safejson.MarshalCanonical(payload)
+	if err != nil {
+		return repository.ToolCallBeforeEvent{}, err
+	}
+	return repository.ToolCallBeforeEvent{
+		SessionID: run.SessionID, TraceID: run.TraceID, Type: "tool.call.started", PayloadJSON: string(payloadJSON),
+	}, nil
+}
+
+func (s *Server) denyToolBefore(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run, argsJSON string, argsHash string, reason string) (*turingv1.ToolPolicyDecision, error) {
+	deniedPayload, err := safejson.MarshalCanonical(map[string]any{
+		"toolCallId": beacon.ToolCallId,
+		"serverName": beaconServerName(beacon),
+		"toolName":   beacon.ToolName,
+		"error":      reason,
 	})
 	if err != nil {
 		return nil, err
 	}
-	s.publishEvent(event)
+	recorded, event, err := s.repo.RecordToolCallBeforeWithEvent(
+		ctx,
+		repository.ToolCallRecord{
+			ToolCallID: beacon.ToolCallId, RunID: beacon.RunId, Status: "denied",
+			ModelToolCallID: beacon.ModelToolCallId,
+		},
+		"general_assistant", beaconServerName(beacon), beacon.ToolName, argsJSON, argsHash,
+		repository.ToolCallBeforeEvent{
+			SessionID: run.SessionID, TraceID: run.TraceID,
+			Type: "tool.call.denied", PayloadJSON: string(deniedPayload),
+		},
+	)
+	if err != nil {
+		return nil, mapToolCallError(err)
+	}
+	if event.EventID != "" {
+		s.publishEvent(event)
+	}
+	if !recorded.Inserted {
+		if decision, handled := existingToolBeforeDecision(recorded.Record, reason); handled {
+			return decision, nil
+		}
+	}
 	payload := toolAuditPayload(beacon)
 	payload["reason"] = reason
 	if err := s.audit.Record(ctx, beacon.RunId, "runtime", "", "tool.call.before", beacon.ToolCallId, payload); err != nil {
-		return nil, err
+		log.Printf("record denied tool before audit for %s: %v", beacon.ToolCallId, err)
 	}
 	return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_DENY, ToolCallId: beacon.ToolCallId, Reason: reason}, nil
 }
 
-func (s *Server) handleToolAfter(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run) (*turingv1.ToolPolicyDecision, error) {
+func existingToolBeforeDecision(record repository.ToolCallRecord, deniedReason string) (*turingv1.ToolPolicyDecision, bool) {
+	decision := &turingv1.ToolPolicyDecision{ToolCallId: record.ToolCallID}
+	switch record.Status {
+	case "allowed":
+		decision.Decision = turingv1.ToolPolicyDecision_DECISION_ALLOW
+	case "approval_required":
+		decision.Decision = turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED
+		decision.ApprovalId = record.ApprovalID
+	case "denied":
+		decision.Decision = turingv1.ToolPolicyDecision_DECISION_DENY
+		decision.Reason = deniedReason
+	case "completed":
+		decision.Decision = turingv1.ToolPolicyDecision_DECISION_DENY
+		decision.Reason = "tool_call_already_completed"
+	case "failed":
+		decision.Decision = turingv1.ToolPolicyDecision_DECISION_DENY
+		decision.Reason = "tool_call_already_failed"
+	default:
+		return nil, false
+	}
+	return decision, true
+}
+
+func (s *Server) handleToolAfter(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run, workerID string) (*turingv1.ToolPolicyDecision, error) {
 	statusValue, eventType, err := toolAfterStatus(beacon)
 	if err != nil {
 		return nil, err
+	}
+	_, argsHash, err := canonicalArgs(beaconArgs(beacon))
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "tool args are not valid JSON")
 	}
 	errorCode, errorMessage := "", ""
 	if beacon.Error != nil {
 		errorCode = beacon.Error.Code
 		errorMessage = beacon.Error.Message
 	}
-	if err := s.repo.RecordToolCallAfter(ctx, beacon.ToolCallId, beacon.RunId, statusValue, beacon.ResultSummary, errorCode, errorMessage, beacon.DurationMs); err != nil {
-		return nil, mapToolCallError(err)
-	}
 	payload := map[string]any{
-		"toolCallId":    beacon.ToolCallId,
-		"serverName":    beaconServerName(beacon),
-		"toolName":      beacon.ToolName,
-		"status":        statusValue,
-		"resultSummary": beacon.ResultSummary,
-		"durationMs":    beacon.DurationMs,
+		"toolCallId": beacon.ToolCallId,
+		"serverName": beaconServerName(beacon),
+		"toolName":   beacon.ToolName,
 	}
-	if beacon.Error != nil {
-		payload["error"] = map[string]any{"code": beacon.Error.Code, "message": beacon.Error.Message}
+	if errorText := publicToolEventError(statusValue, beacon.Error); errorText != "" {
+		payload["error"] = errorText
 	}
-	event, err := s.appendToolEvent(ctx, run, eventType, payload)
+	payloadJSON, err := safejson.MarshalCanonical(payload)
 	if err != nil {
 		return nil, err
 	}
+	changed, event, err := s.repo.RecordToolCallAfterWithEvent(ctx, repository.ToolCallAfterRecord{
+		ToolCallID:      beacon.ToolCallId,
+		RunID:           beacon.RunId,
+		ServerName:      beaconServerName(beacon),
+		ToolName:        beacon.ToolName,
+		ModelToolCallID: beacon.ModelToolCallId,
+		ArgsHash:        argsHash,
+		WorkerID:        workerID,
+		Status:          statusValue,
+		ResultSummary:   beacon.ResultSummary,
+		ErrorCode:       errorCode,
+		ErrorMessage:    errorMessage,
+		DurationMS:      beacon.DurationMs,
+	}, eventType, string(payloadJSON))
+	if err != nil {
+		return nil, mapToolCallError(err)
+	}
+	if !changed {
+		return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: beacon.ToolCallId}, nil
+	}
 	s.publishEvent(event)
 	if err := s.audit.Record(ctx, beacon.RunId, "runtime", "", "tool.call.after", beacon.ToolCallId, toolAuditPayload(beacon)); err != nil {
-		return nil, err
+		log.Printf("record tool after audit for %s: %v", beacon.ToolCallId, err)
 	}
 	return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: beacon.ToolCallId}, nil
 }
@@ -861,6 +1661,9 @@ func (s *Server) handleToolAfter(ctx context.Context, beacon *turingv1.ToolCallB
 func (s *Server) NotifyApprovalUpdated(ctx context.Context, runID string, approvalID string, approvalStatus string, approvalToken string) error {
 	owner := s.workerForRun(runID)
 	if owner == nil {
+		if approvalStatus == "denied" || approvalStatus == "expired" {
+			s.releaseUnownedTerminalRun(ctx, runID)
+		}
 		return nil
 	}
 	sendCtx, cancel := withDefaultTimeout(ctx, 5*time.Second)
@@ -872,12 +1675,6 @@ func (s *Server) NotifyApprovalUpdated(ctx context.Context, runID string, approv
 	}}}); err != nil {
 		return err
 	}
-	if approvalStatus == "denied" || approvalStatus == "expired" {
-		owner.releaseRun(runID)
-		if err := s.DispatchPending(ctx); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -887,6 +1684,8 @@ func mapToolCallError(err error) error {
 		return status.Error(codes.AlreadyExists, err.Error())
 	case errors.Is(err, repository.ErrToolCallNotFound):
 		return status.Error(codes.NotFound, err.Error())
+	case errors.Is(err, repository.ErrToolCallInvalidTransition):
+		return status.Error(codes.FailedPrecondition, err.Error())
 	default:
 		return err
 	}
@@ -902,6 +1701,25 @@ func toolAfterStatus(beacon *turingv1.ToolCallBeacon) (string, string, error) {
 		return "denied", "tool.call.denied", nil
 	default:
 		return "", "", status.Error(codes.InvalidArgument, "tool_call status is required")
+	}
+}
+
+func publicToolEventError(statusValue string, toolError *turingv1.ToolCallError) string {
+	if toolError != nil {
+		if toolError.Message != "" {
+			return toolError.Message
+		}
+		if toolError.Code != "" {
+			return toolError.Code
+		}
+	}
+	switch statusValue {
+	case "failed":
+		return "Tool call failed"
+	case "denied":
+		return "Tool call denied"
+	default:
+		return ""
 	}
 }
 
@@ -946,6 +1764,7 @@ func toolAuditPayload(beacon *turingv1.ToolCallBeacon) map[string]any {
 	if beacon.Args != nil {
 		payload["args"] = beacon.Args.AsMap()
 	}
+	addModelToolCallID(payload, beacon)
 	if beacon.Status != turingv1.ToolCallStatus_TOOL_CALL_STATUS_UNSPECIFIED {
 		payload["status"] = beacon.Status.String()
 	}
@@ -961,18 +1780,10 @@ func toolAuditPayload(beacon *turingv1.ToolCallBeacon) map[string]any {
 	return payload
 }
 
-func (s *Server) appendToolEvent(ctx context.Context, run repository.Run, eventType string, payload map[string]any) (repository.Event, error) {
-	payloadJSON, err := safejson.MarshalCanonical(payload)
-	if err != nil {
-		return repository.Event{}, err
+func addModelToolCallID(payload map[string]any, beacon *turingv1.ToolCallBeacon) {
+	if beacon.GetModelToolCallId() != "" {
+		payload["modelToolCallId"] = beacon.GetModelToolCallId()
 	}
-	return s.repo.AppendEvent(ctx, repository.AppendEventInput{
-		SessionID:   run.SessionID,
-		RunID:       run.RunID,
-		TraceID:     run.TraceID,
-		Type:        eventType,
-		PayloadJSON: string(payloadJSON),
-	})
 }
 
 func (s *Server) publishEvent(event repository.Event) {

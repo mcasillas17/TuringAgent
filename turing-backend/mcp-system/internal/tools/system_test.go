@@ -1,14 +1,67 @@
 package tools
 
-import "testing"
+import (
+	"reflect"
+	"strings"
+	"testing"
+)
 
 func TestCallSystemTime(t *testing.T) {
-	result, err := Call("system.time", map[string]any{"timezone": "UTC"})
+	result, err := Call("system.time", map[string]any{})
 	if err != nil {
 		t.Fatalf("Call returned error: %v", err)
 	}
 	if result["iso"] == "" {
 		t.Fatalf("expected iso timestamp")
+	}
+}
+
+func TestCallRejectsArgumentsForZeroArgumentTools(t *testing.T) {
+	for _, name := range []string{"system.health", "system.time", "system.info"} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Call(name, map[string]any{"unexpected": true}); err == nil {
+				t.Fatalf("Call(%q) accepted an argument outside its schema", name)
+			}
+		})
+	}
+}
+
+func TestCallEchoEnforcesAdvertisedSchema(t *testing.T) {
+	for name, args := range map[string]map[string]any{
+		"unknown argument": {"text": "hello", "unexpected": true},
+		"non-string text":  {"text": 123},
+		"null text":        {"text": nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Call("system.echo", args); err == nil {
+				t.Fatalf("Call(system.echo, %#v) accepted invalid arguments", args)
+			}
+		})
+	}
+
+	result, err := Call("system.echo", map[string]any{})
+	if err != nil {
+		t.Fatalf("Call(system.echo) returned error for omitted text: %v", err)
+	}
+	if result["text"] != "" {
+		t.Fatalf("omitted echo text = %#v, want empty string", result["text"])
+	}
+}
+
+func TestCallEchoEnforcesCharacterBudget(t *testing.T) {
+	const maxEchoCharacters = 64 * 1024
+	boundary := strings.Repeat("界", maxEchoCharacters)
+	result, err := Call("system.echo", map[string]any{"text": boundary})
+	if err != nil {
+		t.Fatalf("Call rejected echo character boundary: %v", err)
+	}
+	if result["text"] != boundary {
+		t.Fatal("Call changed echo text at the character boundary")
+	}
+	if _, err := Call("system.echo", map[string]any{
+		"text": strings.Repeat("界", maxEchoCharacters+1),
+	}); err == nil {
+		t.Fatalf("Call accepted more than %d echo characters", maxEchoCharacters)
 	}
 }
 
@@ -19,5 +72,42 @@ func TestSystemInfoDoesNotExposeSecrets(t *testing.T) {
 	}
 	if _, ok := result["env"]; ok {
 		t.Fatalf("system.info must not expose env")
+	}
+}
+
+func TestListAdvertisesDocumentedObjectSchemas(t *testing.T) {
+	advertised := List()
+	if len(advertised) != 4 {
+		t.Fatalf("List returned %d tools, want 4", len(advertised))
+	}
+	for _, tool := range advertised {
+		name, _ := tool["name"].(string)
+		description, _ := tool["description"].(string)
+		if strings.TrimSpace(description) == "" {
+			t.Errorf("%s description is empty", name)
+		}
+		schema, ok := tool["inputSchema"].(map[string]any)
+		if !ok || schema["type"] != "object" {
+			t.Errorf("%s inputSchema = %#v, want object root", name, tool["inputSchema"])
+			continue
+		}
+		if schema["additionalProperties"] != false {
+			t.Errorf("%s additionalProperties = %#v, want false", name, schema["additionalProperties"])
+		}
+		if tool["policy"] != "safe" {
+			t.Errorf("%s policy = %#v, want safe", name, tool["policy"])
+		}
+		if name == "system.echo" {
+			want := map[string]any{"text": map[string]any{
+				"type":        "string",
+				"maxLength":   64 * 1024,
+				"description": "Text to echo, limited to 65536 Unicode characters.",
+			}}
+			if !reflect.DeepEqual(schema["properties"], want) {
+				t.Errorf("system.echo properties = %#v, want %#v", schema["properties"], want)
+			}
+		} else if properties, ok := schema["properties"].(map[string]any); !ok || len(properties) != 0 {
+			t.Errorf("%s properties = %#v, want empty object", name, schema["properties"])
+		}
 	}
 }

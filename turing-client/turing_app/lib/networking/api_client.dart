@@ -17,7 +17,7 @@ abstract class TuringApi {
     String? before,
   });
 
-  Future<List<TuringEvent>> listEvents({
+  Future<TuringEventPage> listEvents({
     required String sessionId,
     int? after,
     int limit = 500,

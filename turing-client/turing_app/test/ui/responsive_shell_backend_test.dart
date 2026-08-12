@@ -89,12 +89,12 @@ class _FakeApiClient implements TuringApi {
   }
 
   @override
-  Future<List<TuringEvent>> listEvents({
+  Future<TuringEventPage> listEvents({
     required String sessionId,
     int? after,
     int limit = 500,
   }) async {
-    return const [];
+    return const TuringEventPage(events: [], latestSequence: 0);
   }
 
   @override

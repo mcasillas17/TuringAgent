@@ -19,6 +19,8 @@ import '../models/session.dart';
 import '../models/turing_event.dart';
 import 'api_client.dart';
 
+const _startupUnaryTimeout = Duration(seconds: 10);
+
 class GrpcAuthMetadata {
   const GrpcAuthMetadata({required this.apiKey});
 
@@ -138,13 +140,18 @@ class TuringGrpcApi implements ClosableTuringApi {
     String? before,
   }) async {
     final response = await _sessions.listMessages(
-      sessionpb.ListMessagesRequest(sessionId: sessionId, limit: limit),
+      sessionpb.ListMessagesRequest(
+        sessionId: sessionId,
+        limit: limit,
+        beforeMessageId: before ?? '',
+      ),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
     );
     return response.messages.map(GrpcMappers.messageToModel).toList();
   }
 
   @override
-  Future<List<TuringEvent>> listEvents({
+  Future<TuringEventPage> listEvents({
     required String sessionId,
     int? after,
     int limit = 500,
@@ -155,8 +162,14 @@ class TuringGrpcApi implements ClosableTuringApi {
         afterSequence: Int64(after ?? 0),
         limit: limit,
       ),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
     );
-    return response.events.map(GrpcMappers.turingEventToTuringEvent).toList();
+    return TuringEventPage(
+      events: response.events
+          .map(GrpcMappers.turingEventToTuringEvent)
+          .toList(),
+      latestSequence: response.latestSequence.toInt(),
+    );
   }
 
   @override
