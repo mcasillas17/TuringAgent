@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/worker"
 )
 
 func TestShouldReconnect(t *testing.T) {
@@ -64,7 +67,9 @@ func TestServeReturnsPromptlyWhenSignalledDuringBackoff(t *testing.T) {
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- serveWith(ctx, run) }()
+	// Real time.After here: the point is that cancellation interrupts a genuine
+	// wait rather than the loop happening to come round again.
+	go func() { done <- serveWith(ctx, run, healthyStreamDuration, time.After) }()
 
 	<-attempts // the first attempt failed; serve is now sleeping out its backoff
 	cancel()
@@ -88,7 +93,7 @@ func TestServeRetriesUntilShutdownRequested(t *testing.T) {
 		}
 		return nil // the orchestrator asked us to stop
 	}
-	if err := serveWith(context.Background(), run); err != nil {
+	if err := serveWith(context.Background(), run, healthyStreamDuration, instantSleep); err != nil {
 		t.Fatalf("serve returned %v, want nil", err)
 	}
 	if calls != 3 {
@@ -115,5 +120,85 @@ func TestJitterStaysWithinHalfToFullDelay(t *testing.T) {
 	}
 	if jitter(0) != 0 {
 		t.Fatal("jitter(0) must be 0")
+	}
+}
+
+// instantSleep makes the loop's delay a no-op so timing behaviour can be
+// asserted without waiting real seconds.
+func instantSleep(time.Duration) <-chan time.Time {
+	ch := make(chan time.Time, 1)
+	ch <- time.Time{}
+	return ch
+}
+
+// recordingSleep captures each requested delay and returns immediately.
+func recordingSleep(into *[]time.Duration) func(time.Duration) <-chan time.Time {
+	return func(d time.Duration) <-chan time.Time {
+		*into = append(*into, d)
+		return instantSleep(d)
+	}
+}
+
+// Without this, deleting `backoff = nextBackoff(backoff)` from the loop leaves
+// the suite green while the runtime retries at the initial delay forever.
+func TestServeGrowsTheDelayBetweenFailedAttempts(t *testing.T) {
+	var delays []time.Duration
+	var calls int
+	run := func(context.Context) error {
+		calls++
+		if calls > 4 {
+			return nil
+		}
+		return errors.New("stream dropped")
+	}
+	if err := serveWith(context.Background(), run, time.Hour, recordingSleep(&delays)); err != nil {
+		t.Fatal(err)
+	}
+	if len(delays) != 4 {
+		t.Fatalf("recorded %d delays, want 4: %v", len(delays), delays)
+	}
+	// Jitter is [d/2, d], so consecutive samples can overlap; compare the ends.
+	if delays[len(delays)-1] <= delays[0] {
+		t.Fatalf("delay did not grow across attempts: %v", delays)
+	}
+}
+
+// Without this, inverting or deleting the healthy-stream reset is invisible.
+func TestServeResetsTheDelayAfterAHealthyStream(t *testing.T) {
+	var delays []time.Duration
+	var calls int
+	run := func(context.Context) error {
+		calls++
+		if calls > 4 {
+			return nil
+		}
+		return errors.New("stream dropped")
+	}
+	// healthyFor 0 means every attempt counts as healthy, so the delay must
+	// never climb past the initial value.
+	if err := serveWith(context.Background(), run, 0, recordingSleep(&delays)); err != nil {
+		t.Fatal(err)
+	}
+	for i, d := range delays {
+		if d > initialBackoff {
+			t.Fatalf("delay %d = %v exceeded the initial backoff; the reset did not apply: %v", i, d, delays)
+		}
+	}
+}
+
+// A configuration Run rejects can never succeed on retry. Looping it would keep
+// the process alive, never exit non-zero, and hide the fault from the operator.
+func TestServeDoesNotRetryInvalidConfiguration(t *testing.T) {
+	var calls int
+	run := func(context.Context) error {
+		calls++
+		return fmt.Errorf("%w: max concurrent runs must be between 1 and 128", worker.ErrInvalidConfig)
+	}
+	var delays []time.Duration
+	if err := serveWith(context.Background(), run, time.Hour, recordingSleep(&delays)); err != nil {
+		t.Fatalf("serve returned %v, want nil", err)
+	}
+	if calls != 1 {
+		t.Fatalf("run called %d times, want 1 — an unretryable config error must not loop", calls)
 	}
 }

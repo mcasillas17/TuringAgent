@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"math/rand"
 	"net/http"
@@ -82,12 +83,19 @@ const (
 // Retrying around it reuses that teardown as written, and leaves Run testable as
 // the single-stream function every existing test drives.
 func serve(ctx context.Context, runtimeWorker *worker.Worker) error {
-	return serveWith(ctx, runtimeWorker.Run)
+	return serveWith(ctx, runtimeWorker.Run, healthyStreamDuration, time.After)
 }
 
-// serveWith is serve's loop over an arbitrary attempt function, so the retry
-// policy can be tested without a gRPC stream or a real worker.
-func serveWith(ctx context.Context, run func(context.Context) error) error {
+// serveWith is serve's loop over an arbitrary attempt function. healthyFor and
+// sleep are injected so a test can exercise the backoff growth and the
+// reset-after-a-healthy-stream branch without waiting real seconds — otherwise
+// both are unreachable and could be deleted with the suite still green.
+func serveWith(
+	ctx context.Context,
+	run func(context.Context) error,
+	healthyFor time.Duration,
+	sleep func(time.Duration) <-chan time.Time,
+) error {
 	backoff := initialBackoff
 	for {
 		started := time.Now()
@@ -100,7 +108,7 @@ func serveWith(ctx context.Context, run func(context.Context) error) error {
 			}
 			return nil
 		}
-		if time.Since(started) >= healthyStreamDuration {
+		if time.Since(started) >= healthyFor {
 			backoff = initialBackoff
 		}
 		delay := jitter(backoff)
@@ -109,7 +117,7 @@ func serveWith(ctx context.Context, run func(context.Context) error) error {
 		case <-ctx.Done():
 			// Shutting down mid-backoff is a clean exit, not a failure.
 			return nil
-		case <-time.After(delay):
+		case <-sleep(delay):
 		}
 		backoff = nextBackoff(backoff)
 	}
@@ -123,6 +131,13 @@ func serveWith(ctx context.Context, run func(context.Context) error) error {
 // the runtime is expected to ride out.
 func shouldReconnect(ctx context.Context, err error) bool {
 	if ctx.Err() != nil {
+		return false
+	}
+	// Worker.Run validates its configuration before touching the network. Those
+	// failures cannot succeed on retry, and looping them forever would keep the
+	// process alive, never exit non-zero, and so never let the restart policy or
+	// an operator see the fault.
+	if errors.Is(err, worker.ErrInvalidConfig) {
 		return false
 	}
 	return err != nil

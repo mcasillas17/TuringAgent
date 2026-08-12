@@ -83,6 +83,11 @@ var errOutboundWriterStopped = errors.New("runtime outbound writer stopped")
 var errShutdownRequested = errors.New("runtime shutdown requested")
 var errRuntimeDisconnected = errors.New("runtime stream disconnected")
 
+// ErrInvalidConfig marks the validation failures Run reports before it touches
+// the network. They cannot succeed on retry, so a caller looping over Run must
+// stop rather than spin on them forever.
+var ErrInvalidConfig = errors.New("invalid worker configuration")
+
 type outboundWriter struct {
 	stream RuntimeStream
 	queue  chan *outboundRequest
@@ -295,13 +300,13 @@ func New(options Options, client RuntimeClient, executor Executor) *Worker {
 
 func (w *Worker) Run(ctx context.Context) error {
 	if w.client == nil {
-		return errors.New("runtime client is required")
+		return fmt.Errorf("%w: runtime client is required", ErrInvalidConfig)
 	}
 	if w.executor == nil {
-		return errors.New("executor is required")
+		return fmt.Errorf("%w: executor is required", ErrInvalidConfig)
 	}
 	if w.options.MaxConcurrentRuns < 1 || w.options.MaxConcurrentRuns > maxConcurrentRuns {
-		return errors.New("max concurrent runs must be between 1 and 128")
+		return fmt.Errorf("%w: max concurrent runs must be between 1 and 128", ErrInvalidConfig)
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -465,14 +470,24 @@ func (w *Worker) startRun(parent context.Context, stream RuntimeStream, job *tur
 	runCtx, cancel := context.WithCancelCause(parent)
 	entry := &activeRun{cancel: cancel, done: make(chan struct{})}
 	w.mu.Lock()
-	if _, exists := w.active[job.GetRunId()]; exists || len(w.active) >= w.options.MaxConcurrentRuns {
+	if _, exists := w.active[job.GetRunId()]; exists {
+		// Already running it. A redelivered RunAssigned is a duplicate, and
+		// silence is the correct idempotent answer: acking would terminally fail
+		// a healthy in-flight run, which then keeps executing and reports a
+		// completion the orchestrator rejects.
+		w.mu.Unlock()
+		cancel(context.Canceled)
+		return
+	}
+	if len(w.active) >= w.options.MaxConcurrentRuns {
 		w.mu.Unlock()
 		cancel(context.Canceled)
 		// Say so rather than dropping it. Silence is indistinguishable from
-		// "accepted and running", so the orchestrator would wait on a run that
-		// never starts. Retryable because the worker was busy — the run itself is
-		// fine. Reachable after a reconnect, when a run still draining from the
-		// previous stream can outlive DisconnectCleanupTimeout and keep the slot.
+		// "accepted and running", and the orchestrator renews its assignment on
+		// every heartbeat, so a dropped one never expires — the run would hang
+		// forever. Retryable because the worker was busy, not because the run is
+		// broken. Reachable after a reconnect, when a run still draining from the
+		// previous stream can outlive DisconnectCleanupTimeout and hold the slot.
 		sendCtx, sendCancel := context.WithTimeout(parent, w.options.UpdateSendTimeout)
 		defer sendCancel()
 		_ = w.send(sendCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{

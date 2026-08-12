@@ -229,3 +229,29 @@ func requireContainsNone(t *testing.T, serviceName string, block string, snippet
 		}
 	}
 }
+
+// The in-process reconnect loop covers stream failures; the restart policy
+// covers what it cannot — a panic, an OOM kill, or a fatal config error at
+// startup. Without it a service that exits stays down until someone notices,
+// which is the failure this was added to end. Asserted here so it cannot be
+// removed silently.
+func TestComposeServicesRestartUnlessStopped(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "infra", "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := string(data)
+	for _, serviceName := range []string{
+		"turing-orchestrator",
+		"turing-agent-runtime-general",
+		"turing-mcp-system",
+		"turing-mcp-files",
+	} {
+		block := composeServiceBlock(t, compose, serviceName)
+		requireContainsAll(t, serviceName, block, "restart: unless-stopped")
+		// "always" would fight an operator who deliberately stopped a service.
+		if strings.Contains(block, "restart: always") {
+			t.Fatalf("%s uses restart: always; unless-stopped is required", serviceName)
+		}
+	}
+}

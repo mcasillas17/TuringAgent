@@ -102,8 +102,13 @@ func TestWorkerRejectsMaxConcurrentRunsAboveWireAndServerBound(t *testing.T) {
 	}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
 
 	err := worker.Run(context.Background())
-	if err == nil || err.Error() != "max concurrent runs must be between 1 and 128" {
+	if err == nil || !strings.Contains(err.Error(), "max concurrent runs must be between 1 and 128") {
 		t.Fatalf("Worker.Run max concurrent error = %v, want bounded validation", err)
+	}
+	// The sentinel is what a caller looping over Run keys on to stop rather than
+	// retry a configuration that can never succeed.
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("validation error %v does not wrap ErrInvalidConfig", err)
 	}
 	select {
 	case update := <-stream.sent:
@@ -1135,5 +1140,43 @@ func TestWorkerCanRunAgainAfterStreamLoss(t *testing.T) {
 		t.Fatal("reconnected worker did not accept a new run")
 	}
 	cancelSecond()
+	<-done
+}
+
+// A redelivered assignment for a run already in flight is a duplicate, not a
+// rejection. Acking it would terminally fail a healthy run that keeps executing
+// and then reports a completion the orchestrator refuses. Silence is correct.
+func TestWorkerSilentlyIgnoresDuplicateAssignment(t *testing.T) {
+	provider := &blockingProvider{started: make(chan struct{}), cancelled: make(chan struct{})}
+	stream := newFakeStream()
+	worker := New(Options{WorkerID: "worker-1", MaxConcurrentRuns: 2}, &fakeRuntimeClient{stream: stream}, providerExecutor{provider: provider})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+	nextSent(t, stream) // worker_ready
+
+	assign := &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: &turingv1.AgentJob{JobId: "job_1", RunId: "run_1", Model: "llama3.2"}}}
+	stream.recv <- assign
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run never started")
+	}
+
+	// Redeliver the same assignment. There is capacity, so the only reason to
+	// refuse is that it is already running.
+	stream.recv <- assign
+
+	select {
+	case update := <-stream.sent:
+		if failed := update.GetRunFailed(); failed != nil {
+			t.Fatalf("duplicate assignment was failed (%s); it must be ignored", failed.Code)
+		}
+		t.Fatalf("unexpected update for a duplicate assignment: %+v", update)
+	case <-time.After(300 * time.Millisecond):
+		// No update: correct.
+	}
+	cancel()
 	<-done
 }
