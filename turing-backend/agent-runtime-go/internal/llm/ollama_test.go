@@ -382,6 +382,47 @@ func TestOllamaRejectsConflictingToolCallIdentityFragments(t *testing.T) {
 	}
 }
 
+// Every tool mcp-system exposes takes no arguments (system.time, system.health
+// and system.info all declare an empty schema), and Ollama's ToolCallFunction
+// carries `arguments` with no omitempty, so a zero-argument call arrives as
+// `"arguments":null` — or absent, from other OpenAI-compatible servers. Treating
+// either as malformed fails the whole run and the tool is never dispatched,
+// which is precisely what "what time is it?" produces against a live model.
+func TestOllamaAcceptsZeroArgumentToolCalls(t *testing.T) {
+	for name, toolCalls := range map[string]string{
+		"arguments null":   `[{"function":{"name":"system.time","arguments":null}}]`,
+		"arguments absent": `[{"function":{"name":"system.time"}}]`,
+		"arguments empty":  `[{"function":{"name":"system.time","arguments":{}}}]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := streamOllamaEvents(t, `{"message":{"tool_calls":`+toolCalls+`},"done":true,"done_reason":"stop"}`+"\n")
+			var calls []ToolCall
+			for _, event := range got {
+				if len(event.ToolCalls) > 0 {
+					calls = event.ToolCalls
+				}
+				if event.Type == "error" {
+					t.Fatalf("zero-argument tool call rejected: %s: %s", event.Code, event.Message)
+				}
+			}
+			if len(calls) != 1 {
+				t.Fatalf("want 1 tool call, got %d (%+v)", len(calls), got)
+			}
+			if calls[0].Name != "system.time" {
+				t.Fatalf("tool name = %q, want system.time", calls[0].Name)
+			}
+			// Downstream marshals these straight into the MCP request, so an
+			// absent argument map must arrive as an empty object, never nil.
+			if calls[0].Arguments == nil {
+				t.Fatal("arguments must be an empty map, not nil")
+			}
+			if len(calls[0].Arguments) != 0 {
+				t.Fatalf("arguments = %v, want empty", calls[0].Arguments)
+			}
+		})
+	}
+}
+
 func TestOllamaRejectsMalformedToolCalls(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -395,9 +436,12 @@ func TestOllamaRejectsMalformedToolCalls(t *testing.T) {
 		{name: "name missing", toolCalls: `[{"function":{"arguments":{}}}]`},
 		{name: "name empty", toolCalls: `[{"function":{"name":"","arguments":{}}}]`},
 		{name: "name not string", toolCalls: `[{"function":{"name":42,"arguments":{}}}]`},
-		{name: "arguments missing", toolCalls: `[{"function":{"name":"bad"}}]`},
-		{name: "arguments null", toolCalls: `[{"function":{"name":"bad","arguments":null}}]`},
+		// NOTE: absent and null `arguments` are NOT malformed — see
+		// TestOllamaAcceptsZeroArgumentToolCalls. Only a present, non-object
+		// value is a protocol error.
 		{name: "arguments not object", toolCalls: `[{"function":{"name":"bad","arguments":[]}}]`},
+		{name: "arguments string", toolCalls: `[{"function":{"name":"bad","arguments":"{}"}}]`},
+		{name: "arguments number", toolCalls: `[{"function":{"name":"bad","arguments":3}}]`},
 		{name: "null type", toolCalls: `[{"type":null,"function":{"name":"bad","arguments":{}}}]`},
 		{name: "non-string type", toolCalls: `[{"type":42,"function":{"name":"bad","arguments":{}}}]`},
 		{name: "other string type", toolCalls: `[{"type":"command","function":{"name":"bad","arguments":{}}}]`},
