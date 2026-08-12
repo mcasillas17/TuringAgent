@@ -155,6 +155,14 @@ The truncation path is hard to trigger deliberately, so this is best-effort and 
 - [ ] **Step 2: Confirm** the notice appears inline after the last tool card, and the run still completes.
 - [ ] **Step 3: Screenshot for the PR** if you get it to fire. **If you cannot trigger it, say so explicitly in the PR** rather than implying it was seen — the widget tests are the real evidence either way.
 
+
+## Repo conventions this plan is subject to
+
+- **Work on an isolated worktree + feature branch; open a PR into `main`.** Do not commit to `main` (CLAUDE.md, "Repo etiquette").
+- **A pre-push review is required, not optional.** CLAUDE.md mandates dispatching a subagent with **Opus 4.8** to review the full diff before pushing — correctness and edge cases, concrete improvements, and **unit-test coverage for every new behaviour and every fixed bug**. Act on the findings or state why one is rejected. A green test run is not a substitute.
+- **`/verify` runs the full matrix.** Every step in it has a CI counterpart, so a local failure is a failure that will block the PR.
+- **Flutter tests run in CI** (the `flutter` job), so a failing widget test blocks the PR. `flutter analyze` is not in CI — run it yourself; the repo is currently clean.
+
 ---
 
 ## Self-review checklist

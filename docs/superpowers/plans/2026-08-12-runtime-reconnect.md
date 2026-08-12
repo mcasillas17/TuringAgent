@@ -31,6 +31,24 @@
 
 **Why it matters more now than it used to:** with the fake model, a run lasted milliseconds. With a real model plus tool iterations, a run occupies minutes — orders of magnitude more exposure to an orchestrator restart, a rebuild, or a network blip. And the failure is permanent rather than self-healing.
 
+## Is `Worker` actually safe to `Run` twice? Yes — verified, with one caveat
+
+The whole approach rests on this, so it was checked empirically rather than assumed.
+
+`Worker` carries mutable state across `Run` calls (`active`, `approvals`, `toolCalls`, `decisions`, `generations`, `writer`, `fatal`). The ones that matter are handled:
+
+- **`writer`** — `stopOutboundWriter` nils it, `startOutboundWriter` rebuilds it. `TestOutboundWriterCanRestartForASubsequentStream` already covers a second stream.
+- **`fatal`** — `defer w.setFatalChannel(nil)` clears it.
+- **`active`** — cleaned, but *asynchronously*. `cancelActiveRuns` only marks entries stopping (the run goroutine then returns early at `worker.go:490`, before its own `deleteActive`); the actual removal happens in `waitForActiveRuns`, which spawns a goroutine per entry that waits on `entry.done` and calls `deleteActiveEntry`.
+
+Probed directly by starting a run and then invoking `Run`'s teardown verbatim: `len(w.active)` went **1 → 0**. **There is no permanent leak** — an earlier reading of this code suggested there was, and that reading was wrong.
+
+**The caveat that does matter:** `waitForActiveRuns` gives up after `DisconnectCleanupTimeout` and returns while those goroutines are still waiting. A run that drains slowly can therefore still occupy `w.active` when the next `Run` begins. With the default `MaxConcurrentRuns: 1`, the reconnected worker would refuse assignments until the drain finishes — which is exactly why **Task 3's negative ack is not optional**: without it that refusal is silent and the run hangs. The backoff delay also works in your favour here.
+
+**No existing test runs `Run` twice on the same `Worker`.** Add one — it is the only thing that will catch a future change breaking reuse.
+
+The other maps (`approvals`, `toolCalls`, `decisions`, `generations`) are only ever deleted per item, never reset between streams. Nothing observed suggests a problem, and their keys will not recur, but **look at them while you are in here** rather than taking this paragraph's word for it — a stale `decisions` waiter surviving a reconnect would be an awkward bug to find later.
+
 ## Design decisions (locked)
 
 1. **Reconnect in `main.go`, not inside `Worker.Run`.** `Run` already owns one stream's full lifecycle — connect, register, serve, and a `defer` that cancels active runs, drains them, and stops the writer. Retrying *around* it reuses that teardown exactly as written; retrying *inside* would mean unpicking it. It also keeps `Run` unit-testable as a single-stream function, which is how every existing test drives it.
@@ -213,7 +231,11 @@ Use `math/rand` (this is scheduling, not security — do not reach for `crypto/r
 
 - [ ] **Step 3: Verify the loop actually exits on signal.** Add a test that a cancelled context returns promptly rather than sleeping out the backoff — that is what the `select` on `ctx.Done()` inside the delay is for, and it is easy to get wrong by writing `time.Sleep`.
 
-- [ ] **Step 4:** `go build ./...`, `go test ./cmd/runtime/ -count=1`. Commit.
+- [ ] **Step 4: Add the missing `Worker` reuse test** in `internal/worker/worker_test.go`. Nothing currently runs `Run` twice on the same `Worker`, so nothing would catch a change that breaks reuse — and reuse is the entire premise of this plan.
+
+Drive it with the existing helpers (`newFakeStream`, `fakeRuntimeClient`, `blockingProvider`, `nextSent`): run, assign a run, tear the stream down, `Run` again on the same `Worker`, and assert the second `Run` sends a fresh `worker_ready` **and** accepts a new `RunAssigned`. `fakeRuntimeClient` hands out a single stream, so give it a way to return a second one — that small harness change is part of the task.
+
+- [ ] **Step 5:** `go build ./...`, `go test ./cmd/runtime/ ./internal/worker/ -count=1`. Commit.
 
 ## Task 3: Negative-ack the dropped `RunAssigned`
 
@@ -286,6 +308,13 @@ Unit tests cannot show that a restarted orchestrator is survived.
 - [ ] **Step 4: Assert the runtime survived.** Its logs show reconnect attempts and then a successful re-registration, and `docker compose ps` shows it still `Up` (not restarted, ideally — the in-process loop should absorb this without the container dying).
 - [ ] **Step 5: Send a chat message** and confirm it completes. **Before this change that message would hang forever** — that is the regression being closed.
 - [ ] **Step 6: Record the before/after in the PR**, including the log lines showing backoff.
+
+
+## Repo conventions this plan is subject to
+
+- **Work on an isolated worktree + feature branch; open a PR into `main`.** Do not commit to `main` (CLAUDE.md, "Repo etiquette").
+- **A pre-push review is required, not optional.** CLAUDE.md mandates dispatching a subagent with **Opus 4.8** to review the full diff before pushing — correctness and edge cases, concrete improvements, and **unit-test coverage for every new behaviour and every fixed bug**. Act on the findings or state why one is rejected. A green test run is not a substitute.
+- **`/verify` runs the full matrix.** Every step in it has a CI counterpart, so a local failure is a failure that will block the PR.
 
 ---
 
