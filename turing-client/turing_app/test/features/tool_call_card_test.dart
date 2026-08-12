@@ -165,13 +165,16 @@ void main() {
 
     // The card mutates in place (running -> terminal) with no list change, so
     // a silent relabel would never be announced to VoiceOver/TalkBack.
-    expect(
-      tester.getSemantics(find.byType(ToolCallCard)),
-      containsSemantics(
-        isLiveRegion: true,
-        label: 'Tool call system.time: Completed',
-      ),
+    final semantics = tester.widget<Semantics>(
+      find
+          .descendant(
+            of: find.byType(ToolCallCard),
+            matching: find.byType(Semantics),
+          )
+          .first,
     );
+    expect(semantics.properties.liveRegion, isTrue);
+    expect(semantics.properties.label, 'Tool call system.time: Completed');
     handle.dispose();
   });
 
