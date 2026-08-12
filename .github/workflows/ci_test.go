@@ -67,20 +67,16 @@ func TestCIWorkflowRunsPinnedLintInRootAndNestedModules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lintJob := requireIndentedBlock(t, string(data), "  lint:", 2)
+	workflow := string(data)
+	if got := strings.Count(workflow, "\n  lint:\n"); got != 1 {
+		t.Fatalf("lint job count = %d, want exactly one", got)
+	}
+	lintJob := requireIndentedBlock(t, workflow, "  lint:", 2)
 	requireContains(t, lintJob, `go-version: "1.25.x"`)
 	requireContains(t, lintJob, "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2")
-	if got := strings.Count(lintJob, "golangci-lint run ./..."); got != 3 {
-		t.Fatalf("lint command count = %d, want 3", got)
-	}
-	requireInOrder(t, lintJob,
-		"working-directory: .",
-		"golangci-lint run ./...",
-		"working-directory: turing-backend/mcp-files",
-		"golangci-lint run ./...",
-		"working-directory: turing-backend/mcp-system",
-		"golangci-lint run ./...",
-	)
+	requireContains(t, lintJob, `golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" --build-tags sqlite_fts5 ./... ./.github/workflows`)
+	requireRunsIn(t, lintJob, "turing-backend/mcp-files", `golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" ./...`)
+	requireRunsIn(t, lintJob, "turing-backend/mcp-system", `golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" ./...`)
 }
 
 func TestMCPFilesImagePreparesSandboxBeforeDroppingPrivileges(t *testing.T) {

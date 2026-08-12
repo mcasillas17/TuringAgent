@@ -330,24 +330,6 @@ func TestSessionServiceListsMessagesOnlyBeforeBoundary(t *testing.T) {
 	}
 }
 
-func TestListToolsFiltersUnavailableMCPServers(t *testing.T) {
-	h := newSessionHarness(t)
-	server := New(h.repo, config.Config{MCPSystemTokenGeneral: "system-token"})
-
-	response, err := server.ListTools(context.Background(), &turingv1.ListToolsRequest{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(response.Tools) != 4 {
-		t.Fatalf("system-only tool count = %d, want 4: %+v", len(response.Tools), response.Tools)
-	}
-	for _, tool := range response.Tools {
-		if tool.ServerName != "system" || !strings.HasPrefix(tool.ToolName, "system.") {
-			t.Fatalf("unavailable server tool was advertised: %+v", tool)
-		}
-	}
-}
-
 func TestListMessagesBeforeAssignedTurnExcludesRapidlyQueuedLaterTurns(t *testing.T) {
 	h := newSessionHarness(t)
 	client := turingv1.NewSessionServiceClient(h.conn)

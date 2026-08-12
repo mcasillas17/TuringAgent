@@ -79,8 +79,8 @@ Run from the repository root:
 go test -tags sqlite_fts5 -race ./... -count=1
 go vet -tags sqlite_fts5 ./...
 go build -tags sqlite_fts5 ./...
-go test ./.github/workflows -count=1
-go test ./turing-backend/scripts -count=1
+go test -tags sqlite_fts5 ./.github/workflows -count=1
+go test -tags sqlite_fts5 ./turing-backend/scripts -count=1
 
 (cd turing-backend/mcp-files &&
   go test -race ./... -count=1 &&
@@ -90,7 +90,11 @@ go test ./turing-backend/scripts -count=1
 (cd turing-backend/mcp-system &&
   go test -race ./... -count=1 &&
   go vet ./... &&
-  go build ./cmd/server)
+  go build ./...)
+
+golangci-lint run --config .golangci.yml --build-tags sqlite_fts5 ./... ./.github/workflows
+(cd turing-backend/mcp-files && golangci-lint run --config ../../.golangci.yml ./...)
+(cd turing-backend/mcp-system && golangci-lint run --config ../../.golangci.yml ./...)
 
 bash -n turing-backend/scripts/*.sh tools/proto/*.sh
 tools/proto/check.sh

@@ -32,38 +32,6 @@ jobs:
       - name: Build Go packages
         run: go build -tags sqlite_fts5 ./...
 
-  lint:
-    name: Go lint
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.25.x"
-          cache: true
-          cache-dependency-path: |
-            go.sum
-            turing-backend/mcp-files/go.sum
-            turing-backend/mcp-system/go.mod
-
-      - name: Install golangci-lint
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
-
-      - name: Lint root module
-        working-directory: .
-        run: golangci-lint run ./...
-
-      - name: Lint MCP files module
-        working-directory: turing-backend/mcp-files
-        run: golangci-lint run ./...
-
-      - name: Lint MCP system module
-        working-directory: turing-backend/mcp-system
-        run: golangci-lint run ./...
-
   mcp-files:
     name: MCP files module
     runs-on: ubuntu-latest

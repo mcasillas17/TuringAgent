@@ -1101,7 +1101,7 @@ func (s *Server) applyUpdate(ctx context.Context, update *turingv1.RuntimeUpdate
 		s.publishEvent(event)
 		return nil
 	case *turingv1.RuntimeUpdate_ToolBeacon:
-		_, err := s.handleToolBeacon(ctx, value.ToolBeacon, "", nil)
+		_, err := s.handleToolBeacon(ctx, value.ToolBeacon)
 		return err
 	case *turingv1.RuntimeUpdate_RunCompleted:
 		return s.handleRunCompleted(ctx, value.RunCompleted)

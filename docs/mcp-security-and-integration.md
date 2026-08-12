@@ -194,7 +194,9 @@ are deterministically sorted by the encoder.
 
 The current file bearer maps to `general_assistant`; approval JWTs must use
 that subject. Approval consumption uses the internal gRPC bearer and has its
-own 10-second timeout.
+own 10-second timeout. The default approval lifetime is 65 seconds, the runtime
+wait bound is 71 seconds, an individual MCP request is bounded to 30 seconds,
+and the whole tool lifecycle retains a 180-second timeout.
 
 ## Atomic creation and replacement
 
@@ -295,18 +297,18 @@ An empty configured token is treated as rejection, identical to `mcp-system`.
 ## Sandbox model
 
 The sandbox is the security heart of `mcp-files`. Every path-bearing tool
-(read, list, search, create, update) routes through a single `resolve` step
-that is designed to fail closed against both `..` traversal and symlink
-confused-deputy escapes.
+normalizes its relative input, rejects absolute/traversing/reserved paths, and
+walks from an open root descriptor without following symlinks.
 
 ### Sandbox root
 
 The sandbox root is configured by `FILES_SANDBOX_ROOT` (default `/sandbox`).
 The standalone image runs as its fixed non-root UID/GID 1000. For the local
 Compose workflow, `scripts/init.sh` records the host account as `HOST_UID` and
-`HOST_GID`, and Compose runs `mcp-files` with that identity so the process can
-write to the host-owned `sandbox/` bind mount. Compose defaults both values to
-1000 when they are unset; the sandbox is not made world-writable.
+`HOST_GID`, and `scripts/compose.sh` requires and reinjects that current
+identity so the process can write to the host-owned `sandbox/` bind mount.
+Unset or stale identity values are not accepted; the sandbox is not made
+world-writable.
 On construction, the root is processed in two steps:
 
 1. `filepath.Abs(root)` — make it absolute.
@@ -322,43 +324,34 @@ only `filepath.Abs`; the implementation does both. This is a **spec
 correction** worth flagging: tests on macOS will not pass against the
 plan's literal pseudocode, but they do pass against the shipped resolver.
 
-### Per-call resolve algorithm
+### Per-call descriptor walk
 
 For a caller-supplied `path`:
 
-1. Strip a leading `/`, then `filepath.Clean` to fold out `.` and `..`.
-2. Join with the sandbox root.
-3. Walk up the path until an existing ancestor is found, accumulating the
-   missing trailing components. If the walk reaches the filesystem root
-   (`parent == existing`) without finding an existing ancestor, reject with
-   `path escapes sandbox`.
-4. `filepath.EvalSymlinks` on the existing ancestor.
-5. Rejoin the resolved ancestor with the missing trailing components.
-6. `filepath.Rel(root, resolved)`. Reject with `path escapes sandbox` if
-   the relative path starts with `..` or is absolute.
+1. Reject an absolute/volume-qualified path, `..`, empty required path, reserved
+   staging component, or a byte/component/depth overflow.
+2. Open the configured root as a directory descriptor.
+3. Open each directory component relative to the preceding descriptor with
+   `O_DIRECTORY|O_NOFOLLOW`.
+4. Open or inspect the leaf relative to the verified parent with `O_NOFOLLOW`
+   and descriptor-relative type/identity checks.
+5. Publish and clean up through `linkat`, `renameat`, and `unlinkat`, never by
+   reconstructing a trusted absolute leaf path.
 
 Two consequences:
 
-- Traversal (`"../../etc/passwd"`) and symlink escape (a `link.txt` inside
-  the sandbox whose target is outside) both fail at step 6. There is a unit
-  test for each (`TestReadRejectsTraversal`, `TestReadRejectsSymlinkEscape`).
-- `files.create` can target a path whose directory does not yet exist —
-  step 3 is what supports that — because the resolver canonicalizes the
-  deepest existing ancestor instead of requiring the full path to exist.
+- Traversal (`"../../etc/passwd"`) is rejected during normalization, while a
+  symlinked parent or leaf fails the no-follow descriptor open.
+- `files.create` may create missing parent directories, reopening and
+  synchronizing one verified descriptor at a time.
 
 ### Search and symlinks
 
-`files.search` walks the resolved root with `filepath.WalkDir`. For each
-entry it:
-
-- Skips directories.
-- Skips any entry whose `os.DirEntry.Type()` reports the symlink bit
-  (`os.ModeSymlink`). Symlinks are never followed during the walk.
-- Re-resolves the candidate via `EvalSymlinks` and the same `filepath.Rel`
-  check as the resolver. If the resolved candidate falls outside the root
-  (which it should not, because we already filtered symlinks, but the check
-  is defensive), the entry is skipped.
-- Skips files larger than `maxReadBytes` and skips non-UTF-8 files.
+`files.search` uses a bounded descriptor-relative breadth-first walk. Directory
+entry names are classified with `fstatat(..., AT_SYMLINK_NOFOLLOW)`, including
+when `ReadDir` reports `DT_UNKNOWN`; symlinks are skipped and never opened.
+Regular files are opened relative to their verified parent and bounded by the
+per-file and aggregate read budgets.
 
 The result: symlink-bearing entries cannot produce search hits, and search
 cannot leak content from outside the sandbox even if a symlink was somehow
@@ -369,17 +362,10 @@ walked. `TestSearchRejectsSymlinkEscape` exercises this path.
 `files.read` enforces three layers of size and content discipline:
 
 - **Default cap:** `defaultReadBytes = 64 * 1024` (64 KiB).
-- **Maximum honored cap:** `maxReadBytes = 512 * 1024` (512 KiB). The caller's
-  `maxBytes` argument is clamped to this value and then used as the truncation
-  threshold.
-- **Hard rejection on stat:** if `os.Stat().Size()` exceeds `maxReadBytes`,
-  the read is rejected with `file too large` — the file is not opened, not
-  read, not truncated. This is the DoS bound. `TestReadRejectsFileTooLarge`
-  asserts this behavior.
-- **UTF-8 enforcement:** the entire file must be valid UTF-8. If
-  `utf8.Valid(content)` is false, the read is rejected with
-  `unsupported media type`. Binary blobs and files containing invalid UTF-8
-  sequences never reach the caller. `TestReadRejectsBinaryContent` asserts this.
+- **Maximum honored cap:** 64 KiB. Larger regular files return a bounded prefix
+  and `truncated: true`; `bytesRead` still reports the full opened-file size.
+- **UTF-8 enforcement:** the returned prefix must be valid UTF-8. Binary data
+  is rejected rather than exposed to the model.
 - **Truncation hygiene:** when truncation does fire, the content is sliced to
   the byte cap and then trailing bytes are trimmed off until the result is
   again valid UTF-8. This prevents partial code points from being returned
@@ -392,8 +378,8 @@ walked. `TestSearchRejectsSymlinkEscape` exercises this path.
 
 `files.create` and `files.update` are the only mutating tools, and both are
 gated by an approval JWT that the orchestrator signs. The JWT verifier lives
-in `internal/approval/jwt.go` and is invoked from the tool dispatcher before
-any file I/O. Verification has six steps; **none of them fails open**.
+in `internal/approval/jwt.go` and is invoked before any mutation. Non-mutating
+precondition checks may run first; **none of the verification steps fails open**.
 
 ### Algorithm
 
@@ -411,7 +397,7 @@ any file I/O. Verification has six steps; **none of them fails open**.
 ### Time bound
 
 The decoded payload's `exp` claim is compared to `time.Now().Unix()`. If
-`exp < now`, the verifier returns `token expired`. There is no skew
+`exp <= now`, the verifier returns `token expired`. There is no skew
 tolerance.
 
 ### Bound claims
@@ -487,13 +473,14 @@ The verification pipeline is, in order:
 1. Wrong segment count or non-base64url segments — `invalid token`.
 2. Wrong `alg` — `invalid token algorithm`.
 3. Invalid signature — `invalid signature`.
-4. Expired (`exp < now`) — `token expired`.
-5. `aud != "mcp-files"` — `invalid approval audience`.
-6. `sub != agentID` — `approval subject does not match agent`.
-7. `tool != params.name` — `approval tool does not match call`.
-8.  `args_hash` mismatch — `approval args_hash does not match call`.
-9.  Consume returns gRPC `FailedPrecondition` — `approval already consumed or not approved`.
-10. Consume returns any other gRPC error — `approval consume failed: <error>`.
+4. Missing or unexpected `iss` — `invalid token issuer`.
+5. Expired (`exp <= now`) — `token expired`.
+6. `aud != "mcp-files"` — `invalid approval audience`.
+7. `sub != agentID` — `approval subject does not match agent`.
+8. `tool != params.name` — `approval tool does not match call`.
+9. `args_hash` mismatch — `approval args_hash does not match call`.
+10. Consume returns gRPC `FailedPrecondition` — `approval already consumed or not approved`.
+11. Consume returns any other gRPC error — `approval consume failed: <error>`.
 
 None of these branches fall through to the I/O path.
 
@@ -501,15 +488,14 @@ None of these branches fall through to the I/O path.
 
 A concise mapping from rejection to threat:
 
-- **Path traversal (`..` segments).** Resolver step 6 (`Rel` + `..`/absolute
-  check) refuses to return paths outside the sandbox root.
-- **Symlink confused deputy.** Two layers: the resolver canonicalizes via
-  `EvalSymlinks` and re-validates with `Rel`; `files.search` additionally
-  refuses to walk symlink entries at all.
-- **Oversized read DoS.** `os.Stat().Size() > maxReadBytes` is a hard
-  rejection before any read occurs. Memory ceiling is 512 KiB per read.
-- **Binary / non-UTF-8 leakage to the model.** Whole-file UTF-8 validation
-  refuses non-UTF-8 content. Truncation trims trailing partial code points.
+- **Path traversal (`..` or absolute paths).** Input normalization rejects the
+  request before descriptor traversal begins.
+- **Symlink confused deputy.** Directory and leaf opens use no-follow,
+  descriptor-relative operations; search classifies entries without following.
+- **Oversized read DoS.** Reads return at most a 64 KiB prefix; search also has
+  per-file, aggregate-byte, entry, and file-count budgets.
+- **Binary / non-UTF-8 leakage to the model.** The bounded returned prefix must
+  be valid UTF-8. Truncation trims trailing partial code points.
 - **Approval replay across tools.** `tool` claim must equal the JSON-RPC
   method's `name` argument.
 - **Approval replay across arguments.** `args_hash` claim must equal the
@@ -527,6 +513,13 @@ A concise mapping from rejection to threat:
   by the dispatcher; cannot be enabled without a code change.
 
 ## Runtime / orchestrator integration
+
+Flutter consumes four public event types:
+`tool.call.started`, `tool.call.completed`, `tool.call.failed`, and
+`tool.call.denied`. Their payload contract uses camelCase keys and contains
+`toolCallId`, `toolName`, optional `serverName`, and `error` only on failed or
+denied events. Provider IDs, arguments, status, duration, and result summaries
+remain in persisted tool/audit state rather than this UI payload.
 
 ### Agent runtime (Tasks 8 and 11)
 
@@ -581,10 +574,9 @@ they cannot fall through to legacy defaults. Authorization is also scoped to
 the authenticated worker connection, so one worker cannot borrow a capability
 reported only by another worker even though `ListTools` exposes their union.
 
-The separately owned runtime integration must send `COMPLETE` after every
-successful discovery (including a successful empty result) and `FAILED` when
-any required discovery attempt fails. Until that runtime change ships, the
-current runtime is intentionally treated as legacy through `UNSPECIFIED`.
+The shipped runtime sends `COMPLETE` after every successful discovery,
+including a successful empty result, and `FAILED` when a required discovery
+attempt fails.
 
 JWT signing requirements:
 
@@ -594,15 +586,14 @@ JWT signing requirements:
 - Claims:
   - `aud`: `"mcp-files"`.
   - `sub`: the agent identity (currently always `"general_assistant"`).
-  - `tool`: the exact `name` from the upcoming JSON-RPC `tools/call`
+  - `tool`: the exact `name` from the JSON-RPC `tools/call`
     (e.g. `"files.create"`).
   - `args_hash`: `sha256:<hex>` of `canonicalJSON(arguments)` (see below).
   - `jti`: a unique identifier per approval. Must be passed as
     `ConsumeApproval.approval_id`.
-  - `exp`: short enough to make replay risk negligible. A few minutes is
-    appropriate; longer than that is a policy choice that the security
-    review should be aware of.
-  - `iat` and `iss` are accepted by the verifier but not validated.
+  - `exp`: the configured approval expiry (65 seconds by default).
+  - `iss`: exactly `"turing.orchestrator"`; the verifier rejects any other
+    value. `iat` is included for audit context but is not a separate gate.
 
 Canonical-hash parity:
 
@@ -656,10 +647,13 @@ The two services have Go test suites that exercise the server entrypoints,
 sandbox, read limits, approval verifier, and auth middleware:
 
 ```sh
-go test ./.github/workflows -count=1
-go test ./turing-backend/scripts -count=1
-(cd turing-backend/mcp-system && go test ./... -count=1 && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server)
-(cd turing-backend/mcp-files && go test ./... -count=1 && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server)
+go test -tags sqlite_fts5 ./.github/workflows -count=1
+go test -tags sqlite_fts5 ./turing-backend/scripts -count=1
+(cd turing-backend/mcp-system && go test -race ./... -count=1 && go vet ./... && go build ./...)
+(cd turing-backend/mcp-files && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server)
+golangci-lint run --config .golangci.yml --build-tags sqlite_fts5 ./... ./.github/workflows
+(cd turing-backend/mcp-files && golangci-lint run --config ../../.golangci.yml ./...)
+(cd turing-backend/mcp-system && golangci-lint run --config ../../.golangci.yml ./...)
 ```
 
 The Docker smoke path is optional and requires Docker plus its configured

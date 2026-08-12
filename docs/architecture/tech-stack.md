@@ -35,7 +35,7 @@ go test -tags sqlite_fts5 -race ./... -count=1
 go vet -tags sqlite_fts5 ./...
 go build -tags sqlite_fts5 ./...
 (cd turing-backend/mcp-files && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server)
-(cd turing-backend/mcp-system && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server)
+(cd turing-backend/mcp-system && go test -race ./... -count=1 && go vet ./... && go build ./...)
 go test -tags sqlite_fts5 ./.github/workflows -count=1
 go test -tags sqlite_fts5 ./turing-backend/scripts -count=1
 bash -n turing-backend/scripts/*.sh tools/proto/*.sh
@@ -89,6 +89,10 @@ Approval-gated file writes use a two-step flow:
 5. `mcp-files` calls `ApprovalService.ConsumeApproval` over internal gRPC using `authorization: Bearer ${TURING_INTERNAL_TOKEN}`.
 6. The file write proceeds only if the consume response is `APPROVAL_STATUS_CONSUMED`.
 
+The default approval lifetime is 65 seconds, the runtime waits up to 71 seconds
+to observe approval or persisted expiry, each MCP request is bounded to 30
+seconds, and the complete tool lifecycle remains bounded to 180 seconds.
+
 See [MCP security and approval flow](../mcp-security-and-integration.md) for the detailed threat model and test coverage.
 
 ## Local data and secrets
@@ -115,9 +119,12 @@ go test -tags sqlite_fts5 -race ./... -count=1
 go vet -tags sqlite_fts5 ./...
 go build -tags sqlite_fts5 ./...
 (cd turing-backend/mcp-files && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server)
-(cd turing-backend/mcp-system && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server)
+(cd turing-backend/mcp-system && go test -race ./... -count=1 && go vet ./... && go build ./...)
 go test -tags sqlite_fts5 ./.github/workflows -count=1
 go test -tags sqlite_fts5 ./turing-backend/scripts -count=1
+golangci-lint run --config .golangci.yml --build-tags sqlite_fts5 ./... ./.github/workflows
+(cd turing-backend/mcp-files && golangci-lint run --config ../../.golangci.yml ./...)
+(cd turing-backend/mcp-system && golangci-lint run --config ../../.golangci.yml ./...)
 tools/proto/check.sh
 (cd turing-client/turing_app && flutter analyze && flutter test)
 (cd turing-backend && ./scripts/smoke-grpc.sh)
