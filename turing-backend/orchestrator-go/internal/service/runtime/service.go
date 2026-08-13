@@ -83,6 +83,15 @@ type DispatchConfig struct {
 
 var errRuntimeCommandSenderClosed = errors.New("runtime command sender closed")
 
+// errWorkerStreamCancelled is the single error ConnectWorker reports when the
+// worker stream's context is cancelled. Cancellation reaches the handler over
+// several paths that report it differently — a failed Recv or Send, an
+// interrupted dispatch, or the command loop's own ctx.Done — so the handler
+// canonicalises them onto this value. Without that, the error a cancelled
+// stream produced depended on which goroutine the scheduler happened to run
+// first.
+var errWorkerStreamCancelled = status.Error(codes.Canceled, "worker stream cancelled")
+
 type runtimeCommandSender struct {
 	stream turingv1.RuntimeService_ConnectWorkerServer
 	gate   chan struct{}
@@ -245,6 +254,15 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 	}
 	s.persistDiscoveredTools(ctx, ready.GetWorkerId(), connectedWorker, discovered)
 	defer func() {
+		// Cancelling the stream makes several exit paths ready at once — the
+		// receive goroutine's Recv, an in-flight dispatch, and the command
+		// loop's ctx.Done — each of which reports cancellation differently.
+		// Collapse them here so the handler's outcome describes the event
+		// rather than whichever goroutine the scheduler ran first. Errors the
+		// teardown below discovers are still joined on afterwards.
+		if isStreamCancellation(ctx, returnErr) {
+			returnErr = errWorkerStreamCancelled
+		}
 		assignments := connectedWorker.close()
 		s.removeWorkerRegistration(ready.WorkerId, connectedWorker)
 		s.removeDiscoveredTools(ready.GetWorkerId(), connectedWorker)
@@ -367,7 +385,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 	for {
 		select {
 		case <-ctx.Done():
-			return status.Error(codes.Canceled, "worker stream cancelled")
+			return errWorkerStreamCancelled
 		case <-connectedWorker.done:
 			return status.Error(codes.Canceled, "worker is disconnected")
 		case err := <-recvErr:
@@ -378,6 +396,45 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 			}
 		}
 	}
+}
+
+// isStreamCancellation reports whether err carries nothing but a cancelled
+// worker stream, so ConnectWorker can report every shape of that one event as
+// errWorkerStreamCancelled. It is asked during teardown, once the stream
+// context has already ended:
+//
+//   - Cancellation arrives as context.Canceled from an in-process stream and as
+//     a Canceled status from gRPC, so both forms count.
+//   - A registration the service itself closed reports a Canceled status too.
+//     While the stream context is also cancelled the command loop could have
+//     reported either, so folding those in is what removes the coin flip.
+//   - Anything else is a distinct failure and must be reported as itself —
+//     including a real failure that an errors.Join carries alongside the
+//     cancellation, which teardown would otherwise drop on the floor.
+func isStreamCancellation(ctx context.Context, err error) bool {
+	if err == nil || !errors.Is(ctx.Err(), context.Canceled) {
+		return false
+	}
+	return onlyCancellations(err)
+}
+
+// onlyCancellations reports whether every error joined into err is a
+// cancellation. errors.Is alone cannot answer that: it matches when any branch
+// of a join matches, which would let a genuine failure ride along unseen.
+func onlyCancellations(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		branches := joined.Unwrap()
+		if len(branches) == 0 {
+			return false
+		}
+		for _, branch := range branches {
+			if !onlyCancellations(branch) {
+				return false
+			}
+		}
+		return true
+	}
+	return errors.Is(err, context.Canceled) || status.Code(err) == codes.Canceled
 }
 
 func decodeDiscoveredTools(reported []*turingv1.DiscoveredTool) ([]repository.DiscoveredTool, error) {

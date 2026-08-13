@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -135,8 +137,8 @@ func TestTerminalUpdateCannotOvertakeAssignmentDeliveryMark(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		if !errors.Is(err, context.Canceled) && status.Code(err) != codes.Canceled {
-			t.Fatalf("ConnectWorker exit = %v, want canceled", err)
+		if !errors.Is(err, errWorkerStreamCancelled) {
+			t.Fatalf("ConnectWorker exit = %v, want %v", err, errWorkerStreamCancelled)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("worker did not exit after cancellation")
@@ -473,13 +475,159 @@ func TestConnectWorkerReplacesExpiredIdleSameIDRegistration(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("replacement worker exit = %v, want context cancellation", err)
+		if !errors.Is(err, errWorkerStreamCancelled) {
+			t.Fatalf("replacement worker exit = %v, want %v", err, errWorkerStreamCancelled)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("replacement worker did not exit")
 	}
 }
+
+// TestConnectWorkerReportsCancellationBeforeReachingCommandLoop covers the
+// canonicalisation on a path the scheduler cannot influence: a cancelled
+// stream whose Send fails before the command loop is ever entered, so
+// ctx.Done never gets a chance to supply the error. gRPC reports that as a
+// Canceled status rather than context.Canceled, and the handler must still
+// report the one cancellation error.
+func TestConnectWorkerReportsCancellationBeforeReachingCommandLoop(t *testing.T) {
+	h := newHarness(t)
+	streamCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &cancelOnAcceptStream{ctx: streamCtx, cancel: cancel, ready: workerReady("worker-cancelled-accept")}
+
+	err := h.service.ConnectWorker(stream)
+
+	if !stream.acceptSent.Load() {
+		t.Fatal("worker was never accepted, so the cancelled send path was not exercised")
+	}
+	if !errors.Is(err, errWorkerStreamCancelled) {
+		t.Fatalf("ConnectWorker exit = %v, want %v", err, errWorkerStreamCancelled)
+	}
+}
+
+// TestConnectWorkerKeepsTeardownFailuresAlongsideCancellation pins the order
+// the teardown works in: cancellation is canonicalised first and the failures
+// teardown then discovers are joined on top. Collapsing them the other way
+// round would make a cancelled stream the only report of a lost assignment.
+func TestConnectWorkerKeepsTeardownFailuresAlongsideCancellation(t *testing.T) {
+	h := newHarness(t)
+	const workerID = "worker-teardown-failure"
+	streamCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &reconnectAcceptanceStream{ctx: streamCtx, ready: workerReady(workerID), accepted: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() { done <- h.service.ConnectWorker(stream) }()
+
+	select {
+	case <-stream.accepted:
+	case err := <-done:
+		t.Fatalf("worker rejected: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("worker was not accepted")
+	}
+	// Hand the registration an assignment so teardown has something to
+	// reconcile, then take the database away so reconciling it fails.
+	h.service.mu.Lock()
+	connected := h.service.workers[workerID]
+	h.service.mu.Unlock()
+	if connected == nil {
+		t.Fatal("worker was accepted but not registered")
+	}
+	connected.mu.Lock()
+	connected.assignments["run_teardown"] = assignment{jobID: "job_teardown", runID: "run_teardown"}
+	connected.mu.Unlock()
+	if err := h.database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, errWorkerStreamCancelled) {
+			t.Fatalf("exit = %v, want it to report %v", err, errWorkerStreamCancelled)
+		}
+		if !strings.Contains(err.Error(), "reconcile run run_teardown") {
+			t.Fatalf("exit = %v, want it to also report the failed reconciliation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not exit")
+	}
+}
+
+// TestIsStreamCancellationCanonicalisesOnlyCancelledStreams pins the predicate
+// that lets ConnectWorker report one error for a cancelled stream no matter
+// which of its two concurrently-ready paths observed the cancellation. The
+// scheduler decides that race, so this covers deterministically what
+// TestConnectWorkerReplacesExpiredIdleSameIDRegistration can only sample.
+func TestIsStreamCancellationCanonicalisesOnlyCancelledStreams(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancelExpired()
+
+	for _, testCase := range []struct {
+		name string
+		ctx  context.Context
+		err  error
+		want bool
+	}{
+		{name: "in-process recv on cancelled stream", ctx: cancelled, err: context.Canceled, want: true},
+		{name: "grpc recv on cancelled stream", ctx: cancelled, err: status.Error(codes.Canceled, "context canceled"), want: true},
+		{name: "wrapped grpc recv on cancelled stream", ctx: cancelled, err: fmt.Errorf("send: %w", status.Error(codes.Canceled, "context canceled")), want: true},
+		{name: "cancellation joined with nothing", ctx: cancelled, err: errors.Join(context.Canceled, nil), want: true},
+		// A registration the service closed also reports Canceled, and while
+		// the stream context is cancelled the command loop could have reported
+		// either. Folding it in is what makes the outcome deterministic.
+		{name: "closed registration on cancelled stream", ctx: cancelled, err: status.Error(codes.Canceled, "worker is disconnected"), want: true},
+		// Teardown joins its own failures onto whatever the handler returned,
+		// so a join must never collapse: the cancellation would swallow the
+		// only report of a genuine failure.
+		{name: "real failure joined onto cancellation", ctx: cancelled, err: errors.Join(context.Canceled, errors.New("reconcile worker assignments: database is closed")), want: false},
+		{name: "real failure racing cancellation", ctx: cancelled, err: errors.New("apply update: database is locked"), want: false},
+		{name: "deadline on cancelled stream", ctx: cancelled, err: context.DeadlineExceeded, want: false},
+		{name: "cancellation on live stream", ctx: context.Background(), err: context.Canceled, want: false},
+		{name: "expired stream", ctx: expired, err: context.DeadlineExceeded, want: false},
+		{name: "clean exit", ctx: cancelled, err: nil, want: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := isStreamCancellation(testCase.ctx, testCase.err); got != testCase.want {
+				t.Fatalf("isStreamCancellation(%v) = %t, want %t", testCase.err, got, testCase.want)
+			}
+		})
+	}
+}
+
+// cancelOnAcceptStream cancels its own context while delivering the acceptance
+// command and then fails that send the way gRPC fails a send on a cancelled
+// stream.
+type cancelOnAcceptStream struct {
+	grpc.ServerStream
+	ctx        context.Context
+	cancel     context.CancelFunc
+	ready      *turingv1.RuntimeUpdate
+	readySent  bool
+	acceptSent atomic.Bool
+}
+
+func (s *cancelOnAcceptStream) Send(command *turingv1.RuntimeCommand) error {
+	if command.GetWorkerAccepted() == nil {
+		return nil
+	}
+	s.acceptSent.Store(true)
+	s.cancel()
+	return status.Error(codes.Canceled, "context canceled")
+}
+
+func (s *cancelOnAcceptStream) Recv() (*turingv1.RuntimeUpdate, error) {
+	if !s.readySent {
+		s.readySent = true
+		return s.ready, nil
+	}
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
+func (s *cancelOnAcceptStream) Context() context.Context { return s.ctx }
 
 type blockedAssignmentSendStream struct {
 	grpc.ServerStream
