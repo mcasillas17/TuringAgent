@@ -1018,3 +1018,60 @@ func assertNestedRegistrySchemaUnchanged(t *testing.T, schema map[string]any) {
 		t.Errorf("schema = %#v, want %#v", schema, nestedRegistrySchema())
 	}
 }
+
+// The orchestrator persists this snapshot as its tool registry and derives every
+// policy decision from it, so it must carry the server each tool came from and
+// the schema, in a stable order.
+func TestRegistryDiscoveredSnapshot(t *testing.T) {
+	system := &assistantTestToolLister{definitions: []map[string]any{
+		{"name": "system.time", "description": "now", "inputSchema": map[string]any{"type": "object"}},
+	}}
+	files := &assistantTestToolLister{definitions: []map[string]any{
+		{"name": "files.read", "description": "read", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}}},
+	}}
+	registry, err := BuildToolRegistry(context.Background(), map[string]ToolLister{"system": system, "files": files})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := registry.Discovered()
+	if len(got) != 2 {
+		t.Fatalf("snapshot has %d tools, want 2: %+v", len(got), got)
+	}
+	byName := map[string]DiscoveredTool{}
+	for _, tool := range got {
+		byName[tool.ToolName] = tool
+	}
+	if byName["system.time"].ServerName != "system" {
+		t.Fatalf("system.time server = %q, want system", byName["system.time"].ServerName)
+	}
+	if byName["files.read"].ServerName != "files" {
+		t.Fatalf("files.read server = %q, want files", byName["files.read"].ServerName)
+	}
+	if byName["files.read"].Schema == nil {
+		t.Fatal("files.read carried no schema; the orchestrator stores it")
+	}
+	// Deterministic, so a reconnect does not look like a changed tool set.
+	for i := 0; i < 5; i++ {
+		again := registry.Discovered()
+		if again[0].ToolName != got[0].ToolName || again[1].ToolName != got[1].ToolName {
+			t.Fatalf("snapshot order is not stable: %+v vs %+v", got, again)
+		}
+	}
+}
+
+// Mutating a returned schema must not corrupt the registry the agent keeps using.
+func TestRegistryDiscoveredSnapshotIsACopy(t *testing.T) {
+	system := &assistantTestToolLister{definitions: []map[string]any{
+		{"name": "system.time", "inputSchema": map[string]any{"type": "object"}},
+	}}
+	registry, err := BuildToolRegistry(context.Background(), map[string]ToolLister{"system": system})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := registry.Discovered()
+	first[0].Schema["type"] = "mutated"
+	if second := registry.Discovered(); second[0].Schema["type"] != "object" {
+		t.Fatalf("snapshot shares state with the registry: %+v", second[0].Schema)
+	}
+}

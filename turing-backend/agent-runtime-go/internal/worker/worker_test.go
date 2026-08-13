@@ -1180,3 +1180,100 @@ func TestWorkerSilentlyIgnoresDuplicateAssignment(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// The orchestrator persists this snapshot as its tool registry and derives every
+// policy decision from it. Reporting must happen on EVERY connect, not just the
+// first, or a reconnected worker leaves the orchestrator with a stale registry.
+func TestWorkerReportsDiscoveredToolsOnEveryConnect(t *testing.T) {
+	first, second := newFakeStream(), newFakeStream()
+	client := &fakeRuntimeClient{stream: second, queued: []*fakeStream{first}}
+	var calls int
+	worker := New(Options{
+		WorkerID: "worker-1", MaxConcurrentRuns: 1,
+		DiscoverTools: func(context.Context) ([]*turingv1.DiscoveredTool, error) {
+			calls++
+			return []*turingv1.DiscoveredTool{{ServerName: "system", ToolName: "system.time"}}, nil
+		},
+	}, client, terminalExecutor{})
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(firstCtx) }()
+
+	ready := nextSent(t, first).GetWorkerReady()
+	if ready == nil {
+		t.Fatal("no worker_ready on the first stream")
+	}
+	if got := ready.GetToolDiscoveryStatus(); got != turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_COMPLETE {
+		t.Fatalf("status = %v, want COMPLETE", got)
+	}
+	if len(ready.GetTools()) != 1 || ready.GetTools()[0].GetToolName() != "system.time" {
+		t.Fatalf("tools = %+v, want system.time", ready.GetTools())
+	}
+	cancelFirst()
+	<-done
+
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	defer cancelSecond()
+	go func() { done <- worker.Run(secondCtx) }()
+	if reReady := nextSent(t, second).GetWorkerReady(); reReady == nil || len(reReady.GetTools()) != 1 {
+		t.Fatalf("reconnect did not re-report tools: %+v", reReady)
+	}
+	if calls != 2 {
+		t.Fatalf("discovery ran %d times, want once per connect", calls)
+	}
+	cancelSecond()
+	<-done
+}
+
+// A worker that cannot enumerate its tools must say so rather than register a
+// snapshot it does not have. The orchestrator rejects FAILED, and the reconnect
+// loop retries — which is what should happen when MCP is briefly down.
+func TestWorkerReportsFailedDiscovery(t *testing.T) {
+	stream := newFakeStream()
+	worker := New(Options{
+		WorkerID: "worker-1", MaxConcurrentRuns: 1,
+		DiscoverTools: func(context.Context) ([]*turingv1.DiscoveredTool, error) {
+			return nil, errors.New("mcp unreachable")
+		},
+	}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+
+	ready := nextSent(t, stream).GetWorkerReady()
+	if ready == nil {
+		t.Fatal("no worker_ready sent")
+	}
+	if got := ready.GetToolDiscoveryStatus(); got != turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_FAILED {
+		t.Fatalf("status = %v, want FAILED", got)
+	}
+	if len(ready.GetTools()) != 0 {
+		t.Fatalf("failed discovery reported %d tools; it must report none", len(ready.GetTools()))
+	}
+	cancel()
+	<-done
+}
+
+// Without a discovery function the worker is a legacy reporter: the orchestrator
+// falls back to its compatibility defaults, which UNSPECIFIED selects.
+func TestWorkerWithoutDiscoveryReportsUnspecified(t *testing.T) {
+	stream := newFakeStream()
+	worker := New(Options{WorkerID: "worker-1", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+
+	ready := nextSent(t, stream).GetWorkerReady()
+	if ready == nil {
+		t.Fatal("no worker_ready sent")
+	}
+	if got := ready.GetToolDiscoveryStatus(); got != turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_UNSPECIFIED {
+		t.Fatalf("status = %v, want UNSPECIFIED", got)
+	}
+	cancel()
+	<-done
+}

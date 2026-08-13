@@ -31,6 +31,16 @@ type ToolEntry struct {
 type ToolRegistry struct {
 	definitions []llm.ToolDefinition
 	entries     map[string]ToolEntry
+	discovered  []DiscoveredTool
+}
+
+// DiscoveredTool is one tool as reported to the orchestrator on connect. The
+// orchestrator persists these as its registry and derives every policy decision
+// from them, so the server a tool came from is part of the identity, not a label.
+type DiscoveredTool struct {
+	ServerName string
+	ToolName   string
+	Schema     map[string]any
 }
 
 type toolOrigin struct {
@@ -209,6 +219,13 @@ func BuildToolRegistry(ctx context.Context, servers map[string]ToolLister) (*Too
 				listIndex:   index,
 			}
 			registry.definitions = append(registry.definitions, definition)
+			// Built alongside the definitions so the reported snapshot and what
+			// the model is offered can never drift apart.
+			registry.discovered = append(registry.discovered, DiscoveredTool{
+				ServerName: serverName,
+				ToolName:   name,
+				Schema:     parameters,
+			})
 		}
 	}
 
@@ -225,6 +242,19 @@ func (r *ToolRegistry) Definitions() []llm.ToolDefinition {
 		definitions[index] = definition
 	}
 	return definitions
+}
+
+// Discovered returns the snapshot to report on connect, in the registry's own
+// stable order so a reconnect does not look like a changed tool set. Schemas are
+// cloned: a caller marshalling or mutating one must not corrupt the registry the
+// agent keeps serving from.
+func (r *ToolRegistry) Discovered() []DiscoveredTool {
+	out := make([]DiscoveredTool, len(r.discovered))
+	for index, tool := range r.discovered {
+		tool.Schema = cloneNormalizedJSONMap(tool.Schema)
+		out[index] = tool
+	}
+	return out
 }
 
 func (r *ToolRegistry) Lookup(name string) (ToolEntry, bool) {

@@ -3065,3 +3065,39 @@ func TestExecuteIgnoresEmptyRecall(t *testing.T) {
 		}
 	}
 }
+
+// The worker reports this on connect, and the orchestrator turns it into its
+// policy registry. It must reuse the same discovery the agent serves from —
+// reporting one tool set and executing against another would let a tool run
+// under a policy that was never registered for it.
+func TestDiscoveredToolsSharesTheAgentRegistry(t *testing.T) {
+	client := &assistantTestToolLister{definitions: []map[string]any{
+		{"name": "system.time", "inputSchema": map[string]any{"type": "object"}},
+	}}
+	assistant := NewGeneralAssistant(nil, fakeMessageClient{}, &GeneralAssistantTools{SystemMCP: client})
+
+	first, err := assistant.DiscoveredTools(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 || first[0].ToolName != "system.time" || first[0].ServerName != "system" {
+		t.Fatalf("snapshot = %+v, want system/system.time", first)
+	}
+
+	// A second call must not re-list: the registry is cached, and a reconnect
+	// should not re-hit every MCP server.
+	if _, err := assistant.DiscoveredTools(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := client.listCalls.Load(); got != 1 {
+		t.Fatalf("ListTools called %d times, want 1 (cached registry)", got)
+	}
+}
+
+func TestDiscoveredToolsPropagatesFailure(t *testing.T) {
+	client := &assistantTestToolLister{listErrors: []error{errors.New("mcp unreachable")}}
+	assistant := NewGeneralAssistant(nil, fakeMessageClient{}, &GeneralAssistantTools{SystemMCP: client})
+	if _, err := assistant.DiscoveredTools(context.Background()); err == nil {
+		t.Fatal("expected discovery failure to propagate so the worker can report FAILED")
+	}
+}
