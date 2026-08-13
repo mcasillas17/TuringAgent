@@ -115,3 +115,50 @@ Compose first waits (with a 60-second bound) for the MCP healthchecks. The smoke
 client then waits for `HealthService.Check`, creates a session, sends a
 deterministic `system.time` tool request, observes streamed events, and verifies
 event replay. `scripts/smoke.sh` is an alias for this gRPC smoke path.
+
+The deterministic smoke uses the `/tool` debug shortcut. To verify the live
+model-driven path instead, ensure Ollama is running on the host and run:
+
+```bash
+cd turing-backend
+TURING_VERIFY_MODEL=llama3.2 TURING_VERIFY_ATTEMPTS=3 ./scripts/verify-tool-loop.sh
+```
+
+The verifier sends a natural-language prompt, requires `system.time`, and checks
+that the same non-empty `toolCallId` and `toolName` complete before a later final
+answer containing the returned UTC time. It retries inconclusive attempts,
+including model or transport errors before that lifecycle is exercised. It
+accepts ISO, 12/24-hour clock, and Unix seconds/milliseconds representations
+within the observed tool execution window, considering only model output
+streamed after the last successful tool completion. It
+reports:
+
+| Exit | Verdict | Meaning |
+|---|---|---|
+| `0` | `PASS` | The model chose `system.time`, the call completed, and a later final answer reflected its returned UTC time. |
+| `1` | `FAIL` | The `system.time` lifecycle was malformed, mismatched, incomplete after starting (including a post-start timeout), or ended without a later final answer. |
+| `2` | `INCONCLUSIVE` | The proof could not exercise the target lifecycle because of setup, model, transport or timeout before the tool started, a different/no tool choice, or an answer that could not be correlated to the returned time. |
+
+`TURING_VERIFY_MODEL` defaults to `OLLAMA_MODEL` and then `llama3.2`.
+`TURING_VERIFY_ATTEMPTS` defaults to `3`. The host preflight rewrites the
+Compose-oriented `host.docker.internal` Ollama hostname to `localhost`; set
+`TURING_VERIFY_OLLAMA_URL` to override the host-side probe and model endpoint.
+Localhost overrides are mapped to `host.docker.internal` for Compose; use
+`TURING_VERIFY_OLLAMA_CONTAINER_URL` when containers require a different URL.
+The preflight also checks that the selected model is installed before starting
+Compose. A model may recover from rejected arguments by issuing a later valid
+`system.time` call; if every such call fails, the result is inconclusive. An
+explicit model provider/stream failure or output, tool-result, or tool-call
+limit is likewise inconclusive because the runtime or provider operated as
+designed. An
+inconclusive result with a small model should be repeated with a stronger
+tool-calling model before changing the loop. The live verifier is intentionally
+on-demand rather than a CI gate; CI only syntax-checks its shell wrapper.
+
+Flutter coverage exercises the live wire shape separately: the mapper test
+decodes persisted tool events with `toolCallId`, `toolName`, and `serverName`;
+the chat widget tests then verify running-to-completed card updates and that the
+post-tool answer renders below the card. Both macOS entitlements retain
+`com.apple.security.network.client`, without which the sandboxed application
+cannot reach the backend. The captured end-to-end macOS result is
+[live-tool-loop-verification.png](../assets/live-tool-loop-verification.png).
