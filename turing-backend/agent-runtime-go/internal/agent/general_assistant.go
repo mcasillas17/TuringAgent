@@ -169,6 +169,16 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	if a.recall != nil {
 		if block, ok := a.recall.Recall(ctx, job.GetSessionId(), job.GetUserText(), requestMessages); ok {
 			requestMessages = append([]llm.ChatMessage{block}, requestMessages...)
+			// The block tells the model where the material came from; without this
+			// the user gets no such hint, and an answer drawn from a conversation
+			// weeks ago reads as confabulation. Emitted before the model request so
+			// it precedes the answer it explains. Recall returning nothing stays
+			// silent — that is the common case.
+			if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP, map[string]any{
+				"note": "Using material recalled from earlier conversations",
+			})); err != nil {
+				return err
+			}
 		}
 	}
 	var content strings.Builder
@@ -315,7 +325,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		toolIteration++
 		if toolIteration >= maxToolIterations {
 			if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP, map[string]any{
-				"note":              "maximum tool iterations reached",
+				"note":              "Stopped after reaching the tool iteration limit",
 				"maxToolIterations": maxToolIterations,
 			})); err != nil {
 				return err

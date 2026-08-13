@@ -2,10 +2,12 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 )
 
 // TestWorkerBusyRejectionRequeuesWithoutImmediateRedispatch proves the fix for
@@ -173,5 +175,161 @@ func TestTerminalUpdateDispatchesQueuedWork(t *testing.T) {
 	})
 	if next == nil || next.GetRunAssigned() == nil {
 		t.Fatal("the queued run was never dispatched; a suppressed dispatch would strand it")
+	}
+}
+
+// TestWorkerBusyRequeuePublishesRetryNotice proves the requeue notice reaches a
+// client, not just the RetryDecision. The repository test can only observe
+// decision.Events; the point of the notice is that it is published on the
+// session's event stream, which is what the Flutter client subscribes to.
+func TestWorkerBusyRequeuePublishesRetryNotice(t *testing.T) {
+	h := newHarness(t)
+	sessionID := h.createSessionAndRun(t, "notice me")
+	stream, unsubscribe := h.bus.Subscribe(sessionID)
+	defer unsubscribe()
+
+	workerStream, err := h.runtimeClient(t).ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = workerStream.CloseSend() }()
+	if err := workerStream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId: "worker-notice", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	assigned := recvUntil(t, workerStream, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetRunAssigned() != nil
+	}).GetRunAssigned()
+
+	if err := workerStream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
+		RunId:     assigned.RunId,
+		Code:      "worker_busy",
+		Message:   "worker cannot accept the run",
+		Retryable: true,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	notice := streamedToolEventForContract(t, stream, "agent.run.step")
+	var payload struct {
+		Note string `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(notice.PayloadJSON), &payload); err != nil {
+		t.Fatalf("decode notice payload %q: %v", notice.PayloadJSON, err)
+	}
+	if payload.Note != "Retrying (attempt 2 of 3)" {
+		t.Fatalf("published notice note = %q, want %q", payload.Note, "Retrying (attempt 2 of 3)")
+	}
+	if notice.RunID != assigned.RunId {
+		t.Fatalf("notice run_id = %q, want %q (a client correlates by run)", notice.RunID, assigned.RunId)
+	}
+}
+
+// TestOrphanRecoveryPublishesRetryNotice is the reconciliation counterpart to
+// TestWorkerBusyRequeuePublishesRetryNotice. The repository test can only see
+// AssignmentReconciliation.Events; this proves the orchestrator's own recovery
+// sweep publishes them, so a refactor that drops result.Events cannot silence
+// the notice behind a green repository suite.
+func TestOrphanRecoveryPublishesRetryNotice(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	session, err := h.repo.CreateSession(ctx, "Orphan recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "lose my worker", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := h.repo.ClaimNextJob(ctx, "general_assistant", "worker-orphaned")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignment := repository.Assignment{
+		JobID: claimed.JobID, RunID: claimed.RunID, WorkerID: "worker-orphaned", AttemptID: claimed.AssignmentAttemptID,
+	}
+	if err := h.repo.BeginAssignmentSend(ctx, assignment); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.MarkAssignmentDelivered(ctx, assignment); err != nil {
+		t.Fatal(err)
+	}
+	// Expire the lease so the sweep treats the run as orphaned. No worker is
+	// connected to this harness, so nothing can renew it.
+	expired := time.Now().UTC().Add(-time.Minute)
+	if _, err := h.database.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET execution_lease_expires_at = ?, execution_lease_expires_at_ns = ?
+		WHERE id = ?
+	`, repository.FormatTimestamp(expired), expired.UnixNano(), enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+
+	stream, unsubscribe := h.bus.Subscribe(session.SessionID)
+	defer unsubscribe()
+	if err := h.service.RecoverOrphanedAssignments(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	notice := streamedToolEventForContract(t, stream, "agent.run.step")
+	var payload struct {
+		Note string `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(notice.PayloadJSON), &payload); err != nil {
+		t.Fatalf("decode notice payload %q: %v", notice.PayloadJSON, err)
+	}
+	const want = "Retrying (attempt 2 of 3) after the worker became unavailable"
+	if payload.Note != want {
+		t.Fatalf("published recovery note = %q, want %q", payload.Note, want)
+	}
+	if notice.RunID != enqueued.RunID {
+		t.Fatalf("notice run_id = %q, want %q", notice.RunID, enqueued.RunID)
+	}
+}
+
+// The give-up notice is the last thing the user ever hears about a run that
+// exhausted its retries, so proving it reaches the bus matters more than for
+// the retry notice. The publish loops are generic over Events, but a future
+// refactor that filtered by type could drop this silently.
+func TestRetryExhaustionPublishesGiveUpNotice(t *testing.T) {
+	h := newHarnessWithDispatch(t, DispatchConfig{MaxAttempts: 1})
+	sessionID := h.createSessionAndRun(t, "give up on me")
+	stream, unsubscribe := h.bus.Subscribe(sessionID)
+	defer unsubscribe()
+
+	workerStream, err := h.runtimeClient(t).ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = workerStream.CloseSend() }()
+	if err := workerStream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId: "worker-giveup", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	assigned := recvUntil(t, workerStream, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetRunAssigned() != nil
+	}).GetRunAssigned()
+
+	// MaxAttempts=1 means the first rejection exhausts the budget outright.
+	if err := workerStream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
+		RunId: assigned.RunId, Code: "worker_busy", Message: "busy", Retryable: true,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	notice := streamedToolEventForContract(t, stream, "agent.run.step")
+	var payload struct {
+		Note string `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(notice.PayloadJSON), &payload); err != nil {
+		t.Fatalf("decode notice payload %q: %v", notice.PayloadJSON, err)
+	}
+	if payload.Note != "Gave up after 1 attempt" {
+		t.Fatalf("published give-up note = %q, want %q", payload.Note, "Gave up after 1 attempt")
 	}
 }

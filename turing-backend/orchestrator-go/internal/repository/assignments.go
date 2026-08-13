@@ -218,7 +218,7 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 				return reconciliation, nil
 			}
 		}
-		reconciliation, terminalized, err := terminalizeExhaustedAssignmentTx(
+		reconciliation, terminalized, attempt, err := terminalizeExhaustedAssignmentTx(
 			ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, sessionID, traceID, maxAttempts,
 		)
 		if err != nil {
@@ -233,10 +233,20 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 		if err := requeueAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID); err != nil {
 			return AssignmentReconciliation{}, err
 		}
+		// attempt is the one that just lost its worker, and requeueAssignmentTx has
+		// just incremented the counter, so attempt+1 is the attempt the user is
+		// about to wait through — same arithmetic as RequeueOrFailRetryableRun.
+		// The attempt < maxAttempts guard above makes "attempt 4 of 3" unreachable.
+		notice, err := appendRunNoticeTx(ctx, tx, sessionID, assignment.RunID, traceID,
+			fmt.Sprintf("Retrying (attempt %d of %d) after the worker became unavailable", attempt+1, maxAttempts),
+			map[string]any{"attempt": attempt + 1, "maxAttempts": maxAttempts, "reason": "worker_unavailable"}, now())
+		if err != nil {
+			return AssignmentReconciliation{}, err
+		}
 		if err := tx.Commit(); err != nil {
 			return AssignmentReconciliation{}, err
 		}
-		return AssignmentReconciliation{Requeued: true}, nil
+		return AssignmentReconciliation{Requeued: true, Events: []Event{notice}}, nil
 	case "queued":
 		if active == 1 {
 			if _, err := tx.ExecContext(ctx, `
@@ -274,7 +284,7 @@ func terminalizeExhaustedAssignmentTx(
 	sessionID string,
 	traceID string,
 	maxAttempts int,
-) (AssignmentReconciliation, bool, error) {
+) (AssignmentReconciliation, bool, int, error) {
 	var attempt int
 	err := tx.QueryRowContext(ctx, `
 		SELECT id, attempt
@@ -286,12 +296,12 @@ func terminalizeExhaustedAssignmentTx(
 	`, runID, jobID, jobID, attemptID, attemptID).Scan(&jobID, &attempt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return AssignmentReconciliation{}, false, ErrAssignmentFenced
+			return AssignmentReconciliation{}, false, attempt, ErrAssignmentFenced
 		}
-		return AssignmentReconciliation{}, false, err
+		return AssignmentReconciliation{}, false, attempt, err
 	}
 	if attempt < maxAttempts {
-		return AssignmentReconciliation{}, false, nil
+		return AssignmentReconciliation{}, false, attempt, nil
 	}
 
 	const code = "job_timeout"
@@ -313,15 +323,28 @@ func terminalizeExhaustedAssignmentTx(
 			AND (? = '' OR COALESCE(execution_attempt_id, '') = ?)
 	`, code, message, finishedAt, finishedAt, runID, attemptID, attemptID)
 	if err != nil {
-		return AssignmentReconciliation{}, false, err
+		return AssignmentReconciliation{}, false, attempt, err
 	}
 	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
-		return AssignmentReconciliation{}, false, err
+		return AssignmentReconciliation{}, false, attempt, err
 	}
-	events, err := failPendingApprovalLifecycleTx(ctx, tx, runID, code, message, finishedAt)
+	// Emitted first, ahead of both the approval cleanup and the terminal event,
+	// so the explanation precedes every consequence of it — and so this path
+	// orders identically to RequeueOrFailRetryableRun, which inserts its notice
+	// before failRunWithEventTx. Without a give-up notice the user's last word
+	// from us is "Retrying (attempt N of N)" followed by permanent silence,
+	// because the client has no agent.run.failed case at all.
+	giveUp, err := appendRunNoticeTx(ctx, tx, sessionID, runID, traceID,
+		giveUpNote(attempt),
+		map[string]any{"attempts": attempt, "maxAttempts": maxAttempts, "reason": code}, finishedAt)
 	if err != nil {
-		return AssignmentReconciliation{}, false, err
+		return AssignmentReconciliation{}, false, attempt, err
 	}
+	lifecycle, err := failPendingApprovalLifecycleTx(ctx, tx, runID, code, message, finishedAt)
+	if err != nil {
+		return AssignmentReconciliation{}, false, attempt, err
+	}
+	events := append([]Event{giveUp}, lifecycle...)
 	result, err = tx.ExecContext(ctx, `
 		UPDATE jobs
 		SET status = 'failed',
@@ -337,23 +360,23 @@ func terminalizeExhaustedAssignmentTx(
 			AND (? = '' OR COALESCE(assignment_attempt_id, '') = ?)
 	`, finishedAt, code, message, jobID, runID, attemptID, attemptID)
 	if err != nil {
-		return AssignmentReconciliation{}, false, err
+		return AssignmentReconciliation{}, false, attempt, err
 	}
 	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
-		return AssignmentReconciliation{}, false, err
+		return AssignmentReconciliation{}, false, attempt, err
 	}
 	payloadJSON, err := json.Marshal(map[string]any{
 		"runId": runID, "code": code, "message": message, "retryable": false,
 	})
 	if err != nil {
-		return AssignmentReconciliation{}, false, err
+		return AssignmentReconciliation{}, false, attempt, err
 	}
 	event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.failed", string(payloadJSON), finishedAt)
 	if err != nil {
-		return AssignmentReconciliation{}, false, err
+		return AssignmentReconciliation{}, false, attempt, err
 	}
 	events = append(events, event)
-	return AssignmentReconciliation{Cleared: true, Events: events}, true, nil
+	return AssignmentReconciliation{Cleared: true, Events: events}, true, attempt, nil
 }
 
 func terminalizeStaleApprovedAuthorizationTx(

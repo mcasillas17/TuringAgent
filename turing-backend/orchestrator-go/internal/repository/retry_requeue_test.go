@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -28,6 +29,34 @@ func claimRetryRun(t *testing.T, repo *Repository, worker string) (EnqueueUserMe
 	return enqueued, claimed
 }
 
+// onlyRunStepEvent asserts exactly one agent.run.step notice is present and
+// returns it. Notices are the whole point of these events, so "one and only
+// one" is the assertion that catches both silence and accidental duplicates.
+func onlyRunStepEvent(t *testing.T, events []Event) Event {
+	t.Helper()
+	var found []Event
+	for _, event := range events {
+		if event.Type == "agent.run.step" {
+			found = append(found, event)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("got %d agent.run.step events, want exactly 1: %+v", len(found), events)
+	}
+	return found[0]
+}
+
+func runStepNote(t *testing.T, event Event) string {
+	t.Helper()
+	var payload struct {
+		Note string `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+		t.Fatalf("run step payload %q: %v", event.PayloadJSON, err)
+	}
+	return payload.Note
+}
+
 func TestRequeueOrFailRetryableRunRequeuesWhileAttemptsRemain(t *testing.T) {
 	database := openTestDB(t)
 	repo := New(database)
@@ -41,8 +70,14 @@ func TestRequeueOrFailRetryableRunRequeuesWhileAttemptsRemain(t *testing.T) {
 	if !decision.Requeued {
 		t.Fatalf("decision = %+v, want requeued", decision)
 	}
-	if len(decision.Events) != 0 {
-		t.Fatalf("requeue emitted %d events, want none", len(decision.Events))
+	// A requeue used to be silent, which is indistinguishable from a hang to a
+	// watching client. It must now carry exactly one user-visible notice.
+	notice := onlyRunStepEvent(t, decision.Events)
+	if got := runStepNote(t, notice); got != "Retrying (attempt 2 of 3)" {
+		t.Fatalf("requeue note = %q, want %q", got, "Retrying (attempt 2 of 3)")
+	}
+	if !notice.RunID.Valid || notice.RunID.String != enqueued.RunID {
+		t.Fatalf("requeue notice run_id = %+v, want %q", notice.RunID, enqueued.RunID)
 	}
 
 	run, err := repo.GetRun(ctx, enqueued.RunID)
@@ -80,6 +115,12 @@ func TestRequeueOrFailRetryableRunFailsAfterAttemptCap(t *testing.T) {
 		if !decision.Requeued {
 			t.Fatalf("attempt %d: decision = %+v, want requeued", i+1, decision)
 		}
+		// The notice must name the attempt that is about to START, not the one
+		// that just failed: after the first rejection the user is on attempt 2.
+		want := fmt.Sprintf("Retrying (attempt %d of %d)", i+2, maxAttempts)
+		if got := runStepNote(t, onlyRunStepEvent(t, decision.Events)); got != want {
+			t.Fatalf("attempt %d: note = %q, want %q", i+1, got, want)
+		}
 		if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-busy"); err != nil {
 			t.Fatal(err)
 		}
@@ -114,11 +155,28 @@ func TestRequeueOrFailRetryableRunFailsAfterAttemptCap(t *testing.T) {
 			runErrorCode, jobStatus, jobErrorCode, RetriesExhaustedCode)
 	}
 
+	// Without this the user reads "Retrying (attempt 3 of 3)" and then hears
+	// nothing ever again — worse than silence throughout, because the client has
+	// no agent.run.failed case at all.
+	giveUp := onlyRunStepEvent(t, decision.Events)
+	if got := runStepNote(t, giveUp); got != "Gave up after 3 attempts" {
+		t.Fatalf("exhaustion note = %q, want %q", got, "Gave up after 3 attempts")
+	}
+
 	var terminal Event
-	for _, event := range decision.Events {
+	terminalIndex, giveUpIndex := -1, -1
+	for index, event := range decision.Events {
 		if event.Type == "agent.run.failed" {
 			terminal = event
+			terminalIndex = index
 		}
+		if event.EventID == giveUp.EventID {
+			giveUpIndex = index
+		}
+	}
+	// The notice explains the failure, so it must not arrive after it.
+	if giveUpIndex > terminalIndex {
+		t.Fatalf("give-up notice at %d lands after agent.run.failed at %d", giveUpIndex, terminalIndex)
 	}
 	if terminal.EventID == "" {
 		t.Fatalf("exhaustion emitted no agent.run.failed event: %+v", decision.Events)
@@ -132,5 +190,86 @@ func TestRequeueOrFailRetryableRunFailsAfterAttemptCap(t *testing.T) {
 	}
 	if payload.Code != RetriesExhaustedCode || payload.Retryable {
 		t.Fatalf("terminal payload = %+v, want code %q retryable false", payload, RetriesExhaustedCode)
+	}
+}
+
+// A run that was never retryable in the first place — already terminalized or
+// fenced by a concurrent reconciliation — must not be described as retrying.
+// This pins the retry notice's `requeueable` gate; the give-up gate needs a
+// job that has actually spent its attempts, which is
+// TestRequeueOrFailRetryableRunEmitsNoGiveUpForUnclaimableExhaustedJob below.
+func TestRequeueOrFailRetryableRunEmitsNoNoticeWhenNotRequeueable(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Not requeueable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Enqueued but never claimed: the run is queued and its job pending, so no
+	// in-progress attempt exists to requeue.
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "never claimed", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, "worker_busy", "busy", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Requeued {
+		t.Fatalf("decision = %+v, want terminal failure for an unclaimed run", decision)
+	}
+	for _, event := range decision.Events {
+		if event.Type == "agent.run.step" {
+			t.Fatalf("non-requeueable failure emitted a notice: %s", event.PayloadJSON)
+		}
+	}
+
+	// It must also fail under the original code, not RetriesExhaustedCode: it
+	// never spent a retry budget.
+	var errorCode string
+	if err := database.QueryRowContext(ctx, `SELECT error_code FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&errorCode); err != nil {
+		t.Fatal(err)
+	}
+	if errorCode != "worker_busy" {
+		t.Fatalf("run error code = %q, want %q", errorCode, "worker_busy")
+	}
+}
+
+// The give-up notice is gated on `requeueable` as well as on the attempt count.
+// A run that is no longer running, whose job row still shows a spent attempt
+// budget, must not be told "Gave up after 3 attempts" — it never gave up, it
+// was terminalized by something else. Without this, dropping `requeueable &&`
+// from the exhaustion guard would go unnoticed.
+func TestRequeueOrFailRetryableRunEmitsNoGiveUpForUnclaimableExhaustedJob(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	enqueued, claimed := claimRetryRun(t, repo, "worker-gone")
+
+	// Spend the attempt budget, then take the run out of `running` so the
+	// requeueable gate is false while attempt >= maxAttempts stays true.
+	if _, err := database.ExecContext(ctx, `UPDATE jobs SET attempt = 3 WHERE id = ?`, claimed.JobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `UPDATE agent_runs SET status = 'queued' WHERE id = ?`, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+
+	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, "worker_busy", "busy", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Requeued {
+		t.Fatalf("decision = %+v, want terminal failure", decision)
+	}
+	for _, event := range decision.Events {
+		if event.Type == "agent.run.step" {
+			t.Fatalf("a run that never gave up was announced as giving up: %s", event.PayloadJSON)
+		}
 	}
 }

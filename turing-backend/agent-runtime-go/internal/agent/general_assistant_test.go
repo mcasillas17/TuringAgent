@@ -1163,6 +1163,11 @@ func TestExecuteStopsAtMaximumToolIterations(t *testing.T) {
 	if step == nil || step.Payload.AsMap()["maxToolIterations"] != float64(maxToolIterations) {
 		t.Fatalf("max-iteration step = %+v", step)
 	}
+	// note carries the whole user-facing meaning: the client renders it and
+	// nothing else from this payload.
+	if got := step.Payload.AsMap()["note"]; got != "Stopped after reaching the tool iteration limit" {
+		t.Fatalf("max-iteration note = %v, want the plain-language sentence", got)
+	}
 	completed := updates[len(updates)-1].GetRunCompleted()
 	if completed == nil || completed.Content != "12345" {
 		t.Fatalf("run completion = %+v, want all visible streamed content", completed)
@@ -3227,5 +3232,118 @@ func TestDiscoveredToolsPropagatesFailure(t *testing.T) {
 	assistant := NewGeneralAssistant(nil, fakeMessageClient{}, &GeneralAssistantTools{SystemMCP: client})
 	if _, err := assistant.DiscoveredTools(context.Background()); err == nil {
 		t.Fatal("expected discovery failure to propagate so the worker can report FAILED")
+	}
+}
+
+// runStepNotes returns the "note" of every agent.run.step event, in order.
+func runStepNotes(updates []*turingv1.RuntimeUpdate) []string {
+	var notes []string
+	for _, update := range updates {
+		event := update.GetEvent()
+		if event == nil || event.Type != turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
+			continue
+		}
+		note, _ := event.Payload.AsMap()["note"].(string)
+		notes = append(notes, note)
+	}
+	return notes
+}
+
+const recallNotice = "Using material recalled from earlier conversations"
+
+// Recalled material reaching the model unattributed is what makes an answer
+// read as confabulation: the user is told a fact from a conversation weeks ago
+// with no indication of where it came from.
+func TestExecuteAnnouncesRecalledContext(t *testing.T) {
+	provider := &capturingProvider{}
+	recaller := &fakeRecaller{block: llm.ChatMessage{Role: "system", Content: "recalled material"}, ok: true}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{Recall: recaller},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	notes := runStepNotes(updates)
+	if len(notes) != 1 || notes[0] != recallNotice {
+		t.Fatalf("run step notes = %q, want exactly [%q]", notes, recallNotice)
+	}
+
+	// The notice explains the answer, so it must precede it in the transcript.
+	noticeIndex, deltaIndex := -1, -1
+	for index, update := range updates {
+		event := update.GetEvent()
+		if event == nil {
+			continue
+		}
+		if noticeIndex < 0 && event.Type == turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
+			noticeIndex = index
+		}
+		if deltaIndex < 0 && event.Type == turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA {
+			deltaIndex = index
+		}
+	}
+	if noticeIndex < 0 {
+		t.Fatal("no recall notice emitted")
+	}
+	if deltaIndex >= 0 && noticeIndex > deltaIndex {
+		t.Fatalf("recall notice at %d lands after the first delta at %d", noticeIndex, deltaIndex)
+	}
+}
+
+// Recall returning nothing is the common case; a notice there would claim a
+// recall that never happened.
+func TestExecuteDoesNotAnnounceEmptyRecall(t *testing.T) {
+	provider := &capturingProvider{}
+	recaller := &fakeRecaller{ok: false}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{Recall: recaller},
+	)
+	if notes := runStepNotes(collectUpdates(t, assistant, testJob())); len(notes) != 0 {
+		t.Fatalf("empty recall emitted notes %q, want none", notes)
+	}
+}
+
+func TestExecuteDoesNotAnnounceRecallWithoutARecaller(t *testing.T) {
+	provider := &capturingProvider{}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{},
+	)
+	if notes := runStepNotes(collectUpdates(t, assistant, testJob())); len(notes) != 0 {
+		t.Fatalf("unconfigured recall emitted notes %q, want none", notes)
+	}
+}
+
+// Design decision: notices introduce no new failure mode — existing error
+// handling stands. A failing emit means the runtime→orchestrator stream is
+// broken, so continuing would stream an answer nobody receives. Without this
+// test, changing the emit to `_ = emit(...)` would pass unnoticed.
+func TestExecutePropagatesRecallNoticeEmitErrors(t *testing.T) {
+	emitErr := errors.New("emit failed")
+	provider := &capturingProvider{}
+	recaller := &fakeRecaller{block: llm.ChatMessage{Role: "system", Content: "recalled material"}, ok: true}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{Recall: recaller},
+	)
+
+	err := assistant.Execute(context.Background(), testJob(), func(update *turingv1.RuntimeUpdate) error {
+		event := update.GetEvent()
+		if event != nil && event.Type == turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
+			return emitErr
+		}
+		return nil
+	})
+	if !errors.Is(err, emitErr) {
+		t.Fatalf("Execute error = %v, want %v", err, emitErr)
+	}
+	if len(provider.seen) != 0 {
+		t.Fatalf("model was called despite a broken stream: %+v", provider.seen)
 	}
 }
