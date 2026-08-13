@@ -1163,6 +1163,11 @@ func TestExecuteStopsAtMaximumToolIterations(t *testing.T) {
 	if step == nil || step.Payload.AsMap()["maxToolIterations"] != float64(maxToolIterations) {
 		t.Fatalf("max-iteration step = %+v", step)
 	}
+	// note carries the whole user-facing meaning: the client renders it and
+	// nothing else from this payload.
+	if got := step.Payload.AsMap()["note"]; got != "Stopped after reaching the tool iteration limit" {
+		t.Fatalf("max-iteration note = %v, want the plain-language sentence", got)
+	}
 	completed := updates[len(updates)-1].GetRunCompleted()
 	if completed == nil || completed.Content != "12345" {
 		t.Fatalf("run completion = %+v, want all visible streamed content", completed)

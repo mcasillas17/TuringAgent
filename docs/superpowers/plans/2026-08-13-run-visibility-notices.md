@@ -38,7 +38,7 @@ Extra payload keys are ignored by the client — the cap notice already ships a 
 
 > "This run stopped after reaching its tool iteration limit."
 
-That is only correct while the cap is the *sole* producer of `agent.run.step`. This plan adds four more producers. A note-less event is reachable — `messageEvent` swallows marshalling failure and sends a nil payload (`general_assistant.go:679-682`), and `appendRunEventTx` substitutes `"{}"` for an empty payload (`runs.go:552-554`) — so a retrying run could tell the user it hit the tool-iteration limit. That is a flatly wrong and alarming message.
+That is only correct while the cap is the *sole* producer of `agent.run.step`. This plan adds five more producers (retry and give-up on each of the two requeue paths, plus recall). A note-less event is reachable — `messageEvent` swallows marshalling failure and sends a nil payload (`general_assistant.go:679-682`), and `appendRunEventTx` substitutes `"{}"` for an empty payload (`runs.go:552-554`) — so a retrying run could tell the user it hit the tool-iteration limit. That is a flatly wrong and alarming message.
 
 The string is pinned by `test/features/chat_screen_test.dart:131-161`, which asserts it twice. Generalising it is therefore a deliberate, tested client change, and it is **Task 0**.
 
@@ -64,7 +64,7 @@ The string is pinned by `test/features/chat_screen_test.dart:131-161`, which ass
 
 **Files:** `turing-client/turing_app/lib/features/chat/chat_screen.dart`, `test/features/chat_screen_test.dart`
 
-- [ ] **Step 1:** Change `_runStepFallbackNotice` to a string true for any producer. Shipped as *"The run reported a step with no description"* — "the agent" would be wrong, since three of the five producers are the orchestrator.
+- [ ] **Step 1:** Change `_runStepFallbackNotice` to a string true for any producer. Shipped as *"The run reported a step with no description"* — "the agent" would be wrong, since four of the six producers are the orchestrator.
 - [ ] **Step 2:** Update the two assertions at `chat_screen_test.dart:131-161`. Keep them asserting the fallback *behaviour* (empty/missing note → fallback), just with the new string.
 - [ ] **Step 3:** `( cd turing-client/turing_app && flutter test )`.
 

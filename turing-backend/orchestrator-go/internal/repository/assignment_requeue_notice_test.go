@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"reflect"
 	"testing"
 )
 
@@ -92,6 +93,61 @@ func TestFencedReconciliationEmitsNoNotice(t *testing.T) {
 	for _, event := range reconciliation.Events {
 		if event.Type == "agent.run.step" {
 			t.Fatalf("non-requeue reconciliation emitted a notice: %+v", event)
+		}
+	}
+}
+
+// The give-up notice is inserted before failPendingApprovalLifecycleTx so the
+// explanation precedes every consequence of it, matching the ordering in
+// RequeueOrFailRetryableRun. Every other exhaustion test runs with no pending
+// approval, where that cleanup returns nothing — so swapping the two calls
+// would be invisible. This is the case where the ordering is observable.
+func TestExhaustedRecoveryOrdersGiveUpBeforeApprovalCleanup(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	enqueued, assignment := runningAssignment(t, repo, "worker-vanished")
+
+	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
+		ToolCallID: "call_giveup", RunID: enqueued.RunID, ModelToolCallID: "model_giveup",
+		Status: "approval_required",
+	}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateApproval(ctx, enqueued.RunID, "call_giveup", "general_assistant",
+		"files.update", `{"path":"note.txt"}`, "sha256:test", "2099-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	// CreateApproval parks the run in waiting_approval; put it back to running so
+	// reconciliation takes the branch that terminalizes on exhausted attempts,
+	// with the approval still pending underneath it.
+	if _, err := database.ExecContext(ctx, `UPDATE agent_runs SET status = 'running' WHERE id = ?`, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+
+	// maxAttempts=1 with the job on attempt 1 exhausts the budget immediately.
+	reconciliation, err := repo.RecoverAssignmentWithLimit(ctx, assignment, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var eventTypes []string
+	for _, event := range reconciliation.Events {
+		eventTypes = append(eventTypes, event.Type)
+	}
+	// approval.expired (not denied) is this path's pre-existing wording for a
+	// pending approval abandoned by a timed-out job.
+	want := []string{"agent.run.step", "approval.expired", "tool.call.failed", "agent.run.failed"}
+	if !reflect.DeepEqual(eventTypes, want) {
+		t.Fatalf("exhausted recovery events = %v, want %v", eventTypes, want)
+	}
+	if got := runStepNote(t, reconciliation.Events[0]); got != "Gave up after 1 attempt" {
+		t.Fatalf("give-up note = %q, want %q", got, "Gave up after 1 attempt")
+	}
+	// Sequence must agree with slice order — the client renders by sequence.
+	for index := 1; index < len(reconciliation.Events); index++ {
+		if reconciliation.Events[index].Sequence <= reconciliation.Events[index-1].Sequence {
+			t.Fatalf("event %d (%s) has sequence %d, not after %d",
+				index, eventTypes[index], reconciliation.Events[index].Sequence, reconciliation.Events[index-1].Sequence)
 		}
 	}
 }
