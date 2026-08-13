@@ -121,6 +121,16 @@ func TestExhaustedRecoveryOrdersGiveUpBeforeApprovalCleanup(t *testing.T) {
 	// CreateApproval parks the run in waiting_approval; put it back to running so
 	// reconciliation takes the branch that terminalizes on exhausted attempts,
 	// with the approval still pending underneath it.
+	//
+	// This is a shortcut to a REACHABLE state, not a manufactured one. A run can
+	// hold several pending approvals — the unique index is on tool_call_id, not
+	// one-per-run (0001_initial.sql) — and CreateApproval accepts a run that is
+	// already 'running'. So: approval B is created (run -> waiting_approval),
+	// then an earlier approval A is approved, which sets the run back to
+	// 'running' and leaves B pending. Two SQL statements here stand in for that
+	// interleaving. Using an already-'approved' approval instead would NOT
+	// exercise this branch: terminalizeStaleApprovedAuthorizationTx intercepts
+	// that case earlier in reconcileAssignment.
 	if _, err := database.ExecContext(ctx, `UPDATE agent_runs SET status = 'running' WHERE id = ?`, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
