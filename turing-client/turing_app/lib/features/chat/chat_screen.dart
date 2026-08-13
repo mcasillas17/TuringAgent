@@ -114,7 +114,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// of this event — retries, lost workers, exhausted attempts and recall all
   /// emit it — so naming any one of them would mislabel the others.
   static const _runStepFallbackNotice =
-      'The agent reported a step it could not describe.';
+      'The run reported a step with no description';
 
   /// The event stream is the only source of terminal `tool.call.*` events, so
   /// once it errors (gRPC disconnect, deadline, auth failure) or closes, any

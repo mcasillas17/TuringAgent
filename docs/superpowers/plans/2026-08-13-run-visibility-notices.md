@@ -52,7 +52,10 @@ The string is pinned by `test/features/chat_screen_test.dart:131-161`, which ass
 ## Known limits (state these; do not claim otherwise)
 
 - **Notices do not survive a session reopen.** `_isHistoricalRunEvent` (`chat_screen.dart:267-272`) suppresses any `agent.run.step` at or below the replay watermark loaded at screen open, and `TuringEventSource` never reconnects (`:122-124`). So "the client stops going silent" is true for a client that was already watching, not for one that reopens mid-retry. This is consistent with the deliberate tool-card decision.
+- **Startup-recovery notices reach no client, ever.** `RecoverAllActiveAssignmentsWithLimit` runs inside `app.New()` and its events are published *before* any gRPC server is registered, so `Bus.Publish` iterates zero subscribers and drops them; the persisted rows are then suppressed on reopen by the watermark above. The rows are still worth writing for operators reading the event log, but **do not claim this plan makes startup recovery visible** — it does not. Making it visible needs the client to render replayed `agent.run.step` for a still-live run, which is a separate change.
 - **The recall notice can render below the answer** if the screen is opened mid-run: `_loadInitialMessages` *prepends* history to the adopted assistant bubble (`:187-205`) while notices are *appended* (`:259`). On a live send the ordering is correct.
+- **A retried run's text concatenates onto the partial answer.** `chat_screen.dart` keys the assistant bubble by `messageId`, which survives a requeue, so a retry's deltas append to whatever the first attempt already streamed, while the "Retrying" notice renders *below* that bubble. Pre-existing, but these notices make it legible for the first time. Worth a follow-up.
+- **Two other terminal reconciliation paths stay silent**: `reconcileWaitingApprovalTx` (`approval_delivery_failed`) and `terminalizeStaleApprovedAuthorizationTx` (`side_effect_uncertain`). Both are approval-scoped, and the client *does* handle `approval.*` events, so the user is not wholly in the dark there. Out of scope deliberately — not an oversight.
 
 ---
 
@@ -188,5 +191,7 @@ Plus CLAUDE.md's required pre-push subagent review, covering unit-test coverage 
 - Silence is preserved when nothing happened ✓
 - Requeue events carry the retried `run_id` so a watching client correlates them ✓
 - The attempt number is `attempt+1` and the rendered string is pinned by a test ✓
-- Both requeue paths are covered, and exhaustion does not end in silence ✓
+- Both requeue paths are covered, and **both** exhaustion paths end with a notice — `RequeueOrFailRetryableRun` *and* `terminalizeExhaustedAssignmentTx`, which the first review round caught as still silent ✓
+- Both give-up notices share `giveUpNote`, so the wording cannot drift between them ✓
+- `appendRunNoticeTx` takes `note` as a required parameter, so the one key the contract rests on cannot be forgotten ✓
 - Visibility limits (replay watermark, mid-run ordering) are stated, not glossed ✓

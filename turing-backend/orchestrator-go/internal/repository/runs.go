@@ -548,6 +548,25 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 	return events, nil
 }
 
+// appendRunNoticeTx appends a user-facing agent.run.step notice. The client
+// renders this event type generically, reading ONLY the note — so note is a
+// required parameter rather than a map key that could be forgotten, and extras
+// exist purely for operators reading the event log.
+func appendRunNoticeTx(ctx context.Context, tx *sql.Tx, sessionID string, runID string, traceID string, note string, extras map[string]any) (Event, error) {
+	payload := map[string]any{"note": note}
+	for key, value := range extras {
+		if key == "note" {
+			continue
+		}
+		payload[key] = value
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return Event{}, err
+	}
+	return appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.step", string(payloadJSON), now())
+}
+
 func appendRunEventTx(ctx context.Context, tx *sql.Tx, sessionID string, runID string, traceID string, eventType string, payloadJSON string, createdAt string) (Event, error) {
 	if payloadJSON == "" {
 		payloadJSON = "{}"

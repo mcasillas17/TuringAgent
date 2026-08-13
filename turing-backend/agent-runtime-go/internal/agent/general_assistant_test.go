@@ -3244,7 +3244,7 @@ func runStepNotes(updates []*turingv1.RuntimeUpdate) []string {
 	return notes
 }
 
-const recallNotice = "Answered using material recalled from earlier conversations"
+const recallNotice = "Using material recalled from earlier conversations"
 
 // Recalled material reaching the model unattributed is what makes an answer
 // read as confabulation: the user is told a fact from a conversation weeks ago

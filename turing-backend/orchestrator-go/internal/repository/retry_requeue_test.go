@@ -192,3 +192,50 @@ func TestRequeueOrFailRetryableRunFailsAfterAttemptCap(t *testing.T) {
 		t.Fatalf("terminal payload = %+v, want code %q retryable false", payload, RetriesExhaustedCode)
 	}
 }
+
+// A run that was never retryable in the first place — already terminalized or
+// fenced by a concurrent reconciliation — must not be described as one that
+// gave up after exhausting attempts. Both notices are gated on `requeueable`;
+// this pins that gate, because moving either notice outside it would announce
+// a retry that never happened.
+func TestRequeueOrFailRetryableRunEmitsNoNoticeWhenNotRequeueable(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Not requeueable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Enqueued but never claimed: the run is queued and its job pending, so no
+	// in-progress attempt exists to requeue.
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "never claimed", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, "worker_busy", "busy", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Requeued {
+		t.Fatalf("decision = %+v, want terminal failure for an unclaimed run", decision)
+	}
+	for _, event := range decision.Events {
+		if event.Type == "agent.run.step" {
+			t.Fatalf("non-requeueable failure emitted a notice: %s", event.PayloadJSON)
+		}
+	}
+
+	// It must also fail under the original code, not RetriesExhaustedCode: it
+	// never spent a retry budget.
+	var errorCode string
+	if err := database.QueryRowContext(ctx, `SELECT error_code FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&errorCode); err != nil {
+		t.Fatal(err)
+	}
+	if errorCode != "worker_busy" {
+		t.Fatalf("run error code = %q, want %q", errorCode, "worker_busy")
+	}
+}

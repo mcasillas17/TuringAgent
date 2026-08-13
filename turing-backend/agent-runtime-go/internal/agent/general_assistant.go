@@ -175,7 +175,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			// it precedes the answer it explains. Recall returning nothing stays
 			// silent — that is the common case.
 			if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP, map[string]any{
-				"note": "Answered using material recalled from earlier conversations",
+				"note": "Using material recalled from earlier conversations",
 			})); err != nil {
 				return err
 			}

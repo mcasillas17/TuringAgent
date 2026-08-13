@@ -55,7 +55,7 @@ func TestRecoverAssignmentRequeuePublishesNotice(t *testing.T) {
 	}
 
 	notice := onlyRunStepEvent(t, reconciliation.Events)
-	const want = "Retrying after the worker became unavailable"
+	const want = "Retrying (attempt 2 of 3) after the worker became unavailable"
 	if got := runStepNote(t, notice); got != want {
 		t.Fatalf("recovery note = %q, want %q", got, want)
 	}
@@ -67,10 +67,15 @@ func TestRecoverAssignmentRequeuePublishesNotice(t *testing.T) {
 	}
 }
 
-// A reconciliation that does not requeue must stay silent: a fenced or cleared
-// assignment is not something the user needs to be told about, and a spurious
-// notice would read as a retry that never happened.
-func TestReconcileAssignmentWithoutRequeueEmitsNoNotice(t *testing.T) {
+// Fencing must stay silent. A fenced assignment means a newer attempt already
+// owns the run, so telling the user "retrying" would describe work that is not
+// happening.
+//
+// Note this returns at the fence check, well before the requeue branch — it
+// pins fencing, NOT the notice code. The requeue and give-up branches are
+// covered by TestRecoverAssignmentRequeuePublishesNotice and by
+// TestRecoverAssignmentAtCutoffFailsAtConfiguredMaximumAttempt respectively.
+func TestFencedReconciliationEmitsNoNotice(t *testing.T) {
 	repo := New(openTestDB(t))
 	ctx := context.Background()
 	_, assignment := runningAssignment(t, repo, "worker-live")

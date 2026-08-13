@@ -104,12 +104,9 @@ func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, runID string
 		// attempt is the one that just failed, so the attempt the user is about to
 		// wait through is attempt+1 — matching the counter requeueRunForRetryTx
 		// has just incremented.
-		notice, err := appendRunNoticeTx(ctx, tx, sessionID, runID, traceID, map[string]any{
-			"note":        fmt.Sprintf("Retrying (attempt %d of %d)", attempt+1, maxAttempts),
-			"attempt":     attempt + 1,
-			"maxAttempts": maxAttempts,
-			"reason":      code,
-		})
+		notice, err := appendRunNoticeTx(ctx, tx, sessionID, runID, traceID,
+			fmt.Sprintf("Retrying (attempt %d of %d)", attempt+1, maxAttempts),
+			map[string]any{"attempt": attempt + 1, "maxAttempts": maxAttempts, "reason": code})
 		if err != nil {
 			return RetryDecision{}, err
 		}
@@ -127,12 +124,9 @@ func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, runID string
 		// followed by permanent silence: the client has no agent.run.failed case.
 		// Ordered before the terminal events so the explanation precedes the
 		// failure it explains.
-		notice, err := appendRunNoticeTx(ctx, tx, sessionID, runID, traceID, map[string]any{
-			"note":        fmt.Sprintf("Gave up after %d attempts", maxAttempts),
-			"attempts":    attempt,
-			"maxAttempts": maxAttempts,
-			"reason":      code,
-		})
+		notice, err := appendRunNoticeTx(ctx, tx, sessionID, runID, traceID,
+			giveUpNote(attempt),
+			map[string]any{"attempts": attempt, "maxAttempts": maxAttempts, "reason": code})
 		if err != nil {
 			return RetryDecision{}, err
 		}
@@ -155,18 +149,14 @@ func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, runID string
 	return RetryDecision{Events: events}, nil
 }
 
-// appendRunNoticeTx appends a user-facing agent.run.step notice. The client
-// renders this event type generically from its "note" key, so a notice needs no
-// new event type and no client change; extra keys are for operators reading the
-// event log and are ignored by the UI.
-//
-// Note must carry the whole meaning on its own — anything else is dropped.
-func appendRunNoticeTx(ctx context.Context, tx *sql.Tx, sessionID string, runID string, traceID string, payload map[string]any) (Event, error) {
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return Event{}, err
+// giveUpNote words the "we stopped retrying" notice. Shared by both terminal
+// paths — assignment rejection and lease/worker recovery — so a user sees the
+// same sentence whichever way the run ran out of attempts.
+func giveUpNote(attempts int) string {
+	if attempts == 1 {
+		return "Gave up after 1 attempt"
 	}
-	return appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.step", string(payloadJSON), now())
+	return fmt.Sprintf("Gave up after %d attempts", attempts)
 }
 
 // requeueRunForRetryTx returns a running run and its in-progress job to the
