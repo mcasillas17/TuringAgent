@@ -109,8 +109,12 @@ class _ChatScreenState extends State<ChatScreen> {
   static const _historyFailedNotice =
       'Earlier messages could not be loaded. This session is live from here on.';
 
+  /// Shown when an `agent.run.step` arrives without a usable `note`. It must
+  /// stay producer-neutral: the tool-iteration cap is no longer the only source
+  /// of this event — retries, lost workers, exhausted attempts and recall all
+  /// emit it — so naming any one of them would mislabel the others.
   static const _runStepFallbackNotice =
-      'This run stopped after reaching its tool iteration limit.';
+      'The agent reported a step it could not describe.';
 
   /// The event stream is the only source of terminal `tool.call.*` events, so
   /// once it errors (gRPC disconnect, deadline, auth failure) or closes, any

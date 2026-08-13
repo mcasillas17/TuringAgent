@@ -3229,3 +3229,87 @@ func TestDiscoveredToolsPropagatesFailure(t *testing.T) {
 		t.Fatal("expected discovery failure to propagate so the worker can report FAILED")
 	}
 }
+
+// runStepNotes returns the "note" of every agent.run.step event, in order.
+func runStepNotes(updates []*turingv1.RuntimeUpdate) []string {
+	var notes []string
+	for _, update := range updates {
+		event := update.GetEvent()
+		if event == nil || event.Type != turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
+			continue
+		}
+		note, _ := event.Payload.AsMap()["note"].(string)
+		notes = append(notes, note)
+	}
+	return notes
+}
+
+const recallNotice = "Answered using material recalled from earlier conversations"
+
+// Recalled material reaching the model unattributed is what makes an answer
+// read as confabulation: the user is told a fact from a conversation weeks ago
+// with no indication of where it came from.
+func TestExecuteAnnouncesRecalledContext(t *testing.T) {
+	provider := &capturingProvider{}
+	recaller := &fakeRecaller{block: llm.ChatMessage{Role: "system", Content: "recalled material"}, ok: true}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{Recall: recaller},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	notes := runStepNotes(updates)
+	if len(notes) != 1 || notes[0] != recallNotice {
+		t.Fatalf("run step notes = %q, want exactly [%q]", notes, recallNotice)
+	}
+
+	// The notice explains the answer, so it must precede it in the transcript.
+	noticeIndex, deltaIndex := -1, -1
+	for index, update := range updates {
+		event := update.GetEvent()
+		if event == nil {
+			continue
+		}
+		if noticeIndex < 0 && event.Type == turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
+			noticeIndex = index
+		}
+		if deltaIndex < 0 && event.Type == turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA {
+			deltaIndex = index
+		}
+	}
+	if noticeIndex < 0 {
+		t.Fatal("no recall notice emitted")
+	}
+	if deltaIndex >= 0 && noticeIndex > deltaIndex {
+		t.Fatalf("recall notice at %d lands after the first delta at %d", noticeIndex, deltaIndex)
+	}
+}
+
+// Recall returning nothing is the common case; a notice there would claim a
+// recall that never happened.
+func TestExecuteDoesNotAnnounceEmptyRecall(t *testing.T) {
+	provider := &capturingProvider{}
+	recaller := &fakeRecaller{ok: false}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{Recall: recaller},
+	)
+	if notes := runStepNotes(collectUpdates(t, assistant, testJob())); len(notes) != 0 {
+		t.Fatalf("empty recall emitted notes %q, want none", notes)
+	}
+}
+
+func TestExecuteDoesNotAnnounceRecallWithoutARecaller(t *testing.T) {
+	provider := &capturingProvider{}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{},
+	)
+	if notes := runStepNotes(collectUpdates(t, assistant, testJob())); len(notes) != 0 {
+		t.Fatalf("unconfigured recall emitted notes %q, want none", notes)
+	}
+}
