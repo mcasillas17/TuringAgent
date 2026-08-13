@@ -3313,3 +3313,32 @@ func TestExecuteDoesNotAnnounceRecallWithoutARecaller(t *testing.T) {
 		t.Fatalf("unconfigured recall emitted notes %q, want none", notes)
 	}
 }
+
+// Design decision: notices introduce no new failure mode — existing error
+// handling stands. A failing emit means the runtime→orchestrator stream is
+// broken, so continuing would stream an answer nobody receives. Without this
+// test, changing the emit to `_ = emit(...)` would pass unnoticed.
+func TestExecutePropagatesRecallNoticeEmitErrors(t *testing.T) {
+	emitErr := errors.New("emit failed")
+	provider := &capturingProvider{}
+	recaller := &fakeRecaller{block: llm.ChatMessage{Role: "system", Content: "recalled material"}, ok: true}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{Recall: recaller},
+	)
+
+	err := assistant.Execute(context.Background(), testJob(), func(update *turingv1.RuntimeUpdate) error {
+		event := update.GetEvent()
+		if event != nil && event.Type == turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
+			return emitErr
+		}
+		return nil
+	})
+	if !errors.Is(err, emitErr) {
+		t.Fatalf("Execute error = %v, want %v", err, emitErr)
+	}
+	if len(provider.seen) != 0 {
+		t.Fatalf("model was called despite a broken stream: %+v", provider.seen)
+	}
+}

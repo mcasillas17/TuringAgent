@@ -236,10 +236,10 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 		// attempt is the one that just lost its worker, and requeueAssignmentTx has
 		// just incremented the counter, so attempt+1 is the attempt the user is
 		// about to wait through — same arithmetic as RequeueOrFailRetryableRun.
-		// Two consecutive worker losses would otherwise render identical notices.
+		// The attempt < maxAttempts guard above makes "attempt 4 of 3" unreachable.
 		notice, err := appendRunNoticeTx(ctx, tx, sessionID, assignment.RunID, traceID,
 			fmt.Sprintf("Retrying (attempt %d of %d) after the worker became unavailable", attempt+1, maxAttempts),
-			map[string]any{"attempt": attempt + 1, "maxAttempts": maxAttempts, "reason": "worker_unavailable"})
+			map[string]any{"attempt": attempt + 1, "maxAttempts": maxAttempts, "reason": "worker_unavailable"}, now())
 		if err != nil {
 			return AssignmentReconciliation{}, err
 		}
@@ -328,21 +328,23 @@ func terminalizeExhaustedAssignmentTx(
 	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
 		return AssignmentReconciliation{}, false, attempt, err
 	}
-	events, err := failPendingApprovalLifecycleTx(ctx, tx, runID, code, message, finishedAt)
-	if err != nil {
-		return AssignmentReconciliation{}, false, attempt, err
-	}
-	// Ordered before the terminal agent.run.failed below. The requeue notice
-	// tells the user we are retrying after losing the worker; without this, the
-	// moment we stop retrying is silent, because the client has no
-	// agent.run.failed case at all.
+	// Emitted first, ahead of both the approval cleanup and the terminal event,
+	// so the explanation precedes every consequence of it — and so this path
+	// orders identically to RequeueOrFailRetryableRun, which inserts its notice
+	// before failRunWithEventTx. Without a give-up notice the user's last word
+	// from us is "Retrying (attempt N of N)" followed by permanent silence,
+	// because the client has no agent.run.failed case at all.
 	giveUp, err := appendRunNoticeTx(ctx, tx, sessionID, runID, traceID,
 		giveUpNote(attempt),
-		map[string]any{"attempts": attempt, "maxAttempts": maxAttempts, "reason": code})
+		map[string]any{"attempts": attempt, "maxAttempts": maxAttempts, "reason": code}, finishedAt)
 	if err != nil {
 		return AssignmentReconciliation{}, false, attempt, err
 	}
-	events = append(events, giveUp)
+	lifecycle, err := failPendingApprovalLifecycleTx(ctx, tx, runID, code, message, finishedAt)
+	if err != nil {
+		return AssignmentReconciliation{}, false, attempt, err
+	}
+	events := append([]Event{giveUp}, lifecycle...)
 	result, err = tx.ExecContext(ctx, `
 		UPDATE jobs
 		SET status = 'failed',

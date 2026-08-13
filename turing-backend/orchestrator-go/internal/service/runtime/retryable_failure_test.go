@@ -290,3 +290,46 @@ func TestOrphanRecoveryPublishesRetryNotice(t *testing.T) {
 		t.Fatalf("notice run_id = %q, want %q", notice.RunID, enqueued.RunID)
 	}
 }
+
+// The give-up notice is the last thing the user ever hears about a run that
+// exhausted its retries, so proving it reaches the bus matters more than for
+// the retry notice. The publish loops are generic over Events, but a future
+// refactor that filtered by type could drop this silently.
+func TestRetryExhaustionPublishesGiveUpNotice(t *testing.T) {
+	h := newHarnessWithDispatch(t, DispatchConfig{MaxAttempts: 1})
+	sessionID := h.createSessionAndRun(t, "give up on me")
+	stream, unsubscribe := h.bus.Subscribe(sessionID)
+	defer unsubscribe()
+
+	workerStream, err := h.runtimeClient(t).ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = workerStream.CloseSend() }()
+	if err := workerStream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId: "worker-giveup", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	assigned := recvUntil(t, workerStream, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetRunAssigned() != nil
+	}).GetRunAssigned()
+
+	// MaxAttempts=1 means the first rejection exhausts the budget outright.
+	if err := workerStream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
+		RunId: assigned.RunId, Code: "worker_busy", Message: "busy", Retryable: true,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	notice := streamedToolEventForContract(t, stream, "agent.run.step")
+	var payload struct {
+		Note string `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(notice.PayloadJSON), &payload); err != nil {
+		t.Fatalf("decode notice payload %q: %v", notice.PayloadJSON, err)
+	}
+	if payload.Note != "Gave up after 1 attempt" {
+		t.Fatalf("published give-up note = %q, want %q", payload.Note, "Gave up after 1 attempt")
+	}
+}

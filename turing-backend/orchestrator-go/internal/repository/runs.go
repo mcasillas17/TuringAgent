@@ -550,21 +550,27 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 
 // appendRunNoticeTx appends a user-facing agent.run.step notice. The client
 // renders this event type generically, reading ONLY the note — so note is a
-// required parameter rather than a map key that could be forgotten, and extras
-// exist purely for operators reading the event log.
-func appendRunNoticeTx(ctx context.Context, tx *sql.Tx, sessionID string, runID string, traceID string, note string, extras map[string]any) (Event, error) {
-	payload := map[string]any{"note": note}
+// required parameter rather than a map key that could be forgotten, and it is
+// assigned last so no extras key can shadow it.
+//
+// extras exist purely for operators reading the event log. Note the deliberate
+// key split: retry notices carry "attempt" (the one about to start), give-up
+// notices carry "attempts" (the number spent).
+//
+// createdAt is passed in rather than taken here so a notice shares the clock
+// reading of the terminal event it accompanies — otherwise the explanation is
+// stamped after the failure it explains.
+func appendRunNoticeTx(ctx context.Context, tx *sql.Tx, sessionID string, runID string, traceID string, note string, extras map[string]any, createdAt string) (Event, error) {
+	payload := make(map[string]any, len(extras)+1)
 	for key, value := range extras {
-		if key == "note" {
-			continue
-		}
 		payload[key] = value
 	}
+	payload["note"] = note
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		return Event{}, err
 	}
-	return appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.step", string(payloadJSON), now())
+	return appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.step", string(payloadJSON), createdAt)
 }
 
 func appendRunEventTx(ctx context.Context, tx *sql.Tx, sessionID string, runID string, traceID string, eventType string, payloadJSON string, createdAt string) (Event, error) {

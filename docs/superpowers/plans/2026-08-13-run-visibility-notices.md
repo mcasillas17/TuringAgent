@@ -55,6 +55,7 @@ The string is pinned by `test/features/chat_screen_test.dart:131-161`, which ass
 - **Startup-recovery notices reach no client, ever.** `RecoverAllActiveAssignmentsWithLimit` runs inside `app.New()` and its events are published *before* any gRPC server is registered, so `Bus.Publish` iterates zero subscribers and drops them; the persisted rows are then suppressed on reopen by the watermark above. The rows are still worth writing for operators reading the event log, but **do not claim this plan makes startup recovery visible** — it does not. Making it visible needs the client to render replayed `agent.run.step` for a still-live run, which is a separate change.
 - **The recall notice can render below the answer** if the screen is opened mid-run: `_loadInitialMessages` *prepends* history to the adopted assistant bubble (`:187-205`) while notices are *appended* (`:259`). On a live send the ordering is correct.
 - **A retried run's text concatenates onto the partial answer.** `chat_screen.dart` keys the assistant bubble by `messageId`, which survives a requeue, so a retry's deltas append to whatever the first attempt already streamed, while the "Retrying" notice renders *below* that bubble. Pre-existing, but these notices make it legible for the first time. Worth a follow-up.
+- **A requeued run with no worker to claim it waits silently forever.** After a requeue the run is `queued` with `execution_active = 0`, and `RecoverableAssignments` only considers rows with `execution_active = 1` — so nothing ages out a pending job. If no worker ever returns, no further attempt is spent, the give-up notice never fires, and "Retrying (attempt 2 of 3)" is the last word. Pre-existing (a first dispatch with no worker is equally silent), but the notice now *implies* something further will happen. Worth a follow-up: a queue-wait notice or a pending-job timeout.
 - **Two other terminal reconciliation paths stay silent**: `reconcileWaitingApprovalTx` (`approval_delivery_failed`) and `terminalizeStaleApprovedAuthorizationTx` (`side_effect_uncertain`). Both are approval-scoped, and the client *does* handle `approval.*` events, so the user is not wholly in the dark there. Out of scope deliberately — not an oversight.
 
 ---
@@ -63,7 +64,7 @@ The string is pinned by `test/features/chat_screen_test.dart:131-161`, which ass
 
 **Files:** `turing-client/turing_app/lib/features/chat/chat_screen.dart`, `test/features/chat_screen_test.dart`
 
-- [ ] **Step 1:** Change `_runStepFallbackNotice` to a string true for any producer, e.g. *"The agent reported a step it could not describe."*
+- [ ] **Step 1:** Change `_runStepFallbackNotice` to a string true for any producer. Shipped as *"The run reported a step with no description"* — "the agent" would be wrong, since three of the five producers are the orchestrator.
 - [ ] **Step 2:** Update the two assertions at `chat_screen_test.dart:131-161`. Keep them asserting the fallback *behaviour* (empty/missing note → fallback), just with the new string.
 - [ ] **Step 3:** `( cd turing-client/turing_app && flutter test )`.
 
@@ -117,7 +118,9 @@ Wording should not promise a specific attempt number unless it is as reliably av
 
 Without this, Task 1 makes things **worse**: the user sees "Retrying (attempt 2 of 3)", "Retrying (attempt 3 of 3)", then permanent silence — more confusing than silence throughout, because the client has no `agent.run.failed` case at all (`chat_screen.dart:220-248`).
 
-**Files:** `turing-backend/orchestrator-go/internal/repository/jobs.go` (the exhaustion branch, `jobs.go:106-123`).
+**Files:** `turing-backend/orchestrator-go/internal/repository/jobs.go` (the exhaustion branch) **and** `assignments.go` (`terminalizeExhaustedAssignmentTx`).
+
+> **Both** exhaustion paths need this, not just the `jobs.go` one. `reconcileAssignment` has its own exhaustion branch reached by the worker-loss path Task 1b instruments — the *triggerable* path. The first review round caught it still silent. Both share `giveUpNote` so the wording cannot drift, and both insert the notice ahead of the approval-lifecycle cleanup and the terminal event, so the two paths order identically.
 
 - [ ] **Step 1: Write the failing test** — once attempts are exhausted, the decision carries an `agent.run.step` notice saying the run gave up, alongside the existing terminal events.
 - [ ] **Step 2: Run, confirm failure.**
@@ -144,7 +147,7 @@ Without this, Task 1 makes things **worse**: the user sees "Retrying (attempt 2 
 
   ```go
   map[string]any{
-      "note": "Answered using material recalled from earlier conversations",
+      "note": "Using material recalled from earlier conversations",
   }
   ```
   If a count is later genuinely wanted, return one struct (`memory.Recalled{Message, Excerpts, OK}`) rather than a third positional return, so the next addition doesn't churn 13 call sites again.

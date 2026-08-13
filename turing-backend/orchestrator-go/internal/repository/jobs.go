@@ -106,7 +106,7 @@ func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, runID string
 		// has just incremented.
 		notice, err := appendRunNoticeTx(ctx, tx, sessionID, runID, traceID,
 			fmt.Sprintf("Retrying (attempt %d of %d)", attempt+1, maxAttempts),
-			map[string]any{"attempt": attempt + 1, "maxAttempts": maxAttempts, "reason": code})
+			map[string]any{"attempt": attempt + 1, "maxAttempts": maxAttempts, "reason": code}, now())
 		if err != nil {
 			return RetryDecision{}, err
 		}
@@ -126,7 +126,7 @@ func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, runID string
 		// failure it explains.
 		notice, err := appendRunNoticeTx(ctx, tx, sessionID, runID, traceID,
 			giveUpNote(attempt),
-			map[string]any{"attempts": attempt, "maxAttempts": maxAttempts, "reason": code})
+			map[string]any{"attempts": attempt, "maxAttempts": maxAttempts, "reason": code}, now())
 		if err != nil {
 			return RetryDecision{}, err
 		}

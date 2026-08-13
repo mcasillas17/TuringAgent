@@ -325,7 +325,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		toolIteration++
 		if toolIteration >= maxToolIterations {
 			if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP, map[string]any{
-				"note":              "maximum tool iterations reached",
+				"note":              "Stopped after reaching the tool iteration limit",
 				"maxToolIterations": maxToolIterations,
 			})); err != nil {
 				return err
