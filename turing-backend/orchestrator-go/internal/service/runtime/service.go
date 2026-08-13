@@ -330,7 +330,8 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 						return nil
 					}
 				}
-				if err := s.applyUpdate(ctx, update); err != nil {
+				requeued, err := s.applyUpdateForWorker(ctx, update)
+				if err != nil {
 					handled, reconcileErr := s.reconcileLateAssignedUpdate(ctx, connectedWorker, ready.WorkerId, update)
 					if reconcileErr != nil {
 						return reconcileErr
@@ -342,6 +343,13 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 				}
 				if runID := terminalRunID(update); runID != "" {
 					connectedWorker.releaseRun(runID)
+					if requeued {
+						// A retryable (worker_busy) rejection just requeued this
+						// run. Dispatching now would hand the queue straight back
+						// to the still-draining worker, so let the next drain
+						// completion or heartbeat trigger dispatch instead.
+						return nil
+					}
 					if err := s.DispatchPending(ctx); err != nil {
 						return err
 					}
@@ -1106,12 +1114,25 @@ func (s *Server) applyUpdate(ctx context.Context, update *turingv1.RuntimeUpdate
 	case *turingv1.RuntimeUpdate_RunCompleted:
 		return s.handleRunCompleted(ctx, value.RunCompleted)
 	case *turingv1.RuntimeUpdate_RunFailed:
-		return s.handleRunFailed(ctx, value.RunFailed)
+		_, err := s.handleRunFailed(ctx, value.RunFailed)
+		return err
 	case *turingv1.RuntimeUpdate_RunCancelledAck:
 		return s.handleRunCancelledAck(ctx, value.RunCancelledAck)
 	default:
 		return status.Error(codes.InvalidArgument, "unsupported runtime update")
 	}
+}
+
+// applyUpdateForWorker applies a runtime update on behalf of the connected
+// worker and reports whether the update was a retryable failure that got
+// requeued. The recv loop uses that signal to skip the re-dispatch it would
+// otherwise run after a terminal update, so a worker that just rejected an
+// assignment as busy is not immediately handed the whole queue again.
+func (s *Server) applyUpdateForWorker(ctx context.Context, update *turingv1.RuntimeUpdate) (requeued bool, err error) {
+	if failed := update.GetRunFailed(); failed != nil {
+		return s.handleRunFailed(ctx, failed)
+	}
+	return false, s.applyUpdate(ctx, update)
 }
 
 func (s *Server) normalizeRuntimeEvent(ctx context.Context, event *turingv1.TuringEvent) (*turingv1.TuringEvent, error) {
@@ -1336,22 +1357,38 @@ func (s *Server) handleRunCompleted(ctx context.Context, completed *turingv1.Run
 	return nil
 }
 
-func (s *Server) handleRunFailed(ctx context.Context, failed *turingv1.RuntimeRunFailed) error {
+// handleRunFailed terminalizes a failed run. A retryable failure (for example a
+// worker rejecting an assignment with worker_busy) is requeued for another
+// attempt instead of failing permanently, until the attempt budget is spent.
+// The returned bool reports whether the run was requeued, so the caller can
+// suppress the immediate re-dispatch that would otherwise hand the queue
+// straight back to the busy worker.
+func (s *Server) handleRunFailed(ctx context.Context, failed *turingv1.RuntimeRunFailed) (bool, error) {
 	if failed == nil || failed.RunId == "" {
-		return status.Error(codes.InvalidArgument, "run_failed is required")
+		return false, status.Error(codes.InvalidArgument, "run_failed is required")
+	}
+	if failed.Retryable {
+		decision, err := s.repo.RequeueOrFailRetryableRun(ctx, failed.RunId, failed.Code, failed.Message, s.dispatch.MaxAttempts)
+		if err != nil {
+			return false, mapRunStateError(err)
+		}
+		for _, event := range decision.Events {
+			s.publishEvent(event)
+		}
+		return decision.Requeued, nil
 	}
 	payloadJSON, err := encodePayload(map[string]any{"runId": failed.RunId, "code": failed.Code, "message": failed.Message, "retryable": failed.Retryable})
 	if err != nil {
-		return err
+		return false, err
 	}
 	events, err := s.repo.FailRunWithEvent(ctx, failed.RunId, failed.Code, failed.Message, payloadJSON)
 	if err != nil {
-		return mapRunStateError(err)
+		return false, mapRunStateError(err)
 	}
 	for _, event := range events {
 		s.publishEvent(event)
 	}
-	return nil
+	return false, nil
 }
 
 func encodePayload(payload map[string]any) (string, error) {

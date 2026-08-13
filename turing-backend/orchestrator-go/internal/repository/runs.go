@@ -217,17 +217,33 @@ func (r *Repository) FailRunWithEventPreservingExecution(ctx context.Context, ru
 }
 
 func (r *Repository) failRunWithEvent(ctx context.Context, runID string, code string, message string, payloadJSON string, preserveExecution bool) ([]Event, error) {
-	finishedAt := now()
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	events, err := failRunWithEventTx(ctx, tx, runID, code, message, payloadJSON, preserveExecution)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
+// failRunWithEventTx fails a run and its job inside an existing transaction,
+// revoking any pending approvals/tool calls and appending the terminal
+// agent.run.failed event. It is shared by the direct failure path and the
+// retry-exhaustion path so both terminalize a run identically.
+func failRunWithEventTx(ctx context.Context, tx *sql.Tx, runID string, code string, message string, payloadJSON string, preserveExecution bool) ([]Event, error) {
+	finishedAt := now()
 	var sessionID, traceID string
 	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&sessionID, &traceID); err != nil {
 		return nil, err
 	}
 	var result sql.Result
+	var err error
 	if preserveExecution {
 		result, err = tx.ExecContext(ctx, `
 			UPDATE agent_runs
@@ -277,9 +293,6 @@ func (r *Repository) failRunWithEvent(ctx context.Context, runID string, code st
 		return nil, err
 	}
 	events = append(events, event)
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
 	return events, nil
 }
 

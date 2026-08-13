@@ -53,6 +53,116 @@ type Assignment struct {
 
 var ErrAssignmentFenced = errors.New("assignment attempt is fenced")
 
+// RetriesExhaustedCode marks a run that was terminally failed only after its
+// retry budget was spent. It lets an operator distinguish "gave up after
+// retries" from a run that failed on its first attempt.
+const RetriesExhaustedCode = "retries_exhausted"
+
+// RetryDecision reports how a retryable run failure was resolved: either the
+// job was requeued for another attempt, or (once attempts were exhausted) the
+// run was terminally failed and the terminal lifecycle events were emitted.
+type RetryDecision struct {
+	Requeued bool
+	Events   []Event
+}
+
+// RequeueOrFailRetryableRun handles a retryable run failure (for example a
+// worker rejecting an assignment because it was busy). While the job still has
+// attempts left it is requeued for another worker to claim; once the attempt
+// budget is spent — or the run is no longer in a requeueable state — the run is
+// terminally failed with a distinguishable code so the message does not bounce
+// forever. maxAttempts caps the total number of attempts.
+func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, runID string, code string, message string, maxAttempts int) (RetryDecision, error) {
+	if maxAttempts <= 0 {
+		maxAttempts = defaultAssignmentMaxAttempts
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return RetryDecision{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var runStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM agent_runs WHERE id = ?`, runID).Scan(&runStatus); err != nil {
+		return RetryDecision{}, err
+	}
+	var attempt int
+	jobErr := tx.QueryRowContext(ctx, `SELECT attempt FROM jobs WHERE run_id = ? AND status = 'in_progress'`, runID).Scan(&attempt)
+	if jobErr != nil && !errors.Is(jobErr, sql.ErrNoRows) {
+		return RetryDecision{}, jobErr
+	}
+	requeueable := runStatus == "running" && jobErr == nil
+
+	if requeueable && attempt < maxAttempts {
+		if err := requeueRunForRetryTx(ctx, tx, runID); err != nil {
+			return RetryDecision{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return RetryDecision{}, err
+		}
+		return RetryDecision{Requeued: true}, nil
+	}
+
+	failCode, failMessage := code, message
+	if requeueable && attempt >= maxAttempts {
+		failCode = RetriesExhaustedCode
+	}
+	payloadJSON, err := json.Marshal(map[string]any{
+		"runId": runID, "code": failCode, "message": failMessage, "retryable": false,
+	})
+	if err != nil {
+		return RetryDecision{}, err
+	}
+	events, err := failRunWithEventTx(ctx, tx, runID, failCode, failMessage, string(payloadJSON), false)
+	if err != nil {
+		return RetryDecision{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return RetryDecision{}, err
+	}
+	return RetryDecision{Events: events}, nil
+}
+
+// requeueRunForRetryTx returns a running run and its in-progress job to the
+// queue for another attempt, incrementing the job's attempt counter and
+// clearing all execution/lease state so a fresh worker can claim it.
+func requeueRunForRetryTx(ctx context.Context, tx *sql.Tx, runID string) error {
+	result, err := tx.ExecContext(ctx, `
+		UPDATE jobs
+		SET status = 'pending',
+			lease_owner = NULL,
+			lease_expires_at = NULL,
+			lease_expires_at_ns = NULL,
+			picked_up_at = NULL,
+			assignment_attempt_id = NULL,
+			attempt = attempt + 1
+		WHERE run_id = ? AND status = 'in_progress'
+	`, runID)
+	if err != nil {
+		return err
+	}
+	if err := expectOneRow(result, "in-progress job not found for retry requeue"); err != nil {
+		return err
+	}
+	result, err = tx.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET status = 'queued',
+			started_at = NULL,
+			worker_id = NULL,
+			execution_active = 0,
+			execution_exit_acknowledged_at = NULL,
+			execution_attempt_id = NULL,
+			execution_state = 'none',
+			execution_lease_expires_at = NULL,
+			execution_lease_expires_at_ns = NULL
+		WHERE id = ? AND status = 'running'
+	`, runID)
+	if err != nil {
+		return err
+	}
+	return expectOneRow(result, "running run not found for retry requeue")
+}
+
 func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMessageInput) (EnqueueUserMessageResult, error) {
 	created := time.Now().UTC()
 	userMessageID := ids.New("msg")
