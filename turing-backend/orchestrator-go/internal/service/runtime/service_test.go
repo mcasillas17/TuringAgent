@@ -3302,10 +3302,9 @@ func TestRunFailedPublishesTerminalEvent(t *testing.T) {
 	defer unsubscribe()
 
 	err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
-		RunId:     enqueued.RunID,
-		Code:      "model_error",
-		Message:   "model failed",
-		Retryable: true,
+		RunId:   enqueued.RunID,
+		Code:    "model_error",
+		Message: "model failed",
 	}}})
 	if err != nil {
 		t.Fatal(err)
@@ -3323,7 +3322,7 @@ func TestRunFailedPublishesTerminalEvent(t *testing.T) {
 	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
 		t.Fatalf("decode payload: %v", err)
 	}
-	if payload.RunID != enqueued.RunID || payload.Code != "model_error" || payload.Message != "model failed" || !payload.Retryable {
+	if payload.RunID != enqueued.RunID || payload.Code != "model_error" || payload.Message != "model failed" || payload.Retryable {
 		t.Fatalf("payload = %+v", payload)
 	}
 }

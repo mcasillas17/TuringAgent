@@ -330,7 +330,8 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 						return nil
 					}
 				}
-				if err := s.applyUpdate(ctx, update); err != nil {
+				suppressDispatch, err := s.applyUpdateForWorker(ctx, update)
+				if err != nil {
 					handled, reconcileErr := s.reconcileLateAssignedUpdate(ctx, connectedWorker, ready.WorkerId, update)
 					if reconcileErr != nil {
 						return reconcileErr
@@ -342,6 +343,14 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 				}
 				if runID := terminalRunID(update); runID != "" {
 					connectedWorker.releaseRun(runID)
+					if suppressDispatch {
+						// A worker_busy rejection just requeued this run.
+						// Dispatching now would hand the queue straight back to
+						// the still-draining worker in a tight loop. Its drain
+						// completion emits a terminal update, and that path
+						// dispatches — see workerBusyFailureCode.
+						return nil
+					}
 					if err := s.DispatchPending(ctx); err != nil {
 						return err
 					}
@@ -1106,12 +1115,26 @@ func (s *Server) applyUpdate(ctx context.Context, update *turingv1.RuntimeUpdate
 	case *turingv1.RuntimeUpdate_RunCompleted:
 		return s.handleRunCompleted(ctx, value.RunCompleted)
 	case *turingv1.RuntimeUpdate_RunFailed:
-		return s.handleRunFailed(ctx, value.RunFailed)
+		_, err := s.handleRunFailed(ctx, value.RunFailed)
+		return err
 	case *turingv1.RuntimeUpdate_RunCancelledAck:
 		return s.handleRunCancelledAck(ctx, value.RunCancelledAck)
 	default:
 		return status.Error(codes.InvalidArgument, "unsupported runtime update")
 	}
+}
+
+// applyUpdateForWorker applies a runtime update on behalf of the connected
+// worker and reports whether the recv loop should SKIP the re-dispatch it
+// normally runs after a terminal update. That is true only for a worker_busy
+// rejection, so a worker that just said it was full is not immediately handed
+// the whole queue again — see workerBusyFailureCode for why no other retryable
+// failure may skip it.
+func (s *Server) applyUpdateForWorker(ctx context.Context, update *turingv1.RuntimeUpdate) (suppressDispatch bool, err error) {
+	if failed := update.GetRunFailed(); failed != nil {
+		return s.handleRunFailed(ctx, failed)
+	}
+	return false, s.applyUpdate(ctx, update)
 }
 
 func (s *Server) normalizeRuntimeEvent(ctx context.Context, event *turingv1.TuringEvent) (*turingv1.TuringEvent, error) {
@@ -1336,22 +1359,52 @@ func (s *Server) handleRunCompleted(ctx context.Context, completed *turingv1.Run
 	return nil
 }
 
-func (s *Server) handleRunFailed(ctx context.Context, failed *turingv1.RuntimeRunFailed) error {
+// handleRunFailed terminalizes a failed run. A retryable failure (for example a
+// worker rejecting an assignment with worker_busy) is requeued for another
+// attempt instead of failing permanently, until the attempt budget is spent.
+// The returned bool reports whether the caller should skip its re-dispatch, so
+// suppress the immediate re-dispatch that would otherwise hand the queue
+// straight back to the busy worker.
+// workerBusyFailureCode is the one retryable failure whose re-dispatch may be
+// suppressed. The worker reports it when it cannot accept an assignment, so it
+// still holds a draining run that will emit a terminal update — and that update
+// triggers DispatchPending, which is what gets the requeued run moving again.
+//
+// No other retryable failure has that guarantee: they happen mid-run and leave
+// the worker idle, sending nothing further. A heartbeat only dispatches when a
+// lease is reconciled or revived, which a healthy worker never is, and there is
+// no periodic dispatcher — so suppressing those would strand the run in queued
+// forever.
+const workerBusyFailureCode = "worker_busy"
+
+func (s *Server) handleRunFailed(ctx context.Context, failed *turingv1.RuntimeRunFailed) (bool, error) {
 	if failed == nil || failed.RunId == "" {
-		return status.Error(codes.InvalidArgument, "run_failed is required")
+		return false, status.Error(codes.InvalidArgument, "run_failed is required")
+	}
+	if failed.Retryable {
+		decision, err := s.repo.RequeueOrFailRetryableRun(ctx, failed.RunId, failed.Code, failed.Message, s.dispatch.MaxAttempts)
+		if err != nil {
+			return false, mapRunStateError(err)
+		}
+		for _, event := range decision.Events {
+			s.publishEvent(event)
+		}
+		// Every retryable failure is requeued, but only an assignment rejection
+		// may skip the dispatch that follows. See workerBusyFailureCode.
+		return decision.Requeued && failed.Code == workerBusyFailureCode, nil
 	}
 	payloadJSON, err := encodePayload(map[string]any{"runId": failed.RunId, "code": failed.Code, "message": failed.Message, "retryable": failed.Retryable})
 	if err != nil {
-		return err
+		return false, err
 	}
 	events, err := s.repo.FailRunWithEvent(ctx, failed.RunId, failed.Code, failed.Message, payloadJSON)
 	if err != nil {
-		return mapRunStateError(err)
+		return false, mapRunStateError(err)
 	}
 	for _, event := range events {
 		s.publishEvent(event)
 	}
-	return nil
+	return false, nil
 }
 
 func encodePayload(payload map[string]any) (string, error) {
