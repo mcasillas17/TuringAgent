@@ -233,10 +233,20 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 		if err := requeueAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID); err != nil {
 			return AssignmentReconciliation{}, err
 		}
+		// No attempt number here: unlike RequeueOrFailRetryableRun this path does
+		// not read the job's attempt counter, and a number that might be wrong is
+		// worse than no number at all.
+		notice, err := appendRunNoticeTx(ctx, tx, sessionID, assignment.RunID, traceID, map[string]any{
+			"note":   "Retrying after the worker became unavailable",
+			"reason": "worker_unavailable",
+		})
+		if err != nil {
+			return AssignmentReconciliation{}, err
+		}
 		if err := tx.Commit(); err != nil {
 			return AssignmentReconciliation{}, err
 		}
-		return AssignmentReconciliation{Requeued: true}, nil
+		return AssignmentReconciliation{Requeued: true, Events: []Event{notice}}, nil
 	case "queued":
 		if active == 1 {
 			if _, err := tx.ExecContext(ctx, `
