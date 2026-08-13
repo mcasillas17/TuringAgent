@@ -108,8 +108,6 @@ Approval cards appear from `approval.requested` and are removed on `approval.app
 - `lib/networking/auth_storage.dart`: secure storage abstraction.
 - `test/ui/responsive_shell_backend_test.dart`: shell regression test proving the polished shell still wraps backend chat.
 
-The legacy prototype screen under `lib/ui/chat/chat_screen.dart` is not the backend-connected chat surface used by the v1 shell integration.
-
 ## Developer Notes
 
 - Keep the Flutter client thin. Do not move orchestration, memory, routing, tool policy, approval decisions, or persistence into Flutter.
