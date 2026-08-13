@@ -52,6 +52,13 @@ const (
 	maxToolResultBytes        = 4 * 1024 * 1024
 	toolIterationFallback     = "Tool iteration limit reached before a final response."
 	emptyFinalFallback        = "The model returned an empty response."
+	// maxUnknownToolListing caps how many tool names an unknown-tool error echoes
+	// back to the model. A small model only needs a handful of candidates to
+	// correct itself, and the registry could grow large; an unbounded list would
+	// eat into the tool-result byte budget. When more tools exist than this, the
+	// payload lists the first maxUnknownToolListing, flags the truncation, and
+	// reports the true total so the truncation is never silent.
+	maxUnknownToolListing = 32
 )
 
 var errRunTerminalized = errors.New("run already terminalized")
@@ -402,7 +409,7 @@ func (a *GeneralAssistant) executeToolCall(
 		if err := emitAssistantToolCallFailed(emit, job, call, "unknown_tool"); err != nil {
 			return toolCallOutcome{}, err
 		}
-		return toolErrorOutcome(call, "unknown_tool")
+		return unknownToolOutcome(call, registry)
 	}
 	if a.tools == nil || a.tools.Runner == nil {
 		if err := emitAssistantToolCallFailed(emit, job, call, "tool_runner_unavailable"); err != nil {
@@ -487,6 +494,48 @@ func emitToolCallFailed(emit func(*turingv1.RuntimeUpdate) error, job *turingv1.
 
 func toolResultMessage(call llm.ToolCall, content []byte) llm.ChatMessage {
 	return llm.ChatMessage{Role: "tool", Name: call.Name, ToolCallID: call.ID, Content: string(content)}
+}
+
+// unknownToolPayload is the tool-role content returned when the model names a
+// tool the registry does not hold. Unlike the flat {"error": ...} of a failed
+// call, it says the name is unknown, echoes WHICH name was rejected, and lists
+// the tools that actually exist so a small model has something concrete to
+// correct toward instead of re-emitting the same wrong name every iteration.
+type unknownToolPayload struct {
+	Error          string   `json:"error"`
+	RejectedTool   string   `json:"rejectedTool"`
+	AvailableTools []string `json:"availableTools"`
+	// Truncated and TotalAvailable are only present when the list was capped, so
+	// the model can tell a short list from a truncated one.
+	Truncated      bool `json:"availableToolsTruncated,omitempty"`
+	TotalAvailable int  `json:"totalAvailableTools,omitempty"`
+}
+
+// unknownToolOutcome builds the recoverable error for an unknown tool name. Same
+// outcome shape as toolErrorOutcome — a tool-role result threaded back to the
+// model — but with actionable content.
+func unknownToolOutcome(call llm.ToolCall, registry *ToolRegistry) (toolCallOutcome, error) {
+	definitions := registry.Definitions()
+	available := make([]string, 0, len(definitions))
+	for _, definition := range definitions {
+		available = append(available, definition.Name)
+	}
+	payload := unknownToolPayload{
+		Error:          "unknown_tool",
+		RejectedTool:   call.Name,
+		AvailableTools: available,
+	}
+	if len(available) > maxUnknownToolListing {
+		payload.AvailableTools = available[:maxUnknownToolListing]
+		payload.Truncated = true
+		payload.TotalAvailable = len(available)
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return toolCallOutcome{}, err
+	}
+	result := toolResultMessage(call, data)
+	return toolCallOutcome{ResultMessage: &result, AppendedBytes: len(data)}, nil
 }
 
 func toolErrorOutcome(call llm.ToolCall, message string) (toolCallOutcome, error) {
