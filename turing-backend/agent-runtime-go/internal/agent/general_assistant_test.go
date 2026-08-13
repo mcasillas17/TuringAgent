@@ -1549,18 +1549,146 @@ func TestExecuteSurfacesRecoverableToolErrorsToModel(t *testing.T) {
 				}
 			}
 			resultMessage := provider.requests[1].Messages[2]
-			var result map[string]string
+			// Unmarshal into map[string]any because the unknown-tool payload
+			// carries more than the flat {"error": string} the other cases do
+			// (it also lists available tools, an array).
+			var result map[string]any
 			if err := json.Unmarshal([]byte(resultMessage.Content), &result); err != nil {
 				t.Fatalf("tool error result is not JSON: %q: %v", resultMessage.Content, err)
 			}
-			if !strings.Contains(result["error"], test.wantError) {
-				t.Fatalf("tool error = %q, want substring %q", result["error"], test.wantError)
+			errText, _ := result["error"].(string)
+			if !strings.Contains(errText, test.wantError) {
+				t.Fatalf("tool error = %q, want substring %q", errText, test.wantError)
 			}
 			if completed := updates[len(updates)-1].GetRunCompleted(); completed == nil || completed.Content != "recovered" {
 				t.Fatalf("terminal update = %+v", updates[len(updates)-1])
 			}
 			if len(client.calls) != test.wantCalls {
 				t.Fatalf("MCP calls = %d, want %d", len(client.calls), test.wantCalls)
+			}
+		})
+	}
+}
+
+// unknownToolErrorPayload mirrors the JSON an unknown-tool result carries back to
+// the model. Decoding into it also proves the content is valid JSON.
+type unknownToolErrorPayload struct {
+	Error          string   `json:"error"`
+	RejectedTool   string   `json:"rejectedTool"`
+	AvailableTools []string `json:"availableTools"`
+	Truncated      bool     `json:"availableToolsTruncated"`
+	TotalAvailable int      `json:"totalAvailableTools"`
+}
+
+func TestExecuteUnknownToolErrorNamesRejectedToolAndListsAvailable(t *testing.T) {
+	provider := &queuedProvider{responses: [][]llm.StreamEvent{
+		{{Type: "tool_call", ToolCalls: []llm.ToolCall{{ID: "call_bad", Name: "systm.tyme"}}}},
+		{{Type: "delta", Text: "recovered"}},
+	}}
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{"name": "system.time"}, {"name": "files.create"}},
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{SystemMCP: client, Runner: &tools.Runner{PostBeacon: allowToolCall}},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	// An unknown name must not abort: the enriched error is the model's chance to
+	// correct itself, so the loop threads it back and keeps going.
+	if len(provider.requests) != 2 {
+		t.Fatalf("provider requests = %d, want unknown-tool turn then recovery turn", len(provider.requests))
+	}
+	if completed := updates[len(updates)-1].GetRunCompleted(); completed == nil || completed.Content != "recovered" {
+		t.Fatalf("terminal update = %+v, want recovered completion", updates[len(updates)-1])
+	}
+
+	resultMessage := provider.requests[1].Messages[2]
+	if resultMessage.Role != "tool" {
+		t.Fatalf("threaded tool result role = %q, want tool", resultMessage.Role)
+	}
+	var payload unknownToolErrorPayload
+	if err := json.Unmarshal([]byte(resultMessage.Content), &payload); err != nil {
+		t.Fatalf("unknown-tool result is not valid JSON: %q: %v", resultMessage.Content, err)
+	}
+	if payload.Error != "unknown_tool" {
+		t.Fatalf("error = %q, want unknown_tool", payload.Error)
+	}
+	if payload.RejectedTool != "systm.tyme" {
+		t.Fatalf("rejectedTool = %q, want the rejected name systm.tyme", payload.RejectedTool)
+	}
+	wantAvailable := map[string]bool{"system.time": true, "files.create": true}
+	if len(payload.AvailableTools) != len(wantAvailable) {
+		t.Fatalf("availableTools = %v, want the two registered tools", payload.AvailableTools)
+	}
+	for _, name := range payload.AvailableTools {
+		if !wantAvailable[name] {
+			t.Fatalf("availableTools = %v, contains unexpected %q", payload.AvailableTools, name)
+		}
+	}
+	if payload.Truncated {
+		t.Fatalf("availableToolsTruncated = true, want false for a small registry")
+	}
+	if payload.TotalAvailable != 0 {
+		t.Fatalf("totalAvailableTools = %d, want it omitted (0) when the list is not truncated", payload.TotalAvailable)
+	}
+}
+
+func TestExecuteUnknownToolErrorBoundsAvailableToolListAndFlagsTruncation(t *testing.T) {
+	// Exercise the boundary directly: at exactly the cap nothing is truncated;
+	// one past the cap the list is clipped and the truncation is reported.
+	for _, test := range []struct {
+		name          string
+		registered    int
+		wantListed    int
+		wantTruncated bool
+		wantTotal     int
+	}{
+		{name: "exact cap", registered: maxUnknownToolListing, wantListed: maxUnknownToolListing},
+		{
+			name:          "one past cap",
+			registered:    maxUnknownToolListing + 1,
+			wantListed:    maxUnknownToolListing,
+			wantTruncated: true,
+			wantTotal:     maxUnknownToolListing + 1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			definitions := make([]map[string]any, test.registered)
+			for index := range definitions {
+				definitions[index] = map[string]any{"name": fmt.Sprintf("system.tool_%03d", index)}
+			}
+			provider := &queuedProvider{responses: [][]llm.StreamEvent{
+				{{Type: "tool_call", ToolCalls: []llm.ToolCall{{ID: "call_bad", Name: "system.missing"}}}},
+				{{Type: "delta", Text: "recovered"}},
+			}}
+			client := &assistantTestToolLister{definitions: definitions}
+			assistant := NewGeneralAssistant(
+				map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+				fakeMessageClient{},
+				&GeneralAssistantTools{SystemMCP: client, Runner: &tools.Runner{PostBeacon: allowToolCall}},
+			)
+
+			updates := collectUpdates(t, assistant, testJob())
+
+			if completed := updates[len(updates)-1].GetRunCompleted(); completed == nil || completed.Content != "recovered" {
+				t.Fatalf("terminal update = %+v, want recovered completion", updates[len(updates)-1])
+			}
+			resultMessage := provider.requests[1].Messages[2]
+			var payload unknownToolErrorPayload
+			if err := json.Unmarshal([]byte(resultMessage.Content), &payload); err != nil {
+				t.Fatalf("unknown-tool result is not valid JSON: %q: %v", resultMessage.Content, err)
+			}
+			if len(payload.AvailableTools) != test.wantListed {
+				t.Fatalf("availableTools length = %d, want %d", len(payload.AvailableTools), test.wantListed)
+			}
+			if payload.Truncated != test.wantTruncated {
+				t.Fatalf("availableToolsTruncated = %t, want %t", payload.Truncated, test.wantTruncated)
+			}
+			if payload.TotalAvailable != test.wantTotal {
+				t.Fatalf("totalAvailableTools = %d, want %d", payload.TotalAvailable, test.wantTotal)
 			}
 		})
 	}
