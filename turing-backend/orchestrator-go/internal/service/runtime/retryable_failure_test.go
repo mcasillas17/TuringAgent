@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -173,5 +174,53 @@ func TestTerminalUpdateDispatchesQueuedWork(t *testing.T) {
 	})
 	if next == nil || next.GetRunAssigned() == nil {
 		t.Fatal("the queued run was never dispatched; a suppressed dispatch would strand it")
+	}
+}
+
+// TestWorkerBusyRequeuePublishesRetryNotice proves the requeue notice reaches a
+// client, not just the RetryDecision. The repository test can only observe
+// decision.Events; the point of the notice is that it is published on the
+// session's event stream, which is what the Flutter client subscribes to.
+func TestWorkerBusyRequeuePublishesRetryNotice(t *testing.T) {
+	h := newHarness(t)
+	sessionID := h.createSessionAndRun(t, "notice me")
+	stream, unsubscribe := h.bus.Subscribe(sessionID)
+	defer unsubscribe()
+
+	workerStream, err := h.runtimeClient(t).ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = workerStream.CloseSend() }()
+	if err := workerStream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
+		WorkerId: "worker-notice", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	assigned := recvUntil(t, workerStream, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetRunAssigned() != nil
+	}).GetRunAssigned()
+
+	if err := workerStream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
+		RunId:     assigned.RunId,
+		Code:      "worker_busy",
+		Message:   "worker cannot accept the run",
+		Retryable: true,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	notice := streamedToolEventForContract(t, stream, "agent.run.step")
+	var payload struct {
+		Note string `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(notice.PayloadJSON), &payload); err != nil {
+		t.Fatalf("decode notice payload %q: %v", notice.PayloadJSON, err)
+	}
+	if payload.Note != "Retrying (attempt 2 of 3)" {
+		t.Fatalf("published notice note = %q, want %q", payload.Note, "Retrying (attempt 2 of 3)")
+	}
+	if notice.RunID != assigned.RunId {
+		t.Fatalf("notice run_id = %q, want %q (a client correlates by run)", notice.RunID, assigned.RunId)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
@@ -82,8 +83,11 @@ func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, runID string
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var runStatus string
-	if err := tx.QueryRowContext(ctx, `SELECT status FROM agent_runs WHERE id = ?`, runID).Scan(&runStatus); err != nil {
+	var runStatus, sessionID, traceID string
+	// session_id and trace_id are selected here rather than only in
+	// failRunWithEventTx because both branches below now append a notice event,
+	// and appendRunEventTx needs them.
+	if err := tx.QueryRowContext(ctx, `SELECT status, session_id, trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&runStatus, &sessionID, &traceID); err != nil {
 		return RetryDecision{}, err
 	}
 	var attempt int
@@ -97,15 +101,42 @@ func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, runID string
 		if err := requeueRunForRetryTx(ctx, tx, runID); err != nil {
 			return RetryDecision{}, err
 		}
+		// attempt is the one that just failed, so the attempt the user is about to
+		// wait through is attempt+1 — matching the counter requeueRunForRetryTx
+		// has just incremented.
+		notice, err := appendRunNoticeTx(ctx, tx, sessionID, runID, traceID, map[string]any{
+			"note":        fmt.Sprintf("Retrying (attempt %d of %d)", attempt+1, maxAttempts),
+			"attempt":     attempt + 1,
+			"maxAttempts": maxAttempts,
+			"reason":      code,
+		})
+		if err != nil {
+			return RetryDecision{}, err
+		}
 		if err := tx.Commit(); err != nil {
 			return RetryDecision{}, err
 		}
-		return RetryDecision{Requeued: true}, nil
+		return RetryDecision{Requeued: true, Events: []Event{notice}}, nil
 	}
 
 	failCode, failMessage := code, message
+	var events []Event
 	if requeueable && attempt >= maxAttempts {
 		failCode = RetriesExhaustedCode
+		// Without this the user's last word from us is "Retrying (attempt N of N)"
+		// followed by permanent silence: the client has no agent.run.failed case.
+		// Ordered before the terminal events so the explanation precedes the
+		// failure it explains.
+		notice, err := appendRunNoticeTx(ctx, tx, sessionID, runID, traceID, map[string]any{
+			"note":        fmt.Sprintf("Gave up after %d attempts", maxAttempts),
+			"attempts":    attempt,
+			"maxAttempts": maxAttempts,
+			"reason":      code,
+		})
+		if err != nil {
+			return RetryDecision{}, err
+		}
+		events = append(events, notice)
 	}
 	payloadJSON, err := json.Marshal(map[string]any{
 		"runId": runID, "code": failCode, "message": failMessage, "retryable": false,
@@ -113,14 +144,29 @@ func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, runID string
 	if err != nil {
 		return RetryDecision{}, err
 	}
-	events, err := failRunWithEventTx(ctx, tx, runID, failCode, failMessage, string(payloadJSON), false)
+	terminal, err := failRunWithEventTx(ctx, tx, runID, failCode, failMessage, string(payloadJSON), false)
 	if err != nil {
 		return RetryDecision{}, err
 	}
+	events = append(events, terminal...)
 	if err := tx.Commit(); err != nil {
 		return RetryDecision{}, err
 	}
 	return RetryDecision{Events: events}, nil
+}
+
+// appendRunNoticeTx appends a user-facing agent.run.step notice. The client
+// renders this event type generically from its "note" key, so a notice needs no
+// new event type and no client change; extra keys are for operators reading the
+// event log and are ignored by the UI.
+//
+// Note must carry the whole meaning on its own — anything else is dropped.
+func appendRunNoticeTx(ctx context.Context, tx *sql.Tx, sessionID string, runID string, traceID string, payload map[string]any) (Event, error) {
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return Event{}, err
+	}
+	return appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.step", string(payloadJSON), now())
 }
 
 // requeueRunForRetryTx returns a running run and its in-progress job to the
