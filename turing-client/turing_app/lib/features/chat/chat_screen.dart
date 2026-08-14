@@ -234,12 +234,6 @@ class _ChatScreenState extends State<ChatScreen> {
       case 'agent.run.step':
         _applyRunStep(event);
         break;
-      // `agent.run.started` and `agent.run.queued` are deliberately unhandled
-      // here: surfacing them would just add noise ahead of the real content.
-      // `agent.run.completed` is also deliberately unhandled, but for a
-      // different reason: its completion is already evidenced by the
-      // assistant's own answer arriving via `message.delta`, so a dedicated
-      // handler would be redundant.
       case 'agent.run.failed':
         _applyRunFailed(event);
         break;
@@ -264,6 +258,18 @@ class _ChatScreenState extends State<ChatScreen> {
       case 'tool.call.denied':
         _applyToolCall(event, ToolCallStatus.denied);
         break;
+      // Everything below has no case above and so is deliberately left
+      // unhandled — it falls out of this switch untouched, not implicitly
+      // grouped with any handled case above (in particular, not with the
+      // `agent.run.failed` handling just above):
+      //  - `agent.run.started` / `agent.run.queued`: surfacing them would
+      //    just add noise ahead of the real content.
+      //  - `agent.run.completed`: its completion is already evidenced by the
+      //    assistant's own answer arriving via `message.delta`, so a
+      //    dedicated handler would be redundant.
+      //  - `agent.run.cancelled`: this screen has no client-side affordance
+      //    to cancel a run, so today nothing it does can produce this event;
+      //    it is listed here so that changes if/when cancellation is added.
     }
   }
 
@@ -279,6 +285,15 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom();
   }
 
+  /// The code `RequeueOrFailRetryableRun` writes once retries are exhausted
+  /// (`repository/jobs.go:122`). Its humanized form ("Retries exhausted")
+  /// says nothing that the paired give-up `agent.run.step` notice ("Gave up
+  /// after N attempts") has not already said, and the real cause is exactly
+  /// what is unknown when this code is the only signal left — so it is
+  /// excluded from [_humanizeFailureCode] below and treated the same as no
+  /// code at all.
+  static const _retriesExhaustedCode = 'retries_exhausted';
+
   void _applyRunFailed(TuringEvent event) {
     if (_isHistoricalRunEvent(event)) return;
 
@@ -287,7 +302,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final String text;
     if (rawMessage != null && rawMessage.isNotEmpty) {
       text = rawMessage;
-    } else if (rawCode != null && rawCode.isNotEmpty) {
+    } else if (rawCode != null &&
+        rawCode.isNotEmpty &&
+        rawCode != _retriesExhaustedCode) {
       text = _humanizeFailureCode(rawCode);
     } else {
       text = _runFailureFallbackNotice;

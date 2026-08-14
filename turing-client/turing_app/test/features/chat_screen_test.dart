@@ -529,9 +529,50 @@ void main() {
     },
   );
 
+  testWidgets('agent.run.failed falls back to the code when the message is '
+      'whitespace-only', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'agent.run.failed',
+        sequence: 1,
+        payload: const {'code': 'tool_discovery_failed', 'message': '   '},
+      ),
+    );
+    await tester.pump();
+
+    // A blank-but-present message must not win over a usable code.
+    expect(find.text('   '), findsNothing);
+    expect(find.text('Tool discovery failed'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  // `_humanizeFailureCode` strips underscores before deriving a sentence
+  // fragment from the code, so a code that is nothing BUT underscores (a
+  // producer bug, or a not-yet-classified code stored as a literal `_`)
+  // strips down to an empty string. Guard against that collapsing to a blank
+  // card: assert the generic fallback renders instead, and that the stream
+  // keeps delivering afterwards. Removing the empty-after-strip guard would
+  // index into that empty string and throw, taking the whole subscription
+  // (and every later event) down with it — the later `message.delta` in this
+  // test is what would fail to appear if that regressed.
   testWidgets(
-    'agent.run.failed falls back to the code when the message is '
-    'whitespace-only',
+    'agent.run.failed falls back to generic text for an underscore-only '
+    'code, and the stream keeps delivering afterwards',
     (tester) async {
       final events = StreamController<TuringEvent>(sync: true);
 
@@ -550,14 +591,32 @@ void main() {
         _event(
           type: 'agent.run.failed',
           sequence: 1,
-          payload: const {'code': 'tool_discovery_failed', 'message': '   '},
+          payload: const {'code': '_'},
         ),
       );
       await tester.pump();
 
-      // A blank-but-present message must not win over a usable code.
-      expect(find.text('   '), findsNothing);
-      expect(find.text('Tool discovery failed'), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      final failureText = tester.widget<Text>(
+        find.descendant(
+          of: find.byType(RunFailureCard),
+          matching: find.byType(Text),
+        ),
+      );
+      expect(failureText.data, 'The run failed with no further details');
+      expect(find.text('_'), findsNothing);
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 2,
+          payload: {'messageId': 'm1', 'delta': 'still alive'},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('still alive'), findsOneWidget);
+      expect(tester.takeException(), isNull);
 
       await tester.pumpWidget(const SizedBox.shrink());
       unawaited(events.close());
@@ -660,6 +719,68 @@ void main() {
     await tester.pump();
 
     expect(find.byType(RunFailureCard), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  // The watermark sequence alone does not cover every replay: a run that
+  // completed WHILE `listMessages` was loading finishes with its answer
+  // already in history, but its `agent.run.failed` can still carry a
+  // sequence above the watermark captured before that load started (see
+  // `_isHistoricalRunEvent`'s second branch). This mirrors "a run notice for
+  // completed history stays hidden" for the failure-card path specifically.
+  testWidgets('a failure for a run already represented by completed history '
+      'stays hidden', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..initialEvents = [
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: {'messageId': 'msg_a1', 'delta': 'finished'},
+        ),
+      ]
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_a1',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'finished',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // Sequence 2 is newer than the watermark (1), so only the runId match
+    // suppresses it.
+    events.add(
+      _event(
+        type: 'agent.run.failed',
+        sequence: 2,
+        payload: {'code': 'job_timeout', 'message': 'Job timed out'},
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.byType(RunFailureCard),
+      findsNothing,
+      reason:
+          'a failure card for a run already represented by complete history '
+          'would be appended below newer conversation content',
+    );
 
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());
@@ -782,15 +903,18 @@ void main() {
   // The `message` the runtime passes into `RequeueOrFailRetryableRun` is an
   // ordinary proto string field (`RuntimeRunFailed.Message`), so nothing in
   // the contract guarantees it is non-empty by the time it reaches this
-  // `code: "retries_exhausted"` terminal payload. `_applyRunFailed` falls
-  // back to humanizing the `code` when `message` is blank
-  // (`chat_screen.dart`'s `_humanizeFailureCode`), turning
-  // "retries_exhausted" into "Retries exhausted". Pin that this fallback
-  // text is still distinct from the give-up notice, so the double-report
-  // stays non-duplicative even on this edge of the payload.
+  // `code: "retries_exhausted"` terminal payload. Naively humanizing the code
+  // here ("retries_exhausted" -> "Retries exhausted") would just restate the
+  // give-up notice a second time with no new information — the actual cause
+  // is still unknown at this point, so `_applyRunFailed` special-cases this
+  // one code and renders the same cause-free generic fallback it uses when
+  // no code or message is present at all (`chat_screen.dart`'s
+  // `_runFailureFallbackNotice`). Pin that exact, non-repetitive wording so
+  // the double-report never collapses into two cards that say the same
+  // thing in different words.
   testWidgets(
-    'retry exhaustion with an empty failure message falls back to a '
-    'humanized code, still distinct from the give-up notice',
+    'retry exhaustion with an empty failure message falls back to the '
+    'generic notice, not a restated "Retries exhausted"',
     (tester) async {
       final events = StreamController<TuringEvent>(sync: true);
 
@@ -830,21 +954,19 @@ void main() {
       expect(find.byType(RunNoticeCard), findsOneWidget);
       expect(find.byType(RunFailureCard), findsOneWidget);
 
-      const humanizedCode = 'Retries exhausted';
-      expect(
+      // Exact, cause-free copy: not the humanized code, not the give-up
+      // wording restated.
+      final failureText = tester.widget<Text>(
         find.descendant(
           of: find.byType(RunFailureCard),
-          matching: find.text(humanizedCode),
+          matching: find.byType(Text),
         ),
-        findsOneWidget,
       );
-      expect(
-        find.descendant(
-          of: find.byType(RunNoticeCard),
-          matching: find.text(humanizedCode),
-        ),
-        findsNothing,
-      );
+      expect(failureText.data, 'The run failed with no further details');
+
+      // Never the humanized code anywhere: that would just repeat the
+      // give-up notice's meaning without adding anything.
+      expect(find.text('Retries exhausted'), findsNothing);
       expect(
         find.descendant(
           of: find.byType(RunFailureCard),

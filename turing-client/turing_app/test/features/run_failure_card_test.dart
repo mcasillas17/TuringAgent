@@ -22,16 +22,64 @@ void main() {
       ),
     );
 
-    final semantics = tester.widget<Semantics>(
-      find
-          .descendant(
-            of: find.byType(RunFailureCard),
-            matching: find.byType(Semantics),
-          )
-          .first,
+    // Assert against the actual rendered semantics tree, not just the
+    // `Semantics` widget's constructor arguments: a widget can be built with
+    // a `liveRegion: true` argument and still fail to reach the rendered
+    // `SemanticsNode` if it is merged away, excluded by an ancestor, or the
+    // render object never attaches it. `bySemanticsLabel` only matches a
+    // node that assistive technology would actually see.
+    expect(
+      find.bySemanticsLabel('Run failed: connection lost'),
+      findsOneWidget,
     );
-    expect(semantics.properties.label, 'Run failed: connection lost');
-    expect(semantics.properties.liveRegion, isTrue);
+    expect(
+      tester.getSemantics(find.byType(RunFailureCard)),
+      matchesSemantics(
+        label: 'Run failed: connection lost',
+        isLiveRegion: true,
+      ),
+    );
     handle.dispose();
+  });
+
+  testWidgets('uses an error icon and theme-derived error colors, distinct '
+      'from ordinary content', (tester) async {
+    late ColorScheme colorScheme;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) {
+            colorScheme = Theme.of(context).colorScheme;
+            return const Scaffold(
+              body: RunFailureCard(message: 'connection lost'),
+            );
+          },
+        ),
+      ),
+    );
+
+    // Visual distinction is pinned against the *theme's* error colors, not a
+    // hardcoded palette: this fails if the card stops using the error
+    // container styling (e.g. reverts to a plain/neutral card) while staying
+    // correct whichever concrete color scheme the running app supplies.
+    final icon = tester.widget<Icon>(
+      find.descendant(
+        of: find.byType(RunFailureCard),
+        matching: find.byIcon(Icons.error_outline),
+      ),
+    );
+    expect(icon.color, colorScheme.onErrorContainer);
+
+    final card = tester.widget<Card>(
+      find.descendant(
+        of: find.byType(RunFailureCard),
+        matching: find.byType(Card),
+      ),
+    );
+    expect(card.color, colorScheme.errorContainer);
+
+    // The error color must actually differ from a plain surface color, or
+    // pinning "errorContainer" would be a distinction without a difference.
+    expect(colorScheme.errorContainer, isNot(colorScheme.surface));
   });
 }
