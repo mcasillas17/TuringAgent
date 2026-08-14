@@ -15,8 +15,10 @@ class TerminalRunCard extends StatelessWidget {
   });
 
   /// The truthful, human-readable name of the outcome this card reports
-  /// (e.g. `Run failed`, `Run cancelled`). Prefixed onto [message] to form
-  /// the semantics label assistive technology announces.
+  /// (e.g. `Run failed`, `Run cancelled`). Rendered visibly above [message]
+  /// so sighted users can tell the two outcomes apart on screen, and
+  /// prefixed onto [message] to form the semantics label assistive
+  /// technology announces.
   final String outcomeLabel;
 
   final String message;
@@ -57,11 +59,29 @@ class TerminalRunCard extends StatelessWidget {
                     ),
                     const SizedBox(width: 10),
                     Flexible(
-                      child: Text(
-                        message,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: colorScheme.onErrorContainer,
-                        ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Sighted users read the widget tree, not the
+                          // accessibility tree: the outcome must be visible
+                          // on screen too, so "Run failed" and "Run
+                          // cancelled" stay distinguishable without
+                          // assistive technology.
+                          Text(
+                            outcomeLabel,
+                            style: theme.textTheme.labelLarge?.copyWith(
+                              color: colorScheme.onErrorContainer,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            message,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: colorScheme.onErrorContainer,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],

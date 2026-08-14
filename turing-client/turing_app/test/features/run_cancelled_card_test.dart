@@ -3,15 +3,38 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/features/chat/run_cancelled_card.dart';
 import 'package:turing_flutter_app/features/chat/run_failure_card.dart';
 
+const _cancellationMessage = 'The run was cancelled before it could finish';
+
 void main() {
   testWidgets('renders the cancellation message text', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
-        home: Scaffold(body: RunCancelledCard(message: 'client_cancelled')),
+        home: Scaffold(
+          body: RunCancelledCard(message: _cancellationMessage),
+        ),
       ),
     );
 
-    expect(find.textContaining('client_cancelled'), findsOneWidget);
+    expect(find.textContaining(_cancellationMessage), findsOneWidget);
+  });
+
+  testWidgets('renders the "Run cancelled" outcome label visibly, not just '
+      'in the semantics label, and never renders "Run failed"', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: RunCancelledCard(message: _cancellationMessage),
+        ),
+      ),
+    );
+
+    // Sighted users read the widget tree, not the accessibility tree: the
+    // outcome must be visible on screen, not only announced to assistive
+    // technology via the `Semantics` label.
+    expect(find.text('Run cancelled'), findsOneWidget);
+    expect(find.text('Run failed'), findsNothing);
   });
 
   testWidgets('exposes the exact "Run cancelled: ..." semantics label as a '
@@ -19,7 +42,9 @@ void main() {
     final handle = tester.ensureSemantics();
     await tester.pumpWidget(
       const MaterialApp(
-        home: Scaffold(body: RunCancelledCard(message: 'client_cancelled')),
+        home: Scaffold(
+          body: RunCancelledCard(message: _cancellationMessage),
+        ),
       ),
     );
 
@@ -30,19 +55,22 @@ void main() {
     // render object never attaches it. `bySemanticsLabel` only matches a
     // node that assistive technology would actually see.
     expect(
-      find.bySemanticsLabel('Run cancelled: client_cancelled'),
+      find.bySemanticsLabel('Run cancelled: $_cancellationMessage'),
       findsOneWidget,
     );
     expect(
       tester.getSemantics(find.byType(RunCancelledCard)),
       matchesSemantics(
-        label: 'Run cancelled: client_cancelled',
+        label: 'Run cancelled: $_cancellationMessage',
         isLiveRegion: true,
       ),
     );
     // The truthfulness requirement: a cancellation is not a failure, so the
     // rendered semantics must never say so.
-    expect(find.bySemanticsLabel('Run failed: client_cancelled'), findsNothing);
+    expect(
+      find.bySemanticsLabel('Run failed: $_cancellationMessage'),
+      findsNothing,
+    );
     handle.dispose();
   });
 
@@ -55,7 +83,7 @@ void main() {
           builder: (context) {
             colorScheme = Theme.of(context).colorScheme;
             return const Scaffold(
-              body: RunCancelledCard(message: 'client_cancelled'),
+              body: RunCancelledCard(message: _cancellationMessage),
             );
           },
         ),
@@ -91,7 +119,7 @@ void main() {
             body: Column(
               children: [
                 RunFailureCard(message: 'boom'),
-                RunCancelledCard(message: 'client_cancelled'),
+                RunCancelledCard(message: _cancellationMessage),
               ],
             ),
           ),

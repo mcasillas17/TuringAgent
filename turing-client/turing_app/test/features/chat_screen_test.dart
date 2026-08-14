@@ -598,13 +598,17 @@ void main() {
       await tester.pump();
 
       expect(find.byType(RunFailureCard), findsOneWidget);
-      final failureText = tester.widget<Text>(
+      // Narrow to the message text specifically: `RunFailureCard` now also
+      // renders its outcome label ("Run failed") as a second, sibling `Text`
+      // descendant, so grabbing "the" `Text` under this card is no longer
+      // unambiguous.
+      expect(
         find.descendant(
           of: find.byType(RunFailureCard),
-          matching: find.byType(Text),
+          matching: find.text('The run failed with no further details'),
         ),
+        findsOneWidget,
       );
-      expect(failureText.data, 'The run failed with no further details');
       expect(find.text('_'), findsNothing);
 
       events.add(
@@ -680,15 +684,17 @@ void main() {
       await tester.pump();
 
       expect(find.byType(RunFailureCard), findsOneWidget);
-      final textWidget = tester.widget<Text>(
+      // Narrow to the message text specifically: `RunFailureCard` now also
+      // renders its outcome label ("Run failed") as a second, sibling `Text`
+      // descendant, so grabbing "the" `Text` under this card is no longer
+      // unambiguous.
+      expect(
         find.descendant(
           of: find.byType(RunFailureCard),
-          matching: find.byType(Text),
+          matching: find.text('The run failed with no further details'),
         ),
+        findsOneWidget,
       );
-      // A whitespace-only fallback must not pass: assert the exact copy.
-      expect(textWidget.data, 'The run failed with no further details');
-
       await tester.pumpWidget(const SizedBox.shrink());
       unawaited(events.close());
     },
@@ -790,12 +796,15 @@ void main() {
   });
 
   // A server-initiated cancellation is a live signal even though this screen
-  // has no cancel affordance: the backend can evict a queued run, recycle a
-  // worker, or an operator can cancel one directly. Without a dedicated
-  // handler it would fall through the switch's unhandled default (see the
-  // comment above that default) and leave a silent, unexplained turn.
+  // has no cancel affordance: `cancelRun` (orchestrator-go
+  // internal/service/chat/service.go) fires this event from SendMessage's
+  // stream teardown, a `stream.Send` failure, or a `DispatchPending`
+  // failure. Without a dedicated handler it would fall through the switch's
+  // unhandled default (see the comment above that default) and leave a
+  // silent, unexplained turn.
   testWidgets('agent.run.cancelled renders a distinct terminal error-style '
-      'card with cancellation wording', (tester) async {
+      'card with truthful, human-readable cancellation wording — never the '
+      'raw machine `reason` enum', (tester) async {
     final events = StreamController<TuringEvent>(sync: true);
 
     await tester.pumpWidget(
@@ -819,7 +828,19 @@ void main() {
     await tester.pump();
 
     expect(find.byType(RunCancelledCard), findsOneWidget);
-    expect(find.text('client_cancelled'), findsOneWidget);
+    // `client_cancelled` is machine metadata (see `cancelRun` above), not
+    // display copy, and it is truthful across all three of its triggers —
+    // so the card must show human wording valid for all of them, never the
+    // bare enum value.
+    expect(
+      find.text('The run was cancelled before it could finish'),
+      findsOneWidget,
+    );
+    expect(find.text('client_cancelled'), findsNothing);
+    // The outcome title itself must also be visible on screen, not only in
+    // the accessibility tree, and must never say "failed".
+    expect(find.text('Run cancelled'), findsOneWidget);
+    expect(find.text('Run failed'), findsNothing);
     // A cancellation must not be indistinguishable from a failure or from
     // routine retry progress.
     expect(find.byType(RunFailureCard), findsNothing);
@@ -857,11 +878,15 @@ void main() {
       await tester.pump();
 
       expect(
-        find.bySemanticsLabel('Run cancelled: client_cancelled'),
+        find.bySemanticsLabel(
+          'Run cancelled: The run was cancelled before it could finish',
+        ),
         findsOneWidget,
       );
       expect(
-        find.bySemanticsLabel('Run failed: client_cancelled'),
+        find.bySemanticsLabel(
+          'Run failed: The run was cancelled before it could finish',
+        ),
         findsNothing,
       );
 
@@ -892,15 +917,17 @@ void main() {
     await tester.pump();
 
     expect(find.byType(RunCancelledCard), findsOneWidget);
-    final textWidget = tester.widget<Text>(
+    // Narrow to the message text specifically: `RunCancelledCard` now also
+    // renders its outcome label ("Run cancelled") as a second, sibling
+    // `Text` descendant, so grabbing "the" `Text` under this card is no
+    // longer unambiguous.
+    expect(
       find.descendant(
         of: find.byType(RunCancelledCard),
-        matching: find.byType(Text),
+        matching: find.text('The run was cancelled with no further details'),
       ),
+      findsOneWidget,
     );
-    // A whitespace-only fallback must not pass: assert the exact copy, and
-    // that it truthfully says "cancelled", not "failed".
-    expect(textWidget.data, 'The run was cancelled with no further details');
 
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());
@@ -931,6 +958,46 @@ void main() {
     await tester.pump();
 
     expect(find.text('   '), findsNothing);
+    expect(
+      find.text('The run was cancelled with no further details'),
+      findsOneWidget,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('agent.run.cancelled falls back to generic text when the '
+      'reason is an unrecognized, non-empty value', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'agent.run.cancelled',
+        sequence: 1,
+        // `client_cancelled` is currently the only reason the backend ever
+        // emits (`cancelRun`, orchestrator-go internal/service/chat/
+        // service.go). An unrecognized value is not a real producer today,
+        // but the client must not surface it verbatim if one ever appears —
+        // that would leak a bare enum straight to the user.
+        payload: const {'reason': 'some_future_reason'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(RunCancelledCard), findsOneWidget);
+    expect(find.text('some_future_reason'), findsNothing);
     expect(
       find.text('The run was cancelled with no further details'),
       findsOneWidget,
@@ -1296,14 +1363,17 @@ void main() {
       expect(find.byType(RunFailureCard), findsOneWidget);
 
       // Exact, cause-free copy: not the humanized code, not the give-up
-      // wording restated.
-      final failureText = tester.widget<Text>(
+      // wording restated. Narrow to the message text specifically:
+      // `RunFailureCard` now also renders its outcome label ("Run failed")
+      // as a second, sibling `Text` descendant, so grabbing "the" `Text`
+      // under this card is no longer unambiguous.
+      expect(
         find.descendant(
           of: find.byType(RunFailureCard),
-          matching: find.byType(Text),
+          matching: find.text('The run failed with no further details'),
         ),
+        findsOneWidget,
       );
-      expect(failureText.data, 'The run failed with no further details');
 
       // Never the humanized code anywhere: that would just repeat the
       // give-up notice's meaning without adding anything.

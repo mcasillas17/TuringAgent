@@ -123,11 +123,28 @@ class _ChatScreenState extends State<ChatScreen> {
   static const _runFailureFallbackNotice =
       'The run failed with no further details';
 
-  /// Shown for an `agent.run.cancelled` event whose payload carries no usable
-  /// `reason` — missing, empty/whitespace-only, or a non-string value that
-  /// [_asString] already turned into `null`.
+  /// Shown for an `agent.run.cancelled` event whose `reason` is not the one
+  /// known value below — missing, empty/whitespace-only, a non-string value
+  /// that [_asString] already turned into `null`, or any other string. It is
+  /// deliberately generic: `reason` is machine metadata (see
+  /// [_clientCancelledReason]), so an unrecognized value must never be
+  /// echoed to the user verbatim.
   static const _runCancellationFallbackNotice =
       'The run was cancelled with no further details';
+
+  /// The only `reason` value the backend currently emits with
+  /// `agent.run.cancelled` (`cancelRun`, orchestrator-go
+  /// internal/service/chat/service.go). It fires from three call sites:
+  /// `SendMessage`'s stream teardown, a `stream.Send` failure while relaying
+  /// events, and a `DispatchPending` failure — so its human copy below must
+  /// stay truthful for all three, not name just one of them.
+  static const _clientCancelledReason = 'client_cancelled';
+
+  /// Shown for an `agent.run.cancelled` event whose `reason` is
+  /// [_clientCancelledReason]. `reason` itself is machine metadata, not
+  /// display copy, so the raw enum must never reach the user.
+  static const _clientCancelledNotice =
+      'The run was cancelled before it could finish';
 
   /// The event stream is the only source of terminal `tool.call.*` events, so
   /// once it errors (gRPC disconnect, deadline, auth failure) or closes, any
@@ -331,17 +348,19 @@ class _ChatScreenState extends State<ChatScreen> {
     return spaced[0].toUpperCase() + spaced.substring(1);
   }
 
-  /// A run can be cancelled server-side — queue eviction, worker recycling,
-  /// an operator action — even though this screen offers no cancel
-  /// affordance of its own. Left unhandled, the event would fall through
-  /// [_applyEvent]'s switch and leave a silent, unexplained turn on screen.
+  /// The event stream is the only channel `agent.run.cancelled` arrives on,
+  /// and `cancelRun` fires it from three places (see
+  /// [_clientCancelledReason]): `SendMessage`'s own stream teardown, a
+  /// `stream.Send` failure while relaying events, and a `DispatchPending`
+  /// failure. Left unhandled, the event would fall through [_applyEvent]'s
+  /// switch and leave a silent, unexplained turn on screen.
   void _applyRunCancelled(TuringEvent event) {
     if (_isHistoricalRunEvent(event)) return;
 
     final rawReason = _asString(event.payload['reason'])?.trim();
-    final text = (rawReason == null || rawReason.isEmpty)
-        ? _runCancellationFallbackNotice
-        : rawReason;
+    final text = rawReason == _clientCancelledReason
+        ? _clientCancelledNotice
+        : _runCancellationFallbackNotice;
     final entry = _RunCancelledEntry(text);
     setState(() => _messages.add(entry));
     _scrollToBottom();

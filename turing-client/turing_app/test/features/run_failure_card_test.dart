@@ -13,6 +13,23 @@ void main() {
     expect(find.textContaining('connection lost'), findsOneWidget);
   });
 
+  testWidgets('renders the "Run failed" outcome label visibly, not just in '
+      'the semantics label, and never renders "Run cancelled"', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(body: RunFailureCard(message: 'connection lost')),
+      ),
+    );
+
+    // Sighted users read the widget tree, not the accessibility tree: the
+    // outcome must be visible on screen, not only announced to assistive
+    // technology via the `Semantics` label.
+    expect(find.text('Run failed'), findsOneWidget);
+    expect(find.text('Run cancelled'), findsNothing);
+  });
+
   testWidgets('exposes the exact "Run failed: ..." semantics label as a live '
       'region', (tester) async {
     final handle = tester.ensureSemantics();
