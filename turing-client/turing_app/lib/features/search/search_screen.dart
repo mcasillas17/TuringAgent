@@ -9,6 +9,37 @@ import '../../networking/api_client.dart';
 const _emptyResultsCopy =
     'No messages match this exact phrase. Try fewer or shorter words.';
 
+/// How much of a message body a result row shows and announces.
+///
+/// Bodies are unbounded — a pasted log or a whole file is a normal message —
+/// but a row is a summary someone skims, or hears, while deciding which
+/// conversation to open. This keeps the body's opening: enough to tell one
+/// hit from another, and enough to carry the matched phrase whenever it
+/// appears near the start. Centring the window on the match itself isn't
+/// possible here, since [SearchHit] carries the message but no match offset,
+/// so a phrase buried deep in a long body is identified by its conversation,
+/// date and opening rather than quoted.
+const _maxExcerptRunes = 200;
+
+/// How many lines of that excerpt a row renders before clipping.
+const _maxExcerptLines = 3;
+
+/// A bounded excerpt of [content], ellipsised when it had to be cut.
+///
+/// Cuts on runes rather than code units: `substring` splits surrogate pairs,
+/// so an emoji (or any non-BMP character) straddling the cut would leave a
+/// lone half that renders as a replacement glyph and reads as garbage. Only
+/// the first [_maxExcerptRunes] + 1 runes are ever decoded, so an enormous
+/// body isn't walked end to end just to discover it is too long.
+String _excerpt(String content) {
+  final head = content.runes.take(_maxExcerptRunes + 1).toList();
+  if (head.length <= _maxExcerptRunes) return content;
+  final kept = String.fromCharCodes(
+    head.take(_maxExcerptRunes),
+  ).trimRight();
+  return '$kept…';
+}
+
 /// Route-local conversation search. Searches all sessions for an exact
 /// phrase, renders matching messages grouped by session and sorted newest
 /// first, announces how the search ended, and enriches each group with the
@@ -141,6 +172,22 @@ class _SearchScreenState extends State<SearchScreen> {
   /// still-current generation.
   bool _hasCompletedSearch = false;
 
+  /// How many searches have completed successfully for their still-current
+  /// query. Keyed into the results/no-results live regions so each
+  /// completion builds a *new* semantics node rather than reusing the
+  /// previous one.
+  ///
+  /// Both platforms only speak a live region when its text changed or when
+  /// the node is one they haven't seen before. The summary is counts-only
+  /// and the no-results copy is fixed, so two searches in a row routinely
+  /// produce byte-identical text; the loading state usually tears the region
+  /// down in between, but a response that arrives before that frame renders
+  /// (a warm cache, a local backend) leaves the node untouched and the
+  /// completion unannounced. A per-completion key removes that dependency on
+  /// timing. Deliberately not bumped when late title metadata arrives: that
+  /// rebuild is not a new result and must stay silent.
+  int _completedSearches = 0;
+
   /// Cached successful session titles, kept for the screen's lifetime. A
   /// title belongs to a session, not to the query that happened to surface
   /// it, so a cached entry is valid for every later query too.
@@ -257,6 +304,7 @@ class _SearchScreenState extends State<SearchScreen> {
       _loading = false;
       _groups = groups;
       _hasCompletedSearch = true;
+      _completedSearches++;
     });
     // Fire-and-forget: results already rendered must not wait on titles.
     _resolveTitles(groups);
@@ -384,9 +432,14 @@ class _SearchScreenState extends State<SearchScreen> {
 
     if (_loading) {
       return Center(
+        // The caption below says exactly what the label announces, so the
+        // whole subtree is excluded: left as semantics of its own it would
+        // be traversed and spoken a second time.
         child: Semantics(
           key: const Key('search-loading'),
           liveRegion: true,
+          container: true,
+          excludeSemantics: true,
           label: 'Searching conversations',
           child: const Column(
             mainAxisSize: MainAxisSize.min,
@@ -401,17 +454,26 @@ class _SearchScreenState extends State<SearchScreen> {
     }
 
     if (_error != null) {
+      final message = 'Search failed: $_error';
       return Center(
         child: Semantics(
           key: const Key('search-error'),
           liveRegion: true,
-          label: 'Search failed: $_error',
+          container: true,
+          label: message,
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('Search failed: $_error', textAlign: TextAlign.center),
+                // Spoken from the label above; excluded here so the same
+                // sentence isn't read twice. Excluding the whole container
+                // instead would take Retry's semantics with it, leaving the
+                // only way out of this state unreachable, so the exclusion
+                // is scoped to the duplicated text alone.
+                ExcludeSemantics(
+                  child: Text(message, textAlign: TextAlign.center),
+                ),
                 const SizedBox(height: 12),
                 ElevatedButton(
                   key: const Key('search-retry'),
@@ -438,16 +500,22 @@ class _SearchScreenState extends State<SearchScreen> {
       // about, otherwise the screen just goes quiet after the "Searching"
       // announcement. The copy is spoken from the label, so the identical
       // visible text is excluded to keep it from being read twice.
-      return Semantics(
-        key: const Key('search-empty'),
-        liveRegion: true,
-        container: true,
-        excludeSemantics: true,
-        label: 'No results. $_emptyResultsCopy',
-        child: const Center(
-          child: Padding(
-            padding: EdgeInsets.all(24),
-            child: Text(_emptyResultsCopy, textAlign: TextAlign.center),
+      return KeyedSubtree(
+        // Rebuilt per completed search: this copy is fixed, so back-to-back
+        // empty searches would otherwise leave an untouched live region the
+        // platform stays silent about. See [_completedSearches].
+        key: ValueKey('search-empty-$_completedSearches'),
+        child: Semantics(
+          key: const Key('search-empty'),
+          liveRegion: true,
+          container: true,
+          excludeSemantics: true,
+          label: 'No results. $_emptyResultsCopy',
+          child: const Center(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(_emptyResultsCopy, textAlign: TextAlign.center),
+            ),
           ),
         ),
       );
@@ -491,13 +559,19 @@ class _SearchScreenState extends State<SearchScreen> {
     final summary = _resultsSummary;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      child: Semantics(
-        key: const Key('search-results-status'),
-        liveRegion: true,
-        container: true,
-        excludeSemantics: true,
-        label: summary,
-        child: Text(summary, style: Theme.of(context).textTheme.bodySmall),
+      child: KeyedSubtree(
+        // Rebuilt per completed search: counts repeat, so two searches in a
+        // row often produce the same summary and only a node the platform
+        // hasn't seen before gets spoken. See [_completedSearches].
+        key: ValueKey('search-results-announcement-$_completedSearches'),
+        child: Semantics(
+          key: const Key('search-results-status'),
+          liveRegion: true,
+          container: true,
+          excludeSemantics: true,
+          label: summary,
+          child: Text(summary, style: Theme.of(context).textTheme.bodySmall),
+        ),
       ),
     );
   }
@@ -531,15 +605,21 @@ class _SearchScreenState extends State<SearchScreen> {
     // day of different years indistinguishable.
     final date = MaterialLocalizations.of(context).formatShortDate(localDate);
     final role = hit.message.role;
-    final content = hit.message.content;
+    // Bodies are unbounded, and a row is a summary of one: announce and
+    // render an excerpt, not the whole message. Whatever fits stays verbatim.
+    final excerpt = _excerpt(hit.message.content);
     return Semantics(
       key: ValueKey('hit-${hit.message.messageId}'),
-      label: '$role message from $date: $content',
+      label: '$role message from $date: $excerpt',
       button: true,
       excludeSemantics: true,
       onTap: () => widget.onOpenSession(sessionId),
       child: ListTile(
-        title: Text(content),
+        title: Text(
+          excerpt,
+          maxLines: _maxExcerptLines,
+          overflow: TextOverflow.ellipsis,
+        ),
         subtitle: Text('$role · $date'),
         onTap: () => widget.onOpenSession(sessionId),
       ),

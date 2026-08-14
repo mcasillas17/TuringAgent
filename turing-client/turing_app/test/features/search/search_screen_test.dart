@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:turing_flutter_app/features/search/search_screen.dart';
@@ -1787,7 +1788,475 @@ void main() {
         expect(tester.takeException(), isNull);
       },
     );
+
+    testWidgets(
+      'announces the loading state once, not once per duplicate node',
+      (tester) async {
+        final handle = tester.ensureSemantics();
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+
+        final loading = tester.getSemantics(
+          find.byKey(const Key('search-loading')),
+        );
+        expect(loading.flagsCollection.isLiveRegion, isTrue);
+        expect(loading.label, 'Searching conversations');
+
+        // The visible "Searching..." caption says exactly what the live
+        // region already announces. Left as a node of its own it is
+        // traversed — and spoken — a second time, so the user hears the same
+        // state twice.
+        expect(
+          _spokenLabels(tester)
+              .where((label) => label.contains('Searching'))
+              .toList(),
+          ['Searching conversations'],
+          reason: 'the loading state must reach a screen reader exactly once',
+        );
+
+        handle.dispose();
+      },
+    );
+
+    testWidgets(
+      'announces a failure once while keeping Retry independently actionable',
+      (tester) async {
+        final handle = tester.ensureSemantics();
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+        api.searchCalls.single.completer.completeError(Exception('boom'));
+        await tester.pump();
+
+        const message = 'Search failed: Exception: boom';
+        final error = tester.getSemantics(find.byKey(const Key('search-error')));
+        expect(error.flagsCollection.isLiveRegion, isTrue);
+        expect(error.label, message);
+        expect(
+          _spokenLabels(tester)
+              .where((label) => label.contains('Search failed'))
+              .toList(),
+          [message],
+          reason: 'the failure must reach a screen reader exactly once',
+        );
+
+        // Silencing the duplicate copy must not silence the recovery action
+        // along with it: Retry stays a node of its own, outside the live
+        // region's label, and stays a button assistive technology can
+        // activate.
+        final retry = tester.getSemantics(find.byKey(const Key('search-retry')));
+        expect(retry.id, isNot(error.id));
+        final retryData = retry.getSemanticsData();
+        expect(retryData.flagsCollection.isButton, isTrue);
+        expect(retryData.label, 'Retry');
+        expect(retryData.hasAction(SemanticsAction.tap), isTrue);
+        expect(_spokenLabels(tester), contains('Retry'));
+
+        // Driving it the way a screen reader does — the semantics action,
+        // not a synthesized pointer tap — still reruns the search.
+        retry.owner!.performAction(retry.id, SemanticsAction.tap);
+        await tester.pump();
+        expect(api.queries, ['deploy', 'deploy']);
+
+        handle.dispose();
+      },
+    );
+
+    testWidgets(
+      'announces a repeated search whose results land before any loading '
+      'frame renders',
+      (tester) async {
+        final handle = tester.ensureSemantics();
+        final api = _ImmediateSearchApi([
+          [
+            _hit(
+              id: 'msg-1',
+              sessionId: 'session-1',
+              createdAt: DateTime.utc(2026, 8, 13),
+            ),
+          ],
+          [
+            _hit(
+              id: 'msg-2',
+              sessionId: 'session-1',
+              createdAt: DateTime.utc(2026, 8, 13),
+            ),
+          ],
+        ]);
+        await _pumpScreen(tester, api);
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+
+        // The API answered within the frame the search started in, so the
+        // loading live region never rendered and never tore the status
+        // region down in between the two searches.
+        expect(find.byKey(const Key('search-loading')), findsNothing);
+        final first = tester.getSemantics(
+          find.byKey(const Key('search-results-status')),
+        );
+        expect(first.label, '1 result in 1 conversation');
+        final firstId = first.id;
+        final focusAfterFirst = tester.binding.focusManager.primaryFocus;
+
+        await _submitAgain(tester);
+        await tester.pump();
+        expect(api.queries, ['deploy', 'deploy']);
+        expect(find.byKey(const Key('search-loading')), findsNothing);
+        expect(find.byKey(const ValueKey('hit-msg-2')), findsOneWidget);
+
+        final second = tester.getSemantics(
+          find.byKey(const Key('search-results-status')),
+        );
+        // A counts-only summary repeats itself, so the label alone cannot
+        // carry this announcement...
+        expect(second.label, '1 result in 1 conversation');
+        // ...and a live region the platform has already seen is only spoken
+        // again when the node itself is one it has not seen before.
+        expect(
+          second.id,
+          isNot(firstId),
+          reason: 'each completed search must produce a fresh live region',
+        );
+        final secondId = second.id;
+
+        // Rebuilding that region from scratch must not drag focus along with
+        // it, the way announcing results must not steal focus in the first
+        // place.
+        expect(
+          tester.binding.focusManager.primaryFocus,
+          same(focusAfterFirst),
+        );
+
+        // Late title metadata is not a new result: it must reuse that node,
+        // so nothing gets announced a second time for the same search.
+        api.sessionCalls.single.completer.complete(
+          Session(
+            sessionId: 'session-1',
+            title: 'Release work',
+            updatedAt: DateTime.utc(2026, 8, 13),
+          ),
+        );
+        await tester.pump();
+        expect(find.text('Release work'), findsOneWidget);
+        final afterTitle = tester.getSemantics(
+          find.byKey(const Key('search-results-status')),
+        );
+        expect(afterTitle.id, secondId);
+        expect(afterTitle.label, '1 result in 1 conversation');
+
+        handle.dispose();
+      },
+    );
+
+    testWidgets(
+      'announces a repeated empty search that lands before any loading '
+      'frame renders',
+      (tester) async {
+        final handle = tester.ensureSemantics();
+        final api = _ImmediateSearchApi([const [], const []]);
+        await _pumpScreen(tester, api);
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+
+        expect(find.byKey(const Key('search-loading')), findsNothing);
+        final first = tester.getSemantics(find.byKey(const Key('search-empty')));
+        expect(first.flagsCollection.isLiveRegion, isTrue);
+        expect(first.label, contains('No results'));
+        final firstLabel = first.label;
+        final firstId = first.id;
+
+        await _submitAgain(tester);
+        await tester.pump();
+        expect(api.queries, ['deploy', 'deploy']);
+        expect(find.byKey(const Key('search-loading')), findsNothing);
+
+        final second = tester.getSemantics(
+          find.byKey(const Key('search-empty')),
+        );
+        // The zero-results copy is fixed, so a second empty search says the
+        // same words; only a new node can make them heard again.
+        expect(second.label, firstLabel);
+        expect(
+          second.id,
+          isNot(firstId),
+          reason: 'each completed empty search must produce a fresh live '
+              'region',
+        );
+
+        handle.dispose();
+      },
+    );
+
+    testWidgets('bounds the row an over-long message body renders into', (
+      tester,
+    ) async {
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
+
+      await tester.enterText(
+        find.byKey(const Key('search-field')),
+        'deploy staging',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+
+      api.searchCalls.single.completer.complete([
+        _hit(
+          id: 'msg-1',
+          sessionId: 'session-1',
+          content: _longBody,
+          createdAt: DateTime.utc(2026, 8, 13, 12),
+        ),
+      ]);
+      await tester.pump();
+
+      // A single pasted file or transcript must not push every other hit off
+      // the list.
+      expect(
+        tester.getSize(find.byKey(const ValueKey('hit-msg-1'))).height,
+        lessThan(200),
+      );
+
+      final body = tester.widget<Text>(
+        find.descendant(
+          of: find.byKey(const ValueKey('hit-msg-1')),
+          matching: find.textContaining('deploy staging'),
+        ),
+      );
+      expect(body.maxLines, isNotNull);
+      expect(body.maxLines, lessThanOrEqualTo(3));
+      expect(body.overflow, TextOverflow.ellipsis);
+      expect(body.data, startsWith('deploy staging'));
+      expect(
+        body.data!.runes.length,
+        lessThan(_longBody.runes.length),
+        reason: 'the row must not lay out the whole body just to clip it',
+      );
+    });
+
+    testWidgets('announces a bounded excerpt of an over-long message body', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
+
+      await tester.enterText(
+        find.byKey(const Key('search-field')),
+        'deploy staging',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+
+      api.searchCalls.single.completer.complete([
+        _hit(
+          id: 'msg-1',
+          sessionId: 'session-1',
+          content: _longBody,
+          createdAt: DateTime.utc(2026, 8, 13, 12),
+        ),
+      ]);
+      await tester.pump();
+
+      final label = tester
+          .getSemantics(find.byKey(const ValueKey('hit-msg-1')))
+          .label;
+      expect(label, contains('user message from '));
+      expect(
+        label,
+        contains('deploy staging'),
+        reason: 'the excerpt must still identify the matched phrase',
+      );
+      expect(label, isNot(contains(_longBody)));
+      expect(
+        label.runes.length,
+        lessThan(300),
+        reason: 'a row announcement must stay skimmable, not read a whole '
+            'transcript',
+      );
+      expect(label, endsWith('…'));
+
+      handle.dispose();
+    });
+
+    testWidgets('cuts an over-long body on rune boundaries, not code units', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
+
+      await tester.enterText(find.byKey(const Key('search-field')), 'rocket');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+
+      // Every character here is a surrogate pair, so a cut made on code
+      // units lands mid-pair and leaves a lone, unrenderable half behind.
+      final body = '🚀' * 1000;
+      api.searchCalls.single.completer.complete([
+        _hit(
+          id: 'msg-1',
+          sessionId: 'session-1',
+          content: body,
+          createdAt: DateTime.utc(2026, 8, 13, 12),
+        ),
+      ]);
+      await tester.pump();
+
+      final label = tester
+          .getSemantics(find.byKey(const ValueKey('hit-msg-1')))
+          .label;
+      expect(label.runes.length, lessThan(300));
+      expect(
+        _hasUnpairedSurrogate(label),
+        isFalse,
+        reason: 'the announced excerpt must not end mid-character',
+      );
+
+      final rendered = tester
+          .widget<Text>(
+            find.descendant(
+              of: find.byKey(const ValueKey('hit-msg-1')),
+              matching: find.textContaining('🚀'),
+            ),
+          )
+          .data!;
+      expect(rendered.runes.length, lessThan(300));
+      expect(_hasUnpairedSurrogate(rendered), isFalse);
+
+      handle.dispose();
+    });
+
+    testWidgets('leaves a body that already fits untouched', (tester) async {
+      final handle = tester.ensureSemantics();
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
+
+      await tester.enterText(
+        find.byKey(const Key('search-field')),
+        'deploy staging',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+
+      const body =
+          'deploy staging tonight, and roll back at the first sign of trouble';
+      api.searchCalls.single.completer.complete([
+        _hit(
+          id: 'msg-1',
+          sessionId: 'session-1',
+          content: body,
+          createdAt: DateTime.utc(2026, 8, 13, 12),
+        ),
+      ]);
+      await tester.pump();
+
+      expect(find.text(body), findsOneWidget);
+      final label = tester
+          .getSemantics(find.byKey(const ValueKey('hit-msg-1')))
+          .label;
+      expect(label, endsWith(body));
+      expect(label, isNot(contains('…')));
+
+      handle.dispose();
+    });
+
+    testWidgets('renders degenerate bodies without breaking the row', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
+
+      await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+
+      // Whitespace-only past the budget, and empty: the shapes an
+      // index-arithmetic excerpt trips over.
+      api.searchCalls.single.completer.complete([
+        _hit(
+          id: 'msg-blank',
+          sessionId: 'session-1',
+          content: ' ' * 300,
+          createdAt: DateTime.utc(2026, 8, 13, 12),
+        ),
+        _hit(
+          id: 'msg-empty',
+          sessionId: 'session-1',
+          content: '',
+          sequence: 2,
+          createdAt: DateTime.utc(2026, 8, 13, 11),
+        ),
+      ]);
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      expect(find.byKey(const ValueKey('hit-msg-blank')), findsOneWidget);
+      expect(find.byKey(const ValueKey('hit-msg-empty')), findsOneWidget);
+      expect(
+        tester.getSize(find.byKey(const ValueKey('hit-msg-blank'))).height,
+        lessThan(200),
+      );
+      expect(
+        tester.getSemantics(find.byKey(const ValueKey('hit-msg-empty'))).label,
+        contains('user message from '),
+      );
+
+      handle.dispose();
+    });
   });
+}
+
+/// A message body far longer than a result row could sensibly show — a
+/// pasted log or transcript, as far as the screen is concerned.
+final _longBody =
+    'deploy staging '
+    '${List.filled(400, 'lorem ipsum dolor sit amet consectetur').join(' ')}';
+
+/// Submits whatever the field already holds, re-attaching the text input
+/// client that the previous submit detached when it dismissed the keyboard.
+Future<void> _submitAgain(WidgetTester tester) async {
+  await tester.showKeyboard(find.byKey(const Key('search-field')));
+  await tester.testTextInput.receiveAction(TextInputAction.search);
+}
+
+/// The labels a screen reader would encounter, in traversal order, with
+/// merged-away nodes already folded into whichever node speaks for them.
+List<String> _spokenLabels(WidgetTester tester) {
+  return tester.semantics
+      .simulatedAccessibilityTraversal()
+      .map((node) => node.getSemanticsData().label)
+      .where((label) => label.isNotEmpty)
+      .toList();
+}
+
+/// Whether [text] contains a UTF-16 surrogate that lost its partner: the
+/// telltale of a string cut on code units instead of runes.
+bool _hasUnpairedSurrogate(String text) {
+  final units = text.codeUnits;
+  for (var i = 0; i < units.length; i++) {
+    final unit = units[i];
+    if (unit >= 0xDC00 && unit <= 0xDFFF) return true;
+    if (unit >= 0xD800 && unit <= 0xDBFF) {
+      if (i + 1 == units.length) return true;
+      final next = units[i + 1];
+      if (next < 0xDC00 || next > 0xDFFF) return true;
+      i++;
+    }
+  }
+  return false;
 }
 
 /// Short month names as rendered by `DefaultMaterialLocalizations`, spelled
@@ -1977,5 +2446,29 @@ class _FakeSearchApi implements TuringApi {
       'traceId': 'trace_1',
       'status': 'queued',
     };
+  }
+}
+
+/// A fake whose searches are already complete by the time the screen awaits
+/// them, so no loading frame ever renders between two searches — the case
+/// where an unchanged live region would otherwise be silently reused.
+class _ImmediateSearchApi extends _FakeSearchApi {
+  _ImmediateSearchApi(this.results);
+
+  /// One entry per search, in call order; the last entry answers every
+  /// further search.
+  final List<List<SearchHit>> results;
+  int _completed = 0;
+
+  @override
+  Future<List<SearchHit>> searchMessages({
+    required String query,
+    int limit = 50,
+  }) {
+    final future = super.searchMessages(query: query, limit: limit);
+    searchCalls.last.completer.complete(
+      results[min(_completed++, results.length - 1)],
+    );
+    return future;
   }
 }
