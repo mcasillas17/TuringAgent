@@ -406,6 +406,369 @@ void main() {
       expect(newAY, lessThan(oldAY));
     });
 
+    testWidgets(
+      'breaks same-session timestamp ties with the message sequence, not '
+      'backend order',
+      (tester) async {
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+
+        // A user turn and the assistant reply it triggered are written
+        // nanoseconds apart, but protobuf timestamps land on Dart DateTimes
+        // at microsecond resolution, so both hits carry the same instant.
+        // The backend returns them in BM25 order, which here is the reverse
+        // of conversation order.
+        final sameInstant = DateTime.utc(2026, 8, 13, 12);
+        api.searchCalls.single.completer.complete([
+          _hit(
+            id: 'ask',
+            sessionId: 'session-1',
+            role: 'user',
+            sequence: 1,
+            createdAt: sameInstant,
+          ),
+          _hit(
+            id: 'reply',
+            sessionId: 'session-1',
+            role: 'assistant',
+            sequence: 2,
+            createdAt: sameInstant,
+          ),
+          _hit(
+            id: 'older',
+            sessionId: 'session-1',
+            role: 'assistant',
+            sequence: 9,
+            createdAt: sameInstant.subtract(const Duration(days: 1)),
+          ),
+        ]);
+        await tester.pump();
+
+        // Newest first: the tied pair orders by descending sequence, and the
+        // genuinely older hit stays last despite its higher sequence.
+        expect(_hitTop(tester, 'reply'), lessThan(_hitTop(tester, 'ask')));
+        expect(_hitTop(tester, 'ask'), lessThan(_hitTop(tester, 'older')));
+      },
+    );
+
+    testWidgets(
+      'orders sessions deterministically when their newest hits share a '
+      'timestamp',
+      (tester) async {
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        final sameInstant = DateTime.utc(2026, 8, 13, 12);
+        final bHit = _hit(
+          id: 'b-hit',
+          sessionId: 'session-b',
+          sequence: 7,
+          createdAt: sameInstant,
+        );
+        final aHit = _hit(
+          id: 'a-hit',
+          sessionId: 'session-a',
+          sequence: 1,
+          createdAt: sameInstant,
+        );
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+        api.searchCalls[0].completer.complete([bHit, aHit]);
+        await tester.pump();
+
+        expect(
+          _groupTop(tester, 'session-a'),
+          lessThan(_groupTop(tester, 'session-b')),
+        );
+
+        // The same result set delivered in the opposite backend order must
+        // render identically: group order can't inherit relevance ranking.
+        await tester.enterText(find.byKey(const Key('search-field')), 'again');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+        api.searchCalls[1].completer.complete([aHit, bHit]);
+        await tester.pump();
+
+        expect(
+          _groupTop(tester, 'session-a'),
+          lessThan(_groupTop(tester, 'session-b')),
+        );
+      },
+    );
+
+    testWidgets(
+      'renders identically stamped and sequenced hits in a stable order',
+      (tester) async {
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        // Degenerate data: same instant *and* same sequence. Nothing about
+        // the hits themselves says which is newer, so the only requirement
+        // is that the rendered order is reproducible instead of tracking
+        // whatever order the backend happened to rank them in.
+        final sameInstant = DateTime.utc(2026, 8, 13, 12);
+        final first = _hit(
+          id: 'dup-1',
+          sessionId: 'session-1',
+          sequence: 4,
+          createdAt: sameInstant,
+        );
+        final second = _hit(
+          id: 'dup-2',
+          sessionId: 'session-1',
+          sequence: 4,
+          createdAt: sameInstant,
+        );
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+        api.searchCalls[0].completer.complete([first, second]);
+        await tester.pump();
+        final orderedFirst = _hitTop(tester, 'dup-1') < _hitTop(tester, 'dup-2')
+            ? 'dup-1'
+            : 'dup-2';
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'again');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+        api.searchCalls[1].completer.complete([second, first]);
+        await tester.pump();
+
+        expect(
+          _hitTop(tester, orderedFirst),
+          lessThan(
+            _hitTop(tester, orderedFirst == 'dup-1' ? 'dup-2' : 'dup-1'),
+          ),
+        );
+      },
+    );
+
+    testWidgets('announces a completed search that found nothing', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
+
+      await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+
+      api.searchCalls.single.completer.complete(const []);
+      await tester.pump();
+
+      final data = tester.getSemantics(find.byKey(const Key('search-empty')));
+      expect(data.flagsCollection.isLiveRegion, isTrue);
+      expect(data.label, contains('No results'));
+
+      handle.dispose();
+    });
+
+    testWidgets('announces result and conversation counts, pluralized', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
+
+      await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+
+      api.searchCalls[0].completer.complete([
+        _hit(
+          id: 'msg-1',
+          sessionId: 'session-1',
+          createdAt: DateTime.utc(2026, 8, 13, 9),
+        ),
+        _hit(
+          id: 'msg-2',
+          sessionId: 'session-1',
+          createdAt: DateTime.utc(2026, 8, 13, 10),
+        ),
+      ]);
+      await tester.pump();
+
+      final status = tester.getSemantics(
+        find.byKey(const Key('search-results-status')),
+      );
+      expect(status.flagsCollection.isLiveRegion, isTrue);
+      expect(status.label, '2 results in 1 conversation');
+
+      // A single hit spread across sessions flips both plurals the other way.
+      await tester.enterText(find.byKey(const Key('search-field')), 'staging');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+      api.searchCalls[1].completer.complete([
+        _hit(
+          id: 'msg-3',
+          sessionId: 'session-2',
+          createdAt: DateTime.utc(2026, 8, 12, 9),
+        ),
+        _hit(
+          id: 'msg-4',
+          sessionId: 'session-3',
+          createdAt: DateTime.utc(2026, 8, 11, 9),
+        ),
+        _hit(
+          id: 'msg-5',
+          sessionId: 'session-3',
+          createdAt: DateTime.utc(2026, 8, 10, 9),
+        ),
+      ]);
+      await tester.pump();
+
+      expect(
+        tester
+            .getSemantics(find.byKey(const Key('search-results-status')))
+            .label,
+        '3 results in 2 conversations',
+      );
+
+      handle.dispose();
+    });
+
+    testWidgets(
+      'keeps focus put and the announcement stable when a title resolves',
+      (tester) async {
+        final handle = tester.ensureSemantics();
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+        final focusWhileSearching = tester.binding.focusManager.primaryFocus;
+
+        api.searchCalls.single.completer.complete([
+          _hit(
+            id: 'msg-1',
+            sessionId: 'session-1',
+            createdAt: DateTime.utc(2026, 8, 13),
+          ),
+        ]);
+        await tester.pump();
+
+        // Announcing results must not steal focus from the field the user is
+        // still typing in.
+        expect(
+          tester.binding.focusManager.primaryFocus,
+          same(focusWhileSearching),
+        );
+        final announced = tester
+            .getSemantics(find.byKey(const Key('search-results-status')))
+            .label;
+        expect(announced, '1 result in 1 conversation');
+
+        api.sessionCalls.single.completer.complete(
+          Session(
+            sessionId: 'session-1',
+            title: 'Release work',
+            updatedAt: DateTime.utc(2026, 8, 13),
+          ),
+        );
+        await tester.pump();
+        expect(find.text('Release work'), findsOneWidget);
+
+        // Late title metadata changes headings only. The status label is
+        // derived from counts alone, so it stays byte-identical — which is
+        // what stops the platform from re-announcing this live region as a
+        // freshly completed search. (Both engines gate live-region
+        // announcements on the label actually changing; the announcement
+        // itself is emitted engine-side and isn't observable from a widget
+        // test, so the stable label is what this asserts.)
+        final afterTitle = tester
+            .getSemantics(find.byKey(const Key('search-results-status')))
+            .label;
+        expect(afterTitle, announced);
+        expect(afterTitle, isNot(contains('Release work')));
+        expect(
+          tester.binding.focusManager.primaryFocus,
+          same(focusWhileSearching),
+        );
+
+        handle.dispose();
+      },
+    );
+
+    testWidgets(
+      'still announces a new search that happens to match the previous '
+      'counts',
+      (tester) async {
+        final handle = tester.ensureSemantics();
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+        api.searchCalls[0].completer.complete([
+          _hit(
+            id: 'msg-1',
+            sessionId: 'session-1',
+            createdAt: DateTime.utc(2026, 8, 13, 9),
+          ),
+          _hit(
+            id: 'msg-2',
+            sessionId: 'session-1',
+            createdAt: DateTime.utc(2026, 8, 13, 10),
+          ),
+        ]);
+        await tester.pump();
+        expect(
+          tester
+              .getSemantics(find.byKey(const Key('search-results-status')))
+              .label,
+          '2 results in 1 conversation',
+        );
+
+        await tester.enterText(
+          find.byKey(const Key('search-field')),
+          'staging',
+        );
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+
+        // A counts-only label repeats itself whenever two searches happen to
+        // find the same shape of results. That still reaches the user
+        // because the status region is torn down for the loading region
+        // while the new search runs, so the repeated summary arrives as a
+        // label change rather than an unchanged live region the platform
+        // would suppress.
+        expect(find.byKey(const Key('search-results-status')), findsNothing);
+        expect(find.byKey(const Key('search-loading')), findsOneWidget);
+
+        api.searchCalls[1].completer.complete([
+          _hit(
+            id: 'msg-3',
+            sessionId: 'session-2',
+            createdAt: DateTime.utc(2026, 8, 12, 9),
+          ),
+          _hit(
+            id: 'msg-4',
+            sessionId: 'session-2',
+            createdAt: DateTime.utc(2026, 8, 12, 10),
+          ),
+        ]);
+        await tester.pump();
+
+        final status = tester.getSemantics(
+          find.byKey(const Key('search-results-status')),
+        );
+        expect(status.flagsCollection.isLiveRegion, isTrue);
+        expect(status.label, '2 results in 1 conversation');
+
+        handle.dispose();
+      },
+    );
+
     testWidgets('formats hit dates as an absolute local date with a year', (
       tester,
     ) async {
@@ -1456,6 +1819,16 @@ String _hitSubtitle(WidgetTester tester, String messageId) {
       .data!;
 }
 
+/// Vertical offset of a rendered group heading, for render-order assertions.
+double _groupTop(WidgetTester tester, String sessionId) {
+  return tester.getTopLeft(find.byKey(ValueKey('group-header-$sessionId'))).dy;
+}
+
+/// Vertical offset of a rendered hit row, for render-order assertions.
+double _hitTop(WidgetTester tester, String messageId) {
+  return tester.getTopLeft(find.byKey(ValueKey('hit-$messageId'))).dy;
+}
+
 Future<List<String>> _pumpScreen(WidgetTester tester, TuringApi api) async {
   final opened = <String>[];
   await tester.pumpWidget(
@@ -1476,6 +1849,7 @@ SearchHit _hit({
   required String sessionId,
   String role = 'user',
   String content = 'deploy staging',
+  int sequence = 1,
   required DateTime createdAt,
 }) {
   return SearchHit(
@@ -1484,7 +1858,7 @@ SearchHit _hit({
       messageId: id,
       role: role,
       content: content,
-      sequence: 1,
+      sequence: sequence,
       createdAt: createdAt,
     ),
   );

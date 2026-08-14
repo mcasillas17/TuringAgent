@@ -5,10 +5,14 @@ import 'package:flutter/material.dart';
 import '../../models/search_hit.dart';
 import '../../networking/api_client.dart';
 
+/// Shown and announced when a search completes with no matches.
+const _emptyResultsCopy =
+    'No messages match this exact phrase. Try fewer or shorter words.';
+
 /// Route-local conversation search. Searches all sessions for an exact
 /// phrase, renders matching messages grouped by session and sorted newest
-/// first, and enriches each group with the session's title without blocking
-/// on that lookup.
+/// first, announces how the search ended, and enriches each group with the
+/// session's title without blocking on that lookup.
 class SearchScreen extends StatefulWidget {
   const SearchScreen({
     super.key,
@@ -29,6 +33,42 @@ class _SessionGroup {
 
   final String sessionId;
   final List<SearchHit> hits;
+
+  /// When this session's newest matching message was written, i.e. the key
+  /// the group itself is ordered by.
+  DateTime get newestCreatedAt => hits.first.message.createdAt;
+}
+
+/// Orders two hits from the same session newest first.
+///
+/// `createdAt` alone can't decide this. Backend timestamps are protobuf
+/// `Timestamp`s carrying nanoseconds, but they arrive here as Dart
+/// [DateTime]s, which only keep microseconds — so a user turn and the
+/// assistant reply it triggered routinely collapse onto the same instant.
+/// Returning 0 there would leave the pair in whatever order the backend's
+/// BM25 ranking produced, making the rendered order both non-chronological
+/// and dependent on the query. The session-local `sequence` is the
+/// authoritative write order, so it breaks the tie; `messageId` is a last
+/// resort that keeps the ordering total even for duplicate sequences.
+int _compareHitsNewestFirst(SearchHit a, SearchHit b) {
+  final byCreatedAt = b.message.createdAt.compareTo(a.message.createdAt);
+  if (byCreatedAt != 0) return byCreatedAt;
+  final bySequence = b.message.sequence.compareTo(a.message.sequence);
+  if (bySequence != 0) return bySequence;
+  return a.message.messageId.compareTo(b.message.messageId);
+}
+
+/// Orders two session groups by their newest matching message, newest first.
+///
+/// Groups can tie for the same truncation reason as [_compareHitsNewestFirst],
+/// but `sequence` is session-local and says nothing about which of two
+/// different sessions is newer. The session ID breaks the tie instead:
+/// arbitrary, but stable, so the same result set always renders the same way
+/// rather than inheriting the backend's relevance order.
+int _compareGroupsNewestFirst(_SessionGroup a, _SessionGroup b) {
+  final byCreatedAt = b.newestCreatedAt.compareTo(a.newestCreatedAt);
+  if (byCreatedAt != 0) return byCreatedAt;
+  return a.sessionId.compareTo(b.sessionId);
 }
 
 /// Caps concurrent access to a resource across the screen's whole lifetime,
@@ -228,15 +268,10 @@ class _SearchScreenState extends State<SearchScreen> {
       bySession.putIfAbsent(hit.sessionId, () => []).add(hit);
     }
     final groups = bySession.entries.map((entry) {
-      final sorted = [...entry.value]
-        ..sort((a, b) => b.message.createdAt.compareTo(a.message.createdAt));
+      final sorted = [...entry.value]..sort(_compareHitsNewestFirst);
       return _SessionGroup(sessionId: entry.key, hits: sorted);
     }).toList();
-    groups.sort(
-      (a, b) => b.hits.first.message.createdAt.compareTo(
-        a.hits.first.message.createdAt,
-      ),
-    );
+    groups.sort(_compareGroupsNewestFirst);
     return groups;
   }
 
@@ -398,21 +433,72 @@ class _SearchScreenState extends State<SearchScreen> {
         // nothing rather than falsely claiming a completed, zero-hit search.
         return const SizedBox.shrink(key: Key('search-pending'));
       }
-      return const Center(
-        key: Key('search-empty'),
-        child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text(
-            'No messages match this exact phrase. Try fewer or shorter words.',
-            textAlign: TextAlign.center,
+      // Announced like the loading and error states are: a search that ran
+      // and found nothing is a completion a screen reader user has to hear
+      // about, otherwise the screen just goes quiet after the "Searching"
+      // announcement. The copy is spoken from the label, so the identical
+      // visible text is excluded to keep it from being read twice.
+      return Semantics(
+        key: const Key('search-empty'),
+        liveRegion: true,
+        container: true,
+        excludeSemantics: true,
+        label: 'No results. $_emptyResultsCopy',
+        child: const Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(_emptyResultsCopy, textAlign: TextAlign.center),
           ),
         ),
       );
     }
 
-    return ListView.builder(
-      itemCount: _groups.length,
-      itemBuilder: (context, index) => _buildGroup(context, _groups[index]),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildResultsStatus(context),
+        Expanded(
+          child: ListView.builder(
+            itemCount: _groups.length,
+            itemBuilder: (context, index) =>
+                _buildGroup(context, _groups[index]),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// The counts-only summary that both heads the result list and announces a
+  /// successful search.
+  ///
+  /// Deliberately derived from nothing but the group and hit counts. Session
+  /// titles resolve after the results render, and each arrival rebuilds this
+  /// screen; a summary that mentioned them would change then, and a changed
+  /// live region is re-announced — reporting late metadata as if it were a
+  /// whole new search result. Counts only change when results actually do.
+  String get _resultsSummary {
+    final results = _groups.fold<int>(
+      0,
+      (total, group) => total + group.hits.length,
+    );
+    final conversations = _groups.length;
+    return '$results ${results == 1 ? 'result' : 'results'} in '
+        '$conversations '
+        '${conversations == 1 ? 'conversation' : 'conversations'}';
+  }
+
+  Widget _buildResultsStatus(BuildContext context) {
+    final summary = _resultsSummary;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Semantics(
+        key: const Key('search-results-status'),
+        liveRegion: true,
+        container: true,
+        excludeSemantics: true,
+        label: summary,
+        child: Text(summary, style: Theme.of(context).textTheme.bodySmall),
+      ),
     );
   }
 
