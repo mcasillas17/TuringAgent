@@ -7,6 +7,7 @@ import '../../models/turing_event.dart';
 import '../../networking/api_client.dart';
 import '../../networking/event_source.dart';
 import '../approvals/approval_card.dart';
+import 'message_send_failure_card.dart';
 import 'model_provider_selector.dart';
 import 'run_cancelled_card.dart';
 import 'run_failure_card.dart';
@@ -319,6 +320,16 @@ class _ChatScreenState extends State<ChatScreen> {
   /// display copy, so the raw enum must never reach the user.
   static const _clientCancelledNotice =
       'The run was cancelled before it could finish';
+
+  /// Shown when `sendMessage` itself rejects — see [_sendMessage]'s `catch`.
+  /// Deliberately fixed and generic rather than derived from the thrown
+  /// error: unlike [_runFailureFallbackNotice]/[_runCancellationFallbackNotice],
+  /// which fall back only when a real event's own payload lacks detail, here
+  /// there is no server-authored payload to read from at all — the thrown
+  /// value is a raw `GrpcError`/[TuringApiException] never meant for display,
+  /// and may carry request ids or other diagnostic detail unsafe to echo.
+  static const _messageSendFailureNotice =
+      'Your message was not sent. Please try again.';
 
   /// The event stream is the only source of terminal `tool.call.*` events. On
   /// `onDone`, or a subscription that never opened, no further event can ever
@@ -724,11 +735,30 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     _controller.clear();
     _scrollToBottom();
-    await widget.apiClient.sendMessage(
-      sessionId: widget.sessionId,
-      content: text,
-      modelProvider: _modelProvider,
-    );
+    // `sendMessage` (`TuringApi`, `networking/api_client.dart`) resolves once
+    // a run is queued and rejects otherwise — the real `TuringGrpcApi`
+    // implementation (`networking/grpc_client.dart`) rejects with a
+    // `GrpcError` from the underlying call, or a `TuringApiException` if the
+    // stream ends having never queued one. Both `implements Exception`
+    // (unlike `Error` and its subtypes), so `on Exception` catches exactly
+    // this RPC failure boundary without masking a programming bug elsewhere
+    // in this method. Left unguarded, this `await` rejecting becomes an
+    // unhandled Future rejection — the bubble above is added, then silence.
+    try {
+      await widget.apiClient.sendMessage(
+        sessionId: widget.sessionId,
+        content: text,
+        modelProvider: _modelProvider,
+      );
+    } on Exception catch (_) {
+      if (!mounted) return;
+      setState(
+        () => _messages.add(
+          _MessageSendFailureEntry(_messageSendFailureNotice),
+        ),
+      );
+      _scrollToBottom();
+    }
   }
 
   void _scrollToBottom() {
@@ -914,6 +944,8 @@ class _ChatMessageTile extends StatelessWidget {
         return RunFailureCard(message: failure.message);
       case _RunCancelledEntry cancelled:
         return RunCancelledCard(message: cancelled.message);
+      case _MessageSendFailureEntry sendFailure:
+        return MessageSendFailureCard(message: sendFailure.message);
     }
   }
 }
@@ -1097,6 +1129,21 @@ class _RunFailureEntry extends _ChatEntry {
 
 class _RunCancelledEntry extends _ChatEntry {
   _RunCancelledEntry(this.message);
+
+  final String message;
+
+  @override
+  void dispose() {}
+}
+
+/// A `sendMessage` RPC rejected before any `RunQueued` event ever arrived —
+/// see [MessageSendFailureCard] for why this is deliberately distinct from
+/// [_RunFailureEntry]. Appended immediately after the optimistic
+/// [_MessageEntry.user] bubble for the same attempt, in [_sendMessage]'s own
+/// `catch`, never from the event stream: no run was ever created, so no
+/// server-side event could carry this outcome.
+class _MessageSendFailureEntry extends _ChatEntry {
+  _MessageSendFailureEntry(this.message);
 
   final String message;
 
