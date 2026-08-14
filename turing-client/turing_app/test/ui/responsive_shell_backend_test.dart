@@ -38,6 +38,8 @@ void main() {
       expect(find.text('Stats'), findsOneWidget);
       expect(find.text('Integrations'), findsOneWidget);
       expect(find.text('Settings'), findsOneWidget);
+      expect(find.text('Sessions'), findsOneWidget);
+      expect(find.byTooltip('Search conversations'), findsOneWidget);
       expect(find.text('New chat'), findsOneWidget);
 
       await tester.tap(find.text('Devices'));

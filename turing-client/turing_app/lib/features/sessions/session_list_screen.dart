@@ -5,6 +5,7 @@ import '../../networking/api_client.dart';
 import '../../networking/auth_storage.dart';
 import '../../networking/event_source.dart';
 import '../chat/chat_screen.dart';
+import '../search/search_screen.dart';
 import '../settings/settings_screen.dart';
 
 class SessionListScreen extends StatefulWidget {
@@ -74,6 +75,15 @@ class _SessionListScreenState extends State<SessionListScreen> {
     );
   }
 
+  Future<void> _openSearch() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) =>
+            SearchScreen(apiClient: widget.apiClient, onOpenSession: _openChat),
+      ),
+    );
+  }
+
   Future<void> _openSettings() async {
     final authStorage = widget.authStorage;
     if (authStorage == null) return;
@@ -93,6 +103,11 @@ class _SessionListScreenState extends State<SessionListScreen> {
   @override
   Widget build(BuildContext context) {
     final body = _buildSessionsBody();
+    final searchButton = IconButton(
+      tooltip: 'Search conversations',
+      icon: const Icon(Icons.search),
+      onPressed: _openSearch,
+    );
     final newChatButton = FloatingActionButton.extended(
       onPressed: _creating ? null : _createSession,
       icon: _creating
@@ -107,7 +122,30 @@ class _SessionListScreenState extends State<SessionListScreen> {
     if (widget.embedded) {
       return Stack(
         children: [
-          Positioned.fill(child: body),
+          Positioned.fill(
+            child: Material(
+              color: Colors.transparent,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 8, 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Sessions',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                        ),
+                        searchButton,
+                      ],
+                    ),
+                  ),
+                  Expanded(child: body),
+                ],
+              ),
+            ),
+          ),
           Positioned(right: 24, bottom: 24, child: newChatButton),
         ],
       );
@@ -117,6 +155,7 @@ class _SessionListScreenState extends State<SessionListScreen> {
       appBar: AppBar(
         title: const Text('Project Turing Sessions'),
         actions: [
+          searchButton,
           if (widget.authStorage != null)
             IconButton(
               tooltip: 'Settings',
