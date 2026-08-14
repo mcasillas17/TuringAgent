@@ -7,6 +7,7 @@ import '../generated/turing/v1/common.pb.dart' as commonpb;
 import '../generated/turing/v1/events.pb.dart' as eventpb;
 import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
 import 'message.dart' as model_message;
+import 'search_hit.dart' as model_search_hit;
 import 'session.dart' as model_session;
 import 'turing_event.dart' as model_event;
 
@@ -27,6 +28,13 @@ class GrpcMappers {
       content: message.content,
       sequence: message.sequence.toInt(),
       createdAt: _timestampToDateTime(message.createdAt),
+    );
+  }
+
+  static model_search_hit.SearchHit searchHitToModel(commonpb.Message message) {
+    return model_search_hit.SearchHit(
+      sessionId: message.sessionId,
+      message: messageToModel(message),
     );
   }
 

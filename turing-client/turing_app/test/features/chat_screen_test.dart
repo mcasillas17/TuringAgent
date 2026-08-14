@@ -6,6 +6,7 @@ import 'package:turing_flutter_app/features/chat/run_notice_card.dart';
 import 'package:turing_flutter_app/features/chat/chat_screen.dart';
 import 'package:turing_flutter_app/features/chat/tool_call_card.dart';
 import 'package:turing_flutter_app/models/message.dart';
+import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
@@ -2410,6 +2411,15 @@ class _FakeApiClient implements TuringApi {
   }
 
   @override
+  Future<Session> getSession({required String sessionId}) async {
+    return Session(
+      sessionId: sessionId,
+      title: 'Session',
+      updatedAt: DateTime.utc(2026, 5, 10),
+    );
+  }
+
+  @override
   Future<TuringEventPage> listEvents({
     required String sessionId,
     int? after,
@@ -2435,6 +2445,14 @@ class _FakeApiClient implements TuringApi {
     final error = messagesError;
     if (error != null) return Future.error(error);
     return messagesGate?.future ?? Future.value(initialMessages);
+  }
+
+  @override
+  Future<List<SearchHit>> searchMessages({
+    required String query,
+    int limit = 50,
+  }) async {
+    return const [];
   }
 
   @override

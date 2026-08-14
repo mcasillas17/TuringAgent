@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../models/message.dart';
+import '../models/search_hit.dart';
 import '../models/session.dart';
 import '../models/turing_event.dart';
 
@@ -11,10 +12,17 @@ abstract class TuringApi {
 
   Future<List<Session>> listSessions({int limit = 50, String? after});
 
+  Future<Session> getSession({required String sessionId});
+
   Future<List<Message>> listMessages({
     required String sessionId,
     int limit = 50,
     String? before,
+  });
+
+  Future<List<SearchHit>> searchMessages({
+    required String query,
+    int limit = 50,
   });
 
   Future<TuringEventPage> listEvents({
