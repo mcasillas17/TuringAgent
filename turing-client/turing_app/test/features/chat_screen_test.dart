@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grpc/grpc.dart' show GrpcError;
+import 'package:turing_flutter_app/features/chat/message_send_failure_card.dart';
 import 'package:turing_flutter_app/features/chat/message_send_unconfirmed_card.dart';
 import 'package:turing_flutter_app/features/chat/run_cancelled_card.dart';
 import 'package:turing_flutter_app/features/chat/run_failure_card.dart';
@@ -5588,6 +5589,538 @@ void main() {
             'began — even though an unrelated entry was appended to the '
             "list's end first, while this attempt's RPC was still pending",
       );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // Send error taxonomy (round 13, finding A): most sendMessage rejections
+  // are genuinely ambiguous (see `_messageSendUnconfirmedNotice`'s own doc)
+  // and must stay on `MessageSendUnconfirmedCard`, but a narrow,
+  // contract-backed allowlist of statuses is CONCLUSIVELY proven to occur
+  // before the backend's `SendMessage` handler (orchestrator-go
+  // internal/service/chat/service.go) ever reaches `EnqueueUserMessage`:
+  //   * `Unauthenticated` — the stream's own auth interceptor
+  //     (internal/auth/interceptor.go, wired in internal/app/app.go) rejects
+  //     the RPC before `SendMessage`'s handler body ever runs at all.
+  //   * `InvalidArgument` — the handler's own upfront request validation
+  //     (nil request, empty session_id/content, bad content_type/agent_id/
+  //     model_provider); every call site precedes `EnqueueUserMessage`.
+  //   * `NotFound` — the session lookup's `mapSessionError` translation of
+  //     `sql.ErrNoRows`; its only call site is the `GetSession` check, which
+  //     precedes `EnqueueUserMessage`.
+  // None of these three has any OTHER call site in `SendMessage` that could
+  // fire after enqueueing, unlike `Canceled` and `Internal`, which the same
+  // handler also returns from several points strictly AFTER
+  // `EnqueueUserMessage` — so those two (and every other status) must stay
+  // ambiguous. These tests pin that exact allowlist via real `GrpcError`
+  // codes, not guesses, and a `TuringApiException` (an app-defined string
+  // code with no contractual tie to a gRPC status) never qualifies either.
+  testWidgets(
+    'a sendMessage rejection via each status CONCLUSIVELY proven to precede '
+    'EnqueueUserMessage server-side (Unauthenticated, InvalidArgument, '
+    'NotFound) renders the distinct "Message not sent" card, never the '
+    'ambiguous "Message send unconfirmed" one',
+    (tester) async {
+      for (final error in [
+        const GrpcError.unauthenticated('invalid bearer token'),
+        const GrpcError.invalidArgument('content is required'),
+        const GrpcError.notFound('session not found'),
+      ]) {
+        final events = StreamController<TuringEvent>(sync: true);
+        final apiClient = _FakeApiClient()..sendMessageErrors.add(error);
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: ChatScreen(
+              sessionId: 'sess_1',
+              apiClient: apiClient,
+              eventSource: _FakeEventSource(events.stream),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        await tester.enterText(find.byType(TextField), 'Hello there');
+        await tester.tap(find.byIcon(Icons.send));
+        await tester.pump();
+
+        expect(
+          tester.takeException(),
+          isNull,
+          reason:
+              '${error.codeName} must be caught like every other '
+              'sendMessage rejection',
+        );
+        expect(
+          find.byType(MessageSendFailureCard),
+          findsOneWidget,
+          reason:
+              '${error.codeName} is proven pre-enqueue, so it must render '
+              'the confirmed failure card',
+        );
+        expect(find.byType(MessageSendUnconfirmedCard), findsNothing);
+        expect(find.text('Message not sent'), findsOneWidget);
+        expect(find.text('Message send unconfirmed'), findsNothing);
+        // The body is the fixed, generic `_messageSendFailedNotice` copy for
+        // every allowlisted code alike — never the ambiguous notice's
+        // wording, and never derived from `error`'s own message text.
+        expect(
+          find.text(
+            "Your message wasn't sent. Check your session and try again.",
+          ),
+          findsOneWidget,
+          reason:
+              '${error.codeName} must show the fixed confirmed-failure '
+              'body, not the unconfirmed one and not the raw GrpcError '
+              'message',
+        );
+        expect(find.byType(RunFailureCard), findsNothing);
+        expect(find.byType(RunCancelledCard), findsNothing);
+        // The optimistic bubble still stands: this is a rejected attempt,
+        // not evidence the user's own text vanished.
+        expect(
+          find.descendant(
+            of: find.byType(ListView),
+            matching: find.text('Hello there'),
+          ),
+          findsOneWidget,
+        );
+
+        await tester.pumpWidget(const SizedBox.shrink());
+        unawaited(events.close());
+      }
+    },
+  );
+
+  testWidgets(
+    'ambiguous GrpcError statuses that also occur AFTER EnqueueUserMessage '
+    'server-side (Canceled, Internal) or are simply unrecognized by name '
+    '(DeadlineExceeded), plus the real empty-stream TuringApiException, all '
+    'still render the ambiguous unconfirmed card, never the confirmed '
+    '"Message not sent" one',
+    (tester) async {
+      for (final error in [
+        const GrpcError.cancelled('stream cancelled'),
+        const GrpcError.internal('server broke'),
+        const GrpcError.deadlineExceeded('timed out'),
+        const TuringApiException(
+          code: 'empty_stream',
+          message: 'SendMessage stream ended before run queued',
+        ),
+      ]) {
+        final events = StreamController<TuringEvent>(sync: true);
+        final apiClient = _FakeApiClient()..sendMessageErrors.add(error);
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: ChatScreen(
+              sessionId: 'sess_1',
+              apiClient: apiClient,
+              eventSource: _FakeEventSource(events.stream),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        await tester.enterText(find.byType(TextField), 'Hello there');
+        await tester.tap(find.byIcon(Icons.send));
+        await tester.pump();
+
+        expect(tester.takeException(), isNull);
+        expect(
+          find.byType(MessageSendFailureCard),
+          findsNothing,
+          reason:
+              '$error is also reachable from a point in SendMessage '
+              '(orchestrator-go internal/service/chat/service.go) at or '
+              'after EnqueueUserMessage, or carries no such proof at all, '
+              'so it must stay unconfirmed rather than being asserted as a '
+              'confirmed pre-enqueue failure',
+        );
+        expect(find.byType(MessageSendUnconfirmedCard), findsOneWidget);
+        expect(find.text('Message send unconfirmed'), findsOneWidget);
+        expect(find.text('Message not sent'), findsNothing);
+
+        await tester.pumpWidget(const SizedBox.shrink());
+        unawaited(events.close());
+      }
+    },
+  );
+
+  testWidgets(
+    'a GrpcError status code this classifier does not recognize at all '
+    'defaults to the safe, ambiguous unconfirmed outcome, never the '
+    'confirmed "Message not sent" one',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..sendMessageErrors.add(
+          const GrpcError.custom(
+            31,
+            'a status code this classifier has never seen',
+          ),
+        );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'Hello there');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: 'an unrecognized status code must never crash the classifier',
+      );
+      expect(
+        find.byType(MessageSendFailureCard),
+        findsNothing,
+        reason:
+            'defaulting an unrecognized code to the CONFIRMED card would '
+            'be unsafe — only an explicit, proven allowlist may ever '
+            'render it',
+      );
+      expect(find.byType(MessageSendUnconfirmedCard), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'a confirmed pre-enqueue sendMessage rejection renders generic, safe '
+    'copy — never the raw exception code, message, request id, or any '
+    'other leaked detail',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..sendMessageErrors.add(
+          const GrpcError.invalidArgument(
+            'content contains api key ab12cd34ef56 for session sess_secret',
+          ),
+        );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'secret prompt');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      expect(find.byType(MessageSendFailureCard), findsOneWidget);
+      expect(find.textContaining('api key'), findsNothing);
+      expect(find.textContaining('ab12cd34ef56'), findsNothing);
+      expect(find.textContaining('sess_secret'), findsNothing);
+      expect(find.textContaining('INVALID_ARGUMENT'), findsNothing);
+      // The copy must stay fixed and generic rather than echoing whatever
+      // this particular exception happened to say, and must not merely
+      // reuse the unconfirmed notice's wording (that would falsely imply
+      // the outcome here is also unknown).
+      expect(find.text('Message not sent'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'the composer remains enabled after a confirmed pre-enqueue rejection, '
+    'with the attempted text restored so the user can retry or edit it',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..sendMessageErrors.add(
+          const GrpcError.unauthenticated('invalid bearer token'),
+        );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'first attempt');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      expect(find.byType(MessageSendFailureCard), findsOneWidget);
+
+      final field = tester.widget<TextField>(find.byType(TextField));
+      final button = tester.widget<IconButton>(find.byType(IconButton));
+      expect(
+        field.enabled,
+        isTrue,
+        reason:
+            'a confirmed pre-enqueue rejection is still not a dead event '
+            'subscription — the composer must stay usable for a retry',
+      );
+      expect(button.onPressed, isNotNull);
+      expect(field.decoration?.hintText, 'Ask Turing...');
+      expect(
+        field.controller?.text,
+        'first attempt',
+        reason:
+            "the user's own text must be restored even on a confirmed "
+            'failure so they can retry or edit it instead of retyping it '
+            'from memory',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'a later successful send after a confirmed pre-enqueue rejection still '
+    'reaches the API client, and its events are still processed',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..sendMessageErrors.add(
+          const GrpcError.unauthenticated('invalid bearer token'),
+        );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'first attempt');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      expect(find.byType(MessageSendFailureCard), findsOneWidget);
+
+      // The queue is now empty, so this second attempt succeeds exactly
+      // like the ordinary path.
+      await tester.enterText(find.byType(TextField), 'second attempt');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+
+      expect(apiClient.sendMessageCallCount, 2);
+      expect(apiClient.lastSentContent, 'second attempt');
+      // Still exactly one failure card: the successful retry must not add
+      // a second one.
+      expect(find.byType(MessageSendFailureCard), findsOneWidget);
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: {'messageId': 'msg_asst', 'delta': 'Still working.'},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('Still working.'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets('the confirmed failure card renders immediately after its own '
+      'attempted user bubble, below earlier content', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..sendMessageErrors.add(const GrpcError.notFound('session not found'));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: {'messageId': 'm1', 'delta': 'earlier answer'},
+      ),
+    );
+    await tester.pump();
+
+    await tester.enterText(find.byType(TextField), 'Hello there');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+
+    final earlierAnswerTop = tester.getTopLeft(find.text('earlier answer')).dy;
+    final bubbleTop = tester
+        .getTopLeft(
+          find.descendant(
+            of: find.byType(ListView),
+            matching: find.text('Hello there'),
+          ),
+        )
+        .dy;
+    final cardTop = tester.getTopLeft(find.byType(MessageSendFailureCard)).dy;
+    expect(bubbleTop, greaterThan(earlierAnswerTop));
+    expect(
+      cardTop,
+      greaterThan(bubbleTop),
+      reason:
+          'the confirmed failure card must render below the bubble for '
+          'the exact attempt it reports on',
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a confirmed pre-enqueue rejection that settles only after the '
+      'ChatScreen has already been disposed is a no-op, not a "setState() '
+      'called after dispose()" crash', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final pending = Completer<Map<String, dynamic>>();
+    final apiClient = _FakeApiClient()..sendMessagePending = pending;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.enterText(find.byType(TextField), 'Hello there');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+
+    // Dispose the screen before the RPC ever settles.
+    await tester.pumpWidget(const SizedBox.shrink());
+
+    // Only now does the rejection arrive, and with a status that would
+    // classify as a CONFIRMED pre-enqueue failure had the screen still
+    // been mounted. `_sendMessage`'s catch must see `mounted == false`
+    // and return without touching `setState` regardless of which card
+    // the classifier would have chosen.
+    pending.completeError(
+      const GrpcError.unauthenticated('invalid bearer token'),
+    );
+    await tester.pump();
+
+    expect(
+      tester.takeException(),
+      isNull,
+      reason:
+          'a confirmed-failure classification must not bypass the same '
+          'mounted guard the ambiguous path already relies on',
+    );
+
+    unawaited(events.close());
+  });
+
+  testWidgets(
+    'one confirmed pre-enqueue failure and one ambiguous rejection render '
+    'as visibly distinct cards with correct counts, not conflated with '
+    'each other',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..sendMessageErrors.addAll([
+          const GrpcError.unauthenticated('invalid bearer token'),
+          const GrpcError.unavailable('no backend'),
+        ]);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'attempt one');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      await tester.enterText(find.byType(TextField), 'attempt two');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      expect(apiClient.sendMessageCallCount, 2);
+      expect(
+        find.byType(MessageSendFailureCard),
+        findsOneWidget,
+        reason: 'exactly the Unauthenticated attempt is confirmed',
+      );
+      expect(
+        find.byType(MessageSendUnconfirmedCard),
+        findsOneWidget,
+        reason: 'exactly the Unavailable attempt stays ambiguous',
+      );
+      expect(find.text('Message not sent'), findsOneWidget);
+      expect(find.text('Message send unconfirmed'), findsOneWidget);
+
+      final bubbleOneTop = tester
+          .getTopLeft(
+            find.descendant(
+              of: find.byType(ListView),
+              matching: find.text('attempt one'),
+            ),
+          )
+          .dy;
+      final bubbleTwoTop = tester
+          .getTopLeft(
+            find.descendant(
+              of: find.byType(ListView),
+              matching: find.text('attempt two'),
+            ),
+          )
+          .dy;
+      final failureCardTop = tester
+          .getTopLeft(find.byType(MessageSendFailureCard))
+          .dy;
+      final unconfirmedCardTop = tester
+          .getTopLeft(find.byType(MessageSendUnconfirmedCard))
+          .dy;
+
+      expect(bubbleOneTop, lessThan(failureCardTop));
+      expect(failureCardTop, lessThan(bubbleTwoTop));
+      expect(bubbleTwoTop, lessThan(unconfirmedCardTop));
 
       await tester.pumpWidget(const SizedBox.shrink());
       unawaited(events.close());

@@ -1,12 +1,14 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:grpc/grpc.dart' show GrpcError, StatusCode;
 
 import '../../models/message.dart';
 import '../../models/turing_event.dart';
 import '../../networking/api_client.dart';
 import '../../networking/event_source.dart';
 import '../approvals/approval_card.dart';
+import 'message_send_failure_card.dart';
 import 'message_send_unconfirmed_card.dart';
 import 'model_provider_selector.dart';
 import 'run_cancelled_card.dart';
@@ -373,9 +375,64 @@ class _ChatScreenState extends State<ChatScreen> {
   static const _clientCancelledNotice =
       'The run was cancelled before it could finish';
 
-  /// Shown when `sendMessage` itself rejects — see [_sendMessage]'s `catch`.
-  /// Deliberately fixed and generic rather than derived from the thrown
-  /// error: unlike [_runFailureFallbackNotice]/[_runCancellationFallbackNotice],
+  /// `GrpcError` codes CONFIRMED — by the backend's own `SendMessage`
+  /// handler (orchestrator-go internal/service/chat/service.go) — to occur
+  /// only before it ever reaches `EnqueueUserMessage`, never after:
+  ///
+  ///   * [StatusCode.unauthenticated] — the stream's own auth interceptor
+  ///     (internal/auth/interceptor.go, wired via `grpc.StreamInterceptor`
+  ///     in internal/app/app.go) rejects the RPC before `SendMessage`'s
+  ///     handler body ever runs, unconditionally.
+  ///   * [StatusCode.invalidArgument] — every one of the handler's own
+  ///     upfront request-validation checks (nil request; empty session_id
+  ///     or content; unrecognized content_type, agent_id, or
+  ///     model_provider) returns this code, and each precedes
+  ///     `EnqueueUserMessage`. No other call site in the handler returns
+  ///     it.
+  ///   * [StatusCode.notFound] — the session lookup's `mapSessionError`
+  ///     translation of `sql.ErrNoRows` ("session not found"); its only
+  ///     call site, the `GetSession` check, precedes `EnqueueUserMessage`.
+  ///     No other call site in the handler returns it.
+  ///
+  /// Deliberately excludes `StatusCode.canceled` and `StatusCode.internal`:
+  /// the very same handler ALSO returns both from several points AFTER
+  /// `EnqueueUserMessage`, so either one proves nothing about ordering. See
+  /// [_isConfirmedPreEnqueueSendFailure].
+  static const _confirmedPreEnqueueSendFailureCodes = {
+    StatusCode.unauthenticated,
+    StatusCode.invalidArgument,
+    StatusCode.notFound,
+  };
+
+  /// Whether [error] — whatever `sendMessage` rejected with, in
+  /// [_sendMessage]'s own `catch` — is CONCLUSIVELY proven to have occurred
+  /// before the backend's `SendMessage` handler ever reached
+  /// `EnqueueUserMessage`, i.e. before the message or its run could exist
+  /// server-side at all. Only a `GrpcError` whose `code` is in
+  /// [_confirmedPreEnqueueSendFailureCodes] qualifies — see that constant
+  /// for exactly which three codes and why each one does.
+  ///
+  /// Everything else returns `false`, the safe default whenever this proof
+  /// cannot be made: any OTHER `GrpcError` code (including
+  /// `StatusCode.canceled`/`StatusCode.internal`, which the same handler
+  /// also returns from points after `EnqueueUserMessage`, and any code this
+  /// classifier does not recognize at all), and every `TuringApiException`
+  /// unconditionally — its `code` (`api_client.dart`) is an ad-hoc,
+  /// app-defined string with no contractual tie to a gRPC status, so it can
+  /// never satisfy this proof, not even the real `code: 'empty_stream'`
+  /// case (which only means the stream ended with no `RunQueued` seen, not
+  /// that nothing was persisted). `false` here routes to
+  /// [MessageSendUnconfirmedCard]; `true` routes to [MessageSendFailureCard]
+  /// — see [_sendMessage]'s own `catch`.
+  static bool _isConfirmedPreEnqueueSendFailure(Object error) {
+    return error is GrpcError &&
+        _confirmedPreEnqueueSendFailureCodes.contains(error.code);
+  }
+
+  /// Shown when `sendMessage` rejects with anything OTHER than
+  /// [_isConfirmedPreEnqueueSendFailure]'s allowlist — see [_sendMessage]'s
+  /// `catch`. Deliberately fixed and generic rather than derived from the
+  /// thrown error: unlike [_runFailureFallbackNotice]/[_runCancellationFallbackNotice],
   /// which fall back only when a real event's own payload lacks detail, here
   /// there is no server-authored payload to read from at all — the thrown
   /// value is a raw `GrpcError`/[TuringApiException] never meant for display,
@@ -389,21 +446,44 @@ class _ChatScreenState extends State<ChatScreen> {
   /// client simply never saw the acknowledgement. The honest state is
   /// UNKNOWN, so the copy says so and tells the user how to find out
   /// (check the conversation) rather than asserting a failure that may not
-  /// have happened.
+  /// have happened. For the narrow allowlist where the outcome IS known,
+  /// see [_messageSendFailedNotice] instead.
   static const _messageSendUnconfirmedNotice =
       "We couldn't confirm whether this message was sent. Check the "
       'conversation before sending it again.';
+
+  /// Shown when `sendMessage` rejects with a status
+  /// [_isConfirmedPreEnqueueSendFailure] confirms occurred before
+  /// `EnqueueUserMessage` — see [_sendMessage]'s `catch`. Unlike
+  /// [_messageSendUnconfirmedNotice], the outcome genuinely IS known here:
+  /// the message was never accepted, so this copy may truthfully say so.
+  /// Still deliberately fixed and generic rather than derived from the
+  /// thrown error, for the same reason as [_messageSendUnconfirmedNotice] —
+  /// the value is a raw `GrpcError` never meant for display — and stays
+  /// safe and actionable: it never echoes the request's own content,
+  /// session id, or any other diagnostic detail, and only suggests a
+  /// generic remedy that holds across all three allowlisted codes
+  /// (expired/invalid auth, a rejected argument, or a missing session)
+  /// rather than naming any one of them specifically.
+  static const _messageSendFailedNotice =
+      "Your message wasn't sent. Check your session and try again.";
 
   /// Shown when `approveApproval`/`denyApproval` itself rejects — see
   /// [_approve]/[_deny]'s `catch`. Deliberately fixed and generic for the
   /// same reason as [_messageSendUnconfirmedNotice]: the thrown value is a
   /// raw `GrpcError`/[TuringApiException] never meant for display. Unlike
   /// that notice, this one is framed as a plain failure rather than an
-  /// unconfirmed outcome: retrying a decision for the same approval is safe
-  /// regardless of whether the first attempt actually landed — approvals
-  /// are single-use and argument-bound (see `ApprovalCard`'s doc), so a
-  /// duplicate decision is a no-op server-side, not a duplicated action the
-  /// way resending a chat message could be.
+  /// unconfirmed outcome: retrying a decision for the same approval can
+  /// never corrupt state or apply a second, contradictory decision. The
+  /// backend (orchestrator-go internal/service/approvals/service.go and
+  /// internal/repository/approvals.go) guards every decision by the
+  /// approval's CURRENT status: repeating the exact same decision on an
+  /// approval that is still pending (or already matches, and unexpired) is
+  /// a safe no-op, while a conflicting or stale decision — denying one
+  /// already approved, or deciding one already expired or consumed — fails
+  /// outright instead of silently applying. So a retry is never a
+  /// duplicated action the way resending a chat message could be, even
+  /// though not every retry is guaranteed to be a silent no-op.
   ///
   /// Exactly one, fixed string, shared by every approval currently in
   /// [_approvalActionFailedApprovalIds] (round 12, finding 2): the banner in
@@ -847,7 +927,7 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       if (!mounted) return;
       setState(() => _sending = false);
-    } on Exception catch (_) {
+    } on Exception catch (error) {
       if (!mounted) return;
       setState(() {
         // Whether the composer actually re-enables still depends on
@@ -857,10 +937,12 @@ class _ChatScreenState extends State<ChatScreen> {
         // this send's own outcome must never override a startup/stream
         // state that arrived independently of it.
         _sending = false;
-        // The outcome is UNKNOWN, not a confirmed failure (see
-        // `_messageSendUnconfirmedNotice`), so the user's own text is
-        // restored rather than discarded — they can retry or edit it
-        // instead of retyping it from memory.
+        // The user's own text is restored either way, confirmed failure or
+        // not — they can retry or edit it instead of retyping it from
+        // memory. Only the CARD differs: [_isConfirmedPreEnqueueSendFailure]
+        // picks between the two truthfully, per its own doc — everything
+        // else about recovering from this rejection (draft restoration,
+        // anchoring, the mounted guard above) is identical for both.
         _controller.text = text;
         // Anchored immediately after `attempt`, never appended to the
         // list's end: an unrelated stream event for another in-flight run
@@ -869,7 +951,9 @@ class _ChatScreenState extends State<ChatScreen> {
         // to whatever happens to be last.
         _insertAfterEntry(
           attempt,
-          _MessageSendUnconfirmedEntry(_messageSendUnconfirmedNotice),
+          _isConfirmedPreEnqueueSendFailure(error)
+              ? _MessageSendFailureEntry(_messageSendFailedNotice)
+              : _MessageSendUnconfirmedEntry(_messageSendUnconfirmedNotice),
         );
       });
       _scrollToBottom();
@@ -1189,6 +1273,8 @@ class _ChatMessageTile extends StatelessWidget {
         return RunCancelledCard(message: cancelled.message);
       case _MessageSendUnconfirmedEntry sendUnconfirmed:
         return MessageSendUnconfirmedCard(message: sendUnconfirmed.message);
+      case _MessageSendFailureEntry sendFailed:
+        return MessageSendFailureCard(message: sendFailed.message);
     }
   }
 }
@@ -1381,17 +1467,39 @@ class _RunCancelledEntry extends _ChatEntry {
   void dispose() {}
 }
 
-/// A `sendMessage` RPC rejected before any `RunQueued` event ever arrived —
-/// see [MessageSendUnconfirmedCard] for why the true outcome is unknown,
-/// not a confirmed failure, and must never be conflated with
-/// [_RunFailureEntry]. Inserted immediately after the optimistic
-/// [_MessageEntry.user] bubble for the same attempt via
+/// A `sendMessage` RPC rejected before any `RunQueued` event ever arrived,
+/// with a status NOT in [_ChatScreenState._isConfirmedPreEnqueueSendFailure]'s
+/// allowlist — see [MessageSendUnconfirmedCard] for why the true outcome is
+/// unknown, not a confirmed failure, and must never be conflated with
+/// [_RunFailureEntry] or [_MessageSendFailureEntry]. Inserted immediately
+/// after the optimistic [_MessageEntry.user] bubble for the same attempt via
 /// [_ChatScreenState._insertAfterEntry] in [_ChatScreenState._sendMessage]'s
 /// own `catch` — never appended to the list's end, and never from the event
 /// stream, so it stays anchored to its own attempt even if an unrelated
 /// stream event for another in-flight run arrives first.
 class _MessageSendUnconfirmedEntry extends _ChatEntry {
   _MessageSendUnconfirmedEntry(this.message);
+
+  final String message;
+
+  @override
+  void dispose() {}
+}
+
+/// A `sendMessage` RPC rejected before any `RunQueued` event ever arrived,
+/// with a status
+/// [_ChatScreenState._isConfirmedPreEnqueueSendFailure] confirms occurred
+/// before `EnqueueUserMessage` — see [MessageSendFailureCard] for the exact
+/// allowlist and why each entry qualifies, and why this must never be
+/// conflated with [_MessageSendUnconfirmedEntry] or [_RunFailureEntry].
+/// Inserted immediately after the optimistic [_MessageEntry.user] bubble for
+/// the same attempt via [_ChatScreenState._insertAfterEntry] in
+/// [_ChatScreenState._sendMessage]'s own `catch` — never appended to the
+/// list's end, and never from the event stream, so it stays anchored to its
+/// own attempt even if an unrelated stream event for another in-flight run
+/// arrives first.
+class _MessageSendFailureEntry extends _ChatEntry {
+  _MessageSendFailureEntry(this.message);
 
   final String message;
 

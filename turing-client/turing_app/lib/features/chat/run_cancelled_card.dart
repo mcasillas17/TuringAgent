@@ -12,11 +12,12 @@ import 'terminal_outcome_card.dart';
 /// not cancel a run unless the context is already cancelled — even though
 /// this screen exposes no cancel affordance of its own. Deliberately
 /// distinct from [RunFailureCard]: a cancellation is not a failure and must
-/// never be announced as one. Shares its visual chrome with [RunFailureCard]
-/// and [MessageSendUnconfirmedCard] via [TerminalOutcomeCard] — every
-/// non-routine outcome this screen reports gets the same error-styled
-/// treatment — but keeps its own truthful "Run cancelled" wording, in the
-/// rendered text and in the accessibility label alike.
+/// never be announced as one. Shares its visual chrome with [RunFailureCard],
+/// [MessageSendUnconfirmedCard], and [MessageSendFailureCard] via
+/// [TerminalOutcomeCard] — every non-routine outcome this screen reports
+/// gets the same error-styled treatment — but keeps its own truthful "Run
+/// cancelled" wording, in the rendered text and in the accessibility label
+/// alike.
 class RunCancelledCard extends StatelessWidget {
   const RunCancelledCard({super.key, required this.message});
 

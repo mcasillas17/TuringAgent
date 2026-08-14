@@ -8,9 +8,10 @@ import 'terminal_outcome_card.dart';
 /// progress (a retry, a step, giving up after N attempts) and must not be
 /// mistaken for one, so it gets its own error-styled card rather than
 /// reusing the neutral notice. Shares its visual chrome with
-/// [RunCancelledCard] and [MessageSendUnconfirmedCard] via
-/// [TerminalOutcomeCard] — the same non-routine, error-styled treatment —
-/// but keeps its own truthful "Run failed" wording.
+/// [RunCancelledCard], [MessageSendUnconfirmedCard], and
+/// [MessageSendFailureCard] via [TerminalOutcomeCard] — the same
+/// non-routine, error-styled treatment — but keeps its own truthful "Run
+/// failed" wording.
 class RunFailureCard extends StatelessWidget {
   const RunFailureCard({super.key, required this.message});
 
