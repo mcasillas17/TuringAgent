@@ -234,6 +234,12 @@ class _ChatScreenState extends State<ChatScreen> {
       case 'agent.run.step':
         _applyRunStep(event);
         break;
+      // `agent.run.started` and `agent.run.queued` are deliberately unhandled
+      // here: surfacing them would just add noise ahead of the real content.
+      // `agent.run.completed` is also deliberately unhandled, but for a
+      // different reason: its completion is already evidenced by the
+      // assistant's own answer arriving via `message.delta`, so a dedicated
+      // handler would be redundant.
       case 'agent.run.failed':
         _applyRunFailed(event);
         break;
