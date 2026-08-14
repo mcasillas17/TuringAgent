@@ -49,21 +49,26 @@ class _ChatScreenState extends State<ChatScreen> {
   /// [_addApproval] replaces one.
   final Set<String> _approvalsInFlight = {};
 
-  /// Generic, screen-level notice for an `approveApproval`/`denyApproval`
-  /// RPC rejection — see [_approve]/[_deny]. Unlike a run's own terminal
-  /// outcome, an approval DECISION failing is not part of the message
-  /// transcript, so it is surfaced as a banner (like
-  /// [_streamEndedNotice]) rather than an inline card. `null` means no
-  /// action failure is currently outstanding.
-  String? _approvalActionNotice;
-
-  /// The approvalId [_approvalActionNotice] is about, or `null` alongside
-  /// it. Kept separate from the notice text itself so clearing is scoped:
-  /// resolving or retrying one approval must never hide a notice that is
-  /// still relevant to a DIFFERENT approval still pending on screen (more
-  /// than one [ApprovalCard] can be shown at once). See
-  /// [_clearApprovalActionNoticeFor].
-  String? _approvalActionNoticeApprovalId;
+  /// Approval ids whose most recent `approveApproval`/`denyApproval` RPC
+  /// rejected AND whose approval is still pending — see [_approve]/[_deny]'s
+  /// `catch`, and [_isApprovalPending]. Unlike a run's own terminal outcome,
+  /// an approval DECISION failing is not part of the message transcript, so
+  /// it is surfaced as a screen-level banner (like [_streamEndedNotice])
+  /// rather than an inline card: `build()` shows that banner, with the
+  /// fixed, generic [_approvalActionFailedNotice] copy, whenever this set is
+  /// non-empty. The copy itself is never stored per id — every failure
+  /// shares the exact same safe, generic text — so this set only needs to
+  /// track WHICH approvals are affected, never what to say about them.
+  ///
+  /// A `Set`, not a single id (round 12, finding 2): more than one
+  /// [ApprovalCard] can be on screen at once, each with its own,
+  /// independent decision RPC. Resolving or retrying ONE approval must
+  /// never hide a notice still owed to a DIFFERENT approval also pending on
+  /// screen, so an id is removed only for the approval it belongs to, by
+  /// [_clearApprovalActionFailureFor] — never by clearing this whole set at
+  /// once. The banner disappears only once every affected id has been
+  /// removed, i.e. once this set is empty again.
+  final Set<String> _approvalActionFailedApprovalIds = {};
 
   /// Ids of history messages whose text is already complete on screen. The
   /// stream replays the deltas that produced them, and those must not be
@@ -399,6 +404,12 @@ class _ChatScreenState extends State<ChatScreen> {
   /// are single-use and argument-bound (see `ApprovalCard`'s doc), so a
   /// duplicate decision is a no-op server-side, not a duplicated action the
   /// way resending a chat message could be.
+  ///
+  /// Exactly one, fixed string, shared by every approval currently in
+  /// [_approvalActionFailedApprovalIds] (round 12, finding 2): the banner in
+  /// `build()` never varies this copy per id, so two DIFFERENT approvals
+  /// failing at once still show this SAME text, just for longer — until
+  /// every affected id clears.
   static const _approvalActionFailedNotice =
       'Could not send your decision. Please try again.';
 
@@ -783,9 +794,11 @@ class _ChatScreenState extends State<ChatScreen> {
       // The backend can resolve an approval by itself (e.g. expiry) while a
       // decision RPC for it is in flight or already failed — either way,
       // that approval's own card is gone now, so neither the in-flight
-      // guard nor a stale failure notice about it should outlive it.
+      // guard nor its own membership in the decision-failure set should
+      // outlive it. This stream event is authoritative over that RPC's own
+      // outcome (round 12, finding 1): see [_approve]/[_deny]'s `catch`.
       _approvalsInFlight.remove(approvalId);
-      _clearApprovalActionNoticeFor(approvalId);
+      _clearApprovalActionFailureFor(approvalId);
     });
   }
 
@@ -951,9 +964,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   : _historyFailedNotice,
             ),
           if (_streamEnded) _SessionNotice(message: _streamEndedNotice),
-          if (_approvalActionNotice != null)
+          if (_approvalActionFailedApprovalIds.isNotEmpty)
             _SessionNotice(
-              message: _approvalActionNotice!,
+              message: _approvalActionFailedNotice,
               // Distinct from both the connection-lost banner's icon AND
               // `TerminalOutcomeCard`'s (used by every card in the
               // transcript, including this same screen's own
@@ -1021,13 +1034,29 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Clears [_approvalActionNotice] only if it was about [approvalId] — see
-  /// that field's own doc for why the scoping matters. Must be called from
+  /// Whether [approvalId] is still present in [_approvals] — i.e. still
+  /// pending a decision, as opposed to already resolved by ANY means (an
+  /// approve, a deny, an expiry, or a consumption) via the event stream.
+  /// Read by [_approve]/[_deny]'s own `catch` (round 12, finding 1): the
+  /// event stream is authoritative over a decision RPC's own outcome, so a
+  /// rejection for an approval that the stream already resolved while the
+  /// RPC was in flight must be ignored rather than recorded as a fresh
+  /// failure.
+  bool _isApprovalPending(String approvalId) =>
+      _approvals.any((item) => item.approvalId == approvalId);
+
+  /// Removes [approvalId] from [_approvalActionFailedApprovalIds] — a no-op
+  /// if it is not a member. Scoped to exactly this one id (round 12,
+  /// finding 2) so resolving or retrying one approval never hides a
+  /// decision-failure banner still owed to a DIFFERENT approval also
+  /// pending on screen — see that field's own doc. Called both when a NEW
+  /// decision attempt starts for this approval ([_approve]/[_deny],
+  /// clearing their own stale failure right away, even before the new
+  /// attempt itself resolves) and when the approval is resolved by ANY
+  /// means via the event stream ([_clearApproval]). Must be called from
   /// inside a `setState`.
-  void _clearApprovalActionNoticeFor(String approvalId) {
-    if (_approvalActionNoticeApprovalId != approvalId) return;
-    _approvalActionNotice = null;
-    _approvalActionNoticeApprovalId = null;
+  void _clearApprovalActionFailureFor(String approvalId) {
+    _approvalActionFailedApprovalIds.remove(approvalId);
   }
 
   Future<void> _approve(_PendingApproval approval) async {
@@ -1039,7 +1068,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_approvalsInFlight.contains(approval.approvalId)) return;
     setState(() {
       _approvalsInFlight.add(approval.approvalId);
-      _clearApprovalActionNoticeFor(approval.approvalId);
+      _clearApprovalActionFailureFor(approval.approvalId);
     });
     // Left unguarded, this `await` rejecting is an unhandled Future error —
     // the same hazard `_sendMessage` guards against, and just as reachable:
@@ -1055,18 +1084,35 @@ class _ChatScreenState extends State<ChatScreen> {
           (item) => item.approvalId == approval.approvalId,
         );
         _approvalsInFlight.remove(approval.approvalId);
+        // Provably a no-op today: a fresh attempt always clears its own id
+        // right away (above, before this `await`), and `_approvalsInFlight`
+        // blocks any OTHER concurrent attempt for the same id from
+        // re-adding it before this one finishes. Kept anyway so this
+        // success path stays explicitly self-consistent — mirroring
+        // `_clearApproval` — rather than relying on that invariant holding
+        // across future changes.
+        _clearApprovalActionFailureFor(approval.approvalId);
       });
     } on Exception catch (_) {
-      // The approval stays in `_approvals` so its card remains on screen
-      // and actionable: the decision was never confirmed, so removing it
-      // here would silently drop the user's request instead of letting
-      // them retry it. The notice is generic and never echoes the raw
-      // error — see `_approvalActionFailedNotice`'s own doc.
       if (!mounted) return;
       setState(() {
         _approvalsInFlight.remove(approval.approvalId);
-        _approvalActionNotice = _approvalActionFailedNotice;
-        _approvalActionNoticeApprovalId = approval.approvalId;
+        // A stream lifecycle event may have ALREADY resolved (or otherwise
+        // removed) this very approval — e.g. it expired, or another client
+        // decided it — WHILE the `await` above was still outstanding; see
+        // `_clearApproval`, which is authoritative and runs the moment that
+        // event arrives, regardless of this RPC's own eventual outcome
+        // (round 12, finding 1). This rejection landing only now, for an
+        // approval no longer even pending, must not resurrect a notice for
+        // it. Only when the approval is STILL pending does the failure
+        // belong on screen: its card stays in `_approvals` so it remains
+        // actionable — the decision was never confirmed, so removing it
+        // here would silently drop the user's request instead of letting
+        // them retry it. The notice is generic and never echoes the raw
+        // error — see `_approvalActionFailedNotice`'s own doc.
+        if (_isApprovalPending(approval.approvalId)) {
+          _approvalActionFailedApprovalIds.add(approval.approvalId);
+        }
       });
     }
   }
@@ -1075,7 +1121,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_approvalsInFlight.contains(approval.approvalId)) return;
     setState(() {
       _approvalsInFlight.add(approval.approvalId);
-      _clearApprovalActionNoticeFor(approval.approvalId);
+      _clearApprovalActionFailureFor(approval.approvalId);
     });
     try {
       await widget.apiClient.denyApproval(approval.approvalId);
@@ -1085,13 +1131,19 @@ class _ChatScreenState extends State<ChatScreen> {
           (item) => item.approvalId == approval.approvalId,
         );
         _approvalsInFlight.remove(approval.approvalId);
+        // See `_approve`'s own success path for why this is a provable
+        // no-op, kept only for explicit self-consistency.
+        _clearApprovalActionFailureFor(approval.approvalId);
       });
     } on Exception catch (_) {
       if (!mounted) return;
       setState(() {
         _approvalsInFlight.remove(approval.approvalId);
-        _approvalActionNotice = _approvalActionFailedNotice;
-        _approvalActionNoticeApprovalId = approval.approvalId;
+        // See `_approve`'s own `catch` for why this is conditional on the
+        // approval still being pending (round 12, finding 1).
+        if (_isApprovalPending(approval.approvalId)) {
+          _approvalActionFailedApprovalIds.add(approval.approvalId);
+        }
       });
     }
   }

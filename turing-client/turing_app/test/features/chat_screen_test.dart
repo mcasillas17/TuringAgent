@@ -6076,11 +6076,10 @@ void main() {
 
     // appr_2 is resolved by a wholly unrelated means — no decision RPC
     // for IT was ever made — while appr_1's own failure notice is still
-    // showing. `_clearApprovalActionNoticeFor` must check WHICH approval
-    // the current notice is actually about before clearing it; if it
-    // ever cleared unconditionally, this would wrongly wipe appr_1's
-    // still-relevant notice even though appr_1 itself was never
-    // resolved.
+    // showing. `_clearApprovalActionFailureFor` must remove ONLY appr_2's
+    // own id from the decision-failure set; if it ever cleared the whole
+    // set unconditionally, this would wrongly wipe appr_1's still-relevant
+    // notice even though appr_1 itself was never resolved.
     events.add(
       _event(
         type: 'approval.consumed',
@@ -6166,6 +6165,464 @@ void main() {
       unawaited(events.close());
     },
   );
+
+  // Approval decision state (round 12, finding 1): the event stream is
+  // authoritative over a decision RPC's own outcome. `_approve`/`_deny`
+  // used to record a decision-failure notice in their `catch` unconditionally
+  // — even when a lifecycle event had ALREADY resolved (or otherwise
+  // removed) that very approval WHILE the RPC was still in flight. If the
+  // RPC then rejects only afterwards, that is stale: the stream already
+  // moved past this approval, so the rejection must not resurrect either
+  // the card or a notice about it.
+  testWidgets(
+    'an approval.expired stream event resolving the approval while its own '
+    'approveApproval RPC is still in flight is authoritative — a rejection '
+    'arriving after must not resurrect the card or a stale '
+    'decision-failure notice',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final pending = Completer<Map<String, dynamic>>();
+      final apiClient = _FakeApiClient()..approveApprovalPending = pending;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'approval.requested',
+          sequence: 1,
+          payload: {
+            'approvalId': 'appr_1',
+            'toolName': 'files.update',
+            'argsSummary': 'Update note.txt',
+          },
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.text('Approve'));
+      await tester.pump();
+      expect(apiClient.approveApprovalCallCount, 1);
+
+      // The approval resolves via the event stream — e.g. it expired —
+      // WHILE this client's own approveApproval call above is still
+      // outstanding.
+      events.add(
+        _event(
+          type: 'approval.expired',
+          sequence: 2,
+          payload: {'approvalId': 'appr_1'},
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.text('Approval requested: files.update'),
+        findsNothing,
+        reason: 'the stream event must resolve the card immediately',
+      );
+
+      // Only now does the in-flight RPC reject — after the stream already
+      // made its own, authoritative call on this approval.
+      pending.completeError(
+        const TuringApiException(code: 'unavailable', message: 'too late'),
+      );
+      await tester.pump();
+
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: 'a rejection for an already-resolved approval must not throw',
+      );
+      expect(
+        find.text('Approval requested: files.update'),
+        findsNothing,
+        reason: 'the card must stay gone — the stream event is authoritative',
+      );
+      expect(
+        find.text('Could not send your decision. Please try again.'),
+        findsNothing,
+        reason:
+            'the approval was already resolved by the stream before the '
+            'rejection arrived, so the rejection must not resurrect a '
+            'decision-failure notice for it',
+      );
+      expect(find.textContaining('too late'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'an approval.consumed stream event resolving the approval while its '
+    'own denyApproval RPC is still in flight is authoritative — a '
+    'rejection arriving after must not resurrect the card or a stale '
+    'decision-failure notice',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final pending = Completer<Map<String, dynamic>>();
+      final apiClient = _FakeApiClient()..denyApprovalPending = pending;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'approval.requested',
+          sequence: 1,
+          payload: {
+            'approvalId': 'appr_1',
+            'toolName': 'files.update',
+            'argsSummary': 'Update note.txt',
+          },
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.text('Deny'));
+      await tester.pump();
+      expect(apiClient.denyApprovalCallCount, 1);
+
+      // Resolved via the event stream — e.g. another client already decided
+      // it — WHILE this client's own denyApproval call above is still
+      // outstanding.
+      events.add(
+        _event(
+          type: 'approval.consumed',
+          sequence: 2,
+          payload: {'approvalId': 'appr_1'},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('Approval requested: files.update'), findsNothing);
+
+      pending.completeError(
+        const TuringApiException(code: 'unavailable', message: 'too late'),
+      );
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('Approval requested: files.update'), findsNothing);
+      expect(
+        find.text('Could not send your decision. Please try again.'),
+        findsNothing,
+        reason:
+            'the approval was already resolved by the stream before the '
+            'rejection arrived, so the rejection must not resurrect a '
+            'decision-failure notice for it',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // Approval decision state (round 12, finding 2): decision-failure notices
+  // for DIFFERENT approvals must accumulate independently. `_approve`/
+  // `_deny` used to track only a single `approvalId` alongside the notice,
+  // so a SECOND approval's failure silently displaced the first's own
+  // tracking — resolving or retrying whichever approval happened to be the
+  // most-recently-tracked one then hid the banner entirely, even while an
+  // EARLIER failure for a different approval was still sitting there,
+  // never retried.
+  testWidgets(
+    'decision-failure notices for two different approvals accumulate — '
+    'resolving the more-recently-failed one first must not hide the '
+    'still-pending other, and the banner only clears once both are gone',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..approveApprovalErrors.addAll([
+          const TuringApiException(code: 'unavailable', message: 'no backend'),
+          const TuringApiException(code: 'unavailable', message: 'no backend'),
+        ]);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'approval.requested',
+          sequence: 1,
+          payload: {
+            'approvalId': 'appr_1',
+            'toolName': 'files.update',
+            'argsSummary': 'Update note.txt',
+          },
+        ),
+      );
+      events.add(
+        _event(
+          type: 'approval.requested',
+          sequence: 2,
+          payload: {
+            'approvalId': 'appr_2',
+            'toolName': 'shell.exec',
+            'argsSummary': 'Run tests',
+          },
+        ),
+      );
+      await tester.pump();
+
+      Finder cardFor(String argsSummary) => find.ancestor(
+        of: find.text(argsSummary),
+        matching: find.byType(Card),
+      );
+      Finder approveButtonFor(String argsSummary) => find.descendant(
+        of: cardFor(argsSummary),
+        matching: find.text('Approve'),
+      );
+
+      // appr_1 fails first.
+      await tester.tap(approveButtonFor('Update note.txt'));
+      await tester.pump();
+      expect(
+        find.text('Could not send your decision. Please try again.'),
+        findsOneWidget,
+        reason: "appr_1's own rejection must show the banner",
+      );
+
+      // appr_2 fails second — under the OLD single-id design this would
+      // silently displace appr_1's own tracked failure.
+      await tester.tap(approveButtonFor('Run tests'));
+      await tester.pump();
+      expect(
+        find.text('Could not send your decision. Please try again.'),
+        findsOneWidget,
+        reason:
+            "appr_2 failing too must not duplicate the banner — it's a "
+            'single, generic notice',
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.descendant(
+                of: cardFor('Run tests'),
+                matching: find.byWidgetPredicate(
+                  (widget) => widget is FilledButton,
+                ),
+              ),
+            )
+            .onPressed,
+        isNotNull,
+        reason:
+            "appr_2's own RPC already settled (with a rejection), so its "
+            'Approve button must be retryable, not stuck busy',
+      );
+
+      // Retry appr_2 — the MORE RECENTLY failed one, and the one an old
+      // single-id implementation would still be tracking. The queue is
+      // now empty, so this attempt succeeds, but starting it must clear
+      // appr_2's OWN failure immediately, before it even resolves.
+      final retryPending = Completer<Map<String, dynamic>>();
+      apiClient.approveApprovalPending = retryPending;
+      await tester.tap(approveButtonFor('Run tests'));
+      await tester.pump();
+
+      expect(
+        find.text('Approval requested: files.update'),
+        findsOneWidget,
+        reason: 'appr_1 was never retried, so its own card must remain',
+      );
+      expect(
+        find.text('Could not send your decision. Please try again.'),
+        findsOneWidget,
+        reason:
+            "appr_1's own decision-failure is still outstanding, so "
+            'retrying appr_2 must not hide it — a single-id tracker would '
+            'wrongly clear the banner here because appr_2 was the most '
+            'recently failed approval',
+      );
+
+      retryPending.complete({'approvalId': 'appr_2', 'status': 'approved'});
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      expect(find.text('Approval requested: shell.exec'), findsNothing);
+      expect(
+        find.text('Could not send your decision. Please try again.'),
+        findsOneWidget,
+        reason: "appr_1's own failure must still show the banner",
+      );
+
+      // Now resolve appr_1 too — via the event stream this time, not a
+      // retry — leaving no failed approval behind.
+      events.add(
+        _event(
+          type: 'approval.consumed',
+          sequence: 3,
+          payload: {'approvalId': 'appr_1'},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('Approval requested: files.update'), findsNothing);
+      expect(
+        find.text('Could not send your decision. Please try again.'),
+        findsNothing,
+        reason:
+            'once every previously-failed approval is gone, the banner '
+            'must finally clear',
+      );
+      expect(apiClient.approveApprovalCallCount, 3);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets('a rejected approveApproval for one approval and a rejected '
+      'denyApproval for a DIFFERENT approval both feed the same shared '
+      'decision-failure banner — clearing only one leaves it up', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..approveApprovalErrors.add(
+        const TuringApiException(code: 'unavailable', message: 'no backend'),
+      )
+      ..denyApprovalErrors.add(
+        const TuringApiException(code: 'unavailable', message: 'no backend'),
+      );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'approval.requested',
+        sequence: 1,
+        payload: {
+          'approvalId': 'appr_1',
+          'toolName': 'files.update',
+          'argsSummary': 'Update note.txt',
+        },
+      ),
+    );
+    events.add(
+      _event(
+        type: 'approval.requested',
+        sequence: 2,
+        payload: {
+          'approvalId': 'appr_2',
+          'toolName': 'shell.exec',
+          'argsSummary': 'Run tests',
+        },
+      ),
+    );
+    await tester.pump();
+
+    Finder cardFor(String argsSummary) =>
+        find.ancestor(of: find.text(argsSummary), matching: find.byType(Card));
+
+    // appr_1's Approve fails.
+    await tester.tap(
+      find.descendant(
+        of: cardFor('Update note.txt'),
+        matching: find.text('Approve'),
+      ),
+    );
+    await tester.pump();
+    expect(
+      find.text('Could not send your decision. Please try again.'),
+      findsOneWidget,
+    );
+
+    // appr_2's Deny fails too — a DIFFERENT approval, a DIFFERENT
+    // decision verb, feeding the exact same shared banner.
+    await tester.tap(
+      find.descendant(of: cardFor('Run tests'), matching: find.text('Deny')),
+    );
+    await tester.pump();
+    expect(apiClient.approveApprovalCallCount, 1);
+    expect(apiClient.denyApprovalCallCount, 1);
+    expect(
+      find.text('Could not send your decision. Please try again.'),
+      findsOneWidget,
+      reason:
+          "a DIFFERENT approval's denyApproval failure must join the "
+          'same banner as appr_1\'s own approveApproval failure',
+    );
+
+    // Resolve appr_2 (the deny failure) via the event stream — appr_1's
+    // own approve failure must keep the banner up.
+    events.add(
+      _event(
+        type: 'approval.consumed',
+        sequence: 3,
+        payload: {'approvalId': 'appr_2'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Approval requested: shell.exec'), findsNothing);
+    expect(
+      find.text('Approval requested: files.update'),
+      findsOneWidget,
+      reason: 'appr_1 was never retried, so its own card must remain',
+    );
+    expect(
+      find.text('Could not send your decision. Please try again.'),
+      findsOneWidget,
+      reason:
+          "appr_2 resolving must not hide appr_1's own still-pending "
+          'approveApproval failure',
+    );
+
+    // Retry appr_1's Approve — the queue is empty now, so it succeeds,
+    // and it is the last failed id: the banner must finally clear.
+    await tester.tap(
+      find.descendant(
+        of: cardFor('Update note.txt'),
+        matching: find.text('Approve'),
+      ),
+    );
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('Approval requested: files.update'), findsNothing);
+    expect(
+      find.text('Could not send your decision. Please try again.'),
+      findsNothing,
+    );
+    expect(apiClient.approveApprovalCallCount, 2);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
 }
 
 /// The `_SessionNotice` banner's own rendered text, scoped to exclude the
