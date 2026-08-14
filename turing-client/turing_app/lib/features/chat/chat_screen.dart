@@ -320,11 +320,17 @@ class _ChatScreenState extends State<ChatScreen> {
   static const _clientCancelledNotice =
       'The run was cancelled before it could finish';
 
-  /// The event stream is the only source of terminal `tool.call.*` events, so
-  /// once it errors (gRPC disconnect, deadline, auth failure) or closes, any
-  /// card still in [ToolCallStatus.running] can never resolve. Left alone it
-  /// would spin forever and tell the user a tool is still executing. Resolve
-  /// those cards instead; already-terminal cards are untouched.
+  /// The event stream is the only source of terminal `tool.call.*` events. On
+  /// `onDone`, or a subscription that never opened, no further event can ever
+  /// arrive on it, so any card still in [ToolCallStatus.running] genuinely can
+  /// never resolve. On `onError` that is not guaranteed — `cancelOnError` is
+  /// false (see [_openSubscription]), so the stream can keep delivering after
+  /// an error — but a card may still never see a real terminal event, so mark
+  /// it pessimistically with the same 'connection lost' placeholder; a later
+  /// terminal event for that call replaces it via [_applyToolCall] if the
+  /// stream recovers. Either way, left alone the card would spin forever and
+  /// tell the user a tool is still executing. Already-terminal cards are
+  /// untouched.
   ///
   /// Resolving cards is not enough on its own: usually no tool call is in
   /// flight when the stream drops, and [TuringEventSource] never reconnects, so

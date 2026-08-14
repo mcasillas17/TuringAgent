@@ -1684,8 +1684,10 @@ void main() {
     await tester.pump();
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
 
-    // The gRPC stream drops (disconnect / deadline / auth failure). No terminal
-    // event can ever arrive for call_2 now.
+    // The gRPC stream errors (disconnect / deadline / auth failure). Since
+    // `cancelOnError` is false the stream isn't guaranteed to be done, but
+    // call_2 may never get a real terminal event, so it's pessimistically
+    // marked with the connection-lost placeholder below.
     events.addError(StateError('stream dropped'));
     await tester.pump();
 
