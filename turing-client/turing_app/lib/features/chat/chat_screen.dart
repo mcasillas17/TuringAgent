@@ -53,34 +53,53 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _streamEnded = false;
   bool _historyLoadFailed = false;
 
-  /// True until startup readiness is reached, which requires ALL three of:
-  /// the replay watermark has loaded successfully, the initial history load
-  /// has settled (either it succeeded, or it failed and that failure was
-  /// given its own visible handling — see [_historyLoadFailed]), and the
-  /// event subscription has been opened. The composer stays disabled, with a
-  /// spinner in place of the send icon, until all three hold.
+  /// True while startup is still IN PROGRESS — not yet ready, but also not
+  /// yet known to have failed. The composer stays disabled, with a spinner
+  /// in place of the send icon, for as long as this holds. See
+  /// [_startupFailed] for the terminal counterpart: the two flags are never
+  /// true at the same time (see its doc), so `build()` can tell "still
+  /// starting" apart from "will never start" and show truthful copy for
+  /// each, instead of showing a spinner or "Loading session..." for a
+  /// failure that will never resolve.
   ///
-  /// Two distinct races make each of the first two conditions necessary on
-  /// their own, not just together:
-  ///  - A message sent before the watermark is fixed could terminally fail or
-  ///    cancel fast enough that the watermark ends up covering that very run,
-  ///    and [_isHistoricalRunEvent] would then replay-suppress its own live
+  /// Startup only clears this flag — reaching either readiness or terminal
+  /// failure — once every one of the following holds:
+  ///  - the replay watermark has loaded, so [_isHistoricalRunEvent] has a
+  ///    boundary to filter replay against. A message sent before this is
+  ///    fixed could terminally fail or cancel fast enough that the eventual
+  ///    watermark covers that very run, replay-suppressing its own live
   ///    terminal event.
-  ///  - A message sent while history is still loading risks a duplicate or
-  ///    misordered bubble: [_loadInitialMessages] seeds history by
-  ///    PREPENDING (`_messages.insertAll(0, ...)`) once `listMessages`
-  ///    resolves, so a live send in that window is appended immediately and
-  ///    can then ALSO come back from that very `listMessages` call — the same
-  ///    turn rendered twice, in the wrong relative order.
+  ///  - the initial history load has settled — either it succeeded, or it
+  ///    failed and that failure was given its own visible handling (see
+  ///    [_historyLoadFailed], which — unlike [_startupFailed] — does not
+  ///    stop startup from reaching readiness). [_loadInitialMessages] seeds
+  ///    history by PREPENDING (`_messages.insertAll(0, ...)`) once
+  ///    `listMessages` resolves, so a live send while it is still in flight
+  ///    risks a duplicate or misordered bubble: the same turn appended live,
+  ///    then ALSO returned by that very `listMessages` call.
+  ///  - the event subscription is open and was not already dead on arrival
+  ///    (see [_openSubscription]) — nothing else on this screen can carry a
+  ///    send's results back to the user.
   ///
-  /// If the watermark load fails, this flag is deliberately never cleared:
-  /// [_start] calls [_handleStreamEnded] immediately instead of attempting
-  /// history at all, raising the visible connection-lost notice, and no
-  /// subscription ever opens. A composer left disabled forever here is not a
-  /// safety theater — this screen cannot receive results without a
-  /// subscription to carry them, and the notice is what tells the user why;
-  /// there is no live boundary left to protect by also refusing input.
+  /// A failure in either of the first or third condition above is terminal:
+  /// this screen has no retry path, so it is reported by setting
+  /// [_startupFailed] together with clearing this flag, never on its own.
   bool _initializing = true;
+
+  /// True once startup has reached a TERMINAL failure: the replay watermark
+  /// could not be loaded, or the event subscription could not be opened —
+  /// including a subscription that was usable enough for `listen()` to
+  /// return normally, but had already gone dead before that call returned
+  /// (see [_openSubscription]). This screen has no retry path, so unlike
+  /// [_historyLoadFailed] there is no later event that clears this once set.
+  ///
+  /// Always set in the same update that clears [_initializing], and always
+  /// alongside a call to [_handleStreamEnded] (whether made directly, or
+  /// reached indirectly through the subscription's own `onError`/`onDone`),
+  /// so the composer's disabled, truthful copy and the connection-lost
+  /// notice ([_streamEnded] / [_streamEndedNotice]) always appear together as
+  /// one consistent explanation, not two different ones for the same cause.
+  bool _startupFailed = false;
 
   @override
   void initState() {
@@ -95,12 +114,15 @@ class _ChatScreenState extends State<ChatScreen> {
   /// is still in flight would render a second copy of the conversation with no
   /// way to tell which bubbles history already covers.
   ///
-  /// The load is awaited but never allowed to fail the startup: `listMessages`
-  /// hits a backend that routinely is not up (gRPC unavailable, stale token,
-  /// deadline). Letting that propagate would skip `connect()` entirely and
-  /// leave a screen that receives no deltas, no tool cards and — because the
-  /// drop notice is raised from the subscription — no signal at all. Degrade to
-  /// "no history" instead, and say so.
+  /// The load is awaited but never allowed to fail startup on its own:
+  /// `listMessages` hits a backend that routinely is not up (gRPC
+  /// unavailable, stale token, deadline). Letting that propagate would skip
+  /// `connect()` entirely and leave a screen that receives no deltas, no tool
+  /// cards and — because the drop notice is raised from the subscription —
+  /// no signal at all. Degrade to "no history" instead, and say so. That
+  /// holds even when startup has already failed terminally for the unrelated
+  /// reason below: a transcript the backend can still serve is better than
+  /// none, even though the session can never go live.
   Future<void> _start() async {
     // Snapshot the persisted event boundary before history starts loading.
     // Events committed during that RPC remain above the cursor and replay as
@@ -109,41 +131,82 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!mounted) return;
     if (!replayBoundaryLoaded) {
       // No boundary means [_isHistoricalRunEvent] has nothing to filter
-      // replay against, so the subscription must never open — and with it
-      // never opening, there is nothing left for history to be seeded FOR,
-      // or for a send to reach. Raise the visible failure right now instead
-      // of first awaiting `_loadInitialMessages`: that would leave both the
-      // notice and [_initializing] (see its doc) hostage to however long — or
-      // whether ever — that unrelated load resolves.
+      // replay against, so the subscription must never open (enforced below,
+      // after the history attempt this shares with the success path). Raise
+      // the visible, TERMINAL failure right now instead of after
+      // `_loadInitialMessages`: that unrelated, best-effort read-only load
+      // must not hold the notice or the composer's truthful disabled state
+      // hostage to however long — or whether ever — it resolves.
       _handleStreamEnded();
-      return;
+      if (!mounted) return;
+      setState(() {
+        _initializing = false;
+        _startupFailed = true;
+      });
     }
     try {
       await _loadInitialMessages();
     } catch (_) {
       // The dedup sets stay empty, so replayed deltas may re-render text the
-      // server already persisted. A duplicated transcript beats a silent one.
+      // server already persisted. A duplicated transcript beats a silent
+      // one — true whether or not the watermark above already failed.
       if (mounted) setState(() => _historyLoadFailed = true);
     }
-    if (!mounted) return;
-    _subscription = widget.eventSource
-        .connect(
-          sessionId: widget.sessionId,
-          // Replay approval lifecycle events so an unresolved request is
-          // reconstructed after reopening. Historical tool events remain
-          // suppressed by the independently captured watermark.
-          lastSequence: 0,
-        )
-        .listen(
-          _applyEvent,
-          onError: _handleStreamEnded,
-          onDone: _handleStreamEnded,
-        );
-    // Only now are all three conditions in [_initializing]'s doc met: the
-    // watermark is fixed, history has settled (loaded or visibly failed) so a
-    // send cannot race its own prepend, and the subscription that would carry
-    // that send's events is already open.
+    if (!mounted || !replayBoundaryLoaded) return;
+    if (!_openSubscription()) {
+      setState(() {
+        _initializing = false;
+        _startupFailed = true;
+      });
+      return;
+    }
+    // Every condition in [_initializing]'s doc is met: the watermark is
+    // fixed, history has settled (loaded or visibly failed) so a send cannot
+    // race its own prepend, and the subscription that would carry that
+    // send's events is open and was not dead on arrival.
     setState(() => _initializing = false);
+  }
+
+  /// Opens the live event subscription and reports whether it is actually
+  /// usable — not just whether `listen()` itself returned without throwing.
+  ///
+  /// Two distinct failures are both possible here, and both are routed
+  /// through the same [_handleStreamEnded] used for a subscription that
+  /// drops after startup, so every way this can be unusable raises exactly
+  /// one kind of visible notice:
+  ///  - `connect()` touches a gRPC channel on a real [TuringEventSource], so
+  ///    a setup failure there (a torn-down channel, e.g.) can throw
+  ///    SYNCHRONOUSLY rather than arriving later as an `onError`. `_start` is
+  ///    fire-and-forget (`unawaited` from `initState`), so an uncaught throw
+  ///    here would otherwise become an unhandled Future rejection instead of
+  ///    a handled, visible failure.
+  ///  - a source that is already erroring or closed can invoke its terminal
+  ///    callback SYNCHRONOUSLY, within `listen()` itself, before `listen()`
+  ///    has even returned a subscription for this method to assign.
+  ///    [_streamEnded] is only ever set by [_handleStreamEnded], so checking
+  ///    it immediately after `listen()` returns is what catches a
+  ///    subscription that opened without throwing but was already dead on
+  ///    arrival.
+  bool _openSubscription() {
+    try {
+      _subscription = widget.eventSource
+          .connect(
+            sessionId: widget.sessionId,
+            // Replay approval lifecycle events so an unresolved request is
+            // reconstructed after reopening. Historical tool events remain
+            // suppressed by the independently captured watermark.
+            lastSequence: 0,
+          )
+          .listen(
+            _applyEvent,
+            onError: _handleStreamEnded,
+            onDone: _handleStreamEnded,
+          );
+    } catch (error, stackTrace) {
+      _handleStreamEnded(error, stackTrace);
+      return false;
+    }
+    return !_streamEnded;
   }
 
   static const _streamEndedNotice =
@@ -570,6 +633,14 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _sendMessage() async {
+    // The composer's `enabled`/`onPressed` gating in `build()` is the
+    // primary defence, but `TextField.onSubmitted` stays wired to this
+    // method regardless of `enabled` — that flag only affects Flutter's own
+    // focus/input routing, not whether this callback itself runs. A queued
+    // IME commit (captured before the field became disabled) or any future
+    // programmatic caller could still invoke it directly, so this method
+    // must refuse on its own rather than trust the UI to have blocked it.
+    if (_initializing || _startupFailed) return;
     final text = _controller.text.trim();
     if (text.isEmpty) return;
     setState(
@@ -602,6 +673,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Both flags disable the composer, but only [_startupFailed] is
+    // TERMINAL — see its doc — so it alone drives the copy switch below; a
+    // spinner or "Loading session..." for a failure that will never resolve
+    // would be untruthful.
+    final composerDisabled = _initializing || _startupFailed;
     return Scaffold(
       appBar: AppBar(title: const Text('Project Turing')),
       body: Column(
@@ -656,24 +732,26 @@ class _ChatScreenState extends State<ChatScreen> {
                   Expanded(
                     child: TextField(
                       controller: _controller,
-                      enabled: !_initializing,
+                      enabled: !composerDisabled,
                       onSubmitted: (_) => _sendMessage(),
                       decoration: InputDecoration(
-                        hintText: _initializing
-                            ? 'Loading session...'
-                            : 'Ask Turing...',
+                        hintText: _startupFailed
+                            ? _streamEndedNotice
+                            : (_initializing
+                                  ? 'Loading session...'
+                                  : 'Ask Turing...'),
                       ),
                     ),
                   ),
                   IconButton(
-                    tooltip: 'Send',
+                    tooltip: _startupFailed ? _streamEndedNotice : 'Send',
                     icon: _initializing
                         ? const SizedBox.square(
                             dimension: 18,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.send),
-                    onPressed: _initializing ? null : _sendMessage,
+                    onPressed: composerDisabled ? null : _sendMessage,
                   ),
                 ],
               ),
