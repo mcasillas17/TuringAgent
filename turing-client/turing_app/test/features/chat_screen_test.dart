@@ -665,6 +665,101 @@ void main() {
     unawaited(events.close());
   });
 
+  // Retry exhaustion is a documented, decided double-report (Task 2 of
+  // docs/superpowers/plans/2026-08-14-flutter-run-failure-rendering.md):
+  // the backend emits both an `agent.run.step` give-up notice ("Gave up
+  // after N attempts") and the terminal `agent.run.failed` for the same
+  // run (`repository/jobs.go:120-133`). The chosen resolution is option
+  // (a) — show both, worded so neither repeats the other — rather than
+  // suppressing the card with per-run dedup state. This test pins that
+  // decision: it fails if a future change collapses the two into one
+  // card, silently drops either one, or lets their wording collide.
+  testWidgets(
+    'retry exhaustion shows one give-up notice and one distinct failure '
+    'card, worded so neither repeats the other',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: _FakeApiClient(),
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // Mirrors repository.RetryDecision for the exhausted-retries path
+      // (`repository/jobs.go:120-133`, `giveUpNote`): the give-up
+      // `agent.run.step` is ordered first (it explains why retrying
+      // stopped), the terminal `agent.run.failed` follows (it carries the
+      // actual failure reason). Both share one runId.
+      const giveUpNote = 'Gave up after 3 attempts';
+      events.add(
+        _event(
+          type: 'agent.run.step',
+          sequence: 1,
+          payload: {'attempts': 3, 'maxAttempts': 3, 'note': giveUpNote},
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'agent.run.failed',
+          sequence: 2,
+          payload: {
+            'code': 'model_provider_unavailable',
+            'message': 'The model provider is unavailable',
+            'retryable': false,
+          },
+        ),
+      );
+      await tester.pump();
+
+      // Exactly one of each: no duplication and no suppression.
+      expect(find.byType(RunNoticeCard), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+
+      // The give-up wording, verbatim from the backend's `giveUpNote`.
+      expect(find.text(giveUpNote), findsOneWidget);
+      // The failure reason, distinct from the give-up wording.
+      expect(
+        find.text('The model provider is unavailable'),
+        findsOneWidget,
+      );
+
+      // Non-duplicative: the two texts are not the same string, and
+      // neither card renders the other's text anywhere inside it.
+      expect(giveUpNote, isNot('The model provider is unavailable'));
+      expect(
+        find.descendant(
+          of: find.byType(RunNoticeCard),
+          matching: find.text('The model provider is unavailable'),
+        ),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: find.byType(RunFailureCard),
+          matching: find.text(giveUpNote),
+        ),
+        findsNothing,
+      );
+
+      // Event order preserved: the notice (why we stopped retrying) reads
+      // above the failure card (what actually happened) in the transcript.
+      expect(
+        tester.getTopLeft(find.byType(RunNoticeCard)).dy,
+        lessThan(tester.getTopLeft(find.byType(RunFailureCard)).dy),
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
   testWidgets('chat sends selected provider through API client', (
     tester,
   ) async {
