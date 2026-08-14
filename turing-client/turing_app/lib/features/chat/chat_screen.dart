@@ -265,11 +265,16 @@ class _ChatScreenState extends State<ChatScreen> {
   static const _historyFailedNotice =
       'Earlier messages could not be loaded. This session is live from here on.';
 
-  /// Shown instead of [_historyFailedNotice] when [_startupFailed] is also
-  /// true: that copy's "This session is live from here on" claim is false
-  /// once no subscription will ever exist, whether because the replay
-  /// watermark failed to load or because [_openSubscription] itself could
-  /// never open one — nothing about this session is "live" in either case.
+  /// Shown instead of [_historyFailedNotice] when [_startupFailed] or
+  /// [_streamEnded] holds: that copy's "This session is live from here on"
+  /// claim is false whenever the stream is not CURRENTLY able to deliver,
+  /// whether because no subscription will ever exist ([_startupFailed] —
+  /// the replay watermark failed to load, or [_openSubscription] itself
+  /// could never open one) or because one opened fine but has since gone
+  /// dark, recoverably or not ([_streamEnded], set asynchronously by
+  /// [_handleStreamEnded] from an `onError`/`onDone` reached after this
+  /// banner may already be showing the live copy). Nothing about this
+  /// session is "live" in any of those cases.
   static const _historyFailedNoSubscriptionNotice =
       'Earlier messages could not be loaded.';
 
@@ -768,12 +773,20 @@ class _ChatScreenState extends State<ChatScreen> {
           if (_historyLoadFailed)
             _SessionNotice(
               // `_historyFailedNotice`'s "This session is live from here on"
-              // is only true once a subscription genuinely exists; on a
-              // [_startupFailed] path none ever will (see
-              // [_historyFailedNoSubscriptionNotice]'s doc), regardless of
-              // whether that came from the watermark or from
-              // [_openSubscription] itself.
-              message: _startupFailed
+              // is only true while a subscription is CURRENTLY able to
+              // deliver. That fails on [_startupFailed] (no subscription
+              // will ever exist, whether from the watermark or from
+              // [_openSubscription] itself) just as surely as on
+              // [_streamEnded] (a subscription that opened fine has since
+              // gone dark, recoverably or not — see [_handleStreamEnded]):
+              // either one alone already makes the claim false, and
+              // [_streamEnded] is set ASYNCHRONOUSLY, after this banner may
+              // already be showing the live copy, so it must be checked
+              // here too, not just at first render. Both flags share the
+              // same corrected copy because the distinction between them —
+              // permanent vs. recoverable — is already carried by whether
+              // the connection-lost notice below persists or later clears.
+              message: _startupFailed || _streamEnded
                   ? _historyFailedNoSubscriptionNotice
                   : _historyFailedNotice,
             ),

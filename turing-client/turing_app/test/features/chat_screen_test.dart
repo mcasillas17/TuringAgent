@@ -3931,6 +3931,121 @@ void main() {
     },
   );
 
+  // Round 8, sole finding: the "live from here on" claim above is only
+  // true for as long as the subscription STAYS healthy. `_historyLoadFailed`
+  // never clears once set, but `_streamEnded` is set ASYNCHRONOUSLY later —
+  // by the subscription's own `onError`/`onDone` — so a subscription that
+  // was open when the history-failure banner first rendered can go dark
+  // afterwards. The banner must react: it previously keyed off
+  // `_startupFailed` alone, so it kept claiming "live from here on" even
+  // after `_streamEnded` made that false, directly contradicting the
+  // connection-lost notice rendered right below it.
+  testWidgets(
+    'a history load failure notice drops its "live from here on" claim '
+    'once the stream ends asynchronously afterward',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..messagesError = StateError('grpc unavailable');
+      final eventSource = _FakeEventSource(events.stream);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: eventSource,
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      // Sanity check: matches the still-healthy-subscription test above.
+      expect(
+        _sessionNoticeText(
+          'Earlier messages could not be loaded. This session is live from '
+          'here on.',
+        ),
+        findsOneWidget,
+        reason: 'sanity check: the subscription is healthy before the drop',
+      );
+
+      // The subscription is not cancelled on error (`cancelOnError` is
+      // false), so this is the recoverable path, not a terminal one —
+      // `_startupFailed` stays false throughout.
+      events.addError(StateError('stream dropped'));
+      await tester.pump();
+
+      expect(
+        _sessionNoticeText(
+          'Connection to the session lost. Reopen the session to continue.',
+        ),
+        findsOneWidget,
+        reason: 'the connection-lost notice must appear once the stream ends',
+      );
+      expect(
+        _sessionNoticeText('Earlier messages could not be loaded.'),
+        findsOneWidget,
+        reason:
+            'the history notice must switch to the no-subscription copy: '
+            'the stream is currently unavailable, so nothing about this '
+            'session is "live" right now',
+      );
+      expect(
+        find.textContaining('This session is live from here on'),
+        findsNothing,
+        reason:
+            'this claim now directly contradicts the connection-lost '
+            'notice rendered alongside it and must not still be shown',
+      );
+
+      // The subscription is not cancelled on error, so a later event proves
+      // the stream is alive again — the history notice must revert to its
+      // truthful "live from here on" copy, and the composer must re-enable,
+      // exactly like the pre-existing recoverable-stream tests already
+      // prove for the connection-lost notice and composer on their own.
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: {'messageId': 'msg_a', 'delta': 'still here'},
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        _sessionNoticeText(
+          'Connection to the session lost. Reopen the session to continue.',
+        ),
+        findsNothing,
+      );
+      expect(
+        _sessionNoticeText(
+          'Earlier messages could not be loaded. This session is live from '
+          'here on.',
+        ),
+        findsOneWidget,
+        reason:
+            'a later event proves the stream is alive again, so the '
+            'history notice must revert to its truthful "live from here '
+            'on" copy',
+      );
+      final recoveredField = tester.widget<TextField>(find.byType(TextField));
+      expect(
+        recoveredField.enabled,
+        isTrue,
+        reason:
+            'the composer must re-enable once the stream is proven alive '
+            'again, consistent with the pre-existing recoverable-stream '
+            'behavior',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
   // Round 7, finding 3: the watermark is not the only path to
   // `_startupFailed` — the subscription itself can fail to open (see the
   // synchronous-throw/synchronous-onDone tests above) with the watermark
