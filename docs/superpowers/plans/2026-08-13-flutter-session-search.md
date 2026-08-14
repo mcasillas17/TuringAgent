@@ -91,66 +91,512 @@ Do not modify `lib/features/chat/**`.
 
 ## Task 1: Search and session API methods
 
-- [ ] Add failing mapper and in-process gRPC tests that prove:
-  - `searchMessages` forwards its query unchanged, an empty session ID, and
-    limit 50;
-  - the RPC has the existing bounded unary deadline;
-  - every proto message field used by `Message` is mapped;
-  - `session_id` is preserved in `SearchHit`;
-  - `getSession` forwards the ID, has a bounded deadline, and maps the response.
-- [ ] Run the targeted tests and confirm they fail for the missing methods.
-- [ ] Add `SearchHit`, its mapper, `TuringApi.searchMessages`,
-  `TuringApi.getSession`, and both `TuringGrpcApi` implementations.
-- [ ] Update all existing hand-written `TuringApi` fakes.
-- [ ] Run the targeted tests and confirm they pass.
+**Files:**
+
+- Create: `turing-client/turing_app/lib/models/search_hit.dart`
+- Modify: `turing-client/turing_app/lib/models/grpc_mappers.dart`
+- Modify: `turing-client/turing_app/lib/networking/api_client.dart`
+- Modify: `turing-client/turing_app/lib/networking/grpc_client.dart`
+- Modify: `turing-client/turing_app/test/models/grpc_mappers_test.dart`
+- Modify: `turing-client/turing_app/test/networking/grpc_client_test.dart`
+- Modify: `turing-client/turing_app/test/widget_test.dart`
+- Modify: `turing-client/turing_app/test/features/chat_screen_test.dart`
+- Modify: `turing-client/turing_app/test/ui/responsive_shell_backend_test.dart`
+
+- [ ] **Step 1: Write the failing mapper test**
+
+Add a proto message with a non-empty `sessionId`, map it through the
+search-specific mapper, and assert both the grouping key and nested message:
+
+```dart
+final hit = GrpcMappers.searchHitToModel(
+  commonpb.Message(
+    messageId: 'message-1',
+    sessionId: 'session-1',
+    role: commonpb.MessageRole.MESSAGE_ROLE_USER,
+    content: 'deploy staging',
+    sequence: Int64(7),
+    createdAt: timestamppb.Timestamp.fromDateTime(
+      DateTime.utc(2026, 8, 13, 12),
+    ),
+  ),
+);
+
+expect(hit.sessionId, 'session-1');
+expect(hit.message.messageId, 'message-1');
+expect(hit.message.content, 'deploy staging');
+expect(hit.message.sequence, 7);
+expect(hit.message.createdAt, DateTime.utc(2026, 8, 13, 12));
+```
+
+- [ ] **Step 2: Write failing in-process gRPC tests**
+
+Extend the existing capturing `SessionServiceBase` with `searchMessages` and
+`getSession`. Assert:
+
+```dart
+final hits = await api.searchMessages(query: 'deploy  staging', limit: 50);
+final session = await api.getSession(sessionId: 'session-1');
+
+expect(service.searchRequest?.query, 'deploy  staging');
+expect(service.searchRequest?.sessionId, '');
+expect(service.searchRequest?.limit, 50);
+expect(service.searchDeadline, isNotNull);
+expect(hits.single.sessionId, 'session-1');
+expect(service.getRequest?.sessionId, 'session-1');
+expect(service.getDeadline, isNotNull);
+expect(session.title, 'Release work');
+```
+
+Return a complete proto message from `searchMessages` and a `Session` from
+`getSession` so mapping is exercised rather than merely request capture.
+
+- [ ] **Step 3: Run the targeted tests and verify failure**
+
+Run:
+
+```bash
+( cd turing-client/turing_app && \
+  flutter test test/models/grpc_mappers_test.dart \
+    test/networking/grpc_client_test.dart )
+```
+
+Expected: compilation fails because `SearchHit`, `searchHitToModel`,
+`searchMessages`, and `getSession` do not exist.
+
+- [ ] **Step 4: Add the focused result model**
+
+Create:
+
+```dart
+import 'message.dart';
+
+class SearchHit {
+  const SearchHit({required this.sessionId, required this.message});
+
+  final String sessionId;
+  final Message message;
+}
+```
+
+Add to `GrpcMappers`:
+
+```dart
+static model_search.SearchHit searchHitToModel(commonpb.Message message) {
+  return model_search.SearchHit(
+    sessionId: message.sessionId,
+    message: messageToModel(message),
+  );
+}
+```
+
+- [ ] **Step 5: Add API signatures**
+
+Import `search_hit.dart` and add:
+
+```dart
+Future<Session> getSession({required String sessionId});
+
+Future<List<SearchHit>> searchMessages({
+  required String query,
+  int limit = 50,
+});
+```
+
+- [ ] **Step 6: Implement both gRPC methods**
+
+Use the same bounded deadline as startup list calls:
+
+```dart
+@override
+Future<Session> getSession({required String sessionId}) async {
+  final response = await _sessions.getSession(
+    sessionpb.GetSessionRequest(sessionId: sessionId),
+    options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+  );
+  return GrpcMappers.sessionToModel(response);
+}
+
+@override
+Future<List<SearchHit>> searchMessages({
+  required String query,
+  int limit = 50,
+}) async {
+  final response = await _sessions.searchMessages(
+    sessionpb.SearchMessagesRequest(
+      query: query,
+      sessionId: '',
+      limit: limit,
+    ),
+    options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+  );
+  return response.messages.map(GrpcMappers.searchHitToModel).toList();
+}
+```
+
+- [ ] **Step 7: Update every existing test fake**
+
+Each fake implementing `TuringApi` must compile with explicit methods. Use
+fixture-appropriate values, with this empty default where search is irrelevant:
+
+```dart
+@override
+Future<Session> getSession({required String sessionId}) async {
+  return Session(
+    sessionId: sessionId,
+    title: null,
+    updatedAt: DateTime.utc(2026, 8, 13),
+  );
+}
+
+@override
+Future<List<SearchHit>> searchMessages({
+  required String query,
+  int limit = 50,
+}) async {
+  return const [];
+}
+```
+
+- [ ] **Step 8: Run targeted tests and verify pass**
+
+Run the Step 3 command. Expected: all mapper and gRPC tests pass.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add turing-client/turing_app/lib/models \
+  turing-client/turing_app/lib/networking \
+  turing-client/turing_app/test
+git commit -m "feat(flutter): expose session message search"
+```
 
 ## Task 2: Search screen state and rendering
 
-- [ ] Add failing widget tests for:
-  - initial guidance and exact-phrase hint;
-  - a blank query issuing no request;
-  - 350 ms debouncing;
-  - outer whitespace trimming without internal whitespace changes;
-  - loading, grouped results, newest-first group/hit ordering, roles, content,
-    and absolute dates;
-  - punctuation-only input reaching the API and using the normal empty state;
-  - zero results suggesting a shorter exact phrase;
-  - search failure, Retry, and successful recovery;
-  - clearing input invalidating in-flight work;
-  - stale success and stale error responses being ignored;
-  - immediate hit rendering while title lookup is pending;
-  - one title lookup per distinct session;
-  - successful title replacement, empty-title fallback, failed-title fallback,
-    bounded lookup concurrency, and stale title responses being ignored;
-  - tapping a hit calling `onOpenSession` with the exact session ID;
-  - keyboard submission and essential semantics.
-- [ ] Run the targeted widget tests and confirm they fail.
-- [ ] Implement `SearchScreen` as a constructor-injected `StatefulWidget` using
-  existing Flutter state patterns. Dispose its controller, focus node, and
-  debounce timer.
-- [ ] Run the targeted widget tests and confirm they pass.
+**Files:**
+
+- Create: `turing-client/turing_app/lib/features/search/search_screen.dart`
+- Create: `turing-client/turing_app/test/features/search/search_screen_test.dart`
+
+- [ ] **Step 1: Create a controllable fake and widget harness**
+
+The fake records queries and title lookup concurrency and exposes completers:
+
+```dart
+class _FakeSearchApi implements TuringApi {
+  final queries = <String>[];
+  final sessionRequests = <String>[];
+  final searchResponses = <Completer<List<SearchHit>>>[];
+  final sessions = <String, Future<Session>>{};
+  int activeSessionRequests = 0;
+  int maxActiveSessionRequests = 0;
+
+  @override
+  Future<List<SearchHit>> searchMessages({
+    required String query,
+    int limit = 50,
+  }) {
+    queries.add(query);
+    final response = Completer<List<SearchHit>>();
+    searchResponses.add(response);
+    return response.future;
+  }
+
+  @override
+  Future<Session> getSession({required String sessionId}) async {
+    sessionRequests.add(sessionId);
+    activeSessionRequests++;
+    maxActiveSessionRequests = max(
+      maxActiveSessionRequests,
+      activeSessionRequests,
+    );
+    try {
+      return await sessions[sessionId]!;
+    } finally {
+      activeSessionRequests--;
+    }
+  }
+
+  // Implement the remaining TuringApi methods with inert test defaults.
+}
+```
+
+Pump `MaterialApp(home: SearchScreen(...))` and capture opened session IDs.
+
+- [ ] **Step 2: Add failing query lifecycle tests**
+
+Use `tester.enterText`, `pump(const Duration(milliseconds: 349))`, and a final
+1 ms pump to prove debounce timing. Assert:
+
+```dart
+expect(api.queries, isEmpty);
+await tester.pump(const Duration(milliseconds: 1));
+expect(api.queries, ['deploy  staging']);
+```
+
+Cover blank input, outer-only trimming, punctuation-only input, keyboard submit,
+loading, empty exact-phrase guidance, error with Retry, retry recovery, clearing
+input, and out-of-order success/error completions.
+
+- [ ] **Step 3: Add failing result and title tests**
+
+Create hits spanning multiple sessions and deliberately return them in relevance
+order. Assert groups and rows use newest matching timestamps instead. Keep title
+futures incomplete first and verify `Session session-1` is visible immediately.
+Then complete title futures and assert named/untitled replacement, one lookup per
+ID, failure fallback, stale title suppression, and
+`api.maxActiveSessionRequests <= 4`.
+
+Tap a result and assert:
+
+```dart
+expect(openedSessionIds, ['session-1']);
+```
+
+Use `tester.ensureSemantics()` to verify the field label, live error region,
+group headers, row labels, and Retry action.
+
+- [ ] **Step 4: Run the new widget test and verify failure**
+
+Run:
+
+```bash
+( cd turing-client/turing_app && \
+  flutter test test/features/search/search_screen_test.dart )
+```
+
+Expected: compilation fails because `SearchScreen` does not exist.
+
+- [ ] **Step 5: Implement lifecycle state**
+
+`SearchScreen` has:
+
+```dart
+const SearchScreen({
+  super.key,
+  required this.apiClient,
+  required this.onOpenSession,
+});
+
+final TuringApi apiClient;
+final Future<void> Function(String sessionId) onOpenSession;
+```
+
+Its state owns a `TextEditingController`, `FocusNode`, nullable debounce
+`Timer`, generation integer, current normalized query, loading flag, error,
+hits, and successful title cache. Input change increments the generation
+immediately, cancels the prior timer, clears state for an empty trimmed query,
+or starts a 350 ms timer. Keyboard submit cancels the timer and searches
+immediately.
+
+`_runSearch(query, generation)` sets loading state, awaits
+`apiClient.searchMessages(query: query, limit: 50)`, ignores stale completion,
+sorts/groups hits, renders them, and starts title resolution without awaiting
+it. Retry increments the generation and calls `_runSearch` with the current
+query.
+
+- [ ] **Step 6: Implement bounded title resolution**
+
+Build unresolved distinct IDs, share an integer queue index across at most four
+worker futures, and update the title cache only when mounted and the generation
+still matches:
+
+```dart
+final workerCount = min(4, sessionIds.length);
+var nextIndex = 0;
+
+Future<void> worker() async {
+  while (nextIndex < sessionIds.length) {
+    final sessionId = sessionIds[nextIndex++];
+    try {
+      final session = await widget.apiClient.getSession(sessionId: sessionId);
+      if (!mounted || generation != _generation) continue;
+      setState(() {
+        _titles[sessionId] = session.title?.isNotEmpty == true
+            ? session.title!
+            : 'Untitled chat';
+      });
+    } catch (_) {
+      // A metadata failure retains the visible ID fallback.
+    }
+  }
+}
+
+await Future.wait(List.generate(workerCount, (_) => worker()));
+```
+
+Do not catch the search RPC broadly; its error is stored and rendered with
+Retry. The narrow title catch is intentional because metadata is non-critical
+and the ID fallback is already visible.
+
+- [ ] **Step 7: Implement accessible rendering**
+
+Use a labeled `TextField` with search icon, exact-phrase helper text, clear
+button, `TextInputAction.search`, and submit handler. Render:
+
+- initial guidance when the normalized query is empty;
+- a live-region progress state while searching;
+- a live-region error plus Retry button;
+- an exact-phrase empty state;
+- grouped result sections otherwise.
+
+Format each hit date with:
+
+```dart
+final localDate = hit.message.createdAt.toLocal();
+final date = MaterialLocalizations.of(context).formatMediumDate(localDate);
+```
+
+Wrap group headings in `Semantics(header: true)` and give each tappable row a
+label containing role, absolute date, and content.
+
+- [ ] **Step 8: Dispose owned resources**
+
+```dart
+@override
+void dispose() {
+  _debounce?.cancel();
+  _controller.dispose();
+  _focusNode.dispose();
+  super.dispose();
+}
+```
+
+- [ ] **Step 9: Run widget tests and verify pass**
+
+Run the Step 4 command. Expected: all search-screen tests pass.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add turing-client/turing_app/lib/features/search \
+  turing-client/turing_app/test/features/search
+git commit -m "feat(flutter): add conversation search screen"
+```
 
 ## Task 3: Reachability and navigation
 
-- [ ] Add failing tests that prove search is reachable from:
-  - standalone `SessionListScreen` through its app-bar action;
-  - embedded `SessionListScreen` through a compact “Sessions” header action;
-  - the desktop `ResponsiveShell`.
-- [ ] Assert that choosing a result uses the session list's existing chat
-  callback/event-source path.
-- [ ] Implement `_openSearch` in `SessionListScreen`, passing `_openChat` to the
-  search screen. Do not add a shell destination or duplicate chat navigation.
-- [ ] Run the targeted tests and then the full Flutter unit-test suite.
+**Files:**
+
+- Modify:
+  `turing-client/turing_app/lib/features/sessions/session_list_screen.dart`
+- Create:
+  `turing-client/turing_app/test/features/sessions/session_list_screen_test.dart`
+- Modify:
+  `turing-client/turing_app/test/ui/responsive_shell_backend_test.dart`
+
+- [ ] **Step 1: Write failing reachability tests**
+
+Pump standalone and embedded `SessionListScreen` variants. Find the
+`Search conversations` tooltip, tap it, settle, and assert the search field is
+visible. In the responsive-shell test, assert the embedded header contains
+`Sessions` and the same search action.
+
+Use a fake search hit, tap it, and assert the created event source receives the
+matching session ID after `ChatScreen` opens.
+
+- [ ] **Step 2: Run navigation tests and verify failure**
+
+Run:
+
+```bash
+( cd turing-client/turing_app && \
+  flutter test test/features/sessions/session_list_screen_test.dart \
+    test/ui/responsive_shell_backend_test.dart )
+```
+
+Expected: the session-list test file or search action is missing.
+
+- [ ] **Step 3: Add route-local navigation**
+
+Import `SearchScreen` and add:
+
+```dart
+Future<void> _openSearch() async {
+  await Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => SearchScreen(
+        apiClient: widget.apiClient,
+        onOpenSession: _openChat,
+      ),
+    ),
+  );
+}
+```
+
+The standalone app bar gets:
+
+```dart
+IconButton(
+  tooltip: 'Search conversations',
+  icon: const Icon(Icons.search),
+  onPressed: _openSearch,
+)
+```
+
+The embedded body becomes a column with a compact `Sessions` header row and the
+same tooltip/action above an expanded sessions list. Keep the existing new-chat
+button and `_openChat` implementation unchanged.
+
+- [ ] **Step 4: Run navigation tests and verify pass**
+
+Run the Step 2 command. Expected: all session-list and responsive-shell tests
+pass.
+
+- [ ] **Step 5: Run the full Flutter unit suite**
+
+```bash
+( cd turing-client/turing_app && flutter test )
+```
+
+Expected: all tests pass.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add turing-client/turing_app/lib/features/sessions \
+  turing-client/turing_app/test/features/sessions \
+  turing-client/turing_app/test/ui
+git commit -m "feat(flutter): expose conversation search"
+```
 
 ## Task 4: Validation and documentation
 
-- [ ] Run `flutter analyze`.
-- [ ] Run the repository's required verification matrix.
-- [ ] Update relevant client documentation to describe exact-phrase search,
-  where it is reached, and the title fallback behavior.
-- [ ] Treat live Docker/macOS smoke testing and screenshots as optional
-  maintainer validation, not a completion gate; those require local secrets,
-  Docker/Ollama, and GUI access.
+**Files:**
+
+- Modify: `README.md` or the existing client documentation that describes the
+  Flutter session list
+
+- [ ] **Step 1: Run Flutter static analysis**
+
+```bash
+( cd turing-client/turing_app && flutter analyze )
+```
+
+Expected: `No issues found!`
+
+- [ ] **Step 2: Run the repository verification skill**
+
+Invoke `/verify`, which runs the root Go module, both MCP Go modules, Flutter
+tests, proto drift check, and all configured Go linters. Expected: every matrix
+entry passes.
+
+- [ ] **Step 3: Update client documentation**
+
+Document that Search is reached from the Sessions screen, matches exact phrases
+across all sessions, opens the selected conversation, and may temporarily show
+a session ID if title metadata cannot be loaded.
+
+- [ ] **Step 4: Review and commit documentation**
+
+```bash
+git diff --check
+git add README.md docs turing-client
+git commit -m "docs: describe Flutter conversation search"
+```
+
+Live Docker/macOS smoke testing and screenshots are optional maintainer
+validation because they require local secrets, Docker/Ollama, and GUI access.
 
 ---
 
