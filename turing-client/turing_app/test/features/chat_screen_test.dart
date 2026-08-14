@@ -626,7 +626,8 @@ void main() {
           matching: find.byType(Text),
         ),
       );
-      expect(textWidget.data, isNotEmpty);
+      // A whitespace-only fallback must not pass: assert the exact copy.
+      expect(textWidget.data, 'The run failed with no further details');
 
       await tester.pumpWidget(const SizedBox.shrink());
       unawaited(events.close());
