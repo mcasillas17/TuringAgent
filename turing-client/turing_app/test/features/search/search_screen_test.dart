@@ -659,6 +659,445 @@ void main() {
 
       handle.dispose();
     });
+
+    testWidgets('sends a limit of 50 to searchMessages', (tester) async {
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
+
+      await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+
+      expect(api.limits, [50]);
+    });
+
+    testWidgets(
+      'reuses a cached title across a later, unrelated query',
+      (tester) async {
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'first');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+
+        api.searchCalls[0].completer.complete([
+          _hit(
+            id: 'msg-1',
+            sessionId: 'session-1',
+            createdAt: DateTime.utc(2026, 8, 13),
+          ),
+        ]);
+        await tester.pump();
+
+        api.sessionCalls[0].completer.complete(
+          Session(
+            sessionId: 'session-1',
+            title: 'Release work',
+            updatedAt: DateTime.utc(2026, 8, 13),
+          ),
+        );
+        await tester.pump();
+        expect(find.text('Release work'), findsOneWidget);
+        expect(api.sessionRequests, ['session-1']);
+
+        await tester.enterText(
+          find.byKey(const Key('search-field')),
+          'second',
+        );
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+
+        api.searchCalls[1].completer.complete([
+          _hit(
+            id: 'msg-2',
+            sessionId: 'session-1',
+            createdAt: DateTime.utc(2026, 8, 14),
+          ),
+        ]);
+        await tester.pump();
+
+        // The title was already cached: no second lookup is issued, and the
+        // cached title renders immediately.
+        expect(api.sessionRequests, ['session-1']);
+        expect(find.text('Release work'), findsOneWidget);
+      },
+    );
+
+    testWidgets('Retry reruns a title lookup that previously failed', (
+      tester,
+    ) async {
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
+
+      await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+
+      api.searchCalls[0].completer.complete([
+        _hit(
+          id: 'msg-1',
+          sessionId: 'session-1',
+          createdAt: DateTime.utc(2026, 8, 13),
+        ),
+      ]);
+      await tester.pump();
+      api.sessionCalls[0].completer.completeError(Exception('nope'));
+      await tester.pump();
+      expect(find.text('Session session-1'), findsOneWidget);
+
+      // Force the error UI so Retry is available, then retry the same
+      // query: the still-uncached title from the failed lookup above must
+      // be looked up again.
+      await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+      api.searchCalls[1].completer.completeError(Exception('search boom'));
+      await tester.pump();
+      expect(find.byKey(const Key('search-retry')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('search-retry')));
+      await tester.pump();
+
+      api.searchCalls[2].completer.complete([
+        _hit(
+          id: 'msg-1',
+          sessionId: 'session-1',
+          createdAt: DateTime.utc(2026, 8, 13),
+        ),
+      ]);
+      await tester.pump();
+
+      expect(
+        api.sessionRequests.where((id) => id == 'session-1').length,
+        2,
+      );
+
+      api.sessionCalls[1].completer.complete(
+        Session(
+          sessionId: 'session-1',
+          title: 'Resolved on retry',
+          updatedAt: DateTime.utc(2026, 8, 13),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Resolved on retry'), findsOneWidget);
+    });
+
+    testWidgets(
+      'caps concurrent title lookups at four across overlapping generations',
+      (tester) async {
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'first');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+
+        final firstIds = List.generate(4, (i) => 'gen1-session-$i');
+        api.searchCalls[0].completer.complete([
+          for (final id in firstIds)
+            _hit(
+              id: 'msg-$id',
+              sessionId: id,
+              createdAt: DateTime.utc(2026, 8, 13),
+            ),
+        ]);
+        await tester.pump();
+
+        expect(api.sessionCalls.length, 4);
+        expect(api.activeSessionRequests, 4);
+
+        // A newer query starts before any of the first generation's title
+        // lookups resolve. Its own session IDs must queue behind the
+        // global cap instead of pushing concurrency past four.
+        await tester.enterText(
+          find.byKey(const Key('search-field')),
+          'second',
+        );
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+
+        final secondIds = List.generate(4, (i) => 'gen2-session-$i');
+        api.searchCalls[1].completer.complete([
+          for (final id in secondIds)
+            _hit(
+              id: 'msg-$id',
+              sessionId: id,
+              createdAt: DateTime.utc(2026, 8, 14),
+            ),
+        ]);
+        await tester.pump();
+
+        // Still only the first generation's four lookups have started; the
+        // second generation's four IDs are queued behind the cap.
+        expect(api.sessionCalls.length, 4);
+        expect(api.maxActiveSessionRequests, lessThanOrEqualTo(4));
+
+        // Resolving the stale (first-generation) lookups frees slots for
+        // the current (second-generation) lookups, one at a time.
+        for (var i = 0; i < 4; i++) {
+          api.sessionCalls[i].completer.complete(
+            Session(
+              sessionId: firstIds[i],
+              title: 'Stale $i',
+              updatedAt: DateTime.utc(2026, 8, 13),
+            ),
+          );
+          await tester.pump();
+        }
+
+        expect(api.sessionCalls.length, 8);
+        expect(api.maxActiveSessionRequests, lessThanOrEqualTo(4));
+
+        // The stale titles were never applied (their generation is gone),
+        // and the second generation's lookups aren't starved: they do
+        // resolve once slots free up.
+        for (var i = 4; i < 8; i++) {
+          final sessionId = api.sessionCalls[i].sessionId;
+          api.sessionCalls[i].completer.complete(
+            Session(
+              sessionId: sessionId,
+              title: 'Fresh $sessionId',
+              updatedAt: DateTime.utc(2026, 8, 14),
+            ),
+          );
+          await tester.pump();
+          expect(find.text('Fresh $sessionId'), findsOneWidget);
+        }
+
+        for (var i = 0; i < 4; i++) {
+          expect(find.text('Stale $i'), findsNothing);
+        }
+      },
+    );
+
+    testWidgets(
+      'clears stale loading immediately when input changes during the debounce window',
+      (tester) async {
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+        expect(find.byKey(const Key('search-loading')), findsOneWidget);
+
+        // Typing again while the first search is still in flight must
+        // clear the stale loading indicator immediately, before the new
+        // 350ms debounce elapses.
+        await tester.enterText(
+          find.byKey(const Key('search-field')),
+          'deploy2',
+        );
+        await tester.pump();
+
+        expect(find.byKey(const Key('search-loading')), findsNothing);
+        expect(find.byKey(const Key('search-initial')), findsNothing);
+
+        await tester.pump(const Duration(milliseconds: 350));
+        expect(api.queries, ['deploy', 'deploy2']);
+        expect(find.byKey(const Key('search-loading')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'clears a stale error immediately when input changes during the debounce window',
+      (tester) async {
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+        api.searchCalls.single.completer.completeError(Exception('boom'));
+        await tester.pump();
+        expect(find.byKey(const Key('search-error')), findsOneWidget);
+
+        await tester.enterText(
+          find.byKey(const Key('search-field')),
+          'deploy2',
+        );
+        await tester.pump();
+
+        expect(find.byKey(const Key('search-error')), findsNothing);
+        expect(find.byKey(const Key('search-retry')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'ignores a stale debounced search success after newer typed input',
+      (tester) async {
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'first');
+        await tester.pump(const Duration(milliseconds: 350));
+        expect(api.queries, ['first']);
+
+        await tester.enterText(
+          find.byKey(const Key('search-field')),
+          'second',
+        );
+        await tester.pump(const Duration(milliseconds: 350));
+        expect(api.queries, ['first', 'second']);
+
+        api.searchCalls[0].completer.complete([
+          _hit(
+            id: 'stale-hit',
+            sessionId: 'session-stale',
+            createdAt: DateTime.utc(2026, 8, 1),
+          ),
+        ]);
+        await tester.pump();
+        expect(find.byKey(const ValueKey('hit-stale-hit')), findsNothing);
+        expect(find.byKey(const Key('search-loading')), findsOneWidget);
+
+        api.searchCalls[1].completer.complete([
+          _hit(
+            id: 'fresh-hit',
+            sessionId: 'session-fresh',
+            createdAt: DateTime.utc(2026, 8, 2),
+          ),
+        ]);
+        await tester.pump();
+        expect(find.byKey(const ValueKey('hit-fresh-hit')), findsOneWidget);
+        expect(find.byKey(const ValueKey('hit-stale-hit')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'ignores a Retry search completion once superseded by new input',
+      (tester) async {
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+        api.searchCalls[0].completer.completeError(Exception('boom'));
+        await tester.pump();
+        expect(find.byKey(const Key('search-retry')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('search-retry')));
+        await tester.pump();
+        expect(api.searchCalls.length, 2);
+        expect(find.byKey(const Key('search-loading')), findsOneWidget);
+
+        // Before the retried search resolves, the user submits a different
+        // query. The retry's eventual completion must not resurrect stale
+        // state for a query the user has already moved past.
+        await tester.enterText(
+          find.byKey(const Key('search-field')),
+          'staging',
+        );
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+        expect(api.searchCalls.length, 3);
+
+        api.searchCalls[1].completer.complete([
+          _hit(
+            id: 'retry-hit',
+            sessionId: 'session-retry',
+            createdAt: DateTime.utc(2026, 8, 1),
+          ),
+        ]);
+        await tester.pump();
+        expect(find.byKey(const ValueKey('hit-retry-hit')), findsNothing);
+        expect(find.byKey(const Key('search-loading')), findsOneWidget);
+
+        api.searchCalls[2].completer.complete([
+          _hit(
+            id: 'fresh-hit',
+            sessionId: 'session-fresh',
+            createdAt: DateTime.utc(2026, 8, 2),
+          ),
+        ]);
+        await tester.pump();
+        expect(find.byKey(const ValueKey('hit-fresh-hit')), findsOneWidget);
+        expect(find.byKey(const ValueKey('hit-retry-hit')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'exposes semantics for the search field and the Retry action',
+      (tester) async {
+        final handle = tester.ensureSemantics();
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        final fieldFinder = find.bySemanticsLabel(
+          RegExp('Search conversations'),
+        );
+        expect(fieldFinder, findsWidgets);
+        final fieldData = tester.getSemantics(fieldFinder.first);
+        expect(fieldData.flagsCollection.isTextField, isTrue);
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+        api.searchCalls.single.completer.completeError(Exception('boom'));
+        await tester.pump();
+
+        final retryData = tester.getSemantics(
+          find.byKey(const Key('search-retry')),
+        );
+        expect(retryData.flagsCollection.isButton, isTrue);
+        expect(retryData.label, contains('Retry'));
+
+        handle.dispose();
+      },
+    );
+
+    testWidgets(
+      'disposing with a pending debounce and in-flight operations causes no errors',
+      (tester) async {
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        // Kick off an in-flight search.
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+        expect(api.searchCalls.length, 1);
+
+        api.searchCalls[0].completer.complete([
+          _hit(
+            id: 'msg-1',
+            sessionId: 'session-1',
+            createdAt: DateTime.utc(2026, 8, 13),
+          ),
+        ]);
+        await tester.pump();
+        // An in-flight title lookup is now outstanding too.
+        expect(api.sessionCalls.length, 1);
+
+        // Type again without waiting for the debounce to fire, leaving a
+        // pending timer alongside the in-flight title lookup above.
+        await tester.enterText(
+          find.byKey(const Key('search-field')),
+          'deploy2',
+        );
+
+        // Dispose the widget while both are outstanding.
+        await tester.pumpWidget(const SizedBox());
+
+        // Let the debounce window elapse and complete the outstanding
+        // operations; none of this should throw or try to update disposed
+        // state.
+        await tester.pump(const Duration(milliseconds: 400));
+        api.sessionCalls[0].completer.complete(
+          Session(
+            sessionId: 'session-1',
+            title: 'Late title',
+            updatedAt: DateTime.utc(2026, 8, 13),
+          ),
+        );
+        await tester.pump();
+
+        expect(tester.takeException(), isNull);
+      },
+    );
   });
 }
 
@@ -714,6 +1153,7 @@ class _FakeSearchApi implements TuringApi {
   final List<_SearchCall> searchCalls = [];
   final List<_SessionCall> sessionCalls = [];
   final List<String> sessionRequests = [];
+  final List<int> limits = [];
   int activeSessionRequests = 0;
   int maxActiveSessionRequests = 0;
 
@@ -724,6 +1164,7 @@ class _FakeSearchApi implements TuringApi {
     required String query,
     int limit = 50,
   }) {
+    limits.add(limit);
     final call = _SearchCall(query);
     searchCalls.add(call);
     return call.completer.future;

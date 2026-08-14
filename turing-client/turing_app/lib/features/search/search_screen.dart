@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 
@@ -32,6 +31,37 @@ class _SessionGroup {
   final List<SearchHit> hits;
 }
 
+/// Caps concurrent access to a resource across the screen's whole lifetime,
+/// not just within a single search generation. Overlapping generations
+/// (e.g. a query typed before the previous one's title lookups finished)
+/// share the same pool of [_maxConcurrentTitleLookups] slots instead of each
+/// getting their own, so stale and current work never combine into more
+/// than the intended cap of in-flight requests.
+class _Semaphore {
+  _Semaphore(this._availablePermits);
+
+  int _availablePermits;
+  final _waiters = <Completer<void>>[];
+
+  Future<void> acquire() {
+    if (_availablePermits > 0) {
+      _availablePermits--;
+      return Future.value();
+    }
+    final waiter = Completer<void>();
+    _waiters.add(waiter);
+    return waiter.future;
+  }
+
+  void release() {
+    if (_waiters.isNotEmpty) {
+      _waiters.removeAt(0).complete();
+    } else {
+      _availablePermits++;
+    }
+  }
+}
+
 class _SearchScreenState extends State<SearchScreen> {
   static const _debounceDuration = Duration(milliseconds: 350);
   static const _maxConcurrentTitleLookups = 4;
@@ -52,6 +82,11 @@ class _SearchScreenState extends State<SearchScreen> {
   /// Cached successful session titles, kept for the screen's lifetime.
   final Map<String, String> _titles = {};
 
+  /// Global cap shared by every title lookup for the screen's lifetime, so
+  /// overlapping generations can never push concurrent title RPCs past
+  /// [_maxConcurrentTitleLookups] in total.
+  final _titleLookupLimiter = _Semaphore(_maxConcurrentTitleLookups);
+
   @override
   void dispose() {
     _debounce?.cancel();
@@ -62,12 +97,21 @@ class _SearchScreenState extends State<SearchScreen> {
 
   void _handleChanged(String value) {
     _debounce?.cancel();
-    final generation = ++_generation;
+    ++_generation;
+    final generation = _generation;
     final query = value.trim();
     if (query.isEmpty) {
       _resetToInitial();
       return;
     }
+    // The new generation invalidates whatever was in flight for the old
+    // query. Clear its stale loading/error immediately so neither lingers
+    // through the new debounce window while the newly typed query waits to
+    // fire; prior results stay visible until fresh ones replace them.
+    setState(() {
+      _loading = false;
+      _error = null;
+    });
     _debounce = Timer(_debounceDuration, () {
       _runSearch(query, generation);
     });
@@ -164,29 +208,37 @@ class _SearchScreenState extends State<SearchScreen> {
         .toList();
     if (sessionIds.isEmpty) return;
 
-    final workerCount = min(_maxConcurrentTitleLookups, sessionIds.length);
-    var nextIndex = 0;
+    await Future.wait(
+      sessionIds.map((sessionId) => _lookupTitle(sessionId, generation)),
+    );
+  }
 
-    Future<void> worker() async {
-      while (nextIndex < sessionIds.length) {
-        final sessionId = sessionIds[nextIndex++];
-        try {
-          final session = await widget.apiClient.getSession(
-            sessionId: sessionId,
-          );
-          if (!mounted || generation != _generation) continue;
-          setState(() {
-            _titles[sessionId] = session.title?.isNotEmpty == true
-                ? session.title!
-                : 'Untitled chat';
-          });
-        } catch (_) {
-          // Metadata failure is non-fatal: the ID fallback stays visible.
-        }
-      }
+  /// Looks up a single session's title, gated by the screen-lifetime
+  /// [_titleLookupLimiter] so this generation's requests share the global
+  /// cap with any other generation's still-in-flight lookups. Skips the
+  /// call entirely once the generation has gone stale, whether that's
+  /// discovered before queueing for a slot or after (in case it went stale
+  /// while waiting), so queued stale work doesn't waste a slot that a
+  /// current lookup could use instead.
+  Future<void> _lookupTitle(String sessionId, int generation) async {
+    if (!mounted || generation != _generation) return;
+    await _titleLookupLimiter.acquire();
+    try {
+      if (!mounted || generation != _generation) return;
+      final session = await widget.apiClient.getSession(
+        sessionId: sessionId,
+      );
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _titles[sessionId] = session.title?.isNotEmpty == true
+            ? session.title!
+            : 'Untitled chat';
+      });
+    } catch (_) {
+      // Metadata failure is non-fatal: the ID fallback stays visible.
+    } finally {
+      _titleLookupLimiter.release();
     }
-
-    await Future.wait(List.generate(workerCount, (_) => worker()));
   }
 
   @override
