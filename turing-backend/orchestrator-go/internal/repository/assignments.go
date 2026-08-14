@@ -331,9 +331,9 @@ func terminalizeExhaustedAssignmentTx(
 	// Emitted first, ahead of both the approval cleanup and the terminal event,
 	// so the explanation precedes every consequence of it — and so this path
 	// orders identically to RequeueOrFailRetryableRun, which inserts its notice
-	// before failRunWithEventTx. Without a give-up notice the user's last word
-	// from us is "Retrying (attempt N of N)" followed by permanent silence,
-	// because the client has no agent.run.failed case at all.
+	// before failRunWithEventTx. The client renders a terminal failure card for
+	// agent.run.failed, but that card explains the failure, not that retries
+	// were attempted and exhausted; this notice carries the attempt count.
 	giveUp, err := appendRunNoticeTx(ctx, tx, sessionID, runID, traceID,
 		giveUpNote(attempt),
 		map[string]any{"attempts": attempt, "maxAttempts": maxAttempts, "reason": code}, finishedAt)
