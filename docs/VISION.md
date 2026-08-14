@@ -1,6 +1,6 @@
 # TuringAgent — North Star
 
-**Status:** living document, and partly a *proposal* — see "What we will not build", which asks for a decision rather than recording one.
+**Status:** living document. The scope decisions below (multi-agent as a goal, invariants vs. deferrals, destructive-file-op scope) were made by the project owner on 2026-08-14.
 
 Supersedes the stack claims in `docs/superpowers/specs/2026-05-09-project-turing-v1-design.md`, which still describes a Node.js/TypeScript orchestrator over REST/WebSocket. That was replaced by Go + gRPC in #10.
 
@@ -64,8 +64,8 @@ Each is a decision already made and defended in review, cited to where it happen
 | Streaming + resilience | Working; reconnect, requeue, lease recovery, run-visibility notices (#24, #30, #33) |
 | Job queue | Durable: SQLite job table with leases, fencing token, heartbeat renewal, orphan recovery, 3-attempt cap |
 | Tool servers | Two: safe system tools, sandboxed file tools |
-| Agents | **One** (`general_assistant`) behind an executor *interface* with one implementation |
-| Process split | **Shipped** — the agent runtime is its own container and Go module, leased over a bidi gRPC stream |
+| Agents | **One** (`general_assistant`) behind an executor *interface* with one implementation. Multi-agent is a **goal** — see below |
+| Process split | **Shipped** — the agent runtime is its own container, leased over a bidi gRPC stream. (It is *not* its own Go module; only `mcp-files` and `mcp-system` are.) |
 | Clients | **One** (Flutter, macOS-focused). Codegen emits Go and Dart only; both are consumed today |
 | Providers | Ollama (default), OpenAI-compatible (opt-in per request) |
 
@@ -73,22 +73,31 @@ Known gaps, honestly: the client ignores `agent.run.failed` entirely, so run fai
 
 The sharpest gap is against commitment #1: **there is no way to delete anything.** No `DeleteSession`, no message deletion, nothing in the proto surface — the only way to remove what you said is deleting the SQLite file by hand. A system that remembers across sessions and cannot forget is not yet keeping its own first promise.
 
-## What we will not build
+## Invariants — permanent, not deferrals
 
-**This section is a proposal, not an inheritance.** The v1 design listed nine non-goals, but explicitly framed them as deferrals: *"Later phases can add native Windows, semantic memory, richer agents, distributed workers, external integrations, vision, IoT, voice, and advanced native automation."* Converting deferrals into standing refusals is a **new decision** and needs the owner's signature. It is proposed here because a non-goal that is really a "not yet" cannot arbitrate anything.
+These are not capabilities we are declining. They are the properties the rest of the system is built on; violating one voids a commitment above, so they hold regardless of what gets built later.
 
-Proposed standing refusals:
+- **Nothing leaves the machine by default.** A remote provider is opt-in per request, never a default path, and no feature may introduce background egress.
+- **Every mutation is approved, argument-bound, and single-use.** New mutating capability inherits the existing approval flow; it does not get its own weaker one.
+- **Tools stay confined to the sandbox.** Capability may grow inside that boundary; nothing gets an escape hatch out of it.
+- **The orchestrator owns durable state and control flow.** The job queue, leases, fencing, retries, recovery, and event streaming are ours. This is what was previously written as "no graph orchestration frameworks" — that framing was wrong. The real constraint is that nothing may take ownership of those, because they are the hard-won parts (#30, #31, #33).
+- **The backend stays a single language.** It is 100% Go today. A framework requiring a Python or Node runtime in the backend costs a second toolchain, image, and dependency surface — that cost, not the abstraction, is the reason LangGraph-style tools are a poor fit here.
 
-- **Vector/semantic memory.** Keyword recall over your own messages is legible and debuggable; embeddings are neither, and the failure mode is confident nonsense.
-- **Graph orchestration frameworks** (LangGraph and friends). This bars adopting a framework, not multi-agent itself — see open question 1.
-- **External brokers** (Redis, BullMQ, NATS). Note what already exists: a durable SQLite job queue with leases and a separate worker container. The refusal is of an external broker and multi-machine distribution, not of queuing.
-- **Arbitrary shell, AppleScript, PowerShell, screenshots, keyboard/mouse control.** The sandbox is the product; an escape hatch that runs anything voids it. (Currently true: `os/exec` appears only in test files.)
-- **Destructive file operations.** `files.delete` and `files.move` are disabled, and the code is stricter than this document — refused in three independent layers: not advertised, dispatcher-rejected, and policy-blocked ahead of any DB lookup.
-- **Third-party OAuth integrations**, vision, voice, IoT, home automation.
+**On agent frameworks specifically:** a Go library that helps compose agent logic is fine and is *not* refused. What is refused is anything that wants to own durable state, dispatch, or retries, or that drags in a second language runtime. What is left for a framework to do is smaller than it looks: the durable half of orchestration already exists, and the queue is already *parameterised* by agent (`jobs.agent_id`, `ClaimNextJob(agentID, ...)`). It is not, however, close to multi-agent-ready — see "Decided" for what a second agent actually costs.
 
-Two of v1's nine are deliberately **not** carried forward: "native macOS app or bridge" and "native Windows app or bridge". Flutter desktop already is the client, and a second client is open question 2 rather than a refusal.
+## Deferred, in order
 
-Adding any of the above should require revising this document first, not a PR that quietly introduces one.
+Everything here is wanted eventually — this is a "not yet" list with gates, which is how the v1 design framed it (*"later phases can add..."*). Each entry says what must be true before it lands. Working on one out of order is allowed, but should be a deliberate call, not an accident.
+
+1. **Session and message deletion.** Not really a deferral — it is the outstanding failure of commitment #1 and should come first. See "Known gaps".
+2. **Destructive file operations — decided scope: soft-delete and move, approval-gated.** `files.move` becomes a real move; `files.delete` relocates into a sandbox-local trash rather than unlinking. Both require the same argument-bound approval as write. Recoverable by construction, so an approval given in error is not permanent. *Gates,* all three concrete and already implied by `mcp-files`:
+   - **Tamper-resistance vs. visibility pull opposite ways.** `normalizeSandboxPath` rejects any path containing a reserved internal name (`safe_fs.go:119-121`), which is exactly how you stop a tool resurrecting or rewriting trashed content — but it also means the file tools cannot browse it. Making trash visible to the *user* therefore needs a separate affordance (a client view or its own RPC), not a tool path.
+   - **Collisions.** Deleting two files of the same name must not clobber; the unique-naming pattern in `createTemporaryFile` is the precedent to follow.
+   - **Growth.** Trash that is never emptied silently consumes the sandbox. Retention has to be decided before this ships, not after.
+3. **Shell and native automation, under approval.** Wanted, but this is the capability most likely to void an invariant. *Gate:* it runs inside the sandbox, is approval-gated per invocation, and cannot be used to reach outside the sandbox. An unsandboxed shell is not a later phase — it is barred by the invariants above.
+4. **External brokers and multi-machine distribution.** *Gate:* a measured failure of the SQLite queue under real concurrency — sustained lease-renewal loss, claim contention, or recovery that cannot keep up — captured with `MaxConcurrentRuns` raised above 1. "It feels like it needs a queue" does not qualify. Multi-agent will stress leases, fencing and recovery for the first time, so fix what that exposes before reaching for a broker.
+5. **Vector/semantic memory.** *Gate:* a case where keyword recall demonstrably fails and embeddings demonstrably fix it. The concern stands — embeddings fail by producing confident nonsense — so this needs a test that can fail, not a vibe.
+6. **Third-party OAuth, vision, voice, IoT, home automation.** Furthest out, and each needs its own answer to "how does this not phone home?" before it is designed.
 
 ## How we decide what is next
 
@@ -102,16 +111,25 @@ One ordered list, derived from the commitments above so there is no second scori
 
 Rule 1 currently matches nothing, which is a good sign rather than a reason to delete it.
 
+A deferred item may be pulled forward at any time, but its gate still has to be met — see "Deferred, in order". Skipping a gate is the failure mode this document exists to prevent.
+
 `docs/superpowers/plans/` is an **archive**, not a backlog: 12 of its 13 plans map to merged PRs. The only unshipped one is `2026-08-13-flutter-session-search.md` — the backend RPC exists; no Dart outside `lib/generated/` calls it. This document is what future plans should ladder up to.
 
 ---
 
+## Decided
+
+**Multi-agent is a goal** (2026-08-14). Precisely what this does and does not mean:
+
+- The *process* split already shipped — the runtime is its own container, leased over a bidi gRPC stream. That is not the missing piece. (It is not its own Go module; only `mcp-files` and `mcp-system` are.)
+- The missing piece is plural agents: `common.proto` has exactly one real `AgentId`, and there is one executor implementation.
+- Most of the groundwork exists. Dispatch, claiming and capacity are already keyed by `agent_id`, so a second agent largely means a second worker pool rather than new orchestration.
+- It will be the first thing to run agents concurrently. `MaxConcurrentRuns` has defaulted to 1, so leases, fencing and orphan recovery have never been under real concurrent load. Expect the next class of bugs there, and treat deferral 4 (brokers) as a response to evidence from this, not a prerequisite for it.
+- It needs a plan, not a PR: a proto change to `AgentId`, per-agent tool policy, and a routing/handoff decision that no framework will be making for us (see invariants).
+
 ## Open questions — owner's call, not mine
 
-This document codifies what the code demonstrates. The following are genuine product decisions the codebase cannot answer:
+1. **Is a second client a real destination?** Codegen emits only Go and Dart, both consumed today — there is no speculative stub generation. The portability asset is the `.proto` contract, which nothing currently protects from breaking changes. If a second client is real, that guard should exist.
+2. **Is this for one person, or is it a product?** Everything above assumes single-user, single-machine, one bearer key. Multi-user would change auth, storage, and the approval model.
 
-1. **Is multi-agent a goal or a non-goal?** Precisely: the *process* split has shipped — the runtime is already a separate container leased over gRPC. What has never been used is the *multi-agent* part; there is one `AgentId` and one executor implementation. Committing either way would simplify a lot of future design.
-2. **Is a second client a real destination?** Today codegen emits only Go and Dart, both consumed — there is no speculative stub generation. The portability asset is the `.proto` contract, which nothing currently protects from breaking changes. If a second client is real, that guard should exist.
-3. **How far does "can do things on your machine" go?** Files and safe system tools exist today. The refusals above bar arbitrary automation, but the line between "sandboxed file tools" and "useful desktop assistant" is not drawn.
-4. **Is this for one person, or is it a product?** Everything above assumes single-user, single-machine, one bearer key. Multi-user would change auth, storage, and the approval model.
-5. **Do the proposed refusals stand?** See "What we will not build" — v1 called them deferrals, and this document proposes making them permanent.
+*(Previously open, now settled: multi-agent — see "Decided". The scope of "can do things on your machine" — answered by the invariants and the deferral order. Whether the non-goals were permanent — they were not; they are deferrals with gates, except the invariants.)*
