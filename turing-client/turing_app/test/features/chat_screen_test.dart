@@ -694,9 +694,18 @@ void main() {
       // Mirrors repository.RetryDecision for the exhausted-retries path
       // (`repository/jobs.go:120-133`, `giveUpNote`): the give-up
       // `agent.run.step` is ordered first (it explains why retrying
-      // stopped), the terminal `agent.run.failed` follows (it carries the
-      // actual failure reason). Both share one runId.
+      // stopped), the terminal `agent.run.failed` follows. Once attempts
+      // are exhausted, `RequeueOrFailRetryableRun` overwrites the failure
+      // code to `RetriesExhaustedCode` ("retries_exhausted",
+      // `repository/jobs.go:122`) but passes the *original* retryable
+      // failure's message straight through unchanged (`failCode, failMessage
+      // := code, message` at jobs.go:119). "worker cannot accept the run" is
+      // that original message verbatim for the `worker_busy` producer
+      // (`agent-runtime-go/internal/worker/worker.go:522-527`) — a real,
+      // non-empty message reaching this path, distinct from the give-up
+      // wording. Both events share one runId.
       const giveUpNote = 'Gave up after 3 attempts';
+      const failureMessage = 'worker cannot accept the run';
       events.add(
         _event(
           type: 'agent.run.step',
@@ -710,8 +719,8 @@ void main() {
           type: 'agent.run.failed',
           sequence: 2,
           payload: {
-            'code': 'model_provider_unavailable',
-            'message': 'The model provider is unavailable',
+            'code': 'retries_exhausted',
+            'message': failureMessage,
             'retryable': false,
           },
         ),
@@ -722,21 +731,31 @@ void main() {
       expect(find.byType(RunNoticeCard), findsOneWidget);
       expect(find.byType(RunFailureCard), findsOneWidget);
 
-      // The give-up wording, verbatim from the backend's `giveUpNote`.
-      expect(find.text(giveUpNote), findsOneWidget);
-      // The failure reason, distinct from the give-up wording.
-      expect(
-        find.text('The model provider is unavailable'),
-        findsOneWidget,
-      );
-
-      // Non-duplicative: the two texts are not the same string, and
-      // neither card renders the other's text anywhere inside it.
-      expect(giveUpNote, isNot('The model provider is unavailable'));
+      // The give-up wording, verbatim from the backend's `giveUpNote`, is
+      // shown only inside the notice card.
       expect(
         find.descendant(
           of: find.byType(RunNoticeCard),
-          matching: find.text('The model provider is unavailable'),
+          matching: find.text(giveUpNote),
+        ),
+        findsOneWidget,
+      );
+      // The passed-through failure message, distinct wording, is shown only
+      // inside the failure card.
+      expect(
+        find.descendant(
+          of: find.byType(RunFailureCard),
+          matching: find.text(failureMessage),
+        ),
+        findsOneWidget,
+      );
+
+      // Non-duplicative: neither card renders the other's text anywhere
+      // inside it.
+      expect(
+        find.descendant(
+          of: find.byType(RunNoticeCard),
+          matching: find.text(failureMessage),
         ),
         findsNothing,
       );
@@ -753,6 +772,85 @@ void main() {
       expect(
         tester.getTopLeft(find.byType(RunNoticeCard)).dy,
         lessThan(tester.getTopLeft(find.byType(RunFailureCard)).dy),
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // The `message` the runtime passes into `RequeueOrFailRetryableRun` is an
+  // ordinary proto string field (`RuntimeRunFailed.Message`), so nothing in
+  // the contract guarantees it is non-empty by the time it reaches this
+  // `code: "retries_exhausted"` terminal payload. `_applyRunFailed` falls
+  // back to humanizing the `code` when `message` is blank
+  // (`chat_screen.dart`'s `_humanizeFailureCode`), turning
+  // "retries_exhausted" into "Retries exhausted". Pin that this fallback
+  // text is still distinct from the give-up notice, so the double-report
+  // stays non-duplicative even on this edge of the payload.
+  testWidgets(
+    'retry exhaustion with an empty failure message falls back to a '
+    'humanized code, still distinct from the give-up notice',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: _FakeApiClient(),
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      const giveUpNote = 'Gave up after 1 attempt';
+      events.add(
+        _event(
+          type: 'agent.run.step',
+          sequence: 1,
+          payload: {'attempts': 1, 'maxAttempts': 1, 'note': giveUpNote},
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'agent.run.failed',
+          sequence: 2,
+          payload: {
+            'code': 'retries_exhausted',
+            'message': '',
+            'retryable': false,
+          },
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byType(RunNoticeCard), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+
+      const humanizedCode = 'Retries exhausted';
+      expect(
+        find.descendant(
+          of: find.byType(RunFailureCard),
+          matching: find.text(humanizedCode),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byType(RunNoticeCard),
+          matching: find.text(humanizedCode),
+        ),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: find.byType(RunFailureCard),
+          matching: find.text(giveUpNote),
+        ),
+        findsNothing,
       );
 
       await tester.pumpWidget(const SizedBox.shrink());
