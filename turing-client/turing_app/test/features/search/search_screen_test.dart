@@ -872,6 +872,120 @@ void main() {
       },
     );
 
+    // Pins the end-state contract (stale queued IDs never requested, the
+    // current one is, concurrency stays capped) for a generation whose
+    // title lookups spill past the four running permits into the wait
+    // queue. This is an end-state spec, not a scheduling-order regression
+    // guard: `pump()` fully drains pending microtasks before returning, so
+    // even a plain FIFO hand-off that grants stale queued waiters a permit
+    // first (letting each notice it's stale and re-release in turn) still
+    // converges to this same observable end state within one pump. The
+    // priority fix instead has the semaphore's own release() skip stale
+    // queued waiters directly, without ever handing them a permit.
+    testWidgets(
+      'prioritizes a current-generation title lookup over stale queued waiters',
+      (tester) async {
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        // Generation A yields 8 distinct session IDs: 4 acquire the global
+        // permits immediately, and the other 4 queue as waiters.
+        await tester.enterText(find.byKey(const Key('search-field')), 'first');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+
+        final staleIds = List.generate(8, (i) => 'gen1-session-$i');
+        api.searchCalls[0].completer.complete([
+          for (final id in staleIds)
+            _hit(
+              id: 'msg-$id',
+              sessionId: id,
+              createdAt: DateTime.utc(2026, 8, 13),
+            ),
+        ]);
+        await tester.pump();
+
+        expect(api.sessionCalls.length, 4);
+        final staleQueuedIds = staleIds.skip(4).toSet();
+
+        // Generation B starts and completes its own search before any A
+        // title lookup resolves. Its single session ID cannot acquire a
+        // permit either (all 4 are held by A), so it queues too, landing
+        // behind the 4 already-queued stale A waiters in strict FIFO
+        // order.
+        await tester.enterText(
+          find.byKey(const Key('search-field')),
+          'second',
+        );
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+
+        api.searchCalls[1].completer.complete([
+          _hit(
+            id: 'msg-current',
+            sessionId: 'session-current',
+            createdAt: DateTime.utc(2026, 8, 14),
+          ),
+        ]);
+        await tester.pump();
+        expect(api.sessionCalls.length, 4);
+
+        // Release exactly one of the 4 in-flight (now-stale generation A)
+        // lookups. The current generation's queued lookup must be the one
+        // scheduled next: the 4 stale queued waiters must be discarded
+        // without ever being requested, and "session-current" must be
+        // requested promptly (within this single pump), all while never
+        // exceeding the cap of 4 concurrent requests.
+        api.sessionCalls[0].completer.complete(
+          Session(
+            sessionId: api.sessionCalls[0].sessionId,
+            title: 'Stale 0',
+            updatedAt: DateTime.utc(2026, 8, 13),
+          ),
+        );
+        await tester.pump();
+
+        final requestedIds = api.sessionCalls.map((c) => c.sessionId).toSet();
+        expect(
+          requestedIds.intersection(staleQueuedIds),
+          isEmpty,
+          reason: 'stale queued session IDs must never be requested',
+        );
+        expect(
+          requestedIds.contains('session-current'),
+          isTrue,
+          reason:
+              'the current generation title lookup must be scheduled '
+              'promptly once a permit frees up, not after draining stale '
+              'queued waiters',
+        );
+        expect(api.maxActiveSessionRequests, lessThanOrEqualTo(4));
+
+        // Draining the rest of the still-in-flight stale lookups must
+        // never surface any of the queued stale IDs either.
+        for (var i = 1; i < 4; i++) {
+          api.sessionCalls[i].completer.complete(
+            Session(
+              sessionId: api.sessionCalls[i].sessionId,
+              title: 'Stale $i',
+              updatedAt: DateTime.utc(2026, 8, 13),
+            ),
+          );
+          await tester.pump();
+        }
+
+        final finalRequestedIds = api.sessionCalls
+            .map((c) => c.sessionId)
+            .toSet();
+        expect(
+          finalRequestedIds.intersection(staleQueuedIds),
+          isEmpty,
+          reason: 'stale queued session IDs must never be requested',
+        );
+        expect(api.maxActiveSessionRequests, lessThanOrEqualTo(4));
+      },
+    );
+
     testWidgets(
       'clears stale loading immediately when input changes during the debounce window',
       (tester) async {

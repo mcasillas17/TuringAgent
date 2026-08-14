@@ -31,34 +31,68 @@ class _SessionGroup {
   final List<SearchHit> hits;
 }
 
+/// A queued [_Semaphore.acquire] call, paired with the predicate that
+/// determines whether it's still worth granting a permit to. [completer]
+/// resolves to whether a permit was actually handed to this waiter: `true`
+/// once granted (the caller must eventually call [_Semaphore.release]),
+/// `false` if it was discarded as stale before a permit was ever consumed
+/// (the caller must not release, since it never held one).
+class _SemaphoreWaiter {
+  _SemaphoreWaiter(this.isValid);
+
+  final bool Function() isValid;
+  final completer = Completer<bool>();
+}
+
 /// Caps concurrent access to a resource across the screen's whole lifetime,
 /// not just within a single search generation. Overlapping generations
 /// (e.g. a query typed before the previous one's title lookups finished)
 /// share the same pool of [_maxConcurrentTitleLookups] slots instead of each
 /// getting their own, so stale and current work never combine into more
 /// than the intended cap of in-flight requests.
+///
+/// Queued waiters carry a validity predicate so a freed permit always goes
+/// to the first still-current waiter. [release] discards any stale queued
+/// waiters itself (completing them with `false`, consuming no permit)
+/// instead of handing them the permit and relying on each one to notice
+/// it's stale and release again in turn: with plain FIFO handoff, a stale
+/// query with many queued lookups would occupy that release-then-hand-off
+/// chain ahead of a newer generation's own queued lookup, delaying it
+/// behind every stale entry instead of being scheduled directly.
 class _Semaphore {
   _Semaphore(this._availablePermits);
 
   int _availablePermits;
-  final _waiters = <Completer<void>>[];
+  final _waiters = <_SemaphoreWaiter>[];
 
-  Future<void> acquire() {
+  /// Resolves to whether a permit was granted. Returns `false` immediately,
+  /// without ever queueing, if [isValid] already fails at call time.
+  Future<bool> acquire({required bool Function() isValid}) {
+    if (!isValid()) return Future.value(false);
     if (_availablePermits > 0) {
       _availablePermits--;
-      return Future.value();
+      return Future.value(true);
     }
-    final waiter = Completer<void>();
+    final waiter = _SemaphoreWaiter(isValid);
     _waiters.add(waiter);
-    return waiter.future;
+    return waiter.completer.future;
   }
 
+  /// Frees a permit. Scans queued waiters oldest-first, discarding any
+  /// whose [_SemaphoreWaiter.isValid] now fails (completing them with
+  /// `false`, no permit consumed) until it finds one that's still current
+  /// and hands it the freed permit, or the queue is exhausted and the
+  /// permit becomes available for a future [acquire].
   void release() {
-    if (_waiters.isNotEmpty) {
-      _waiters.removeAt(0).complete();
-    } else {
-      _availablePermits++;
+    while (_waiters.isNotEmpty) {
+      final waiter = _waiters.removeAt(0);
+      if (waiter.isValid()) {
+        waiter.completer.complete(true);
+        return;
+      }
+      waiter.completer.complete(false);
     }
+    _availablePermits++;
   }
 }
 
@@ -217,18 +251,21 @@ class _SearchScreenState extends State<SearchScreen> {
   /// [_titleLookupLimiter] so this generation's requests share the global
   /// cap with any other generation's still-in-flight lookups. Skips the
   /// call entirely once the generation has gone stale, whether that's
-  /// discovered before queueing for a slot or after (in case it went stale
-  /// while waiting), so queued stale work doesn't waste a slot that a
-  /// current lookup could use instead.
+  /// discovered before queueing for a slot, while waiting (in which case
+  /// [_Semaphore.release] discards it directly, without ever granting it
+  /// the slot), or after being granted a slot, so queued stale work never
+  /// occupies or delays a slot that a current lookup could use instead.
   Future<void> _lookupTitle(String sessionId, int generation) async {
-    if (!mounted || generation != _generation) return;
-    await _titleLookupLimiter.acquire();
+    bool isValid() => mounted && generation == _generation;
+    if (!isValid()) return;
+    final acquired = await _titleLookupLimiter.acquire(isValid: isValid);
+    if (!acquired) return;
     try {
-      if (!mounted || generation != _generation) return;
+      if (!isValid()) return;
       final session = await widget.apiClient.getSession(
         sessionId: sessionId,
       );
-      if (!mounted || generation != _generation) return;
+      if (!isValid()) return;
       setState(() {
         _titles[sessionId] = session.title?.isNotEmpty == true
             ? session.title!
