@@ -1040,6 +1040,50 @@ void main() {
     );
 
     testWidgets(
+      'does not show the no-results copy while a new query is still '
+      'debouncing after a prior error, since no search has completed for it',
+      (tester) async {
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+        api.searchCalls.single.completer.completeError(Exception('boom'));
+        await tester.pump();
+        expect(find.byKey(const Key('search-error')), findsOneWidget);
+
+        await tester.enterText(
+          find.byKey(const Key('search-field')),
+          'deploy2',
+        );
+        await tester.pump();
+
+        // The error and its Retry action are gone (already covered above),
+        // but no successful search has ever completed for "deploy2" yet: it
+        // must not be mistaken for a completed, zero-hit search.
+        expect(find.byKey(const Key('search-error')), findsNothing);
+        expect(find.byKey(const Key('search-retry')), findsNothing);
+        expect(find.byKey(const Key('search-empty')), findsNothing);
+        expect(
+          find.text(
+            'No messages match this exact phrase. Try fewer or shorter '
+            'words.',
+          ),
+          findsNothing,
+        );
+
+        // Once the debounced search actually completes with zero hits, the
+        // no-results copy is legitimate and must appear.
+        await tester.pump(const Duration(milliseconds: 350));
+        expect(api.queries, ['deploy', 'deploy2']);
+        api.searchCalls[1].completer.complete(const []);
+        await tester.pump();
+        expect(find.byKey(const Key('search-empty')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
       'ignores a stale debounced search success after newer typed input',
       (tester) async {
         final api = _FakeSearchApi();

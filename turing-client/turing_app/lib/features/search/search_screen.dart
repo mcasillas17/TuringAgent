@@ -113,6 +113,15 @@ class _SearchScreenState extends State<SearchScreen> {
   Object? _error;
   List<_SessionGroup> _groups = const [];
 
+  /// Whether a search has actually completed successfully for the *current*
+  /// [_query]. Distinguishes "ran and truly found nothing" from "hasn't run
+  /// yet" (still debouncing, or invalidated by a newer/edited query), so the
+  /// zero-results copy is only ever shown for a real, current, empty result
+  /// set. Reset whenever the query changes/submits or the screen resets to
+  /// initial; set only when [_runSearch] completes successfully for the
+  /// still-current generation.
+  bool _hasCompletedSearch = false;
+
   /// Cached successful session titles, kept for the screen's lifetime.
   final Map<String, String> _titles = {};
 
@@ -141,10 +150,15 @@ class _SearchScreenState extends State<SearchScreen> {
     // The new generation invalidates whatever was in flight for the old
     // query. Clear its stale loading/error immediately so neither lingers
     // through the new debounce window while the newly typed query waits to
-    // fire; prior results stay visible until fresh ones replace them.
+    // fire; prior results stay visible until fresh ones replace them. No
+    // search has completed for this newly edited query yet, so also clear
+    // that flag: otherwise a still-empty `_groups` left over from before
+    // would be mistaken for a real, current zero-hit result during the
+    // debounce window.
     setState(() {
       _loading = false;
       _error = null;
+      _hasCompletedSearch = false;
     });
     _debounce = Timer(_debounceDuration, () {
       _runSearch(query, generation);
@@ -159,6 +173,7 @@ class _SearchScreenState extends State<SearchScreen> {
       _resetToInitial();
       return;
     }
+    _hasCompletedSearch = false;
     _runSearch(query, generation);
   }
 
@@ -181,6 +196,7 @@ class _SearchScreenState extends State<SearchScreen> {
       _loading = false;
       _error = null;
       _groups = const [];
+      _hasCompletedSearch = false;
     });
   }
 
@@ -208,6 +224,7 @@ class _SearchScreenState extends State<SearchScreen> {
     setState(() {
       _loading = false;
       _groups = groups;
+      _hasCompletedSearch = true;
     });
     // Fire-and-forget: results already rendered must not wait on titles.
     _resolveTitles(groups, generation);
@@ -374,6 +391,13 @@ class _SearchScreenState extends State<SearchScreen> {
     }
 
     if (_groups.isEmpty) {
+      if (!_hasCompletedSearch) {
+        // No search has completed for the current query yet (still
+        // debouncing after an edit, or a prior error/results were just
+        // invalidated). There's nothing to report either way yet, so render
+        // nothing rather than falsely claiming a completed, zero-hit search.
+        return const SizedBox.shrink(key: Key('search-pending'));
+      }
       return const Center(
         key: Key('search-empty'),
         child: Padding(
