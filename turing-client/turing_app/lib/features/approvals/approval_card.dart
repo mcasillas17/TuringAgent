@@ -7,12 +7,22 @@ class ApprovalCard extends StatelessWidget {
     required this.argsSummary,
     required this.onApprove,
     required this.onDeny,
+    this.busy = false,
   });
 
   final String toolName;
   final String argsSummary;
   final VoidCallback onApprove;
   final VoidCallback onDeny;
+
+  /// True while a decision for this approval is already in flight — the
+  /// caller has an `approveApproval`/`denyApproval` RPC outstanding for it.
+  /// Disables BOTH actions, not just the one pressed: the two decisions are
+  /// mutually exclusive for one approval, so a Deny tap must not race an
+  /// in-flight Approve (or vice versa) for the same one. Defaults to
+  /// `false` so existing callers that never pass it keep working exactly as
+  /// before.
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
@@ -39,12 +49,12 @@ class ApprovalCard extends StatelessWidget {
               runSpacing: 8,
               children: [
                 FilledButton.icon(
-                  onPressed: onApprove,
+                  onPressed: busy ? null : onApprove,
                   icon: const Icon(Icons.check),
                   label: const Text('Approve'),
                 ),
                 OutlinedButton.icon(
-                  onPressed: onDeny,
+                  onPressed: busy ? null : onDeny,
                   icon: const Icon(Icons.close),
                   label: const Text('Deny'),
                 ),

@@ -1,33 +1,36 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:turing_flutter_app/features/chat/message_send_failure_card.dart';
+import 'package:turing_flutter_app/features/chat/message_send_unconfirmed_card.dart';
 
 void main() {
-  testWidgets('renders the failure message text', (tester) async {
+  testWidgets('renders the unconfirmed-send message text', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(
-          body: MessageSendFailureCard(
-            message: 'Your message was not sent. Please try again.',
+          body: MessageSendUnconfirmedCard(
+            message:
+                "We couldn't confirm whether this message was sent. Check "
+                'the conversation before sending it again.',
           ),
         ),
       ),
     );
 
     expect(
-      find.textContaining('Your message was not sent. Please try again.'),
+      find.textContaining("We couldn't confirm whether this message was sent"),
       findsOneWidget,
     );
   });
 
   testWidgets(
-    'renders the "Message not sent" outcome label visibly, not just in the '
-    'semantics label, and never renders "Run failed" or "Run cancelled"',
+    'renders the "Message send unconfirmed" outcome label visibly, not just '
+    'in the semantics label, and never renders "Run failed" or "Run '
+    'cancelled"',
     (tester) async {
       await tester.pumpWidget(
         const MaterialApp(
           home: Scaffold(
-            body: MessageSendFailureCard(message: 'connection lost'),
+            body: MessageSendUnconfirmedCard(message: 'connection lost'),
           ),
         ),
       );
@@ -35,23 +38,28 @@ void main() {
       // Sighted users read the widget tree, not the accessibility tree: the
       // outcome must be visible on screen, not only announced to assistive
       // technology via the `Semantics` label.
-      expect(find.text('Message not sent'), findsOneWidget);
-      // No run was ever queued for a rejected send, so either of these
-      // would falsely claim one existed.
+      expect(find.text('Message send unconfirmed'), findsOneWidget);
+      // The true outcome is unknown, not a known terminal state — a run may
+      // or may not have been queued server-side (see this card's own doc
+      // comment) — so neither of these definite claims may ever appear.
       expect(find.text('Run failed'), findsNothing);
       expect(find.text('Run cancelled'), findsNothing);
+      // The prior, now-corrected name for this exact outcome asserted a
+      // certainty ("not sent") this client does not have. It must never
+      // resurface once the fix regresses.
+      expect(find.text('Message not sent'), findsNothing);
     },
   );
 
   testWidgets(
-    'exposes the exact "Message not sent: ..." semantics label as a live '
-    'region',
+    'exposes the exact "Message send unconfirmed: ..." semantics label as a '
+    'live region',
     (tester) async {
       final handle = tester.ensureSemantics();
       await tester.pumpWidget(
         const MaterialApp(
           home: Scaffold(
-            body: MessageSendFailureCard(message: 'connection lost'),
+            body: MessageSendUnconfirmedCard(message: 'connection lost'),
           ),
         ),
       );
@@ -63,13 +71,13 @@ void main() {
       // ancestor, or the render object never attaches it. `bySemanticsLabel`
       // only matches a node that assistive technology would actually see.
       expect(
-        find.bySemanticsLabel('Message not sent: connection lost'),
+        find.bySemanticsLabel('Message send unconfirmed: connection lost'),
         findsOneWidget,
       );
       expect(
-        tester.getSemantics(find.byType(MessageSendFailureCard)),
+        tester.getSemantics(find.byType(MessageSendUnconfirmedCard)),
         matchesSemantics(
-          label: 'Message not sent: connection lost',
+          label: 'Message send unconfirmed: connection lost',
           isLiveRegion: true,
         ),
       );
@@ -88,7 +96,7 @@ void main() {
             builder: (context) {
               colorScheme = Theme.of(context).colorScheme;
               return const Scaffold(
-                body: MessageSendFailureCard(message: 'connection lost'),
+                body: MessageSendUnconfirmedCard(message: 'connection lost'),
               );
             },
           ),
@@ -102,7 +110,7 @@ void main() {
       // supplies.
       final icon = tester.widget<Icon>(
         find.descendant(
-          of: find.byType(MessageSendFailureCard),
+          of: find.byType(MessageSendUnconfirmedCard),
           matching: find.byIcon(Icons.error_outline),
         ),
       );
@@ -110,7 +118,7 @@ void main() {
 
       final card = tester.widget<Card>(
         find.descendant(
-          of: find.byType(MessageSendFailureCard),
+          of: find.byType(MessageSendUnconfirmedCard),
           matching: find.byType(Card),
         ),
       );

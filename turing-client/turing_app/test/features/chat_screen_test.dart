@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grpc/grpc.dart' show GrpcError;
-import 'package:turing_flutter_app/features/chat/message_send_failure_card.dart';
+import 'package:turing_flutter_app/features/chat/message_send_unconfirmed_card.dart';
 import 'package:turing_flutter_app/features/chat/run_cancelled_card.dart';
 import 'package:turing_flutter_app/features/chat/run_failure_card.dart';
 import 'package:turing_flutter_app/features/chat/run_notice_card.dart';
@@ -4813,31 +4813,35 @@ void main() {
     unawaited(events.close());
   });
 
-  // sendMessage rejection before RunQueued (adjacent scope, round 9):
-  // `_sendMessage` adds the optimistic user bubble, clears the composer,
-  // scrolls, then `await`s `apiClient.sendMessage` with no `try`/`catch` at
-  // all. `TuringGrpcApi.sendMessage` (`grpc_client.dart`) resolves only once
-  // a `RunQueued` event arrives on the `ChatService.SendMessage` stream and
-  // rejects otherwise — a stream `onError` (the real gRPC call failing), or
-  // the stream reaching `onDone` having never queued a run (mapped there to
-  // `TuringApiException(code: 'empty_stream', ...)`). Both mean NO run was
-  // ever created for that attempt. Left unguarded, that rejection becomes an
-  // unhandled Future rejection — `_sendMessage` is invoked as a fire-and-
-  // forget `IconButton.onPressed` / `TextField.onSubmitted` callback, so
-  // nothing awaits its returned Future — and the user is left with a bubble
+  // sendMessage rejection before RunQueued (round 11, finding A.1): the
+  // backend's `SendMessage` handler (orchestrator-go
+  // internal/service/chat/service.go) persists the enqueued message and its
+  // run FIRST, and only afterwards attempts to acknowledge it with a
+  // `RunQueued` event sent back over this same stream. `_sendMessage`
+  // `await`s `apiClient.sendMessage`, which resolves only once that
+  // `RunQueued` event arrives and rejects otherwise — a stream `onError`
+  // (the real gRPC call failing), or the stream reaching `onDone` having
+  // never queued a run (mapped there to `TuringApiException(code:
+  // 'empty_stream', ...)`). NEITHER case proves the message was never sent:
+  // a network drop or reconnect between the backend persisting the run and
+  // this client observing its acknowledgement rejects this RPC with no
+  // `RunQueued` ever seen, even though the run may already exist
+  // server-side. So the honest outcome is UNKNOWN, not failure — the prior
+  // "Message not sent" copy asserted a certainty this client does not have.
+  // Left unguarded, the rejection itself would also become an unhandled
+  // Future rejection — `_sendMessage` is invoked as a fire-and-forget
+  // `IconButton.onPressed` / `TextField.onSubmitted` callback, so nothing
+  // awaits its returned Future — and the user would be left with a bubble
   // that appears sent and then silent forever.
   testWidgets(
     'a sendMessage rejection before RunQueued is caught, not left as an '
-    'unhandled Future rejection, and renders a distinct "Message not sent" '
-    'card',
+    'unhandled Future rejection, and renders a distinct "Message send '
+    'unconfirmed" card',
     (tester) async {
       final events = StreamController<TuringEvent>(sync: true);
       final apiClient = _FakeApiClient()
         ..sendMessageErrors.add(
-          const TuringApiException(
-            code: 'unavailable',
-            message: 'no backend',
-          ),
+          const TuringApiException(code: 'unavailable', message: 'no backend'),
         );
 
       await tester.pumpWidget(
@@ -4871,62 +4875,63 @@ void main() {
         findsOneWidget,
         reason:
             'the optimistic user bubble must remain visible on a rejected '
-            'send — the attempt genuinely happened, even though it never '
-            'reached the backend',
+            'send — the attempt genuinely happened, even though this '
+            'client never saw it acknowledged',
       );
-      expect(find.byType(MessageSendFailureCard), findsOneWidget);
-      // No run was ever queued for this attempt: "Run failed" or "Run
-      // cancelled" would falsely claim one existed.
+      expect(find.byType(MessageSendUnconfirmedCard), findsOneWidget);
+      // The true outcome is UNKNOWN, not a known terminal state — a run may
+      // or may not have been queued server-side — so neither of these
+      // definite claims may ever appear.
       expect(find.byType(RunFailureCard), findsNothing);
       expect(find.byType(RunCancelledCard), findsNothing);
       expect(find.text('Run failed'), findsNothing);
       expect(find.text('Run cancelled'), findsNothing);
-      expect(find.text('Message not sent'), findsOneWidget);
+      expect(find.text('Message send unconfirmed'), findsOneWidget);
+      // The prior, now-corrected name for this exact outcome. Must never
+      // resurface once the fix regresses.
+      expect(find.text('Message not sent'), findsNothing);
 
       await tester.pumpWidget(const SizedBox.shrink());
       unawaited(events.close());
     },
   );
 
-  testWidgets(
-    'a sendMessage call that throws synchronously (never returning a '
-    'Future at all) is also caught, not left as an unhandled Future '
-    'rejection',
-    (tester) async {
-      final events = StreamController<TuringEvent>(sync: true);
-      final apiClient = _SynchronousThrowApiClient();
+  testWidgets('a sendMessage call that throws synchronously (never returning a '
+      'Future at all) is also caught, not left as an unhandled Future '
+      'rejection', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _SynchronousThrowApiClient();
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ChatScreen(
-            sessionId: 'sess_1',
-            apiClient: apiClient,
-            eventSource: _FakeEventSource(events.stream),
-          ),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
         ),
-      );
-      await tester.pump();
+      ),
+    );
+    await tester.pump();
 
-      await tester.enterText(find.byType(TextField), 'Hello there');
-      await tester.tap(find.byIcon(Icons.send));
-      await tester.pump();
+    await tester.enterText(find.byType(TextField), 'Hello there');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
 
-      expect(
-        tester.takeException(),
-        isNull,
-        reason:
-            '_sendMessage must guard the call itself, not merely `await` '
-            'an already-returned Future — the same defensive posture '
-            'already applied to `_openSubscription` for connect()/listen()',
-      );
-      expect(find.byType(MessageSendFailureCard), findsOneWidget);
-      // The call was actually reached and threw, not skipped entirely.
-      expect(apiClient.sendMessageCallCount, 1);
+    expect(
+      tester.takeException(),
+      isNull,
+      reason:
+          '_sendMessage must guard the call itself, not merely `await` '
+          'an already-returned Future — the same defensive posture '
+          'already applied to `_openSubscription` for connect()/listen()',
+    );
+    expect(find.byType(MessageSendUnconfirmedCard), findsOneWidget);
+    // The call was actually reached and threw, not skipped entirely.
+    expect(apiClient.sendMessageCallCount, 1);
 
-      await tester.pumpWidget(const SizedBox.shrink());
-      unawaited(events.close());
-    },
-  );
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
 
   testWidgets(
     'a rejected sendMessage renders generic, safe copy — never the raw '
@@ -4958,7 +4963,7 @@ void main() {
       await tester.pump();
 
       expect(tester.takeException(), isNull);
-      expect(find.byType(MessageSendFailureCard), findsOneWidget);
+      expect(find.byType(MessageSendUnconfirmedCard), findsOneWidget);
       expect(find.textContaining('permission_denied'), findsNothing);
       expect(find.textContaining('api key'), findsNothing);
       expect(find.textContaining('ab12cd34ef56'), findsNothing);
@@ -4967,7 +4972,10 @@ void main() {
       // The copy must stay fixed and generic rather than echoing whatever
       // this particular exception happened to say.
       expect(
-        find.text('Your message was not sent. Please try again.'),
+        find.text(
+          "We couldn't confirm whether this message was sent. Check the "
+          'conversation before sending it again.',
+        ),
         findsOneWidget,
       );
 
@@ -4977,17 +4985,14 @@ void main() {
   );
 
   testWidgets(
-    'the composer remains enabled after a rejected send so the user can '
-    'retry, because a sendMessage rejection does not itself mean the event '
-    'subscription is unhealthy',
+    'the composer remains enabled after a rejected send, with the attempted '
+    'text restored so the user can retry or edit it, because a sendMessage '
+    'rejection does not itself mean the event subscription is unhealthy',
     (tester) async {
       final events = StreamController<TuringEvent>(sync: true);
       final apiClient = _FakeApiClient()
         ..sendMessageErrors.add(
-          const TuringApiException(
-            code: 'unavailable',
-            message: 'no backend',
-          ),
+          const TuringApiException(code: 'unavailable', message: 'no backend'),
         );
 
       await tester.pumpWidget(
@@ -5018,6 +5023,14 @@ void main() {
       expect(button.onPressed, isNotNull);
       expect(button.tooltip, 'Send');
       expect(field.decoration?.hintText, 'Ask Turing...');
+      expect(
+        field.controller?.text,
+        'first attempt',
+        reason:
+            'the outcome is unknown, not a confirmed failure — the '
+            "user's own text must be restored so they can retry or edit "
+            'it instead of retyping it from memory',
+      );
 
       await tester.pumpWidget(const SizedBox.shrink());
       unawaited(events.close());
@@ -5031,10 +5044,7 @@ void main() {
       final events = StreamController<TuringEvent>(sync: true);
       final apiClient = _FakeApiClient()
         ..sendMessageErrors.add(
-          const TuringApiException(
-            code: 'unavailable',
-            message: 'no backend',
-          ),
+          const TuringApiException(code: 'unavailable', message: 'no backend'),
         );
 
       await tester.pumpWidget(
@@ -5052,7 +5062,7 @@ void main() {
       await tester.tap(find.byIcon(Icons.send));
       await tester.pump();
       expect(tester.takeException(), isNull);
-      expect(find.byType(MessageSendFailureCard), findsOneWidget);
+      expect(find.byType(MessageSendUnconfirmedCard), findsOneWidget);
 
       // The queue is now empty, so this second attempt succeeds exactly
       // like the ordinary path.
@@ -5062,9 +5072,9 @@ void main() {
 
       expect(apiClient.sendMessageCallCount, 2);
       expect(apiClient.lastSentContent, 'second attempt');
-      // Still exactly one failure card: the successful retry must not add
-      // a second one.
-      expect(find.byType(MessageSendFailureCard), findsOneWidget);
+      // Still exactly one unconfirmed card: the successful retry must not
+      // add a second one.
+      expect(find.byType(MessageSendUnconfirmedCard), findsOneWidget);
 
       events.add(
         _event(
@@ -5083,16 +5093,13 @@ void main() {
   );
 
   testWidgets(
-    'the failure card renders immediately after its own attempted user '
+    'the unconfirmed card renders immediately after its own attempted user '
     'bubble, below earlier content',
     (tester) async {
       final events = StreamController<TuringEvent>(sync: true);
       final apiClient = _FakeApiClient()
         ..sendMessageErrors.add(
-          const TuringApiException(
-            code: 'unavailable',
-            message: 'no backend',
-          ),
+          const TuringApiException(code: 'unavailable', message: 'no backend'),
         );
 
       await tester.pumpWidget(
@@ -5132,15 +5139,15 @@ void main() {
           )
           .dy;
       final cardTop = tester
-          .getTopLeft(find.byType(MessageSendFailureCard))
+          .getTopLeft(find.byType(MessageSendUnconfirmedCard))
           .dy;
       expect(bubbleTop, greaterThan(earlierAnswerTop));
       expect(
         cardTop,
         greaterThan(bubbleTop),
         reason:
-            'the failure card must render below the bubble for the exact '
-            'attempt it reports on',
+            'the unconfirmed card must render below the bubble for the '
+            'exact attempt it reports on',
       );
 
       await tester.pumpWidget(const SizedBox.shrink());
@@ -5150,19 +5157,13 @@ void main() {
 
   testWidgets(
     'multiple failed send attempts produce correctly ordered, independent '
-    'failure cards',
+    'unconfirmed cards',
     (tester) async {
       final events = StreamController<TuringEvent>(sync: true);
       final apiClient = _FakeApiClient()
         ..sendMessageErrors.addAll([
-          const TuringApiException(
-            code: 'unavailable',
-            message: 'first down',
-          ),
-          const TuringApiException(
-            code: 'unavailable',
-            message: 'second down',
-          ),
+          const TuringApiException(code: 'unavailable', message: 'first down'),
+          const TuringApiException(code: 'unavailable', message: 'second down'),
         ]);
 
       await tester.pumpWidget(
@@ -5185,11 +5186,14 @@ void main() {
 
       expect(tester.takeException(), isNull);
       expect(apiClient.sendMessageCallCount, 2);
-      expect(find.byType(MessageSendFailureCard), findsNWidgets(2));
+      expect(find.byType(MessageSendUnconfirmedCard), findsNWidgets(2));
       // Both attempts are reported with the same fixed, generic copy —
       // proving neither leaked its own distinct injected message.
       expect(
-        find.text('Your message was not sent. Please try again.'),
+        find.text(
+          "We couldn't confirm whether this message was sent. Check the "
+          'conversation before sending it again.',
+        ),
         findsNWidgets(2),
       );
 
@@ -5210,10 +5214,10 @@ void main() {
           )
           .dy;
       final cardOneTop = tester
-          .getTopLeft(find.byType(MessageSendFailureCard).at(0))
+          .getTopLeft(find.byType(MessageSendUnconfirmedCard).at(0))
           .dy;
       final cardTwoTop = tester
-          .getTopLeft(find.byType(MessageSendFailureCard).at(1))
+          .getTopLeft(find.byType(MessageSendUnconfirmedCard).at(1))
           .dy;
 
       expect(bubbleOneTop, lessThan(cardOneTop));
@@ -5228,7 +5232,8 @@ void main() {
   testWidgets(
     'a sendMessage rejection via a raw GrpcError (the underlying gRPC call '
     'itself failing, distinct from the empty-stream TuringApiException '
-    'case) is also caught and renders the same "Message not sent" card',
+    'case) is also caught and renders the same "Message send unconfirmed" '
+    'card',
     (tester) async {
       final events = StreamController<TuringEvent>(sync: true);
       final apiClient = _FakeApiClient()
@@ -5258,9 +5263,12 @@ void main() {
             'TuringApiException — `on Exception` must cover this rejection '
             'type too, since GrpcError also implements Exception',
       );
-      expect(find.byType(MessageSendFailureCard), findsOneWidget);
+      expect(find.byType(MessageSendUnconfirmedCard), findsOneWidget);
       expect(
-        find.text('Your message was not sent. Please try again.'),
+        find.text(
+          "We couldn't confirm whether this message was sent. Check the "
+          'conversation before sending it again.',
+        ),
         findsOneWidget,
       );
       expect(find.textContaining('no backend'), findsNothing);
@@ -5313,6 +5321,846 @@ void main() {
             'a sendMessage rejection settling after the widget is disposed '
             'must be a no-op — the mounted guard exists exactly for this, '
             'mirroring _approve/_deny',
+      );
+
+      unawaited(events.close());
+    },
+  );
+
+  // `_sending` (round 11, finding A.2): the composer must visibly and
+  // functionally disable for the FULL lifetime of an in-flight send, not
+  // just up to the point the RPC is issued — otherwise a second attempt
+  // could fire while the first has not yet resolved. This also covers the
+  // ordinary success path: the composer clears and re-enables once the RPC
+  // resolves.
+  testWidgets(
+    'the composer disables with a truthful "Sending..." hint/tooltip and a '
+    'spinner while a send is in flight, then clears and re-enables once it '
+    'resolves',
+    (tester) async {
+      final handle = tester.ensureSemantics();
+      final events = StreamController<TuringEvent>(sync: true);
+      final pending = Completer<Map<String, dynamic>>();
+      final apiClient = _FakeApiClient()..sendMessagePending = pending;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'Hello there');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+
+      final sendingField = tester.widget<TextField>(find.byType(TextField));
+      final sendingButton = tester.widget<IconButton>(find.byType(IconButton));
+      expect(
+        sendingField.enabled,
+        isFalse,
+        reason:
+            'a second send while the first is still unresolved must be '
+            'refused, not merely discouraged',
+      );
+      expect(sendingButton.onPressed, isNull);
+      expect(sendingField.decoration?.hintText, 'Sending...');
+      expect(
+        sendingButton.tooltip,
+        'Sending...',
+        reason:
+            'this must say what is actually happening — merely reusing '
+            'the connection-lost copy would also be "not Send", but that '
+            'is a different, less recoverable state than a send simply '
+            'still being in flight',
+      );
+      expect(
+        tester.getSemantics(find.byType(Tooltip)),
+        matchesSemantics(
+          tooltip: 'Sending...',
+          isButton: true,
+          hasEnabledState: true,
+          // Not `isEnabled`/`hasTapAction`: the button is disabled while
+          // sending. `isFocusable`/`hasFocusAction` remain true because
+          // this button was just tapped to start the send — unlike the
+          // untouched button in the mid-startup loading test above, a
+          // button that already has focus keeps that focus action even
+          // once `onPressed` becomes null.
+          isFocusable: true,
+          hasFocusAction: true,
+        ),
+        reason:
+            'a screen reader user relies on the accessibility tree, not '
+            'the widget property alone',
+      );
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.byIcon(Icons.send), findsNothing);
+
+      pending.complete(<String, dynamic>{});
+      await tester.pump();
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      final readyField = tester.widget<TextField>(find.byType(TextField));
+      final readyButton = tester.widget<IconButton>(find.byType(IconButton));
+      expect(
+        readyField.controller?.text,
+        isEmpty,
+        reason: 'a successful send must leave the composer cleared',
+      );
+      expect(readyField.enabled, isTrue);
+      expect(readyButton.onPressed, isNotNull);
+      expect(readyField.decoration?.hintText, 'Ask Turing...');
+      expect(readyButton.tooltip, 'Send');
+      expect(find.byIcon(Icons.send), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+      handle.dispose();
+    },
+  );
+
+  // Send serialization (round 11, finding A.2/A.3): with `_sending` in
+  // flight, a second attempt must be blocked at BOTH layers — the widget's
+  // own `enabled`/`onPressed` gating, and `_sendMessage`'s own defensive
+  // guard for a caller that bypasses the widget (a queued `onSubmitted`
+  // invocation, mirroring the existing startup/stream-ended guard tests
+  // above).
+  testWidgets(
+    'a send already in flight blocks a second, overlapping attempt at both '
+    'the disabled-UI layer and a programmatic onSubmitted bypass',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final pending = Completer<Map<String, dynamic>>();
+      final apiClient = _FakeApiClient()..sendMessagePending = pending;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'first attempt');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      expect(apiClient.sendMessageCallCount, 1);
+      expect(apiClient.lastSentContent, 'first attempt');
+
+      final button = tester.widget<IconButton>(find.byType(IconButton));
+      expect(
+        button.onPressed,
+        isNull,
+        reason: 'the widget layer must already refuse a second tap',
+      );
+      // A tap on the button while its `onPressed` is `null` is a
+      // documented, safe no-op in Flutter (see the existing
+      // disabled-button assertions elsewhere in this file) — proving the
+      // WIDGET itself, not just app logic, blocks a second attempt.
+      // `find.byType(IconButton)`, not `find.byIcon(Icons.send)`: the icon
+      // itself is now a spinner (see `_composerDisabled`'s icon swap)
+      // while `_sending` holds, so the send icon no longer exists to find.
+      await tester.tap(find.byType(IconButton));
+      await tester.pump();
+      expect(apiClient.sendMessageCallCount, 1);
+
+      // Programmatic bypass: `onSubmitted` stays wired regardless of
+      // `enabled` (see `_sendMessage`'s own doc) — a queued IME commit
+      // captured before the field disabled could still invoke it
+      // directly, so `_sendMessage` itself must refuse, not merely trust
+      // that the UI already blocked it.
+      final field = tester.widget<TextField>(find.byType(TextField));
+      field.controller!.text = 'second attempt, bypassing the UI';
+      field.onSubmitted!('second attempt, bypassing the UI');
+      await tester.pump();
+      expect(
+        apiClient.sendMessageCallCount,
+        1,
+        reason:
+            '_sendMessage must refuse a second, overlapping attempt on '
+            'its own, not merely trust that the UI already blocked it',
+      );
+      expect(tester.takeException(), isNull);
+      expect(
+        find.descendant(
+          of: find.byType(ListView),
+          matching: find.text('second attempt, bypassing the UI'),
+        ),
+        findsNothing,
+        reason: 'the refused, bypassed attempt must never add its own bubble',
+      );
+
+      pending.complete(<String, dynamic>{});
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // Adjacency under a race (round 11, finding A.3): a `sendMessage` RPC can
+  // remain pending across multiple event-stream deliveries for OTHER,
+  // already in-flight runs. The unconfirmed card must still land right
+  // after its own bubble once this attempt's RPC finally rejects, not at
+  // wherever the message list happens to end by then.
+  testWidgets(
+    'an unconfirmed card is anchored immediately after its own attempted '
+    'user bubble even when another event streams in first, while this '
+    "attempt's RPC is still pending",
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final pending = Completer<Map<String, dynamic>>();
+      final apiClient = _FakeApiClient()..sendMessagePending = pending;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'Hello there');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+
+      // An unrelated run's own step notice streams in while THIS attempt's
+      // RPC is still pending.
+      events.add(
+        _event(
+          type: 'agent.run.step',
+          sequence: 1,
+          runId: 'run_other',
+          payload: {'note': 'unrelated progress'},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('unrelated progress'), findsOneWidget);
+      expect(
+        find.byType(MessageSendUnconfirmedCard),
+        findsNothing,
+        reason:
+            'this attempt has not settled yet, so it has no outcome to show',
+      );
+
+      pending.completeError(
+        const TuringApiException(code: 'unavailable', message: 'no backend'),
+      );
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      expect(find.byType(MessageSendUnconfirmedCard), findsOneWidget);
+
+      final bubbleTop = tester
+          .getTopLeft(
+            find.descendant(
+              of: find.byType(ListView),
+              matching: find.text('Hello there'),
+            ),
+          )
+          .dy;
+      final cardTop = tester
+          .getTopLeft(find.byType(MessageSendUnconfirmedCard))
+          .dy;
+      final noteTop = tester.getTopLeft(find.text('unrelated progress')).dy;
+
+      expect(bubbleTop, lessThan(cardTop));
+      expect(
+        cardTop,
+        lessThan(noteTop),
+        reason:
+            'the unconfirmed card must be inserted right after its own '
+            "origin bubble — captured by identity when this attempt "
+            'began — even though an unrelated entry was appended to the '
+            "list's end first, while this attempt's RPC was still pending",
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // Approval decision rejection (round 11, finding C): `_approve`/`_deny`
+  // used to `await` their RPC with no `try`/`catch` at all, wired as
+  // fire-and-forget `onApprove`/`onDeny` callbacks on `ApprovalCard` — the
+  // same unhandled-Future-rejection hazard `_sendMessage` had for its own
+  // RPC. An approval decision failing (an already-resolved approval, a
+  // dropped connection, ...) must not crash the app, must leave the
+  // approval on screen so the user can retry, and must never leak the raw
+  // error.
+  testWidgets(
+    'an approveApproval rejection is caught, leaves the approval actionable '
+    'with a generic notice, and a retry can still succeed',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..approveApprovalErrors.add(
+          const TuringApiException(
+            code: 'internal',
+            message: 'db unavailable req_555',
+          ),
+        );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'approval.requested',
+          sequence: 1,
+          payload: {
+            'approvalId': 'appr_1',
+            'toolName': 'files.update',
+            'argsSummary': 'Update note.txt',
+          },
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.text('Approve'));
+      await tester.pump();
+
+      expect(
+        tester.takeException(),
+        isNull,
+        reason:
+            'a rejected approveApproval must be caught by _approve itself, '
+            'not escape as an unhandled Future rejection',
+      );
+      expect(
+        find.text('Approval requested: files.update'),
+        findsOneWidget,
+        reason:
+            'the decision was never confirmed, so the card must stay on '
+            'screen and actionable rather than silently disappearing',
+      );
+      expect(
+        find.text('Could not send your decision. Please try again.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('db unavailable'), findsNothing);
+      expect(find.textContaining('req_555'), findsNothing);
+      expect(find.textContaining('internal'), findsNothing);
+
+      // Retry: the queue is now empty, so this attempt succeeds.
+      await tester.tap(find.text('Approve'));
+      await tester.pump();
+
+      expect(apiClient.approveApprovalCallCount, 2);
+      expect(find.text('Approval requested: files.update'), findsNothing);
+      expect(
+        find.text('Could not send your decision. Please try again.'),
+        findsNothing,
+        reason: 'a successful retry must clear the earlier failure notice',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'a denyApproval rejection is caught, leaves the approval actionable '
+    'with a generic notice, and a retry can still succeed',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..denyApprovalErrors.add(
+          const TuringApiException(code: 'unavailable', message: 'no backend'),
+        );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'approval.requested',
+          sequence: 1,
+          payload: {
+            'approvalId': 'appr_1',
+            'toolName': 'files.update',
+            'argsSummary': 'Update note.txt',
+          },
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.text('Deny'));
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('Approval requested: files.update'), findsOneWidget);
+      expect(
+        find.text('Could not send your decision. Please try again.'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.text('Deny'));
+      await tester.pump();
+
+      expect(apiClient.denyApprovalCallCount, 2);
+      expect(find.text('Approval requested: files.update'), findsNothing);
+      expect(
+        find.text('Could not send your decision. Please try again.'),
+        findsNothing,
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'an approveApproval rejection via a raw GrpcError is also caught, with '
+    'no raw detail leaked',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..approveApprovalErrors.add(const GrpcError.unavailable('no backend'));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'approval.requested',
+          sequence: 1,
+          payload: {
+            'approvalId': 'appr_1',
+            'toolName': 'files.update',
+            'argsSummary': 'Update note.txt',
+          },
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.text('Approve'));
+      await tester.pump();
+
+      expect(
+        tester.takeException(),
+        isNull,
+        reason:
+            'the stream `onError` path of the real '
+            'TuringGrpcApi.approveApproval rejects with a GrpcError, not a '
+            'TuringApiException — `on Exception` must cover this '
+            'rejection type too, since GrpcError also implements '
+            'Exception',
+      );
+      expect(find.text('Approval requested: files.update'), findsOneWidget);
+      expect(
+        find.text('Could not send your decision. Please try again.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('no backend'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets('a decision in flight disables both actions on its own card so a '
+      'second, overlapping decision cannot be fired for the same approval', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final pending = Completer<Map<String, dynamic>>();
+    final apiClient = _FakeApiClient()..approveApprovalPending = pending;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'approval.requested',
+        sequence: 1,
+        payload: {
+          'approvalId': 'appr_1',
+          'toolName': 'files.update',
+          'argsSummary': 'Update note.txt',
+        },
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.text('Approve'));
+    await tester.pump();
+    expect(apiClient.approveApprovalCallCount, 1);
+
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byWidgetPredicate((widget) => widget is FilledButton),
+          )
+          .onPressed,
+      isNull,
+      reason:
+          'Approve must disable itself while its own decision is still '
+          'in flight',
+    );
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.byWidgetPredicate((widget) => widget is OutlinedButton),
+          )
+          .onPressed,
+      isNull,
+      reason:
+          'Deny must ALSO disable — the two decisions are mutually '
+          'exclusive for one approval, so Deny racing an in-flight '
+          'Approve must be refused too',
+    );
+
+    await tester.tap(find.text('Approve'));
+    await tester.tap(find.text('Deny'));
+    await tester.pump();
+    expect(
+      apiClient.approveApprovalCallCount,
+      1,
+      reason: 'a disabled Approve tap must not fire a second RPC',
+    );
+    expect(
+      apiClient.denyApprovalCallCount,
+      0,
+      reason: 'a disabled Deny tap must not fire while Approve is pending',
+    );
+
+    pending.complete({'approvalId': 'appr_1', 'status': 'approved'});
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(find.text('Approval requested: files.update'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets(
+    'a new decision attempt for the same approval clears its own stale '
+    'notice immediately, even before the new attempt itself resolves',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..approveApprovalErrors.add(
+          const TuringApiException(code: 'unavailable', message: 'no backend'),
+        );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'approval.requested',
+          sequence: 1,
+          payload: {
+            'approvalId': 'appr_1',
+            'toolName': 'files.update',
+            'argsSummary': 'Update note.txt',
+          },
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.text('Approve'));
+      await tester.pump();
+      expect(
+        find.text('Could not send your decision. Please try again.'),
+        findsOneWidget,
+      );
+
+      final pending = Completer<Map<String, dynamic>>();
+      apiClient.approveApprovalPending = pending;
+      await tester.tap(find.text('Approve'));
+      await tester.pump();
+
+      expect(
+        find.text('Could not send your decision. Please try again.'),
+        findsNothing,
+        reason:
+            'starting a new attempt for this approval must clear its own '
+            'earlier notice right away, not leave stale failure copy '
+            'sitting alongside a decision now genuinely in flight',
+      );
+
+      pending.complete({'approvalId': 'appr_1', 'status': 'approved'});
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'an approval resolved by a later stream event clears its own stale '
+    'decision-failure notice too',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..approveApprovalErrors.add(
+          const TuringApiException(code: 'unavailable', message: 'no backend'),
+        );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'approval.requested',
+          sequence: 1,
+          payload: {
+            'approvalId': 'appr_1',
+            'toolName': 'files.update',
+            'argsSummary': 'Update note.txt',
+          },
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.text('Approve'));
+      await tester.pump();
+      expect(
+        find.text('Could not send your decision. Please try again.'),
+        findsOneWidget,
+      );
+
+      // Resolved by other means — e.g. another client, or the CLI —
+      // rather than through THIS client's own retry.
+      events.add(
+        _event(
+          type: 'approval.consumed',
+          sequence: 2,
+          payload: {'approvalId': 'appr_1'},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('Approval requested: files.update'), findsNothing);
+      expect(
+        find.text('Could not send your decision. Please try again.'),
+        findsNothing,
+        reason:
+            'once the approval is resolved by any means, a notice about a '
+            'now-irrelevant earlier attempt to decide it must not linger',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets("a stale decision-failure notice for one approval survives a "
+      "DIFFERENT approval resolving — the notice is scoped by approvalId, "
+      "not cleared unconditionally", (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..approveApprovalErrors.add(
+        const TuringApiException(code: 'unavailable', message: 'no backend'),
+      );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'approval.requested',
+        sequence: 1,
+        payload: {
+          'approvalId': 'appr_1',
+          'toolName': 'files.update',
+          'argsSummary': 'Update note.txt',
+        },
+      ),
+    );
+    events.add(
+      _event(
+        type: 'approval.requested',
+        sequence: 2,
+        payload: {
+          'approvalId': 'appr_2',
+          'toolName': 'shell.exec',
+          'argsSummary': 'Run tests',
+        },
+      ),
+    );
+    await tester.pump();
+
+    // Two `ApprovalCard`s are on screen now, each with its own "Approve"
+    // text, so the tap must be scoped to appr_1's card specifically via
+    // its unique args summary rather than an ambiguous top-level
+    // `find.text('Approve')`.
+    final approveAppr1 = find.descendant(
+      of: find.ancestor(
+        of: find.text('Update note.txt'),
+        matching: find.byType(Card),
+      ),
+      matching: find.text('Approve'),
+    );
+    await tester.tap(approveAppr1);
+    await tester.pump();
+
+    expect(
+      find.text('Could not send your decision. Please try again.'),
+      findsOneWidget,
+      reason: "appr_1's rejected decision must show the generic notice",
+    );
+
+    // appr_2 is resolved by a wholly unrelated means — no decision RPC
+    // for IT was ever made — while appr_1's own failure notice is still
+    // showing. `_clearApprovalActionNoticeFor` must check WHICH approval
+    // the current notice is actually about before clearing it; if it
+    // ever cleared unconditionally, this would wrongly wipe appr_1's
+    // still-relevant notice even though appr_1 itself was never
+    // resolved.
+    events.add(
+      _event(
+        type: 'approval.consumed',
+        sequence: 3,
+        payload: {'approvalId': 'appr_2'},
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.text('Approval requested: shell.exec'),
+      findsNothing,
+      reason: "appr_2's own card must be gone once it is consumed",
+    );
+    expect(
+      find.text('Approval requested: files.update'),
+      findsOneWidget,
+      reason: 'appr_1 was never resolved, so its card must remain',
+    );
+    expect(
+      find.text('Could not send your decision. Please try again.'),
+      findsOneWidget,
+      reason:
+          "a different approval resolving must not clear appr_1's own "
+          'still-pending decision-failure notice',
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets(
+    'an approveApproval rejection that settles only after the ChatScreen '
+    'has already been disposed is a no-op, mirroring _sendMessage',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final pending = Completer<Map<String, dynamic>>();
+      final apiClient = _FakeApiClient()..approveApprovalPending = pending;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'approval.requested',
+          sequence: 1,
+          payload: {
+            'approvalId': 'appr_1',
+            'toolName': 'files.update',
+            'argsSummary': 'Update note.txt',
+          },
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.text('Approve'));
+      await tester.pump();
+
+      await tester.pumpWidget(const SizedBox.shrink());
+
+      pending.completeError(
+        const TuringApiException(code: 'unavailable', message: 'too late'),
+      );
+      await tester.pump();
+
+      expect(
+        tester.takeException(),
+        isNull,
+        reason:
+            'an approveApproval rejection settling after the widget is '
+            'disposed must be a no-op — the mounted guard exists exactly '
+            'for this, mirroring _sendMessage',
       );
 
       unawaited(events.close());
@@ -5392,12 +6240,33 @@ class _FakeApiClient implements TuringApi {
   /// explicitly.
   Completer<TuringEventPage>? eventsGate;
 
+  /// Queued `approveApproval` rejections, one per call, consumed in order —
+  /// mirrors [sendMessageErrors]. Models the real `TuringGrpcApi` rejecting
+  /// the decision RPC outright (a `GrpcError` from the underlying call, or a
+  /// [TuringApiException] the client maps it to).
+  final List<Object> approveApprovalErrors = [];
+
+  /// How many times `approveApproval` has been invoked — mirrors
+  /// [sendMessageCallCount].
+  int approveApprovalCallCount = 0;
+
+  /// When set, `approveApproval` returns this completer's future instead of
+  /// consuming [approveApprovalErrors] or resolving immediately — mirrors
+  /// [sendMessagePending].
+  Completer<Map<String, dynamic>>? approveApprovalPending;
+
   @override
   Future<Map<String, dynamic>> approveApproval(
     String approvalId, {
     String? comment,
-  }) async {
-    return {'approvalId': approvalId, 'status': 'approved'};
+  }) {
+    approveApprovalCallCount++;
+    final pending = approveApprovalPending;
+    if (pending != null) return pending.future;
+    if (approveApprovalErrors.isNotEmpty) {
+      return Future.error(approveApprovalErrors.removeAt(0));
+    }
+    return Future.value({'approvalId': approvalId, 'status': 'approved'});
   }
 
   @override
@@ -5405,12 +6274,31 @@ class _FakeApiClient implements TuringApi {
     return {'sessionId': 'sess_1', 'createdAt': '2026-05-10T00:00:00.000Z'};
   }
 
+  /// Queued `denyApproval` rejections, one per call, consumed in order —
+  /// mirrors [approveApprovalErrors].
+  final List<Object> denyApprovalErrors = [];
+
+  /// How many times `denyApproval` has been invoked — mirrors
+  /// [approveApprovalCallCount].
+  int denyApprovalCallCount = 0;
+
+  /// When set, `denyApproval` returns this completer's future instead of
+  /// consuming [denyApprovalErrors] or resolving immediately — mirrors
+  /// [approveApprovalPending].
+  Completer<Map<String, dynamic>>? denyApprovalPending;
+
   @override
   Future<Map<String, dynamic>> denyApproval(
     String approvalId, {
     String? reason,
-  }) async {
-    return {'approvalId': approvalId, 'status': 'denied'};
+  }) {
+    denyApprovalCallCount++;
+    final pending = denyApprovalPending;
+    if (pending != null) return pending.future;
+    if (denyApprovalErrors.isNotEmpty) {
+      return Future.error(denyApprovalErrors.removeAt(0));
+    }
+    return Future.value({'approvalId': approvalId, 'status': 'denied'});
   }
 
   @override

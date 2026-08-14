@@ -7,7 +7,7 @@ import '../../models/turing_event.dart';
 import '../../networking/api_client.dart';
 import '../../networking/event_source.dart';
 import '../approvals/approval_card.dart';
-import 'message_send_failure_card.dart';
+import 'message_send_unconfirmed_card.dart';
 import 'model_provider_selector.dart';
 import 'run_cancelled_card.dart';
 import 'run_failure_card.dart';
@@ -38,6 +38,32 @@ class _ChatScreenState extends State<ChatScreen> {
   final Map<String, _ToolCallEntry> _toolEntries = {};
   final List<_PendingApproval> _approvals = [];
   final Set<String> _completedHistoryRunIds = {};
+
+  /// Approval ids with an `approveApproval`/`denyApproval` RPC currently in
+  /// flight — see [_approve]/[_deny]. Drives each [ApprovalCard.busy] so a
+  /// second decision for the SAME approval (a duplicate tap, or Approve and
+  /// Deny racing each other) is refused while the first is still
+  /// unresolved, rather than firing a second, possibly contradictory RPC.
+  /// Membership is keyed by approvalId, not by identity, because a
+  /// [_PendingApproval] is rebuilt (not mutated in place) whenever
+  /// [_addApproval] replaces one.
+  final Set<String> _approvalsInFlight = {};
+
+  /// Generic, screen-level notice for an `approveApproval`/`denyApproval`
+  /// RPC rejection — see [_approve]/[_deny]. Unlike a run's own terminal
+  /// outcome, an approval DECISION failing is not part of the message
+  /// transcript, so it is surfaced as a banner (like
+  /// [_streamEndedNotice]) rather than an inline card. `null` means no
+  /// action failure is currently outstanding.
+  String? _approvalActionNotice;
+
+  /// The approvalId [_approvalActionNotice] is about, or `null` alongside
+  /// it. Kept separate from the notice text itself so clearing is scoped:
+  /// resolving or retrying one approval must never hide a notice that is
+  /// still relevant to a DIFFERENT approval still pending on screen (more
+  /// than one [ApprovalCard] can be shown at once). See
+  /// [_clearApprovalActionNoticeFor].
+  String? _approvalActionNoticeApprovalId;
 
   /// Ids of history messages whose text is already complete on screen. The
   /// stream replays the deltas that produced them, and those must not be
@@ -125,13 +151,28 @@ class _ChatScreenState extends State<ChatScreen> {
   /// [_streamEnded], never this flag.
   bool _startupFailed = false;
 
+  /// True from the moment [_sendMessage] accepts the composer's text for the
+  /// CURRENT attempt until that attempt's `sendMessage` RPC resolves or
+  /// rejects. Included in [_composerDisabled] so a second, overlapping
+  /// attempt — a fast double-tap, or a queued `onSubmitted` racing the RPC —
+  /// is refused rather than firing a second concurrent send: without this,
+  /// nothing would stop two attempts' optimistic bubbles and outcomes from
+  /// interleaving in an order neither [_sendMessage] nor a reader could
+  /// disentangle. Cleared in both the success and failure branches of
+  /// [_sendMessage] alike — whether the composer is ready to accept a NEW
+  /// attempt does not depend on how the last one ended, only on whether one
+  /// is still outstanding.
+  bool _sending = false;
+
   /// True whenever a send could never reach the user — still starting up,
-  /// terminally failed to start, or a live subscription that has since
-  /// dropped (recoverably or not). Gates both the composer in `build()` and
+  /// terminally failed to start, a live subscription that has since dropped
+  /// (recoverably or not), or a previous attempt still in flight
+  /// ([_sending]). Gates both the composer in `build()` and
   /// [_sendMessage]'s own defensive guard, so a queued `onSubmitted` call
   /// that bypasses the widget's `enabled`/`onPressed` gating is refused for
   /// exactly the same reasons.
-  bool get _composerDisabled => _initializing || _startupFailed || _streamEnded;
+  bool get _composerDisabled =>
+      _initializing || _startupFailed || _streamEnded || _sending;
 
   @override
   void initState() {
@@ -281,6 +322,12 @@ class _ChatScreenState extends State<ChatScreen> {
 
   static const _loadingNotice = 'Loading session...';
 
+  /// Shown while [_sending] holds — a `sendMessage` RPC for the current
+  /// attempt is outstanding. Distinct from [_loadingNotice]: this is a
+  /// per-send, transient state on an otherwise ready composer, not the
+  /// screen's own startup.
+  static const _sendingNotice = 'Sending...';
+
   /// Shown when an `agent.run.step` arrives without a usable `note`. It must
   /// stay producer-neutral: the tool-iteration cap is no longer the only source
   /// of this event — retries, lost workers, exhausted attempts and recall all
@@ -328,8 +375,32 @@ class _ChatScreenState extends State<ChatScreen> {
   /// there is no server-authored payload to read from at all — the thrown
   /// value is a raw `GrpcError`/[TuringApiException] never meant for display,
   /// and may carry request ids or other diagnostic detail unsafe to echo.
-  static const _messageSendFailureNotice =
-      'Your message was not sent. Please try again.';
+  ///
+  /// Deliberately does NOT say "not sent" or "failed": the backend persists
+  /// the enqueued message and its run BEFORE attempting to acknowledge it
+  /// with a `RunQueued` event on this same stream (`SendMessage`,
+  /// orchestrator-go internal/service/chat/service.go), so a rejection here
+  /// can happen after the message was already durably accepted — this
+  /// client simply never saw the acknowledgement. The honest state is
+  /// UNKNOWN, so the copy says so and tells the user how to find out
+  /// (check the conversation) rather than asserting a failure that may not
+  /// have happened.
+  static const _messageSendUnconfirmedNotice =
+      "We couldn't confirm whether this message was sent. Check the "
+      'conversation before sending it again.';
+
+  /// Shown when `approveApproval`/`denyApproval` itself rejects — see
+  /// [_approve]/[_deny]'s `catch`. Deliberately fixed and generic for the
+  /// same reason as [_messageSendUnconfirmedNotice]: the thrown value is a
+  /// raw `GrpcError`/[TuringApiException] never meant for display. Unlike
+  /// that notice, this one is framed as a plain failure rather than an
+  /// unconfirmed outcome: retrying a decision for the same approval is safe
+  /// regardless of whether the first attempt actually landed — approvals
+  /// are single-use and argument-bound (see `ApprovalCard`'s doc), so a
+  /// duplicate decision is a no-op server-side, not a duplicated action the
+  /// way resending a chat message could be.
+  static const _approvalActionFailedNotice =
+      'Could not send your decision. Please try again.';
 
   /// The event stream is the only source of terminal `tool.call.*` events. On
   /// `onDone`, or a subscription that never opened, no further event can ever
@@ -707,11 +778,15 @@ class _ChatScreenState extends State<ChatScreen> {
   void _clearApproval(TuringEvent event) {
     final approvalId = _asString(event.payload['approvalId']);
     if (approvalId == null) return;
-    setState(
-      () => _approvals.removeWhere(
-        (approval) => approval.approvalId == approvalId,
-      ),
-    );
+    setState(() {
+      _approvals.removeWhere((approval) => approval.approvalId == approvalId);
+      // The backend can resolve an approval by itself (e.g. expiry) while a
+      // decision RPC for it is in flight or already failed — either way,
+      // that approval's own card is gone now, so neither the in-flight
+      // guard nor a stale failure notice about it should outlive it.
+      _approvalsInFlight.remove(approvalId);
+      _clearApprovalActionNoticeFor(approvalId);
+    });
   }
 
   Future<void> _sendMessage() async {
@@ -722,17 +797,24 @@ class _ChatScreenState extends State<ChatScreen> {
     // IME commit (captured before the field became disabled) or any future
     // programmatic caller could still invoke it directly, so this method
     // must refuse on its own rather than trust the UI to have blocked it.
+    // [_sending] is one of the flags [_composerDisabled] combines, so this
+    // same guard also refuses a second, overlapping attempt while one is
+    // already in flight — see [_sending]'s own doc for why that matters.
     if (_composerDisabled) return;
     final text = _controller.text.trim();
     if (text.isEmpty) return;
-    setState(
-      () => _messages.add(
-        _MessageEntry.user(
-          messageId: 'local_${DateTime.now().microsecondsSinceEpoch}',
-          content: text,
-        ),
-      ),
+    // Captured by reference (not looked up again later): `_messages` may
+    // grow while this RPC is in flight (an unrelated run's own stream
+    // events), so finding "this attempt's bubble" later means finding THIS
+    // object, not re-deriving it from state that has since moved on.
+    final attempt = _MessageEntry.user(
+      messageId: 'local_${DateTime.now().microsecondsSinceEpoch}',
+      content: text,
     );
+    setState(() {
+      _messages.add(attempt);
+      _sending = true;
+    });
     _controller.clear();
     _scrollToBottom();
     // `sendMessage` (`TuringApi`, `networking/api_client.dart`) resolves once
@@ -750,15 +832,50 @@ class _ChatScreenState extends State<ChatScreen> {
         content: text,
         modelProvider: _modelProvider,
       );
+      if (!mounted) return;
+      setState(() => _sending = false);
     } on Exception catch (_) {
       if (!mounted) return;
-      setState(
-        () => _messages.add(
-          _MessageSendFailureEntry(_messageSendFailureNotice),
-        ),
-      );
+      setState(() {
+        // Whether the composer actually re-enables still depends on
+        // [_composerDisabled]'s OTHER flags: if the stream ended or startup
+        // failed while this RPC was pending, clearing [_sending] alone
+        // will not unblock it, which is exactly the desired behaviour —
+        // this send's own outcome must never override a startup/stream
+        // state that arrived independently of it.
+        _sending = false;
+        // The outcome is UNKNOWN, not a confirmed failure (see
+        // `_messageSendUnconfirmedNotice`), so the user's own text is
+        // restored rather than discarded — they can retry or edit it
+        // instead of retyping it from memory.
+        _controller.text = text;
+        // Anchored immediately after `attempt`, never appended to the
+        // list's end: an unrelated stream event for another in-flight run
+        // may have already been appended while this RPC was pending, and
+        // this outcome must still read as belonging to ITS OWN bubble, not
+        // to whatever happens to be last.
+        _insertAfterEntry(
+          attempt,
+          _MessageSendUnconfirmedEntry(_messageSendUnconfirmedNotice),
+        );
+      });
       _scrollToBottom();
     }
+  }
+
+  /// Inserts [entry] immediately after [origin] in [_messages] rather than
+  /// at the list's end. [origin] must already be present; falls back to
+  /// appending if it somehow is not (defensive — entries are never removed
+  /// from [_messages] once added, so this should not happen in practice).
+  /// Must be called from inside a `setState` — it mutates [_messages]
+  /// directly and does not schedule a rebuild itself.
+  void _insertAfterEntry(_ChatEntry origin, _ChatEntry entry) {
+    final index = _messages.indexOf(origin);
+    if (index == -1) {
+      _messages.add(entry);
+      return;
+    }
+    _messages.insert(index + 1, entry);
   }
 
   void _scrollToBottom() {
@@ -775,12 +892,19 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Truthful copy for the composer's hint text and send-button tooltip in
   /// every state `build()` can be in. Checked in this order because a
   /// still-loading composer must say so specifically, never "Send" — even
-  /// though [_initializing] is also one of the three flags [_composerDisabled]
+  /// though [_initializing] is also one of the four flags [_composerDisabled]
   /// combines, so checking that first would collapse the distinct loading
   /// case into the same generic unavailable copy used for a real drop.
+  /// [_startupFailed]/[_streamEnded] are checked before [_sending] for the
+  /// same reason in reverse: they describe this SESSION as broken, which
+  /// stays true regardless of how the current send resolves, so that copy
+  /// must win over a merely transient "Sending..." if both were ever true
+  /// at once (an event-stream drop landing while a `sendMessage` RPC — a
+  /// separate stream — is still outstanding).
   String _composerCopy(String readyCopy) {
     if (_initializing) return _loadingNotice;
     if (_startupFailed || _streamEnded) return _streamEndedNotice;
+    if (_sending) return _sendingNotice;
     return readyCopy;
   }
 
@@ -827,12 +951,24 @@ class _ChatScreenState extends State<ChatScreen> {
                   : _historyFailedNotice,
             ),
           if (_streamEnded) _SessionNotice(message: _streamEndedNotice),
+          if (_approvalActionNotice != null)
+            _SessionNotice(
+              message: _approvalActionNotice!,
+              // Distinct from both the connection-lost banner's icon AND
+              // `TerminalOutcomeCard`'s (used by every card in the
+              // transcript, including this same screen's own
+              // `MessageSendUnconfirmedCard`): this banner must be
+              // findable and readable as its own, unambiguous thing, not
+              // visually or programmatically conflated with either.
+              icon: Icons.warning_amber_rounded,
+            ),
           for (final approval in _approvals)
             ApprovalCard(
               toolName: approval.toolName,
               argsSummary: approval.argsSummary,
               onApprove: () => _approve(approval),
               onDeny: () => _deny(approval),
+              busy: _approvalsInFlight.contains(approval.approvalId),
             ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
@@ -868,7 +1004,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   IconButton(
                     tooltip: _composerCopy('Send'),
-                    icon: _initializing
+                    icon: (_initializing || _sending)
                         ? const SizedBox.square(
                             dimension: 18,
                             child: CircularProgressIndicator(strokeWidth: 2),
@@ -885,24 +1021,79 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// Clears [_approvalActionNotice] only if it was about [approvalId] — see
+  /// that field's own doc for why the scoping matters. Must be called from
+  /// inside a `setState`.
+  void _clearApprovalActionNoticeFor(String approvalId) {
+    if (_approvalActionNoticeApprovalId != approvalId) return;
+    _approvalActionNotice = null;
+    _approvalActionNoticeApprovalId = null;
+  }
+
   Future<void> _approve(_PendingApproval approval) async {
-    await widget.apiClient.approveApproval(approval.approvalId);
-    if (!mounted) return;
-    setState(
-      () => _approvals.removeWhere(
-        (item) => item.approvalId == approval.approvalId,
-      ),
-    );
+    // Approve and Deny are mutually exclusive outcomes for the SAME
+    // approval, so a duplicate tap or the other action racing an
+    // already-in-flight decision for this one must be refused here, not
+    // just at the button's own disabled state — the same reasoning
+    // `_sendMessage` applies to its own `_composerDisabled` guard.
+    if (_approvalsInFlight.contains(approval.approvalId)) return;
+    setState(() {
+      _approvalsInFlight.add(approval.approvalId);
+      _clearApprovalActionNoticeFor(approval.approvalId);
+    });
+    // Left unguarded, this `await` rejecting is an unhandled Future error —
+    // the same hazard `_sendMessage` guards against, and just as reachable:
+    // the backend can reject this decision (an already-resolved approval, a
+    // dropped connection, ...) for reasons this client cannot always
+    // prevent. `GrpcError`/[TuringApiException] both `implements Exception`,
+    // so `on Exception` catches exactly this RPC failure boundary.
+    try {
+      await widget.apiClient.approveApproval(approval.approvalId);
+      if (!mounted) return;
+      setState(() {
+        _approvals.removeWhere(
+          (item) => item.approvalId == approval.approvalId,
+        );
+        _approvalsInFlight.remove(approval.approvalId);
+      });
+    } on Exception catch (_) {
+      // The approval stays in `_approvals` so its card remains on screen
+      // and actionable: the decision was never confirmed, so removing it
+      // here would silently drop the user's request instead of letting
+      // them retry it. The notice is generic and never echoes the raw
+      // error — see `_approvalActionFailedNotice`'s own doc.
+      if (!mounted) return;
+      setState(() {
+        _approvalsInFlight.remove(approval.approvalId);
+        _approvalActionNotice = _approvalActionFailedNotice;
+        _approvalActionNoticeApprovalId = approval.approvalId;
+      });
+    }
   }
 
   Future<void> _deny(_PendingApproval approval) async {
-    await widget.apiClient.denyApproval(approval.approvalId);
-    if (!mounted) return;
-    setState(
-      () => _approvals.removeWhere(
-        (item) => item.approvalId == approval.approvalId,
-      ),
-    );
+    if (_approvalsInFlight.contains(approval.approvalId)) return;
+    setState(() {
+      _approvalsInFlight.add(approval.approvalId);
+      _clearApprovalActionNoticeFor(approval.approvalId);
+    });
+    try {
+      await widget.apiClient.denyApproval(approval.approvalId);
+      if (!mounted) return;
+      setState(() {
+        _approvals.removeWhere(
+          (item) => item.approvalId == approval.approvalId,
+        );
+        _approvalsInFlight.remove(approval.approvalId);
+      });
+    } on Exception catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _approvalsInFlight.remove(approval.approvalId);
+        _approvalActionNotice = _approvalActionFailedNotice;
+        _approvalActionNoticeApprovalId = approval.approvalId;
+      });
+    }
   }
 
   @override
@@ -944,18 +1135,24 @@ class _ChatMessageTile extends StatelessWidget {
         return RunFailureCard(message: failure.message);
       case _RunCancelledEntry cancelled:
         return RunCancelledCard(message: cancelled.message);
-      case _MessageSendFailureEntry sendFailure:
-        return MessageSendFailureCard(message: sendFailure.message);
+      case _MessageSendUnconfirmedEntry sendUnconfirmed:
+        return MessageSendUnconfirmedCard(message: sendUnconfirmed.message);
     }
   }
 }
 
-/// Persistent, screen-reader-announced banner for a session whose event stream
-/// is gone. Presentational only: the parent owns when it is shown.
+/// Persistent, screen-reader-announced banner for a screen-level notice —
+/// an event stream that is gone, history that failed to load, or an
+/// approval decision the backend rejected. Presentational only: the parent
+/// owns when it is shown and which [icon] fits its cause.
 class _SessionNotice extends StatelessWidget {
-  const _SessionNotice({required this.message});
+  const _SessionNotice({required this.message, this.icon = Icons.cloud_off});
 
   final String message;
+
+  /// Defaults to the original connection-lost glyph so every pre-existing
+  /// caller keeps its exact appearance unchanged.
+  final IconData icon;
 
   @override
   Widget build(BuildContext context) {
@@ -969,11 +1166,7 @@ class _SessionNotice extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         child: Row(
           children: [
-            Icon(
-              Icons.cloud_off,
-              size: 18,
-              color: colorScheme.onErrorContainer,
-            ),
+            Icon(icon, size: 18, color: colorScheme.onErrorContainer),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
@@ -1137,13 +1330,16 @@ class _RunCancelledEntry extends _ChatEntry {
 }
 
 /// A `sendMessage` RPC rejected before any `RunQueued` event ever arrived —
-/// see [MessageSendFailureCard] for why this is deliberately distinct from
-/// [_RunFailureEntry]. Appended immediately after the optimistic
-/// [_MessageEntry.user] bubble for the same attempt, in [_sendMessage]'s own
-/// `catch`, never from the event stream: no run was ever created, so no
-/// server-side event could carry this outcome.
-class _MessageSendFailureEntry extends _ChatEntry {
-  _MessageSendFailureEntry(this.message);
+/// see [MessageSendUnconfirmedCard] for why the true outcome is unknown,
+/// not a confirmed failure, and must never be conflated with
+/// [_RunFailureEntry]. Inserted immediately after the optimistic
+/// [_MessageEntry.user] bubble for the same attempt via
+/// [_ChatScreenState._insertAfterEntry] in [_ChatScreenState._sendMessage]'s
+/// own `catch` — never appended to the list's end, and never from the event
+/// stream, so it stays anchored to its own attempt even if an unrelated
+/// stream event for another in-flight run arrives first.
+class _MessageSendUnconfirmedEntry extends _ChatEntry {
+  _MessageSendUnconfirmedEntry(this.message);
 
   final String message;
 

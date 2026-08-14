@@ -1,24 +1,26 @@
 import 'package:flutter/material.dart';
 
-/// Shared presentational chrome for a terminal run outcome — failure or
-/// cancellation. Neither is routine progress (a retry, a step, giving up
-/// after N attempts), so both get the same error-styled card rather than the
-/// neutral [RunNoticeCard]. What differs between the two outcomes is only the
-/// wording: callers supply their own truthful [outcomeLabel] so a
-/// cancellation is never rendered — or announced to assistive technology —
-/// as a failure.
-class TerminalRunCard extends StatelessWidget {
-  const TerminalRunCard({
+/// Shared presentational chrome for a non-routine, error-styled outcome the
+/// user must notice: a run failure, a run cancellation, or a `sendMessage`
+/// attempt whose outcome could not be confirmed. None of these is routine
+/// progress (a retry, a step, giving up after N attempts), so each gets this
+/// same error-styled card rather than the neutral [RunNoticeCard]. Callers
+/// are not limited to any fixed set — each supplies its own truthful
+/// [outcomeLabel], so what is actually known (or not known) about ITS
+/// outcome is never blurred into another's wording, and adding a future
+/// caller never requires revisiting this chrome.
+class TerminalOutcomeCard extends StatelessWidget {
+  const TerminalOutcomeCard({
     super.key,
     required this.outcomeLabel,
     required this.message,
   });
 
   /// The truthful, human-readable name of the outcome this card reports
-  /// (e.g. `Run failed`, `Run cancelled`). Rendered visibly above [message]
-  /// so sighted users can tell the two outcomes apart on screen, and
-  /// prefixed onto [message] to form the semantics label assistive
-  /// technology announces.
+  /// (e.g. `Run failed`, `Run cancelled`, `Message send unconfirmed`).
+  /// Rendered visibly above [message] so sighted users can tell different
+  /// callers' outcomes apart on screen, and prefixed onto [message] to form
+  /// the semantics label assistive technology announces.
   final String outcomeLabel;
 
   final String message;
@@ -65,9 +67,9 @@ class TerminalRunCard extends StatelessWidget {
                         children: [
                           // Sighted users read the widget tree, not the
                           // accessibility tree: the outcome must be visible
-                          // on screen too, so "Run failed" and "Run
-                          // cancelled" stay distinguishable without
-                          // assistive technology.
+                          // on screen too, so each caller's outcomeLabel
+                          // stays distinguishable from every other's
+                          // without assistive technology.
                           Text(
                             outcomeLabel,
                             style: theme.textTheme.labelLarge?.copyWith(
