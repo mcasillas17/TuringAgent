@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:turing_flutter_app/features/chat/run_failure_card.dart';
 import 'package:turing_flutter_app/features/chat/run_notice_card.dart';
 import 'package:turing_flutter_app/features/chat/chat_screen.dart';
 import 'package:turing_flutter_app/features/chat/tool_call_card.dart';
@@ -325,6 +326,339 @@ void main() {
           'a notice for a run already represented by complete history would '
           'be appended below newer conversation content',
     );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('agent.run.failed renders a distinct failure card', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'agent.run.failed',
+        sequence: 1,
+        payload: {
+          'code': 'job_timeout',
+          'message': 'Job timed out',
+          'retryable': false,
+        },
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(RunFailureCard), findsOneWidget);
+    expect(find.text('Job timed out'), findsOneWidget);
+    // A failure must not be indistinguishable from routine retry progress.
+    expect(find.byType(RunNoticeCard), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('the run failure renders below earlier assistant text', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: {'messageId': 'm1', 'delta': 'Let me check.'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'agent.run.failed',
+        sequence: 2,
+        payload: {'code': 'job_timeout', 'message': 'Job timed out'},
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      tester.getTopLeft(find.byType(RunFailureCard)).dy,
+      greaterThan(tester.getTopLeft(find.text('Let me check.')).dy),
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('the run failure renders below the last tool card', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'tool.call.completed',
+        sequence: 1,
+        payload: {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'agent.run.failed',
+        sequence: 2,
+        payload: {'code': 'job_timeout', 'message': 'Job timed out'},
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      tester.getTopLeft(find.byType(RunFailureCard)).dy,
+      greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a malformed agent.run.failed does not break the stream', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'agent.run.failed',
+        sequence: 1,
+        payload: {'code': 42, 'message': 42, 'retryable': 'nope'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 2,
+        payload: {'messageId': 'm1', 'delta': 'still alive'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(RunFailureCard), findsOneWidget);
+    expect(find.text('still alive'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets(
+    'agent.run.failed falls back to a humanized code when the message is '
+    'absent',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: _FakeApiClient(),
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'agent.run.failed',
+          sequence: 1,
+          payload: const {'code': 'tool_discovery_failed', 'message': ''},
+        ),
+      );
+      await tester.pump();
+
+      // Never the bare machine code as the whole message.
+      expect(find.text('tool_discovery_failed'), findsNothing);
+      expect(find.text('Tool discovery failed'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'agent.run.failed falls back to the code when the message is '
+    'whitespace-only',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: _FakeApiClient(),
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'agent.run.failed',
+          sequence: 1,
+          payload: const {'code': 'tool_discovery_failed', 'message': '   '},
+        ),
+      );
+      await tester.pump();
+
+      // A blank-but-present message must not win over a usable code.
+      expect(find.text('   '), findsNothing);
+      expect(find.text('Tool discovery failed'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'agent.run.failed prefers a valid message over a non-string code',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: _FakeApiClient(),
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'agent.run.failed',
+          sequence: 1,
+          payload: const {'code': 42, 'message': 'Job timed out'},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('Job timed out'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'agent.run.failed falls back to generic text when message and code are '
+    'both absent',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: _FakeApiClient(),
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(type: 'agent.run.failed', sequence: 1, payload: const {}),
+      );
+      await tester.pump();
+
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      final textWidget = tester.widget<Text>(
+        find.descendant(
+          of: find.byType(RunFailureCard),
+          matching: find.byType(Text),
+        ),
+      );
+      expect(textWidget.data, isNotEmpty);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets('a replayed agent.run.failed is not appended to history', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final persistedFailure = _event(
+      type: 'agent.run.failed',
+      sequence: 7,
+      payload: {'code': 'job_timeout', 'message': 'Job timed out'},
+    );
+    final apiClient = _FakeApiClient()..initialEvents = [persistedFailure];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(persistedFailure);
+    await tester.pump();
+
+    expect(find.byType(RunFailureCard), findsNothing);
 
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());

@@ -8,6 +8,7 @@ import '../../networking/api_client.dart';
 import '../../networking/event_source.dart';
 import '../approvals/approval_card.dart';
 import 'model_provider_selector.dart';
+import 'run_failure_card.dart';
 import 'run_notice_card.dart';
 import 'tool_call_card.dart';
 
@@ -115,6 +116,11 @@ class _ChatScreenState extends State<ChatScreen> {
   /// emit it — so naming any one of them would mislabel the others.
   static const _runStepFallbackNotice =
       'The run reported a step with no description';
+
+  /// Shown for an `agent.run.failed` event whose payload carries neither a
+  /// usable `message` nor a `code` to derive one from.
+  static const _runFailureFallbackNotice =
+      'The run failed with no further details';
 
   /// The event stream is the only source of terminal `tool.call.*` events, so
   /// once it errors (gRPC disconnect, deadline, auth failure) or closes, any
@@ -228,6 +234,9 @@ class _ChatScreenState extends State<ChatScreen> {
       case 'agent.run.step':
         _applyRunStep(event);
         break;
+      case 'agent.run.failed':
+        _applyRunFailed(event);
+        break;
       case 'approval.requested':
         _addApproval(event);
         break;
@@ -262,6 +271,34 @@ class _ChatScreenState extends State<ChatScreen> {
     final entry = _RunNoticeEntry(note);
     setState(() => _messages.add(entry));
     _scrollToBottom();
+  }
+
+  void _applyRunFailed(TuringEvent event) {
+    if (_isHistoricalRunEvent(event)) return;
+
+    final rawMessage = _asString(event.payload['message'])?.trim();
+    final rawCode = _asString(event.payload['code'])?.trim();
+    final String text;
+    if (rawMessage != null && rawMessage.isNotEmpty) {
+      text = rawMessage;
+    } else if (rawCode != null && rawCode.isNotEmpty) {
+      text = _humanizeFailureCode(rawCode);
+    } else {
+      text = _runFailureFallbackNotice;
+    }
+    final entry = _RunFailureEntry(text);
+    setState(() => _messages.add(entry));
+    _scrollToBottom();
+  }
+
+  /// Turns a machine-readable failure `code` (e.g. `tool_discovery_failed`)
+  /// into a human-readable sentence fragment (`Tool discovery failed`). Used
+  /// only when `message` is absent — the user should learn what happened,
+  /// not read an enum.
+  static String _humanizeFailureCode(String code) {
+    final spaced = code.replaceAll('_', ' ').trim();
+    if (spaced.isEmpty) return _runFailureFallbackNotice;
+    return spaced[0].toUpperCase() + spaced.substring(1);
   }
 
   /// Whether an inline run artifact belongs to history that is already on
@@ -583,6 +620,8 @@ class _ChatMessageTile extends StatelessWidget {
         );
       case _RunNoticeEntry notice:
         return RunNoticeCard(note: notice.note);
+      case _RunFailureEntry failure:
+        return RunFailureCard(message: failure.message);
     }
   }
 }
@@ -750,6 +789,15 @@ class _RunNoticeEntry extends _ChatEntry {
   _RunNoticeEntry(this.note);
 
   final String note;
+
+  @override
+  void dispose() {}
+}
+
+class _RunFailureEntry extends _ChatEntry {
+  _RunFailureEntry(this.message);
+
+  final String message;
 
   @override
   void dispose() {}
