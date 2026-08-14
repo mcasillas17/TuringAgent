@@ -50,6 +50,19 @@ class _ChatScreenState extends State<ChatScreen> {
   int? _replayWatermarkSequence;
   StreamSubscription<TuringEvent>? _subscription;
   String _modelProvider = 'ollama';
+
+  /// True whenever the live subscription is not currently able to deliver —
+  /// set by [_handleStreamEnded], whether reached from an `onError`, an
+  /// `onDone`, or a synchronous setup failure in [_openSubscription]. This
+  /// alone does NOT mean the subscription is permanently gone: `cancelOnError`
+  /// is false (see [_openSubscription]), so an `onError` never ends the
+  /// stream, and [_applyEvent] clears this flag the moment a further event
+  /// proves the stream is still alive. [_startupFailed] is the separate,
+  /// permanent flag for when nothing ever will follow.
+  ///
+  /// Gates the composer alongside [_initializing] and [_startupFailed] (see
+  /// [_composerDisabled]) — a send while this is true could never reach the
+  /// user, whether or not the drop turns out to be recoverable.
   bool _streamEnded = false;
   bool _historyLoadFailed = false;
 
@@ -77,9 +90,11 @@ class _ChatScreenState extends State<ChatScreen> {
   ///    `listMessages` resolves, so a live send while it is still in flight
   ///    risks a duplicate or misordered bubble: the same turn appended live,
   ///    then ALSO returned by that very `listMessages` call.
-  ///  - the event subscription is open and was not already dead on arrival
-  ///    (see [_openSubscription]) — nothing else on this screen can carry a
-  ///    send's results back to the user.
+  ///  - the event subscription is open and was not already dead on arrival —
+  ///    genuinely closed (`onDone`) or never opened at all, not merely
+  ///    erroring once (see [_openSubscription] and [_streamEnded]) — nothing
+  ///    else on this screen can carry a send's results back to the user once
+  ///    that happens.
   ///
   /// A failure in either of the first or third condition above is terminal:
   /// this screen has no retry path, so it is reported by setting
@@ -87,19 +102,35 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _initializing = true;
 
   /// True once startup has reached a TERMINAL failure: the replay watermark
-  /// could not be loaded, or the event subscription could not be opened —
-  /// including a subscription that was usable enough for `listen()` to
-  /// return normally, but had already gone dead before that call returned
-  /// (see [_openSubscription]). This screen has no retry path, so unlike
-  /// [_historyLoadFailed] there is no later event that clears this once set.
+  /// could not be loaded, or the event subscription itself could never be
+  /// opened — either `connect()`/`listen()` threw synchronously, or the
+  /// returned subscription signalled `onDone` (not merely `onError`)
+  /// synchronously, before `listen()` even returned (see
+  /// [_openSubscription]). A synchronous `onError` alone never sets this:
+  /// `cancelOnError` is false, so an error does not end the stream, and a
+  /// later event can still arrive on that very same subscription — see
+  /// [_streamEnded], which covers that recoverable case instead. This screen
+  /// has no retry path for a genuine terminal failure, so unlike
+  /// [_historyLoadFailed] or [_streamEnded] there is no later event that
+  /// clears this once set.
   ///
   /// Always set in the same update that clears [_initializing], and always
-  /// alongside a call to [_handleStreamEnded] (whether made directly, or
-  /// reached indirectly through the subscription's own `onError`/`onDone`),
-  /// so the composer's disabled, truthful copy and the connection-lost
-  /// notice ([_streamEnded] / [_streamEndedNotice]) always appear together as
-  /// one consistent explanation, not two different ones for the same cause.
+  /// alongside a call to [_handleStreamEnded], so the composer's disabled,
+  /// truthful copy and the connection-lost notice ([_streamEnded] /
+  /// [_streamEndedNotice]) always appear together as one consistent
+  /// explanation, not two different ones for the same cause. The converse
+  /// does not hold: [_handleStreamEnded] alone (a recoverable `onError`, or
+  /// an async drop after startup already succeeded) sets only
+  /// [_streamEnded], never this flag.
   bool _startupFailed = false;
+
+  /// True whenever a send could never reach the user — still starting up,
+  /// terminally failed to start, or a live subscription that has since
+  /// dropped (recoverably or not). Gates both the composer in `build()` and
+  /// [_sendMessage]'s own defensive guard, so a queued `onSubmitted` call
+  /// that bypasses the widget's `enabled`/`onPressed` gating is refused for
+  /// exactly the same reasons.
+  bool get _composerDisabled => _initializing || _startupFailed || _streamEnded;
 
   @override
   void initState() {
@@ -167,27 +198,43 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _initializing = false);
   }
 
-  /// Opens the live event subscription and reports whether it is actually
-  /// usable — not just whether `listen()` itself returned without throwing.
+  /// Opens the live event subscription and reports whether it is actually,
+  /// permanently usable — not just whether `listen()` itself returned
+  /// without throwing.
   ///
-  /// Two distinct failures are both possible here, and both are routed
-  /// through the same [_handleStreamEnded] used for a subscription that
-  /// drops after startup, so every way this can be unusable raises exactly
-  /// one kind of visible notice:
-  ///  - `connect()` touches a gRPC channel on a real [TuringEventSource], so
-  ///    a setup failure there (a torn-down channel, e.g.) can throw
-  ///    SYNCHRONOUSLY rather than arriving later as an `onError`. `_start` is
-  ///    fire-and-forget (`unawaited` from `initState`), so an uncaught throw
-  ///    here would otherwise become an unhandled Future rejection instead of
-  ///    a handled, visible failure.
-  ///  - a source that is already erroring or closed can invoke its terminal
-  ///    callback SYNCHRONOUSLY, within `listen()` itself, before `listen()`
-  ///    has even returned a subscription for this method to assign.
-  ///    [_streamEnded] is only ever set by [_handleStreamEnded], so checking
-  ///    it immediately after `listen()` returns is what catches a
-  ///    subscription that opened without throwing but was already dead on
-  ///    arrival.
+  /// [TuringEventSource] is an interface over an arbitrary `Stream`, and
+  /// nothing pinned in this repo proves any particular real implementation's
+  /// exact timing — only what `Stream.listen`'s own documented contract
+  /// already permits. That contract allows both of the following, and this
+  /// method's `try`/`catch` plus the `onDone` closure below exist to turn
+  /// each into a handled, visible failure instead of an unhandled Future
+  /// rejection (`_start` is fire-and-forget, `unawaited` from `initState`):
+  ///  - `connect()` or `listen()` itself can throw SYNCHRONOUSLY rather than
+  ///    ever producing a subscription.
+  ///  - a source that is already closed can invoke `onDone` SYNCHRONOUSLY,
+  ///    within `listen()` itself, before `listen()` has even returned a
+  ///    subscription for this method to assign.
+  ///
+  /// Both are genuinely terminal — nothing further can ever arrive — so this
+  /// method returns `false` for either: the throw does so directly from its
+  /// `catch` below, and the sync `onDone` does so via `subscriptionClosed`,
+  /// read by the final `return` once `listen()` itself has returned. A
+  /// synchronous `onError` is deliberately NOT one of them:
+  /// `cancelOnError` is false (see the `listen` call below), so an error
+  /// never itself ends the stream, and a later event can still arrive on
+  /// the very same subscription. `onError` still routes through
+  /// [_handleStreamEnded] — the caller must still show the drop notice and
+  /// disable the composer — but it must not set `subscriptionClosed`;
+  /// [_applyEvent] clears that notice itself once a further event proves
+  /// the stream is still alive, which a genuinely closed subscription never
+  /// could.
   bool _openSubscription() {
+    // Local, not a field: only the synchronous window inside this method's
+    // own `try` matters here. An `onDone` invoked later, asynchronously,
+    // still reaches `_handleStreamEnded` below, but by then this method has
+    // already returned and used its result — mutating a field at that point
+    // would have no reader left to observe it.
+    var subscriptionClosed = false;
     try {
       _subscription = widget.eventSource
           .connect(
@@ -200,13 +247,16 @@ class _ChatScreenState extends State<ChatScreen> {
           .listen(
             _applyEvent,
             onError: _handleStreamEnded,
-            onDone: _handleStreamEnded,
+            onDone: () {
+              subscriptionClosed = true;
+              _handleStreamEnded();
+            },
           );
     } catch (error, stackTrace) {
       _handleStreamEnded(error, stackTrace);
       return false;
     }
-    return !_streamEnded;
+    return !subscriptionClosed;
   }
 
   static const _streamEndedNotice =
@@ -214,6 +264,16 @@ class _ChatScreenState extends State<ChatScreen> {
 
   static const _historyFailedNotice =
       'Earlier messages could not be loaded. This session is live from here on.';
+
+  /// Shown instead of [_historyFailedNotice] when [_startupFailed] is also
+  /// true: that copy's "This session is live from here on" claim is false
+  /// once no subscription will ever exist, whether because the replay
+  /// watermark failed to load or because [_openSubscription] itself could
+  /// never open one — nothing about this session is "live" in either case.
+  static const _historyFailedNoSubscriptionNotice =
+      'Earlier messages could not be loaded.';
+
+  static const _loadingNotice = 'Loading session...';
 
   /// Shown when an `agent.run.step` arrives without a usable `note`. It must
   /// stay producer-neutral: the tool-iteration cap is no longer the only source
@@ -640,7 +700,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // IME commit (captured before the field became disabled) or any future
     // programmatic caller could still invoke it directly, so this method
     // must refuse on its own rather than trust the UI to have blocked it.
-    if (_initializing || _startupFailed) return;
+    if (_composerDisabled) return;
     final text = _controller.text.trim();
     if (text.isEmpty) return;
     setState(
@@ -671,13 +731,20 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  /// Truthful copy for the composer's hint text and send-button tooltip in
+  /// every state `build()` can be in. Checked in this order because a
+  /// still-loading composer must say so specifically, never "Send" — even
+  /// though [_initializing] is also one of the three flags [_composerDisabled]
+  /// combines, so checking that first would collapse the distinct loading
+  /// case into the same generic unavailable copy used for a real drop.
+  String _composerCopy(String readyCopy) {
+    if (_initializing) return _loadingNotice;
+    if (_startupFailed || _streamEnded) return _streamEndedNotice;
+    return readyCopy;
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Both flags disable the composer, but only [_startupFailed] is
-    // TERMINAL — see its doc — so it alone drives the copy switch below; a
-    // spinner or "Loading session..." for a failure that will never resolve
-    // would be untruthful.
-    final composerDisabled = _initializing || _startupFailed;
     return Scaffold(
       appBar: AppBar(title: const Text('Project Turing')),
       body: Column(
@@ -698,7 +765,18 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ),
-          if (_historyLoadFailed) _SessionNotice(message: _historyFailedNotice),
+          if (_historyLoadFailed)
+            _SessionNotice(
+              // `_historyFailedNotice`'s "This session is live from here on"
+              // is only true once a subscription genuinely exists; on a
+              // [_startupFailed] path none ever will (see
+              // [_historyFailedNoSubscriptionNotice]'s doc), regardless of
+              // whether that came from the watermark or from
+              // [_openSubscription] itself.
+              message: _startupFailed
+                  ? _historyFailedNoSubscriptionNotice
+                  : _historyFailedNotice,
+            ),
           if (_streamEnded) _SessionNotice(message: _streamEndedNotice),
           for (final approval in _approvals)
             ApprovalCard(
@@ -732,26 +810,22 @@ class _ChatScreenState extends State<ChatScreen> {
                   Expanded(
                     child: TextField(
                       controller: _controller,
-                      enabled: !composerDisabled,
+                      enabled: !_composerDisabled,
                       onSubmitted: (_) => _sendMessage(),
                       decoration: InputDecoration(
-                        hintText: _startupFailed
-                            ? _streamEndedNotice
-                            : (_initializing
-                                  ? 'Loading session...'
-                                  : 'Ask Turing...'),
+                        hintText: _composerCopy('Ask Turing...'),
                       ),
                     ),
                   ),
                   IconButton(
-                    tooltip: _startupFailed ? _streamEndedNotice : 'Send',
+                    tooltip: _composerCopy('Send'),
                     icon: _initializing
                         ? const SizedBox.square(
                             dimension: 18,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.send),
-                    onPressed: composerDisabled ? null : _sendMessage,
+                    onPressed: _composerDisabled ? null : _sendMessage,
                   ),
                 ],
               ),

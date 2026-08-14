@@ -2388,8 +2388,16 @@ void main() {
     events.addError(StateError('stream dropped'));
     await tester.pump();
 
+    // Round 7, finding 4 extends the same notice text to the composer's own
+    // hint/tooltip while `_streamEnded` holds (previously only
+    // `_startupFailed` did this — see `_sessionNoticeText`'s doc), so an
+    // unscoped `find.textContaining` now ambiguously matches both the
+    // banner and the composer. Scope to the banner specifically, exactly as
+    // the terminal-startup-failure tests already do.
     expect(
-      find.textContaining('Connection to the session lost'),
+      _sessionNoticeText(
+        'Connection to the session lost. Reopen the session to continue.',
+      ),
       findsOneWidget,
     );
 
@@ -2404,12 +2412,106 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.textContaining('Connection to the session lost'), findsNothing);
+    expect(
+      _sessionNoticeText(
+        'Connection to the session lost. Reopen the session to continue.',
+      ),
+      findsNothing,
+    );
     expect(find.text('still here'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());
   });
+
+  // Composer guard (round 7, finding 1): the notice above already proves it
+  // recovers, but nothing proved the *composer* also recovers with it. A
+  // send while nothing is listening could never reach the user — so
+  // `_streamEnded` must gate the composer exactly like `_startupFailed`
+  // already does, and (unlike `_startupFailed`, which is permanent) must
+  // stop gating it once a later event proves the stream is alive again.
+  testWidgets(
+    'a dropped stream disables the composer and a later event re-enables it',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: _FakeApiClient(),
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final readyField = tester.widget<TextField>(find.byType(TextField));
+      final readyButton = tester.widget<IconButton>(find.byType(IconButton));
+      expect(
+        readyField.enabled,
+        isTrue,
+        reason: 'sanity check: composer is ready before the drop',
+      );
+      expect(readyButton.onPressed, isNotNull);
+
+      events.addError(StateError('stream dropped'));
+      await tester.pump();
+
+      // Round 7, finding 4 makes the composer's own hint/tooltip show this
+      // same notice text while `_streamEnded` holds, so an unscoped
+      // `find.textContaining` would ambiguously match both the banner and
+      // the composer (see `_sessionNoticeText`'s doc) — scope to the banner.
+      expect(
+        _sessionNoticeText(
+          'Connection to the session lost. Reopen the session to continue.',
+        ),
+        findsOneWidget,
+      );
+      final droppedField = tester.widget<TextField>(find.byType(TextField));
+      final droppedButton = tester.widget<IconButton>(find.byType(IconButton));
+      expect(
+        droppedField.enabled,
+        isFalse,
+        reason:
+            'sending now could never reach the user — nothing is '
+            'currently listening to carry a reply back',
+      );
+      expect(droppedButton.onPressed, isNull);
+      expect(
+        droppedButton.tooltip,
+        'Connection to the session lost. Reopen the session to continue.',
+      );
+
+      // The subscription is not cancelled on error, so a later event proves
+      // the stream is alive again and the composer must re-enable with it.
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: {'messageId': 'msg_a', 'delta': 'still here'},
+        ),
+      );
+      await tester.pump();
+
+      final recoveredField = tester.widget<TextField>(find.byType(TextField));
+      final recoveredButton = tester.widget<IconButton>(
+        find.byType(IconButton),
+      );
+      expect(
+        recoveredField.enabled,
+        isTrue,
+        reason:
+            'a screen unable to receive results must become able to again '
+            'once a later event proves it is, exactly like the notice above',
+      );
+      expect(recoveredButton.onPressed, isNotNull);
+      expect(recoveredButton.tooltip, 'Send');
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
 
   testWidgets('tool.call.denied renders a denied card', (tester) async {
     final events = StreamController<TuringEvent>(sync: true);
@@ -3309,6 +3411,13 @@ void main() {
     'the composer stays disabled while the replay watermark is loading, '
     'then enables once it resolves',
     (tester) async {
+      // Semantics enabled for this test (round 7, finding 4): the loading
+      // control's accessibility-tree tooltip must be checked directly, not
+      // inferred from the widget property alone — `IconButton.tooltip` and
+      // `Semantics.tooltip` happen to be the same value today, but only
+      // reading the actual accessibility tree proves that, rather than
+      // assuming it.
+      final handle = tester.ensureSemantics();
       final events = StreamController<TuringEvent>(sync: true);
       final gate = Completer<TuringEventPage>();
       final apiClient = _FakeApiClient()..eventsGate = gate;
@@ -3343,6 +3452,29 @@ void main() {
             'unresponsive',
       );
       expect(
+        loadingButton.tooltip,
+        isNot('Send'),
+        reason:
+            'a control that cannot yet send anything must not claim it '
+            'can — "Send" is only truthful once startup is actually ready',
+      );
+      expect(
+        tester.getSemantics(find.byType(Tooltip)),
+        matchesSemantics(
+          // Hardcoded (not `loadingButton.tooltip`) so this assertion can
+          // independently fail if the loading copy regresses to some other
+          // non-"Send" string — deriving the expectation from the widget
+          // under test would let any such regression pass silently.
+          tooltip: 'Loading session...',
+          isButton: true,
+          hasEnabledState: true,
+        ),
+        reason:
+            'IconButton.tooltip drives Semantics.tooltip, so the '
+            'accessibility tree must be checked directly — a screen '
+            'reader user relies on that tree, not on the widget property',
+      );
+      expect(
         find.byType(CircularProgressIndicator),
         findsOneWidget,
         reason:
@@ -3360,11 +3492,26 @@ void main() {
       expect(readyField.enabled, isTrue);
       expect(readyButton.onPressed, isNotNull);
       expect(readyField.decoration?.hintText, 'Ask Turing...');
+      expect(readyButton.tooltip, 'Send');
+      expect(
+        tester.getSemantics(find.byType(Tooltip)),
+        matchesSemantics(
+          tooltip: 'Send',
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: true,
+          isFocusable: true,
+          hasTapAction: true,
+          hasFocusAction: true,
+        ),
+        reason: 'once ready, the accessibility tree must say "Send" too',
+      );
       expect(find.byIcon(Icons.send), findsOneWidget);
       expect(find.byType(CircularProgressIndicator), findsNothing);
 
       await tester.pumpWidget(const SizedBox.shrink());
       unawaited(events.close());
+      handle.dispose();
     },
   );
 
@@ -3674,6 +3821,14 @@ void main() {
   // handling (`_historyLoadFailed`) must still fire when the read-only
   // attempt this finding adds ALSO fails, stacking with — not replacing —
   // the connection-lost notice from the watermark failure itself.
+  //
+  // Round 7, finding 3: the notice text itself must also be
+  // context-accurate. The normal history-failure copy claims "This session
+  // is live from here on" — true when a subscription is open and only
+  // history was lost, but false here: the watermark failure means NO
+  // subscription will ever open, so nothing about this session is "live"
+  // at all. `_startupFailed` distinguishes the two cases; this test pins
+  // the corrected, subscription-accurate copy.
   testWidgets(
     'a failed replay watermark load preserves the history-load-failed '
     'notice when the read-only history attempt also fails',
@@ -3706,17 +3861,126 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.textContaining('Earlier messages could not be loaded'),
+        _sessionNoticeText('Earlier messages could not be loaded.'),
         findsOneWidget,
         reason:
             'a history failure must still get its own visible handling even '
             'on a path that starts from a watermark failure',
+      );
+      expect(
+        find.textContaining('This session is live from here on'),
+        findsNothing,
+        reason:
+            'no subscription will ever open on this failure path — nothing '
+            'about this session is "live", so the normal history-failure '
+            'copy would be false here',
       );
       expect(apiClient.listMessagesCallCount, 1);
       expect(eventSource.connectCount, 0);
 
       await tester.pumpWidget(const SizedBox.shrink());
       unawaited(events.close());
+    },
+  );
+
+  // Round 7, finding 3: the corrected copy above must be scoped to when a
+  // subscription genuinely never opens — a history failure that happens
+  // to occur while the subscription itself is fine must keep the ORIGINAL
+  // "live from here on" claim, because that one is still true.
+  testWidgets(
+    'a history load failure keeps the "live from here on" notice when the '
+    'subscription is open',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..messagesError = StateError('grpc unavailable');
+      final eventSource = _FakeEventSource(events.stream);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: eventSource,
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        _sessionNoticeText(
+          'Earlier messages could not be loaded. This session is live from '
+          'here on.',
+        ),
+        findsOneWidget,
+        reason:
+            'a subscription is genuinely open here, so this claim is true '
+            'and must be preserved exactly as before',
+      );
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(
+        field.enabled,
+        isTrue,
+        reason: 'a history failure alone must not disable a live composer',
+      );
+      expect(eventSource.connectCount, 1);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // Round 7, finding 3: the watermark is not the only path to
+  // `_startupFailed` — the subscription itself can fail to open (see the
+  // synchronous-throw/synchronous-onDone tests above) with the watermark
+  // otherwise fine. The corrected copy must key off "no subscription will
+  // ever exist" generally, not off the watermark specifically, so it must
+  // also replace the false claim on THIS path.
+  testWidgets(
+    'a failed subscription open preserves the history-load-failed notice '
+    'with context-accurate copy, not the watermark-failure path',
+    (tester) async {
+      final apiClient = _FakeApiClient()
+        ..messagesError = StateError('grpc unavailable');
+      final eventSource = _ImmediatelyTerminalEventSource(asError: false);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: eventSource,
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        _sessionNoticeText(
+          'Connection to the session lost. Reopen the session to continue.',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        _sessionNoticeText('Earlier messages could not be loaded.'),
+        findsOneWidget,
+        reason:
+            'a history failure must still get its own visible handling on '
+            'this path to `_startupFailed` too, not just the '
+            'watermark-failure one',
+      );
+      expect(
+        find.textContaining('This session is live from here on'),
+        findsNothing,
+        reason:
+            'the subscription failed to open here just as surely as on the '
+            'watermark-failure path — this claim would be exactly as false',
+      );
+      expect(eventSource.connectCount, 1);
+
+      await tester.pumpWidget(const SizedBox.shrink());
     },
   );
 
@@ -3761,18 +4025,21 @@ void main() {
     },
   );
 
-  // Subscription setup (round 6, finding 3): `connect()` on a real
-  // [TuringEventSource] touches a gRPC channel, and a resource failure there
-  // (a torn-down channel, e.g.) throws synchronously rather than arriving
-  // later as an `onError` callback. `_start` is fire-and-forget
-  // (`unawaited` in `initState`), so an uncaught synchronous throw here
-  // becomes an unhandled Future rejection — not a hypothetical: this exact
-  // shape reliably fails a `flutter test` run outright (`EXCEPTION CAUGHT BY
-  // FLUTTER TEST FRAMEWORK`) rather than merely failing an assertion.
+  // Subscription setup (round 6, finding 3): `TuringEventSource` is an
+  // interface, and its contract allows `connect()` to fail eagerly instead
+  // of only ever arriving later as an `onError` callback — nothing here
+  // asserts that any particular real implementation actually behaves this
+  // way, only that `_start` must survive it if one does. `_start` is
+  // fire-and-forget (`unawaited` in `initState`), so an uncaught
+  // synchronous throw here becomes an unhandled Future rejection — not a
+  // hypothetical: this exact shape reliably fails a `flutter test` run
+  // outright (`EXCEPTION CAUGHT BY FLUTTER TEST FRAMEWORK`) rather than
+  // merely failing an assertion.
   testWidgets(
     'a synchronous exception from connect() during subscription setup is '
     'handled, not left as an unhandled Future rejection',
     (tester) async {
+      final handle = tester.ensureSemantics();
       final eventSource = _ThrowingEventSource();
 
       await tester.pumpWidget(
@@ -3817,9 +4084,24 @@ void main() {
             'accessibility tree too (IconButton.tooltip drives '
             'Semantics.tooltip), not just visually',
       );
+      expect(
+        tester.getSemantics(find.byType(Tooltip)),
+        matchesSemantics(
+          tooltip:
+              'Connection to the session lost. Reopen the session to '
+              'continue.',
+          isButton: true,
+          hasEnabledState: true,
+        ),
+        reason:
+            'a startup failure must also be truthful in the accessibility '
+            'tree itself, not only in the widget property a screen reader '
+            'never inspects directly',
+      );
       expect(find.byType(CircularProgressIndicator), findsNothing);
 
       await tester.pumpWidget(const SizedBox.shrink());
+      handle.dispose();
     },
   );
 
@@ -3880,16 +4162,29 @@ void main() {
   // without throwing, the returned subscription can be dead on arrival — a
   // source that is already erroring fires its terminal callback
   // SYNCHRONOUSLY, within the very `listen` call, before `_start` even
-  // finishes assigning `_subscription`. The pre-fix bug: `_start`
+  // finishes assigning `_subscription`. The pre-fix (round 6) bug: `_start`
   // unconditionally cleared `_initializing` right after `listen` returned,
   // with nothing checking whether that same `listen` call had already
   // invoked `_handleStreamEnded` — so this exact scenario showed BOTH the
   // connection-lost notice AND a composer that claimed to be ready, backed
   // by a subscription that was already gone.
+  //
+  // Round 6's own fix over-corrected (round 7, finding 2): it treated ANY
+  // synchronous `_streamEnded` — including one set by `onError` alone — as
+  // a PERMANENT startup failure. That is wrong: `cancelOnError` is false
+  // (see `_openSubscription`), so an `onError` does not end the stream,
+  // synchronous or not, and a real event can still follow it. The composer
+  // must still refuse a send for as long as the drop notice is showing,
+  // exactly as round 6 already proved, but startup itself must NOT be
+  // marked as terminally failed for it — proven below by a later event on
+  // the very same subscription recovering the composer, which a genuinely
+  // terminal failure (see the immediate-`onDone` test right after this
+  // one) never could.
   testWidgets(
     'a stream that errors synchronously the instant it is listened to '
-    'fails startup instead of enabling the composer',
+    'disables the composer but recovers once a later event arrives',
     (tester) async {
+      final handle = tester.ensureSemantics();
       final eventSource = _ImmediatelyTerminalEventSource(asError: true);
 
       await tester.pumpWidget(
@@ -3912,38 +4207,115 @@ void main() {
         ),
         findsOneWidget,
       );
-      final field = tester.widget<TextField>(find.byType(TextField));
-      final button = tester.widget<IconButton>(find.byType(IconButton));
+      final droppedField = tester.widget<TextField>(find.byType(TextField));
+      final droppedButton = tester.widget<IconButton>(find.byType(IconButton));
       expect(
-        field.enabled,
+        droppedField.enabled,
         isFalse,
         reason:
-            'startup must not be marked ready off a subscription that was '
-            'already dead before `_start` finished setting it up',
+            'a send here could never reach the user — nothing is '
+            'currently listening to carry its results back, even though '
+            'the drop itself may still recover',
       );
-      expect(button.onPressed, isNull);
+      expect(droppedButton.onPressed, isNull);
       expect(
-        field.decoration?.hintText,
+        droppedField.decoration?.hintText,
         'Connection to the session lost. Reopen the session to continue.',
       );
       expect(
-        button.tooltip,
+        droppedButton.tooltip,
         'Connection to the session lost. Reopen the session to continue.',
         reason:
             'the disabled send affordance must be truthful in the '
             'accessibility tree too (IconButton.tooltip drives '
             'Semantics.tooltip), not just visually',
       );
+      expect(
+        tester.getSemantics(find.byType(Tooltip)),
+        matchesSemantics(
+          tooltip:
+              'Connection to the session lost. Reopen the session to '
+              'continue.',
+          isButton: true,
+          hasEnabledState: true,
+        ),
+        reason:
+            'a dropped stream must also be truthful in the accessibility '
+            'tree itself, not only in the widget property a screen reader '
+            'never inspects directly',
+      );
       expect(find.byType(CircularProgressIndicator), findsNothing);
 
+      // The subscription is NOT cancelled on error (`cancelOnError` is
+      // false), so the fake can still deliver a genuine event afterwards —
+      // proving this was never a terminal startup failure to begin with.
+      eventSource.pushLater(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: {'messageId': 'msg_a', 'delta': 'still here'},
+        ),
+      );
+      await tester.pump();
+      // A second pump, matching the loading→ready transition test above:
+      // the focus-action semantics for the now-enabled button settles one
+      // frame after the rebuild that flips `enabled`.
+      await tester.pump();
+
+      expect(
+        _sessionNoticeText(
+          'Connection to the session lost. Reopen the session to continue.',
+        ),
+        findsNothing,
+        reason: 'a later event proves the stream recovered',
+      );
+      final recoveredField = tester.widget<TextField>(find.byType(TextField));
+      final recoveredButton = tester.widget<IconButton>(
+        find.byType(IconButton),
+      );
+      expect(
+        recoveredField.enabled,
+        isTrue,
+        reason:
+            'a synchronous onError alone must never be treated as a '
+            'terminal startup failure — only a genuinely closed, or '
+            'never-opened, subscription may permanently disable the '
+            'composer',
+      );
+      expect(recoveredButton.onPressed, isNotNull);
+      expect(recoveredField.decoration?.hintText, 'Ask Turing...');
+      expect(recoveredButton.tooltip, 'Send');
+      expect(
+        tester.getSemantics(find.byType(Tooltip)),
+        matchesSemantics(
+          tooltip: 'Send',
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: true,
+          isFocusable: true,
+          hasTapAction: true,
+          hasFocusAction: true,
+        ),
+        reason:
+            'recovery must be truthful in the accessibility tree too — a '
+            'screen reader user relies on that tree, not the widget '
+            'property, to know sending is possible again',
+      );
+      expect(find.text('still here'), findsOneWidget);
+
       await tester.pumpWidget(const SizedBox.shrink());
+      handle.dispose();
     },
   );
 
   // Subscription setup (round 6, finding 3): the same dead-on-arrival race
   // as above, but signalled with an immediate `onDone` instead of an
-  // `onError` — `_handleStreamEnded` is wired to both, and both must be
-  // caught before startup is declared ready.
+  // `onError`. Unlike `onError` above — recoverable, because
+  // `cancelOnError` is false and an error does not end the stream —
+  // `onDone` is the stream contract's own guarantee that nothing more will
+  // EVER arrive on this subscription. That difference is exactly why only
+  // this shape may fail startup permanently (round 7, finding 2): no later
+  // event could ever prove otherwise.
   testWidgets(
     'a stream that closes synchronously the instant it is listened to '
     'fails startup instead of enabling the composer',
@@ -4088,6 +4460,74 @@ void main() {
           'own (un-cleared) TextField still legitimately shows "go"',
     );
   });
+
+  // Send guard (round 7, finding 1): `build()`'s `enabled`/`onPressed`
+  // gating is the primary defence, but `_sendMessage` must refuse on its
+  // own too — this bypasses the widget layer entirely (see the two
+  // `onSubmitted` tests above), standing in for a queued IME commit
+  // captured just before a post-ready drop. Unlike the two tests above,
+  // this one is never `_initializing` nor `_startupFailed`: startup
+  // completed successfully, and the drop that follows is recoverable, not
+  // terminal — proving the guard keys off `_streamEnded` itself, not off
+  // either of the two states it already covers.
+  testWidgets(
+    'a queued onSubmitted invocation cannot send while a live stream has '
+    'since dropped',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final readyField = tester.widget<TextField>(find.byType(TextField));
+      expect(
+        readyField.enabled,
+        isTrue,
+        reason: 'sanity check: composer is ready before the drop',
+      );
+
+      events.addError(StateError('stream dropped'));
+      await tester.pump();
+
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(
+        field.enabled,
+        isFalse,
+        reason: 'sanity check: the drop above disabled the composer',
+      );
+      field.controller!.text = 'go';
+      field.onSubmitted!('go');
+      await tester.pump();
+
+      expect(
+        apiClient.lastSentContent,
+        isNull,
+        reason:
+            'a send while nothing is listening to carry a reply back must '
+            'never reach the API client, even though the drop is '
+            'recoverable rather than a terminal startup failure',
+      );
+      expect(
+        find.descendant(of: find.byType(ListView), matching: find.text('go')),
+        findsNothing,
+        reason:
+            'no local echo bubble may appear in the message list for a '
+            'refused send — scoped to the ListView because the composer\'s '
+            'own (un-cleared) TextField still legitimately shows "go"',
+      );
+
+      unawaited(events.close());
+    },
+  );
 
   testWidgets('a run submitted right after the replay watermark resolves still '
       'renders its live cancellation', (tester) async {
@@ -4432,10 +4872,12 @@ class _FakeEventSource implements TuringEventSource {
   }
 }
 
-/// Event source whose `connect()` throws SYNCHRONOUSLY, standing in for a
-/// gRPC channel that fails its setup (a torn-down channel, e.g.) before ever
-/// producing a stream — a real failure mode of a client backed by a live
-/// channel, not one confined to this fake.
+/// Event source whose `connect()` throws SYNCHRONOUSLY instead of ever
+/// producing a stream. [TuringEventSource] is an interface, and nothing
+/// pinned in this repo proves any particular real implementation actually
+/// fails this way — this fake exists only to prove `_openSubscription`
+/// survives a setup failure the interface's contract permits, whether or
+/// not a given implementation ever exercises it.
 class _ThrowingEventSource implements TuringEventSource {
   int connectCount = 0;
 
@@ -4480,24 +4922,39 @@ class _ThrowingOnListenStream extends Stream<TuringEvent> {
   }
 }
 
-/// Event source whose returned stream fires its terminal callback
+/// Event source whose returned stream fires a terminal callback
 /// SYNCHRONOUSLY — within the very `listen` call, before `listen` even
-/// returns a subscription — standing in for a source that is already dead
-/// on arrival. `asError` selects which terminal shape: an immediate
-/// `onError`, or an immediate `onDone` with no error at all. Both callbacks
-/// point at the same handler in production ([ChatScreen]'s
-/// `_handleStreamEnded`), so both dead-on-arrival shapes must be exercised.
+/// returns a subscription. `asError` selects which shape:
+///  - `true`: an immediate `onError`, with the controller left OPEN
+///    afterward. A real `Stream` does not close itself just because it
+///    errored once — `cancelOnError` defaults to false, and production
+///    wires it that way too (see `_openSubscription`) — so this fake does
+///    not either; [pushLater] lets a test prove the subscription really is
+///    still alive and can deliver a genuine event afterwards.
+///  - `false`: an immediate `onDone`, with no error at all — the
+///    controller closes right there, so nothing can ever arrive on it
+///    again. This is the only one of the two shapes that is actually
+///    terminal.
 class _ImmediatelyTerminalEventSource implements TuringEventSource {
   _ImmediatelyTerminalEventSource({required this.asError});
 
   final bool asError;
   int connectCount = 0;
+  _ImmediatelyTerminalStream? _stream;
 
   @override
   Stream<TuringEvent> connect({required String sessionId, int? lastSequence}) {
     connectCount++;
-    return _ImmediatelyTerminalStream(asError: asError);
+    final stream = _ImmediatelyTerminalStream(asError: asError);
+    _stream = stream;
+    return stream;
   }
+
+  /// Delivers a live event on the same controller after the synchronous
+  /// `onError` above. Only meaningful when `asError` is true — the
+  /// `asError: false` shape closes its controller immediately and can
+  /// never accept another event.
+  void pushLater(TuringEvent event) => _stream!.controller!.add(event);
 
   @override
   void close() {}
@@ -4507,6 +4964,10 @@ class _ImmediatelyTerminalStream extends Stream<TuringEvent> {
   _ImmediatelyTerminalStream({required this.asError});
 
   final bool asError;
+
+  /// Exposed so [_ImmediatelyTerminalEventSource.pushLater] can add a later
+  /// event on the exact controller `listen()` created below.
+  StreamController<TuringEvent>? controller;
 
   @override
   StreamSubscription<TuringEvent> listen(
@@ -4521,6 +4982,7 @@ class _ImmediatelyTerminalStream extends Stream<TuringEvent> {
     // the inner listener first, then emitting, is what makes the callback
     // fire before this override returns a subscription to its own caller.
     final controller = StreamController<TuringEvent>(sync: true);
+    this.controller = controller;
     final subscription = controller.stream.listen(
       onData,
       onError: onError,
@@ -4528,9 +4990,12 @@ class _ImmediatelyTerminalStream extends Stream<TuringEvent> {
       cancelOnError: cancelOnError,
     );
     if (asError) {
-      controller.addError(StateError('synchronously dead stream'));
+      // Deliberately does NOT close: an error is not itself a done signal
+      // (see the class doc above), so the controller stays open.
+      controller.addError(StateError('synchronous recoverable error'));
+    } else {
+      controller.close();
     }
-    controller.close();
     return subscription;
   }
 }
