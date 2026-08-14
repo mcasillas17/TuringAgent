@@ -53,15 +53,33 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _streamEnded = false;
   bool _historyLoadFailed = false;
 
-  /// True until [_loadReplayWatermark] settles, one way or the other. The
-  /// composer is disabled while this is true: a message sent before the
-  /// watermark is fixed could terminally fail or cancel fast enough that the
-  /// watermark ends up covering that very run, and [_isHistoricalRunEvent]
-  /// would then replay-suppress its own live terminal event. Cleared on
-  /// failure too — [_handleStreamEnded] already raises a visible notice for
-  /// that case, and with no subscription ever opening there is no boundary
-  /// left to race, so refusing to send forever would only be a silent dead
-  /// end, not a safety measure.
+  /// True until startup readiness is reached, which requires ALL three of:
+  /// the replay watermark has loaded successfully, the initial history load
+  /// has settled (either it succeeded, or it failed and that failure was
+  /// given its own visible handling — see [_historyLoadFailed]), and the
+  /// event subscription has been opened. The composer stays disabled, with a
+  /// spinner in place of the send icon, until all three hold.
+  ///
+  /// Two distinct races make each of the first two conditions necessary on
+  /// their own, not just together:
+  ///  - A message sent before the watermark is fixed could terminally fail or
+  ///    cancel fast enough that the watermark ends up covering that very run,
+  ///    and [_isHistoricalRunEvent] would then replay-suppress its own live
+  ///    terminal event.
+  ///  - A message sent while history is still loading risks a duplicate or
+  ///    misordered bubble: [_loadInitialMessages] seeds history by
+  ///    PREPENDING (`_messages.insertAll(0, ...)`) once `listMessages`
+  ///    resolves, so a live send in that window is appended immediately and
+  ///    can then ALSO come back from that very `listMessages` call — the same
+  ///    turn rendered twice, in the wrong relative order.
+  ///
+  /// If the watermark load fails, this flag is deliberately never cleared:
+  /// [_start] calls [_handleStreamEnded] immediately instead of attempting
+  /// history at all, raising the visible connection-lost notice, and no
+  /// subscription ever opens. A composer left disabled forever here is not a
+  /// safety theater — this screen cannot receive results without a
+  /// subscription to carry them, and the notice is what tells the user why;
+  /// there is no live boundary left to protect by also refusing input.
   bool _initializing = true;
 
   @override
@@ -89,13 +107,17 @@ class _ChatScreenState extends State<ChatScreen> {
     // live after history is seeded.
     final replayBoundaryLoaded = await _loadReplayWatermark();
     if (!mounted) return;
-    // The boundary is now fixed (or unreachable — see [_initializing]), so
-    // any message sent from here on is inherently sequenced after it. Free
-    // the composer before `_loadInitialMessages` starts: that load races
-    // history in, not the watermark, and a run submitted while it is in
-    // flight is already handled correctly (see
-    // `tool events committed while history loads remain live`).
-    setState(() => _initializing = false);
+    if (!replayBoundaryLoaded) {
+      // No boundary means [_isHistoricalRunEvent] has nothing to filter
+      // replay against, so the subscription must never open — and with it
+      // never opening, there is nothing left for history to be seeded FOR,
+      // or for a send to reach. Raise the visible failure right now instead
+      // of first awaiting `_loadInitialMessages`: that would leave both the
+      // notice and [_initializing] (see its doc) hostage to however long — or
+      // whether ever — that unrelated load resolves.
+      _handleStreamEnded();
+      return;
+    }
     try {
       await _loadInitialMessages();
     } catch (_) {
@@ -104,10 +126,6 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) setState(() => _historyLoadFailed = true);
     }
     if (!mounted) return;
-    if (!replayBoundaryLoaded) {
-      _handleStreamEnded();
-      return;
-    }
     _subscription = widget.eventSource
         .connect(
           sessionId: widget.sessionId,
@@ -121,6 +139,11 @@ class _ChatScreenState extends State<ChatScreen> {
           onError: _handleStreamEnded,
           onDone: _handleStreamEnded,
         );
+    // Only now are all three conditions in [_initializing]'s doc met: the
+    // watermark is fixed, history has settled (loaded or visibly failed) so a
+    // send cannot race its own prepend, and the subscription that would carry
+    // that send's events is already open.
+    setState(() => _initializing = false);
   }
 
   static const _streamEndedNotice =
@@ -390,8 +413,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Whether an inline run artifact belongs to history that is already on
   /// screen. Approvals deliberately replay to rebuild pending state, while
-  /// tool cards and run notices cannot be interleaved into message history and
-  /// therefore stay hidden once that history is complete.
+  /// tool cards, run notices, and terminal failure/cancellation cards
+  /// ([_applyRunFailed], [_applyRunCancelled]) cannot be interleaved into
+  /// message history and therefore stay hidden once that history is complete.
   bool _isHistoricalRunEvent(TuringEvent event) {
     final watermark = _replayWatermarkSequence;
     if (watermark != null && event.sequence <= watermark) return true;

@@ -2153,6 +2153,15 @@ void main() {
       findsOneWidget,
       reason: 'a silently empty transcript looks identical to a fresh session',
     );
+    // Readiness (round 5): a history failure is handled, not fatal — the
+    // subscription above proves it — so it must free the composer exactly
+    // like a clean load would. Refusing to send here would treat a
+    // recoverable, already-signalled failure as a permanent dead end.
+    final field = tester.widget<TextField>(find.byType(TextField));
+    final button = tester.widget<IconButton>(find.byType(IconButton));
+    expect(field.enabled, isTrue);
+    expect(button.onPressed, isNotNull);
+    expect(field.decoration?.hintText, 'Ask Turing...');
 
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());
@@ -3329,13 +3338,15 @@ void main() {
       expect(
         loadingField.decoration?.hintText,
         'Loading session...',
-        reason: 'the composer being unusable must also be visible, not just '
+        reason:
+            'the composer being unusable must also be visible, not just '
             'unresponsive',
       );
       expect(
         find.byType(CircularProgressIndicator),
         findsOneWidget,
-        reason: 'the send icon swaps for a spinner while disabled, matching '
+        reason:
+            'the send icon swaps for a spinner while disabled, matching '
             'the existing loading affordance in session_list_screen.dart',
       );
       expect(find.byIcon(Icons.send), findsNothing);
@@ -3391,109 +3402,213 @@ void main() {
     },
   );
 
-  testWidgets(
-    'a failed replay watermark load still frees the composer, with the '
-    'connection-lost notice as the visible failure signal',
-    (tester) async {
-      final events = StreamController<TuringEvent>(sync: true);
-      final apiClient = _FakeApiClient()
-        ..eventsError = const TuringApiException(
-          code: 'UNAVAILABLE',
-          message: 'no backend',
-        );
+  // Readiness (round 5, finding A): `_initializing` used to clear right after
+  // `_loadReplayWatermark` settled, before `_loadInitialMessages` even
+  // started. History is seeded by PREPENDING once `listMessages` resolves
+  // (`_messages.insertAll(0, ...)` — see `_loadInitialMessages`), so a
+  // message sent in that window is appended live and can then ALSO come back
+  // from that very `listMessages` call: the same turn rendered twice, in the
+  // wrong relative order. The composer must stay disabled until history has
+  // settled AND the subscription is open, closing the window structurally
+  // instead of reconciling a duplicate/misordered bubble after the fact.
+  testWidgets('the composer stays disabled while history is loading after a '
+      'successful watermark, then enables once the subscription opens', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final gate = Completer<List<Message>>();
+    final apiClient = _FakeApiClient()..messagesGate = gate;
+    final eventSource = _FakeEventSource(events.stream);
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ChatScreen(
-            sessionId: 'sess_1',
-            apiClient: apiClient,
-            eventSource: _FakeEventSource(events.stream),
-          ),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: eventSource,
         ),
-      );
-      await tester.pump();
+      ),
+    );
+    await tester.pump();
 
-      final field = tester.widget<TextField>(find.byType(TextField));
-      final button = tester.widget<IconButton>(find.byType(IconButton));
-      expect(
-        field.enabled,
-        isTrue,
-        reason:
-            'no subscription will ever open on this failure path, so there '
-            'is no boundary left to race — refusing to send forever would '
-            'be a silent dead end, not a safety measure',
-      );
-      expect(button.onPressed, isNotNull);
-      expect(
-        find.text(
-          'Connection to the session lost. Reopen the session to continue.',
+    final loadingField = tester.widget<TextField>(find.byType(TextField));
+    final loadingButton = tester.widget<IconButton>(find.byType(IconButton));
+    expect(
+      loadingField.enabled,
+      isFalse,
+      reason:
+          'history is seeded by prepending once listMessages resolves, so '
+          'a send here could be duplicated by — or misordered against — '
+          'the very persisted turn that same send produces',
+    );
+    expect(loadingButton.onPressed, isNull);
+    expect(loadingField.decoration?.hintText, 'Loading session...');
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byIcon(Icons.send), findsNothing);
+    expect(
+      eventSource.connectCount,
+      0,
+      reason:
+          'the subscription must not open before history has settled, '
+          'mirroring the ordering `_loadInitialMessages`\'s own doc comment '
+          'already requires',
+    );
+
+    gate.complete(const []);
+    await tester.pump();
+    await tester.pump();
+
+    final readyField = tester.widget<TextField>(find.byType(TextField));
+    final readyButton = tester.widget<IconButton>(find.byType(IconButton));
+    expect(readyField.enabled, isTrue);
+    expect(readyButton.onPressed, isNotNull);
+    expect(readyField.decoration?.hintText, 'Ask Turing...');
+    expect(find.byIcon(Icons.send), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(eventSource.connectCount, 1);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  // Readiness (round 5, finding B): `_initializing` used to clear right
+  // after `_loadReplayWatermark` settled — success OR failure — because
+  // `_start` unconditionally freed the composer before even attempting
+  // `_loadInitialMessages`. On the failure path that left an enabled
+  // composer, backed by no subscription, for however long history took to
+  // load next — `_handleStreamEnded` (and its visible notice) only ran
+  // AFTER that history load finished. `_start` must check the watermark's
+  // own outcome first and, on failure, raise the notice immediately without
+  // ever attempting history: there is no subscription for history to seed,
+  // or for anything the composer sends to reach.
+  testWidgets('a failed replay watermark load shows the connection-lost notice '
+      'immediately, without waiting on history, and never frees the composer', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    // Never completed. If `_start` still awaited history on this failure
+    // path (the round 4 bug), the notice below would never appear at all —
+    // this test would fail (or hang) instead of passing quickly.
+    final neverSettles = Completer<List<Message>>();
+    final apiClient = _FakeApiClient()
+      ..eventsError = const TuringApiException(
+        code: 'UNAVAILABLE',
+        message: 'no backend',
+      )
+      ..messagesGate = neverSettles;
+    final eventSource = _FakeEventSource(events.stream);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: eventSource,
         ),
-        findsOneWidget,
-        reason: 'the composer freeing up must not be the only signal',
-      );
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
 
-      await tester.pumpWidget(const SizedBox.shrink());
-      unawaited(events.close());
-    },
-  );
+    expect(
+      find.text(
+        'Connection to the session lost. Reopen the session to continue.',
+      ),
+      findsOneWidget,
+      reason:
+          'the failure notice must not wait on a history load that, on '
+          'this path, never even starts',
+    );
+    final field = tester.widget<TextField>(find.byType(TextField));
+    final button = tester.widget<IconButton>(find.byType(IconButton));
+    expect(
+      field.enabled,
+      isFalse,
+      reason:
+          'no subscription will ever open on this failure path, so an '
+          'enabled composer would send into a screen that can never show '
+          'the result — the notice above is the signal, a live composer '
+          'would not be',
+    );
+    expect(button.onPressed, isNull);
+    expect(field.decoration?.hintText, 'Loading session...');
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byIcon(Icons.send), findsNothing);
+    expect(
+      eventSource.connectCount,
+      0,
+      reason: 'a failed watermark must never open a subscription',
+    );
+    expect(
+      apiClient.listMessagesCallCount,
+      0,
+      reason:
+          'a never-completing gate only proves the result is not awaited; '
+          'this proves `_start` never even calls `listMessages` on this '
+          'path, matching "not unnecessarily awaited/called"',
+    );
 
-  testWidgets(
-    'a run submitted right after the replay watermark resolves still '
-    'renders its live cancellation',
-    (tester) async {
-      final events = StreamController<TuringEvent>(sync: true);
-      final gate = Completer<TuringEventPage>();
-      final apiClient = _FakeApiClient()..eventsGate = gate;
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+    // Hygiene only: the fixed code never awaits this, but complete it
+    // anyway so the Completer does not dangle into a later test.
+    neverSettles.complete(const []);
+  });
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ChatScreen(
-            sessionId: 'sess_1',
-            apiClient: apiClient,
-            eventSource: _FakeEventSource(events.stream),
-          ),
+  testWidgets('a run submitted right after the replay watermark resolves still '
+      'renders its live cancellation', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final gate = Completer<TuringEventPage>();
+    final apiClient = _FakeApiClient()..eventsGate = gate;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
         ),
-      );
-      await tester.pump();
+      ),
+    );
+    await tester.pump();
 
-      gate.complete(const TuringEventPage(events: [], latestSequence: 0));
-      await tester.pump();
-      await tester.pump();
+    gate.complete(const TuringEventPage(events: [], latestSequence: 0));
+    await tester.pump();
+    await tester.pump();
 
-      await tester.enterText(find.byType(TextField), 'go');
-      await tester.tap(find.byIcon(Icons.send));
-      await tester.pump();
+    await tester.enterText(find.byType(TextField), 'go');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
 
-      expect(apiClient.lastSentContent, 'go');
+    expect(apiClient.lastSentContent, 'go');
 
-      // This run's terminal event arrives with the very next sequence after
-      // the boundary the screen just fixed — the closest a live event can
-      // get to that boundary — and must still render.
-      events.add(
-        _event(
-          type: 'agent.run.cancelled',
-          sequence: 1,
-          payload: {'reason': 'client_cancelled'},
-        ),
-      );
-      await tester.pump();
+    // This run's terminal event arrives with the very next sequence after
+    // the boundary the screen just fixed — the closest a live event can
+    // get to that boundary — and must still render.
+    events.add(
+      _event(
+        type: 'agent.run.cancelled',
+        sequence: 1,
+        payload: {'reason': 'client_cancelled'},
+      ),
+    );
+    await tester.pump();
 
-      expect(
-        find.byType(RunCancelledCard),
-        findsOneWidget,
-        reason:
-            'a run started after readiness must never be classified as '
-            'replay of history that predates this screen',
-      );
-      expect(
-        find.text('The run was cancelled before it could finish'),
-        findsOneWidget,
-      );
+    expect(
+      find.byType(RunCancelledCard),
+      findsOneWidget,
+      reason:
+          'a run started after readiness must never be classified as '
+          'replay of history that predates this screen',
+    );
+    expect(
+      find.text('The run was cancelled before it could finish'),
+      findsOneWidget,
+    );
 
-      await tester.pumpWidget(const SizedBox.shrink());
-      unawaited(events.close());
-    },
-  );
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
 
   testWidgets('the same toolCallId in two runs renders two cards', (
     tester,
@@ -3645,6 +3760,11 @@ class _FakeApiClient implements TuringApi {
   Object? messagesError;
   List<Message> initialMessages = const [];
 
+  /// How many times `listMessages` has been invoked. Lets a test prove a
+  /// short-circuit skips the call entirely, not just that it never awaited
+  /// the call's result.
+  int listMessagesCallCount = 0;
+
   /// The event log already persisted when the screen opens. The screen reads
   /// its latest sequence to learn which events the subscription will REPLAY.
   List<TuringEvent> initialEvents = const [];
@@ -3711,6 +3831,7 @@ class _FakeApiClient implements TuringApi {
     int limit = 50,
     String? before,
   }) {
+    listMessagesCallCount++;
     final error = messagesError;
     if (error != null) return Future.error(error);
     return messagesGate?.future ?? Future.value(initialMessages);
