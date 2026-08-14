@@ -8,6 +8,7 @@ import '../../networking/api_client.dart';
 import '../../networking/event_source.dart';
 import '../approvals/approval_card.dart';
 import 'model_provider_selector.dart';
+import 'run_cancelled_card.dart';
 import 'run_failure_card.dart';
 import 'run_notice_card.dart';
 import 'tool_call_card.dart';
@@ -121,6 +122,12 @@ class _ChatScreenState extends State<ChatScreen> {
   /// usable `message` nor a `code` to derive one from.
   static const _runFailureFallbackNotice =
       'The run failed with no further details';
+
+  /// Shown for an `agent.run.cancelled` event whose payload carries no usable
+  /// `reason` — missing, empty/whitespace-only, or a non-string value that
+  /// [_asString] already turned into `null`.
+  static const _runCancellationFallbackNotice =
+      'The run was cancelled with no further details';
 
   /// The event stream is the only source of terminal `tool.call.*` events, so
   /// once it errors (gRPC disconnect, deadline, auth failure) or closes, any
@@ -237,6 +244,9 @@ class _ChatScreenState extends State<ChatScreen> {
       case 'agent.run.failed':
         _applyRunFailed(event);
         break;
+      case 'agent.run.cancelled':
+        _applyRunCancelled(event);
+        break;
       case 'approval.requested':
         _addApproval(event);
         break;
@@ -261,15 +271,12 @@ class _ChatScreenState extends State<ChatScreen> {
       // Everything below has no case above and so is deliberately left
       // unhandled — it falls out of this switch untouched, not implicitly
       // grouped with any handled case above (in particular, not with the
-      // `agent.run.failed` handling just above):
+      // `agent.run.failed` / `agent.run.cancelled` handling just above):
       //  - `agent.run.started` / `agent.run.queued`: surfacing them would
       //    just add noise ahead of the real content.
       //  - `agent.run.completed`: its completion is already evidenced by the
       //    assistant's own answer arriving via `message.delta`, so a
       //    dedicated handler would be redundant.
-      //  - `agent.run.cancelled`: this screen has no client-side affordance
-      //    to cancel a run, so today nothing it does can produce this event;
-      //    it is listed here so that changes if/when cancellation is added.
     }
   }
 
@@ -322,6 +329,22 @@ class _ChatScreenState extends State<ChatScreen> {
     final spaced = code.replaceAll('_', ' ').trim();
     if (spaced.isEmpty) return _runFailureFallbackNotice;
     return spaced[0].toUpperCase() + spaced.substring(1);
+  }
+
+  /// A run can be cancelled server-side — queue eviction, worker recycling,
+  /// an operator action — even though this screen offers no cancel
+  /// affordance of its own. Left unhandled, the event would fall through
+  /// [_applyEvent]'s switch and leave a silent, unexplained turn on screen.
+  void _applyRunCancelled(TuringEvent event) {
+    if (_isHistoricalRunEvent(event)) return;
+
+    final rawReason = _asString(event.payload['reason'])?.trim();
+    final text = (rawReason == null || rawReason.isEmpty)
+        ? _runCancellationFallbackNotice
+        : rawReason;
+    final entry = _RunCancelledEntry(text);
+    setState(() => _messages.add(entry));
+    _scrollToBottom();
   }
 
   /// Whether an inline run artifact belongs to history that is already on
@@ -645,6 +668,8 @@ class _ChatMessageTile extends StatelessWidget {
         return RunNoticeCard(note: notice.note);
       case _RunFailureEntry failure:
         return RunFailureCard(message: failure.message);
+      case _RunCancelledEntry cancelled:
+        return RunCancelledCard(message: cancelled.message);
     }
   }
 }
@@ -819,6 +844,15 @@ class _RunNoticeEntry extends _ChatEntry {
 
 class _RunFailureEntry extends _ChatEntry {
   _RunFailureEntry(this.message);
+
+  final String message;
+
+  @override
+  void dispose() {}
+}
+
+class _RunCancelledEntry extends _ChatEntry {
+  _RunCancelledEntry(this.message);
 
   final String message;
 

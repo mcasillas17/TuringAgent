@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:turing_flutter_app/features/chat/run_cancelled_card.dart';
 import 'package:turing_flutter_app/features/chat/run_failure_card.dart';
 import 'package:turing_flutter_app/features/chat/run_notice_card.dart';
 import 'package:turing_flutter_app/features/chat/chat_screen.dart';
@@ -724,12 +725,14 @@ void main() {
     unawaited(events.close());
   });
 
-  // The watermark sequence alone does not cover every replay: a run that
-  // completed WHILE `listMessages` was loading finishes with its answer
-  // already in history, but its `agent.run.failed` can still carry a
-  // sequence above the watermark captured before that load started (see
-  // `_isHistoricalRunEvent`'s second branch). This mirrors "a run notice for
-  // completed history stays hidden" for the failure-card path specifically.
+  // Unlike the `agent.run.step` case above, the backend cannot actually
+  // produce an `agent.run.failed` for a run whose `agent.run.completed` is
+  // already in history: completion and failure are mutually exclusive
+  // terminal outcomes for the same run, so this specific interleaving is not
+  // one the backend can produce. `_applyRunFailed` shares the exact same
+  // `_isHistoricalRunEvent` guard as `_applyRunStep` regardless — purely for
+  // defensive parity with the run-notice path, not because this scenario is
+  // real. This test pins that shared guard, not a producible interleaving.
   testWidgets('a failure for a run already represented by completed history '
       'stays hidden', (tester) async {
     final events = StreamController<TuringEvent>(sync: true);
@@ -780,6 +783,344 @@ void main() {
       reason:
           'a failure card for a run already represented by complete history '
           'would be appended below newer conversation content',
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  // A server-initiated cancellation is a live signal even though this screen
+  // has no cancel affordance: the backend can evict a queued run, recycle a
+  // worker, or an operator can cancel one directly. Without a dedicated
+  // handler it would fall through the switch's unhandled default (see the
+  // comment above that default) and leave a silent, unexplained turn.
+  testWidgets('agent.run.cancelled renders a distinct terminal error-style '
+      'card with cancellation wording', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'agent.run.cancelled',
+        sequence: 1,
+        payload: {'reason': 'client_cancelled'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(RunCancelledCard), findsOneWidget);
+    expect(find.text('client_cancelled'), findsOneWidget);
+    // A cancellation must not be indistinguishable from a failure or from
+    // routine retry progress.
+    expect(find.byType(RunFailureCard), findsNothing);
+    expect(find.byType(RunNoticeCard), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets(
+    'the rendered agent.run.cancelled semantics label is truthful — "Run '
+    'cancelled", never "Run failed"',
+    (tester) async {
+      final handle = tester.ensureSemantics();
+      final events = StreamController<TuringEvent>(sync: true);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: _FakeApiClient(),
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'agent.run.cancelled',
+          sequence: 1,
+          payload: {'reason': 'client_cancelled'},
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.bySemanticsLabel('Run cancelled: client_cancelled'),
+        findsOneWidget,
+      );
+      expect(
+        find.bySemanticsLabel('Run failed: client_cancelled'),
+        findsNothing,
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+      handle.dispose();
+    },
+  );
+
+  testWidgets('agent.run.cancelled falls back to generic text when the '
+      'reason is absent', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(type: 'agent.run.cancelled', sequence: 1, payload: const {}),
+    );
+    await tester.pump();
+
+    expect(find.byType(RunCancelledCard), findsOneWidget);
+    final textWidget = tester.widget<Text>(
+      find.descendant(
+        of: find.byType(RunCancelledCard),
+        matching: find.byType(Text),
+      ),
+    );
+    // A whitespace-only fallback must not pass: assert the exact copy, and
+    // that it truthfully says "cancelled", not "failed".
+    expect(textWidget.data, 'The run was cancelled with no further details');
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('agent.run.cancelled falls back to generic text when the '
+      'reason is whitespace-only', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'agent.run.cancelled',
+        sequence: 1,
+        payload: const {'reason': '   '},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('   '), findsNothing);
+    expect(
+      find.text('The run was cancelled with no further details'),
+      findsOneWidget,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets(
+    'a non-String agent.run.cancelled reason does not break the stream, and '
+    'a later event is still processed',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: _FakeApiClient(),
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'agent.run.cancelled',
+          sequence: 1,
+          payload: const {'reason': 42},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byType(RunCancelledCard), findsOneWidget);
+      expect(
+        find.text('The run was cancelled with no further details'),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 2,
+          payload: {'messageId': 'm1', 'delta': 'still alive'},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('still alive'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets('the run cancellation renders below earlier assistant text', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: {'messageId': 'm1', 'delta': 'Let me check.'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'agent.run.cancelled',
+        sequence: 2,
+        payload: {'reason': 'client_cancelled'},
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      tester.getTopLeft(find.byType(RunCancelledCard)).dy,
+      greaterThan(tester.getTopLeft(find.text('Let me check.')).dy),
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('a replayed agent.run.cancelled is not appended to history', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final persistedCancellation = _event(
+      type: 'agent.run.cancelled',
+      sequence: 7,
+      payload: {'reason': 'client_cancelled'},
+    );
+    final apiClient = _FakeApiClient()..initialEvents = [persistedCancellation];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(persistedCancellation);
+    await tester.pump();
+
+    expect(find.byType(RunCancelledCard), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  // Mirrors "a failure for a run already represented by completed history
+  // stays hidden" above: completion and cancellation are also mutually
+  // exclusive terminal outcomes for the same run, so the backend cannot
+  // actually produce this interleaving either. `_applyRunCancelled` shares
+  // the same `_isHistoricalRunEvent` guard as `_applyRunFailed` and
+  // `_applyRunStep` purely for defensive parity, not because this scenario
+  // is real. This test pins that shared guard, not a producible
+  // interleaving.
+  testWidgets('a cancellation for a run already represented by completed '
+      'history stays hidden', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..initialEvents = [
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: {'messageId': 'msg_a1', 'delta': 'finished'},
+        ),
+      ]
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_a1',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'finished',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // Sequence 2 is newer than the watermark (1), so only the runId match
+    // suppresses it.
+    events.add(
+      _event(
+        type: 'agent.run.cancelled',
+        sequence: 2,
+        payload: {'reason': 'client_cancelled'},
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.byType(RunCancelledCard),
+      findsNothing,
+      reason:
+          'a cancellation card for a run already represented by complete '
+          'history would be appended below newer conversation content',
     );
 
     await tester.pumpWidget(const SizedBox.shrink());
