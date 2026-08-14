@@ -31,66 +31,40 @@ class _SessionGroup {
   final List<SearchHit> hits;
 }
 
-/// A queued [_Semaphore.acquire] call, paired with the predicate that
-/// determines whether it's still worth granting a permit to. [completer]
-/// resolves to whether a permit was actually handed to this waiter: `true`
-/// once granted (the caller must eventually call [_Semaphore.release]),
-/// `false` if it was discarded as stale before a permit was ever consumed
-/// (the caller must not release, since it never held one).
-class _SemaphoreWaiter {
-  _SemaphoreWaiter(this.isValid);
-
-  final bool Function() isValid;
-  final completer = Completer<bool>();
-}
-
 /// Caps concurrent access to a resource across the screen's whole lifetime,
 /// not just within a single search generation. Overlapping generations
 /// (e.g. a query typed before the previous one's title lookups finished)
-/// share the same pool of [_maxConcurrentTitleLookups] slots instead of each
-/// getting their own, so stale and current work never combine into more
-/// than the intended cap of in-flight requests.
+/// share the same pool of [_maxConcurrentTitleLookups] permits instead of
+/// each getting their own, so their work never combines into more than the
+/// intended cap of in-flight requests.
 ///
-/// Queued waiters carry a validity predicate so a freed permit always goes
-/// to the first still-current waiter. [release] discards any stale queued
-/// waiters itself (completing them with `false`, consuming no permit)
-/// instead of handing them the permit and relying on each one to notice
-/// it's stale and release again in turn: with plain FIFO handoff, a stale
-/// query with many queued lookups would occupy that release-then-hand-off
-/// chain ahead of a newer generation's own queued lookup, delaying it
-/// behind every stale entry instead of being scheduled directly.
+/// Waiters are served first-in, first-out. Nothing needs to be prioritized
+/// or discarded by search generation: title lookups are deduped and cached
+/// per session for the screen's lifetime, so a lookup an older generation
+/// started still serves whatever query is current when it finishes.
 class _Semaphore {
   _Semaphore(this._availablePermits);
 
   int _availablePermits;
-  final _waiters = <_SemaphoreWaiter>[];
+  final _waiters = <Completer<void>>[];
 
-  /// Resolves to whether a permit was granted. Returns `false` immediately,
-  /// without ever queueing, if [isValid] already fails at call time.
-  Future<bool> acquire({required bool Function() isValid}) {
-    if (!isValid()) return Future.value(false);
+  /// Resolves once a permit is held. The caller must [release] exactly once.
+  Future<void> acquire() {
     if (_availablePermits > 0) {
       _availablePermits--;
-      return Future.value(true);
+      return Future.value();
     }
-    final waiter = _SemaphoreWaiter(isValid);
+    final waiter = Completer<void>();
     _waiters.add(waiter);
-    return waiter.completer.future;
+    return waiter.future;
   }
 
-  /// Frees a permit. Scans queued waiters oldest-first, discarding any
-  /// whose [_SemaphoreWaiter.isValid] now fails (completing them with
-  /// `false`, no permit consumed) until it finds one that's still current
-  /// and hands it the freed permit, or the queue is exhausted and the
-  /// permit becomes available for a future [acquire].
+  /// Frees a permit, handing it to the longest-waiting queued caller if any,
+  /// otherwise returning it to the pool for a future [acquire].
   void release() {
-    while (_waiters.isNotEmpty) {
-      final waiter = _waiters.removeAt(0);
-      if (waiter.isValid()) {
-        waiter.completer.complete(true);
-        return;
-      }
-      waiter.completer.complete(false);
+    if (_waiters.isNotEmpty) {
+      _waiters.removeAt(0).complete();
+      return;
     }
     _availablePermits++;
   }
@@ -104,10 +78,15 @@ class _SearchScreenState extends State<SearchScreen> {
   final _focusNode = FocusNode();
   Timer? _debounce;
 
-  /// Incremented on every changed/submitted/retried/cleared query so stale
-  /// async completions (search or title) cannot mutate newer state.
+  /// Incremented on every changed/submitted/retried/cleared query so a stale
+  /// search completion cannot mutate newer state. Title lookups are
+  /// deliberately not gated on this: they're keyed by session, not by query.
   int _generation = 0;
 
+  /// The current trimmed query as typed, adopted as soon as the user edits
+  /// the field even though its request may still be waiting out the
+  /// debounce. Empty only when the field is (effectively) empty, which is
+  /// what puts the screen back into its initial-guidance state.
   String _query = '';
   bool _loading = false;
   Object? _error;
@@ -122,8 +101,16 @@ class _SearchScreenState extends State<SearchScreen> {
   /// still-current generation.
   bool _hasCompletedSearch = false;
 
-  /// Cached successful session titles, kept for the screen's lifetime.
+  /// Cached successful session titles, kept for the screen's lifetime. A
+  /// title belongs to a session, not to the query that happened to surface
+  /// it, so a cached entry is valid for every later query too.
   final Map<String, String> _titles = {};
+
+  /// Lookups that are running or queued, keyed by session ID, so overlapping
+  /// generations join the same request instead of issuing a duplicate one.
+  /// Entries are removed once settled: successes live on in [_titles], and
+  /// failures become retryable again.
+  final Map<String, Future<void>> _inFlightTitleLookups = {};
 
   /// Global cap shared by every title lookup for the screen's lifetime, so
   /// overlapping generations can never push concurrent title RPCs past
@@ -148,14 +135,19 @@ class _SearchScreenState extends State<SearchScreen> {
       return;
     }
     // The new generation invalidates whatever was in flight for the old
-    // query. Clear its stale loading/error immediately so neither lingers
-    // through the new debounce window while the newly typed query waits to
-    // fire; prior results stay visible until fresh ones replace them. No
-    // search has completed for this newly edited query yet, so also clear
-    // that flag: otherwise a still-empty `_groups` left over from before
-    // would be mistaken for a real, current zero-hit result during the
-    // debounce window.
+    // query. Adopt the newly typed query as the current one right away —
+    // without starting its request, which still waits out the debounce —
+    // so the screen stops describing the state of a query the user has
+    // already moved past. Otherwise the untouched-screen guidance would sit
+    // there through the whole debounce window of the very first query.
+    // Clear the old query's loading/error for the same reason; prior
+    // results stay visible until fresh ones replace them. No search has
+    // completed for this newly edited query yet, so also clear that flag:
+    // otherwise a still-empty `_groups` left over from before would be
+    // mistaken for a real, current zero-hit result during the debounce
+    // window.
     setState(() {
+      _query = query;
       _loading = false;
       _error = null;
       _hasCompletedSearch = false;
@@ -227,7 +219,7 @@ class _SearchScreenState extends State<SearchScreen> {
       _hasCompletedSearch = true;
     });
     // Fire-and-forget: results already rendered must not wait on titles.
-    _resolveTitles(groups, generation);
+    _resolveTitles(groups);
   }
 
   List<_SessionGroup> _groupHits(List<SearchHit> hits) {
@@ -248,49 +240,57 @@ class _SearchScreenState extends State<SearchScreen> {
     return groups;
   }
 
-  Future<void> _resolveTitles(
-    List<_SessionGroup> groups,
-    int generation,
-  ) async {
+  /// Starts (or joins) a title lookup for every session in [groups] that
+  /// isn't cached yet. Deliberately not generation-scoped: a title is a
+  /// property of the session, so the work is worth doing and keeping no
+  /// matter which query first asked for it.
+  void _resolveTitles(List<_SessionGroup> groups) {
     final sessionIds = groups
         .map((group) => group.sessionId)
         .where((id) => !_titles.containsKey(id))
-        .toSet()
-        .toList();
-    if (sessionIds.isEmpty) return;
-
-    await Future.wait(
-      sessionIds.map((sessionId) => _lookupTitle(sessionId, generation)),
-    );
+        .toSet();
+    for (final sessionId in sessionIds) {
+      unawaited(_lookupTitle(sessionId));
+    }
   }
 
-  /// Looks up a single session's title, gated by the screen-lifetime
-  /// [_titleLookupLimiter] so this generation's requests share the global
-  /// cap with any other generation's still-in-flight lookups. Skips the
-  /// call entirely once the generation has gone stale, whether that's
-  /// discovered before queueing for a slot, while waiting (in which case
-  /// [_Semaphore.release] discards it directly, without ever granting it
-  /// the slot), or after being granted a slot, so queued stale work never
-  /// occupies or delays a slot that a current lookup could use instead.
-  Future<void> _lookupTitle(String sessionId, int generation) async {
-    bool isValid() => mounted && generation == _generation;
-    if (!isValid()) return;
-    final acquired = await _titleLookupLimiter.acquire(isValid: isValid);
-    if (!acquired) return;
+  /// Returns the lookup already running or queued for [sessionId] when there
+  /// is one, so overlapping generations share a single `getSession` call per
+  /// session instead of racing duplicates against the global cap.
+  Future<void> _lookupTitle(String sessionId) {
+    final inFlight = _inFlightTitleLookups[sessionId];
+    if (inFlight != null) return inFlight;
+    final lookup = _fetchTitle(sessionId);
+    _inFlightTitleLookups[sessionId] = lookup;
+    return lookup;
+  }
+
+  /// Fetches one session's title, gated by the screen-lifetime
+  /// [_titleLookupLimiter] so every generation's lookups share the global
+  /// cap. Only mount state gates the rebuild: whichever generation started
+  /// this lookup, the resolved title is the correct heading for any group
+  /// currently rendering that session, and [build] reads it out of the
+  /// cache by session ID.
+  Future<void> _fetchTitle(String sessionId) async {
+    await _titleLookupLimiter.acquire();
     try {
-      if (!isValid()) return;
-      final session = await widget.apiClient.getSession(
-        sessionId: sessionId,
-      );
-      if (!isValid()) return;
+      // A lookup can sit in the limiter's queue for a while; if the screen
+      // is gone by the time it gets a permit, there's nothing left to title,
+      // so skip the request entirely.
+      if (!mounted) return;
+      final session = await widget.apiClient.getSession(sessionId: sessionId);
+      final title = session.title?.isNotEmpty == true
+          ? session.title!
+          : 'Untitled chat';
+      if (!mounted) return;
       setState(() {
-        _titles[sessionId] = session.title?.isNotEmpty == true
-            ? session.title!
-            : 'Untitled chat';
+        _titles[sessionId] = title;
       });
     } catch (_) {
-      // Metadata failure is non-fatal: the ID fallback stays visible.
+      // Metadata failure is non-fatal: the ID fallback stays visible, and
+      // nothing is cached, so a later search or Retry can try again.
     } finally {
+      _inFlightTitleLookups.remove(sessionId);
       _titleLookupLimiter.release();
     }
   }
@@ -440,7 +440,10 @@ class _SearchScreenState extends State<SearchScreen> {
 
   Widget _buildHit(BuildContext context, String sessionId, SearchHit hit) {
     final localDate = hit.message.createdAt.toLocal();
-    final date = MaterialLocalizations.of(context).formatMediumDate(localDate);
+    // Short date rather than medium: `MaterialLocalizations.formatMediumDate`
+    // omits the year (e.g. "Thu, Aug 13"), which makes hits from the same
+    // day of different years indistinguishable.
+    final date = MaterialLocalizations.of(context).formatShortDate(localDate);
     final role = hit.message.role;
     final content = hit.message.content;
     return Semantics(

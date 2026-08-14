@@ -58,6 +58,86 @@ void main() {
       expect(api.queries, ['deploy  staging']);
     });
 
+    testWidgets(
+      'drops the initial guidance for a pending first query during the debounce',
+      (tester) async {
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.pump(const Duration(milliseconds: 100));
+
+        // Still debouncing, so no request has gone out yet, but the screen
+        // must already reflect the query being typed instead of the
+        // untouched-screen guidance, and must not claim zero results for a
+        // search that has never run.
+        expect(api.queries, isEmpty);
+        expect(find.byKey(const Key('search-initial')), findsNothing);
+        expect(find.byKey(const Key('search-pending')), findsOneWidget);
+        expect(find.byKey(const Key('search-empty')), findsNothing);
+        expect(find.byKey(const Key('search-loading')), findsNothing);
+
+        // The debounce window itself is unchanged: still exactly 350ms from
+        // the keystroke, not restarted or fired early.
+        await tester.pump(const Duration(milliseconds: 249));
+        expect(api.queries, isEmpty);
+        await tester.pump(const Duration(milliseconds: 1));
+        expect(api.queries, ['deploy']);
+        expect(find.byKey(const Key('search-loading')), findsOneWidget);
+      },
+    );
+
+    testWidgets('keeps prior results visible while a new query debounces', (
+      tester,
+    ) async {
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
+
+      await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+      api.searchCalls.single.completer.complete([
+        _hit(
+          id: 'msg-1',
+          sessionId: 'session-1',
+          createdAt: DateTime.utc(2026, 8, 13),
+        ),
+      ]);
+      await tester.pump();
+      expect(find.byKey(const ValueKey('hit-msg-1')), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const Key('search-field')),
+        'deploy staging',
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Results from the previous query stay on screen until fresh ones
+      // replace them, rather than blanking out mid-typing.
+      expect(find.byKey(const ValueKey('hit-msg-1')), findsOneWidget);
+      expect(find.byKey(const Key('search-initial')), findsNothing);
+      expect(find.byKey(const Key('search-empty')), findsNothing);
+    });
+
+    testWidgets(
+      'returns to the initial guidance when a pending query is emptied',
+      (tester) async {
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.byKey(const Key('search-initial')), findsNothing);
+
+        await tester.enterText(find.byKey(const Key('search-field')), '');
+        await tester.pump(const Duration(milliseconds: 400));
+
+        expect(find.byKey(const Key('search-initial')), findsOneWidget);
+        expect(find.byKey(const Key('search-pending')), findsNothing);
+        expect(api.queries, isEmpty);
+      },
+    );
+
     testWidgets('trims only outer whitespace, keeping internal spacing', (
       tester,
     ) async {
@@ -326,7 +406,7 @@ void main() {
       expect(newAY, lessThan(oldAY));
     });
 
-    testWidgets('formats hit dates as an absolute local date', (
+    testWidgets('formats hit dates as an absolute local date with a year', (
       tester,
     ) async {
       final api = _FakeSearchApi();
@@ -343,12 +423,57 @@ void main() {
       ]);
       await tester.pump();
 
-      final context = tester.element(find.byKey(const ValueKey('hit-msg-1')));
-      final expectedDate = MaterialLocalizations.of(
-        context,
-      ).formatMediumDate(createdAt.toLocal());
+      // Expectation is derived from the raw local DateTime fields, not from
+      // the same formatter the screen uses, so a formatter that silently
+      // drops the year (or renders the UTC day) fails here.
+      final local = createdAt.toLocal();
+      final expected =
+          '${_shortMonths[local.month - 1]} ${local.day}, ${local.year}';
+      expect(_hitSubtitle(tester, 'msg-1'), contains(expected));
+    });
 
-      expect(find.textContaining(expectedDate), findsWidgets);
+    testWidgets('distinguishes same-day hits from different years', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
+
+      await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+
+      api.searchCalls.single.completer.complete([
+        _hit(
+          id: 'msg-2026',
+          sessionId: 'session-1',
+          createdAt: DateTime.utc(2026, 8, 13, 12),
+        ),
+        _hit(
+          id: 'msg-2024',
+          sessionId: 'session-1',
+          createdAt: DateTime.utc(2024, 8, 13, 12),
+        ),
+      ]);
+      await tester.pump();
+
+      final visible2026 = _hitSubtitle(tester, 'msg-2026');
+      final visible2024 = _hitSubtitle(tester, 'msg-2024');
+      expect(visible2026, contains('2026'));
+      expect(visible2024, contains('2024'));
+      expect(visible2026, isNot(visible2024));
+
+      final semantics2026 = tester
+          .getSemantics(find.byKey(const ValueKey('hit-msg-2026')))
+          .label;
+      final semantics2024 = tester
+          .getSemantics(find.byKey(const ValueKey('hit-msg-2024')))
+          .label;
+      expect(semantics2026, contains('2026'));
+      expect(semantics2024, contains('2024'));
+      expect(semantics2026, isNot(semantics2024));
+
+      handle.dispose();
     });
 
     testWidgets('renders hits immediately, before title metadata resolves', (
@@ -538,67 +663,78 @@ void main() {
       expect(api.maxActiveSessionRequests, lessThanOrEqualTo(4));
     });
 
-    testWidgets('ignores a stale title response after a newer query', (
-      tester,
-    ) async {
-      final api = _FakeSearchApi();
-      await _pumpScreen(tester, api);
+    testWidgets(
+      'reuses one in-flight title lookup when a newer query hits the same '
+      'session',
+      (tester) async {
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
 
-      await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
-      await tester.testTextInput.receiveAction(TextInputAction.search);
-      await tester.pump();
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
 
-      api.searchCalls[0].completer.complete([
-        _hit(
-          id: 'msg-1',
-          sessionId: 'session-1',
-          createdAt: DateTime.utc(2026, 8, 13),
-        ),
-      ]);
-      await tester.pump();
-      // First (stale-to-be) title lookup is now in flight.
-      expect(api.sessionCalls.length, 1);
+        api.searchCalls[0].completer.complete([
+          _hit(
+            id: 'msg-1',
+            sessionId: 'session-1',
+            createdAt: DateTime.utc(2026, 8, 13),
+          ),
+        ]);
+        await tester.pump();
+        expect(api.sessionCalls.length, 1);
 
-      // Re-submitting the same query still bumps the generation, starting a
-      // second, independent title lookup for the same session ID.
-      await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
-      await tester.testTextInput.receiveAction(TextInputAction.search);
-      await tester.pump();
+        // A newer generation matching the same session must ride the
+        // already-in-flight lookup: a session's title is session-specific,
+        // not query-specific, so re-requesting it is pure duplicate work.
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
 
-      api.searchCalls[1].completer.complete([
-        _hit(
-          id: 'msg-1',
-          sessionId: 'session-1',
-          createdAt: DateTime.utc(2026, 8, 13),
-        ),
-      ]);
-      await tester.pump();
-      expect(api.sessionCalls.length, 2);
+        api.searchCalls[1].completer.complete([
+          _hit(
+            id: 'msg-1',
+            sessionId: 'session-1',
+            createdAt: DateTime.utc(2026, 8, 13),
+          ),
+        ]);
+        await tester.pump();
+        expect(api.sessionRequests, ['session-1']);
+        expect(api.sessionCalls.length, 1);
 
-      // Complete the stale (first-generation) lookup: must not update.
-      api.sessionCalls[0].completer.complete(
-        Session(
-          sessionId: 'session-1',
-          title: 'Stale Title',
-          updatedAt: DateTime.utc(2026, 8, 13),
-        ),
-      );
-      await tester.pump();
-      expect(find.text('Stale Title'), findsNothing);
-      expect(find.text('Session session-1'), findsOneWidget);
+        // The shared lookup was started by the older generation, but its
+        // result is still the right title for the current query's group.
+        api.sessionCalls[0].completer.complete(
+          Session(
+            sessionId: 'session-1',
+            title: 'Release work',
+            updatedAt: DateTime.utc(2026, 8, 13),
+          ),
+        );
+        await tester.pump();
+        expect(find.text('Release work'), findsOneWidget);
+        expect(find.text('Session session-1'), findsNothing);
 
-      // Complete the fresh (current-generation) lookup: must update.
-      api.sessionCalls[1].completer.complete(
-        Session(
-          sessionId: 'session-1',
-          title: 'Fresh Title',
-          updatedAt: DateTime.utc(2026, 8, 13),
-        ),
-      );
-      await tester.pump();
-      expect(find.text('Fresh Title'), findsOneWidget);
-      expect(find.text('Stale Title'), findsNothing);
-    });
+        // A later, unrelated query reuses the cached title with no new call.
+        await tester.enterText(
+          find.byKey(const Key('search-field')),
+          'staging',
+        );
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+
+        api.searchCalls[2].completer.complete([
+          _hit(
+            id: 'msg-2',
+            sessionId: 'session-1',
+            createdAt: DateTime.utc(2026, 8, 14),
+          ),
+        ]);
+        await tester.pump();
+        expect(api.sessionRequests, ['session-1']);
+        expect(find.text('Release work'), findsOneWidget);
+      },
+    );
 
     testWidgets('tapping a result opens the exact session ID', (
       tester,
@@ -872,31 +1008,33 @@ void main() {
       },
     );
 
-    // Pins the end-state contract (stale queued IDs never requested, the
-    // current one is, concurrency stays capped) for a generation whose
-    // title lookups spill past the four running permits into the wait
-    // queue. This is an end-state spec, not a scheduling-order regression
-    // guard: `pump()` fully drains pending microtasks before returning, so
-    // even a plain FIFO hand-off that grants stale queued waiters a permit
-    // first (letting each notice it's stale and re-release in turn) still
-    // converges to this same observable end state within one pump. The
-    // priority fix instead has the semaphore's own release() skip stale
-    // queued waiters directly, without ever handing them a permit.
+    // Replaces an earlier "stale queued waiters are skipped" test that could
+    // not actually fail: `pump()` drains pending microtasks, so a plain FIFO
+    // hand-off converged to the same end state as the priority hand-off it
+    // was meant to guard. This one is behavioral: without a screen-lifetime
+    // cache plus in-flight dedupe keyed by session ID, overlapping
+    // generations reissue `getSession` for sessions they share, and titles
+    // resolved by the older generation never reach the current query.
     testWidgets(
-      'prioritizes a current-generation title lookup over stale queued waiters',
+      'dedupes overlapping generations onto one lookup per session without '
+      'starving newly matched sessions',
       (tester) async {
+        tester.view.physicalSize = const Size(1200, 3000);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+
         final api = _FakeSearchApi();
         await _pumpScreen(tester, api);
 
-        // Generation A yields 8 distinct session IDs: 4 acquire the global
-        // permits immediately, and the other 4 queue as waiters.
+        // Generation A matches five sessions: four lookups take the global
+        // permits and the fifth queues behind them.
         await tester.enterText(find.byKey(const Key('search-field')), 'first');
         await tester.testTextInput.receiveAction(TextInputAction.search);
         await tester.pump();
 
-        final staleIds = List.generate(8, (i) => 'gen1-session-$i');
+        final sharedIds = List.generate(5, (i) => 'session-$i');
         api.searchCalls[0].completer.complete([
-          for (final id in staleIds)
+          for (final id in sharedIds)
             _hit(
               id: 'msg-$id',
               sessionId: id,
@@ -904,85 +1042,115 @@ void main() {
             ),
         ]);
         await tester.pump();
-
         expect(api.sessionCalls.length, 4);
-        final staleQueuedIds = staleIds.skip(4).toSet();
 
-        // Generation B starts and completes its own search before any A
-        // title lookup resolves. Its single session ID cannot acquire a
-        // permit either (all 4 are held by A), so it queues too, landing
-        // behind the 4 already-queued stale A waiters in strict FIFO
-        // order.
+        // Generation B refines the query before anything resolves, matching
+        // the same five sessions plus one the older generation never saw.
         await tester.enterText(
           find.byKey(const Key('search-field')),
-          'second',
+          'first refined',
         );
         await tester.testTextInput.receiveAction(TextInputAction.search);
         await tester.pump();
 
+        final allIds = [...sharedIds, 'session-5'];
         api.searchCalls[1].completer.complete([
-          _hit(
-            id: 'msg-current',
-            sessionId: 'session-current',
-            createdAt: DateTime.utc(2026, 8, 14),
-          ),
+          for (final id in allIds)
+            _hit(
+              id: 'msg-$id',
+              sessionId: id,
+              createdAt: DateTime.utc(2026, 8, 14),
+            ),
         ]);
         await tester.pump();
-        expect(api.sessionCalls.length, 4);
 
-        // Release exactly one of the 4 in-flight (now-stale generation A)
-        // lookups. The current generation's queued lookup must be the one
-        // scheduled next: the 4 stale queued waiters must be discarded
-        // without ever being requested, and "session-current" must be
-        // requested promptly (within this single pump), all while never
-        // exceeding the cap of 4 concurrent requests.
+        // The shared sessions ride the existing lookups instead of being
+        // requested a second time.
+        expect(api.sessionCalls.length, 4);
+        expect(
+          api.sessionRequests.length,
+          api.sessionRequests.toSet().length,
+          reason: 'no session ID may be requested twice',
+        );
+
+        // A lookup started by the older generation still titles the current
+        // query's identical session.
+        final firstId = api.sessionCalls[0].sessionId;
         api.sessionCalls[0].completer.complete(
           Session(
-            sessionId: api.sessionCalls[0].sessionId,
-            title: 'Stale 0',
+            sessionId: firstId,
+            title: 'Title $firstId',
             updatedAt: DateTime.utc(2026, 8, 13),
           ),
         );
         await tester.pump();
+        expect(find.text('Title $firstId'), findsOneWidget);
+        expect(find.text('Session $firstId'), findsNothing);
 
-        final requestedIds = api.sessionCalls.map((c) => c.sessionId).toSet();
-        expect(
-          requestedIds.intersection(staleQueuedIds),
-          isEmpty,
-          reason: 'stale queued session IDs must never be requested',
-        );
-        expect(
-          requestedIds.contains('session-current'),
-          isTrue,
-          reason:
-              'the current generation title lookup must be scheduled '
-              'promptly once a permit frees up, not after draining stale '
-              'queued waiters',
-        );
+        // Drain the rest. Freed permits pick up the queued sessions,
+        // including the one only the newer generation matched.
+        for (var i = 1; i < api.sessionCalls.length; i++) {
+          final sessionId = api.sessionCalls[i].sessionId;
+          api.sessionCalls[i].completer.complete(
+            Session(
+              sessionId: sessionId,
+              title: 'Title $sessionId',
+              updatedAt: DateTime.utc(2026, 8, 14),
+            ),
+          );
+          await tester.pump();
+        }
+
+        expect(api.sessionRequests, hasLength(allIds.length));
+        expect(api.sessionRequests.toSet(), allIds.toSet());
         expect(api.maxActiveSessionRequests, lessThanOrEqualTo(4));
+        for (final id in allIds) {
+          expect(find.text('Title $id'), findsOneWidget);
+          expect(find.text('Session $id'), findsNothing);
+        }
+      },
+    );
 
-        // Draining the rest of the still-in-flight stale lookups must
-        // never surface any of the queued stale IDs either.
-        for (var i = 1; i < 4; i++) {
+    testWidgets(
+      'skips a queued title lookup once the screen is disposed',
+      (tester) async {
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+
+        // Six sessions: four lookups take the permits, two queue.
+        api.searchCalls.single.completer.complete([
+          for (var i = 0; i < 6; i++)
+            _hit(
+              id: 'msg-session-$i',
+              sessionId: 'session-$i',
+              createdAt: DateTime.utc(2026, 8, 13),
+            ),
+        ]);
+        await tester.pump();
+        expect(api.sessionCalls.length, 4);
+
+        await tester.pumpWidget(const SizedBox());
+
+        // Freeing permits after disposal must not send the queued lookups:
+        // nothing is left to render their titles.
+        for (var i = 0; i < 4; i++) {
           api.sessionCalls[i].completer.complete(
             Session(
               sessionId: api.sessionCalls[i].sessionId,
-              title: 'Stale $i',
+              title: 'Late title $i',
               updatedAt: DateTime.utc(2026, 8, 13),
             ),
           );
           await tester.pump();
         }
 
-        final finalRequestedIds = api.sessionCalls
-            .map((c) => c.sessionId)
-            .toSet();
-        expect(
-          finalRequestedIds.intersection(staleQueuedIds),
-          isEmpty,
-          reason: 'stale queued session IDs must never be requested',
-        );
-        expect(api.maxActiveSessionRequests, lessThanOrEqualTo(4));
+        expect(api.sessionCalls.length, 4);
+        expect(api.activeSessionRequests, 0);
+        expect(tester.takeException(), isNull);
       },
     );
 
@@ -1257,6 +1425,35 @@ void main() {
       },
     );
   });
+}
+
+/// Short month names as rendered by `DefaultMaterialLocalizations`, spelled
+/// out here so date expectations don't lean on the widget's own formatter.
+const _shortMonths = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+/// The visible "role · date" subtitle rendered for a hit.
+String _hitSubtitle(WidgetTester tester, String messageId) {
+  return tester
+      .widget<Text>(
+        find.descendant(
+          of: find.byKey(ValueKey('hit-$messageId')),
+          matching: find.textContaining('·'),
+        ),
+      )
+      .data!;
 }
 
 Future<List<String>> _pumpScreen(WidgetTester tester, TuringApi api) async {
