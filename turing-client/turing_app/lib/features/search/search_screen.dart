@@ -167,9 +167,11 @@ class _SearchScreenState extends State<SearchScreen> {
   /// [_query]. Distinguishes "ran and truly found nothing" from "hasn't run
   /// yet" (still debouncing, or invalidated by a newer/edited query), so the
   /// zero-results copy is only ever shown for a real, current, empty result
-  /// set. Reset whenever the query changes/submits or the screen resets to
-  /// initial; set only when [_runSearch] completes successfully for the
-  /// still-current generation.
+  /// set, and so the results summary only announces itself when it describes
+  /// a completion rather than results left over from an earlier query. Reset
+  /// whenever the query changes/submits or the screen resets to initial; set
+  /// only when [_runSearch] completes successfully for the still-current
+  /// generation.
   bool _hasCompletedSearch = false;
 
   /// How many searches have completed successfully for their still-current
@@ -566,7 +568,19 @@ class _SearchScreenState extends State<SearchScreen> {
         key: ValueKey('search-results-announcement-$_completedSearches'),
         child: Semantics(
           key: const Key('search-results-status'),
-          liveRegion: true,
+          // Live only while these counts describe a search that actually
+          // completed for the query as it now stands. Results outlive the
+          // query they came from — they stay on screen through the next
+          // query's debounce so the screen isn't blanked mid-typing — and a
+          // keystroke landing while that query is in flight drops the loading
+          // state, putting them back on screen. That rebuilds this node from
+          // scratch (loading had torn it down), and a live region the
+          // platform hasn't seen before is spoken: the previous query's
+          // counts, announced as though a search had just finished, while
+          // none has. Staying silent costs nothing, because the completion
+          // that does arrive bumps [_completedSearches] and so is announced
+          // by a freshly keyed node of its own.
+          liveRegion: _hasCompletedSearch,
           container: true,
           excludeSemantics: true,
           label: summary,

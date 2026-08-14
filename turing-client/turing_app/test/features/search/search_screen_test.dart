@@ -1998,6 +1998,120 @@ void main() {
       },
     );
 
+    testWidgets(
+      'stays silent about surviving results when a keystroke interrupts an '
+      'in-flight search',
+      (tester) async {
+        final handle = tester.ensureSemantics();
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+
+        // A search completes and announces its counts.
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+        api.searchCalls.single.completer.complete([
+          _hit(
+            id: 'msg-1',
+            sessionId: 'session-1',
+            createdAt: DateTime.utc(2026, 8, 13, 12),
+          ),
+          _hit(
+            id: 'msg-2',
+            sessionId: 'session-1',
+            sequence: 2,
+            createdAt: DateTime.utc(2026, 8, 13, 11),
+          ),
+        ]);
+        await tester.pump();
+        final completed = tester.getSemantics(
+          find.byKey(const Key('search-results-status')),
+        );
+        expect(completed.flagsCollection.isLiveRegion, isTrue);
+        expect(completed.label, '2 results in 1 conversation');
+        final completedId = completed.id;
+
+        // A newer query reaches its request: loading replaces the results and
+        // tears their live region down.
+        await tester.enterText(
+          find.byKey(const Key('search-field')),
+          'deploy stag',
+        );
+        await tester.pump(const Duration(milliseconds: 350));
+        expect(api.queries, ['deploy', 'deploy stag']);
+        expect(find.byKey(const Key('search-loading')), findsOneWidget);
+        expect(find.byKey(const Key('search-results-status')), findsNothing);
+
+        // The user types again before that search answers. Loading is dropped
+        // for a query nothing has run for yet, so the previous query's
+        // results — and their summary — come back on screen.
+        await tester.enterText(
+          find.byKey(const Key('search-field')),
+          'deploy stagi',
+        );
+        await tester.pump();
+        expect(find.byKey(const Key('search-loading')), findsNothing);
+        expect(find.byKey(const ValueKey('hit-msg-1')), findsOneWidget);
+
+        final resurrected = tester.getSemantics(
+          find.byKey(const Key('search-results-status')),
+        );
+        final resurrectedId = resurrected.id;
+        expect(resurrected.label, '2 results in 1 conversation');
+        // The loading frame destroyed the earlier node, so this is a node the
+        // platform has never seen: as a live region it would be spoken, and
+        // it would report the old query's counts as though a search had just
+        // finished. No search has completed for what is now typed, so it must
+        // not announce.
+        expect(
+          resurrectedId,
+          isNot(completedId),
+          reason: 'the summary node was rebuilt from scratch, so only its '
+              'live-region flag can keep it quiet',
+        );
+        expect(
+          resurrected.flagsCollection.isLiveRegion,
+          isFalse,
+          reason: 'surviving results must not be announced when no search has '
+              'completed for the current query',
+        );
+
+        // The next real completion is still a completion: even with an
+        // identical summary it has to mint a live region and be heard.
+        await tester.pump(const Duration(milliseconds: 350));
+        expect(api.queries, ['deploy', 'deploy stag', 'deploy stagi']);
+        api.searchCalls[2].completer.complete([
+          _hit(
+            id: 'msg-3',
+            sessionId: 'session-2',
+            createdAt: DateTime.utc(2026, 8, 14, 12),
+          ),
+          _hit(
+            id: 'msg-4',
+            sessionId: 'session-2',
+            sequence: 2,
+            createdAt: DateTime.utc(2026, 8, 14, 11),
+          ),
+        ]);
+        await tester.pump();
+        expect(find.byKey(const ValueKey('hit-msg-3')), findsOneWidget);
+        expect(find.byKey(const ValueKey('hit-msg-1')), findsNothing);
+
+        final announced = tester.getSemantics(
+          find.byKey(const Key('search-results-status')),
+        );
+        expect(announced.label, '2 results in 1 conversation');
+        expect(announced.flagsCollection.isLiveRegion, isTrue);
+        expect(
+          announced.id,
+          isNot(resurrectedId),
+          reason: 'a real completion must still produce a fresh live region',
+        );
+
+        handle.dispose();
+      },
+    );
+
     testWidgets('bounds the row an over-long message body renders into', (
       tester,
     ) async {
