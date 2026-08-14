@@ -53,6 +53,17 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _streamEnded = false;
   bool _historyLoadFailed = false;
 
+  /// True until [_loadReplayWatermark] settles, one way or the other. The
+  /// composer is disabled while this is true: a message sent before the
+  /// watermark is fixed could terminally fail or cancel fast enough that the
+  /// watermark ends up covering that very run, and [_isHistoricalRunEvent]
+  /// would then replay-suppress its own live terminal event. Cleared on
+  /// failure too — [_handleStreamEnded] already raises a visible notice for
+  /// that case, and with no subscription ever opening there is no boundary
+  /// left to race, so refusing to send forever would only be a silent dead
+  /// end, not a safety measure.
+  bool _initializing = true;
+
   @override
   void initState() {
     super.initState();
@@ -78,6 +89,13 @@ class _ChatScreenState extends State<ChatScreen> {
     // live after history is seeded.
     final replayBoundaryLoaded = await _loadReplayWatermark();
     if (!mounted) return;
+    // The boundary is now fixed (or unreachable — see [_initializing]), so
+    // any message sent from here on is inherently sequenced after it. Free
+    // the composer before `_loadInitialMessages` starts: that load races
+    // history in, not the watermark, and a run submitted while it is in
+    // flight is already handled correctly (see
+    // `tool events committed while history loads remain live`).
+    setState(() => _initializing = false);
     try {
       await _loadInitialMessages();
     } catch (_) {
@@ -134,10 +152,15 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// The only `reason` value the backend currently emits with
   /// `agent.run.cancelled` (`cancelRun`, orchestrator-go
-  /// internal/service/chat/service.go). It fires from three call sites:
-  /// `SendMessage`'s stream teardown, a `stream.Send` failure while relaying
-  /// events, and a `DispatchPending` failure — so its human copy below must
-  /// stay truthful for all three, not name just one of them.
+  /// internal/service/chat/service.go). It fires on exactly two conditions:
+  /// `SendMessage`'s own context being cancelled — checked at four
+  /// checkpoints (the initial `RunQueued` send, the dispatch loop's
+  /// teardown, a replay-events error, and a relayed event send) — or a
+  /// `DispatchPending` failure, which cancels unconditionally regardless of
+  /// context state. A bare `stream.Send` failure never triggers this by
+  /// itself; it only does at those checkpoints once the context is already
+  /// cancelled. Its human copy below must stay truthful for both
+  /// conditions, not name just one of them.
   static const _clientCancelledReason = 'client_cancelled';
 
   /// Shown for an `agent.run.cancelled` event whose `reason` is
@@ -349,11 +372,10 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// The event stream is the only channel `agent.run.cancelled` arrives on,
-  /// and `cancelRun` fires it from three places (see
-  /// [_clientCancelledReason]): `SendMessage`'s own stream teardown, a
-  /// `stream.Send` failure while relaying events, and a `DispatchPending`
-  /// failure. Left unhandled, the event would fall through [_applyEvent]'s
-  /// switch and leave a silent, unexplained turn on screen.
+  /// and `cancelRun` fires it on exactly two conditions (see
+  /// [_clientCancelledReason]): `SendMessage`'s own context is cancelled, or
+  /// `DispatchPending` fails. Left unhandled, the event would fall through
+  /// [_applyEvent]'s switch and leave a silent, unexplained turn on screen.
   void _applyRunCancelled(TuringEvent event) {
     if (_isHistoricalRunEvent(event)) return;
 
@@ -610,16 +632,24 @@ class _ChatScreenState extends State<ChatScreen> {
                   Expanded(
                     child: TextField(
                       controller: _controller,
+                      enabled: !_initializing,
                       onSubmitted: (_) => _sendMessage(),
-                      decoration: const InputDecoration(
-                        hintText: 'Ask Turing...',
+                      decoration: InputDecoration(
+                        hintText: _initializing
+                            ? 'Loading session...'
+                            : 'Ask Turing...',
                       ),
                     ),
                   ),
                   IconButton(
                     tooltip: 'Send',
-                    icon: const Icon(Icons.send),
-                    onPressed: _sendMessage,
+                    icon: _initializing
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.send),
+                    onPressed: _initializing ? null : _sendMessage,
                   ),
                 ],
               ),

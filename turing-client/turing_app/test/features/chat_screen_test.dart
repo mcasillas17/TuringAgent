@@ -797,11 +797,13 @@ void main() {
 
   // A server-initiated cancellation is a live signal even though this screen
   // has no cancel affordance: `cancelRun` (orchestrator-go
-  // internal/service/chat/service.go) fires this event from SendMessage's
-  // stream teardown, a `stream.Send` failure, or a `DispatchPending`
-  // failure. Without a dedicated handler it would fall through the switch's
-  // unhandled default (see the comment above that default) and leave a
-  // silent, unexplained turn.
+  // internal/service/chat/service.go) fires this event on exactly two
+  // conditions — SendMessage's own context being cancelled (checked at four
+  // checkpoints: initial send, dispatch loop teardown, replay error, relay
+  // send) or DispatchPending failing unconditionally. A bare `stream.Send`
+  // failure does not cancel a run on its own. Without a dedicated handler
+  // this event would fall through the switch's unhandled default (see the
+  // comment above that default) and leave a silent, unexplained turn.
   testWidgets('agent.run.cancelled renders a distinct terminal error-style '
       'card with truthful, human-readable cancellation wording — never the '
       'raw machine `reason` enum', (tester) async {
@@ -829,9 +831,9 @@ void main() {
 
     expect(find.byType(RunCancelledCard), findsOneWidget);
     // `client_cancelled` is machine metadata (see `cancelRun` above), not
-    // display copy, and it is truthful across all three of its triggers —
-    // so the card must show human wording valid for all of them, never the
-    // bare enum value.
+    // display copy, and it is truthful across both of its triggers — so the
+    // card must show human wording valid for both, never the bare enum
+    // value.
     expect(
       find.text('The run was cancelled before it could finish'),
       findsOneWidget,
@@ -3284,6 +3286,215 @@ void main() {
     unawaited(events.close());
   });
 
+  // Startup race (round 4): `_loadReplayWatermark` used to be awaited with
+  // nothing stopping a submission from landing while it was still in
+  // flight. A run submitted in that window can terminally fail or cancel
+  // before the watermark resolves, and the eventual watermark — which
+  // covers everything persisted up to that moment, including the
+  // just-submitted run's own terminal event — would then make
+  // `_isHistoricalRunEvent` treat that live event as replay and silently
+  // swallow it. The composer must refuse input until the boundary is fixed,
+  // closing the window structurally instead of exempting the run after the
+  // fact.
+  testWidgets(
+    'the composer stays disabled while the replay watermark is loading, '
+    'then enables once it resolves',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final gate = Completer<TuringEventPage>();
+      final apiClient = _FakeApiClient()..eventsGate = gate;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final loadingField = tester.widget<TextField>(find.byType(TextField));
+      final loadingButton = tester.widget<IconButton>(find.byType(IconButton));
+      expect(
+        loadingField.enabled,
+        isFalse,
+        reason:
+            'a submission here could complete before the boundary is fixed, '
+            'and the eventual watermark would then cover its own terminal '
+            'event',
+      );
+      expect(loadingButton.onPressed, isNull);
+      expect(
+        loadingField.decoration?.hintText,
+        'Loading session...',
+        reason: 'the composer being unusable must also be visible, not just '
+            'unresponsive',
+      );
+      expect(
+        find.byType(CircularProgressIndicator),
+        findsOneWidget,
+        reason: 'the send icon swaps for a spinner while disabled, matching '
+            'the existing loading affordance in session_list_screen.dart',
+      );
+      expect(find.byIcon(Icons.send), findsNothing);
+
+      gate.complete(const TuringEventPage(events: [], latestSequence: 0));
+      await tester.pump();
+      await tester.pump();
+
+      final readyField = tester.widget<TextField>(find.byType(TextField));
+      final readyButton = tester.widget<IconButton>(find.byType(IconButton));
+      expect(readyField.enabled, isTrue);
+      expect(readyButton.onPressed, isNotNull);
+      expect(readyField.decoration?.hintText, 'Ask Turing...');
+      expect(find.byIcon(Icons.send), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'the widget can be disposed while the replay watermark load is still '
+    'pending, before the composer is ever freed',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final gate = Completer<TuringEventPage>();
+      final apiClient = _FakeApiClient()..eventsGate = gate;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // The gate is never completed: `_start` is still suspended on
+      // `await _loadReplayWatermark()` when the screen goes away. `_start`
+      // must resume into a dead `State` without throwing, and the
+      // now-orphaned gate must not leak into a later test.
+      await tester.pumpWidget(const SizedBox.shrink());
+      expect(tester.takeException(), isNull);
+
+      gate.complete(const TuringEventPage(events: [], latestSequence: 0));
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'a failed replay watermark load still frees the composer, with the '
+    'connection-lost notice as the visible failure signal',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..eventsError = const TuringApiException(
+          code: 'UNAVAILABLE',
+          message: 'no backend',
+        );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final field = tester.widget<TextField>(find.byType(TextField));
+      final button = tester.widget<IconButton>(find.byType(IconButton));
+      expect(
+        field.enabled,
+        isTrue,
+        reason:
+            'no subscription will ever open on this failure path, so there '
+            'is no boundary left to race — refusing to send forever would '
+            'be a silent dead end, not a safety measure',
+      );
+      expect(button.onPressed, isNotNull);
+      expect(
+        find.text(
+          'Connection to the session lost. Reopen the session to continue.',
+        ),
+        findsOneWidget,
+        reason: 'the composer freeing up must not be the only signal',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'a run submitted right after the replay watermark resolves still '
+    'renders its live cancellation',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final gate = Completer<TuringEventPage>();
+      final apiClient = _FakeApiClient()..eventsGate = gate;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      gate.complete(const TuringEventPage(events: [], latestSequence: 0));
+      await tester.pump();
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'go');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+
+      expect(apiClient.lastSentContent, 'go');
+
+      // This run's terminal event arrives with the very next sequence after
+      // the boundary the screen just fixed — the closest a live event can
+      // get to that boundary — and must still render.
+      events.add(
+        _event(
+          type: 'agent.run.cancelled',
+          sequence: 1,
+          payload: {'reason': 'client_cancelled'},
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.byType(RunCancelledCard),
+        findsOneWidget,
+        reason:
+            'a run started after readiness must never be classified as '
+            'replay of history that predates this screen',
+      );
+      expect(
+        find.text('The run was cancelled before it could finish'),
+        findsOneWidget,
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
   testWidgets('the same toolCallId in two runs renders two cards', (
     tester,
   ) async {
@@ -3442,6 +3653,11 @@ class _FakeApiClient implements TuringApi {
   /// When set, `listEvents` fails with it.
   Object? eventsError;
 
+  /// When set, `listEvents` returns this future instead of resolving
+  /// immediately, letting a test drive the replay-watermark startup race
+  /// explicitly.
+  Completer<TuringEventPage>? eventsGate;
+
   @override
   Future<Map<String, dynamic>> approveApproval(
     String approvalId, {
@@ -3478,6 +3694,8 @@ class _FakeApiClient implements TuringApi {
   }) {
     final error = eventsError;
     if (error != null) return Future.error(error);
+    final gate = eventsGate;
+    if (gate != null) return gate.future;
     var latest = latestEventSequence ?? 0;
     for (final event in initialEvents) {
       if (event.sequence > latest) latest = event.sequence;
