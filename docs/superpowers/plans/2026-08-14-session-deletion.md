@@ -97,7 +97,7 @@ Deleting rows out from under a worker mid-execution means the runtime finishes a
 
 ## Task 5: Update the documentation this closes
 
-- [x] `docs/VISION.md`: remove session deletion from "Known gaps" and from deferral #1; note in "How we would know this is working" that commitment #1's deletion check now has an implementation.
+- [x] `docs/VISION.md`: remove session deletion from "Known gaps" and from deferral #1; note in "How we would know this is working" that commitment #1's deletion check now has an implementation. *(All three done — the third was initially missed and caught in review; the falsifiability bullet also records that sandbox files outlive a deleted session.)*
 - [x] Do **not** claim message-level deletion or "forget this fact" — both remain out of scope.
 
 ---

@@ -35,6 +35,7 @@ Three commitments, in priority order when they conflict:
 A north star that cannot be falsified is decoration. These are the checks:
 
 - A privacy claim is falsified the moment any default path sends data off the machine, or any port beyond `:3000` is published.
+- Commitment 1 is also falsified by anything the user cannot withdraw. Whole-session deletion now exists and removes the conversation from the search index; the check fails again the moment something the user said survives a delete somewhere they cannot see. **It currently does:** files written into the sandbox by `files.*` tools are not session-scoped — `mcp-files` has no notion of a session — so they outlive the conversation that created them.
 - Commitment 2 is falsified by any state where the user waits with no indication why, or any mutation that happened without a matching approval record.
 - Commitment 3 is falsified when the honest answer to "why did that fail?" is "use a bigger model."
 

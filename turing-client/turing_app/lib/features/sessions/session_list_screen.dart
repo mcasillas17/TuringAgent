@@ -59,8 +59,9 @@ class _SessionListScreenState extends State<SessionListScreen> {
       builder: (dialogContext) => AlertDialog(
         title: Text('Delete "$title"?'),
         content: const Text(
-          'This permanently removes the conversation and everything it '
-          'produced. It will no longer appear in search. This cannot be undone.',
+          'This permanently removes the conversation, its messages and its run '
+          'history, and it will no longer appear in search. Files written into '
+          'the sandbox are not removed. This cannot be undone.',
         ),
         actions: [
           TextButton(

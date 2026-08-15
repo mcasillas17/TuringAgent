@@ -63,10 +63,18 @@ func (r *Repository) DeleteSession(ctx context.Context, sessionID string) error 
 	}
 
 	// Refuse before mutating anything, so a rejected delete leaves no trace.
+	//
+	// Status alone is not enough. A run can be terminally failed while its
+	// execution is still live: failRunWithEventTx(preserveExecution=true) leaves
+	// execution_active = 1 with execution_state = 'uncertain' (runs.go), and the
+	// recovery machinery keeps querying those rows (assignments.go). Deleting
+	// then would cascade rows out from under a worker that has not acknowledged
+	// exit — exactly what this guard exists to prevent.
 	var active int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM agent_runs
-		WHERE session_id = ? AND status IN ('queued','running','waiting_approval')
+		WHERE session_id = ?
+			AND (status IN ('queued','running','waiting_approval') OR execution_active = 1)
 	`, sessionID).Scan(&active); err != nil {
 		return err
 	}

@@ -247,3 +247,34 @@ func TestDeleteSessionRefusesWhileARunIsLive(t *testing.T) {
 		t.Fatalf("refused deletion scrubbed audit anyway: %q", payload)
 	}
 }
+
+// A run can be terminally failed while its execution is still live:
+// failRunWithEventTx(preserveExecution=true) sets status='failed' but leaves
+// execution_active = 1 and execution_state = 'uncertain' (runs.go), and the
+// recovery machinery still queries those rows (assignments.go). Status alone is
+// therefore not enough to decide the run is finished — deleting here would
+// cascade rows out from under a worker that has not acknowledged exit.
+func TestDeleteSessionRefusesWhileExecutionIsStillActive(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	enqueued := seedDeletableSession(t, repo, "Uncertain", "still executing")
+	finishRun(t, repo, enqueued.RunID)
+
+	// Terminal status, but the worker never acknowledged exit.
+	if _, err := database.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET status = 'failed', execution_active = 1, execution_state = 'uncertain'
+		WHERE id = ?
+	`, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+
+	err := repo.DeleteSession(ctx, enqueued.SessionID)
+	if !errors.Is(err, ErrSessionHasActiveRun) {
+		t.Fatalf("DeleteSession(uncertain execution) = %v, want ErrSessionHasActiveRun", err)
+	}
+	if got := countRows(t, repo, `SELECT COUNT(*) FROM sessions WHERE id = ?`, enqueued.SessionID); got != 1 {
+		t.Fatal("refused deletion still removed the session")
+	}
+}

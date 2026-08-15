@@ -147,6 +147,9 @@ void main() {
 
       // The dialog must say the deletion is permanent, not just "are you sure".
       expect(find.textContaining('cannot be undone'), findsOneWidget);
+      // The dialog must not overclaim: sandbox files are not session-scoped and
+      // survive the delete, so saying "everything it produced" would be a lie.
+      expect(find.textContaining('sandbox are not removed'), findsOneWidget);
       expect(find.textContaining('Doomed chat'), findsWidgets);
 
       await tester.tap(find.widgetWithText(TextButton, 'Delete'));
