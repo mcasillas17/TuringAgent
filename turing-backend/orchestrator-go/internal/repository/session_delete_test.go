@@ -139,6 +139,14 @@ func TestDeleteSessionRemovesMessagesFromTheSearchIndex(t *testing.T) {
 	if len(found) != 0 {
 		t.Fatalf("deleted content is still searchable: %+v", found)
 	}
+
+	// SearchMessages inner-joins messages, so it returns nothing once those rows
+	// are gone whether or not messages_fts_ad fired. Query the index directly —
+	// this is the assertion that actually catches a soft-delete or a dropped
+	// trigger leaving deleted text in the index.
+	if got := countRows(t, repo, `SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH ?`, "hunter2"); got != 0 {
+		t.Fatalf("deleted content still occupies %d row(s) in the FTS index", got)
+	}
 }
 
 func TestDeleteSessionKeepsAuditRowButScrubsItsPayload(t *testing.T) {
@@ -177,9 +185,33 @@ func TestDeleteSessionKeepsAuditRowButScrubsItsPayload(t *testing.T) {
 		t.Fatalf("payload still carries user content: %q", payload)
 	}
 
-	// Deletion is itself an auditable action.
-	if got := countRows(t, repo, `SELECT COUNT(*) FROM audit_logs WHERE action = 'session.deleted'`); got != 1 {
-		t.Fatalf("session.deleted audit rows = %d, want 1", got)
+	// Deletion is itself an auditable action, and the row says how much went —
+	// "something was deleted" is far weaker evidence than a count.
+	var deletedTarget, deletedPayload string
+	var deletedCorrelation any
+	if err := repo.db.QueryRowContext(ctx, `
+		SELECT COALESCE(target, ''), COALESCE(payload_json, ''), correlation_id
+		FROM audit_logs WHERE action = 'session.deleted'
+	`).Scan(&deletedTarget, &deletedPayload, &deletedCorrelation); err != nil {
+		t.Fatalf("session.deleted audit row missing: %v", err)
+	}
+	if deletedTarget != enqueued.SessionID {
+		t.Fatalf("session.deleted target = %q, want the session id", deletedTarget)
+	}
+	// correlation_id means "run id" at every other call site; reusing it for a
+	// session id would conflate two kinds under one index.
+	if deletedCorrelation != nil {
+		t.Fatalf("session.deleted correlation_id = %v, want NULL", deletedCorrelation)
+	}
+	var counts struct {
+		Runs     int `json:"runs"`
+		Messages int `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(deletedPayload), &counts); err != nil {
+		t.Fatalf("session.deleted payload %q: %v", deletedPayload, err)
+	}
+	if counts.Runs != 1 || counts.Messages == 0 {
+		t.Fatalf("session.deleted counts = %+v, want 1 run and some messages", counts)
 	}
 }
 
@@ -224,7 +256,6 @@ func TestDeleteSessionRefusesWhileARunIsLive(t *testing.T) {
 	repo := New(openTestDB(t))
 	ctx := context.Background()
 	enqueued := seedDeletableSession(t, repo, "Busy", "in flight")
-	// ClaimNextJob in the seed already moved the run to running.
 
 	err := repo.DeleteSession(ctx, enqueued.SessionID)
 	if !errors.Is(err, ErrSessionHasActiveRun) {
@@ -273,6 +304,38 @@ func TestDeleteSessionRefusesWhileExecutionIsStillActive(t *testing.T) {
 	err := repo.DeleteSession(ctx, enqueued.SessionID)
 	if !errors.Is(err, ErrSessionHasActiveRun) {
 		t.Fatalf("DeleteSession(uncertain execution) = %v, want ErrSessionHasActiveRun", err)
+	}
+	if got := countRows(t, repo, `SELECT COUNT(*) FROM sessions WHERE id = ?`, enqueued.SessionID); got != 1 {
+		t.Fatal("refused deletion still removed the session")
+	}
+}
+
+// CancelRun is the user-reachable variant of the same hazard: it sets
+// status='cancelled' but never touches execution_active (runs.go), so the
+// worker may still be executing. Deleting here previously tore down the whole
+// ConnectWorker stream, taking unrelated runs with it.
+func TestDeleteSessionRefusesAfterCancelLeavesExecutionActive(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	enqueued := seedDeletableSession(t, repo, "Cancelled", "cancel me")
+
+	if err := repo.CancelRun(ctx, enqueued.RunID, "user cancelled"); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	var active int
+	if err := database.QueryRowContext(ctx,
+		`SELECT status, execution_active FROM agent_runs WHERE id = ?`, enqueued.RunID,
+	).Scan(&status, &active); err != nil {
+		t.Fatal(err)
+	}
+	if status != "cancelled" || active != 1 {
+		t.Fatalf("precondition: run = status:%q execution_active:%d, want cancelled with execution still active", status, active)
+	}
+
+	if err := repo.DeleteSession(ctx, enqueued.SessionID); !errors.Is(err, ErrSessionHasActiveRun) {
+		t.Fatalf("DeleteSession(cancelled, execution live) = %v, want ErrSessionHasActiveRun", err)
 	}
 	if got := countRows(t, repo, `SELECT COUNT(*) FROM sessions WHERE id = ?`, enqueued.SessionID); got != 1 {
 		t.Fatal("refused deletion still removed the session")

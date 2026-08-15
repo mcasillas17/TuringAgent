@@ -36,6 +36,7 @@ class SessionListScreen extends StatefulWidget {
 class _SessionListScreenState extends State<SessionListScreen> {
   late Future<List<Session>> _sessionsFuture;
   bool _creating = false;
+  final Set<String> _deleting = {};
 
   @override
   void initState() {
@@ -44,13 +45,30 @@ class _SessionListScreenState extends State<SessionListScreen> {
   }
 
   void _refreshSessions() {
-    setState(() => _sessionsFuture = widget.apiClient.listSessions());
+    // Braces, not an arrow: `() => _sessionsFuture = ...` RETURNS the assigned
+    // Future, and setState asserts its callback returns nothing. With the arrow
+    // form every refresh threw in debug — silently breaking refresh-after-create
+    // and turning a successful delete into an error toast.
+    setState(() {
+      _sessionsFuture = widget.apiClient.listSessions();
+    });
   }
 
   /// Deletion is permanent and cascades to every message, run and event the
   /// session produced, so it is confirmed first and the dialog says so plainly
   /// rather than asking a vague "are you sure?".
   Future<void> _confirmAndDeleteSession(Session session) async {
+    // Without this a double tap stacks two dialogs and fires two deletes; the
+    // second comes back NotFound and shows a raw error.
+    if (!_deleting.add(session.sessionId)) return;
+    try {
+      await _deleteSessionFlow(session);
+    } finally {
+      _deleting.remove(session.sessionId);
+    }
+  }
+
+  Future<void> _deleteSessionFlow(Session session) async {
     final title = session.title?.isNotEmpty == true
         ? session.title!
         : 'Untitled chat';

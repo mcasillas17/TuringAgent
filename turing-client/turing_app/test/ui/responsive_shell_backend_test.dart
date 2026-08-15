@@ -91,7 +91,6 @@ class _FakeApiClient implements TuringApi {
     };
   }
 
-
   @override
   Future<void> deleteSession({required String sessionId}) async {}
 

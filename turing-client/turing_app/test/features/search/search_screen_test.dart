@@ -206,10 +206,7 @@ void main() {
         final api = _FakeSearchApi();
         await _pumpScreen(tester, api);
 
-        await tester.enterText(
-          find.byKey(const Key('search-field')),
-          'deploy',
-        );
+        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
         await tester.testTextInput.receiveAction(TextInputAction.search);
         await tester.pump();
 
@@ -218,10 +215,7 @@ void main() {
 
         expect(find.byKey(const Key('search-empty')), findsOneWidget);
         expect(find.textContaining('exact phrase'), findsWidgets);
-        expect(
-          find.textContaining(RegExp('fewer|shorter')),
-          findsOneWidget,
-        );
+        expect(find.textContaining(RegExp('fewer|shorter')), findsOneWidget);
       },
     );
 
@@ -264,9 +258,7 @@ void main() {
       handle.dispose();
     });
 
-    testWidgets('clearing input invalidates in-flight search', (
-      tester,
-    ) async {
+    testWidgets('clearing input invalidates in-flight search', (tester) async {
       final api = _FakeSearchApi();
       await _pumpScreen(tester, api);
 
@@ -1100,9 +1092,7 @@ void main() {
       },
     );
 
-    testWidgets('tapping a result opens the exact session ID', (
-      tester,
-    ) async {
+    testWidgets('tapping a result opens the exact session ID', (tester) async {
       final api = _FakeSearchApi();
       final opened = await _pumpScreen(tester, api);
 
@@ -1171,58 +1161,54 @@ void main() {
       expect(api.limits, [50]);
     });
 
-    testWidgets(
-      'reuses a cached title across a later, unrelated query',
-      (tester) async {
-        final api = _FakeSearchApi();
-        await _pumpScreen(tester, api);
+    testWidgets('reuses a cached title across a later, unrelated query', (
+      tester,
+    ) async {
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
 
-        await tester.enterText(find.byKey(const Key('search-field')), 'first');
-        await tester.testTextInput.receiveAction(TextInputAction.search);
-        await tester.pump();
+      await tester.enterText(find.byKey(const Key('search-field')), 'first');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
 
-        api.searchCalls[0].completer.complete([
-          _hit(
-            id: 'msg-1',
-            sessionId: 'session-1',
-            createdAt: DateTime.utc(2026, 8, 13),
-          ),
-        ]);
-        await tester.pump();
+      api.searchCalls[0].completer.complete([
+        _hit(
+          id: 'msg-1',
+          sessionId: 'session-1',
+          createdAt: DateTime.utc(2026, 8, 13),
+        ),
+      ]);
+      await tester.pump();
 
-        api.sessionCalls[0].completer.complete(
-          Session(
-            sessionId: 'session-1',
-            title: 'Release work',
-            updatedAt: DateTime.utc(2026, 8, 13),
-          ),
-        );
-        await tester.pump();
-        expect(find.text('Release work'), findsOneWidget);
-        expect(api.sessionRequests, ['session-1']);
+      api.sessionCalls[0].completer.complete(
+        Session(
+          sessionId: 'session-1',
+          title: 'Release work',
+          updatedAt: DateTime.utc(2026, 8, 13),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Release work'), findsOneWidget);
+      expect(api.sessionRequests, ['session-1']);
 
-        await tester.enterText(
-          find.byKey(const Key('search-field')),
-          'second',
-        );
-        await tester.testTextInput.receiveAction(TextInputAction.search);
-        await tester.pump();
+      await tester.enterText(find.byKey(const Key('search-field')), 'second');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
 
-        api.searchCalls[1].completer.complete([
-          _hit(
-            id: 'msg-2',
-            sessionId: 'session-1',
-            createdAt: DateTime.utc(2026, 8, 14),
-          ),
-        ]);
-        await tester.pump();
+      api.searchCalls[1].completer.complete([
+        _hit(
+          id: 'msg-2',
+          sessionId: 'session-1',
+          createdAt: DateTime.utc(2026, 8, 14),
+        ),
+      ]);
+      await tester.pump();
 
-        // The title was already cached: no second lookup is issued, and the
-        // cached title renders immediately.
-        expect(api.sessionRequests, ['session-1']);
-        expect(find.text('Release work'), findsOneWidget);
-      },
-    );
+      // The title was already cached: no second lookup is issued, and the
+      // cached title renders immediately.
+      expect(api.sessionRequests, ['session-1']);
+      expect(find.text('Release work'), findsOneWidget);
+    });
 
     testWidgets('Retry reruns a title lookup that previously failed', (
       tester,
@@ -1268,10 +1254,7 @@ void main() {
       ]);
       await tester.pump();
 
-      expect(
-        api.sessionRequests.where((id) => id == 'session-1').length,
-        2,
-      );
+      expect(api.sessionRequests.where((id) => id == 'session-1').length, 2);
 
       api.sessionCalls[1].completer.complete(
         Session(
@@ -1311,10 +1294,7 @@ void main() {
         // A newer query starts before any of the first generation's title
         // lookups resolve. Its own session IDs must queue behind the
         // global cap instead of pushing concurrency past four.
-        await tester.enterText(
-          find.byKey(const Key('search-field')),
-          'second',
-        );
+        await tester.enterText(find.byKey(const Key('search-field')), 'second');
         await tester.testTextInput.receiveAction(TextInputAction.search);
         await tester.pump();
 
@@ -1475,48 +1455,47 @@ void main() {
       },
     );
 
-    testWidgets(
-      'skips a queued title lookup once the screen is disposed',
-      (tester) async {
-        final api = _FakeSearchApi();
-        await _pumpScreen(tester, api);
+    testWidgets('skips a queued title lookup once the screen is disposed', (
+      tester,
+    ) async {
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
 
-        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
-        await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+
+      // Six sessions: four lookups take the permits, two queue.
+      api.searchCalls.single.completer.complete([
+        for (var i = 0; i < 6; i++)
+          _hit(
+            id: 'msg-session-$i',
+            sessionId: 'session-$i',
+            createdAt: DateTime.utc(2026, 8, 13),
+          ),
+      ]);
+      await tester.pump();
+      expect(api.sessionCalls.length, 4);
+
+      await tester.pumpWidget(const SizedBox());
+
+      // Freeing permits after disposal must not send the queued lookups:
+      // nothing is left to render their titles.
+      for (var i = 0; i < 4; i++) {
+        api.sessionCalls[i].completer.complete(
+          Session(
+            sessionId: api.sessionCalls[i].sessionId,
+            title: 'Late title $i',
+            updatedAt: DateTime.utc(2026, 8, 13),
+          ),
+        );
         await tester.pump();
+      }
 
-        // Six sessions: four lookups take the permits, two queue.
-        api.searchCalls.single.completer.complete([
-          for (var i = 0; i < 6; i++)
-            _hit(
-              id: 'msg-session-$i',
-              sessionId: 'session-$i',
-              createdAt: DateTime.utc(2026, 8, 13),
-            ),
-        ]);
-        await tester.pump();
-        expect(api.sessionCalls.length, 4);
-
-        await tester.pumpWidget(const SizedBox());
-
-        // Freeing permits after disposal must not send the queued lookups:
-        // nothing is left to render their titles.
-        for (var i = 0; i < 4; i++) {
-          api.sessionCalls[i].completer.complete(
-            Session(
-              sessionId: api.sessionCalls[i].sessionId,
-              title: 'Late title $i',
-              updatedAt: DateTime.utc(2026, 8, 13),
-            ),
-          );
-          await tester.pump();
-        }
-
-        expect(api.sessionCalls.length, 4);
-        expect(api.activeSessionRequests, 0);
-        expect(tester.takeException(), isNull);
-      },
-    );
+      expect(api.sessionCalls.length, 4);
+      expect(api.activeSessionRequests, 0);
+      expect(tester.takeException(), isNull);
+    });
 
     testWidgets(
       'clears stale loading immediately when input changes during the debounce window',
@@ -1625,10 +1604,7 @@ void main() {
         await tester.pump(const Duration(milliseconds: 350));
         expect(api.queries, ['first']);
 
-        await tester.enterText(
-          find.byKey(const Key('search-field')),
-          'second',
-        );
+        await tester.enterText(find.byKey(const Key('search-field')), 'second');
         await tester.pump(const Duration(milliseconds: 350));
         expect(api.queries, ['first', 'second']);
 
@@ -1709,35 +1685,32 @@ void main() {
       },
     );
 
-    testWidgets(
-      'exposes semantics for the search field and the Retry action',
-      (tester) async {
-        final handle = tester.ensureSemantics();
-        final api = _FakeSearchApi();
-        await _pumpScreen(tester, api);
+    testWidgets('exposes semantics for the search field and the Retry action', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
 
-        final fieldFinder = find.bySemanticsLabel(
-          RegExp('Search conversations'),
-        );
-        expect(fieldFinder, findsWidgets);
-        final fieldData = tester.getSemantics(fieldFinder.first);
-        expect(fieldData.flagsCollection.isTextField, isTrue);
+      final fieldFinder = find.bySemanticsLabel(RegExp('Search conversations'));
+      expect(fieldFinder, findsWidgets);
+      final fieldData = tester.getSemantics(fieldFinder.first);
+      expect(fieldData.flagsCollection.isTextField, isTrue);
 
-        await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
-        await tester.testTextInput.receiveAction(TextInputAction.search);
-        await tester.pump();
-        api.searchCalls.single.completer.completeError(Exception('boom'));
-        await tester.pump();
+      await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+      api.searchCalls.single.completer.completeError(Exception('boom'));
+      await tester.pump();
 
-        final retryData = tester.getSemantics(
-          find.byKey(const Key('search-retry')),
-        );
-        expect(retryData.flagsCollection.isButton, isTrue);
-        expect(retryData.label, contains('Retry'));
+      final retryData = tester.getSemantics(
+        find.byKey(const Key('search-retry')),
+      );
+      expect(retryData.flagsCollection.isButton, isTrue);
+      expect(retryData.label, contains('Retry'));
 
-        handle.dispose();
-      },
-    );
+      handle.dispose();
+    });
 
     testWidgets(
       'disposing with a pending debounce and in-flight operations causes no errors',
@@ -1811,9 +1784,9 @@ void main() {
         // traversed — and spoken — a second time, so the user hears the same
         // state twice.
         expect(
-          _spokenLabels(tester)
-              .where((label) => label.contains('Searching'))
-              .toList(),
+          _spokenLabels(
+            tester,
+          ).where((label) => label.contains('Searching')).toList(),
           ['Searching conversations'],
           reason: 'the loading state must reach a screen reader exactly once',
         );
@@ -1836,13 +1809,15 @@ void main() {
         await tester.pump();
 
         const message = 'Search failed: Exception: boom';
-        final error = tester.getSemantics(find.byKey(const Key('search-error')));
+        final error = tester.getSemantics(
+          find.byKey(const Key('search-error')),
+        );
         expect(error.flagsCollection.isLiveRegion, isTrue);
         expect(error.label, message);
         expect(
-          _spokenLabels(tester)
-              .where((label) => label.contains('Search failed'))
-              .toList(),
+          _spokenLabels(
+            tester,
+          ).where((label) => label.contains('Search failed')).toList(),
           [message],
           reason: 'the failure must reach a screen reader exactly once',
         );
@@ -1851,7 +1826,9 @@ void main() {
         // along with it: Retry stays a node of its own, outside the live
         // region's label, and stays a button assistive technology can
         // activate.
-        final retry = tester.getSemantics(find.byKey(const Key('search-retry')));
+        final retry = tester.getSemantics(
+          find.byKey(const Key('search-retry')),
+        );
         expect(retry.id, isNot(error.id));
         final retryData = retry.getSemanticsData();
         expect(retryData.flagsCollection.isButton, isTrue);
@@ -1931,10 +1908,7 @@ void main() {
         // Rebuilding that region from scratch must not drag focus along with
         // it, the way announcing results must not steal focus in the first
         // place.
-        expect(
-          tester.binding.focusManager.primaryFocus,
-          same(focusAfterFirst),
-        );
+        expect(tester.binding.focusManager.primaryFocus, same(focusAfterFirst));
 
         // Late title metadata is not a new result: it must reuse that node,
         // so nothing gets announced a second time for the same search.
@@ -1970,7 +1944,9 @@ void main() {
         await tester.pump();
 
         expect(find.byKey(const Key('search-loading')), findsNothing);
-        final first = tester.getSemantics(find.byKey(const Key('search-empty')));
+        final first = tester.getSemantics(
+          find.byKey(const Key('search-empty')),
+        );
         expect(first.flagsCollection.isLiveRegion, isTrue);
         expect(first.label, contains('No results'));
         final firstLabel = first.label;
@@ -1990,7 +1966,8 @@ void main() {
         expect(
           second.id,
           isNot(firstId),
-          reason: 'each completed empty search must produce a fresh live '
+          reason:
+              'each completed empty search must produce a fresh live '
               'region',
         );
 
@@ -2066,13 +2043,15 @@ void main() {
         expect(
           resurrectedId,
           isNot(completedId),
-          reason: 'the summary node was rebuilt from scratch, so only its '
+          reason:
+              'the summary node was rebuilt from scratch, so only its '
               'live-region flag can keep it quiet',
         );
         expect(
           resurrected.flagsCollection.isLiveRegion,
           isFalse,
-          reason: 'surviving results must not be announced when no search has '
+          reason:
+              'surviving results must not be announced when no search has '
               'completed for the current query',
         );
 
@@ -2196,7 +2175,8 @@ void main() {
       expect(
         label.runes.length,
         lessThan(300),
-        reason: 'a row announcement must stay skimmable, not read a whole '
+        reason:
+            'a row announcement must stay skimmable, not read a whole '
             'transcript',
       );
       expect(label, endsWith('…'));
@@ -2482,7 +2462,6 @@ class _FakeSearchApi implements TuringApi {
     return call.completer.future;
   }
 
-
   @override
   Future<void> deleteSession({required String sessionId}) async {}
 
@@ -2492,7 +2471,10 @@ class _FakeSearchApi implements TuringApi {
     final call = _SessionCall(sessionId);
     sessionCalls.add(call);
     activeSessionRequests++;
-    maxActiveSessionRequests = max(maxActiveSessionRequests, activeSessionRequests);
+    maxActiveSessionRequests = max(
+      maxActiveSessionRequests,
+      activeSessionRequests,
+    );
     try {
       return await call.completer.future;
     } finally {

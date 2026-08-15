@@ -156,6 +156,13 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(api.deletedSessionIds, ['session-doomed']);
+
+      // Let the refreshed listSessions() future resolve and rebuild.
+      await tester.pumpAndSettle();
+      // Removing the _refreshSessions() call would leave the row on screen, so
+      // asserting the RPC alone is not enough.
+      expect(find.text('Doomed chat'), findsNothing);
+      expect(find.text('No sessions yet.'), findsOneWidget);
     });
 
     testWidgets('cancelling deletes nothing', (tester) async {
