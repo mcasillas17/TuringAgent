@@ -9,7 +9,8 @@ The project is designed for local development first: secrets stay in your local 
 - Runs a Go gRPC orchestrator for sessions, messages, runs, events, and approvals.
 - Runs a Go agent runtime that connects to local or OpenAI-compatible models.
 - Exposes MCP tool servers for safe system tools and approval-gated sandboxed file tools.
-- Provides a Flutter client with settings, session list, chat, streamed responses, and approval cards.
+- Provides a Flutter client with settings, conversation search, session list,
+  chat, streamed responses, and approval cards.
 - Ships a Docker Compose local stack and an end-to-end gRPC smoke test.
 
 ## Requirements

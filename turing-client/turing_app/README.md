@@ -10,8 +10,10 @@ Implemented in the client:
 
 - Existing TuringAgent app shell with desktop navigation rail and mobile drawer.
 - Backend URL and API key settings stored through secure client storage.
-- gRPC client for config, sessions, messages, event replay, streaming session events, and approval actions.
+- gRPC client for config, sessions, message search, event replay, streaming session events, and approval actions.
 - Chat tab wired to backend sessions and streamed message deltas.
+- Exact-phrase conversation search across all sessions, grouped by conversation
+  and linked back to the matching chat.
 - Inline tool-call status cards for live `tool.call.*` events.
 - Inline notices when a live agent run reaches its tool-iteration limit.
 - Approval cards for `approval.requested` events, cleared by approval terminal events.
@@ -64,7 +66,9 @@ authorization: Bearer <api-key>
 
 `ResponsiveShell` remains the primary app surface:
 
-- **Chat** renders `SessionListScreen`, which lists sessions once the backend is available and opens backend-connected `ChatScreen` instances.
+- **Chat** renders `SessionListScreen`, which lists sessions once the backend is
+  available, opens backend-connected `ChatScreen` instances, and exposes
+  **Search conversations** in both embedded and standalone layouts.
 - **Devices** is a placeholder: `IoT Devices Dashboard`.
 - **Stats** is a placeholder: `Stats & Usage`.
 - **Integrations** is a placeholder: `Integrations Status`.
@@ -77,8 +81,12 @@ This keeps theme logic, app colors, desktop rail behavior, mobile drawer behavio
 The Chat tab uses the generated gRPC services for commands, queries, and streamed events:
 
 - `SessionService.GetConfig` for backend capabilities and model providers.
-- `SessionService.ListSessions` and `SessionService.CreateSession` for chat sessions.
+- `SessionService.ListSessions`, `SessionService.GetSession`, and
+  `SessionService.CreateSession` for chat sessions and search-result headings.
 - `SessionService.ListMessages` to load persisted messages.
+- `SessionService.SearchMessages` to search one exact phrase across all
+  sessions. Search results appear immediately; unresolved session titles use a
+  session-ID fallback and update when metadata arrives.
 - `ChatService.SendMessage` to enqueue a user message and selected model provider.
 - `EventService.ListEvents` and `EventService.SubscribeSessionEvents` for replay and live updates.
 - `ApprovalService.ApproveApproval` and `ApprovalService.DenyApproval` for approval cards.
@@ -95,6 +103,8 @@ Approval cards appear from `approval.requested` and are removed on `approval.app
 - `lib/ui/shell/responsive_shell.dart`: polished TuringAgent shell and tab integration.
 - `lib/features/settings/settings_screen.dart`: backend URL/API key form.
 - `lib/features/sessions/session_list_screen.dart`: backend session list and new-chat flow.
+- `lib/features/search/search_screen.dart`: debounced, accessible exact-phrase
+  conversation search and grouped result navigation.
 - `lib/features/chat/chat_screen.dart`: active backend-connected chat screen for message loading, sending, streaming deltas, inline run/tool activity, and approvals.
 - `lib/features/chat/tool_call_card.dart`: inline live tool-call lifecycle UI.
 - `lib/features/chat/run_notice_card.dart`: accessible inline metadata for a truncated live run.

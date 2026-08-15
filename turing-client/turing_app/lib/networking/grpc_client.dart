@@ -15,6 +15,7 @@ import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
 import '../generated/turing/v1/sessions.pbgrpc.dart' as sessiongrpc;
 import '../models/grpc_mappers.dart';
 import '../models/message.dart';
+import '../models/search_hit.dart';
 import '../models/session.dart';
 import '../models/turing_event.dart';
 import 'api_client.dart';
@@ -134,6 +135,15 @@ class TuringGrpcApi implements ClosableTuringApi {
   }
 
   @override
+  Future<Session> getSession({required String sessionId}) async {
+    final response = await _sessions.getSession(
+      sessionpb.GetSessionRequest(sessionId: sessionId),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+    return GrpcMappers.sessionToModel(response);
+  }
+
+  @override
   Future<List<Message>> listMessages({
     required String sessionId,
     int limit = 50,
@@ -148,6 +158,22 @@ class TuringGrpcApi implements ClosableTuringApi {
       options: grpc.CallOptions(timeout: _startupUnaryTimeout),
     );
     return response.messages.map(GrpcMappers.messageToModel).toList();
+  }
+
+  @override
+  Future<List<SearchHit>> searchMessages({
+    required String query,
+    int limit = 50,
+  }) async {
+    final response = await _sessions.searchMessages(
+      sessionpb.SearchMessagesRequest(
+        query: query,
+        sessionId: '',
+        limit: limit,
+      ),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+    return response.messages.map(GrpcMappers.searchHitToModel).toList();
   }
 
   @override

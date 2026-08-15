@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:turing_flutter_app/app.dart';
 import 'package:turing_flutter_app/models/message.dart';
+import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/auth_storage.dart';
@@ -108,6 +109,15 @@ class _ClosableFakeApiClient implements ClosableTuringApi {
   }
 
   @override
+  Future<Session> getSession({required String sessionId}) async {
+    return Session(
+      sessionId: sessionId,
+      title: 'Session',
+      updatedAt: DateTime.utc(2026, 5, 10),
+    );
+  }
+
+  @override
   Future<TuringEventPage> listEvents({
     required String sessionId,
     int? after,
@@ -121,6 +131,14 @@ class _ClosableFakeApiClient implements ClosableTuringApi {
     required String sessionId,
     int limit = 50,
     String? before,
+  }) async {
+    return const [];
+  }
+
+  @override
+  Future<List<SearchHit>> searchMessages({
+    required String query,
+    int limit = 50,
   }) async {
     return const [];
   }

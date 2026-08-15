@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/models/message.dart';
+import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
@@ -37,6 +38,8 @@ void main() {
       expect(find.text('Stats'), findsOneWidget);
       expect(find.text('Integrations'), findsOneWidget);
       expect(find.text('Settings'), findsOneWidget);
+      expect(find.text('Sessions'), findsOneWidget);
+      expect(find.byTooltip('Search conversations'), findsOneWidget);
       expect(find.text('New chat'), findsOneWidget);
 
       await tester.tap(find.text('Devices'));
@@ -89,6 +92,15 @@ class _FakeApiClient implements TuringApi {
   }
 
   @override
+  Future<Session> getSession({required String sessionId}) async {
+    return Session(
+      sessionId: sessionId,
+      title: 'Session',
+      updatedAt: DateTime.utc(2026, 5, 10),
+    );
+  }
+
+  @override
   Future<TuringEventPage> listEvents({
     required String sessionId,
     int? after,
@@ -102,6 +114,14 @@ class _FakeApiClient implements TuringApi {
     required String sessionId,
     int limit = 50,
     String? before,
+  }) async {
+    return const [];
+  }
+
+  @override
+  Future<List<SearchHit>> searchMessages({
+    required String query,
+    int limit = 50,
   }) async {
     return const [];
   }

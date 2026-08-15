@@ -5,6 +5,8 @@ import 'package:turing_flutter_app/generated/turing/v1/common.pb.dart'
     as commonpb;
 import 'package:turing_flutter_app/generated/turing/v1/events.pb.dart'
     as eventpb;
+import 'package:turing_flutter_app/generated/google/protobuf/timestamp.pb.dart'
+    as timestamppb;
 import 'package:turing_flutter_app/models/grpc_mappers.dart';
 import 'package:turing_flutter_app/generated/google/protobuf/struct.pb.dart'
     as structpb;
@@ -104,5 +106,29 @@ void main() {
     );
 
     expect(mapped.runId, 'run_1');
+  });
+
+  test('maps a search hit from a complete proto message', () {
+    final mapped = GrpcMappers.searchHitToModel(
+      commonpb.Message(
+        messageId: 'message_42',
+        sessionId: 'session_42',
+        runId: 'run_42',
+        role: commonpb.MessageRole.MESSAGE_ROLE_USER,
+        content: 'find  this text',
+        sequence: Int64(99),
+        createdAt: timestamppb.Timestamp.fromDateTime(
+          DateTime.utc(2026, 8, 13, 12, 34, 56),
+        ),
+      ),
+    );
+
+    expect(mapped.sessionId, 'session_42');
+    expect(mapped.message.messageId, 'message_42');
+    expect(mapped.message.runId, 'run_42');
+    expect(mapped.message.role, 'user');
+    expect(mapped.message.content, 'find  this text');
+    expect(mapped.message.sequence, 99);
+    expect(mapped.message.createdAt, DateTime.utc(2026, 8, 13, 12, 34, 56));
   });
 }
