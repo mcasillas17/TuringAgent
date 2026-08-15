@@ -143,6 +143,30 @@ const GetSessionRequest$json = {
 final $typed_data.Uint8List getSessionRequestDescriptor = $convert.base64Decode(
     'ChFHZXRTZXNzaW9uUmVxdWVzdBIdCgpzZXNzaW9uX2lkGAEgASgJUglzZXNzaW9uSWQ=');
 
+@$core.Deprecated('Use deleteSessionRequestDescriptor instead')
+const DeleteSessionRequest$json = {
+  '1': 'DeleteSessionRequest',
+  '2': [
+    {'1': 'session_id', '3': 1, '4': 1, '5': 9, '10': 'sessionId'},
+  ],
+};
+
+/// Descriptor for `DeleteSessionRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List deleteSessionRequestDescriptor = $convert.base64Decode(
+    'ChREZWxldGVTZXNzaW9uUmVxdWVzdBIdCgpzZXNzaW9uX2lkGAEgASgJUglzZXNzaW9uSWQ=');
+
+@$core.Deprecated('Use deleteSessionResponseDescriptor instead')
+const DeleteSessionResponse$json = {
+  '1': 'DeleteSessionResponse',
+  '2': [
+    {'1': 'session_id', '3': 1, '4': 1, '5': 9, '10': 'sessionId'},
+  ],
+};
+
+/// Descriptor for `DeleteSessionResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List deleteSessionResponseDescriptor = $convert.base64Decode(
+    'ChVEZWxldGVTZXNzaW9uUmVzcG9uc2USHQoKc2Vzc2lvbl9pZBgBIAEoCVIJc2Vzc2lvbklk');
+
 @$core.Deprecated('Use listMessagesRequestDescriptor instead')
 const ListMessagesRequest$json = {
   '1': 'ListMessagesRequest',

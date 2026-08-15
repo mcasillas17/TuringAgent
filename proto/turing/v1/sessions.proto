@@ -37,6 +37,14 @@ message GetSessionRequest {
   string session_id = 1;
 }
 
+message DeleteSessionRequest {
+  string session_id = 1;
+}
+
+message DeleteSessionResponse {
+  string session_id = 1;
+}
+
 message ListMessagesRequest {
   string session_id = 1;
   int32 limit = 2;
@@ -87,6 +95,7 @@ service SessionService {
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   rpc GetSession(GetSessionRequest) returns (Session);
+  rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
   rpc ListMessages(ListMessagesRequest) returns (ListMessagesResponse);
   rpc SearchMessages(SearchMessagesRequest) returns (SearchMessagesResponse);
   rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);

@@ -22,6 +22,7 @@ const (
 	SessionService_CreateSession_FullMethodName  = "/turing.v1.SessionService/CreateSession"
 	SessionService_ListSessions_FullMethodName   = "/turing.v1.SessionService/ListSessions"
 	SessionService_GetSession_FullMethodName     = "/turing.v1.SessionService/GetSession"
+	SessionService_DeleteSession_FullMethodName  = "/turing.v1.SessionService/DeleteSession"
 	SessionService_ListMessages_FullMethodName   = "/turing.v1.SessionService/ListMessages"
 	SessionService_SearchMessages_FullMethodName = "/turing.v1.SessionService/SearchMessages"
 	SessionService_GetConfig_FullMethodName      = "/turing.v1.SessionService/GetConfig"
@@ -36,6 +37,7 @@ type SessionServiceClient interface {
 	CreateSession(ctx context.Context, in *CreateSessionRequest, opts ...grpc.CallOption) (*CreateSessionResponse, error)
 	ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error)
 	GetSession(ctx context.Context, in *GetSessionRequest, opts ...grpc.CallOption) (*Session, error)
+	DeleteSession(ctx context.Context, in *DeleteSessionRequest, opts ...grpc.CallOption) (*DeleteSessionResponse, error)
 	ListMessages(ctx context.Context, in *ListMessagesRequest, opts ...grpc.CallOption) (*ListMessagesResponse, error)
 	SearchMessages(ctx context.Context, in *SearchMessagesRequest, opts ...grpc.CallOption) (*SearchMessagesResponse, error)
 	GetConfig(ctx context.Context, in *GetConfigRequest, opts ...grpc.CallOption) (*GetConfigResponse, error)
@@ -75,6 +77,16 @@ func (c *sessionServiceClient) GetSession(ctx context.Context, in *GetSessionReq
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Session)
 	err := c.cc.Invoke(ctx, SessionService_GetSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sessionServiceClient) DeleteSession(ctx context.Context, in *DeleteSessionRequest, opts ...grpc.CallOption) (*DeleteSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteSessionResponse)
+	err := c.cc.Invoke(ctx, SessionService_DeleteSession_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -138,6 +150,7 @@ type SessionServiceServer interface {
 	CreateSession(context.Context, *CreateSessionRequest) (*CreateSessionResponse, error)
 	ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error)
 	GetSession(context.Context, *GetSessionRequest) (*Session, error)
+	DeleteSession(context.Context, *DeleteSessionRequest) (*DeleteSessionResponse, error)
 	ListMessages(context.Context, *ListMessagesRequest) (*ListMessagesResponse, error)
 	SearchMessages(context.Context, *SearchMessagesRequest) (*SearchMessagesResponse, error)
 	GetConfig(context.Context, *GetConfigRequest) (*GetConfigResponse, error)
@@ -161,6 +174,9 @@ func (UnimplementedSessionServiceServer) ListSessions(context.Context, *ListSess
 }
 func (UnimplementedSessionServiceServer) GetSession(context.Context, *GetSessionRequest) (*Session, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetSession not implemented")
+}
+func (UnimplementedSessionServiceServer) DeleteSession(context.Context, *DeleteSessionRequest) (*DeleteSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteSession not implemented")
 }
 func (UnimplementedSessionServiceServer) ListMessages(context.Context, *ListMessagesRequest) (*ListMessagesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListMessages not implemented")
@@ -248,6 +264,24 @@ func _SessionService_GetSession_Handler(srv interface{}, ctx context.Context, de
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(SessionServiceServer).GetSession(ctx, req.(*GetSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SessionService_DeleteSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SessionServiceServer).DeleteSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SessionService_DeleteSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SessionServiceServer).DeleteSession(ctx, req.(*DeleteSessionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -360,6 +394,10 @@ var SessionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetSession",
 			Handler:    _SessionService_GetSession_Handler,
+		},
+		{
+			MethodName: "DeleteSession",
+			Handler:    _SessionService_DeleteSession_Handler,
 		},
 		{
 			MethodName: "ListMessages",

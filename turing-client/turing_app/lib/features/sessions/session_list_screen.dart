@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:grpc/grpc.dart' as grpc;
 
 import '../../models/session.dart';
 import '../../networking/api_client.dart';
@@ -45,6 +46,55 @@ class _SessionListScreenState extends State<SessionListScreen> {
   void _refreshSessions() {
     setState(() => _sessionsFuture = widget.apiClient.listSessions());
   }
+
+  /// Deletion is permanent and cascades to every message, run and event the
+  /// session produced, so it is confirmed first and the dialog says so plainly
+  /// rather than asking a vague "are you sure?".
+  Future<void> _confirmAndDeleteSession(Session session) async {
+    final title = session.title?.isNotEmpty == true
+        ? session.title!
+        : 'Untitled chat';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Delete "$title"?'),
+        content: const Text(
+          'This permanently removes the conversation and everything it '
+          'produced. It will no longer appear in search. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await widget.apiClient.deleteSession(sessionId: session.sessionId);
+      if (!mounted) return;
+      _refreshSessions();
+    } catch (error) {
+      if (!mounted) return;
+      // A run still in flight is refused with FAILED_PRECONDITION. That is not
+      // a bug and must not read like one, so name the actual reason.
+      final message = _isRunInProgress(error)
+          ? 'This chat has a run in progress. Wait for it to finish, then try again.'
+          : 'Could not delete this chat: $error';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  static bool _isRunInProgress(Object error) =>
+      error is grpc.GrpcError &&
+      error.code == grpc.StatusCode.failedPrecondition;
 
   Future<void> _createSession() async {
     setState(() => _creating = true);
@@ -197,6 +247,11 @@ class _SessionListScreenState extends State<SessionListScreen> {
               ),
               subtitle: Text(session.updatedAt.toLocal().toString()),
               onTap: () => _openChat(session.sessionId),
+              trailing: IconButton(
+                icon: const Icon(Icons.delete_outline),
+                tooltip: 'Delete chat',
+                onPressed: () => _confirmAndDeleteSession(session),
+              ),
             );
           },
         );

@@ -71,7 +71,9 @@ Each is a decision already made and defended in review, cited to where it happen
 
 Known gaps, honestly: a live `agent.run.failed` or `agent.run.cancelled` now renders as an inline failure or cancellation card, but — like tool cards and run notices — that entry is suppressed on session reopen by the replay watermark, so a past failed or cancelled run can still surface as an unexplained empty turn; a requeued run with no worker waits indefinitely; startup-recovery notices are published before the gRPC servers exist and so reach no subscriber; there is no curated user memory, only keyword recall over raw messages; audit is not inspectable.
 
-The sharpest gap is against commitment #1: **there is no way to delete anything.** No `DeleteSession`, no message deletion, nothing in the proto surface — the only way to remove what you said is deleting the SQLite file by hand. A system that remembers across sessions and cannot forget is not yet keeping its own first promise.
+Commitment #1's sharpest gap is now partly closed: **whole-session deletion works.** `SessionService.DeleteSession` removes a session and cascades to its messages, runs, jobs, events, tool calls and approvals; the content leaves the FTS index too, so recall cannot resurface it. Audit rows survive with their content scrubbed, so the record still evidences that something happened without retaining what was withdrawn. Deleting a session with a run in flight is refused rather than orphaning the worker.
+
+Still missing: **message-level deletion**, and any way to forget one fact without deleting the conversation around it. Those need curated memory, which does not exist yet.
 
 ## Invariants — permanent, not deferrals
 
@@ -89,7 +91,7 @@ These are not capabilities we are declining. They are the properties the rest of
 
 Everything here is wanted eventually — this is a "not yet" list with gates, which is how the v1 design framed it (*"later phases can add..."*). Each entry says what must be true before it lands. Working on one out of order is allowed, but should be a deliberate call, not an accident.
 
-1. **Session and message deletion.** Not really a deferral — it is the outstanding failure of commitment #1 and should come first. See "Known gaps".
+1. **Message-level deletion.** Session deletion has shipped; removing a single message, or forgetting one fact without deleting the conversation, has not. It depends on curated memory (item 5's neighbour, not yet planned).
 2. **Destructive file operations — decided scope: soft-delete and move, approval-gated.** `files.move` becomes a real move; `files.delete` relocates into a sandbox-local trash rather than unlinking. Both require the same argument-bound approval as write. Recoverable by construction, so an approval given in error is not permanent. *Gates,* all three concrete and already implied by `mcp-files`:
    - **Tamper-resistance vs. visibility pull opposite ways.** `normalizeSandboxPath` rejects any path containing a reserved internal name (`safe_fs.go:119-121`), which is exactly how you stop a tool resurrecting or rewriting trashed content — but it also means the file tools cannot browse it. Making trash visible to the *user* therefore needs a separate affordance (a client view or its own RPC), not a tool path.
    - **Collisions.** Deleting two files of the same name must not clobber; the unique-naming pattern in `createTemporaryFile` is the precedent to follow.

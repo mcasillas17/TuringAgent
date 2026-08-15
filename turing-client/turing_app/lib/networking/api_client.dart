@@ -14,6 +14,10 @@ abstract class TuringApi {
 
   Future<Session> getSession({required String sessionId});
 
+  /// Removes a session and everything it produced. Permanent: there is no
+  /// undo, and the content also leaves the search index.
+  Future<void> deleteSession({required String sessionId});
+
   Future<List<Message>> listMessages({
     required String sessionId,
     int limit = 50,
