@@ -69,7 +69,7 @@ Each is a decision already made and defended in review, cited to where it happen
 | Clients | **One** (Flutter, macOS-focused). Codegen emits Go and Dart only; both are consumed today |
 | Providers | Ollama (default), OpenAI-compatible (opt-in per request) |
 
-Known gaps, honestly: the client ignores `agent.run.failed` entirely, so run failures are silent unless a notice covers them; a requeued run with no worker waits indefinitely; startup-recovery notices are published before the gRPC servers exist and so reach no subscriber; there is no curated user memory, only keyword recall over raw messages; audit is not inspectable.
+Known gaps, honestly: a live `agent.run.failed` or `agent.run.cancelled` now renders as an inline failure or cancellation card, but — like tool cards and run notices — that entry is suppressed on session reopen by the replay watermark, so a past failed or cancelled run can still surface as an unexplained empty turn; a requeued run with no worker waits indefinitely; startup-recovery notices are published before the gRPC servers exist and so reach no subscriber; there is no curated user memory, only keyword recall over raw messages; audit is not inspectable.
 
 The sharpest gap is against commitment #1: **there is no way to delete anything.** No `DeleteSession`, no message deletion, nothing in the proto surface — the only way to remove what you said is deleting the SQLite file by hand. A system that remembers across sessions and cannot forget is not yet keeping its own first promise.
 

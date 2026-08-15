@@ -120,10 +120,10 @@ func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, runID string
 	var events []Event
 	if requeueable && attempt >= maxAttempts {
 		failCode = RetriesExhaustedCode
-		// Without this the user's last word from us is "Retrying (attempt N of N)"
-		// followed by permanent silence: the client has no agent.run.failed case.
-		// Ordered before the terminal events so the explanation precedes the
-		// failure it explains.
+		// The client renders a terminal failure card for agent.run.failed, but
+		// that card explains the failure, not that retries were attempted and
+		// exhausted; this notice carries the attempt count. Ordered before the
+		// terminal events so the explanation precedes the failure it explains.
 		notice, err := appendRunNoticeTx(ctx, tx, sessionID, runID, traceID,
 			giveUpNote(attempt),
 			map[string]any{"attempts": attempt, "maxAttempts": maxAttempts, "reason": code}, now())

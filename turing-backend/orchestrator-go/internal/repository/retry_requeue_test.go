@@ -155,9 +155,9 @@ func TestRequeueOrFailRetryableRunFailsAfterAttemptCap(t *testing.T) {
 			runErrorCode, jobStatus, jobErrorCode, RetriesExhaustedCode)
 	}
 
-	// Without this the user reads "Retrying (attempt 3 of 3)" and then hears
-	// nothing ever again — worse than silence throughout, because the client has
-	// no agent.run.failed case at all.
+	// The client's agent.run.failed card communicates the terminal failure and
+	// its reason, not the attempt count that led up to it, so this notice is
+	// still needed to tell the user retries stopped and how many were tried.
 	giveUp := onlyRunStepEvent(t, decision.Events)
 	if got := runStepNote(t, giveUp); got != "Gave up after 3 attempts" {
 		t.Fatalf("exhaustion note = %q, want %q", got, "Gave up after 3 attempts")
