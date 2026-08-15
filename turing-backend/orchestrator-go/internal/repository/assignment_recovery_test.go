@@ -183,9 +183,10 @@ func TestRecoverAssignmentAtCutoffFailsAtConfiguredMaximumAttempt(t *testing.T) 
 	for _, event := range reconciliation.Events {
 		eventTypes = append(eventTypes, event.Type)
 	}
-	// The notice must precede the terminal event it explains: the client has no
-	// agent.run.failed case, so without it a user who keeps losing their worker
-	// sees "Retrying after the worker became unavailable" and then nothing.
+	// The notice must precede the terminal event it explains: the client's
+	// agent.run.failed card communicates the terminal failure and its reason,
+	// not that retries were attempted and exhausted, so a user who keeps
+	// losing their worker still needs this notice's attempt count.
 	if want := []string{"agent.run.step", "agent.run.failed"}; !reflect.DeepEqual(eventTypes, want) {
 		t.Fatalf("exhausted recovery events = %v, want %v", eventTypes, want)
 	}

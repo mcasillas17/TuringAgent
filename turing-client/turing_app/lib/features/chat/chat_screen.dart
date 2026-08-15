@@ -1,13 +1,18 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:grpc/grpc.dart' show GrpcError, StatusCode;
 
 import '../../models/message.dart';
 import '../../models/turing_event.dart';
 import '../../networking/api_client.dart';
 import '../../networking/event_source.dart';
 import '../approvals/approval_card.dart';
+import 'message_send_failure_card.dart';
+import 'message_send_unconfirmed_card.dart';
 import 'model_provider_selector.dart';
+import 'run_cancelled_card.dart';
+import 'run_failure_card.dart';
 import 'run_notice_card.dart';
 import 'tool_call_card.dart';
 
@@ -36,6 +41,37 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<_PendingApproval> _approvals = [];
   final Set<String> _completedHistoryRunIds = {};
 
+  /// Approval ids with an `approveApproval`/`denyApproval` RPC currently in
+  /// flight — see [_approve]/[_deny]. Drives each [ApprovalCard.busy] so a
+  /// second decision for the SAME approval (a duplicate tap, or Approve and
+  /// Deny racing each other) is refused while the first is still
+  /// unresolved, rather than firing a second, possibly contradictory RPC.
+  /// Membership is keyed by approvalId, not by identity, because a
+  /// [_PendingApproval] is rebuilt (not mutated in place) whenever
+  /// [_addApproval] replaces one.
+  final Set<String> _approvalsInFlight = {};
+
+  /// Approval ids whose most recent `approveApproval`/`denyApproval` RPC
+  /// rejected AND whose approval is still pending — see [_approve]/[_deny]'s
+  /// `catch`, and [_isApprovalPending]. Unlike a run's own terminal outcome,
+  /// an approval DECISION failing is not part of the message transcript, so
+  /// it is surfaced as a screen-level banner (like [_streamEndedNotice])
+  /// rather than an inline card: `build()` shows that banner, with the
+  /// fixed, generic [_approvalActionFailedNotice] copy, whenever this set is
+  /// non-empty. The copy itself is never stored per id — every failure
+  /// shares the exact same safe, generic text — so this set only needs to
+  /// track WHICH approvals are affected, never what to say about them.
+  ///
+  /// A `Set`, not a single id (round 12, finding 2): more than one
+  /// [ApprovalCard] can be on screen at once, each with its own,
+  /// independent decision RPC. Resolving or retrying ONE approval must
+  /// never hide a notice still owed to a DIFFERENT approval also pending on
+  /// screen, so an id is removed only for the approval it belongs to, by
+  /// [_clearApprovalActionFailureFor] — never by clearing this whole set at
+  /// once. The banner disappears only once every affected id has been
+  /// removed, i.e. once this set is empty again.
+  final Set<String> _approvalActionFailedApprovalIds = {};
+
   /// Ids of history messages whose text is already complete on screen. The
   /// stream replays the deltas that produced them, and those must not be
   /// applied a second time.
@@ -48,8 +84,102 @@ class _ChatScreenState extends State<ChatScreen> {
   int? _replayWatermarkSequence;
   StreamSubscription<TuringEvent>? _subscription;
   String _modelProvider = 'ollama';
+
+  /// True whenever the live subscription is not currently able to deliver —
+  /// set by [_handleStreamEnded], whether reached from an `onError`, an
+  /// `onDone`, or a synchronous setup failure in [_openSubscription]. This
+  /// alone does NOT mean the subscription is permanently gone: `cancelOnError`
+  /// is false (see [_openSubscription]), so an `onError` never ends the
+  /// stream, and [_applyEvent] clears this flag the moment a further event
+  /// proves the stream is still alive. [_startupFailed] is the separate,
+  /// permanent flag for when nothing ever will follow.
+  ///
+  /// Gates the composer alongside [_initializing] and [_startupFailed] (see
+  /// [_composerDisabled]) — a send while this is true could never reach the
+  /// user, whether or not the drop turns out to be recoverable.
   bool _streamEnded = false;
   bool _historyLoadFailed = false;
+
+  /// True while startup is still IN PROGRESS — not yet ready, but also not
+  /// yet known to have failed. The composer stays disabled, with a spinner
+  /// in place of the send icon, for as long as this holds. See
+  /// [_startupFailed] for the terminal counterpart: the two flags are never
+  /// true at the same time (see its doc), so `build()` can tell "still
+  /// starting" apart from "will never start" and show truthful copy for
+  /// each, instead of showing a spinner or "Loading session..." for a
+  /// failure that will never resolve.
+  ///
+  /// Startup only clears this flag — reaching either readiness or terminal
+  /// failure — once every one of the following holds:
+  ///  - the replay watermark has loaded, so [_isHistoricalRunEvent] has a
+  ///    boundary to filter replay against. A message sent before this is
+  ///    fixed could terminally fail or cancel fast enough that the eventual
+  ///    watermark covers that very run, replay-suppressing its own live
+  ///    terminal event.
+  ///  - the initial history load has settled — either it succeeded, or it
+  ///    failed and that failure was given its own visible handling (see
+  ///    [_historyLoadFailed], which — unlike [_startupFailed] — does not
+  ///    stop startup from reaching readiness). [_loadInitialMessages] seeds
+  ///    history by PREPENDING (`_messages.insertAll(0, ...)`) once
+  ///    `listMessages` resolves, so a live send while it is still in flight
+  ///    risks a duplicate or misordered bubble: the same turn appended live,
+  ///    then ALSO returned by that very `listMessages` call.
+  ///  - the event subscription is open and was not already dead on arrival —
+  ///    genuinely closed (`onDone`) or never opened at all, not merely
+  ///    erroring once (see [_openSubscription] and [_streamEnded]) — nothing
+  ///    else on this screen can carry a send's results back to the user once
+  ///    that happens.
+  ///
+  /// A failure in either of the first or third condition above is terminal:
+  /// this screen has no retry path, so it is reported by setting
+  /// [_startupFailed] together with clearing this flag, never on its own.
+  bool _initializing = true;
+
+  /// True once startup has reached a TERMINAL failure: the replay watermark
+  /// could not be loaded, or the event subscription itself could never be
+  /// opened — either `connect()`/`listen()` threw synchronously, or the
+  /// returned subscription signalled `onDone` (not merely `onError`)
+  /// synchronously, before `listen()` even returned (see
+  /// [_openSubscription]). A synchronous `onError` alone never sets this:
+  /// `cancelOnError` is false, so an error does not end the stream, and a
+  /// later event can still arrive on that very same subscription — see
+  /// [_streamEnded], which covers that recoverable case instead. This screen
+  /// has no retry path for a genuine terminal failure, so unlike
+  /// [_historyLoadFailed] or [_streamEnded] there is no later event that
+  /// clears this once set.
+  ///
+  /// Always set in the same update that clears [_initializing], and always
+  /// alongside a call to [_handleStreamEnded], so the composer's disabled,
+  /// truthful copy and the connection-lost notice ([_streamEnded] /
+  /// [_streamEndedNotice]) always appear together as one consistent
+  /// explanation, not two different ones for the same cause. The converse
+  /// does not hold: [_handleStreamEnded] alone (a recoverable `onError`, or
+  /// an async drop after startup already succeeded) sets only
+  /// [_streamEnded], never this flag.
+  bool _startupFailed = false;
+
+  /// True from the moment [_sendMessage] accepts the composer's text for the
+  /// CURRENT attempt until that attempt's `sendMessage` RPC resolves or
+  /// rejects. Included in [_composerDisabled] so a second, overlapping
+  /// attempt — a fast double-tap, or a queued `onSubmitted` racing the RPC —
+  /// is refused rather than firing a second concurrent send: without this,
+  /// nothing would stop two attempts' optimistic bubbles and outcomes from
+  /// interleaving in an order neither [_sendMessage] nor a reader could
+  /// disentangle. Cleared in both the success and failure branches of
+  /// [_sendMessage] alike — whether the composer is ready to accept a NEW
+  /// attempt does not depend on how the last one ended, only on whether one
+  /// is still outstanding.
+  bool _sending = false;
+
+  /// True whenever a send could never reach the user — still starting up,
+  /// terminally failed to start, a live subscription that has since dropped
+  /// (recoverably or not), or a previous attempt still in flight
+  /// ([_sending]). Gates both the composer in `build()` and
+  /// [_sendMessage]'s own defensive guard, so a queued `onSubmitted` call
+  /// that bypasses the widget's `enabled`/`onPressed` gating is refused for
+  /// exactly the same reasons.
+  bool get _composerDisabled =>
+      _initializing || _startupFailed || _streamEnded || _sending;
 
   @override
   void initState() {
@@ -64,43 +194,118 @@ class _ChatScreenState extends State<ChatScreen> {
   /// is still in flight would render a second copy of the conversation with no
   /// way to tell which bubbles history already covers.
   ///
-  /// The load is awaited but never allowed to fail the startup: `listMessages`
-  /// hits a backend that routinely is not up (gRPC unavailable, stale token,
-  /// deadline). Letting that propagate would skip `connect()` entirely and
-  /// leave a screen that receives no deltas, no tool cards and — because the
-  /// drop notice is raised from the subscription — no signal at all. Degrade to
-  /// "no history" instead, and say so.
+  /// The load is awaited but never allowed to fail startup on its own:
+  /// `listMessages` hits a backend that routinely is not up (gRPC
+  /// unavailable, stale token, deadline). Letting that propagate would skip
+  /// `connect()` entirely and leave a screen that receives no deltas, no tool
+  /// cards and — because the drop notice is raised from the subscription —
+  /// no signal at all. Degrade to "no history" instead, and say so. That
+  /// holds even when startup has already failed terminally for the unrelated
+  /// reason below: a transcript the backend can still serve is better than
+  /// none, even though the session can never go live.
   Future<void> _start() async {
     // Snapshot the persisted event boundary before history starts loading.
     // Events committed during that RPC remain above the cursor and replay as
     // live after history is seeded.
     final replayBoundaryLoaded = await _loadReplayWatermark();
     if (!mounted) return;
+    if (!replayBoundaryLoaded) {
+      // No boundary means [_isHistoricalRunEvent] has nothing to filter
+      // replay against, so the subscription must never open (enforced below,
+      // after the history attempt this shares with the success path). Raise
+      // the visible, TERMINAL failure right now instead of after
+      // `_loadInitialMessages`: that unrelated, best-effort read-only load
+      // must not hold the notice or the composer's truthful disabled state
+      // hostage to however long — or whether ever — it resolves.
+      _handleStreamEnded();
+      if (!mounted) return;
+      setState(() {
+        _initializing = false;
+        _startupFailed = true;
+      });
+    }
     try {
       await _loadInitialMessages();
     } catch (_) {
       // The dedup sets stay empty, so replayed deltas may re-render text the
-      // server already persisted. A duplicated transcript beats a silent one.
+      // server already persisted. A duplicated transcript beats a silent
+      // one — true whether or not the watermark above already failed.
       if (mounted) setState(() => _historyLoadFailed = true);
     }
-    if (!mounted) return;
-    if (!replayBoundaryLoaded) {
-      _handleStreamEnded();
+    if (!mounted || !replayBoundaryLoaded) return;
+    if (!_openSubscription()) {
+      setState(() {
+        _initializing = false;
+        _startupFailed = true;
+      });
       return;
     }
-    _subscription = widget.eventSource
-        .connect(
-          sessionId: widget.sessionId,
-          // Replay approval lifecycle events so an unresolved request is
-          // reconstructed after reopening. Historical tool events remain
-          // suppressed by the independently captured watermark.
-          lastSequence: 0,
-        )
-        .listen(
-          _applyEvent,
-          onError: _handleStreamEnded,
-          onDone: _handleStreamEnded,
-        );
+    // Every condition in [_initializing]'s doc is met: the watermark is
+    // fixed, history has settled (loaded or visibly failed) so a send cannot
+    // race its own prepend, and the subscription that would carry that
+    // send's events is open and was not dead on arrival.
+    setState(() => _initializing = false);
+  }
+
+  /// Opens the live event subscription and reports whether it is actually,
+  /// permanently usable — not just whether `listen()` itself returned
+  /// without throwing.
+  ///
+  /// [TuringEventSource] is an interface over an arbitrary `Stream`, and
+  /// nothing pinned in this repo proves any particular real implementation's
+  /// exact timing — only what `Stream.listen`'s own documented contract
+  /// already permits. That contract allows both of the following, and this
+  /// method's `try`/`catch` plus the `onDone` closure below exist to turn
+  /// each into a handled, visible failure instead of an unhandled Future
+  /// rejection (`_start` is fire-and-forget, `unawaited` from `initState`):
+  ///  - `connect()` or `listen()` itself can throw SYNCHRONOUSLY rather than
+  ///    ever producing a subscription.
+  ///  - a source that is already closed can invoke `onDone` SYNCHRONOUSLY,
+  ///    within `listen()` itself, before `listen()` has even returned a
+  ///    subscription for this method to assign.
+  ///
+  /// Both are genuinely terminal — nothing further can ever arrive — so this
+  /// method returns `false` for either: the throw does so directly from its
+  /// `catch` below, and the sync `onDone` does so via `subscriptionClosed`,
+  /// read by the final `return` once `listen()` itself has returned. A
+  /// synchronous `onError` is deliberately NOT one of them:
+  /// `cancelOnError` is false (see the `listen` call below), so an error
+  /// never itself ends the stream, and a later event can still arrive on
+  /// the very same subscription. `onError` still routes through
+  /// [_handleStreamEnded] — the caller must still show the drop notice and
+  /// disable the composer — but it must not set `subscriptionClosed`;
+  /// [_applyEvent] clears that notice itself once a further event proves
+  /// the stream is still alive, which a genuinely closed subscription never
+  /// could.
+  bool _openSubscription() {
+    // Local, not a field: only the synchronous window inside this method's
+    // own `try` matters here. An `onDone` invoked later, asynchronously,
+    // still reaches `_handleStreamEnded` below, but by then this method has
+    // already returned and used its result — mutating a field at that point
+    // would have no reader left to observe it.
+    var subscriptionClosed = false;
+    try {
+      _subscription = widget.eventSource
+          .connect(
+            sessionId: widget.sessionId,
+            // Replay approval lifecycle events so an unresolved request is
+            // reconstructed after reopening. Historical tool events remain
+            // suppressed by the independently captured watermark.
+            lastSequence: 0,
+          )
+          .listen(
+            _applyEvent,
+            onError: _handleStreamEnded,
+            onDone: () {
+              subscriptionClosed = true;
+              _handleStreamEnded();
+            },
+          );
+    } catch (error, stackTrace) {
+      _handleStreamEnded(error, stackTrace);
+      return false;
+    }
+    return !subscriptionClosed;
   }
 
   static const _streamEndedNotice =
@@ -109,6 +314,27 @@ class _ChatScreenState extends State<ChatScreen> {
   static const _historyFailedNotice =
       'Earlier messages could not be loaded. This session is live from here on.';
 
+  /// Shown instead of [_historyFailedNotice] when [_startupFailed] or
+  /// [_streamEnded] holds: that copy's "This session is live from here on"
+  /// claim is false whenever the stream is not CURRENTLY able to deliver,
+  /// whether because no subscription will ever exist ([_startupFailed] —
+  /// the replay watermark failed to load, or [_openSubscription] itself
+  /// could never open one) or because one opened fine but has since gone
+  /// dark, recoverably or not ([_streamEnded], set asynchronously by
+  /// [_handleStreamEnded] from an `onError`/`onDone` reached after this
+  /// banner may already be showing the live copy). Nothing about this
+  /// session is "live" in any of those cases.
+  static const _historyFailedNoSubscriptionNotice =
+      'Earlier messages could not be loaded.';
+
+  static const _loadingNotice = 'Loading session...';
+
+  /// Shown while [_sending] holds — a `sendMessage` RPC for the current
+  /// attempt is outstanding. Distinct from [_loadingNotice]: this is a
+  /// per-send, transient state on an otherwise ready composer, not the
+  /// screen's own startup.
+  static const _sendingNotice = 'Sending...';
+
   /// Shown when an `agent.run.step` arrives without a usable `note`. It must
   /// stay producer-neutral: the tool-iteration cap is no longer the only source
   /// of this event — retries, lost workers, exhausted attempts and recall all
@@ -116,11 +342,168 @@ class _ChatScreenState extends State<ChatScreen> {
   static const _runStepFallbackNotice =
       'The run reported a step with no description';
 
-  /// The event stream is the only source of terminal `tool.call.*` events, so
-  /// once it errors (gRPC disconnect, deadline, auth failure) or closes, any
-  /// card still in [ToolCallStatus.running] can never resolve. Left alone it
-  /// would spin forever and tell the user a tool is still executing. Resolve
-  /// those cards instead; already-terminal cards are untouched.
+  /// Shown for an `agent.run.failed` event whose payload carries neither a
+  /// usable `message` nor a `code` to derive one from.
+  static const _runFailureFallbackNotice =
+      'The run failed with no further details';
+
+  /// Shown for an `agent.run.cancelled` event whose `reason` is not the one
+  /// known value below — missing, empty/whitespace-only, a non-string value
+  /// that [_asString] already turned into `null`, or any other string. It is
+  /// deliberately generic: `reason` is machine metadata (see
+  /// [_clientCancelledReason]), so an unrecognized value must never be
+  /// echoed to the user verbatim.
+  static const _runCancellationFallbackNotice =
+      'The run was cancelled with no further details';
+
+  /// The only `reason` value the backend currently emits with
+  /// `agent.run.cancelled` (`cancelRun`, orchestrator-go
+  /// internal/service/chat/service.go). It fires on exactly two conditions:
+  /// `SendMessage`'s own context being cancelled — checked at four
+  /// checkpoints (the initial `RunQueued` send, the dispatch loop's
+  /// teardown, a replay-events error, and a relayed event send) — or a
+  /// `DispatchPending` failure, which cancels unconditionally regardless of
+  /// context state. A bare `stream.Send` failure never triggers this by
+  /// itself; it only does at those checkpoints once the context is already
+  /// cancelled. Its human copy below must stay truthful for both
+  /// conditions, not name just one of them.
+  static const _clientCancelledReason = 'client_cancelled';
+
+  /// Shown for an `agent.run.cancelled` event whose `reason` is
+  /// [_clientCancelledReason]. `reason` itself is machine metadata, not
+  /// display copy, so the raw enum must never reach the user.
+  static const _clientCancelledNotice =
+      'The run was cancelled before it could finish';
+
+  /// `GrpcError` codes CONFIRMED — by the backend's own `SendMessage`
+  /// handler (orchestrator-go internal/service/chat/service.go) — to occur
+  /// only before it ever reaches `EnqueueUserMessage`, never after:
+  ///
+  ///   * [StatusCode.unauthenticated] — the stream's own auth interceptor
+  ///     (internal/auth/interceptor.go, wired via `grpc.StreamInterceptor`
+  ///     in internal/app/app.go) rejects the RPC before `SendMessage`'s
+  ///     handler body ever runs, unconditionally.
+  ///   * [StatusCode.invalidArgument] — every one of the handler's own
+  ///     upfront request-validation checks (nil request; empty session_id
+  ///     or content; unrecognized content_type, agent_id, or
+  ///     model_provider) returns this code, and each precedes
+  ///     `EnqueueUserMessage`. No other call site in the handler returns
+  ///     it.
+  ///   * [StatusCode.notFound] — the session lookup's `mapSessionError`
+  ///     translation of `sql.ErrNoRows` ("session not found"); its only
+  ///     call site, the `GetSession` check, precedes `EnqueueUserMessage`.
+  ///     No other call site in the handler returns it.
+  ///
+  /// Deliberately excludes `StatusCode.canceled` and `StatusCode.internal`:
+  /// the very same handler ALSO returns both from several points AFTER
+  /// `EnqueueUserMessage`, so either one proves nothing about ordering. See
+  /// [_isConfirmedPreEnqueueSendFailure].
+  static const _confirmedPreEnqueueSendFailureCodes = {
+    StatusCode.unauthenticated,
+    StatusCode.invalidArgument,
+    StatusCode.notFound,
+  };
+
+  /// Whether [error] — whatever `sendMessage` rejected with, in
+  /// [_sendMessage]'s own `catch` — is CONCLUSIVELY proven to have occurred
+  /// before the backend's `SendMessage` handler ever reached
+  /// `EnqueueUserMessage`, i.e. before the message or its run could exist
+  /// server-side at all. Only a `GrpcError` whose `code` is in
+  /// [_confirmedPreEnqueueSendFailureCodes] qualifies — see that constant
+  /// for exactly which three codes and why each one does.
+  ///
+  /// Everything else returns `false`, the safe default whenever this proof
+  /// cannot be made: any OTHER `GrpcError` code (including
+  /// `StatusCode.canceled`/`StatusCode.internal`, which the same handler
+  /// also returns from points after `EnqueueUserMessage`, and any code this
+  /// classifier does not recognize at all), and every `TuringApiException`
+  /// unconditionally — its `code` (`api_client.dart`) is an ad-hoc,
+  /// app-defined string with no contractual tie to a gRPC status, so it can
+  /// never satisfy this proof, not even the real `code: 'empty_stream'`
+  /// case (which only means the stream ended with no `RunQueued` seen, not
+  /// that nothing was persisted). `false` here routes to
+  /// [MessageSendUnconfirmedCard]; `true` routes to [MessageSendFailureCard]
+  /// — see [_sendMessage]'s own `catch`.
+  static bool _isConfirmedPreEnqueueSendFailure(Object error) {
+    return error is GrpcError &&
+        _confirmedPreEnqueueSendFailureCodes.contains(error.code);
+  }
+
+  /// Shown when `sendMessage` rejects with anything OTHER than
+  /// [_isConfirmedPreEnqueueSendFailure]'s allowlist — see [_sendMessage]'s
+  /// `catch`. Deliberately fixed and generic rather than derived from the
+  /// thrown error: unlike [_runFailureFallbackNotice]/[_runCancellationFallbackNotice],
+  /// which fall back only when a real event's own payload lacks detail, here
+  /// there is no server-authored payload to read from at all — the thrown
+  /// value is a raw `GrpcError`/[TuringApiException] never meant for display,
+  /// and may carry request ids or other diagnostic detail unsafe to echo.
+  ///
+  /// Deliberately does NOT say "not sent" or "failed": the backend persists
+  /// the enqueued message and its run BEFORE attempting to acknowledge it
+  /// with a `RunQueued` event on this same stream (`SendMessage`,
+  /// orchestrator-go internal/service/chat/service.go), so a rejection here
+  /// can happen after the message was already durably accepted — this
+  /// client simply never saw the acknowledgement. The honest state is
+  /// UNKNOWN, so the copy says so and tells the user how to find out
+  /// (check the conversation) rather than asserting a failure that may not
+  /// have happened. For the narrow allowlist where the outcome IS known,
+  /// see [_messageSendFailedNotice] instead.
+  static const _messageSendUnconfirmedNotice =
+      "We couldn't confirm whether this message was sent. Check the "
+      'conversation before sending it again.';
+
+  /// Shown when `sendMessage` rejects with a status
+  /// [_isConfirmedPreEnqueueSendFailure] confirms occurred before
+  /// `EnqueueUserMessage` — see [_sendMessage]'s `catch`. Unlike
+  /// [_messageSendUnconfirmedNotice], the outcome genuinely IS known here:
+  /// the message was never accepted, so this copy may truthfully say so.
+  /// Still deliberately fixed and generic rather than derived from the
+  /// thrown error, for the same reason as [_messageSendUnconfirmedNotice] —
+  /// the value is a raw `GrpcError` never meant for display — and stays
+  /// safe and actionable: it never echoes the request's own content,
+  /// session id, or any other diagnostic detail, and only suggests a
+  /// generic remedy that holds across all three allowlisted codes
+  /// (expired/invalid auth, a rejected argument, or a missing session)
+  /// rather than naming any one of them specifically.
+  static const _messageSendFailedNotice =
+      "Your message wasn't sent. Check your session and try again.";
+
+  /// Shown when `approveApproval`/`denyApproval` itself rejects — see
+  /// [_approve]/[_deny]'s `catch`. Deliberately fixed and generic for the
+  /// same reason as [_messageSendUnconfirmedNotice]: the thrown value is a
+  /// raw `GrpcError`/[TuringApiException] never meant for display. Unlike
+  /// that notice, this one is framed as a plain failure rather than an
+  /// unconfirmed outcome: retrying a decision for the same approval can
+  /// never corrupt state or apply a second, contradictory decision. The
+  /// backend (orchestrator-go internal/service/approvals/service.go and
+  /// internal/repository/approvals.go) guards every decision by the
+  /// approval's CURRENT status: repeating the exact same decision on an
+  /// approval that is still pending (or already matches, and unexpired) is
+  /// a safe no-op, while a conflicting or stale decision — denying one
+  /// already approved, or deciding one already expired or consumed — fails
+  /// outright instead of silently applying. So a retry is never a
+  /// duplicated action the way resending a chat message could be, even
+  /// though not every retry is guaranteed to be a silent no-op.
+  ///
+  /// Exactly one, fixed string, shared by every approval currently in
+  /// [_approvalActionFailedApprovalIds] (round 12, finding 2): the banner in
+  /// `build()` never varies this copy per id, so two DIFFERENT approvals
+  /// failing at once still show this SAME text, just for longer — until
+  /// every affected id clears.
+  static const _approvalActionFailedNotice =
+      'Could not send your decision. Please try again.';
+
+  /// The event stream is the only source of terminal `tool.call.*` events. On
+  /// `onDone`, or a subscription that never opened, no further event can ever
+  /// arrive on it, so any card still in [ToolCallStatus.running] genuinely can
+  /// never resolve. On `onError` that is not guaranteed — `cancelOnError` is
+  /// false (see [_openSubscription]), so the stream can keep delivering after
+  /// an error — but a card may still never see a real terminal event, so mark
+  /// it pessimistically with the same 'connection lost' placeholder; a later
+  /// terminal event for that call replaces it via [_applyToolCall] if the
+  /// stream recovers. Either way, left alone the card would spin forever and
+  /// tell the user a tool is still executing. Already-terminal cards are
+  /// untouched.
   ///
   /// Resolving cards is not enough on its own: usually no tool call is in
   /// flight when the stream drops, and [TuringEventSource] never reconnects, so
@@ -228,6 +611,12 @@ class _ChatScreenState extends State<ChatScreen> {
       case 'agent.run.step':
         _applyRunStep(event);
         break;
+      case 'agent.run.failed':
+        _applyRunFailed(event);
+        break;
+      case 'agent.run.cancelled':
+        _applyRunCancelled(event);
+        break;
       case 'approval.requested':
         _addApproval(event);
         break;
@@ -249,6 +638,15 @@ class _ChatScreenState extends State<ChatScreen> {
       case 'tool.call.denied':
         _applyToolCall(event, ToolCallStatus.denied);
         break;
+      // Everything below has no case above and so is deliberately left
+      // unhandled — it falls out of this switch untouched, not implicitly
+      // grouped with any handled case above (in particular, not with the
+      // `agent.run.failed` / `agent.run.cancelled` handling just above):
+      //  - `agent.run.started` / `agent.run.queued`: surfacing them would
+      //    just add noise ahead of the real content.
+      //  - `agent.run.completed`: its completion is already evidenced by the
+      //    assistant's own answer arriving via `message.delta`, so a
+      //    dedicated handler would be redundant.
     }
   }
 
@@ -264,10 +662,67 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom();
   }
 
+  /// The code `RequeueOrFailRetryableRun` writes once retries are exhausted
+  /// (`repository/jobs.go:122`). Its humanized form ("Retries exhausted")
+  /// says nothing that the paired give-up `agent.run.step` notice ("Gave up
+  /// after N attempts") has not already said, and the real cause is exactly
+  /// what is unknown when this code is the only signal left — so it is
+  /// excluded from [_humanizeFailureCode] below and treated the same as no
+  /// code at all.
+  static const _retriesExhaustedCode = 'retries_exhausted';
+
+  void _applyRunFailed(TuringEvent event) {
+    if (_isHistoricalRunEvent(event)) return;
+
+    final rawMessage = _asString(event.payload['message'])?.trim();
+    final rawCode = _asString(event.payload['code'])?.trim();
+    final String text;
+    if (rawMessage != null && rawMessage.isNotEmpty) {
+      text = rawMessage;
+    } else if (rawCode != null &&
+        rawCode.isNotEmpty &&
+        rawCode != _retriesExhaustedCode) {
+      text = _humanizeFailureCode(rawCode);
+    } else {
+      text = _runFailureFallbackNotice;
+    }
+    final entry = _RunFailureEntry(text);
+    setState(() => _messages.add(entry));
+    _scrollToBottom();
+  }
+
+  /// Turns a machine-readable failure `code` (e.g. `tool_discovery_failed`)
+  /// into a human-readable sentence fragment (`Tool discovery failed`). Used
+  /// only when `message` is absent — the user should learn what happened,
+  /// not read an enum.
+  static String _humanizeFailureCode(String code) {
+    final spaced = code.replaceAll('_', ' ').trim();
+    if (spaced.isEmpty) return _runFailureFallbackNotice;
+    return spaced[0].toUpperCase() + spaced.substring(1);
+  }
+
+  /// The event stream is the only channel `agent.run.cancelled` arrives on,
+  /// and `cancelRun` fires it on exactly two conditions (see
+  /// [_clientCancelledReason]): `SendMessage`'s own context is cancelled, or
+  /// `DispatchPending` fails. Left unhandled, the event would fall through
+  /// [_applyEvent]'s switch and leave a silent, unexplained turn on screen.
+  void _applyRunCancelled(TuringEvent event) {
+    if (_isHistoricalRunEvent(event)) return;
+
+    final rawReason = _asString(event.payload['reason'])?.trim();
+    final text = rawReason == _clientCancelledReason
+        ? _clientCancelledNotice
+        : _runCancellationFallbackNotice;
+    final entry = _RunCancelledEntry(text);
+    setState(() => _messages.add(entry));
+    _scrollToBottom();
+  }
+
   /// Whether an inline run artifact belongs to history that is already on
   /// screen. Approvals deliberately replay to rebuild pending state, while
-  /// tool cards and run notices cannot be interleaved into message history and
-  /// therefore stay hidden once that history is complete.
+  /// tool cards, run notices, and terminal failure/cancellation cards
+  /// ([_applyRunFailed], [_applyRunCancelled]) cannot be interleaved into
+  /// message history and therefore stay hidden once that history is complete.
   bool _isHistoricalRunEvent(TuringEvent event) {
     final watermark = _replayWatermarkSequence;
     if (watermark != null && event.sequence <= watermark) return true;
@@ -414,31 +869,110 @@ class _ChatScreenState extends State<ChatScreen> {
   void _clearApproval(TuringEvent event) {
     final approvalId = _asString(event.payload['approvalId']);
     if (approvalId == null) return;
-    setState(
-      () => _approvals.removeWhere(
-        (approval) => approval.approvalId == approvalId,
-      ),
-    );
+    setState(() {
+      _approvals.removeWhere((approval) => approval.approvalId == approvalId);
+      // The backend can resolve an approval by itself (e.g. expiry) while a
+      // decision RPC for it is in flight or already failed — either way,
+      // that approval's own card is gone now, so neither the in-flight
+      // guard nor its own membership in the decision-failure set should
+      // outlive it. This stream event is authoritative over that RPC's own
+      // outcome (round 12, finding 1): see [_approve]/[_deny]'s `catch`.
+      _approvalsInFlight.remove(approvalId);
+      _clearApprovalActionFailureFor(approvalId);
+    });
   }
 
   Future<void> _sendMessage() async {
+    // The composer's `enabled`/`onPressed` gating in `build()` is the
+    // primary defence, but `TextField.onSubmitted` stays wired to this
+    // method regardless of `enabled` — that flag only affects Flutter's own
+    // focus/input routing, not whether this callback itself runs. A queued
+    // IME commit (captured before the field became disabled) or any future
+    // programmatic caller could still invoke it directly, so this method
+    // must refuse on its own rather than trust the UI to have blocked it.
+    // [_sending] is one of the flags [_composerDisabled] combines, so this
+    // same guard also refuses a second, overlapping attempt while one is
+    // already in flight — see [_sending]'s own doc for why that matters.
+    if (_composerDisabled) return;
     final text = _controller.text.trim();
     if (text.isEmpty) return;
-    setState(
-      () => _messages.add(
-        _MessageEntry.user(
-          messageId: 'local_${DateTime.now().microsecondsSinceEpoch}',
-          content: text,
-        ),
-      ),
+    // Captured by reference (not looked up again later): `_messages` may
+    // grow while this RPC is in flight (an unrelated run's own stream
+    // events), so finding "this attempt's bubble" later means finding THIS
+    // object, not re-deriving it from state that has since moved on.
+    final attempt = _MessageEntry.user(
+      messageId: 'local_${DateTime.now().microsecondsSinceEpoch}',
+      content: text,
     );
+    setState(() {
+      _messages.add(attempt);
+      _sending = true;
+    });
     _controller.clear();
     _scrollToBottom();
-    await widget.apiClient.sendMessage(
-      sessionId: widget.sessionId,
-      content: text,
-      modelProvider: _modelProvider,
-    );
+    // `sendMessage` (`TuringApi`, `networking/api_client.dart`) resolves once
+    // a run is queued and rejects otherwise — the real `TuringGrpcApi`
+    // implementation (`networking/grpc_client.dart`) rejects with a
+    // `GrpcError` from the underlying call, or a `TuringApiException` if the
+    // stream ends having never queued one. Both `implements Exception`
+    // (unlike `Error` and its subtypes), so `on Exception` catches exactly
+    // this RPC failure boundary without masking a programming bug elsewhere
+    // in this method. Left unguarded, this `await` rejecting becomes an
+    // unhandled Future rejection — the bubble above is added, then silence.
+    try {
+      await widget.apiClient.sendMessage(
+        sessionId: widget.sessionId,
+        content: text,
+        modelProvider: _modelProvider,
+      );
+      if (!mounted) return;
+      setState(() => _sending = false);
+    } on Exception catch (error) {
+      if (!mounted) return;
+      setState(() {
+        // Whether the composer actually re-enables still depends on
+        // [_composerDisabled]'s OTHER flags: if the stream ended or startup
+        // failed while this RPC was pending, clearing [_sending] alone
+        // will not unblock it, which is exactly the desired behaviour —
+        // this send's own outcome must never override a startup/stream
+        // state that arrived independently of it.
+        _sending = false;
+        // The user's own text is restored either way, confirmed failure or
+        // not — they can retry or edit it instead of retyping it from
+        // memory. Only the CARD differs: [_isConfirmedPreEnqueueSendFailure]
+        // picks between the two truthfully, per its own doc — everything
+        // else about recovering from this rejection (draft restoration,
+        // anchoring, the mounted guard above) is identical for both.
+        _controller.text = text;
+        // Anchored immediately after `attempt`, never appended to the
+        // list's end: an unrelated stream event for another in-flight run
+        // may have already been appended while this RPC was pending, and
+        // this outcome must still read as belonging to ITS OWN bubble, not
+        // to whatever happens to be last.
+        _insertAfterEntry(
+          attempt,
+          _isConfirmedPreEnqueueSendFailure(error)
+              ? _MessageSendFailureEntry(_messageSendFailedNotice)
+              : _MessageSendUnconfirmedEntry(_messageSendUnconfirmedNotice),
+        );
+      });
+      _scrollToBottom();
+    }
+  }
+
+  /// Inserts [entry] immediately after [origin] in [_messages] rather than
+  /// at the list's end. [origin] must already be present; falls back to
+  /// appending if it somehow is not (defensive — entries are never removed
+  /// from [_messages] once added, so this should not happen in practice).
+  /// Must be called from inside a `setState` — it mutates [_messages]
+  /// directly and does not schedule a rebuild itself.
+  void _insertAfterEntry(_ChatEntry origin, _ChatEntry entry) {
+    final index = _messages.indexOf(origin);
+    if (index == -1) {
+      _messages.add(entry);
+      return;
+    }
+    _messages.insert(index + 1, entry);
   }
 
   void _scrollToBottom() {
@@ -450,6 +984,25 @@ class _ChatScreenState extends State<ChatScreen> {
         curve: Curves.easeOut,
       );
     });
+  }
+
+  /// Truthful copy for the composer's hint text and send-button tooltip in
+  /// every state `build()` can be in. Checked in this order because a
+  /// still-loading composer must say so specifically, never "Send" — even
+  /// though [_initializing] is also one of the four flags [_composerDisabled]
+  /// combines, so checking that first would collapse the distinct loading
+  /// case into the same generic unavailable copy used for a real drop.
+  /// [_startupFailed]/[_streamEnded] are checked before [_sending] for the
+  /// same reason in reverse: they describe this SESSION as broken, which
+  /// stays true regardless of how the current send resolves, so that copy
+  /// must win over a merely transient "Sending..." if both were ever true
+  /// at once (an event-stream drop landing while a `sendMessage` RPC — a
+  /// separate stream — is still outstanding).
+  String _composerCopy(String readyCopy) {
+    if (_initializing) return _loadingNotice;
+    if (_startupFailed || _streamEnded) return _streamEndedNotice;
+    if (_sending) return _sendingNotice;
+    return readyCopy;
   }
 
   @override
@@ -474,14 +1027,45 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ),
-          if (_historyLoadFailed) _SessionNotice(message: _historyFailedNotice),
+          if (_historyLoadFailed)
+            _SessionNotice(
+              // `_historyFailedNotice`'s "This session is live from here on"
+              // is only true while a subscription is CURRENTLY able to
+              // deliver. That fails on [_startupFailed] (no subscription
+              // will ever exist, whether from the watermark or from
+              // [_openSubscription] itself) just as surely as on
+              // [_streamEnded] (a subscription that opened fine has since
+              // gone dark, recoverably or not — see [_handleStreamEnded]):
+              // either one alone already makes the claim false, and
+              // [_streamEnded] is set ASYNCHRONOUSLY, after this banner may
+              // already be showing the live copy, so it must be checked
+              // here too, not just at first render. Both flags share the
+              // same corrected copy because the distinction between them —
+              // permanent vs. recoverable — is already carried by whether
+              // the connection-lost notice below persists or later clears.
+              message: _startupFailed || _streamEnded
+                  ? _historyFailedNoSubscriptionNotice
+                  : _historyFailedNotice,
+            ),
           if (_streamEnded) _SessionNotice(message: _streamEndedNotice),
+          if (_approvalActionFailedApprovalIds.isNotEmpty)
+            _SessionNotice(
+              message: _approvalActionFailedNotice,
+              // Distinct from both the connection-lost banner's icon AND
+              // `TerminalOutcomeCard`'s (used by every card in the
+              // transcript, including this same screen's own
+              // `MessageSendUnconfirmedCard`): this banner must be
+              // findable and readable as its own, unambiguous thing, not
+              // visually or programmatically conflated with either.
+              icon: Icons.warning_amber_rounded,
+            ),
           for (final approval in _approvals)
             ApprovalCard(
               toolName: approval.toolName,
               argsSummary: approval.argsSummary,
               onApprove: () => _approve(approval),
               onDeny: () => _deny(approval),
+              busy: _approvalsInFlight.contains(approval.approvalId),
             ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
@@ -508,16 +1092,22 @@ class _ChatScreenState extends State<ChatScreen> {
                   Expanded(
                     child: TextField(
                       controller: _controller,
+                      enabled: !_composerDisabled,
                       onSubmitted: (_) => _sendMessage(),
-                      decoration: const InputDecoration(
-                        hintText: 'Ask Turing...',
+                      decoration: InputDecoration(
+                        hintText: _composerCopy('Ask Turing...'),
                       ),
                     ),
                   ),
                   IconButton(
-                    tooltip: 'Send',
-                    icon: const Icon(Icons.send),
-                    onPressed: _sendMessage,
+                    tooltip: _composerCopy('Send'),
+                    icon: (_initializing || _sending)
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.send),
+                    onPressed: _composerDisabled ? null : _sendMessage,
                   ),
                 ],
               ),
@@ -528,24 +1118,118 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// Whether [approvalId] is still present in [_approvals] — i.e. still
+  /// pending a decision, as opposed to already resolved by ANY means (an
+  /// approve, a deny, an expiry, or a consumption) via the event stream.
+  /// Read by [_approve]/[_deny]'s own `catch` (round 12, finding 1): the
+  /// event stream is authoritative over a decision RPC's own outcome, so a
+  /// rejection for an approval that the stream already resolved while the
+  /// RPC was in flight must be ignored rather than recorded as a fresh
+  /// failure.
+  bool _isApprovalPending(String approvalId) =>
+      _approvals.any((item) => item.approvalId == approvalId);
+
+  /// Removes [approvalId] from [_approvalActionFailedApprovalIds] — a no-op
+  /// if it is not a member. Scoped to exactly this one id (round 12,
+  /// finding 2) so resolving or retrying one approval never hides a
+  /// decision-failure banner still owed to a DIFFERENT approval also
+  /// pending on screen — see that field's own doc. Called both when a NEW
+  /// decision attempt starts for this approval ([_approve]/[_deny],
+  /// clearing their own stale failure right away, even before the new
+  /// attempt itself resolves) and when the approval is resolved by ANY
+  /// means via the event stream ([_clearApproval]). Must be called from
+  /// inside a `setState`.
+  void _clearApprovalActionFailureFor(String approvalId) {
+    _approvalActionFailedApprovalIds.remove(approvalId);
+  }
+
   Future<void> _approve(_PendingApproval approval) async {
-    await widget.apiClient.approveApproval(approval.approvalId);
-    if (!mounted) return;
-    setState(
-      () => _approvals.removeWhere(
-        (item) => item.approvalId == approval.approvalId,
-      ),
-    );
+    // Approve and Deny are mutually exclusive outcomes for the SAME
+    // approval, so a duplicate tap or the other action racing an
+    // already-in-flight decision for this one must be refused here, not
+    // just at the button's own disabled state — the same reasoning
+    // `_sendMessage` applies to its own `_composerDisabled` guard.
+    if (_approvalsInFlight.contains(approval.approvalId)) return;
+    setState(() {
+      _approvalsInFlight.add(approval.approvalId);
+      _clearApprovalActionFailureFor(approval.approvalId);
+    });
+    // Left unguarded, this `await` rejecting is an unhandled Future error —
+    // the same hazard `_sendMessage` guards against, and just as reachable:
+    // the backend can reject this decision (an already-resolved approval, a
+    // dropped connection, ...) for reasons this client cannot always
+    // prevent. `GrpcError`/[TuringApiException] both `implements Exception`,
+    // so `on Exception` catches exactly this RPC failure boundary.
+    try {
+      await widget.apiClient.approveApproval(approval.approvalId);
+      if (!mounted) return;
+      setState(() {
+        _approvals.removeWhere(
+          (item) => item.approvalId == approval.approvalId,
+        );
+        _approvalsInFlight.remove(approval.approvalId);
+        // Provably a no-op today: a fresh attempt always clears its own id
+        // right away (above, before this `await`), and `_approvalsInFlight`
+        // blocks any OTHER concurrent attempt for the same id from
+        // re-adding it before this one finishes. Kept anyway so this
+        // success path stays explicitly self-consistent — mirroring
+        // `_clearApproval` — rather than relying on that invariant holding
+        // across future changes.
+        _clearApprovalActionFailureFor(approval.approvalId);
+      });
+    } on Exception catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _approvalsInFlight.remove(approval.approvalId);
+        // A stream lifecycle event may have ALREADY resolved (or otherwise
+        // removed) this very approval — e.g. it expired, or another client
+        // decided it — WHILE the `await` above was still outstanding; see
+        // `_clearApproval`, which is authoritative and runs the moment that
+        // event arrives, regardless of this RPC's own eventual outcome
+        // (round 12, finding 1). This rejection landing only now, for an
+        // approval no longer even pending, must not resurrect a notice for
+        // it. Only when the approval is STILL pending does the failure
+        // belong on screen: its card stays in `_approvals` so it remains
+        // actionable — the decision was never confirmed, so removing it
+        // here would silently drop the user's request instead of letting
+        // them retry it. The notice is generic and never echoes the raw
+        // error — see `_approvalActionFailedNotice`'s own doc.
+        if (_isApprovalPending(approval.approvalId)) {
+          _approvalActionFailedApprovalIds.add(approval.approvalId);
+        }
+      });
+    }
   }
 
   Future<void> _deny(_PendingApproval approval) async {
-    await widget.apiClient.denyApproval(approval.approvalId);
-    if (!mounted) return;
-    setState(
-      () => _approvals.removeWhere(
-        (item) => item.approvalId == approval.approvalId,
-      ),
-    );
+    if (_approvalsInFlight.contains(approval.approvalId)) return;
+    setState(() {
+      _approvalsInFlight.add(approval.approvalId);
+      _clearApprovalActionFailureFor(approval.approvalId);
+    });
+    try {
+      await widget.apiClient.denyApproval(approval.approvalId);
+      if (!mounted) return;
+      setState(() {
+        _approvals.removeWhere(
+          (item) => item.approvalId == approval.approvalId,
+        );
+        _approvalsInFlight.remove(approval.approvalId);
+        // See `_approve`'s own success path for why this is a provable
+        // no-op, kept only for explicit self-consistency.
+        _clearApprovalActionFailureFor(approval.approvalId);
+      });
+    } on Exception catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _approvalsInFlight.remove(approval.approvalId);
+        // See `_approve`'s own `catch` for why this is conditional on the
+        // approval still being pending (round 12, finding 1).
+        if (_isApprovalPending(approval.approvalId)) {
+          _approvalActionFailedApprovalIds.add(approval.approvalId);
+        }
+      });
+    }
   }
 
   @override
@@ -583,16 +1267,30 @@ class _ChatMessageTile extends StatelessWidget {
         );
       case _RunNoticeEntry notice:
         return RunNoticeCard(note: notice.note);
+      case _RunFailureEntry failure:
+        return RunFailureCard(message: failure.message);
+      case _RunCancelledEntry cancelled:
+        return RunCancelledCard(message: cancelled.message);
+      case _MessageSendUnconfirmedEntry sendUnconfirmed:
+        return MessageSendUnconfirmedCard(message: sendUnconfirmed.message);
+      case _MessageSendFailureEntry sendFailed:
+        return MessageSendFailureCard(message: sendFailed.message);
     }
   }
 }
 
-/// Persistent, screen-reader-announced banner for a session whose event stream
-/// is gone. Presentational only: the parent owns when it is shown.
+/// Persistent, screen-reader-announced banner for a screen-level notice —
+/// an event stream that is gone, history that failed to load, or an
+/// approval decision the backend rejected. Presentational only: the parent
+/// owns when it is shown and which [icon] fits its cause.
 class _SessionNotice extends StatelessWidget {
-  const _SessionNotice({required this.message});
+  const _SessionNotice({required this.message, this.icon = Icons.cloud_off});
 
   final String message;
+
+  /// Defaults to the original connection-lost glyph so every pre-existing
+  /// caller keeps its exact appearance unchanged.
+  final IconData icon;
 
   @override
   Widget build(BuildContext context) {
@@ -606,11 +1304,7 @@ class _SessionNotice extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         child: Row(
           children: [
-            Icon(
-              Icons.cloud_off,
-              size: 18,
-              color: colorScheme.onErrorContainer,
-            ),
+            Icon(icon, size: 18, color: colorScheme.onErrorContainer),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
@@ -750,6 +1444,64 @@ class _RunNoticeEntry extends _ChatEntry {
   _RunNoticeEntry(this.note);
 
   final String note;
+
+  @override
+  void dispose() {}
+}
+
+class _RunFailureEntry extends _ChatEntry {
+  _RunFailureEntry(this.message);
+
+  final String message;
+
+  @override
+  void dispose() {}
+}
+
+class _RunCancelledEntry extends _ChatEntry {
+  _RunCancelledEntry(this.message);
+
+  final String message;
+
+  @override
+  void dispose() {}
+}
+
+/// A `sendMessage` RPC rejected before any `RunQueued` event ever arrived,
+/// with a status NOT in [_ChatScreenState._isConfirmedPreEnqueueSendFailure]'s
+/// allowlist — see [MessageSendUnconfirmedCard] for why the true outcome is
+/// unknown, not a confirmed failure, and must never be conflated with
+/// [_RunFailureEntry] or [_MessageSendFailureEntry]. Inserted immediately
+/// after the optimistic [_MessageEntry.user] bubble for the same attempt via
+/// [_ChatScreenState._insertAfterEntry] in [_ChatScreenState._sendMessage]'s
+/// own `catch` — never appended to the list's end, and never from the event
+/// stream, so it stays anchored to its own attempt even if an unrelated
+/// stream event for another in-flight run arrives first.
+class _MessageSendUnconfirmedEntry extends _ChatEntry {
+  _MessageSendUnconfirmedEntry(this.message);
+
+  final String message;
+
+  @override
+  void dispose() {}
+}
+
+/// A `sendMessage` RPC rejected before any `RunQueued` event ever arrived,
+/// with a status
+/// [_ChatScreenState._isConfirmedPreEnqueueSendFailure] confirms occurred
+/// before `EnqueueUserMessage` — see [MessageSendFailureCard] for the exact
+/// allowlist and why each entry qualifies, and why this must never be
+/// conflated with [_MessageSendUnconfirmedEntry] or [_RunFailureEntry].
+/// Inserted immediately after the optimistic [_MessageEntry.user] bubble for
+/// the same attempt via [_ChatScreenState._insertAfterEntry] in
+/// [_ChatScreenState._sendMessage]'s own `catch` — never appended to the
+/// list's end, and never from the event stream, so it stays anchored to its
+/// own attempt even if an unrelated stream event for another in-flight run
+/// arrives first.
+class _MessageSendFailureEntry extends _ChatEntry {
+  _MessageSendFailureEntry(this.message);
+
+  final String message;
 
   @override
   void dispose() {}
