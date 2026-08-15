@@ -183,8 +183,14 @@ func TestRecoverAssignmentAtCutoffFailsAtConfiguredMaximumAttempt(t *testing.T) 
 	for _, event := range reconciliation.Events {
 		eventTypes = append(eventTypes, event.Type)
 	}
-	if want := []string{"agent.run.failed"}; !reflect.DeepEqual(eventTypes, want) {
+	// The notice must precede the terminal event it explains: the client has no
+	// agent.run.failed case, so without it a user who keeps losing their worker
+	// sees "Retrying after the worker became unavailable" and then nothing.
+	if want := []string{"agent.run.step", "agent.run.failed"}; !reflect.DeepEqual(eventTypes, want) {
 		t.Fatalf("exhausted recovery events = %v, want %v", eventTypes, want)
+	}
+	if got := runStepNote(t, reconciliation.Events[0]); got != "Gave up after 1 attempt" {
+		t.Fatalf("exhausted recovery note = %q, want %q", got, "Gave up after 1 attempt")
 	}
 	run, err := repo.GetRun(ctx, enqueued.RunID)
 	if err != nil {

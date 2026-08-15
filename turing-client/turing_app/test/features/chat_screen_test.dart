@@ -119,7 +119,7 @@ void main() {
     await tester.pump();
 
     expect(
-      find.text('This run stopped after reaching its tool iteration limit.'),
+      find.text('The run reported a step with no description'),
       findsOneWidget,
     );
     expect(find.text('still alive'), findsOneWidget);
@@ -153,7 +153,7 @@ void main() {
     await tester.pump();
 
     expect(
-      find.text('This run stopped after reaching its tool iteration limit.'),
+      find.text('The run reported a step with no description'),
       findsNWidgets(2),
     );
 
