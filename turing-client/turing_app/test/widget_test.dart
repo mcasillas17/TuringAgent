@@ -109,6 +109,9 @@ class _ClosableFakeApiClient implements ClosableTuringApi {
   }
 
   @override
+  Future<void> deleteSession({required String sessionId}) async {}
+
+  @override
   Future<Session> getSession({required String sessionId}) async {
     return Session(
       sessionId: sessionId,

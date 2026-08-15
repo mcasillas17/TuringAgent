@@ -439,6 +439,121 @@ class GetSessionRequest extends $pb.GeneratedMessage {
   void clearSessionId() => $_clearField(1);
 }
 
+class DeleteSessionRequest extends $pb.GeneratedMessage {
+  factory DeleteSessionRequest({
+    $core.String? sessionId,
+  }) {
+    final result = create();
+    if (sessionId != null) result.sessionId = sessionId;
+    return result;
+  }
+
+  DeleteSessionRequest._();
+
+  factory DeleteSessionRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory DeleteSessionRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'DeleteSessionRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'sessionId')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  DeleteSessionRequest clone() =>
+      DeleteSessionRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  DeleteSessionRequest copyWith(void Function(DeleteSessionRequest) updates) =>
+      super.copyWith((message) => updates(message as DeleteSessionRequest))
+          as DeleteSessionRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static DeleteSessionRequest create() => DeleteSessionRequest._();
+  @$core.override
+  DeleteSessionRequest createEmptyInstance() => create();
+  static $pb.PbList<DeleteSessionRequest> createRepeated() =>
+      $pb.PbList<DeleteSessionRequest>();
+  @$core.pragma('dart2js:noInline')
+  static DeleteSessionRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<DeleteSessionRequest>(create);
+  static DeleteSessionRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get sessionId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set sessionId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasSessionId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearSessionId() => $_clearField(1);
+}
+
+class DeleteSessionResponse extends $pb.GeneratedMessage {
+  factory DeleteSessionResponse({
+    $core.String? sessionId,
+  }) {
+    final result = create();
+    if (sessionId != null) result.sessionId = sessionId;
+    return result;
+  }
+
+  DeleteSessionResponse._();
+
+  factory DeleteSessionResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory DeleteSessionResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'DeleteSessionResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'sessionId')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  DeleteSessionResponse clone() =>
+      DeleteSessionResponse()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  DeleteSessionResponse copyWith(
+          void Function(DeleteSessionResponse) updates) =>
+      super.copyWith((message) => updates(message as DeleteSessionResponse))
+          as DeleteSessionResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static DeleteSessionResponse create() => DeleteSessionResponse._();
+  @$core.override
+  DeleteSessionResponse createEmptyInstance() => create();
+  static $pb.PbList<DeleteSessionResponse> createRepeated() =>
+      $pb.PbList<DeleteSessionResponse>();
+  @$core.pragma('dart2js:noInline')
+  static DeleteSessionResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<DeleteSessionResponse>(create);
+  static DeleteSessionResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get sessionId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set sessionId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasSessionId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearSessionId() => $_clearField(1);
+}
+
 class ListMessagesRequest extends $pb.GeneratedMessage {
   factory ListMessagesRequest({
     $core.String? sessionId,

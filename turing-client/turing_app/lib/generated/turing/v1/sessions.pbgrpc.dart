@@ -53,6 +53,13 @@ class SessionServiceClient extends $grpc.Client {
     return $createUnaryCall(_$getSession, request, options: options);
   }
 
+  $grpc.ResponseFuture<$0.DeleteSessionResponse> deleteSession(
+    $0.DeleteSessionRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$deleteSession, request, options: options);
+  }
+
   $grpc.ResponseFuture<$0.ListMessagesResponse> listMessages(
     $0.ListMessagesRequest request, {
     $grpc.CallOptions? options,
@@ -105,6 +112,11 @@ class SessionServiceClient extends $grpc.Client {
           '/turing.v1.SessionService/GetSession',
           ($0.GetSessionRequest value) => value.writeToBuffer(),
           $0.Session.fromBuffer);
+  static final _$deleteSession =
+      $grpc.ClientMethod<$0.DeleteSessionRequest, $0.DeleteSessionResponse>(
+          '/turing.v1.SessionService/DeleteSession',
+          ($0.DeleteSessionRequest value) => value.writeToBuffer(),
+          $0.DeleteSessionResponse.fromBuffer);
   static final _$listMessages =
       $grpc.ClientMethod<$0.ListMessagesRequest, $0.ListMessagesResponse>(
           '/turing.v1.SessionService/ListMessages',
@@ -162,6 +174,15 @@ abstract class SessionServiceBase extends $grpc.Service {
         false,
         ($core.List<$core.int> value) => $0.GetSessionRequest.fromBuffer(value),
         ($0.Session value) => value.writeToBuffer()));
+    $addMethod(
+        $grpc.ServiceMethod<$0.DeleteSessionRequest, $0.DeleteSessionResponse>(
+            'DeleteSession',
+            deleteSession_Pre,
+            false,
+            false,
+            ($core.List<$core.int> value) =>
+                $0.DeleteSessionRequest.fromBuffer(value),
+            ($0.DeleteSessionResponse value) => value.writeToBuffer()));
     $addMethod(
         $grpc.ServiceMethod<$0.ListMessagesRequest, $0.ListMessagesResponse>(
             'ListMessages',
@@ -228,6 +249,15 @@ abstract class SessionServiceBase extends $grpc.Service {
 
   $async.Future<$0.Session> getSession(
       $grpc.ServiceCall call, $0.GetSessionRequest request);
+
+  $async.Future<$0.DeleteSessionResponse> deleteSession_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.DeleteSessionRequest> $request) async {
+    return deleteSession($call, await $request);
+  }
+
+  $async.Future<$0.DeleteSessionResponse> deleteSession(
+      $grpc.ServiceCall call, $0.DeleteSessionRequest request);
 
   $async.Future<$0.ListMessagesResponse> listMessages_Pre(
       $grpc.ServiceCall $call,

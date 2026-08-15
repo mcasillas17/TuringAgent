@@ -144,6 +144,14 @@ class TuringGrpcApi implements ClosableTuringApi {
   }
 
   @override
+  Future<void> deleteSession({required String sessionId}) async {
+    await _sessions.deleteSession(
+      sessionpb.DeleteSessionRequest(sessionId: sessionId),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+  }
+
+  @override
   Future<List<Message>> listMessages({
     required String sessionId,
     int limit = 50,

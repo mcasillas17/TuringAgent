@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:grpc/grpc.dart' as grpc;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/features/search/search_screen.dart';
 import 'package:turing_flutter_app/features/sessions/session_list_screen.dart';
@@ -123,6 +124,103 @@ void main() {
       expect(api.listMessagesSessionIds, ['search-session-42']);
     });
   });
+
+  group('SessionListScreen delete', () {
+    testWidgets('confirming deletes the session and refreshes the list', (
+      tester,
+    ) async {
+      final api = _FakeTuringApi(
+        sessions: [_session(id: 'session-doomed', title: 'Doomed chat')],
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SessionListScreen(
+            apiClient: api,
+            eventSourceFactory: _TrackingEventSourceFactory().create,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Delete chat'));
+      await tester.pumpAndSettle();
+
+      // The dialog must say the deletion is permanent, not just "are you sure".
+      expect(find.textContaining('cannot be undone'), findsOneWidget);
+      // The dialog must not overclaim: sandbox files are not session-scoped and
+      // survive the delete, so saying "everything it produced" would be a lie.
+      expect(find.textContaining('sandbox are not removed'), findsOneWidget);
+      expect(find.textContaining('Doomed chat'), findsWidgets);
+
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      expect(api.deletedSessionIds, ['session-doomed']);
+
+      // Let the refreshed listSessions() future resolve and rebuild.
+      await tester.pumpAndSettle();
+      // Removing the _refreshSessions() call would leave the row on screen, so
+      // asserting the RPC alone is not enough.
+      expect(find.text('Doomed chat'), findsNothing);
+      expect(find.text('No sessions yet.'), findsOneWidget);
+    });
+
+    testWidgets('cancelling deletes nothing', (tester) async {
+      final api = _FakeTuringApi(
+        sessions: [_session(id: 'session-safe', title: 'Safe chat')],
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SessionListScreen(
+            apiClient: api,
+            eventSourceFactory: _TrackingEventSourceFactory().create,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Delete chat'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(api.deletedSessionIds, isEmpty);
+      expect(find.text('Safe chat'), findsOneWidget);
+    });
+
+    testWidgets('a run in progress is explained, not reported as a bug', (
+      tester,
+    ) async {
+      final api = _FakeTuringApi(
+        sessions: [_session(id: 'session-busy', title: 'Busy chat')],
+        deleteError: grpc.GrpcError.failedPrecondition(
+          'session has a run in progress',
+        ),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SessionListScreen(
+            apiClient: api,
+            eventSourceFactory: _TrackingEventSourceFactory().create,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Delete chat'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      // Assert on wording ONLY the friendly branch produces: the raw GrpcError
+      // message also contains "run in progress", so matching that would pass
+      // even with the classifier dead.
+      expect(find.textContaining('Wait for it to finish'), findsOneWidget);
+      expect(find.textContaining('Could not delete'), findsNothing);
+      // The session survives a refused delete.
+      expect(find.text('Busy chat'), findsOneWidget);
+    });
+  });
 }
 
 Session _session({required String id, required String title}) {
@@ -166,9 +264,10 @@ class _SessionCall {
 }
 
 class _FakeTuringApi implements TuringApi {
-  _FakeTuringApi({required this.sessions});
+  _FakeTuringApi({required this.sessions, this.deleteError});
 
   final List<Session> sessions;
+  final Object? deleteError;
   final List<_SearchCall> searchCalls = [];
   final List<_SessionCall> sessionCalls = [];
   final List<String> sessionRequests = [];
@@ -204,6 +303,15 @@ class _FakeTuringApi implements TuringApi {
     return {
       'enabledProviders': ['ollama'],
     };
+  }
+
+  final List<String> deletedSessionIds = [];
+
+  @override
+  Future<void> deleteSession({required String sessionId}) async {
+    if (deleteError != null) throw deleteError!;
+    deletedSessionIds.add(sessionId);
+    sessions.removeWhere((session) => session.sessionId == sessionId);
   }
 
   @override

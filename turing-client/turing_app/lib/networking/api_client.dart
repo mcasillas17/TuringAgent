@@ -14,6 +14,12 @@ abstract class TuringApi {
 
   Future<Session> getSession({required String sessionId});
 
+  /// Removes a session, its messages and its run history. Permanent: there is
+  /// no undo, and the content also leaves the search index. Note this does NOT
+  /// remove files the session wrote into the sandbox — mcp-files has no notion
+  /// of a session, so those outlive it.
+  Future<void> deleteSession({required String sessionId});
+
   Future<List<Message>> listMessages({
     required String sessionId,
     int limit = 50,

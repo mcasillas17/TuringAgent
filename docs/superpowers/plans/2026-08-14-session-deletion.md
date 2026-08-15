@@ -1,10 +1,12 @@
 # Session Deletion Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Let a user delete a session and everything it produced. This is deferral #1 in `docs/VISION.md` and the outstanding failure of commitment #1 — a system that remembers across sessions and cannot forget is not keeping its first promise.
 
 **Scope, decided 2026-08-14:** whole-session deletion only (not individual messages), and audit rows **survive with their content scrubbed**.
+
+**Status: implemented 2026-08-15.** One correction found during implementation: this plan says the audit scrub must happen *before* the cascade. Mutation testing showed that is not the constraint — `audit_logs` has no foreign key, so nothing cascades into it and the `UPDATE` works either side of the `DELETE`. What is genuinely order-sensitive is **capturing the run ids**, since `SELECT id FROM agent_runs WHERE session_id = ?` returns nothing once the cascade has run.
 
 **Tech Stack:** Go 1.23, `orchestrator-go`, proto change + regeneration, Flutter client affordance.
 
@@ -38,16 +40,16 @@ The scrub is not cosmetic: `toolAuditPayload` puts `args` (tool arguments — pa
 
 **Files:** `turing-backend/orchestrator-go/internal/repository/sessions.go` (or a new `session_delete.go`); tests alongside.
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - a session with messages, runs, jobs, events, tool calls and approvals is fully removed — assert each table has zero rows for it;
   - its messages are gone from **FTS**: `SearchMessages` for a distinctive term in the deleted session returns nothing (this is the test that catches a soft-delete regression);
   - audit rows for the session's runs **survive**, with `payload_json` replaced and every other column intact;
   - audit rows belonging to **other** sessions are untouched (the scrub must be correlated, not global);
   - deleting an unknown session id returns a not-found error, not a silent success.
 
-- [ ] **Step 2: Run, confirm failure.**
+- [x] **Step 2: Run, confirm failure.**
 
-- [ ] **Step 3: Implement.** In one transaction, in this order:
+- [x] **Step 3: Implement.** In one transaction, in this order:
   1. `SELECT id FROM agent_runs WHERE session_id = ?` — capture the run ids **first**; after step 3 they are gone.
   2. `UPDATE audit_logs SET payload_json = ? WHERE correlation_id IN (<those run ids>)`.
   3. `DELETE FROM sessions WHERE id = ?` and let the cascade do the rest.
@@ -55,19 +57,19 @@ The scrub is not cosmetic: `toolAuditPayload` puts `args` (tool arguments — pa
 
   Do not hand-delete the child tables — that duplicates the FK graph in Go and will drift. If a table turns out **not** to cascade, fix the schema rather than the Go.
 
-- [ ] **Step 4: Run, confirm pass. Prove it discriminates** — swap the real `DELETE` for a `deleted_at` flag and confirm the FTS test fails.
+- [x] **Step 4: Run, confirm pass. Prove it discriminates** — swap the real `DELETE` for a `deleted_at` flag and confirm the FTS test fails.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ## Task 2: Refuse to delete a session with a live run
 
 Deleting rows out from under a worker mid-execution means the runtime finishes a run whose rows no longer exist, and reconciliation then operates on nothing. The cheapest correct answer is to refuse.
 
-- [ ] **Step 1: Write the failing test** — deleting a session whose run is `running`/`waiting_approval` returns `FailedPrecondition` and deletes nothing.
-- [ ] **Step 2: Run, confirm failure.**
-- [ ] **Step 3: Implement** the guard in the same transaction as Task 1, before any mutation.
-- [ ] **Step 4: Run, confirm pass; assert nothing was deleted on the refusal path.**
-- [ ] **Step 5: Commit.**
+- [x] **Step 1: Write the failing test** — deleting a session whose run is `running`/`waiting_approval` returns `FailedPrecondition` and deletes nothing.
+- [x] **Step 2: Run, confirm failure.**
+- [x] **Step 3: Implement** the guard in the same transaction as Task 1, before any mutation.
+- [x] **Step 4: Run, confirm pass; assert nothing was deleted on the refusal path.**
+- [x] **Step 5: Commit.**
 
 > `CancelRun`/`CancelRunWithEvent` already exist (`runs.go:299,357`). Cancel-then-delete is a reasonable follow-up, but it is a **second** decision (what does the user see when their delete cancels work?) and should not be smuggled in here. Refuse first; make it convenient later.
 
@@ -75,28 +77,28 @@ Deleting rows out from under a worker mid-execution means the runtime finishes a
 
 **Files:** `proto/turing/v1/sessions.proto`, orchestrator `sessions` service, regenerated `gen/` + `turing-client/turing_app/lib/generated/`.
 
-- [ ] **Step 1:** Add `rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);` to `SessionService` (`sessions.proto:86-94`).
-- [ ] **Step 2:** Regenerate with the pinned toolchain and **commit the generated output** — `tools/proto/generate.sh`, then `tools/proto/check.sh` must pass. CI compares bytes.
-- [ ] **Step 3:** Implement the service method: not-found → `NotFound`, live run → `FailedPrecondition`, empty id → `InvalidArgument`.
-- [ ] **Step 4:** Service-level test asserting the status codes, not just the happy path.
-- [ ] **Step 5: Commit.**
+- [x] **Step 1:** Add `rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);` to `SessionService` (`sessions.proto:86-94`).
+- [x] **Step 2:** Regenerate with the pinned toolchain and **commit the generated output** — `tools/proto/generate.sh`, then `tools/proto/check.sh` must pass. CI compares bytes.
+- [x] **Step 3:** Implement the service method: not-found → `NotFound`, live run → `FailedPrecondition`, empty id → `InvalidArgument`.
+- [x] **Step 4:** Service-level test asserting the status codes, not just the happy path.
+- [x] **Step 5: Commit.**
 
 ## Task 4: Client affordance
 
 **Files:** `turing-client/turing_app/lib/features/sessions/`, `networking/`.
 
-- [ ] **Step 1:** Add `deleteSession` to the API client and a delete action in the session list.
-- [ ] **Step 2:** Confirm before deleting, and say what goes: the conversation and everything it produced, permanently, with no undo.
-- [ ] **Step 3:** Handle `FailedPrecondition` with a real message ("this session has a run in progress"), not a generic failure.
-- [ ] **Step 4:** Widget tests for confirm-then-delete, cancel-does-nothing, and the in-progress refusal.
-- [ ] **Step 5: Commit.**
+- [x] **Step 1:** Add `deleteSession` to the API client and a delete action in the session list.
+- [x] **Step 2:** Confirm before deleting, and say what goes: the conversation and everything it produced, permanently, with no undo.
+- [x] **Step 3:** Handle `FailedPrecondition` with a real message ("this session has a run in progress"), not a generic failure.
+- [x] **Step 4:** Widget tests for confirm-then-delete, cancel-does-nothing, and the in-progress refusal.
+- [x] **Step 5: Commit.**
 
 > **Merge-skew:** `2026-08-13-flutter-session-search.md` is still unimplemented and also touches the session list. Whoever lands second should expect a conflict there.
 
 ## Task 5: Update the documentation this closes
 
-- [ ] `docs/VISION.md`: remove session deletion from "Known gaps" and from deferral #1; note in "How we would know this is working" that commitment #1's deletion check now has an implementation.
-- [ ] Do **not** claim message-level deletion or "forget this fact" — both remain out of scope.
+- [x] `docs/VISION.md`: remove session deletion from "Known gaps" and from deferral #1; note in "How we would know this is working" that commitment #1's deletion check now has an implementation. *(All three done — the third was initially missed and caught in review; the falsifiability bullet also records that sandbox files outlive a deleted session.)*
+- [x] Do **not** claim message-level deletion or "forget this fact" — both remain out of scope.
 
 ---
 

@@ -392,3 +392,50 @@ func insertServiceSearchMessage(t *testing.T, ctx context.Context, database *db.
 		t.Fatalf("insert message %s: %v", id, err)
 	}
 }
+
+// Deletion is the only way a user can withdraw what they have said, so its
+// failure modes must be distinguishable over the wire: a client has to be able
+// to say "already gone" and "still running" rather than "something broke".
+func TestDeleteSessionReportsDistinctStatusCodes(t *testing.T) {
+	h := newSessionHarness(t)
+	ctx := context.Background()
+	client := turingv1.NewSessionServiceClient(h.conn)
+
+	if _, err := client.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: ""}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("empty session_id = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := client.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: "sess_missing"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("unknown session = %v, want NotFound", status.Code(err))
+	}
+
+	// A session whose run is still in flight must refuse rather than orphan it.
+	session, err := h.repo.CreateSession(ctx, "Busy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "in flight", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("live run = %v, want FailedPrecondition", status.Code(err))
+	}
+
+	// And the happy path actually removes it.
+	idle, err := h.repo.CreateSession(ctx, "Idle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: idle.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.GetSessionId() != idle.SessionID {
+		t.Fatalf("response session_id = %q, want %q", resp.GetSessionId(), idle.SessionID)
+	}
+	if _, err := client.GetSession(ctx, &turingv1.GetSessionRequest{SessionId: idle.SessionID}); status.Code(err) != codes.NotFound {
+		t.Fatalf("deleted session still readable: %v", status.Code(err))
+	}
+}

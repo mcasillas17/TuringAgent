@@ -71,6 +71,28 @@ func (s *Server) GetSession(ctx context.Context, req *turingv1.GetSessionRequest
 	return mapSession(session), nil
 }
 
+// DeleteSession removes a session and everything it produced. It is the only
+// way a user can withdraw what they have said, so the failure modes are
+// reported distinctly rather than collapsed into Internal: NotFound so the
+// client can say the session is already gone, and FailedPrecondition so it can
+// explain that work is still in flight rather than implying a bug.
+func (s *Server) DeleteSession(ctx context.Context, req *turingv1.DeleteSessionRequest) (*turingv1.DeleteSessionResponse, error) {
+	if req == nil || req.SessionId == "" {
+		return nil, status.Error(codes.InvalidArgument, "session_id is required")
+	}
+	if err := s.repo.DeleteSession(ctx, req.SessionId); err != nil {
+		switch {
+		case errors.Is(err, repository.ErrSessionNotFound):
+			return nil, status.Error(codes.NotFound, "session not found")
+		case errors.Is(err, repository.ErrSessionHasActiveRun):
+			return nil, status.Error(codes.FailedPrecondition, "session has a run in progress")
+		default:
+			return nil, status.Error(codes.Internal, "delete session failed")
+		}
+	}
+	return &turingv1.DeleteSessionResponse{SessionId: req.SessionId}, nil
+}
+
 func (s *Server) ListMessages(ctx context.Context, req *turingv1.ListMessagesRequest) (*turingv1.ListMessagesResponse, error) {
 	if req == nil || req.SessionId == "" {
 		return nil, status.Error(codes.InvalidArgument, "session_id is required")
