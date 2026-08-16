@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:grpc/grpc.dart' show GrpcError, StatusCode;
 
 import '../../constants/app_colors.dart';
@@ -1330,6 +1331,50 @@ class _SessionNotice extends StatelessWidget {
   }
 }
 
+/// Markdown styling for assistant turns. Code and inline code sit on the
+/// raised surface so they read as quoted machine output rather than prose,
+/// and headings stay close to body size — an answer inside a conversation
+/// should not shout like a document title.
+MarkdownStyleSheet _assistantMarkdown(
+  BuildContext context,
+  AppPalette palette,
+) {
+  final body = TextStyle(fontSize: 15, height: 1.6, color: palette.text);
+  final mono = TextStyle(
+    fontFamily: 'Menlo',
+    fontSize: 13,
+    height: 1.5,
+    color: palette.text,
+  );
+  return MarkdownStyleSheet(
+    p: body,
+    listBullet: body,
+    a: const TextStyle(color: AppColors.brand),
+    strong: body.copyWith(fontWeight: FontWeight.w600),
+    em: body.copyWith(fontStyle: FontStyle.italic),
+    h1: body.copyWith(fontSize: 19, fontWeight: FontWeight.w700),
+    h2: body.copyWith(fontSize: 17, fontWeight: FontWeight.w700),
+    h3: body.copyWith(fontSize: 15.5, fontWeight: FontWeight.w700),
+    code: mono.copyWith(backgroundColor: Colors.transparent),
+    codeblockDecoration: BoxDecoration(
+      color: palette.raised,
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: palette.border),
+    ),
+    codeblockPadding: const EdgeInsets.all(12),
+    blockquoteDecoration: BoxDecoration(
+      border: Border(left: BorderSide(color: palette.border, width: 3)),
+    ),
+    blockquotePadding: const EdgeInsets.only(left: 12),
+    tableBorder: TableBorder.all(color: palette.border),
+    tableCellsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+    horizontalRuleDecoration: BoxDecoration(
+      border: Border(top: BorderSide(color: palette.border)),
+    ),
+    blockSpacing: 10,
+  );
+}
+
 class _MessageBubble extends StatelessWidget {
   const _MessageBubble({required this.entry});
 
@@ -1388,19 +1433,20 @@ class _MessageBubble extends StatelessWidget {
             ),
           );
         }
+        // Rendered as markdown, not plain text: the assistant writes lists,
+        // code and tables, and a wall of unformatted characters is the
+        // difference between a transcript you can read and one you have to
+        // decode. Selectable so answers can be copied out.
         return Align(
           alignment: Alignment.centerLeft,
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 760),
             child: Padding(
               padding: const EdgeInsets.only(top: 6, bottom: 14, right: 40),
-              child: SelectableText(
-                content,
-                style: TextStyle(
-                  fontSize: 15,
-                  height: 1.6,
-                  color: palette.text,
-                ),
+              child: MarkdownBody(
+                data: content,
+                selectable: true,
+                styleSheet: _assistantMarkdown(context, palette),
               ),
             ),
           ),

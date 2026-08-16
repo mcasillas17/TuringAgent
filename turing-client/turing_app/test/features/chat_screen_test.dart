@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grpc/grpc.dart' show GrpcError;
 import 'package:turing_flutter_app/features/chat/message_send_failure_card.dart';
@@ -18,6 +19,43 @@ import 'package:turing_flutter_app/networking/api_client.dart';
 import 'package:turing_flutter_app/networking/event_source.dart';
 
 void main() {
+  testWidgets('assistant markdown renders as formatting, not raw syntax', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: const {
+          'messageId': 'msg_a',
+          'role': 'assistant',
+          'delta': '**bold** and `code`',
+        },
+      ),
+    );
+    await tester.pump();
+
+    // The assistant writes lists, code and tables; showing the raw characters
+    // makes a transcript you have to decode rather than read.
+    expect(find.textContaining('**bold**'), findsNothing);
+    expect(find.byType(MarkdownBody), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
   testWidgets('chat streams message deltas into one assistant bubble', (
     tester,
   ) async {
