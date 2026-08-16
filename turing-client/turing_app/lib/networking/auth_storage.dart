@@ -9,7 +9,17 @@ abstract class ClientAuthStorage {
 }
 
 class AuthStorage implements ClientAuthStorage {
-  const AuthStorage([this._storage = const FlutterSecureStorage()]);
+  const AuthStorage([this._storage = _defaultStorage]);
+
+  /// macOS defaults to the data-protection keychain, which only works for an
+  /// app signed with a keychain-access-group entitlement. A locally built
+  /// (adhoc-signed) app has no such entitlement, so every write fails at the OS
+  /// layer and the Future never completes — the Settings screen sits on
+  /// "Saving..." forever with no error. The legacy file-based keychain works
+  /// without a signing identity, which is what a local-first desktop app needs.
+  static const _defaultStorage = FlutterSecureStorage(
+    mOptions: MacOsOptions(useDataProtectionKeyChain: false),
+  );
 
   final FlutterSecureStorage _storage;
   static const _backendUrlKey = 'turing_backend_url';

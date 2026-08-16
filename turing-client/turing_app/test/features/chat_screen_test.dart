@@ -3485,7 +3485,7 @@ void main() {
         findsOneWidget,
         reason:
             'the send icon swaps for a spinner while disabled, matching '
-            'the existing loading affordance in session_list_screen.dart',
+            'the existing loading affordance in the shell sidebar',
       );
       expect(find.byIcon(Icons.send), findsNothing);
 
