@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:grpc/grpc.dart' show GrpcError, StatusCode;
 
+import '../../constants/app_colors.dart';
 import '../../models/message.dart';
 import '../../models/turing_event.dart';
 import '../../networking/api_client.dart';
@@ -22,11 +23,17 @@ class ChatScreen extends StatefulWidget {
     required this.sessionId,
     required this.apiClient,
     required this.eventSource,
+    this.embedded = false,
   });
 
   final String sessionId;
   final TuringApi apiClient;
   final TuringEventSource eventSource;
+
+  /// When hosted inside the shell there is already a Scaffold and the
+  /// conversation is the whole right-hand pane, so it must not nest another
+  /// Scaffold or repeat an app bar.
+  final bool embedded;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -1007,114 +1014,118 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Project Turing')),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListView.builder(
-              controller: _scrollController,
-              padding: const EdgeInsets.all(12),
-              itemCount: _messages.length,
-              // Key on the entry itself: `_loadInitialMessages` prepends
-              // history with `insertAll(0, ...)`, shifting every live entry's
-              // index. Without a key Flutter re-associates Elements by
-              // position, tearing down and re-subscribing each
-              // ValueListenableBuilder and resetting a running card's spinner.
-              itemBuilder: (context, index) => _ChatMessageTile(
-                key: ObjectKey(_messages[index]),
-                entry: _messages[index],
-              ),
+    final body = Column(
+      children: [
+        Expanded(
+          child: ListView.builder(
+            controller: _scrollController,
+            padding: const EdgeInsets.all(12),
+            itemCount: _messages.length,
+            // Key on the entry itself: `_loadInitialMessages` prepends
+            // history with `insertAll(0, ...)`, shifting every live entry's
+            // index. Without a key Flutter re-associates Elements by
+            // position, tearing down and re-subscribing each
+            // ValueListenableBuilder and resetting a running card's spinner.
+            itemBuilder: (context, index) => _ChatMessageTile(
+              key: ObjectKey(_messages[index]),
+              entry: _messages[index],
             ),
           ),
-          if (_historyLoadFailed)
-            _SessionNotice(
-              // `_historyFailedNotice`'s "This session is live from here on"
-              // is only true while a subscription is CURRENTLY able to
-              // deliver. That fails on [_startupFailed] (no subscription
-              // will ever exist, whether from the watermark or from
-              // [_openSubscription] itself) just as surely as on
-              // [_streamEnded] (a subscription that opened fine has since
-              // gone dark, recoverably or not — see [_handleStreamEnded]):
-              // either one alone already makes the claim false, and
-              // [_streamEnded] is set ASYNCHRONOUSLY, after this banner may
-              // already be showing the live copy, so it must be checked
-              // here too, not just at first render. Both flags share the
-              // same corrected copy because the distinction between them —
-              // permanent vs. recoverable — is already carried by whether
-              // the connection-lost notice below persists or later clears.
-              message: _startupFailed || _streamEnded
-                  ? _historyFailedNoSubscriptionNotice
-                  : _historyFailedNotice,
-            ),
-          if (_streamEnded) _SessionNotice(message: _streamEndedNotice),
-          if (_approvalActionFailedApprovalIds.isNotEmpty)
-            _SessionNotice(
-              message: _approvalActionFailedNotice,
-              // Distinct from both the connection-lost banner's icon AND
-              // `TerminalOutcomeCard`'s (used by every card in the
-              // transcript, including this same screen's own
-              // `MessageSendUnconfirmedCard`): this banner must be
-              // findable and readable as its own, unambiguous thing, not
-              // visually or programmatically conflated with either.
-              icon: Icons.warning_amber_rounded,
-            ),
-          for (final approval in _approvals)
-            ApprovalCard(
-              toolName: approval.toolName,
-              argsSummary: approval.argsSummary,
-              onApprove: () => _approve(approval),
-              onDeny: () => _deny(approval),
-              busy: _approvalsInFlight.contains(approval.approvalId),
-            ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+        ),
+        if (_historyLoadFailed)
+          _SessionNotice(
+            // `_historyFailedNotice`'s "This session is live from here on"
+            // is only true while a subscription is CURRENTLY able to
+            // deliver. That fails on [_startupFailed] (no subscription
+            // will ever exist, whether from the watermark or from
+            // [_openSubscription] itself) just as surely as on
+            // [_streamEnded] (a subscription that opened fine has since
+            // gone dark, recoverably or not — see [_handleStreamEnded]):
+            // either one alone already makes the claim false, and
+            // [_streamEnded] is set ASYNCHRONOUSLY, after this banner may
+            // already be showing the live copy, so it must be checked
+            // here too, not just at first render. Both flags share the
+            // same corrected copy because the distinction between them —
+            // permanent vs. recoverable — is already carried by whether
+            // the connection-lost notice below persists or later clears.
+            message: _startupFailed || _streamEnded
+                ? _historyFailedNoSubscriptionNotice
+                : _historyFailedNotice,
+          ),
+        if (_streamEnded) _SessionNotice(message: _streamEndedNotice),
+        if (_approvalActionFailedApprovalIds.isNotEmpty)
+          _SessionNotice(
+            message: _approvalActionFailedNotice,
+            // Distinct from both the connection-lost banner's icon AND
+            // `TerminalOutcomeCard`'s (used by every card in the
+            // transcript, including this same screen's own
+            // `MessageSendUnconfirmedCard`): this banner must be
+            // findable and readable as its own, unambiguous thing, not
+            // visually or programmatically conflated with either.
+            icon: Icons.warning_amber_rounded,
+          ),
+        for (final approval in _approvals)
+          ApprovalCard(
+            toolName: approval.toolName,
+            argsSummary: approval.argsSummary,
+            onApprove: () => _approve(approval),
+            onDeny: () => _deny(approval),
+            busy: _approvalsInFlight.contains(approval.approvalId),
+          ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+          child: Row(
+            children: [
+              Text(
+                'Model provider',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              const SizedBox(width: 12),
+              ModelProviderSelector(
+                value: _modelProvider,
+                onChanged: (value) => setState(() => _modelProvider = value),
+              ),
+            ],
+          ),
+        ),
+        SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
             child: Row(
               children: [
-                Text(
-                  'Model provider',
-                  style: Theme.of(context).textTheme.labelLarge,
+                Expanded(
+                  child: TextField(
+                    controller: _controller,
+                    enabled: !_composerDisabled,
+                    onSubmitted: (_) => _sendMessage(),
+                    decoration: InputDecoration(
+                      hintText: _composerCopy('Ask Turing...'),
+                    ),
+                  ),
                 ),
-                const SizedBox(width: 12),
-                ModelProviderSelector(
-                  value: _modelProvider,
-                  onChanged: (value) => setState(() => _modelProvider = value),
+                IconButton(
+                  tooltip: _composerCopy('Send'),
+                  icon: (_initializing || _sending)
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.send),
+                  onPressed: _composerDisabled ? null : _sendMessage,
                 ),
               ],
             ),
           ),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _controller,
-                      enabled: !_composerDisabled,
-                      onSubmitted: (_) => _sendMessage(),
-                      decoration: InputDecoration(
-                        hintText: _composerCopy('Ask Turing...'),
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: _composerCopy('Send'),
-                    icon: (_initializing || _sending)
-                        ? const SizedBox.square(
-                            dimension: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.send),
-                    onPressed: _composerDisabled ? null : _sendMessage,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
+    );
+    // Standalone (tests, deep links) still gets its own Scaffold; embedded
+    // in the shell it is just the right-hand pane.
+    if (widget.embedded) return body;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Project Turing')),
+      body: body,
     );
   }
 
@@ -1324,18 +1335,17 @@ class _MessageBubble extends StatelessWidget {
 
   final _MessageEntry entry;
 
+  /// A conversation should read as a conversation, not a column of equal-weight
+  /// boxes. So the two roles are rendered differently on purpose:
+  ///
+  /// The user's turn is a compact tinted block, right-aligned — it is short and
+  /// it is an instruction, so it should look like one. The assistant's turn is
+  /// plain text on the page at a comfortable measure, because it is the content
+  /// you actually came to read; wrapping it in a bubble made it compete with
+  /// the tool and notice cards around it.
   @override
   Widget build(BuildContext context) {
-    final alignment = entry.isUser
-        ? Alignment.centerRight
-        : Alignment.centerLeft;
-    final colorScheme = Theme.of(context).colorScheme;
-    final background = entry.isUser
-        ? colorScheme.primaryContainer
-        : colorScheme.surfaceContainerHighest;
-    final foreground = entry.isUser
-        ? colorScheme.onPrimaryContainer
-        : colorScheme.onSurface;
+    final palette = AppColors.of(context);
     // The builder wraps the chrome, not just the text: an entry can legitimately
     // hold no content — an assistant row adopted from a mid-run reopen before
     // its first delta, or one sealed by a tool call that arrived before any text
@@ -1346,18 +1356,52 @@ class _MessageBubble extends StatelessWidget {
       valueListenable: entry.content,
       builder: (context, content, _) {
         if (content.isEmpty) return const SizedBox.shrink();
-        return Align(
-          alignment: alignment,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 640),
-            child: Container(
-              margin: const EdgeInsets.symmetric(vertical: 4),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: background,
-                borderRadius: BorderRadius.circular(8),
+        if (entry.isUser) {
+          return Align(
+            alignment: Alignment.centerRight,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Container(
+                margin: const EdgeInsets.only(top: 14, bottom: 6, left: 40),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.brand.withValues(alpha: 0.16),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(12),
+                    topRight: Radius.circular(12),
+                    bottomLeft: Radius.circular(12),
+                    bottomRight: Radius.circular(4),
+                  ),
+                ),
+                child: SelectableText(
+                  content,
+                  style: TextStyle(
+                    fontSize: 14.5,
+                    height: 1.5,
+                    color: palette.text,
+                  ),
+                ),
               ),
-              child: Text(content, style: TextStyle(color: foreground)),
+            ),
+          );
+        }
+        return Align(
+          alignment: Alignment.centerLeft,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: Padding(
+              padding: const EdgeInsets.only(top: 6, bottom: 14, right: 40),
+              child: SelectableText(
+                content,
+                style: TextStyle(
+                  fontSize: 15,
+                  height: 1.6,
+                  color: palette.text,
+                ),
+              ),
             ),
           ),
         );

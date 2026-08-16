@@ -46,7 +46,13 @@ class _TuringAppState extends State<TuringApp> {
   }
 
   void _reloadConfig() {
-    setState(() => _configFuture = _loadConfig());
+    // Braces, not an arrow: `() => _configFuture = _loadConfig()` RETURNS the
+    // assigned Future, and setState asserts its callback returns nothing. With
+    // the arrow form saving credentials threw here, so the app never left the
+    // Settings screen even though the write had succeeded.
+    setState(() {
+      _configFuture = _loadConfig();
+    });
   }
 
   @override
@@ -105,70 +111,113 @@ class _TuringAppState extends State<TuringApp> {
 
   ThemeData _buildTheme(Brightness brightness) {
     final isDark = brightness == Brightness.dark;
+    final palette = isDark ? const AppPalette.dark() : const AppPalette.light();
+    final scheme =
+        ColorScheme.fromSeed(
+          seedColor: AppColors.brand,
+          brightness: brightness,
+        ).copyWith(
+          surface: palette.surface,
+          onSurface: palette.text,
+          outlineVariant: palette.border,
+        );
+
+    // A conversation is long-form reading, so the body text is sized and
+    // spaced for that rather than for dense UI chrome.
+    final base = isDark ? ThemeData.dark() : ThemeData.light();
+    final text = base.textTheme.copyWith(
+      bodyLarge: TextStyle(fontSize: 15, height: 1.55, color: palette.text),
+      bodyMedium: TextStyle(fontSize: 14, height: 1.5, color: palette.text),
+      bodySmall: TextStyle(
+        fontSize: 12.5,
+        height: 1.4,
+        color: palette.textMuted,
+      ),
+      titleMedium: TextStyle(
+        fontSize: 14.5,
+        fontWeight: FontWeight.w600,
+        color: palette.text,
+      ),
+      labelLarge: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+    );
+
     return ThemeData(
       brightness: brightness,
       useMaterial3: true,
-      colorSchemeSeed: AppColors.electricBlue,
-      scaffoldBackgroundColor: isDark
-          ? AppColors.darkBackground
-          : AppColors.lightBackground,
-      drawerTheme: DrawerThemeData(
-        backgroundColor: isDark
-            ? AppColors.darkSurface
-            : AppColors.lightSurface,
-        surfaceTintColor: isDark
-            ? AppColors.darkSurface
-            : AppColors.lightSurface,
+      colorScheme: scheme,
+      scaffoldBackgroundColor: palette.background,
+      textTheme: text,
+      dividerTheme: DividerThemeData(
+        color: palette.border,
+        thickness: 1,
+        space: 1,
       ),
       appBarTheme: AppBarTheme(
-        backgroundColor: isDark
-            ? AppColors.darkSurface
-            : AppColors.lightSurface,
-        foregroundColor: isDark ? AppColors.darkText : AppColors.lightText,
-        elevation: isDark ? 0 : 0.5,
-      ),
-      navigationRailTheme: NavigationRailThemeData(
-        backgroundColor: isDark
-            ? AppColors.darkSurface
-            : AppColors.lightSurface,
-        selectedIconTheme: IconThemeData(
-          color: isDark
-              ? AppColors.menuSelectedDark
-              : AppColors.menuSelectedLight,
+        backgroundColor: palette.background,
+        foregroundColor: palette.text,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: false,
+        titleTextStyle: TextStyle(
+          fontSize: 15,
+          fontWeight: FontWeight.w600,
+          color: palette.text,
         ),
-        selectedLabelTextStyle: TextStyle(
-          color: isDark
-              ? AppColors.menuSelectedDark
-              : AppColors.menuSelectedLight,
-          fontWeight: FontWeight.bold,
-        ),
-        unselectedIconTheme: const IconThemeData(color: Colors.grey),
-        indicatorColor: isDark ? AppColors.accentBlue : const Color(0xFFE3F2FD),
       ),
       cardTheme: CardThemeData(
-        color: isDark ? AppColors.darkSurface : AppColors.lightSurface,
+        color: palette.raised,
         surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        margin: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(color: palette.border),
+        ),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: palette.surface,
+        hintStyle: TextStyle(color: palette.textMuted),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 12,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: palette.border),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: palette.border),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: AppColors.brand, width: 1.5),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: AppColors.brand,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(foregroundColor: AppColors.brand),
+      ),
+      listTileTheme: ListTileThemeData(
+        iconColor: palette.textMuted,
+        textColor: palette.text,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
-      floatingActionButtonTheme: const FloatingActionButtonThemeData(
-        backgroundColor: AppColors.electricBlue,
-        foregroundColor: Colors.white,
-      ),
-      switchTheme: SwitchThemeData(
-        thumbColor: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) {
-            return AppColors.electricBlue;
-          }
-          return isDark ? Colors.grey : null;
-        }),
-        trackColor: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) {
-            return isDark
-                ? AppColors.accentBlue
-                : AppColors.electricBlue.withValues(alpha: 0.5);
-          }
-          return isDark ? Colors.grey[800] : null;
-        }),
+      snackBarTheme: SnackBarThemeData(
+        backgroundColor: palette.raised,
+        contentTextStyle: TextStyle(color: palette.text),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     );
   }

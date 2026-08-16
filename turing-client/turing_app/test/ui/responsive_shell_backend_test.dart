@@ -12,54 +12,144 @@ import 'package:turing_flutter_app/networking/event_source.dart';
 import 'package:turing_flutter_app/ui/shell/responsive_shell.dart';
 
 void main() {
-  testWidgets(
-    'responsive shell keeps polished navigation around backend chat',
-    (tester) async {
-      tester.view.physicalSize = const Size(1200, 800);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
+  testWidgets('the shell is one surface: conversations beside a chat', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ResponsiveShell(
-            apiClient: _FakeApiClient(),
-            eventSourceFactory: () => _FakeEventSource(),
-            authStorage: _FakeAuthStorage(),
-            initialBackendUrl: 'http://localhost:3000',
-            initialApiKey: 'tk_test',
-          ),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ResponsiveShell(
+          apiClient: _FakeApiClient(),
+          eventSourceFactory: () => _FakeEventSource(),
+          authStorage: _FakeAuthStorage(),
+          initialBackendUrl: 'http://localhost:3000',
+          initialApiKey: 'tk_test',
         ),
-      );
-      await tester.pumpAndSettle();
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      expect(find.text('Chat'), findsOneWidget);
-      expect(find.text('Devices'), findsOneWidget);
-      expect(find.text('Stats'), findsOneWidget);
-      expect(find.text('Integrations'), findsOneWidget);
-      expect(find.text('Settings'), findsOneWidget);
-      expect(find.text('Sessions'), findsOneWidget);
-      expect(find.byTooltip('Search conversations'), findsOneWidget);
-      expect(find.text('New chat'), findsOneWidget);
+    // Every destination must lead somewhere real. The old rail carried
+    // Devices/Stats/Integrations, which rendered placeholder screens for
+    // features that do not exist and that docs/VISION.md refuses outright.
+    expect(find.text('Devices'), findsNothing);
+    expect(find.text('Stats'), findsNothing);
+    expect(find.text('Integrations'), findsNothing);
+    expect(find.text('IoT Devices Dashboard'), findsNothing);
 
-      await tester.tap(find.text('Devices'));
-      await tester.pumpAndSettle();
-      expect(find.text('IoT Devices Dashboard'), findsOneWidget);
+    // What is there instead: start a conversation, find an old one, settings.
+    // Two while the pane is empty: the sidebar button and the empty state's.
+    expect(find.text('New chat'), findsWidgets);
+    expect(find.byTooltip('Search conversations'), findsOneWidget);
+    expect(find.byTooltip('Settings'), findsOneWidget);
+    expect(find.text('Existing chat'), findsOneWidget);
 
-      await tester.tap(find.text('Stats'));
-      await tester.pumpAndSettle();
-      expect(find.text('Stats & Usage'), findsOneWidget);
+    // With nothing selected the pane invites a first message rather than
+    // showing an empty frame.
+    expect(find.text('Ask Turing anything'), findsOneWidget);
 
-      await tester.tap(find.text('Integrations'));
-      await tester.pumpAndSettle();
-      expect(find.text('Integrations Status'), findsOneWidget);
+    // Selecting a conversation swaps it IN PLACE — nothing is pushed, so the
+    // sidebar stays put and there is nothing to back out of.
+    await tester.tap(find.text('Existing chat'));
+    await tester.pumpAndSettle();
+    expect(find.text('Ask Turing anything'), findsNothing);
+    expect(find.text('New chat'), findsOneWidget, reason: 'sidebar persists');
+  });
 
-      await tester.tap(find.text('Settings'));
-      await tester.pumpAndSettle();
-      expect(find.text('Backend URL'), findsOneWidget);
-      expect(find.text('API key'), findsOneWidget);
-    },
-  );
+  testWidgets('deleting a conversation confirms, then removes it', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final api = _FakeApiClient();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ResponsiveShell(
+          apiClient: api,
+          eventSourceFactory: () => _FakeEventSource(),
+          authStorage: _FakeAuthStorage(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The delete affordance is revealed by selecting the row rather than shown
+    // on every row, so a destructive action is never one stray click away.
+    await tester.tap(find.text('Existing chat'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Delete chat'));
+    await tester.pumpAndSettle();
+
+    // The dialog must say it is permanent, and must not overclaim: sandbox
+    // files outlive the conversation.
+    expect(find.textContaining('cannot be undone'), findsOneWidget);
+    expect(find.textContaining('sandbox are not removed'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+    await tester.pumpAndSettle();
+    expect(api.deletedSessionIds, ['sess_existing']);
+  });
+
+  testWidgets('cancelling a delete removes nothing', (tester) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final api = _FakeApiClient();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ResponsiveShell(
+          apiClient: api,
+          eventSourceFactory: () => _FakeEventSource(),
+          authStorage: _FakeAuthStorage(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Existing chat'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Delete chat'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+
+    expect(api.deletedSessionIds, isEmpty);
+    expect(find.text('Existing chat'), findsOneWidget);
+  });
+
+  testWidgets('settings opens from the sidebar', (tester) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ResponsiveShell(
+          apiClient: _FakeApiClient(),
+          eventSourceFactory: () => _FakeEventSource(),
+          authStorage: _FakeAuthStorage(),
+          initialBackendUrl: 'http://localhost:3000',
+          initialApiKey: 'tk_test',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    expect(find.text('Backend URL'), findsOneWidget);
+    expect(find.text('API key'), findsOneWidget);
+  });
 }
 
 class _FakeApiClient implements TuringApi {
@@ -91,8 +181,12 @@ class _FakeApiClient implements TuringApi {
     };
   }
 
+  final List<String> deletedSessionIds = [];
+
   @override
-  Future<void> deleteSession({required String sessionId}) async {}
+  Future<void> deleteSession({required String sessionId}) async {
+    deletedSessionIds.add(sessionId);
+  }
 
   @override
   Future<Session> getSession({required String sessionId}) async {
@@ -131,7 +225,13 @@ class _FakeApiClient implements TuringApi {
 
   @override
   Future<List<Session>> listSessions({int limit = 50, String? after}) async {
-    return const [];
+    return [
+      Session(
+        sessionId: 'sess_existing',
+        title: 'Existing chat',
+        updatedAt: DateTime.utc(2026, 5, 10),
+      ),
+    ];
   }
 
   @override

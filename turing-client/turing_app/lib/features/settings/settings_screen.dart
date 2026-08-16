@@ -74,15 +74,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _save() async {
     setState(() => _saving = true);
-    await widget.authStorage.save(
-      backendUrl: _backendUrl.text,
-      apiKey: _apiKey.text,
-    );
-    if (!mounted) return;
-    setState(() => _saving = false);
-    widget.onSaved?.call();
-    if (Navigator.of(context).canPop()) {
-      Navigator.of(context).pop();
+    // Without this the button just flashes and nothing else happens: any
+    // failure below escapes as an unhandled async error, leaving the user with
+    // no result and no reason.
+    try {
+      await widget.authStorage.save(
+        backendUrl: _backendUrl.text,
+        apiKey: _apiKey.text,
+      );
+      if (!mounted) return;
+      widget.onSaved?.call();
+      if (Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save settings: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
