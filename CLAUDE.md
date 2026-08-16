@@ -47,7 +47,7 @@ The `/verify` skill runs this matrix.
 cd turing-backend && ./scripts/init.sh   # generates .env, tokens, data/ & sandbox/; prints the Flutter API key
 ./scripts/dev.sh                          # docker compose up --build (foreground)
 ```
-Requires Docker + Compose, Go 1.23+, Flutter, and Ollama running on the host (`OLLAMA_BASE_URL=http://host.docker.internal:11434`, default model `llama3.2`). Run the client: `cd turing-client/turing_app && flutter pub get && flutter run -d macos`.
+Requires Docker + Compose, Go 1.23+, Flutter, and Ollama running on the host (`OLLAMA_BASE_URL=http://host.docker.internal:11434`, default model `qwen2.5:7b` (~4.9 GB resident). The runtime sends Ollama a per-request `keep_alive` (`OLLAMA_KEEP_ALIVE`, default `2m`) instead of relying on Ollama's own server-side env var, so the model is released once you stop talking to it. Keep it above `TURING_APPROVAL_WAIT_TIMEOUT_MS` or it unloads mid-run). Run the client: `cd turing-client/turing_app && flutter pub get && flutter run -d macos`.
 
 ## Review before pushing (required)
 

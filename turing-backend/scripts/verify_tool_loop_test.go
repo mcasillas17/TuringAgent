@@ -127,7 +127,7 @@ func TestVerifyToolLoopScriptHarnessIgnoresAmbientOllamaModel(t *testing.T) {
 	if result.exitCode != 0 {
 		t.Fatalf("exit code = %d; output:\n%s", result.exitCode, result.output)
 	}
-	if !strings.Contains(result.curlLog, `"llama3.2"`) {
+	if !strings.Contains(result.curlLog, `"qwen2.5:7b"`) {
 		t.Fatalf("curl log = %q, want .env model probe", result.curlLog)
 	}
 }
@@ -137,7 +137,7 @@ func TestVerifyToolLoopScriptReportsMissingModelWithoutStartingCompose(t *testin
 	if result.exitCode != 2 {
 		t.Fatalf("exit code = %d, want 2; output:\n%s", result.exitCode, result.output)
 	}
-	if !strings.Contains(result.output, "model llama3.2 is not available") {
+	if !strings.Contains(result.output, "model qwen2.5:7b is not available") {
 		t.Fatalf("output = %q, want missing-model guidance", result.output)
 	}
 	if result.composeLog != "" {
@@ -293,7 +293,7 @@ func runVerifyToolLoopHarness(
 	chmod +x "$client_bin"
 	`)
 	if err := os.WriteFile(filepath.Join(root, ".env"), []byte(
-		"TURING_CLIENT_API_KEY=token\nOLLAMA_BASE_URL=http://host.docker.internal:11434\nOLLAMA_MODEL=llama3.2\n",
+		"TURING_CLIENT_API_KEY=token\nOLLAMA_BASE_URL=http://host.docker.internal:11434\nOLLAMA_MODEL=qwen2.5:7b\n",
 	), 0600); err != nil {
 		t.Fatal(err)
 	}

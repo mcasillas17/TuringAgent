@@ -174,7 +174,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		InternalPort:             internalPort,
 		DatabasePath:             stringValue("DATABASE_PATH", "/app/data/turing.db"),
 		OllamaBaseURL:            stringValue("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
-		OllamaModel:              stringValue("OLLAMA_MODEL", "llama3.2"),
+		OllamaModel:              stringValue("OLLAMA_MODEL", "qwen2.5:7b"),
 		OpenAIBaseURL:            stringValue("OPENAI_BASE_URL", "https://api.openai.com/v1"),
 		OpenAIAPIKey:             env["OPENAI_API_KEY"],
 		OpenAIModel:              stringValue("OPENAI_MODEL", "gpt-4o-mini"),

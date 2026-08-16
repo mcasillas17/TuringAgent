@@ -9,7 +9,9 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -22,8 +24,9 @@ const (
 )
 
 type Ollama struct {
-	baseURL string
-	client  *http.Client
+	baseURL   string
+	client    *http.Client
+	keepAlive json.RawMessage
 }
 
 func NewOllama(baseURL string, client *http.Client) *Ollama {
@@ -33,6 +36,56 @@ func NewOllama(baseURL string, client *http.Client) *Ollama {
 	return &Ollama{baseURL: strings.TrimRight(baseURL, "/"), client: client}
 }
 
+// WithKeepAlive sets how long Ollama should hold the model in memory after a
+// request. Ollama's own default is 5 minutes, which on a personal machine keeps
+// several GB of unified memory occupied long after the answer is finished —
+// exactly the "does not slow my machine down" problem a local-first assistant
+// has to care about.
+//
+// Sending it per request rather than relying on the server-wide
+// OLLAMA_KEEP_ALIVE means the setting belongs to this deployment, travels with
+// it, and survives an Ollama restart we do not control. Empty leaves Ollama's
+// default alone.
+func (p *Ollama) WithKeepAlive(keepAlive string) *Ollama {
+	// A conversion error cannot happen for a value that passed config
+	// validation, and silently omitting is the safe degradation: the request
+	// still works, Ollama just uses its own default.
+	encoded, _ := EncodeOllamaKeepAlive(keepAlive)
+	p.keepAlive = encoded
+	return p
+}
+
+// EncodeOllamaKeepAlive turns a user-supplied keep-alive into the JSON Ollama
+// accepts, and is the single definition of what is valid.
+//
+// Ollama takes EITHER a duration string ("30s", "2m") or a bare number of
+// seconds, where -1 means "keep loaded forever". Those are not
+// interchangeable: sending "-1" as a JSON *string* fails with
+// `time: missing unit in duration "-1"` and a 400 on every request. That
+// matters because OLLAMA_KEEP_ALIVE is also Ollama's own server env var, so a
+// user who already exports -1 for their server would otherwise have it
+// injected here and break every chat.
+//
+// Empty means "say nothing and let Ollama decide".
+func EncodeOllamaKeepAlive(value string) (json.RawMessage, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if _, err := strconv.Atoi(trimmed); err == nil {
+		// Bare number: seconds, and -1 means forever. Must go out unquoted.
+		return json.RawMessage(trimmed), nil
+	}
+	if _, err := time.ParseDuration(trimmed); err != nil {
+		return nil, fmt.Errorf("keep-alive %q must be a duration such as 30s or 2m, or a whole number of seconds (-1 for forever)", value)
+	}
+	quoted, err := json.Marshal(trimmed)
+	if err != nil {
+		return nil, err
+	}
+	return quoted, nil
+}
+
 func (p *Ollama) ID() string { return "ollama" }
 
 func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
@@ -40,11 +93,12 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 	tools := ollamaTools(req.Tools)
 	body, err := marshalProviderRequest("Ollama", req.Messages, func(messages []ChatMessage) ([]byte, error) {
 		return json.Marshal(ollamaChatRequest{
-			Model:    req.Model,
-			Messages: ollamaMessages(messages),
-			Stream:   true,
-			Options:  options,
-			Tools:    tools,
+			Model:     req.Model,
+			Messages:  ollamaMessages(messages),
+			Stream:    true,
+			Options:   options,
+			Tools:     tools,
+			KeepAlive: p.keepAlive,
 		})
 	})
 	if err != nil {
@@ -422,6 +476,9 @@ type ollamaChatRequest struct {
 	Stream   bool            `json:"stream"`
 	Options  *ollamaOptions  `json:"options,omitempty"`
 	Tools    []ollamaTool    `json:"tools,omitempty"`
+	// omitempty matters: Ollama rejects an empty keep_alive, so "unset" must
+	// stay off the wire rather than serialize as "".
+	KeepAlive json.RawMessage `json:"keep_alive,omitempty"`
 }
 
 type ollamaOptions struct {

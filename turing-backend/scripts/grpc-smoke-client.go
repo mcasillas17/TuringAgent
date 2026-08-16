@@ -152,7 +152,7 @@ func loadConfig() (smokeConfig, error) {
 		model = lookup("OLLAMA_MODEL")
 	}
 	if model == "" {
-		model = "llama3.2"
+		model = "qwen2.5:7b"
 	}
 	jobTimeout := lookup("TURING_JOB_TIMEOUT_MS")
 	if jobTimeout == "" {

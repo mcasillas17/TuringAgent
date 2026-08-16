@@ -310,3 +310,70 @@ func mapEnv(values map[string]string) func(string) string {
 		return values[name]
 	}
 }
+
+// The agent runtime is the side that actually calls Ollama, so its defaults are
+// the ones that decide which model runs and how long it stays resident. Without
+// these, reverting either default would break nothing in the suite — and a
+// runtime defaulting to a different model than the orchestrator advertises is a
+// silent mismatch rather than a loud failure.
+func TestLoadFromEnvDefaultsTheLocalModelAndKeepAlive(t *testing.T) {
+	cfg, err := LoadFromEnv(mapEnv(map[string]string{
+		"TURING_INTERNAL_TOKEN": "internal",
+	}))
+	if err != nil {
+		t.Fatalf("LoadFromEnv failed: %v", err)
+	}
+	if cfg.OllamaModel != "qwen2.5:7b" {
+		t.Fatalf("OllamaModel = %q, want qwen2.5:7b", cfg.OllamaModel)
+	}
+	// Must stay above TURING_APPROVAL_WAIT_TIMEOUT_MS (71s) or the model is
+	// evicted mid-run while the user decides on an approval, costing a reload
+	// and the whole conversation's KV cache on the resumed answer.
+	if cfg.OllamaKeepAlive != "2m" {
+		t.Fatalf("OllamaKeepAlive = %q, want 2m", cfg.OllamaKeepAlive)
+	}
+	approvalWait := 71 * time.Second
+	keepAlive, err := time.ParseDuration(cfg.OllamaKeepAlive)
+	if err != nil {
+		t.Fatalf("default keep-alive %q is not a duration: %v", cfg.OllamaKeepAlive, err)
+	}
+	if keepAlive <= approvalWait {
+		t.Fatalf("keep-alive %s <= approval wait %s: the model would unload mid-run", keepAlive, approvalWait)
+	}
+}
+
+// A bad value must fail at startup with a readable message rather than 400ing
+// every chat request. -1 in particular is Ollama's documented "forever" and is
+// also its own server env var, so it must be accepted, not rejected.
+func TestLoadFromEnvValidatesKeepAlive(t *testing.T) {
+	if _, err := LoadFromEnv(mapEnv(map[string]string{
+		"TURING_INTERNAL_TOKEN": "internal",
+		"OLLAMA_KEEP_ALIVE":     "forever",
+	})); err == nil {
+		t.Fatal("an unparseable keep-alive was accepted; it would 400 every request instead")
+	}
+	cfg, err := LoadFromEnv(mapEnv(map[string]string{
+		"TURING_INTERNAL_TOKEN": "internal",
+		"OLLAMA_KEEP_ALIVE":     "-1",
+	}))
+	if err != nil {
+		t.Fatalf("-1 (Ollama's documented \"forever\") was rejected: %v", err)
+	}
+	if cfg.OllamaKeepAlive != "-1" {
+		t.Fatalf("OllamaKeepAlive = %q, want -1 preserved", cfg.OllamaKeepAlive)
+	}
+}
+
+func TestLoadFromEnvHonoursExplicitModelAndKeepAlive(t *testing.T) {
+	cfg, err := LoadFromEnv(mapEnv(map[string]string{
+		"TURING_INTERNAL_TOKEN": "internal",
+		"OLLAMA_MODEL":          "llama3.2",
+		"OLLAMA_KEEP_ALIVE":     "5m",
+	}))
+	if err != nil {
+		t.Fatalf("LoadFromEnv failed: %v", err)
+	}
+	if cfg.OllamaModel != "llama3.2" || cfg.OllamaKeepAlive != "5m" {
+		t.Fatalf("overrides ignored: model=%q keepAlive=%q", cfg.OllamaModel, cfg.OllamaKeepAlive)
+	}
+}
