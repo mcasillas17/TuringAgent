@@ -61,6 +61,9 @@ const (
 	maxUnknownToolListing = 32
 )
 
+// joinedDiscoveryHook is set only by tests; see the call site in discoverTools.
+var joinedDiscoveryHook func()
+
 var errRunTerminalized = errors.New("run already terminalized")
 
 type terminalizedRunExitError struct{}
@@ -359,6 +362,14 @@ func (a *GeneralAssistant) discoverTools(ctx context.Context) (*ToolRegistry, er
 		if a.discovery != nil {
 			discovery := a.discovery
 			a.registryMu.Unlock()
+			// Observation point for tests that need to know a caller has actually
+			// parked on an in-flight discovery. Entering discoverTools is not the
+			// same thing: boundedContext calls parent.Done() on the way in, so a
+			// context-based signal fires before the join and lets a test race
+			// ahead of it. nil in production.
+			if joinedDiscoveryHook != nil {
+				joinedDiscoveryHook()
+			}
 			select {
 			case <-discovery.done:
 				if err := ctx.Err(); err != nil {

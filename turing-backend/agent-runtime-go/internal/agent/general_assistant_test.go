@@ -549,13 +549,25 @@ func TestExecuteSharesConcurrentToolDiscoveryFailure(t *testing.T) {
 	results := make(chan result, 2)
 	go func() { results <- execute(context.Background()) }()
 	<-entered
-	waiting := make(chan struct{})
-	go func() {
-		results <- execute(&doneSignalingContext{Context: context.Background(), called: waiting})
-	}()
+
+	// Wait for the second caller to actually PARK on the in-flight discovery.
+	// A context-based signal is not sufficient: discoverTools calls
+	// boundedContext first, and context.WithTimeout calls parent.Done() to wire
+	// up propagation, so a Done()-triggered signal fires while the goroutine is
+	// still upstream of the join. Releasing on that signal let the first
+	// discovery finish and clear a.discovery, so the second caller started a
+	// FRESH discovery, got a working tool list, and completed with an empty
+	// model response instead of sharing the failure — the CI flake this
+	// synchronization exists to prevent.
+	joined := make(chan struct{})
+	var joinOnce sync.Once
+	joinedDiscoveryHook = func() { joinOnce.Do(func() { close(joined) }) }
+	t.Cleanup(func() { joinedDiscoveryHook = nil })
+
+	go func() { results <- execute(context.Background()) }()
 	select {
-	case <-waiting:
-	case <-time.After(time.Second):
+	case <-joined:
+	case <-time.After(5 * time.Second):
 		t.Fatal("second Execute did not join the discovery flight")
 	}
 	close(release)

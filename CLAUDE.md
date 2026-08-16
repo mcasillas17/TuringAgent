@@ -21,9 +21,10 @@ The root module requires SQLite FTS5, so its `go test` and `go build` commands m
 
 ```bash
 go test -tags sqlite_fts5 ./... -count=1
+go test -tags sqlite_fts5 -race ./... -count=1   # CI runs this; concurrency bugs hide without it
 go build -tags sqlite_fts5 ./...
-( cd turing-backend/mcp-files  && go test ./... -count=1 && go build ./cmd/server )
-( cd turing-backend/mcp-system && go test ./... -count=1 && go build ./... )
+( cd turing-backend/mcp-files  && go test ./... -count=1 && go test -race ./... -count=1 && go build ./cmd/server )
+( cd turing-backend/mcp-system && go test ./... -count=1 && go test -race ./... -count=1 && go build ./... )
 ( cd turing-client/turing_app  && flutter test )
 tools/proto/check.sh
 golangci-lint run --build-tags sqlite_fts5 ./... ./.github/workflows
