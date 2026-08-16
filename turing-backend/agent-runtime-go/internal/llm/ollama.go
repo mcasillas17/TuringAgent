@@ -22,8 +22,9 @@ const (
 )
 
 type Ollama struct {
-	baseURL string
-	client  *http.Client
+	baseURL   string
+	client    *http.Client
+	keepAlive string
 }
 
 func NewOllama(baseURL string, client *http.Client) *Ollama {
@@ -33,6 +34,21 @@ func NewOllama(baseURL string, client *http.Client) *Ollama {
 	return &Ollama{baseURL: strings.TrimRight(baseURL, "/"), client: client}
 }
 
+// WithKeepAlive sets how long Ollama should hold the model in memory after a
+// request. Ollama's own default is 5 minutes, which on a personal machine keeps
+// several GB of unified memory occupied long after the answer is finished —
+// exactly the "does not slow my machine down" problem a local-first assistant
+// has to care about.
+//
+// Sending it per request rather than relying on the server-wide
+// OLLAMA_KEEP_ALIVE means the setting belongs to this deployment, travels with
+// it, and survives an Ollama restart we do not control. Empty leaves Ollama's
+// default alone.
+func (p *Ollama) WithKeepAlive(keepAlive string) *Ollama {
+	p.keepAlive = keepAlive
+	return p
+}
+
 func (p *Ollama) ID() string { return "ollama" }
 
 func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
@@ -40,11 +56,12 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 	tools := ollamaTools(req.Tools)
 	body, err := marshalProviderRequest("Ollama", req.Messages, func(messages []ChatMessage) ([]byte, error) {
 		return json.Marshal(ollamaChatRequest{
-			Model:    req.Model,
-			Messages: ollamaMessages(messages),
-			Stream:   true,
-			Options:  options,
-			Tools:    tools,
+			Model:     req.Model,
+			Messages:  ollamaMessages(messages),
+			Stream:    true,
+			Options:   options,
+			Tools:     tools,
+			KeepAlive: p.keepAlive,
 		})
 	})
 	if err != nil {
@@ -422,6 +439,9 @@ type ollamaChatRequest struct {
 	Stream   bool            `json:"stream"`
 	Options  *ollamaOptions  `json:"options,omitempty"`
 	Tools    []ollamaTool    `json:"tools,omitempty"`
+	// omitempty matters: Ollama rejects an empty keep_alive, so "unset" must
+	// stay off the wire rather than serialize as "".
+	KeepAlive string `json:"keep_alive,omitempty"`
 }
 
 type ollamaOptions struct {

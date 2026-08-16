@@ -18,12 +18,20 @@ const (
 	maxHeartbeatInterval            = 30 * time.Second
 )
 
+// defaultOllamaModel is the local default. qwen2.5:7b is chosen over a 3B
+// model because this platform's workload is tool calling, and small models are
+// materially worse at emitting well-formed tool calls — the zero-argument and
+// unknown-tool recovery paths exist because of that. ~4.9 GB resident on Apple
+// Silicon, verified against the live tool loop.
+const defaultOllamaModel = "qwen2.5:7b"
+
 type Config struct {
 	OrchestratorGRPCAddr string
 	InternalToken        string
 	WorkerID             string
 	OllamaBaseURL        string
 	OllamaModel          string
+	OllamaKeepAlive      string
 	OpenAIBaseURL        string
 	OpenAIAPIKey         string
 	OpenAIModel          string
@@ -116,22 +124,26 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 		InternalToken:        internalToken,
 		WorkerID:             defaultString(getenv("TURING_WORKER_ID"), "worker-general-go"),
 		OllamaBaseURL:        ollamaBaseURL,
-		OllamaModel:          defaultString(getenv("OLLAMA_MODEL"), "llama3.2"),
-		OpenAIBaseURL:        openAIBaseURL,
-		OpenAIAPIKey:         getenv("OPENAI_API_KEY"),
-		OpenAIModel:          defaultString(getenv("OPENAI_MODEL"), "gpt-4o-mini"),
-		MCPSystemBaseURL:     mcpSystemBaseURL,
-		MCPFilesBaseURL:      mcpFilesBaseURL,
-		MCPSystemToken:       getenv("MCP_SYSTEM_TOKEN_GENERAL"),
-		MCPFilesToken:        getenv("MCP_FILES_TOKEN_GENERAL"),
-		MaxConcurrentRuns:    maxConcurrentRuns,
-		MaxToolCallsPerRun:   maxToolCalls,
-		HeartbeatInterval:    heartbeatInterval,
-		ModelTimeout:         modelTimeout,
-		ToolTimeout:          toolTimeout,
-		ApprovalTimeout:      approvalTimeout,
-		TotalToolTimeout:     totalToolTimeout,
-		LogLevel:             defaultString(getenv("LOG_LEVEL"), "info"),
+		OllamaModel:          defaultString(getenv("OLLAMA_MODEL"), defaultOllamaModel),
+		// Short by design: holding ~5 GB of unified memory for five minutes after
+		// an answer is the difference between a background assistant and one that
+		// makes the machine feel slow. Costs a reload on the next message.
+		OllamaKeepAlive:    defaultString(getenv("OLLAMA_KEEP_ALIVE"), "30s"),
+		OpenAIBaseURL:      openAIBaseURL,
+		OpenAIAPIKey:       getenv("OPENAI_API_KEY"),
+		OpenAIModel:        defaultString(getenv("OPENAI_MODEL"), "gpt-4o-mini"),
+		MCPSystemBaseURL:   mcpSystemBaseURL,
+		MCPFilesBaseURL:    mcpFilesBaseURL,
+		MCPSystemToken:     getenv("MCP_SYSTEM_TOKEN_GENERAL"),
+		MCPFilesToken:      getenv("MCP_FILES_TOKEN_GENERAL"),
+		MaxConcurrentRuns:  maxConcurrentRuns,
+		MaxToolCallsPerRun: maxToolCalls,
+		HeartbeatInterval:  heartbeatInterval,
+		ModelTimeout:       modelTimeout,
+		ToolTimeout:        toolTimeout,
+		ApprovalTimeout:    approvalTimeout,
+		TotalToolTimeout:   totalToolTimeout,
+		LogLevel:           defaultString(getenv("LOG_LEVEL"), "info"),
 	}, nil
 }
 

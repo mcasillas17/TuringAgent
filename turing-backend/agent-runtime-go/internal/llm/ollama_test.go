@@ -764,6 +764,11 @@ func TestOllamaStreamStopsOnCancellation(t *testing.T) {
 
 func captureOllamaRequest(t *testing.T, request ChatRequest) map[string]any {
 	t.Helper()
+	return captureOllamaRequestWith(t, request, "")
+}
+
+func captureOllamaRequestWith(t *testing.T, request ChatRequest, keepAlive string) map[string]any {
+	t.Helper()
 	requestBody := make(chan []byte, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -774,7 +779,7 @@ func captureOllamaRequest(t *testing.T, request ChatRequest) map[string]any {
 		fmt.Fprintln(w, `{"done":true,"done_reason":"stop"}`)
 	}))
 	t.Cleanup(server.Close)
-	provider := NewOllama(server.URL, server.Client())
+	provider := NewOllama(server.URL, server.Client()).WithKeepAlive(keepAlive)
 	events, err := provider.StreamChat(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -845,4 +850,25 @@ func collectEvents(events <-chan StreamEvent) []StreamEvent {
 		got = append(got, event)
 	}
 	return got
+}
+
+// Ollama keeps a model resident for 5 minutes after a request by default,
+// which on a shared desktop holds several GB of unified memory long after the
+// answer is done. The runtime says how long it wants instead of relying on a
+// server-wide env var, so the setting travels with the deployment and survives
+// an Ollama restart.
+func TestOllamaRequestCarriesKeepAliveWhenConfigured(t *testing.T) {
+	body := captureOllamaRequestWith(t, ChatRequest{Model: "qwen2.5:7b"}, "30s")
+	if body["keep_alive"] != "30s" {
+		t.Fatalf("keep_alive = %#v, want \"30s\"", body["keep_alive"])
+	}
+}
+
+// Unset must stay absent rather than serialize as "", which Ollama would
+// reject; absent means "use the server default".
+func TestOllamaRequestOmitsKeepAliveByDefault(t *testing.T) {
+	body := captureOllamaRequest(t, ChatRequest{Model: "qwen2.5:7b"})
+	if _, present := body["keep_alive"]; present {
+		t.Fatalf("keep_alive was serialized when unset: %#v", body)
+	}
 }

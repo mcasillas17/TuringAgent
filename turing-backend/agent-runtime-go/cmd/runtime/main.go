@@ -42,7 +42,7 @@ func run() error {
 	}
 	defer func() { _ = client.Close() }()
 	providers := map[turingv1.ModelProvider]llm.Provider{
-		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: llm.NewOllama(cfg.OllamaBaseURL, http.DefaultClient),
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: llm.NewOllama(cfg.OllamaBaseURL, http.DefaultClient).WithKeepAlive(cfg.OllamaKeepAlive),
 	}
 	if cfg.OpenAIAPIKey != "" {
 		providers[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE] = llm.NewOpenAICompatible(cfg.OpenAIBaseURL, cfg.OpenAIAPIKey, http.DefaultClient)

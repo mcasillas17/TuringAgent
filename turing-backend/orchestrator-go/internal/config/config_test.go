@@ -23,7 +23,7 @@ func TestLoadFromEnvRequiresSecretsAndDefaultsPorts(t *testing.T) {
 	if cfg.PublicPort != 3000 || cfg.InternalPort != 3001 {
 		t.Fatalf("ports = %d/%d, want 3000/3001", cfg.PublicPort, cfg.InternalPort)
 	}
-	if cfg.OllamaModel != "llama3.2" {
+	if cfg.OllamaModel != "qwen2.5:7b" {
 		t.Fatalf("OllamaModel = %q", cfg.OllamaModel)
 	}
 }

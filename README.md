@@ -82,7 +82,7 @@ prompt and uses its result, run the on-demand live check:
 
 ```bash
 cd turing-backend
-TURING_VERIFY_MODEL=llama3.2 TURING_VERIFY_ATTEMPTS=3 ./scripts/verify-tool-loop.sh
+TURING_VERIFY_MODEL=qwen2.5:7b TURING_VERIFY_ATTEMPTS=3 ./scripts/verify-tool-loop.sh
 ```
 
 The live check prints `PASS`, `FAIL`, or `INCONCLUSIVE`. Exit code `0` means

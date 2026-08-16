@@ -28,7 +28,7 @@ Three commitments, in priority order when they conflict:
 
 1. **Private by construction.** Local-first is not a deployment option, it is the architecture. Secrets in a local `.env`, data in local SQLite, file tools confined to a sandbox, MCP servers never published to the host. Exactly one port is exposed — the orchestrator's `:3000`, bound to `127.0.0.1` **by default but configurable** (`ORCHESTRATOR_PUBLIC_BIND_HOST`), guarded by a bearer API key minted by `init.sh`. That key is the whole client-side trust boundary today, which is why open question 4 is not academic — and why widening that bind host is the single easiest way to break commitment #1 by accident.
 2. **Trustworthy over capable.** An action the user did not sanction is a defect, even if useful. Mutating file tools require an explicit approval bound to the exact arguments; a run that retries, stalls, or draws on old context says so.
-3. **Useful with the models people can actually run.** The target is llama3.2-class local models, not frontier ones. When a small model gets something wrong in a recoverable way, the platform recovers rather than blaming the model.
+3. **Useful with the models people can actually run.** The target is a 7B-class local model on consumer hardware (default `qwen2.5:7b`, ~4.9 GB resident on an M-series Mac), not frontier ones. When a small model gets something wrong in a recoverable way, the platform recovers rather than blaming the model — the zero-argument tool call and unknown-tool recovery paths exist for exactly that.
 
 ### How we would know this is working
 
