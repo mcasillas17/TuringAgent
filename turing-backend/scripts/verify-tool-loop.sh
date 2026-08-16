@@ -36,7 +36,7 @@ if ! curl -sf -m 3 "${ollama_base_url}/api/tags" >/dev/null; then
 fi
 
 model="${TURING_VERIFY_MODEL:-${OLLAMA_MODEL:-$(env_value OLLAMA_MODEL)}}"
-model="${model:-llama3.2}"
+model="${model:-qwen2.5:7b}"
 if ! curl -sf -m 10 \
   -H "Content-Type: application/json" \
   -d "{\"model\":\"${model}\"}" \

@@ -9,7 +9,9 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -24,7 +26,7 @@ const (
 type Ollama struct {
 	baseURL   string
 	client    *http.Client
-	keepAlive string
+	keepAlive json.RawMessage
 }
 
 func NewOllama(baseURL string, client *http.Client) *Ollama {
@@ -45,8 +47,43 @@ func NewOllama(baseURL string, client *http.Client) *Ollama {
 // it, and survives an Ollama restart we do not control. Empty leaves Ollama's
 // default alone.
 func (p *Ollama) WithKeepAlive(keepAlive string) *Ollama {
-	p.keepAlive = keepAlive
+	// A conversion error cannot happen for a value that passed config
+	// validation, and silently omitting is the safe degradation: the request
+	// still works, Ollama just uses its own default.
+	encoded, _ := EncodeOllamaKeepAlive(keepAlive)
+	p.keepAlive = encoded
 	return p
+}
+
+// EncodeOllamaKeepAlive turns a user-supplied keep-alive into the JSON Ollama
+// accepts, and is the single definition of what is valid.
+//
+// Ollama takes EITHER a duration string ("30s", "2m") or a bare number of
+// seconds, where -1 means "keep loaded forever". Those are not
+// interchangeable: sending "-1" as a JSON *string* fails with
+// `time: missing unit in duration "-1"` and a 400 on every request. That
+// matters because OLLAMA_KEEP_ALIVE is also Ollama's own server env var, so a
+// user who already exports -1 for their server would otherwise have it
+// injected here and break every chat.
+//
+// Empty means "say nothing and let Ollama decide".
+func EncodeOllamaKeepAlive(value string) (json.RawMessage, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if _, err := strconv.Atoi(trimmed); err == nil {
+		// Bare number: seconds, and -1 means forever. Must go out unquoted.
+		return json.RawMessage(trimmed), nil
+	}
+	if _, err := time.ParseDuration(trimmed); err != nil {
+		return nil, fmt.Errorf("keep-alive %q must be a duration such as 30s or 2m, or a whole number of seconds (-1 for forever)", value)
+	}
+	quoted, err := json.Marshal(trimmed)
+	if err != nil {
+		return nil, err
+	}
+	return quoted, nil
 }
 
 func (p *Ollama) ID() string { return "ollama" }
@@ -441,7 +478,7 @@ type ollamaChatRequest struct {
 	Tools    []ollamaTool    `json:"tools,omitempty"`
 	// omitempty matters: Ollama rejects an empty keep_alive, so "unset" must
 	// stay off the wire rather than serialize as "".
-	KeepAlive string `json:"keep_alive,omitempty"`
+	KeepAlive json.RawMessage `json:"keep_alive,omitempty"`
 }
 
 type ollamaOptions struct {

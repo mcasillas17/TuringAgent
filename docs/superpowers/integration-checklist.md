@@ -121,7 +121,7 @@ model-driven path instead, ensure Ollama is running on the host and run:
 
 ```bash
 cd turing-backend
-TURING_VERIFY_MODEL=llama3.2 TURING_VERIFY_ATTEMPTS=3 ./scripts/verify-tool-loop.sh
+TURING_VERIFY_MODEL=qwen2.5:7b TURING_VERIFY_ATTEMPTS=3 ./scripts/verify-tool-loop.sh
 ```
 
 The verifier sends a natural-language prompt, requires `system.time`, and checks
@@ -139,7 +139,7 @@ reports:
 | `1` | `FAIL` | The `system.time` lifecycle was malformed, mismatched, incomplete after starting (including a post-start timeout), or ended without a later final answer. |
 | `2` | `INCONCLUSIVE` | The proof could not exercise the target lifecycle because of setup, model, transport or timeout before the tool started, a different/no tool choice, or an answer that could not be correlated to the returned time. |
 
-`TURING_VERIFY_MODEL` defaults to `OLLAMA_MODEL` and then `llama3.2`.
+`TURING_VERIFY_MODEL` defaults to `OLLAMA_MODEL` and then `qwen2.5:7b`.
 `TURING_VERIFY_ATTEMPTS` defaults to `3`. The host preflight rewrites the
 Compose-oriented `host.docker.internal` Ollama hostname to `localhost`; set
 `TURING_VERIFY_OLLAMA_URL` to override the host-side probe and model endpoint.

@@ -872,3 +872,41 @@ func TestOllamaRequestOmitsKeepAliveByDefault(t *testing.T) {
 		t.Fatalf("keep_alive was serialized when unset: %#v", body)
 	}
 }
+
+// Ollama accepts a duration string OR a bare number of seconds, and they are
+// not interchangeable: "-1" as a JSON string fails with
+// `time: missing unit in duration "-1"` and 400s every request. -1 is Ollama's
+// documented "keep loaded forever", and OLLAMA_KEEP_ALIVE is also its own
+// server env var, so a user exporting -1 would otherwise break every chat.
+func TestOllamaKeepAliveEncodesBareSecondsAsNumber(t *testing.T) {
+	for _, value := range []string{"-1", "0", "45"} {
+		encoded, err := EncodeOllamaKeepAlive(value)
+		if err != nil {
+			t.Fatalf("EncodeOllamaKeepAlive(%q) errored: %v", value, err)
+		}
+		if string(encoded) != value {
+			t.Fatalf("EncodeOllamaKeepAlive(%q) = %s, want an unquoted number", value, encoded)
+		}
+	}
+}
+
+func TestOllamaKeepAliveQuotesDurationsAndRejectsGarbage(t *testing.T) {
+	encoded, err := EncodeOllamaKeepAlive("2m")
+	if err != nil || string(encoded) != `"2m"` {
+		t.Fatalf("EncodeOllamaKeepAlive(\"2m\") = %s, %v; want quoted duration", encoded, err)
+	}
+	if encoded, err := EncodeOllamaKeepAlive("forever"); err == nil {
+		t.Fatalf("EncodeOllamaKeepAlive(\"forever\") = %s, want an error naming the accepted formats", encoded)
+	}
+	if encoded, err := EncodeOllamaKeepAlive("  "); err != nil || encoded != nil {
+		t.Fatalf("blank keep-alive = %s, %v; want omitted so Ollama uses its own default", encoded, err)
+	}
+}
+
+// The whole point of the numeric path: -1 must reach the wire unquoted.
+func TestOllamaRequestSendsForeverKeepAliveAsNumber(t *testing.T) {
+	body := captureOllamaRequestWith(t, ChatRequest{Model: "qwen2.5:7b"}, "-1")
+	if body["keep_alive"] != json.Number("-1") {
+		t.Fatalf("keep_alive = %#v, want the number -1", body["keep_alive"])
+	}
+}

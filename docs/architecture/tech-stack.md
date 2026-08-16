@@ -63,7 +63,7 @@ The default local model path is Ollama:
 
 ```text
 OLLAMA_BASE_URL=http://host.docker.internal:11434
-OLLAMA_MODEL=llama3.2
+OLLAMA_MODEL=qwen2.5:7b
 ```
 
 OpenAI-compatible models can be configured with:

@@ -20,7 +20,6 @@ services:
       DATABASE_PATH: ${DATABASE_PATH:-/app/data/turing.db}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
-      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30s}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
@@ -68,7 +67,7 @@ services:
       MCP_FILES_TOKEN_GENERAL: ${MCP_FILES_TOKEN_GENERAL}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
-      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30s}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-2m}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
