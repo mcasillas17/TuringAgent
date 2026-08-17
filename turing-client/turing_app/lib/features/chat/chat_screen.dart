@@ -12,7 +12,6 @@ import '../../networking/event_source.dart';
 import '../approvals/approval_card.dart';
 import 'message_send_failure_card.dart';
 import 'message_send_unconfirmed_card.dart';
-import 'model_provider_selector.dart';
 import 'run_cancelled_card.dart';
 import 'run_failure_card.dart';
 import 'run_notice_card.dart';
@@ -25,6 +24,7 @@ class ChatScreen extends StatefulWidget {
     required this.apiClient,
     required this.eventSource,
     this.embedded = false,
+    this.modelProvider = 'ollama',
   });
 
   final String sessionId;
@@ -35,6 +35,9 @@ class ChatScreen extends StatefulWidget {
   /// conversation is the whole right-hand pane, so it must not nest another
   /// Scaffold or repeat an app bar.
   final bool embedded;
+
+  /// Chosen once in Settings rather than shown above every conversation.
+  final String modelProvider;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -91,7 +94,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// screen existed — see [_applyToolCall]. Null until the boundary is loaded.
   int? _replayWatermarkSequence;
   StreamSubscription<TuringEvent>? _subscription;
-  String _modelProvider = 'ollama';
+  String get _modelProvider => widget.modelProvider;
 
   /// True whenever the live subscription is not currently able to deliver —
   /// set by [_handleStreamEnded], whether reached from an `onError`, an
@@ -1018,20 +1021,28 @@ class _ChatScreenState extends State<ChatScreen> {
     final body = Column(
       children: [
         Expanded(
-          child: ListView.builder(
-            controller: _scrollController,
-            padding: const EdgeInsets.all(12),
-            itemCount: _messages.length,
-            // Key on the entry itself: `_loadInitialMessages` prepends
-            // history with `insertAll(0, ...)`, shifting every live entry's
-            // index. Without a key Flutter re-associates Elements by
-            // position, tearing down and re-subscribing each
-            // ValueListenableBuilder and resetting a running card's spinner.
-            itemBuilder: (context, index) => _ChatMessageTile(
-              key: ObjectKey(_messages[index]),
-              entry: _messages[index],
-            ),
-          ),
+          // A selected-but-empty conversation rendered as a tall black void
+          // with the composer stranded at the bottom. An empty room should say
+          // what to do in it.
+          child: _messages.isEmpty && !_initializing
+              ? const _EmptyConversation()
+              : ListView.builder(
+                  controller: _scrollController,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 28,
+                    vertical: 20,
+                  ),
+                  itemCount: _messages.length,
+                  // Key on the entry itself: `_loadInitialMessages` prepends
+                  // history with `insertAll(0, ...)`, shifting every live entry's
+                  // index. Without a key Flutter re-associates Elements by
+                  // position, tearing down and re-subscribing each
+                  // ValueListenableBuilder and resetting a running card's spinner.
+                  itemBuilder: (context, index) => _ChatMessageTile(
+                    key: ObjectKey(_messages[index]),
+                    entry: _messages[index],
+                  ),
+                ),
         ),
         if (_historyLoadFailed)
           _SessionNotice(
@@ -1073,22 +1084,6 @@ class _ChatScreenState extends State<ChatScreen> {
             onDeny: () => _deny(approval),
             busy: _approvalsInFlight.contains(approval.approvalId),
           ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
-          child: Row(
-            children: [
-              Text(
-                'Model provider',
-                style: Theme.of(context).textTheme.labelLarge,
-              ),
-              const SizedBox(width: 12),
-              ModelProviderSelector(
-                value: _modelProvider,
-                onChanged: (value) => setState(() => _modelProvider = value),
-              ),
-            ],
-          ),
-        ),
         SafeArea(
           top: false,
           child: Padding(
@@ -1313,7 +1308,7 @@ class _SessionNotice extends StatelessWidget {
       child: Container(
         width: double.infinity,
         color: colorScheme.errorContainer,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(
           children: [
             Icon(icon, size: 18, color: colorScheme.onErrorContainer),
@@ -1373,6 +1368,50 @@ MarkdownStyleSheet _assistantMarkdown(
     ),
     blockSpacing: 10,
   );
+}
+
+class _EmptyConversation extends StatelessWidget {
+  const _EmptyConversation();
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppColors.of(context);
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 380),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.auto_awesome,
+              size: 26,
+              color: AppColors.brand.withValues(alpha: 0.7),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              'What can I help with?',
+              style: TextStyle(
+                fontSize: 16.5,
+                fontWeight: FontWeight.w600,
+                color: palette.text,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Runs on this machine, can use tools, and remembers earlier '
+              'conversations.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.5,
+                color: palette.textMuted,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _MessageBubble extends StatelessWidget {

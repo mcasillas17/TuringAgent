@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../constants/app_colors.dart';
@@ -48,6 +50,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
 
   late Future<List<Session>> _sessionsFuture;
   String? _activeSessionId;
+  String _modelProvider = 'ollama';
   bool _creating = false;
   final Set<String> _deleting = {};
 
@@ -55,6 +58,14 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   void initState() {
     super.initState();
     _sessionsFuture = widget.apiClient.listSessions();
+    unawaited(_loadModelProvider());
+  }
+
+  /// Chosen once in Settings; re-read whenever settings change.
+  Future<void> _loadModelProvider() async {
+    final stored = await widget.authStorage?.readModelProvider();
+    if (!mounted || stored == null || stored.isEmpty) return;
+    setState(() => _modelProvider = stored);
   }
 
   void _refreshSessions() {
@@ -163,6 +174,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       ),
     );
     widget.onSettingsChanged?.call();
+    unawaited(_loadModelProvider());
   }
 
   @override
@@ -208,6 +220,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       apiClient: widget.apiClient,
       eventSource: widget.eventSourceFactory(),
       embedded: true,
+      modelProvider: _modelProvider,
     );
   }
 }

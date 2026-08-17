@@ -60,6 +60,12 @@ class _FakeAuthStorage implements ClientAuthStorage {
   final String? apiKey;
 
   @override
+  Future<String?> readModelProvider() async => 'ollama';
+
+  @override
+  Future<void> saveModelProvider(String provider) async {}
+
+  @override
   Future<String?> readApiKey() async => apiKey;
 
   @override

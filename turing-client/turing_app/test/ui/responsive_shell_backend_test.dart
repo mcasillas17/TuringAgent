@@ -254,6 +254,12 @@ class _FakeApiClient implements TuringApi {
 
 class _FakeAuthStorage implements ClientAuthStorage {
   @override
+  Future<String?> readModelProvider() async => 'ollama';
+
+  @override
+  Future<void> saveModelProvider(String provider) async {}
+
+  @override
   Future<String?> readApiKey() async => 'tk_test';
 
   @override

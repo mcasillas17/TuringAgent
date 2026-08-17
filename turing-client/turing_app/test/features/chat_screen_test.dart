@@ -1435,7 +1435,9 @@ void main() {
     },
   );
 
-  testWidgets('chat sends selected provider through API client', (
+  // The provider is a preference chosen once in Settings, not a control shown
+  // above every conversation. The chat still has to send whatever was chosen.
+  testWidgets('chat sends the configured provider through API client', (
     tester,
   ) async {
     final events = StreamController<TuringEvent>(sync: true);
@@ -1447,15 +1449,15 @@ void main() {
           sessionId: 'sess_1',
           apiClient: apiClient,
           eventSource: _FakeEventSource(events.stream),
+          modelProvider: 'openai_compatible',
         ),
       ),
     );
     await tester.pump();
 
-    await tester.tap(find.byType(DropdownButton<String>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('OpenAI-compatible').last);
-    await tester.pump();
+    // No picker clutters the conversation any more.
+    expect(find.byType(DropdownButton<String>), findsNothing);
+    expect(find.text('Model provider'), findsNothing);
 
     await tester.enterText(find.byType(TextField), 'Use cloud model');
     await tester.tap(find.byIcon(Icons.send));
