@@ -477,6 +477,13 @@ class _Sidebar extends StatelessWidget {
   final VoidCallback onSearch;
   final VoidCallback? onSettings;
 
+  /// Below this the sidebar cannot hold the destinations, the conversation
+  /// list and the footer at once, so the destinations join the scroll. Above
+  /// it they stay pinned, because on a desktop the destinations are the app's
+  /// primary navigation and scrolling a long chat list must never take them
+  /// off screen.
+  static const double _pinnedNavMinHeight = 460;
+
   @override
   Widget build(BuildContext context) {
     final showingChats = destination == ShellDestination.chats;
@@ -485,116 +492,125 @@ class _Sidebar extends StatelessWidget {
       color: palette.surface,
       child: SafeArea(
         right: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
-              child: Row(
-                children: [
-                  Icon(Icons.auto_awesome, size: 18, color: AppColors.brand),
-                  const SizedBox(width: 9),
-                  Text(
-                    'Turing',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.2,
-                      color: palette.text,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-              child: FilledButton.icon(
-                onPressed: creating ? null : onNewConversation,
-                icon: creating
-                    ? const SizedBox.square(
-                        dimension: 15,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Icon(Icons.add, size: 18),
-                label: Text(creating ? 'Starting...' : 'New chat'),
-              ),
-            ),
-            // The destinations scroll WITH the conversations rather than
-            // sitting above them in fixed height. Five fixed nav rows plus a
-            // fixed header and footer do not fit a phone in landscape, and
-            // the part that got clipped was the footer — which is where
-            // Settings lives.
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.only(bottom: 8),
-                children: [
-                  for (final item in ShellDestination.navigation)
-                    _NavItem(
-                      destination: item,
-                      palette: palette,
-                      selected: destination == item,
-                      onTap: () => onSelectDestination(item),
-                    ),
-                  const SizedBox(height: 14),
-                  _ChatsHeader(
-                    palette: palette,
-                    selected: showingChats,
-                    onTap: () => onSelectDestination(ShellDestination.chats),
-                    onSearch: onSearch,
-                  ),
-                  if (sessionsLoading)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 18),
-                      child: Center(
-                        child: SizedBox.square(
-                          dimension: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      ),
-                    )
-                  else if (sessions.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
-                      child: Text(
-                        sessionsFailed
-                            ? 'Could not load conversations.'
-                            : 'No conversations yet.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: palette.textMuted,
-                        ),
-                      ),
-                    )
-                  else
-                    for (final session in sessions)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        child: _SessionTile(
-                          session: session,
-                          palette: palette,
-                          // A conversation is only "current" while the chat
-                          // view is what you are looking at; highlighting it
-                          // from the MCPs page would claim a selection that is
-                          // not on screen.
-                          selected:
-                              showingChats &&
-                              session.sessionId == activeSessionId,
-                          onTap: () => onSelect(session.sessionId),
-                          onDelete: () => onDelete(session),
-                        ),
-                      ),
-                ],
-              ),
-            ),
-            Divider(height: 1, color: palette.border),
-            _SidebarFooter(palette: palette, onSettings: onSettings),
-          ],
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final pinNav = constraints.maxHeight >= _pinnedNavMinHeight;
+            return _content(pinNav: pinNav, showingChats: showingChats);
+          },
         ),
       ),
+    );
+  }
+
+  Widget _content({required bool pinNav, required bool showingChats}) {
+    final navItems = [
+      for (final item in ShellDestination.navigation)
+        _NavItem(
+          destination: item,
+          palette: palette,
+          selected: destination == item,
+          onTap: () => onSelectDestination(item),
+        ),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+          child: Row(
+            children: [
+              Icon(Icons.auto_awesome, size: 18, color: AppColors.brand),
+              const SizedBox(width: 9),
+              Text(
+                'Turing',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2,
+                  color: palette.text,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          child: FilledButton.icon(
+            onPressed: creating ? null : onNewConversation,
+            icon: creating
+                ? const SizedBox.square(
+                    dimension: 15,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.add, size: 18),
+            label: Text(creating ? 'Starting...' : 'New chat'),
+          ),
+        ),
+        // Pinned when there is room, so a long conversation list never
+        // scrolls the app's navigation away. Only when the sidebar is too
+        // short to hold everything do the destinations join the scroll —
+        // otherwise five fixed rows plus a fixed header and footer clip
+        // the footer, which is where Settings lives.
+        if (pinNav) ...navItems,
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.only(bottom: 8),
+            children: [
+              if (!pinNav) ...navItems,
+              const SizedBox(height: 14),
+              _ChatsHeader(
+                palette: palette,
+                selected: showingChats,
+                onTap: () => onSelectDestination(ShellDestination.chats),
+                onSearch: onSearch,
+              ),
+              if (sessionsLoading)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 18),
+                  child: Center(
+                    child: SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
+                )
+              else if (sessions.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
+                  child: Text(
+                    sessionsFailed
+                        ? 'Could not load conversations.'
+                        : 'No conversations yet.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 13, color: palette.textMuted),
+                  ),
+                )
+              else
+                for (final session in sessions)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: _SessionTile(
+                      session: session,
+                      palette: palette,
+                      // A conversation is only "current" while the chat
+                      // view is what you are looking at; highlighting it
+                      // from the MCPs page would claim a selection that is
+                      // not on screen.
+                      selected:
+                          showingChats && session.sessionId == activeSessionId,
+                      onTap: () => onSelect(session.sessionId),
+                      onDelete: () => onDelete(session),
+                    ),
+                  ),
+            ],
+          ),
+        ),
+        Divider(height: 1, color: palette.border),
+        _SidebarFooter(palette: palette, onSettings: onSettings),
+      ],
     );
   }
 }

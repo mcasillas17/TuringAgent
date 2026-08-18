@@ -405,6 +405,45 @@ void main() {
     });
   });
 
+  group('the destinations stay put on desktop', () {
+    testWidgets('scrolling a long conversation list keeps them visible', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..sessions = [
+          for (var i = 0; i < 60; i++)
+            Session(
+              sessionId: 'sess_$i',
+              title: 'Conversation number $i',
+              updatedAt: DateTime.utc(2026, 5, 10),
+            ),
+        ];
+      await _pumpShell(tester, api: api, size: _desktop);
+      expect(find.text('Skills'), findsOneWidget);
+
+      // Enough to run the list well past where five nav rows used to sit.
+      await tester.drag(
+        find.text('Conversation number 0'),
+        const Offset(0, -1200),
+      );
+      await tester.pumpAndSettle();
+
+      // The destinations are this app's primary navigation on desktop; a long
+      // chat list must never take them off screen.
+      for (final label in [
+        'Skills',
+        'Integrations',
+        'MCPs',
+        'Automations',
+        'Agents',
+      ]) {
+        expect(find.text(label), findsOneWidget, reason: ' scrolled away');
+      }
+      // And the list really did move, or the assertion above proves nothing.
+      expect(find.text('Conversation number 0'), findsNothing);
+    });
+  });
+
   group('the sidebar fits small screens', () {
     // The nav destinations added ~200px of fixed height to a column that also
     // holds a header, a button, the chat list and a footer. On a short screen
