@@ -1,8 +1,10 @@
 import 'dart:async';
 
+import '../models/agent_descriptor.dart';
 import '../models/message.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
+import '../models/tool_descriptor.dart';
 import '../models/turing_event.dart';
 
 abstract class TuringApi {
@@ -52,6 +54,13 @@ abstract class TuringApi {
     String approvalId, {
     String? reason,
   });
+
+  /// Every tool the backend has discovered from its MCP servers, with the
+  /// approval policy currently attached to each.
+  Future<List<ToolDescriptor>> listTools();
+
+  /// The agents the backend can route a run to.
+  Future<List<AgentDescriptor>> listAgents();
 }
 
 class TuringApiException implements Exception {

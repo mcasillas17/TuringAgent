@@ -13,10 +13,12 @@ import '../generated/turing/v1/events.pb.dart' as eventpb;
 import '../generated/turing/v1/events.pbgrpc.dart' as eventgrpc;
 import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
 import '../generated/turing/v1/sessions.pbgrpc.dart' as sessiongrpc;
+import '../models/agent_descriptor.dart';
 import '../models/grpc_mappers.dart';
 import '../models/message.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
+import '../models/tool_descriptor.dart';
 import '../models/turing_event.dart';
 import 'api_client.dart';
 
@@ -290,6 +292,18 @@ class TuringGrpcApi implements ClosableTuringApi {
       'approvalId': response.approvalId,
       'status': GrpcMappers.approvalStatusToString(response.status),
     };
+  }
+
+  @override
+  Future<List<ToolDescriptor>> listTools() async {
+    final response = await _sessions.listTools(sessionpb.ListToolsRequest());
+    return response.tools.map(GrpcMappers.toolToModel).toList();
+  }
+
+  @override
+  Future<List<AgentDescriptor>> listAgents() async {
+    final response = await _sessions.listAgents(sessionpb.ListAgentsRequest());
+    return response.agents.map(GrpcMappers.agentToModel).toList();
   }
 
   @override

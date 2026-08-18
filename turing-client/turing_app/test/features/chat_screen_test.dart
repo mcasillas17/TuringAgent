@@ -17,6 +17,8 @@ import 'package:turing_flutter_app/models/session.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 import 'package:turing_flutter_app/networking/event_source.dart';
+import 'package:turing_flutter_app/models/agent_descriptor.dart';
+import 'package:turing_flutter_app/models/tool_descriptor.dart';
 
 void main() {
   testWidgets('assistant markdown renders as formatting, not raw syntax', (
@@ -7331,6 +7333,12 @@ class _FakeApiClient implements TuringApi {
     }
     return Future.value({'approvalId': approvalId, 'status': 'denied'});
   }
+
+  @override
+  Future<List<ToolDescriptor>> listTools() async => const [];
+
+  @override
+  Future<List<AgentDescriptor>> listAgents() async => const [];
 
   @override
   Future<Map<String, dynamic>> getConfig() async {

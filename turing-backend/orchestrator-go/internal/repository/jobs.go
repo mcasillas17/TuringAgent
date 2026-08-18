@@ -232,6 +232,7 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 	}
 	createdAt := FormatTimestamp(created)
 	assistantCreatedAt := FormatTimestamp(created.Add(time.Nanosecond))
+	derivedTitle := DeriveSessionTitle(input.Content)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at) VALUES (?, ?, 'user', ?, 'text', ?, ?)`, userMessageID, input.SessionID, input.Content, next, createdAt); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
@@ -239,6 +240,25 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 		return EnqueueUserMessageResult{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status, model_provider, model_name, created_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`, runID, input.SessionID, userMessageID, assistantMessageID, input.AgentID, traceID, input.ModelProvider, input.Model, createdAt); err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	// Name the conversation after the first thing said in it, and mark the
+	// session as touched so the client's most-recent-first list actually
+	// reflects activity rather than creation order.
+	//
+	// The untitled check lives in the statement rather than in a read followed
+	// by a write. SetMaxOpenConns(1) serialises writers today, so a read-modify
+	// -write would also be correct — but it would be correct only because of a
+	// pool setting made elsewhere for another reason. This form does not care.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE sessions
+		SET title = CASE
+				WHEN (title IS NULL OR title = '') AND ? <> '' THEN ?
+				ELSE title
+			END,
+			updated_at = ?
+		WHERE id = ?
+	`, derivedTitle, derivedTitle, createdAt, input.SessionID); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	jobPayload, err := json.Marshal(map[string]any{

@@ -25,6 +25,7 @@ class ChatScreen extends StatefulWidget {
     required this.eventSource,
     this.embedded = false,
     this.modelProvider = 'ollama',
+    this.onMessageSent,
   });
 
   final String sessionId;
@@ -39,11 +40,22 @@ class ChatScreen extends StatefulWidget {
   /// Chosen once in Settings rather than shown above every conversation.
   final String modelProvider;
 
+  /// Called once the backend has accepted a message and queued a run.
+  ///
+  /// The host uses this to re-read the conversation list: the backend names a
+  /// session after its first message, so the sidebar's label is out of date
+  /// from this moment until something asks for it again.
+  final VoidCallback? onMessageSent;
+
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  /// The event source this screen actually subscribed to, captured once so
+  /// that connect and close always refer to the same instance.
+  late final TuringEventSource _eventSource = widget.eventSource;
+
   final _controller = TextEditingController();
   final _scrollController = ScrollController();
   final List<_ChatEntry> _messages = [];
@@ -296,7 +308,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // would have no reader left to observe it.
     var subscriptionClosed = false;
     try {
-      _subscription = widget.eventSource
+      _subscription = _eventSource
           .connect(
             sessionId: widget.sessionId,
             // Replay approval lifecycle events so an unresolved request is
@@ -938,6 +950,10 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       if (!mounted) return;
       setState(() => _sending = false);
+      // Only on the success path: the title is written in the same
+      // transaction that queues the run, so a rejected send changed nothing
+      // for the host to re-read.
+      widget.onMessageSent?.call();
     } on Exception catch (error) {
       if (!mounted) return;
       setState(() {
@@ -1242,7 +1258,11 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _subscription?.cancel();
-    widget.eventSource.close();
+    // The instance captured at mount, not widget.eventSource: if the host
+    // rebuilt with a different source, widget.eventSource is one this screen
+    // never connected to, and closing THAT would leave the live channel open
+    // forever while shutting down an unused one.
+    _eventSource.close();
     for (final entry in _messages) {
       entry.dispose();
     }

@@ -4,9 +4,11 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:turing_flutter_app/app.dart';
+import 'package:turing_flutter_app/models/agent_descriptor.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
+import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/auth_storage.dart';
 import 'package:turing_flutter_app/networking/grpc_client.dart';
@@ -113,6 +115,12 @@ class _ClosableFakeApiClient implements ClosableTuringApi {
       'enabledProviders': ['ollama'],
     };
   }
+
+  @override
+  Future<List<ToolDescriptor>> listTools() async => const [];
+
+  @override
+  Future<List<AgentDescriptor>> listAgents() async => const [];
 
   @override
   Future<void> deleteSession({required String sessionId}) async {}

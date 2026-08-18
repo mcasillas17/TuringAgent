@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../models/search_hit.dart';
+import '../../models/session_title.dart';
 import '../../networking/api_client.dart';
 
 /// Shown and announced when a search completes with no matches.
@@ -364,9 +365,7 @@ class _SearchScreenState extends State<SearchScreen> {
       // so skip the request entirely.
       if (!mounted) return;
       final session = await widget.apiClient.getSession(sessionId: sessionId);
-      final title = session.title?.isNotEmpty == true
-          ? session.title!
-          : 'Untitled chat';
+      final title = sessionDisplayTitle(session);
       if (!mounted) return;
       setState(() {
         _titles[sessionId] = title;
