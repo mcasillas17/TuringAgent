@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -60,6 +61,14 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	repo := repository.New(database)
+	// Conversations created before naming moved to the backend are all called
+	// "New chat". Naming only happens as a message is enqueued, so without a
+	// pass at startup a conversation the user never writes to again would keep
+	// that placeholder forever.
+	if _, err := repo.BackfillSessionTitles(context.Background()); err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("backfill session titles: %w", err)
+	}
 	eventBus := eventsvc.NewBus(128)
 	recoveredEvents, err := repo.RecoverAllActiveAssignmentsWithLimit(context.Background(), cfg.JobMaxAttempts)
 	if err != nil {

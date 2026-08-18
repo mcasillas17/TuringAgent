@@ -253,12 +253,13 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE sessions
 		SET title = CASE
-				WHEN (title IS NULL OR title = '') AND ? <> '' THEN ?
+				WHEN (title IS NULL OR title = '' OR title = ?) AND ? <> ''
+					THEN ?
 				ELSE title
 			END,
 			updated_at = ?
 		WHERE id = ?
-	`, derivedTitle, derivedTitle, createdAt, input.SessionID); err != nil {
+	`, legacyPlaceholderTitle, derivedTitle, derivedTitle, createdAt, input.SessionID); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	jobPayload, err := json.Marshal(map[string]any{

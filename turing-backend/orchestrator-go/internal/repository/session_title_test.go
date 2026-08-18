@@ -2,8 +2,11 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 )
 
 func TestDeriveSessionTitle(t *testing.T) {
@@ -324,6 +327,146 @@ func TestEnqueueUserMessageStoresTheTruncatedTitle(t *testing.T) {
 	}
 	if stored.Title.String == content {
 		t.Fatalf("title was stored untruncated")
+	}
+}
+
+func TestBackfillSessionTitlesNamesLegacyConversations(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+
+	// What every conversation created before this change looks like: the
+	// client's placeholder stored as if it were a real title.
+	legacy := seedSession(t, ctx, repo, "New chat", "How do I roast coffee at home?")
+	blank := seedSession(t, ctx, repo, "", "Second conversation")
+	named := seedSession(t, ctx, repo, "Budget planning", "unrelated content")
+	empty := seedSession(t, ctx, repo, "New chat", "")
+
+	renamed, err := repo.BackfillSessionTitles(ctx)
+	if err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if renamed != 2 {
+		t.Fatalf("renamed %d sessions, want 2", renamed)
+	}
+
+	assertTitle(t, ctx, repo, legacy, "How do I roast coffee at home?")
+	assertTitle(t, ctx, repo, blank, "Second conversation")
+	// A title the user chose is theirs, backfill or not.
+	assertTitle(t, ctx, repo, named, "Budget planning")
+	// Nothing was ever said in it, so there is nothing to name it after.
+	assertTitle(t, ctx, repo, empty, "New chat")
+}
+
+// Startup runs this every time, so a second pass must be a no-op rather than
+// re-deriving titles over ones already assigned.
+func TestBackfillSessionTitlesIsIdempotent(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session := seedSession(t, ctx, repo, "New chat", "first thing said")
+
+	if _, err := repo.BackfillSessionTitles(ctx); err != nil {
+		t.Fatalf("first backfill: %v", err)
+	}
+	renamed, err := repo.BackfillSessionTitles(ctx)
+	if err != nil {
+		t.Fatalf("second backfill: %v", err)
+	}
+	if renamed != 0 {
+		t.Fatalf("second pass renamed %d sessions, want 0", renamed)
+	}
+	assertTitle(t, ctx, repo, session, "first thing said")
+}
+
+// The backfill and the live path must not disagree about what a message is
+// called, or the same conversation would be named differently depending on
+// whether it was open when the feature shipped.
+func TestBackfillMatchesTheLiveTitleForTheSameMessage(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	content := "Please read every file under the sandbox directory and tell me which ones changed today"
+
+	backfilled := seedSession(t, ctx, repo, "New chat", content)
+	if _, err := repo.BackfillSessionTitles(ctx); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+
+	live, err := repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID:     live.SessionID,
+		Content:       content,
+		AgentID:       "general_assistant",
+		ModelProvider: "ollama",
+		Model:         "qwen2.5:7b",
+	}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	backfilledSession, err := repo.GetSession(ctx, backfilled)
+	if err != nil {
+		t.Fatalf("get backfilled: %v", err)
+	}
+	liveSession, err := repo.GetSession(ctx, live.SessionID)
+	if err != nil {
+		t.Fatalf("get live: %v", err)
+	}
+	if backfilledSession.Title.String != liveSession.Title.String {
+		t.Fatalf("backfilled title %q != live title %q",
+			backfilledSession.Title.String, liveSession.Title.String)
+	}
+}
+
+// A conversation still carrying the placeholder gets named the moment it is
+// used again, even if the startup pass never reached it.
+func TestEnqueueUserMessageReplacesTheLegacyPlaceholder(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session := seedSession(t, ctx, repo, "New chat", "an older message")
+
+	if _, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID:     session,
+		Content:       "a newer message",
+		AgentID:       "general_assistant",
+		ModelProvider: "ollama",
+		Model:         "qwen2.5:7b",
+	}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	assertTitle(t, ctx, repo, session, "a newer message")
+}
+
+// seedSession creates a session with the given stored title and, unless
+// content is empty, one user message — the shape a conversation had before
+// backend naming existed.
+func seedSession(t *testing.T, ctx context.Context, repo *Repository, title, content string) string {
+	t.Helper()
+	session, err := repo.CreateSession(ctx, title)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	// CreateSession stores NULL for "", so force the exact stored value under
+	// test rather than trusting it to round-trip.
+	if _, err := repo.db.ExecContext(ctx, `UPDATE sessions SET title = ? WHERE id = ?`,
+		nullableString(sql.NullString{String: title, Valid: title != ""}), session.SessionID); err != nil {
+		t.Fatalf("set title: %v", err)
+	}
+	if content != "" {
+		if _, err := repo.db.ExecContext(ctx,
+			`INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at) VALUES (?, ?, 'user', ?, 'text', 1, ?)`,
+			ids.New("msg"), session.SessionID, content, now()); err != nil {
+			t.Fatalf("insert message: %v", err)
+		}
+	}
+	return session.SessionID
+}
+
+func assertTitle(t *testing.T, ctx context.Context, repo *Repository, sessionID, want string) {
+	t.Helper()
+	session, err := repo.GetSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get session %s: %v", sessionID, err)
+	}
+	if session.Title.String != want {
+		t.Fatalf("session %s title = %q, want %q", sessionID, session.Title.String, want)
 	}
 }
 
