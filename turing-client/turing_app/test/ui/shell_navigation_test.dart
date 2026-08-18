@@ -2,11 +2,15 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:turing_flutter_app/features/chat/chat_screen.dart';
+import 'package:turing_flutter_app/features/workspace/session_skills_bar.dart';
+import 'package:turing_flutter_app/features/workspace/skills_page.dart';
 import 'package:turing_flutter_app/features/workspace/workspace_pages.dart';
 import 'package:turing_flutter_app/models/agent_descriptor.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
+import 'package:turing_flutter_app/models/skill.dart';
 import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
@@ -138,6 +142,83 @@ void main() {
     });
   });
 
+  group('skills in the shell', () {
+    testWidgets('Skills opens the real library, not a placeholder', (
+      tester,
+    ) async {
+      await _pumpShell(tester, api: _FakeApi(), size: _desktop);
+
+      await tester.tap(find.text('Skills'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SkillsPage), findsOneWidget);
+      expect(find.byType(PlannedDestinationPage), findsNothing);
+    });
+
+    testWidgets('the attached skills sit above the conversation', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..skills.add(
+          const Skill(
+            skillId: 'skill_1',
+            name: 'Tone',
+            instructions: 'Be brief.',
+          ),
+        )
+        ..attached['sess_existing'] = ['skill_1'];
+      await _pumpShell(tester, api: api, size: _desktop);
+
+      await tester.tap(find.text('Existing chat'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SessionSkillsBar), findsOneWidget);
+      // Above the transcript, not below it: standing instructions that change
+      // the answers should be visible while you read them.
+      final bar = tester.getTopLeft(find.byType(SessionSkillsBar));
+      final chat = tester.getTopLeft(find.byType(ChatScreen));
+      expect(bar.dy, lessThan(chat.dy));
+    });
+
+    testWidgets('switching conversations never shows the previous set', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..sessions = [
+          Session(
+            sessionId: 'sess_a',
+            title: 'Chat A',
+            updatedAt: DateTime.utc(2026, 5, 11),
+          ),
+          Session(
+            sessionId: 'sess_b',
+            title: 'Chat B',
+            updatedAt: DateTime.utc(2026, 5, 10),
+          ),
+        ]
+        ..skills.add(
+          const Skill(
+            skillId: 'skill_1',
+            name: 'Tone',
+            instructions: 'Be brief.',
+          ),
+        )
+        ..attached['sess_a'] = ['skill_1'];
+      await _pumpShell(tester, api: api, size: _desktop);
+
+      await tester.tap(find.text('Chat A'));
+      await tester.pumpAndSettle();
+      expect(find.text('Tone'), findsOneWidget);
+
+      await tester.tap(find.text('Chat B'));
+      await tester.pumpAndSettle();
+
+      // B has none attached; showing A's would misstate what B is following.
+      expect(find.text('Tone'), findsNothing);
+      expect(find.text('No skills attached'), findsOneWidget);
+    });
+  });
+
   group('conversation naming', () {
     testWidgets('a new conversation is created without a title', (
       tester,
@@ -259,7 +340,7 @@ void main() {
 
       await tester.tap(find.byTooltip('Open navigation menu'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Skills'));
+      await tester.tap(find.text('Integrations'));
       await tester.pumpAndSettle();
 
       expect(find.byType(Drawer), findsNothing);
@@ -366,7 +447,7 @@ void main() {
       final api = _FakeApi()..sessions = [];
       await _pumpShell(tester, api: api, size: _desktop);
 
-      await tester.tap(find.text('Skills'));
+      await tester.tap(find.text('Integrations'));
       await tester.pumpAndSettle();
       expect(find.byType(PlannedDestinationPage), findsOneWidget);
 
@@ -538,6 +619,88 @@ class _FakeApi implements TuringApi {
     final error = toolsError;
     if (error != null) throw error;
     return tools;
+  }
+
+  /// A working in-memory library, so the Skills UI is tested against
+  /// something that behaves like the backend rather than a stub that always
+  /// says yes.
+  final List<Skill> skills = [];
+  final Map<String, List<String>> attached = {};
+  Object? skillsError;
+  int nextSkillId = 1;
+
+  @override
+  Future<List<Skill>> listSkills() async {
+    final error = skillsError;
+    if (error != null) throw error;
+    return List.unmodifiable(skills);
+  }
+
+  @override
+  Future<Skill> createSkill({
+    required String name,
+    required String instructions,
+  }) async {
+    if (skills.any((s) => s.name.toLowerCase() == name.toLowerCase())) {
+      throw StateError('a skill with that name already exists');
+    }
+    final skill = Skill(
+      skillId: 'skill_${nextSkillId++}',
+      name: name,
+      instructions: instructions,
+    );
+    skills.add(skill);
+    return skill;
+  }
+
+  @override
+  Future<Skill> updateSkill({
+    required String skillId,
+    required String name,
+    required String instructions,
+  }) async {
+    final index = skills.indexWhere((s) => s.skillId == skillId);
+    if (index < 0) throw StateError('skill not found');
+    final updated = Skill(
+      skillId: skillId,
+      name: name,
+      instructions: instructions,
+    );
+    skills[index] = updated;
+    return updated;
+  }
+
+  @override
+  Future<void> deleteSkill({required String skillId}) async {
+    skills.removeWhere((s) => s.skillId == skillId);
+    for (final ids in attached.values) {
+      ids.remove(skillId);
+    }
+  }
+
+  @override
+  Future<List<Skill>> attachSkill({
+    required String sessionId,
+    required String skillId,
+  }) async {
+    final ids = attached.putIfAbsent(sessionId, () => []);
+    if (!ids.contains(skillId)) ids.add(skillId);
+    return listSessionSkills(sessionId: sessionId);
+  }
+
+  @override
+  Future<List<Skill>> detachSkill({
+    required String sessionId,
+    required String skillId,
+  }) async {
+    attached[sessionId]?.remove(skillId);
+    return listSessionSkills(sessionId: sessionId);
+  }
+
+  @override
+  Future<List<Skill>> listSessionSkills({required String sessionId}) async {
+    final ids = attached[sessionId] ?? const <String>[];
+    return skills.where((s) => ids.contains(s.skillId)).toList();
   }
 
   @override

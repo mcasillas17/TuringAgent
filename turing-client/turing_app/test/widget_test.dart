@@ -14,6 +14,8 @@ import 'package:turing_flutter_app/networking/auth_storage.dart';
 import 'package:turing_flutter_app/networking/grpc_client.dart';
 import 'package:turing_flutter_app/networking/event_source.dart';
 
+import 'support/no_skills_api.dart';
+
 void main() {
   testWidgets('Turing app renders settings when credentials are missing', (
     tester,
@@ -80,7 +82,7 @@ class _FakeAuthStorage implements ClientAuthStorage {
   }) async {}
 }
 
-class _ClosableFakeApiClient implements ClosableTuringApi {
+class _ClosableFakeApiClient with NoSkillsApi implements ClosableTuringApi {
   bool closed = false;
 
   @override

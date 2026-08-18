@@ -14,9 +14,7 @@ void main() {
   });
 
   testWidgets('renders the "Run failed" outcome label visibly, not just in '
-      'the semantics label, and never renders "Run cancelled"', (
-    tester,
-  ) async {
+      'the semantics label, and never renders "Run cancelled"', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(body: RunFailureCard(message: 'connection lost')),

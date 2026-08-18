@@ -157,14 +157,14 @@ class _McpsPageState extends State<McpsPage> {
         future: _tools,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
-            return const _PageLoading();
+            return const WorkspaceLoading();
           }
           if (snapshot.hasError) {
             return _PageError(message: '${snapshot.error}', onRetry: _reload);
           }
           final tools = snapshot.data ?? const <ToolDescriptor>[];
           if (tools.isEmpty) {
-            return _PageNotice(
+            return WorkspaceNotice(
               icon: Icons.hub_outlined,
               title: 'No tools discovered',
               body:
@@ -338,7 +338,7 @@ class _AgentsPageState extends State<AgentsPage> {
         future: _agents,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
-            return const _PageLoading();
+            return const WorkspaceLoading();
           }
           if (snapshot.hasError) {
             return _PageError(message: '${snapshot.error}', onRetry: _reload);
@@ -396,7 +396,7 @@ class _AgentsPageState extends State<AgentsPage> {
               const SizedBox(height: 8),
               // Said explicitly because the single row above otherwise reads
               // as a list that failed to load the rest.
-              _PageNotice(
+              WorkspaceNotice(
                 icon: Icons.alt_route_outlined,
                 title: 'Routing to other agents is not built yet',
                 body:
@@ -414,8 +414,9 @@ class _AgentsPageState extends State<AgentsPage> {
   }
 }
 
-class _PageLoading extends StatelessWidget {
-  const _PageLoading();
+/// Shared by every destination page, including ones in sibling files.
+class WorkspaceLoading extends StatelessWidget {
+  const WorkspaceLoading({super.key});
 
   @override
   Widget build(BuildContext context) => const Padding(
@@ -436,7 +437,7 @@ class _PageError extends StatelessWidget {
   final VoidCallback onRetry;
 
   @override
-  Widget build(BuildContext context) => _PageNotice(
+  Widget build(BuildContext context) => WorkspaceNotice(
     icon: Icons.error_outline,
     title: 'Could not reach the backend',
     body: message,
@@ -445,8 +446,9 @@ class _PageError extends StatelessWidget {
   );
 }
 
-class _PageNotice extends StatelessWidget {
-  const _PageNotice({
+class WorkspaceNotice extends StatelessWidget {
+  const WorkspaceNotice({
+    super.key,
     required this.icon,
     required this.title,
     required this.body,

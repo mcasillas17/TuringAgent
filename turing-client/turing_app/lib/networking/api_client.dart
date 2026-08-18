@@ -4,6 +4,7 @@ import '../models/agent_descriptor.dart';
 import '../models/message.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
+import '../models/skill.dart';
 import '../models/tool_descriptor.dart';
 import '../models/turing_event.dart';
 
@@ -61,6 +62,39 @@ abstract class TuringApi {
 
   /// The agents the backend can route a run to.
   Future<List<AgentDescriptor>> listAgents();
+
+  /// The user's whole skill library.
+  Future<List<Skill>> listSkills();
+
+  Future<Skill> createSkill({
+    required String name,
+    required String instructions,
+  });
+
+  Future<Skill> updateSkill({
+    required String skillId,
+    required String name,
+    required String instructions,
+  });
+
+  /// Removes a skill from the library, which also detaches it from every
+  /// conversation. Runs already queued are unaffected — they carry a snapshot
+  /// of the instructions taken when the message was sent.
+  Future<void> deleteSkill({required String skillId});
+
+  /// Attach and detach return the conversation's full skill set, so the client
+  /// never has to guess what the server now believes is attached.
+  Future<List<Skill>> attachSkill({
+    required String sessionId,
+    required String skillId,
+  });
+
+  Future<List<Skill>> detachSkill({
+    required String sessionId,
+    required String skillId,
+  });
+
+  Future<List<Skill>> listSessionSkills({required String sessionId});
 }
 
 class TuringApiException implements Exception {

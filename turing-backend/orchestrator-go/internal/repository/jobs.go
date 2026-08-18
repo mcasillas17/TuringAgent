@@ -42,6 +42,7 @@ type Job struct {
 	UserText            string
 	Attempt             int
 	AssignmentAttemptID string
+	Skills              []AttachedSkill
 	StartedEvent        Event
 }
 
@@ -262,6 +263,13 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 	`, legacyPlaceholderTitle, derivedTitle, derivedTitle, createdAt, input.SessionID); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
+	// Frozen into the payload rather than read when the job is claimed: a
+	// skill edited or detached while the job waits must not change what this
+	// run was told to do. It is the same reason userText is stored here.
+	attachedSkills, err := attachedSkillsTx(ctx, tx, input.SessionID)
+	if err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
 	jobPayload, err := json.Marshal(map[string]any{
 		"userText":           input.Content,
 		"sessionId":          input.SessionID,
@@ -270,6 +278,7 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 		"traceId":            traceID,
 		"modelProvider":      input.ModelProvider,
 		"model":              input.Model,
+		"skills":             attachedSkills,
 	})
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
@@ -386,12 +395,16 @@ func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, 
 		return Job{}, err
 	}
 	var payload struct {
-		UserText string `json:"userText"`
+		UserText string          `json:"userText"`
+		Skills   []AttachedSkill `json:"skills"`
 	}
 	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
 		return Job{}, err
 	}
 	job.UserText = payload.UserText
+	// Absent for jobs enqueued before skills existed, which decodes to nil —
+	// the same as a conversation with none attached.
+	job.Skills = payload.Skills
 	result, err := tx.ExecContext(ctx, `
 		UPDATE jobs
 		SET status = 'in_progress', lease_owner = ?, lease_expires_at = ?, lease_expires_at_ns = ?, picked_up_at = ?, assignment_attempt_id = ?

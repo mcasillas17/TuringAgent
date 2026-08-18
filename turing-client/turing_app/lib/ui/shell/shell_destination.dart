@@ -18,15 +18,7 @@ enum ShellDestination {
     label: 'Skills',
     icon: Icons.auto_awesome_outlined,
     selectedIcon: Icons.auto_awesome,
-    implemented: false,
-    summary:
-        'Reusable instructions you can hand the agent — a checklist it should '
-        'follow, a format it should always write in, a procedure it should '
-        'run the same way every time.',
-    blockedOn:
-        'The agent takes a single system prompt today. Skills need somewhere '
-        'to store them, a way to pick which apply to a conversation, and a '
-        'way to compose several without them contradicting each other.',
+    implemented: true,
   ),
   integrations(
     label: 'Integrations',

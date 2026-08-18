@@ -18,6 +18,7 @@ import (
 	eventsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	runtimesvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/runtime"
 	sessionsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/sessions"
+	skillsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/skills"
 	"google.golang.org/grpc"
 )
 
@@ -86,6 +87,7 @@ func New(cfg config.Config) (*App, error) {
 		MaxAttempts:       cfg.JobMaxAttempts,
 	}, approvalService)
 	sessionService := sessionsvc.New(repo, cfg)
+	skillService := skillsvc.New(repo)
 	eventService := eventsvc.NewServer(repo, eventBus)
 	chatService := chatsvc.New(repo, eventBus, runtimeService, cfg.OllamaModel, cfg.OpenAIModel)
 	auditService := auditsvc.New(repo)
@@ -123,6 +125,9 @@ func New(cfg config.Config) (*App, error) {
 
 	turingv1.RegisterHealthServiceServer(publicServer, healthService)
 	turingv1.RegisterSessionServiceServer(publicServer, sessionService)
+	// Public only: the runtime never reads skills over gRPC, it receives the
+	// snapshot on the job it claims.
+	turingv1.RegisterSkillServiceServer(publicServer, skillService)
 	turingv1.RegisterEventServiceServer(publicServer, eventService)
 	turingv1.RegisterChatServiceServer(publicServer, chatService)
 	turingv1.RegisterApprovalServiceServer(publicServer, approvalsvc.NewPublicServer(approvalService))

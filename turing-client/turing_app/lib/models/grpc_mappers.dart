@@ -6,14 +6,24 @@ import '../generated/turing/v1/chat.pb.dart' as chatpb;
 import '../generated/turing/v1/common.pb.dart' as commonpb;
 import '../generated/turing/v1/events.pb.dart' as eventpb;
 import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
+import '../generated/turing/v1/skills.pb.dart' as skillpb;
 import 'agent_descriptor.dart' as model_agent;
 import 'message.dart' as model_message;
 import 'search_hit.dart' as model_search_hit;
 import 'session.dart' as model_session;
+import 'skill.dart' as model_skill;
 import 'tool_descriptor.dart' as model_tool;
 import 'turing_event.dart' as model_event;
 
 class GrpcMappers {
+  static model_skill.Skill skillToModel(skillpb.Skill skill) {
+    return model_skill.Skill(
+      skillId: skill.skillId,
+      name: skill.name,
+      instructions: skill.instructions,
+    );
+  }
+
   static model_tool.ToolDescriptor toolToModel(sessionpb.ToolDescriptor tool) {
     return model_tool.ToolDescriptor(
       serverName: tool.serverName,

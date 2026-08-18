@@ -1939,5 +1939,20 @@ func mapJob(job repository.Job) *turingv1.AgentJob {
 		Model:              job.Model,
 		UserText:           job.UserText,
 		Attempt:            int32(job.Attempt),
+		Skills:             toProtoSkills(job.Skills),
 	}
+}
+
+func toProtoSkills(skills []repository.AttachedSkill) []*turingv1.AttachedSkill {
+	if len(skills) == 0 {
+		return nil
+	}
+	converted := make([]*turingv1.AttachedSkill, 0, len(skills))
+	for _, skill := range skills {
+		converted = append(converted, &turingv1.AttachedSkill{
+			Name:         skill.Name,
+			Instructions: skill.Instructions,
+		})
+	}
+	return converted
 }

@@ -35,9 +35,7 @@ const _maxExcerptLines = 3;
 String _excerpt(String content) {
   final head = content.runes.take(_maxExcerptRunes + 1).toList();
   if (head.length <= _maxExcerptRunes) return content;
-  final kept = String.fromCharCodes(
-    head.take(_maxExcerptRunes),
-  ).trimRight();
+  final kept = String.fromCharCodes(head.take(_maxExcerptRunes)).trimRight();
   return '$kept…';
 }
 
@@ -599,10 +597,7 @@ class _SearchScreenState extends State<SearchScreen> {
           child: Semantics(
             key: ValueKey('group-header-${group.sessionId}'),
             header: true,
-            child: Text(
-              title,
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
+            child: Text(title, style: Theme.of(context).textTheme.titleMedium),
           ),
         ),
         for (final hit in group.hits) _buildHit(context, group.sessionId, hit),

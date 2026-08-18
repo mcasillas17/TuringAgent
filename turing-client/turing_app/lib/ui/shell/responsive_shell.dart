@@ -6,6 +6,8 @@ import '../../constants/app_colors.dart';
 import '../../features/chat/chat_screen.dart';
 import '../../features/search/search_screen.dart';
 import '../../features/settings/settings_screen.dart';
+import '../../features/workspace/session_skills_bar.dart';
+import '../../features/workspace/skills_page.dart';
 import '../../features/workspace/workspace_pages.dart';
 import '../../logic/theme_logic.dart';
 import '../../models/session.dart';
@@ -396,6 +398,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       case ShellDestination.agents:
         return AgentsPage(apiClient: widget.apiClient);
       case ShellDestination.skills:
+        return SkillsPage(apiClient: widget.apiClient);
       case ShellDestination.integrations:
       case ShellDestination.automations:
         return PlannedDestinationPage(destination: _destination);
@@ -411,16 +414,32 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
         onNewConversation: _newConversation,
       );
     }
-    return ChatScreen(
-      // Keyed by session so switching conversations rebuilds the chat state
-      // instead of leaking the previous transcript into the new one.
-      key: ValueKey(sessionId),
-      sessionId: sessionId,
-      apiClient: widget.apiClient,
-      eventSource: _eventSourceForChat(sessionId),
-      embedded: true,
-      modelProvider: _modelProvider,
-      onMessageSent: _onMessageSent,
+    return Column(
+      children: [
+        // Above the transcript rather than inside it: standing instructions
+        // that change the answers should be visible while you read them.
+        // Keyed like the chat below it: a fresh State per conversation is what
+        // guarantees the previous conversation's skills can never linger on
+        // screen while the new set loads.
+        SessionSkillsBar(
+          key: ValueKey('skills-$sessionId'),
+          apiClient: widget.apiClient,
+          sessionId: sessionId,
+        ),
+        Expanded(
+          child: ChatScreen(
+            // Keyed by session so switching conversations rebuilds the chat
+            // state instead of leaking the previous transcript into the new one.
+            key: ValueKey(sessionId),
+            sessionId: sessionId,
+            apiClient: widget.apiClient,
+            eventSource: _eventSourceForChat(sessionId),
+            embedded: true,
+            modelProvider: _modelProvider,
+            onMessageSent: _onMessageSent,
+          ),
+        ),
+      ],
     );
   }
 }

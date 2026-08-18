@@ -13,6 +13,8 @@ import 'package:turing_flutter_app/networking/auth_storage.dart';
 import 'package:turing_flutter_app/networking/event_source.dart';
 import 'package:turing_flutter_app/ui/shell/responsive_shell.dart';
 
+import '../support/no_skills_api.dart';
+
 void main() {
   testWidgets('the shell is one surface: conversations beside a chat', (
     tester,
@@ -160,7 +162,7 @@ void main() {
   });
 }
 
-class _FakeApiClient implements TuringApi {
+class _FakeApiClient with NoSkillsApi implements TuringApi {
   @override
   Future<Map<String, dynamic>> approveApproval(
     String approvalId, {
