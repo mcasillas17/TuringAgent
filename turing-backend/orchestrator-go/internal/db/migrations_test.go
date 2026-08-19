@@ -400,12 +400,13 @@ func TestAuditReadMigrationNormalizesLegacyVariableWidthCreatedAt(t *testing.T) 
 	}
 
 	// legacy_on_second reproduces the old now()'s output for an instant with
-	// zero nanoseconds. later_with_fraction is one nanosecond later, in the
-	// same second, and keeps its fraction because it isn't exactly zero.
+	// zero nanoseconds. The other rows exercise both a canonical fraction and
+	// RFC3339Nano's common trimmed-fraction form.
 	if _, err := database.ExecContext(ctx, `
 		INSERT INTO audit_logs (id, actor_type, action, created_at)
 		VALUES ('legacy_on_second', 'runtime', 'tool.call.before', '2026-01-01T00:00:05Z'),
-		       ('later_with_fraction', 'runtime', 'tool.call.after', '2026-01-01T00:00:05.000000001Z')`); err != nil {
+		       ('later_with_fraction', 'runtime', 'tool.call.after', '2026-01-01T00:00:05.000000001Z'),
+		       ('legacy_trimmed_fraction', 'runtime', 'tool.call.after', '2026-01-01T00:00:05.12Z')`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -429,11 +430,15 @@ func TestAuditReadMigrationNormalizesLegacyVariableWidthCreatedAt(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	wantIDs := []string{"legacy_on_second", "later_with_fraction"}
+	wantIDs := []string{"legacy_on_second", "later_with_fraction", "legacy_trimmed_fraction"}
 	if !reflect.DeepEqual(gotIDs, wantIDs) {
 		t.Fatalf("created_at ASC order = %v, want %v (05.000000000 must sort before 05.000000001)", gotIDs, wantIDs)
 	}
-	wantCreatedAt := []string{"2026-01-01T00:00:05.000000000Z", "2026-01-01T00:00:05.000000001Z"}
+	wantCreatedAt := []string{
+		"2026-01-01T00:00:05.000000000Z",
+		"2026-01-01T00:00:05.000000001Z",
+		"2026-01-01T00:00:05.120000000Z",
+	}
 	if !reflect.DeepEqual(gotCreatedAt, wantCreatedAt) {
 		t.Fatalf("normalized created_at = %v, want %v (fixed 9-digit fraction, matching repository.FormatTimestamp)", gotCreatedAt, wantCreatedAt)
 	}
