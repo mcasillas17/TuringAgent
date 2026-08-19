@@ -177,6 +177,10 @@ func TestRepositoryDockerignoreExcludesSensitiveAndGeneratedContent(t *testing.T
 		"**/.env.*",
 		"**/.runtime",
 		"**/data",
+		// "**/data" matches only a component named exactly "data", so the runtime
+		// SQLite backup directories need their own patterns.
+		"**/data.backup-*",
+		"**/data.worktree-backup-*",
 		"**/sandbox",
 		"**/node_modules",
 		"**/.dart_tool",
