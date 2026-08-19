@@ -50,7 +50,7 @@ The public orchestrator gRPC port defaults to `3000`. The internal runtime gRPC 
 
 | Service | Network exposure |
 |---|---|
-| `turing-orchestrator` | Publishes public gRPC port `3000`; exposes internal gRPC port `3001` only inside Docker networks |
+| `turing-orchestrator` | Publishes public gRPC port `3000` on `127.0.0.1`; exposes internal gRPC port `3001` only inside Docker networks |
 | `turing-agent-runtime-general` | Internal Docker networks only |
 | `turing-mcp-system` | Internal `net-system` network only |
 | `turing-mcp-files` | Internal `net-files` network only |
@@ -59,8 +59,8 @@ Compose uses explicit `environment:` blocks instead of `env_file:` so services r
 
 Every service has an explicit non-root runtime identity, a read-only root
 filesystem, `cap_drop: ALL`, and `no-new-privileges`. Only the orchestrator's
-`/app/data` and `mcp-files`' `/sandbox` are writable; the runtime and
-`mcp-system` have no writable mount or tmpfs.
+`/app/data` and `mcp-files`' `/sandbox` are writable. Each service replaces
+Docker's default writable `/dev/shm` with a 64 KiB read-only tmpfs.
 
 ## Model providers
 

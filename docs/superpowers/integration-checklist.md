@@ -17,9 +17,10 @@ Use this checklist against the current Go gRPC, MCP, and Flutter architecture.
 - [ ] Every backend container uses an explicit non-root identity, a read-only
   root filesystem, `cap_drop: ALL`, and `no-new-privileges`.
 - [ ] Only orchestrator `/app/data` and `mcp-files` `/sandbox` are writable;
-  runtime and `mcp-system` have no writable mounts or tmpfs.
-- [ ] Only the orchestrator publishes a host port; MCP services remain on their
-  intended internal Docker networks.
+  every service replaces Docker's default writable `/dev/shm` with the approved
+  read-only tmpfs.
+- [ ] Only the orchestrator publishes a host port, fixed to `127.0.0.1`; MCP
+  services remain on their intended internal Docker networks.
 - [ ] MCP healthchecks run through the service binaries without write access or
   extra image utilities, and the runtime waits for both services to be healthy.
 

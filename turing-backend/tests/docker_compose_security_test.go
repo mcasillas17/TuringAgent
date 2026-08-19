@@ -55,11 +55,13 @@ type composeService struct {
 }
 
 type composeRuntimePolicy struct {
-	user     string
-	volumes  []string
-	ports    []string
-	expose   []string
-	networks []string
+	user       string
+	volumes    []string
+	tmpfs      []string
+	ports      []string
+	expose     []string
+	networks   []string
+	extraHosts []string
 }
 
 func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
@@ -240,37 +242,42 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 func TestEveryBackendImageRunsAsExplicitNonRootUser(t *testing.T) {
 	composePath := filepath.Join("..", "infra", "docker-compose.yml")
 	tests := map[string]struct {
+		context  string
 		path     string
 		user     string
 		snippets []string
 	}{
 		"turing-orchestrator": {
-			path: filepath.Join("..", "orchestrator-go", "Dockerfile"),
-			user: "turing-orchestrator:turing-orchestrator",
+			context: filepath.Join("..", ".."),
+			path:    filepath.Join("..", "orchestrator-go", "Dockerfile"),
+			user:    "turing-orchestrator:turing-orchestrator",
 			snippets: []string{
 				"groupadd --gid 1000 turing-orchestrator",
 				"useradd --uid 1000 --gid 1000",
 			},
 		},
 		"turing-agent-runtime-general": {
-			path: filepath.Join("..", "agent-runtime-go", "Dockerfile"),
-			user: "turing-agent-runtime:turing-agent-runtime",
+			context: filepath.Join("..", ".."),
+			path:    filepath.Join("..", "agent-runtime-go", "Dockerfile"),
+			user:    "turing-agent-runtime:turing-agent-runtime",
 			snippets: []string{
 				"groupadd --gid 1000 turing-agent-runtime",
 				"useradd --uid 1000 --gid 1000",
 			},
 		},
 		"turing-mcp-system": {
-			path: filepath.Join("..", "mcp-system", "Dockerfile"),
-			user: "mcp-system:mcp-system",
+			context: filepath.Join("..", "mcp-system"),
+			path:    filepath.Join("..", "mcp-system", "Dockerfile"),
+			user:    "mcp-system:mcp-system",
 			snippets: []string{
 				"addgroup -g 1000 -S mcp-system",
 				"adduser -u 1000 -S -G mcp-system mcp-system",
 			},
 		},
 		"turing-mcp-files": {
-			path: filepath.Join("..", "mcp-files", "Dockerfile"),
-			user: "mcp-files:mcp-files",
+			context: filepath.Join("..", ".."),
+			path:    filepath.Join("..", "mcp-files", "Dockerfile"),
+			user:    "mcp-files:mcp-files",
 			snippets: []string{
 				"addgroup -g 1000 -S mcp-files",
 				"adduser -u 1000 -S -G mcp-files mcp-files",
@@ -288,9 +295,16 @@ func TestEveryBackendImageRunsAsExplicitNonRootUser(t *testing.T) {
 			if !known {
 				t.Fatalf("%s has no Dockerfile non-root policy", serviceName)
 			}
-			dockerfilePath, err := composeDockerfilePath(composePath, document.Services[serviceName].Build)
+			contextPath, dockerfilePath, err := composeBuildPaths(composePath, document.Services[serviceName].Build)
 			if err != nil {
 				t.Fatalf("%s build: %v", serviceName, err)
+			}
+			expectedContext, err := filepath.Abs(test.context)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if contextPath != expectedContext {
+				t.Errorf("%s build context = %q, want %q", serviceName, contextPath, expectedContext)
 			}
 			expectedPath, err := filepath.Abs(test.path)
 			if err != nil {
@@ -335,22 +349,27 @@ func TestEveryComposeServiceUsesLeastPrivilegeRuntime(t *testing.T) {
 		"turing-orchestrator": {
 			user:     "${HOST_UID:?Use scripts/compose.sh to launch}:${HOST_GID:?Use scripts/compose.sh to launch}",
 			volumes:  []string{"../data:/app/data"},
-			ports:    []string{"${ORCHESTRATOR_PUBLIC_BIND_HOST:-127.0.0.1}:${ORCHESTRATOR_PUBLIC_PORT:-3000}:3000"},
+			tmpfs:    []string{"/dev/shm:ro,nosuid,nodev,noexec,size=64k"},
+			ports:    []string{"127.0.0.1:${ORCHESTRATOR_PUBLIC_PORT:-3000}:3000"},
 			expose:   []string{"3001"},
 			networks: []string{"net-system", "net-files"},
 		},
 		"turing-agent-runtime-general": {
-			user:     "turing-agent-runtime:turing-agent-runtime",
-			networks: []string{"net-system", "net-files"},
+			user:       "turing-agent-runtime:turing-agent-runtime",
+			tmpfs:      []string{"/dev/shm:ro,nosuid,nodev,noexec,size=64k"},
+			networks:   []string{"net-system", "net-files"},
+			extraHosts: []string{"host.docker.internal:host-gateway"},
 		},
 		"turing-mcp-system": {
 			user:     "mcp-system:mcp-system",
+			tmpfs:    []string{"/dev/shm:ro,nosuid,nodev,noexec,size=64k"},
 			expose:   []string{"7100"},
 			networks: []string{"net-system"},
 		},
 		"turing-mcp-files": {
 			user:     "${HOST_UID:?Use scripts/compose.sh to launch}:${HOST_GID:?Use scripts/compose.sh to launch}",
 			volumes:  []string{"../sandbox:/sandbox"},
+			tmpfs:    []string{"/dev/shm:ro,nosuid,nodev,noexec,size=64k"},
 			expose:   []string{"7110"},
 			networks: []string{"net-files"},
 		},
@@ -478,6 +497,7 @@ services:
     ipc: host
     userns_mode: host
     group_add: ["0"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
     ports: ["7100:7100"]
     network_mode: host
 `,
@@ -492,6 +512,7 @@ services:
 				"IPC namespace",
 				"user namespace",
 				"supplementary groups",
+				"host aliases",
 				"ports",
 				"expose",
 				"networks",
@@ -584,6 +605,35 @@ services:
 	}
 	if _, err := composeDockerfilePath(composePath, document.Services["targeted"].Build); err == nil {
 		t.Fatal("composeDockerfilePath accepted a non-default target stage")
+	}
+}
+
+func TestComposeBuildPathsExposeBroadenedContext(t *testing.T) {
+	composePath := filepath.Join(string(filepath.Separator), "repo", "turing-backend", "infra", "docker-compose.yml")
+	document := decodeComposeDocument(t, `
+services:
+  canonical:
+    build:
+      context: ../..
+      dockerfile: turing-backend/orchestrator-go/Dockerfile
+  broadened:
+    build:
+      context: ../../..
+      dockerfile: repo/turing-backend/orchestrator-go/Dockerfile
+`)
+	canonicalContext, canonicalDockerfile, err := composeBuildPaths(composePath, document.Services["canonical"].Build)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broadenedContext, broadenedDockerfile, err := composeBuildPaths(composePath, document.Services["broadened"].Build)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonicalDockerfile != broadenedDockerfile {
+		t.Fatalf("fixture Dockerfiles differ: %q != %q", canonicalDockerfile, broadenedDockerfile)
+	}
+	if canonicalContext == broadenedContext {
+		t.Fatalf("broadened context = canonical context %q", canonicalContext)
 	}
 }
 
@@ -815,8 +865,8 @@ func composeRuntimePolicyViolations(serviceName string, service composeService, 
 	if !equalStrings(service.Volumes, policy.volumes) {
 		violations = append(violations, fmt.Sprintf("%s volume mounts = %v, want %v", serviceName, service.Volumes, policy.volumes))
 	}
-	if len(service.Tmpfs) != 0 {
-		violations = append(violations, fmt.Sprintf("%s has unapproved writable tmpfs mounts: %v", serviceName, service.Tmpfs))
+	if !equalStrings(service.Tmpfs, policy.tmpfs) {
+		violations = append(violations, fmt.Sprintf("%s tmpfs mounts = %v, want %v", serviceName, service.Tmpfs, policy.tmpfs))
 	}
 	if len(service.VolumesFrom) != 0 {
 		violations = append(violations, fmt.Sprintf("%s inherits unapproved volumes from %v", serviceName, service.VolumesFrom))
@@ -867,6 +917,9 @@ func composeRuntimePolicyViolations(serviceName string, service composeService, 
 	if len(service.ExternalLinks) != 0 {
 		violations = append(violations, fmt.Sprintf("%s uses unapproved external_links: %v", serviceName, service.ExternalLinks))
 	}
+	if !equalStrings(service.ExtraHosts, policy.extraHosts) {
+		violations = append(violations, fmt.Sprintf("%s host aliases = %v, want %v", serviceName, service.ExtraHosts, policy.extraHosts))
+	}
 	return violations
 }
 
@@ -877,8 +930,13 @@ func composeUserIsRoot(user string) bool {
 }
 
 func composeDockerfilePath(composePath string, build yaml.Node) (string, error) {
+	_, dockerfilePath, err := composeBuildPaths(composePath, build)
+	return dockerfilePath, err
+}
+
+func composeBuildPaths(composePath string, build yaml.Node) (string, string, error) {
 	if !yamlNodePresent(build) {
-		return "", fmt.Errorf("missing build configuration")
+		return "", "", fmt.Errorf("missing build configuration")
 	}
 
 	context := ""
@@ -886,7 +944,7 @@ func composeDockerfilePath(composePath string, build yaml.Node) (string, error) 
 	switch build.Kind {
 	case yaml.ScalarNode:
 		if build.Tag == "!!null" {
-			return "", fmt.Errorf("build configuration is null")
+			return "", "", fmt.Errorf("build configuration is null")
 		}
 		context = build.Value
 	case yaml.MappingNode:
@@ -896,7 +954,7 @@ func composeDockerfilePath(composePath string, build yaml.Node) (string, error) 
 			switch key {
 			case "context", "dockerfile":
 				if value.Kind != yaml.ScalarNode || value.Tag == "!!null" {
-					return "", fmt.Errorf("build %s must be a string", key)
+					return "", "", fmt.Errorf("build %s must be a string", key)
 				}
 				if key == "context" {
 					context = value.Value
@@ -904,30 +962,34 @@ func composeDockerfilePath(composePath string, build yaml.Node) (string, error) 
 					dockerfile = value.Value
 				}
 			case "target":
-				return "", fmt.Errorf("build target is not allowed")
+				return "", "", fmt.Errorf("build target is not allowed")
 			case "dockerfile_inline":
-				return "", fmt.Errorf("inline Dockerfiles are not allowed")
+				return "", "", fmt.Errorf("inline Dockerfiles are not allowed")
 			case "args":
 				if err := validateComposeBuildArgs(*value); err != nil {
-					return "", err
+					return "", "", err
 				}
 			default:
-				return "", fmt.Errorf("unapproved build key %q", key)
+				return "", "", fmt.Errorf("unapproved build key %q", key)
 			}
 		}
 	default:
-		return "", fmt.Errorf("build configuration must be a path or mapping")
+		return "", "", fmt.Errorf("build configuration must be a path or mapping")
 	}
 	if context == "" {
-		return "", fmt.Errorf("build context is empty")
+		return "", "", fmt.Errorf("build context is empty")
 	}
 	if dockerfile == "" {
 		dockerfile = "Dockerfile"
 	}
 	if filepath.IsAbs(context) || filepath.IsAbs(dockerfile) {
-		return "", fmt.Errorf("build context and Dockerfile must be repository-relative")
+		return "", "", fmt.Errorf("build context and Dockerfile must be repository-relative")
 	}
-	return filepath.Abs(filepath.Join(filepath.Dir(composePath), context, dockerfile))
+	contextPath, err := filepath.Abs(filepath.Join(filepath.Dir(composePath), context))
+	if err != nil {
+		return "", "", err
+	}
+	return contextPath, filepath.Join(contextPath, dockerfile), nil
 }
 
 func validateComposeBuildArgs(args yaml.Node) error {
