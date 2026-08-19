@@ -45,7 +45,10 @@ Start the backend stack:
 ./scripts/dev.sh
 ```
 
-This builds and runs the orchestrator, agent runtime, and MCP servers through Docker Compose. The public gRPC API is fixed to `localhost:3000`.
+This builds and runs the orchestrator, agent runtime, and MCP servers through
+Docker Compose. The public gRPC API bind address is fixed to `localhost`; its
+host port defaults to `3000` and can be changed with
+`ORCHESTRATOR_PUBLIC_PORT`.
 
 Use the repository scripts rather than invoking this Compose file directly.
 `scripts/compose.sh` validates and injects the current non-root host UID/GID;

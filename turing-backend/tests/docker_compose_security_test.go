@@ -719,6 +719,7 @@ func TestRepositoryDockerignoreExcludesSensitiveAndGeneratedContent(t *testing.T
 		"**/.env.*",
 		"**/.runtime",
 		"**/data",
+		"**/skills",
 		"**/sandbox",
 		"**/node_modules",
 		"**/.dart_tool",

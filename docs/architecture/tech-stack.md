@@ -50,7 +50,7 @@ The public orchestrator gRPC port defaults to `3000`. The internal runtime gRPC 
 
 | Service | Network exposure |
 |---|---|
-| `turing-orchestrator` | Publishes public gRPC port `3000` on `127.0.0.1`; exposes internal gRPC port `3001` only inside Docker networks |
+| `turing-orchestrator` | Publishes the public gRPC port (default `3000`) on `127.0.0.1`; exposes internal gRPC port `3001` only inside Docker networks |
 | `turing-agent-runtime-general` | Internal Docker networks only |
 | `turing-mcp-system` | Internal `net-system` network only |
 | `turing-mcp-files` | Internal `net-files` network only |

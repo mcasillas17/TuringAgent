@@ -36,9 +36,8 @@ additions, incomplete capability drops, missing `no-new-privileges`, device or
 deploy-resource mappings, namespace sharing, supplementary groups,
 image-declared volumes, host aliases, and unapproved secrets. The guard also
 pins each service to its reviewed build context and Dockerfile, keeps both
-networks project-scoped, and permits only the orchestrator's fixed
-loopback-bound public port; MCP ports are exposed only inside their assigned
-network.
+networks project-scoped, and permits only one orchestrator public port on the
+fixed loopback bind; MCP ports are exposed only inside their assigned network.
 The orchestrator configures SQLite `temp_store=MEMORY`, so sorts and transient
 b-trees do not require write access to `/tmp`; durable SQLite files and WAL
 artifacts remain under `/app/data`.

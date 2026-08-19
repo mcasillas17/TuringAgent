@@ -15,6 +15,7 @@
 **/*.cert
 **/.runtime
 **/data
+**/skills
 **/sandbox
 
 # Dependency caches, generated build output, and test artifacts
