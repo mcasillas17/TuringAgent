@@ -22,6 +22,7 @@ package memory
 
 import (
 	"context"
+	"crypto/sha256"
 	"sort"
 	"strings"
 	"time"
@@ -93,6 +94,56 @@ type Excerpt struct {
 	Role      string
 	Content   string
 	CreatedAt time.Time
+}
+
+type preparedRecallCandidate struct {
+	excerpt    Excerpt
+	contextKey string
+}
+
+type preparedRecallHits struct {
+	byTerm     map[string][]string
+	candidates map[string]preparedRecallCandidate
+}
+
+func newPreparedRecallHits() *preparedRecallHits {
+	return &preparedRecallHits{
+		byTerm:     make(map[string][]string),
+		candidates: make(map[string]preparedRecallCandidate),
+	}
+}
+
+func (p *preparedRecallHits) addTerm(term string, found []Excerpt, maxChars int) {
+	if maxChars <= 0 {
+		maxChars = defaultMaxChars
+	}
+	seen := make(map[string]struct{}, len(found))
+	for _, excerpt := range found {
+		if excerpt.Role != "user" && excerpt.Role != "assistant" {
+			continue
+		}
+		if strings.TrimSpace(excerpt.Content) == "" {
+			continue
+		}
+		key := dedupKey(excerpt)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		if _, exists := p.candidates[key]; !exists {
+			contextKey := inContextKey(excerpt.Role, excerpt.Content)
+			if len(excerpt.Content) > maxChars {
+				excerpt.Content = strings.Clone(truncate(excerpt.Content, maxChars))
+			} else {
+				excerpt.Content = strings.Clone(excerpt.Content)
+			}
+			p.candidates[key] = preparedRecallCandidate{
+				excerpt:    excerpt,
+				contextKey: contextKey,
+			}
+		}
+		p.byTerm[term] = append(p.byTerm[term], key)
+	}
 }
 
 // Searcher is the orchestrator lookup this package needs, kept narrow so tests
@@ -170,7 +221,7 @@ func (r *Recaller) PrepareRecall(
 	// FTS5 OR/AND operators cannot be injected. One single-term query each (a
 	// one-word phrase is a plain term match) and merge here instead. The store is
 	// a local SQLite file over loopback, so the extra round-trips are cheap.
-	hits := make(map[string][]Excerpt, len(queries))
+	prepared := newPreparedRecallHits()
 	for _, query := range queries {
 		found, err := r.Search.SearchMessages(ctx, query, perTermHits)
 		if err != nil {
@@ -181,7 +232,7 @@ func (r *Recaller) PrepareRecall(
 			// leaves hits empty, so a dead backend produces no block at all.
 			break
 		}
-		hits[query] = found
+		prepared.addTerm(query, found, r.MaxChars)
 	}
 
 	return func(rankCtx context.Context, inContext []llm.ChatMessage) (llm.ChatMessage, bool) {
@@ -189,7 +240,7 @@ func (r *Recaller) PrepareRecall(
 			return llm.ChatMessage{}, false
 		}
 		// rank fills in a default for any budget the caller left unset.
-		excerpts := rank(hits, currentSessionID, inContextKeys(inContext), r.MaxExcerpts, r.MaxChars)
+		excerpts := rankPrepared(prepared, currentSessionID, inContextKeys(inContext), r.MaxExcerpts, r.MaxChars)
 		return Render(excerpts)
 	}
 }
@@ -216,7 +267,8 @@ func inContextKeys(messages []llm.ChatMessage) map[string]bool {
 }
 
 func inContextKey(role string, content string) string {
-	return role + "|" + strings.TrimSpace(content)
+	sum := sha256.Sum256([]byte(role + "|" + strings.TrimSpace(content)))
+	return string(sum[:])
 }
 
 // terms reduces the user's text to search terms: lowercased, stopwords and very
@@ -316,6 +368,58 @@ func rank(hits map[string][]Excerpt, currentSessionID string, inContext map[stri
 			next++
 		}
 	}
+	return budgetScored(byKey, maxExcerpts, maxChars)
+}
+
+func rankPrepared(
+	prepared *preparedRecallHits,
+	currentSessionID string,
+	inContext map[string]bool,
+	maxExcerpts int,
+	maxChars int,
+) []Excerpt {
+	if prepared == nil {
+		return nil
+	}
+	if maxExcerpts <= 0 {
+		maxExcerpts = defaultMaxExcerpts
+	}
+	if maxChars <= 0 {
+		maxChars = defaultMaxChars
+	}
+	byKey := make(map[string]*scored, len(prepared.candidates))
+	next := 0
+	termKeys := make([]string, 0, len(prepared.byTerm))
+	for term := range prepared.byTerm {
+		termKeys = append(termKeys, term)
+	}
+	sort.Strings(termKeys)
+	for _, term := range termKeys {
+		for _, key := range prepared.byTerm[term] {
+			candidate, ok := prepared.candidates[key]
+			if !ok {
+				continue
+			}
+			if candidate.excerpt.SessionID == currentSessionID &&
+				(inContext == nil || inContext[candidate.contextKey]) {
+				continue
+			}
+			if existing, ok := byKey[key]; ok {
+				existing.matches++
+				continue
+			}
+			byKey[key] = &scored{
+				excerpt: candidate.excerpt,
+				matches: 1,
+				order:   next,
+			}
+			next++
+		}
+	}
+	return budgetScored(byKey, maxExcerpts, maxChars)
+}
+
+func budgetScored(byKey map[string]*scored, maxExcerpts int, maxChars int) []Excerpt {
 
 	ordered := make([]*scored, 0, len(byKey))
 	for _, entry := range byKey {

@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -102,6 +103,39 @@ func TestPrepareRecallSearchesOnceAndReranksForEachAdmittedContext(t *testing.T)
 	}
 	if len(search.queries) != 1 {
 		t.Fatalf("search queries = %v, want one prepared search", search.queries)
+	}
+}
+
+func TestPreparedRecallDeduplicatesAndBoundsCachedPayloads(t *testing.T) {
+	found := make([]Excerpt, 40)
+	for index := range found {
+		found[index] = Excerpt{
+			MessageID: fmt.Sprintf("message-%d", index),
+			SessionID: "session-earlier",
+			Role:      "assistant",
+			Content:   strings.Repeat(fmt.Sprintf("payload-%d ", index), 8192),
+			CreatedAt: at(1),
+		}
+	}
+	prepared := newPreparedRecallHits()
+	for _, term := range []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot"} {
+		prepared.addTerm(term, found, defaultMaxChars)
+	}
+
+	if len(prepared.candidates) != len(found) {
+		t.Fatalf("cached candidates = %d, want %d unique messages", len(prepared.candidates), len(found))
+	}
+	var references int
+	for _, keys := range prepared.byTerm {
+		references += len(keys)
+	}
+	if references != 6*len(found) {
+		t.Fatalf("term references = %d, want %d", references, 6*len(found))
+	}
+	for key, candidate := range prepared.candidates {
+		if len(candidate.excerpt.Content) > defaultMaxChars {
+			t.Fatalf("candidate %q retained %d bytes, want <= %d", key, len(candidate.excerpt.Content), defaultMaxChars)
+		}
 	}
 }
 

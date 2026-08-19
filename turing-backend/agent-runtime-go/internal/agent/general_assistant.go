@@ -29,10 +29,6 @@ type MessageClient interface {
 // type and a test can substitute a fake. Optional: a nil recaller simply means
 // no recall.
 type ContextRecaller interface {
-	Recall(ctx context.Context, sessionID string, userText string, inContext []llm.ChatMessage) (llm.ChatMessage, bool)
-}
-
-type contextRecallPreparer interface {
 	PrepareRecall(
 		ctx context.Context,
 		sessionID string,
@@ -538,17 +534,7 @@ func (a *GeneralAssistant) prepareRecallForRun(
 	if a.recall == nil || job.GetExternalAgent() != nil {
 		return nil
 	}
-	if preparer, ok := a.recall.(contextRecallPreparer); ok {
-		return preparer.PrepareRecall(ctx, job.GetSessionId(), job.GetUserText())
-	}
-	return func(callCtx context.Context, inContext []llm.ChatMessage) (llm.ChatMessage, bool) {
-		return a.recall.Recall(
-			callCtx,
-			job.GetSessionId(),
-			job.GetUserText(),
-			inContext,
-		)
-	}
+	return a.recall.PrepareRecall(ctx, job.GetSessionId(), job.GetUserText())
 }
 
 func maxOutputTokensSetting(provider llm.Provider) string {

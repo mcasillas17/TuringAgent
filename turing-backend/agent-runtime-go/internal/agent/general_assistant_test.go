@@ -3236,6 +3236,16 @@ func (r *fakeRecaller) Recall(_ context.Context, sessionID string, userText stri
 	return r.block, r.ok
 }
 
+func (r *fakeRecaller) PrepareRecall(
+	_ context.Context,
+	sessionID string,
+	userText string,
+) func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool) {
+	return func(ctx context.Context, inContext []llm.ChatMessage) (llm.ChatMessage, bool) {
+		return r.Recall(ctx, sessionID, userText, inContext)
+	}
+}
+
 func TestExecutePrependsRecalledContext(t *testing.T) {
 	provider := &capturingProvider{}
 	recaller := &fakeRecaller{block: llm.ChatMessage{Role: "system", Content: "recalled material"}, ok: true}
