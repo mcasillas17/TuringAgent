@@ -20,9 +20,11 @@ var schedulerDefaults = repository.AutomationRunDefaults{
 }
 
 type countingDispatcher struct {
-	mu    sync.Mutex
-	calls int
-	err   error
+	mu              sync.Mutex
+	calls           int
+	err             error
+	refreshErr      error
+	routableDefault string
 }
 
 func (d *countingDispatcher) DispatchPending(context.Context) error {
@@ -33,7 +35,14 @@ func (d *countingDispatcher) DispatchPending(context.Context) error {
 }
 
 func (d *countingDispatcher) RefreshPendingRoutingState(context.Context, string) error {
-	return nil
+	return d.refreshErr
+}
+
+func (d *countingDispatcher) RoutableDefaultModel(_ string, configured string) string {
+	if d.routableDefault != "" {
+		return d.routableDefault
+	}
+	return configured
 }
 
 func (d *countingDispatcher) count() int {
@@ -143,6 +152,7 @@ func TestTickFiresOnceWhenDueAndAgainOnlyAfterTheNextInterval(t *testing.T) {
 	if err := h.scheduler.Tick(h.ctx); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
+
 	fired, err := h.repo.GetAutomation(h.ctx, automation.AutomationID)
 	if err != nil {
 		t.Fatal(err)
@@ -174,6 +184,32 @@ func TestTickFiresOnceWhenDueAndAgainOnlyAfterTheNextInterval(t *testing.T) {
 	}
 	if got := h.firedRuns(t, automation.AutomationID); got != 2 {
 		t.Fatalf("after the next interval it had fired %d times, want 2", got)
+	}
+}
+
+func TestTickUsesLiveRoutableDefaultAndDispatchesAfterNoticeRefreshFailure(t *testing.T) {
+	h := newSchedulerHarness(t)
+	h.dispatcher.routableDefault = "live-ollama"
+	h.dispatcher.refreshErr = errors.New("refresh failed")
+	automation := createEnabled(t, h.repo, h.ctx, "Live default", repository.Schedule{Kind: repository.ScheduleInterval, Interval: 5 * time.Minute})
+	h.scheduler.now = func() time.Time { return parseTime(t, automation.NextDueAt) }
+
+	if err := h.scheduler.Tick(h.ctx); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if h.dispatcher.count() != 1 {
+		t.Fatalf("dispatched %d times, want 1 despite notice refresh failure", h.dispatcher.count())
+	}
+	fired, err := h.repo.GetAutomation(h.ctx, automation.AutomationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var model string
+	if err := h.database.QueryRowContext(h.ctx, `SELECT model_name FROM agent_runs WHERE id = ?`, fired.LastRunID).Scan(&model); err != nil {
+		t.Fatal(err)
+	}
+	if model != "live-ollama" {
+		t.Fatalf("run model = %q, want live-ollama", model)
 	}
 }
 

@@ -291,7 +291,8 @@ func (s *Server) ProviderCapabilities() map[turingv1.ModelProvider][]*turingv1.M
 				continue
 			}
 			key := modelKey{provider: provider, model: model.model}
-			if limit := int32(model.maxContextTokens); limit > advertised[key] {
+			current, present := advertised[key]
+			if limit := int32(model.maxContextTokens); !present || limit > current {
 				advertised[key] = limit
 			}
 		}
@@ -315,6 +316,34 @@ func (s *Server) ProviderCapabilities() map[turingv1.ModelProvider][]*turingv1.M
 		})
 	}
 	return out
+}
+
+func (s *Server) RoutableDefaultModel(provider string, configured string) string {
+	advertised := s.ProviderCapabilities()[modelProviderProto(provider)]
+	for _, model := range advertised {
+		if model.GetModel() == configured {
+			return configured
+		}
+	}
+	if len(advertised) > 0 {
+		return advertised[0].GetModel()
+	}
+	return ""
+}
+
+func (s *Server) LiveToolNames() []string {
+	unique := map[string]struct{}{}
+	for _, candidate := range s.liveRoutingCandidates(time.Now().UTC()) {
+		for tool := range candidate.capabilities.tools {
+			unique[tool] = struct{}{}
+		}
+	}
+	tools := make([]string, 0, len(unique))
+	for tool := range unique {
+		tools = append(tools, tool)
+	}
+	sort.Strings(tools)
+	return tools
 }
 
 func (s *Server) AgentAvailable(agentID turingv1.AgentId) bool {

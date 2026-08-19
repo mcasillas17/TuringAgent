@@ -128,6 +128,7 @@ func TestSendMessageDispatchContextSurvivesClientCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	streamCtx, cancel := context.WithCancel(context.Background())
 	stream := &cancellingChatStream{ctx: streamCtx, cancel: cancel}
 
@@ -142,6 +143,35 @@ func TestSendMessageDispatchContextSurvivesClientCancellation(t *testing.T) {
 	}
 	if dispatcher.contextErr != nil {
 		t.Fatalf("DispatchPending received cancelled client context: %v", dispatcher.contextErr)
+	}
+}
+
+func TestSendMessageUsesLiveRoutableDefaultWhenModelIsOmitted(t *testing.T) {
+	h := newHarness(t)
+	capabilities := defaultChatWorkerCapabilities(false)
+	capabilities.Models = []*turingv1.ModelCapability{{
+		Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:            "live-ollama",
+		MaxContextTokens: 8192,
+	}}
+	worker := connectChatTestWorker(t, h, capabilities)
+
+	stream, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
+		SessionId:     h.createSession(t),
+		Content:       "use the live fallback",
+		ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("receive queued event: %v", err)
+	}
+	assigned := recvRuntimeCommand(t, worker, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetRunAssigned() != nil
+	}).GetRunAssigned()
+	if assigned.GetModel() != "live-ollama" {
+		t.Fatalf("assigned model = %q, want live-ollama", assigned.GetModel())
 	}
 }
 
@@ -162,6 +192,10 @@ func (d *dispatchContextRecorder) ValidateRouting(context.Context, repository.Ro
 
 func (d *dispatchContextRecorder) RefreshPendingRoutingState(context.Context, string) error {
 	return nil
+}
+
+func (d *dispatchContextRecorder) RoutableDefaultModel(_ string, configured string) string {
+	return configured
 }
 
 type cancellingChatStream struct {

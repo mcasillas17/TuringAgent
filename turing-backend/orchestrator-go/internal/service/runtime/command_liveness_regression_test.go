@@ -514,10 +514,14 @@ func TestConnectWorkerReportsCancellationBeforeReachingCommandLoop(t *testing.T)
 // round would make a cancelled stream the only report of a lost assignment.
 func TestConnectWorkerKeepsTeardownFailuresAlongsideCancellation(t *testing.T) {
 	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "teardown persistence failure")
 	const workerID = "worker-teardown-failure"
 	streamCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stream := &reconnectAcceptanceStream{ctx: streamCtx, ready: workerReady(workerID), accepted: make(chan struct{})}
+	stream := &reconnectAcceptanceStream{
+		ctx: streamCtx, ready: workerReady(workerID), accepted: make(chan struct{}),
+		assigned: make(chan struct{}), receiving: make(chan struct{}),
+	}
 	done := make(chan error, 1)
 	go func() { done <- h.service.ConnectWorker(stream) }()
 
@@ -528,17 +532,26 @@ func TestConnectWorkerKeepsTeardownFailuresAlongsideCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("worker was not accepted")
 	}
-	// Hand the registration an assignment so teardown has something to
-	// reconcile, then take the database away so reconciling it fails.
+	select {
+	case <-stream.assigned:
+	case <-time.After(time.Second):
+		t.Fatal("initial dispatch did not finish before database teardown")
+	}
 	h.service.mu.Lock()
 	connected := h.service.workers[workerID]
 	h.service.mu.Unlock()
 	if connected == nil {
 		t.Fatal("worker was accepted but not registered")
 	}
-	connected.mu.Lock()
-	connected.assignments["run_teardown"] = assignment{jobID: "job_teardown", runID: "run_teardown"}
-	connected.mu.Unlock()
+	select {
+	case <-stream.receiving:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not enter its receive loop after initial dispatch")
+	}
+	eventually(t, time.Second, func() bool {
+		run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+		return err == nil && run.ExecutionState == "delivered" && connected.hasAssignment(enqueued.RunID)
+	})
 	if err := h.database.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -549,7 +562,7 @@ func TestConnectWorkerKeepsTeardownFailuresAlongsideCancellation(t *testing.T) {
 		if !errors.Is(err, errWorkerStreamCancelled) {
 			t.Fatalf("exit = %v, want it to report %v", err, errWorkerStreamCancelled)
 		}
-		if !strings.Contains(err.Error(), "reconcile run run_teardown") {
+		if !strings.Contains(err.Error(), "reconcile run "+enqueued.RunID) {
 			t.Fatalf("exit = %v, want it to also report the failed reconciliation", err)
 		}
 	case <-time.After(time.Second):
@@ -697,16 +710,23 @@ func (s *serialBlockingCommandStream) Context() context.Context { return s.ctx }
 
 type reconnectAcceptanceStream struct {
 	grpc.ServerStream
-	ctx       context.Context
-	ready     *turingv1.RuntimeUpdate
-	readySent bool
-	accepted  chan struct{}
-	once      sync.Once
+	ctx        context.Context
+	ready      *turingv1.RuntimeUpdate
+	readySent  bool
+	accepted   chan struct{}
+	assigned   chan struct{}
+	receiving  chan struct{}
+	once       sync.Once
+	assignOnce sync.Once
+	recvOnce   sync.Once
 }
 
 func (s *reconnectAcceptanceStream) Send(command *turingv1.RuntimeCommand) error {
 	if command.GetWorkerAccepted() != nil {
 		s.once.Do(func() { close(s.accepted) })
+	}
+	if command.GetRunAssigned() != nil && s.assigned != nil {
+		s.assignOnce.Do(func() { close(s.assigned) })
 	}
 	return nil
 }
@@ -715,6 +735,9 @@ func (s *reconnectAcceptanceStream) Recv() (*turingv1.RuntimeUpdate, error) {
 	if !s.readySent {
 		s.readySent = true
 		return s.ready, nil
+	}
+	if s.receiving != nil {
+		s.recvOnce.Do(func() { close(s.receiving) })
 	}
 	<-s.ctx.Done()
 	return nil, s.ctx.Err()

@@ -29,6 +29,7 @@ type sessionHarness struct {
 type sessionCapabilitySource struct {
 	providers map[turingv1.ModelProvider][]*turingv1.ModelCapability
 	agents    map[turingv1.AgentId]bool
+	tools     []string
 }
 
 func (s *sessionCapabilitySource) ProviderCapabilities() map[turingv1.ModelProvider][]*turingv1.ModelCapability {
@@ -37,6 +38,26 @@ func (s *sessionCapabilitySource) ProviderCapabilities() map[turingv1.ModelProvi
 
 func (s *sessionCapabilitySource) AgentAvailable(agentID turingv1.AgentId) bool {
 	return s.agents[agentID]
+}
+
+func (s *sessionCapabilitySource) RoutableDefaultModel(provider string, configured string) string {
+	providerID := turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA
+	if provider == "openai_compatible" {
+		providerID = turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE
+	}
+	for _, model := range s.providers[providerID] {
+		if model.GetModel() == configured {
+			return configured
+		}
+	}
+	if len(s.providers[providerID]) > 0 {
+		return s.providers[providerID][0].GetModel()
+	}
+	return ""
+}
+
+func (s *sessionCapabilitySource) LiveToolNames() []string {
+	return append([]string(nil), s.tools...)
 }
 
 func newSessionHarness(t *testing.T) *sessionHarness {
@@ -54,6 +75,7 @@ func newSessionHarness(t *testing.T) *sessionHarness {
 		agents: map[turingv1.AgentId]bool{
 			turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT: true,
 		},
+		tools: []string{"custom/custom.scan", "files/files.create", "system/system.time"},
 	}
 	lis := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
@@ -223,8 +245,28 @@ func TestListToolsIsEmptyBeforeAnyWorkerReportsCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if len(listed.Tools) != 0 {
 		t.Fatalf("ListTools before a worker handshake = %+v, want empty", listed.Tools)
+	}
+}
+
+func TestListToolsExcludesPersistedToolsThatNoLiveWorkerAdvertises(t *testing.T) {
+	h := newSessionHarness(t)
+	if err := h.repo.UpsertTools(context.Background(), []repository.DiscoveredTool{
+		{ServerName: "system", ToolName: "system.time", SchemaJSON: `{}`, Policy: "safe"},
+		{ServerName: "files", ToolName: "files.create", SchemaJSON: `{}`, Policy: "approval_required"},
+	}); err != nil {
+		t.Fatalf("UpsertTools: %v", err)
+	}
+	h.capabilities.tools = []string{"system/system.time"}
+
+	listed, err := turingv1.NewSessionServiceClient(h.conn).ListTools(context.Background(), &turingv1.ListToolsRequest{})
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if len(listed.Tools) != 1 || listed.Tools[0].GetToolName() != "system.time" {
+		t.Fatalf("live tools = %#v, want only system.time", listed.Tools)
 	}
 }
 

@@ -124,8 +124,12 @@ registry snapshots:
 - provider entries expose the currently advertised exact models and context ceilings;
 - each provider default is the configured model when live, otherwise the first
   deterministic live model (or empty when the provider is unavailable);
+- chat requests and scheduled automations that omit a model resolve through that same
+  live default before validation and enqueue;
 - known agents remain listed with an explicit availability flag;
-- tools continue to come from the union of live worker tool snapshots.
+- tools come from the union of live worker tool snapshots; persisted discovery rows
+  are filtered against that union so disconnect or lease expiry cannot expose stale
+  tools.
 
 The context ceilings are routing guarantees configured on the runtime. They are not
 inferred from provider marketing metadata or guessed from a model name.

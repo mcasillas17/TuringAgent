@@ -49,6 +49,14 @@ func TestAppSchedulerFiresADueAutomationAndStops(t *testing.T) {
 	recvRuntimeCommand(t, worker, func(command *turingv1.RuntimeCommand) bool {
 		return command.GetWorkerAccepted() != nil
 	})
+	if got := application.RuntimeService.RoutableDefaultModel("ollama", cfg.OllamaModel); got != cfg.OllamaModel {
+		t.Fatalf("live default model = %q, want %q; providers = %+v", got, cfg.OllamaModel, application.RuntimeService.ProviderCapabilities())
+	}
+	if err := application.RuntimeService.ValidateRouting(context.Background(), repository.RoutingRequirements{
+		AgentID: "general_assistant", ModelProvider: "ollama", Model: cfg.OllamaModel, MinimumWorkerMaxConcurrentRuns: 1,
+	}); err != nil {
+		t.Fatalf("worker accepted without becoming routable: %v", err)
+	}
 	ctx := context.Background()
 	automation := createEnabledAutomation(t, application, "Digest")
 	makeAutomationDue(t, cfg.DatabasePath, automation.AutomationID)

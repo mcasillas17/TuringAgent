@@ -19,6 +19,7 @@ const maxFiresPerTick = 20
 type Dispatcher interface {
 	DispatchPending(context.Context) error
 	RefreshPendingRoutingState(context.Context, string) error
+	RoutableDefaultModel(string, string) string
 }
 
 // Scheduler creates the runs nobody asked for.
@@ -78,7 +79,11 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		fire, found, err := s.repo.ClaimDueAutomation(ctx, s.now(), s.defaults)
+		defaults := s.defaults
+		if s.dispatcher != nil {
+			defaults.Model = s.dispatcher.RoutableDefaultModel(defaults.ModelProvider, defaults.Model)
+		}
+		fire, found, err := s.repo.ClaimDueAutomation(ctx, s.now(), defaults)
 		if err != nil {
 			return err
 		}
@@ -104,7 +109,6 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 		if s.dispatcher != nil {
 			if err := s.dispatcher.RefreshPendingRoutingState(ctx, "automation enqueued"); err != nil {
 				log.Printf("refresh automation routing state for run %s: %v", fire.RunID, err)
-				continue
 			}
 			if err := s.dispatcher.DispatchPending(ctx); err != nil {
 				// The run is queued and durable; a worker will pick it up on

@@ -624,6 +624,40 @@ func modelCapabilities(
 	}
 }
 
+func TestRemoveDiscoveredToolsRestoresToolsetSnapshotWhenPersistenceFails(t *testing.T) {
+	h := newHarness(t)
+	const workerID = "worker-toolset-rollback"
+	owner := &worker{}
+	h.service.toolsets[workerID] = workerToolset{
+		owner: owner,
+		tools: []repository.DiscoveredTool{{
+			ServerName: "files",
+			ToolName:   "files.create",
+			SchemaJSON: `{}`,
+			Policy:     "approval_required",
+		}},
+	}
+	if err := h.repo.UpsertTools(context.Background(), h.service.toolsets[workerID].tools); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.database.ExecContext(context.Background(), `
+		CREATE TRIGGER fail_tool_update
+		BEFORE UPDATE ON tools
+		BEGIN
+			SELECT RAISE(FAIL, 'update blocked');
+		END`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	if err := h.service.removeDiscoveredTools(workerID, owner); err == nil {
+		t.Fatal("removeDiscoveredTools succeeded, want persistence failure")
+	}
+	restored, ok := h.service.toolsets[workerID]
+	if !ok || restored.owner != owner || len(restored.tools) != 1 {
+		t.Fatalf("restored toolset = %#v, want original snapshot", restored)
+	}
+}
+
 func eventually(t *testing.T, timeout time.Duration, condition func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

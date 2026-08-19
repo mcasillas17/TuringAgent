@@ -104,6 +104,24 @@ func TestValidateRoutingRejectsEachUnavailableCapability(t *testing.T) {
 	}
 }
 
+func TestProviderCapabilitiesIncludesModelsWithoutPositiveContextGuarantee(t *testing.T) {
+	h := newHarness(t)
+	stream := connectWorkerCapabilities(t, h, "worker-zero-context", "registration-zero-context", &turingv1.WorkerCapabilities{
+		Models: []*turingv1.ModelCapability{{
+			Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+			Model:    "operator-unspecified-context",
+		}},
+		AgentIds:          []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+		MaxConcurrentRuns: 1,
+	})
+	defer func() { _ = stream.CloseSend() }()
+
+	models := h.service.ProviderCapabilities()[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA]
+	if len(models) != 1 || models[0].GetModel() != "operator-unspecified-context" || models[0].GetMaxContextTokens() != 0 {
+		t.Fatalf("provider capabilities = %+v, want the zero-context model", models)
+	}
+}
+
 func TestLegacyWorkerCapabilitiesRequireExplicitProfile(t *testing.T) {
 	ready := &turingv1.RuntimeWorkerReady{
 		WorkerId: "legacy-worker", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 2,

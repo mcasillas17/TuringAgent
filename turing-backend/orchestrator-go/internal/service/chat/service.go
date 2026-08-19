@@ -33,6 +33,7 @@ type runtimeDispatcher interface {
 	CancelRun(context.Context, string, string)
 	ValidateRouting(context.Context, repository.RoutingRequirements) error
 	RefreshPendingRoutingState(context.Context, string) error
+	RoutableDefaultModel(string, string) string
 }
 
 func New(repo *repository.Repository, bus *events.Bus, runtimeServer runtimeDispatcher, ollamaModel string, openAIModel string) *Server {
@@ -73,11 +74,15 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 		return err
 	}
 	model := req.Model
-	if model == "" && modelProvider == "ollama" {
-		model = s.ollamaModel
-	}
-	if model == "" && modelProvider == "openai_compatible" {
-		model = s.openAIModel
+	if model == "" {
+		configured := s.ollamaModel
+		if modelProvider == "openai_compatible" {
+			configured = s.openAIModel
+		}
+		model = configured
+		if s.runtime != nil {
+			model = s.runtime.RoutableDefaultModel(modelProvider, configured)
+		}
 	}
 	if _, err := s.repo.GetSession(ctx, req.SessionId); err != nil {
 		return mapSessionError(ctx, err)

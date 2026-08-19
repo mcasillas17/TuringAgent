@@ -25,6 +25,8 @@ type Server struct {
 type capabilitySource interface {
 	ProviderCapabilities() map[turingv1.ModelProvider][]*turingv1.ModelCapability
 	AgentAvailable(turingv1.AgentId) bool
+	RoutableDefaultModel(string, string) string
+	LiveToolNames() []string
 }
 
 func New(repo *repository.Repository, cfg config.Config, capabilities capabilitySource) *Server {
@@ -145,17 +147,22 @@ func (s *Server) GetConfig(context.Context, *turingv1.GetConfigRequest) (*turing
 	if s.capabilities != nil {
 		advertised = s.capabilities.ProviderCapabilities()
 	}
+	ollamaDefault, openAIDefault := "", ""
+	if s.capabilities != nil {
+		ollamaDefault = s.capabilities.RoutableDefaultModel("ollama", s.cfg.OllamaModel)
+		openAIDefault = s.capabilities.RoutableDefaultModel("openai_compatible", s.cfg.OpenAIModel)
+	}
 	providers := []*turingv1.ProviderConfig{
 		{
 			Provider:     turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
 			Enabled:      len(advertised[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA]) > 0,
-			DefaultModel: advertisedDefaultModel(s.cfg.OllamaModel, advertised[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA]),
+			DefaultModel: ollamaDefault,
 			Models:       advertised[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA],
 		},
 		{
 			Provider:     turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
 			Enabled:      len(advertised[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE]) > 0,
-			DefaultModel: advertisedDefaultModel(s.cfg.OpenAIModel, advertised[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE]),
+			DefaultModel: openAIDefault,
 			Models:       advertised[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE],
 		},
 	}
@@ -164,18 +171,6 @@ func (s *Server) GetConfig(context.Context, *turingv1.GetConfigRequest) (*turing
 		ApprovalsEnabled: s.cfg.ApprovalJWTSecret != "",
 		FilesMcpEnabled:  s.cfg.MCPFilesTokenGeneral != "",
 	}, nil
-}
-
-func advertisedDefaultModel(configured string, advertised []*turingv1.ModelCapability) string {
-	for _, model := range advertised {
-		if model.GetModel() == configured {
-			return configured
-		}
-	}
-	if len(advertised) > 0 {
-		return advertised[0].GetModel()
-	}
-	return ""
 }
 
 func (s *Server) ListAgents(context.Context, *turingv1.ListAgentsRequest) (*turingv1.ListAgentsResponse, error) {
@@ -196,8 +191,17 @@ func (s *Server) ListTools(ctx context.Context, _ *turingv1.ListToolsRequest) (*
 	if err != nil {
 		return nil, status.Error(codes.Internal, "list tools failed")
 	}
+	live := map[string]struct{}{}
+	if s.capabilities != nil {
+		for _, name := range s.capabilities.LiveToolNames() {
+			live[name] = struct{}{}
+		}
+	}
 	tools := make([]*turingv1.ToolDescriptor, 0, len(discovered))
 	for _, tool := range discovered {
+		if _, ok := live[tool.ServerName+"/"+tool.ToolName]; !ok {
+			continue
+		}
 		tools = append(tools, &turingv1.ToolDescriptor{
 			ServerName: tool.ServerName,
 			ToolName:   tool.ToolName,

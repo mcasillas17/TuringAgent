@@ -578,6 +578,7 @@ func (s *Server) removeDiscoveredTools(workerID string, owner *worker) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.repo.UpsertTools(ctx, unionToolsets(s.toolsets)); err != nil {
+		s.toolsets[workerID] = toolset
 		return err
 	}
 	return nil
