@@ -2,6 +2,7 @@ import 'dart:async';
 
 import '../models/agent_descriptor.dart';
 import '../models/external_agent.dart';
+import '../models/integration.dart';
 import '../models/message.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
@@ -137,6 +138,40 @@ abstract class TuringApi {
 
   /// Returns a conversation to the local assistant.
   Future<ExternalAgent?> clearSessionAgent({required String sessionId});
+  /// What can be connected, what cannot, what each kind of credential grants,
+  /// and whether this backend is set up to store one at all. Served by the
+  /// backend so the client does not have its own idea of what connecting
+  /// gives away.
+  Future<IntegrationCatalogue> listIntegrationProviders();
+
+  /// Every connected account, live and revoked. No response carries a stored
+  /// credential — only a redacted hint.
+  Future<List<IntegrationConnection>> listConnections();
+
+  /// Stores a credential the user created at the provider.
+  ///
+  /// [consentAcknowledged] is the user's agreement to the provider's grants.
+  /// The backend refuses the call without it, so this is not a formality the
+  /// client can skip.
+  Future<IntegrationConnection> connectAccount({
+    required IntegrationProviderKind provider,
+    required String displayName,
+    required String credential,
+    required bool consentAcknowledged,
+    String accountLabel,
+    String endpoint,
+  });
+
+  /// Destroys the stored credential. The record of the connection survives so
+  /// the user can still see the account once had access. This cannot
+  /// invalidate the credential at the provider — only the provider can.
+  Future<IntegrationConnection> revokeConnection({
+    required String connectionId,
+  });
+
+  /// Removes the connection and its history. Deleting a live one destroys its
+  /// credential too.
+  Future<void> deleteConnection({required String connectionId});
 }
 
 class TuringApiException implements Exception {

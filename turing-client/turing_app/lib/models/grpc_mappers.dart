@@ -6,10 +6,12 @@ import '../generated/turing/v1/approvals.pb.dart' as approvalpb;
 import '../generated/turing/v1/chat.pb.dart' as chatpb;
 import '../generated/turing/v1/common.pb.dart' as commonpb;
 import '../generated/turing/v1/events.pb.dart' as eventpb;
+import '../generated/turing/v1/integrations.pb.dart' as integrationpb;
 import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
 import '../generated/turing/v1/skills.pb.dart' as skillpb;
 import 'agent_descriptor.dart' as model_agent;
 import 'external_agent.dart' as model_external_agent;
+import 'integration.dart' as model_integration;
 import 'message.dart' as model_message;
 import 'search_hit.dart' as model_search_hit;
 import 'session.dart' as model_session;
@@ -83,6 +85,127 @@ class GrpcMappers {
       name: skill.name,
       instructions: skill.instructions,
     );
+  }
+
+  static model_integration.IntegrationConnection connectionToModel(
+    integrationpb.Connection connection,
+  ) {
+    return model_integration.IntegrationConnection(
+      connectionId: connection.connectionId,
+      provider: integrationProviderToModel(connection.provider),
+      displayName: connection.displayName,
+      accountLabel: connection.accountLabel,
+      endpoint: connection.endpoint,
+      credentialHint: connection.credentialHint,
+      state: connectionStateToModel(connection.status),
+      grantedScopes: List.unmodifiable(connection.grantedScopes),
+      credentialUnreadable: connection.credentialUnreadable,
+      connectedAt: connection.hasConnectedAt()
+          ? _timestampToDateTime(connection.connectedAt)
+          : null,
+      revokedAt: connection.hasRevokedAt()
+          ? _timestampToDateTime(connection.revokedAt)
+          : null,
+    );
+  }
+
+  static model_integration.IntegrationCatalogue catalogueToModel(
+    integrationpb.ListProvidersResponse response,
+  ) {
+    return model_integration.IntegrationCatalogue(
+      providers: response.providers.map(providerToModel).toList(),
+      storageConfigured: response.credentialStorageConfigured,
+      storageUnconfiguredReason: response.storageUnconfiguredReason,
+    );
+  }
+
+  static model_integration.IntegrationProviderInfo providerToModel(
+    integrationpb.ProviderDescriptor descriptor,
+  ) {
+    return model_integration.IntegrationProviderInfo(
+      kind: integrationProviderToModel(descriptor.provider),
+      displayName: descriptor.displayName,
+      category: descriptor.category,
+      supported: descriptor.supported,
+      unsupportedReason: descriptor.unsupportedReason,
+      secretLabel: descriptor.secretLabel,
+      secretHelp: descriptor.secretHelp,
+      accountLabel: descriptor.accountLabel,
+      requiresEndpoint: descriptor.requiresEndpoint,
+      endpointLabel: descriptor.endpointLabel,
+      grants: List.unmodifiable(descriptor.grants),
+    );
+  }
+
+  static model_integration.IntegrationProviderKind integrationProviderToModel(
+    integrationpb.IntegrationProvider provider,
+  ) {
+    switch (provider) {
+      case integrationpb.IntegrationProvider.INTEGRATION_PROVIDER_IMAP:
+        return model_integration.IntegrationProviderKind.imap;
+      case integrationpb.IntegrationProvider.INTEGRATION_PROVIDER_CALDAV:
+        return model_integration.IntegrationProviderKind.caldav;
+      case integrationpb.IntegrationProvider.INTEGRATION_PROVIDER_NOTION:
+        return model_integration.IntegrationProviderKind.notion;
+      case integrationpb.IntegrationProvider.INTEGRATION_PROVIDER_GITHUB:
+        return model_integration.IntegrationProviderKind.github;
+      case integrationpb
+          .IntegrationProvider
+          .INTEGRATION_PROVIDER_GOOGLE_WORKSPACE:
+        return model_integration.IntegrationProviderKind.googleWorkspace;
+      case integrationpb.IntegrationProvider.INTEGRATION_PROVIDER_MICROSOFT_365:
+        return model_integration.IntegrationProviderKind.microsoft365;
+      case integrationpb.IntegrationProvider.INTEGRATION_PROVIDER_SLACK:
+        return model_integration.IntegrationProviderKind.slack;
+      default:
+        // Includes UNSPECIFIED and anything added to the proto after this
+        // build.
+        return model_integration.IntegrationProviderKind.unknown;
+    }
+  }
+
+  static integrationpb.IntegrationProvider integrationProviderFromModel(
+    model_integration.IntegrationProviderKind kind,
+  ) {
+    switch (kind) {
+      case model_integration.IntegrationProviderKind.imap:
+        return integrationpb.IntegrationProvider.INTEGRATION_PROVIDER_IMAP;
+      case model_integration.IntegrationProviderKind.caldav:
+        return integrationpb.IntegrationProvider.INTEGRATION_PROVIDER_CALDAV;
+      case model_integration.IntegrationProviderKind.notion:
+        return integrationpb.IntegrationProvider.INTEGRATION_PROVIDER_NOTION;
+      case model_integration.IntegrationProviderKind.github:
+        return integrationpb.IntegrationProvider.INTEGRATION_PROVIDER_GITHUB;
+      case model_integration.IntegrationProviderKind.googleWorkspace:
+        return integrationpb
+            .IntegrationProvider
+            .INTEGRATION_PROVIDER_GOOGLE_WORKSPACE;
+      case model_integration.IntegrationProviderKind.microsoft365:
+        return integrationpb
+            .IntegrationProvider
+            .INTEGRATION_PROVIDER_MICROSOFT_365;
+      case model_integration.IntegrationProviderKind.slack:
+        return integrationpb.IntegrationProvider.INTEGRATION_PROVIDER_SLACK;
+      case model_integration.IntegrationProviderKind.unknown:
+        return integrationpb
+            .IntegrationProvider
+            .INTEGRATION_PROVIDER_UNSPECIFIED;
+    }
+  }
+
+  static model_integration.IntegrationConnectionState connectionStateToModel(
+    integrationpb.ConnectionStatus status,
+  ) {
+    switch (status) {
+      case integrationpb.ConnectionStatus.CONNECTION_STATUS_CONNECTED:
+        return model_integration.IntegrationConnectionState.connected;
+      case integrationpb.ConnectionStatus.CONNECTION_STATUS_REVOKED:
+        return model_integration.IntegrationConnectionState.revoked;
+      default:
+        // Never "connected": saying an account still has access when this
+        // build cannot tell would misstate what someone has given away.
+        return model_integration.IntegrationConnectionState.unknown;
+    }
   }
 
   static model_tool.ToolDescriptor toolToModel(sessionpb.ToolDescriptor tool) {

@@ -389,6 +389,7 @@ func TestAppRegistersPublicAndInternalServices(t *testing.T) {
 		"turing.v1.EventService",
 		"turing.v1.ChatService",
 		"turing.v1.ApprovalService",
+		"turing.v1.IntegrationService",
 	} {
 		if _, ok := publicServices[name]; !ok {
 			t.Fatalf("public server missing %s", name)
@@ -400,6 +401,50 @@ func TestAppRegistersPublicAndInternalServices(t *testing.T) {
 	}
 	if _, ok := internalServices["turing.v1.HealthService"]; ok {
 		t.Fatal("internal server should not register public health service")
+	}
+	// Third-party connections are the user's business, not the runtime's.
+	// Registering them internally would put them behind the runtime token,
+	// which every tool server already holds.
+	if _, ok := internalServices["turing.v1.IntegrationService"]; ok {
+		t.Fatal("internal server should not expose the integration service to the runtime")
+	}
+}
+
+// The whole feature is optional: an install that has never run the updated
+// init.sh has no TURING_INTEGRATION_KEY and must still start, with the
+// service registered so it can say what is missing rather than answering
+// Unimplemented.
+func TestAppStartsWithAndWithoutAnIntegrationKey(t *testing.T) {
+	// newTestApp configures no key at all.
+	if _, ok := newTestApp(t).PublicServer.GetServiceInfo()["turing.v1.IntegrationService"]; !ok {
+		t.Fatal("the integration service is missing when no key is configured")
+	}
+
+	withKey, err := New(config.Config{
+		ClientAPIKey:      "client",
+		InternalToken:     "internal",
+		ApprovalJWTSecret: "approval-secret",
+		IntegrationKey:    strings.Repeat("ab", 32),
+		DatabasePath:      t.TempDir() + "/turing.db",
+	})
+	if err != nil {
+		t.Fatalf("start with an integration key: %v", err)
+	}
+	t.Cleanup(withKey.Stop)
+	if _, ok := withKey.PublicServer.GetServiceInfo()["turing.v1.IntegrationService"]; !ok {
+		t.Fatal("the integration service is missing when a key is configured")
+	}
+
+	// A key of the wrong shape is a misconfiguration, not something to
+	// discover while somebody is pasting a token.
+	if _, err := New(config.Config{
+		ClientAPIKey:      "client",
+		InternalToken:     "internal",
+		ApprovalJWTSecret: "approval-secret",
+		IntegrationKey:    "not-a-key",
+		DatabasePath:      t.TempDir() + "/turing.db",
+	}); err == nil {
+		t.Fatal("started with a malformed integration key")
 	}
 }
 

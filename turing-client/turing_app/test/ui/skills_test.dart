@@ -12,6 +12,7 @@ import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 
 import '../support/no_external_agents_api.dart';
+import '../support/no_integrations_api.dart';
 
 void main() {
   group('the skill library', () {
@@ -366,6 +367,7 @@ class _Offline implements Exception {
 }
 
 class _SkillApi with NoExternalAgentsApi implements TuringApi {
+class _SkillApi with NoIntegrationsApi implements TuringApi {
   final List<Skill> skills = [];
   final Map<String, List<String>> attached = {};
   final List<(String, String)> created = [];

@@ -1,0 +1,175 @@
+syntax = "proto3";
+
+package turing.v1;
+
+option go_package = "github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1";
+
+import "google/protobuf/timestamp.proto";
+
+// A third-party account the user has connected: mail, calendar, notes, code.
+//
+// The connection model here is deliberately narrow. Turing has no registered
+// OAuth client with any provider, no redirect URI and no browser round trip,
+// so an authorization-code flow is not something it can honestly offer. What
+// it can do is hold a credential the user created themselves — an app
+// password, an internal integration token, a personal access token — which is
+// how these services are reached by scripts and self-hosted clients every
+// day. Providers that only issue credentials through OAuth are listed as
+// unsupported, with the reason, rather than shown as a button that cannot
+// work.
+enum IntegrationProvider {
+  INTEGRATION_PROVIDER_UNSPECIFIED = 0;
+
+  // Supported: the user pastes a credential they minted themselves.
+  INTEGRATION_PROVIDER_IMAP = 1;
+  INTEGRATION_PROVIDER_CALDAV = 2;
+  INTEGRATION_PROVIDER_NOTION = 3;
+  INTEGRATION_PROVIDER_GITHUB = 4;
+
+  // Named but not supported. They exist in this enum so the client can list
+  // them with a reason instead of leaving the user wondering whether Turing
+  // has heard of their mail provider.
+  INTEGRATION_PROVIDER_GOOGLE_WORKSPACE = 5;
+  INTEGRATION_PROVIDER_MICROSOFT_365 = 6;
+  INTEGRATION_PROVIDER_SLACK = 7;
+}
+
+enum ConnectionStatus {
+  CONNECTION_STATUS_UNSPECIFIED = 0;
+  CONNECTION_STATUS_CONNECTED = 1;
+  // The credential has been destroyed. The row survives so the user can still
+  // see that the account was once connected and when access ended.
+  CONNECTION_STATUS_REVOKED = 2;
+}
+
+// What a provider is, what credential it takes, and what that credential
+// grants. Served by the backend rather than hardcoded in a client, so every
+// client states the same thing about what connecting gives away.
+message ProviderDescriptor {
+  IntegrationProvider provider = 1;
+  string display_name = 2;
+  // "Mail", "Calendar", "Notes", "Code" — how the user thinks about it.
+  string category = 3;
+  bool supported = 4;
+  // Why it cannot be connected. Set only when supported is false.
+  string unsupported_reason = 5;
+  // What the user is being asked to paste, and where they get it.
+  string secret_label = 6;
+  string secret_help = 7;
+  // Label for the non-secret account identifier (an address, a workspace).
+  string account_label = 8;
+  bool requires_endpoint = 9;
+  string endpoint_label = 10;
+  // Exactly what a credential of this kind lets the holder do, in the user's
+  // terms. These are statements, not options: none of them can be narrowed
+  // from here, because the scope of a pasted credential is decided where it
+  // was minted. A client must show all of them before connecting.
+  repeated string grants = 11;
+}
+
+// A connected account.
+//
+// No field here carries the credential, and none ever will. The stored secret
+// is returned by no RPC in this file; a connection is described by its
+// provider, the account it points at, and a redacted hint — enough to tell two
+// connections apart, not enough to use one.
+message Connection {
+  string connection_id = 1;
+  IntegrationProvider provider = 2;
+  string display_name = 3;
+  string account_label = 4;
+  string endpoint = 5;
+  // A redaction of the stored credential: bullets, plus at most the last four
+  // characters of a secret long enough that four characters do not give it
+  // away. Empty once revoked.
+  string credential_hint = 6;
+  ConnectionStatus status = 7;
+  // What the user agreed to when they connected, captured at that moment. If
+  // a later build widens what a provider grants, this still says what was
+  // actually consented to.
+  repeated string granted_scopes = 8;
+  google.protobuf.Timestamp consent_granted_at = 9;
+  google.protobuf.Timestamp connected_at = 10;
+  google.protobuf.Timestamp revoked_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+  // True when the stored credential was sealed with a key the backend no
+  // longer has — TURING_INTEGRATION_KEY was rotated, lost, or restored from a
+  // different .env. The connection can never be used again and must be
+  // reconnected. Answered from the sealed value's key fingerprint, without
+  // decrypting anything; a connection that quietly claimed to work would be
+  // the app asserting access it does not have.
+  bool credential_unreadable = 13;
+}
+
+message ListProvidersRequest {}
+
+message ListProvidersResponse {
+  repeated ProviderDescriptor providers = 1;
+  // False when no TURING_INTEGRATION_KEY is configured, in which case nothing
+  // can be connected because there is nothing to seal a credential with. Sent
+  // with the catalogue so a client can say so before asking anyone to paste a
+  // live app password into a form that cannot work.
+  bool credential_storage_configured = 2;
+  // Why it is not configured, and what to do about it. Empty when it is.
+  string storage_unconfigured_reason = 3;
+}
+
+message ConnectAccountRequest {
+  IntegrationProvider provider = 1;
+  string display_name = 2;
+  string account_label = 3;
+  string endpoint = 4;
+  // Write-only. This is the only message in the API that carries a secret,
+  // and it only travels client to server. It is sealed before it reaches
+  // storage, is never written to an event or an audit record, and is never
+  // read back out over the wire.
+  string credential = 5;
+  // The user's consent to the provider's grants, taken at connect time. The
+  // server refuses the request when this is false rather than treating a
+  // missing field as agreement, so a client cannot connect an account by
+  // omission.
+  bool consent_acknowledged = 6;
+}
+
+message ListConnectionsRequest {}
+
+message ListConnectionsResponse {
+  repeated Connection connections = 1;
+}
+
+message GetConnectionRequest {
+  string connection_id = 1;
+}
+
+message RevokeConnectionRequest {
+  string connection_id = 1;
+}
+
+message DeleteConnectionRequest {
+  string connection_id = 1;
+}
+
+message DeleteConnectionResponse {}
+
+service IntegrationService {
+  // The catalogue: what can be connected, what cannot, and what each kind of
+  // credential grants.
+  rpc ListProviders(ListProvidersRequest) returns (ListProvidersResponse);
+
+  // Stores a credential the user minted at the provider. Requires explicit
+  // consent to that provider's grants in the same request.
+  rpc ConnectAccount(ConnectAccountRequest) returns (Connection);
+
+  rpc ListConnections(ListConnectionsRequest) returns (ListConnectionsResponse);
+  rpc GetConnection(GetConnectionRequest) returns (Connection);
+
+  // Destroys the stored credential and marks the connection revoked. The
+  // record of the connection survives; the secret does not. This cannot
+  // invalidate the credential at the provider — only the provider can do
+  // that — and a client must say so.
+  rpc RevokeConnection(RevokeConnectionRequest) returns (Connection);
+
+  // Removes the connection entirely, including its history. Revoking first is
+  // not required: deleting a connected account destroys the credential too.
+  rpc DeleteConnection(DeleteConnectionRequest) returns (DeleteConnectionResponse);
+}

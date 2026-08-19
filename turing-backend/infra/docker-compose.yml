@@ -15,6 +15,9 @@ services:
       MCP_SYSTEM_TOKEN_GENERAL: ${MCP_SYSTEM_TOKEN_GENERAL}
       MCP_FILES_TOKEN_GENERAL: ${MCP_FILES_TOKEN_GENERAL}
       TURING_APPROVAL_JWT_SECRET: ${TURING_APPROVAL_JWT_SECRET}
+      # Seals third-party credentials before they reach the database. The
+      # orchestrator is the only service that stores or opens one.
+      TURING_INTEGRATION_KEY: ${TURING_INTEGRATION_KEY}
       ORCHESTRATOR_PUBLIC_PORT: ${ORCHESTRATOR_PUBLIC_PORT:-3000}
       ORCHESTRATOR_INTERNAL_PORT: ${ORCHESTRATOR_INTERNAL_PORT:-3001}
       DATABASE_PATH: ${DATABASE_PATH:-/app/data/turing.db}
