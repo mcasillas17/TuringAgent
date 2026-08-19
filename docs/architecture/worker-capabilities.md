@@ -105,9 +105,10 @@ the final typed matcher, and the indexed query claims at most one compatible row
 an incompatible backlog is not decoded and rescanned for every worker. Dispatch
 reserves worker capacity without holding the worker lock while waiting for SQLite.
 Immediately before assignment delivery, the sender revalidates the frozen route
-against the committed live snapshot; an incompatible claim is requeued instead of
-being sent. Capability fencing occurs before execution and therefore does not consume
-the run's execution retry budget.
+against the current registration, heartbeat lease, and committed live snapshot; a
+stale or incompatible claim is requeued instead of being sent. Capability fencing
+occurs before execution and therefore does not consume the run's execution retry
+budget. Advisory notice failure at this fence is logged without blocking redispatch.
 
 Scheduled runs use the same validator before creating a session, message, run, or job.
 An unavailable occurrence advances its schedule and records `routing_unavailable`

@@ -766,17 +766,25 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 		// already owns requeueing or terminalizing the run.
 		return nil
 	}
+	s.mu.Lock()
+	ownsRegistration := s.workers[workerID] == connectedWorker
+	s.mu.Unlock()
+	now := time.Now().UTC()
 	connectedWorker.mu.Lock()
-	supported := workerCapabilitiesSupportRoute(connectedWorker.capabilities, routingRequirementsForAgentJob(assigned))
+	supported := ownsRegistration &&
+		!connectedWorker.closed &&
+		!connectedWorker.lastHeartbeat.IsZero() &&
+		now.Before(connectedWorker.lastHeartbeat.Add(s.dispatch.LeaseDuration)) &&
+		workerCapabilitiesSupportRoute(connectedWorker.capabilities, routingRequirementsForAgentJob(assigned))
 	connectedWorker.mu.Unlock()
 	if !supported {
 		_ = connectedWorker.releaseRun(assigned.RunId)
 		if err := s.requeueAssignments([]assignment{currentAssignment}); err != nil {
 			return err
 		}
-		if err := s.refreshPendingCapabilityState(ctx, "worker capabilities changed before assignment delivery", workerID, true, false); err != nil {
-			return err
-		}
+		s.refreshPendingCapabilityStateAdvisory(
+			ctx, "worker route changed before assignment delivery", workerID, true, false,
+		)
 		return s.DispatchPending(ctx)
 	}
 	repositoryAssignment := repository.Assignment{
