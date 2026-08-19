@@ -249,6 +249,22 @@ func TestOpenAIReportsLengthWithPendingToolCallAsOutputLimitCompletion(t *testin
 	}
 }
 
+func TestOpenAIEmitsCompleteToolCallBeforeLengthCompletion(t *testing.T) {
+	got := streamOpenAIEvents(t,
+		"data: "+`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"files_create","arguments":"{\"path\":\"note.txt\"}"}}]}}]}`+"\n\n"+
+			"data: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`+"\n\n",
+	)
+
+	assertOpenAIEventTypes(t, got, "tool_call", "completed")
+	if len(got[0].ToolCalls) != 1 ||
+		got[0].ToolCalls[0].ID != "call_0" ||
+		got[0].ToolCalls[0].Name != "files_create" ||
+		got[0].ToolCalls[0].Arguments["path"] != "note.txt" ||
+		got[1].FinishReason != "length" {
+		t.Fatalf("events = %+v, want complete tool call then length completion", got)
+	}
+}
+
 func TestOpenAIParsesMultilineSSEDataEvent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
