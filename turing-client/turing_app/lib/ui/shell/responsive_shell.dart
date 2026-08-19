@@ -119,19 +119,21 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   }
 
   void _openSessionUpdateSubscription() {
-    final source = widget.sessionUpdateSourceFactory?.call();
-    if (source == null) return;
-    _sessionUpdateSource = source;
+    TuringSessionUpdateSource? source;
     try {
+      source = widget.sessionUpdateSourceFactory?.call();
+      if (source == null) return;
+      _sessionUpdateSource = source;
       _sessionUpdateSubscription = source.connectSessionUpdates().listen(
         _applySessionUpdated,
         onError: (_, _) => _handleSessionUpdateStreamEnded(),
         onDone: _handleSessionUpdateStreamEnded,
         cancelOnError: true,
       );
-    } on Exception {
-      source.close();
+    } catch (_) {
+      source?.close();
       _sessionUpdateSource = null;
+      _sessionsFailed = true;
       _scheduleSessionUpdateReconnect();
     }
   }
@@ -350,7 +352,9 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
         sessionId: result['sessionId'] as String,
         title: null,
         updatedAt: DateTime.parse(createdAtValue).toUtc(),
-        updatedAtNanoseconds: _parseTimestampNanoseconds(createdAtValue),
+        updatedAtNanoseconds:
+            result['createdAtNanoseconds'] as int? ??
+            _parseTimestampNanoseconds(createdAtValue),
       );
       setState(() {
         final sessions = List<Session>.of(_sessions);

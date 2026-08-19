@@ -380,6 +380,7 @@ Document these exact contracts:
 - `SubscribeSessionUpdates` replays the latest durable snapshot per session and then streams live updates across all sessions, so inactive and automation conversations update without polling.
 - Flutter preserves the backend's nanosecond timestamp ordering key; observed snapshots expire so refresh can heal a remote deletion instead of resurrecting it.
 - Global replay is bounded to the canonical 50-session page; the bus coalesces pending updates per session, and Flutter reconnects terminal streams with capped exponential backoff.
+- CreateSession carries protobuf nanoseconds into the local snapshot, and synchronous source setup errors enter the same reconnect path as asynchronous failures.
 - Session deletion removes the session row, title, messages, and title events through existing cascades.
 - There is no title-related configuration knob. The 60-rune policy is a code-level UX contract.
 - The rune boundary is not a grapheme-cluster boundary; a combining sequence or emoji ZWJ sequence exactly at the cutoff can end oddly.

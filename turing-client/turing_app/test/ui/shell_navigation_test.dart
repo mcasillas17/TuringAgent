@@ -872,6 +872,43 @@ void main() {
       expect(find.text('After reconnect'), findsOneWidget);
     });
 
+    testWidgets('a synchronous source error reconnects and resumes updates', (
+      tester,
+    ) async {
+      var calls = 0;
+      final replacement = _FakeSessionUpdateSource();
+      await _pumpShell(
+        tester,
+        api: _FakeApi(),
+        size: _desktop,
+        sessionUpdateSourceFactory: () {
+          calls++;
+          if (calls == 1) throw StateError('setup failed');
+          return replacement;
+        },
+      );
+      await tester.pump(const Duration(seconds: 1));
+      expect(calls, 2);
+
+      replacement.add(
+        TuringEvent(
+          eventId: 'evt_after_setup_retry',
+          sessionId: 'sess_after_setup_retry',
+          traceId: 'trace_after_setup_retry',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 8, 18, 20),
+          payload: const {
+            'title': 'After setup retry',
+            'updatedAt': '2026-08-18T20:00:00.000000000Z',
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('After setup retry'), findsOneWidget);
+    });
+
     testWidgets('a later stale page does not resurrect a deleted session', (
       tester,
     ) async {

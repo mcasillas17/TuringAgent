@@ -152,6 +152,9 @@ class TuringGrpcApi implements ClosableTuringApi {
     return {
       'sessionId': response.sessionId,
       'createdAt': response.createdAt.toDateTime().toUtc().toIso8601String(),
+      'createdAtNanoseconds':
+          response.createdAt.seconds.toInt() * 1000000000 +
+          response.createdAt.nanos,
     };
   }
 

@@ -64,7 +64,8 @@ adds a partial index containing only `session.updated` rows, so reconnect work
 scales with title-update history and returns at most 50 rows; there is no timer
 or polling loop. A terminal stream error or completion triggers a refresh and a
 capped exponential reconnect (1, 2, 4, 8, 16, then 32 seconds). A durable event
-on the replacement stream resets that backoff.
+on the replacement stream resets that backoff. Synchronous factory/connect/listen
+failures use the same path as terminal stream errors.
 
 A replayed older event cannot reorder the list. An update for a session outside
 the loaded page inserts it, and a concurrent older `ListSessions` response is
@@ -74,7 +75,10 @@ unknown global/per-session snapshots survive a concurrent refresh but expire
 when a later page omits them, so off-page or remotely deleted rows are not
 pinned. Older refresh responses are discarded by request generation. Ordering
 matches the backend with an exact nanosecond key: `updatedAt` descending, then
-session ID descending when timestamps tie. Locally deleted IDs remain
+session ID descending when timestamps tie. List/Get mappings read protobuf
+seconds/nanos directly, and CreateSession returns the same exact key alongside
+its display timestamp, so a newly created row does not lose sub-microsecond
+ordering. Locally deleted IDs remain
 tombstoned for the shell lifetime because omission from the 50-row page cannot
 prove absence.
 Flutter does not call `ListSessions` after sending a message. Search group
