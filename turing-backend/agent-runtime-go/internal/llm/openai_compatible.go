@@ -30,7 +30,10 @@ type OpenAICompatible struct {
 	apiKey              string
 	client              *http.Client
 	contextWindowTokens int
+	maxOutputTokens     int
 }
+
+var _ Provider = (*OpenAICompatible)(nil)
 
 func NewOpenAICompatible(baseURL string, apiKey string, client *http.Client) *OpenAICompatible {
 	if client == nil {
@@ -41,17 +44,31 @@ func NewOpenAICompatible(baseURL string, apiKey string, client *http.Client) *Op
 		apiKey:              apiKey,
 		client:              client,
 		contextWindowTokens: DefaultContextWindowTokens,
+		maxOutputTokens:     DefaultMaxOutputTokens,
 	}
+}
+
+func NewOpenAICompatibleWithLimits(
+	baseURL string,
+	apiKey string,
+	client *http.Client,
+	contextWindowTokens int,
+	maxOutputTokens int,
+) (*OpenAICompatible, error) {
+	if err := ValidateContextLimits(contextWindowTokens, maxOutputTokens); err != nil {
+		return nil, err
+	}
+	provider := NewOpenAICompatible(baseURL, apiKey, client)
+	provider.contextWindowTokens = contextWindowTokens
+	provider.maxOutputTokens = maxOutputTokens
+	return provider, nil
 }
 
 func (p *OpenAICompatible) ID() string { return "openai_compatible" }
 
 func (p *OpenAICompatible) ContextWindowTokens() int { return p.contextWindowTokens }
 
-func (p *OpenAICompatible) WithContextWindowTokens(tokens int) *OpenAICompatible {
-	p.contextWindowTokens = tokens
-	return p
-}
+func (p *OpenAICompatible) MaxOutputTokens() int { return p.maxOutputTokens }
 
 func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
 	body, aliases, err := p.marshalRequest(req)
@@ -210,12 +227,16 @@ func (p *OpenAICompatible) marshalRequest(req ChatRequest) ([]byte, openAIToolAl
 	if err != nil {
 		return nil, openAIToolAliases{}, err
 	}
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = p.maxOutputTokens
+	}
 	body, err := json.Marshal(openAIChatRequest{
 		Model:       req.Model,
 		Messages:    converted,
 		Stream:      true,
 		Temperature: req.Temperature,
-		MaxTokens:   req.MaxTokens,
+		MaxTokens:   maxTokens,
 		Tools:       tools,
 	})
 	return body, aliases, err

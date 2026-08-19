@@ -64,7 +64,8 @@ The default local model path is Ollama:
 ```text
 OLLAMA_BASE_URL=http://host.docker.internal:11434
 OLLAMA_MODEL=qwen2.5:7b
-OLLAMA_CONTEXT_WINDOW_TOKENS=8192
+OLLAMA_CONTEXT_WINDOW_TOKENS=32768
+OLLAMA_MAX_OUTPUT_TOKENS=2048
 ```
 
 OpenAI-compatible models can be configured with:
@@ -73,21 +74,22 @@ OpenAI-compatible models can be configured with:
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini
-OPENAI_CONTEXT_WINDOW_TOKENS=8192
+OPENAI_CONTEXT_WINDOW_TOKENS=32768
+OPENAI_MAX_OUTPUT_TOKENS=2048
 ```
 
-Both context values must be integers from `1` through `16777216`; invalid configuration stops the runtime at startup. Ollama receives its value as `options.num_ctx` on every request. OpenAI-compatible providers and routed external agents use their value for local admission only, so no Ollama-only option leaks onto their wire format. Operators must match each value to the selected model because Turing does not currently discover model capabilities.
+Both context values must be integers from `1` through `16777216`. Each output value must be positive and smaller than its context window; invalid configuration stops the runtime at startup. Ollama receives `num_ctx` and `num_predict` on every request. OpenAI-compatible providers and routed external agents use their window for local admission and receive only `max_tokens`, so no Ollama-only option leaks onto their wire format. Operators must match each value to the selected model because Turing does not currently discover model capabilities.
 
-Before dispatch, each built-in provider serializes the exact JSON request it would send. The runtime conservatively counts one UTF-8 request byte as one estimated token. This intentionally avoids claiming exact tokenizer or billing usage while providing one deterministic bound for messages, tool schemas, aliases, and provider framing.
+Before dispatch, each built-in provider serializes the exact JSON request it would send. The runtime conservatively counts one UTF-8 request byte as an upper bound of one prompt token and requires that bound plus the output reservation fit the configured window. This intentionally avoids claiming exact tokenizer or billing usage while providing one deterministic bound for messages, tool schemas, aliases, and provider framing.
 
 Admission priority is:
 
-1. Attached skills, the current user turn, and the complete live assistant tool-call/result chain.
-2. Whole tool definitions in stable registry order; any definition referenced by live protocol is mandatory.
+1. Attached skills, the current user turn, and every live assistant tool-call/result message and correlation ID. Oversized result bodies are replaced whole by explicit omission markers.
+2. A stable prefix of whole optional tool definitions; any definition referenced by live protocol is mandatory.
 3. The whole attributed recall block.
-4. Complete history turns, newest first.
+4. A contiguous suffix of complete history turns, newest first.
 
-Optional material is removed only in whole units. Whenever the omission set changes, the runtime emits an `agent.run.step` with `reason=context_budget`; the orchestrator persists it and the Flutter client renders its `note` inline. Mandatory live protocol that does not fit fails with `context_budget_exceeded` and is never partially truncated. Provider request marshaling retains a separate 16 MiB hard limit but no longer trims history itself.
+Optional material is removed only in whole units. Whenever the omission set changes, the runtime emits an `agent.run.step` with `reason=context_budget`; the orchestrator persists it and the Flutter client renders its `note` inline during the live run. The replay watermark currently suppresses historical run notices on reopen. Mandatory live protocol that does not fit even with minimal result markers fails with `context_budget_exceeded`; a prospective tool chain is checked before tool execution. Provider request marshaling retains a separate 16 MiB hard limit but never trims history itself.
 
 The Flutter client sends the selected provider with each message. The backend owns provider routing, context admission, and model execution.
 

@@ -51,4 +51,11 @@ func TestWorkerConfigContextWindowDefaultsAndAllowsOverride(t *testing.T) {
 	if got := configured.contextWindowTokens(); got != 4096 {
 		t.Fatalf("configured context window = %d, want 4096", got)
 	}
+	if got := defaults.maxOutputTokens(); got != llm.DefaultMaxOutputTokens {
+		t.Fatalf("default max output = %d, want %d", got, llm.DefaultMaxOutputTokens)
+	}
+	configured.MaxOutputTokens = 512
+	if got := configured.maxOutputTokens(); got != 512 {
+		t.Fatalf("configured max output = %d, want 512", got)
+	}
 }

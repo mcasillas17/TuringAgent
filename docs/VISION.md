@@ -60,7 +60,7 @@ Each is a decision already made and defended in review, cited to where it happen
 | Model-driven tool calling | Working, live-verified against a real model (#19, #27) |
 | Dynamic tool discovery | Working; runtime reports its registry to the orchestrator (#17, #26) |
 | Cross-session recall | Working — SQLite FTS5, keyword search, attributed to the user (#15, #18, #25, #33) |
-| Context budgeting | Working — provider windows are explicit, Ollama `num_ctx` is pinned per request, whole-unit omissions are durable notices, and live tool protocol is never partially truncated (TUR-020) |
+| Context budgeting | Working — provider windows and output reservations are explicit, Ollama `num_ctx` is pinned per request, omissions are durable run events, and live tool protocol messages/correlation are never dropped (TUR-020) |
 | Approvals | Working; single-use argument-bound JWT, consumed over internal gRPC |
 | Audit | **Write-only.** Rows are recorded; there is no read path in any proto or client |
 | Streaming + resilience | Working; reconnect, requeue, lease recovery, run-visibility notices (#24, #30, #33) |
@@ -72,7 +72,7 @@ Each is a decision already made and defended in review, cited to where it happen
 | Clients | **One** (Flutter, macOS-focused). Codegen emits Go and Dart only; both are consumed today |
 | Providers | Ollama (default), OpenAI-compatible (opt-in per request) |
 
-Context admission is conservative rather than tokenizer-exact: built-in providers measure their exact serialized request and count one UTF-8 byte as one estimated token. The operator configures each provider/model window; Turing does not yet discover model capabilities or persist exact provider token usage. Provenance-preserving summaries remain MEM-014, not part of TUR-020.
+Context admission is conservative rather than tokenizer-exact: built-in providers measure their exact serialized request, count one UTF-8 byte as an upper bound of one prompt token, and reserve configured output tokens inside the window. Oversized tool-result bodies can be replaced by explicit omission markers without dropping the tool message or its correlation ID. The operator configures each provider/model window; Turing does not yet discover model capabilities or persist exact provider token usage. Provenance-preserving summaries remain MEM-014, not part of TUR-020.
 
 Known gaps, honestly: a live `agent.run.failed` or `agent.run.cancelled` now renders as an inline failure or cancellation card, but — like tool cards and run notices — that entry is suppressed on session reopen by the replay watermark, so a past failed or cancelled run can still surface as an unexplained empty turn; a requeued run with no worker waits indefinitely; startup-recovery notices are published before the gRPC servers exist and so reach no subscriber; there is no curated user memory, only keyword recall over raw messages; audit is not inspectable.
 

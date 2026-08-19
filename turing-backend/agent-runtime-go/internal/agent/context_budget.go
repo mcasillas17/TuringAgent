@@ -21,6 +21,7 @@ type contextOmissions struct {
 	HistoryMessages int
 	RecallOmitted   bool
 	ToolDefinitions int
+	ToolResults     int
 }
 
 func (o contextOmissions) Notice() string {
@@ -41,6 +42,13 @@ func (o contextOmissions) Notice() string {
 			label = "tool definition"
 		}
 		omitted = append(omitted, fmt.Sprintf("%d %s", o.ToolDefinitions, label))
+	}
+	if o.ToolResults > 0 {
+		label := "tool results"
+		if o.ToolResults == 1 {
+			label = "tool result"
+		}
+		omitted = append(omitted, fmt.Sprintf("content from %d %s", o.ToolResults, label))
 	}
 	if len(omitted) == 0 {
 		return ""
@@ -74,8 +82,9 @@ func buildBudgetedContext(
 	input contextInput,
 	tools []llm.ToolDefinition,
 ) (budgetedContext, error) {
+	liveMessages := cloneChatMessages(input.live)
 	selectedTools := make([]bool, len(tools))
-	requiredNames := liveToolNames(input.live)
+	requiredNames := liveToolNames(liveMessages)
 	for index, definition := range tools {
 		if _, required := requiredNames[definition.Name]; required {
 			selectedTools[index] = true
@@ -84,8 +93,9 @@ func buildBudgetedContext(
 
 	selectedHistory := make([][]llm.ChatMessage, 0)
 	recallUsed := false
+	omissions := contextOmissions{}
 	buildRequest := func() llm.ChatRequest {
-		messages := make([]llm.ChatMessage, 0, len(input.history)+len(input.live)+2)
+		messages := make([]llm.ChatMessage, 0, len(input.history)+len(liveMessages)+2)
 		if recallUsed && input.recall != nil {
 			messages = append(messages, *input.recall)
 		}
@@ -95,7 +105,7 @@ func buildBudgetedContext(
 		for _, unit := range selectedHistory {
 			messages = append(messages, unit...)
 		}
-		messages = append(messages, input.live...)
+		messages = append(messages, liveMessages...)
 
 		selectedDefinitions := make([]llm.ToolDefinition, 0, len(tools))
 		for index, definition := range tools {
@@ -104,9 +114,10 @@ func buildBudgetedContext(
 			}
 		}
 		return llm.ChatRequest{
-			Model:    model,
-			Messages: messages,
-			Tools:    selectedDefinitions,
+			Model:     model,
+			Messages:  messages,
+			MaxTokens: provider.MaxOutputTokens(),
+			Tools:     selectedDefinitions,
 		}
 	}
 	estimate := func() (int, error) {
@@ -117,37 +128,66 @@ func buildBudgetedContext(
 		if err != nil {
 			return false, 0, err
 		}
-		return value <= llm.ProviderContextWindowTokens(provider), value, nil
+		inputBudget := provider.ContextWindowTokens() - provider.MaxOutputTokens()
+		return value <= inputBudget, value, nil
 	}
 
 	ok, mandatoryEstimate, err := fits()
 	if err != nil {
 		return budgetedContext{}, fmt.Errorf("estimate mandatory model context: %w", err)
 	}
+	for index := range liveMessages {
+		if ok {
+			break
+		}
+		if liveMessages[index].Role != "tool" || isCompactedToolResult(liveMessages[index].Content) {
+			continue
+		}
+		liveMessages[index].Content = compactedToolResult(liveMessages[index].Content)
+		omissions.ToolResults++
+		ok, mandatoryEstimate, err = fits()
+		if err != nil {
+			return budgetedContext{}, fmt.Errorf("estimate compacted live tool protocol: %w", err)
+		}
+	}
 	if !ok {
 		return budgetedContext{}, fmt.Errorf(
-			"%w: conservative mandatory request estimate %d exceeds configured window %d",
+			"%w: conservative mandatory request estimate %d plus %d reserved output tokens exceeds configured window %d",
 			errContextBudgetExceeded,
 			mandatoryEstimate,
-			llm.ProviderContextWindowTokens(provider),
+			provider.MaxOutputTokens(),
+			provider.ContextWindowTokens(),
 		)
 	}
 
-	omissions := contextOmissions{}
+	optionalTools := make([]int, 0, len(tools))
 	for index := range tools {
-		if selectedTools[index] {
-			continue
-		}
-		selectedTools[index] = true
-		ok, _, err := fits()
-		if err != nil {
-			return budgetedContext{}, fmt.Errorf("estimate model context with tool %q: %w", tools[index].Name, err)
-		}
-		if !ok {
-			selectedTools[index] = false
-			omissions.ToolDefinitions++
+		if !selectedTools[index] {
+			optionalTools = append(optionalTools, index)
 		}
 	}
+	setOptionalPrefix := func(count int) {
+		for optionalIndex, toolIndex := range optionalTools {
+			selectedTools[toolIndex] = optionalIndex < count
+		}
+	}
+	best := 0
+	for low, high := 0, len(optionalTools); low <= high; {
+		middle := low + (high-low)/2
+		setOptionalPrefix(middle)
+		candidateFits, _, err := fits()
+		if err != nil {
+			return budgetedContext{}, fmt.Errorf("estimate model context with %d optional tools: %w", middle, err)
+		}
+		if candidateFits {
+			best = middle
+			low = middle + 1
+		} else {
+			high = middle - 1
+		}
+	}
+	setOptionalPrefix(best)
+	omissions.ToolDefinitions = len(optionalTools) - best
 
 	if input.recall != nil {
 		recallUsed = true
@@ -170,7 +210,10 @@ func buildBudgetedContext(
 		}
 		if !ok {
 			selectedHistory = selectedHistory[1:]
-			omissions.HistoryMessages += len(units[index])
+			for omittedIndex := 0; omittedIndex <= index; omittedIndex++ {
+				omissions.HistoryMessages += len(units[omittedIndex])
+			}
+			break
 		}
 	}
 
@@ -185,6 +228,26 @@ func buildBudgetedContext(
 		RecallUsed: recallUsed,
 		Estimate:   finalEstimate,
 	}, nil
+}
+
+func compactedToolResult(content string) string {
+	return fmt.Sprintf(
+		`{"contextBudget":{"omitted":true,"originalBytes":%d,"message":"Tool result content omitted to fit the configured context window."}}`,
+		len(content),
+	)
+}
+
+func isCompactedToolResult(content string) bool {
+	return strings.Contains(content, `"contextBudget":{"omitted":true`)
+}
+
+func cloneChatMessages(messages []llm.ChatMessage) []llm.ChatMessage {
+	cloned := make([]llm.ChatMessage, len(messages))
+	copy(cloned, messages)
+	for index := range cloned {
+		cloned[index].ToolCalls = append([]llm.ToolCall(nil), cloned[index].ToolCalls...)
+	}
+	return cloned
 }
 
 func liveToolNames(messages []llm.ChatMessage) map[string]struct{} {

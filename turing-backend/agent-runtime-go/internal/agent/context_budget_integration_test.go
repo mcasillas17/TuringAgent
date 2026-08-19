@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -12,16 +13,28 @@ import (
 
 type budgetCapturingProvider struct {
 	window    int
+	output    int
 	responses [][]llm.StreamEvent
 	requests  []llm.ChatRequest
 	estimates []int
+	onRequest func(int)
 }
 
 func (p *budgetCapturingProvider) ID() string { return "budget-capturing" }
 
 func (p *budgetCapturingProvider) ContextWindowTokens() int { return p.window }
 
+func (p *budgetCapturingProvider) MaxOutputTokens() int { return p.output }
+
+func (p *budgetCapturingProvider) EstimateRequestTokens(req llm.ChatRequest) (int, error) {
+	body, err := json.Marshal(req)
+	return len(body), err
+}
+
 func (p *budgetCapturingProvider) StreamChat(_ context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	if p.onRequest != nil {
+		p.onRequest(len(p.requests))
+	}
 	p.requests = append(p.requests, req)
 	estimate, err := llm.EstimateRequestTokens(p, req)
 	if err != nil {
@@ -173,9 +186,9 @@ func TestExecuteRebudgetsAfterToolResultWithoutSplittingProtocol(t *testing.T) {
 	}
 }
 
-func TestExecuteFailsBeforeDispatchWhenLiveToolProtocolCannotFit(t *testing.T) {
+func TestExecuteCompactsOversizedToolResultWithoutSplittingProtocol(t *testing.T) {
 	provider := &budgetCapturingProvider{
-		window: 500,
+		window: 700,
 		responses: [][]llm.StreamEvent{
 			{{Type: "tool_call", ToolCalls: []llm.ToolCall{{
 				ID: "call_1", Name: "system.read", Arguments: map[string]any{},
@@ -199,15 +212,158 @@ func TestExecuteFailsBeforeDispatchWhenLiveToolProtocolCannotFit(t *testing.T) {
 
 	updates := collectUpdates(t, assistant, testJob())
 
-	if len(provider.requests) != 1 {
-		t.Fatalf("provider requests = %d, want no second dispatch", len(provider.requests))
+	if len(provider.requests) != 2 {
+		t.Fatalf("provider requests = %d, want compacted second dispatch", len(provider.requests))
+	}
+	second := provider.requests[1].Messages
+	call := second[len(second)-2]
+	result := second[len(second)-1]
+	if call.Role != "assistant" || len(call.ToolCalls) != 1 || call.ToolCalls[0].ID != "call_1" {
+		t.Fatalf("tool call protocol changed: %#v", call)
+	}
+	if result.Role != "tool" || result.ToolCallID != "call_1" {
+		t.Fatalf("tool result protocol changed: %#v", result)
+	}
+	if strings.Contains(result.Content, "oversized result oversized result") ||
+		!strings.Contains(result.Content, "omitted") {
+		t.Fatalf("tool result was not replaced by an explicit omission marker: %q", result.Content)
+	}
+	if !containsStringFragment(runStepNotes(updates), "tool result") {
+		t.Fatalf("run notes = %q, want tool-result omission notice", runStepNotes(updates))
+	}
+}
+
+func TestExecuteRejectsUnfitToolProtocolBeforeSideEffect(t *testing.T) {
+	provider := &budgetCapturingProvider{
+		window: 520,
+		output: 100,
+		responses: [][]llm.StreamEvent{
+			{{Type: "tool_call", ToolCalls: []llm.ToolCall{{
+				ID: "call_1", Name: "files.create", Arguments: map[string]any{"path": "note.txt"},
+			}}}},
+		},
+	}
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{"name": "files.create"}},
+		result:      map[string]any{"ok": true},
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
+		},
+		fakeMessageClient{},
+		&GeneralAssistantTools{
+			FilesMCP: client,
+			Runner: &tools.Runner{
+				PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+					return approvalToolCall(beacon), nil
+				},
+				WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+			},
+		},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	if len(client.calls) != 0 {
+		t.Fatalf("side-effecting tool calls = %d, want none before protocol fits", len(client.calls))
 	}
 	failure := findRunFailed(updates)
 	if failure == nil || failure.GetCode() != "context_budget_exceeded" {
 		t.Fatalf("failure = %#v, want context_budget_exceeded", failure)
 	}
-	if failure.GetRetryable() {
-		t.Fatal("context budget failure was retryable")
+}
+
+func TestExecuteEmitsEachChangedOmissionSetBeforeItsDispatch(t *testing.T) {
+	provider := &budgetCapturingProvider{
+		window: 950,
+		output: 100,
+		responses: [][]llm.StreamEvent{
+			{{Type: "tool_call", ToolCalls: []llm.ToolCall{{
+				ID: "call_1", Name: "system.read", Arguments: map[string]any{},
+			}}}},
+			{{Type: "tool_call", ToolCalls: []llm.ToolCall{{
+				ID: "call_2", Name: "system.read", Arguments: map[string]any{},
+			}}}},
+			{{Type: "delta", Text: "done"}, {Type: "completed", FinishReason: "stop"}},
+		},
+	}
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{"name": "system.read"}},
+		result:      map[string]any{"content": strings.Repeat("tool result ", 28)},
+	}
+	history := []llm.ChatMessage{
+		{Role: "user", Content: strings.Repeat("oldest question ", 12)},
+		{Role: "assistant", Content: strings.Repeat("oldest answer ", 12)},
+		{Role: "user", Content: strings.Repeat("middle question ", 12)},
+		{Role: "assistant", Content: strings.Repeat("middle answer ", 12)},
+		{Role: "user", Content: "recent question"},
+		{Role: "assistant", Content: "recent answer"},
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
+		},
+		fakeMessageClient{messages: history},
+		&GeneralAssistantTools{
+			SystemMCP: client,
+			Runner:    &tools.Runner{PostBeacon: allowToolCall},
+		},
+	)
+
+	var updates []*turingv1.RuntimeUpdate
+	var updatesBeforeRequest []int
+	provider.onRequest = func(int) {
+		updatesBeforeRequest = append(updatesBeforeRequest, len(updates))
+	}
+	if err := assistant.Execute(context.Background(), testJob(), func(update *turingv1.RuntimeUpdate) error {
+		updates = append(updates, update)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(provider.requests) != 3 || len(updatesBeforeRequest) != 3 {
+		t.Fatalf("requests/update markers = %d/%d, want 3/3", len(provider.requests), len(updatesBeforeRequest))
+	}
+	type omissionSet struct {
+		history int
+		results int
+	}
+	var emitted []omissionSet
+	var eventIndices []int
+	for index, update := range updates {
+		event := update.GetEvent()
+		if event == nil || event.Type != turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
+			continue
+		}
+		payload := event.GetPayload().AsMap()
+		if payload["reason"] != "context_budget" {
+			continue
+		}
+		emitted = append(emitted, omissionSet{
+			history: int(payload["historyMessagesOmitted"].(float64)),
+			results: int(payload["toolResultsOmitted"].(float64)),
+		})
+		eventIndices = append(eventIndices, index)
+	}
+	if len(emitted) < 2 {
+		t.Fatalf("omission events = %#v, want changed sets across tool rounds", emitted)
+	}
+	for index := 1; index < len(emitted); index++ {
+		if emitted[index] == emitted[index-1] {
+			t.Fatalf("duplicate unchanged omission set emitted: %#v", emitted)
+		}
+	}
+	for index, eventIndex := range eventIndices {
+		if index >= len(updatesBeforeRequest) || eventIndex >= updatesBeforeRequest[index] {
+			t.Fatalf(
+				"omission event %d at update %d did not precede request marker %v",
+				index,
+				eventIndex,
+				updatesBeforeRequest,
+			)
+		}
 	}
 }
 

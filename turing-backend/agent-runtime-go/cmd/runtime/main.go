@@ -41,15 +41,31 @@ func run() error {
 		return err
 	}
 	defer func() { _ = client.Close() }()
+	ollamaProvider, err := llm.NewOllamaWithLimits(
+		cfg.OllamaBaseURL,
+		http.DefaultClient,
+		cfg.OllamaContextWindowTokens,
+		cfg.OllamaMaxOutputTokens,
+	)
+	if err != nil {
+		return fmt.Errorf("configure Ollama provider: %w", err)
+	}
+	ollamaProvider.WithKeepAlive(cfg.OllamaKeepAlive)
 	providers := map[turingv1.ModelProvider]llm.Provider{
-		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: llm.NewOllama(cfg.OllamaBaseURL, http.DefaultClient).
-			WithKeepAlive(cfg.OllamaKeepAlive).
-			WithContextWindowTokens(cfg.OllamaContextWindowTokens),
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: ollamaProvider,
 	}
 	if cfg.OpenAIAPIKey != "" {
-		providers[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE] =
-			llm.NewOpenAICompatible(cfg.OpenAIBaseURL, cfg.OpenAIAPIKey, http.DefaultClient).
-				WithContextWindowTokens(cfg.OpenAIContextWindowTokens)
+		openAIProvider, err := llm.NewOpenAICompatibleWithLimits(
+			cfg.OpenAIBaseURL,
+			cfg.OpenAIAPIKey,
+			http.DefaultClient,
+			cfg.OpenAIContextWindowTokens,
+			cfg.OpenAIMaxOutputTokens,
+		)
+		if err != nil {
+			return fmt.Errorf("configure OpenAI-compatible provider: %w", err)
+		}
+		providers[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE] = openAIProvider
 	}
 	toolRunner := &tools.Runner{WaitApproval: func(ctx context.Context, approvalID string) (string, error) {
 		return client.WaitForApprovalToken(ctx, approvalID, time.Second, cfg.ApprovalTimeout)
@@ -74,6 +90,7 @@ func run() error {
 	executor.SetExternalAgentProvider(agent.NewExternalAgentProviderFunc(
 		cfg.AgentAPIKeys,
 		cfg.OpenAIContextWindowTokens,
+		cfg.OpenAIMaxOutputTokens,
 		http.DefaultClient,
 	))
 	runtimeWorker := worker.New(worker.Options{

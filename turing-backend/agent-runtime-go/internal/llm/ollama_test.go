@@ -193,14 +193,16 @@ func TestOllamaRequestNestsOptions(t *testing.T) {
 	options, ok := body["options"].(map[string]any)
 	if !ok || options["temperature"] != json.Number("0.25") ||
 		options["num_predict"] != json.Number("321") ||
-		options["num_ctx"] != json.Number("8192") {
+		options["num_ctx"] != json.Number("32768") {
 		t.Fatalf("options = %#v", body["options"])
 	}
 
 	withoutOptions := captureOllamaRequest(t, ChatRequest{Model: "llama3.2"})
 	defaultOptions, ok := withoutOptions["options"].(map[string]any)
-	if !ok || len(defaultOptions) != 1 || defaultOptions["num_ctx"] != json.Number("8192") {
-		t.Fatalf("default options = %#v, want only num_ctx=8192", withoutOptions["options"])
+	if !ok || len(defaultOptions) != 2 ||
+		defaultOptions["num_ctx"] != json.Number("32768") ||
+		defaultOptions["num_predict"] != json.Number("2048") {
+		t.Fatalf("default options = %#v, want num_ctx=32768 and num_predict=2048", withoutOptions["options"])
 	}
 }
 
@@ -217,7 +219,10 @@ func TestOllamaRequestPinsConfiguredContextWindow(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	provider := NewOllama(server.URL, server.Client()).WithContextWindowTokens(6144)
+	provider, err := NewOllamaWithLimits(server.URL, server.Client(), 6144, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
 	events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "qwen2.5:7b"})
 	if err != nil {
 		t.Fatal(err)
@@ -231,11 +236,32 @@ func TestOllamaRequestPinsConfiguredContextWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	options, ok := body["options"].(map[string]any)
-	if !ok || options["num_ctx"] != json.Number("6144") {
-		t.Fatalf("options = %#v, want num_ctx=6144", body["options"])
+	if !ok || options["num_ctx"] != json.Number("6144") ||
+		options["num_predict"] != json.Number("512") {
+		t.Fatalf("options = %#v, want num_ctx=6144 and num_predict=512", body["options"])
 	}
 	if got := provider.ContextWindowTokens(); got != 6144 {
 		t.Fatalf("ContextWindowTokens = %d, want 6144", got)
+	}
+	if got := provider.MaxOutputTokens(); got != 512 {
+		t.Fatalf("MaxOutputTokens = %d, want 512", got)
+	}
+}
+
+func TestOllamaLimitsRejectInvalidValues(t *testing.T) {
+	for _, test := range []struct {
+		window int
+		output int
+	}{
+		{window: 0, output: 1},
+		{window: -1, output: 1},
+		{window: 1024, output: 0},
+		{window: 1024, output: 1024},
+		{window: 1024, output: 1025},
+	} {
+		if _, err := NewOllamaWithLimits("http://example.test", nil, test.window, test.output); err == nil {
+			t.Fatalf("NewOllamaWithLimits(%d, %d) succeeded", test.window, test.output)
+		}
 	}
 }
 

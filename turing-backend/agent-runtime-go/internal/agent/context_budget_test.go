@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,12 +13,22 @@ import (
 )
 
 type budgetTestProvider struct {
-	window int
+	window        int
+	output        int
+	estimateCalls int
 }
 
 func (p *budgetTestProvider) ID() string { return "budget-test" }
 
 func (p *budgetTestProvider) ContextWindowTokens() int { return p.window }
+
+func (p *budgetTestProvider) MaxOutputTokens() int { return p.output }
+
+func (p *budgetTestProvider) EstimateRequestTokens(req llm.ChatRequest) (int, error) {
+	p.estimateCalls++
+	body, err := json.Marshal(req)
+	return len(body), err
+}
 
 func (p *budgetTestProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	panic("StreamChat must not be called by the context builder")
@@ -53,8 +65,73 @@ func TestBuildBudgetedContextKeepsMandatoryMessagesAndStableOrder(t *testing.T) 
 	if got.Estimate > provider.window {
 		t.Fatalf("estimate = %d, context window = %d", got.Estimate, provider.window)
 	}
+	if got.Request.MaxTokens != provider.output {
+		t.Fatalf("MaxTokens = %d, want output reservation %d", got.Request.MaxTokens, provider.output)
+	}
 	if !got.RecallUsed || got.Omissions != (contextOmissions{}) {
 		t.Fatalf("budget result = %#v, want recall with no omissions", got)
+	}
+}
+
+func TestBuildBudgetedContextDefaultOllamaKeepsRecallAndRecentHistoryWithRepresentativeTools(t *testing.T) {
+	provider := llm.NewOllama("http://ollama.test", nil)
+	recall := llm.ChatMessage{Role: "system", Content: strings.Repeat("recalled material ", 120)}
+	history := []llm.ChatMessage{
+		{Role: "user", Content: strings.Repeat("older question ", 180)},
+		{Role: "assistant", Content: strings.Repeat("older answer ", 180)},
+		{Role: "user", Content: strings.Repeat("recent question ", 80)},
+		{Role: "assistant", Content: strings.Repeat("recent answer ", 80)},
+	}
+	tools := make([]llm.ToolDefinition, 8)
+	for index := range tools {
+		tools[index] = llm.ToolDefinition{
+			Name:        fmt.Sprintf("tool_%d", index),
+			Description: strings.Repeat("representative tool description ", 8),
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{
+						"type":        "string",
+						"description": strings.Repeat("representative schema text ", 8),
+					},
+				},
+			},
+		}
+	}
+
+	got, err := buildBudgetedContext(provider, "qwen2.5:7b", contextInput{
+		recall:  &recall,
+		history: history,
+		live:    []llm.ChatMessage{{Role: "user", Content: "current question"}},
+	}, tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.RecallUsed || !containsMessageContent(got.Request.Messages, "recalled material") {
+		t.Fatalf("default Ollama request omitted recall: %#v", got)
+	}
+	if !containsMessageContent(got.Request.Messages, "recent question") {
+		t.Fatalf("default Ollama request omitted recent history: %#v", got.Request.Messages)
+	}
+	if got.Estimate+provider.MaxOutputTokens() > provider.ContextWindowTokens() {
+		t.Fatalf(
+			"prompt upper bound %d + output reserve %d exceeds context %d",
+			got.Estimate,
+			provider.MaxOutputTokens(),
+			provider.ContextWindowTokens(),
+		)
+	}
+}
+
+func TestBuildBudgetedContextReservesOutputTokens(t *testing.T) {
+	live := []llm.ChatMessage{{Role: "user", Content: "current"}}
+	provider := &budgetTestProvider{window: 4096, output: 512}
+	estimate := estimateRequest(t, provider, "model", live, nil)
+	provider.window = estimate + provider.output - 16
+
+	_, err := buildBudgetedContext(provider, "model", contextInput{live: live}, nil)
+	if !errors.Is(err, errContextBudgetExceeded) {
+		t.Fatalf("error = %v, want output reservation to make mandatory context overflow", err)
 	}
 }
 
@@ -97,6 +174,38 @@ func TestBuildBudgetedContextOmitsOldestCompleteHistoryFirst(t *testing.T) {
 	}
 	if got.Omissions.HistoryMessages != 2 {
 		t.Fatalf("HistoryMessages = %d, want 2", got.Omissions.HistoryMessages)
+	}
+}
+
+func TestBuildBudgetedContextKeepsAContiguousHistorySuffix(t *testing.T) {
+	provider := &budgetTestProvider{}
+	live := []llm.ChatMessage{{Role: "user", Content: "current"}}
+	newest := []llm.ChatMessage{
+		{Role: "user", Content: "newest question"},
+		{Role: "assistant", Content: "newest answer"},
+	}
+	provider.window = estimateRequest(t, provider, "model", appendMessages(newest, live), nil)
+
+	got, err := buildBudgetedContext(provider, "model", contextInput{
+		history: []llm.ChatMessage{
+			{Role: "user", Content: "tiny oldest question"},
+			{Role: "assistant", Content: "tiny oldest answer"},
+			{Role: "user", Content: strings.Repeat("large middle question ", 40)},
+			{Role: "assistant", Content: strings.Repeat("large middle answer ", 40)},
+			newest[0],
+			newest[1],
+		},
+		live: live,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsMessageContent(got.Request.Messages, "tiny oldest") ||
+		containsMessageContent(got.Request.Messages, "large middle") {
+		t.Fatalf("history is not a contiguous newest suffix: %#v", got.Request.Messages)
+	}
+	if got.Omissions.HistoryMessages != 4 {
+		t.Fatalf("HistoryMessages = %d, want oldest and middle turns omitted (4)", got.Omissions.HistoryMessages)
 	}
 }
 
@@ -147,6 +256,31 @@ func TestBuildBudgetedContextOmitsWholeToolDefinitionsInStableOrder(t *testing.T
 	}
 	if got.Omissions.ToolDefinitions != 1 {
 		t.Fatalf("ToolDefinitions = %d, want 1", got.Omissions.ToolDefinitions)
+	}
+}
+
+func TestBuildBudgetedContextBoundsToolAdmissionEstimatesLogarithmically(t *testing.T) {
+	provider := &budgetTestProvider{window: 512}
+	tools := make([]llm.ToolDefinition, 10_000)
+	for index := range tools {
+		tools[index] = llm.ToolDefinition{
+			Name:       fmt.Sprintf("tool_%d", index),
+			Parameters: map[string]any{"type": "object"},
+		}
+	}
+	provider.estimateCalls = 0
+
+	_, err := buildBudgetedContext(
+		provider,
+		"model",
+		contextInput{live: []llm.ChatMessage{{Role: "user", Content: "current"}}},
+		tools,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.estimateCalls > 32 {
+		t.Fatalf("request estimates = %d, want logarithmic bounded tool admission", provider.estimateCalls)
 	}
 }
 
@@ -262,9 +396,10 @@ func TestContextOmissionsNoticeHandlesSingularAndEmpty(t *testing.T) {
 func estimateRequest(t *testing.T, provider llm.Provider, model string, messages []llm.ChatMessage, tools []llm.ToolDefinition) int {
 	t.Helper()
 	estimate, err := llm.EstimateRequestTokens(provider, llm.ChatRequest{
-		Model:    model,
-		Messages: messages,
-		Tools:    tools,
+		Model:     model,
+		Messages:  messages,
+		MaxTokens: provider.MaxOutputTokens(),
+		Tools:     tools,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -8,6 +8,8 @@
 
 **Tech Stack:** Go 1.23, gRPC runtime events, Ollama `/api/chat`, OpenAI-compatible `/chat/completions`, SQLite-backed orchestrator event persistence, Docker Compose, Flutter run-notice rendering, Go tests.
 
+**Review amendments:** The independent review loop tightened the executed design beyond the initial examples below. The final implementation uses a `32768` default provider window plus a validated `2048` output reservation, requires context limits and exact-wire estimation on the `Provider` interface, admits optional tool definitions with logarithmic exact re-estimation, keeps history as a contiguous newest suffix, and replaces an oversized tool-result body with an explicit omission marker while preserving its tool message and correlation ID. These amendments supersede the earlier `8192`/setter/no-output-reserve examples in this archived execution plan.
+
 ---
 
 ## File structure

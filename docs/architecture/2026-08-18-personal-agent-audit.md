@@ -254,9 +254,9 @@ Task IDs are stable references, not priority numbers. Delivery order follows `do
 
 **Outcome:** The assembled prompt cannot silently exceed the model's context window, and recall cannot be dropped without notice.
 
-**Shipped behavior:** `OLLAMA_CONTEXT_WINDOW_TOKENS` is validated at startup and sent as Ollama `options.num_ctx` on every request; `OPENAI_CONTEXT_WINDOW_TOKENS` applies the same local admission contract without leaking Ollama fields. Built-in providers conservatively account from their exact serialized request. The runtime keeps skills, the current turn, complete live tool protocol, required schemas, whole optional schemas, whole recall, and newest complete history in that order. Changed omissions produce durable `agent.run.step` notices. Mandatory live protocol that cannot fit fails rather than being cut.
+**Shipped behavior:** Provider windows and output reservations are validated at startup. Ollama receives `num_ctx` and `num_predict` on every request; OpenAI-compatible providers receive `max_tokens` without Ollama fields. Built-in providers conservatively account from their exact serialized request. The runtime keeps skills, the current turn, live tool protocol messages/correlation, required schemas, a stable optional-schema prefix, whole recall, and a contiguous newest-history suffix in that order. Oversized tool-result bodies become explicit omission markers; prospective protocol is checked before executing tools. Changed omissions produce durable `agent.run.step` events, rendered during the live run but currently suppressed by the client replay watermark on reopen.
 
-**Limit:** The estimate is intentionally conservative—one serialized UTF-8 request byte per estimated token—not tokenizer-exact usage. Model capability discovery and provenance-preserving summaries remain future work (MEM-014).
+**Limit:** The estimate is intentionally conservative—one serialized UTF-8 request byte as an upper bound of one prompt token plus a configured output reservation—not tokenizer-exact usage. Model capability discovery and provenance-preserving summaries remain future work (MEM-014).
 
 **Acceptance evidence:** Configuration, Ollama/OpenAI wire, long-session recall, recall-omission, evolving tool-result, live-protocol integrity, and persisted-notice tests cover the contract.
 

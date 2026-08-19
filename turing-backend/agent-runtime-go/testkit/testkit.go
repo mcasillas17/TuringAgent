@@ -28,6 +28,7 @@ type WorkerConfig struct {
 	OpenAIBaseURL       string
 	OpenAIAPIKey        string
 	ContextWindowTokens int
+	MaxOutputTokens     int
 	MCPSystemBaseURL    string
 	MCPFilesBaseURL     string
 	MCPSystemToken      string
@@ -40,12 +41,18 @@ type WorkerExecutor interface {
 
 func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 	client := orchestrator.New(cfg.Conn, cfg.InternalToken)
+	openAIProvider, err := llm.NewOpenAICompatibleWithLimits(
+		cfg.OpenAIBaseURL,
+		cfg.OpenAIAPIKey,
+		http.DefaultClient,
+		cfg.contextWindowTokens(),
+		cfg.maxOutputTokens(),
+	)
+	if err != nil {
+		return err
+	}
 	providers := map[turingv1.ModelProvider]llm.Provider{
-		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE: llm.NewOpenAICompatible(
-			cfg.OpenAIBaseURL,
-			cfg.OpenAIAPIKey,
-			http.DefaultClient,
-		).WithContextWindowTokens(cfg.contextWindowTokens()),
+		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE: openAIProvider,
 	}
 
 	toolRunner := &tools.Runner{WaitApproval: func(ctx context.Context, approvalID string) (string, error) {
@@ -75,6 +82,13 @@ func (cfg WorkerConfig) contextWindowTokens() int {
 		return cfg.ContextWindowTokens
 	}
 	return llm.DefaultContextWindowTokens
+}
+
+func (cfg WorkerConfig) maxOutputTokens() int {
+	if cfg.MaxOutputTokens > 0 {
+		return cfg.MaxOutputTokens
+	}
+	return llm.DefaultMaxOutputTokens
 }
 
 func RunWorkerWithExecutor(ctx context.Context, cfg WorkerConfig, executor WorkerExecutor) error {

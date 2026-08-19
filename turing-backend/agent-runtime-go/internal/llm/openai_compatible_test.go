@@ -46,7 +46,10 @@ func TestOpenAICompatibleContextWindowDoesNotChangeWireFormat(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	provider := NewOpenAICompatible(server.URL, "", server.Client()).WithContextWindowTokens(6144)
+	provider, err := NewOpenAICompatibleWithLimits(server.URL, "", server.Client(), 6144, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
 	events, err := provider.StreamChat(context.Background(), ChatRequest{
 		Model:    "compatible-model",
 		Messages: []ChatMessage{{Role: "user", Content: "hello"}},
@@ -66,8 +69,20 @@ func TestOpenAICompatibleContextWindowDoesNotChangeWireFormat(t *testing.T) {
 	if _, present := body["options"]; present {
 		t.Fatalf("OpenAI-compatible request contained Ollama options: %#v", body)
 	}
+	if body["max_tokens"] != float64(512) {
+		t.Fatalf("max_tokens = %#v, want 512", body["max_tokens"])
+	}
 	if got := provider.ContextWindowTokens(); got != 6144 {
 		t.Fatalf("ContextWindowTokens = %d, want 6144", got)
+	}
+	if got := provider.MaxOutputTokens(); got != 512 {
+		t.Fatalf("MaxOutputTokens = %d, want 512", got)
+	}
+}
+
+func TestOpenAICompatibleLimitsRejectInvalidValues(t *testing.T) {
+	if _, err := NewOpenAICompatibleWithLimits("http://example.test", "", nil, 1024, 1024); err == nil {
+		t.Fatal("output reservation equal to the context window was accepted")
 	}
 }
 
@@ -876,7 +891,7 @@ func TestOpenAIRequestSerializesAssistantToolCalls(t *testing.T) {
 	collectEvents(events)
 
 	body := <-requestBody
-	const wantJSON = `{"model":"gpt-4o-mini","messages":[{"role":"assistant","content":null,"name":"planner","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}}]}],"stream":true}`
+	const wantJSON = `{"model":"gpt-4o-mini","messages":[{"role":"assistant","content":null,"name":"planner","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}}]}],"stream":true,"max_tokens":2048}`
 	if string(body) != wantJSON {
 		t.Fatalf("request JSON = %s, want %s", body, wantJSON)
 	}

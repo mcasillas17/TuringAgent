@@ -18,7 +18,6 @@ const (
 	approvalWaitPollTransportMargin = 5 * time.Second
 	maxConcurrentRunsLimit          = 128
 	maxHeartbeatInterval            = 30 * time.Second
-	maxContextWindowTokens          = 16 * 1024 * 1024
 )
 
 // defaultOllamaModel keeps this side in step with the orchestrator, which is
@@ -43,10 +42,12 @@ type Config struct {
 	OllamaModel               string
 	OllamaKeepAlive           string
 	OllamaContextWindowTokens int
+	OllamaMaxOutputTokens     int
 	OpenAIBaseURL             string
 	OpenAIAPIKey              string
 	OpenAIModel               string
 	OpenAIContextWindowTokens int
+	OpenAIMaxOutputTokens     int
 	// AgentAPIKeys maps an external agent's credential_ref to its API key.
 	// This is the only place a third-party key exists in the whole system: it
 	// is never written to SQLite, never crosses the orchestrator, and never
@@ -81,11 +82,19 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 	if _, err := llm.EncodeOllamaKeepAlive(keepAlive); err != nil {
 		return Config{}, fmt.Errorf("OLLAMA_KEEP_ALIVE: %w", err)
 	}
-	ollamaContextWindowTokens, err := contextWindowTokensValue(getenv, "OLLAMA_CONTEXT_WINDOW_TOKENS")
+	ollamaContextWindowTokens, ollamaMaxOutputTokens, err := providerContextLimits(
+		getenv,
+		"OLLAMA_CONTEXT_WINDOW_TOKENS",
+		"OLLAMA_MAX_OUTPUT_TOKENS",
+	)
 	if err != nil {
 		return Config{}, err
 	}
-	openAIContextWindowTokens, err := contextWindowTokensValue(getenv, "OPENAI_CONTEXT_WINDOW_TOKENS")
+	openAIContextWindowTokens, openAIMaxOutputTokens, err := providerContextLimits(
+		getenv,
+		"OPENAI_CONTEXT_WINDOW_TOKENS",
+		"OPENAI_MAX_OUTPUT_TOKENS",
+	)
 	if err != nil {
 		return Config{}, err
 	}
@@ -162,10 +171,12 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 		OllamaModel:               defaultString(getenv("OLLAMA_MODEL"), defaultOllamaModel),
 		OllamaKeepAlive:           keepAlive,
 		OllamaContextWindowTokens: ollamaContextWindowTokens,
+		OllamaMaxOutputTokens:     ollamaMaxOutputTokens,
 		OpenAIBaseURL:             openAIBaseURL,
 		OpenAIAPIKey:              getenv("OPENAI_API_KEY"),
 		OpenAIModel:               defaultString(getenv("OPENAI_MODEL"), "gpt-4o-mini"),
 		OpenAIContextWindowTokens: openAIContextWindowTokens,
+		OpenAIMaxOutputTokens:     openAIMaxOutputTokens,
 		AgentAPIKeys:              agentAPIKeys,
 		MCPSystemBaseURL:          mcpSystemBaseURL,
 		MCPFilesBaseURL:           mcpFilesBaseURL,
@@ -182,15 +193,23 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 	}, nil
 }
 
-func contextWindowTokensValue(getenv func(string) string, name string) (int, error) {
-	value, err := intValue(getenv, name, llm.DefaultContextWindowTokens)
+func providerContextLimits(
+	getenv func(string) string,
+	contextName string,
+	outputName string,
+) (int, int, error) {
+	contextWindowTokens, err := intValue(getenv, contextName, llm.DefaultContextWindowTokens)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	if value <= 0 || value > maxContextWindowTokens {
-		return 0, fmt.Errorf("%s must be between 1 and %d", name, maxContextWindowTokens)
+	maxOutputTokens, err := intValue(getenv, outputName, llm.DefaultMaxOutputTokens)
+	if err != nil {
+		return 0, 0, err
 	}
-	return value, nil
+	if err := llm.ValidateContextLimits(contextWindowTokens, maxOutputTokens); err != nil {
+		return 0, 0, fmt.Errorf("%s/%s: %w", contextName, outputName, err)
+	}
+	return contextWindowTokens, maxOutputTokens, nil
 }
 
 func endpointURLValue(getenv func(string) string, name string, defaultValue string) (string, error) {

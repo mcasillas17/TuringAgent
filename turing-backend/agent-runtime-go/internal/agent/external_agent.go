@@ -34,6 +34,7 @@ var ErrExternalAgentRoutingUnavailable = errors.New("this runtime is not configu
 func NewExternalAgentProviderFunc(
 	keys map[string]string,
 	contextWindowTokens int,
+	maxOutputTokens int,
 	client *http.Client,
 ) ExternalAgentProviderFunc {
 	return func(target *turingv1.ExternalAgentTarget) (llm.Provider, error) {
@@ -55,7 +56,16 @@ func NewExternalAgentProviderFunc(
 		// Every vendor this section is for — Anthropic, OpenAI, Google, xAI —
 		// exposes an OpenAI-compatible chat-completions endpoint, so this is
 		// one client configured four ways rather than four integrations.
-		return llm.NewOpenAICompatible(target.GetBaseUrl(), apiKey, client).
-			WithContextWindowTokens(contextWindowTokens), nil
+		provider, err := llm.NewOpenAICompatibleWithLimits(
+			target.GetBaseUrl(),
+			apiKey,
+			client,
+			contextWindowTokens,
+			maxOutputTokens,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("configure external agent provider: %w", err)
+		}
+		return provider, nil
 	}
 }

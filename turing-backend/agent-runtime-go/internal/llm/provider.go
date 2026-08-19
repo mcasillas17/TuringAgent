@@ -2,14 +2,17 @@ package llm
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 )
 
 const (
 	maxProviderRequestBytes    = 16 * 1024 * 1024
-	DefaultContextWindowTokens = 8192
+	DefaultContextWindowTokens = 32768
+	DefaultMaxOutputTokens     = 2048
+	MaxContextWindowTokens     = 16 * 1024 * 1024
 )
 
 type ChatMessage struct {
@@ -54,37 +57,46 @@ type StreamEvent struct {
 
 type Provider interface {
 	ID() string
+	ContextWindowTokens() int
+	MaxOutputTokens() int
+	EstimateRequestTokens(ChatRequest) (int, error)
 	StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error)
 }
 
-type contextWindowProvider interface {
-	ContextWindowTokens() int
-}
-
-type requestTokenEstimator interface {
-	EstimateRequestTokens(ChatRequest) (int, error)
-}
-
-func ProviderContextWindowTokens(provider Provider) int {
-	if configured, ok := provider.(contextWindowProvider); ok && configured.ContextWindowTokens() > 0 {
-		return configured.ContextWindowTokens()
-	}
-	return DefaultContextWindowTokens
-}
-
 // EstimateRequestTokens applies the runtime's conservative admission rule: one
-// serialized UTF-8 request byte counts as one estimated token. Built-in
-// providers estimate their exact wire representation; provider test doubles and
-// future implementations fall back to the provider-neutral request shape.
+// serialized UTF-8 request byte counts as one upper-bound token estimate.
+// Providers must estimate their exact wire representation.
 func EstimateRequestTokens(provider Provider, req ChatRequest) (int, error) {
-	if estimator, ok := provider.(requestTokenEstimator); ok {
-		return estimator.EstimateRequestTokens(req)
+	if ProviderIsNil(provider) {
+		return 0, errors.New("model provider is unavailable")
 	}
-	body, err := json.Marshal(req)
-	if err != nil {
-		return 0, err
+	return provider.EstimateRequestTokens(req)
+}
+
+func ProviderIsNil(provider Provider) bool {
+	if provider == nil {
+		return true
 	}
-	return len(body), nil
+	value := reflect.ValueOf(provider)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+func ValidateContextLimits(contextWindowTokens, maxOutputTokens int) error {
+	if contextWindowTokens <= 0 || contextWindowTokens > MaxContextWindowTokens {
+		return fmt.Errorf("context window tokens must be between 1 and %d", MaxContextWindowTokens)
+	}
+	if maxOutputTokens <= 0 {
+		return errors.New("max output tokens must be greater than 0")
+	}
+	if maxOutputTokens >= contextWindowTokens {
+		return errors.New("max output tokens must be less than context window tokens")
+	}
+	return nil
 }
 
 type providerRequestSizeError struct {

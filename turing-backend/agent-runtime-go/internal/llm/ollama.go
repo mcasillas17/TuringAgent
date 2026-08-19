@@ -28,7 +28,10 @@ type Ollama struct {
 	client              *http.Client
 	keepAlive           json.RawMessage
 	contextWindowTokens int
+	maxOutputTokens     int
 }
+
+var _ Provider = (*Ollama)(nil)
 
 func NewOllama(baseURL string, client *http.Client) *Ollama {
 	if client == nil {
@@ -38,7 +41,23 @@ func NewOllama(baseURL string, client *http.Client) *Ollama {
 		baseURL:             strings.TrimRight(baseURL, "/"),
 		client:              client,
 		contextWindowTokens: DefaultContextWindowTokens,
+		maxOutputTokens:     DefaultMaxOutputTokens,
 	}
+}
+
+func NewOllamaWithLimits(
+	baseURL string,
+	client *http.Client,
+	contextWindowTokens int,
+	maxOutputTokens int,
+) (*Ollama, error) {
+	if err := ValidateContextLimits(contextWindowTokens, maxOutputTokens); err != nil {
+		return nil, err
+	}
+	provider := NewOllama(baseURL, client)
+	provider.contextWindowTokens = contextWindowTokens
+	provider.maxOutputTokens = maxOutputTokens
+	return provider, nil
 }
 
 // WithKeepAlive sets how long Ollama should hold the model in memory after a
@@ -57,11 +76,6 @@ func (p *Ollama) WithKeepAlive(keepAlive string) *Ollama {
 	// still works, Ollama just uses its own default.
 	encoded, _ := EncodeOllamaKeepAlive(keepAlive)
 	p.keepAlive = encoded
-	return p
-}
-
-func (p *Ollama) WithContextWindowTokens(tokens int) *Ollama {
-	p.contextWindowTokens = tokens
 	return p
 }
 
@@ -99,6 +113,8 @@ func EncodeOllamaKeepAlive(value string) (json.RawMessage, error) {
 func (p *Ollama) ID() string { return "ollama" }
 
 func (p *Ollama) ContextWindowTokens() int { return p.contextWindowTokens }
+
+func (p *Ollama) MaxOutputTokens() int { return p.maxOutputTokens }
 
 func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
 	body, err := marshalProviderRequest("Ollama", func() ([]byte, error) {
@@ -242,7 +258,11 @@ func (p *Ollama) EstimateRequestTokens(req ChatRequest) (int, error) {
 }
 
 func (p *Ollama) marshalRequest(req ChatRequest) ([]byte, error) {
-	options := ollamaRequestOptions(req.Temperature, req.MaxTokens, p.contextWindowTokens)
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = p.maxOutputTokens
+	}
+	options := ollamaRequestOptions(req.Temperature, maxTokens, p.contextWindowTokens)
 	tools := ollamaTools(req.Tools)
 	return json.Marshal(ollamaChatRequest{
 		Model:     req.Model,

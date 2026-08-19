@@ -133,15 +133,19 @@ Common values:
 | `ORCHESTRATOR_GRPC_ADDR` | Internal orchestrator gRPC address, usually `turing-orchestrator:3001` |
 | `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Local model endpoint and default model |
 | `OLLAMA_KEEP_ALIVE` | How long Ollama holds the model in memory after a reply (default `2m`). Accepts a duration (`30s`, `2m`) or whole seconds (`-1` = forever). Sent per request, so it does not depend on Ollama's own env var. Keep it above `TURING_APPROVAL_WAIT_TIMEOUT_MS` or the model unloads mid-run |
-| `OLLAMA_CONTEXT_WINDOW_TOKENS` | Local prompt window (default `8192`). Must be `1`–`16777216`; invalid values fail startup. Sent as Ollama `options.num_ctx` on every request, so the runtime never relies on the host default |
+| `OLLAMA_CONTEXT_WINDOW_TOKENS` | Local context window (default `32768`). Must be `1`–`16777216`; invalid values fail startup. Sent as Ollama `options.num_ctx` on every request, so the runtime never relies on the host default |
+| `OLLAMA_MAX_OUTPUT_TOKENS` | Answer reservation inside the Ollama window (default `2048`). Must be positive and smaller than the window; sent as `options.num_predict` |
 | `OPENAI_API_KEY` / `OPENAI_MODEL` | Optional OpenAI-compatible model configuration |
-| `OPENAI_CONTEXT_WINDOW_TOKENS` | Local admission window for OpenAI-compatible models and routed external agents (default `8192`, same validation). Match it to the configured model; it is enforced locally and is not sent as Ollama's `num_ctx` |
+| `OPENAI_CONTEXT_WINDOW_TOKENS` | Local window for OpenAI-compatible models and routed external agents (default `32768`, same validation). Match it to the configured model; it is enforced locally and is not sent as Ollama's `num_ctx` |
+| `OPENAI_MAX_OUTPUT_TOKENS` | Answer reservation for OpenAI-compatible requests (default `2048`); sent as `max_tokens` |
 
 ### Context budgeting
 
-Before every model dispatch, the runtime measures the exact provider-specific JSON request and conservatively treats each serialized UTF-8 byte as one estimated token. This is an admission bound, not exact tokenizer usage or billable provider usage; Turing does not currently discover model capabilities or ship provider tokenizers.
+Before every model dispatch, the runtime measures the exact provider-specific JSON request. Without provider tokenizers, it conservatively treats each serialized UTF-8 byte as an upper bound of one prompt token, then requires that upper bound plus the configured output reservation fit the context window. This is intentionally not exact tokenizer usage or billable provider usage; Turing does not currently discover model capabilities.
 
-The runtime always keeps attached skills, the current user turn, and the complete live assistant tool-call/result chain. It then admits whole tool definitions in stable registry order (definitions already referenced by the live chain are mandatory), the whole recall block, and newest complete history turns. Optional content is omitted only as whole messages, turns, or schemas. Each changed omission set is persisted as an `agent.run.step` notice and rendered inline by the chat client. If the mandatory live protocol cannot fit, the run fails with `context_budget_exceeded` rather than sending a partial tool call or result.
+The runtime always keeps attached skills, the current user turn, and every assistant tool-call/result message and correlation ID. If a result body is too large, its whole content is replaced by an explicit JSON omission marker; the protocol message itself is never dropped or split. The runtime then admits a stable prefix of whole optional tool definitions (definitions referenced by live protocol are mandatory), the whole recall block, and a contiguous suffix of newest complete history turns.
+
+Each changed omission set is persisted as an `agent.run.step` notice and rendered inline during the live run. Historical run notices are currently suppressed by the client replay watermark, so reopening a session does not yet redisplay them. If even the current turn, skills, required schemas, tool protocol, and minimal result markers cannot fit, the run fails with `context_budget_exceeded`; for a newly requested tool chain, that feasibility check occurs before any tool side effect.
 
 Focused verification:
 
@@ -154,7 +158,7 @@ go test -tags sqlite_fts5 ./turing-backend/agent-runtime-go/internal/config ./tu
 - **Backend is not reachable:** check that Docker Compose is running and port `3000` is free.
 - **Authentication fails:** confirm the Flutter API key matches `TURING_CLIENT_API_KEY` in `turing-backend/.env`.
 - **No model response:** ensure Ollama is running on the host and the configured model is available.
-- **Run fails with `context_budget_exceeded`:** the current user turn, attached skills, or live tool-call/result chain cannot fit whole. Increase the matching provider context-window setting only when the selected model supports it; Turing will not split live protocol to force a request through.
+- **Run fails with `context_budget_exceeded`:** the current user turn, attached skills, required schemas, or minimal live tool protocol cannot fit alongside the output reservation. Increase the matching provider window only when the selected model supports it, or lower its output reservation; Turing will not split protocol to force a request through.
 - **Smoke test times out:** inspect the `turing-orchestrator` and `turing-agent-runtime-general` container logs.
 - **Initialization refuses root:** run it from the non-root host account that owns the checkout and sandbox; do not use `sudo`.
 - **Initialization reports legacy sandbox content:** restore ownership and owner read/write access (plus directory traversal) outside the script, or move the content aside, then rerun `scripts/init.sh`. The script deliberately does not recurse with `chmod` or `chown`.

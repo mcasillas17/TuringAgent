@@ -180,7 +180,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		// a person editing .env, not by another attempt in thirty seconds.
 		return emitRunFailed(emit, job, "external_agent_unavailable", err.Error(), false)
 	}
-	if provider == nil {
+	if llm.ProviderIsNil(provider) {
 		return emitRunFailed(emit, job, "model_provider_unavailable", fmt.Sprintf("Provider %s is not configured", job.GetModelProvider().String()), false)
 	}
 	registry, err := a.discoverTools(ctx)
@@ -248,13 +248,12 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		if notice := budgeted.Omissions.Notice(); notice != "" &&
 			(!omissionNoticeEmitted || budgeted.Omissions != lastOmissions) {
 			if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP, map[string]any{
-				"note":                        notice,
-				"reason":                      "context_budget",
-				"historyMessagesOmitted":      budgeted.Omissions.HistoryMessages,
-				"recallOmitted":               budgeted.Omissions.RecallOmitted,
-				"toolDefinitionsOmitted":      budgeted.Omissions.ToolDefinitions,
-				"conservativeRequestEstimate": budgeted.Estimate,
-				"configuredContextWindow":     llm.ProviderContextWindowTokens(provider),
+				"note":                   notice,
+				"reason":                 "context_budget",
+				"historyMessagesOmitted": budgeted.Omissions.HistoryMessages,
+				"recallOmitted":          budgeted.Omissions.RecallOmitted,
+				"toolDefinitionsOmitted": budgeted.Omissions.ToolDefinitions,
+				"toolResultsOmitted":     budgeted.Omissions.ToolResults,
 			})); err != nil {
 				return err
 			}
@@ -378,6 +377,23 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			Content:   turnText.String(),
 			ToolCalls: calls,
 		})
+		prospectiveLive := cloneChatMessages(liveMessages)
+		for _, call := range calls {
+			prospectiveLive = append(prospectiveLive, llm.ChatMessage{
+				Role:       "tool",
+				Name:       call.Name,
+				ToolCallID: call.ID,
+				Content:    compactedToolResult(""),
+			})
+		}
+		if _, err := buildBudgetedContext(provider, job.GetModel(), contextInput{
+			skills:  skillMessage,
+			history: historyMessages,
+			recall:  recallMessage,
+			live:    prospectiveLive,
+		}, toolDefinitions); err != nil {
+			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
+		}
 		for _, call := range calls {
 			outcome, err := a.executeToolCall(ctx, job, emit, registry, call)
 			successfulToolSideEffect = successfulToolSideEffect || outcome.SuccessfulSideEffect
