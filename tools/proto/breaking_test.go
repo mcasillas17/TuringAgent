@@ -25,13 +25,13 @@ func TestBreakingCompatibility(t *testing.T) {
 			name:            "removed live field",
 			fixture:         "removed",
 			wantFailure:     true,
-			wantDiagnostics: []string{`Field "2"`, "was deleted"},
+			wantDiagnostics: []string{`field "2"`, "was deleted"},
 		},
 		{
 			name:            "renumbered live field",
 			fixture:         "renumbered",
 			wantFailure:     true,
-			wantDiagnostics: []string{`Field "2"`, "was deleted"},
+			wantDiagnostics: []string{`field "2"`, "was deleted"},
 		},
 	}
 
@@ -56,6 +56,80 @@ func TestBreakingCompatibility(t *testing.T) {
 
 			runGit(t, repo, "rev-parse", "--verify", "refs/remotes/origin/main")
 		})
+	}
+}
+
+func TestBreakingRejectsUnsupportedBufVersion(t *testing.T) {
+	binDir := t.TempDir()
+	writeTool(t, binDir, "buf", "#!/bin/sh\necho '9.9.9'\n")
+
+	command := exec.Command("./breaking.sh", "origin/main")
+	command.Env = append(os.Environ(), "PATH="+binDir+":/usr/bin:/bin")
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatal("breaking.sh succeeded with unsupported Buf version")
+	}
+	want := "buf 1.72.0 is required (found: 9.9.9)"
+	if !strings.Contains(string(output), want) {
+		t.Fatalf("breaking.sh output = %q, want it to contain %q", output, want)
+	}
+}
+
+func TestBreakingRejectsInvalidBaseRef(t *testing.T) {
+	binDir := t.TempDir()
+	writeTool(t, binDir, "buf", "#!/bin/sh\necho '1.72.0'\n")
+
+	for _, baseRef := range []string{"main", "origin/../main"} {
+		t.Run(baseRef, func(t *testing.T) {
+			command := exec.Command("./breaking.sh", baseRef)
+			command.Env = append(os.Environ(), "PATH="+binDir+":/usr/bin:/bin")
+			output, err := command.CombinedOutput()
+			if err == nil {
+				t.Fatalf("breaking.sh succeeded with invalid base ref %q", baseRef)
+			}
+			want := "base ref must be a valid remote-tracking ref"
+			if !strings.Contains(string(output), want) {
+				t.Fatalf("breaking.sh output = %q, want it to contain %q", output, want)
+			}
+		})
+	}
+}
+
+func TestBreakingDoesNotUseStaleBaseWhenFetchFails(t *testing.T) {
+	tempDir := t.TempDir()
+	repo := filepath.Join(tempDir, "repo")
+	runGit(t, tempDir, "init", "--initial-branch=feature", repo)
+	runGit(t, repo, "config", "user.name", "Turing Proto Test")
+	runGit(t, repo, "config", "user.email", "proto-test@example.invalid")
+	if err := os.WriteFile(filepath.Join(repo, "README"), []byte("fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "README")
+	runGit(t, repo, "commit", "-m", "fixture")
+	runGit(t, repo, "remote", "add", "origin", filepath.Join(tempDir, "missing.git"))
+	runGit(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+	copyFile(t, "breaking.sh", filepath.Join(repo, "tools", "proto", "breaking.sh"), 0o755)
+	bufLog := filepath.Join(tempDir, "buf.log")
+	binDir := t.TempDir()
+	writeTool(t, binDir, "buf", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '1.72.0'; exit 0; fi\nprintf 'called\\n' > \"$BUF_LOG\"\n")
+
+	command := exec.Command(filepath.Join(repo, "tools", "proto", "breaking.sh"), "origin/main")
+	command.Dir = repo
+	command.Env = append(os.Environ(),
+		"PATH="+binDir+":/usr/bin:/bin",
+		"BUF_LOG="+bufLog,
+	)
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatal("breaking.sh succeeded after its base fetch failed")
+	}
+	want := "failed to refresh base ref origin/main"
+	if !strings.Contains(string(output), want) {
+		t.Fatalf("breaking.sh output = %q, want it to contain %q", output, want)
+	}
+	if _, err := os.Stat(bufLog); !os.IsNotExist(err) {
+		t.Fatalf("buf was called after fetch failure; stat error = %v", err)
 	}
 }
 
