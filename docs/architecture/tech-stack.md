@@ -60,12 +60,18 @@ redaction contract.
 
 | Service | Network exposure |
 |---|---|
-| `turing-orchestrator` | Publishes public gRPC port `3000`; exposes internal gRPC port `3001` only inside Docker networks |
+| `turing-orchestrator` | Publishes the public gRPC port (default `3000`) on `127.0.0.1`; exposes internal gRPC port `3001` only inside Docker networks |
 | `turing-agent-runtime-general` | Internal Docker networks only |
 | `turing-mcp-system` | Internal `net-system` network only |
 | `turing-mcp-files` | Internal `net-files` network only |
 
 Compose uses explicit `environment:` blocks instead of `env_file:` so services receive only the secrets and config they need.
+
+Every service has an explicit non-root runtime identity, a read-only root
+filesystem, `cap_drop: ALL`, and `no-new-privileges`. Only the orchestrator's
+`/app/data` and `/skills` plus `mcp-files`' `/sandbox` are writable. Each
+service replaces Docker's default writable `/dev/shm` with a 64 KiB read-only
+tmpfs.
 
 ## Model providers
 
@@ -159,11 +165,12 @@ survives, but the withdrawn content does not. See
 
 - `turing-backend/.env`
 - `turing-backend/data/`
+- `turing-backend/skills/`
 - `turing-backend/sandbox/`
 
-Initialization must run as the non-root host owner. It rejects a symlinked
-sandbox and inaccessible legacy entries rather than recursively changing
-ownership or permissions. Compose must be launched through
+Initialization must run as the non-root host owner. It rejects symlinked
+sandbox or skills roots and inaccessible legacy entries rather than recursively
+changing ownership or permissions. Compose must be launched through
 `turing-backend/scripts/compose.sh` (direct invocation is unsupported because
 exported variables override `.env`). Do not commit generated secrets, local
 databases, or sandbox files.

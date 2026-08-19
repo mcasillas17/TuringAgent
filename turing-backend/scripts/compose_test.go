@@ -31,6 +31,77 @@ func TestComposeMountsFileBackedSkillsIntoTheOrchestrator(t *testing.T) {
 	}
 }
 
+func TestComposeLaunchRejectsUnsafeSkillsBindSource(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(*testing.T, string)
+		wantOutput string
+	}{
+		{
+			name: "missing",
+			setup: func(t *testing.T, root string) {
+				if err := os.Remove(filepath.Join(root, "skills")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "skills must be a real directory",
+		},
+		{
+			name: "symlink",
+			setup: func(t *testing.T, root string) {
+				skills := filepath.Join(root, "skills")
+				if err := os.Remove(skills); err != nil {
+					t.Fatal(err)
+				}
+				target := filepath.Join(root, "outside-skills")
+				if err := os.Mkdir(target, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, skills); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "skills must be a real directory, not a symlink",
+		},
+		{
+			name: "not a directory",
+			setup: func(t *testing.T, root string) {
+				skills := filepath.Join(root, "skills")
+				if err := os.Remove(skills); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(skills, []byte("not a directory"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "skills must be a real directory",
+		},
+		{
+			name: "not mode 0700",
+			setup: func(t *testing.T, root string) {
+				if err := os.Chmod(filepath.Join(root, "skills"), 0755); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "skills must have mode 0700",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := executeComposeWithSetup(t, true, "501", "20", "501", "20", test.setup, "up")
+			if result.err == nil {
+				t.Fatalf("compose.sh accepted unsafe skills; docker log:\n%s", result.dockerLog)
+			}
+			if !strings.Contains(result.output, test.wantOutput) {
+				t.Fatalf("failure did not explain unsafe skills:\n%s", result.output)
+			}
+			if result.dockerLog != "" {
+				t.Fatalf("docker was called before skills rejection:\n%s", result.dockerLog)
+			}
+		})
+	}
+}
+
 func TestComposeLaunchAllowsRecoveryDownWithoutEnvFile(t *testing.T) {
 	result := executeComposeWithEnv(t, false, "501", "20", "0", "999", "down", "--remove-orphans")
 	if result.err != nil {
@@ -393,6 +464,9 @@ func executeComposeWithSetup(
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(filepath.Join(root, "data"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "skills"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if setup != nil {
