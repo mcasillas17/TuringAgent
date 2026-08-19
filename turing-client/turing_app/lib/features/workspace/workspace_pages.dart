@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../../constants/app_colors.dart';
-import '../../models/agent_descriptor.dart';
 import '../../models/tool_descriptor.dart';
 import '../../networking/api_client.dart';
 import '../../ui/shell/shell_destination.dart';
@@ -298,117 +297,6 @@ class _PolicyChip extends StatelessWidget {
           fontWeight: FontWeight.w600,
           color: color,
         ),
-      ),
-    );
-  }
-}
-
-/// The agents the backend will route a run to.
-class AgentsPage extends StatefulWidget {
-  const AgentsPage({super.key, required this.apiClient});
-
-  final TuringApi apiClient;
-
-  @override
-  State<AgentsPage> createState() => _AgentsPageState();
-}
-
-class _AgentsPageState extends State<AgentsPage> {
-  late Future<List<AgentDescriptor>> _agents;
-
-  @override
-  void initState() {
-    super.initState();
-    _agents = widget.apiClient.listAgents();
-  }
-
-  void _reload() {
-    setState(() {
-      _agents = widget.apiClient.listAgents();
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = AppColors.of(context);
-    return WorkspacePage(
-      title: 'Agents',
-      subtitle: 'Who your messages are routed to.',
-      child: FutureBuilder<List<AgentDescriptor>>(
-        future: _agents,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const WorkspaceLoading();
-          }
-          if (snapshot.hasError) {
-            return _PageError(message: '${snapshot.error}', onRetry: _reload);
-          }
-          final agents = snapshot.data ?? const <AgentDescriptor>[];
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              for (final agent in agents)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: palette.surface,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: palette.border),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.smart_toy_outlined,
-                          size: 18,
-                          color: AppColors.brand,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                agent.displayName,
-                                style: TextStyle(
-                                  fontSize: 14.5,
-                                  fontWeight: FontWeight.w600,
-                                  color: palette.text,
-                                ),
-                              ),
-                              const SizedBox(height: 3),
-                              Text(
-                                'Runs locally through your configured model '
-                                'provider.',
-                                style: TextStyle(
-                                  fontSize: 12.5,
-                                  color: palette.textMuted,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              const SizedBox(height: 8),
-              // Said explicitly because the single row above otherwise reads
-              // as a list that failed to load the rest.
-              WorkspaceNotice(
-                icon: Icons.alt_route_outlined,
-                title: 'Routing to other agents is not built yet',
-                body:
-                    'Handing a conversation to a different assistant — a '
-                    'hosted model, or a second local one — needs the backend '
-                    'to address more than one agent: per-agent capacity, '
-                    'routing on the run, and a tool policy per agent. Today '
-                    'every run goes to the one above.',
-              ),
-            ],
-          );
-        },
       ),
     );
   }

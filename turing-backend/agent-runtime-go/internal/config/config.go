@@ -44,18 +44,23 @@ type Config struct {
 	OpenAIBaseURL        string
 	OpenAIAPIKey         string
 	OpenAIModel          string
-	MCPSystemBaseURL     string
-	MCPFilesBaseURL      string
-	MCPSystemToken       string
-	MCPFilesToken        string
-	MaxConcurrentRuns    int
-	MaxToolCallsPerRun   int
-	HeartbeatInterval    time.Duration
-	ModelTimeout         time.Duration
-	ToolTimeout          time.Duration
-	ApprovalTimeout      time.Duration
-	TotalToolTimeout     time.Duration
-	LogLevel             string
+	// AgentAPIKeys maps an external agent's credential_ref to its API key.
+	// This is the only place a third-party key exists in the whole system: it
+	// is never written to SQLite, never crosses the orchestrator, and never
+	// reaches a client.
+	AgentAPIKeys       map[string]string
+	MCPSystemBaseURL   string
+	MCPFilesBaseURL    string
+	MCPSystemToken     string
+	MCPFilesToken      string
+	MaxConcurrentRuns  int
+	MaxToolCallsPerRun int
+	HeartbeatInterval  time.Duration
+	ModelTimeout       time.Duration
+	ToolTimeout        time.Duration
+	ApprovalTimeout    time.Duration
+	TotalToolTimeout   time.Duration
+	LogLevel           string
 }
 
 func Load() (Config, error) {
@@ -134,6 +139,10 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	agentAPIKeys, err := parseAgentAPIKeys(getenv(agentAPIKeysVar))
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
 		OrchestratorGRPCAddr: grpcAddr(getenv),
 		InternalToken:        internalToken,
@@ -144,6 +153,7 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 		OpenAIBaseURL:        openAIBaseURL,
 		OpenAIAPIKey:         getenv("OPENAI_API_KEY"),
 		OpenAIModel:          defaultString(getenv("OPENAI_MODEL"), "gpt-4o-mini"),
+		AgentAPIKeys:         agentAPIKeys,
 		MCPSystemBaseURL:     mcpSystemBaseURL,
 		MCPFilesBaseURL:      mcpFilesBaseURL,
 		MCPSystemToken:       getenv("MCP_SYSTEM_TOKEN_GENERAL"),

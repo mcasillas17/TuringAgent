@@ -14,6 +14,7 @@ import 'package:turing_flutter_app/networking/api_client.dart';
 import 'package:turing_flutter_app/models/agent_descriptor.dart';
 import 'package:turing_flutter_app/models/tool_descriptor.dart';
 
+import '../../support/no_external_agents_api.dart';
 import '../../support/no_skills_api.dart';
 
 void main() {
@@ -2448,7 +2449,9 @@ class _SessionCall {
   final Completer<Session> completer;
 }
 
-class _FakeSearchApi with NoSkillsApi implements TuringApi {
+class _FakeSearchApi
+    with NoSkillsApi, NoExternalAgentsApi
+    implements TuringApi {
   final List<_SearchCall> searchCalls = [];
   final List<_SessionCall> sessionCalls = [];
   final List<String> sessionRequests = [];

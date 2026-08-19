@@ -12,6 +12,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	agentsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/agents"
 	approvalsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/approvals"
 	auditsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/audit"
 	chatsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/chat"
@@ -88,6 +89,7 @@ func New(cfg config.Config) (*App, error) {
 	}, approvalService)
 	sessionService := sessionsvc.New(repo, cfg)
 	skillService := skillsvc.New(repo)
+	agentService := agentsvc.New(repo, cfg.AgentCredentialNames)
 	eventService := eventsvc.NewServer(repo, eventBus)
 	chatService := chatsvc.New(repo, eventBus, runtimeService, cfg.OllamaModel, cfg.OpenAIModel)
 	auditService := auditsvc.New(repo)
@@ -128,6 +130,9 @@ func New(cfg config.Config) (*App, error) {
 	// Public only: the runtime never reads skills over gRPC, it receives the
 	// snapshot on the job it claims.
 	turingv1.RegisterSkillServiceServer(publicServer, skillService)
+	// Public only, for the same reason: the runtime is handed the destination
+	// on the job it claims and never asks for it.
+	turingv1.RegisterExternalAgentServiceServer(publicServer, agentService)
 	turingv1.RegisterEventServiceServer(publicServer, eventService)
 	turingv1.RegisterChatServiceServer(publicServer, chatService)
 	turingv1.RegisterApprovalServiceServer(publicServer, approvalsvc.NewPublicServer(approvalService))

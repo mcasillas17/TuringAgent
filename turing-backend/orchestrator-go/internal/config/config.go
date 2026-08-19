@@ -14,19 +14,24 @@ const (
 )
 
 type Config struct {
-	ClientAPIKey             string
-	InternalToken            string
-	MCPSystemTokenGeneral    string
-	MCPFilesTokenGeneral     string
-	ApprovalJWTSecret        string
-	PublicPort               int
-	InternalPort             int
-	DatabasePath             string
-	OllamaBaseURL            string
-	OllamaModel              string
-	OpenAIBaseURL            string
-	OpenAIAPIKey             string
-	OpenAIModel              string
+	ClientAPIKey          string
+	InternalToken         string
+	MCPSystemTokenGeneral string
+	MCPFilesTokenGeneral  string
+	ApprovalJWTSecret     string
+	PublicPort            int
+	InternalPort          int
+	DatabasePath          string
+	OllamaBaseURL         string
+	OllamaModel           string
+	OpenAIBaseURL         string
+	OpenAIAPIKey          string
+	OpenAIModel           string
+	// AgentCredentialNames is the set of credential names an external agent may
+	// refer to — names only. The keys themselves are decoded, counted and
+	// dropped: the orchestrator never calls a third-party API, so holding the
+	// secret would buy nothing and risk it reaching a log or a response.
+	AgentCredentialNames     []string
 	JobTimeoutMS             int
 	JobReaperIntervalMS      int
 	JobMaxAttempts           int
@@ -163,6 +168,10 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if approvalTTL <= 0 || approvalTTL > maxApprovalTTLMS {
 		return Config{}, fmt.Errorf("invalid integer env var TURING_APPROVAL_TIMEOUT_MS")
 	}
+	agentAPIKeys, err := ParseAgentAPIKeys(env[AgentAPIKeysVar])
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		ClientAPIKey:             clientKey,
@@ -178,6 +187,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		OpenAIBaseURL:            stringValue("OPENAI_BASE_URL", "https://api.openai.com/v1"),
 		OpenAIAPIKey:             env["OPENAI_API_KEY"],
 		OpenAIModel:              stringValue("OPENAI_MODEL", "gpt-4o-mini"),
+		AgentCredentialNames:     AgentCredentialNames(agentAPIKeys),
 		JobTimeoutMS:             jobTimeout,
 		JobReaperIntervalMS:      reaperInterval,
 		JobMaxAttempts:           maxAttempts,

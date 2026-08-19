@@ -4,6 +4,8 @@ import 'package:fixnum/fixnum.dart';
 import 'package:grpc/grpc.dart' as grpc;
 import 'package:grpc/service_api.dart' as grpc_api;
 
+import '../generated/turing/v1/agents.pb.dart' as agentpb;
+import '../generated/turing/v1/agents.pbgrpc.dart' as agentgrpc;
 import '../generated/turing/v1/approvals.pb.dart' as approvalpb;
 import '../generated/turing/v1/approvals.pbgrpc.dart' as approvalgrpc;
 import '../generated/turing/v1/chat.pb.dart' as chatpb;
@@ -16,6 +18,7 @@ import '../generated/turing/v1/sessions.pbgrpc.dart' as sessiongrpc;
 import '../generated/turing/v1/skills.pb.dart' as skillpb;
 import '../generated/turing/v1/skills.pbgrpc.dart' as skillgrpc;
 import '../models/agent_descriptor.dart';
+import '../models/external_agent.dart';
 import '../models/grpc_mappers.dart';
 import '../models/message.dart';
 import '../models/search_hit.dart';
@@ -84,6 +87,10 @@ class TuringGrpcApi implements ClosableTuringApi {
     _chat = chatgrpc.ChatServiceClient(_channel, options: options);
     _approvals = approvalgrpc.ApprovalServiceClient(_channel, options: options);
     _skills = skillgrpc.SkillServiceClient(_channel, options: options);
+    _externalAgents = agentgrpc.ExternalAgentServiceClient(
+      _channel,
+      options: options,
+    );
   }
 
   final String baseUrl;
@@ -95,6 +102,7 @@ class TuringGrpcApi implements ClosableTuringApi {
   late final chatgrpc.ChatServiceClient _chat;
   late final approvalgrpc.ApprovalServiceClient _approvals;
   late final skillgrpc.SkillServiceClient _skills;
+  late final agentgrpc.ExternalAgentServiceClient _externalAgents;
 
   GrpcAuthMetadata get _metadata => GrpcAuthMetadata(apiKey: apiKey);
 
@@ -377,6 +385,98 @@ class TuringGrpcApi implements ClosableTuringApi {
       skillpb.ListSessionSkillsRequest(sessionId: sessionId),
     );
     return response.skills.map(GrpcMappers.skillToModel).toList();
+  }
+
+  @override
+  Future<List<ExternalAgent>> listExternalAgents() async {
+    final response = await _externalAgents.listExternalAgents(
+      agentpb.ListExternalAgentsRequest(),
+    );
+    return response.agents.map(GrpcMappers.externalAgentToModel).toList();
+  }
+
+  @override
+  Future<ExternalAgent> createExternalAgent({
+    required String displayName,
+    required ExternalAgentProvider provider,
+    required String baseUrl,
+    required String model,
+    required String credentialRef,
+  }) async {
+    final response = await _externalAgents.createExternalAgent(
+      agentpb.CreateExternalAgentRequest(
+        displayName: displayName,
+        provider: GrpcMappers.externalAgentProviderToProto(provider),
+        baseUrl: baseUrl,
+        model: model,
+        credentialRef: credentialRef,
+      ),
+    );
+    return GrpcMappers.externalAgentToModel(response);
+  }
+
+  @override
+  Future<ExternalAgent> updateExternalAgent({
+    required String agentId,
+    required String displayName,
+    required ExternalAgentProvider provider,
+    required String baseUrl,
+    required String model,
+    required String credentialRef,
+  }) async {
+    final response = await _externalAgents.updateExternalAgent(
+      agentpb.UpdateExternalAgentRequest(
+        agentId: agentId,
+        displayName: displayName,
+        provider: GrpcMappers.externalAgentProviderToProto(provider),
+        baseUrl: baseUrl,
+        model: model,
+        credentialRef: credentialRef,
+      ),
+    );
+    return GrpcMappers.externalAgentToModel(response);
+  }
+
+  @override
+  Future<void> deleteExternalAgent({required String agentId}) async {
+    await _externalAgents.deleteExternalAgent(
+      agentpb.DeleteExternalAgentRequest(agentId: agentId),
+    );
+  }
+
+  @override
+  Future<ExternalAgent?> getSessionAgent({required String sessionId}) async {
+    final response = await _externalAgents.getSessionAgent(
+      agentpb.GetSessionAgentRequest(sessionId: sessionId),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+    return _sessionAgentOrLocal(response);
+  }
+
+  @override
+  Future<ExternalAgent?> setSessionAgent({
+    required String sessionId,
+    required String agentId,
+  }) async {
+    final response = await _externalAgents.setSessionAgent(
+      agentpb.SetSessionAgentRequest(sessionId: sessionId, agentId: agentId),
+    );
+    return _sessionAgentOrLocal(response);
+  }
+
+  @override
+  Future<ExternalAgent?> clearSessionAgent({required String sessionId}) async {
+    final response = await _externalAgents.clearSessionAgent(
+      agentpb.ClearSessionAgentRequest(sessionId: sessionId),
+    );
+    return _sessionAgentOrLocal(response);
+  }
+
+  /// An absent agent is not a missing field: it is the local assistant, which
+  /// is what every conversation does unless someone routed it elsewhere.
+  ExternalAgent? _sessionAgentOrLocal(agentpb.SessionAgentResponse response) {
+    if (!response.hasAgent()) return null;
+    return GrpcMappers.externalAgentToModel(response.agent);
   }
 
   @override

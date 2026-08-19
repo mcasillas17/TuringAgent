@@ -14,6 +14,7 @@ import 'package:turing_flutter_app/networking/auth_storage.dart';
 import 'package:turing_flutter_app/networking/grpc_client.dart';
 import 'package:turing_flutter_app/networking/event_source.dart';
 
+import 'support/no_external_agents_api.dart';
 import 'support/no_skills_api.dart';
 
 void main() {
@@ -82,7 +83,9 @@ class _FakeAuthStorage implements ClientAuthStorage {
   }) async {}
 }
 
-class _ClosableFakeApiClient with NoSkillsApi implements ClosableTuringApi {
+class _ClosableFakeApiClient
+    with NoSkillsApi, NoExternalAgentsApi
+    implements ClosableTuringApi {
   bool closed = false;
 
   @override

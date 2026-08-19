@@ -91,7 +91,10 @@ type AgentJob struct {
 	// The skills attached to this conversation when the message was accepted,
 	// captured then rather than read at execution time so that editing a skill
 	// never changes what an already-queued run was told to do.
-	Skills        []*AttachedSkill `protobuf:"bytes,13,rep,name=skills,proto3" json:"skills,omitempty"`
+	Skills []*AttachedSkill `protobuf:"bytes,13,rep,name=skills,proto3" json:"skills,omitempty"`
+	// Set only when the conversation was deliberately routed away from the
+	// local assistant. Absent is the default and means "run this here".
+	ExternalAgent *ExternalAgentTarget `protobuf:"bytes,14,opt,name=external_agent,json=externalAgent,proto3" json:"external_agent,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -217,6 +220,85 @@ func (x *AgentJob) GetSkills() []*AttachedSkill {
 	return nil
 }
 
+func (x *AgentJob) GetExternalAgent() *ExternalAgentTarget {
+	if x != nil {
+		return x.ExternalAgent
+	}
+	return nil
+}
+
+// Where to send a run that the user routed off this machine.
+//
+// Deliberately not the full ExternalAgent message: the runtime has no use for
+// identifiers, timestamps or the provider label, and this is replayed from a
+// stored job payload where a narrower shape is a narrower thing to keep in
+// sync. The model is not repeated here either — AgentJob.model already carries
+// it, frozen at enqueue from the agent's configuration.
+//
+// credential_ref is a NAME, not a secret. The key it names is resolved from
+// the runtime's own environment at execution time, so no third-party API key
+// is ever written to the database, sent over this stream, or handed to a
+// client.
+type ExternalAgentTarget struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DisplayName   string                 `protobuf:"bytes,1,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	BaseUrl       string                 `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
+	CredentialRef string                 `protobuf:"bytes,3,opt,name=credential_ref,json=credentialRef,proto3" json:"credential_ref,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExternalAgentTarget) Reset() {
+	*x = ExternalAgentTarget{}
+	mi := &file_turing_v1_runtime_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExternalAgentTarget) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExternalAgentTarget) ProtoMessage() {}
+
+func (x *ExternalAgentTarget) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_runtime_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExternalAgentTarget.ProtoReflect.Descriptor instead.
+func (*ExternalAgentTarget) Descriptor() ([]byte, []int) {
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ExternalAgentTarget) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
+}
+
+func (x *ExternalAgentTarget) GetBaseUrl() string {
+	if x != nil {
+		return x.BaseUrl
+	}
+	return ""
+}
+
+func (x *ExternalAgentTarget) GetCredentialRef() string {
+	if x != nil {
+		return x.CredentialRef
+	}
+	return ""
+}
+
 // A skill as the runtime sees it: a name for attribution and the instructions
 // themselves. Deliberately not the full Skill message — the runtime has no use
 // for identifiers or timestamps, and the job is replayed from a stored payload
@@ -231,7 +313,7 @@ type AttachedSkill struct {
 
 func (x *AttachedSkill) Reset() {
 	*x = AttachedSkill{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[1]
+	mi := &file_turing_v1_runtime_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -243,7 +325,7 @@ func (x *AttachedSkill) String() string {
 func (*AttachedSkill) ProtoMessage() {}
 
 func (x *AttachedSkill) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[1]
+	mi := &file_turing_v1_runtime_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -256,7 +338,7 @@ func (x *AttachedSkill) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachedSkill.ProtoReflect.Descriptor instead.
 func (*AttachedSkill) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{1}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *AttachedSkill) GetName() string {
@@ -284,7 +366,7 @@ type DiscoveredTool struct {
 
 func (x *DiscoveredTool) Reset() {
 	*x = DiscoveredTool{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[2]
+	mi := &file_turing_v1_runtime_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -296,7 +378,7 @@ func (x *DiscoveredTool) String() string {
 func (*DiscoveredTool) ProtoMessage() {}
 
 func (x *DiscoveredTool) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[2]
+	mi := &file_turing_v1_runtime_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -309,7 +391,7 @@ func (x *DiscoveredTool) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiscoveredTool.ProtoReflect.Descriptor instead.
 func (*DiscoveredTool) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{2}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *DiscoveredTool) GetServerName() string {
@@ -347,7 +429,7 @@ type RuntimeWorkerReady struct {
 
 func (x *RuntimeWorkerReady) Reset() {
 	*x = RuntimeWorkerReady{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[3]
+	mi := &file_turing_v1_runtime_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -359,7 +441,7 @@ func (x *RuntimeWorkerReady) String() string {
 func (*RuntimeWorkerReady) ProtoMessage() {}
 
 func (x *RuntimeWorkerReady) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[3]
+	mi := &file_turing_v1_runtime_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -372,7 +454,7 @@ func (x *RuntimeWorkerReady) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeWorkerReady.ProtoReflect.Descriptor instead.
 func (*RuntimeWorkerReady) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{3}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *RuntimeWorkerReady) GetWorkerId() string {
@@ -419,7 +501,7 @@ type RuntimeHeartbeat struct {
 
 func (x *RuntimeHeartbeat) Reset() {
 	*x = RuntimeHeartbeat{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[4]
+	mi := &file_turing_v1_runtime_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -431,7 +513,7 @@ func (x *RuntimeHeartbeat) String() string {
 func (*RuntimeHeartbeat) ProtoMessage() {}
 
 func (x *RuntimeHeartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[4]
+	mi := &file_turing_v1_runtime_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -444,7 +526,7 @@ func (x *RuntimeHeartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeHeartbeat.ProtoReflect.Descriptor instead.
 func (*RuntimeHeartbeat) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{4}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *RuntimeHeartbeat) GetWorkerId() string {
@@ -466,7 +548,7 @@ type RuntimeRunCompleted struct {
 
 func (x *RuntimeRunCompleted) Reset() {
 	*x = RuntimeRunCompleted{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[5]
+	mi := &file_turing_v1_runtime_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -478,7 +560,7 @@ func (x *RuntimeRunCompleted) String() string {
 func (*RuntimeRunCompleted) ProtoMessage() {}
 
 func (x *RuntimeRunCompleted) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[5]
+	mi := &file_turing_v1_runtime_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -491,7 +573,7 @@ func (x *RuntimeRunCompleted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeRunCompleted.ProtoReflect.Descriptor instead.
 func (*RuntimeRunCompleted) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{5}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *RuntimeRunCompleted) GetRunId() string {
@@ -534,7 +616,7 @@ type RuntimeRunFailed struct {
 
 func (x *RuntimeRunFailed) Reset() {
 	*x = RuntimeRunFailed{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[6]
+	mi := &file_turing_v1_runtime_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -546,7 +628,7 @@ func (x *RuntimeRunFailed) String() string {
 func (*RuntimeRunFailed) ProtoMessage() {}
 
 func (x *RuntimeRunFailed) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[6]
+	mi := &file_turing_v1_runtime_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -559,7 +641,7 @@ func (x *RuntimeRunFailed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeRunFailed.ProtoReflect.Descriptor instead.
 func (*RuntimeRunFailed) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{6}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *RuntimeRunFailed) GetRunId() string {
@@ -599,7 +681,7 @@ type RuntimeCancelledAck struct {
 
 func (x *RuntimeCancelledAck) Reset() {
 	*x = RuntimeCancelledAck{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[7]
+	mi := &file_turing_v1_runtime_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -611,7 +693,7 @@ func (x *RuntimeCancelledAck) String() string {
 func (*RuntimeCancelledAck) ProtoMessage() {}
 
 func (x *RuntimeCancelledAck) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[7]
+	mi := &file_turing_v1_runtime_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -624,7 +706,7 @@ func (x *RuntimeCancelledAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeCancelledAck.ProtoReflect.Descriptor instead.
 func (*RuntimeCancelledAck) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{7}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RuntimeCancelledAck) GetRunId() string {
@@ -652,7 +734,7 @@ type RuntimeUpdate struct {
 
 func (x *RuntimeUpdate) Reset() {
 	*x = RuntimeUpdate{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[8]
+	mi := &file_turing_v1_runtime_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -664,7 +746,7 @@ func (x *RuntimeUpdate) String() string {
 func (*RuntimeUpdate) ProtoMessage() {}
 
 func (x *RuntimeUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[8]
+	mi := &file_turing_v1_runtime_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -677,7 +759,7 @@ func (x *RuntimeUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeUpdate.ProtoReflect.Descriptor instead.
 func (*RuntimeUpdate) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{8}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RuntimeUpdate) GetUpdate() isRuntimeUpdate_Update {
@@ -805,7 +887,7 @@ type RuntimeWorkerAccepted struct {
 
 func (x *RuntimeWorkerAccepted) Reset() {
 	*x = RuntimeWorkerAccepted{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[9]
+	mi := &file_turing_v1_runtime_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -817,7 +899,7 @@ func (x *RuntimeWorkerAccepted) String() string {
 func (*RuntimeWorkerAccepted) ProtoMessage() {}
 
 func (x *RuntimeWorkerAccepted) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[9]
+	mi := &file_turing_v1_runtime_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -830,7 +912,7 @@ func (x *RuntimeWorkerAccepted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeWorkerAccepted.ProtoReflect.Descriptor instead.
 func (*RuntimeWorkerAccepted) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{9}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *RuntimeWorkerAccepted) GetWorkerId() string {
@@ -850,7 +932,7 @@ type RuntimeRunCancelled struct {
 
 func (x *RuntimeRunCancelled) Reset() {
 	*x = RuntimeRunCancelled{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[10]
+	mi := &file_turing_v1_runtime_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -862,7 +944,7 @@ func (x *RuntimeRunCancelled) String() string {
 func (*RuntimeRunCancelled) ProtoMessage() {}
 
 func (x *RuntimeRunCancelled) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[10]
+	mi := &file_turing_v1_runtime_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -875,7 +957,7 @@ func (x *RuntimeRunCancelled) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeRunCancelled.ProtoReflect.Descriptor instead.
 func (*RuntimeRunCancelled) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{10}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *RuntimeRunCancelled) GetRunId() string {
@@ -903,7 +985,7 @@ type RuntimeApprovalUpdated struct {
 
 func (x *RuntimeApprovalUpdated) Reset() {
 	*x = RuntimeApprovalUpdated{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[11]
+	mi := &file_turing_v1_runtime_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -915,7 +997,7 @@ func (x *RuntimeApprovalUpdated) String() string {
 func (*RuntimeApprovalUpdated) ProtoMessage() {}
 
 func (x *RuntimeApprovalUpdated) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[11]
+	mi := &file_turing_v1_runtime_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -928,7 +1010,7 @@ func (x *RuntimeApprovalUpdated) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeApprovalUpdated.ProtoReflect.Descriptor instead.
 func (*RuntimeApprovalUpdated) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{11}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *RuntimeApprovalUpdated) GetApprovalId() string {
@@ -961,7 +1043,7 @@ type RuntimeShutdownRequested struct {
 
 func (x *RuntimeShutdownRequested) Reset() {
 	*x = RuntimeShutdownRequested{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[12]
+	mi := &file_turing_v1_runtime_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -973,7 +1055,7 @@ func (x *RuntimeShutdownRequested) String() string {
 func (*RuntimeShutdownRequested) ProtoMessage() {}
 
 func (x *RuntimeShutdownRequested) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[12]
+	mi := &file_turing_v1_runtime_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -986,7 +1068,7 @@ func (x *RuntimeShutdownRequested) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeShutdownRequested.ProtoReflect.Descriptor instead.
 func (*RuntimeShutdownRequested) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{12}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *RuntimeShutdownRequested) GetReason() string {
@@ -1013,7 +1095,7 @@ type RuntimeCommand struct {
 
 func (x *RuntimeCommand) Reset() {
 	*x = RuntimeCommand{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[13]
+	mi := &file_turing_v1_runtime_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1025,7 +1107,7 @@ func (x *RuntimeCommand) String() string {
 func (*RuntimeCommand) ProtoMessage() {}
 
 func (x *RuntimeCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[13]
+	mi := &file_turing_v1_runtime_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1038,7 +1120,7 @@ func (x *RuntimeCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeCommand.ProtoReflect.Descriptor instead.
 func (*RuntimeCommand) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{13}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *RuntimeCommand) GetCommand() isRuntimeCommand_Command {
@@ -1146,7 +1228,7 @@ var File_turing_v1_runtime_proto protoreflect.FileDescriptor
 
 const file_turing_v1_runtime_proto_rawDesc = "" +
 	"\n" +
-	"\x17turing/v1/runtime.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16turing/v1/common.proto\x1a\x16turing/v1/events.proto\x1a\x15turing/v1/tools.proto\"\xe4\x03\n" +
+	"\x17turing/v1/runtime.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16turing/v1/common.proto\x1a\x16turing/v1/events.proto\x1a\x15turing/v1/tools.proto\"\xab\x04\n" +
 	"\bAgentJob\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x15\n" +
 	"\x06run_id\x18\x02 \x01(\tR\x05runId\x12\x1d\n" +
@@ -1162,7 +1244,12 @@ const file_turing_v1_runtime_proto_rawDesc = "" +
 	" \x01(\tR\buserText\x12'\n" +
 	"\x0frequested_tools\x18\v \x03(\tR\x0erequestedTools\x12\x18\n" +
 	"\aattempt\x18\f \x01(\x05R\aattempt\x120\n" +
-	"\x06skills\x18\r \x03(\v2\x18.turing.v1.AttachedSkillR\x06skills\"G\n" +
+	"\x06skills\x18\r \x03(\v2\x18.turing.v1.AttachedSkillR\x06skills\x12E\n" +
+	"\x0eexternal_agent\x18\x0e \x01(\v2\x1e.turing.v1.ExternalAgentTargetR\rexternalAgent\"z\n" +
+	"\x13ExternalAgentTarget\x12!\n" +
+	"\fdisplay_name\x18\x01 \x01(\tR\vdisplayName\x12\x19\n" +
+	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12%\n" +
+	"\x0ecredential_ref\x18\x03 \x01(\tR\rcredentialRef\"G\n" +
 	"\rAttachedSkill\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\"\n" +
 	"\finstructions\x18\x02 \x01(\tR\finstructions\"\x7f\n" +
@@ -1242,59 +1329,61 @@ func file_turing_v1_runtime_proto_rawDescGZIP() []byte {
 }
 
 var file_turing_v1_runtime_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_turing_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_turing_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_turing_v1_runtime_proto_goTypes = []any{
 	(ToolDiscoveryStatus)(0),         // 0: turing.v1.ToolDiscoveryStatus
 	(*AgentJob)(nil),                 // 1: turing.v1.AgentJob
-	(*AttachedSkill)(nil),            // 2: turing.v1.AttachedSkill
-	(*DiscoveredTool)(nil),           // 3: turing.v1.DiscoveredTool
-	(*RuntimeWorkerReady)(nil),       // 4: turing.v1.RuntimeWorkerReady
-	(*RuntimeHeartbeat)(nil),         // 5: turing.v1.RuntimeHeartbeat
-	(*RuntimeRunCompleted)(nil),      // 6: turing.v1.RuntimeRunCompleted
-	(*RuntimeRunFailed)(nil),         // 7: turing.v1.RuntimeRunFailed
-	(*RuntimeCancelledAck)(nil),      // 8: turing.v1.RuntimeCancelledAck
-	(*RuntimeUpdate)(nil),            // 9: turing.v1.RuntimeUpdate
-	(*RuntimeWorkerAccepted)(nil),    // 10: turing.v1.RuntimeWorkerAccepted
-	(*RuntimeRunCancelled)(nil),      // 11: turing.v1.RuntimeRunCancelled
-	(*RuntimeApprovalUpdated)(nil),   // 12: turing.v1.RuntimeApprovalUpdated
-	(*RuntimeShutdownRequested)(nil), // 13: turing.v1.RuntimeShutdownRequested
-	(*RuntimeCommand)(nil),           // 14: turing.v1.RuntimeCommand
-	(AgentId)(0),                     // 15: turing.v1.AgentId
-	(ModelProvider)(0),               // 16: turing.v1.ModelProvider
-	(*structpb.Struct)(nil),          // 17: google.protobuf.Struct
-	(*TuringEvent)(nil),              // 18: turing.v1.TuringEvent
-	(*ToolCallBeacon)(nil),           // 19: turing.v1.ToolCallBeacon
-	(*ToolPolicyDecision)(nil),       // 20: turing.v1.ToolPolicyDecision
+	(*ExternalAgentTarget)(nil),      // 2: turing.v1.ExternalAgentTarget
+	(*AttachedSkill)(nil),            // 3: turing.v1.AttachedSkill
+	(*DiscoveredTool)(nil),           // 4: turing.v1.DiscoveredTool
+	(*RuntimeWorkerReady)(nil),       // 5: turing.v1.RuntimeWorkerReady
+	(*RuntimeHeartbeat)(nil),         // 6: turing.v1.RuntimeHeartbeat
+	(*RuntimeRunCompleted)(nil),      // 7: turing.v1.RuntimeRunCompleted
+	(*RuntimeRunFailed)(nil),         // 8: turing.v1.RuntimeRunFailed
+	(*RuntimeCancelledAck)(nil),      // 9: turing.v1.RuntimeCancelledAck
+	(*RuntimeUpdate)(nil),            // 10: turing.v1.RuntimeUpdate
+	(*RuntimeWorkerAccepted)(nil),    // 11: turing.v1.RuntimeWorkerAccepted
+	(*RuntimeRunCancelled)(nil),      // 12: turing.v1.RuntimeRunCancelled
+	(*RuntimeApprovalUpdated)(nil),   // 13: turing.v1.RuntimeApprovalUpdated
+	(*RuntimeShutdownRequested)(nil), // 14: turing.v1.RuntimeShutdownRequested
+	(*RuntimeCommand)(nil),           // 15: turing.v1.RuntimeCommand
+	(AgentId)(0),                     // 16: turing.v1.AgentId
+	(ModelProvider)(0),               // 17: turing.v1.ModelProvider
+	(*structpb.Struct)(nil),          // 18: google.protobuf.Struct
+	(*TuringEvent)(nil),              // 19: turing.v1.TuringEvent
+	(*ToolCallBeacon)(nil),           // 20: turing.v1.ToolCallBeacon
+	(*ToolPolicyDecision)(nil),       // 21: turing.v1.ToolPolicyDecision
 }
 var file_turing_v1_runtime_proto_depIdxs = []int32{
-	15, // 0: turing.v1.AgentJob.agent_id:type_name -> turing.v1.AgentId
-	16, // 1: turing.v1.AgentJob.model_provider:type_name -> turing.v1.ModelProvider
-	2,  // 2: turing.v1.AgentJob.skills:type_name -> turing.v1.AttachedSkill
-	17, // 3: turing.v1.DiscoveredTool.schema:type_name -> google.protobuf.Struct
-	15, // 4: turing.v1.RuntimeWorkerReady.agent_id:type_name -> turing.v1.AgentId
-	3,  // 5: turing.v1.RuntimeWorkerReady.tools:type_name -> turing.v1.DiscoveredTool
-	0,  // 6: turing.v1.RuntimeWorkerReady.tool_discovery_status:type_name -> turing.v1.ToolDiscoveryStatus
-	17, // 7: turing.v1.RuntimeRunCompleted.usage:type_name -> google.protobuf.Struct
-	4,  // 8: turing.v1.RuntimeUpdate.worker_ready:type_name -> turing.v1.RuntimeWorkerReady
-	5,  // 9: turing.v1.RuntimeUpdate.heartbeat:type_name -> turing.v1.RuntimeHeartbeat
-	18, // 10: turing.v1.RuntimeUpdate.event:type_name -> turing.v1.TuringEvent
-	19, // 11: turing.v1.RuntimeUpdate.tool_beacon:type_name -> turing.v1.ToolCallBeacon
-	6,  // 12: turing.v1.RuntimeUpdate.run_completed:type_name -> turing.v1.RuntimeRunCompleted
-	7,  // 13: turing.v1.RuntimeUpdate.run_failed:type_name -> turing.v1.RuntimeRunFailed
-	8,  // 14: turing.v1.RuntimeUpdate.run_cancelled_ack:type_name -> turing.v1.RuntimeCancelledAck
-	10, // 15: turing.v1.RuntimeCommand.worker_accepted:type_name -> turing.v1.RuntimeWorkerAccepted
-	1,  // 16: turing.v1.RuntimeCommand.run_assigned:type_name -> turing.v1.AgentJob
-	11, // 17: turing.v1.RuntimeCommand.run_cancelled:type_name -> turing.v1.RuntimeRunCancelled
-	12, // 18: turing.v1.RuntimeCommand.approval_updated:type_name -> turing.v1.RuntimeApprovalUpdated
-	13, // 19: turing.v1.RuntimeCommand.shutdown_requested:type_name -> turing.v1.RuntimeShutdownRequested
-	20, // 20: turing.v1.RuntimeCommand.tool_policy_decision:type_name -> turing.v1.ToolPolicyDecision
-	9,  // 21: turing.v1.RuntimeService.ConnectWorker:input_type -> turing.v1.RuntimeUpdate
-	14, // 22: turing.v1.RuntimeService.ConnectWorker:output_type -> turing.v1.RuntimeCommand
-	22, // [22:23] is the sub-list for method output_type
-	21, // [21:22] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	16, // 0: turing.v1.AgentJob.agent_id:type_name -> turing.v1.AgentId
+	17, // 1: turing.v1.AgentJob.model_provider:type_name -> turing.v1.ModelProvider
+	3,  // 2: turing.v1.AgentJob.skills:type_name -> turing.v1.AttachedSkill
+	2,  // 3: turing.v1.AgentJob.external_agent:type_name -> turing.v1.ExternalAgentTarget
+	18, // 4: turing.v1.DiscoveredTool.schema:type_name -> google.protobuf.Struct
+	16, // 5: turing.v1.RuntimeWorkerReady.agent_id:type_name -> turing.v1.AgentId
+	4,  // 6: turing.v1.RuntimeWorkerReady.tools:type_name -> turing.v1.DiscoveredTool
+	0,  // 7: turing.v1.RuntimeWorkerReady.tool_discovery_status:type_name -> turing.v1.ToolDiscoveryStatus
+	18, // 8: turing.v1.RuntimeRunCompleted.usage:type_name -> google.protobuf.Struct
+	5,  // 9: turing.v1.RuntimeUpdate.worker_ready:type_name -> turing.v1.RuntimeWorkerReady
+	6,  // 10: turing.v1.RuntimeUpdate.heartbeat:type_name -> turing.v1.RuntimeHeartbeat
+	19, // 11: turing.v1.RuntimeUpdate.event:type_name -> turing.v1.TuringEvent
+	20, // 12: turing.v1.RuntimeUpdate.tool_beacon:type_name -> turing.v1.ToolCallBeacon
+	7,  // 13: turing.v1.RuntimeUpdate.run_completed:type_name -> turing.v1.RuntimeRunCompleted
+	8,  // 14: turing.v1.RuntimeUpdate.run_failed:type_name -> turing.v1.RuntimeRunFailed
+	9,  // 15: turing.v1.RuntimeUpdate.run_cancelled_ack:type_name -> turing.v1.RuntimeCancelledAck
+	11, // 16: turing.v1.RuntimeCommand.worker_accepted:type_name -> turing.v1.RuntimeWorkerAccepted
+	1,  // 17: turing.v1.RuntimeCommand.run_assigned:type_name -> turing.v1.AgentJob
+	12, // 18: turing.v1.RuntimeCommand.run_cancelled:type_name -> turing.v1.RuntimeRunCancelled
+	13, // 19: turing.v1.RuntimeCommand.approval_updated:type_name -> turing.v1.RuntimeApprovalUpdated
+	14, // 20: turing.v1.RuntimeCommand.shutdown_requested:type_name -> turing.v1.RuntimeShutdownRequested
+	21, // 21: turing.v1.RuntimeCommand.tool_policy_decision:type_name -> turing.v1.ToolPolicyDecision
+	10, // 22: turing.v1.RuntimeService.ConnectWorker:input_type -> turing.v1.RuntimeUpdate
+	15, // 23: turing.v1.RuntimeService.ConnectWorker:output_type -> turing.v1.RuntimeCommand
+	23, // [23:24] is the sub-list for method output_type
+	22, // [22:23] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_runtime_proto_init() }
@@ -1305,7 +1394,7 @@ func file_turing_v1_runtime_proto_init() {
 	file_turing_v1_common_proto_init()
 	file_turing_v1_events_proto_init()
 	file_turing_v1_tools_proto_init()
-	file_turing_v1_runtime_proto_msgTypes[8].OneofWrappers = []any{
+	file_turing_v1_runtime_proto_msgTypes[9].OneofWrappers = []any{
 		(*RuntimeUpdate_WorkerReady)(nil),
 		(*RuntimeUpdate_Heartbeat)(nil),
 		(*RuntimeUpdate_Event)(nil),
@@ -1314,7 +1403,7 @@ func file_turing_v1_runtime_proto_init() {
 		(*RuntimeUpdate_RunFailed)(nil),
 		(*RuntimeUpdate_RunCancelledAck)(nil),
 	}
-	file_turing_v1_runtime_proto_msgTypes[13].OneofWrappers = []any{
+	file_turing_v1_runtime_proto_msgTypes[14].OneofWrappers = []any{
 		(*RuntimeCommand_WorkerAccepted)(nil),
 		(*RuntimeCommand_RunAssigned)(nil),
 		(*RuntimeCommand_RunCancelled)(nil),
@@ -1328,7 +1417,7 @@ func file_turing_v1_runtime_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_runtime_proto_rawDesc), len(file_turing_v1_runtime_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   14,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

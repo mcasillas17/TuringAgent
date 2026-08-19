@@ -82,6 +82,14 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 	}
 	queuedEvent := enqueued.QueuedEvent
 	s.bus.Publish(busEventFromRepository(queuedEvent))
+	// Published alongside the queued event so a subscriber that is not this
+	// stream — a second window on the same conversation — still learns that
+	// the message left the machine. Replay would eventually deliver them, but
+	// only after a poll, and "you were told late" is not much better than "you
+	// were not told".
+	for _, event := range enqueued.RoutingEvents {
+		s.bus.Publish(busEventFromRepository(event))
+	}
 	if err := stream.Send(&turingv1.ChatStreamEvent{
 		SessionId: req.SessionId,
 		RunId:     enqueued.RunID,

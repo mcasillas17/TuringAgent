@@ -19,8 +19,16 @@ func TestProtoContractsDefineRequiredServices(t *testing.T) {
 		"sessions.proto":  {"service SessionService", "rpc CreateSession", "rpc ListMessages", "rpc SearchMessages", "message SearchMessagesRequest", "message SearchMessagesResponse", "rpc ListTools"},
 		"approvals.proto": {"service ApprovalService", "rpc ApproveApproval", "rpc DenyApproval", "rpc GetApprovalForRuntime", "rpc ConsumeApproval"},
 		"tools.proto":     {"message ToolCallBeacon", "message ToolPolicyDecision"},
-		"mcp.proto":       {"message McpRequest", "message McpResult"},
-		"health.proto":    {"service HealthService", "rpc Check", "rpc Version"},
+		// The credential_ref/credential_available pair is the whole storage
+		// decision in the contract: a client learns the NAME of a key and
+		// whether the backend has it, never the key.
+		"agents.proto": {
+			"service ExternalAgentService", "rpc ListExternalAgents", "rpc SetSessionAgent",
+			"rpc ClearSessionAgent", "message ExternalAgent", "string credential_ref",
+			"bool credential_available",
+		},
+		"mcp.proto":    {"message McpRequest", "message McpResult"},
+		"health.proto": {"service HealthService", "rpc Check", "rpc Version"},
 	}
 	for file, snippets := range required {
 		data, err := os.ReadFile(filepath.Join(root, file))

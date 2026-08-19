@@ -1940,6 +1940,21 @@ func mapJob(job repository.Job) *turingv1.AgentJob {
 		UserText:           job.UserText,
 		Attempt:            int32(job.Attempt),
 		Skills:             toProtoSkills(job.Skills),
+		ExternalAgent:      toProtoExternalAgent(job.ExternalAgent),
+	}
+}
+
+// toProtoExternalAgent keeps nil as nil. An empty target would look like a
+// routed run with no endpoint, which is a worse failure than an unrouted one:
+// the runtime would try to reach "" instead of just running locally.
+func toProtoExternalAgent(target *repository.ExternalAgentTarget) *turingv1.ExternalAgentTarget {
+	if target == nil {
+		return nil
+	}
+	return &turingv1.ExternalAgentTarget{
+		DisplayName:   target.DisplayName,
+		BaseUrl:       target.BaseURL,
+		CredentialRef: target.CredentialRef,
 	}
 }
 

@@ -74,6 +74,14 @@ const AgentJob$json = {
       '6': '.turing.v1.AttachedSkill',
       '10': 'skills'
     },
+    {
+      '1': 'external_agent',
+      '3': 14,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.ExternalAgentTarget',
+      '10': 'externalAgent'
+    },
   ],
 };
 
@@ -87,7 +95,24 @@ final $typed_data.Uint8List agentJobDescriptor = $convert.base64Decode(
     '50dXJpbmcudjEuTW9kZWxQcm92aWRlclINbW9kZWxQcm92aWRlchIUCgVtb2RlbBgJIAEoCVIF'
     'bW9kZWwSGwoJdXNlcl90ZXh0GAogASgJUgh1c2VyVGV4dBInCg9yZXF1ZXN0ZWRfdG9vbHMYCy'
     'ADKAlSDnJlcXVlc3RlZFRvb2xzEhgKB2F0dGVtcHQYDCABKAVSB2F0dGVtcHQSMAoGc2tpbGxz'
-    'GA0gAygLMhgudHVyaW5nLnYxLkF0dGFjaGVkU2tpbGxSBnNraWxscw==');
+    'GA0gAygLMhgudHVyaW5nLnYxLkF0dGFjaGVkU2tpbGxSBnNraWxscxJFCg5leHRlcm5hbF9hZ2'
+    'VudBgOIAEoCzIeLnR1cmluZy52MS5FeHRlcm5hbEFnZW50VGFyZ2V0Ug1leHRlcm5hbEFnZW50');
+
+@$core.Deprecated('Use externalAgentTargetDescriptor instead')
+const ExternalAgentTarget$json = {
+  '1': 'ExternalAgentTarget',
+  '2': [
+    {'1': 'display_name', '3': 1, '4': 1, '5': 9, '10': 'displayName'},
+    {'1': 'base_url', '3': 2, '4': 1, '5': 9, '10': 'baseUrl'},
+    {'1': 'credential_ref', '3': 3, '4': 1, '5': 9, '10': 'credentialRef'},
+  ],
+};
+
+/// Descriptor for `ExternalAgentTarget`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List externalAgentTargetDescriptor = $convert.base64Decode(
+    'ChNFeHRlcm5hbEFnZW50VGFyZ2V0EiEKDGRpc3BsYXlfbmFtZRgBIAEoCVILZGlzcGxheU5hbW'
+    'USGQoIYmFzZV91cmwYAiABKAlSB2Jhc2VVcmwSJQoOY3JlZGVudGlhbF9yZWYYAyABKAlSDWNy'
+    'ZWRlbnRpYWxSZWY=');
 
 @$core.Deprecated('Use attachedSkillDescriptor instead')
 const AttachedSkill$json = {

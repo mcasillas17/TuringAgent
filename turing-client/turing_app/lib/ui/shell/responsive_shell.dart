@@ -6,6 +6,8 @@ import '../../constants/app_colors.dart';
 import '../../features/chat/chat_screen.dart';
 import '../../features/search/search_screen.dart';
 import '../../features/settings/settings_screen.dart';
+import '../../features/workspace/agents_page.dart';
+import '../../features/workspace/session_agent_bar.dart';
 import '../../features/workspace/session_skills_bar.dart';
 import '../../features/workspace/skills_page.dart';
 import '../../features/workspace/workspace_pages.dart';
@@ -416,6 +418,17 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     }
     return Column(
       children: [
+        // First, above even the skills: where a conversation goes is more
+        // fundamental than how it is told to answer, and it is the one
+        // property that decides whether anything typed below leaves the
+        // machine. Keyed like the rest so the previous conversation's
+        // destination can never linger on screen while the new one loads —
+        // which, for this particular strip, would be a lie about egress.
+        SessionAgentBar(
+          key: ValueKey('agent-$sessionId'),
+          apiClient: widget.apiClient,
+          sessionId: sessionId,
+        ),
         // Above the transcript rather than inside it: standing instructions
         // that change the answers should be visible while you read them.
         // Keyed like the chat below it: a fresh State per conversation is what

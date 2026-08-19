@@ -183,6 +183,7 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 		"0004_execution_exit_gate",
 		"0005_timestamp_ordering",
 		"0006_skills",
+		"0007_agents",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("applied migrations = %v, want %v", got, want)
@@ -194,8 +195,8 @@ func TestCurrentSchemaVersionUsesLatestEmbeddedMigrationPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "0006" {
-		t.Fatalf("CurrentSchemaVersion = %q, want 0006", got)
+	if got != "0007" {
+		t.Fatalf("CurrentSchemaVersion = %q, want 0007", got)
 	}
 }
 

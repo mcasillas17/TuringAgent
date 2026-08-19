@@ -1,0 +1,108 @@
+syntax = "proto3";
+
+package turing.v1;
+
+option go_package = "github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1";
+
+import "google/protobuf/timestamp.proto";
+
+// Which vendor an external agent is. Purely descriptive: every provider below
+// is reached through the same OpenAI-compatible chat-completions endpoint, so
+// this changes the label and the suggested base URL, not the transport.
+enum ExternalAgentProvider {
+  EXTERNAL_AGENT_PROVIDER_UNSPECIFIED = 0;
+  EXTERNAL_AGENT_PROVIDER_ANTHROPIC = 1;
+  EXTERNAL_AGENT_PROVIDER_OPENAI = 2;
+  EXTERNAL_AGENT_PROVIDER_GOOGLE = 3;
+  EXTERNAL_AGENT_PROVIDER_XAI = 4;
+  // An OpenAI-compatible endpoint that is none of the above.
+  EXTERNAL_AGENT_PROVIDER_OTHER = 5;
+}
+
+// An assistant that does NOT run on this machine.
+//
+// Turing's own local assistant is not one of these: it is the default and it
+// cannot be configured away. Everything described here is somewhere a
+// conversation can be sent instead, which means the transcript leaves the
+// machine — the thing this project's first commitment is about. Nothing routes
+// to one of these unless a person picked it for a specific conversation.
+message ExternalAgent {
+  string agent_id = 1;
+  string display_name = 2;
+  ExternalAgentProvider provider = 3;
+  string base_url = 4;
+  string model = 5;
+  // The NAME of a credential, never the credential itself. The API key lives
+  // in the backend's environment (TURING_AGENT_API_KEYS in
+  // turing-backend/.env) and is resolved there; it is never stored in SQLite,
+  // never sent to a client, and never accepted from one.
+  string credential_ref = 6;
+  // Whether the backend can currently resolve credential_ref. Reported so the
+  // client can say "this will not work yet" instead of letting the user find
+  // out by sending a message that fails.
+  bool credential_available = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+message CreateExternalAgentRequest {
+  string display_name = 1;
+  ExternalAgentProvider provider = 2;
+  string base_url = 3;
+  string model = 4;
+  string credential_ref = 5;
+}
+
+message UpdateExternalAgentRequest {
+  string agent_id = 1;
+  string display_name = 2;
+  ExternalAgentProvider provider = 3;
+  string base_url = 4;
+  string model = 5;
+  string credential_ref = 6;
+}
+
+message DeleteExternalAgentRequest {
+  string agent_id = 1;
+}
+
+message DeleteExternalAgentResponse {}
+
+message ListExternalAgentsRequest {}
+
+message ListExternalAgentsResponse {
+  repeated ExternalAgent agents = 1;
+}
+
+message GetSessionAgentRequest {
+  string session_id = 1;
+}
+
+message SetSessionAgentRequest {
+  string session_id = 1;
+  string agent_id = 2;
+}
+
+message ClearSessionAgentRequest {
+  string session_id = 1;
+}
+
+// Where a conversation's messages go. An unset agent means the local
+// assistant, which is the default and the only destination that keeps the
+// conversation on this machine.
+message SessionAgentResponse {
+  ExternalAgent agent = 1;
+}
+
+service ExternalAgentService {
+  rpc CreateExternalAgent(CreateExternalAgentRequest) returns (ExternalAgent);
+  rpc UpdateExternalAgent(UpdateExternalAgentRequest) returns (ExternalAgent);
+  rpc DeleteExternalAgent(DeleteExternalAgentRequest) returns (DeleteExternalAgentResponse);
+  rpc ListExternalAgents(ListExternalAgentsRequest) returns (ListExternalAgentsResponse);
+
+  // Set, clear and get all return the conversation's current destination, so a
+  // client never has to guess what the server now believes it is.
+  rpc GetSessionAgent(GetSessionAgentRequest) returns (SessionAgentResponse);
+  rpc SetSessionAgent(SetSessionAgentRequest) returns (SessionAgentResponse);
+  rpc ClearSessionAgent(ClearSessionAgentRequest) returns (SessionAgentResponse);
+}

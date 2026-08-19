@@ -26,6 +26,27 @@ message AgentJob {
   // captured then rather than read at execution time so that editing a skill
   // never changes what an already-queued run was told to do.
   repeated AttachedSkill skills = 13;
+  // Set only when the conversation was deliberately routed away from the
+  // local assistant. Absent is the default and means "run this here".
+  ExternalAgentTarget external_agent = 14;
+}
+
+// Where to send a run that the user routed off this machine.
+//
+// Deliberately not the full ExternalAgent message: the runtime has no use for
+// identifiers, timestamps or the provider label, and this is replayed from a
+// stored job payload where a narrower shape is a narrower thing to keep in
+// sync. The model is not repeated here either — AgentJob.model already carries
+// it, frozen at enqueue from the agent's configuration.
+//
+// credential_ref is a NAME, not a secret. The key it names is resolved from
+// the runtime's own environment at execution time, so no third-party API key
+// is ever written to the database, sent over this stream, or handed to a
+// client.
+message ExternalAgentTarget {
+  string display_name = 1;
+  string base_url = 2;
+  string credential_ref = 3;
 }
 
 // A skill as the runtime sees it: a name for attribution and the instructions

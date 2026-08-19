@@ -11,6 +11,8 @@ import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 
+import '../support/no_external_agents_api.dart';
+
 void main() {
   group('the skill library', () {
     testWidgets('says what a skill is for when there are none', (tester) async {
@@ -363,7 +365,7 @@ class _Offline implements Exception {
   String toString() => 'offline';
 }
 
-class _SkillApi implements TuringApi {
+class _SkillApi with NoExternalAgentsApi implements TuringApi {
   final List<Skill> skills = [];
   final Map<String, List<String>> attached = {};
   final List<(String, String)> created = [];

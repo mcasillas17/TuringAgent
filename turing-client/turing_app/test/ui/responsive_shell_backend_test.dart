@@ -13,6 +13,7 @@ import 'package:turing_flutter_app/networking/auth_storage.dart';
 import 'package:turing_flutter_app/networking/event_source.dart';
 import 'package:turing_flutter_app/ui/shell/responsive_shell.dart';
 
+import '../support/no_external_agents_api.dart';
 import '../support/no_skills_api.dart';
 
 void main() {
@@ -162,7 +163,9 @@ void main() {
   });
 }
 
-class _FakeApiClient with NoSkillsApi implements TuringApi {
+class _FakeApiClient
+    with NoSkillsApi, NoExternalAgentsApi
+    implements TuringApi {
   @override
   Future<Map<String, dynamic>> approveApproval(
     String approvalId, {
