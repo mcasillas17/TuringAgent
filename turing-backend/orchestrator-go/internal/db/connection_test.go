@@ -53,6 +53,22 @@ func TestOpenMemoryDoesNotCreateFilesystemArtifact(t *testing.T) {
 	}
 }
 
+func TestOpenKeepsSQLiteTemporaryStorageInMemory(t *testing.T) {
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	var tempStore int
+	if err := database.QueryRow(`PRAGMA temp_store`).Scan(&tempStore); err != nil {
+		t.Fatal(err)
+	}
+	if tempStore != 2 {
+		t.Fatalf("PRAGMA temp_store = %d, want 2 (MEMORY)", tempStore)
+	}
+}
+
 func TestOpenRestrictsExistingSQLiteFileMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.db")
 	if err := os.WriteFile(path, nil, 0644); err != nil {

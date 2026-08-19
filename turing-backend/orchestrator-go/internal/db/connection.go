@@ -32,6 +32,13 @@ func Open(path string) (*DB, error) {
 		_ = database.Close()
 		return nil, err
 	}
+	// The orchestrator runs with a read-only root filesystem. Keep SQLite sort
+	// and transient b-tree storage off /tmp while the durable database remains
+	// on the narrowly writable /app/data mount.
+	if _, err := database.Exec(`PRAGMA temp_store = MEMORY`); err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("configure SQLite temporary storage: %w", err)
+	}
 	if !inMemory {
 		if err := secureSQLiteArtifacts(path); err != nil {
 			_ = database.Close()
