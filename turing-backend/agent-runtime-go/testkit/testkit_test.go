@@ -3,6 +3,8 @@ package testkit
 import (
 	"testing"
 	"time"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
 )
 
 func TestWorkerConfigTimeoutsDefaultAndAllowOverrides(t *testing.T) {
@@ -10,6 +12,7 @@ func TestWorkerConfigTimeoutsDefaultAndAllowOverrides(t *testing.T) {
 	if defaults.modelTimeout() != 120*time.Second {
 		t.Fatalf("default model timeout = %v, want 120s", defaults.modelTimeout())
 	}
+
 	if defaults.toolTimeout() != 30*time.Second {
 		t.Fatalf("default tool timeout = %v, want 30s", defaults.toolTimeout())
 	}
@@ -36,5 +39,23 @@ func TestWorkerConfigTimeoutsDefaultAndAllowOverrides(t *testing.T) {
 			configured.approvalTimeout(),
 			configured.totalToolTimeout(),
 		)
+	}
+}
+
+func TestWorkerConfigContextWindowDefaultsAndAllowsOverride(t *testing.T) {
+	defaults := WorkerConfig{}
+	if got := defaults.contextWindowTokens(); got != llm.DefaultContextWindowTokens {
+		t.Fatalf("default context window = %d, want %d", got, llm.DefaultContextWindowTokens)
+	}
+	configured := WorkerConfig{ContextWindowTokens: 4096}
+	if got := configured.contextWindowTokens(); got != 4096 {
+		t.Fatalf("configured context window = %d, want 4096", got)
+	}
+	if got := defaults.maxOutputTokens(); got != llm.DefaultMaxOutputTokens {
+		t.Fatalf("default max output = %d, want %d", got, llm.DefaultMaxOutputTokens)
+	}
+	configured.MaxOutputTokens = 512
+	if got := configured.maxOutputTokens(); got != 512 {
+		t.Fatalf("configured max output = %d, want 512", got)
 	}
 }

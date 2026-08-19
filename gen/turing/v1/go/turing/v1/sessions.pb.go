@@ -527,12 +527,13 @@ func (x *ListMessagesResponse) GetMessages() []*Message {
 }
 
 type SearchMessagesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Query         string                 `protobuf:"bytes,1,opt,name=query,proto3" json:"query,omitempty"`
-	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"` // optional scope; empty = all sessions
-	Limit         int32                  `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Query            string                 `protobuf:"bytes,1,opt,name=query,proto3" json:"query,omitempty"`
+	SessionId        string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"` // optional scope; empty = all sessions
+	Limit            int32                  `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
+	ExcludeSessionId string                 `protobuf:"bytes,4,opt,name=exclude_session_id,json=excludeSessionId,proto3" json:"exclude_session_id,omitempty"` // optional exclusion; applied after session_id scope
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *SearchMessagesRequest) Reset() {
@@ -584,6 +585,13 @@ func (x *SearchMessagesRequest) GetLimit() int32 {
 		return x.Limit
 	}
 	return 0
+}
+
+func (x *SearchMessagesRequest) GetExcludeSessionId() string {
+	if x != nil {
+		return x.ExcludeSessionId
+	}
+	return ""
 }
 
 type SearchMessagesResponse struct {
@@ -987,12 +995,13 @@ const file_turing_v1_sessions_proto_rawDesc = "" +
 	"\x05limit\x18\x02 \x01(\x05R\x05limit\x12*\n" +
 	"\x11before_message_id\x18\x03 \x01(\tR\x0fbeforeMessageId\"F\n" +
 	"\x14ListMessagesResponse\x12.\n" +
-	"\bmessages\x18\x01 \x03(\v2\x12.turing.v1.MessageR\bmessages\"b\n" +
+	"\bmessages\x18\x01 \x03(\v2\x12.turing.v1.MessageR\bmessages\"\x90\x01\n" +
 	"\x15SearchMessagesRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x14\n" +
-	"\x05limit\x18\x03 \x01(\x05R\x05limit\"H\n" +
+	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12,\n" +
+	"\x12exclude_session_id\x18\x04 \x01(\tR\x10excludeSessionId\"H\n" +
 	"\x16SearchMessagesResponse\x12.\n" +
 	"\bmessages\x18\x01 \x03(\v2\x12.turing.v1.MessageR\bmessages\"\x12\n" +
 	"\x10GetConfigRequest\"\xa5\x01\n" +

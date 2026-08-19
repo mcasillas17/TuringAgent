@@ -59,6 +59,7 @@ message SearchMessagesRequest {
   string query = 1;
   string session_id = 2; // optional scope; empty = all sessions
   int32 limit = 3;
+  string exclude_session_id = 4; // optional exclusion; applied after session_id scope
 }
 
 message SearchMessagesResponse {

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,16 +25,40 @@ const (
 )
 
 type Ollama struct {
-	baseURL   string
-	client    *http.Client
-	keepAlive json.RawMessage
+	baseURL             string
+	client              *http.Client
+	keepAlive           json.RawMessage
+	contextWindowTokens int
+	maxOutputTokens     int
 }
+
+var _ Provider = (*Ollama)(nil)
 
 func NewOllama(baseURL string, client *http.Client) *Ollama {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return &Ollama{baseURL: strings.TrimRight(baseURL, "/"), client: client}
+	return &Ollama{
+		baseURL:             strings.TrimRight(baseURL, "/"),
+		client:              client,
+		contextWindowTokens: DefaultContextWindowTokens,
+		maxOutputTokens:     DefaultMaxOutputTokens,
+	}
+}
+
+func NewOllamaWithLimits(
+	baseURL string,
+	client *http.Client,
+	contextWindowTokens int,
+	maxOutputTokens int,
+) (*Ollama, error) {
+	if err := ValidateContextLimits(contextWindowTokens, maxOutputTokens); err != nil {
+		return nil, err
+	}
+	provider := NewOllama(baseURL, client)
+	provider.contextWindowTokens = contextWindowTokens
+	provider.maxOutputTokens = maxOutputTokens
+	return provider, nil
 }
 
 // WithKeepAlive sets how long Ollama should hold the model in memory after a
@@ -72,9 +97,9 @@ func EncodeOllamaKeepAlive(value string) (json.RawMessage, error) {
 	if trimmed == "" {
 		return nil, nil
 	}
-	if _, err := strconv.Atoi(trimmed); err == nil {
+	if seconds, err := strconv.Atoi(trimmed); err == nil {
 		// Bare number: seconds, and -1 means forever. Must go out unquoted.
-		return json.RawMessage(trimmed), nil
+		return json.RawMessage(strconv.Itoa(seconds)), nil
 	}
 	if _, err := time.ParseDuration(trimmed); err != nil {
 		return nil, fmt.Errorf("keep-alive %q must be a duration such as 30s or 2m, or a whole number of seconds (-1 for forever)", value)
@@ -88,18 +113,13 @@ func EncodeOllamaKeepAlive(value string) (json.RawMessage, error) {
 
 func (p *Ollama) ID() string { return "ollama" }
 
+func (p *Ollama) ContextWindowTokens() int { return p.contextWindowTokens }
+
+func (p *Ollama) MaxOutputTokens() int { return p.maxOutputTokens }
+
 func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
-	options := ollamaRequestOptions(req.Temperature, req.MaxTokens)
-	tools := ollamaTools(req.Tools)
-	body, err := marshalProviderRequest("Ollama", req.Messages, func(messages []ChatMessage) ([]byte, error) {
-		return json.Marshal(ollamaChatRequest{
-			Model:     req.Model,
-			Messages:  ollamaMessages(messages),
-			Stream:    true,
-			Options:   options,
-			Tools:     tools,
-			KeepAlive: p.keepAlive,
-		})
+	body, err := marshalProviderRequest("Ollama", func() ([]byte, error) {
+		return p.marshalRequest(req)
 	})
 	if err != nil {
 		return nil, err
@@ -228,6 +248,64 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 		}
 	}()
 	return out, nil
+}
+
+func (p *Ollama) EstimateRequestTokens(req ChatRequest) (int, error) {
+	body, err := p.marshalRequest(req)
+	if err != nil {
+		return 0, err
+	}
+	return len(body), nil
+}
+
+func (p *Ollama) marshalRequest(req ChatRequest) ([]byte, error) {
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = p.maxOutputTokens
+	}
+	if maxTokens >= p.contextWindowTokens {
+		return nil, fmt.Errorf("max output tokens %d must be less than context window %d", maxTokens, p.contextWindowTokens)
+	}
+	tools := ollamaTools(req.Tools)
+	messages := ollamaMessages(req.Messages)
+	contextWindowTokens := p.contextWindowTokens
+	var body []byte
+	var err error
+	for range 10 {
+		body, err = json.Marshal(ollamaChatRequest{
+			Model:     req.Model,
+			Messages:  messages,
+			Stream:    true,
+			Options:   ollamaRequestOptions(req.Temperature, maxTokens, contextWindowTokens),
+			Tools:     tools,
+			KeepAlive: p.keepAlive,
+		})
+		if err != nil {
+			return nil, err
+		}
+		required := len(body) + maxTokens
+		targetContext := ollamaContextBucket(required, p.contextWindowTokens)
+		if targetContext == contextWindowTokens {
+			return body, nil
+		}
+		contextWindowTokens = targetContext
+	}
+	return nil, errors.New("Ollama request context size did not converge")
+}
+
+func ollamaContextBucket(required, cap int) int {
+	const minimumBucket = 4096
+	if cap <= minimumBucket {
+		return cap
+	}
+	bucket := minimumBucket
+	for bucket < required && bucket < cap {
+		bucket *= 2
+	}
+	if bucket > cap {
+		return cap
+	}
+	return bucket
 }
 
 // ollamaTokenUsage reads the token counts Ollama puts on its terminal chunk.
@@ -520,13 +598,15 @@ type ollamaChatRequest struct {
 type ollamaOptions struct {
 	Temperature float64 `json:"temperature,omitempty"`
 	NumPredict  int     `json:"num_predict,omitempty"`
+	NumCtx      int     `json:"num_ctx"`
 }
 
-func ollamaRequestOptions(temperature float64, maxTokens int) *ollamaOptions {
-	if temperature == 0 && maxTokens == 0 {
-		return nil
+func ollamaRequestOptions(temperature float64, maxTokens int, contextWindowTokens int) *ollamaOptions {
+	return &ollamaOptions{
+		Temperature: temperature,
+		NumPredict:  maxTokens,
+		NumCtx:      contextWindowTokens,
 	}
-	return &ollamaOptions{Temperature: temperature, NumPredict: maxTokens}
 }
 
 type ollamaMessage struct {

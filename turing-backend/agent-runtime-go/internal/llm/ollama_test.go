@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -190,13 +191,119 @@ func TestOllamaRequestNestsOptions(t *testing.T) {
 		t.Fatalf("top-level num_predict was serialized: %#v", body)
 	}
 	options, ok := body["options"].(map[string]any)
-	if !ok || options["temperature"] != json.Number("0.25") || options["num_predict"] != json.Number("321") {
+	if !ok || options["temperature"] != json.Number("0.25") ||
+		options["num_predict"] != json.Number("321") {
 		t.Fatalf("options = %#v", body["options"])
+	}
+	explicitNumCtx, err := options["num_ctx"].(json.Number).Int64()
+	if err != nil || explicitNumCtx >= int64(DefaultContextWindowTokens) || explicitNumCtx <= 321 {
+		t.Fatalf("dynamic num_ctx = %v, want max output < num_ctx < configured cap", options["num_ctx"])
 	}
 
 	withoutOptions := captureOllamaRequest(t, ChatRequest{Model: "llama3.2"})
-	if _, present := withoutOptions["options"]; present {
-		t.Fatalf("zero options were serialized: %#v", withoutOptions)
+	defaultOptions, ok := withoutOptions["options"].(map[string]any)
+	if !ok || len(defaultOptions) != 2 ||
+		defaultOptions["num_predict"] != json.Number("2048") {
+		t.Fatalf("default options = %#v, want dynamic num_ctx and num_predict=2048", withoutOptions["options"])
+	}
+	numCtx, err := defaultOptions["num_ctx"].(json.Number).Int64()
+	if err != nil || numCtx >= int64(DefaultContextWindowTokens) || numCtx <= int64(DefaultMaxOutputTokens) {
+		t.Fatalf("dynamic num_ctx = %v, want output reserve < num_ctx < configured cap", defaultOptions["num_ctx"])
+	}
+}
+
+func TestOllamaRequestPinsConfiguredContextWindow(t *testing.T) {
+	requestBody := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request: %v", err)
+			return
+		}
+		requestBody <- body
+		_, _ = io.WriteString(w, `{"done":true,"done_reason":"stop"}`+"\n")
+	}))
+	t.Cleanup(server.Close)
+
+	provider, err := NewOllamaWithLimits(server.URL, server.Client(), 6144, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "qwen2.5:7b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collectEvents(events)
+
+	decoder := json.NewDecoder(bytes.NewReader(<-requestBody))
+	decoder.UseNumber()
+	var body map[string]any
+	if err := decoder.Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	options, ok := body["options"].(map[string]any)
+	if !ok || options["num_predict"] != json.Number("512") {
+		t.Fatalf("options = %#v, want dynamic num_ctx and num_predict=512", body["options"])
+	}
+	numCtx, err := options["num_ctx"].(json.Number).Int64()
+	if err != nil || numCtx >= 6144 || numCtx <= 512 {
+		t.Fatalf("dynamic num_ctx = %v, want 512 < num_ctx < configured cap 6144", options["num_ctx"])
+	}
+	if got := provider.ContextWindowTokens(); got != 6144 {
+		t.Fatalf("ContextWindowTokens = %d, want 6144", got)
+	}
+	if got := provider.MaxOutputTokens(); got != 512 {
+		t.Fatalf("MaxOutputTokens = %d, want 512", got)
+	}
+}
+
+func TestOllamaRequestUsesStableContextBucketForGrowingConversation(t *testing.T) {
+	provider, err := NewOllamaWithLimits("http://example.test", nil, 32768, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := provider.marshalRequest(ChatRequest{
+		Model:    "qwen2.5:7b",
+		Messages: []ChatMessage{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := provider.marshalRequest(ChatRequest{
+		Model: "qwen2.5:7b",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "hello"},
+			{Role: "assistant", Content: "world"},
+			{Role: "user", Content: "again"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstNumCtx := decodeOllamaNumCtx(t, first)
+	secondNumCtx := decodeOllamaNumCtx(t, second)
+	if firstNumCtx != secondNumCtx {
+		t.Fatalf("num_ctx changed from %d to %d for the same small-context bucket", firstNumCtx, secondNumCtx)
+	}
+	if firstNumCtx >= 32768 {
+		t.Fatalf("small request num_ctx = %d, want below configured cap", firstNumCtx)
+	}
+}
+
+func TestOllamaLimitsRejectInvalidValues(t *testing.T) {
+	for _, test := range []struct {
+		window int
+		output int
+	}{
+		{window: 0, output: 1},
+		{window: -1, output: 1},
+		{window: 1024, output: 0},
+		{window: 1024, output: 1024},
+		{window: 1024, output: 1025},
+	} {
+		if _, err := NewOllamaWithLimits("http://example.test", nil, test.window, test.output); err == nil {
+			t.Fatalf("NewOllamaWithLimits(%d, %d) succeeded", test.window, test.output)
+		}
 	}
 }
 
@@ -205,7 +312,7 @@ func TestOllamaRequestSerializesProviderSpecificMessages(t *testing.T) {
 		Model: "llama3.2",
 		Messages: []ChatMessage{
 			{Role: "system", Content: "Be concise"},
-			{Role: "user", Content: "Weather?", Name: "neutral-only"},
+			{MessageID: "msg_user", Role: "user", Content: "Weather?", Name: "neutral-only"},
 			{
 				Role:    "assistant",
 				Content: "",
@@ -228,6 +335,9 @@ func TestOllamaRequestSerializesProviderSpecificMessages(t *testing.T) {
 	}
 	if _, present := messages[1].(map[string]any)["name"]; present {
 		t.Fatalf("unsupported neutral name was serialized: %#v", messages[1])
+	}
+	if _, present := messages[1].(map[string]any)["message_id"]; present {
+		t.Fatalf("internal message ID was serialized: %#v", messages[1])
 	}
 	assistant := messages[2].(map[string]any)
 	toolCalls := assistant["tool_calls"].([]any)
@@ -775,6 +885,7 @@ func captureOllamaRequestWith(t *testing.T, request ChatRequest, keepAlive strin
 		if err != nil {
 			t.Errorf("read request: %v", err)
 		}
+
 		requestBody <- body
 		fmt.Fprintln(w, `{"done":true,"done_reason":"stop"}`)
 	}))
@@ -793,6 +904,29 @@ func captureOllamaRequestWith(t *testing.T, request ChatRequest, keepAlive strin
 		t.Fatalf("decode request: %v", err)
 	}
 	return body
+}
+
+func decodeOllamaNumCtx(t *testing.T, body []byte) int64 {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var decoded map[string]any
+	if err := decoder.Decode(&decoded); err != nil {
+		t.Fatal(err)
+	}
+	options, ok := decoded["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("options = %#v, want object", decoded["options"])
+	}
+	numCtx, ok := options["num_ctx"].(json.Number)
+	if !ok {
+		t.Fatalf("num_ctx = %#v, want JSON number", options["num_ctx"])
+	}
+	value, err := numCtx.Int64()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
 }
 
 func streamOllamaEvents(t *testing.T, body string) []StreamEvent {
@@ -886,6 +1020,21 @@ func TestOllamaKeepAliveEncodesBareSecondsAsNumber(t *testing.T) {
 		}
 		if string(encoded) != value {
 			t.Fatalf("EncodeOllamaKeepAlive(%q) = %s, want an unquoted number", value, encoded)
+		}
+	}
+}
+
+func TestOllamaKeepAliveCanonicalizesJSONInvalidIntegerSpellings(t *testing.T) {
+	for input, want := range map[string]string{
+		"+1": "1",
+		"01": "1",
+	} {
+		encoded, err := EncodeOllamaKeepAlive(input)
+		if err != nil {
+			t.Fatalf("EncodeOllamaKeepAlive(%q) errored: %v", input, err)
+		}
+		if string(encoded) != want {
+			t.Fatalf("EncodeOllamaKeepAlive(%q) = %s, want canonical JSON number %s", input, encoded, want)
 		}
 	}
 }

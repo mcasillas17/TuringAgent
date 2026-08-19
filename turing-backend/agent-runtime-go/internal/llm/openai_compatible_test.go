@@ -33,6 +33,95 @@ func TestOpenAICompatibleStreamChatAcceptsRequiredFixtureWithoutChoiceIndex(t *t
 	}
 }
 
+func TestOpenAICompatibleContextWindowDoesNotChangeWireFormat(t *testing.T) {
+	requestBody := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request: %v", err)
+			return
+		}
+		requestBody <- body
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(server.Close)
+
+	provider, err := NewOpenAICompatibleWithLimits(server.URL, "", server.Client(), 6144, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := provider.StreamChat(context.Background(), ChatRequest{
+		Model:    "compatible-model",
+		Messages: []ChatMessage{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collectEvents(events)
+
+	var body map[string]any
+	if err := json.Unmarshal(<-requestBody, &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := body["num_ctx"]; present {
+		t.Fatalf("OpenAI-compatible request contained num_ctx: %#v", body)
+	}
+	if _, present := body["options"]; present {
+		t.Fatalf("OpenAI-compatible request contained Ollama options: %#v", body)
+	}
+	if body["max_tokens"] != float64(512) {
+		t.Fatalf("max_tokens = %#v, want 512", body["max_tokens"])
+	}
+	if got := provider.ContextWindowTokens(); got != 6144 {
+		t.Fatalf("ContextWindowTokens = %d, want 6144", got)
+	}
+	if got := provider.MaxOutputTokens(); got != 512 {
+		t.Fatalf("MaxOutputTokens = %d, want 512", got)
+	}
+}
+
+func TestOpenAICompatibleLimitsRejectInvalidValues(t *testing.T) {
+	if _, err := NewOpenAICompatibleWithLimits("http://example.test", "", nil, 1024, 1024); err == nil {
+		t.Fatal("output reservation equal to the context window was accepted")
+	}
+}
+
+func TestOpenAIReasoningModelUsesMaxCompletionTokens(t *testing.T) {
+	for _, model := range []string{
+		"o1",
+		"o3-mini",
+		"o4-mini",
+		"openai/o3",
+		"gpt-5",
+		"gpt-5-mini",
+		"openai/gpt-5.1",
+	} {
+		t.Run(model, func(t *testing.T) {
+			_, body := captureOpenAIRequestForModel(t, model, nil, nil)
+			if body["max_completion_tokens"] != float64(DefaultMaxOutputTokens) {
+				t.Fatalf("max_completion_tokens = %#v, want %d", body["max_completion_tokens"], DefaultMaxOutputTokens)
+			}
+			if _, present := body["max_tokens"]; present {
+				t.Fatalf("o-series request included incompatible max_tokens: %#v", body)
+			}
+		})
+	}
+}
+
+func TestOpenAILegacyCompatibleModelsKeepMaxTokens(t *testing.T) {
+	for _, model := range []string{"gpt-4o-mini", "claude-sonnet-4"} {
+		t.Run(model, func(t *testing.T) {
+			_, body := captureOpenAIRequestForModel(t, model, nil, nil)
+			if body["max_tokens"] != float64(DefaultMaxOutputTokens) {
+				t.Fatalf("max_tokens = %#v, want %d", body["max_tokens"], DefaultMaxOutputTokens)
+			}
+			if _, present := body["max_completion_tokens"]; present {
+				t.Fatalf("legacy-compatible request included max_completion_tokens: %#v", body)
+			}
+		})
+	}
+}
+
 func TestOpenAIChunkEmitsDeltaAndFinishReason(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
@@ -140,10 +229,93 @@ func TestOpenAIRejectsDoneWithPendingToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	got := collectEvents(events)
 	if len(got) != 1 || got[0].Type != "error" || got[0].Code != "model_bad_chunk" ||
 		!strings.Contains(got[0].Message, "[DONE]") || !strings.Contains(got[0].Message, "unfinished tool call") {
 		t.Fatalf("events = %+v, want malformed premature DONE error", got)
+	}
+}
+
+func TestOpenAIReportsLengthWithPendingToolCallAsOutputLimitCompletion(t *testing.T) {
+	got := streamOpenAIEvents(t,
+		"data: "+`{"choices":[{"index":0,"delta":{"content":"partial","tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"files_create","arguments":"{\"path\":\""}}]}}]}`+"\n\n"+
+			"data: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`+"\n\n",
+	)
+
+	assertOpenAIEventTypes(t, got, "delta", "completed")
+	if got[0].Text != "partial" || got[1].FinishReason != "length" {
+		t.Fatalf("events = %+v, want partial delta then length completion", got)
+	}
+}
+
+func TestOpenAIDropsIDAndNameOnlyToolCallAtLength(t *testing.T) {
+	got := streamOpenAIEvents(t,
+		"data: "+`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"files_create","arguments":""}}]}}]}`+"\n\n"+
+			"data: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`+"\n\n",
+	)
+
+	assertOpenAIEventTypes(t, got, "completed")
+	if got[0].FinishReason != "length" {
+		t.Fatalf("events = %+v, want length completion without tool call", got)
+	}
+}
+
+func TestOpenAIEmitsExplicitEmptyObjectToolCallAtLength(t *testing.T) {
+	got := streamOpenAIEvents(t,
+		"data: "+`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"system_time","arguments":"{}"}}]}}]}`+"\n\n"+
+			"data: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`+"\n\n",
+	)
+
+	assertOpenAIEventTypes(t, got, "tool_call", "completed")
+	if len(got[0].ToolCalls) != 1 ||
+		got[0].ToolCalls[0].ID != "call_0" ||
+		len(got[0].ToolCalls[0].Arguments) != 0 {
+		t.Fatalf("events = %+v, want explicit empty-object call", got)
+	}
+}
+
+func TestOpenAIEmitsCompleteToolCallBeforeLengthCompletion(t *testing.T) {
+	got := streamOpenAIEvents(t,
+		"data: "+`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"files_create","arguments":"{\"path\":\"note.txt\"}"}}]}}]}`+"\n\n"+
+			"data: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`+"\n\n",
+	)
+
+	assertOpenAIEventTypes(t, got, "tool_call", "completed")
+	if len(got[0].ToolCalls) != 1 ||
+		got[0].ToolCalls[0].ID != "call_0" ||
+		got[0].ToolCalls[0].Name != "files_create" ||
+		got[0].ToolCalls[0].Arguments["path"] != "note.txt" ||
+		got[1].FinishReason != "length" {
+		t.Fatalf("events = %+v, want complete tool call then length completion", got)
+	}
+}
+
+func TestOpenAIEmitsCompleteCallsAndDropsIncompleteCallsAtLength(t *testing.T) {
+	got := streamOpenAIEvents(t,
+		"data: "+`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_complete","type":"function","function":{"name":"files_create","arguments":"{\"path\":\"note.txt\"}"}},{"index":1,"id":"call_incomplete","type":"function","function":{"name":"files_update","arguments":"{\"path\":\""}}]}}]}`+"\n\n"+
+			"data: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`+"\n\n",
+	)
+
+	assertOpenAIEventTypes(t, got, "tool_call", "completed")
+	if len(got[0].ToolCalls) != 1 ||
+		got[0].ToolCalls[0].ID != "call_complete" ||
+		got[0].ToolCalls[0].Name != "files_create" ||
+		got[1].FinishReason != "length" {
+		t.Fatalf("events = %+v, want only complete call before length completion", got)
+	}
+}
+
+func TestOpenAIRejectsSparseToolCallIndicesAtLength(t *testing.T) {
+	got := streamOpenAIEvents(t,
+		"data: "+`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"first","arguments":"{}"}},{"index":2,"id":"call_2","type":"function","function":{"name":"third","arguments":"{}"}}]}}]}`+"\n\n"+
+			"data: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`+"\n\n",
+	)
+
+	assertOpenAIEventTypes(t, got, "error")
+	if got[0].Code != "model_bad_chunk" ||
+		!strings.Contains(got[0].Message, "non-contiguous") {
+		t.Fatalf("events = %+v, want sparse-index model_bad_chunk", got)
 	}
 }
 
@@ -842,7 +1014,7 @@ func TestOpenAIRequestSerializesAssistantToolCalls(t *testing.T) {
 	collectEvents(events)
 
 	body := <-requestBody
-	const wantJSON = `{"model":"gpt-4o-mini","messages":[{"role":"assistant","content":null,"name":"planner","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}}]}],"stream":true,"stream_options":{"include_usage":true}}`
+	const wantJSON = `{"model":"gpt-4o-mini","messages":[{"role":"assistant","content":null,"name":"planner","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}}]}],"stream":true,"max_tokens":2048,"stream_options":{"include_usage":true}}`
 	if string(body) != wantJSON {
 		t.Fatalf("request JSON = %s, want %s", body, wantJSON)
 	}
@@ -1524,6 +1696,15 @@ func captureOpenAIToolFunctions(t *testing.T, definitions []ToolDefinition, mess
 }
 
 func captureOpenAIRequest(t *testing.T, definitions []ToolDefinition, messages []ChatMessage) ([]map[string]any, map[string]any) {
+	return captureOpenAIRequestForModel(t, "gpt-4o-mini", definitions, messages)
+}
+
+func captureOpenAIRequestForModel(
+	t *testing.T,
+	model string,
+	definitions []ToolDefinition,
+	messages []ChatMessage,
+) ([]map[string]any, map[string]any) {
 	t.Helper()
 	requestBody := make(chan []byte, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1535,7 +1716,7 @@ func captureOpenAIRequest(t *testing.T, definitions []ToolDefinition, messages [
 
 	provider := NewOpenAICompatible(server.URL, "", server.Client())
 	events, err := provider.StreamChat(context.Background(), ChatRequest{
-		Model: "gpt-4o-mini", Tools: definitions, Messages: messages,
+		Model: model, Tools: definitions, Messages: messages,
 	})
 	if err != nil {
 		t.Fatal(err)

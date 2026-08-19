@@ -15,13 +15,14 @@
 //
 // and GeneralAssistant.Execute prepends the block to the request messages.
 // Prepended, not appended, so recalled material sits before the live
-// conversation and cannot be read as the user's latest turn. Execute passes the
-// request as built, which is how Recall knows what is already in front of the
-// model.
+// conversation and cannot be read as the user's latest turn. Execute first
+// budgets without recall, then passes the admitted request here so a fetched
+// current-session turn omitted by the budget remains recallable.
 package memory
 
 import (
 	"context"
+	"crypto/sha256"
 	"sort"
 	"strings"
 	"time"
@@ -36,20 +37,12 @@ const (
 	minTermLen = 3
 	ellipsis   = "…"
 
-	// perTermHits is deliberately far larger than maxExcerpts, because the rows
-	// this package throws away are drawn from the same window as the ones it
-	// keeps. The server cannot exclude a session — SearchMessagesRequest.SessionId
-	// only scopes *to* one — so it returns the best `limit` rows by bm25 across
-	// ALL sessions and rank() filters here. When the user asks about the topic
-	// they have been discussing in this very session, that session's own messages
-	// are the ones carrying those terms: with a small window they fill it, get
-	// dropped, and recall goes quiet in exactly the case it is most wanted.
-	//
-	// Upper bound is the repository's, and it does not clamp: a limit above 100
-	// falls back to 20 (repository.SearchMessages), which would be worse than
-	// asking for less. The store is a local SQLite file over loopback, so a wider
-	// page costs almost nothing.
-	perTermHits = 40
+	// perScopeTermHits is deliberately far larger than maxExcerpts. Each term
+	// gets one earlier-session search and one current-session search so neither
+	// scope can crowd the other out before rank() removes admitted duplicates.
+	// At maxTerms this is bounded to 12 local queries and 480 returned rows under
+	// one shared deadline.
+	perScopeTermHits = 40
 
 	// Defaults applied when a Recaller leaves a budget unset, so that a
 	// hand-constructed recaller recalls rather than silently doing nothing.
@@ -95,10 +88,66 @@ type Excerpt struct {
 	CreatedAt time.Time
 }
 
+type preparedRecallCandidate struct {
+	excerpt    Excerpt
+	contextKey string
+}
+
+type preparedRecallHits struct {
+	byTerm     map[string][]string
+	candidates map[string]preparedRecallCandidate
+}
+
+func newPreparedRecallHits() *preparedRecallHits {
+	return &preparedRecallHits{
+		byTerm:     make(map[string][]string),
+		candidates: make(map[string]preparedRecallCandidate),
+	}
+}
+
+func (p *preparedRecallHits) addTerm(term string, found []Excerpt, maxChars int) {
+	if maxChars <= 0 {
+		maxChars = defaultMaxChars
+	}
+	seen := make(map[string]struct{}, len(found))
+	for _, excerpt := range found {
+		if excerpt.Role != "user" && excerpt.Role != "assistant" {
+			continue
+		}
+		if strings.TrimSpace(excerpt.Content) == "" {
+			continue
+		}
+		key := dedupKey(excerpt)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		if _, exists := p.candidates[key]; !exists {
+			contextKey := inContextKey(excerpt.Role, excerpt.Content)
+			if len(excerpt.Content) > maxChars {
+				excerpt.Content = strings.Clone(truncate(excerpt.Content, maxChars))
+			} else {
+				excerpt.Content = strings.Clone(excerpt.Content)
+			}
+			p.candidates[key] = preparedRecallCandidate{
+				excerpt:    excerpt,
+				contextKey: contextKey,
+			}
+		}
+		p.byTerm[term] = append(p.byTerm[term], key)
+	}
+}
+
 // Searcher is the orchestrator lookup this package needs, kept narrow so tests
 // can supply a fake without standing up a gRPC server.
 type Searcher interface {
-	SearchMessages(ctx context.Context, query string, limit int) ([]Excerpt, error)
+	SearchMessages(
+		ctx context.Context,
+		query string,
+		sessionID string,
+		excludedSessionID string,
+		limit int,
+	) ([]Excerpt, error)
 }
 
 // Recaller surfaces excerpts from earlier sessions.
@@ -128,24 +177,35 @@ func NewRecaller(search Searcher) *Recaller {
 // Recall returns a system message of relevant excerpts from earlier sessions, or
 // ok=false when there is nothing worth adding.
 //
-// inContext is the request as the caller has it so far — the messages already in
-// front of the model. Recall uses it to skip current-session hits that would
-// merely duplicate context. It is only what the caller actually fetched, not the
-// whole session: the runtime's FetchMessages caps at 50 messages, so a long
-// session has history that is neither in the request nor otherwise reachable,
-// and that older material is precisely what "like we discussed earlier" is
-// asking for. Passing nil is safe and falls back to excluding the current
+// inContext is the budget-admitted request as the caller has it so far — the
+// messages that will actually be in front of the model. Recall uses it to skip
+// current-session hits that would merely duplicate context. History dropped by
+// prompt budgeting and history older than FetchMessages' 50-message cap remain
+// recallable. Passing nil is safe and falls back to excluding the current
 // session wholesale, which never duplicates but can recall nothing.
 //
 // It never returns an error. Recall is an enhancement, and a backend that is
 // down, slow, or empty must degrade to "no block" rather than fail the turn.
 func (r *Recaller) Recall(ctx context.Context, currentSessionID string, userText string, inContext []llm.ChatMessage) (llm.ChatMessage, bool) {
-	if r == nil || r.Search == nil {
+	return r.PrepareRecall(ctx, currentSessionID, userText)(ctx, inContext)
+}
+
+// PrepareRecall performs the query work once and returns a cheap rank/render
+// function for the admitted context of each model dispatch in the same run.
+func (r *Recaller) PrepareRecall(
+	ctx context.Context,
+	currentSessionID string,
+	userText string,
+) func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool) {
+	none := func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool) {
 		return llm.ChatMessage{}, false
+	}
+	if r == nil || r.Search == nil {
+		return none
 	}
 	queries := terms(userText)
 	if len(queries) == 0 {
-		return llm.ChatMessage{}, false
+		return none
 	}
 	timeout := r.Timeout
 	if timeout <= 0 {
@@ -159,9 +219,9 @@ func (r *Recaller) Recall(ctx context.Context, currentSessionID string, userText
 	// FTS5 OR/AND operators cannot be injected. One single-term query each (a
 	// one-word phrase is a plain term match) and merge here instead. The store is
 	// a local SQLite file over loopback, so the extra round-trips are cheap.
-	hits := make(map[string][]Excerpt, len(queries))
+	prepared := newPreparedRecallHits()
 	for _, query := range queries {
-		found, err := r.Search.SearchMessages(ctx, query, perTermHits)
+		found, err := r.Search.SearchMessages(ctx, query, "", currentSessionID, perScopeTermHits)
 		if err != nil {
 			// Stop, but keep what earlier terms already returned. The queries share
 			// one deadline, so the usual failure is a late term tripping it —
@@ -170,37 +230,67 @@ func (r *Recaller) Recall(ctx context.Context, currentSessionID string, userText
 			// leaves hits empty, so a dead backend produces no block at all.
 			break
 		}
-		hits[query] = found
+		if currentSessionID != "" {
+			currentSessionFound, currentErr := r.Search.SearchMessages(
+				ctx,
+				query,
+				currentSessionID,
+				"",
+				perScopeTermHits,
+			)
+			found = append(found, currentSessionFound...)
+			if currentErr != nil {
+				prepared.addTerm(query, found, r.MaxChars)
+				break
+			}
+		}
+		prepared.addTerm(query, found, r.MaxChars)
 	}
 
-	// rank fills in a default for any budget the caller left unset.
-	excerpts := rank(hits, currentSessionID, inContextKeys(inContext), r.MaxExcerpts, r.MaxChars)
-	return Render(excerpts)
+	return func(rankCtx context.Context, inContext []llm.ChatMessage) (llm.ChatMessage, bool) {
+		if rankCtx.Err() != nil {
+			return llm.ChatMessage{}, false
+		}
+		// rank fills in a default for any budget the caller left unset.
+		excerpts := rankPrepared(prepared, currentSessionID, inContextKeys(inContext), r.MaxExcerpts, r.MaxChars)
+		return Render(excerpts)
+	}
 }
 
-// inContextKeys indexes the messages the caller has already placed in the
-// request. nil means "the caller did not say", which rank reads as the
-// conservative assumption that the whole current session is present.
-//
-// The key is role plus content because that is all the caller has: its copy of
-// the request is []llm.ChatMessage, which carries no row ids. That is fine for
-// this question — "is this text already in front of the model?" is about the
-// text, not about identity — and it is the opposite of the mistake dedupKey
-// avoids, where the row id exists and must be used. A miss costs one duplicated
-// line; it can never surface a wrong answer.
-func inContextKeys(messages []llm.ChatMessage) map[string]bool {
+// inContextIndex records exact persisted message IDs when available and
+// occurrence counts for live messages that do not have an ID.
+type inContextIndex struct {
+	messageIDs  map[string]bool
+	occurrences map[string]int
+}
+
+// inContextKeys indexes messages the caller has already placed in the request.
+// Exact row identity wins. Role-plus-content counts are only the fallback for a
+// live message without an ID; counts ensure admitting one duplicate does not
+// suppress every older identical row. nil means "the caller did not say", which
+// rank reads as the conservative assumption that the whole current session is
+// present.
+func inContextKeys(messages []llm.ChatMessage) *inContextIndex {
 	if len(messages) == 0 {
 		return nil
 	}
-	keys := make(map[string]bool, len(messages))
-	for _, message := range messages {
-		keys[inContextKey(message.Role, message.Content)] = true
+	index := &inContextIndex{
+		messageIDs:  make(map[string]bool, len(messages)),
+		occurrences: make(map[string]int, len(messages)),
 	}
-	return keys
+	for _, message := range messages {
+		if message.MessageID != "" {
+			index.messageIDs[message.MessageID] = true
+			continue
+		}
+		index.occurrences[inContextKey(message.Role, message.Content)]++
+	}
+	return index
 }
 
 func inContextKey(role string, content string) string {
-	return role + "|" + strings.TrimSpace(content)
+	sum := sha256.Sum256([]byte(role + "|" + strings.TrimSpace(content)))
+	return string(sum[:])
 }
 
 // terms reduces the user's text to search terms: lowercased, stopwords and very
@@ -252,11 +342,11 @@ type scored struct {
 // rank merges per-term hits into one ordered, budgeted list: most distinct terms
 // matched first, most recent breaking ties.
 //
-// inContext holds the keys of the messages already in the request (see
+// inContext holds occurrence counts for messages already in the request (see
 // inContextKeys); nil means the caller did not say, and the whole current
 // session is assumed present. Budgets are optional here too: a non-positive
 // value takes the package default rather than meaning "none".
-func rank(hits map[string][]Excerpt, currentSessionID string, inContext map[string]bool, maxExcerpts int, maxChars int) []Excerpt {
+func rank(hits map[string][]Excerpt, currentSessionID string, inContext *inContextIndex, maxExcerpts int, maxChars int) []Excerpt {
 	if maxExcerpts <= 0 {
 		maxExcerpts = defaultMaxExcerpts
 	}
@@ -264,6 +354,19 @@ func rank(hits map[string][]Excerpt, currentSessionID string, inContext map[stri
 		maxChars = defaultMaxChars
 	}
 	byKey := map[string]*scored{}
+	candidates := make(map[string]preparedRecallCandidate)
+	for _, found := range hits {
+		for _, excerpt := range found {
+			key := dedupKey(excerpt)
+			if _, exists := candidates[key]; !exists {
+				candidates[key] = preparedRecallCandidate{
+					excerpt:    excerpt,
+					contextKey: inContextKey(excerpt.Role, excerpt.Content),
+				}
+			}
+		}
+	}
+	suppressed := suppressedCurrentSessionCandidates(candidates, currentSessionID, inContext)
 	next := 0
 	// Iterate terms in a stable order so the result does not depend on Go's
 	// randomised map iteration.
@@ -275,16 +378,6 @@ func rank(hits map[string][]Excerpt, currentSessionID string, inContext map[stri
 
 	for _, term := range termKeys {
 		for _, excerpt := range hits[term] {
-			// Drop what the model can already see. For the current session that is
-			// the messages the caller fetched — NOT the whole session: the runtime
-			// fetches a bounded window (50 messages), so anything older is absent
-			// from the request and recallable like any other past material. When the
-			// caller says nothing, assume the whole session is present: duplicating
-			// context is the worse failure of the two to make silently.
-			if excerpt.SessionID == currentSessionID &&
-				(inContext == nil || inContext[inContextKey(excerpt.Role, excerpt.Content)]) {
-				continue
-			}
 			if excerpt.Role != "user" && excerpt.Role != "assistant" {
 				continue
 			}
@@ -292,6 +385,9 @@ func rank(hits map[string][]Excerpt, currentSessionID string, inContext map[stri
 				continue
 			}
 			key := dedupKey(excerpt)
+			if suppressed[key] {
+				continue
+			}
 			if existing, ok := byKey[key]; ok {
 				existing.matches++
 				continue
@@ -300,20 +396,142 @@ func rank(hits map[string][]Excerpt, currentSessionID string, inContext map[stri
 			next++
 		}
 	}
+	return budgetScored(byKey, currentSessionID, maxExcerpts, maxChars)
+}
 
-	ordered := make([]*scored, 0, len(byKey))
-	for _, entry := range byKey {
-		ordered = append(ordered, entry)
+func rankPrepared(
+	prepared *preparedRecallHits,
+	currentSessionID string,
+	inContext *inContextIndex,
+	maxExcerpts int,
+	maxChars int,
+) []Excerpt {
+	if prepared == nil {
+		return nil
 	}
-	sort.SliceStable(ordered, func(i, j int) bool {
-		if ordered[i].matches != ordered[j].matches {
-			return ordered[i].matches > ordered[j].matches
+	if maxExcerpts <= 0 {
+		maxExcerpts = defaultMaxExcerpts
+	}
+	if maxChars <= 0 {
+		maxChars = defaultMaxChars
+	}
+	byKey := make(map[string]*scored, len(prepared.candidates))
+	suppressed := suppressedCurrentSessionCandidates(prepared.candidates, currentSessionID, inContext)
+	next := 0
+	termKeys := make([]string, 0, len(prepared.byTerm))
+	for term := range prepared.byTerm {
+		termKeys = append(termKeys, term)
+	}
+	sort.Strings(termKeys)
+	for _, term := range termKeys {
+		for _, key := range prepared.byTerm[term] {
+			candidate, ok := prepared.candidates[key]
+			if !ok {
+				continue
+			}
+			if suppressed[key] {
+				continue
+			}
+			if existing, ok := byKey[key]; ok {
+				existing.matches++
+				continue
+			}
+			byKey[key] = &scored{
+				excerpt: candidate.excerpt,
+				matches: 1,
+				order:   next,
+			}
+			next++
 		}
-		if !ordered[i].excerpt.CreatedAt.Equal(ordered[j].excerpt.CreatedAt) {
-			return ordered[i].excerpt.CreatedAt.After(ordered[j].excerpt.CreatedAt)
+	}
+	return budgetScored(byKey, currentSessionID, maxExcerpts, maxChars)
+}
+
+func suppressedCurrentSessionCandidates(
+	candidates map[string]preparedRecallCandidate,
+	currentSessionID string,
+	inContext *inContextIndex,
+) map[string]bool {
+	suppressed := make(map[string]bool)
+	if inContext == nil {
+		for key, candidate := range candidates {
+			if candidate.excerpt.SessionID == currentSessionID {
+				suppressed[key] = true
+			}
 		}
-		return ordered[i].order < ordered[j].order
-	})
+		return suppressed
+	}
+
+	type keyedCandidate struct {
+		key       string
+		candidate preparedRecallCandidate
+	}
+	byContextKey := make(map[string][]keyedCandidate)
+	for key, candidate := range candidates {
+		if candidate.excerpt.SessionID != currentSessionID {
+			continue
+		}
+		if candidate.excerpt.MessageID != "" && inContext.messageIDs[candidate.excerpt.MessageID] {
+			suppressed[key] = true
+			continue
+		}
+		byContextKey[candidate.contextKey] = append(byContextKey[candidate.contextKey], keyedCandidate{
+			key:       key,
+			candidate: candidate,
+		})
+	}
+	for contextKey, group := range byContextKey {
+		count := inContext.occurrences[contextKey]
+		if count <= 0 {
+			continue
+		}
+		sort.Slice(group, func(left, right int) bool {
+			leftTime := group[left].candidate.excerpt.CreatedAt
+			rightTime := group[right].candidate.excerpt.CreatedAt
+			if !leftTime.Equal(rightTime) {
+				return leftTime.After(rightTime)
+			}
+			return group[left].key < group[right].key
+		})
+		if count > len(group) {
+			count = len(group)
+		}
+		for index := 0; index < count; index++ {
+			suppressed[group[index].key] = true
+		}
+	}
+	return suppressed
+}
+
+func budgetScored(
+	byKey map[string]*scored,
+	currentSessionID string,
+	maxExcerpts int,
+	maxChars int,
+) []Excerpt {
+	earlierSession := make([]*scored, 0, len(byKey))
+	currentSession := make([]*scored, 0, len(byKey))
+	for _, entry := range byKey {
+		if entry.excerpt.SessionID == currentSessionID {
+			currentSession = append(currentSession, entry)
+		} else {
+			earlierSession = append(earlierSession, entry)
+		}
+	}
+	sortScope := func(entries []*scored) {
+		sort.SliceStable(entries, func(i, j int) bool {
+			if entries[i].matches != entries[j].matches {
+				return entries[i].matches > entries[j].matches
+			}
+			if !entries[i].excerpt.CreatedAt.Equal(entries[j].excerpt.CreatedAt) {
+				return entries[i].excerpt.CreatedAt.After(entries[j].excerpt.CreatedAt)
+			}
+			return entries[i].order < entries[j].order
+		})
+	}
+	sortScope(earlierSession)
+	sortScope(currentSession)
+	ordered := append(earlierSession, currentSession...)
 
 	out := make([]Excerpt, 0, len(ordered))
 	remaining := maxChars
@@ -448,8 +666,10 @@ func Render(excerpts []Excerpt) (llm.ChatMessage, bool) {
 }
 
 // singleLine collapses every run of line breaks and other control characters
-// into one space, so an excerpt occupies exactly one rendered line. Content is
-// already character-budgeted, so folding it loses nothing but the line breaks.
+// into one space, so an excerpt occupies exactly one rendered line. It also
+// neutralizes the fixed block delimiter so quoted history cannot terminate its
+// own trust boundary. Content is already character-budgeted, so folding it
+// loses nothing but the line breaks.
 func singleLine(content string) string {
 	var builder strings.Builder
 	builder.Grow(len(content))
@@ -465,5 +685,6 @@ func singleLine(content string) string {
 		space = false
 		builder.WriteRune(r)
 	}
-	return strings.TrimSpace(builder.String())
+	line := strings.TrimSpace(builder.String())
+	return strings.ReplaceAll(line, endMarker, "[end marker in recalled text]")
 }

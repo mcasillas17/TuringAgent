@@ -64,6 +64,8 @@ The default local model path is Ollama:
 ```text
 OLLAMA_BASE_URL=http://host.docker.internal:11434
 OLLAMA_MODEL=qwen2.5:7b
+OLLAMA_CONTEXT_WINDOW_TOKENS=32768
+OLLAMA_MAX_OUTPUT_TOKENS=2048
 ```
 
 OpenAI-compatible models can be configured with:
@@ -72,9 +74,28 @@ OpenAI-compatible models can be configured with:
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini
+OPENAI_CONTEXT_WINDOW_TOKENS=32768
+OPENAI_MAX_OUTPUT_TOKENS=2048
 ```
 
-The Flutter client sends the selected provider with each message. The backend owns provider routing and model execution.
+Both context values must be integers from `1` through `16777216`. Each output value must be positive and smaller than its context window; invalid configuration stops the runtime at startup. Ollama receives `num_predict` plus an explicit `num_ctx` rounded up to a stable power-of-two bucket that covers exact admitted request bytes and output reserve, capped by `OLLAMA_CONTEXT_WINDOW_TOKENS`; small requests avoid the cap's full KV-cache allocation while nearby turns reuse one runner size. OpenAI-compatible providers and routed external agents use their window for local admission and receive `max_completion_tokens` for o1/o3/o4 and GPT-5 model families, or `max_tokens` otherwise, so no Ollama-only option leaks onto their wire format. Operators must match each cap to the selected model because Turing does not currently discover model capabilities.
+
+Before dispatch, each built-in provider serializes the exact JSON request it would send. The runtime conservatively counts one UTF-8 request byte as an upper bound of one prompt token and requires that bound plus the output reservation fit the configured window. This intentionally avoids claiming exact tokenizer or billing usage while providing one deterministic bound for messages, tool schemas, aliases, and provider framing.
+
+Admission priority is:
+
+1. Attached skills, the current user turn, and every live assistant tool-call/result message and correlation ID. Oversized result bodies are replaced whole by explicit omission markers.
+2. A stable prefix of whole optional tool definitions; any definition referenced by live protocol is mandatory.
+3. The whole attributed recall block.
+4. A contiguous suffix of complete history turns, newest first.
+
+Recall search runs once per agent run, with separate bounded earlier-session and current-session searches per term so one scope cannot crowd the other out. Earlier-session matches receive excerpt slots first; omitted current-session history fills remaining capacity. The runtime caches one recall-budget-bounded payload per unique message plus lightweight per-term references. Fetched history and the live user turn retain message IDs through context assembly, so re-ranking suppresses exact admitted rows; occurrence counts are only a defensive fallback for ID-less callers. The runtime permits up to three ranking/budget passes under one two-second deadline if adding recall changes the contiguous history suffix. One broad fallback allows possible duplication rather than silently excluding a fetched current-session turn from both paths.
+
+Optional material is removed only in whole units. Whenever the omission set changes, the runtime emits an `agent.run.step` with `reason=context_budget`; the orchestrator persists it and the Flutter client renders its `note` inline during the live run. The replay watermark currently suppresses historical run notices on reopen. Mandatory live protocol that does not fit even with minimal result markers fails with `context_budget_exceeded`; a prospective tool chain is checked before tool execution. Provider request marshaling retains a separate 16 MiB hard limit but never trims history itself.
+
+A provider completion with finish reason `length` emits a durable `agent.run.step` with `reason=model_output_limit`, the configured reservation, and the relevant environment setting. The partial answer can still complete, but the cap is never silent; for a complete tool-call turn, the notice precedes tool execution. An unfinished OpenAI-compatible tool fragment at `length` is discarded rather than executed or mislabeled as protocol corruption.
+
+The Flutter client sends the selected provider with each message. The backend owns provider routing, context admission, and model execution.
 
 ## Approval flow
 
