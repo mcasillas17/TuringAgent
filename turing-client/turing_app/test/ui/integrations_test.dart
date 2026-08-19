@@ -351,7 +351,15 @@ void main() {
         find.textContaining('deletes the connection and its history'),
         findsOneWidget,
       );
-      await tester.tap(find.widgetWithText(TextButton, 'Remove'));
+      // Scoped to the dialog: the card's own "Remove" is still mounted
+      // behind it, so an unscoped finder matches two buttons and which one
+      // wins is a matter of timing. It passed locally and failed in CI.
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.widgetWithText(TextButton, 'Remove'),
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(api.deleted, ['conn_1']);
