@@ -786,13 +786,8 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 	connectedWorker.mu.Unlock()
 	if !supported {
 		_ = connectedWorker.releaseRun(assigned.RunId)
-		if err := s.requeueAssignments([]assignment{currentAssignment}); err != nil {
-			if !errors.Is(err, repository.ErrAssignmentFenced) {
-				return err
-			}
-			if err := s.acknowledgeFencedExecutionExit(assigned.RunId); err != nil {
-				return err
-			}
+		if err := s.releaseClaimedAssignment(currentAssignment); err != nil {
+			return err
 		}
 		s.refreshPendingCapabilityStateAdvisory(
 			ctx, "worker route changed before assignment delivery", workerID, true, false,
@@ -881,6 +876,14 @@ func (s *Server) requeueAssignments(assignments []assignment) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (s *Server) releaseClaimedAssignment(claimed assignment) error {
+	err := s.requeueAssignments([]assignment{claimed})
+	if !errors.Is(err, repository.ErrAssignmentFenced) {
+		return err
+	}
+	return s.acknowledgeFencedExecutionExit(claimed.runID)
 }
 
 func (s *Server) reconcileAssignments(assignments []assignment, workerID string) (bool, error) {
@@ -1106,7 +1109,7 @@ func (s *Server) dispatchToWorker(
 		len(worker.assignments) >= worker.maxConcurrent ||
 		!workerCapabilitiesSupportRoute(worker.capabilities, routingRequirementsForJob(job)) {
 		worker.mu.Unlock()
-		if err := s.requeueAssignments([]assignment{claimedAssignment}); err != nil {
+		if err := s.releaseClaimedAssignment(claimedAssignment); err != nil {
 			return false, false, false, err
 		}
 		return false, false, true, nil
@@ -1120,7 +1123,7 @@ func (s *Server) dispatchToWorker(
 	case <-ctx.Done():
 		delete(worker.assignments, job.RunID)
 		worker.mu.Unlock()
-		return false, false, false, errors.Join(ctx.Err(), s.requeueAssignments([]assignment{claimedAssignment}))
+		return false, false, false, errors.Join(ctx.Err(), s.releaseClaimedAssignment(claimedAssignment))
 	}
 }
 

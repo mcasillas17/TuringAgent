@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -802,6 +803,166 @@ func TestCapabilityFenceRestartsDispatchForWorkerAddedDuringClaim(t *testing.T) 
 		}
 	case <-time.After(time.Second):
 		t.Fatal("capability-fenced claim was stranded instead of restarting dispatch")
+	}
+}
+
+func TestCancellationFenceAfterClaimReleasesTerminalExecution(t *testing.T) {
+	h := newHarness(t)
+	stream := connectWorkerCapabilities(t, h, "worker-cancelled-claim", "registration-cancelled-claim", modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+	))
+	defer func() { _ = stream.CloseSend() }()
+	session, err := h.repo.CreateSession(context.Background(), "Cancelled claim fence")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "cancel after claim", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := h.database.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitCount := h.database.Stats().WaitCount
+	dispatchDone := make(chan error, 1)
+	go func() { dispatchDone <- h.service.DispatchPending(context.Background()) }()
+	deadline := time.Now().Add(time.Second)
+	for h.database.Stats().WaitCount == waitCount {
+		if time.Now().After(deadline) {
+			_ = tx.Rollback()
+			t.Fatal("dispatch never reached the database wait")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	worker := h.service.registeredWorker("worker-cancelled-claim")
+	worker.mu.Lock()
+	workerLocked := true
+	defer func() {
+		if workerLocked {
+			worker.mu.Unlock()
+		}
+	}()
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		var status string
+		if err := h.database.QueryRowContext(
+			context.Background(), `SELECT status FROM jobs WHERE id = ?`, enqueued.JobID,
+		).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status == "in_progress" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("dispatch did not reserve the job")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, err := h.repo.CancelRunWithEvent(
+		context.Background(), enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	unsupported, _, err := decodeWorkerCapabilities(modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, "gpt-4o-mini", 8192, 1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.capabilities = unsupported
+	worker.mu.Unlock()
+	workerLocked = false
+	if err := <-dispatchDone; err != nil {
+		t.Fatalf("terminal claim fence failed dispatch: %v", err)
+	}
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "cancelled" || run.ExecutionActive || run.ExecutionState != "exited" {
+		t.Fatalf("released cancelled claim = %+v, want inactive exited execution", run)
+	}
+}
+
+func TestCancellationFenceWhileQueueingCommandDoesNotJoinAssignmentFence(t *testing.T) {
+	h := newHarness(t)
+	capabilities, _, err := decodeWorkerCapabilities(modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := &worker{
+		commands:       make(chan *turingv1.RuntimeCommand, 1),
+		done:           make(chan struct{}),
+		registrationID: "registration-cancelled-command",
+		capabilities:   capabilities,
+		maxConcurrent:  1,
+		lastHeartbeat:  time.Now().UTC(),
+		assignments:    map[string]assignment{},
+	}
+	worker.commands <- &turingv1.RuntimeCommand{}
+	session, err := h.repo.CreateSession(context.Background(), "Cancelled queued command")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "cancel while queueing", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	type dispatchResult struct {
+		err error
+	}
+	dispatchDone := make(chan dispatchResult, 1)
+	go func() {
+		_, _, _, err := h.service.dispatchToWorker(ctx, "worker-cancelled-command", worker)
+		dispatchDone <- dispatchResult{err: err}
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		var status string
+		if err := h.database.QueryRowContext(
+			context.Background(), `SELECT status FROM jobs WHERE id = ?`, enqueued.JobID,
+		).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status == "in_progress" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("dispatch did not reserve the job")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, err := h.repo.CancelRunWithEvent(
+		context.Background(), enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	result := <-dispatchDone
+	if !errors.Is(result.err, context.Canceled) {
+		t.Fatalf("dispatch error = %v, want context cancellation", result.err)
+	}
+	if errors.Is(result.err, repository.ErrAssignmentFenced) {
+		t.Fatalf("dispatch leaked benign assignment fence: %v", result.err)
+	}
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "cancelled" || run.ExecutionActive || run.ExecutionState != "exited" {
+		t.Fatalf("released cancelled command = %+v, want inactive exited execution", run)
 	}
 }
 
