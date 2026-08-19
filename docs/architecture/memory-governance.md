@@ -25,6 +25,9 @@ replaces the affected audit payload with `{"scrubbed":true}` before deleting
 the session. The remaining row may prove that an action or deletion occurred;
 it may not preserve prompts, arguments, results, extracted facts, summaries,
 identifiers copied from content, or any other recoverable user material.
+The schema manifest restricts the exception to an explicit allowlist, while
+repository deletion tests cover both run-correlated and session-targeted audit
+rows.
 
 This contract applies to future facts, preferences, instructions, candidates,
 revisions, summaries, embeddings, vector indexes, graph edges, caches,
@@ -123,8 +126,10 @@ retention jobs.
 
 A consistent backup is a copy of governed state, not an escape from the
 contract. Backup tooling must use SQLite's supported consistency mechanisms
-rather than copying a live database and WAL independently. A restore reruns
-schema invariants before the restored state is used.
+rather than copying a live database and WAL independently. A future restore
+path must validate the restored schema before use. The current guard is
+CI-only, so backup/restore work must first extract or reproduce the invariant
+in callable production code; MEM-001 does not provide restore tooling.
 
 Memory export must be explicit, local by default, and open-format. It includes
 scope, lifecycle, revisions, provenance, and timestamps so an export does not
@@ -182,9 +187,13 @@ contract does not imply that either has shipped.
 The DB schema-invariant test maintains an exhaustive policy manifest for
 application-owned ordinary and virtual tables. It ignores SQLite's internal
 and FTS shadow tables, but not new application tables. For each derived table,
-the guard walks declared foreign keys and requires a transitive
-`ON DELETE CASCADE` path to the policy's source table. It separately verifies
-the external-content and delete-trigger contract for `messages_fts`.
+the guard requires a distinct, present, classified source, then walks declared
+foreign keys and requires a transitive `ON DELETE CASCADE` path whose child
+columns are explicitly `NOT NULL`. Independent source/configuration roots need
+a written rationale rather than acting as a silent escape hatch. The guard
+separately verifies the external-content declaration and delete-trigger shape
+for `messages_fts`, then inserts and deletes a probe to prove the index row is
+removed transactionally.
 
 The regression suite proves:
 
@@ -192,7 +201,7 @@ The regression suite proves:
 - a synthetic derived-text table with a source foreign key but no
   `ON DELETE CASCADE` is rejected;
 - a new unclassified application table is rejected; and
-- a scrubbed exception without a justification is rejected.
+- an unapproved or unjustified scrubbed exception is rejected.
 
 The guard is a CI contract, not a startup refusal. Migration authors must
 classify a new table and prove its lifecycle in the same change that creates

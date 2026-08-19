@@ -189,6 +189,7 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 		"0010_session_title_origin",
 		"0010_telemetry",
 		"0011_approval_rationale",
+		"0012_derived_state_provenance",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("applied migrations = %v, want %v", got, want)
@@ -289,8 +290,120 @@ func TestCurrentSchemaVersionUsesLatestEmbeddedMigrationPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "0011" {
-		t.Fatalf("CurrentSchemaVersion = %q, want 0011", got)
+	if got != "0012" {
+		t.Fatalf("CurrentSchemaVersion = %q, want 0012", got)
+	}
+}
+
+func TestDerivedStateCascadeKeysAreExplicitlyNonNull(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, check := range []struct {
+		table  string
+		column string
+	}{
+		{table: "session_external_agent", column: "session_id"},
+		{table: "automation_runs", column: "run_id"},
+	} {
+		rows, err := database.QueryContext(ctx, "PRAGMA table_info("+quoteSQLiteIdentifier(check.table)+")")
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for rows.Next() {
+			var columnID, notNull, primaryKey int
+			var name, columnType string
+			var defaultValue sql.NullString
+			if err := rows.Scan(
+				&columnID,
+				&name,
+				&columnType,
+				&notNull,
+				&defaultValue,
+				&primaryKey,
+			); err != nil {
+				_ = rows.Close()
+				t.Fatal(err)
+			}
+			if name == check.column {
+				found = true
+				if notNull != 1 {
+					_ = rows.Close()
+					t.Fatalf("%s.%s notnull = %d, want 1", check.table, check.column, notNull)
+				}
+			}
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if !found {
+			t.Fatalf("%s.%s is missing", check.table, check.column)
+		}
+	}
+}
+
+func TestDerivedStateProvenanceMigrationPreservesExistingRows(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	names, err := migrationNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if name == "0012_derived_state_provenance.sql" {
+			break
+		}
+		applyMigration(t, ctx, database, name)
+	}
+
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO sessions (id, title, status, created_at, updated_at)
+		VALUES ('session_before_provenance', 'Existing', 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+		INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at)
+		VALUES ('message_before_provenance', 'session_before_provenance', 'user', 'hello', 'text', 1, '2026-01-01T00:00:00Z');
+		INSERT INTO agent_runs (id, session_id, user_message_id, agent_id, trace_id, status, model_provider, model_name, created_at)
+		VALUES ('run_before_provenance', 'session_before_provenance', 'message_before_provenance', 'general_assistant', 'trace_before_provenance', 'completed', 'ollama', 'llama3.2', '2026-01-01T00:00:00Z');
+		INSERT INTO external_agents (id, display_name, provider, base_url, model, credential_ref, created_at, updated_at)
+		VALUES ('agent_before_provenance', 'Remote', 'openai', 'https://example.com/v1', 'model', 'remote', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+		INSERT INTO session_external_agent (session_id, agent_id, routed_at)
+		VALUES ('session_before_provenance', 'agent_before_provenance', '2026-01-01T00:00:00Z');
+		INSERT INTO automation_runs (run_id, automation_id, automation_name, allowed_tools_json, fired_at)
+		VALUES ('run_before_provenance', 'automation_before_provenance', 'Existing automation', '[]', '2026-01-01T00:00:00Z');
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	applyMigration(t, ctx, database, "0012_derived_state_provenance.sql")
+
+	var routedAgentID string
+	if err := database.QueryRowContext(ctx, `
+		SELECT agent_id FROM session_external_agent WHERE session_id = 'session_before_provenance'
+	`).Scan(&routedAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if routedAgentID != "agent_before_provenance" {
+		t.Fatalf("routed agent = %q, want agent_before_provenance", routedAgentID)
+	}
+	var automationName string
+	if err := database.QueryRowContext(ctx, `
+		SELECT automation_name FROM automation_runs WHERE run_id = 'run_before_provenance'
+	`).Scan(&automationName); err != nil {
+		t.Fatal(err)
+	}
+	if automationName != "Existing automation" {
+		t.Fatalf("automation name = %q, want Existing automation", automationName)
 	}
 }
 

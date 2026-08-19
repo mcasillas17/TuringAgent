@@ -215,6 +215,35 @@ func TestDeleteSessionKeepsAuditRowButScrubsItsPayload(t *testing.T) {
 	}
 }
 
+func TestDeleteSessionScrubsSessionTargetedRoutingAudit(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Delete routed session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := mustCreateAgent(t, ctx, repo, anthropicAgent())
+	if _, err := repo.SetSessionAgent(ctx, session.SessionID, agent.AgentID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.DeleteSession(ctx, session.SessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	var payload string
+	if err := repo.db.QueryRowContext(ctx, `
+		SELECT COALESCE(payload_json, '')
+		FROM audit_logs
+		WHERE action = 'session.routed' AND target = ?
+	`, session.SessionID).Scan(&payload); err != nil {
+		t.Fatalf("routing audit row did not survive deletion: %v", err)
+	}
+	if payload != scrubbedAuditPayload {
+		t.Fatalf("routing audit payload = %q, want %q", payload, scrubbedAuditPayload)
+	}
+}
+
 // The scrub is correlated, not global: another session's audit must be intact.
 func TestDeleteSessionLeavesOtherSessionsAuditIntact(t *testing.T) {
 	repo := New(openTestDB(t))
