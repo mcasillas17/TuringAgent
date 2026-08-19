@@ -2,7 +2,7 @@
 
 **Audit date:** 2026-08-18
 **Original audit snapshot:** `be2c8c9`
-**Roadmap status last verified against the code:** 2026-08-18, at `591c1ae`
+**Roadmap status last verified against the code:** 2026-08-18, at `b5b5432`
 **Scope:** Backend architecture, local personal-agent behavior, durable memory, privacy, reliability, integrations, and the path to multiple specialized agents.
 
 ## Executive conclusion
@@ -254,7 +254,7 @@ Task IDs are stable references, not priority numbers. Delivery order follows `do
 
 **Outcome:** The assembled prompt cannot silently exceed the model's context window, and recall cannot be dropped without notice.
 
-**Shipped behavior:** Provider caps and output reservations are validated at startup. Ollama receives `num_predict` plus an explicit per-request `num_ctx` derived below its configured cap; OpenAI-compatible providers receive `max_completion_tokens` for o1/o3/o4 and GPT-5 model families, or `max_tokens` otherwise, without Ollama fields. Built-in providers conservatively account from their exact serialized request. The runtime keeps skills, the current turn, live tool protocol messages/correlation, required schemas, a stable optional-schema prefix, whole recall, and a contiguous newest-history suffix in that order. Recall searches once per run, caches one bounded payload per unique message plus term references, and re-ranks against admitted history using exact fetched-message IDs plus live-message occurrence counts with three convergence passes under one two-second deadline, then one broad fallback. Oversized tool-result bodies become explicit omission markers; prospective protocol is checked before executing tools. Changed omissions and provider `length` stops produce durable `agent.run.step` events, rendered during the live run but currently suppressed by the client replay watermark on reopen.
+**Shipped behavior:** Provider caps and output reservations are validated at startup. Ollama receives `num_predict` plus an explicit per-request `num_ctx` derived below its configured cap; OpenAI-compatible providers receive `max_completion_tokens` for o1/o3/o4 and GPT-5 model families, or `max_tokens` otherwise, without Ollama fields. Built-in providers conservatively account from their exact serialized request. The runtime keeps skills, the current turn, live tool protocol messages/correlation, required schemas, a stable optional-schema prefix, whole recall, and a contiguous newest-history suffix in that order. Recall searches once per run, caches one bounded payload per unique message plus term references, and re-ranks against admitted history using exact fetched and live user-message IDs, with occurrence counts only as an ID-less fallback, three convergence passes under one two-second deadline, then one broad fallback. Oversized tool-result bodies become explicit omission markers; prospective protocol is checked before executing tools. Changed omissions and provider `length` stops produce durable `agent.run.step` events, rendered during the live run but currently suppressed by the client replay watermark on reopen.
 
 **Limit:** The estimate is intentionally conservative—one serialized UTF-8 request byte as an upper bound of one prompt token plus a configured output reservation—not tokenizer-exact usage. Model capability discovery and provenance-preserving summaries remain future work (MEM-014).
 
