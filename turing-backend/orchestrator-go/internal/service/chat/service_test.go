@@ -176,6 +176,49 @@ func TestSendMessageStreamsQueuedEvent(t *testing.T) {
 	}
 }
 
+func TestSendMessagePublishesSessionUpdatedBeforeQueued(t *testing.T) {
+	h := newHarness(t)
+	session, err := h.repo.CreateSession(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, unsubscribe := h.bus.Subscribe(session.SessionID)
+	defer unsubscribe()
+
+	stream, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
+		SessionId:     session.SessionID,
+		Content:       "What is in the sandbox?",
+		ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:         "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatal(err)
+	}
+
+	first := <-published
+	if first.Type != "session.updated" {
+		t.Fatalf("first published event = %q, want session.updated", first.Type)
+	}
+	if first.RunID != "" {
+		t.Fatalf("session update run_id = %q, want empty", first.RunID)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(first.PayloadJSON), &payload); err != nil {
+		t.Fatalf("decode session update: %v", err)
+	}
+	if payload["title"] != "What is in the sandbox?" {
+		t.Fatalf("session update payload = %+v", payload)
+	}
+
+	second := <-published
+	if second.Type != "agent.run.queued" {
+		t.Fatalf("second published event = %q, want agent.run.queued", second.Type)
+	}
+}
+
 func TestSendMessageRejectsUnknownModelProvider(t *testing.T) {
 	h := newHarness(t)
 	sessionID := h.createSession(t)
@@ -956,6 +999,25 @@ func TestMapChatEventFallsBackToPersistedEvent(t *testing.T) {
 	}
 	if !persisted.Payload.GetFields()["ready"].GetBoolValue() {
 		t.Fatalf("payload = %+v", persisted.Payload)
+	}
+}
+
+func TestMapChatEventMapsSessionUpdatedFallback(t *testing.T) {
+	got := mapChatEvent(events.Event{
+		EventID:     "evt_session_updated",
+		SessionID:   "sess_1",
+		TraceID:     "trace_1",
+		Sequence:    1,
+		Type:        "session.updated",
+		CreatedAt:   "2026-08-18T20:00:00Z",
+		PayloadJSON: `{"title":"First turn","updatedAt":"2026-08-18T20:00:00Z"}`,
+	})
+	persisted := got.GetPersistedEvent()
+	if persisted == nil {
+		t.Fatalf("event = %T, want persisted_event", got.Event)
+	}
+	if persisted.Type != turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_UPDATED {
+		t.Fatalf("event type = %v, want SESSION_UPDATED", persisted.Type)
 	}
 }
 

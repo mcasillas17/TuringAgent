@@ -39,6 +39,7 @@ const TuringEventType$json = {
     {'1': 'TURING_EVENT_TYPE_APPROVAL_CONSUMED', '2': 18},
     {'1': 'TURING_EVENT_TYPE_ERROR', '2': 19},
     {'1': 'TURING_EVENT_TYPE_SYSTEM', '2': 20},
+    {'1': 'TURING_EVENT_TYPE_SESSION_UPDATED', '2': 21},
   ],
 };
 
@@ -59,7 +60,7 @@ final $typed_data.Uint8List turingEventTypeDescriptor = $convert.base64Decode(
     'VVJJTkdfRVZFTlRfVFlQRV9BUFBST1ZBTF9ERU5JRUQQEBImCiJUVVJJTkdfRVZFTlRfVFlQRV'
     '9BUFBST1ZBTF9FWFBJUkVEEBESJwojVFVSSU5HX0VWRU5UX1RZUEVfQVBQUk9WQUxfQ09OU1VN'
     'RUQQEhIbChdUVVJJTkdfRVZFTlRfVFlQRV9FUlJPUhATEhwKGFRVUklOR19FVkVOVF9UWVBFX1'
-    'NZU1RFTRAU');
+    'NZU1RFTRAUEiUKIVRVUklOR19FVkVOVF9UWVBFX1NFU1NJT05fVVBEQVRFRBAV');
 
 @$core.Deprecated('Use turingEventDescriptor instead')
 const TuringEvent$json = {

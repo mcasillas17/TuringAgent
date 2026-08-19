@@ -105,6 +105,45 @@ func TestEventServiceListsPersistedEvents(t *testing.T) {
 	}
 }
 
+func TestEventServiceMapsSessionUpdated(t *testing.T) {
+	h := newEventHarness(t)
+	client := turingv1.NewEventServiceClient(h.conn)
+	ctx := context.Background()
+	session, err := h.repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.AppendEvent(ctx, repository.AppendEventInput{
+		SessionID:   session.SessionID,
+		TraceID:     "trace_1",
+		Type:        "session.updated",
+		PayloadJSON: `{"title":"First turn","updatedAt":"2026-08-18T20:00:00Z"}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := client.ListEvents(ctx, &turingv1.ListEventsRequest{
+		SessionId: session.SessionID,
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if len(resp.Events) != 1 {
+		t.Fatalf("events = %+v, want one session update", resp.Events)
+	}
+	got := resp.Events[0]
+	if got.Type != turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_UPDATED {
+		t.Fatalf("event type = %v, want SESSION_UPDATED", got.Type)
+	}
+	if got.Payload.GetFields()["title"].GetStringValue() != "First turn" {
+		t.Fatalf("payload = %+v", got.Payload)
+	}
+	if got.Payload.GetFields()["updatedAt"].GetStringValue() != "2026-08-18T20:00:00Z" {
+		t.Fatalf("payload = %+v", got.Payload)
+	}
+}
+
 func TestEventServiceListEventsRequiresResyncWhenClientSequenceIsAhead(t *testing.T) {
 	h := newEventHarness(t)
 	client := turingv1.NewEventServiceClient(h.conn)

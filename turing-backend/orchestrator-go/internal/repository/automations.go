@@ -105,13 +105,14 @@ type AutomationRunDefaults struct {
 // mistaking "declined" for "nothing was due" — the latter is how it knows to
 // stop looping.
 type AutomationFire struct {
-	AutomationID string
-	Name         string
-	SessionID    string
-	RunID        string
-	JobID        string
-	TraceID      string
-	QueuedEvent  Event
+	AutomationID        string
+	Name                string
+	SessionID           string
+	RunID               string
+	JobID               string
+	TraceID             string
+	SessionUpdatedEvent Event
+	QueuedEvent         Event
 
 	// Set when the occurrence was passed over rather than run. The schedule
 	// still moved on, so the automation is not stuck; SkippedReason says why.
@@ -544,13 +545,14 @@ func (r *Repository) ClaimDueAutomation(ctx context.Context, at time.Time, defau
 		return AutomationFire{}, false, err
 	}
 	return AutomationFire{
-		AutomationID: automationID,
-		Name:         name,
-		SessionID:    runSessionID,
-		RunID:        enqueued.RunID,
-		JobID:        enqueued.JobID,
-		TraceID:      enqueued.TraceID,
-		QueuedEvent:  enqueued.QueuedEvent,
+		AutomationID:        automationID,
+		Name:                name,
+		SessionID:           runSessionID,
+		RunID:               enqueued.RunID,
+		JobID:               enqueued.JobID,
+		TraceID:             enqueued.TraceID,
+		SessionUpdatedEvent: enqueued.SessionUpdatedEvent,
+		QueuedEvent:         enqueued.QueuedEvent,
 	}, true, nil
 }
 

@@ -92,8 +92,13 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 				fire.Name, fire.AutomationID, fire.SkippedReason)
 			continue
 		}
-		if s.bus != nil && fire.QueuedEvent.EventID != "" {
-			s.bus.Publish(busEvent(fire.QueuedEvent))
+		if s.bus != nil {
+			if fire.SessionUpdatedEvent.EventID != "" {
+				s.bus.Publish(busEvent(fire.SessionUpdatedEvent))
+			}
+			if fire.QueuedEvent.EventID != "" {
+				s.bus.Publish(busEvent(fire.QueuedEvent))
+			}
 		}
 		if s.dispatcher != nil {
 			if err := s.dispatcher.DispatchPending(ctx); err != nil {

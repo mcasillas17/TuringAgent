@@ -223,6 +223,8 @@ func mapEventType(value string) turingv1.TuringEventType {
 		return turingv1.TuringEventType_TURING_EVENT_TYPE_ERROR
 	case "system":
 		return turingv1.TuringEventType_TURING_EVENT_TYPE_SYSTEM
+	case "session.updated":
+		return turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_UPDATED
 	default:
 		return turingv1.TuringEventType_TURING_EVENT_TYPE_UNSPECIFIED
 	}

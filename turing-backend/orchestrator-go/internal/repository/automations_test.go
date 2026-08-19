@@ -235,8 +235,12 @@ func TestClaimDueAutomationFiresWhenDueAndNotBefore(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("claim at due = found %v err %v, want found", found, err)
 	}
-	if fire.RunID == "" || fire.SessionID == "" || fire.QueuedEvent.EventID == "" {
-		t.Fatalf("fire = %+v, want a run, a conversation and a queued event", fire)
+	if fire.RunID == "" || fire.SessionID == "" || fire.SessionUpdatedEvent.EventID == "" || fire.QueuedEvent.EventID == "" {
+		t.Fatalf("fire = %+v, want a run, a conversation and its committed events", fire)
+	}
+	if fire.SessionUpdatedEvent.Sequence >= fire.QueuedEvent.Sequence {
+		t.Fatalf("session update sequence %d, want before queued event %d",
+			fire.SessionUpdatedEvent.Sequence, fire.QueuedEvent.Sequence)
 	}
 	messages, err := repo.ListMessages(ctx, fire.SessionID, 10)
 	if err != nil {
