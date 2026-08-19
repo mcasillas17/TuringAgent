@@ -89,7 +89,7 @@ Admission priority is:
 3. The whole attributed recall block.
 4. A contiguous suffix of complete history turns, newest first.
 
-Recall and history admission converge before dispatch: recall deduplicates against the budget-admitted request, and the runtime rebuilds if adding recall changes the contiguous history suffix. A bounded fallback allows possible duplication rather than silently excluding a fetched current-session turn from both paths.
+Recall and history admission converge before dispatch: recall deduplicates against the budget-admitted request, and the runtime permits up to three rebuilds under one two-second deadline if adding recall changes the contiguous history suffix. One broad fallback allows possible duplication rather than silently excluding a fetched current-session turn from both paths.
 
 Optional material is removed only in whole units. Whenever the omission set changes, the runtime emits an `agent.run.step` with `reason=context_budget`; the orchestrator persists it and the Flutter client renders its `note` inline during the live run. The replay watermark currently suppresses historical run notices on reopen. Mandatory live protocol that does not fit even with minimal result markers fails with `context_budget_exceeded`; a prospective tool chain is checked before tool execution. Provider request marshaling retains a separate 16 MiB hard limit but never trims history itself.
 

@@ -2,7 +2,7 @@
 
 **Audit date:** 2026-08-18
 **Original audit snapshot:** `be2c8c9`
-**Roadmap status last verified against the code:** 2026-08-18, at `9165d7e`
+**Roadmap status last verified against the code:** 2026-08-18, at `09e4ca2`
 **Scope:** Backend architecture, local personal-agent behavior, durable memory, privacy, reliability, integrations, and the path to multiple specialized agents.
 
 ## Executive conclusion
@@ -254,7 +254,7 @@ Task IDs are stable references, not priority numbers. Delivery order follows `do
 
 **Outcome:** The assembled prompt cannot silently exceed the model's context window, and recall cannot be dropped without notice.
 
-**Shipped behavior:** Provider windows and output reservations are validated at startup. Ollama receives `num_ctx` and `num_predict` on every request; OpenAI-compatible providers receive `max_tokens` without Ollama fields. Built-in providers conservatively account from their exact serialized request. The runtime keeps skills, the current turn, live tool protocol messages/correlation, required schemas, a stable optional-schema prefix, whole recall, and a contiguous newest-history suffix in that order. Recall deduplicates against admitted history and converges if adding recall changes that suffix. Oversized tool-result bodies become explicit omission markers; prospective protocol is checked before executing tools. Changed omissions and provider `length` stops produce durable `agent.run.step` events, rendered during the live run but currently suppressed by the client replay watermark on reopen.
+**Shipped behavior:** Provider windows and output reservations are validated at startup. Ollama receives `num_ctx` and `num_predict` on every request; OpenAI-compatible providers receive `max_tokens` without Ollama fields. Built-in providers conservatively account from their exact serialized request. The runtime keeps skills, the current turn, live tool protocol messages/correlation, required schemas, a stable optional-schema prefix, whole recall, and a contiguous newest-history suffix in that order. Recall deduplicates against admitted history with three convergence passes under one two-second deadline, then one broad fallback. Oversized tool-result bodies become explicit omission markers; prospective protocol is checked before executing tools. Changed omissions and provider `length` stops produce durable `agent.run.step` events, rendered during the live run but currently suppressed by the client replay watermark on reopen.
 
 **Limit:** The estimate is intentionally conservative—one serialized UTF-8 request byte as an upper bound of one prompt token plus a configured output reservation—not tokenizer-exact usage. Model capability discovery and provenance-preserving summaries remain future work (MEM-014).
 
