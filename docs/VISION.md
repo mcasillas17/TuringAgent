@@ -4,7 +4,7 @@
 
 Supersedes the stack claims in `docs/superpowers/specs/2026-05-09-project-turing-v1-design.md`, which still describes a Node.js/TypeScript orchestrator over REST/WebSocket. That was replaced by Go + gRPC in #10.
 
-**Last verified against the code:** 2026-08-18, at `83c69b6` (TUR-020 review fixes).
+**Last verified against the code:** 2026-08-18, at `fb4aa49` (TUR-020 review fixes).
 
 ---
 
@@ -43,7 +43,7 @@ A north star that cannot be falsified is decoration. These are the checks:
 
 Each is a decision already made and defended in review, cited to where it happened. They are written down so the next decision matches.
 
-**The user is never left guessing.** A run that retries, exhausts its attempts, hits the tool-iteration cap, answers from recalled context, or omits optional prompt material to honor a configured model window emits a durable notice (#23, #24, #30, #33, TUR-020). Silence is indistinguishable from a hang, so anything that delays or shapes an answer must be visible.
+**The user is never left guessing.** A run that retries, exhausts its attempts, hits the tool-iteration cap, answers from recalled context, omits optional prompt material, or stops at its configured output cap emits a durable notice (#23, #24, #30, #33, TUR-020). Silence is indistinguishable from a hang, so anything that delays or shapes an answer must be visible.
 
 **Recalled context is attributed.** Memory that arrives unattributed reads as confabulation. If an answer draws on an earlier conversation, the user is told (#33).
 
