@@ -6,7 +6,8 @@ session-scoped search, and the public `SessionService.SearchMessages` RPC. The
 Flutter Sessions screen exposes that RPC through **Search conversations**.
 Search spans all sessions, treats the query as one exact phrase, groups matches
 by conversation, and opens the selected conversation. Group headings use the
-session title when it can be loaded and otherwise retain a session-ID fallback.
+same orchestrator-owned title that the session list receives through
+`session.updated`, and otherwise retain a session-ID fallback.
 
 Two follow-up layers were deferred at the time. **Layer 1 has since shipped** (#18, #25): the runtime recalls relevant excerpts from earlier sessions and prepends them to the model context before answering, and #33 added the notice that tells the user when it did. See `agent-runtime-go/internal/memory/recall.go` and the call site in `general_assistant.go`.
 

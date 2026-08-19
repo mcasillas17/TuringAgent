@@ -60,6 +60,7 @@ Each is a decision already made and defended in review, cited to where it happen
 | Model-driven tool calling | Working, live-verified against a real model (#19, #27) |
 | Dynamic tool discovery | Working; runtime reports its registry to the orchestrator (#17, #26) |
 | Cross-session recall | Working — SQLite FTS5, keyword search, attributed to the user (#15, #18, #25, #33) |
+| Stable session titles | Working — derived deterministically from the first usable user turn, persisted by the orchestrator, and streamed to subscribed clients |
 | Approvals | Working; single-use argument-bound JWT, consumed over internal gRPC |
 | Audit | **Write-only.** Rows are recorded; there is no read path in any proto or client |
 | Streaming + resilience | Working; reconnect, requeue, lease recovery, run-visibility notices (#24, #30, #33) |
