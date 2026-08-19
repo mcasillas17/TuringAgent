@@ -504,13 +504,12 @@ statement covers two disjoint sets of rows:
 - every `audit_logs` row whose `correlation_id` matches one of the session's
   runs — the ordinary case, since `correlation_id` is the run id at almost
   every writer; and
-- every `session.routed` / `session.unrouted` row whose `target` is the
-  session id. These two writers (`repository/external_agents.go`) record
-  `correlation_id` as `NULL` and identify the session through `target`
-  instead, so a correlation-only scrub would never reach them and the
-  third-party endpoint host, model, and agent display name would outlive the
-  conversation they describe. The action match is exact, not a prefix, so it
-  covers only the writers that actually use this target convention.
+- every row whose `target` is the session id and whose `correlation_id` is
+  `NULL` or empty. This covers `session.routed` / `session.unrouted` today,
+  because those writers identify the session through `target`, and it also
+  makes future uncorrelated session-level actions scrubbed by default. Without
+  this target path, routing payloads such as the third-party endpoint host,
+  model, and agent display name would outlive the conversation they describe.
 
 Either way the payload is overwritten with the exact tombstone
 `{"scrubbed":true}`. The row itself — `audit_id`, `correlation_id`,
