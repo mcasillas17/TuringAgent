@@ -137,15 +137,11 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       _sessionUpdateStabilityTimer = Timer(const Duration(seconds: 30), () {
         _sessionUpdateStabilityTimer = null;
         if (!mounted || !identical(_sessionUpdateSource, openedSource)) return;
-        setState(() {
-          _sessionUpdateReconnectAttempts = 0;
-          _sessionsFailed = false;
-        });
+        _sessionUpdateReconnectAttempts = 0;
       });
     } catch (_) {
       source?.close();
       _sessionUpdateSource = null;
-      _sessionsFailed = true;
       _scheduleSessionUpdateReconnect();
     }
   }
@@ -158,7 +154,6 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     _sessionUpdateSubscription = null;
     _sessionUpdateSource?.close();
     _sessionUpdateSource = null;
-    setState(() => _sessionsFailed = true);
     _scheduleSessionUpdateReconnect();
   }
 
@@ -214,13 +209,10 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   }
 
   void _applyGlobalSessionUpdated(TuringEvent event) {
-    _applySessionUpdated(event, clearGlobalFailure: true);
+    _applySessionUpdated(event);
   }
 
-  void _applySessionUpdated(
-    TuringEvent event, {
-    bool clearGlobalFailure = false,
-  }) {
+  void _applySessionUpdated(TuringEvent event) {
     if (!mounted) return;
     if (_locallyDeletedSessionIds.contains(event.sessionId)) return;
     final title = event.payload['title'];
@@ -243,9 +235,6 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       updatedAtNanoseconds: updatedAtNanoseconds,
     );
     setState(() {
-      if (clearGlobalFailure) {
-        _sessionsFailed = false;
-      }
       final next = List<Session>.of(_sessions);
       if (index >= 0) {
         final previous = next.removeAt(index);

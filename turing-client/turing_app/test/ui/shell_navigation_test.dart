@@ -1013,6 +1013,24 @@ void main() {
       );
     });
 
+    testWidgets('stream stability does not hide a conversation load failure', (
+      tester,
+    ) async {
+      final api = _FakeApi()..sessionsError = Exception('backend down');
+      await _pumpShell(
+        tester,
+        api: api,
+        size: _desktop,
+        sessionUpdateSourceFactory: _FakeSessionUpdateSource.new,
+      );
+
+      expect(find.text('Could not load conversations.'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 31));
+
+      expect(find.text('Could not load conversations.'), findsOneWidget);
+      expect(find.text('No conversations yet.'), findsNothing);
+    });
+
     testWidgets('a synchronous source error reconnects and resumes updates', (
       tester,
     ) async {
@@ -1473,6 +1491,7 @@ class _FakeApi
   List<AgentDescriptor> agents = const [];
   Object? toolsError;
   Object? agentsError;
+  Object? sessionsError;
   int listToolsCalls = 0;
   int listMessagesCalls = 0;
   final List<String?> createSessionTitles = [];
@@ -1488,6 +1507,8 @@ class _FakeApi
   @override
   Future<List<Session>> listSessions({int limit = 50, String? after}) async {
     listSessionsCalls++;
+    final error = sessionsError;
+    if (error != null) throw error;
     final next = nextListSessions;
     if (next != null) {
       nextListSessions = null;
