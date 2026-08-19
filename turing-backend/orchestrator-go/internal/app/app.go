@@ -113,7 +113,15 @@ func New(cfg config.Config) (*App, error) {
 	automationService := automationsvc.New(repo)
 	eventService := eventsvc.NewServer(repo, eventBus)
 	chatService := chatsvc.New(repo, eventBus, runtimeService, cfg.OllamaModel, cfg.OpenAIModel)
-	auditService := auditsvc.New(repo)
+	// Passing the server-side approval signing secret means the cursor MAC key
+	// is derived deterministically (auditsvc.New domain-separates it), so a
+	// cursor minted before a restart is still accepted after one — as long as
+	// this install's approval secret has not changed. The secret is server-side
+	// and shared with approval-verifying components, never public clients; only
+	// the orchestrator derives this cursor subkey. A public bearer holder cannot
+	// forge a cursor MAC, and rotating that bearer alone leaves cursors valid.
+	// auditsvc.New never returns or logs the derived key.
+	auditService := auditsvc.New(repo, cfg.ApprovalJWTSecret)
 	telemetryService := telemetrysvc.New(repo)
 	// A missing key is not fatal: everything else still works, and the
 	// integrations service says so on its catalogue and refuses to connect an
@@ -181,6 +189,10 @@ func New(cfg config.Config) (*App, error) {
 	turingv1.RegisterEventServiceServer(publicServer, eventService)
 	turingv1.RegisterChatServiceServer(publicServer, chatService)
 	turingv1.RegisterApprovalServiceServer(publicServer, approvalsvc.NewPublicServer(approvalService))
+	// Public only: this is the user reading what was recorded about their own
+	// install. The runtime has nothing to ask it and holding the internal
+	// token should never be enough to read every client's audit trail.
+	turingv1.RegisterAuditServiceServer(publicServer, auditService)
 	turingv1.RegisterSessionServiceServer(internalServer, sessionService)
 	turingv1.RegisterApprovalServiceServer(internalServer, approvalsvc.NewInternalServer(approvalService))
 	turingv1.RegisterRuntimeServiceServer(internalServer, runtimeService)

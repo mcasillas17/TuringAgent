@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../models/agent_descriptor.dart';
+import '../models/audit.dart';
 import '../models/external_agent.dart';
 import '../models/integration.dart';
 import '../models/automation.dart';
@@ -203,6 +204,27 @@ abstract class TuringApi {
   /// The backend REFUSES a window it cannot answer rather than narrowing it,
   /// so the returned window always describes the returned numbers.
   Future<TelemetrySummary> getTelemetrySummary({required int windowDays});
+
+  /// An authenticated, local-only read of the audit log the backend already
+  /// keeps. Every row is redacted server-side before it ever reaches this
+  /// client: the response never carries raw tool arguments, result
+  /// summaries, credentials, approval tokens, or other secrets, only the
+  /// typed fields the server's own per-action allowlist chose to disclose.
+  ///
+  /// [correlationId] and [action] are exact-match filters. [createdAtStart]
+  /// is an inclusive lower bound and [createdAtEnd] an exclusive upper bound
+  /// on [AuditEntry.createdAt]; both are sent in UTC. [order] controls
+  /// whether the newest or oldest matching entry comes first, [limit] bounds
+  /// the page size, and [cursor] resumes from a previous [AuditPage].
+  Future<AuditPage> listAuditEntries({
+    String? correlationId,
+    String? action,
+    DateTime? createdAtStart,
+    DateTime? createdAtEnd,
+    AuditOrder order = AuditOrder.descending,
+    int limit = 50,
+    String? cursor,
+  });
 }
 
 class TuringApiException implements Exception {

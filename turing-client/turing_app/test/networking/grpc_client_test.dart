@@ -3,6 +3,10 @@ import 'package:fixnum/fixnum.dart';
 import 'package:grpc/grpc.dart' as grpc;
 import 'package:turing_flutter_app/generated/google/protobuf/timestamp.pb.dart'
     as timestamppb;
+import 'package:turing_flutter_app/generated/turing/v1/audit.pb.dart'
+    as auditpb;
+import 'package:turing_flutter_app/generated/turing/v1/audit.pbgrpc.dart'
+    as auditgrpc;
 import 'package:turing_flutter_app/generated/turing/v1/common.pb.dart'
     as commonpb;
 import 'package:turing_flutter_app/generated/turing/v1/events.pb.dart'
@@ -13,6 +17,7 @@ import 'package:turing_flutter_app/generated/turing/v1/sessions.pb.dart'
     as sessionpb;
 import 'package:turing_flutter_app/generated/turing/v1/sessions.pbgrpc.dart'
     as sessiongrpc;
+import 'package:turing_flutter_app/models/audit.dart';
 import 'package:turing_flutter_app/networking/grpc_client.dart';
 
 void main() {
@@ -211,6 +216,444 @@ void main() {
       );
     },
   );
+
+  test(
+    'listAuditEntries preserves every filter, ascending order, limit, cursor, '
+    'and a bounded deadline',
+    () async {
+      final service = _CapturingAuditService();
+      final server = grpc.Server.create(services: [service]);
+      await server.serve(address: '127.0.0.1', port: 0);
+      final channel = grpc.ClientChannel(
+        '127.0.0.1',
+        port: server.port!,
+        options: const grpc.ChannelOptions(
+          credentials: grpc.ChannelCredentials.insecure(),
+        ),
+      );
+      addTearDown(() async {
+        await channel.shutdown();
+        await server.shutdown();
+      });
+      final api = TuringGrpcApi(
+        baseUrl: 'http://127.0.0.1:${server.port}',
+        apiKey: 'client-key',
+        channel: channel,
+      );
+
+      final startedAt = DateTime.now();
+      await api.listAuditEntries(
+        correlationId: 'run_1',
+        action: 'tool.call.before',
+        createdAtStart: DateTime.utc(2026, 8, 18),
+        createdAtEnd: DateTime.utc(2026, 8, 19),
+        order: AuditOrder.ascending,
+        limit: 25,
+        cursor: 'cursor-1',
+      );
+
+      final request = service.request;
+      expect(request, isNotNull);
+      expect(request!.hasCorrelationId(), isTrue);
+      expect(request.correlationId, 'run_1');
+      expect(request.hasAction(), isTrue);
+      expect(request.action, 'tool.call.before');
+      expect(request.hasCreatedAtStart(), isTrue);
+      expect(
+        request.createdAtStart.toDateTime().toUtc(),
+        DateTime.utc(2026, 8, 18),
+      );
+      expect(request.hasCreatedAtEnd(), isTrue);
+      expect(
+        request.createdAtEnd.toDateTime().toUtc(),
+        DateTime.utc(2026, 8, 19),
+      );
+      expect(request.order, auditpb.AuditOrder.AUDIT_ORDER_ASCENDING);
+      expect(request.page.limit, 25);
+      expect(request.page.cursor, 'cursor-1');
+      expect(service.deadline, isNotNull);
+      expect(service.deadline!.isAfter(startedAt), isTrue);
+      expect(
+        service.deadline!.difference(startedAt),
+        lessThanOrEqualTo(const Duration(seconds: 11)),
+      );
+    },
+  );
+
+  test('listAuditEntries omits optional filters and defaults order/cursor when '
+      'the caller passes none', () async {
+    final service = _CapturingAuditService();
+    final server = grpc.Server.create(services: [service]);
+    await server.serve(address: '127.0.0.1', port: 0);
+    final channel = grpc.ClientChannel(
+      '127.0.0.1',
+      port: server.port!,
+      options: const grpc.ChannelOptions(
+        credentials: grpc.ChannelCredentials.insecure(),
+      ),
+    );
+    addTearDown(() async {
+      await channel.shutdown();
+      await server.shutdown();
+    });
+    final api = TuringGrpcApi(
+      baseUrl: 'http://127.0.0.1:${server.port}',
+      apiKey: 'client-key',
+      channel: channel,
+    );
+
+    await api.listAuditEntries();
+
+    final request = service.request;
+    expect(request, isNotNull);
+    expect(request!.hasCorrelationId(), isFalse);
+    expect(request.hasAction(), isFalse);
+    expect(request.hasCreatedAtStart(), isFalse);
+    expect(request.hasCreatedAtEnd(), isFalse);
+    expect(request.order, auditpb.AuditOrder.AUDIT_ORDER_DESCENDING);
+    expect(request.page.limit, 50);
+    expect(request.page.cursor, '');
+  });
+
+  test('listAuditEntries maps present and absent payload fields without '
+      'inventing values, and preserves a non-empty next cursor', () async {
+    final service = _CapturingAuditService()
+      ..response = auditpb.ListAuditEntriesResponse(
+        entries: [
+          auditpb.AuditEntry(
+            auditId: 'audit-1',
+            correlationId: 'run_1',
+            actorType: 'user',
+            actorId: 'user-1',
+            action: 'tool.call.before',
+            target: 'sandbox/file.txt',
+            payload: auditpb.AuditPayload(
+              state: auditpb.AuditPayloadState.AUDIT_PAYLOAD_STATE_PRESENT,
+              toolName: '',
+              serverName: '',
+              phase: '',
+              status: '',
+              reason: '',
+              durationMs: Int64(0),
+              errorCode: '',
+              provider: '',
+              displayName: '',
+              unattended: false,
+              automationId: '',
+              automationName: '',
+              method: '',
+              requestId: '',
+              deletedRuns: Int64(0),
+              deletedMessages: Int64(0),
+              decisionComment: '',
+              decisionCommentTruncated: false,
+              denialReason: '',
+              denialReasonTruncated: false,
+            ),
+            createdAt: timestamppb.Timestamp.fromDateTime(
+              DateTime.utc(2026, 8, 18, 10),
+            ),
+          ),
+          auditpb.AuditEntry(
+            auditId: 'audit-2',
+            actorType: 'system',
+            action: 'automation.run.completed',
+            payload: auditpb.AuditPayload(
+              state: auditpb.AuditPayloadState.AUDIT_PAYLOAD_STATE_ABSENT,
+            ),
+            createdAt: timestamppb.Timestamp.fromDateTime(
+              DateTime.utc(2026, 8, 19, 11),
+            ),
+          ),
+        ],
+        page: commonpb.PageResponse(nextCursor: 'cursor-2'),
+      );
+    final server = grpc.Server.create(services: [service]);
+    await server.serve(address: '127.0.0.1', port: 0);
+    final channel = grpc.ClientChannel(
+      '127.0.0.1',
+      port: server.port!,
+      options: const grpc.ChannelOptions(
+        credentials: grpc.ChannelCredentials.insecure(),
+      ),
+    );
+    addTearDown(() async {
+      await channel.shutdown();
+      await server.shutdown();
+    });
+    final api = TuringGrpcApi(
+      baseUrl: 'http://127.0.0.1:${server.port}',
+      apiKey: 'client-key',
+      channel: channel,
+    );
+
+    final page = await api.listAuditEntries();
+
+    expect(page.entries, hasLength(2));
+    expect(page.nextCursor, 'cursor-2');
+
+    final full = page.entries[0];
+    expect(full.auditId, 'audit-1');
+    expect(full.correlationId, 'run_1');
+    expect(full.actorType, 'user');
+    expect(full.actorId, 'user-1');
+    expect(full.action, 'tool.call.before');
+    expect(full.target, 'sandbox/file.txt');
+    expect(full.createdAt, DateTime.utc(2026, 8, 18, 10));
+    expect(full.createdAt.isUtc, isTrue);
+    expect(full.payload.state, AuditPayloadState.present);
+    // Explicitly-set falsy/empty optionals must survive as themselves, not
+    // collapse to null just because they compare equal to a default.
+    expect(full.payload.toolName, '');
+    expect(full.payload.serverName, '');
+    expect(full.payload.phase, '');
+    expect(full.payload.status, '');
+    expect(full.payload.reason, '');
+    expect(full.payload.durationMs, 0);
+    expect(full.payload.errorCode, '');
+    expect(full.payload.provider, '');
+    expect(full.payload.displayName, '');
+    expect(full.payload.unattended, false);
+    expect(full.payload.automationId, '');
+    expect(full.payload.automationName, '');
+    expect(full.payload.method, '');
+    expect(full.payload.requestId, '');
+    expect(full.payload.deletedRuns, 0);
+    expect(full.payload.deletedMessages, 0);
+    expect(full.payload.decisionComment, '');
+    expect(full.payload.decisionCommentTruncated, false);
+    expect(full.payload.denialReason, '');
+    expect(full.payload.denialReasonTruncated, false);
+
+    final minimal = page.entries[1];
+    expect(minimal.auditId, 'audit-2');
+    expect(minimal.correlationId, isNull);
+    expect(minimal.actorType, 'system');
+    expect(minimal.actorId, isNull);
+    expect(minimal.action, 'automation.run.completed');
+    expect(minimal.target, isNull);
+    expect(minimal.createdAt, DateTime.utc(2026, 8, 19, 11));
+    expect(minimal.payload.state, AuditPayloadState.absent);
+    expect(minimal.payload.toolName, isNull);
+    expect(minimal.payload.serverName, isNull);
+    expect(minimal.payload.phase, isNull);
+    expect(minimal.payload.status, isNull);
+    expect(minimal.payload.reason, isNull);
+    expect(minimal.payload.durationMs, isNull);
+    expect(minimal.payload.errorCode, isNull);
+    expect(minimal.payload.provider, isNull);
+    expect(minimal.payload.displayName, isNull);
+    expect(minimal.payload.unattended, isNull);
+    expect(minimal.payload.automationId, isNull);
+    expect(minimal.payload.automationName, isNull);
+    expect(minimal.payload.method, isNull);
+    expect(minimal.payload.requestId, isNull);
+    expect(minimal.payload.deletedRuns, isNull);
+    expect(minimal.payload.deletedMessages, isNull);
+    expect(minimal.payload.decisionComment, isNull);
+    expect(minimal.payload.decisionCommentTruncated, isNull);
+    expect(minimal.payload.denialReason, isNull);
+    expect(minimal.payload.denialReasonTruncated, isNull);
+  });
+
+  // The approval rationale is the one payload field a person authored, so the
+  // client has to carry their answer back unchanged: the words they typed, the
+  // fact that they typed nothing, and the fact that no human field exists at
+  // all are three different results, not one nullable string.
+  test('listAuditEntries preserves an approval rationale, its explicit empty '
+      'value, and its truncation flag without inventing any of them', () async {
+    final service = _CapturingAuditService()
+      ..response = auditpb.ListAuditEntriesResponse(
+        entries: [
+          auditpb.AuditEntry(
+            auditId: 'audit-approved',
+            actorType: 'user',
+            action: 'approval.approved',
+            payload: auditpb.AuditPayload(
+              state: auditpb.AuditPayloadState.AUDIT_PAYLOAD_STATE_PRESENT,
+              toolName: 'files.update',
+              decisionComment: 'looked at the diff, fine',
+              decisionCommentTruncated: true,
+            ),
+            createdAt: timestamppb.Timestamp.fromDateTime(
+              DateTime.utc(2026, 8, 18, 10),
+            ),
+          ),
+          auditpb.AuditEntry(
+            auditId: 'audit-approved-silent',
+            actorType: 'user',
+            action: 'approval.approved',
+            payload: auditpb.AuditPayload(
+              state: auditpb.AuditPayloadState.AUDIT_PAYLOAD_STATE_PRESENT,
+              toolName: 'files.update',
+              decisionComment: '',
+            ),
+            createdAt: timestamppb.Timestamp.fromDateTime(
+              DateTime.utc(2026, 8, 18, 11),
+            ),
+          ),
+          auditpb.AuditEntry(
+            auditId: 'audit-denied',
+            actorType: 'user',
+            action: 'approval.denied',
+            payload: auditpb.AuditPayload(
+              state: auditpb.AuditPayloadState.AUDIT_PAYLOAD_STATE_PRESENT,
+              toolName: 'files.update',
+              denialReason: 'path is outside the sandbox',
+              denialReasonTruncated: false,
+            ),
+            createdAt: timestamppb.Timestamp.fromDateTime(
+              DateTime.utc(2026, 8, 18, 12),
+            ),
+          ),
+          auditpb.AuditEntry(
+            auditId: 'audit-unattended',
+            actorType: 'system',
+            action: 'approval.approved',
+            payload: auditpb.AuditPayload(
+              state: auditpb.AuditPayloadState.AUDIT_PAYLOAD_STATE_PRESENT,
+              toolName: 'files.update',
+              unattended: true,
+            ),
+            createdAt: timestamppb.Timestamp.fromDateTime(
+              DateTime.utc(2026, 8, 18, 13),
+            ),
+          ),
+        ],
+      );
+    final server = grpc.Server.create(services: [service]);
+    await server.serve(address: '127.0.0.1', port: 0);
+    final channel = grpc.ClientChannel(
+      '127.0.0.1',
+      port: server.port!,
+      options: const grpc.ChannelOptions(
+        credentials: grpc.ChannelCredentials.insecure(),
+      ),
+    );
+    addTearDown(() async {
+      await channel.shutdown();
+      await server.shutdown();
+    });
+    final api = TuringGrpcApi(
+      baseUrl: 'http://127.0.0.1:${server.port}',
+      apiKey: 'client-key',
+      channel: channel,
+    );
+
+    final page = await api.listAuditEntries();
+
+    final approved = page.entries[0].payload;
+    expect(approved.decisionComment, 'looked at the diff, fine');
+    expect(approved.decisionCommentTruncated, isTrue);
+    expect(approved.denialReason, isNull);
+    expect(approved.denialReasonTruncated, isNull);
+
+    final silent = page.entries[1].payload;
+    expect(silent.decisionComment, '');
+    expect(silent.decisionCommentTruncated, isNull);
+
+    final denied = page.entries[2].payload;
+    expect(denied.denialReason, 'path is outside the sandbox');
+    expect(denied.denialReasonTruncated, isFalse);
+    expect(denied.decisionComment, isNull);
+    expect(denied.decisionCommentTruncated, isNull);
+
+    final unattended = page.entries[3].payload;
+    expect(unattended.unattended, isTrue);
+    expect(unattended.decisionComment, isNull);
+    expect(unattended.decisionCommentTruncated, isNull);
+    expect(unattended.denialReason, isNull);
+    expect(unattended.denialReasonTruncated, isNull);
+  });
+
+  test('listAuditEntries maps an empty next cursor to null', () async {
+    final service = _CapturingAuditService()
+      ..response = auditpb.ListAuditEntriesResponse(
+        entries: [
+          auditpb.AuditEntry(
+            auditId: 'audit-1',
+            actorType: 'user',
+            action: 'tool.call.before',
+            payload: auditpb.AuditPayload(
+              state: auditpb.AuditPayloadState.AUDIT_PAYLOAD_STATE_ABSENT,
+            ),
+            createdAt: timestamppb.Timestamp.fromDateTime(
+              DateTime.utc(2026, 8, 18, 10),
+            ),
+          ),
+        ],
+        page: commonpb.PageResponse(),
+      );
+    final server = grpc.Server.create(services: [service]);
+    await server.serve(address: '127.0.0.1', port: 0);
+    final channel = grpc.ClientChannel(
+      '127.0.0.1',
+      port: server.port!,
+      options: const grpc.ChannelOptions(
+        credentials: grpc.ChannelCredentials.insecure(),
+      ),
+    );
+    addTearDown(() async {
+      await channel.shutdown();
+      await server.shutdown();
+    });
+    final api = TuringGrpcApi(
+      baseUrl: 'http://127.0.0.1:${server.port}',
+      apiKey: 'client-key',
+      channel: channel,
+    );
+
+    final page = await api.listAuditEntries();
+
+    expect(page.nextCursor, isNull);
+  });
+
+  test(
+    'listAuditEntries fails loudly when the server reports an unspecified '
+    'payload state rather than guessing present, absent, or scrubbed',
+    () async {
+      final service = _CapturingAuditService()
+        ..response = auditpb.ListAuditEntriesResponse(
+          entries: [
+            auditpb.AuditEntry(
+              auditId: 'audit-1',
+              actorType: 'user',
+              action: 'tool.call.before',
+              payload: auditpb.AuditPayload(
+                state:
+                    auditpb.AuditPayloadState.AUDIT_PAYLOAD_STATE_UNSPECIFIED,
+              ),
+              createdAt: timestamppb.Timestamp.fromDateTime(
+                DateTime.utc(2026, 8, 18, 10),
+              ),
+            ),
+          ],
+        );
+      final server = grpc.Server.create(services: [service]);
+      await server.serve(address: '127.0.0.1', port: 0);
+      final channel = grpc.ClientChannel(
+        '127.0.0.1',
+        port: server.port!,
+        options: const grpc.ChannelOptions(
+          credentials: grpc.ChannelCredentials.insecure(),
+        ),
+      );
+      addTearDown(() async {
+        await channel.shutdown();
+        await server.shutdown();
+      });
+      final api = TuringGrpcApi(
+        baseUrl: 'http://127.0.0.1:${server.port}',
+        apiKey: 'client-key',
+        channel: channel,
+      );
+
+      await expectLater(
+        () => api.listAuditEntries(),
+        throwsA(isA<FormatException>()),
+      );
+    },
+  );
 }
 
 class _CapturingSessionService extends sessiongrpc.SessionServiceBase {
@@ -297,6 +740,26 @@ class _LatestSequenceEventService extends eventgrpc.EventServiceBase {
   ) async {
     deadline = call.deadline;
     return eventpb.ListEventsResponse(latestSequence: Int64(700));
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _CapturingAuditService extends auditgrpc.AuditServiceBase {
+  auditpb.ListAuditEntriesRequest? request;
+  DateTime? deadline;
+  auditpb.ListAuditEntriesResponse response =
+      auditpb.ListAuditEntriesResponse();
+
+  @override
+  Future<auditpb.ListAuditEntriesResponse> listAuditEntries(
+    grpc.ServiceCall call,
+    auditpb.ListAuditEntriesRequest request,
+  ) async {
+    this.request = request;
+    deadline = call.deadline;
+    return response;
   }
 
   @override

@@ -9,6 +9,13 @@ services:
       args:
         GOFLAGS: -tags=sqlite_fts5
     user: "${HOST_UID:?Use scripts/compose.sh to launch}:${HOST_GID:?Use scripts/compose.sh to launch}"
+    read_only: true
+    tmpfs:
+      - /dev/shm:ro,nosuid,nodev,noexec,size=64k
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     environment:
       TURING_CLIENT_API_KEY: ${TURING_CLIENT_API_KEY}
       TURING_INTERNAL_TOKEN: ${TURING_INTERNAL_TOKEN}
@@ -42,7 +49,7 @@ services:
       TURING_APPROVAL_TIMEOUT_MS: ${TURING_APPROVAL_TIMEOUT_MS:-65000}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
-      - "${ORCHESTRATOR_PUBLIC_BIND_HOST:-127.0.0.1}:${ORCHESTRATOR_PUBLIC_PORT:-3000}:3000"
+      - "127.0.0.1:${ORCHESTRATOR_PUBLIC_PORT:-3000}:${ORCHESTRATOR_PUBLIC_PORT:-3000}"
     expose:
       - "3001"
     volumes:
@@ -59,6 +66,14 @@ services:
     build:
       context: ../..
       dockerfile: turing-backend/agent-runtime-go/Dockerfile
+    user: "turing-agent-runtime:turing-agent-runtime"
+    read_only: true
+    tmpfs:
+      - /dev/shm:ro,nosuid,nodev,noexec,size=64k
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     environment:
       TURING_INTERNAL_TOKEN: ${TURING_INTERNAL_TOKEN}
       ORCHESTRATOR_GRPC_ADDR: ${ORCHESTRATOR_GRPC_ADDR:-turing-orchestrator:3001}
@@ -107,7 +122,10 @@ services:
     # cannot: a panic, an OOM kill, or a fatal config error at startup.
     restart: unless-stopped
     build: ../mcp-system
+    user: "mcp-system:mcp-system"
     read_only: true
+    tmpfs:
+      - /dev/shm:ro,nosuid,nodev,noexec,size=64k
     cap_drop:
       - ALL
     security_opt:
@@ -136,6 +154,8 @@ services:
       dockerfile: turing-backend/mcp-files/Dockerfile
     user: "${HOST_UID:?Use scripts/compose.sh to launch}:${HOST_GID:?Use scripts/compose.sh to launch}"
     read_only: true
+    tmpfs:
+      - /dev/shm:ro,nosuid,nodev,noexec,size=64k
     cap_drop:
       - ALL
     security_opt:

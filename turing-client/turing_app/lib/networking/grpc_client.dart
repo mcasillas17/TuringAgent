@@ -4,10 +4,13 @@ import 'package:fixnum/fixnum.dart';
 import 'package:grpc/grpc.dart' as grpc;
 import 'package:grpc/service_api.dart' as grpc_api;
 
+import '../generated/google/protobuf/timestamp.pb.dart' as timestamppb;
 import '../generated/turing/v1/agents.pb.dart' as agentpb;
 import '../generated/turing/v1/agents.pbgrpc.dart' as agentgrpc;
 import '../generated/turing/v1/approvals.pb.dart' as approvalpb;
 import '../generated/turing/v1/approvals.pbgrpc.dart' as approvalgrpc;
+import '../generated/turing/v1/audit.pb.dart' as auditpb;
+import '../generated/turing/v1/audit.pbgrpc.dart' as auditgrpc;
 import '../generated/turing/v1/automations.pb.dart' as automationpb;
 import '../generated/turing/v1/automations.pbgrpc.dart' as automationgrpc;
 import '../generated/turing/v1/chat.pb.dart' as chatpb;
@@ -24,6 +27,7 @@ import '../generated/turing/v1/skills.pbgrpc.dart' as skillgrpc;
 import '../generated/turing/v1/telemetry.pb.dart' as telemetrypb;
 import '../generated/turing/v1/telemetry.pbgrpc.dart' as telemetrygrpc;
 import '../models/agent_descriptor.dart';
+import '../models/audit.dart';
 import '../models/automation.dart';
 import '../models/external_agent.dart';
 import '../models/grpc_mappers.dart';
@@ -112,6 +116,7 @@ class TuringGrpcApi implements ClosableTuringApi {
       _channel,
       options: options,
     );
+    _audit = auditgrpc.AuditServiceClient(_channel, options: options);
   }
 
   final String baseUrl;
@@ -127,6 +132,7 @@ class TuringGrpcApi implements ClosableTuringApi {
   late final integrationgrpc.IntegrationServiceClient _integrations;
   late final automationgrpc.AutomationServiceClient _automations;
   late final telemetrygrpc.TelemetryServiceClient _telemetry;
+  late final auditgrpc.AuditServiceClient _audit;
 
   GrpcAuthMetadata get _metadata => GrpcAuthMetadata(apiKey: apiKey);
 
@@ -615,6 +621,36 @@ class TuringGrpcApi implements ClosableTuringApi {
       telemetrypb.GetTelemetrySummaryRequest(windowDays: windowDays),
     );
     return GrpcMappers.telemetrySummaryToModel(response);
+  }
+
+  @override
+  Future<AuditPage> listAuditEntries({
+    String? correlationId,
+    String? action,
+    DateTime? createdAtStart,
+    DateTime? createdAtEnd,
+    AuditOrder order = AuditOrder.descending,
+    int limit = 50,
+    String? cursor,
+  }) async {
+    final response = await _audit.listAuditEntries(
+      auditpb.ListAuditEntriesRequest(
+        correlationId: correlationId,
+        action: action,
+        createdAtStart: createdAtStart == null
+            ? null
+            : timestamppb.Timestamp.fromDateTime(createdAtStart.toUtc()),
+        createdAtEnd: createdAtEnd == null
+            ? null
+            : timestamppb.Timestamp.fromDateTime(createdAtEnd.toUtc()),
+        order: order == AuditOrder.ascending
+            ? auditpb.AuditOrder.AUDIT_ORDER_ASCENDING
+            : auditpb.AuditOrder.AUDIT_ORDER_DESCENDING,
+        page: commonpb.PageRequest(limit: limit, cursor: cursor ?? ''),
+      ),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+    return GrpcMappers.auditPageToModel(response);
   }
 
   @override

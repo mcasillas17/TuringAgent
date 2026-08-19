@@ -10,6 +10,7 @@ import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 
+import '../support/no_audit_api.dart';
 import '../support/no_skills_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_automations_api.dart';
@@ -597,7 +598,12 @@ class _ConnectCall {
 /// A working in-memory backend, so the UI is tested against something that
 /// behaves like the real one rather than a stub that always says yes.
 class _IntegrationsApi
-    with NoSkillsApi, NoExternalAgentsApi, NoAutomationsApi, NoTelemetryApi
+    with
+        NoAuditApi,
+        NoSkillsApi,
+        NoExternalAgentsApi,
+        NoAutomationsApi,
+        NoTelemetryApi
     implements TuringApi {
   final List<IntegrationConnection> connections = [];
   final List<_ConnectCall> connectCalls = [];

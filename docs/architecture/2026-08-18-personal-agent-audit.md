@@ -139,7 +139,7 @@ Mem0's current V3 documentation demonstrates scoped, ADD-only fact extraction, e
 | Tool-result memory | Tool summaries/events only | Selected tool evidence can be imported with provenance and trust class | High |
 | Memory UI | Recall notice only | List, inspect, edit, approve, reject, retract, export, and explain | Critical |
 | Remote privacy | Provider selected per request | Explicit per-session/run egress policy and visible data scope | Critical |
-| Audit | Write-only | Redacted, filterable read path | High |
+| Audit | Redacted authenticated read API; no built-in viewer | Redacted, filterable read path with a viewer | Medium |
 | Export/backup | Missing | Open-format export, consistent backup, tested restore | High |
 | Connectors | Two hard-coded in-repo JSON-RPC tool servers | Standards-conformant MCP plus connector provenance and consent | High |
 | Multi-agent | One general assistant | Capability-aware routing and explicit handoff | Later |
@@ -243,8 +243,15 @@ Task IDs are stable references, not priority numbers. Delivery order follows `do
 because the existing proto3 scalars have no presence, omitted and explicit empty
 input share the documented empty-string representation, while non-human paths
 remain `NULL`. Audit receives only a bounded rationale copy and `toolName`, and
-session deletion still scrubs that payload. TUR-013 remains the public audit
-read path and TUR-021 remains the approval preview/diff UX.
+session deletion still scrubs that payload. TUR-013 now makes that record
+user-readable: `AuditService.ListAuditEntries` discloses the stored comment as
+`decision_comment` on `approval.approved` and the stored reason as
+`denial_reason` on `approval.denied`, each with its `*_truncated` flag when the
+writer set one, and each preserving present-empty (a human typed nothing)
+against absent (no human field was recorded) — see
+[Audit read API](audit-read-api.md#approval-decision-rationale). That closes
+this task's stated TUR-013 read dependency; TUR-021 remains the approval
+preview/diff UX, and no approval viewer UI ships here.
 
 #### TUR-007 — Derive stable session titles from the first user turn — Implemented
 
@@ -310,6 +317,11 @@ read path and TUR-021 remains the approval preview/diff UX.
 **Likely files:** orchestrator/runtime Dockerfiles, Compose, Docker security tests.  
 **Acceptance:** Security tests cover all services; normal startup, model calls, and persistence still work.  
 **Dependencies:** None.
+**Status:** Pending merge. Branch `mcasillas17-tur-005-container-hardening`
+adds the runtime image identity, applies one fail-closed Compose posture to all
+four backend services, and allowlists only `/app/data`, `/skills`, and `/sandbox`
+as writable storage. The pull request must record fresh Docker-backed startup,
+model-loop, and persistence evidence before merge.
 
 #### TUR-006 — Introduce service-scoped internal identities
 
@@ -363,10 +375,15 @@ read path and TUR-021 remains the approval preview/diff UX.
 
 #### TUR-013 — Add a redacted audit read API
 
-**Outcome:** Users can inspect approvals, mutations, retries, and memory decisions.  
-**Scope:** Add paginated/filterable audit RPCs by correlation, action, and time; distinguish scrubbed payloads; default to redaction.  
-**Likely files:** new audit proto/service, audit repository, app registration, Flutter inspection UI.  
-**Acceptance:** Written rows are retrievable; deleted-session rows remain visible only as scrubbed evidence; credentials and raw sensitive payloads never appear.  
+**Status:** Implemented. See [Audit read API](audit-read-api.md) for the full contract; this does not change the status of any dependent task below.
+
+**Outcome:** Users can inspect the actions recorded today — approvals, tool calls, integrations, routing, deletions, and auth failures — through an authenticated, redacted public read API. This is not every mutation in the system, only what the listed writers already record; a future memory or retry writer can use the same recording API but none is implemented here. Retries remain visible only through the existing `tool.call.*` `reason`/`error_code` fields; this task does not cover memory decisions, since curated memory does not exist yet.
+
+**Scope:** Shipped `AuditService.ListAuditEntries`: correlation/action/time filters (time window start-inclusive, end-exclusive), ascending/descending order (unspecified defaults to descending), keyset-paginated by `(created_at, rowid)` with an opaque HMAC-authenticated cursor (default page size 50, max 100); distinguishes absent/present/scrubbed payload states; the required string metadata fields (`id`, `actor_type`, `action`) are always returned and use `[redacted]` when unsafe, `created_at` is validated separately and an invalid stored timestamp makes the RPC fail with generic `Internal`, and the payload state is an enum; the optional metadata fields (`correlation_id`, `actor_id`, `target`) are returned only when stored and structurally safe, and otherwise omitted entirely — with two action-scoped omissions on top of that, because structural safety cannot answer whether a value is safe to disclose: `target` is never returned for any `approval.*` action (it is the approval id, which is also the approval JWT's `jti`), and `actor_id` is never returned for `auth.failed` (it is the caller's peer address); every action-specific payload field defaults to redacted unless a reviewed, closed, per-action allowlist explicitly names it — including for actions not yet on that allowlist. The allowlist names one deliberately human field: the approval comment on `approval.approved` and the denial reason on `approval.denied` that TUR-002 records, disclosed as their own typed fields (never as the tool-policy `reason`), bounded to 512 bytes by the writer, preserving present-empty against absent, and allowing newline/tab but no other control character. That is the only place this API returns text a person wrote rather than a machine label, so it is documented as free text the service cannot content-inspect.
+
+**Likely files:** ~~new audit proto/service, audit repository, app registration, Flutter inspection UI~~ — delivered as `proto/turing/v1/audit.proto`, `turing-backend/orchestrator-go/internal/service/audit/`, `turing-backend/orchestrator-go/internal/repository/audit.go`, `internal/app/app.go` registration (public server only), and a thin Flutter access surface (`lib/networking/api_client.dart`, `grpc_client.dart`, `lib/models/audit.dart`) with **no** Flutter inspection UI — a large viewer is intentionally out of scope for this task.
+
+**Acceptance:** Written rows are retrievable; deleted-session rows remain visible only as scrubbed evidence while the deletion itself stays a visible, un-scrubbed record; credentials, raw payload JSON, tool arguments/results, human-readable error messages, approval tokens/JTIs, and auth headers never appear — those are the fields the service can identify by where they are stored, which is a different guarantee from claiming a user-authored approval rationale can never contain a secret someone typed into it; invalid filters, limits, timestamps, or cursors are rejected as `InvalidArgument`; repository or stored-data failures answer a generic `Internal` with no leaked values.
 **Dependencies:** None.
 
 #### TUR-014 — Capture provider usage and actionable health

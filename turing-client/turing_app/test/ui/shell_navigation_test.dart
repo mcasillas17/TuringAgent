@@ -23,6 +23,7 @@ import 'package:turing_flutter_app/networking/event_source.dart';
 import 'package:turing_flutter_app/ui/shell/responsive_shell.dart';
 import 'package:turing_flutter_app/ui/shell/shell_destination.dart';
 
+import '../support/no_audit_api.dart';
 import '../support/no_integrations_api.dart';
 import '../support/no_automations_api.dart';
 import '../support/no_telemetry_api.dart';
@@ -1411,7 +1412,12 @@ Future<void> _pumpShell(
 }
 
 class _FakeApi
-    with NoIntegrationsApi, NoAutomationsApi, NoTelemetryApi, NoSkillsApi
+    with
+        NoAuditApi,
+        NoIntegrationsApi,
+        NoAutomationsApi,
+        NoTelemetryApi,
+        NoSkillsApi
     implements TuringApi {
   List<Session> sessions = [
     Session(

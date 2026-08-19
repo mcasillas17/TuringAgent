@@ -9,5 +9,8 @@ RUN CGO_ENABLED=0 go build -tags sqlite_fts5 -o /out/turing-agent-runtime-go ./t
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+RUN groupadd --gid 1000 turing-agent-runtime \
+    && useradd --uid 1000 --gid 1000 --no-create-home --home-dir /app --shell /usr/sbin/nologin turing-agent-runtime
 COPY --from=build /out/turing-agent-runtime-go /app/turing-agent-runtime-go
+USER turing-agent-runtime:turing-agent-runtime
 ENTRYPOINT ["/app/turing-agent-runtime-go"]

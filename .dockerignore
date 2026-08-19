@@ -14,12 +14,12 @@
 **/*.key
 **/*.cert
 **/.runtime
+# Runtime database and sandbox paths can be created at multiple worktree depths.
+# Skills stay repository-scoped because **/skills would hide the Go skills package.
 **/data
-# "**/data" matches only a component named exactly "data", so the runtime SQLite
-# backup directories beside it need explicit patterns to stay out of the build
-# context shared by the orchestrator, agent-runtime, and mcp-files images.
 **/data.backup-*
 **/data.worktree-backup-*
+turing-backend/skills
 **/sandbox
 
 # Dependency caches, generated build output, and test artifacts
