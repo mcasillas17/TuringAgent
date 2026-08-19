@@ -192,17 +192,23 @@ func TestOllamaRequestNestsOptions(t *testing.T) {
 	}
 	options, ok := body["options"].(map[string]any)
 	if !ok || options["temperature"] != json.Number("0.25") ||
-		options["num_predict"] != json.Number("321") ||
-		options["num_ctx"] != json.Number("32768") {
+		options["num_predict"] != json.Number("321") {
 		t.Fatalf("options = %#v", body["options"])
+	}
+	explicitNumCtx, err := options["num_ctx"].(json.Number).Int64()
+	if err != nil || explicitNumCtx >= int64(DefaultContextWindowTokens) || explicitNumCtx <= 321 {
+		t.Fatalf("dynamic num_ctx = %v, want max output < num_ctx < configured cap", options["num_ctx"])
 	}
 
 	withoutOptions := captureOllamaRequest(t, ChatRequest{Model: "llama3.2"})
 	defaultOptions, ok := withoutOptions["options"].(map[string]any)
 	if !ok || len(defaultOptions) != 2 ||
-		defaultOptions["num_ctx"] != json.Number("32768") ||
 		defaultOptions["num_predict"] != json.Number("2048") {
-		t.Fatalf("default options = %#v, want num_ctx=32768 and num_predict=2048", withoutOptions["options"])
+		t.Fatalf("default options = %#v, want dynamic num_ctx and num_predict=2048", withoutOptions["options"])
+	}
+	numCtx, err := defaultOptions["num_ctx"].(json.Number).Int64()
+	if err != nil || numCtx >= int64(DefaultContextWindowTokens) || numCtx <= int64(DefaultMaxOutputTokens) {
+		t.Fatalf("dynamic num_ctx = %v, want output reserve < num_ctx < configured cap", defaultOptions["num_ctx"])
 	}
 }
 
@@ -236,9 +242,12 @@ func TestOllamaRequestPinsConfiguredContextWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	options, ok := body["options"].(map[string]any)
-	if !ok || options["num_ctx"] != json.Number("6144") ||
-		options["num_predict"] != json.Number("512") {
-		t.Fatalf("options = %#v, want num_ctx=6144 and num_predict=512", body["options"])
+	if !ok || options["num_predict"] != json.Number("512") {
+		t.Fatalf("options = %#v, want dynamic num_ctx and num_predict=512", body["options"])
+	}
+	numCtx, err := options["num_ctx"].(json.Number).Int64()
+	if err != nil || numCtx >= 6144 || numCtx <= 512 {
+		t.Fatalf("dynamic num_ctx = %v, want 512 < num_ctx < configured cap 6144", options["num_ctx"])
 	}
 	if got := provider.ContextWindowTokens(); got != 6144 {
 		t.Fatalf("ContextWindowTokens = %d, want 6144", got)

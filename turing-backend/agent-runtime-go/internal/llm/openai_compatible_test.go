@@ -86,6 +86,20 @@ func TestOpenAICompatibleLimitsRejectInvalidValues(t *testing.T) {
 	}
 }
 
+func TestOpenAIReasoningModelUsesMaxCompletionTokens(t *testing.T) {
+	for _, model := range []string{"o1", "o3-mini", "o4-mini", "openai/o3"} {
+		t.Run(model, func(t *testing.T) {
+			_, body := captureOpenAIRequestForModel(t, model, nil, nil)
+			if body["max_completion_tokens"] != float64(DefaultMaxOutputTokens) {
+				t.Fatalf("max_completion_tokens = %#v, want %d", body["max_completion_tokens"], DefaultMaxOutputTokens)
+			}
+			if _, present := body["max_tokens"]; present {
+				t.Fatalf("o-series request included incompatible max_tokens: %#v", body)
+			}
+		})
+	}
+}
+
 func TestOpenAIChunkEmitsDeltaAndFinishReason(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
@@ -1586,6 +1600,15 @@ func captureOpenAIToolFunctions(t *testing.T, definitions []ToolDefinition, mess
 }
 
 func captureOpenAIRequest(t *testing.T, definitions []ToolDefinition, messages []ChatMessage) ([]map[string]any, map[string]any) {
+	return captureOpenAIRequestForModel(t, "gpt-4o-mini", definitions, messages)
+}
+
+func captureOpenAIRequestForModel(
+	t *testing.T,
+	model string,
+	definitions []ToolDefinition,
+	messages []ChatMessage,
+) ([]map[string]any, map[string]any) {
 	t.Helper()
 	requestBody := make(chan []byte, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1597,7 +1620,7 @@ func captureOpenAIRequest(t *testing.T, definitions []ToolDefinition, messages [
 
 	provider := NewOpenAICompatible(server.URL, "", server.Client())
 	events, err := provider.StreamChat(context.Background(), ChatRequest{
-		Model: "gpt-4o-mini", Tools: definitions, Messages: messages,
+		Model: model, Tools: definitions, Messages: messages,
 	})
 	if err != nil {
 		t.Fatal(err)

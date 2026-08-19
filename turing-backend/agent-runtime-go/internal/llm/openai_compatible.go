@@ -232,12 +232,13 @@ func (p *OpenAICompatible) marshalRequest(req ChatRequest) ([]byte, openAIToolAl
 		maxTokens = p.maxOutputTokens
 	}
 	body, err := json.Marshal(openAIChatRequest{
-		Model:       req.Model,
-		Messages:    converted,
-		Stream:      true,
-		Temperature: req.Temperature,
-		MaxTokens:   maxTokens,
-		Tools:       tools,
+		Model:               req.Model,
+		Messages:            converted,
+		Stream:              true,
+		Temperature:         req.Temperature,
+		MaxTokens:           legacyMaxTokens(req.Model, maxTokens),
+		MaxCompletionTokens: reasoningMaxTokens(req.Model, maxTokens),
+		Tools:               tools,
 	})
 	return body, aliases, err
 }
@@ -268,12 +269,40 @@ func splitSSELines(data []byte, atEOF bool) (advance int, token []byte, err erro
 }
 
 type openAIChatRequest struct {
-	Model       string          `json:"model"`
-	Messages    []openAIMessage `json:"messages"`
-	Stream      bool            `json:"stream"`
-	Temperature float64         `json:"temperature,omitempty"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
-	Tools       []openAITool    `json:"tools,omitempty"`
+	Model               string          `json:"model"`
+	Messages            []openAIMessage `json:"messages"`
+	Stream              bool            `json:"stream"`
+	Temperature         float64         `json:"temperature,omitempty"`
+	MaxTokens           int             `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
+	Tools               []openAITool    `json:"tools,omitempty"`
+}
+
+func legacyMaxTokens(model string, maxTokens int) int {
+	if usesMaxCompletionTokens(model) {
+		return 0
+	}
+	return maxTokens
+}
+
+func reasoningMaxTokens(model string, maxTokens int) int {
+	if usesMaxCompletionTokens(model) {
+		return maxTokens
+	}
+	return 0
+}
+
+func usesMaxCompletionTokens(model string) bool {
+	name := strings.ToLower(strings.TrimSpace(model))
+	if index := strings.LastIndexByte(name, '/'); index >= 0 {
+		name = name[index+1:]
+	}
+	for _, family := range []string{"o1", "o3", "o4"} {
+		if name == family || strings.HasPrefix(name, family+"-") {
+			return true
+		}
+	}
+	return false
 }
 
 type openAIMessage struct {

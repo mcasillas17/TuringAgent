@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -262,16 +263,36 @@ func (p *Ollama) marshalRequest(req ChatRequest) ([]byte, error) {
 	if maxTokens <= 0 {
 		maxTokens = p.maxOutputTokens
 	}
-	options := ollamaRequestOptions(req.Temperature, maxTokens, p.contextWindowTokens)
+	if maxTokens >= p.contextWindowTokens {
+		return nil, fmt.Errorf("max output tokens %d must be less than context window %d", maxTokens, p.contextWindowTokens)
+	}
 	tools := ollamaTools(req.Tools)
-	return json.Marshal(ollamaChatRequest{
-		Model:     req.Model,
-		Messages:  ollamaMessages(req.Messages),
-		Stream:    true,
-		Options:   options,
-		Tools:     tools,
-		KeepAlive: p.keepAlive,
-	})
+	messages := ollamaMessages(req.Messages)
+	contextWindowTokens := p.contextWindowTokens
+	var body []byte
+	var err error
+	for range 10 {
+		body, err = json.Marshal(ollamaChatRequest{
+			Model:     req.Model,
+			Messages:  messages,
+			Stream:    true,
+			Options:   ollamaRequestOptions(req.Temperature, maxTokens, contextWindowTokens),
+			Tools:     tools,
+			KeepAlive: p.keepAlive,
+		})
+		if err != nil {
+			return nil, err
+		}
+		required := len(body) + maxTokens
+		if required > p.contextWindowTokens {
+			required = p.contextWindowTokens
+		}
+		if required == contextWindowTokens {
+			return body, nil
+		}
+		contextWindowTokens = required
+	}
+	return nil, errors.New("Ollama request context size did not converge")
 }
 
 type ollamaStreamToolCall struct {

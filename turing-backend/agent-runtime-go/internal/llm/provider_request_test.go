@@ -170,7 +170,7 @@ func TestProviderRequestBudgetRejectsOversizedRequiredToolProtocol(t *testing.T)
 func TestProviderRequestBudgetAllowsExactSerializedBoundary(t *testing.T) {
 	for _, fixture := range providerRequestFixtures() {
 		t.Run(fixture.name, func(t *testing.T) {
-			bodies := make(chan []byte, 2)
+			bodies := make(chan []byte, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, err := io.ReadAll(r.Body)
 				if err != nil {
@@ -183,25 +183,36 @@ func TestProviderRequestBudgetAllowsExactSerializedBoundary(t *testing.T) {
 			t.Cleanup(server.Close)
 			provider := fixture.newProvider(server.URL, server.Client())
 
-			events, err := provider.StreamChat(context.Background(), ChatRequest{
-				Model: fixture.model, Messages: []ChatMessage{{Role: "user"}},
-			})
-			if err != nil {
-				t.Fatalf("calibrate request: %v", err)
+			requestWithContentBytes := func(contentBytes int) ChatRequest {
+				return ChatRequest{
+					Model: fixture.model,
+					Messages: []ChatMessage{{
+						Role:    "user",
+						Content: strings.Repeat("x", contentBytes),
+					}},
+				}
 			}
-			collectEvents(events)
-			baseSize := len(<-bodies)
-			if baseSize >= providerRequestByteBudgetForTest {
-				t.Fatalf("base request size = %d, want below budget", baseSize)
+			bestContentBytes := 0
+			bestEstimate := 0
+			for low, high := 0, providerRequestByteBudgetForTest; low <= high; {
+				middle := low + (high-low)/2
+				estimate, err := EstimateRequestTokens(provider, requestWithContentBytes(middle))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if estimate <= providerRequestByteBudgetForTest {
+					bestContentBytes = middle
+					bestEstimate = estimate
+					low = middle + 1
+				} else {
+					high = middle - 1
+				}
+			}
+			if bestEstimate != providerRequestByteBudgetForTest {
+				t.Fatalf("largest accepted estimate = %d, want exact boundary %d", bestEstimate, providerRequestByteBudgetForTest)
 			}
 
-			events, err = provider.StreamChat(context.Background(), ChatRequest{
-				Model: fixture.model,
-				Messages: []ChatMessage{{
-					Role:    "user",
-					Content: strings.Repeat("x", providerRequestByteBudgetForTest-baseSize),
-				}},
-			})
+			events, err := provider.StreamChat(context.Background(), requestWithContentBytes(bestContentBytes))
 			if err != nil {
 				t.Fatalf("StreamChat rejected exact serialized boundary: %v", err)
 			}
