@@ -186,6 +186,9 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 		"0007_agents",
 		"0008_integrations",
 		"0009_automations",
+		"0010_session_title_origin",
+		"0010_telemetry",
+		"0011_approval_rationale",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("applied migrations = %v, want %v", got, want)
@@ -286,8 +289,52 @@ func TestCurrentSchemaVersionUsesLatestEmbeddedMigrationPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "0009" {
-		t.Fatalf("CurrentSchemaVersion = %q, want 0009", got)
+	if got != "0011" {
+		t.Fatalf("CurrentSchemaVersion = %q, want 0011", got)
+	}
+}
+
+func TestApprovalRationaleMigrationPreservesExistingApprovals(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	applyMigration(t, ctx, database, "0001_initial.sql")
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO sessions (id, title, status, created_at, updated_at)
+		VALUES ('session_before_rationale', 'Existing', 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+		INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at)
+		VALUES ('message_before_rationale', 'session_before_rationale', 'user', 'hello', 'text', 1, '2026-01-01T00:00:00Z');
+		INSERT INTO agent_runs (id, session_id, user_message_id, agent_id, trace_id, status, model_provider, model_name, created_at)
+		VALUES ('run_before_rationale', 'session_before_rationale', 'message_before_rationale', 'general_assistant', 'trace_before_rationale', 'waiting_approval', 'ollama', 'llama3.2', '2026-01-01T00:00:00Z');
+		INSERT INTO tool_calls (id, run_id, agent_id, server_name, tool_name, args_json, args_hash, status, created_at)
+		VALUES ('call_before_rationale', 'run_before_rationale', 'general_assistant', 'files', 'files.update', '{"path":"note.txt"}', 'sha256:args', 'approval_required', '2026-01-01T00:00:00Z');
+		INSERT INTO approvals (id, run_id, tool_call_id, agent_id, tool_name, args_json, args_hash, status, expires_at, created_at)
+		VALUES ('approval_before_rationale', 'run_before_rationale', 'call_before_rationale', 'general_assistant', 'files.update', '{"path":"note.txt"}', 'sha256:args', 'pending', '2026-01-01T00:01:00Z', '2026-01-01T00:00:00Z');
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	applyMigration(t, ctx, database, "0011_approval_rationale.sql")
+
+	var status string
+	var approvalComment, denialReason sql.NullString
+	if err := database.QueryRowContext(ctx, `
+		SELECT status, approval_comment, denial_reason
+		FROM approvals
+		WHERE id = 'approval_before_rationale'
+	`).Scan(&status, &approvalComment, &denialReason); err != nil {
+		t.Fatal(err)
+	}
+	if status != "pending" || approvalComment.Valid || denialReason.Valid {
+		t.Fatalf(
+			"upgraded approval = status %q comment %#v reason %#v, want pending and both NULL",
+			status,
+			approvalComment,
+			denialReason,
+		)
 	}
 }
 
@@ -379,6 +426,76 @@ func TestApplyMigrationsUpgradesPopulated0002DatabaseWithNullableModelToolCallID
 	}
 	if applied != 1 {
 		t.Fatalf("0005 migration count = %d, want 1", applied)
+	}
+}
+
+func TestSessionTitleOriginMigrationClassifiesLegacyPlaceholders(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.ExecContext(ctx,
+		`CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	names, err := migrationNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if name == "0010_session_title_origin.sql" {
+			break
+		}
+		applyMigration(t, ctx, database, name)
+	}
+	for _, row := range []struct {
+		id    string
+		title any
+	}{
+		{id: "legacy", title: "New chat"},
+		{id: "blank", title: nil},
+		{id: "named", title: "Budget planning"},
+		{id: "automation", title: "New chat"},
+	} {
+		if _, err := database.ExecContext(ctx, `
+			INSERT INTO sessions (id, title, created_at, updated_at)
+			VALUES (?, ?, datetime('now'), datetime('now'))
+		`, row.id, row.title); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO automations (
+			id, name, prompt, schedule_kind, interval_seconds, enabled,
+			next_due_at, session_id, created_at, updated_at
+		)
+		VALUES (
+			'auto_new_chat', 'New chat', 'Summarise the sandbox.', 'interval',
+			300, 1, '2099-01-01T00:00:00Z', 'automation',
+			'2026-08-18T00:00:00Z', '2026-08-18T00:00:00Z'
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	applyMigration(t, ctx, database, "0010_session_title_origin.sql")
+
+	for id, want := range map[string]string{
+		"legacy":     "unset",
+		"blank":      "unset",
+		"named":      "explicit",
+		"automation": "explicit",
+	} {
+		var got string
+		if err := database.QueryRowContext(ctx,
+			`SELECT title_origin FROM sessions WHERE id = ?`, id).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("session %s title_origin = %q, want %q", id, got, want)
+		}
 	}
 }
 

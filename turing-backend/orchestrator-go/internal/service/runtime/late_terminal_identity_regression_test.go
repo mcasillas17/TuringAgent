@@ -79,7 +79,7 @@ func TestLateAssignedTerminalUpdateDoesNotReleaseConflictingCompletion(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.repo.CompleteRunWithEvent(context.Background(), enqueued.RunID, enqueued.AssistantMessageID, "persisted completion", payload); err != nil {
+	if _, err := h.repo.CompleteRunWithEvent(context.Background(), enqueued.RunID, enqueued.AssistantMessageID, "persisted completion", payload, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.database.ExecContext(context.Background(), `

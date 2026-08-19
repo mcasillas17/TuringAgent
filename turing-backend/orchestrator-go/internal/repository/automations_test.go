@@ -235,8 +235,24 @@ func TestClaimDueAutomationFiresWhenDueAndNotBefore(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("claim at due = found %v err %v, want found", found, err)
 	}
-	if fire.RunID == "" || fire.SessionID == "" || fire.QueuedEvent.EventID == "" {
-		t.Fatalf("fire = %+v, want a run, a conversation and a queued event", fire)
+	if fire.RunID == "" || fire.SessionID == "" || fire.SessionUpdatedEvent.EventID == "" || fire.QueuedEvent.EventID == "" {
+		t.Fatalf("fire = %+v, want a run, a conversation and its committed events", fire)
+	}
+	if fire.SessionUpdatedEvent.Sequence >= fire.QueuedEvent.Sequence {
+		t.Fatalf("session update sequence %d, want before queued event %d",
+			fire.SessionUpdatedEvent.Sequence, fire.QueuedEvent.Sequence)
+	}
+	var title, titleOrigin string
+	if err := repo.db.QueryRowContext(ctx,
+		`SELECT title, title_origin FROM sessions WHERE id = ?`,
+		fire.SessionID).Scan(&title, &titleOrigin); err != nil {
+		t.Fatalf("read automation session: %v", err)
+	}
+	if title != "Digest" || titleOrigin != "explicit" {
+		t.Fatalf("automation session title = %q origin = %q, want explicit Digest", title, titleOrigin)
+	}
+	if payload := decodeSessionUpdatedPayload(t, fire.SessionUpdatedEvent); payload.Title != "Digest" {
+		t.Fatalf("session.updated title = %q, want automation name", payload.Title)
 	}
 	messages, err := repo.ListMessages(ctx, fire.SessionID, 10)
 	if err != nil {

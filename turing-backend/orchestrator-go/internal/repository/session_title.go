@@ -6,12 +6,6 @@ import (
 	"strings"
 )
 
-// legacyPlaceholderTitle is the literal the client used to send on every
-// create, before naming moved to the backend. It was never a choice a user
-// made — there was no way to type it — so a session carrying it is untitled
-// in every sense except the database's.
-const legacyPlaceholderTitle = "New chat"
-
 // maxTitleRunes bounds a derived title to about one line of the client's
 // conversation list. Titles are counted in runes rather than bytes, so a
 // message in a non-Latin script is not cut to a third of the length of an
@@ -72,16 +66,13 @@ func DeriveSessionTitle(content string) string {
 // in SQL, so a title assigned here is byte-identical to one assigned live.
 func (r *Repository) BackfillSessionTitles(ctx context.Context) (int, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT s.id, (
-			SELECT m.content
-			FROM messages m
-			WHERE m.session_id = s.id AND m.role = 'user'
-			ORDER BY m.sequence
-			LIMIT 1
-		)
+		SELECT s.id, m.content
 		FROM sessions s
-		WHERE s.title IS NULL OR s.title = '' OR s.title = ?
-	`, legacyPlaceholderTitle)
+		LEFT JOIN messages m
+			ON m.session_id = s.id AND m.role = 'user'
+		WHERE s.title_origin = 'unset'
+		ORDER BY s.id, m.sequence
+	`)
 	if err != nil {
 		return 0, err
 	}
@@ -94,7 +85,7 @@ func (r *Repository) BackfillSessionTitles(ctx context.Context) (int, error) {
 		if err := rows.Scan(&sessionID, &content); err != nil {
 			return 0, err
 		}
-		if !content.Valid {
+		if _, found := titles[sessionID]; found || !content.Valid {
 			// Never had a user message, so there is nothing to name it after.
 			// It keeps showing the client's placeholder, which is accurate.
 			continue
@@ -109,7 +100,11 @@ func (r *Repository) BackfillSessionTitles(ctx context.Context) (int, error) {
 	// Collected first, then written: SQLite will not let this connection write
 	// through a cursor it is still reading from.
 	for sessionID, title := range titles {
-		if _, err := r.db.ExecContext(ctx, `UPDATE sessions SET title = ? WHERE id = ?`, title, sessionID); err != nil {
+		if _, err := r.db.ExecContext(ctx, `
+			UPDATE sessions
+			SET title = ?, title_origin = 'derived'
+			WHERE id = ? AND title_origin = 'unset'
+		`, title, sessionID); err != nil {
 			return 0, err
 		}
 	}

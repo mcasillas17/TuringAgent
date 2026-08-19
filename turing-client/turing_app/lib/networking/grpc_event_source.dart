@@ -10,7 +10,8 @@ import '../models/turing_event.dart';
 import 'grpc_client.dart';
 import 'event_source.dart';
 
-class TuringGrpcEventSource implements TuringEventSource {
+class TuringGrpcEventSource
+    implements TuringEventSource, TuringSessionUpdateSource {
   TuringGrpcEventSource({
     required this.baseUrl,
     required this.apiKey,
@@ -40,6 +41,13 @@ class TuringGrpcEventSource implements TuringEventSource {
             afterSequence: Int64(lastSequence ?? 0),
           ),
         )
+        .map(GrpcMappers.turingEventToTuringEvent);
+  }
+
+  @override
+  Stream<TuringEvent> connectSessionUpdates() {
+    return _events
+        .subscribeSessionUpdates(eventpb.SubscribeSessionUpdatesRequest())
         .map(GrpcMappers.turingEventToTuringEvent);
   }
 

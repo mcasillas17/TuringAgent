@@ -8,6 +8,7 @@ import 'package:turing_flutter_app/networking/api_client.dart';
 import '../support/no_skills_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
+import '../support/no_telemetry_api.dart';
 
 void main() {
   group('what a schedule says', () {
@@ -678,7 +679,7 @@ Future<void> _pumpAutomations(
 /// something that behaves like the backend rather than a stub that always says
 /// yes.
 class _FakeApi
-    with NoSkillsApi, NoExternalAgentsApi, NoIntegrationsApi
+    with NoSkillsApi, NoExternalAgentsApi, NoIntegrationsApi, NoTelemetryApi
     implements TuringApi {
   final List<Automation> automations = [];
   final List<String> deleted = [];

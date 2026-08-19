@@ -25,6 +25,8 @@ type ApprovalRecord struct {
 	ArgsHash        string
 	Status          string
 	ApprovalToken   string
+	ApprovalComment sql.NullString
+	DenialReason    sql.NullString
 	ExpiresAt       string
 	ModelToolCallID string
 }
@@ -186,12 +188,12 @@ func (r *Repository) GetPendingApprovalForRun(ctx context.Context, runID string)
 	return approvalByID(ctx, r.db, approvalID)
 }
 
-func (r *Repository) ApproveApproval(ctx context.Context, approvalID string, approvalToken string, decidedAt string) (ApprovalRecord, error) {
-	transition, err := r.ApproveApprovalWithEvent(ctx, approvalID, approvalToken, decidedAt)
+func (r *Repository) ApproveApproval(ctx context.Context, approvalID string, approvalToken string, approvalComment sql.NullString, decidedAt string) (ApprovalRecord, error) {
+	transition, err := r.ApproveApprovalWithEvent(ctx, approvalID, approvalToken, approvalComment, decidedAt)
 	return transition.Approval, err
 }
 
-func (r *Repository) ApproveApprovalWithEvent(ctx context.Context, approvalID string, approvalToken string, decidedAt string) (ApprovalTerminalization, error) {
+func (r *Repository) ApproveApprovalWithEvent(ctx context.Context, approvalID string, approvalToken string, approvalComment sql.NullString, decidedAt string) (ApprovalTerminalization, error) {
 	if decidedAt == "" {
 		decidedAt = now()
 	}
@@ -216,7 +218,15 @@ func (r *Repository) ApproveApprovalWithEvent(ctx context.Context, approvalID st
 	if approvalExpiredAtDecision(record.ExpiresAt, decidedAt) {
 		return ApprovalTerminalization{Approval: record}, ErrApprovalExpired
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE approvals SET status = 'approved', approval_jti = ?, approval_token = ?, decided_at = ? WHERE id = ? AND status = 'pending'`, approvalID, approvalToken, decidedAt, approvalID)
+	result, err := tx.ExecContext(ctx, `
+		UPDATE approvals
+		SET status = 'approved',
+			approval_jti = ?,
+			approval_token = ?,
+			approval_comment = ?,
+			decided_at = ?
+		WHERE id = ? AND status = 'pending'
+	`, approvalID, approvalToken, nullableString(approvalComment), decidedAt, approvalID)
 	if err != nil {
 		return ApprovalTerminalization{}, err
 	}
@@ -249,26 +259,27 @@ func (r *Repository) ExpireApproval(ctx context.Context, approvalID string, deci
 	return transition.Approval, err
 }
 
-func (r *Repository) DenyApproval(ctx context.Context, approvalID string, decidedAt string) (ApprovalRecord, error) {
-	transition, err := r.DenyApprovalWithEvent(ctx, approvalID, decidedAt)
+func (r *Repository) DenyApproval(ctx context.Context, approvalID string, denialReason sql.NullString, decidedAt string) (ApprovalRecord, error) {
+	transition, err := r.DenyApprovalWithEvent(ctx, approvalID, denialReason, decidedAt)
 	return transition.Approval, err
 }
 
 func (r *Repository) ExpireApprovalWithEvent(ctx context.Context, approvalID string, decidedAt string) (ApprovalTerminalization, error) {
-	return r.terminalizeApproval(ctx, approvalID, decidedAt, "expired", "approval_expired", "Approval expired", "failed", "approval.expired", false)
+	return r.terminalizeApproval(ctx, approvalID, sql.NullString{}, decidedAt, "expired", "approval_expired", "Approval expired", "failed", "approval.expired", false)
 }
 
-func (r *Repository) DenyApprovalWithEvent(ctx context.Context, approvalID string, decidedAt string) (ApprovalTerminalization, error) {
-	return r.terminalizeApproval(ctx, approvalID, decidedAt, "denied", "approval_denied", "User denied approval", "denied", "approval.denied", true)
+func (r *Repository) DenyApprovalWithEvent(ctx context.Context, approvalID string, denialReason sql.NullString, decidedAt string) (ApprovalTerminalization, error) {
+	return r.terminalizeApproval(ctx, approvalID, denialReason, decidedAt, "denied", "approval_denied", "User denied approval", "denied", "approval.denied", true)
 }
 
 func (r *Repository) FailApprovalDeliveryWithEvent(ctx context.Context, approvalID string, decidedAt string) (ApprovalTerminalization, error) {
-	return r.terminalizeApproval(ctx, approvalID, decidedAt, "denied", "approval_delivery_failed", "Tool policy decision delivery failed", "failed", "approval.denied", false)
+	return r.terminalizeApproval(ctx, approvalID, sql.NullString{}, decidedAt, "denied", "approval_delivery_failed", "Tool policy decision delivery failed", "failed", "approval.denied", false)
 }
 
 func (r *Repository) terminalizeApproval(
 	ctx context.Context,
 	approvalID string,
+	denialReason sql.NullString,
 	decidedAt string,
 	approvalStatus string,
 	errorCode string,
@@ -323,13 +334,25 @@ func (r *Repository) terminalizeApproval(
 	if approvedExpiration {
 		approvalStatusPredicate = "status = 'approved'"
 	}
+	storedDenialReason := sql.NullString{}
+	if approvalStatus == "denied" {
+		storedDenialReason = denialReason
+	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE approvals
 		SET status = ?,
 			approval_jti = CASE WHEN ? = 'expired' THEN NULL ELSE approval_jti END,
 			approval_token = CASE WHEN ? = 'expired' THEN NULL ELSE approval_token END,
+			denial_reason = ?,
 			decided_at = ?
-		WHERE id = ? AND `+approvalStatusPredicate, approvalStatus, approvalStatus, approvalStatus, decidedAt, approvalID)
+		WHERE id = ? AND `+approvalStatusPredicate,
+		approvalStatus,
+		approvalStatus,
+		approvalStatus,
+		nullableString(storedDenialReason),
+		decidedAt,
+		approvalID,
+	)
 	if err != nil {
 		return ApprovalTerminalization{}, err
 	}
@@ -565,14 +588,30 @@ func approvalByID(ctx context.Context, q approvalQuerier, approvalID string) (Ap
 	var record ApprovalRecord
 	var toolCallID sql.NullString
 	var approvalToken sql.NullString
+	var approvalComment sql.NullString
+	var denialReason sql.NullString
 	var modelToolCallID sql.NullString
 	err := q.QueryRowContext(ctx, `
 		SELECT a.id, a.run_id, a.tool_call_id, a.agent_id, a.tool_name, a.args_json, a.args_hash,
-			a.status, a.approval_token, a.expires_at, tc.model_tool_call_id
+			a.status, a.approval_token, a.approval_comment, a.denial_reason, a.expires_at, tc.model_tool_call_id
 		FROM approvals a
 		LEFT JOIN tool_calls tc ON tc.id = a.tool_call_id
 		WHERE a.id = ?
-	`, approvalID).Scan(&record.ApprovalID, &record.RunID, &toolCallID, &record.AgentID, &record.ToolName, &record.ArgsJSON, &record.ArgsHash, &record.Status, &approvalToken, &record.ExpiresAt, &modelToolCallID)
+	`, approvalID).Scan(
+		&record.ApprovalID,
+		&record.RunID,
+		&toolCallID,
+		&record.AgentID,
+		&record.ToolName,
+		&record.ArgsJSON,
+		&record.ArgsHash,
+		&record.Status,
+		&approvalToken,
+		&approvalComment,
+		&denialReason,
+		&record.ExpiresAt,
+		&modelToolCallID,
+	)
 	if err != nil {
 		return ApprovalRecord{}, err
 	}
@@ -582,6 +621,8 @@ func approvalByID(ctx context.Context, q approvalQuerier, approvalID string) (Ap
 	if approvalToken.Valid {
 		record.ApprovalToken = approvalToken.String
 	}
+	record.ApprovalComment = approvalComment
+	record.DenialReason = denialReason
 	if modelToolCallID.Valid {
 		record.ModelToolCallID = modelToolCallID.String
 	}

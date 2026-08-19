@@ -392,6 +392,7 @@ func TestAppRegistersPublicAndInternalServices(t *testing.T) {
 		"turing.v1.IntegrationService",
 		"turing.v1.SkillService",
 		"turing.v1.AutomationService",
+		"turing.v1.TelemetryService",
 	} {
 		if _, ok := publicServices[name]; !ok {
 			t.Fatalf("public server missing %s", name)
@@ -415,6 +416,12 @@ func TestAppRegistersPublicAndInternalServices(t *testing.T) {
 	}
 	if _, ok := internalServices["turing.v1.IntegrationService"]; ok {
 		t.Fatal("internal server should not expose the integration service to the runtime")
+	}
+	// A usage report is for the person, not for the machinery. Registering it
+	// internally would let anything holding the runtime token read what this
+	// installation has been doing.
+	if _, ok := internalServices["turing.v1.TelemetryService"]; ok {
+		t.Fatal("internal server should not expose telemetry to the runtime")
 	}
 }
 

@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	EventService_ListEvents_FullMethodName             = "/turing.v1.EventService/ListEvents"
-	EventService_SubscribeSessionEvents_FullMethodName = "/turing.v1.EventService/SubscribeSessionEvents"
+	EventService_ListEvents_FullMethodName              = "/turing.v1.EventService/ListEvents"
+	EventService_SubscribeSessionEvents_FullMethodName  = "/turing.v1.EventService/SubscribeSessionEvents"
+	EventService_SubscribeSessionUpdates_FullMethodName = "/turing.v1.EventService/SubscribeSessionUpdates"
 )
 
 // EventServiceClient is the client API for EventService service.
@@ -29,6 +30,7 @@ const (
 type EventServiceClient interface {
 	ListEvents(ctx context.Context, in *ListEventsRequest, opts ...grpc.CallOption) (*ListEventsResponse, error)
 	SubscribeSessionEvents(ctx context.Context, in *SubscribeSessionEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TuringEvent], error)
+	SubscribeSessionUpdates(ctx context.Context, in *SubscribeSessionUpdatesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TuringEvent], error)
 }
 
 type eventServiceClient struct {
@@ -68,12 +70,32 @@ func (c *eventServiceClient) SubscribeSessionEvents(ctx context.Context, in *Sub
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type EventService_SubscribeSessionEventsClient = grpc.ServerStreamingClient[TuringEvent]
 
+func (c *eventServiceClient) SubscribeSessionUpdates(ctx context.Context, in *SubscribeSessionUpdatesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TuringEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &EventService_ServiceDesc.Streams[1], EventService_SubscribeSessionUpdates_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[SubscribeSessionUpdatesRequest, TuringEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EventService_SubscribeSessionUpdatesClient = grpc.ServerStreamingClient[TuringEvent]
+
 // EventServiceServer is the server API for EventService service.
 // All implementations must embed UnimplementedEventServiceServer
 // for forward compatibility.
 type EventServiceServer interface {
 	ListEvents(context.Context, *ListEventsRequest) (*ListEventsResponse, error)
 	SubscribeSessionEvents(*SubscribeSessionEventsRequest, grpc.ServerStreamingServer[TuringEvent]) error
+	SubscribeSessionUpdates(*SubscribeSessionUpdatesRequest, grpc.ServerStreamingServer[TuringEvent]) error
 	mustEmbedUnimplementedEventServiceServer()
 }
 
@@ -89,6 +111,9 @@ func (UnimplementedEventServiceServer) ListEvents(context.Context, *ListEventsRe
 }
 func (UnimplementedEventServiceServer) SubscribeSessionEvents(*SubscribeSessionEventsRequest, grpc.ServerStreamingServer[TuringEvent]) error {
 	return status.Error(codes.Unimplemented, "method SubscribeSessionEvents not implemented")
+}
+func (UnimplementedEventServiceServer) SubscribeSessionUpdates(*SubscribeSessionUpdatesRequest, grpc.ServerStreamingServer[TuringEvent]) error {
+	return status.Error(codes.Unimplemented, "method SubscribeSessionUpdates not implemented")
 }
 func (UnimplementedEventServiceServer) mustEmbedUnimplementedEventServiceServer() {}
 func (UnimplementedEventServiceServer) testEmbeddedByValue()                      {}
@@ -140,6 +165,17 @@ func _EventService_SubscribeSessionEvents_Handler(srv interface{}, stream grpc.S
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type EventService_SubscribeSessionEventsServer = grpc.ServerStreamingServer[TuringEvent]
 
+func _EventService_SubscribeSessionUpdates_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(SubscribeSessionUpdatesRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(EventServiceServer).SubscribeSessionUpdates(m, &grpc.GenericServerStream[SubscribeSessionUpdatesRequest, TuringEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EventService_SubscribeSessionUpdatesServer = grpc.ServerStreamingServer[TuringEvent]
+
 // EventService_ServiceDesc is the grpc.ServiceDesc for EventService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -156,6 +192,11 @@ var EventService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "SubscribeSessionEvents",
 			Handler:       _EventService_SubscribeSessionEvents_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "SubscribeSessionUpdates",
+			Handler:       _EventService_SubscribeSessionUpdates_Handler,
 			ServerStreams: true,
 		},
 	},

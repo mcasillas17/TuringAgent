@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -21,14 +22,15 @@ type EnqueueUserMessageInput struct {
 }
 
 type EnqueueUserMessageResult struct {
-	SessionID          string
-	UserMessageID      string
-	AssistantMessageID string
-	RunID              string
-	JobID              string
-	TraceID            string
-	Status             string
-	QueuedEvent        Event
+	SessionID           string
+	UserMessageID       string
+	AssistantMessageID  string
+	RunID               string
+	JobID               string
+	TraceID             string
+	Status              string
+	SessionUpdatedEvent Event
+	QueuedEvent         Event
 	// RoutingEvents carries the notices written in the same transaction as the
 	// run — today, the one saying this message is leaving the machine. They are
 	// returned rather than published here because the repository does not own
@@ -279,6 +281,15 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 	}
 	modelProvider, model := input.ModelProvider, input.Model
 	var externalTarget *ExternalAgentTarget
+	// Recorded on the run itself, not left to be derived later from
+	// session_external_agent. That table says where the conversation points
+	// NOW; re-pointing or deleting an agent afterwards would silently rewrite
+	// the history of where earlier messages were actually sent, and "what left
+	// this machine" is exactly the record that must not be rewritable.
+	//
+	// The host rather than the base URL: a URL can carry a path, a query, and
+	// from a careless paste a credential. Only the recipient is worth keeping.
+	var externalAgentName, externalAgentHost sql.NullString
 	if routed {
 		// Every supported vendor speaks the OpenAI chat-completions dialect, so
 		// this reuses the existing provider rather than adding one client per
@@ -290,8 +301,18 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 			BaseURL:       routedAgent.BaseURL,
 			CredentialRef: routedAgent.CredentialRef,
 		}
+		externalAgentName = sql.NullString{String: routedAgent.DisplayName, Valid: true}
+		// Parsed here rather than through ExternalAgentEndpointHost, which
+		// falls back to returning the URL whole when it cannot find a host.
+		// That fallback is fine for a transcript notice; it is not fine for a
+		// column that is read straight back into a report promising a host and
+		// nothing else. No host recorded beats the wrong thing recorded, and
+		// the client already words the absence.
+		if parsed, parseErr := url.Parse(routedAgent.BaseURL); parseErr == nil && parsed.Host != "" {
+			externalAgentHost = sql.NullString{String: parsed.Host, Valid: true}
+		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status, model_provider, model_name, created_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`, runID, input.SessionID, userMessageID, assistantMessageID, input.AgentID, traceID, modelProvider, model, createdAt); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status, model_provider, model_name, external_agent_name, external_agent_host, created_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`, runID, input.SessionID, userMessageID, assistantMessageID, input.AgentID, traceID, modelProvider, model, externalAgentName, externalAgentHost, createdAt); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	// Name the conversation after the first thing said in it, and mark the
@@ -305,13 +326,33 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE sessions
 		SET title = CASE
-				WHEN (title IS NULL OR title = '' OR title = ?) AND ? <> ''
+				WHEN title_origin = 'unset' AND ? <> ''
 					THEN ?
 				ELSE title
 			END,
+			title_origin = CASE
+				WHEN title_origin = 'unset' AND ? <> ''
+					THEN 'derived'
+				ELSE title_origin
+			END,
 			updated_at = ?
 		WHERE id = ?
-	`, legacyPlaceholderTitle, derivedTitle, derivedTitle, createdAt, input.SessionID); err != nil {
+	`, derivedTitle, derivedTitle, derivedTitle, createdAt, input.SessionID); err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	var sessionTitle string
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(title, '') FROM sessions WHERE id = ?`, input.SessionID).Scan(&sessionTitle); err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	sessionUpdatedPayload, err := json.Marshal(map[string]string{
+		"title":     sessionTitle,
+		"updatedAt": createdAt,
+	})
+	if err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	sessionUpdatedEvent, err := appendSessionEventTx(ctx, tx, input.SessionID, traceID, "session.updated", string(sessionUpdatedPayload), createdAt)
+	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	// Frozen into the payload rather than read when the job is claimed: a
@@ -383,7 +424,7 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 		}
 		routingEvents = append(routingEvents, notice)
 	}
-	return EnqueueUserMessageResult{SessionID: input.SessionID, UserMessageID: userMessageID, AssistantMessageID: assistantMessageID, RunID: runID, JobID: jobID, TraceID: traceID, Status: "queued", QueuedEvent: queuedEvent, RoutingEvents: routingEvents}, nil
+	return EnqueueUserMessageResult{SessionID: input.SessionID, UserMessageID: userMessageID, AssistantMessageID: assistantMessageID, RunID: runID, JobID: jobID, TraceID: traceID, Status: "queued", SessionUpdatedEvent: sessionUpdatedEvent, QueuedEvent: queuedEvent, RoutingEvents: routingEvents}, nil
 }
 
 // flattenNoticeText collapses a user-chosen name to a single line before it is

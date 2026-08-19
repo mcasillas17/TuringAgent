@@ -398,6 +398,50 @@ class SubscribeSessionEventsRequest extends $pb.GeneratedMessage {
   void clearAfterSequence() => $_clearField(2);
 }
 
+class SubscribeSessionUpdatesRequest extends $pb.GeneratedMessage {
+  factory SubscribeSessionUpdatesRequest() => create();
+
+  SubscribeSessionUpdatesRequest._();
+
+  factory SubscribeSessionUpdatesRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory SubscribeSessionUpdatesRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'SubscribeSessionUpdatesRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SubscribeSessionUpdatesRequest clone() =>
+      SubscribeSessionUpdatesRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SubscribeSessionUpdatesRequest copyWith(
+          void Function(SubscribeSessionUpdatesRequest) updates) =>
+      super.copyWith(
+              (message) => updates(message as SubscribeSessionUpdatesRequest))
+          as SubscribeSessionUpdatesRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static SubscribeSessionUpdatesRequest create() =>
+      SubscribeSessionUpdatesRequest._();
+  @$core.override
+  SubscribeSessionUpdatesRequest createEmptyInstance() => create();
+  static $pb.PbList<SubscribeSessionUpdatesRequest> createRepeated() =>
+      $pb.PbList<SubscribeSessionUpdatesRequest>();
+  @$core.pragma('dart2js:noInline')
+  static SubscribeSessionUpdatesRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<SubscribeSessionUpdatesRequest>(create);
+  static SubscribeSessionUpdatesRequest? _defaultInstance;
+}
+
 const $core.bool _omitFieldNames =
     $core.bool.fromEnvironment('protobuf.omit_field_names');
 const $core.bool _omitMessageNames =

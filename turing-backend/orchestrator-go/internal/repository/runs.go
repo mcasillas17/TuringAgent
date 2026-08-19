@@ -104,7 +104,34 @@ func (r *Repository) CompleteRun(ctx context.Context, runID string, assistantMes
 	return tx.Commit()
 }
 
-func (r *Repository) CompleteRunWithEvent(ctx context.Context, runID string, assistantMessageID string, content string, payloadJSON string) ([]Event, error) {
+// RunTokenUsage is what a provider REPORTED for a run. A nil field means it
+// reported nothing, which is stored as NULL and read back as unknown. Nothing
+// in this package computes, estimates or defaults these.
+type RunTokenUsage struct {
+	InputTokens  *int64
+	OutputTokens *int64
+}
+
+// nonNegativeNullInt64 turns a count into what SQLite stores. Absent becomes
+// NULL, and so does a negative — there is no count below zero worth keeping,
+// and NULL is the value every reader already knows means "unknown".
+func nonNegativeNullInt64(value *int64) sql.NullInt64 {
+	if value == nil || *value < 0 {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: *value, Valid: true}
+}
+
+// CompleteRunWithEvent terminalizes a run. usage may be nil, which is the
+// ordinary case for a provider that reports no token counts; it is recorded in
+// the same transaction as the completion so a run can never be marked finished
+// while its measured cost is written separately, or not at all.
+func (r *Repository) CompleteRunWithEvent(ctx context.Context, runID string, assistantMessageID string, content string, payloadJSON string, usage *RunTokenUsage) ([]Event, error) {
+	var inputTokens, outputTokens sql.NullInt64
+	if usage != nil {
+		inputTokens = nonNegativeNullInt64(usage.InputTokens)
+		outputTokens = nonNegativeNullInt64(usage.OutputTokens)
+	}
 	finishedAt := now()
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -119,13 +146,15 @@ func (r *Repository) CompleteRunWithEvent(ctx context.Context, runID string, ass
 		UPDATE agent_runs
 		SET status = 'completed',
 			finished_at = ?,
+			input_tokens = ?,
+			output_tokens = ?,
 			execution_active = 0,
 			execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
 			execution_state = 'exited',
 			execution_lease_expires_at = NULL,
 			execution_lease_expires_at_ns = NULL
 		WHERE id = ? AND status IN ('running','waiting_approval')
-	`, finishedAt, finishedAt, runID)
+	`, finishedAt, inputTokens, outputTokens, finishedAt, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -573,7 +602,15 @@ func appendRunNoticeTx(ctx context.Context, tx *sql.Tx, sessionID string, runID 
 	return appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.step", string(payloadJSON), createdAt)
 }
 
+func appendSessionEventTx(ctx context.Context, tx *sql.Tx, sessionID string, traceID string, eventType string, payloadJSON string, createdAt string) (Event, error) {
+	return appendEventTx(ctx, tx, sessionID, sql.NullString{}, traceID, eventType, payloadJSON, createdAt)
+}
+
 func appendRunEventTx(ctx context.Context, tx *sql.Tx, sessionID string, runID string, traceID string, eventType string, payloadJSON string, createdAt string) (Event, error) {
+	return appendEventTx(ctx, tx, sessionID, sql.NullString{String: runID, Valid: true}, traceID, eventType, payloadJSON, createdAt)
+}
+
+func appendEventTx(ctx context.Context, tx *sql.Tx, sessionID string, runID sql.NullString, traceID string, eventType string, payloadJSON string, createdAt string) (Event, error) {
 	if payloadJSON == "" {
 		payloadJSON = "{}"
 	}
@@ -584,14 +621,14 @@ func appendRunEventTx(ctx context.Context, tx *sql.Tx, sessionID string, runID s
 	event := Event{
 		EventID:     ids.New("evt"),
 		SessionID:   sessionID,
-		RunID:       sql.NullString{String: runID, Valid: true},
+		RunID:       runID,
 		TraceID:     traceID,
 		Sequence:    sequence,
 		Type:        eventType,
 		PayloadJSON: payloadJSON,
 		CreatedAt:   createdAt,
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO events (id, session_id, run_id, trace_id, sequence, type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, event.EventID, event.SessionID, runID, event.TraceID, event.Sequence, event.Type, event.PayloadJSON, event.CreatedAt); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO events (id, session_id, run_id, trace_id, sequence, type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, event.EventID, event.SessionID, nullableString(runID), event.TraceID, event.Sequence, event.Type, event.PayloadJSON, event.CreatedAt); err != nil {
 		return Event{}, err
 	}
 	return event, nil

@@ -687,7 +687,25 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 	defer connectedWorker.updateMu.Unlock()
 	assignment, ok := connectedWorker.assignmentForRun(assigned.RunId)
 	if !ok {
-		return repository.ErrAssignmentFenced
+		// The command was queued while this worker held the run; by the time it
+		// reached the front of the queue the assignment had been released —
+		// terminalized, requeued, or reconciled by another path. Handing the
+		// worker a run it no longer owns would be wrong, so the command is
+		// dropped and the loop continues.
+		//
+		// This used to return ErrAssignmentFenced, which the caller turns into
+		// a stream error: one command that merely arrived too late tore down
+		// the whole connection, costing the worker every OTHER assignment it
+		// was holding and orphaning their runs until the reaper noticed. That
+		// is what made TestTerminalizedAssignedRunReconcilesMatchingLateTerminal
+		// Update fail intermittently under CI's slower scheduling — the late
+		// terminal update released the run while its own dispatch was still in
+		// flight.
+		//
+		// Nothing is lost by dropping it: handleUndeliveredCommand only acts on
+		// tool-policy decisions, and whichever path released the assignment
+		// already owns requeueing or terminalizing the run.
+		return nil
 	}
 	repositoryAssignment := repository.Assignment{
 		JobID: assignment.jobID, RunID: assignment.runID, WorkerID: workerID, AttemptID: assignment.attemptID,
@@ -1391,6 +1409,34 @@ func isTerminalRunStatus(runStatus string) bool {
 	}
 }
 
+// runTokenUsage carries the runtime's reported counts into storage without
+// filling anything in. A worker that reports nothing yields nil, which the
+// repository stores as NULL and every reader treats as unknown rather than as
+// zero. Presence is preserved per field: a provider that reported only output
+// tokens must not have an input count invented for it here.
+func runTokenUsage(reported *turingv1.RunTokenUsage) *repository.RunTokenUsage {
+	if reported == nil {
+		return nil
+	}
+	// An empty message carries no numbers, so it is silence with an envelope
+	// around it.
+	if reported.InputTokens == nil && reported.OutputTokens == nil {
+		return nil
+	}
+	// Copied rather than aliased: the proto message belongs to the stream and
+	// must not be able to change a value already handed to storage.
+	usage := &repository.RunTokenUsage{}
+	if reported.InputTokens != nil {
+		input := *reported.InputTokens
+		usage.InputTokens = &input
+	}
+	if reported.OutputTokens != nil {
+		output := *reported.OutputTokens
+		usage.OutputTokens = &output
+	}
+	return usage
+}
+
 func (s *Server) handleRunCompleted(ctx context.Context, completed *turingv1.RuntimeRunCompleted) error {
 	if completed == nil || completed.RunId == "" {
 		return status.Error(codes.InvalidArgument, "run_completed is required")
@@ -1423,7 +1469,7 @@ func (s *Server) handleRunCompleted(ctx context.Context, completed *turingv1.Run
 	if err != nil {
 		return err
 	}
-	events, err := s.repo.CompleteRunWithEvent(ctx, completed.RunId, assistantMessageID, completed.Content, payloadJSON)
+	events, err := s.repo.CompleteRunWithEvent(ctx, completed.RunId, assistantMessageID, completed.Content, payloadJSON, runTokenUsage(completed.GetTokenUsage()))
 	if err != nil {
 		return mapRunStateError(err)
 	}

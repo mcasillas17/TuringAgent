@@ -10,6 +10,7 @@ import '../generated/turing/v1/events.pb.dart' as eventpb;
 import '../generated/turing/v1/integrations.pb.dart' as integrationpb;
 import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
 import '../generated/turing/v1/skills.pb.dart' as skillpb;
+import '../generated/turing/v1/telemetry.pb.dart' as telemetrypb;
 import 'agent_descriptor.dart' as model_agent;
 import 'external_agent.dart' as model_external_agent;
 import 'integration.dart' as model_integration;
@@ -18,6 +19,7 @@ import 'message.dart' as model_message;
 import 'search_hit.dart' as model_search_hit;
 import 'session.dart' as model_session;
 import 'skill.dart' as model_skill;
+import 'telemetry.dart' as model_telemetry;
 import 'tool_descriptor.dart' as model_tool;
 import 'turing_event.dart' as model_event;
 
@@ -330,6 +332,9 @@ class GrpcMappers {
       sessionId: session.sessionId,
       title: session.title.isEmpty ? null : session.title,
       updatedAt: _timestampToDateTime(session.updatedAt),
+      updatedAtNanoseconds:
+          session.updatedAt.seconds.toInt() * 1000000000 +
+          session.updatedAt.nanos,
     );
   }
 
@@ -465,6 +470,8 @@ class GrpcMappers {
         return 'error';
       case eventpb.TuringEventType.TURING_EVENT_TYPE_SYSTEM:
         return 'system';
+      case eventpb.TuringEventType.TURING_EVENT_TYPE_SESSION_UPDATED:
+        return 'session.updated';
       case eventpb.TuringEventType.TURING_EVENT_TYPE_UNSPECIFIED:
       default:
         return 'system';
@@ -628,6 +635,114 @@ class GrpcMappers {
       'toolName': event.toolName,
       'argsSummary': event.argsSummary,
     };
+  }
+
+  /// Telemetry, where the interesting part of the mapping is what does NOT
+  /// happen: an unset int64 stays null all the way to the widget instead of
+  /// collapsing to protobuf's zero default. `hasX()` is the whole difference
+  /// between "no provider reported this" and "this was zero", and the page
+  /// draws them differently on purpose.
+  static model_telemetry.TelemetrySummary telemetrySummaryToModel(
+    telemetrypb.GetTelemetrySummaryResponse response,
+  ) {
+    return model_telemetry.TelemetrySummary(
+      window: model_telemetry.TelemetryWindow(
+        days: response.window.days,
+        start: response.window.start.toDateTime().toUtc(),
+        end: response.window.end.toDateTime().toUtc(),
+      ),
+      runs: model_telemetry.TelemetryRunTotals(
+        total: response.runs.total.toInt(),
+        completed: response.runs.completed.toInt(),
+        failed: response.runs.failed.toInt(),
+        cancelled: response.runs.cancelled.toInt(),
+        inFlight: response.runs.inFlight.toInt(),
+        averageDurationMs: response.runs.hasAverageDurationMs()
+            ? response.runs.averageDurationMs.toInt()
+            : null,
+      ),
+      tokens: model_telemetry.TelemetryTokenTotals(
+        inputTokens: response.tokens.hasInputTokens()
+            ? response.tokens.inputTokens.toInt()
+            : null,
+        outputTokens: response.tokens.hasOutputTokens()
+            ? response.tokens.outputTokens.toInt()
+            : null,
+        runsWithUsage: response.tokens.runsWithUsage.toInt(),
+        runsWithoutUsage: response.tokens.runsWithoutUsage.toInt(),
+      ),
+      tools: response.tools
+          .map(
+            (tool) => model_telemetry.TelemetryToolUsage(
+              serverName: tool.serverName,
+              toolName: tool.toolName,
+              calls: tool.calls.toInt(),
+              failed: tool.failed.toInt(),
+              denied: tool.denied.toInt(),
+              averageDurationMs: tool.hasAverageDurationMs()
+                  ? tool.averageDurationMs.toInt()
+                  : null,
+            ),
+          )
+          .toList(growable: false),
+      models: response.models
+          .map(
+            (model) => model_telemetry.TelemetryModelUsage(
+              provider: model.provider,
+              model: model.model,
+              runs: model.runs.toInt(),
+              inputTokens: model.hasInputTokens()
+                  ? model.inputTokens.toInt()
+                  : null,
+              outputTokens: model.hasOutputTokens()
+                  ? model.outputTokens.toInt()
+                  : null,
+              runsWithoutUsage: model.runsWithoutUsage.toInt(),
+            ),
+          )
+          .toList(growable: false),
+      externalAgents: response.externalAgents
+          .map(
+            (agent) => model_telemetry.TelemetryExternalAgentUsage(
+              displayName: agent.displayName,
+              endpointHost: agent.endpointHost,
+              runs: agent.runs.toInt(),
+              inputTokens: agent.hasInputTokens()
+                  ? agent.inputTokens.toInt()
+                  : null,
+              outputTokens: agent.hasOutputTokens()
+                  ? agent.outputTokens.toInt()
+                  : null,
+              runsWithoutUsage: agent.runsWithoutUsage.toInt(),
+            ),
+          )
+          .toList(growable: false),
+      automations: model_telemetry.TelemetryAutomationTotals(
+        runs: response.automations.runs.toInt(),
+        completed: response.automations.completed.toInt(),
+        failed: response.automations.failed.toInt(),
+        unattendedApprovals: response.automations.unattendedApprovals.toInt(),
+      ),
+      integrations: model_telemetry.TelemetryIntegrationTotals(
+        connected: response.integrations.connected.toInt(),
+        revoked: response.integrations.revoked.toInt(),
+      ),
+      daily: response.daily
+          .map(
+            (day) => model_telemetry.TelemetryDailyActivity(
+              date: day.date,
+              runs: day.runs.toInt(),
+              toolCalls: day.toolCalls.toInt(),
+              inputTokens: day.hasInputTokens()
+                  ? day.inputTokens.toInt()
+                  : null,
+              outputTokens: day.hasOutputTokens()
+                  ? day.outputTokens.toInt()
+                  : null,
+            ),
+          )
+          .toList(growable: false),
+    );
   }
 
   static dynamic _valueToDart(structpb.Value value) {

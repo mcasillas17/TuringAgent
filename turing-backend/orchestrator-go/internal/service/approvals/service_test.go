@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
@@ -366,7 +368,11 @@ func TestApproveApprovalReturnsStatusAndToken(t *testing.T) {
 	}
 	client := turingv1.NewApprovalServiceClient(h.conn)
 
-	resp, err := client.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID})
+	comment := "Approved after checking the path"
+	resp, err := client.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{
+		ApprovalId: approvalID,
+		Comment:    comment,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,9 +386,23 @@ func TestApproveApprovalReturnsStatusAndToken(t *testing.T) {
 	if !strings.Contains(approval.ApprovalToken, ".") {
 		t.Fatalf("approval token was not signed: %q", approval.ApprovalToken)
 	}
-	var auditAction string
-	if err := h.database.QueryRowContext(context.Background(), `SELECT action FROM audit_logs WHERE action = 'approval.approved' AND target = ?`, approvalID).Scan(&auditAction); err != nil {
+	if approval.ApprovalComment != (sql.NullString{String: comment, Valid: true}) || approval.DenialReason.Valid {
+		t.Fatalf("approval rationale = comment %#v reason %#v", approval.ApprovalComment, approval.DenialReason)
+	}
+	var auditAction, auditPayloadJSON string
+	if err := h.database.QueryRowContext(context.Background(), `
+		SELECT action, payload_json
+		FROM audit_logs
+		WHERE action = 'approval.approved' AND target = ?
+	`, approvalID).Scan(&auditAction, &auditPayloadJSON); err != nil {
 		t.Fatal(err)
+	}
+	var auditPayload map[string]any
+	if err := json.Unmarshal([]byte(auditPayloadJSON), &auditPayload); err != nil {
+		t.Fatal(err)
+	}
+	if auditPayload["comment"] != comment || auditPayload["toolName"] != "files.update" {
+		t.Fatalf("approval audit payload = %#v", auditPayload)
 	}
 }
 
@@ -796,8 +816,8 @@ func TestDenyApprovalAtExpiryBoundaryTakesExpirationPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if approval.Status != "expired" {
-		t.Fatalf("approval status = %q, want expired", approval.Status)
+	if approval.Status != "expired" || approval.DenialReason.Valid {
+		t.Fatalf("expired approval retained a denial rationale: %+v", approval)
 	}
 	var expiredEvents, deniedEvents int
 	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'approval.expired'`, enqueued.RunID).Scan(&expiredEvents); err != nil {
@@ -820,7 +840,8 @@ func TestDenyApprovalReturnsDeniedStatus(t *testing.T) {
 	}
 	client := turingv1.NewApprovalServiceClient(h.conn)
 
-	resp, err := client.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{ApprovalId: approvalID, Reason: "no"})
+	reason := "Wrong destination"
+	resp, err := client.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{ApprovalId: approvalID, Reason: reason})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -833,6 +854,476 @@ func TestDenyApprovalReturnsDeniedStatus(t *testing.T) {
 	}
 	if run.Status != "failed" {
 		t.Fatalf("run status = %q, want failed", run.Status)
+	}
+	approval, err := h.repo.GetApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval.DenialReason != (sql.NullString{String: reason, Valid: true}) || approval.ApprovalComment.Valid {
+		t.Fatalf("denial rationale = comment %#v reason %#v", approval.ApprovalComment, approval.DenialReason)
+	}
+	var payloadJSON string
+	if err := h.database.QueryRowContext(context.Background(), `
+		SELECT payload_json
+		FROM audit_logs
+		WHERE action = 'approval.denied' AND target = ?
+	`, approvalID).Scan(&payloadJSON); err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["reason"] != reason || payload["toolName"] != "files.update" {
+		t.Fatalf("denial audit payload = %#v", payload)
+	}
+}
+
+func TestHumanApprovalRationaleEmptyInputContract(t *testing.T) {
+	tests := []struct {
+		name   string
+		decide func(context.Context, *Server, string) error
+		field  func(repository.ApprovalRecord) sql.NullString
+	}{
+		{
+			name: "approve omitted scalar",
+			decide: func(ctx context.Context, service *Server, approvalID string) error {
+				_, err := service.ApproveApproval(ctx, &turingv1.ApproveApprovalRequest{ApprovalId: approvalID})
+				return err
+			},
+			field: func(record repository.ApprovalRecord) sql.NullString { return record.ApprovalComment },
+		},
+		{
+			name: "approve explicit empty scalar",
+			decide: func(ctx context.Context, service *Server, approvalID string) error {
+				_, err := service.ApproveApproval(ctx, &turingv1.ApproveApprovalRequest{ApprovalId: approvalID, Comment: ""})
+				return err
+			},
+			field: func(record repository.ApprovalRecord) sql.NullString { return record.ApprovalComment },
+		},
+		{
+			name: "deny omitted scalar",
+			decide: func(ctx context.Context, service *Server, approvalID string) error {
+				_, err := service.DenyApproval(ctx, &turingv1.DenyApprovalRequest{ApprovalId: approvalID})
+				return err
+			},
+			field: func(record repository.ApprovalRecord) sql.NullString { return record.DenialReason },
+		},
+		{
+			name: "deny explicit empty scalar",
+			decide: func(ctx context.Context, service *Server, approvalID string) error {
+				_, err := service.DenyApproval(ctx, &turingv1.DenyApprovalRequest{ApprovalId: approvalID, Reason: ""})
+				return err
+			},
+			field: func(record repository.ApprovalRecord) sql.NullString { return record.DenialReason },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newApprovalHarness(t)
+			enqueued := h.createRunningToolCall(t)
+			approvalID, err := h.service.CreateApprovalForTool(
+				context.Background(),
+				enqueued.RunID,
+				"call_1",
+				"general_assistant",
+				"files.update",
+				map[string]any{"path": "note.txt"},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := test.decide(context.Background(), h.service, approvalID); err != nil {
+				t.Fatal(err)
+			}
+			record, err := h.repo.GetApproval(context.Background(), approvalID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if field := test.field(record); !field.Valid || field.String != "" {
+				t.Fatalf("empty human rationale = %#v, want valid empty string", field)
+			}
+		})
+	}
+}
+
+func TestApprovalRationaleRejectsInvalidOrOversizedInput(t *testing.T) {
+	tests := []struct {
+		name   string
+		decide func(context.Context, *Server, string) error
+	}{
+		{
+			name: "approve oversized",
+			decide: func(ctx context.Context, service *Server, approvalID string) error {
+				_, err := service.ApproveApproval(ctx, &turingv1.ApproveApprovalRequest{
+					ApprovalId: approvalID,
+					Comment:    strings.Repeat("x", maxDecisionRationaleBytes+1),
+				})
+				return err
+			},
+		},
+		{
+			name: "deny invalid UTF-8",
+			decide: func(ctx context.Context, service *Server, approvalID string) error {
+				_, err := service.DenyApproval(ctx, &turingv1.DenyApprovalRequest{
+					ApprovalId: approvalID,
+					Reason:     string([]byte{0xff}),
+				})
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newApprovalHarness(t)
+			enqueued := h.createRunningToolCall(t)
+			approvalID, err := h.service.CreateApprovalForTool(
+				context.Background(),
+				enqueued.RunID,
+				"call_1",
+				"general_assistant",
+				"files.update",
+				map[string]any{"path": "note.txt"},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := test.decide(context.Background(), h.service, approvalID); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("decision error = %v, want InvalidArgument", err)
+			}
+			record, err := h.repo.GetApproval(context.Background(), approvalID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if record.Status != "pending" || record.ApprovalComment.Valid || record.DenialReason.Valid {
+				t.Fatalf("invalid rationale mutated approval: %+v", record)
+			}
+		})
+	}
+}
+
+func TestApprovalRationaleAuditIsBoundedAndAllowlisted(t *testing.T) {
+	h := newApprovalHarness(t)
+	enqueued := h.createRunningToolCall(t)
+	secretToolArgument := "tool-argument-must-not-enter-decision-audit"
+	approvalID, err := h.service.CreateApprovalForTool(
+		context.Background(),
+		enqueued.RunID,
+		"call_1",
+		"general_assistant",
+		"files.update",
+		map[string]any{
+			"path":    "note.txt",
+			"content": strings.Repeat(secretToolArgument, 100),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	comment := strings.Repeat("🔥", maxAuditRationaleBytes)
+	if len(comment) > maxDecisionRationaleBytes {
+		comment = comment[:maxDecisionRationaleBytes]
+		for !utf8.ValidString(comment) {
+			comment = comment[:len(comment)-1]
+		}
+	}
+	if _, err := h.service.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{
+		ApprovalId: approvalID,
+		Comment:    comment,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	record, err := h.repo.GetApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.ApprovalComment.String != comment {
+		t.Fatalf("stored comment was truncated: got %d bytes, want %d", len(record.ApprovalComment.String), len(comment))
+	}
+
+	var payloadJSON string
+	if err := h.database.QueryRowContext(context.Background(), `
+		SELECT payload_json
+		FROM audit_logs
+		WHERE action = 'approval.approved' AND target = ?
+	`, approvalID).Scan(&payloadJSON); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(payloadJSON, secretToolArgument) {
+		t.Fatalf("decision audit leaked tool arguments: %s", payloadJSON)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		t.Fatal(err)
+	}
+	auditComment, ok := payload["comment"].(string)
+	if !ok || len(auditComment) > maxAuditRationaleBytes || !utf8.ValidString(auditComment) || payload["commentTruncated"] != true {
+		t.Fatalf("bounded audit comment = %#v", payload)
+	}
+	for _, forbidden := range []string{"approvalToken", "approvalJti", "args", "argsHash", "toolArgs"} {
+		if _, exists := payload[forbidden]; exists {
+			t.Fatalf("decision audit payload includes forbidden field %q: %#v", forbidden, payload)
+		}
+	}
+}
+
+func TestDeleteSessionScrubsApprovalRationaleAudit(t *testing.T) {
+	h := newApprovalHarness(t)
+	enqueued := h.createRunningToolCall(t)
+	approvalID, err := h.service.CreateApprovalForTool(
+		context.Background(),
+		enqueued.RunID,
+		"call_1",
+		"general_assistant",
+		"files.update",
+		map[string]any{"path": "note.txt"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const reason = "withdrawn rationale 5a53118c"
+	if _, err := h.service.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{
+		ApprovalId: approvalID,
+		Reason:     reason,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.DeleteSession(context.Background(), enqueued.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	var approvals int
+	if err := h.database.QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*) FROM approvals WHERE id = ?`,
+		approvalID,
+	).Scan(&approvals); err != nil {
+		t.Fatal(err)
+	}
+	if approvals != 0 {
+		t.Fatalf("approval count after session deletion = %d, want 0", approvals)
+	}
+	var payloadJSON string
+	if err := h.database.QueryRowContext(context.Background(), `
+		SELECT payload_json
+		FROM audit_logs
+		WHERE action = 'approval.denied' AND target = ?
+	`, approvalID).Scan(&payloadJSON); err != nil {
+		t.Fatal(err)
+	}
+	if payloadJSON != `{"scrubbed":true}` || strings.Contains(payloadJSON, reason) {
+		t.Fatalf("approval audit payload after deletion = %q", payloadJSON)
+	}
+}
+
+func TestLateApprovalAuditAfterSessionDeletionDoesNotRestoreRationale(t *testing.T) {
+	h := newApprovalHarness(t)
+	enqueued := h.createRunningToolCall(t)
+	approvalID, err := h.service.CreateApprovalForTool(
+		context.Background(),
+		enqueued.RunID,
+		"call_1",
+		"general_assistant",
+		"files.update",
+		map[string]any{"path": "note.txt"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const reason = "rationale that must remain withdrawn"
+	if _, err := h.service.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{
+		ApprovalId: approvalID,
+		Reason:     reason,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	denied, err := h.repo.GetApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.DeleteSession(context.Background(), enqueued.SessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	h.service.finishPostCommit(denied, "client", "approval.denied", "denied", "")
+
+	rows, err := h.database.QueryContext(context.Background(), `
+		SELECT payload_json
+		FROM audit_logs
+		WHERE action = 'approval.denied' AND target = ?
+		ORDER BY rowid
+	`, approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var payloads []string
+	for rows.Next() {
+		var payload string
+		if err := rows.Scan(&payload); err != nil {
+			t.Fatal(err)
+		}
+		payloads = append(payloads, payload)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(payloads, []string{`{"scrubbed":true}`}) {
+		t.Fatalf("approval audit payloads after late write = %q", payloads)
+	}
+}
+
+func TestApprovedUnchangedTransitionSkipsPostCommitEffects(t *testing.T) {
+	h := newApprovalHarness(t)
+	enqueued := h.createRunningToolCall(t)
+	approvalID, err := h.service.CreateApprovalForTool(
+		context.Background(),
+		enqueued.RunID,
+		"call_1",
+		"general_assistant",
+		"files.update",
+		map[string]any{"path": "note.txt"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := h.repo.ApproveApproval(
+		context.Background(),
+		approvalID,
+		"already-committed-token",
+		sql.NullString{String: "first committed comment", Valid: true},
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notifier := &recordingApprovalNotifier{}
+	h.service.SetNotifier(notifier)
+
+	h.service.runChangedApprovalPostCommitEffects(repository.ApprovalTerminalization{Approval: approved})
+
+	if got := notifier.snapshot(); got.count != 0 {
+		t.Fatalf("unchanged transition notified runtime %d time(s)", got.count)
+	}
+	var audits int
+	if err := h.database.QueryRowContext(context.Background(), `
+		SELECT COUNT(*)
+		FROM audit_logs
+		WHERE action = 'approval.approved' AND target = ?
+	`, approvalID).Scan(&audits); err != nil {
+		t.Fatal(err)
+	}
+	if audits != 0 {
+		t.Fatalf("unchanged transition wrote %d approval audit row(s)", audits)
+	}
+}
+
+func TestApprovalRationaleSurvivesDatabaseRestart(t *testing.T) {
+	tests := []struct {
+		name   string
+		decide func(context.Context, *Server, string) error
+		field  func(repository.ApprovalRecord) sql.NullString
+		want   string
+	}{
+		{
+			name: "approval comment",
+			decide: func(ctx context.Context, service *Server, approvalID string) error {
+				_, err := service.ApproveApproval(ctx, &turingv1.ApproveApprovalRequest{
+					ApprovalId: approvalID,
+					Comment:    "persisted approval comment",
+				})
+				return err
+			},
+			field: func(record repository.ApprovalRecord) sql.NullString { return record.ApprovalComment },
+			want:  "persisted approval comment",
+		},
+		{
+			name: "denial reason",
+			decide: func(ctx context.Context, service *Server, approvalID string) error {
+				_, err := service.DenyApproval(ctx, &turingv1.DenyApprovalRequest{
+					ApprovalId: approvalID,
+					Reason:     "persisted denial reason",
+				})
+				return err
+			},
+			field: func(record repository.ApprovalRecord) sql.NullString { return record.DenialReason },
+			want:  "persisted denial reason",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "turing.db")
+			database, err := db.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.ApplyMigrations(ctx, database); err != nil {
+				t.Fatal(err)
+			}
+			repo := repository.New(database)
+			service := New(repo, events.NewBus(8), "approval-secret")
+			session, err := repo.CreateSession(ctx, "Restart rationale")
+			if err != nil {
+				t.Fatal(err)
+			}
+			enqueued, err := repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+				SessionID:     session.SessionID,
+				Content:       "needs approval",
+				AgentID:       "general_assistant",
+				ModelProvider: "ollama",
+				Model:         "llama3.2",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.RecordToolCallBefore(
+				ctx,
+				repository.ToolCallRecord{ToolCallID: "call_restart", RunID: enqueued.RunID},
+				"general_assistant",
+				"files",
+				"files.update",
+				`{"path":"note.txt"}`,
+				"sha256:restart",
+			); err != nil {
+				t.Fatal(err)
+			}
+			approvalID, err := service.CreateApprovalForTool(
+				ctx,
+				enqueued.RunID,
+				"call_restart",
+				"general_assistant",
+				"files.update",
+				map[string]any{"path": "note.txt"},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := test.decide(ctx, service, approvalID); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			reopened, err := db.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = reopened.Close() })
+			if err := db.ApplyMigrations(ctx, reopened); err != nil {
+				t.Fatal(err)
+			}
+			record, err := repository.New(reopened).GetApproval(ctx, approvalID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if field := test.field(record); !field.Valid || field.String != test.want {
+				t.Fatalf("rationale after restart = %#v, want %q", field, test.want)
+			}
+		})
 	}
 }
 

@@ -17,6 +17,7 @@ import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
 import '../support/no_automations_api.dart';
 import '../support/no_skills_api.dart';
+import '../support/no_telemetry_api.dart';
 
 void main() {
   testWidgets('the shell is one surface: conversations beside a chat', (
@@ -108,6 +109,11 @@ void main() {
     await tester.tap(find.widgetWithText(TextButton, 'Delete'));
     await tester.pumpAndSettle();
     expect(api.deletedSessionIds, ['sess_existing']);
+    expect(
+      find.text('Existing chat'),
+      findsNothing,
+      reason: 'a stale list response must not resurrect the deleted session',
+    );
   });
 
   testWidgets('cancelling a delete removes nothing', (tester) async {
@@ -166,7 +172,12 @@ void main() {
 }
 
 class _FakeApiClient
-    with NoSkillsApi, NoExternalAgentsApi, NoIntegrationsApi, NoAutomationsApi
+    with
+        NoSkillsApi,
+        NoExternalAgentsApi,
+        NoIntegrationsApi,
+        NoAutomationsApi,
+        NoTelemetryApi
     implements TuringApi {
   @override
   Future<Map<String, dynamic>> approveApproval(

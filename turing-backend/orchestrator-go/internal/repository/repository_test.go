@@ -107,11 +107,14 @@ func TestSessionMessageRunJobTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if latest != 1 || len(replayed) != 1 {
-		t.Fatalf("queued event replay latest=%d events=%+v", latest, replayed)
+	if latest != result.QueuedEvent.Sequence || len(replayed) != 2 {
+		t.Fatalf("enqueue event replay latest=%d events=%+v", latest, replayed)
 	}
-	if replayed[0].EventID != result.QueuedEvent.EventID || replayed[0].Type != "agent.run.queued" {
-		t.Fatalf("bad queued replay event: %+v", replayed[0])
+	if replayed[0].EventID != result.SessionUpdatedEvent.EventID || replayed[0].Type != "session.updated" {
+		t.Fatalf("bad session update replay event: %+v", replayed[0])
+	}
+	if replayed[1].EventID != result.QueuedEvent.EventID || replayed[1].Type != "agent.run.queued" {
+		t.Fatalf("bad queued replay event: %+v", replayed[1])
 	}
 }
 
@@ -684,7 +687,7 @@ func TestCompleteRunWithEventRollsBackWhenEventAppendFails(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	_, err = repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done", `{"assistantMessageId":"`+enqueued.AssistantMessageID+`"}`)
+	_, err = repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done", `{"assistantMessageId":"`+enqueued.AssistantMessageID+`"}`, nil)
 	if err == nil {
 		t.Fatal("CompleteRunWithEvent succeeded, want trigger failure")
 	}
@@ -724,7 +727,7 @@ func TestCompleteRunWithEventAppendsMessageCompletedBeforeRunCompleted(t *testin
 	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	completedEvents, err := repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done", `{"assistantMessageId":"`+enqueued.AssistantMessageID+`"}`)
+	completedEvents, err := repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done", `{"assistantMessageId":"`+enqueued.AssistantMessageID+`"}`, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -792,7 +795,7 @@ func TestCompleteRunWithEventAppendsAuthoritativeMessageCompleted(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	completedEvents, err := repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "authoritative", `{"assistantMessageId":"`+enqueued.AssistantMessageID+`"}`)
+	completedEvents, err := repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "authoritative", `{"assistantMessageId":"`+enqueued.AssistantMessageID+`"}`, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -901,12 +904,29 @@ func TestApprovalLifecycleRecordsTokenAndUpdatesRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	approved, err := repo.ApproveApproval(ctx, approval.ApprovalID, "approval_token_1", "2026-05-15T00:00:00Z")
+	comment := sql.NullString{String: "Reviewed the exact note update", Valid: true}
+	approved, err := repo.ApproveApproval(ctx, approval.ApprovalID, "approval_token_1", comment, "2026-05-15T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if approved.Status != "approved" || approved.ApprovalToken != "approval_token_1" {
 		t.Fatalf("bad approval record: %+v", approved)
+	}
+	if approved.ApprovalComment != comment || approved.DenialReason.Valid {
+		t.Fatalf("approval rationale = comment %#v reason %#v", approved.ApprovalComment, approved.DenialReason)
+	}
+	retried, err := repo.ApproveApproval(
+		ctx,
+		approval.ApprovalID,
+		"replacement_token",
+		sql.NullString{String: "replacement comment", Valid: true},
+		"2026-05-15T00:00:01Z",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried.ApprovalToken != "approval_token_1" || retried.ApprovalComment != comment {
+		t.Fatalf("approval retry rewrote committed decision: %+v", retried)
 	}
 	var toolCallStatus, toolCallApprovalID string
 	if err := database.QueryRowContext(ctx, `SELECT status, approval_id FROM tool_calls WHERE id = ?`, "tool_1").Scan(&toolCallStatus, &toolCallApprovalID); err != nil {
@@ -923,11 +943,22 @@ func TestApprovalLifecycleRecordsTokenAndUpdatesRun(t *testing.T) {
 		t.Fatalf("run status = %q", run.Status)
 	}
 	var approvalJTI, approvalToken string
-	if err := database.QueryRowContext(ctx, `SELECT approval_jti, approval_token FROM approvals WHERE id = ?`, approval.ApprovalID).Scan(&approvalJTI, &approvalToken); err != nil {
+	var storedComment, storedReason sql.NullString
+	if err := database.QueryRowContext(ctx, `
+		SELECT approval_jti, approval_token, approval_comment, denial_reason
+		FROM approvals
+		WHERE id = ?
+	`, approval.ApprovalID).Scan(&approvalJTI, &approvalToken, &storedComment, &storedReason); err != nil {
 		t.Fatalf("query approval token fields: %v", err)
 	}
-	if approvalJTI != approval.ApprovalID || approvalToken != "approval_token_1" {
-		t.Fatalf("bad token fields: approval_jti=%q approval_token=%q", approvalJTI, approvalToken)
+	if approvalJTI != approval.ApprovalID || approvalToken != "approval_token_1" || storedComment != comment || storedReason.Valid {
+		t.Fatalf(
+			"bad approval fields: approval_jti=%q approval_token=%q comment=%#v reason=%#v",
+			approvalJTI,
+			approvalToken,
+			storedComment,
+			storedReason,
+		)
 	}
 	consumed, err := repo.ConsumeApproval(ctx, approval.ApprovalID, "2026-05-15T00:01:00Z")
 	if err != nil {
@@ -1049,7 +1080,7 @@ func TestRecordToolCallAfterRejectsApprovedButUnconsumedCompletion(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ApproveApproval(ctx, approval.ApprovalID, "approved-token", ""); err != nil {
+	if _, err := repo.ApproveApproval(ctx, approval.ApprovalID, "approved-token", sql.NullString{}, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1195,7 +1226,7 @@ func TestDenyApprovalDoesNotMutateNonWaitingRun(t *testing.T) {
 	if _, err := database.ExecContext(ctx, `UPDATE agent_runs SET status = 'completed' WHERE id = ?`, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.DenyApproval(ctx, approval.ApprovalID, "2026-05-15T00:00:00Z"); err == nil {
+	if _, err := repo.DenyApproval(ctx, approval.ApprovalID, sql.NullString{}, "2026-05-15T00:00:00Z"); err == nil {
 		t.Fatal("expected deny approval to fail for completed run")
 	}
 	run, err := repo.GetRun(ctx, enqueued.RunID)
@@ -1239,15 +1270,26 @@ func TestDenyApprovalAtomicallyTerminalizesToolRunJobAndEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := repo.DenyApproval(ctx, approval.ApprovalID, "2026-05-15T00:00:00Z"); err != nil {
+	reason := sql.NullString{String: "The destination is not the one I intended", Valid: true}
+	if _, err := repo.DenyApproval(ctx, approval.ApprovalID, reason, "2026-05-15T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.DenyApproval(ctx, approval.ApprovalID, "2026-05-15T00:00:00Z"); err != nil {
+	if _, err := repo.DenyApproval(
+		ctx,
+		approval.ApprovalID,
+		sql.NullString{String: "replacement reason", Valid: true},
+		"2026-05-15T00:00:01Z",
+	); err != nil {
 		t.Fatalf("repeated denial: %v", err)
 	}
 
 	var approvalStatus, toolCallStatus, runStatus, jobStatus string
-	if err := database.QueryRowContext(ctx, `SELECT status FROM approvals WHERE id = ?`, approval.ApprovalID).Scan(&approvalStatus); err != nil {
+	var storedComment, storedReason sql.NullString
+	if err := database.QueryRowContext(ctx, `
+		SELECT status, approval_comment, denial_reason
+		FROM approvals
+		WHERE id = ?
+	`, approval.ApprovalID).Scan(&approvalStatus, &storedComment, &storedReason); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.QueryRowContext(ctx, `SELECT status FROM tool_calls WHERE id = 'call_denied'`).Scan(&toolCallStatus); err != nil {
@@ -1259,8 +1301,17 @@ func TestDenyApprovalAtomicallyTerminalizesToolRunJobAndEvent(t *testing.T) {
 	if err := database.QueryRowContext(ctx, `SELECT status FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus); err != nil {
 		t.Fatal(err)
 	}
-	if approvalStatus != "denied" || toolCallStatus != "denied" || runStatus != "failed" || jobStatus != "failed" {
-		t.Fatalf("terminal states approval=%q tool=%q run=%q job=%q", approvalStatus, toolCallStatus, runStatus, jobStatus)
+	if approvalStatus != "denied" || storedComment.Valid || storedReason != reason ||
+		toolCallStatus != "denied" || runStatus != "failed" || jobStatus != "failed" {
+		t.Fatalf(
+			"terminal state approval=%q comment=%#v reason=%#v tool=%q run=%q job=%q",
+			approvalStatus,
+			storedComment,
+			storedReason,
+			toolCallStatus,
+			runStatus,
+			jobStatus,
+		)
 	}
 	var terminalEvents int
 	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'agent.run.failed'`, enqueued.RunID).Scan(&terminalEvents); err != nil {
@@ -1302,7 +1353,7 @@ func TestDenyApprovalTerminalizesRunWhenToolCallAlreadyFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := repo.DenyApproval(ctx, approval.ApprovalID, "2026-05-15T00:00:00Z"); err != nil {
+	if _, err := repo.DenyApproval(ctx, approval.ApprovalID, sql.NullString{}, "2026-05-15T00:00:00Z"); err != nil {
 		t.Fatalf("DenyApproval after failed tool call: %v", err)
 	}
 	var approvalStatus, toolCallStatus, runStatus, jobStatus string
@@ -1333,7 +1384,7 @@ func TestRuntimeFailureTerminalizesPendingApprovalBeforeLateResolution(t *testin
 			name:        "conflicting denial",
 			expectError: true,
 			terminalize: func(repo *Repository, ctx context.Context, approvalID string) (ApprovalTerminalization, error) {
-				return repo.DenyApprovalWithEvent(ctx, approvalID, "2026-05-15T00:00:00Z")
+				return repo.DenyApprovalWithEvent(ctx, approvalID, sql.NullString{}, "2026-05-15T00:00:00Z")
 			},
 		},
 		{

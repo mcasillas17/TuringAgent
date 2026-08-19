@@ -61,8 +61,10 @@ Each is a decision already made and defended in review, cited to where it happen
 | Dynamic tool discovery | Working; runtime reports its registry to the orchestrator (#17, #26) |
 | Cross-session recall | Working — SQLite FTS5, keyword search, attributed to the user (#15, #18, #25, #33) |
 | Context budgeting | Working — provider caps and output reservations are explicit, Ollama `num_ctx` is derived and pinned per request below its cap, omissions are durable run events, and live tool protocol messages/correlation are never dropped (TUR-020) |
+| Stable session titles | Working — derived deterministically from the first usable user turn, persisted by the orchestrator, and streamed to subscribed clients |
 | Approvals | Working; single-use argument-bound JWT, consumed over internal gRPC |
 | Audit | **Write-only.** Rows are recorded; there is no read path in any proto or client |
+| Telemetry | Working, and **local by construction** — aggregation over the orchestrator's own SQLite, served to the user's own client, with no collector, no identifier and no write path. Token counts are captured from what a provider reports (Ollama's `prompt_eval_count`/`eval_count`, an OpenAI-compatible `usage` object) and are **NULL when nothing reported them**; nothing estimates a token count anywhere. Runs routed off the machine are attributed per run at enqueue, so a later settings change cannot rewrite what left |
 | Streaming + resilience | Working; reconnect, requeue, lease recovery, run-visibility notices (#24, #30, #33) |
 | Job queue | Durable: SQLite job table with leases, fencing token, heartbeat renewal, orphan recovery, 3-attempt cap |
 | Tool servers | Two: safe system tools, sandboxed file tools |
