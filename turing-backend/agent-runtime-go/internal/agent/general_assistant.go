@@ -59,6 +59,11 @@ const (
 	// payload lists the first maxUnknownToolListing, flags the truncation, and
 	// reports the true total so the truncation is never silent.
 	maxUnknownToolListing = 32
+	// Recall itself has a two-second default timeout. Convergence shares one
+	// deadline across a small pass budget, then uses one broad fallback query so
+	// an oscillating suffix cannot occupy a worker for minutes.
+	maxRecallConvergencePasses = 3
+	recallConvergenceTimeout   = 2 * time.Second
 )
 
 // joinedDiscoveryHook is set only by tests; see the call site in discoverTools.
@@ -467,16 +472,20 @@ func (a *GeneralAssistant) buildBudgetedContextWithRecall(
 	// pre-budget fetch window. Rebuild until the admitted contiguous history
 	// suffix is stable; this lets newly omitted current-session turns become
 	// recallable instead of disappearing from both paths.
-	maxPasses := len(completeHistoryUnits(historyMessages)) + 2
-	for range maxPasses {
+	convergenceCtx, cancelConvergence := context.WithTimeout(ctx, recallConvergenceTimeout)
+	defer cancelConvergence()
+	for range maxRecallConvergencePasses {
 		var recallMessage *llm.ChatMessage
 		if block, ok := a.recall.Recall(
-			ctx,
+			convergenceCtx,
 			job.GetSessionId(),
 			job.GetUserText(),
 			budgeted.Request.Messages,
 		); ok {
 			recallMessage = &block
+		}
+		if convergenceCtx.Err() != nil {
+			break
 		}
 		nextInput := baseInput
 		nextInput.recall = recallMessage
@@ -493,6 +502,9 @@ func (a *GeneralAssistant) buildBudgetedContextWithRecall(
 	// A pathological oscillation must still prefer a possible duplicate over
 	// silently losing a fetched turn. Recall against live context only, then let
 	// the normal budget either admit that block or emit a recall-omission notice.
+	if err := ctx.Err(); err != nil {
+		return budgetedContext{}, nil, err
+	}
 	broadInput := contextInput{skills: skillMessage, live: liveMessages}
 	broad, err := buildBudgetedContext(provider, job.GetModel(), broadInput, toolDefinitions)
 	if err != nil {

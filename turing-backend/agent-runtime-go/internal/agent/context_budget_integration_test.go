@@ -28,6 +28,24 @@ type admissionAwareRecaller struct {
 	calls  int
 }
 
+type oscillatingRecaller struct {
+	calls int
+}
+
+func (r *oscillatingRecaller) Recall(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ []llm.ChatMessage,
+) (llm.ChatMessage, bool) {
+	r.calls++
+	content := "small recall"
+	if r.calls%2 == 1 {
+		content = strings.Repeat("large recall ", 30)
+	}
+	return llm.ChatMessage{Role: "system", Content: content}, true
+}
+
 func (r *admissionAwareRecaller) Recall(
 	_ context.Context,
 	_ string,
@@ -149,6 +167,37 @@ func TestExecuteRecallsCurrentSessionHistoryOmittedByBudget(t *testing.T) {
 	}
 	if !containsString(runStepNotes(updates), recallNotice) {
 		t.Fatalf("run notes = %q, want recall attribution", runStepNotes(updates))
+	}
+}
+
+func TestExecuteBoundsOscillatingRecallConvergence(t *testing.T) {
+	provider := &budgetCapturingProvider{window: 900}
+	recaller := &oscillatingRecaller{}
+	var history []llm.ChatMessage
+	for index := range 25 {
+		history = append(history,
+			llm.ChatMessage{Role: "user", Content: fmt.Sprintf("question %02d %s", index, strings.Repeat("q", 20))},
+			llm.ChatMessage{Role: "assistant", Content: fmt.Sprintf("answer %02d %s", index, strings.Repeat("a", 20))},
+		)
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
+		},
+		fakeMessageClient{messages: history},
+		&GeneralAssistantTools{Recall: recaller},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	if recaller.calls > 4 {
+		t.Fatalf("recall calls = %d, want at most 3 convergence passes plus fallback", recaller.calls)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider requests = %d, want eventual model dispatch", len(provider.requests))
+	}
+	if failure := findRunFailed(updates); failure != nil {
+		t.Fatalf("oscillating recall failed the run: %#v", failure)
 	}
 }
 
