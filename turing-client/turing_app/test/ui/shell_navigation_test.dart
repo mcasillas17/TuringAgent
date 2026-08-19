@@ -886,6 +886,133 @@ void main() {
       expect(find.text('After reconnect'), findsOneWidget);
     });
 
+    testWidgets('chat updates do not reset global reconnect backoff', (
+      tester,
+    ) async {
+      final chatSource = _FakeEventSource();
+      final globalSources = <_FakeSessionUpdateSource>[];
+      await _pumpShell(
+        tester,
+        api: _FakeApi(),
+        size: _desktop,
+        eventSourceFactory: () => chatSource,
+        sessionUpdateSourceFactory: () {
+          final source = _FakeSessionUpdateSource();
+          globalSources.add(source);
+          return source;
+        },
+      );
+      await tester.tap(find.text('Existing chat'));
+      await tester.pumpAndSettle();
+
+      globalSources[0].addError(StateError('first failure'));
+      await tester.pump(const Duration(seconds: 1));
+      expect(globalSources, hasLength(2));
+      globalSources[1].addError(StateError('second failure'));
+      await tester.pump(const Duration(seconds: 2));
+      expect(globalSources, hasLength(3));
+
+      chatSource.add(
+        TuringEvent(
+          eventId: 'evt_chat_update',
+          sessionId: 'sess_existing',
+          traceId: 'trace_chat_update',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 8, 19),
+          payload: const {
+            'title': 'Existing chat',
+            'updatedAt': '2026-08-19T00:00:00.000000000Z',
+          },
+        ),
+      );
+      await tester.pump();
+
+      globalSources[2].addError(StateError('third failure'));
+      await tester.pump(const Duration(seconds: 1));
+      expect(
+        globalSources,
+        hasLength(3),
+        reason: 'the third global retry remains on the four-second backoff',
+      );
+      await tester.pump(const Duration(seconds: 3));
+      expect(globalSources, hasLength(4));
+    });
+
+    testWidgets('replayed updates do not reset global reconnect backoff', (
+      tester,
+    ) async {
+      final globalSources = <_FakeSessionUpdateSource>[];
+      await _pumpShell(
+        tester,
+        api: _FakeApi(),
+        size: _desktop,
+        sessionUpdateSourceFactory: () {
+          final source = _FakeSessionUpdateSource();
+          globalSources.add(source);
+          return source;
+        },
+      );
+
+      globalSources[0].addError(StateError('first failure'));
+      await tester.pump(const Duration(seconds: 1));
+      expect(globalSources, hasLength(2));
+      globalSources[1].add(
+        TuringEvent(
+          eventId: 'evt_replayed_after_reconnect',
+          sessionId: 'sess_existing',
+          traceId: 'trace_replayed_after_reconnect',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 8, 19),
+          payload: const {
+            'title': 'Existing chat',
+            'updatedAt': '2026-08-19T00:00:00.000000000Z',
+          },
+        ),
+      );
+      await tester.pump();
+
+      globalSources[1].addError(StateError('second failure'));
+      await tester.pump(const Duration(seconds: 1));
+      expect(
+        globalSources,
+        hasLength(2),
+        reason: 'a replay snapshot does not restart the backoff at one second',
+      );
+      await tester.pump(const Duration(seconds: 1));
+      expect(globalSources, hasLength(3));
+    });
+
+    testWidgets('a stable global stream resets reconnect backoff', (
+      tester,
+    ) async {
+      final globalSources = <_FakeSessionUpdateSource>[];
+      await _pumpShell(
+        tester,
+        api: _FakeApi(),
+        size: _desktop,
+        sessionUpdateSourceFactory: () {
+          final source = _FakeSessionUpdateSource();
+          globalSources.add(source);
+          return source;
+        },
+      );
+
+      globalSources[0].addError(StateError('first failure'));
+      await tester.pump(const Duration(seconds: 1));
+      expect(globalSources, hasLength(2));
+      await tester.pump(const Duration(seconds: 30));
+
+      globalSources[1].addError(StateError('failure after stable connection'));
+      await tester.pump(const Duration(seconds: 1));
+      expect(
+        globalSources,
+        hasLength(3),
+        reason: 'thirty stable seconds reset the retry delay to one second',
+      );
+    });
+
     testWidgets('a synchronous source error reconnects and resumes updates', (
       tester,
     ) async {

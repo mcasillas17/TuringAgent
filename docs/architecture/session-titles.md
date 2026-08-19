@@ -64,8 +64,10 @@ adds a partial index containing only `session.updated` rows, so reconnect work
 scales with title-update history and returns at most 50 rows; there is no timer
 or polling loop. A terminal stream error or completion triggers a refresh and a
 capped exponential reconnect (1, 2, 4, 8, 16, then 32 seconds). A durable event
-on the replacement stream resets that backoff. Synchronous factory/connect/listen
-failures use the same path as terminal stream errors.
+does not reset recovery because it may be an initial replay snapshot; 30
+uninterrupted seconds on the replacement stream reset the backoff. Per-session
+chat events never affect global-stream recovery. Synchronous
+factory/connect/listen failures use the same path as terminal stream errors.
 
 A replayed older event cannot reorder the list. An update for a session outside
 the loaded page inserts it, and a concurrent older `ListSessions` response is
