@@ -39,6 +39,7 @@ class AgentJob extends $pb.GeneratedMessage {
     $core.Iterable<$core.String>? requestedTools,
     $core.int? attempt,
     $core.Iterable<AttachedSkill>? skills,
+    ExternalAgentTarget? externalAgent,
   }) {
     final result = create();
     if (jobId != null) result.jobId = jobId;
@@ -55,6 +56,7 @@ class AgentJob extends $pb.GeneratedMessage {
     if (requestedTools != null) result.requestedTools.addAll(requestedTools);
     if (attempt != null) result.attempt = attempt;
     if (skills != null) result.skills.addAll(skills);
+    if (externalAgent != null) result.externalAgent = externalAgent;
     return result;
   }
 
@@ -92,6 +94,8 @@ class AgentJob extends $pb.GeneratedMessage {
     ..a<$core.int>(12, _omitFieldNames ? '' : 'attempt', $pb.PbFieldType.O3)
     ..pc<AttachedSkill>(13, _omitFieldNames ? '' : 'skills', $pb.PbFieldType.PM,
         subBuilder: AttachedSkill.create)
+    ..aOM<ExternalAgentTarget>(14, _omitFieldNames ? '' : 'externalAgent',
+        subBuilder: ExternalAgentTarget.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -220,6 +224,111 @@ class AgentJob extends $pb.GeneratedMessage {
   /// never changes what an already-queued run was told to do.
   @$pb.TagNumber(13)
   $pb.PbList<AttachedSkill> get skills => $_getList(12);
+
+  /// Set only when the conversation was deliberately routed away from the
+  /// local assistant. Absent is the default and means "run this here".
+  @$pb.TagNumber(14)
+  ExternalAgentTarget get externalAgent => $_getN(13);
+  @$pb.TagNumber(14)
+  set externalAgent(ExternalAgentTarget value) => $_setField(14, value);
+  @$pb.TagNumber(14)
+  $core.bool hasExternalAgent() => $_has(13);
+  @$pb.TagNumber(14)
+  void clearExternalAgent() => $_clearField(14);
+  @$pb.TagNumber(14)
+  ExternalAgentTarget ensureExternalAgent() => $_ensure(13);
+}
+
+/// Where to send a run that the user routed off this machine.
+///
+/// Deliberately not the full ExternalAgent message: the runtime has no use for
+/// identifiers, timestamps or the provider label, and this is replayed from a
+/// stored job payload where a narrower shape is a narrower thing to keep in
+/// sync. The model is not repeated here either — AgentJob.model already carries
+/// it, frozen at enqueue from the agent's configuration.
+///
+/// credential_ref is a NAME, not a secret. The key it names is resolved from
+/// the runtime's own environment at execution time, so no third-party API key
+/// is ever written to the database, sent over this stream, or handed to a
+/// client.
+class ExternalAgentTarget extends $pb.GeneratedMessage {
+  factory ExternalAgentTarget({
+    $core.String? displayName,
+    $core.String? baseUrl,
+    $core.String? credentialRef,
+  }) {
+    final result = create();
+    if (displayName != null) result.displayName = displayName;
+    if (baseUrl != null) result.baseUrl = baseUrl;
+    if (credentialRef != null) result.credentialRef = credentialRef;
+    return result;
+  }
+
+  ExternalAgentTarget._();
+
+  factory ExternalAgentTarget.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ExternalAgentTarget.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ExternalAgentTarget',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'displayName')
+    ..aOS(2, _omitFieldNames ? '' : 'baseUrl')
+    ..aOS(3, _omitFieldNames ? '' : 'credentialRef')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ExternalAgentTarget clone() => ExternalAgentTarget()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ExternalAgentTarget copyWith(void Function(ExternalAgentTarget) updates) =>
+      super.copyWith((message) => updates(message as ExternalAgentTarget))
+          as ExternalAgentTarget;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ExternalAgentTarget create() => ExternalAgentTarget._();
+  @$core.override
+  ExternalAgentTarget createEmptyInstance() => create();
+  static $pb.PbList<ExternalAgentTarget> createRepeated() =>
+      $pb.PbList<ExternalAgentTarget>();
+  @$core.pragma('dart2js:noInline')
+  static ExternalAgentTarget getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ExternalAgentTarget>(create);
+  static ExternalAgentTarget? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get displayName => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set displayName($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasDisplayName() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearDisplayName() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get baseUrl => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set baseUrl($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasBaseUrl() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearBaseUrl() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get credentialRef => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set credentialRef($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasCredentialRef() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearCredentialRef() => $_clearField(3);
 }
 
 /// A skill as the runtime sees it: a name for attribution and the instructions

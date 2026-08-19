@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
@@ -28,6 +29,12 @@ type EnqueueUserMessageResult struct {
 	TraceID            string
 	Status             string
 	QueuedEvent        Event
+	// RoutingEvents carries the notices written in the same transaction as the
+	// run — today, the one saying this message is leaving the machine. They are
+	// returned rather than published here because the repository does not own
+	// the event bus, and a caller that forgot to publish them would leave a
+	// subscriber with no record of the egress.
+	RoutingEvents []Event
 }
 
 type Job struct {
@@ -43,7 +50,10 @@ type Job struct {
 	Attempt             int
 	AssignmentAttemptID string
 	Skills              []AttachedSkill
-	StartedEvent        Event
+	// ExternalAgent is nil for the local assistant, which is the default and
+	// the common case.
+	ExternalAgent *ExternalAgentTarget
+	StartedEvent  Event
 }
 
 type Assignment struct {
@@ -240,7 +250,32 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 	if _, err := tx.ExecContext(ctx, `INSERT INTO messages (id, session_id, run_id, role, content, content_type, sequence, created_at) VALUES (?, ?, ?, 'assistant', '', 'text', ?, ?)`, assistantMessageID, input.SessionID, runID, next+1, assistantCreatedAt); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status, model_provider, model_name, created_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`, runID, input.SessionID, userMessageID, assistantMessageID, input.AgentID, traceID, input.ModelProvider, input.Model, createdAt); err != nil {
+	// Read inside the transaction that records the run, so the destination
+	// cannot change between deciding it and recording it. A conversation
+	// routed to an external agent overrides whatever provider and model the
+	// client asked for: the destination is a property of the conversation the
+	// user configured, not of the request, and letting a request override it
+	// would mean a message could quietly go somewhere else than the bar above
+	// it says.
+	routedAgent, routed, err := sessionExternalAgentTx(ctx, tx, input.SessionID)
+	if err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	modelProvider, model := input.ModelProvider, input.Model
+	var externalTarget *ExternalAgentTarget
+	if routed {
+		// Every supported vendor speaks the OpenAI chat-completions dialect, so
+		// this reuses the existing provider rather than adding one client per
+		// company. What differs per agent is the base URL, the model and which
+		// credential to resolve — configuration, not integrations.
+		modelProvider, model = "openai_compatible", routedAgent.Model
+		externalTarget = &ExternalAgentTarget{
+			DisplayName:   routedAgent.DisplayName,
+			BaseURL:       routedAgent.BaseURL,
+			CredentialRef: routedAgent.CredentialRef,
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status, model_provider, model_name, created_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`, runID, input.SessionID, userMessageID, assistantMessageID, input.AgentID, traceID, modelProvider, model, createdAt); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	// Name the conversation after the first thing said in it, and mark the
@@ -276,9 +311,13 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 		"userMessageId":      userMessageID,
 		"assistantMessageId": assistantMessageID,
 		"traceId":            traceID,
-		"modelProvider":      input.ModelProvider,
-		"model":              input.Model,
+		"modelProvider":      modelProvider,
+		"model":              model,
 		"skills":             attachedSkills,
+		// Frozen for the same reason the skills are: re-pointing or deleting
+		// the agent while this job waits must not redirect a message the user
+		// already sent, and must not send it to a company they did not pick.
+		"externalAgent": externalTarget,
 	})
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
@@ -299,10 +338,36 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
+	// Written into the transcript, in the same transaction that accepts the
+	// message, because a conversation that leaves this machine has to say so
+	// where it happens rather than only in a settings screen the user is not
+	// looking at. Ordered after the queued event so it lands inside the run
+	// the sender is already streaming.
+	var routingEvents []Event
+	if routed {
+		notice, err := appendRunNoticeTx(ctx, tx, input.SessionID, runID, traceID,
+			"Sent to "+flattenNoticeText(routedAgent.DisplayName)+" — this message left your machine",
+			map[string]any{
+				"externalAgent": routedAgent.DisplayName,
+				"endpoint":      ExternalAgentEndpointHost(routedAgent.BaseURL),
+				"model":         routedAgent.Model,
+			}, createdAt)
+		if err != nil {
+			return EnqueueUserMessageResult{}, err
+		}
+		routingEvents = append(routingEvents, notice)
+	}
 	if err := tx.Commit(); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
-	return EnqueueUserMessageResult{SessionID: input.SessionID, UserMessageID: userMessageID, AssistantMessageID: assistantMessageID, RunID: runID, JobID: jobID, TraceID: traceID, Status: "queued", QueuedEvent: queuedEvent}, nil
+	return EnqueueUserMessageResult{SessionID: input.SessionID, UserMessageID: userMessageID, AssistantMessageID: assistantMessageID, RunID: runID, JobID: jobID, TraceID: traceID, Status: "queued", QueuedEvent: queuedEvent, RoutingEvents: routingEvents}, nil
+}
+
+// flattenNoticeText collapses a user-chosen name to a single line before it is
+// pasted into a sentence. An agent named across two lines would otherwise
+// break the notice in half, and the second half would read as its own claim.
+func flattenNoticeText(value string) string {
+	return strings.Join(strings.Fields(value), " ")
 }
 
 func (r *Repository) ClaimNextJob(ctx context.Context, agentID string, leaseOwner string) (Job, error) {
@@ -395,8 +460,9 @@ func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, 
 		return Job{}, err
 	}
 	var payload struct {
-		UserText string          `json:"userText"`
-		Skills   []AttachedSkill `json:"skills"`
+		UserText      string               `json:"userText"`
+		Skills        []AttachedSkill      `json:"skills"`
+		ExternalAgent *ExternalAgentTarget `json:"externalAgent"`
 	}
 	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
 		return Job{}, err
@@ -405,6 +471,10 @@ func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, 
 	// Absent for jobs enqueued before skills existed, which decodes to nil —
 	// the same as a conversation with none attached.
 	job.Skills = payload.Skills
+	// Absent for every job enqueued before routing existed, and for every
+	// conversation that was never routed away. nil means the local assistant,
+	// which is the only default that keeps the transcript on this machine.
+	job.ExternalAgent = payload.ExternalAgent
 	result, err := tx.ExecContext(ctx, `
 		UPDATE jobs
 		SET status = 'in_progress', lease_owner = ?, lease_expires_at = ?, lease_expires_at_ns = ?, picked_up_at = ?, assignment_attempt_id = ?

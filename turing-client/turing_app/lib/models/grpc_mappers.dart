@@ -1,6 +1,7 @@
 import '../generated/google/protobuf/struct.pb.dart' as structpb;
 import '../generated/google/protobuf/timestamp.pb.dart' as timestamppb;
 
+import '../generated/turing/v1/agents.pb.dart' as agentpb;
 import '../generated/turing/v1/approvals.pb.dart' as approvalpb;
 import '../generated/turing/v1/chat.pb.dart' as chatpb;
 import '../generated/turing/v1/common.pb.dart' as commonpb;
@@ -8,6 +9,7 @@ import '../generated/turing/v1/events.pb.dart' as eventpb;
 import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
 import '../generated/turing/v1/skills.pb.dart' as skillpb;
 import 'agent_descriptor.dart' as model_agent;
+import 'external_agent.dart' as model_external_agent;
 import 'message.dart' as model_message;
 import 'search_hit.dart' as model_search_hit;
 import 'session.dart' as model_session;
@@ -16,6 +18,65 @@ import 'tool_descriptor.dart' as model_tool;
 import 'turing_event.dart' as model_event;
 
 class GrpcMappers {
+  static model_external_agent.ExternalAgent externalAgentToModel(
+    agentpb.ExternalAgent agent,
+  ) {
+    return model_external_agent.ExternalAgent(
+      agentId: agent.agentId,
+      displayName: agent.displayName,
+      provider: externalAgentProviderToModel(agent.provider),
+      baseUrl: agent.baseUrl,
+      model: agent.model,
+      credentialRef: agent.credentialRef,
+      credentialAvailable: agent.credentialAvailable,
+    );
+  }
+
+  static model_external_agent.ExternalAgentProvider
+  externalAgentProviderToModel(agentpb.ExternalAgentProvider provider) {
+    switch (provider) {
+      case agentpb.ExternalAgentProvider.EXTERNAL_AGENT_PROVIDER_ANTHROPIC:
+        return model_external_agent.ExternalAgentProvider.anthropic;
+      case agentpb.ExternalAgentProvider.EXTERNAL_AGENT_PROVIDER_OPENAI:
+        return model_external_agent.ExternalAgentProvider.openai;
+      case agentpb.ExternalAgentProvider.EXTERNAL_AGENT_PROVIDER_GOOGLE:
+        return model_external_agent.ExternalAgentProvider.google;
+      case agentpb.ExternalAgentProvider.EXTERNAL_AGENT_PROVIDER_XAI:
+        return model_external_agent.ExternalAgentProvider.xai;
+      case agentpb.ExternalAgentProvider.EXTERNAL_AGENT_PROVIDER_OTHER:
+        return model_external_agent.ExternalAgentProvider.other;
+      default:
+        // Includes UNSPECIFIED and anything added to the proto after this
+        // build. Reported as unknown rather than guessed at: this label names
+        // the company that receives the conversation.
+        return model_external_agent.ExternalAgentProvider.unknown;
+    }
+  }
+
+  static agentpb.ExternalAgentProvider externalAgentProviderToProto(
+    model_external_agent.ExternalAgentProvider provider,
+  ) {
+    switch (provider) {
+      case model_external_agent.ExternalAgentProvider.anthropic:
+        return agentpb.ExternalAgentProvider.EXTERNAL_AGENT_PROVIDER_ANTHROPIC;
+      case model_external_agent.ExternalAgentProvider.openai:
+        return agentpb.ExternalAgentProvider.EXTERNAL_AGENT_PROVIDER_OPENAI;
+      case model_external_agent.ExternalAgentProvider.google:
+        return agentpb.ExternalAgentProvider.EXTERNAL_AGENT_PROVIDER_GOOGLE;
+      case model_external_agent.ExternalAgentProvider.xai:
+        return agentpb.ExternalAgentProvider.EXTERNAL_AGENT_PROVIDER_XAI;
+      case model_external_agent.ExternalAgentProvider.other:
+        return agentpb.ExternalAgentProvider.EXTERNAL_AGENT_PROVIDER_OTHER;
+      case model_external_agent.ExternalAgentProvider.unknown:
+        // Sent back as unspecified, which the backend rejects. Silently
+        // rewriting it to a real vendor would save an unrelated edit by
+        // changing where the conversation goes.
+        return agentpb
+            .ExternalAgentProvider
+            .EXTERNAL_AGENT_PROVIDER_UNSPECIFIED;
+    }
+  }
+
   static model_skill.Skill skillToModel(skillpb.Skill skill) {
     return model_skill.Skill(
       skillId: skill.skillId,

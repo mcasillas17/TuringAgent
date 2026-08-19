@@ -73,6 +73,7 @@ func (terminalizedRunExitError) RunTerminal() bool { return true }
 
 type GeneralAssistant struct {
 	providers          map[turingv1.ModelProvider]llm.Provider
+	externalAgents     ExternalAgentProviderFunc
 	messages           MessageClient
 	tools              *GeneralAssistantTools
 	recall             ContextRecaller
@@ -106,6 +107,28 @@ func NewGeneralAssistant(providers map[turingv1.ModelProvider]llm.Provider, mess
 		recall:             recall,
 		maxToolCallsPerRun: maxToolCallsPerRun,
 	}
+}
+
+// SetExternalAgentProvider supplies the resolver for runs routed off this
+// machine. Left unset, a routed job fails with a message saying so rather than
+// being answered locally under another assistant's name.
+func (a *GeneralAssistant) SetExternalAgentProvider(resolve ExternalAgentProviderFunc) {
+	a.externalAgents = resolve
+}
+
+// providerFor picks where this run's model request goes. The routed case is
+// checked first and is exclusive: a conversation addressed to an external
+// agent is never answered by the local provider map, whatever the job's
+// model_provider says. A nil provider with a nil error means the local map has
+// no entry for the requested provider, which the caller words for itself.
+func (a *GeneralAssistant) providerFor(job *turingv1.AgentJob) (llm.Provider, error) {
+	if target := job.GetExternalAgent(); target != nil {
+		if a.externalAgents == nil {
+			return nil, ErrExternalAgentRoutingUnavailable
+		}
+		return a.externalAgents(target)
+	}
+	return a.providers[job.GetModelProvider()], nil
 }
 
 func (a *GeneralAssistant) SetToolBeaconPoster(post func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error)) {
@@ -151,7 +174,12 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	if handled, err := a.tryDebugTool(ctx, job, trimmed, emit); handled || err != nil {
 		return err
 	}
-	provider := a.providers[job.GetModelProvider()]
+	provider, err := a.providerFor(job)
+	if err != nil {
+		// Not retryable: a missing key or an unconfigured runtime is fixed by
+		// a person editing .env, not by another attempt in thirty seconds.
+		return emitRunFailed(emit, job, "external_agent_unavailable", err.Error(), false)
+	}
 	if provider == nil {
 		return emitRunFailed(emit, job, "model_provider_unavailable", fmt.Sprintf("Provider %s is not configured", job.GetModelProvider().String()), false)
 	}
@@ -177,7 +205,13 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	// built, which is how it knows what is already in front of the model; it
 	// never returns an error, degrading to "no block" instead, so a slow or
 	// unavailable search cannot fail the run.
-	if a.recall != nil {
+	//
+	// Recall is skipped entirely for a run routed off this machine. The user
+	// opted ONE conversation into leaving; recall would quietly widen that to
+	// material from conversations they never chose to send anywhere, which is
+	// exactly the surprise the first commitment exists to prevent. Capability
+	// loses to consent here, and the client says so where the choice is made.
+	if a.recall != nil && job.GetExternalAgent() == nil {
 		if block, ok := a.recall.Recall(ctx, job.GetSessionId(), job.GetUserText(), requestMessages); ok {
 			requestMessages = append([]llm.ChatMessage{block}, requestMessages...)
 			// The block tells the model where the material came from; without this

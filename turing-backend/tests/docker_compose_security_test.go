@@ -25,6 +25,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"DATABASE_PATH:",
 		"OLLAMA_BASE_URL:",
 		"OPENAI_API_KEY:",
+		"TURING_AGENT_API_KEYS:",
 	)
 	requireContainsNone(t, "turing-orchestrator", orchestrator,
 		"ORCHESTRATOR_GRPC_ADDR:",
@@ -44,6 +45,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"MCP_FILES_TOKEN_GENERAL:",
 		"OLLAMA_BASE_URL:",
 		"OPENAI_API_KEY:",
+		"TURING_AGENT_API_KEYS:",
 	)
 	requireContainsNone(t, "turing-agent-runtime-general", agent,
 		"TURING_CLIENT_API_KEY:",
@@ -58,6 +60,9 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"TURING_INTERNAL_TOKEN:",
 		"TURING_APPROVAL_JWT_SECRET:",
 		"OPENAI_API_KEY:",
+		// A tool server has no reason to hold a user's third-party API keys,
+		// and it is the container most exposed to what a model asks for.
+		"TURING_AGENT_API_KEYS:",
 	)
 
 	files := composeServiceBlock(t, compose, "turing-mcp-files")
@@ -75,6 +80,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 	requireContainsNone(t, "turing-mcp-files", files,
 		"TURING_CLIENT_API_KEY:",
 		"OPENAI_API_KEY:",
+		"TURING_AGENT_API_KEYS:",
 		"ORCHESTRATOR_INTERNAL_BASE_URL:",
 		"${FILES_SANDBOX_ROOT",
 	)

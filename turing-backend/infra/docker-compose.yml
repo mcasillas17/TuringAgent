@@ -23,6 +23,10 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      # Parsed here for the names only: the orchestrator answers "can this
+      # agent actually run?" for the client and never calls a vendor, so it
+      # keeps the credential names and drops the keys.
+      TURING_AGENT_API_KEYS: ${TURING_AGENT_API_KEYS:-}
       TURING_JOB_TIMEOUT_MS: ${TURING_JOB_TIMEOUT_MS:-300000}
       TURING_JOB_REAPER_INTERVAL_MS: ${TURING_JOB_REAPER_INTERVAL_MS:-60000}
       TURING_JOB_MAX_ATTEMPTS: ${TURING_JOB_MAX_ATTEMPTS:-3}
@@ -71,6 +75,9 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      # The only process that actually calls an external agent, and so the only
+      # one that needs the keys themselves rather than just their names.
+      TURING_AGENT_API_KEYS: ${TURING_AGENT_API_KEYS:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       turing-orchestrator:

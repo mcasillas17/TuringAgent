@@ -64,6 +64,10 @@ func run() error {
 		TotalToolTimeout:   cfg.TotalToolTimeout,
 	}
 	executor := agent.NewGeneralAssistant(providers, client, toolset)
+	// The only place a third-party API key exists at runtime. It is read from
+	// this process's environment and used to build a per-job client; nothing
+	// puts it back on a job, an event, or a response.
+	executor.SetExternalAgentProvider(agent.NewExternalAgentProviderFunc(cfg.AgentAPIKeys, http.DefaultClient))
 	runtimeWorker := worker.New(worker.Options{
 		WorkerID:                 cfg.WorkerID,
 		AgentID:                  turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../models/agent_descriptor.dart';
+import '../models/external_agent.dart';
 import '../models/message.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
@@ -95,6 +96,47 @@ abstract class TuringApi {
   });
 
   Future<List<Skill>> listSessionSkills({required String sessionId});
+
+  /// The assistants the user has configured that do NOT run on this machine.
+  /// Turing's own assistant is not among them: it is the default, and it is
+  /// the only destination that keeps a conversation local.
+  Future<List<ExternalAgent>> listExternalAgents();
+
+  Future<ExternalAgent> createExternalAgent({
+    required String displayName,
+    required ExternalAgentProvider provider,
+    required String baseUrl,
+    required String model,
+    required String credentialRef,
+  });
+
+  Future<ExternalAgent> updateExternalAgent({
+    required String agentId,
+    required String displayName,
+    required ExternalAgentProvider provider,
+    required String baseUrl,
+    required String model,
+    required String credentialRef,
+  });
+
+  /// Removes an agent, which also returns every conversation routed to it to
+  /// the local assistant. Failing towards "stays on this machine" is the only
+  /// safe direction for this to fail in.
+  Future<void> deleteExternalAgent({required String agentId});
+
+  /// Where a conversation's messages go. Null means the local assistant.
+  Future<ExternalAgent?> getSessionAgent({required String sessionId});
+
+  /// Routes a conversation to an agent, replacing wherever it went before.
+  /// Returns the destination the server now believes in, so the client never
+  /// has to guess.
+  Future<ExternalAgent?> setSessionAgent({
+    required String sessionId,
+    required String agentId,
+  });
+
+  /// Returns a conversation to the local assistant.
+  Future<ExternalAgent?> clearSessionAgent({required String sessionId});
 }
 
 class TuringApiException implements Exception {

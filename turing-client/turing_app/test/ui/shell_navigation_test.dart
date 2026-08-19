@@ -3,10 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/features/chat/chat_screen.dart';
+import 'package:turing_flutter_app/features/workspace/agents_page.dart';
+import 'package:turing_flutter_app/features/workspace/session_agent_bar.dart';
 import 'package:turing_flutter_app/features/workspace/session_skills_bar.dart';
 import 'package:turing_flutter_app/features/workspace/skills_page.dart';
 import 'package:turing_flutter_app/features/workspace/workspace_pages.dart';
 import 'package:turing_flutter_app/models/agent_descriptor.dart';
+import 'package:turing_flutter_app/models/external_agent.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
@@ -105,7 +108,7 @@ void main() {
       expect(find.text('Runs freely'), findsNothing);
     });
 
-    testWidgets('Agents does not imply routing that does not exist', (
+    testWidgets('Agents lists the local assistant and what you added', (
       tester,
     ) async {
       final api = _FakeApi()
@@ -114,16 +117,31 @@ void main() {
             id: 'AGENT_ID_GENERAL_ASSISTANT',
             displayName: 'General Assistant',
           ),
-        ];
+        ]
+        ..externalAgents.add(
+          const ExternalAgent(
+            agentId: 'agent_1',
+            displayName: 'Claude',
+            provider: ExternalAgentProvider.anthropic,
+            baseUrl: 'https://api.anthropic.com/v1',
+            model: 'claude-sonnet-4-5',
+            credentialRef: 'claude',
+            credentialAvailable: true,
+          ),
+        );
       await _pumpShell(tester, api: api, size: _desktop);
 
       await tester.tap(find.text('Agents'));
       await tester.pumpAndSettle();
 
+      expect(find.byType(AgentsPage), findsOneWidget);
+      expect(find.byType(PlannedDestinationPage), findsNothing);
       expect(find.text('General Assistant'), findsOneWidget);
-      // Without this the single row reads as a list that failed to load.
+      expect(find.text('Claude'), findsOneWidget);
+      // The two kinds are not interchangeable rows in one list, and the page
+      // has to say which is which.
       expect(
-        find.textContaining('Routing to other agents is not built yet'),
+        find.text('These receive whatever you send them'),
         findsOneWidget,
       );
     });
@@ -216,6 +234,106 @@ void main() {
       // B has none attached; showing A's would misstate what B is following.
       expect(find.text('Tone'), findsNothing);
       expect(find.text('No skills attached'), findsOneWidget);
+    });
+  });
+
+  group('where a conversation goes', () {
+    testWidgets('the destination sits above everything else in the chat', (
+      tester,
+    ) async {
+      await _pumpShell(tester, api: _FakeApi(), size: _desktop);
+
+      await tester.tap(find.text('Existing chat'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SessionAgentBar), findsOneWidget);
+      // Above the skills strip and the transcript: where a conversation goes
+      // decides whether anything typed below it leaves the machine, which is
+      // more fundamental than how it is told to answer.
+      final agentBar = tester.getTopLeft(find.byType(SessionAgentBar));
+      final skillsBar = tester.getTopLeft(find.byType(SessionSkillsBar));
+      final chat = tester.getTopLeft(find.byType(ChatScreen));
+      expect(agentBar.dy, lessThan(skillsBar.dy));
+      expect(agentBar.dy, lessThan(chat.dy));
+    });
+
+    testWidgets('a routed conversation says so on the conversation itself', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..externalAgents.add(
+          const ExternalAgent(
+            agentId: 'agent_1',
+            displayName: 'Claude',
+            provider: ExternalAgentProvider.anthropic,
+            baseUrl: 'https://api.anthropic.com/v1',
+            model: 'claude-sonnet-4-5',
+            credentialRef: 'claude',
+            credentialAvailable: true,
+          ),
+        )
+        ..routes['sess_existing'] = 'agent_1';
+      await _pumpShell(tester, api: api, size: _desktop);
+
+      await tester.tap(find.text('Existing chat'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Goes to Claude — messages leave your machine'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('switching conversations never shows the previous destination', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..sessions = [
+          Session(
+            sessionId: 'sess_a',
+            title: 'Chat A',
+            updatedAt: DateTime.utc(2026, 5, 11),
+          ),
+          Session(
+            sessionId: 'sess_b',
+            title: 'Chat B',
+            updatedAt: DateTime.utc(2026, 5, 10),
+          ),
+        ]
+        ..externalAgents.add(
+          const ExternalAgent(
+            agentId: 'agent_1',
+            displayName: 'Claude',
+            provider: ExternalAgentProvider.anthropic,
+            baseUrl: 'https://api.anthropic.com/v1',
+            model: 'claude-sonnet-4-5',
+            credentialRef: 'claude',
+            credentialAvailable: true,
+          ),
+        )
+        ..routes['sess_a'] = 'agent_1';
+      await _pumpShell(tester, api: api, size: _desktop);
+
+      await tester.tap(find.text('Chat A'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Goes to Claude — messages leave your machine'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.text('Chat B'));
+      await tester.pumpAndSettle();
+
+      // B is local; carrying A's warning over would be a lie about egress in
+      // the one place the user is told about it.
+      expect(
+        find.text('Goes to Claude — messages leave your machine'),
+        findsNothing,
+      );
+      expect(
+        find.text('Turing — this conversation stays on your machine'),
+        findsOneWidget,
+      );
     });
   });
 
@@ -814,6 +932,111 @@ class _FakeApi implements TuringApi {
     String approvalId, {
     String? reason,
   }) async => {'approvalId': approvalId, 'status': 'denied'};
+
+  /// A working in-memory set of external agents plus per-conversation routing,
+  /// so the UI is exercised against something that behaves like the backend
+  /// rather than a stub that always says yes.
+  final List<ExternalAgent> externalAgents = [];
+  final Map<String, String> routes = {};
+  Object? externalAgentsError;
+  Object? sessionAgentError;
+  int listExternalAgentsCalls = 0;
+  int nextExternalAgentId = 1;
+
+  @override
+  Future<List<ExternalAgent>> listExternalAgents() async {
+    listExternalAgentsCalls++;
+    final error = externalAgentsError;
+    if (error != null) throw error;
+    return List.unmodifiable(externalAgents);
+  }
+
+  @override
+  Future<ExternalAgent> createExternalAgent({
+    required String displayName,
+    required ExternalAgentProvider provider,
+    required String baseUrl,
+    required String model,
+    required String credentialRef,
+  }) async {
+    if (externalAgents.any(
+      (a) => a.displayName.toLowerCase() == displayName.toLowerCase(),
+    )) {
+      throw StateError('an agent with that name already exists');
+    }
+    final agent = ExternalAgent(
+      agentId: 'agent_${nextExternalAgentId++}',
+      displayName: displayName,
+      provider: provider,
+      baseUrl: baseUrl,
+      model: model,
+      credentialRef: credentialRef,
+      credentialAvailable: true,
+    );
+    externalAgents.add(agent);
+    return agent;
+  }
+
+  @override
+  Future<ExternalAgent> updateExternalAgent({
+    required String agentId,
+    required String displayName,
+    required ExternalAgentProvider provider,
+    required String baseUrl,
+    required String model,
+    required String credentialRef,
+  }) async {
+    final index = externalAgents.indexWhere((a) => a.agentId == agentId);
+    if (index < 0) throw StateError('agent not found');
+    final updated = ExternalAgent(
+      agentId: agentId,
+      displayName: displayName,
+      provider: provider,
+      baseUrl: baseUrl,
+      model: model,
+      credentialRef: credentialRef,
+      credentialAvailable: true,
+    );
+    externalAgents[index] = updated;
+    return updated;
+  }
+
+  @override
+  Future<void> deleteExternalAgent({required String agentId}) async {
+    externalAgents.removeWhere((a) => a.agentId == agentId);
+    routes.removeWhere((_, id) => id == agentId);
+  }
+
+  @override
+  Future<ExternalAgent?> getSessionAgent({required String sessionId}) async {
+    final error = sessionAgentError;
+    if (error != null) throw error;
+    return _routedAgent(sessionId);
+  }
+
+  @override
+  Future<ExternalAgent?> setSessionAgent({
+    required String sessionId,
+    required String agentId,
+  }) async {
+    routes[sessionId] = agentId;
+    return _routedAgent(sessionId);
+  }
+
+  @override
+  Future<ExternalAgent?> clearSessionAgent({required String sessionId}) async {
+    routes.remove(sessionId);
+    return null;
+  }
+
+  ExternalAgent? _routedAgent(String sessionId) {
+    final agentId = routes[sessionId];
+    if (agentId == null) return null;
+    for (final agent in externalAgents) {
+      if (agent.agentId == agentId) return agent;
+    }
+    return null;
+  }
 }
 
 class _FakeEventSource implements TuringEventSource {
