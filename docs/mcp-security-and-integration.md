@@ -13,10 +13,38 @@ runtime and orchestrator.
 
 Compose exposes these ports only to internal Docker networks; it does not
 publish them to the host. An empty configured bearer token denies every
-request rather than opening the service. Both images run as non-root users.
-Compose also makes both MCP root filesystems read-only, drops all Linux
-capabilities, and sets `no-new-privileges`. The `mcp-files` `/sandbox` bind
-mount remains writable. Neither service needs a writable temporary filesystem.
+request rather than opening the service.
+
+All four backend services run as explicit non-root users. Compose makes every
+root filesystem read-only, drops all Linux capabilities without adding any
+back, and sets `no-new-privileges`. Writable storage is allowlisted:
+
+| Service | Runtime identity | Writable storage |
+|---|---|---|
+| `turing-orchestrator` | Validated host UID/GID | `data/` at `/app/data`; `skills/` at `/skills` |
+| `turing-agent-runtime-general` | Image user `turing-agent-runtime` (UID/GID 1000) | None |
+| `turing-mcp-system` | Image user `mcp-system` (UID/GID 1000) | None |
+| `turing-mcp-files` | Validated host UID/GID | `sandbox/` at `/sandbox` |
+
+No service receives a writable temporary filesystem. Each container replaces
+Docker's default writable `/dev/shm` with a 64 KiB read-only, `nosuid`, `nodev`,
+and `noexec` tmpfs. The static security guard
+decodes the complete Compose service map, rejects unresolved `include` or
+`extends` inheritance and unknown service/build keys, applies this mount
+allowlist, and rejects root or missing users, writable roots, capability
+additions, incomplete capability drops, missing `no-new-privileges`, device or
+deploy-resource mappings, namespace sharing, supplementary groups,
+image overrides or Dockerfile-declared volumes, host aliases, and unapproved
+secrets. A Docker-gated companion check builds the four images and rejects
+volumes inherited through their base-image metadata; run it with
+`TURING_DOCKER_SECURITY_LIVE=1 go test -tags sqlite_fts5 ./turing-backend/tests -run TestBuiltBackendImagesDeclareNoWritableVolumes -count=1`.
+The guard also
+pins each service to its reviewed build context and Dockerfile, keeps both
+networks project-scoped, and permits only one orchestrator public port on the
+fixed loopback bind; MCP ports are exposed only inside their assigned network.
+The orchestrator configures SQLite `temp_store=MEMORY`, so sorts and transient
+b-trees do not require write access to `/tmp`; durable SQLite files and WAL
+artifacts remain under `/app/data`.
 The servers bound request bodies and configure header, read, write, and idle
 HTTP timeouts. `mcp-system` accepts at most 1 MiB per request; `mcp-files`
 allows the worst-case escaped 512 KiB mutation envelope (about 3.1 MiB). Both
@@ -242,18 +270,21 @@ writers.
 
 ## Bind-mount identities and host security systems
 
-The standalone `mcp-files` and orchestrator images use non-root UID/GID 1000.
-Repository Compose overrides both bind-mount writers with the validated current
-host UID/GID so `sandbox/` and `data/` remain writable without broadening their
-permissions.
+Every backend image defines a non-root user. The standalone orchestrator,
+agent-runtime, `mcp-system`, and `mcp-files` identities use UID/GID 1000.
+Repository Compose overrides the orchestrator and `mcp-files` bind-mount writers
+with the validated current host UID/GID so `data/`, `skills/`, and `sandbox/`
+remain writable without broadening their permissions. The runtime and
+`mcp-system` retain their fixed image identities because they have no writable
+mount.
 
 `scripts/init.sh` accepts only canonical positive UID/GID values for the
 current process and rejects root, invalid, or out-of-range identities before it
 mutates the sandbox or `.env`. It always rewrites `HOST_UID` and `HOST_GID` to
 the current host values; manual or stale values are not supported. It rejects a
-pre-existing sandbox symlink, creates real mode-`0700` sandbox and data
-directories independently of the caller's umask, and checks that the sandbox
-root and existing nested
+pre-existing sandbox or skills symlink, creates real mode-`0700` sandbox,
+skills, and data directories independently of the caller's umask, and checks
+that the sandbox root and existing nested
 directories/files are owned, accessible, and not group/world-writable. Symlink
 entries are not followed. Data and configured SQLite files must have safe types
 and ownership; owned database files are restricted to mode `0600`. A
@@ -266,9 +297,9 @@ revalidates the current non-root identity and supplies it directly to Compose,
 overriding both exported and `.env` `HOST_UID`/`HOST_GID` values. Direct
 `docker compose` invocation is unsupported because shell variables take
 precedence over `.env` and can bypass that preflight. Immediately before a
-launch, the wrapper also verifies that `sandbox/` and `data/` are real, owned,
-restrictive directories and that SQLite files are regular, owned, mode-`0600`
-files.
+launch, the wrapper also verifies that `sandbox/`, `skills/`, and `data/` are
+real, owned, restrictive directories and that SQLite files are regular, owned,
+mode-`0600` files.
 
 Rootless Docker and daemon `userns-remap` translate container IDs through
 daemon-specific subordinate-ID mappings. A host UID copied into Compose is

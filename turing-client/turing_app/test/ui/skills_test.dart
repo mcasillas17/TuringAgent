@@ -10,6 +10,7 @@ import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 
+import '../support/no_audit_api.dart';
 import '../support/no_automations_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
@@ -164,6 +165,7 @@ Future<void> _pumpSkills(
 
 class _SkillApi
     with
+        NoAuditApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
         NoAutomationsApi,

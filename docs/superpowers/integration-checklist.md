@@ -5,17 +5,25 @@ Use this checklist against the current Go gRPC, MCP, and Flutter architecture.
 ## 1. Initialization and Compose
 
 - [ ] `turing-backend/scripts/init.sh` creates mode-`0700` data and sandbox
-  directories, mode-`0600` SQLite files, and a mode-`0600` regular `.env` while
-  running as a non-root host user.
+  directories, a mode-`0700` skills directory, mode-`0600` SQLite files, and a
+  mode-`0600` regular `.env` while running as a non-root host user.
 - [ ] Initialization rejects symlinked, non-owned, inaccessible, or
   group/world-writable sandbox roots and unsafe writable legacy entries.
-- [ ] `turing-backend/scripts/compose.sh` revalidates the sandbox bind source
-  and data/SQLite modes immediately before a launch, then injects the current
-  host UID/GID for both bind-mount writers.
+- [ ] `turing-backend/scripts/compose.sh` revalidates the sandbox, skills, and
+  data bind sources plus SQLite modes immediately before a launch, then injects
+  the current host UID/GID for both bind-mount writers.
 - [ ] `cd turing-backend && ./scripts/compose.sh config --quiet` resolves the
   orchestrator, agent runtime, `mcp-system`, and `mcp-files` services.
-- [ ] MCP containers are non-root, read-only, capability-free, and reachable
-  only on their intended internal Docker networks.
+- [ ] Every backend container uses an explicit non-root identity, a read-only
+  root filesystem, `cap_drop: ALL`, and `no-new-privileges`.
+- [ ] `TURING_DOCKER_SECURITY_LIVE=1 go test -tags sqlite_fts5
+  ./turing-backend/tests -run TestBuiltBackendImagesDeclareNoWritableVolumes
+  -count=1` confirms no built image inherits a writable volume.
+- [ ] Only orchestrator `/app/data` and `/skills` plus `mcp-files` `/sandbox`
+  are writable; every service replaces Docker's default writable `/dev/shm`
+  with the approved read-only tmpfs.
+- [ ] Only the orchestrator publishes a host port, fixed to `127.0.0.1`; MCP
+  services remain on their intended internal Docker networks.
 - [ ] MCP healthchecks run through the service binaries without write access or
   extra image utilities, and the runtime waits for both services to be healthy.
 
@@ -24,8 +32,9 @@ Use this checklist against the current Go gRPC, MCP, and Flutter architecture.
 - [ ] `proto/turing/v1/` is the source of truth for public and internal APIs.
 - [ ] `tools/proto/check.sh` leaves the Go generated output unchanged; the
   Flutter contract test separately verifies checked-in Dart fields.
-- [ ] The orchestrator exposes the public gRPC API on port `3000` and its
-  authenticated runtime API only on the internal port `3001`.
+- [ ] The orchestrator exposes the public gRPC API on the configured loopback
+  port (default `3000`) and its authenticated runtime API only on the internal
+  port `3001`.
 - [ ] Health, session creation, message sending, event replay/subscription, and
   approval RPCs reject missing or invalid bearer credentials.
 

@@ -467,8 +467,11 @@ func (s *Server) GrantUnattendedApproval(ctx context.Context, approvalID string,
 	}
 	// The approval event itself is byte-identical to a person's, so without
 	// this the conversation shows an approval card appearing and resolving
-	// with nothing to say nobody was asked. The audit row records it too, but
-	// audit has no read path — this notice is the only place the user sees it.
+	// with nothing to say nobody was asked. The audit row records it too, and
+	// is now readable through the redacted audit API — but that is an
+	// operator-grade query surface, not something a person reading this
+	// conversation will go looking at. This notice is the in-conversation
+	// surface, and the only place the user sees it in context.
 	notice, err := s.repo.AppendRunNotice(ctx, approved.RunID, fmt.Sprintf(
 		"Approved automatically: %s is on %q's allowlist, so nobody was asked.",
 		approved.ToolName, grant.AutomationName), map[string]any{
