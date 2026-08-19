@@ -23,6 +23,30 @@ type budgetCapturingProvider struct {
 	onRequest func(int)
 }
 
+type admissionAwareRecaller struct {
+	target string
+	calls  int
+}
+
+func (r *admissionAwareRecaller) Recall(
+	_ context.Context,
+	_ string,
+	_ string,
+	inContext []llm.ChatMessage,
+) (llm.ChatMessage, bool) {
+	r.calls++
+	for _, message := range inContext {
+		if (message.Role == "user" || message.Role == "assistant") &&
+			strings.Contains(message.Content, r.target) {
+			return llm.ChatMessage{}, false
+		}
+	}
+	return llm.ChatMessage{
+		Role:    "system",
+		Content: "recalled omitted current-session material: " + r.target,
+	}, true
+}
+
 func (p *budgetCapturingProvider) ID() string { return "budget-capturing" }
 
 func (p *budgetCapturingProvider) ContextWindowTokens() int { return p.window }
@@ -63,6 +87,7 @@ func TestExecuteLongSessionStaysWithinBudgetAndPreservesRecall(t *testing.T) {
 		block: llm.ChatMessage{Role: "system", Content: "recalled material that must survive before old history"},
 		ok:    true,
 	}
+
 	var history []llm.ChatMessage
 	for index := 0; index < 8; index++ {
 		history = append(history,
@@ -91,6 +116,39 @@ func TestExecuteLongSessionStaysWithinBudgetAndPreservesRecall(t *testing.T) {
 	}
 	if notes := runStepNotes(updates); !containsString(notes, recallNotice) {
 		t.Fatalf("run notes = %q, want recall attribution", notes)
+	}
+}
+
+func TestExecuteRecallsCurrentSessionHistoryOmittedByBudget(t *testing.T) {
+	provider := &budgetCapturingProvider{window: 700}
+	target := "important current-session fact to preserve"
+	recaller := &admissionAwareRecaller{target: target}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
+		},
+		fakeMessageClient{messages: []llm.ChatMessage{
+			{Role: "user", Content: target},
+			{Role: "assistant", Content: strings.Repeat("large old answer ", 60)},
+			{Role: "user", Content: "recent question"},
+			{Role: "assistant", Content: "recent answer"},
+		}},
+		&GeneralAssistantTools{Recall: recaller},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider requests = %d, want 1", len(provider.requests))
+	}
+	if !containsMessageContent(provider.requests[0].Messages, target) {
+		t.Fatalf("budget omitted target from both history and recall: %#v", provider.requests[0].Messages)
+	}
+	if recaller.calls == 0 {
+		t.Fatal("recall was not evaluated against admitted history")
+	}
+	if !containsString(runStepNotes(updates), recallNotice) {
+		t.Fatalf("run notes = %q, want recall attribution", runStepNotes(updates))
 	}
 }
 

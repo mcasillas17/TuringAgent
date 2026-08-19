@@ -275,10 +275,6 @@ func buildBudgetedContext(
 	}, nil
 }
 
-func compactedToolResult(content string) string {
-	return compactedToolResultForBytes(len(content))
-}
-
 func compactedToolResultForBytes(originalBytes int) string {
 	return fmt.Sprintf(
 		`{"contextBudget":{"omitted":true,"originalBytes":%d,"message":"Tool result content omitted to fit the configured context window."}}`,

@@ -15,9 +15,9 @@
 //
 // and GeneralAssistant.Execute prepends the block to the request messages.
 // Prepended, not appended, so recalled material sits before the live
-// conversation and cannot be read as the user's latest turn. Execute passes the
-// request as built, which is how Recall knows what is already in front of the
-// model.
+// conversation and cannot be read as the user's latest turn. Execute first
+// budgets without recall, then passes the admitted request here so a fetched
+// current-session turn omitted by the budget remains recallable.
 package memory
 
 import (
@@ -128,13 +128,11 @@ func NewRecaller(search Searcher) *Recaller {
 // Recall returns a system message of relevant excerpts from earlier sessions, or
 // ok=false when there is nothing worth adding.
 //
-// inContext is the request as the caller has it so far — the messages already in
-// front of the model. Recall uses it to skip current-session hits that would
-// merely duplicate context. It is only what the caller actually fetched, not the
-// whole session: the runtime's FetchMessages caps at 50 messages, so a long
-// session has history that is neither in the request nor otherwise reachable,
-// and that older material is precisely what "like we discussed earlier" is
-// asking for. Passing nil is safe and falls back to excluding the current
+// inContext is the budget-admitted request as the caller has it so far — the
+// messages that will actually be in front of the model. Recall uses it to skip
+// current-session hits that would merely duplicate context. History dropped by
+// prompt budgeting and history older than FetchMessages' 50-message cap remain
+// recallable. Passing nil is safe and falls back to excluding the current
 // session wholesale, which never duplicates but can recall nothing.
 //
 // It never returns an error. Recall is an enhancement, and a backend that is

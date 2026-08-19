@@ -201,28 +201,6 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	if system, ok := skillsSystemMessage(job.GetSkills()); ok {
 		skillMessage = &system
 	}
-	// Recalled material is prepended so it sits before the live conversation and
-	// cannot be read as the user's latest turn. Recall is given the request as
-	// built, which is how it knows what is already in front of the model; it
-	// never returns an error, degrading to "no block" instead, so a slow or
-	// unavailable search cannot fail the run.
-	//
-	// Recall is skipped entirely for a run routed off this machine. The user
-	// opted ONE conversation into leaving; recall would quietly widen that to
-	// material from conversations they never chose to send anywhere, which is
-	// exactly the surprise the first commitment exists to prevent. Capability
-	// loses to consent here, and the client says so where the choice is made.
-	var recallMessage *llm.ChatMessage
-	if a.recall != nil && job.GetExternalAgent() == nil {
-		recallContext := append([]llm.ChatMessage{}, historyMessages...)
-		recallContext = append(recallContext, liveMessages...)
-		if skillMessage != nil {
-			recallContext = append([]llm.ChatMessage{*skillMessage}, recallContext...)
-		}
-		if block, ok := a.recall.Recall(ctx, job.GetSessionId(), job.GetUserText(), recallContext); ok {
-			recallMessage = &block
-		}
-	}
 	toolDefinitions := registry.Definitions()
 	var content strings.Builder
 	toolCallCount := 0
@@ -236,12 +214,15 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		budgeted, err := buildBudgetedContext(provider, job.GetModel(), contextInput{
-			skills:  skillMessage,
-			history: historyMessages,
-			recall:  recallMessage,
-			live:    liveMessages,
-		}, toolDefinitions)
+		budgeted, recallMessage, err := a.buildBudgetedContextWithRecall(
+			ctx,
+			provider,
+			job,
+			skillMessage,
+			historyMessages,
+			liveMessages,
+			toolDefinitions,
+		)
 		if err != nil {
 			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
 		}
@@ -461,6 +442,74 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			return completeRun(emit, job, content.String())
 		}
 	}
+}
+
+func (a *GeneralAssistant) buildBudgetedContextWithRecall(
+	ctx context.Context,
+	provider llm.Provider,
+	job *turingv1.AgentJob,
+	skillMessage *llm.ChatMessage,
+	historyMessages []llm.ChatMessage,
+	liveMessages []llm.ChatMessage,
+	toolDefinitions []llm.ToolDefinition,
+) (budgetedContext, *llm.ChatMessage, error) {
+	baseInput := contextInput{
+		skills:  skillMessage,
+		history: historyMessages,
+		live:    liveMessages,
+	}
+	budgeted, err := buildBudgetedContext(provider, job.GetModel(), baseInput, toolDefinitions)
+	if err != nil || a.recall == nil || job.GetExternalAgent() != nil {
+		return budgeted, nil, err
+	}
+
+	// Recall must dedupe against what the model will actually see, not the
+	// pre-budget fetch window. Rebuild until the admitted contiguous history
+	// suffix is stable; this lets newly omitted current-session turns become
+	// recallable instead of disappearing from both paths.
+	maxPasses := len(completeHistoryUnits(historyMessages)) + 2
+	for range maxPasses {
+		var recallMessage *llm.ChatMessage
+		if block, ok := a.recall.Recall(
+			ctx,
+			job.GetSessionId(),
+			job.GetUserText(),
+			budgeted.Request.Messages,
+		); ok {
+			recallMessage = &block
+		}
+		nextInput := baseInput
+		nextInput.recall = recallMessage
+		next, nextErr := buildBudgetedContext(provider, job.GetModel(), nextInput, toolDefinitions)
+		if nextErr != nil {
+			return budgetedContext{}, nil, nextErr
+		}
+		if next.Omissions.HistoryMessages == budgeted.Omissions.HistoryMessages {
+			return next, recallMessage, nil
+		}
+		budgeted = next
+	}
+
+	// A pathological oscillation must still prefer a possible duplicate over
+	// silently losing a fetched turn. Recall against live context only, then let
+	// the normal budget either admit that block or emit a recall-omission notice.
+	broadInput := contextInput{skills: skillMessage, live: liveMessages}
+	broad, err := buildBudgetedContext(provider, job.GetModel(), broadInput, toolDefinitions)
+	if err != nil {
+		return budgetedContext{}, nil, err
+	}
+	var recallMessage *llm.ChatMessage
+	if block, ok := a.recall.Recall(
+		ctx,
+		job.GetSessionId(),
+		job.GetUserText(),
+		broad.Request.Messages,
+	); ok {
+		recallMessage = &block
+	}
+	baseInput.recall = recallMessage
+	final, err := buildBudgetedContext(provider, job.GetModel(), baseInput, toolDefinitions)
+	return final, recallMessage, err
 }
 
 func maxOutputTokensSetting(provider llm.Provider) string {
