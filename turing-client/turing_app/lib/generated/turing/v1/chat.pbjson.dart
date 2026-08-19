@@ -39,6 +39,21 @@ const SendMessageRequest$json = {
     },
     {'1': 'model', '3': 6, '4': 1, '5': 9, '10': 'model'},
     {'1': 'idempotency_key', '3': 7, '4': 1, '5': 9, '10': 'idempotencyKey'},
+    {'1': 'requested_tools', '3': 8, '4': 3, '5': 9, '10': 'requestedTools'},
+    {
+      '1': 'required_context_tokens',
+      '3': 9,
+      '4': 1,
+      '5': 5,
+      '10': 'requiredContextTokens'
+    },
+    {
+      '1': 'minimum_worker_max_concurrent_runs',
+      '3': 10,
+      '4': 1,
+      '5': 5,
+      '10': 'minimumWorkerMaxConcurrentRuns'
+    },
   ],
 };
 
@@ -49,7 +64,10 @@ final $typed_data.Uint8List sendMessageRequestDescriptor = $convert.base64Decode
     'ZRItCghhZ2VudF9pZBgEIAEoDjISLnR1cmluZy52MS5BZ2VudElkUgdhZ2VudElkEj8KDm1vZG'
     'VsX3Byb3ZpZGVyGAUgASgOMhgudHVyaW5nLnYxLk1vZGVsUHJvdmlkZXJSDW1vZGVsUHJvdmlk'
     'ZXISFAoFbW9kZWwYBiABKAlSBW1vZGVsEicKD2lkZW1wb3RlbmN5X2tleRgHIAEoCVIOaWRlbX'
-    'BvdGVuY3lLZXk=');
+    'BvdGVuY3lLZXkSJwoPcmVxdWVzdGVkX3Rvb2xzGAggAygJUg5yZXF1ZXN0ZWRUb29scxI2Chdy'
+    'ZXF1aXJlZF9jb250ZXh0X3Rva2VucxgJIAEoBVIVcmVxdWlyZWRDb250ZXh0VG9rZW5zEkoKIm'
+    '1pbmltdW1fd29ya2VyX21heF9jb25jdXJyZW50X3J1bnMYCiABKAVSHm1pbmltdW1Xb3JrZXJN'
+    'YXhDb25jdXJyZW50UnVucw==');
 
 @$core.Deprecated('Use runQueuedDescriptor instead')
 const RunQueued$json = {

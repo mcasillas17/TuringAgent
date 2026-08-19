@@ -146,6 +146,7 @@ func TestAppEnforcesConfiguredGlobalGeneralRunCapacity(t *testing.T) {
 		InternalToken:            "internal",
 		ApprovalJWTSecret:        "approval-secret",
 		DatabasePath:             t.TempDir() + "/turing.db",
+		OllamaModel:              "llama3.2",
 		MaxConcurrentRunsGeneral: 1,
 	})
 	if err != nil {

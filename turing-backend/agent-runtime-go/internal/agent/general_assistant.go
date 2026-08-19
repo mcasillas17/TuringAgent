@@ -19,6 +19,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 type MessageClient interface {
@@ -160,6 +161,26 @@ func (a *GeneralAssistant) DiscoveredTools(ctx context.Context) ([]DiscoveredToo
 		return nil, err
 	}
 	return registry.Discovered(), nil
+}
+
+func (a *GeneralAssistant) AdvertisedTools(ctx context.Context) ([]*turingv1.DiscoveredTool, error) {
+	discovered, err := a.DiscoveredTools(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*turingv1.DiscoveredTool, 0, len(discovered))
+	for _, tool := range discovered {
+		schema, err := structpb.NewStruct(tool.Schema)
+		if err != nil {
+			return nil, fmt.Errorf("encode schema for %s/%s: %w", tool.ServerName, tool.ToolName, err)
+		}
+		out = append(out, &turingv1.DiscoveredTool{
+			ServerName: tool.ServerName,
+			ToolName:   tool.ToolName,
+			Schema:     schema,
+		})
+	}
+	return out, nil
 }
 
 func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, emit func(*turingv1.RuntimeUpdate) error) error {

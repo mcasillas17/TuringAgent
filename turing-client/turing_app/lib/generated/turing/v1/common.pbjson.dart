@@ -44,6 +44,31 @@ final $typed_data.Uint8List modelProviderDescriptor = $convert.base64Decode(
     'xfUFJPVklERVJfT0xMQU1BEAESJAogTU9ERUxfUFJPVklERVJfT1BFTkFJX0NPTVBBVElCTEUQ'
     'Ag==');
 
+@$core.Deprecated('Use routingRequirementKindDescriptor instead')
+const RoutingRequirementKind$json = {
+  '1': 'RoutingRequirementKind',
+  '2': [
+    {'1': 'ROUTING_REQUIREMENT_KIND_UNSPECIFIED', '2': 0},
+    {'1': 'ROUTING_REQUIREMENT_KIND_PROVIDER', '2': 1},
+    {'1': 'ROUTING_REQUIREMENT_KIND_MODEL', '2': 2},
+    {'1': 'ROUTING_REQUIREMENT_KIND_CONTEXT', '2': 3},
+    {'1': 'ROUTING_REQUIREMENT_KIND_TOOL', '2': 4},
+    {'1': 'ROUTING_REQUIREMENT_KIND_AGENT', '2': 5},
+    {'1': 'ROUTING_REQUIREMENT_KIND_CAPACITY', '2': 6},
+    {'1': 'ROUTING_REQUIREMENT_KIND_EXTERNAL_AGENT_CREDENTIAL', '2': 7},
+  ],
+};
+
+/// Descriptor for `RoutingRequirementKind`. Decode as a `google.protobuf.EnumDescriptorProto`.
+final $typed_data.Uint8List routingRequirementKindDescriptor = $convert.base64Decode(
+    'ChZSb3V0aW5nUmVxdWlyZW1lbnRLaW5kEigKJFJPVVRJTkdfUkVRVUlSRU1FTlRfS0lORF9VTl'
+    'NQRUNJRklFRBAAEiUKIVJPVVRJTkdfUkVRVUlSRU1FTlRfS0lORF9QUk9WSURFUhABEiIKHlJP'
+    'VVRJTkdfUkVRVUlSRU1FTlRfS0lORF9NT0RFTBACEiQKIFJPVVRJTkdfUkVRVUlSRU1FTlRfS0'
+    'lORF9DT05URVhUEAMSIQodUk9VVElOR19SRVFVSVJFTUVOVF9LSU5EX1RPT0wQBBIiCh5ST1VU'
+    'SU5HX1JFUVVJUkVNRU5UX0tJTkRfQUdFTlQQBRIlCiFST1VUSU5HX1JFUVVJUkVNRU5UX0tJTk'
+    'RfQ0FQQUNJVFkQBhI2CjJST1VUSU5HX1JFUVVJUkVNRU5UX0tJTkRfRVhURVJOQUxfQUdFTlRf'
+    'Q1JFREVOVElBTBAH');
+
 @$core.Deprecated('Use messageRoleDescriptor instead')
 const MessageRole$json = {
   '1': 'MessageRole',
@@ -162,6 +187,58 @@ final $typed_data.Uint8List errorDetailDescriptor = $convert.base64Decode(
     'NhZ2USHQoKcmVxdWVzdF9pZBgDIAEoCVIJcmVxdWVzdElkEjEKB2RldGFpbHMYBCABKAsyFy5n'
     'b29nbGUucHJvdG9idWYuU3RydWN0UgdkZXRhaWxz');
 
+@$core.Deprecated('Use routingUnavailableDetailDescriptor instead')
+const RoutingUnavailableDetail$json = {
+  '1': 'RoutingUnavailableDetail',
+  '2': [
+    {
+      '1': 'kind',
+      '3': 1,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.RoutingRequirementKind',
+      '10': 'kind'
+    },
+    {'1': 'requested', '3': 2, '4': 1, '5': 9, '10': 'requested'},
+    {'1': 'available', '3': 3, '4': 3, '5': 9, '10': 'available'},
+  ],
+};
+
+/// Descriptor for `RoutingUnavailableDetail`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List routingUnavailableDetailDescriptor = $convert.base64Decode(
+    'ChhSb3V0aW5nVW5hdmFpbGFibGVEZXRhaWwSNQoEa2luZBgBIAEoDjIhLnR1cmluZy52MS5Sb3'
+    'V0aW5nUmVxdWlyZW1lbnRLaW5kUgRraW5kEhwKCXJlcXVlc3RlZBgCIAEoCVIJcmVxdWVzdGVk'
+    'EhwKCWF2YWlsYWJsZRgDIAMoCVIJYXZhaWxhYmxl');
+
+@$core.Deprecated('Use modelCapabilityDescriptor instead')
+const ModelCapability$json = {
+  '1': 'ModelCapability',
+  '2': [
+    {
+      '1': 'provider',
+      '3': 1,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.ModelProvider',
+      '10': 'provider'
+    },
+    {'1': 'model', '3': 2, '4': 1, '5': 9, '10': 'model'},
+    {
+      '1': 'max_context_tokens',
+      '3': 3,
+      '4': 1,
+      '5': 5,
+      '10': 'maxContextTokens'
+    },
+  ],
+};
+
+/// Descriptor for `ModelCapability`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List modelCapabilityDescriptor = $convert.base64Decode(
+    'Cg9Nb2RlbENhcGFiaWxpdHkSNAoIcHJvdmlkZXIYASABKA4yGC50dXJpbmcudjEuTW9kZWxQcm'
+    '92aWRlclIIcHJvdmlkZXISFAoFbW9kZWwYAiABKAlSBW1vZGVsEiwKEm1heF9jb250ZXh0X3Rv'
+    'a2VucxgDIAEoBVIQbWF4Q29udGV4dFRva2Vucw==');
+
 @$core.Deprecated('Use providerConfigDescriptor instead')
 const ProviderConfig$json = {
   '1': 'ProviderConfig',
@@ -176,6 +253,14 @@ const ProviderConfig$json = {
     },
     {'1': 'enabled', '3': 2, '4': 1, '5': 8, '10': 'enabled'},
     {'1': 'default_model', '3': 3, '4': 1, '5': 9, '10': 'defaultModel'},
+    {
+      '1': 'models',
+      '3': 4,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.ModelCapability',
+      '10': 'models'
+    },
   ],
 };
 
@@ -183,7 +268,8 @@ const ProviderConfig$json = {
 final $typed_data.Uint8List providerConfigDescriptor = $convert.base64Decode(
     'Cg5Qcm92aWRlckNvbmZpZxI0Cghwcm92aWRlchgBIAEoDjIYLnR1cmluZy52MS5Nb2RlbFByb3'
     'ZpZGVyUghwcm92aWRlchIYCgdlbmFibGVkGAIgASgIUgdlbmFibGVkEiMKDWRlZmF1bHRfbW9k'
-    'ZWwYAyABKAlSDGRlZmF1bHRNb2RlbA==');
+    'ZWwYAyABKAlSDGRlZmF1bHRNb2RlbBIyCgZtb2RlbHMYBCADKAsyGi50dXJpbmcudjEuTW9kZW'
+    'xDYXBhYmlsaXR5UgZtb2RlbHM=');
 
 @$core.Deprecated('Use agentDescriptorDescriptor instead')
 const AgentDescriptor$json = {
@@ -191,13 +277,15 @@ const AgentDescriptor$json = {
   '2': [
     {'1': 'id', '3': 1, '4': 1, '5': 14, '6': '.turing.v1.AgentId', '10': 'id'},
     {'1': 'display_name', '3': 2, '4': 1, '5': 9, '10': 'displayName'},
+    {'1': 'available', '3': 3, '4': 1, '5': 8, '10': 'available'},
   ],
 };
 
 /// Descriptor for `AgentDescriptor`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List agentDescriptorDescriptor = $convert.base64Decode(
     'Cg9BZ2VudERlc2NyaXB0b3ISIgoCaWQYASABKA4yEi50dXJpbmcudjEuQWdlbnRJZFICaWQSIQ'
-    'oMZGlzcGxheV9uYW1lGAIgASgJUgtkaXNwbGF5TmFtZQ==');
+    'oMZGlzcGxheV9uYW1lGAIgASgJUgtkaXNwbGF5TmFtZRIcCglhdmFpbGFibGUYAyABKAhSCWF2'
+    'YWlsYWJsZQ==');
 
 @$core.Deprecated('Use messageDescriptor instead')
 const Message$json = {

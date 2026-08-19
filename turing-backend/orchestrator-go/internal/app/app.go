@@ -102,12 +102,31 @@ func New(cfg config.Config) (*App, error) {
 	if maxConcurrentRuns <= 0 {
 		maxConcurrentRuns = 1
 	}
+	legacyModels := []*turingv1.ModelCapability{{
+		Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:            cfg.OllamaModel,
+		MaxContextTokens: int32(cfg.OllamaContextWindowTokens),
+	}}
+	if cfg.OpenAIAPIKey != "" {
+		legacyModels = append(legacyModels, &turingv1.ModelCapability{
+			Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
+			Model:            cfg.OpenAIModel,
+			MaxContextTokens: int32(cfg.OpenAIContextWindowTokens),
+		})
+	}
 	runtimeService := runtimesvc.NewWithConfig(repo, eventBus, runtimesvc.DispatchConfig{
 		MaxConcurrentRuns: maxConcurrentRuns,
 		LeaseDuration:     time.Duration(cfg.JobTimeoutMS) * time.Millisecond,
 		MaxAttempts:       cfg.JobMaxAttempts,
+		LegacyCapabilities: &runtimesvc.LegacyCapabilityProfile{
+			Models:                      legacyModels,
+			AgentIds:                    []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+			Tools:                       runtimesvc.LegacyPolicyToolCapabilities(),
+			ExternalAgentCredentialRefs: append([]string(nil), cfg.AgentCredentialNames...),
+			SupportsExternalAgents:      len(cfg.AgentCredentialNames) > 0,
+		},
 	}, approvalService)
-	sessionService := sessionsvc.New(repo, cfg)
+	sessionService := sessionsvc.New(repo, cfg, runtimeService)
 	skillService := skillsvc.New(repo)
 	agentService := agentsvc.New(repo, cfg.AgentCredentialNames)
 	automationService := automationsvc.New(repo)
@@ -226,9 +245,10 @@ func New(cfg config.Config) (*App, error) {
 		close(application.reaperDone)
 	}
 	scheduler := automationsvc.NewScheduler(repo, eventBus, runtimeService, repository.AutomationRunDefaults{
-		AgentID:       "general_assistant",
-		ModelProvider: "ollama",
-		Model:         cfg.OllamaModel,
+		AgentID:         "general_assistant",
+		ModelProvider:   "ollama",
+		Model:           cfg.OllamaModel,
+		ValidateRouting: runtimeService.ValidateRouting,
 	})
 	schedulerCtx, schedulerCancel := context.WithCancel(context.Background())
 	application.schedulerCancel = schedulerCancel
@@ -277,6 +297,9 @@ func (a *App) Stop() {
 			}()
 		}
 		wg.Wait()
+		if a.RuntimeService != nil {
+			a.RuntimeService.WaitForWorkerStreams()
+		}
 		if a.authFailures != nil {
 			closeCtx, cancel := context.WithTimeout(context.Background(), gracefulStopTimeout)
 			_ = a.authFailures.Close(closeCtx)

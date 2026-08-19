@@ -8,6 +8,7 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 )
 
 // TestWorkerBusyRejectionRequeuesWithoutImmediateRedispatch proves the fix for
@@ -211,13 +212,13 @@ func TestWorkerBusyRequeuePublishesRetryNotice(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	notice := streamedToolEventForContract(t, stream, "agent.run.step")
+	notice := recvBusEvent(t, stream, func(event events.Event) bool {
+		return runNoticeHasText(event, "Retrying (attempt 2 of 3)")
+	})
 	var payload struct {
 		Note string `json:"note"`
 	}
-	if err := json.Unmarshal([]byte(notice.PayloadJSON), &payload); err != nil {
-		t.Fatalf("decode notice payload %q: %v", notice.PayloadJSON, err)
-	}
+	_ = json.Unmarshal([]byte(notice.PayloadJSON), &payload)
 	if payload.Note != "Retrying (attempt 2 of 3)" {
 		t.Fatalf("published notice note = %q, want %q", payload.Note, "Retrying (attempt 2 of 3)")
 	}
@@ -275,14 +276,14 @@ func TestOrphanRecoveryPublishesRetryNotice(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	notice := streamedToolEventForContract(t, stream, "agent.run.step")
+	const want = "Retrying (attempt 2 of 3) after the worker became unavailable"
+	notice := recvBusEvent(t, stream, func(event events.Event) bool {
+		return runNoticeHasText(event, want)
+	})
 	var payload struct {
 		Note string `json:"note"`
 	}
-	if err := json.Unmarshal([]byte(notice.PayloadJSON), &payload); err != nil {
-		t.Fatalf("decode notice payload %q: %v", notice.PayloadJSON, err)
-	}
-	const want = "Retrying (attempt 2 of 3) after the worker became unavailable"
+	_ = json.Unmarshal([]byte(notice.PayloadJSON), &payload)
 	if payload.Note != want {
 		t.Fatalf("published recovery note = %q, want %q", payload.Note, want)
 	}
@@ -322,14 +323,24 @@ func TestRetryExhaustionPublishesGiveUpNotice(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	notice := streamedToolEventForContract(t, stream, "agent.run.step")
+	notice := recvBusEvent(t, stream, func(event events.Event) bool {
+		return runNoticeHasText(event, "Gave up after 1 attempt")
+	})
 	var payload struct {
 		Note string `json:"note"`
 	}
-	if err := json.Unmarshal([]byte(notice.PayloadJSON), &payload); err != nil {
-		t.Fatalf("decode notice payload %q: %v", notice.PayloadJSON, err)
-	}
+	_ = json.Unmarshal([]byte(notice.PayloadJSON), &payload)
 	if payload.Note != "Gave up after 1 attempt" {
 		t.Fatalf("published give-up note = %q, want %q", payload.Note, "Gave up after 1 attempt")
 	}
+}
+
+func runNoticeHasText(event events.Event, want string) bool {
+	if event.Type != "agent.run.step" {
+		return false
+	}
+	var payload struct {
+		Note string `json:"note"`
+	}
+	return json.Unmarshal([]byte(event.PayloadJSON), &payload) == nil && payload.Note == want
 }

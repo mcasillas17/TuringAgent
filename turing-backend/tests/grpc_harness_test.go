@@ -111,6 +111,8 @@ type harnessConfig struct {
 	blockModelUntilCancel bool
 	approvalTTL           time.Duration
 	startRuntimeWorker    bool
+	advertiseSystemTime   bool
+	advertiseFilesCreate  bool
 }
 
 func TestMain(m *testing.M) {
@@ -133,6 +135,14 @@ func withoutRuntimeWorker() harnessOption {
 	return func(cfg *harnessConfig) { cfg.startRuntimeWorker = false }
 }
 
+func withSystemTimeTool() harnessOption {
+	return func(cfg *harnessConfig) { cfg.advertiseSystemTime = true }
+}
+
+func withFilesCreateTool() harnessOption {
+	return func(cfg *harnessConfig) { cfg.advertiseFilesCreate = true }
+}
+
 func newGRPCHarness(t *testing.T, opts ...harnessOption) *grpcHarness {
 	t.Helper()
 	cfg := harnessConfig{startRuntimeWorker: true}
@@ -148,6 +158,12 @@ func newGRPCHarness(t *testing.T, opts ...harnessOption) *grpcHarness {
 	fakeModel := newFakeModelServer(cfg.blockModelUntilCancel)
 	systemMCP := newFakeMCPServer("system", integrationSystemToken)
 	filesMCP := newFakeMCPServer("files", integrationFilesToken)
+	if cfg.advertiseSystemTime {
+		systemMCP.enableTimeTool()
+	}
+	if cfg.advertiseFilesCreate {
+		filesMCP.enableCreateToolWithApprovalValidation()
+	}
 	app, err := orchestratortestkit.NewApp(orchestratortestkit.Config{
 		ClientAPIKey:             integrationClientKey,
 		InternalToken:            integrationInternalToken,
@@ -192,6 +208,7 @@ func newGRPCHarness(t *testing.T, opts ...harnessOption) *grpcHarness {
 	h.waitForHealth(t)
 	if cfg.startRuntimeWorker {
 		h.startRuntimeWorker()
+		h.waitForRuntimeWorker(t)
 	}
 	return h
 }
@@ -215,6 +232,7 @@ func (h *grpcHarness) startRuntimeWorker() {
 			MaxToolCallsPerRun: 10,
 			OpenAIBaseURL:      h.fakeModel.server.URL,
 			OpenAIAPIKey:       integrationOpenAIKey,
+			OpenAIModel:        "fake-model",
 			MCPSystemBaseURL:   h.systemMCP.server.URL,
 			MCPFilesBaseURL:    h.filesMCP.server.URL,
 			MCPSystemToken:     integrationSystemToken,
@@ -226,6 +244,22 @@ func (h *grpcHarness) startRuntimeWorker() {
 		}
 		h.workerDone <- nil
 	}()
+}
+
+func (h *grpcHarness) waitForRuntimeWorker(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		lastErr = h.app.ValidateRuntimeRoute(
+			context.Background(), "general_assistant", "openai_compatible", "fake-model",
+		)
+		if lastErr == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("runtime worker did not advertise capabilities: %v", lastErr)
 }
 
 func artifactDir(t *testing.T, backendRoot string) string {
@@ -989,13 +1023,8 @@ func TestDiscoveredToolsAppearInListTools(t *testing.T) {
 	want := map[string]turingv1.ToolPolicy{
 		"custom/custom.inspect": turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
 		"files/files.create":    turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
-		"files/files.list":      turingv1.ToolPolicy_TOOL_POLICY_SAFE,
-		"files/files.read":      turingv1.ToolPolicy_TOOL_POLICY_SAFE,
-		"files/files.search":    turingv1.ToolPolicy_TOOL_POLICY_SAFE,
-		"files/files.update":    turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
-		"system/system.echo":    turingv1.ToolPolicy_TOOL_POLICY_SAFE,
-		"system/system.health":  turingv1.ToolPolicy_TOOL_POLICY_SAFE,
-		"system/system.info":    turingv1.ToolPolicy_TOOL_POLICY_SAFE,
+		"skills/skill_view":     turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
+		"skills/skills_list":    turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
 		"system/system.time":    turingv1.ToolPolicy_TOOL_POLICY_SAFE,
 	}
 	if len(got) != len(want) {
@@ -1009,7 +1038,7 @@ func TestDiscoveredToolsAppearInListTools(t *testing.T) {
 }
 
 func TestQueuedTurnsUseCausalModelHistory(t *testing.T) {
-	harness := newGRPCHarness(t, withoutRuntimeWorker())
+	harness := newGRPCHarness(t)
 	defer harness.close()
 
 	sessionID := harness.createSession(t, "causal model history")
@@ -1043,7 +1072,6 @@ func TestQueuedTurnsUseCausalModelHistory(t *testing.T) {
 	secondStream, cancelSecond := queue("turn two")
 	defer cancelSecond()
 
-	harness.startRuntimeWorker()
 	readTerminal := func(stream turingv1.ChatService_SendMessageClient) {
 		for {
 			event, err := stream.Recv()
@@ -1137,24 +1165,14 @@ func TestApprovalPersistenceFailureFencesRealWorkerUntilExecutorExit(t *testing.
 		t.Fatalf("queued event = %+v, want run_queued", event)
 		return "", nil
 	}
-	sessionID := harness.createSession(t, "real worker approval failure")
-	firstRunID, cancelFirst := queue(sessionID, "first approval")
-	defer cancelFirst()
-	secondRunID, cancelSecond := queue(sessionID, "same-session follow-up")
-	defer cancelSecond()
-	globalSessionID := harness.createSession(t, "global capacity follow-up")
-	globalRunID, cancelGlobal := queue(globalSessionID, "global follow-up")
-	defer cancelGlobal()
-
 	firstExecutor := &terminalDecisionBlockingExecutor{
-		firstRunID:   firstRunID,
 		started:      make(chan struct{}),
 		decisionSeen: make(chan error, 1),
 		release:      make(chan struct{}),
 		exited:       make(chan struct{}),
 		afterStarted: make(chan string, 2),
 	}
-	startWorker := func(workerID string, executor runtimetestkit.WorkerExecutor) (context.CancelFunc, <-chan error, *grpc.ClientConn) {
+	startWorker := func(workerID string, executor runtimetestkit.WorkerExecutor, discoveredTools ...*turingv1.DiscoveredTool) (context.CancelFunc, <-chan error, *grpc.ClientConn) {
 		ctx, cancel := context.WithCancel(context.Background())
 		conn := dialBufconn(t, harness.internalLis)
 		done := make(chan error, 1)
@@ -1166,8 +1184,11 @@ func TestApprovalPersistenceFailureFencesRealWorkerUntilExecutorExit(t *testing.
 				MaxConcurrentRuns:  1,
 				TotalToolTimeout:   time.Second,
 				MaxToolCallsPerRun: 1,
+				OpenAIModel:        "fake-model",
+				DiscoveredTools:    discoveredTools,
 			}, executor)
 		}()
+		harness.waitForRuntimeWorker(t)
 		t.Cleanup(func() {
 			cancel()
 			_ = conn.Close()
@@ -1179,11 +1200,28 @@ func TestApprovalPersistenceFailureFencesRealWorkerUntilExecutorExit(t *testing.
 		})
 		return cancel, done, conn
 	}
-	_, _, _ = startWorker("worker-approval-failure-real", firstExecutor)
+	toolSchema, err := structpb.NewStruct(map[string]any{"type": "object"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _ = startWorker("worker-approval-failure-real", firstExecutor, &turingv1.DiscoveredTool{
+		ServerName: "files", ToolName: "files.update", Schema: toolSchema,
+	})
+	sessionID := harness.createSession(t, "real worker approval failure")
+	firstRunID, cancelFirst := queue(sessionID, "first approval")
+	defer cancelFirst()
+	secondRunID, cancelSecond := queue(sessionID, "same-session follow-up")
+	defer cancelSecond()
+	globalSessionID := harness.createSession(t, "global capacity follow-up")
+	globalRunID, cancelGlobal := queue(globalSessionID, "global follow-up")
+	defer cancelGlobal()
 	select {
 	case <-firstExecutor.started:
 	case <-time.After(2 * time.Second):
 		t.Fatal("first real worker executor did not start")
+	}
+	if firstExecutor.firstRunID != firstRunID {
+		t.Fatalf("first executor run = %q, want %q", firstExecutor.firstRunID, firstRunID)
 	}
 	select {
 	case decisionErr := <-firstExecutor.decisionSeen:
@@ -1249,6 +1287,9 @@ func (e *terminalDecisionBlockingExecutor) SetToolBeaconPoster(post func(context
 }
 
 func (e *terminalDecisionBlockingExecutor) Execute(ctx context.Context, job *turingv1.AgentJob, _ func(*turingv1.RuntimeUpdate) error) error {
+	if e.firstRunID == "" {
+		e.firstRunID = job.GetRunId()
+	}
 	if job.GetRunId() != e.firstRunID {
 		select {
 		case e.afterStarted <- job.GetRunId():
@@ -1337,9 +1378,8 @@ func TestModelDrivenToolCallCompletesRun(t *testing.T) {
 		userText           = "What time is it in UTC?"
 		finalText          = "The fixed time is 2025-01-02T03:04:05Z."
 	)
-	harness := newGRPCHarness(t)
+	harness := newGRPCHarness(t, withSystemTimeTool())
 	defer harness.close()
-	harness.systemMCP.enableTimeTool()
 
 	sessionID := harness.createSession(t, "model-driven tool call")
 	priorEvents := harness.sendMessageToCompletion(t, sessionID, priorUserText)
@@ -1435,9 +1475,8 @@ func TestModelDrivenFilesCreateCompletesApprovalFlow(t *testing.T) {
 		finalText = "Created model-created.txt."
 	)
 	wantArgs := map[string]any{"path": "model-created.txt", "content": "created by model"}
-	harness := newGRPCHarness(t)
+	harness := newGRPCHarness(t, withFilesCreateTool())
 	defer harness.close()
-	harness.filesMCP.enableCreateToolWithApprovalValidation()
 	harness.fakeModel.enableModelDrivenFilesCreate()
 
 	sessionID := harness.createSession(t, "model-driven files approval")
@@ -1539,9 +1578,8 @@ func TestModelDrivenFilesCreateCompletesApprovalFlow(t *testing.T) {
 	}
 }
 func TestApprovalRequiredToolFlow(t *testing.T) {
-	harness := newGRPCHarness(t)
+	harness := newGRPCHarness(t, withFilesCreateTool())
 	defer harness.close()
-	harness.filesMCP.enableCreateToolWithApprovalValidation()
 
 	sessionID := harness.createSession(t, "approval flow")
 	ctx, cancel := context.WithTimeout(harness.clientContext(), 15*time.Second)
@@ -1633,7 +1671,7 @@ func TestTerminalApprovalKeepsRuntimeWorkerLiveAndUnblocksSameSession(t *testing
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			harness := newGRPCHarness(t, withApprovalTTL(time.Millisecond))
+			harness := newGRPCHarness(t, withApprovalTTL(time.Millisecond), withFilesCreateTool())
 			defer harness.close()
 			sessionID := harness.createSession(t, "terminal approval keeps worker")
 			ctx, cancel := context.WithTimeout(harness.clientContext(), 10*time.Second)
