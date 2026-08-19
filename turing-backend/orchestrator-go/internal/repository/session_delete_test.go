@@ -77,6 +77,16 @@ func TestDeleteSessionRemovesEverythingItProduced(t *testing.T) {
 	ctx := context.Background()
 	enqueued := seedDeletableSession(t, repo, "Delete me", "remember the passphrase hunter2")
 	finishRun(t, repo, enqueued.RunID)
+	agent := mustCreateAgent(t, ctx, repo, anthropicAgent())
+	if _, err := repo.SetSessionAgent(ctx, enqueued.SessionID, agent.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.db.ExecContext(ctx, `
+		INSERT INTO automation_runs (run_id, automation_id, automation_name, allowed_tools_json, fired_at)
+		VALUES (?, 'automation-delete', 'Delete automation run', '[]', datetime('now'))
+	`, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := repo.DeleteSession(ctx, enqueued.SessionID); err != nil {
 		t.Fatal(err)
@@ -90,6 +100,7 @@ func TestDeleteSessionRemovesEverythingItProduced(t *testing.T) {
 		{"messages", `SELECT COUNT(*) FROM messages WHERE session_id = ?`},
 		{"agent_runs", `SELECT COUNT(*) FROM agent_runs WHERE session_id = ?`},
 		{"events", `SELECT COUNT(*) FROM events WHERE session_id = ?`},
+		{"session_external_agent", `SELECT COUNT(*) FROM session_external_agent WHERE session_id = ?`},
 	} {
 		if got := countRows(t, repo, check.query, enqueued.SessionID); got != 0 {
 			t.Fatalf("%s still has %d rows for the deleted session", check.table, got)
@@ -104,6 +115,7 @@ func TestDeleteSessionRemovesEverythingItProduced(t *testing.T) {
 		{"jobs", `SELECT COUNT(*) FROM jobs WHERE run_id = ?`},
 		{"tool_calls", `SELECT COUNT(*) FROM tool_calls WHERE run_id = ?`},
 		{"approvals", `SELECT COUNT(*) FROM approvals WHERE run_id = ?`},
+		{"automation_runs", `SELECT COUNT(*) FROM automation_runs WHERE run_id = ?`},
 	} {
 		if got := countRows(t, repo, check.query, enqueued.RunID); got != 0 {
 			t.Fatalf("%s still has %d rows for the deleted run", check.table, got)

@@ -1,6 +1,27 @@
 -- SQLite permits NULL in a non-INTEGER PRIMARY KEY unless NOT NULL is stated
 -- explicitly. These columns are also the ownership links for derived rows, so
 -- NULL would bypass their ON DELETE CASCADE constraints.
+--
+-- Fail before rebuilding if a legacy database contains such a row. Silently
+-- deleting it would hide provenance loss; the named constraints tell the
+-- operator which ownership link must be inspected, and the migration
+-- transaction preserves the original tables and rows on failure.
+
+CREATE TABLE derived_state_provenance_preflight (
+  session_owner_null_count INTEGER NOT NULL
+    CONSTRAINT derived_state_provenance_session_owner_required
+    CHECK (session_owner_null_count = 0),
+  run_owner_null_count INTEGER NOT NULL
+    CONSTRAINT derived_state_provenance_run_owner_required
+    CHECK (run_owner_null_count = 0)
+);
+
+INSERT INTO derived_state_provenance_preflight (session_owner_null_count, run_owner_null_count)
+SELECT
+  (SELECT COUNT(*) FROM session_external_agent WHERE session_id IS NULL),
+  (SELECT COUNT(*) FROM automation_runs WHERE run_id IS NULL);
+
+DROP TABLE derived_state_provenance_preflight;
 
 CREATE TABLE session_external_agent_0012 (
   session_id TEXT NOT NULL PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,

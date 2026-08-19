@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -404,6 +405,82 @@ func TestDerivedStateProvenanceMigrationPreservesExistingRows(t *testing.T) {
 	}
 	if automationName != "Existing automation" {
 		t.Fatalf("automation name = %q, want Existing automation", automationName)
+	}
+}
+
+func TestDerivedStateProvenanceMigrationRejectsLegacyNullOwnershipKeys(t *testing.T) {
+	testCases := []struct {
+		name           string
+		seedSQL        string
+		constraintName string
+		remainingQuery string
+	}{
+		{
+			name: "session routing",
+			seedSQL: `
+				INSERT INTO external_agents (id, display_name, provider, base_url, model, credential_ref, created_at, updated_at)
+				VALUES ('agent_with_null_owner', 'Remote', 'openai', 'https://example.com/v1', 'model', 'remote', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+				INSERT INTO session_external_agent (session_id, agent_id, routed_at)
+				VALUES (NULL, 'agent_with_null_owner', '2026-01-01T00:00:00Z');
+			`,
+			constraintName: "derived_state_provenance_session_owner_required",
+			remainingQuery: `SELECT COUNT(*) FROM session_external_agent WHERE session_id IS NULL`,
+		},
+		{
+			name: "automation run",
+			seedSQL: `
+				INSERT INTO automation_runs (run_id, automation_id, automation_name, allowed_tools_json, fired_at)
+				VALUES (NULL, 'automation_with_null_owner', 'Orphan', '[]', '2026-01-01T00:00:00Z');
+			`,
+			constraintName: "derived_state_provenance_run_owner_required",
+			remainingQuery: `SELECT COUNT(*) FROM automation_runs WHERE run_id IS NULL`,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx := context.Background()
+			database, err := Open(":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			names, err := migrationNames()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range names {
+				if name == "0012_derived_state_provenance.sql" {
+					break
+				}
+				applyMigration(t, ctx, database, name)
+			}
+			if _, err := database.ExecContext(ctx, testCase.seedSQL); err != nil {
+				t.Fatal(err)
+			}
+
+			err = ApplyMigrations(ctx, database)
+			if err == nil || !strings.Contains(err.Error(), testCase.constraintName) {
+				t.Fatalf("ApplyMigrations error = %v, want %q", err, testCase.constraintName)
+			}
+			var applied int
+			if err := database.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM schema_migrations
+				WHERE version = '0012_derived_state_provenance'
+			`).Scan(&applied); err != nil {
+				t.Fatal(err)
+			}
+			if applied != 0 {
+				t.Fatal("failed provenance migration was recorded as applied")
+			}
+			var remaining int
+			if err := database.QueryRowContext(ctx, testCase.remainingQuery).Scan(&remaining); err != nil {
+				t.Fatal(err)
+			}
+			if remaining != 1 {
+				t.Fatalf("legacy invalid rows remaining = %d, want 1 after rollback", remaining)
+			}
+		})
 	}
 }
 
