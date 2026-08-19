@@ -8,7 +8,7 @@ TuringAgent is split into four local runtime pieces:
 
 | Component | Location | Responsibility |
 |---|---|---|
-| Go orchestrator | `turing-backend/orchestrator-go` | Public gRPC API, internal runtime gRPC API, sessions, messages, runs, events, approvals, audit records, SQLite persistence |
+| Go orchestrator | `turing-backend/orchestrator-go` | Public gRPC API, internal runtime gRPC API, sessions, messages, runs, events, approvals, audit records, a redacted public audit read API, SQLite persistence |
 | Go agent runtime | `turing-backend/agent-runtime-go` | Connects to the orchestrator, loads session context, calls model providers, executes MCP tools, streams runtime updates |
 | MCP system server | `turing-backend/mcp-system` | Safe system tools exposed over JSON-RPC 2.0 Streamable HTTP |
 | MCP files server | `turing-backend/mcp-files` | Sandboxed file tools; mutating tools require approval JWT validation and gRPC approval consumption |
@@ -17,6 +17,10 @@ TuringAgent is split into four local runtime pieces:
 The client talks to the orchestrator through gRPC. The agent runtime talks to MCP servers over internal HTTP JSON-RPC. MCP servers are not published to the host.
 
 For what the shipped session-recall capability does—and the two intentionally deferred model-context and summary layers—see [Session recall scope](session-recall.md).
+
+For the public, redacted audit read API — its exact filters, keyset cursor,
+per-action field allowlist, and deletion-scrub semantics — see
+[Audit read API](audit-read-api.md).
 
 ## gRPC and protobuf
 
@@ -43,6 +47,12 @@ bash -n turing-backend/scripts/*.sh tools/proto/*.sh
 ```
 
 The public orchestrator gRPC port defaults to `3000`. The internal runtime gRPC port defaults to `3001`.
+
+`AuditService.ListAuditEntries` is registered on the public server only —
+never on the internal one — and authenticated with the same
+`TURING_CLIENT_API_KEY` bearer token as every other public RPC. See
+[Audit read API](audit-read-api.md) for its filters, pagination, and
+redaction contract.
 
 ## Docker Compose services
 
@@ -115,15 +125,33 @@ separate nullable columns. Proto3 omission and explicit empty input both become
 an empty human rationale; `NULL` is reserved for paths that did not carry a
 human field, such as automation and expiration. Audit keeps only `toolName` and
 a UTF-8-safe 512-byte rationale copy in human approval decision rows, never
-approval credentials or tool arguments. Separate `tool.call.before` and
-`tool.call.after` audit rows still record tool arguments. Whole-session deletion
-removes the approval and scrubs all of those surviving audit payloads.
+approval credentials or tool arguments. That rationale copy is readable through
+`AuditService.ListAuditEntries` as a typed `decision_comment` /`denial_reason`
+field, with present-empty and absent kept distinct. Separate `tool.call.before`
+and `tool.call.after` audit rows still record tool arguments. Whole-session
+deletion removes the approval and scrubs all of those surviving audit payloads.
 
 The default approval lifetime is 65 seconds, the runtime waits up to 71 seconds
 to observe approval or persisted expiry, each MCP request is bounded to 30
 seconds, and the complete tool lifecycle remains bounded to 180 seconds.
 
 See [MCP security and approval flow](../mcp-security-and-integration.md) for the detailed threat model and test coverage.
+
+## Audit read redaction and deletion
+
+`AuditService.ListAuditEntries` never returns raw payload JSON, tool
+arguments/results, error messages, approval tokens/JTIs, bearer tokens,
+credentials, or user agent/peer values — only the specific typed fields a
+reviewed, per-action allowlist names. One of those named fields is the
+approval decision comment / denial reason: free text a person typed,
+disclosed on purpose so the recorded rationale is actually readable. The
+service cannot content-inspect it, so bearer-token holders can read whatever
+was typed there and users should not put credentials in it. Deleting a session
+(`Repository.DeleteSession`) scrubs the audit rows it correlates with by
+overwriting their payload with a fixed tombstone in the same transaction as
+the cascade, so the row itself (and the fact that something happened)
+survives, but the withdrawn content does not. See
+[Audit read API](audit-read-api.md) for the full contract.
 
 ## Local data and secrets
 

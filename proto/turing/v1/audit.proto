@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package turing.v1;
+
+option go_package = "github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1";
+
+import "google/protobuf/timestamp.proto";
+import "turing/v1/common.proto";
+
+enum AuditOrder {
+  AUDIT_ORDER_UNSPECIFIED = 0;
+  AUDIT_ORDER_DESCENDING = 1;
+  AUDIT_ORDER_ASCENDING = 2;
+}
+
+// Payload state says whether the structured audit payload was absent, present,
+// or scrubbed before storage.
+enum AuditPayloadState {
+  AUDIT_PAYLOAD_STATE_UNSPECIFIED = 0;
+  // No payload was ever stored for the row.
+  AUDIT_PAYLOAD_STATE_ABSENT = 1;
+  // A payload existed, but only action-allowlisted typed fields may be returned.
+  AUDIT_PAYLOAD_STATE_PRESENT = 2;
+  // Stored content was deliberately replaced after withdrawal or deletion.
+  AUDIT_PAYLOAD_STATE_SCRUBBED = 3;
+}
+
+message AuditPayload {
+  AuditPayloadState state = 1;
+  optional string tool_name = 2;
+  optional string server_name = 3;
+  optional string phase = 4;
+  optional string status = 5;
+  optional string reason = 6;
+  optional int64 duration_ms = 7;
+  optional string error_code = 8;
+  optional string provider = 9;
+  optional string display_name = 10;
+  optional bool unattended = 11;
+  optional string automation_id = 12;
+  optional string automation_name = 13;
+  optional string method = 14;
+  optional string request_id = 15;
+  optional int64 deleted_runs = 16;
+  optional int64 deleted_messages = 17;
+  // Human-authored approval rationale, disclosed only for the two decision
+  // actions a person takes: decision_comment for approval.approved and
+  // denial_reason for approval.denied. Each carries the bounded (<= 512 byte)
+  // copy the approvals writer stored, never raw payload JSON and never the
+  // tool-policy `reason` above.
+  //
+  // Presence is the answer, not the value: a present empty string means the
+  // person decided and typed nothing, while an absent field means no human
+  // rationale was ever recorded for the row (an unattended automation grant,
+  // an expiry, a consumption) or that the stored value failed the read API's
+  // own checks.
+  //
+  // The *_truncated flags are present only when the stored audit payload
+  // itself carried that exact boolean; they report the writer's truncation,
+  // and this read path never truncates or repairs a value of its own.
+  optional string decision_comment = 18;
+  optional bool decision_comment_truncated = 19;
+  optional string denial_reason = 20;
+  optional bool denial_reason_truncated = 21;
+}
+
+message AuditEntry {
+  string audit_id = 1;
+  optional string correlation_id = 2;
+  string actor_type = 3;
+  optional string actor_id = 4;
+  string action = 5;
+  optional string target = 6;
+  AuditPayload payload = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+message ListAuditEntriesRequest {
+  optional string correlation_id = 1;
+  optional string action = 2;
+  // Inclusive lower bound on created_at.
+  optional google.protobuf.Timestamp created_at_start = 3;
+  // Exclusive upper bound on created_at.
+  optional google.protobuf.Timestamp created_at_end = 4;
+  // Unspecified means descending.
+  AuditOrder order = 5;
+  PageRequest page = 6;
+}
+
+message ListAuditEntriesResponse {
+  repeated AuditEntry entries = 1;
+  PageResponse page = 2;
+}
+
+service AuditService {
+  rpc ListAuditEntries(ListAuditEntriesRequest) returns (ListAuditEntriesResponse);
+}

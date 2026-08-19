@@ -42,10 +42,12 @@ const scrubSessionAuditPayloadsSQL = `
 // reachable by cross-session recall — the system would keep remembering exactly
 // what the user asked it to forget.
 //
-// The audit scrub runs BEFORE the cascade. Run-owned rows link through
-// correlation_id; uncorrelated session-level actions use the session as their
-// target. Both links disappear or become unresolvable after deletion, so the
-// update resolves them while the source rows still exist.
+// The audit scrub runs BEFORE the cascade, as a single statement whose
+// subquery resolves run ownership inline. Run-owned rows link through
+// correlation_id; uncorrelated session-level actions, including routing rows,
+// use the session as their target. Both links disappear or become unresolvable
+// after deletion, so the update resolves them while the source rows still
+// exist.
 func (r *Repository) DeleteSession(ctx context.Context, sessionID string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -94,6 +96,10 @@ func (r *Repository) DeleteSession(ctx context.Context, sessionID string) error 
 		return err
 	}
 
+	// Scrub both run-owned rows and every uncorrelated session-targeted action.
+	// The latter includes routing payloads and future derived session actions.
+	// session.deleted is inserted after this statement and deliberately remains
+	// PRESENT as evidence of the deletion.
 	if _, err := tx.ExecContext(
 		ctx,
 		scrubSessionAuditPayloadsSQL,
