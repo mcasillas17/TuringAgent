@@ -23,14 +23,16 @@ const (
 )
 
 type SendMessageRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	SessionId      string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	Content        string                 `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
-	ContentType    string                 `protobuf:"bytes,3,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
-	AgentId        AgentId                `protobuf:"varint,4,opt,name=agent_id,json=agentId,proto3,enum=turing.v1.AgentId" json:"agent_id,omitempty"`
-	ModelProvider  ModelProvider          `protobuf:"varint,5,opt,name=model_provider,json=modelProvider,proto3,enum=turing.v1.ModelProvider" json:"model_provider,omitempty"`
-	Model          string                 `protobuf:"bytes,6,opt,name=model,proto3" json:"model,omitempty"`
-	IdempotencyKey string                 `protobuf:"bytes,7,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Content       string                 `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
+	ContentType   string                 `protobuf:"bytes,3,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	AgentId       AgentId                `protobuf:"varint,4,opt,name=agent_id,json=agentId,proto3,enum=turing.v1.AgentId" json:"agent_id,omitempty"`
+	ModelProvider ModelProvider          `protobuf:"varint,5,opt,name=model_provider,json=modelProvider,proto3,enum=turing.v1.ModelProvider" json:"model_provider,omitempty"`
+	Model         string                 `protobuf:"bytes,6,opt,name=model,proto3" json:"model,omitempty"`
+	// Opaque key retained for retries of this exact operation. Reusing a key
+	// with a different normalized request returns ALREADY_EXISTS.
+	IdempotencyKey string `protobuf:"bytes,7,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }

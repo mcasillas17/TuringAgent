@@ -2,7 +2,9 @@ package repository
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,11 +16,13 @@ import (
 )
 
 type EnqueueUserMessageInput struct {
-	SessionID     string
-	Content       string
-	AgentID       string
-	ModelProvider string
-	Model         string
+	SessionID      string
+	Content        string
+	ContentType    string
+	AgentID        string
+	ModelProvider  string
+	Model          string
+	IdempotencyKey string
 }
 
 type EnqueueUserMessageResult struct {
@@ -31,6 +35,9 @@ type EnqueueUserMessageResult struct {
 	Status              string
 	SessionUpdatedEvent Event
 	QueuedEvent         Event
+	// Replayed is true when an existing idempotent enqueue was returned. Its
+	// events already reached the durable log and must not be published again.
+	Replayed bool
 	// RoutingEvents carries the notices written in the same transaction as the
 	// run — today, the one saying this message is leaving the machine. They are
 	// returned rather than published here because the repository does not own
@@ -66,6 +73,100 @@ type Assignment struct {
 }
 
 var ErrAssignmentFenced = errors.New("assignment attempt is fenced")
+var ErrIdempotencyConflict = errors.New("idempotency key was already used for a different request")
+
+type sendMessageIdempotencyRecord struct {
+	SessionID           string
+	RequestFingerprint  string
+	UserMessageID       string
+	AssistantMessageID  string
+	RunID               string
+	JobID               string
+	TraceID             string
+	QueuedEventSequence int64
+	CreatedAt           string
+}
+
+func (record sendMessageIdempotencyRecord) result() EnqueueUserMessageResult {
+	return EnqueueUserMessageResult{
+		SessionID:          record.SessionID,
+		UserMessageID:      record.UserMessageID,
+		AssistantMessageID: record.AssistantMessageID,
+		RunID:              record.RunID,
+		JobID:              record.JobID,
+		TraceID:            record.TraceID,
+		Status:             "queued",
+		QueuedEvent: Event{
+			SessionID: record.SessionID,
+			RunID:     sql.NullString{String: record.RunID, Valid: true},
+			TraceID:   record.TraceID,
+			Sequence:  record.QueuedEventSequence,
+			Type:      "agent.run.queued",
+			CreatedAt: record.CreatedAt,
+		},
+		Replayed: true,
+	}
+}
+
+func enqueueRequestFingerprint(input EnqueueUserMessageInput) (string, error) {
+	canonical, err := json.Marshal(struct {
+		Version       int    `json:"version"`
+		SessionID     string `json:"session_id"`
+		Content       string `json:"content"`
+		ContentType   string `json:"content_type"`
+		AgentID       string `json:"agent_id"`
+		ModelProvider string `json:"model_provider"`
+		Model         string `json:"model"`
+	}{
+		Version:       1,
+		SessionID:     input.SessionID,
+		Content:       input.Content,
+		ContentType:   input.ContentType,
+		AgentID:       input.AgentID,
+		ModelProvider: input.ModelProvider,
+		Model:         input.Model,
+	})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(canonical)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func findSendMessageIdempotencyTx(ctx context.Context, tx *sql.Tx, idempotencyKey string) (sendMessageIdempotencyRecord, bool, error) {
+	var record sendMessageIdempotencyRecord
+	err := tx.QueryRowContext(ctx, `
+		SELECT
+			session_id,
+			request_fingerprint,
+			user_message_id,
+			assistant_message_id,
+			run_id,
+			job_id,
+			trace_id,
+			queued_event_sequence,
+			created_at
+		FROM send_message_idempotency
+		WHERE idempotency_key = ?
+	`, idempotencyKey).Scan(
+		&record.SessionID,
+		&record.RequestFingerprint,
+		&record.UserMessageID,
+		&record.AssistantMessageID,
+		&record.RunID,
+		&record.JobID,
+		&record.TraceID,
+		&record.QueuedEventSequence,
+		&record.CreatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return sendMessageIdempotencyRecord{}, false, nil
+	}
+	if err != nil {
+		return sendMessageIdempotencyRecord{}, false, err
+	}
+	return record, true, nil
+}
 
 // RetriesExhaustedCode marks a run that was terminally failed only after its
 // retry budget was spent. It lets an operator distinguish "gave up after
@@ -218,9 +319,52 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 		return EnqueueUserMessageResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	input = normalizeEnqueueUserMessageInput(input)
+	fingerprint := ""
+	if input.IdempotencyKey != "" {
+		fingerprint, err = enqueueRequestFingerprint(input)
+		if err != nil {
+			return EnqueueUserMessageResult{}, err
+		}
+		record, found, err := findSendMessageIdempotencyTx(ctx, tx, input.IdempotencyKey)
+		if err != nil {
+			return EnqueueUserMessageResult{}, err
+		}
+		if found {
+			if record.RequestFingerprint != fingerprint {
+				return EnqueueUserMessageResult{}, ErrIdempotencyConflict
+			}
+			if err := tx.Commit(); err != nil {
+				return EnqueueUserMessageResult{}, err
+			}
+			return record.result(), nil
+		}
+	}
 	result, err := r.enqueueUserMessageTx(ctx, tx, input)
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
+	}
+	if input.IdempotencyKey != "" {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO send_message_idempotency (
+				idempotency_key, session_id, request_fingerprint, user_message_id,
+				assistant_message_id, run_id, job_id, trace_id, queued_event_sequence,
+				created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+			input.IdempotencyKey,
+			input.SessionID,
+			fingerprint,
+			result.UserMessageID,
+			result.AssistantMessageID,
+			result.RunID,
+			result.JobID,
+			result.TraceID,
+			result.QueuedEvent.Sequence,
+			result.QueuedEvent.CreatedAt,
+		); err != nil {
+			return EnqueueUserMessageResult{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return EnqueueUserMessageResult{}, err
@@ -234,6 +378,7 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 // between advancing the schedule and creating the run would otherwise either
 // lose a run or fire the same one twice.
 func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMessageInput) (EnqueueUserMessageResult, error) {
+	input = normalizeEnqueueUserMessageInput(input)
 	created := time.Now().UTC()
 	userMessageID := ids.New("msg")
 	assistantMessageID := ids.New("msg")
@@ -262,10 +407,10 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	createdAt := FormatTimestamp(created)
 	assistantCreatedAt := FormatTimestamp(created.Add(time.Nanosecond))
 	derivedTitle := DeriveSessionTitle(input.Content)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at) VALUES (?, ?, 'user', ?, 'text', ?, ?)`, userMessageID, input.SessionID, input.Content, next, createdAt); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at) VALUES (?, ?, 'user', ?, ?, ?, ?)`, userMessageID, input.SessionID, input.Content, input.ContentType, next, createdAt); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO messages (id, session_id, run_id, role, content, content_type, sequence, created_at) VALUES (?, ?, ?, 'assistant', '', 'text', ?, ?)`, assistantMessageID, input.SessionID, runID, next+1, assistantCreatedAt); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO messages (id, session_id, run_id, role, content, content_type, sequence, created_at) VALUES (?, ?, ?, 'assistant', '', ?, ?, ?)`, assistantMessageID, input.SessionID, runID, input.ContentType, next+1, assistantCreatedAt); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	// Read inside the transaction that records the run, so the destination
@@ -426,6 +571,13 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 		routingEvents = append(routingEvents, notice)
 	}
 	return EnqueueUserMessageResult{SessionID: input.SessionID, UserMessageID: userMessageID, AssistantMessageID: assistantMessageID, RunID: runID, JobID: jobID, TraceID: traceID, Status: "queued", SessionUpdatedEvent: sessionUpdatedEvent, QueuedEvent: queuedEvent, RoutingEvents: routingEvents}, nil
+}
+
+func normalizeEnqueueUserMessageInput(input EnqueueUserMessageInput) EnqueueUserMessageInput {
+	if input.ContentType == "" {
+		input.ContentType = "text"
+	}
+	return input
 }
 
 // flattenNoticeText collapses a user-chosen name to a single line before it is

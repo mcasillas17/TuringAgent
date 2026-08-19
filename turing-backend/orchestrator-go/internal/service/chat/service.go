@@ -71,26 +71,35 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 	ch, unsubscribe := s.bus.Subscribe(req.SessionId)
 	defer unsubscribe()
 	enqueued, err := s.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
-		SessionID:     req.SessionId,
-		Content:       req.Content,
-		AgentID:       agentID,
-		ModelProvider: modelProvider,
-		Model:         model,
+		SessionID:      req.SessionId,
+		Content:        req.Content,
+		ContentType:    "text",
+		AgentID:        agentID,
+		ModelProvider:  modelProvider,
+		Model:          model,
+		IdempotencyKey: req.IdempotencyKey,
 	})
 	if err != nil {
 		return mapEnqueueError(ctx, err)
 	}
-	s.bus.Publish(busEventFromRepository(enqueued.SessionUpdatedEvent))
+	if !enqueued.Replayed {
+		s.bus.Publish(busEventFromRepository(enqueued.SessionUpdatedEvent))
+	}
 	queuedEvent := enqueued.QueuedEvent
-	s.bus.Publish(busEventFromRepository(queuedEvent))
+	if !enqueued.Replayed {
+		s.bus.Publish(busEventFromRepository(queuedEvent))
+	}
 	// Published alongside the queued event so a subscriber that is not this
 	// stream — a second window on the same conversation — still learns that
 	// the message left the machine. Replay would eventually deliver them, but
 	// only after a poll, and "you were told late" is not much better than "you
 	// were not told".
-	for _, event := range enqueued.RoutingEvents {
-		s.bus.Publish(busEventFromRepository(event))
+	if !enqueued.Replayed {
+		for _, event := range enqueued.RoutingEvents {
+			s.bus.Publish(busEventFromRepository(event))
+		}
 	}
+	cancelRunOnClientDisconnect := req.IdempotencyKey == ""
 	if err := stream.Send(&turingv1.ChatStreamEvent{
 		SessionId: req.SessionId,
 		RunId:     enqueued.RunID,
@@ -102,16 +111,19 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 			TraceId: enqueued.TraceID,
 		}},
 	}); err != nil {
-		s.cancelRunIfClientCancelled(ctx, enqueued.RunID)
+		if !enqueued.Replayed && req.IdempotencyKey != "" {
+			if dispatchErr := s.dispatchPending(ctx, enqueued.RunID, cancelRunOnClientDisconnect); dispatchErr != nil {
+				return dispatchErr
+			}
+		}
+		if cancelRunOnClientDisconnect {
+			s.cancelRunIfClientCancelled(ctx, enqueued.RunID)
+		}
 		return err
 	}
-	if s.runtime != nil {
-		if err := s.runtime.DispatchPending(context.WithoutCancel(ctx)); err != nil {
-			s.cancelRun(enqueued.RunID)
-			if ctx.Err() != nil {
-				return status.Error(codes.Canceled, "client cancelled stream")
-			}
-			return status.Error(codes.Internal, "dispatch pending job failed")
+	if !enqueued.Replayed {
+		if err := s.dispatchPending(ctx, enqueued.RunID, cancelRunOnClientDisconnect); err != nil {
+			return err
 		}
 	}
 	lastSent := queuedEvent.Sequence
@@ -120,13 +132,15 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 	for {
 		select {
 		case <-ctx.Done():
-			s.cancelRun(enqueued.RunID)
+			if cancelRunOnClientDisconnect {
+				s.cancelRun(enqueued.RunID)
+			}
 			return status.Error(codes.Canceled, "client cancelled stream")
 		case _, ok := <-ch:
 			if !ok {
 				return nil
 			}
-			done, err := s.streamAvailableEvents(ctx, req.SessionId, enqueued.RunID, &lastSent, stream)
+			done, err := s.streamAvailableEvents(ctx, req.SessionId, enqueued.RunID, &lastSent, cancelRunOnClientDisconnect, stream)
 			if err != nil {
 				return err
 			}
@@ -134,7 +148,7 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 				return nil
 			}
 		case <-ticker.C:
-			done, err := s.streamAvailableEvents(ctx, req.SessionId, enqueued.RunID, &lastSent, stream)
+			done, err := s.streamAvailableEvents(ctx, req.SessionId, enqueued.RunID, &lastSent, cancelRunOnClientDisconnect, stream)
 			if err != nil {
 				return err
 			}
@@ -145,13 +159,31 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 	}
 }
 
-func (s *Server) streamAvailableEvents(ctx context.Context, sessionID string, runID string, lastSent *int64, stream turingv1.ChatService_SendMessageServer) (bool, error) {
+func (s *Server) dispatchPending(ctx context.Context, runID string, cancelRunOnFailure bool) error {
+	if s.runtime == nil {
+		return nil
+	}
+	if err := s.runtime.DispatchPending(context.WithoutCancel(ctx)); err != nil {
+		if cancelRunOnFailure {
+			s.cancelRun(runID)
+		}
+		if ctx.Err() != nil {
+			return status.Error(codes.Canceled, "client cancelled stream")
+		}
+		return status.Error(codes.Internal, "dispatch pending job failed")
+	}
+	return nil
+}
+
+func (s *Server) streamAvailableEvents(ctx context.Context, sessionID string, runID string, lastSent *int64, cancelRunOnClientDisconnect bool, stream turingv1.ChatService_SendMessageServer) (bool, error) {
 	const replayLimit = 500
 	for {
 		replayed, _, err := s.repo.ReplayEvents(ctx, sessionID, *lastSent, replayLimit)
 		if err != nil {
 			if ctx.Err() != nil {
-				s.cancelRun(runID)
+				if cancelRunOnClientDisconnect {
+					s.cancelRun(runID)
+				}
 				return false, status.Error(codes.Canceled, "client cancelled stream")
 			}
 			return false, status.Error(codes.Internal, "replay events failed")
@@ -167,7 +199,9 @@ func (s *Server) streamAvailableEvents(ctx context.Context, sessionID string, ru
 				continue
 			}
 			if err := stream.Send(mapChatEvent(busEventFromRepository(event))); err != nil {
-				s.cancelRunIfClientCancelled(ctx, runID)
+				if cancelRunOnClientDisconnect {
+					s.cancelRunIfClientCancelled(ctx, runID)
+				}
 				return false, err
 			}
 			if isTerminalEvent(event.Type) {
@@ -229,6 +263,9 @@ func mapSessionError(ctx context.Context, err error) error {
 func mapEnqueueError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return status.Error(codes.Canceled, "client cancelled stream")
+	}
+	if errors.Is(err, repository.ErrIdempotencyConflict) {
+		return status.Error(codes.AlreadyExists, "idempotency key was already used for a different request")
 	}
 	return status.Error(codes.Internal, "enqueue user message failed")
 }

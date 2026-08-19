@@ -795,6 +795,7 @@ class _IntegrationsApi
     required String sessionId,
     required String content,
     String modelProvider = 'ollama',
+    String? idempotencyKey,
   }) async => const {};
 
   @override

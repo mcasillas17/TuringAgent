@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,6 +41,11 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	database := openChatTestDB(t)
+	return newHarnessWithDatabase(t, database)
+}
+
+func newHarnessWithDatabase(t *testing.T, database *db.DB) *harness {
+	t.Helper()
 	repo := repository.New(database)
 	bus := events.NewBus(8)
 	runtimeServer := runtimesvc.New(repo, bus)
@@ -129,11 +137,14 @@ func TestSendMessageDispatchContextSurvivesClientCancellation(t *testing.T) {
 
 type dispatchContextRecorder struct {
 	contextErr error
+	calls      int
+	err        error
 }
 
 func (d *dispatchContextRecorder) DispatchPending(ctx context.Context) error {
+	d.calls++
 	d.contextErr = ctx.Err()
-	return nil
+	return d.err
 }
 
 func (d *dispatchContextRecorder) CancelRun(context.Context, string, string) {}
@@ -155,6 +166,149 @@ func (s *cancellingChatStream) Send(event *turingv1.ChatStreamEvent) error {
 	return nil
 }
 
+type failingQueuedChatStream struct {
+	grpc.ServerStream
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+type queuedChatStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s *queuedChatStream) Context() context.Context {
+	return s.ctx
+}
+
+func (s *queuedChatStream) Send(*turingv1.ChatStreamEvent) error {
+	return nil
+}
+
+func (s *failingQueuedChatStream) Context() context.Context {
+	return s.ctx
+}
+
+func (s *failingQueuedChatStream) Send(event *turingv1.ChatStreamEvent) error {
+	if event.GetRunQueued() != nil {
+		s.cancel()
+		return status.Error(codes.Unavailable, "queued acknowledgement lost")
+	}
+	return nil
+}
+
+func TestSendMessageWithIdempotencyKeyDispatchesAfterQueuedSendFails(t *testing.T) {
+	database := openChatTestDB(t)
+	repo := repository.New(database)
+	bus := events.NewBus(8)
+	dispatcher := &dispatchContextRecorder{}
+	service := New(repo, bus, dispatcher, "llama3.2", "gpt-4o-mini")
+	session, err := repo.CreateSession(context.Background(), "Lost acknowledgement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamCtx, cancel := context.WithCancel(context.Background())
+	stream := &failingQueuedChatStream{ctx: streamCtx, cancel: cancel}
+
+	err = service.SendMessage(&turingv1.SendMessageRequest{
+		SessionId:      session.SessionID,
+		Content:        "continue after acknowledgement loss",
+		ModelProvider:  turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:          "llama3.2",
+		IdempotencyKey: "lost-queued-acknowledgement",
+	}, stream)
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("SendMessage error = %v, want Unavailable", err)
+	}
+	if dispatcher.calls != 1 || dispatcher.contextErr != nil {
+		t.Fatalf("DispatchPending calls=%d context error=%v, want one uncancelled dispatch", dispatcher.calls, dispatcher.contextErr)
+	}
+	var runID, runStatus string
+	if err := database.QueryRowContext(context.Background(), `SELECT id, status FROM agent_runs WHERE session_id = ?`, session.SessionID).Scan(&runID, &runStatus); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus != "queued" {
+		t.Fatalf("run %q status = %q, want queued after acknowledgement loss", runID, runStatus)
+	}
+}
+
+func TestSendMessageWithIdempotencyKeyKeepsQueuedRunOnDispatchFailure(t *testing.T) {
+	database := openChatTestDB(t)
+	repo := repository.New(database)
+	bus := events.NewBus(8)
+	dispatcher := &dispatchContextRecorder{err: errors.New("dispatch unavailable")}
+	service := New(repo, bus, dispatcher, "llama3.2", "gpt-4o-mini")
+	session, err := repo.CreateSession(context.Background(), "Dispatch failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &queuedChatStream{ctx: context.Background()}
+
+	err = service.SendMessage(&turingv1.SendMessageRequest{
+		SessionId:      session.SessionID,
+		Content:        "keep queued when dispatch fails",
+		ModelProvider:  turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:          "llama3.2",
+		IdempotencyKey: "dispatch-failure",
+	}, stream)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("SendMessage error = %v, want Internal", err)
+	}
+	if dispatcher.calls != 1 {
+		t.Fatalf("DispatchPending calls = %d, want 1", dispatcher.calls)
+	}
+	var runID, runStatus string
+	if err := database.QueryRowContext(context.Background(), `SELECT id, status FROM agent_runs WHERE session_id = ?`, session.SessionID).Scan(&runID, &runStatus); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus != "queued" {
+		t.Fatalf("run %q status = %q, want queued after dispatch failure", runID, runStatus)
+	}
+}
+
+func TestSendMessageCancellingReplayDoesNotCancelOriginalRun(t *testing.T) {
+	database := openChatTestDB(t)
+	repo := repository.New(database)
+	bus := events.NewBus(8)
+	service := New(repo, bus, nil, "llama3.2", "gpt-4o-mini")
+	session, err := repo.CreateSession(context.Background(), "Replay cancellation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+		SessionID:      session.SessionID,
+		Content:        "do not cancel the original",
+		ContentType:    "text",
+		AgentID:        "general_assistant",
+		ModelProvider:  "ollama",
+		Model:          "llama3.2",
+		IdempotencyKey: "replay-cancellation",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamCtx, cancel := context.WithCancel(context.Background())
+	stream := &cancellingChatStream{ctx: streamCtx, cancel: cancel}
+
+	err = service.SendMessage(&turingv1.SendMessageRequest{
+		SessionId:      session.SessionID,
+		Content:        "do not cancel the original",
+		ModelProvider:  turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:          "llama3.2",
+		IdempotencyKey: "replay-cancellation",
+	}, stream)
+	if status.Code(err) != codes.Canceled {
+		t.Fatalf("SendMessage error = %v, want Canceled", err)
+	}
+	run, err := repo.GetRun(context.Background(), original.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "queued" {
+		t.Fatalf("original run status = %q, want queued after replay cancellation", run.Status)
+	}
+}
+
 func TestSendMessageStreamsQueuedEvent(t *testing.T) {
 	h := newHarness(t)
 	sessionID := h.createSession(t)
@@ -173,6 +327,232 @@ func TestSendMessageStreamsQueuedEvent(t *testing.T) {
 	}
 	if event.GetRunQueued() == nil {
 		t.Fatalf("first event = %T, want run_queued", event.Event)
+	}
+}
+
+func TestSendMessageIdempotentReplayReturnsOriginalRunAndResumesEventStream(t *testing.T) {
+	h := newHarness(t)
+	sessionID := h.createSession(t)
+	key := "send-replay-key"
+	first, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
+		SessionId:      sessionID,
+		Content:        "replay this operation",
+		IdempotencyKey: key,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstQueued, err := first.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	replay, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
+		SessionId:      sessionID,
+		Content:        "replay this operation",
+		ContentType:    "text",
+		AgentId:        turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ModelProvider:  turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:          "llama3.2",
+		IdempotencyKey: key,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayedQueued, err := replay.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayedQueued.GetRunQueued().GetRunId() != firstQueued.GetRunQueued().GetRunId() ||
+		replayedQueued.GetRunQueued().GetJobId() != firstQueued.GetRunQueued().GetJobId() ||
+		replayedQueued.GetRunQueued().GetTraceId() != firstQueued.GetRunQueued().GetTraceId() {
+		t.Fatalf("replayed queued event = %+v, want original %+v", replayedQueued.GetRunQueued(), firstQueued.GetRunQueued())
+	}
+	assertSingleEnqueuedOperation(t, h.database, sessionID)
+
+	completed, err := h.repo.AppendEvent(context.Background(), repository.AppendEventInput{
+		SessionID:   sessionID,
+		RunID:       firstQueued.GetRunQueued().GetRunId(),
+		TraceID:     firstQueued.GetRunQueued().GetTraceId(),
+		Type:        "agent.run.completed",
+		PayloadJSON: `{"assistantMessageId":"msg_done"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayedTerminal, err := replay.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayedTerminal.GetRunCompleted().GetRunId() != firstQueued.GetRunQueued().GetRunId() ||
+		replayedTerminal.Sequence != completed.Sequence {
+		t.Fatalf("replayed terminal event = %+v, want run %q at sequence %d", replayedTerminal, firstQueued.GetRunQueued().GetRunId(), completed.Sequence)
+	}
+}
+
+func TestSendMessageConcurrentIdempotentRequestsQueueOneOperation(t *testing.T) {
+	h := newHarness(t)
+	sessionID := h.createSession(t)
+	start := make(chan struct{})
+	queued := make(chan *turingv1.RunQueued, 2)
+	errs := make(chan error, 2)
+	var workers sync.WaitGroup
+	for range 2 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			stream, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
+				SessionId:      sessionID,
+				Content:        "enqueue only once",
+				ModelProvider:  turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+				Model:          "llama3.2",
+				IdempotencyKey: "concurrent-send-key",
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			event, err := stream.Recv()
+			if err != nil {
+				errs <- err
+				return
+			}
+			queued <- event.GetRunQueued()
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(errs)
+	close(queued)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	var results []*turingv1.RunQueued
+	for result := range queued {
+		results = append(results, result)
+	}
+	if len(results) != 2 {
+		t.Fatalf("queued responses = %d, want 2", len(results))
+	}
+	if results[0].GetRunId() != results[1].GetRunId() || results[0].GetJobId() != results[1].GetJobId() || results[0].GetTraceId() != results[1].GetTraceId() {
+		t.Fatalf("concurrent queued responses = %+v and %+v, want identical IDs", results[0], results[1])
+	}
+	assertSingleEnqueuedOperation(t, h.database, sessionID)
+}
+
+func TestSendMessageRejectsConflictingIdempotencyKeyReuse(t *testing.T) {
+	h := newHarness(t)
+	sessionID := h.createSession(t)
+	key := "conflicting-send-key"
+	first, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
+		SessionId:      sessionID,
+		Content:        "original content",
+		ModelProvider:  turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:          "llama3.2",
+		IdempotencyKey: key,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Recv(); err != nil {
+		t.Fatal(err)
+	}
+
+	conflict, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
+		SessionId:      sessionID,
+		Content:        "different content",
+		ModelProvider:  turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:          "llama3.2",
+		IdempotencyKey: key,
+	})
+	if err == nil {
+		_, err = conflict.Recv()
+	}
+	if status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("conflicting idempotency key error = %v, want AlreadyExists", err)
+	}
+	assertSingleEnqueuedOperation(t, h.database, sessionID)
+}
+
+func TestSendMessageIdempotencySurvivesDatabaseRestart(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "turing.db")
+	const key = "restart-send-key"
+	var sessionID string
+	var original *turingv1.RunQueued
+	t.Run("first process", func(t *testing.T) {
+		database, err := db.Open(databasePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = database.Close() })
+		if err := db.ApplyMigrations(context.Background(), database); err != nil {
+			t.Fatal(err)
+		}
+		h := newHarnessWithDatabase(t, database)
+		sessionID = h.createSession(t)
+		stream, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
+			SessionId:      sessionID,
+			Content:        "survive restart",
+			ModelProvider:  turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+			Model:          "llama3.2",
+			IdempotencyKey: key,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		event, err := stream.Recv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		original = event.GetRunQueued()
+	})
+	t.Run("replay process", func(t *testing.T) {
+		database, err := db.Open(databasePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = database.Close() })
+		if err := db.ApplyMigrations(context.Background(), database); err != nil {
+			t.Fatal(err)
+		}
+		h := newHarnessWithDatabase(t, database)
+		stream, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
+			SessionId:      sessionID,
+			Content:        "survive restart",
+			ModelProvider:  turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+			Model:          "llama3.2",
+			IdempotencyKey: key,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		event, err := stream.Recv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		replayed := event.GetRunQueued()
+		if replayed.GetRunId() != original.GetRunId() || replayed.GetJobId() != original.GetJobId() || replayed.GetTraceId() != original.GetTraceId() {
+			t.Fatalf("replayed queued event = %+v, want %+v", replayed, original)
+		}
+		assertSingleEnqueuedOperation(t, database, sessionID)
+	})
+}
+
+func assertSingleEnqueuedOperation(t *testing.T, database *db.DB, sessionID string) {
+	t.Helper()
+	var userMessages, runs, jobs int
+	if err := database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user'`, sessionID).Scan(&userMessages); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM agent_runs WHERE session_id = ?`, sessionID).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM jobs WHERE run_id IN (SELECT id FROM agent_runs WHERE session_id = ?)`, sessionID).Scan(&jobs); err != nil {
+		t.Fatal(err)
+	}
+	if userMessages != 1 || runs != 1 || jobs != 1 {
+		t.Fatalf("enqueued rows: user messages=%d, runs=%d, jobs=%d; want exactly one each", userMessages, runs, jobs)
 	}
 }
 

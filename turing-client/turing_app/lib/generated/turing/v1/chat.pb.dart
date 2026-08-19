@@ -146,6 +146,8 @@ class SendMessageRequest extends $pb.GeneratedMessage {
   @$pb.TagNumber(6)
   void clearModel() => $_clearField(6);
 
+  /// Opaque key retained for retries of this exact operation. Reusing a key
+  /// with a different normalized request returns ALREADY_EXISTS.
   @$pb.TagNumber(7)
   $core.String get idempotencyKey => $_getSZ(6);
   @$pb.TagNumber(7)

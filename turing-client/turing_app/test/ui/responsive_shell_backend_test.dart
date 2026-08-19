@@ -276,6 +276,7 @@ class _FakeApiClient
     required String sessionId,
     required String content,
     String modelProvider = 'ollama',
+    String? idempotencyKey,
   }) async {
     return {
       'sessionId': sessionId,

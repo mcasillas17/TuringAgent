@@ -5087,6 +5087,184 @@ void main() {
     },
   );
 
+  testWidgets('retrying an unconfirmed send reuses its idempotency key', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..sendMessageErrors.add(
+        const TuringApiException(code: 'unavailable', message: 'no backend'),
+      );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.enterText(find.byType(TextField), 'retry this request');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+
+    expect(apiClient.idempotencyKeys, hasLength(2));
+    expect(apiClient.idempotencyKeys.first, isNotEmpty);
+    expect(apiClient.idempotencyKeys.last, apiClient.idempotencyKeys.first);
+    expect(find.text('retry this request'), findsOneWidget);
+    expect(find.byType(MessageSendUnconfirmedCard), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('an idempotency conflict discards the stale retry key', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..sendMessageErrors.add(
+        const GrpcError.alreadyExists('idempotency key conflict'),
+      );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.enterText(find.byType(TextField), 'send a new request');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    expect(find.byType(MessageSendFailureCard), findsOneWidget);
+    expect(find.byType(MessageSendUnconfirmedCard), findsNothing);
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+
+    expect(apiClient.idempotencyKeys, hasLength(2));
+    expect(
+      apiClient.idempotencyKeys.last,
+      isNot(apiClient.idempotencyKeys.first),
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets(
+    'changing the provider after an unconfirmed send starts a new operation',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..sendMessageErrors.add(
+          const TuringApiException(code: 'unavailable', message: 'no backend'),
+        );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+            modelProvider: 'ollama',
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'change provider');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+            modelProvider: 'openai_compatible',
+          ),
+        ),
+      );
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+
+      expect(apiClient.idempotencyKeys, hasLength(2));
+      expect(
+        apiClient.idempotencyKeys.last,
+        isNot(apiClient.idempotencyKeys.first),
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'a provider change during a failed send does not reuse its stale key',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final pending = Completer<Map<String, dynamic>>();
+      final apiClient = _FakeApiClient()..sendMessagePending = pending;
+      final eventSource = _FakeEventSource(events.stream);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: eventSource,
+            modelProvider: 'ollama',
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.enterText(
+        find.byType(TextField),
+        'provider changed in flight',
+      );
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: eventSource,
+            modelProvider: 'openai_compatible',
+          ),
+        ),
+      );
+      apiClient.sendMessagePending = null;
+      pending.completeError(
+        const TuringApiException(code: 'unavailable', message: 'no backend'),
+      );
+      await tester.pump();
+
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+
+      expect(apiClient.idempotencyKeys, hasLength(2));
+      expect(
+        apiClient.idempotencyKeys.last,
+        isNot(apiClient.idempotencyKeys.first),
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
   testWidgets(
     'a later successful send after a rejected one still reaches the API '
     'client, and its events are still processed',
@@ -7258,6 +7436,7 @@ class _FakeApiClient
     implements TuringApi {
   String? lastSentContent;
   String? lastModelProvider;
+  final List<String?> idempotencyKeys = [];
 
   /// When set, `listMessages` returns this future instead of resolving
   /// immediately, letting a test drive the history-load race explicitly.
@@ -7444,10 +7623,12 @@ class _FakeApiClient
     required String sessionId,
     required String content,
     String modelProvider = 'ollama',
+    String? idempotencyKey,
   }) {
     sendMessageCallCount++;
     lastSentContent = content;
     lastModelProvider = modelProvider;
+    idempotencyKeys.add(idempotencyKey);
     final pending = sendMessagePending;
     if (pending != null) {
       return pending.future;
@@ -7483,10 +7664,12 @@ class _SynchronousThrowApiClient extends _FakeApiClient {
     required String sessionId,
     required String content,
     String modelProvider = 'ollama',
+    String? idempotencyKey,
   }) {
     sendMessageCallCount++;
     lastSentContent = content;
     lastModelProvider = modelProvider;
+    idempotencyKeys.add(idempotencyKey);
     throw const TuringApiException(
       code: 'internal',
       message: 'boom before returning a Future',

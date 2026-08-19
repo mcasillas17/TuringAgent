@@ -271,6 +271,8 @@ read path and TUR-021 remains the approval preview/diff UX.
 
 #### TUR-001 — Make `SendMessage` idempotent
 
+**Status:** In review — pending merge.
+
 **Outcome:** Retrying the same client operation cannot create duplicate messages, runs, or side effects.  
 **Scope:** Persist and consume `SendMessageRequest.idempotency_key`; bind it to session and request identity; return the original IDs for an identical replay; reject a conflicting payload.  
 **Likely files:** `proto/turing/v1/chat.proto`, chat service, jobs repository, schema migration, integration tests.  
