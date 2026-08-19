@@ -85,9 +85,9 @@ The accepted requirements are frozen into the job payload. Dispatch claims only 
 that match the selected worker's current snapshot. A route that was valid when
 accepted therefore cannot be handed to an incompatible worker after capabilities
 change. Coarse provider/model/context/tool/capacity predicates run in SQLite before
-the final typed matcher, so an incompatible backlog is not decoded and rescanned for
-every worker. Dispatch reserves worker capacity without holding the worker lock while
-waiting for SQLite.
+the final typed matcher, and the indexed query claims at most one compatible row, so
+an incompatible backlog is not decoded and rescanned for every worker. Dispatch
+reserves worker capacity without holding the worker lock while waiting for SQLite.
 
 Scheduled runs use the same validator before creating a session, message, run, or job.
 An unavailable occurrence advances its schedule and records `routing_unavailable`
@@ -111,7 +111,10 @@ runs.
 The before/after comparison tracks whether each loss was actually published, so a
 restart seed cannot suppress the first actionable notice. Enqueue callers recheck
 pending routes after commit to close the capability-loss race between validation and
-persistence. Idempotent snapshots do not duplicate notices.
+persistence. Deduplication advances after each committed notice, even if a later notice
+in the same refresh fails. Queue refreshes use an indexed keyset scan in bounded pages
+and a five-second deadline, so retries neither duplicate transitions nor monopolize the
+registry lock indefinitely. Idempotent snapshots do not duplicate notices.
 On orchestrator restart the empty registry is restored by worker reconnects; queued
 routes receive restoration notices and become dispatchable again.
 

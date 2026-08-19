@@ -53,6 +53,11 @@ type PendingRoutingWork struct {
 	Requirements RoutingRequirements
 }
 
+type PendingRoutingCursor struct {
+	CreatedAtNanos int64
+	JobID          string
+}
+
 type EnqueueUserMessageResult struct {
 	SessionID           string
 	UserMessageID       string
@@ -446,7 +451,7 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id, run_id, agent_id, status, payload_json, created_at) VALUES (?, ?, ?, 'pending', ?, ?)`, jobID, runID, input.AgentID, string(jobPayload), createdAt); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id, run_id, agent_id, status, payload_json, created_at, created_at_ns) VALUES (?, ?, ?, 'pending', ?, ?, ?)`, jobID, runID, input.AgentID, string(jobPayload), createdAt, created.UnixNano()); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	queuedPayload, err := json.Marshal(map[string]any{
@@ -581,7 +586,8 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 						)
 					)
 			)` + routingFilter + `
-		ORDER BY ` + sqliteTimestampNanos("j.created_at") + `, j.id
+		ORDER BY j.created_at_ns, j.id
+		LIMIT 1
 	`
 	queryArgs := []any{agentID}
 	queryArgs = append(queryArgs, routingArgs...)
@@ -752,35 +758,54 @@ func claimRoutingFilterSQL(capabilities *WorkerRoutingCapabilities) (string, []a
 	return filter, args
 }
 
-func (r *Repository) ListPendingRoutingWork(ctx context.Context) ([]PendingRoutingWork, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT j.run_id, j.agent_id, r.model_provider, r.model_name, j.payload_json
+func (r *Repository) ListPendingRoutingWorkPage(
+	ctx context.Context,
+	after PendingRoutingCursor,
+	limit int,
+) ([]PendingRoutingWork, PendingRoutingCursor, error) {
+	if limit < 1 {
+		return nil, after, fmt.Errorf("pending routing page limit must be positive")
+	}
+	query := `
+		SELECT j.id, j.created_at_ns, j.run_id, j.agent_id, r.model_provider, r.model_name, j.payload_json
 		FROM jobs j
 		JOIN agent_runs r ON r.id = j.run_id
-		WHERE j.status = 'pending' AND r.status = 'queued'
-		ORDER BY `+sqliteTimestampNanos("j.created_at")+`, j.id
-	`)
+		WHERE j.status = 'pending' AND r.status = 'queued'`
+	args := make([]any, 0, 3)
+	if after.JobID != "" {
+		query += `
+			AND (j.created_at_ns > ? OR (j.created_at_ns = ? AND j.id > ?))`
+		args = append(args, after.CreatedAtNanos, after.CreatedAtNanos, after.JobID)
+	}
+	query += `
+		ORDER BY j.created_at_ns, j.id
+		LIMIT ?`
+	args = append(args, limit)
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, after, err
 	}
 	defer func() { _ = rows.Close() }()
 
 	var work []PendingRoutingWork
+	next := after
 	for rows.Next() {
 		var item PendingRoutingWork
 		var payloadJSON string
 		if err := rows.Scan(
+			&next.JobID,
+			&next.CreatedAtNanos,
 			&item.RunID,
 			&item.Requirements.AgentID,
 			&item.Requirements.ModelProvider,
 			&item.Requirements.Model,
 			&payloadJSON,
 		); err != nil {
-			return nil, err
+			return nil, after, err
 		}
 		var payload queuedJobPayload
 		if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
-			return nil, err
+			return nil, after, err
 		}
 		item.Requirements.RequestedTools = append([]string(nil), payload.RequestedTools...)
 		item.Requirements.RequiredContextTokens = payload.RequiredContextTokens
@@ -789,9 +814,9 @@ func (r *Repository) ListPendingRoutingWork(ctx context.Context) ([]PendingRouti
 		work = append(work, item)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, after, err
 	}
-	return work, nil
+	return work, next, nil
 }
 
 func (r *Repository) RequeueClaimedJob(ctx context.Context, jobID string, runID string) error {

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -243,6 +244,62 @@ func TestCapabilityLossAndDisconnectAppendQueueNotices(t *testing.T) {
 				return false
 			})
 		})
+	}
+}
+
+func TestCapabilityNoticeDedupSurvivesPartialPersistenceFailure(t *testing.T) {
+	h := newHarness(t)
+	stream := connectWorkerCapabilities(t, h, "worker-partial-notice", "registration-partial-notice", modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+	))
+	defer func() { _ = stream.CloseSend() }()
+
+	var enqueued []repository.EnqueueUserMessageResult
+	for _, title := range []string{"First unavailable", "Second unavailable"} {
+		session, err := h.repo.CreateSession(context.Background(), title)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+			SessionID: session.SessionID, Content: title, AgentID: "general_assistant",
+			ModelProvider: "ollama", Model: "llama3.2",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		enqueued = append(enqueued, result)
+	}
+	if _, err := h.database.ExecContext(context.Background(), fmt.Sprintf(`
+		CREATE TRIGGER fail_second_routing_notice
+		BEFORE INSERT ON events
+		WHEN NEW.run_id = '%s' AND NEW.type = 'agent.run.step'
+			AND json_extract(NEW.payload_json, '$.reason') = 'routing_capability_unavailable'
+		BEGIN
+			SELECT RAISE(FAIL, 'second notice blocked');
+		END`, enqueued[1].RunID)); err != nil {
+		t.Fatal(err)
+	}
+	h.service.mu.Lock()
+	connected := h.service.workers["worker-partial-notice"]
+	delete(h.service.workers, "worker-partial-notice")
+	h.service.mu.Unlock()
+	if connected == nil {
+		t.Fatal("connected worker is missing")
+	}
+
+	if err := h.service.refreshPendingCapabilityState(context.Background(), "test loss", "", true, false); err == nil {
+		t.Fatal("partial notice refresh succeeded, want persistence failure")
+	}
+	if _, err := h.database.ExecContext(context.Background(), `DROP TRIGGER fail_second_routing_notice`); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.service.refreshPendingCapabilityState(context.Background(), "retry loss", "", true, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range enqueued {
+		if got := countRoutingNotices(t, h, result.RunID, "routing_capability_unavailable"); got != 1 {
+			t.Fatalf("run %s has %d loss notices, want 1", result.RunID, got)
+		}
 	}
 }
 
@@ -675,6 +732,7 @@ func hasRoutingNotice(t *testing.T, h *harness, sessionID, runID, reason string)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	for _, event := range events {
 		if event.Type != "agent.run.step" || !event.RunID.Valid || event.RunID.String != runID {
 			continue
@@ -685,4 +743,19 @@ func hasRoutingNotice(t *testing.T, h *harness, sessionID, runID, reason string)
 		}
 	}
 	return false
+}
+
+func countRoutingNotices(t *testing.T, h *harness, runID, reason string) int {
+	t.Helper()
+	var count int
+	if err := h.database.QueryRowContext(context.Background(), `
+		SELECT COUNT(*)
+		FROM events
+		WHERE run_id = ?
+			AND type = 'agent.run.step'
+			AND json_extract(payload_json, '$.reason') = ?
+	`, runID, reason).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
 }

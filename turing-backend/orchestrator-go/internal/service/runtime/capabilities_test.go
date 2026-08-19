@@ -151,6 +151,27 @@ func TestLegacyWorkerCapabilitiesRequireExplicitProfile(t *testing.T) {
 	}
 }
 
+func TestModernWorkerRejectsUnknownToolDiscoveryStatus(t *testing.T) {
+	h := newHarness(t)
+	stream, err := h.runtimeClient(t).ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{
+		WorkerReady: &turingv1.RuntimeWorkerReady{
+			WorkerId:            "worker-unknown-discovery",
+			RegistrationId:      "registration-unknown-discovery",
+			ToolDiscoveryStatus: turingv1.ToolDiscoveryStatus(99),
+			Capabilities:        modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1),
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Recv(); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ConnectWorker error = %v, want InvalidArgument", err)
+	}
+}
+
 func TestProviderAndAgentAvailabilityReflectLiveWorkerUnion(t *testing.T) {
 	h := newHarness(t)
 	first := connectWorkerCapabilities(t, h, "worker-view-a", "registration-view-a", &turingv1.WorkerCapabilities{

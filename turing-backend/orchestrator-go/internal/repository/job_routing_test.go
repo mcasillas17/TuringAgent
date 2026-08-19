@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 )
@@ -14,6 +15,7 @@ func TestClaimNextCompatibleJobSkipsUnsupportedPendingWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	unsupported, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
 		SessionID:             unsupportedSession.SessionID,
 		Content:               "needs files",
@@ -89,5 +91,41 @@ func TestClaimNextCompatibleJobSkipsUnsupportedPendingWork(t *testing.T) {
 	}
 	if unsupportedStatus != "pending" {
 		t.Fatalf("unsupported job status = %q, want pending", unsupportedStatus)
+	}
+}
+
+func TestListPendingRoutingWorkPageUsesStableKeyset(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	var want []string
+	for _, title := range []string{"First", "Second", "Third"} {
+		session, err := repo.CreateSession(ctx, title)
+		if err != nil {
+			t.Fatal(err)
+		}
+		enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+			SessionID: session.SessionID, Content: title, AgentID: "general_assistant",
+			ModelProvider: "ollama", Model: "llama3.2",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, enqueued.RunID)
+	}
+
+	first, cursor, err := repo.ListPendingRoutingWorkPage(ctx, PendingRoutingCursor{}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := repo.ListPendingRoutingWorkPage(ctx, cursor, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(first)+len(second))
+	for _, item := range append(first, second...) {
+		got = append(got, item.RunID)
+	}
+	if len(first) != 2 || len(second) != 1 || !slices.Equal(got, want) {
+		t.Fatalf("paged run IDs = %v (%d/%d), want %v", got, len(first), len(second), want)
 	}
 }

@@ -194,6 +194,11 @@ type unavailableRoutingState struct {
 	lossPublished bool
 }
 
+const (
+	pendingRoutingPageSize       = 128
+	pendingRoutingRefreshTimeout = 5 * time.Second
+)
+
 func workerCapabilitiesSupportRoute(capabilities *registeredWorkerCapabilities, route repository.RoutingRequirements) bool {
 	if capabilities == nil {
 		return false
@@ -377,66 +382,78 @@ func (s *Server) refreshPendingCapabilityState(
 	publishLosses bool,
 	publishRestorations bool,
 ) error {
+	ctx, cancel := context.WithTimeout(ctx, pendingRoutingRefreshTimeout)
+	defer cancel()
 	s.availabilityMu.Lock()
 	defer s.availabilityMu.Unlock()
 
-	work, err := s.repo.ListPendingRoutingWork(ctx)
-	if err != nil {
-		return err
-	}
 	nextUnavailable := make(map[string]unavailableRoutingState)
-	workByRunID := make(map[string]repository.PendingRoutingWork, len(work))
-	for _, item := range work {
-		workByRunID[item.RunID] = item
-		routingErr := s.ValidateRouting(ctx, item.Requirements)
-		if routingErr == nil {
-			continue
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		detail := routingDetail(routingErr)
-		if detail == nil {
-			return routingErr
-		}
-		fingerprint := routingRequirementsFingerprint(item.Requirements)
-		previous := s.unavailablePending[item.RunID]
-		state := unavailableRoutingState{
-			fingerprint:   fingerprint,
-			lossPublished: previous.fingerprint == fingerprint && previous.lossPublished,
-		}
-		nextUnavailable[item.RunID] = state
-		if !publishLosses || state.lossPublished {
-			continue
-		}
-		label := routingRequirementLabel(detail.GetKind())
-		requested := strings.Join(strings.Fields(detail.GetRequested()), " ")
-		event, err := s.repo.AppendRunNotice(
-			ctx,
-			item.RunID,
-			fmt.Sprintf("Waiting for a compatible worker: %s %q is unavailable", label, requested),
-			map[string]any{
-				"reason":                         "routing_capability_unavailable",
-				"cause":                          cause,
-				"workerId":                       workerID,
-				"agentId":                        item.Requirements.AgentID,
-				"provider":                       item.Requirements.ModelProvider,
-				"model":                          item.Requirements.Model,
-				"requiredTools":                  append([]string(nil), item.Requirements.RequestedTools...),
-				"requiredContextTokens":          item.Requirements.RequiredContextTokens,
-				"minimumWorkerMaxConcurrentRuns": item.Requirements.MinimumWorkerMaxConcurrentRuns,
-				"externalAgent":                  item.Requirements.ExternalAgent,
-				"unavailableCapability":          detail.GetKind().String(),
-				"requested":                      detail.GetRequested(),
-				"available":                      append([]string(nil), detail.GetAvailable()...),
-			},
-		)
+	previousPending := make(map[string]struct{}, len(s.unavailablePending))
+	cursor := repository.PendingRoutingCursor{}
+	for {
+		work, nextCursor, err := s.repo.ListPendingRoutingWorkPage(ctx, cursor, pendingRoutingPageSize)
 		if err != nil {
 			return err
 		}
-		s.publishEvent(event)
-		state.lossPublished = true
-		nextUnavailable[item.RunID] = state
+		for _, item := range work {
+			if _, tracked := s.unavailablePending[item.RunID]; tracked {
+				previousPending[item.RunID] = struct{}{}
+			}
+			routingErr := s.ValidateRouting(ctx, item.Requirements)
+			if routingErr == nil {
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			detail := routingDetail(routingErr)
+			if detail == nil {
+				return routingErr
+			}
+			fingerprint := routingRequirementsFingerprint(item.Requirements)
+			previous := s.unavailablePending[item.RunID]
+			state := unavailableRoutingState{
+				fingerprint:   fingerprint,
+				lossPublished: previous.fingerprint == fingerprint && previous.lossPublished,
+			}
+			nextUnavailable[item.RunID] = state
+			if !publishLosses || state.lossPublished {
+				continue
+			}
+			label := routingRequirementLabel(detail.GetKind())
+			requested := strings.Join(strings.Fields(detail.GetRequested()), " ")
+			event, err := s.repo.AppendRunNotice(
+				ctx,
+				item.RunID,
+				fmt.Sprintf("Waiting for a compatible worker: %s %q is unavailable", label, requested),
+				map[string]any{
+					"reason":                         "routing_capability_unavailable",
+					"cause":                          cause,
+					"workerId":                       workerID,
+					"agentId":                        item.Requirements.AgentID,
+					"provider":                       item.Requirements.ModelProvider,
+					"model":                          item.Requirements.Model,
+					"requiredTools":                  append([]string(nil), item.Requirements.RequestedTools...),
+					"requiredContextTokens":          item.Requirements.RequiredContextTokens,
+					"minimumWorkerMaxConcurrentRuns": item.Requirements.MinimumWorkerMaxConcurrentRuns,
+					"externalAgent":                  item.Requirements.ExternalAgent,
+					"unavailableCapability":          detail.GetKind().String(),
+					"requested":                      detail.GetRequested(),
+					"available":                      append([]string(nil), detail.GetAvailable()...),
+				},
+			)
+			if err != nil {
+				return err
+			}
+			s.publishEvent(event)
+			state.lossPublished = true
+			nextUnavailable[item.RunID] = state
+			s.unavailablePending[item.RunID] = state
+		}
+		if len(work) < pendingRoutingPageSize {
+			break
+		}
+		cursor = nextCursor
 	}
 	if publishRestorations {
 		restoredRunIDs := make([]string, 0)
@@ -444,7 +461,7 @@ func (s *Server) refreshPendingCapabilityState(
 			if _, stillUnavailable := nextUnavailable[runID]; stillUnavailable {
 				continue
 			}
-			if _, stillPending := workByRunID[runID]; stillPending {
+			if _, stillPending := previousPending[runID]; stillPending {
 				restoredRunIDs = append(restoredRunIDs, runID)
 			}
 		}
@@ -464,6 +481,7 @@ func (s *Server) refreshPendingCapabilityState(
 				return err
 			}
 			s.publishEvent(event)
+			delete(s.unavailablePending, runID)
 		}
 	}
 	s.unavailablePending = nextUnavailable

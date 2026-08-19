@@ -228,8 +228,13 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 		maxConcurrent int
 	)
 	if ready.GetCapabilities() != nil {
-		if ready.GetToolDiscoveryStatus() == turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_FAILED {
+		switch ready.GetToolDiscoveryStatus() {
+		case turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_UNSPECIFIED,
+			turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_COMPLETE:
+		case turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_FAILED:
 			return status.Error(codes.FailedPrecondition, "worker capabilities are unavailable: worker tool discovery failed")
+		default:
+			return status.Error(codes.InvalidArgument, "worker tool discovery status is invalid")
 		}
 		if ready.GetRegistrationId() == "" {
 			return status.Error(codes.InvalidArgument, "worker registration_id is required")
