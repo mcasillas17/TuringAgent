@@ -498,6 +498,40 @@ func payloadExternalAgent(t *testing.T, ctx context.Context, repo *Repository, j
 	return payload.ExternalAgent
 }
 
+// Deleting a session lets the FK graph do the deleting, so a table added later
+// is only cleaned up if its foreign key says so. Without this, a deleted
+// conversation would leave a row behind recording where it used to send things.
+func TestDeletingASessionRemovesItsRouting(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	agent := mustCreateAgent(t, ctx, repo, anthropicAgent())
+	if _, err := repo.SetSessionAgent(ctx, session.SessionID, agent.AgentID); err != nil {
+		t.Fatalf("route: %v", err)
+	}
+
+	if err := repo.DeleteSession(ctx, session.SessionID); err != nil {
+		t.Fatalf("delete session: %v", err)
+	}
+
+	var remaining int
+	if err := repo.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM session_external_agent WHERE session_id = ?`, session.SessionID).
+		Scan(&remaining); err != nil {
+		t.Fatalf("count routing rows: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("routing rows left after deleting the conversation = %d, want 0", remaining)
+	}
+	// The agent itself is the user's configuration and outlives one
+	// conversation.
+	if _, err := repo.GetExternalAgent(ctx, agent.AgentID); err != nil {
+		t.Fatalf("agent was removed along with the conversation: %v", err)
+	}
+}
+
 func jobPayloadJSON(t *testing.T, ctx context.Context, repo *Repository, jobID string) string {
 	t.Helper()
 	var payloadJSON string
