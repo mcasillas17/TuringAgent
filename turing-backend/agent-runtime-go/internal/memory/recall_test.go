@@ -171,6 +171,34 @@ func TestPreparedRecallSuppressesOnlyAdmittedDuplicateOccurrences(t *testing.T) 
 	}
 }
 
+func TestPreparedRecallDoesNotSuppressPagedOlderDuplicateByNewerMessageID(t *testing.T) {
+	content := "identical current-session message"
+	older := Excerpt{
+		MessageID: "older",
+		SessionID: "session-current",
+		Role:      "user",
+		Content:   content,
+		CreatedAt: at(1),
+	}
+	prepared := newPreparedRecallHits()
+	prepared.addTerm("identical", []Excerpt{older}, defaultMaxChars)
+
+	got := rankPrepared(
+		prepared,
+		"session-current",
+		inContextKeys([]llm.ChatMessage{{
+			MessageID: "newer",
+			Role:      "user",
+			Content:   content,
+		}}),
+		defaultMaxExcerpts,
+		defaultMaxChars,
+	)
+	if len(got) != 1 || got[0].MessageID != "older" {
+		t.Fatalf("paged duplicate ranking = %+v, want older candidate retained", got)
+	}
+}
+
 func TestTermsDedupesAndCaps(t *testing.T) {
 	if got := terms("deploy deploy DEPLOY"); len(got) != 1 || got[0] != "deploy" {
 		t.Fatalf("terms did not dedupe case-insensitively: %v", got)

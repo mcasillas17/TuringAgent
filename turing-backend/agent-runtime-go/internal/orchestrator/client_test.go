@@ -165,9 +165,9 @@ func TestFetchMessagesRequestsCausalHistoryBeforeCurrentUserMessage(t *testing.T
 		t.Fatalf("FetchMessages returned error: %v", err)
 	}
 	want := []llm.ChatMessage{
-		{Role: "system", Content: "instructions"},
-		{Role: "user", Content: "repeat me"},
-		{Role: "assistant", Content: ""},
+		{MessageID: "msg_system", Role: "system", Content: "instructions"},
+		{MessageID: "msg_older_user", Role: "user", Content: "repeat me"},
+		{MessageID: "msg_older_empty_assistant", Role: "assistant", Content: ""},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("FetchMessages = %#v, want %#v", got, want)
@@ -195,8 +195,8 @@ func TestFetchMessagesFiltersLegacyResponseAtAssignedAnchor(t *testing.T) {
 		t.Fatalf("FetchMessages returned error: %v", err)
 	}
 	want := []llm.ChatMessage{
-		{Role: "user", Content: "older"},
-		{Role: "assistant", Content: "answer"},
+		{MessageID: "msg_older_user", Role: "user", Content: "older"},
+		{MessageID: "msg_older_assistant", Role: "assistant", Content: "answer"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("FetchMessages legacy response = %#v, want only pre-anchor history %#v", got, want)
@@ -224,7 +224,7 @@ func TestFetchMessagesRetainsFiftyCausallyBoundEntries(t *testing.T) {
 	}
 	for i, message := range got {
 		want := fmt.Sprintf("message %02d", i)
-		if message.Role != "user" || message.Content != want {
+		if message.MessageID != fmt.Sprintf("msg_%02d", i) || message.Role != "user" || message.Content != want {
 			t.Fatalf("FetchMessages[%d] = %#v, want user %q", i, message, want)
 		}
 	}
@@ -257,7 +257,7 @@ func TestFetchMessagesKeepsMostRecentFiftyFromCausalResponse(t *testing.T) {
 	}
 	for i, message := range got {
 		want := fmt.Sprintf("message %02d", i+1)
-		if message.Role != "assistant" || message.Content != want {
+		if message.MessageID != fmt.Sprintf("msg_%02d", i+1) || message.Role != "assistant" || message.Content != want {
 			t.Fatalf("FetchMessages[%d] = %#v, want assistant %q", i, message, want)
 		}
 	}

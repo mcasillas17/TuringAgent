@@ -97,9 +97,9 @@ func EncodeOllamaKeepAlive(value string) (json.RawMessage, error) {
 	if trimmed == "" {
 		return nil, nil
 	}
-	if _, err := strconv.Atoi(trimmed); err == nil {
+	if seconds, err := strconv.Atoi(trimmed); err == nil {
 		// Bare number: seconds, and -1 means forever. Must go out unquoted.
-		return json.RawMessage(trimmed), nil
+		return json.RawMessage(strconv.Itoa(seconds)), nil
 	}
 	if _, err := time.ParseDuration(trimmed); err != nil {
 		return nil, fmt.Errorf("keep-alive %q must be a duration such as 30s or 2m, or a whole number of seconds (-1 for forever)", value)

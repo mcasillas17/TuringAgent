@@ -83,7 +83,11 @@ func (c *Client) FetchMessages(ctx context.Context, sessionID string, beforeMess
 		if !ok {
 			continue
 		}
-		out = append(out, llm.ChatMessage{Role: role, Content: message.GetContent()})
+		out = append(out, llm.ChatMessage{
+			MessageID: message.GetMessageId(),
+			Role:      role,
+			Content:   message.GetContent(),
+		})
 	}
 	if len(out) > historyLimit {
 		out = out[len(out)-historyLimit:]

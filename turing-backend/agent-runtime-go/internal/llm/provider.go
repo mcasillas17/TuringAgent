@@ -16,6 +16,7 @@ const (
 )
 
 type ChatMessage struct {
+	MessageID  string     `json:"-"`
 	Role       string     `json:"role"`
 	Content    string     `json:"content"`
 	Name       string     `json:"name,omitempty"`

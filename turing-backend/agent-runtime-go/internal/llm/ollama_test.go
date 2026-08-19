@@ -279,7 +279,7 @@ func TestOllamaRequestSerializesProviderSpecificMessages(t *testing.T) {
 		Model: "llama3.2",
 		Messages: []ChatMessage{
 			{Role: "system", Content: "Be concise"},
-			{Role: "user", Content: "Weather?", Name: "neutral-only"},
+			{MessageID: "msg_user", Role: "user", Content: "Weather?", Name: "neutral-only"},
 			{
 				Role:    "assistant",
 				Content: "",
@@ -302,6 +302,9 @@ func TestOllamaRequestSerializesProviderSpecificMessages(t *testing.T) {
 	}
 	if _, present := messages[1].(map[string]any)["name"]; present {
 		t.Fatalf("unsupported neutral name was serialized: %#v", messages[1])
+	}
+	if _, present := messages[1].(map[string]any)["message_id"]; present {
+		t.Fatalf("internal message ID was serialized: %#v", messages[1])
 	}
 	assistant := messages[2].(map[string]any)
 	toolCalls := assistant["tool_calls"].([]any)
@@ -960,6 +963,21 @@ func TestOllamaKeepAliveEncodesBareSecondsAsNumber(t *testing.T) {
 		}
 		if string(encoded) != value {
 			t.Fatalf("EncodeOllamaKeepAlive(%q) = %s, want an unquoted number", value, encoded)
+		}
+	}
+}
+
+func TestOllamaKeepAliveCanonicalizesJSONInvalidIntegerSpellings(t *testing.T) {
+	for input, want := range map[string]string{
+		"+1": "1",
+		"01": "1",
+	} {
+		encoded, err := EncodeOllamaKeepAlive(input)
+		if err != nil {
+			t.Fatalf("EncodeOllamaKeepAlive(%q) errored: %v", input, err)
+		}
+		if string(encoded) != want {
+			t.Fatalf("EncodeOllamaKeepAlive(%q) = %s, want canonical JSON number %s", input, encoded, want)
 		}
 	}
 }

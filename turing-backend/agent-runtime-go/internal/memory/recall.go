@@ -257,15 +257,27 @@ func (r *Recaller) PrepareRecall(
 // text, not about identity — and it is the opposite of the mistake dedupKey
 // avoids, where the row id exists and must be used. A miss costs one duplicated
 // line; it can never surface a wrong answer.
-func inContextKeys(messages []llm.ChatMessage) map[string]int {
+type inContextIndex struct {
+	messageIDs  map[string]bool
+	occurrences map[string]int
+}
+
+func inContextKeys(messages []llm.ChatMessage) *inContextIndex {
 	if len(messages) == 0 {
 		return nil
 	}
-	keys := make(map[string]int, len(messages))
-	for _, message := range messages {
-		keys[inContextKey(message.Role, message.Content)]++
+	index := &inContextIndex{
+		messageIDs:  make(map[string]bool, len(messages)),
+		occurrences: make(map[string]int, len(messages)),
 	}
-	return keys
+	for _, message := range messages {
+		if message.MessageID != "" {
+			index.messageIDs[message.MessageID] = true
+			continue
+		}
+		index.occurrences[inContextKey(message.Role, message.Content)]++
+	}
+	return index
 }
 
 func inContextKey(role string, content string) string {
@@ -326,7 +338,7 @@ type scored struct {
 // inContextKeys); nil means the caller did not say, and the whole current
 // session is assumed present. Budgets are optional here too: a non-positive
 // value takes the package default rather than meaning "none".
-func rank(hits map[string][]Excerpt, currentSessionID string, inContext map[string]int, maxExcerpts int, maxChars int) []Excerpt {
+func rank(hits map[string][]Excerpt, currentSessionID string, inContext *inContextIndex, maxExcerpts int, maxChars int) []Excerpt {
 	if maxExcerpts <= 0 {
 		maxExcerpts = defaultMaxExcerpts
 	}
@@ -382,7 +394,7 @@ func rank(hits map[string][]Excerpt, currentSessionID string, inContext map[stri
 func rankPrepared(
 	prepared *preparedRecallHits,
 	currentSessionID string,
-	inContext map[string]int,
+	inContext *inContextIndex,
 	maxExcerpts int,
 	maxChars int,
 ) []Excerpt {
@@ -430,7 +442,7 @@ func rankPrepared(
 func suppressedCurrentSessionCandidates(
 	candidates map[string]preparedRecallCandidate,
 	currentSessionID string,
-	inContext map[string]int,
+	inContext *inContextIndex,
 ) map[string]bool {
 	suppressed := make(map[string]bool)
 	if inContext == nil {
@@ -451,13 +463,17 @@ func suppressedCurrentSessionCandidates(
 		if candidate.excerpt.SessionID != currentSessionID {
 			continue
 		}
+		if candidate.excerpt.MessageID != "" && inContext.messageIDs[candidate.excerpt.MessageID] {
+			suppressed[key] = true
+			continue
+		}
 		byContextKey[candidate.contextKey] = append(byContextKey[candidate.contextKey], keyedCandidate{
 			key:       key,
 			candidate: candidate,
 		})
 	}
 	for contextKey, group := range byContextKey {
-		count := inContext[contextKey]
+		count := inContext.occurrences[contextKey]
 		if count <= 0 {
 			continue
 		}
