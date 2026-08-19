@@ -687,7 +687,25 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 	defer connectedWorker.updateMu.Unlock()
 	assignment, ok := connectedWorker.assignmentForRun(assigned.RunId)
 	if !ok {
-		return repository.ErrAssignmentFenced
+		// The command was queued while this worker held the run; by the time it
+		// reached the front of the queue the assignment had been released —
+		// terminalized, requeued, or reconciled by another path. Handing the
+		// worker a run it no longer owns would be wrong, so the command is
+		// dropped and the loop continues.
+		//
+		// This used to return ErrAssignmentFenced, which the caller turns into
+		// a stream error: one command that merely arrived too late tore down
+		// the whole connection, costing the worker every OTHER assignment it
+		// was holding and orphaning their runs until the reaper noticed. That
+		// is what made TestTerminalizedAssignedRunReconcilesMatchingLateTerminal
+		// Update fail intermittently under CI's slower scheduling — the late
+		// terminal update released the run while its own dispatch was still in
+		// flight.
+		//
+		// Nothing is lost by dropping it: handleUndeliveredCommand only acts on
+		// tool-policy decisions, and whichever path released the assignment
+		// already owns requeueing or terminalizing the run.
+		return nil
 	}
 	repositoryAssignment := repository.Assignment{
 		JobID: assignment.jobID, RunID: assignment.runID, WorkerID: workerID, AttemptID: assignment.attemptID,
