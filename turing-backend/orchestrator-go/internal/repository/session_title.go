@@ -66,15 +66,12 @@ func DeriveSessionTitle(content string) string {
 // in SQL, so a title assigned here is byte-identical to one assigned live.
 func (r *Repository) BackfillSessionTitles(ctx context.Context) (int, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT s.id, (
-			SELECT m.content
-			FROM messages m
-			WHERE m.session_id = s.id AND m.role = 'user'
-			ORDER BY m.sequence
-			LIMIT 1
-		)
+		SELECT s.id, m.content
 		FROM sessions s
+		LEFT JOIN messages m
+			ON m.session_id = s.id AND m.role = 'user'
 		WHERE s.title_origin = 'unset'
+		ORDER BY s.id, m.sequence
 	`)
 	if err != nil {
 		return 0, err
@@ -88,7 +85,7 @@ func (r *Repository) BackfillSessionTitles(ctx context.Context) (int, error) {
 		if err := rows.Scan(&sessionID, &content); err != nil {
 			return 0, err
 		}
-		if !content.Valid {
+		if _, found := titles[sessionID]; found || !content.Valid {
 			// Never had a user message, so there is nothing to name it after.
 			// It keeps showing the client's placeholder, which is accurate.
 			continue

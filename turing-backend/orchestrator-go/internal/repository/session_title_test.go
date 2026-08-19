@@ -491,6 +491,22 @@ func TestBackfillSessionTitlesDoesNotOverwriteExplicitNewChatTitle(t *testing.T)
 	assertTitle(t, ctx, repo, session.SessionID, "New chat")
 }
 
+func TestBackfillSessionTitlesSkipsWhitespaceOnlyUserTurns(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session := seedSession(t, ctx, repo, "New chat", " \n\t ")
+	if _, err := repo.db.ExecContext(ctx,
+		`INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at) VALUES (?, ?, 'user', ?, 'text', 2, ?)`,
+		ids.New("msg"), session, "First usable turn", now()); err != nil {
+		t.Fatalf("insert second message: %v", err)
+	}
+
+	if _, err := repo.BackfillSessionTitles(ctx); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+
+	assertTitle(t, ctx, repo, session, "First usable turn")
+}
+
 // Startup runs this every time, so a second pass must be a no-op rather than
 // re-deriving titles over ones already assigned.
 func TestBackfillSessionTitlesIsIdempotent(t *testing.T) {

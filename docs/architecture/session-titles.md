@@ -13,9 +13,10 @@ When a user message is accepted, the repository updates the session in the same
 SQLite transaction that inserts the message, creates the assistant placeholder,
 queues the run, and appends its events. A title is assigned only when the stored
 `title_origin` is `unset`. Creating a session with any non-empty explicit title
-sets the origin to `explicit`; assignment from a message changes it to `derived`.
-The text itself is never used as a sentinel, so an explicit or derived title
-whose words are exactly `New chat` is not replaced by a later message.
+sets the origin to `explicit`; this includes the named conversations created for
+automations. Assignment from a message changes it to `derived`. The text itself
+is never used as a sentinel, so an explicit or derived title whose words are
+exactly `New chat` is not replaced by a later message.
 
 `DeriveSessionTitle` applies one deterministic policy:
 
@@ -51,10 +52,13 @@ Flutter maps protocol event
 `updatedAt` to its local session list, and sorts by that durable recency key. A
 replayed older event cannot reorder the list. An update for a session outside
 the loaded page inserts it, and a concurrent older `ListSessions` response is
-merged without overwriting newer event state. Flutter does not call
-`ListSessions` after sending a message. Search group headings load the same
-stored session title, so the sidebar and search do not invent separate names for
-one conversation.
+merged without overwriting newer event state. Locally created sessions enter
+the same snapshot journal before their refresh starts, and older refresh
+responses are discarded by request generation. Locally deleted IDs remain
+tombstoned for the shell lifetime because omission from the 50-row page cannot
+prove absence. Flutter does not call `ListSessions` after sending a message.
+Search group headings load the same stored session title, so the sidebar and
+search do not invent separate names for one conversation.
 
 Whitespace-only messages still produce a session update because they touch
 `updated_at`, but their empty title snapshot keeps the `New chat` display
@@ -69,15 +73,22 @@ literal `New chat` rows as `unset`; other existing non-empty titles become
 
 At startup, before gRPC servers accept subscriptions, the orchestrator scans
 only sessions whose origin is `unset`. It derives each title from that session's
-first stored user message using the same function as the live path and marks the
-result `derived`. The pass is idempotent, leaves explicitly named and
-never-started sessions alone, and emits no live event because no subscriber can
-exist yet. Startup fails if this compatibility pass cannot complete rather than
-serving a partially repaired session list.
+first usable stored user message using the same function as the live path,
+skipping empty or whitespace-only turns, and marks the result `derived`. The
+pass is idempotent, leaves explicitly named and never-started sessions alone,
+and emits no live event because no subscriber can exist yet. Startup fails if
+this compatibility pass cannot complete rather than serving a partially
+repaired session list.
 
 Deleting a session deletes its title with the session row. Existing foreign-key
 cascades also remove its messages, jobs, runs, and durable `session.updated`
 events, so neither search nor event replay can recover the deleted title.
+
+`session.updated` is not a deletion event. A deletion performed by this Flutter
+shell is removed locally and guarded against buffered stale updates. As already
+documented in `docs/VISION.md`, a different subscribed client is not notified
+when another client deletes the session; cross-client deletion propagation is a
+separate existing protocol gap.
 
 ## Configuration and limits
 

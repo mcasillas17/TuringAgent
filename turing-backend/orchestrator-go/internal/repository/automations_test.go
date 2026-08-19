@@ -242,6 +242,18 @@ func TestClaimDueAutomationFiresWhenDueAndNotBefore(t *testing.T) {
 		t.Fatalf("session update sequence %d, want before queued event %d",
 			fire.SessionUpdatedEvent.Sequence, fire.QueuedEvent.Sequence)
 	}
+	var title, titleOrigin string
+	if err := repo.db.QueryRowContext(ctx,
+		`SELECT title, title_origin FROM sessions WHERE id = ?`,
+		fire.SessionID).Scan(&title, &titleOrigin); err != nil {
+		t.Fatalf("read automation session: %v", err)
+	}
+	if title != "Digest" || titleOrigin != "explicit" {
+		t.Fatalf("automation session title = %q origin = %q, want explicit Digest", title, titleOrigin)
+	}
+	if payload := decodeSessionUpdatedPayload(t, fire.SessionUpdatedEvent); payload.Title != "Digest" {
+		t.Fatalf("session.updated title = %q, want automation name", payload.Title)
+	}
 	messages, err := repo.ListMessages(ctx, fire.SessionID, 10)
 	if err != nil {
 		t.Fatal(err)

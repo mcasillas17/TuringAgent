@@ -100,8 +100,9 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   bool _creating = false;
   final Set<String> _deleting = {};
   final Set<String> _locallyDeletedSessionIds = {};
-  final Map<String, _SessionEventSnapshot> _sessionEventSnapshots = {};
-  int _sessionUpdateRevision = 0;
+  final Map<String, _SessionSnapshot> _sessionSnapshots = {};
+  int _sessionStateRevision = 0;
+  int _sessionRefreshRequest = 0;
 
   @override
   void initState() {
@@ -118,17 +119,18 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   }
 
   Future<void> _refreshSessions() async {
-    final startingRevision = _sessionUpdateRevision;
+    final request = ++_sessionRefreshRequest;
+    final startingRevision = _sessionStateRevision;
     try {
       final sessions = await widget.apiClient.listSessions();
-      if (!mounted) return;
+      if (!mounted || request != _sessionRefreshRequest) return;
       setState(() {
         _sessions = _reconcileSessionRefresh(sessions, startingRevision);
         _sessionsLoading = false;
         _sessionsFailed = false;
       });
     } on Exception {
-      if (!mounted) return;
+      if (!mounted || request != _sessionRefreshRequest) return;
       // The list is left as it was: a failed refresh should not blank out
       // conversations that are still perfectly valid on screen.
       setState(() {
@@ -167,11 +169,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
         _insertSessionByRecency(next, updated);
       }
       _sessions = next;
-      _sessionUpdateRevision++;
-      _sessionEventSnapshots[event.sessionId] = _SessionEventSnapshot(
-        session: updated,
-        revision: _sessionUpdateRevision,
-      );
+      _recordSessionSnapshot(updated);
     });
   }
 
@@ -194,21 +192,15 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     int startingRevision,
   ) {
     final refreshedSessions = refreshed.toList();
-    final refreshedIDs = refreshedSessions
-        .map((session) => session.sessionId)
-        .toSet();
-    _locallyDeletedSessionIds.removeWhere(
-      (sessionID) => !refreshedIDs.contains(sessionID),
-    );
     final merged = refreshedSessions
         .where(
           (session) => !_locallyDeletedSessionIds.contains(session.sessionId),
         )
         .toList();
-    final concurrentSnapshots = _sessionEventSnapshots.values
+    final concurrentSnapshots = _sessionSnapshots.values
         .where((snapshot) => snapshot.revision > startingRevision)
         .toList();
-    _sessionEventSnapshots.removeWhere(
+    _sessionSnapshots.removeWhere(
       (_, snapshot) => snapshot.revision <= startingRevision,
     );
     for (final snapshot in concurrentSnapshots) {
@@ -229,6 +221,14 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       }
     }
     return merged;
+  }
+
+  void _recordSessionSnapshot(Session session) {
+    _sessionStateRevision++;
+    _sessionSnapshots[session.sessionId] = _SessionSnapshot(
+      session: session,
+      revision: _sessionStateRevision,
+    );
   }
 
   /// Null when the active conversation has not been named yet, or is not in
@@ -268,8 +268,17 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       // in a title that is still empty.
       final result = await widget.apiClient.createSession();
       if (!mounted) return;
+      final session = Session(
+        sessionId: result['sessionId'] as String,
+        title: null,
+        updatedAt: DateTime.parse(result['createdAt'] as String).toUtc(),
+      );
       setState(() {
-        _activeSessionId = result['sessionId'] as String?;
+        final sessions = List<Session>.of(_sessions);
+        _insertSessionByRecency(sessions, session);
+        _sessions = sessions;
+        _recordSessionSnapshot(session);
+        _activeSessionId = session.sessionId;
         _destination = ShellDestination.chats;
         _creating = false;
       });
@@ -310,7 +319,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       if (!mounted) return;
       setState(() {
         _locallyDeletedSessionIds.add(session.sessionId);
-        _sessionEventSnapshots.remove(session.sessionId);
+        _sessionSnapshots.remove(session.sessionId);
         _sessions = _sessions
             .where((candidate) => candidate.sessionId != session.sessionId)
             .toList();
@@ -1049,8 +1058,8 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-class _SessionEventSnapshot {
-  const _SessionEventSnapshot({required this.session, required this.revision});
+class _SessionSnapshot {
+  const _SessionSnapshot({required this.session, required this.revision});
 
   final Session session;
   final int revision;

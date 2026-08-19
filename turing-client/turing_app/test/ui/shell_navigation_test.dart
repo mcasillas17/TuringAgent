@@ -576,6 +576,78 @@ void main() {
         reason: 'the older response is merged rather than discarded wholesale',
       );
     });
+
+    testWidgets('a new untitled session survives an older list response', (
+      tester,
+    ) async {
+      final api = _FakeApi()..addCreatedSessionToList = true;
+      final staleSessions = List<Session>.of(api.sessions);
+      final delayedList = Completer<List<Session>>();
+      api.nextListSessions = delayedList;
+      tester.view.physicalSize = _desktop;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResponsiveShell(
+            apiClient: api,
+            eventSourceFactory: () => _FakeEventSource(),
+            authStorage: _FakeAuthStorage(),
+          ),
+        ),
+      );
+      for (var i = 0; i < 5; i++) {
+        await tester.pump();
+      }
+
+      await tester.tap(find.text('New chat').first);
+      for (var i = 0; i < 5; i++) {
+        await tester.pump();
+      }
+      delayedList.complete(staleSessions);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byTooltip('Delete chat'),
+        findsOneWidget,
+        reason: 'the active new session remains present in the sidebar',
+      );
+    });
+
+    testWidgets('a later stale page does not resurrect a deleted session', (
+      tester,
+    ) async {
+      final deleted = Session(
+        sessionId: 'sess_deleted',
+        title: 'Delete me',
+        updatedAt: DateTime.utc(2026, 5, 10),
+      );
+      final api = _FakeApi()
+        ..sessions = [deleted]
+        ..removeDeletedSessionFromList = true;
+      await _pumpShell(tester, api: api, size: _desktop);
+
+      await tester.tap(find.text('Delete me'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Delete chat'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+      expect(find.text('Delete me'), findsNothing);
+
+      api
+        ..sessions = [deleted]
+        ..addCreatedSessionToList = true;
+      await tester.tap(find.text('New chat').first);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Delete me'),
+        findsNothing,
+        reason: 'page omission does not expire a local deletion tombstone',
+      );
+    });
   });
 
   group('compact layout', () {
@@ -950,6 +1022,8 @@ class _FakeApi with NoIntegrationsApi, NoAutomationsApi implements TuringApi {
   final List<String?> createSessionTitles = [];
   final List<String> sentMessages = [];
   Completer<List<Session>>? nextListSessions;
+  bool addCreatedSessionToList = false;
+  bool removeDeletedSessionFromList = false;
 
   int listSessionsCalls = 0;
 
@@ -1159,6 +1233,16 @@ class _FakeApi with NoIntegrationsApi, NoAutomationsApi implements TuringApi {
   @override
   Future<Map<String, dynamic>> createSession({String? title}) async {
     createSessionTitles.add(title);
+    if (addCreatedSessionToList) {
+      sessions = [
+        Session(
+          sessionId: 'sess_new',
+          title: title,
+          updatedAt: DateTime.utc(2026, 5, 10),
+        ),
+        ...sessions,
+      ];
+    }
     return {'sessionId': 'sess_new', 'createdAt': '2026-05-10T00:00:00.000Z'};
   }
 
@@ -1173,7 +1257,13 @@ class _FakeApi with NoIntegrationsApi, NoAutomationsApi implements TuringApi {
   }
 
   @override
-  Future<void> deleteSession({required String sessionId}) async {}
+  Future<void> deleteSession({required String sessionId}) async {
+    if (removeDeletedSessionFromList) {
+      sessions = sessions
+          .where((session) => session.sessionId != sessionId)
+          .toList();
+    }
+  }
 
   @override
   Future<Session> getSession({required String sessionId}) async => Session(

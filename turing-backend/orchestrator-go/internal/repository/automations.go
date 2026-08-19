@@ -576,9 +576,10 @@ func automationSessionTx(ctx context.Context, tx *sql.Tx, automationID string, n
 	}
 	createdAt := now()
 	sessionID := ids.New("sess")
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)`,
-		sessionID, name, createdAt, createdAt); err != nil {
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO sessions (id, title, title_origin, created_at, updated_at)
+		VALUES (?, ?, 'explicit', ?, ?)
+	`, sessionID, name, createdAt, createdAt); err != nil {
 		return "", err
 	}
 	if _, err := tx.ExecContext(ctx,

@@ -371,7 +371,9 @@ Document these exact contracts:
 - Migration `0010_session_title_origin.sql` classifies old null, empty, and placeholder rows as `unset`; new explicit and derived titles record their provenance, so even a valid title equal to `New chat` is preserved.
 - The repository guards assignment by `title_origin` in the enqueue transaction, so later messages and explicit caller titles are preserved.
 - Every accepted message updates `sessions.updated_at` and persists `session.updated` with `title` and RFC3339Nano `updatedAt`; subscribed clients apply it without polling.
-- Startup backfill repairs legacy null, empty, and literal `New chat` rows from their first stored user message. It is idempotent and emits no live event because it runs before servers accept subscriptions.
+- Startup backfill repairs legacy null, empty, and literal `New chat` rows from their first usable stored user message, skipping whitespace-only turns. It is idempotent and emits no live event because it runs before servers accept subscriptions.
+- Automation-created conversations set `title_origin = 'explicit'`, preserving their configured name rather than replacing it with the scheduled prompt.
+- Flutter records locally created sessions in the same snapshot journal, ignores older refresh generations, and retains local deletion tombstones for the shell lifetime because page omission cannot prove deletion.
 - Session deletion removes the session row, title, messages, and title events through existing cascades.
 - There is no title-related configuration knob. The 60-rune policy is a code-level UX contract.
 - The rune boundary is not a grapheme-cluster boundary; a combining sequence or emoji ZWJ sequence exactly at the cutoff can end oddly.
