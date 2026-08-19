@@ -32,6 +32,34 @@ type oscillatingRecaller struct {
 	calls int
 }
 
+type preparedCountingRecaller struct {
+	prepareCalls int
+	directCalls  int
+	rankCalls    int
+}
+
+func (r *preparedCountingRecaller) Recall(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ []llm.ChatMessage,
+) (llm.ChatMessage, bool) {
+	r.directCalls++
+	return llm.ChatMessage{Role: "system", Content: "direct recall"}, true
+}
+
+func (r *preparedCountingRecaller) PrepareRecall(
+	_ context.Context,
+	_ string,
+	_ string,
+) func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool) {
+	r.prepareCalls++
+	return func(_ context.Context, _ []llm.ChatMessage) (llm.ChatMessage, bool) {
+		r.rankCalls++
+		return llm.ChatMessage{Role: "system", Content: "prepared recall"}, true
+	}
+}
+
 func (r *oscillatingRecaller) Recall(
 	_ context.Context,
 	_ string,
@@ -198,6 +226,52 @@ func TestExecuteBoundsOscillatingRecallConvergence(t *testing.T) {
 	}
 	if failure := findRunFailed(updates); failure != nil {
 		t.Fatalf("oscillating recall failed the run: %#v", failure)
+	}
+}
+
+func TestExecutePreparesRecallSearchOnceAcrossToolIterations(t *testing.T) {
+	provider := &budgetCapturingProvider{
+		window: 2048,
+		responses: [][]llm.StreamEvent{
+			{{Type: "tool_call", ToolCalls: []llm.ToolCall{{
+				ID: "call_1", Name: "system.read", Arguments: map[string]any{},
+			}}}},
+			{{Type: "tool_call", ToolCalls: []llm.ToolCall{{
+				ID: "call_2", Name: "system.read", Arguments: map[string]any{},
+			}}}},
+			{{Type: "delta", Text: "done"}, {Type: "completed", FinishReason: "stop"}},
+		},
+	}
+	recaller := &preparedCountingRecaller{}
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{"name": "system.read"}},
+		result:      map[string]any{"ok": true},
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
+		},
+		fakeMessageClient{},
+		&GeneralAssistantTools{
+			Recall:    recaller,
+			SystemMCP: client,
+			Runner:    &tools.Runner{PostBeacon: allowToolCall},
+		},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	if len(provider.requests) != 3 {
+		t.Fatalf("provider requests = %d, want 3", len(provider.requests))
+	}
+	if recaller.prepareCalls != 1 || recaller.directCalls != 0 {
+		t.Fatalf("prepare/direct recall calls = %d/%d, want 1/0", recaller.prepareCalls, recaller.directCalls)
+	}
+	if recaller.rankCalls < 3 {
+		t.Fatalf("rank calls = %d, want context-dependent ranking for each dispatch", recaller.rankCalls)
+	}
+	if failure := findRunFailed(updates); failure != nil {
+		t.Fatalf("prepared recall run failed: %#v", failure)
 	}
 }
 

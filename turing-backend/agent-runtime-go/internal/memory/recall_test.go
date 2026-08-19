@@ -66,6 +66,45 @@ func TestTermsDropsStopwordsAndShortWordsPreservingOrder(t *testing.T) {
 	}
 }
 
+func TestPrepareRecallSearchesOnceAndReranksForEachAdmittedContext(t *testing.T) {
+	current := Excerpt{
+		MessageID: "current",
+		SessionID: "session-current",
+		Role:      "user",
+		Content:   "staging cluster detail from this session",
+		CreatedAt: at(2),
+	}
+	earlier := Excerpt{
+		MessageID: "earlier",
+		SessionID: "session-earlier",
+		Role:      "assistant",
+		Content:   "staging cluster detail from earlier",
+		CreatedAt: at(1),
+	}
+	search := &fakeSearcher{byTerm: map[string][]Excerpt{
+		"staging": {current, earlier},
+	}}
+	recaller := NewRecaller(search)
+
+	prepared := recaller.PrepareRecall(context.Background(), "session-current", "staging")
+	withCurrent, ok := prepared(context.Background(), []llm.ChatMessage{{
+		Role: "user", Content: current.Content,
+	}})
+	if !ok || strings.Contains(withCurrent.Content, current.Content) ||
+		!strings.Contains(withCurrent.Content, earlier.Content) {
+		t.Fatalf("prepared recall with current context = %#v", withCurrent)
+	}
+	withoutCurrent, ok := prepared(context.Background(), []llm.ChatMessage{{
+		Role: "user", Content: "different admitted message",
+	}})
+	if !ok || !strings.Contains(withoutCurrent.Content, current.Content) {
+		t.Fatalf("prepared recall without current context = %#v", withoutCurrent)
+	}
+	if len(search.queries) != 1 {
+		t.Fatalf("search queries = %v, want one prepared search", search.queries)
+	}
+}
+
 func TestTermsDedupesAndCaps(t *testing.T) {
 	if got := terms("deploy deploy DEPLOY"); len(got) != 1 || got[0] != "deploy" {
 		t.Fatalf("terms did not dedupe case-insensitively: %v", got)

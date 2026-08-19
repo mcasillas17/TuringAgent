@@ -138,12 +138,25 @@ func NewRecaller(search Searcher) *Recaller {
 // It never returns an error. Recall is an enhancement, and a backend that is
 // down, slow, or empty must degrade to "no block" rather than fail the turn.
 func (r *Recaller) Recall(ctx context.Context, currentSessionID string, userText string, inContext []llm.ChatMessage) (llm.ChatMessage, bool) {
-	if r == nil || r.Search == nil {
+	return r.PrepareRecall(ctx, currentSessionID, userText)(ctx, inContext)
+}
+
+// PrepareRecall performs the query work once and returns a cheap rank/render
+// function for the admitted context of each model dispatch in the same run.
+func (r *Recaller) PrepareRecall(
+	ctx context.Context,
+	currentSessionID string,
+	userText string,
+) func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool) {
+	none := func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool) {
 		return llm.ChatMessage{}, false
+	}
+	if r == nil || r.Search == nil {
+		return none
 	}
 	queries := terms(userText)
 	if len(queries) == 0 {
-		return llm.ChatMessage{}, false
+		return none
 	}
 	timeout := r.Timeout
 	if timeout <= 0 {
@@ -171,9 +184,14 @@ func (r *Recaller) Recall(ctx context.Context, currentSessionID string, userText
 		hits[query] = found
 	}
 
-	// rank fills in a default for any budget the caller left unset.
-	excerpts := rank(hits, currentSessionID, inContextKeys(inContext), r.MaxExcerpts, r.MaxChars)
-	return Render(excerpts)
+	return func(rankCtx context.Context, inContext []llm.ChatMessage) (llm.ChatMessage, bool) {
+		if rankCtx.Err() != nil {
+			return llm.ChatMessage{}, false
+		}
+		// rank fills in a default for any budget the caller left unset.
+		excerpts := rank(hits, currentSessionID, inContextKeys(inContext), r.MaxExcerpts, r.MaxChars)
+		return Render(excerpts)
+	}
 }
 
 // inContextKeys indexes the messages the caller has already placed in the

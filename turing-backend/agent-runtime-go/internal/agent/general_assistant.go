@@ -32,6 +32,14 @@ type ContextRecaller interface {
 	Recall(ctx context.Context, sessionID string, userText string, inContext []llm.ChatMessage) (llm.ChatMessage, bool)
 }
 
+type contextRecallPreparer interface {
+	PrepareRecall(
+		ctx context.Context,
+		sessionID string,
+		userText string,
+	) func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool)
+}
+
 type GeneralAssistantTools struct {
 	SystemMCP          ToolLister
 	FilesMCP           ToolLister
@@ -207,6 +215,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		skillMessage = &system
 	}
 	toolDefinitions := registry.Definitions()
+	recallForContext := a.prepareRecallForRun(ctx, job)
 	var content strings.Builder
 	toolCallCount := 0
 	successfulToolSideEffect := false
@@ -227,6 +236,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			historyMessages,
 			liveMessages,
 			toolDefinitions,
+			recallForContext,
 		)
 		if err != nil {
 			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
@@ -457,6 +467,7 @@ func (a *GeneralAssistant) buildBudgetedContextWithRecall(
 	historyMessages []llm.ChatMessage,
 	liveMessages []llm.ChatMessage,
 	toolDefinitions []llm.ToolDefinition,
+	recallForContext func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool),
 ) (budgetedContext, *llm.ChatMessage, error) {
 	baseInput := contextInput{
 		skills:  skillMessage,
@@ -464,7 +475,7 @@ func (a *GeneralAssistant) buildBudgetedContextWithRecall(
 		live:    liveMessages,
 	}
 	budgeted, err := buildBudgetedContext(provider, job.GetModel(), baseInput, toolDefinitions)
-	if err != nil || a.recall == nil || job.GetExternalAgent() != nil {
+	if err != nil || recallForContext == nil {
 		return budgeted, nil, err
 	}
 
@@ -476,10 +487,8 @@ func (a *GeneralAssistant) buildBudgetedContextWithRecall(
 	defer cancelConvergence()
 	for range maxRecallConvergencePasses {
 		var recallMessage *llm.ChatMessage
-		if block, ok := a.recall.Recall(
+		if block, ok := recallForContext(
 			convergenceCtx,
-			job.GetSessionId(),
-			job.GetUserText(),
 			budgeted.Request.Messages,
 		); ok {
 			recallMessage = &block
@@ -511,10 +520,8 @@ func (a *GeneralAssistant) buildBudgetedContextWithRecall(
 		return budgetedContext{}, nil, err
 	}
 	var recallMessage *llm.ChatMessage
-	if block, ok := a.recall.Recall(
+	if block, ok := recallForContext(
 		ctx,
-		job.GetSessionId(),
-		job.GetUserText(),
 		broad.Request.Messages,
 	); ok {
 		recallMessage = &block
@@ -522,6 +529,26 @@ func (a *GeneralAssistant) buildBudgetedContextWithRecall(
 	baseInput.recall = recallMessage
 	final, err := buildBudgetedContext(provider, job.GetModel(), baseInput, toolDefinitions)
 	return final, recallMessage, err
+}
+
+func (a *GeneralAssistant) prepareRecallForRun(
+	ctx context.Context,
+	job *turingv1.AgentJob,
+) func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool) {
+	if a.recall == nil || job.GetExternalAgent() != nil {
+		return nil
+	}
+	if preparer, ok := a.recall.(contextRecallPreparer); ok {
+		return preparer.PrepareRecall(ctx, job.GetSessionId(), job.GetUserText())
+	}
+	return func(callCtx context.Context, inContext []llm.ChatMessage) (llm.ChatMessage, bool) {
+		return a.recall.Recall(
+			callCtx,
+			job.GetSessionId(),
+			job.GetUserText(),
+			inContext,
+		)
+	}
 }
 
 func maxOutputTokensSetting(provider llm.Provider) string {
