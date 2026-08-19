@@ -37,6 +37,27 @@ func TestGitignoreCoversRuntimeDatabaseBackupDirectories(t *testing.T) {
 	}
 }
 
+// git applies the last matching rule, so only a negation placed after the runtime
+// backup patterns can re-admit them. Reject those by position instead of guessing
+// which globs would match: .gitignore's existing negations (.env.example, .yarn/*)
+// all precede the block and are unaffected. This closes the same-file gap that
+// finitely-sampled check-ignore assertions cannot.
+func TestGitignoreAddsNoNegationAfterRuntimeBackupRules(t *testing.T) {
+	reached := false
+	for _, line := range ignoreFileOrderedLines(t, ".gitignore") {
+		if !reached {
+			reached = runtimeBackupComponent(line) != ""
+			continue
+		}
+		if strings.HasPrefix(line, "!") {
+			t.Errorf(".gitignore negation %q follows the runtime database backup rules and can re-admit them", line)
+		}
+	}
+	if !reached {
+		t.Fatal(".gitignore has no runtime database backup rules to order against")
+	}
+}
+
 // Docker's matcher is not a dependency of this module, so there is no way here to
 // evaluate whether a given negation would re-admit a backup directory. .dockerignore
 // carries no negations today, so reject them outright: a future one has to be
@@ -68,9 +89,11 @@ func TestRuntimeDatabaseBackupPathsAreNotTracked(t *testing.T) {
 	}
 }
 
-// A negation anywhere in .gitignore is caught here rather than by scanning the
-// file for "!" lines: git evaluates the full ordered rule chain, so this covers
-// every form a negation could take, including globs like "!data.?ackup-*".
+// Negations are checked by git itself rather than by scanning .gitignore for "!"
+// lines, so real ordered rule precedence and glob semantics apply, including to
+// nested .gitignore files along each path. This covers the paths it samples; the
+// exact, unsampled backstop against anything slipping through is
+// TestRuntimeDatabaseBackupPathsAreNotTracked.
 func TestRuntimeDatabaseBackupPathsAreGitIgnored(t *testing.T) {
 	for _, path := range []string{
 		// The paths this containment work removed from the repository tip.
@@ -126,6 +149,9 @@ func TestTrackedPathScanDetectsNonASCIIBackupDirectory(t *testing.T) {
 		}
 	}
 	runGit("init", "-q")
+	// Pin the quoting behaviour this test exists to defeat, so the fixture does
+	// not depend on the developer's or runner's global core.quotePath setting.
+	runGit("config", "core.quotePath", "true")
 
 	backup := filepath.Join(repo, "data.backup-\u00e9")
 	if err := os.MkdirAll(backup, 0o755); err != nil {
@@ -169,14 +195,25 @@ func runtimeBackupComponent(path string) string {
 // ignore file at the repository root, as a set.
 func ignoreFileLines(t *testing.T, name string) map[string]bool {
 	t.Helper()
+	lines := make(map[string]bool)
+	for _, line := range ignoreFileOrderedLines(t, name) {
+		lines[line] = true
+	}
+	return lines
+}
+
+// ignoreFileOrderedLines returns the same lines in file order, which is what rule
+// precedence depends on.
+func ignoreFileOrderedLines(t *testing.T, name string) []string {
+	t.Helper()
 	data, err := os.ReadFile(filepath.Join(repoRootFromTests, name))
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := make(map[string]bool)
+	var lines []string
 	for _, line := range strings.Split(string(data), "\n") {
 		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
-			lines[line] = true
+			lines = append(lines, line)
 		}
 	}
 	return lines
