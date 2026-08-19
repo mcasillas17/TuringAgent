@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -36,7 +37,7 @@ func TestConsumeApprovalAfterExpiryTerminalizesVerifiedAuthorization(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ApproveApprovalWithEvent(ctx, approval.ApprovalID, "verified-before-expiry", FormatTimestamp(expiresAt.Add(-time.Nanosecond))); err != nil {
+	if _, err := repo.ApproveApprovalWithEvent(ctx, approval.ApprovalID, "verified-before-expiry", sql.NullString{}, FormatTimestamp(expiresAt.Add(-time.Nanosecond))); err != nil {
 		t.Fatal(err)
 	}
 

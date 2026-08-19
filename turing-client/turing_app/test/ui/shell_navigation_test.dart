@@ -336,7 +336,7 @@ void main() {
       expect(find.text('Untitled chat'), findsNothing);
     });
 
-    testWidgets('sending a message re-reads the renamed conversation list', (
+    testWidgets('sending a message does not poll the conversation list', (
       tester,
     ) async {
       final api = _FakeApi()
@@ -353,17 +353,6 @@ void main() {
       // sidebar's button and the untitled row itself.
       await tester.tap(find.text('New chat').last);
       await tester.pumpAndSettle();
-      expect(find.text('New chat'), findsNWidgets(2));
-
-      // The backend names the session inside the same transaction that queues
-      // the run, so by the time sendMessage resolves the list is stale.
-      api.sessions = [
-        Session(
-          sessionId: 'sess_fresh',
-          title: 'What is in the sandbox?',
-          updatedAt: DateTime.utc(2026, 5, 11),
-        ),
-      ];
       final callsBefore = api.listSessionsCalls;
 
       await tester.enterText(
@@ -375,16 +364,674 @@ void main() {
 
       expect(
         api.listSessionsCalls,
-        greaterThan(callsBefore),
-        reason: 'sending re-reads the list the backend has just renamed',
+        callsBefore,
+        reason: 'the durable session.updated event owns list refreshes',
       );
-      // The count, not the text: the message bubble renders the same string,
-      // so asserting the title appears would pass even if the sidebar never
-      // refreshed. Only the row losing its placeholder proves it did.
+    });
+
+    testWidgets('a session update event renames and reorders the row locally', (
+      tester,
+    ) async {
+      final source = _FakeEventSource();
+      final api = _FakeApi()
+        ..sessions = [
+          Session(
+            sessionId: 'sess_other',
+            title: 'Other chat',
+            updatedAt: DateTime.utc(2026, 5, 11),
+          ),
+          Session(
+            sessionId: 'sess_fresh',
+            title: null,
+            updatedAt: DateTime.utc(2026, 5, 10),
+          ),
+        ];
+      await _pumpShell(
+        tester,
+        api: api,
+        size: _desktop,
+        eventSourceFactory: () => source,
+      );
+      await tester.tap(find.text('New chat').last);
+      await tester.pumpAndSettle();
+      final callsBefore = api.listSessionsCalls;
+
+      source.add(
+        TuringEvent(
+          eventId: 'evt_session_updated',
+          sessionId: 'sess_fresh',
+          traceId: 'trace_1',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 8, 18, 20),
+          payload: const {
+            'title': 'What is in the sandbox?',
+            'updatedAt': '2026-08-18T20:00:00Z',
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('What is in the sandbox?'), findsOneWidget);
       expect(
-        find.text('New chat'),
+        tester.getTopLeft(find.text('What is in the sandbox?')).dy,
+        lessThan(tester.getTopLeft(find.text('Other chat')).dy),
+        reason: 'the updated conversation becomes the most recent row',
+      );
+      expect(
+        api.listSessionsCalls,
+        callsBefore,
+        reason: 'the event payload is authoritative; no list poll is needed',
+      );
+    });
+
+    testWidgets('a replayed older session update does not reorder the list', (
+      tester,
+    ) async {
+      final source = _FakeEventSource();
+      final api = _FakeApi()
+        ..sessions = [
+          Session(
+            sessionId: 'sess_recent',
+            title: 'Recent chat',
+            updatedAt: DateTime.utc(2026, 5, 11),
+          ),
+          Session(
+            sessionId: 'sess_old',
+            title: 'Old chat',
+            updatedAt: DateTime.utc(2026, 5, 10),
+          ),
+        ];
+      await _pumpShell(
+        tester,
+        api: api,
+        size: _desktop,
+        eventSourceFactory: () => source,
+      );
+      await tester.tap(find.text('Old chat'));
+      await tester.pumpAndSettle();
+
+      source.add(
+        TuringEvent(
+          eventId: 'evt_replayed_session_updated',
+          sessionId: 'sess_old',
+          traceId: 'trace_old',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 5, 10),
+          payload: const {
+            'title': 'Old chat',
+            'updatedAt': '2026-05-10T00:00:00Z',
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.getTopLeft(find.text('Recent chat')).dy,
+        lessThan(tester.getTopLeft(find.text('Old chat')).dy),
+        reason: 'durable activity time, not replay delivery, owns ordering',
+      );
+    });
+
+    testWidgets('a session update survives an older list response', (
+      tester,
+    ) async {
+      final api = _FakeApi();
+      final sources = <_FakeEventSource>[];
+      await _pumpShell(
+        tester,
+        api: api,
+        size: _desktop,
+        eventSourceFactory: () {
+          final source = _FakeEventSource();
+          sources.add(source);
+          return source;
+        },
+      );
+      final delayedList = Completer<List<Session>>();
+      api.nextListSessions = delayedList;
+
+      await tester.tap(find.text('New chat').first);
+      for (var i = 0; i < 5; i++) {
+        await tester.pump();
+      }
+      expect(sources, isNotEmpty);
+      sources.last.add(
+        TuringEvent(
+          eventId: 'evt_new_session_updated',
+          sessionId: 'sess_new',
+          traceId: 'trace_new',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 8, 18, 20),
+          payload: const {
+            'title': 'Brand new conversation',
+            'updatedAt': '2026-08-18T20:00:00Z',
+          },
+        ),
+      );
+      await tester.pump();
+
+      delayedList.complete(api.sessions);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Brand new conversation'), findsOneWidget);
+      expect(
+        find.text('Existing chat'),
         findsOneWidget,
-        reason: 'only the sidebar button is left; the row now has a name',
+        reason: 'the older response is merged rather than discarded wholesale',
+      );
+    });
+
+    testWidgets('a new untitled session survives an older list response', (
+      tester,
+    ) async {
+      final api = _FakeApi()..addCreatedSessionToList = true;
+      final staleSessions = List<Session>.of(api.sessions);
+      final delayedList = Completer<List<Session>>();
+      api.nextListSessions = delayedList;
+      tester.view.physicalSize = _desktop;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResponsiveShell(
+            apiClient: api,
+            eventSourceFactory: () => _FakeEventSource(),
+            authStorage: _FakeAuthStorage(),
+          ),
+        ),
+      );
+      for (var i = 0; i < 5; i++) {
+        await tester.pump();
+      }
+
+      await tester.tap(find.text('New chat').first);
+      for (var i = 0; i < 5; i++) {
+        await tester.pump();
+      }
+      delayedList.complete(staleSessions);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byTooltip('Delete chat'),
+        findsOneWidget,
+        reason: 'the active new session remains present in the sidebar',
+      );
+    });
+
+    testWidgets('a local session survives a limited refresh page', (
+      tester,
+    ) async {
+      final api = _FakeApi();
+      await _pumpShell(tester, api: api, size: _desktop);
+      final limitedPage = Completer<List<Session>>();
+      api.nextListSessions = limitedPage;
+
+      await tester.tap(find.text('New chat').first);
+      for (var i = 0; i < 5; i++) {
+        await tester.pump();
+      }
+      limitedPage.complete(api.sessions);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byTooltip('Delete chat'),
+        findsOneWidget,
+        reason: 'page omission does not discard a retained local snapshot',
+      );
+    });
+
+    testWidgets('equal timestamps use the backend session id tie-breaker', (
+      tester,
+    ) async {
+      final api = _FakeApi();
+      await _pumpShell(tester, api: api, size: _desktop);
+
+      await tester.tap(find.text('New chat').first);
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.getTopLeft(find.text('New chat').last).dy,
+        lessThan(tester.getTopLeft(find.text('Existing chat')).dy),
+        reason: 'sess_new sorts before sess_existing when timestamps tie',
+      );
+    });
+
+    testWidgets('nanoseconds outrank the session id tie-breaker', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..sessions = [
+          Session(
+            sessionId: 'sess_z',
+            title: 'Earlier nanoseconds',
+            updatedAt: DateTime.fromMicrosecondsSinceEpoch(
+              1000000,
+              isUtc: true,
+            ),
+            updatedAtNanoseconds: 1000000100,
+          ),
+        ]
+        ..createdSessionId = 'sess_a'
+        ..createdSessionTimestamp = '1970-01-01T00:00:01.000000900Z';
+      await _pumpShell(tester, api: api, size: _desktop);
+
+      await tester.tap(find.text('New chat').first);
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.getTopLeft(find.text('New chat').last).dy,
+        lessThan(tester.getTopLeft(find.text('Earlier nanoseconds')).dy),
+        reason: '900ns is newer than 100ns despite sess_a sorting below sess_z',
+      );
+    });
+
+    testWidgets('a refresh can remove an externally deleted listed session', (
+      tester,
+    ) async {
+      final source = _FakeEventSource();
+      final api = _FakeApi();
+      await _pumpShell(
+        tester,
+        api: api,
+        size: _desktop,
+        eventSourceFactory: () => source,
+      );
+      await tester.tap(find.text('Existing chat'));
+      await tester.pumpAndSettle();
+      source.add(
+        TuringEvent(
+          eventId: 'evt_existing_updated',
+          sessionId: 'sess_existing',
+          traceId: 'trace_existing',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 5, 11),
+          payload: const {
+            'title': 'Updated existing chat',
+            'updatedAt': '2026-05-11T00:00:00.000000000Z',
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      api
+        ..sessions = []
+        ..addCreatedSessionToList = true;
+      await tester.tap(find.text('New chat').first);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Updated existing chat'),
+        findsNothing,
+        reason:
+            'an observed session snapshot expires when a later page omits it',
+      );
+    });
+
+    testWidgets('a global update adds a non-active session without polling', (
+      tester,
+    ) async {
+      final globalUpdates = _FakeSessionUpdateSource();
+      final api = _FakeApi();
+      await _pumpShell(
+        tester,
+        api: api,
+        size: _desktop,
+        sessionUpdateSourceFactory: () => globalUpdates,
+      );
+      await tester.tap(find.text('Existing chat'));
+      await tester.pumpAndSettle();
+      final callsBefore = api.listSessionsCalls;
+
+      globalUpdates.add(
+        TuringEvent(
+          eventId: 'evt_automation_session',
+          sessionId: 'sess_automation',
+          traceId: 'trace_automation',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 8, 18, 20),
+          payload: const {
+            'title': 'Morning digest',
+            'updatedAt': '2026-08-18T20:00:00.000000000Z',
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Morning digest'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.text('Morning digest')).dy,
+        lessThan(tester.getTopLeft(find.text('Existing chat')).dy),
+      );
+      expect(api.listSessionsCalls, callsBefore);
+    });
+
+    testWidgets(
+      'an unlisted global update expires after a later page omits it',
+      (tester) async {
+        final globalUpdates = _FakeSessionUpdateSource();
+        final api = _FakeApi();
+        await _pumpShell(
+          tester,
+          api: api,
+          size: _desktop,
+          sessionUpdateSourceFactory: () => globalUpdates,
+        );
+        globalUpdates.add(
+          TuringEvent(
+            eventId: 'evt_off_page',
+            sessionId: 'sess_off_page',
+            traceId: 'trace_off_page',
+            sequence: 1,
+            type: 'session.updated',
+            createdAt: DateTime.utc(2026, 8, 18, 20),
+            payload: const {
+              'title': 'Off-page update',
+              'updatedAt': '2026-08-18T20:00:00.000000000Z',
+            },
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Off-page update'), findsOneWidget);
+
+        api.addCreatedSessionToList = true;
+        await tester.tap(find.text('New chat').first);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Off-page update'), findsNothing);
+      },
+    );
+
+    testWidgets('a queued global update after teardown is ignored', (
+      tester,
+    ) async {
+      final events = StreamController<TuringEvent>();
+      addTearDown(events.close);
+      await _pumpShell(
+        tester,
+        api: _FakeApi(),
+        size: _desktop,
+        sessionUpdateSourceFactory: () =>
+            _UncancellableSessionUpdateSource(events.stream),
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      events.add(
+        TuringEvent(
+          eventId: 'evt_after_dispose',
+          sessionId: 'sess_after_dispose',
+          traceId: 'trace_after_dispose',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 8, 18, 20),
+          payload: const {
+            'title': 'Too late',
+            'updatedAt': '2026-08-18T20:00:00.000000000Z',
+          },
+        ),
+      );
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a failed global stream reconnects and resumes updates', (
+      tester,
+    ) async {
+      final sources = <_FakeSessionUpdateSource>[];
+      await _pumpShell(
+        tester,
+        api: _FakeApi(),
+        size: _desktop,
+        sessionUpdateSourceFactory: () {
+          final source = _FakeSessionUpdateSource();
+          sources.add(source);
+          return source;
+        },
+      );
+      expect(sources, hasLength(1));
+
+      sources.single.addError(StateError('connection lost'));
+      await tester.pump(const Duration(seconds: 1));
+      expect(sources, hasLength(2));
+
+      sources.last.add(
+        TuringEvent(
+          eventId: 'evt_after_reconnect',
+          sessionId: 'sess_after_reconnect',
+          traceId: 'trace_after_reconnect',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 8, 18, 20),
+          payload: const {
+            'title': 'After reconnect',
+            'updatedAt': '2026-08-18T20:00:00.000000000Z',
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('After reconnect'), findsOneWidget);
+    });
+
+    testWidgets('chat updates do not reset global reconnect backoff', (
+      tester,
+    ) async {
+      final chatSource = _FakeEventSource();
+      final globalSources = <_FakeSessionUpdateSource>[];
+      await _pumpShell(
+        tester,
+        api: _FakeApi(),
+        size: _desktop,
+        eventSourceFactory: () => chatSource,
+        sessionUpdateSourceFactory: () {
+          final source = _FakeSessionUpdateSource();
+          globalSources.add(source);
+          return source;
+        },
+      );
+      await tester.tap(find.text('Existing chat'));
+      await tester.pumpAndSettle();
+
+      globalSources[0].addError(StateError('first failure'));
+      await tester.pump(const Duration(seconds: 1));
+      expect(globalSources, hasLength(2));
+      globalSources[1].addError(StateError('second failure'));
+      await tester.pump(const Duration(seconds: 2));
+      expect(globalSources, hasLength(3));
+
+      chatSource.add(
+        TuringEvent(
+          eventId: 'evt_chat_update',
+          sessionId: 'sess_existing',
+          traceId: 'trace_chat_update',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 8, 19),
+          payload: const {
+            'title': 'Existing chat',
+            'updatedAt': '2026-08-19T00:00:00.000000000Z',
+          },
+        ),
+      );
+      await tester.pump();
+
+      globalSources[2].addError(StateError('third failure'));
+      await tester.pump(const Duration(seconds: 1));
+      expect(
+        globalSources,
+        hasLength(3),
+        reason: 'the third global retry remains on the four-second backoff',
+      );
+      await tester.pump(const Duration(seconds: 3));
+      expect(globalSources, hasLength(4));
+    });
+
+    testWidgets('replayed updates do not reset global reconnect backoff', (
+      tester,
+    ) async {
+      final globalSources = <_FakeSessionUpdateSource>[];
+      await _pumpShell(
+        tester,
+        api: _FakeApi(),
+        size: _desktop,
+        sessionUpdateSourceFactory: () {
+          final source = _FakeSessionUpdateSource();
+          globalSources.add(source);
+          return source;
+        },
+      );
+
+      globalSources[0].addError(StateError('first failure'));
+      await tester.pump(const Duration(seconds: 1));
+      expect(globalSources, hasLength(2));
+      globalSources[1].add(
+        TuringEvent(
+          eventId: 'evt_replayed_after_reconnect',
+          sessionId: 'sess_existing',
+          traceId: 'trace_replayed_after_reconnect',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 8, 19),
+          payload: const {
+            'title': 'Existing chat',
+            'updatedAt': '2026-08-19T00:00:00.000000000Z',
+          },
+        ),
+      );
+      await tester.pump();
+
+      globalSources[1].addError(StateError('second failure'));
+      await tester.pump(const Duration(seconds: 1));
+      expect(
+        globalSources,
+        hasLength(2),
+        reason: 'a replay snapshot does not restart the backoff at one second',
+      );
+      await tester.pump(const Duration(seconds: 1));
+      expect(globalSources, hasLength(3));
+    });
+
+    testWidgets('a stable global stream resets reconnect backoff', (
+      tester,
+    ) async {
+      final globalSources = <_FakeSessionUpdateSource>[];
+      await _pumpShell(
+        tester,
+        api: _FakeApi(),
+        size: _desktop,
+        sessionUpdateSourceFactory: () {
+          final source = _FakeSessionUpdateSource();
+          globalSources.add(source);
+          return source;
+        },
+      );
+
+      globalSources[0].addError(StateError('first failure'));
+      await tester.pump(const Duration(seconds: 1));
+      expect(globalSources, hasLength(2));
+      await tester.pump(const Duration(seconds: 30));
+
+      globalSources[1].addError(StateError('failure after stable connection'));
+      await tester.pump(const Duration(seconds: 1));
+      expect(
+        globalSources,
+        hasLength(3),
+        reason: 'thirty stable seconds reset the retry delay to one second',
+      );
+    });
+
+    testWidgets('stream stability does not hide a conversation load failure', (
+      tester,
+    ) async {
+      final api = _FakeApi()..sessionsError = Exception('backend down');
+      await _pumpShell(
+        tester,
+        api: api,
+        size: _desktop,
+        sessionUpdateSourceFactory: _FakeSessionUpdateSource.new,
+      );
+
+      expect(find.text('Could not load conversations.'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 31));
+
+      expect(find.text('Could not load conversations.'), findsOneWidget);
+      expect(find.text('No conversations yet.'), findsNothing);
+    });
+
+    testWidgets('a synchronous source error reconnects and resumes updates', (
+      tester,
+    ) async {
+      var calls = 0;
+      final replacement = _FakeSessionUpdateSource();
+      await _pumpShell(
+        tester,
+        api: _FakeApi(),
+        size: _desktop,
+        sessionUpdateSourceFactory: () {
+          calls++;
+          if (calls == 1) throw StateError('setup failed');
+          return replacement;
+        },
+      );
+      await tester.pump(const Duration(seconds: 1));
+      expect(calls, 2);
+
+      replacement.add(
+        TuringEvent(
+          eventId: 'evt_after_setup_retry',
+          sessionId: 'sess_after_setup_retry',
+          traceId: 'trace_after_setup_retry',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 8, 18, 20),
+          payload: const {
+            'title': 'After setup retry',
+            'updatedAt': '2026-08-18T20:00:00.000000000Z',
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('After setup retry'), findsOneWidget);
+    });
+
+    testWidgets('a later stale page does not resurrect a deleted session', (
+      tester,
+    ) async {
+      final deleted = Session(
+        sessionId: 'sess_deleted',
+        title: 'Delete me',
+        updatedAt: DateTime.utc(2026, 5, 10),
+      );
+      final api = _FakeApi()
+        ..sessions = [deleted]
+        ..removeDeletedSessionFromList = true;
+      await _pumpShell(tester, api: api, size: _desktop);
+
+      await tester.tap(find.text('Delete me'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Delete chat'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+      expect(find.text('Delete me'), findsNothing);
+
+      api
+        ..sessions = [deleted]
+        ..addCreatedSessionToList = true;
+      await tester.tap(find.text('New chat').first);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Delete me'),
+        findsNothing,
+        reason: 'page omission does not expire a local deletion tombstone',
       );
     });
   });
@@ -742,6 +1389,8 @@ Future<void> _pumpShell(
   WidgetTester tester, {
   required _FakeApi api,
   required Size size,
+  TuringEventSource Function()? eventSourceFactory,
+  TuringSessionUpdateSource? Function()? sessionUpdateSourceFactory,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -752,7 +1401,8 @@ Future<void> _pumpShell(
     MaterialApp(
       home: ResponsiveShell(
         apiClient: api,
-        eventSourceFactory: () => _FakeEventSource(),
+        eventSourceFactory: eventSourceFactory ?? () => _FakeEventSource(),
+        sessionUpdateSourceFactory: sessionUpdateSourceFactory,
         authStorage: _FakeAuthStorage(),
       ),
     ),
@@ -774,16 +1424,29 @@ class _FakeApi
   List<AgentDescriptor> agents = const [];
   Object? toolsError;
   Object? agentsError;
+  Object? sessionsError;
   int listToolsCalls = 0;
   int listMessagesCalls = 0;
   final List<String?> createSessionTitles = [];
   final List<String> sentMessages = [];
+  Completer<List<Session>>? nextListSessions;
+  bool addCreatedSessionToList = false;
+  bool removeDeletedSessionFromList = false;
+  String createdSessionId = 'sess_new';
+  String createdSessionTimestamp = '2026-05-10T00:00:00.000Z';
 
   int listSessionsCalls = 0;
 
   @override
   Future<List<Session>> listSessions({int limit = 50, String? after}) async {
     listSessionsCalls++;
+    final error = sessionsError;
+    if (error != null) throw error;
+    final next = nextListSessions;
+    if (next != null) {
+      nextListSessions = null;
+      return next.future;
+    }
     return sessions;
   }
 
@@ -900,7 +1563,20 @@ class _FakeApi
   @override
   Future<Map<String, dynamic>> createSession({String? title}) async {
     createSessionTitles.add(title);
-    return {'sessionId': 'sess_new', 'createdAt': '2026-05-10T00:00:00.000Z'};
+    if (addCreatedSessionToList) {
+      sessions = [
+        Session(
+          sessionId: createdSessionId,
+          title: title,
+          updatedAt: DateTime.parse(createdSessionTimestamp),
+        ),
+        ...sessions,
+      ];
+    }
+    return {
+      'sessionId': createdSessionId,
+      'createdAt': createdSessionTimestamp,
+    };
   }
 
   @override
@@ -914,7 +1590,13 @@ class _FakeApi
   }
 
   @override
-  Future<void> deleteSession({required String sessionId}) async {}
+  Future<void> deleteSession({required String sessionId}) async {
+    if (removeDeletedSessionFromList) {
+      sessions = sessions
+          .where((session) => session.sessionId != sessionId)
+          .toList();
+    }
+  }
 
   @override
   Future<Session> getSession({required String sessionId}) async => Session(
@@ -1080,6 +1762,8 @@ class _FakeEventSource implements TuringEventSource {
 
   final _events = StreamController<TuringEvent>();
 
+  void add(TuringEvent event) => _events.add(event);
+
   @override
   Stream<TuringEvent> connect({required String sessionId, int? lastSequence}) {
     return _events.stream;
@@ -1089,6 +1773,90 @@ class _FakeEventSource implements TuringEventSource {
   void close() {
     unawaited(_events.close());
   }
+}
+
+class _FakeSessionUpdateSource implements TuringSessionUpdateSource {
+  final _events = StreamController<TuringEvent>();
+
+  void add(TuringEvent event) => _events.add(event);
+
+  void addError(Object error) => _events.addError(error);
+
+  @override
+  Stream<TuringEvent> connectSessionUpdates() => _events.stream;
+
+  @override
+  void close() {
+    unawaited(_events.close());
+  }
+}
+
+class _UncancellableSessionUpdateSource implements TuringSessionUpdateSource {
+  _UncancellableSessionUpdateSource(this._events);
+
+  final Stream<TuringEvent> _events;
+
+  @override
+  Stream<TuringEvent> connectSessionUpdates() =>
+      _UncancellableSessionUpdateStream(_events);
+
+  @override
+  void close() {}
+}
+
+class _UncancellableSessionUpdateStream extends Stream<TuringEvent> {
+  _UncancellableSessionUpdateStream(this._source);
+
+  final Stream<TuringEvent> _source;
+
+  @override
+  StreamSubscription<TuringEvent> listen(
+    void Function(TuringEvent event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) {
+    return _UncancellableSessionUpdateSubscription(
+      _source.listen(
+        onData,
+        onError: onError,
+        onDone: onDone,
+        cancelOnError: cancelOnError,
+      ),
+    );
+  }
+}
+
+class _UncancellableSessionUpdateSubscription
+    implements StreamSubscription<TuringEvent> {
+  _UncancellableSessionUpdateSubscription(this._inner);
+
+  final StreamSubscription<TuringEvent> _inner;
+
+  @override
+  Future<void> cancel() async {}
+
+  @override
+  Future<E> asFuture<E>([E? futureValue]) => _inner.asFuture(futureValue);
+
+  @override
+  bool get isPaused => _inner.isPaused;
+
+  @override
+  void onData(void Function(TuringEvent event)? handleData) =>
+      _inner.onData(handleData);
+
+  @override
+  void onDone(void Function()? handleDone) => _inner.onDone(handleDone);
+
+  @override
+  void onError(Function? handleError) => _inner.onError(handleError);
+
+  @override
+  void pause([Future<void>? resumeSignal]) => _inner.pause(resumeSignal);
+
+  @override
+  void resume() => _inner.resume();
 }
 
 class _FakeAuthStorage implements ClientAuthStorage {

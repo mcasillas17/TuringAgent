@@ -281,6 +281,17 @@ class _ConfiguredTuringShellState extends State<_ConfiguredTuringShell> {
         baseUrl: widget.config.backendUrl,
         apiKey: widget.config.apiKey,
       ),
+      sessionUpdateSourceFactory: () {
+        final source = widget.eventSourceFactory(
+          baseUrl: widget.config.backendUrl,
+          apiKey: widget.config.apiKey,
+        );
+        if (source is TuringSessionUpdateSource) {
+          return source as TuringSessionUpdateSource;
+        }
+        source.close();
+        return null;
+      },
     );
   }
 

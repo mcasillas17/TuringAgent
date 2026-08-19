@@ -145,6 +145,9 @@ func TestAnAllowlistedToolIsApprovedWithoutAnyoneWatching(t *testing.T) {
 	if approval.Status != "approved" {
 		t.Fatalf("approval status = %q, want approved before anyone was asked", approval.Status)
 	}
+	if approval.ApprovalComment.Valid || approval.DenialReason.Valid {
+		t.Fatalf("unattended approval has human rationale: %+v", approval)
+	}
 	// The token is the invariant that survives: single-use, and bound to these
 	// exact arguments by args_hash inside it.
 	if strings.Count(approval.ApprovalToken, ".") != 2 {
@@ -190,6 +193,11 @@ func TestAnUnattendedApprovalIsAuditedAsAnAutomationsAndNotAPersons(t *testing.T
 	for _, want := range []string{`"unattended":true`, `"automationName":"Nightly note"`, `"toolName":"files.update"`} {
 		if !strings.Contains(row.Payload, want) {
 			t.Fatalf("audit payload %s does not contain %s", row.Payload, want)
+		}
+	}
+	for _, forbidden := range []string{`"comment"`, `"reason"`} {
+		if strings.Contains(row.Payload, forbidden) {
+			t.Fatalf("unattended audit payload %s contains human rationale field %s", row.Payload, forbidden)
 		}
 	}
 }

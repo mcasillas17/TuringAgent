@@ -1,13 +1,16 @@
 class Session {
-  const Session({
+  Session({
     required this.sessionId,
     required this.title,
     required this.updatedAt,
-  });
+    int? updatedAtNanoseconds,
+  }) : updatedAtNanoseconds =
+           updatedAtNanoseconds ?? updatedAt.microsecondsSinceEpoch * 1000;
 
   final String sessionId;
   final String? title;
   final DateTime updatedAt;
+  final int updatedAtNanoseconds;
 
   factory Session.fromJson(Map<String, dynamic> json) {
     return Session(

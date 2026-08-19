@@ -48,6 +48,15 @@ class EventServiceClient extends $grpc.Client {
         options: options);
   }
 
+  $grpc.ResponseStream<$0.TuringEvent> subscribeSessionUpdates(
+    $0.SubscribeSessionUpdatesRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createStreamingCall(
+        _$subscribeSessionUpdates, $async.Stream.fromIterable([request]),
+        options: options);
+  }
+
   // method descriptors
 
   static final _$listEvents =
@@ -59,6 +68,11 @@ class EventServiceClient extends $grpc.Client {
       $grpc.ClientMethod<$0.SubscribeSessionEventsRequest, $0.TuringEvent>(
           '/turing.v1.EventService/SubscribeSessionEvents',
           ($0.SubscribeSessionEventsRequest value) => value.writeToBuffer(),
+          $0.TuringEvent.fromBuffer);
+  static final _$subscribeSessionUpdates =
+      $grpc.ClientMethod<$0.SubscribeSessionUpdatesRequest, $0.TuringEvent>(
+          '/turing.v1.EventService/SubscribeSessionUpdates',
+          ($0.SubscribeSessionUpdatesRequest value) => value.writeToBuffer(),
           $0.TuringEvent.fromBuffer);
 }
 
@@ -83,6 +97,15 @@ abstract class EventServiceBase extends $grpc.Service {
             ($core.List<$core.int> value) =>
                 $0.SubscribeSessionEventsRequest.fromBuffer(value),
             ($0.TuringEvent value) => value.writeToBuffer()));
+    $addMethod(
+        $grpc.ServiceMethod<$0.SubscribeSessionUpdatesRequest, $0.TuringEvent>(
+            'SubscribeSessionUpdates',
+            subscribeSessionUpdates_Pre,
+            false,
+            true,
+            ($core.List<$core.int> value) =>
+                $0.SubscribeSessionUpdatesRequest.fromBuffer(value),
+            ($0.TuringEvent value) => value.writeToBuffer()));
   }
 
   $async.Future<$0.ListEventsResponse> listEvents_Pre($grpc.ServiceCall $call,
@@ -101,4 +124,13 @@ abstract class EventServiceBase extends $grpc.Service {
 
   $async.Stream<$0.TuringEvent> subscribeSessionEvents(
       $grpc.ServiceCall call, $0.SubscribeSessionEventsRequest request);
+
+  $async.Stream<$0.TuringEvent> subscribeSessionUpdates_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.SubscribeSessionUpdatesRequest> $request) async* {
+    yield* subscribeSessionUpdates($call, await $request);
+  }
+
+  $async.Stream<$0.TuringEvent> subscribeSessionUpdates(
+      $grpc.ServiceCall call, $0.SubscribeSessionUpdatesRequest request);
 }

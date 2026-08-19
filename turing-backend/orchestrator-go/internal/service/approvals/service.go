@@ -12,6 +12,7 @@ import (
 	"log"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
@@ -47,8 +48,10 @@ type Notifier interface {
 }
 
 const (
-	defaultApprovalTTL = 65 * time.Second
-	postCommitTimeout  = 5 * time.Second
+	defaultApprovalTTL        = 65 * time.Second
+	postCommitTimeout         = 5 * time.Second
+	maxDecisionRationaleBytes = 4096
+	maxAuditRationaleBytes    = 512
 )
 
 func New(repo *repository.Repository, bus *events.Bus, jwtSecret string, approvalTTLs ...time.Duration) *Server {
@@ -131,6 +134,9 @@ func (s *Server) ApproveApproval(ctx context.Context, req *turingv1.ApproveAppro
 	if req == nil || req.ApprovalId == "" {
 		return nil, status.Error(codes.InvalidArgument, "approval_id is required")
 	}
+	if err := validateDecisionRationale("comment", req.Comment); err != nil {
+		return nil, err
+	}
 	approval, err := s.repo.GetApproval(ctx, req.ApprovalId)
 	if err != nil {
 		return nil, mapApprovalError(err)
@@ -157,7 +163,13 @@ func (s *Server) ApproveApproval(ctx context.Context, req *turingv1.ApproveAppro
 	if err != nil {
 		return nil, err
 	}
-	transition, err := s.repo.ApproveApprovalWithEvent(ctx, req.ApprovalId, token, "")
+	transition, err := s.repo.ApproveApprovalWithEvent(
+		ctx,
+		req.ApprovalId,
+		token,
+		sql.NullString{String: req.Comment, Valid: true},
+		"",
+	)
 	if errors.Is(err, repository.ErrApprovalExpired) {
 		if _, expireErr := s.expireApproval(ctx, req.ApprovalId); expireErr != nil {
 			return nil, mapApprovalError(expireErr)
@@ -168,18 +180,34 @@ func (s *Server) ApproveApproval(ctx context.Context, req *turingv1.ApproveAppro
 		return nil, mapApprovalError(err)
 	}
 	approved := transition.Approval
+	s.runChangedApprovalPostCommitEffects(transition)
+	return &turingv1.ApprovalResponse{ApprovalId: approved.ApprovalID, Status: turingv1.ApprovalStatus_APPROVAL_STATUS_APPROVED}, nil
+}
+
+func (s *Server) runChangedApprovalPostCommitEffects(transition repository.ApprovalTerminalization) {
+	if !transition.Changed {
+		return
+	}
+	approved := transition.Approval
 	if transition.ApprovalEvent.EventID != "" {
 		s.publishEvent(transition.ApprovalEvent)
 	}
 	s.finishPostCommit(approved, "client", "approval.approved", "approved", approved.ApprovalToken)
-	return &turingv1.ApprovalResponse{ApprovalId: approved.ApprovalID, Status: turingv1.ApprovalStatus_APPROVAL_STATUS_APPROVED}, nil
 }
 
 func (s *Server) DenyApproval(ctx context.Context, req *turingv1.DenyApprovalRequest) (*turingv1.ApprovalResponse, error) {
 	if req == nil || req.ApprovalId == "" {
 		return nil, status.Error(codes.InvalidArgument, "approval_id is required")
 	}
-	transition, err := s.repo.DenyApprovalWithEvent(ctx, req.ApprovalId, "")
+	if err := validateDecisionRationale("reason", req.Reason); err != nil {
+		return nil, err
+	}
+	transition, err := s.repo.DenyApprovalWithEvent(
+		ctx,
+		req.ApprovalId,
+		sql.NullString{String: req.Reason, Valid: true},
+		"",
+	)
 	if err != nil {
 		return nil, mapApprovalError(err)
 	}
@@ -289,11 +317,55 @@ func (s *Server) expireApproval(ctx context.Context, approvalID string) (reposit
 
 func (s *Server) finishPostCommit(approval repository.ApprovalRecord, actorType string, action string, approvalStatus string, approvalToken string) {
 	auditCtx, cancelAudit := context.WithTimeout(context.Background(), postCommitTimeout)
-	if err := s.audit.Record(auditCtx, approval.RunID, actorType, "", action, approval.ApprovalID, map[string]any{"toolName": approval.ToolName}); err != nil {
+	if _, err := s.audit.RecordForExistingRun(auditCtx, approval.RunID, actorType, "", action, approval.ApprovalID, approvalAuditPayload(approval, action)); err != nil {
 		log.Printf("record %s audit for %s: %v", action, approval.ApprovalID, err)
 	}
 	cancelAudit()
 	s.notifyPostCommit(approval, approvalStatus, approvalToken)
+}
+
+func validateDecisionRationale(fieldName string, value string) error {
+	if !utf8.ValidString(value) {
+		return status.Errorf(codes.InvalidArgument, "%s must be valid UTF-8", fieldName)
+	}
+	if len(value) > maxDecisionRationaleBytes {
+		return status.Errorf(codes.InvalidArgument, "%s must be at most %d bytes", fieldName, maxDecisionRationaleBytes)
+	}
+	return nil
+}
+
+func approvalAuditPayload(approval repository.ApprovalRecord, action string) map[string]any {
+	payload := map[string]any{"toolName": approval.ToolName}
+	switch action {
+	case "approval.approved":
+		if approval.ApprovalComment.Valid {
+			comment, truncated := boundedAuditRationale(approval.ApprovalComment.String)
+			payload["comment"] = comment
+			if truncated {
+				payload["commentTruncated"] = true
+			}
+		}
+	case "approval.denied":
+		if approval.DenialReason.Valid {
+			reason, truncated := boundedAuditRationale(approval.DenialReason.String)
+			payload["reason"] = reason
+			if truncated {
+				payload["reasonTruncated"] = true
+			}
+		}
+	}
+	return payload
+}
+
+func boundedAuditRationale(value string) (string, bool) {
+	if len(value) <= maxAuditRationaleBytes {
+		return value, false
+	}
+	prefix := value[:maxAuditRationaleBytes-3]
+	for !utf8.ValidString(prefix) {
+		prefix = prefix[:len(prefix)-1]
+	}
+	return prefix + "...", true
 }
 
 func (s *Server) notifyPostCommit(approval repository.ApprovalRecord, approvalStatus string, approvalToken string) {
@@ -378,7 +450,7 @@ func (s *Server) GrantUnattendedApproval(ctx context.Context, approvalID string,
 	if err != nil {
 		return err
 	}
-	transition, err := s.repo.ApproveApprovalWithEvent(ctx, approvalID, token, "")
+	transition, err := s.repo.ApproveApprovalWithEvent(ctx, approvalID, token, sql.NullString{}, "")
 	if errors.Is(err, repository.ErrApprovalExpired) {
 		if _, expireErr := s.expireApproval(ctx, approvalID); expireErr != nil {
 			return mapApprovalError(expireErr)

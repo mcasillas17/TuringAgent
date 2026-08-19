@@ -238,14 +238,21 @@ Task IDs are stable references, not priority numbers. Delivery order follows `do
 **Scope:** Add decision-comment and denial-reason storage; consume `ApproveApprovalRequest.comment` and `DenyApprovalRequest.reason`; expose both through audit with empty and absent values distinguished.  
 **Likely files:** approvals schema/proto/service/repository and audit mapping.  
 **Acceptance:** A comment or reason survives restart; repository/service tests prove both request fields are consumed and included in the corresponding audit record. TUR-013 later makes that record user-readable.  
-**Dependencies:** None. The request fields exist today, but no database column or production handler stores them.
+**Dependencies:** None.
+**Status:** Implemented. Human decisions persist the matching field atomically;
+because the existing proto3 scalars have no presence, omitted and explicit empty
+input share the documented empty-string representation, while non-human paths
+remain `NULL`. Audit receives only a bounded rationale copy and `toolName`, and
+session deletion still scrubs that payload. TUR-013 remains the public audit
+read path and TUR-021 remains the approval preview/diff UX.
 
-#### TUR-007 — Derive stable session titles from the first user turn
+#### TUR-007 — Derive stable session titles from the first user turn — Implemented
 
 **Outcome:** Conversations and search groups are distinguishable instead of remaining "New chat."  
-**Scope:** Derive a deterministic, single-line, rune-safe title once in the orchestrator and emit an update event.  
-**Likely files:** session/jobs repository, session events/proto if needed, Flutter session creation/rendering.  
-**Acceptance:** First user message sets the title; later messages do not rewrite it; deletion removes it; non-ASCII and multiline cases are tested.  
+**Delivered:** The enqueue transaction derives a deterministic, single-line, rune-safe title from the first usable user turn, preserves it on later turns, and persists `session.updated` with the authoritative title and timestamp. Flutter creates untitled sessions and applies the durable event without polling; startup backfill repairs legacy `New chat` rows.
+
+**Verification:** Repository tests cover whitespace-only, multiline, long, non-ASCII, explicit-title, later-message, backfill, replay, and deletion behavior. Event service and Flutter widget tests cover protocol mapping and live session/search rendering. See `docs/architecture/session-titles.md`.
+
 **Dependencies:** None.
 
 #### TUR-020 — Pin and enforce the model context budget
