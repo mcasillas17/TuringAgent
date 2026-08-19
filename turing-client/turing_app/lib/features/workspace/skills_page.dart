@@ -171,114 +171,119 @@ class _SkillCard extends StatelessWidget {
       if (skill.author.isNotEmpty) 'Author ${skill.author}',
       if (skill.license.isNotEmpty) 'License ${skill.license}',
     ];
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: palette.surface,
+    return Material(
+      color: palette.surface,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: palette.border),
+        side: BorderSide(color: palette.border),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      skill.name.isEmpty ? skill.skillId : skill.name,
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: palette.text,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        skill.name.isEmpty ? skill.skillId : skill.name,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: palette.text,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 3),
-                    SelectableText(
-                      skill.skillId,
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        color: palette.textMuted,
+                      const SizedBox(height: 3),
+                      SelectableText(
+                        skill.skillId,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: palette.textMuted,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Switch(value: skill.enabled, onChanged: busy ? null : onEnabled),
-            ],
-          ),
-          const SizedBox(height: 8),
-          SelectableText(
-            displayPath,
-            style: TextStyle(fontSize: 12, color: palette.textMuted),
-          ),
-          if (metadata.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Text(
-              metadata.join(' · '),
-              style: TextStyle(fontSize: 12.5, color: palette.textMuted),
+                const SizedBox(width: 12),
+                Switch(
+                  value: skill.enabled,
+                  onChanged: busy ? null : onEnabled,
+                ),
+              ],
             ),
-          ],
-          if (skill.parseError.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            _StatusBox(
-              icon: Icons.warning_amber_rounded,
-              text: 'SKILL.md could not be parsed: ${skill.parseError}',
-              color: AppColors.danger,
+            const SizedBox(height: 8),
+            SelectableText(
+              displayPath,
+              style: TextStyle(fontSize: 12, color: palette.textMuted),
             ),
-          ] else ...[
-            if (skill.description.isNotEmpty) ...[
-              const SizedBox(height: 12),
+            if (metadata.isNotEmpty) ...[
+              const SizedBox(height: 6),
               Text(
-                skill.description,
-                style: TextStyle(fontSize: 13.5, color: palette.textMuted),
+                metadata.join(' · '),
+                style: TextStyle(fontSize: 12.5, color: palette.textMuted),
               ),
             ],
-            if (skill.body.isNotEmpty) ...[
+            if (skill.parseError.isNotEmpty) ...[
               const SizedBox(height: 12),
-              SelectableText(
-                skill.body,
-                style: TextStyle(
-                  fontSize: 13.5,
-                  height: 1.5,
-                  color: palette.text,
-                ),
+              _StatusBox(
+                icon: Icons.warning_amber_rounded,
+                text: 'SKILL.md could not be parsed: ${skill.parseError}',
+                color: AppColors.danger,
               ),
-            ],
-            const SizedBox(height: 12),
-            _StatusBox(
-              icon: _statusIcon(skill),
-              text: _statusText(skill),
-              color: _statusColor(skill),
-            ),
-            if (skill.requires.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              Text(
-                'Capability consent',
-                style: TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w600,
-                  color: palette.text,
+            ] else ...[
+              if (skill.description.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text(
+                  skill.description,
+                  style: TextStyle(fontSize: 13.5, color: palette.textMuted),
                 ),
+              ],
+              if (skill.body.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                SelectableText(
+                  skill.body,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    height: 1.5,
+                    color: palette.text,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              _StatusBox(
+                icon: _statusIcon(skill),
+                text: _statusText(skill),
+                color: _statusColor(skill),
               ),
-              for (final capability in skill.requires)
-                CheckboxListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  title: Text(capability),
-                  value: skill.grantedCapabilities.contains(capability),
-                  onChanged: busy
-                      ? null
-                      : (value) => onCapability(capability, value ?? false),
+              if (skill.requires.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(
+                  'Capability consent',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: palette.text,
+                  ),
                 ),
+                for (final capability in skill.requires)
+                  CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: Text(capability),
+                    value: skill.grantedCapabilities.contains(capability),
+                    onChanged: busy
+                        ? null
+                        : (value) => onCapability(capability, value ?? false),
+                  ),
+              ],
             ],
           ],
-        ],
+        ),
       ),
     );
   }
