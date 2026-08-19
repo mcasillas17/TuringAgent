@@ -178,17 +178,26 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 				drainDeadline.Stop()
 			}
 		}()
-		holdCompleted := func(event StreamEvent) {
+		sendCompleted := func(event StreamEvent) {
+			event.Usage = state.usage
+			sendStreamEvent(ctx, out, event)
+		}
+		holdCompleted := func(event StreamEvent) bool {
+			if deadline, ok := ctx.Deadline(); ok &&
+				time.Until(deadline) <= p.usageDrainTimeout {
+				// The answer already finished. Do not spend the remaining model
+				// deadline waiting for optional telemetry and then lose the
+				// completion because its delivery context expired.
+				sendCompleted(event)
+				return true
+			}
 			pendingCompleted = &event
 			if drainDeadline == nil {
 				drainDeadline = time.AfterFunc(p.usageDrainTimeout, func() {
 					_ = resp.Body.Close()
 				})
 			}
-		}
-		sendCompleted := func(event StreamEvent) {
-			event.Usage = state.usage
-			sendStreamEvent(ctx, out, event)
+			return false
 		}
 		dispatch := func(data string) bool {
 			trimmed := strings.TrimSpace(data)
@@ -226,7 +235,9 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 			}
 			for _, event := range events {
 				if event.Type == "completed" {
-					holdCompleted(event)
+					if holdCompleted(event) {
+						return true
+					}
 					continue
 				}
 				if !sendStreamEvent(ctx, out, event) {
@@ -853,7 +864,11 @@ func parseOpenAIData(data []byte, state *openAIStreamState) ([]StreamEvent, bool
 			// one. Execute only calls that are already structurally complete;
 			// truncated fragments are discarded and the output-limit notice still
 			// explains why the turn stopped.
-			if calls := finalizeCompleteOpenAIToolCalls(state); len(calls) > 0 {
+			calls, err := finalizeCompleteOpenAIToolCalls(state)
+			if err != nil {
+				return nil, false, err
+			}
+			if len(calls) > 0 {
 				events = append(events, StreamEvent{Type: "tool_call", ToolCalls: calls})
 			}
 		} else if len(state.toolCalls) > 0 {
@@ -881,12 +896,17 @@ func finalizeOpenAIToolCalls(state *openAIStreamState) ([]ToolCall, error) {
 	return calls, nil
 }
 
-func finalizeCompleteOpenAIToolCalls(state *openAIStreamState) []ToolCall {
+func finalizeCompleteOpenAIToolCalls(state *openAIStreamState) ([]ToolCall, error) {
 	indices := make([]int, 0, len(state.toolCalls))
 	for index := range state.toolCalls {
 		indices = append(indices, index)
 	}
 	sort.Ints(indices)
+	for position, index := range indices {
+		if index != position {
+			return nil, fmt.Errorf("tool call indices are non-contiguous: missing index %d", position)
+		}
+	}
 	calls := make([]ToolCall, 0, len(indices))
 	ids := make(map[string]struct{}, len(indices))
 	for _, index := range indices {
@@ -895,7 +915,7 @@ func finalizeCompleteOpenAIToolCalls(state *openAIStreamState) []ToolCall {
 			calls = append(calls, call)
 		}
 	}
-	return calls
+	return calls, nil
 }
 
 func finalizeOpenAIToolCall(

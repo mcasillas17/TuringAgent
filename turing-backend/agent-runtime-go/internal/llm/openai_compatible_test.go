@@ -280,6 +280,19 @@ func TestOpenAIEmitsCompleteCallsAndDropsIncompleteCallsAtLength(t *testing.T) {
 	}
 }
 
+func TestOpenAIRejectsSparseToolCallIndicesAtLength(t *testing.T) {
+	got := streamOpenAIEvents(t,
+		"data: "+`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"first","arguments":"{}"}},{"index":2,"id":"call_2","type":"function","function":{"name":"third","arguments":"{}"}}]}}]}`+"\n\n"+
+			"data: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`+"\n\n",
+	)
+
+	assertOpenAIEventTypes(t, got, "error")
+	if got[0].Code != "model_bad_chunk" ||
+		!strings.Contains(got[0].Message, "non-contiguous") {
+		t.Fatalf("events = %+v, want sparse-index model_bad_chunk", got)
+	}
+}
+
 func TestOpenAIParsesMultilineSSEDataEvent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")

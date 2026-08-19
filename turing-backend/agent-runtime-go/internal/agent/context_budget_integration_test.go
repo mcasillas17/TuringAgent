@@ -857,6 +857,46 @@ func TestExecuteNoticesRealOpenAILengthStopWithPendingToolFragment(t *testing.T)
 	}
 }
 
+func TestExecuteDoesNotRunSparseOpenAIToolCallsAtLength(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w,
+			"data: "+`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"first","arguments":"{}"}},{"index":2,"id":"call_2","type":"function","function":{"name":"third","arguments":"{}"}}]}}]}`+"\n\n"+
+				"data: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`+"\n\n",
+		)
+	}))
+	t.Cleanup(server.Close)
+	provider, err := llm.NewOpenAICompatibleWithLimits(server.URL, "", server.Client(), 4096, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := testJob()
+	job.ModelProvider = turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{"name": "first"}, {"name": "third"}},
+		result:      map[string]any{"ok": true},
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE: provider,
+		},
+		fakeMessageClient{},
+		&GeneralAssistantTools{
+			SystemMCP: client,
+			Runner:    &tools.Runner{PostBeacon: allowToolCall},
+		},
+	)
+
+	updates := collectUpdates(t, assistant, job)
+
+	if len(client.calls) != 0 {
+		t.Fatalf("MCP calls = %d, want no sparse-index side effects", len(client.calls))
+	}
+	failure := findRunFailed(updates)
+	if failure == nil || failure.GetCode() != "model_bad_chunk" {
+		t.Fatalf("failure = %#v, want model_bad_chunk", failure)
+	}
+}
+
 func TestExecuteNoticesLengthLimitedToolTurnBeforeRunningTool(t *testing.T) {
 	provider := &queuedProvider{responses: [][]llm.StreamEvent{
 		{
