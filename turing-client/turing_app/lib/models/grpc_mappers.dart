@@ -465,6 +465,8 @@ class GrpcMappers {
         return 'error';
       case eventpb.TuringEventType.TURING_EVENT_TYPE_SYSTEM:
         return 'system';
+      case eventpb.TuringEventType.TURING_EVENT_TYPE_SESSION_UPDATED:
+        return 'session.updated';
       case eventpb.TuringEventType.TURING_EVENT_TYPE_UNSPECIFIED:
       default:
         return 'system';

@@ -25,7 +25,7 @@ class ChatScreen extends StatefulWidget {
     required this.eventSource,
     this.embedded = false,
     this.modelProvider = 'ollama',
-    this.onMessageSent,
+    this.onSessionUpdated,
   });
 
   final String sessionId;
@@ -40,12 +40,10 @@ class ChatScreen extends StatefulWidget {
   /// Chosen once in Settings rather than shown above every conversation.
   final String modelProvider;
 
-  /// Called once the backend has accepted a message and queued a run.
-  ///
-  /// The host uses this to re-read the conversation list: the backend names a
-  /// session after its first message, so the sidebar's label is out of date
-  /// from this moment until something asks for it again.
-  final VoidCallback? onMessageSent;
+  /// Delivers durable session metadata changes to the shell that owns the
+  /// conversation list. The event payload is authoritative, so the shell does
+  /// not need to poll after a send.
+  final ValueChanged<TuringEvent>? onSessionUpdated;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -631,6 +629,9 @@ class _ChatScreenState extends State<ChatScreen> {
       case 'message.delta':
         _applyMessageDelta(event);
         break;
+      case 'session.updated':
+        widget.onSessionUpdated?.call(event);
+        break;
       case 'agent.run.step':
         _applyRunStep(event);
         break;
@@ -950,10 +951,6 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       if (!mounted) return;
       setState(() => _sending = false);
-      // Only on the success path: the title is written in the same
-      // transaction that queues the run, so a rejected send changed nothing
-      // for the host to re-read.
-      widget.onMessageSent?.call();
     } on Exception catch (error) {
       if (!mounted) return;
       setState(() {

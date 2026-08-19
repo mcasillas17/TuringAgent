@@ -51,6 +51,15 @@ void main() {
     );
   });
 
+  test('maps SESSION_UPDATED to the session event string', () {
+    expect(
+      GrpcMappers.eventTypeToString(
+        eventpb.TuringEventType.TURING_EVENT_TYPE_SESSION_UPDATED,
+      ),
+      'session.updated',
+    );
+  });
+
   test('maps token deltas into assistant message content', () {
     final event = ChatStreamEvent(
       sessionId: 'sess_1',

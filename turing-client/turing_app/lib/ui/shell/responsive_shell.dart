@@ -16,6 +16,7 @@ import '../../features/workspace/workspace_pages.dart';
 import '../../logic/theme_logic.dart';
 import '../../models/session.dart';
 import '../../models/session_title.dart';
+import '../../models/turing_event.dart';
 import '../../networking/api_client.dart';
 import '../../networking/auth_storage.dart';
 import '../../networking/event_source.dart';
@@ -133,10 +134,28 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     }
   }
 
-  /// The backend names a conversation after its first message, so the sidebar
-  /// is stale the moment a message is accepted. Re-listing here is what turns
-  /// "New chat" into the actual subject without the user reloading anything.
-  void _onMessageSent() => unawaited(_refreshSessions());
+  void _applySessionUpdated(TuringEvent event) {
+    final title = event.payload['title'];
+    final updatedAtValue = event.payload['updatedAt'];
+    if (title is! String || updatedAtValue is! String) return;
+    final updatedAt = DateTime.tryParse(updatedAtValue);
+    if (updatedAt == null) return;
+    final index = _sessions.indexWhere(
+      (session) => session.sessionId == event.sessionId,
+    );
+    if (index < 0) return;
+    final updated = Session(
+      sessionId: event.sessionId,
+      title: title.isEmpty ? null : title,
+      updatedAt: updatedAt.toUtc(),
+    );
+    setState(() {
+      _sessions = [
+        updated,
+        ..._sessions.where((session) => session.sessionId != event.sessionId),
+      ];
+    });
+  }
 
   /// Null when the active conversation has not been named yet, or is not in
   /// the list the shell last loaded.
@@ -455,7 +474,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
             eventSource: _eventSourceForChat(sessionId),
             embedded: true,
             modelProvider: _modelProvider,
-            onMessageSent: _onMessageSent,
+            onSessionUpdated: _applySessionUpdated,
           ),
         ),
       ],

@@ -389,7 +389,7 @@ void main() {
       expect(find.text('Untitled chat'), findsNothing);
     });
 
-    testWidgets('sending a message re-reads the renamed conversation list', (
+    testWidgets('sending a message does not poll the conversation list', (
       tester,
     ) async {
       final api = _FakeApi()
@@ -406,17 +406,6 @@ void main() {
       // sidebar's button and the untitled row itself.
       await tester.tap(find.text('New chat').last);
       await tester.pumpAndSettle();
-      expect(find.text('New chat'), findsNWidgets(2));
-
-      // The backend names the session inside the same transaction that queues
-      // the run, so by the time sendMessage resolves the list is stale.
-      api.sessions = [
-        Session(
-          sessionId: 'sess_fresh',
-          title: 'What is in the sandbox?',
-          updatedAt: DateTime.utc(2026, 5, 11),
-        ),
-      ];
       final callsBefore = api.listSessionsCalls;
 
       await tester.enterText(
@@ -428,16 +417,64 @@ void main() {
 
       expect(
         api.listSessionsCalls,
-        greaterThan(callsBefore),
-        reason: 'sending re-reads the list the backend has just renamed',
+        callsBefore,
+        reason: 'the durable session.updated event owns list refreshes',
       );
-      // The count, not the text: the message bubble renders the same string,
-      // so asserting the title appears would pass even if the sidebar never
-      // refreshed. Only the row losing its placeholder proves it did.
+    });
+
+    testWidgets('a session update event renames and reorders the row locally', (
+      tester,
+    ) async {
+      final source = _FakeEventSource();
+      final api = _FakeApi()
+        ..sessions = [
+          Session(
+            sessionId: 'sess_other',
+            title: 'Other chat',
+            updatedAt: DateTime.utc(2026, 5, 11),
+          ),
+          Session(
+            sessionId: 'sess_fresh',
+            title: null,
+            updatedAt: DateTime.utc(2026, 5, 10),
+          ),
+        ];
+      await _pumpShell(
+        tester,
+        api: api,
+        size: _desktop,
+        eventSourceFactory: () => source,
+      );
+      await tester.tap(find.text('New chat').last);
+      await tester.pumpAndSettle();
+      final callsBefore = api.listSessionsCalls;
+
+      source.add(
+        TuringEvent(
+          eventId: 'evt_session_updated',
+          sessionId: 'sess_fresh',
+          traceId: 'trace_1',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 8, 18, 20),
+          payload: const {
+            'title': 'What is in the sandbox?',
+            'updatedAt': '2026-08-18T20:00:00Z',
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('What is in the sandbox?'), findsOneWidget);
       expect(
-        find.text('New chat'),
-        findsOneWidget,
-        reason: 'only the sidebar button is left; the row now has a name',
+        tester.getTopLeft(find.text('What is in the sandbox?')).dy,
+        lessThan(tester.getTopLeft(find.text('Other chat')).dy),
+        reason: 'the updated conversation becomes the most recent row',
+      );
+      expect(
+        api.listSessionsCalls,
+        callsBefore,
+        reason: 'the event payload is authoritative; no list poll is needed',
       );
     });
   });
@@ -778,6 +815,7 @@ Future<void> _pumpShell(
   WidgetTester tester, {
   required _FakeApi api,
   required Size size,
+  TuringEventSource Function()? eventSourceFactory,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -788,7 +826,7 @@ Future<void> _pumpShell(
     MaterialApp(
       home: ResponsiveShell(
         apiClient: api,
-        eventSourceFactory: () => _FakeEventSource(),
+        eventSourceFactory: eventSourceFactory ?? () => _FakeEventSource(),
         authStorage: _FakeAuthStorage(),
       ),
     ),
@@ -1195,6 +1233,8 @@ class _FakeEventSource implements TuringEventSource {
   }
 
   final _events = StreamController<TuringEvent>();
+
+  void add(TuringEvent event) => _events.add(event);
 
   @override
   Stream<TuringEvent> connect({required String sessionId, int? lastSequence}) {
