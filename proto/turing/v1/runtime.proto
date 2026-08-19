@@ -22,10 +22,10 @@ message AgentJob {
   string user_text = 10;
   repeated string requested_tools = 11;
   int32 attempt = 12;
-  // The skills attached to this conversation when the message was accepted,
-  // captured then rather than read at execution time so that editing a skill
-  // never changes what an already-queued run was told to do.
-  repeated AttachedSkill skills = 13;
+  // The eligible filesystem skills when the message was accepted, captured
+  // then rather than read at execution time so edits cannot rewrite a queued
+  // run. Older queued jobs may still carry the legacy name/instructions pair.
+  repeated SkillSnapshot skills = 13;
   // Set only when the conversation was deliberately routed away from the
   // local assistant. Absent is the default and means "run this here".
   ExternalAgentTarget external_agent = 14;
@@ -49,13 +49,21 @@ message ExternalAgentTarget {
   string credential_ref = 3;
 }
 
-// A skill as the runtime sees it: a name for attribution and the instructions
-// themselves. Deliberately not the full Skill message — the runtime has no use
-// for identifiers or timestamps, and the job is replayed from a stored payload
-// where a narrower shape is a narrower thing to keep in sync.
-message AttachedSkill {
+// A frozen skill snapshot as the runtime sees it. instructions retains field 2
+// for wire compatibility with jobs queued by the database-backed model; for
+// filesystem skills it carries the SKILL.md body.
+message SkillSnapshot {
   string name = 1;
   string instructions = 2;
+  string skill_id = 3;
+  string description = 4;
+  string category = 5;
+  map<string, string> references = 6;
+  // True when this enabled skill was missing one or more declared grants when
+  // the run was queued. Metadata remains visible in the enabled index, but
+  // neither its body nor its references are present in the snapshot.
+  bool withheld = 7;
+  repeated string missing_capabilities = 8;
 }
 
 message DiscoveredTool {

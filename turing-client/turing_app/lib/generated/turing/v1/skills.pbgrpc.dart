@@ -32,27 +32,6 @@ class SkillServiceClient extends $grpc.Client {
 
   SkillServiceClient(super.channel, {super.options, super.interceptors});
 
-  $grpc.ResponseFuture<$0.Skill> createSkill(
-    $0.CreateSkillRequest request, {
-    $grpc.CallOptions? options,
-  }) {
-    return $createUnaryCall(_$createSkill, request, options: options);
-  }
-
-  $grpc.ResponseFuture<$0.Skill> updateSkill(
-    $0.UpdateSkillRequest request, {
-    $grpc.CallOptions? options,
-  }) {
-    return $createUnaryCall(_$updateSkill, request, options: options);
-  }
-
-  $grpc.ResponseFuture<$0.DeleteSkillResponse> deleteSkill(
-    $0.DeleteSkillRequest request, {
-    $grpc.CallOptions? options,
-  }) {
-    return $createUnaryCall(_$deleteSkill, request, options: options);
-  }
-
   $grpc.ResponseFuture<$0.ListSkillsResponse> listSkills(
     $0.ListSkillsRequest request, {
     $grpc.CallOptions? options,
@@ -60,66 +39,49 @@ class SkillServiceClient extends $grpc.Client {
     return $createUnaryCall(_$listSkills, request, options: options);
   }
 
-  /// Attach and detach return the conversation's full skill set so a client
-  /// never has to guess what the server now believes is attached.
-  $grpc.ResponseFuture<$0.SessionSkillsResponse> attachSkill(
-    $0.AttachSkillRequest request, {
+  $grpc.ResponseFuture<$0.Skill> getSkill(
+    $0.GetSkillRequest request, {
     $grpc.CallOptions? options,
   }) {
-    return $createUnaryCall(_$attachSkill, request, options: options);
+    return $createUnaryCall(_$getSkill, request, options: options);
   }
 
-  $grpc.ResponseFuture<$0.SessionSkillsResponse> detachSkill(
-    $0.DetachSkillRequest request, {
+  $grpc.ResponseFuture<$0.Skill> setSkillEnabled(
+    $0.SetSkillEnabledRequest request, {
     $grpc.CallOptions? options,
   }) {
-    return $createUnaryCall(_$detachSkill, request, options: options);
+    return $createUnaryCall(_$setSkillEnabled, request, options: options);
   }
 
-  $grpc.ResponseFuture<$0.SessionSkillsResponse> listSessionSkills(
-    $0.ListSessionSkillsRequest request, {
+  $grpc.ResponseFuture<$0.Skill> setSkillCapabilityGrant(
+    $0.SetSkillCapabilityGrantRequest request, {
     $grpc.CallOptions? options,
   }) {
-    return $createUnaryCall(_$listSessionSkills, request, options: options);
+    return $createUnaryCall(_$setSkillCapabilityGrant, request,
+        options: options);
   }
 
   // method descriptors
 
-  static final _$createSkill =
-      $grpc.ClientMethod<$0.CreateSkillRequest, $0.Skill>(
-          '/turing.v1.SkillService/CreateSkill',
-          ($0.CreateSkillRequest value) => value.writeToBuffer(),
-          $0.Skill.fromBuffer);
-  static final _$updateSkill =
-      $grpc.ClientMethod<$0.UpdateSkillRequest, $0.Skill>(
-          '/turing.v1.SkillService/UpdateSkill',
-          ($0.UpdateSkillRequest value) => value.writeToBuffer(),
-          $0.Skill.fromBuffer);
-  static final _$deleteSkill =
-      $grpc.ClientMethod<$0.DeleteSkillRequest, $0.DeleteSkillResponse>(
-          '/turing.v1.SkillService/DeleteSkill',
-          ($0.DeleteSkillRequest value) => value.writeToBuffer(),
-          $0.DeleteSkillResponse.fromBuffer);
   static final _$listSkills =
       $grpc.ClientMethod<$0.ListSkillsRequest, $0.ListSkillsResponse>(
           '/turing.v1.SkillService/ListSkills',
           ($0.ListSkillsRequest value) => value.writeToBuffer(),
           $0.ListSkillsResponse.fromBuffer);
-  static final _$attachSkill =
-      $grpc.ClientMethod<$0.AttachSkillRequest, $0.SessionSkillsResponse>(
-          '/turing.v1.SkillService/AttachSkill',
-          ($0.AttachSkillRequest value) => value.writeToBuffer(),
-          $0.SessionSkillsResponse.fromBuffer);
-  static final _$detachSkill =
-      $grpc.ClientMethod<$0.DetachSkillRequest, $0.SessionSkillsResponse>(
-          '/turing.v1.SkillService/DetachSkill',
-          ($0.DetachSkillRequest value) => value.writeToBuffer(),
-          $0.SessionSkillsResponse.fromBuffer);
-  static final _$listSessionSkills =
-      $grpc.ClientMethod<$0.ListSessionSkillsRequest, $0.SessionSkillsResponse>(
-          '/turing.v1.SkillService/ListSessionSkills',
-          ($0.ListSessionSkillsRequest value) => value.writeToBuffer(),
-          $0.SessionSkillsResponse.fromBuffer);
+  static final _$getSkill = $grpc.ClientMethod<$0.GetSkillRequest, $0.Skill>(
+      '/turing.v1.SkillService/GetSkill',
+      ($0.GetSkillRequest value) => value.writeToBuffer(),
+      $0.Skill.fromBuffer);
+  static final _$setSkillEnabled =
+      $grpc.ClientMethod<$0.SetSkillEnabledRequest, $0.Skill>(
+          '/turing.v1.SkillService/SetSkillEnabled',
+          ($0.SetSkillEnabledRequest value) => value.writeToBuffer(),
+          $0.Skill.fromBuffer);
+  static final _$setSkillCapabilityGrant =
+      $grpc.ClientMethod<$0.SetSkillCapabilityGrantRequest, $0.Skill>(
+          '/turing.v1.SkillService/SetSkillCapabilityGrant',
+          ($0.SetSkillCapabilityGrantRequest value) => value.writeToBuffer(),
+          $0.Skill.fromBuffer);
 }
 
 @$pb.GrpcServiceName('turing.v1.SkillService')
@@ -127,31 +89,6 @@ abstract class SkillServiceBase extends $grpc.Service {
   $core.String get $name => 'turing.v1.SkillService';
 
   SkillServiceBase() {
-    $addMethod($grpc.ServiceMethod<$0.CreateSkillRequest, $0.Skill>(
-        'CreateSkill',
-        createSkill_Pre,
-        false,
-        false,
-        ($core.List<$core.int> value) =>
-            $0.CreateSkillRequest.fromBuffer(value),
-        ($0.Skill value) => value.writeToBuffer()));
-    $addMethod($grpc.ServiceMethod<$0.UpdateSkillRequest, $0.Skill>(
-        'UpdateSkill',
-        updateSkill_Pre,
-        false,
-        false,
-        ($core.List<$core.int> value) =>
-            $0.UpdateSkillRequest.fromBuffer(value),
-        ($0.Skill value) => value.writeToBuffer()));
-    $addMethod(
-        $grpc.ServiceMethod<$0.DeleteSkillRequest, $0.DeleteSkillResponse>(
-            'DeleteSkill',
-            deleteSkill_Pre,
-            false,
-            false,
-            ($core.List<$core.int> value) =>
-                $0.DeleteSkillRequest.fromBuffer(value),
-            ($0.DeleteSkillResponse value) => value.writeToBuffer()));
     $addMethod($grpc.ServiceMethod<$0.ListSkillsRequest, $0.ListSkillsResponse>(
         'ListSkills',
         listSkills_Pre,
@@ -159,58 +96,30 @@ abstract class SkillServiceBase extends $grpc.Service {
         false,
         ($core.List<$core.int> value) => $0.ListSkillsRequest.fromBuffer(value),
         ($0.ListSkillsResponse value) => value.writeToBuffer()));
-    $addMethod(
-        $grpc.ServiceMethod<$0.AttachSkillRequest, $0.SessionSkillsResponse>(
-            'AttachSkill',
-            attachSkill_Pre,
-            false,
-            false,
-            ($core.List<$core.int> value) =>
-                $0.AttachSkillRequest.fromBuffer(value),
-            ($0.SessionSkillsResponse value) => value.writeToBuffer()));
-    $addMethod(
-        $grpc.ServiceMethod<$0.DetachSkillRequest, $0.SessionSkillsResponse>(
-            'DetachSkill',
-            detachSkill_Pre,
-            false,
-            false,
-            ($core.List<$core.int> value) =>
-                $0.DetachSkillRequest.fromBuffer(value),
-            ($0.SessionSkillsResponse value) => value.writeToBuffer()));
-    $addMethod($grpc.ServiceMethod<$0.ListSessionSkillsRequest,
-            $0.SessionSkillsResponse>(
-        'ListSessionSkills',
-        listSessionSkills_Pre,
+    $addMethod($grpc.ServiceMethod<$0.GetSkillRequest, $0.Skill>(
+        'GetSkill',
+        getSkill_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) => $0.GetSkillRequest.fromBuffer(value),
+        ($0.Skill value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.SetSkillEnabledRequest, $0.Skill>(
+        'SetSkillEnabled',
+        setSkillEnabled_Pre,
         false,
         false,
         ($core.List<$core.int> value) =>
-            $0.ListSessionSkillsRequest.fromBuffer(value),
-        ($0.SessionSkillsResponse value) => value.writeToBuffer()));
+            $0.SetSkillEnabledRequest.fromBuffer(value),
+        ($0.Skill value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.SetSkillCapabilityGrantRequest, $0.Skill>(
+        'SetSkillCapabilityGrant',
+        setSkillCapabilityGrant_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.SetSkillCapabilityGrantRequest.fromBuffer(value),
+        ($0.Skill value) => value.writeToBuffer()));
   }
-
-  $async.Future<$0.Skill> createSkill_Pre($grpc.ServiceCall $call,
-      $async.Future<$0.CreateSkillRequest> $request) async {
-    return createSkill($call, await $request);
-  }
-
-  $async.Future<$0.Skill> createSkill(
-      $grpc.ServiceCall call, $0.CreateSkillRequest request);
-
-  $async.Future<$0.Skill> updateSkill_Pre($grpc.ServiceCall $call,
-      $async.Future<$0.UpdateSkillRequest> $request) async {
-    return updateSkill($call, await $request);
-  }
-
-  $async.Future<$0.Skill> updateSkill(
-      $grpc.ServiceCall call, $0.UpdateSkillRequest request);
-
-  $async.Future<$0.DeleteSkillResponse> deleteSkill_Pre($grpc.ServiceCall $call,
-      $async.Future<$0.DeleteSkillRequest> $request) async {
-    return deleteSkill($call, await $request);
-  }
-
-  $async.Future<$0.DeleteSkillResponse> deleteSkill(
-      $grpc.ServiceCall call, $0.DeleteSkillRequest request);
 
   $async.Future<$0.ListSkillsResponse> listSkills_Pre($grpc.ServiceCall $call,
       $async.Future<$0.ListSkillsRequest> $request) async {
@@ -220,30 +129,27 @@ abstract class SkillServiceBase extends $grpc.Service {
   $async.Future<$0.ListSkillsResponse> listSkills(
       $grpc.ServiceCall call, $0.ListSkillsRequest request);
 
-  $async.Future<$0.SessionSkillsResponse> attachSkill_Pre(
-      $grpc.ServiceCall $call,
-      $async.Future<$0.AttachSkillRequest> $request) async {
-    return attachSkill($call, await $request);
+  $async.Future<$0.Skill> getSkill_Pre($grpc.ServiceCall $call,
+      $async.Future<$0.GetSkillRequest> $request) async {
+    return getSkill($call, await $request);
   }
 
-  $async.Future<$0.SessionSkillsResponse> attachSkill(
-      $grpc.ServiceCall call, $0.AttachSkillRequest request);
+  $async.Future<$0.Skill> getSkill(
+      $grpc.ServiceCall call, $0.GetSkillRequest request);
 
-  $async.Future<$0.SessionSkillsResponse> detachSkill_Pre(
-      $grpc.ServiceCall $call,
-      $async.Future<$0.DetachSkillRequest> $request) async {
-    return detachSkill($call, await $request);
+  $async.Future<$0.Skill> setSkillEnabled_Pre($grpc.ServiceCall $call,
+      $async.Future<$0.SetSkillEnabledRequest> $request) async {
+    return setSkillEnabled($call, await $request);
   }
 
-  $async.Future<$0.SessionSkillsResponse> detachSkill(
-      $grpc.ServiceCall call, $0.DetachSkillRequest request);
+  $async.Future<$0.Skill> setSkillEnabled(
+      $grpc.ServiceCall call, $0.SetSkillEnabledRequest request);
 
-  $async.Future<$0.SessionSkillsResponse> listSessionSkills_Pre(
-      $grpc.ServiceCall $call,
-      $async.Future<$0.ListSessionSkillsRequest> $request) async {
-    return listSessionSkills($call, await $request);
+  $async.Future<$0.Skill> setSkillCapabilityGrant_Pre($grpc.ServiceCall $call,
+      $async.Future<$0.SetSkillCapabilityGrantRequest> $request) async {
+    return setSkillCapabilityGrant($call, await $request);
   }
 
-  $async.Future<$0.SessionSkillsResponse> listSessionSkills(
-      $grpc.ServiceCall call, $0.ListSessionSkillsRequest request);
+  $async.Future<$0.Skill> setSkillCapabilityGrant(
+      $grpc.ServiceCall call, $0.SetSkillCapabilityGrantRequest request);
 }

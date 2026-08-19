@@ -51,7 +51,7 @@ type Job struct {
 	UserText            string
 	Attempt             int
 	AssignmentAttemptID string
-	Skills              []AttachedSkill
+	Skills              []SkillSnapshot
 	// ExternalAgent is nil for the local assistant, which is the default and
 	// the common case.
 	ExternalAgent *ExternalAgentTarget
@@ -218,7 +218,7 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 		return EnqueueUserMessageResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	result, err := enqueueUserMessageTx(ctx, tx, input)
+	result, err := r.enqueueUserMessageTx(ctx, tx, input)
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
@@ -233,7 +233,7 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 // can claim a due automation and queue its run in ONE transaction: a crash
 // between advancing the schedule and creating the run would otherwise either
 // lose a run or fire the same one twice.
-func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMessageInput) (EnqueueUserMessageResult, error) {
+func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMessageInput) (EnqueueUserMessageResult, error) {
 	created := time.Now().UTC()
 	userMessageID := ids.New("msg")
 	assistantMessageID := ids.New("msg")
@@ -355,10 +355,11 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
-	// Frozen into the payload rather than read when the job is claimed: a
-	// skill edited or detached while the job waits must not change what this
-	// run was told to do. It is the same reason userText is stored here.
-	attachedSkills, err := attachedSkillsTx(ctx, tx, input.SessionID)
+	// Frozen into the payload rather than read when the job is claimed: a skill
+	// edited, disabled, or re-granted while the job waits must not change the
+	// metadata and content this run was offered. It is the same reason userText
+	// is stored here.
+	skillSnapshots, err := r.enabledSkillSnapshotsTx(ctx, tx)
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
@@ -370,7 +371,7 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 		"traceId":            traceID,
 		"modelProvider":      modelProvider,
 		"model":              model,
-		"skills":             attachedSkills,
+		"skills":             skillSnapshots,
 		// Frozen for the same reason the skills are: re-pointing or deleting
 		// the agent while this job waits must not redirect a message the user
 		// already sent, and must not send it to a company they did not pick.
@@ -525,7 +526,7 @@ func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, 
 	}
 	var payload struct {
 		UserText      string               `json:"userText"`
-		Skills        []AttachedSkill      `json:"skills"`
+		Skills        []SkillSnapshot      `json:"skills"`
 		ExternalAgent *ExternalAgentTarget `json:"externalAgent"`
 	}
 	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
@@ -533,7 +534,7 @@ func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, 
 	}
 	job.UserText = payload.UserText
 	// Absent for jobs enqueued before skills existed, which decodes to nil —
-	// the same as a conversation with none attached.
+	// the same as a run with no enabled skills.
 	job.Skills = payload.Skills
 	// Absent for every job enqueued before routing existed, and for every
 	// conversation that was never routed away. nil means the local assistant,
