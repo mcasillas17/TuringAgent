@@ -132,7 +132,7 @@ func TestListAuditRecordsPaginatesWithoutDuplicatesOrGapsWhenTimestampsMatch(t *
 		t.Fatalf("first page returned %d rows, want limit+1 = 3", len(firstPage))
 	}
 	firstPageIDs := auditIDList(firstPage[:2])
-	if !equalStrings(firstPageIDs, []string{"audit_p5", "audit_p4"}) {
+	if !auditStringSlicesEqual(firstPageIDs, []string{"audit_p5", "audit_p4"}) {
 		t.Fatalf("first page IDs = %v, want [audit_p5 audit_p4]", firstPageIDs)
 	}
 
@@ -153,7 +153,7 @@ func TestListAuditRecordsPaginatesWithoutDuplicatesOrGapsWhenTimestampsMatch(t *
 		t.Fatalf("second page returned %d rows, want limit+1 = 3 (one more page remains after it)", len(secondPage))
 	}
 	secondPageIDs := auditIDList(secondPage[:2])
-	if !equalStrings(secondPageIDs, []string{"audit_p3", "audit_p2"}) {
+	if !auditStringSlicesEqual(secondPageIDs, []string{"audit_p3", "audit_p2"}) {
 		t.Fatalf("second page IDs = %v, want [audit_p3 audit_p2]", secondPageIDs)
 	}
 
@@ -176,13 +176,13 @@ func TestListAuditRecordsPaginatesWithoutDuplicatesOrGapsWhenTimestampsMatch(t *
 		t.Fatalf("third page returned %d rows, want 1 (no more pages beyond)", len(thirdPage))
 	}
 	thirdPageIDs := auditIDList(thirdPage)
-	if !equalStrings(thirdPageIDs, []string{"audit_p1"}) {
+	if !auditStringSlicesEqual(thirdPageIDs, []string{"audit_p1"}) {
 		t.Fatalf("third page IDs = %v, want [audit_p1] (no duplicates, no gaps)", thirdPageIDs)
 	}
 
 	all := append(append([]string{}, firstPageIDs...), secondPageIDs...)
 	all = append(all, thirdPageIDs...)
-	if !equalStrings(all, []string{"audit_p5", "audit_p4", "audit_p3", "audit_p2", "audit_p1"}) {
+	if !auditStringSlicesEqual(all, []string{"audit_p5", "audit_p4", "audit_p3", "audit_p2", "audit_p1"}) {
 		t.Fatalf("stitched pages = %v, want every row exactly once in order", all)
 	}
 }
@@ -478,10 +478,10 @@ func auditIDList(records []AuditRecord) []string {
 }
 
 func auditIDsEqual(records []AuditRecord, want []string) bool {
-	return equalStrings(auditIDList(records), want)
+	return auditStringSlicesEqual(auditIDList(records), want)
 }
 
-func equalStrings(got, want []string) bool {
+func auditStringSlicesEqual(got, want []string) bool {
 	if len(got) != len(want) {
 		return false
 	}

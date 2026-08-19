@@ -20,83 +20,43 @@ const Skill$json = {
   '2': [
     {'1': 'skill_id', '3': 1, '4': 1, '5': 9, '10': 'skillId'},
     {'1': 'name', '3': 2, '4': 1, '5': 9, '10': 'name'},
-    {'1': 'instructions', '3': 3, '4': 1, '5': 9, '10': 'instructions'},
+    {'1': 'description', '3': 3, '4': 1, '5': 9, '10': 'description'},
+    {'1': 'body', '3': 4, '4': 1, '5': 9, '10': 'body'},
+    {'1': 'category', '3': 5, '4': 1, '5': 9, '10': 'category'},
+    {'1': 'version', '3': 6, '4': 1, '5': 9, '10': 'version'},
+    {'1': 'author', '3': 7, '4': 1, '5': 9, '10': 'author'},
+    {'1': 'license', '3': 8, '4': 1, '5': 9, '10': 'license'},
+    {'1': 'requires', '3': 9, '4': 3, '5': 9, '10': 'requires'},
     {
-      '1': 'created_at',
-      '3': 4,
-      '4': 1,
-      '5': 11,
-      '6': '.google.protobuf.Timestamp',
-      '10': 'createdAt'
+      '1': 'granted_capabilities',
+      '3': 10,
+      '4': 3,
+      '5': 9,
+      '10': 'grantedCapabilities'
     },
     {
-      '1': 'updated_at',
-      '3': 5,
-      '4': 1,
-      '5': 11,
-      '6': '.google.protobuf.Timestamp',
-      '10': 'updatedAt'
+      '1': 'missing_capabilities',
+      '3': 11,
+      '4': 3,
+      '5': 9,
+      '10': 'missingCapabilities'
     },
+    {'1': 'enabled', '3': 12, '4': 1, '5': 8, '10': 'enabled'},
+    {'1': 'parse_error', '3': 13, '4': 1, '5': 9, '10': 'parseError'},
+    {'1': 'folder_path', '3': 14, '4': 1, '5': 9, '10': 'folderPath'},
   ],
 };
 
 /// Descriptor for `Skill`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List skillDescriptor = $convert.base64Decode(
     'CgVTa2lsbBIZCghza2lsbF9pZBgBIAEoCVIHc2tpbGxJZBISCgRuYW1lGAIgASgJUgRuYW1lEi'
-    'IKDGluc3RydWN0aW9ucxgDIAEoCVIMaW5zdHJ1Y3Rpb25zEjkKCmNyZWF0ZWRfYXQYBCABKAsy'
-    'Gi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wUgljcmVhdGVkQXQSOQoKdXBkYXRlZF9hdBgFIA'
-    'EoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBSCXVwZGF0ZWRBdA==');
-
-@$core.Deprecated('Use createSkillRequestDescriptor instead')
-const CreateSkillRequest$json = {
-  '1': 'CreateSkillRequest',
-  '2': [
-    {'1': 'name', '3': 1, '4': 1, '5': 9, '10': 'name'},
-    {'1': 'instructions', '3': 2, '4': 1, '5': 9, '10': 'instructions'},
-  ],
-};
-
-/// Descriptor for `CreateSkillRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List createSkillRequestDescriptor = $convert.base64Decode(
-    'ChJDcmVhdGVTa2lsbFJlcXVlc3QSEgoEbmFtZRgBIAEoCVIEbmFtZRIiCgxpbnN0cnVjdGlvbn'
-    'MYAiABKAlSDGluc3RydWN0aW9ucw==');
-
-@$core.Deprecated('Use updateSkillRequestDescriptor instead')
-const UpdateSkillRequest$json = {
-  '1': 'UpdateSkillRequest',
-  '2': [
-    {'1': 'skill_id', '3': 1, '4': 1, '5': 9, '10': 'skillId'},
-    {'1': 'name', '3': 2, '4': 1, '5': 9, '10': 'name'},
-    {'1': 'instructions', '3': 3, '4': 1, '5': 9, '10': 'instructions'},
-  ],
-};
-
-/// Descriptor for `UpdateSkillRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List updateSkillRequestDescriptor = $convert.base64Decode(
-    'ChJVcGRhdGVTa2lsbFJlcXVlc3QSGQoIc2tpbGxfaWQYASABKAlSB3NraWxsSWQSEgoEbmFtZR'
-    'gCIAEoCVIEbmFtZRIiCgxpbnN0cnVjdGlvbnMYAyABKAlSDGluc3RydWN0aW9ucw==');
-
-@$core.Deprecated('Use deleteSkillRequestDescriptor instead')
-const DeleteSkillRequest$json = {
-  '1': 'DeleteSkillRequest',
-  '2': [
-    {'1': 'skill_id', '3': 1, '4': 1, '5': 9, '10': 'skillId'},
-  ],
-};
-
-/// Descriptor for `DeleteSkillRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List deleteSkillRequestDescriptor =
-    $convert.base64Decode(
-        'ChJEZWxldGVTa2lsbFJlcXVlc3QSGQoIc2tpbGxfaWQYASABKAlSB3NraWxsSWQ=');
-
-@$core.Deprecated('Use deleteSkillResponseDescriptor instead')
-const DeleteSkillResponse$json = {
-  '1': 'DeleteSkillResponse',
-};
-
-/// Descriptor for `DeleteSkillResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List deleteSkillResponseDescriptor =
-    $convert.base64Decode('ChNEZWxldGVTa2lsbFJlc3BvbnNl');
+    'AKC2Rlc2NyaXB0aW9uGAMgASgJUgtkZXNjcmlwdGlvbhISCgRib2R5GAQgASgJUgRib2R5EhoK'
+    'CGNhdGVnb3J5GAUgASgJUghjYXRlZ29yeRIYCgd2ZXJzaW9uGAYgASgJUgd2ZXJzaW9uEhYKBm'
+    'F1dGhvchgHIAEoCVIGYXV0aG9yEhgKB2xpY2Vuc2UYCCABKAlSB2xpY2Vuc2USGgoIcmVxdWly'
+    'ZXMYCSADKAlSCHJlcXVpcmVzEjEKFGdyYW50ZWRfY2FwYWJpbGl0aWVzGAogAygJUhNncmFudG'
+    'VkQ2FwYWJpbGl0aWVzEjEKFG1pc3NpbmdfY2FwYWJpbGl0aWVzGAsgAygJUhNtaXNzaW5nQ2Fw'
+    'YWJpbGl0aWVzEhgKB2VuYWJsZWQYDCABKAhSB2VuYWJsZWQSHwoLcGFyc2VfZXJyb3IYDSABKA'
+    'lSCnBhcnNlRXJyb3ISHwoLZm9sZGVyX3BhdGgYDiABKAlSCmZvbGRlclBhdGg=');
 
 @$core.Deprecated('Use listSkillsRequestDescriptor instead')
 const ListSkillsRequest$json = {
@@ -127,64 +87,46 @@ final $typed_data.Uint8List listSkillsResponseDescriptor = $convert.base64Decode
     'ChJMaXN0U2tpbGxzUmVzcG9uc2USKAoGc2tpbGxzGAEgAygLMhAudHVyaW5nLnYxLlNraWxsUg'
     'Zza2lsbHM=');
 
-@$core.Deprecated('Use attachSkillRequestDescriptor instead')
-const AttachSkillRequest$json = {
-  '1': 'AttachSkillRequest',
+@$core.Deprecated('Use getSkillRequestDescriptor instead')
+const GetSkillRequest$json = {
+  '1': 'GetSkillRequest',
   '2': [
-    {'1': 'session_id', '3': 1, '4': 1, '5': 9, '10': 'sessionId'},
-    {'1': 'skill_id', '3': 2, '4': 1, '5': 9, '10': 'skillId'},
+    {'1': 'skill_id', '3': 1, '4': 1, '5': 9, '10': 'skillId'},
   ],
 };
 
-/// Descriptor for `AttachSkillRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List attachSkillRequestDescriptor = $convert.base64Decode(
-    'ChJBdHRhY2hTa2lsbFJlcXVlc3QSHQoKc2Vzc2lvbl9pZBgBIAEoCVIJc2Vzc2lvbklkEhkKCH'
-    'NraWxsX2lkGAIgASgJUgdza2lsbElk');
+/// Descriptor for `GetSkillRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List getSkillRequestDescriptor = $convert.base64Decode(
+    'Cg9HZXRTa2lsbFJlcXVlc3QSGQoIc2tpbGxfaWQYASABKAlSB3NraWxsSWQ=');
 
-@$core.Deprecated('Use detachSkillRequestDescriptor instead')
-const DetachSkillRequest$json = {
-  '1': 'DetachSkillRequest',
+@$core.Deprecated('Use setSkillEnabledRequestDescriptor instead')
+const SetSkillEnabledRequest$json = {
+  '1': 'SetSkillEnabledRequest',
   '2': [
-    {'1': 'session_id', '3': 1, '4': 1, '5': 9, '10': 'sessionId'},
-    {'1': 'skill_id', '3': 2, '4': 1, '5': 9, '10': 'skillId'},
+    {'1': 'skill_id', '3': 1, '4': 1, '5': 9, '10': 'skillId'},
+    {'1': 'enabled', '3': 2, '4': 1, '5': 8, '10': 'enabled'},
   ],
 };
 
-/// Descriptor for `DetachSkillRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List detachSkillRequestDescriptor = $convert.base64Decode(
-    'ChJEZXRhY2hTa2lsbFJlcXVlc3QSHQoKc2Vzc2lvbl9pZBgBIAEoCVIJc2Vzc2lvbklkEhkKCH'
-    'NraWxsX2lkGAIgASgJUgdza2lsbElk');
-
-@$core.Deprecated('Use sessionSkillsResponseDescriptor instead')
-const SessionSkillsResponse$json = {
-  '1': 'SessionSkillsResponse',
-  '2': [
-    {
-      '1': 'skills',
-      '3': 1,
-      '4': 3,
-      '5': 11,
-      '6': '.turing.v1.Skill',
-      '10': 'skills'
-    },
-  ],
-};
-
-/// Descriptor for `SessionSkillsResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List sessionSkillsResponseDescriptor = $convert.base64Decode(
-    'ChVTZXNzaW9uU2tpbGxzUmVzcG9uc2USKAoGc2tpbGxzGAEgAygLMhAudHVyaW5nLnYxLlNraW'
-    'xsUgZza2lsbHM=');
-
-@$core.Deprecated('Use listSessionSkillsRequestDescriptor instead')
-const ListSessionSkillsRequest$json = {
-  '1': 'ListSessionSkillsRequest',
-  '2': [
-    {'1': 'session_id', '3': 1, '4': 1, '5': 9, '10': 'sessionId'},
-  ],
-};
-
-/// Descriptor for `ListSessionSkillsRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List listSessionSkillsRequestDescriptor =
+/// Descriptor for `SetSkillEnabledRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List setSkillEnabledRequestDescriptor =
     $convert.base64Decode(
-        'ChhMaXN0U2Vzc2lvblNraWxsc1JlcXVlc3QSHQoKc2Vzc2lvbl9pZBgBIAEoCVIJc2Vzc2lvbk'
-        'lk');
+        'ChZTZXRTa2lsbEVuYWJsZWRSZXF1ZXN0EhkKCHNraWxsX2lkGAEgASgJUgdza2lsbElkEhgKB2'
+        'VuYWJsZWQYAiABKAhSB2VuYWJsZWQ=');
+
+@$core.Deprecated('Use setSkillCapabilityGrantRequestDescriptor instead')
+const SetSkillCapabilityGrantRequest$json = {
+  '1': 'SetSkillCapabilityGrantRequest',
+  '2': [
+    {'1': 'skill_id', '3': 1, '4': 1, '5': 9, '10': 'skillId'},
+    {'1': 'capability', '3': 2, '4': 1, '5': 9, '10': 'capability'},
+    {'1': 'granted', '3': 3, '4': 1, '5': 8, '10': 'granted'},
+  ],
+};
+
+/// Descriptor for `SetSkillCapabilityGrantRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List setSkillCapabilityGrantRequestDescriptor =
+    $convert.base64Decode(
+        'Ch5TZXRTa2lsbENhcGFiaWxpdHlHcmFudFJlcXVlc3QSGQoIc2tpbGxfaWQYASABKAlSB3NraW'
+        'xsSWQSHgoKY2FwYWJpbGl0eRgCIAEoCVIKY2FwYWJpbGl0eRIYCgdncmFudGVkGAMgASgIUgdn'
+        'cmFudGVk');

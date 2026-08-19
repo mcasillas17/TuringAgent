@@ -88,10 +88,10 @@ type AgentJob struct {
 	UserText           string                 `protobuf:"bytes,10,opt,name=user_text,json=userText,proto3" json:"user_text,omitempty"`
 	RequestedTools     []string               `protobuf:"bytes,11,rep,name=requested_tools,json=requestedTools,proto3" json:"requested_tools,omitempty"`
 	Attempt            int32                  `protobuf:"varint,12,opt,name=attempt,proto3" json:"attempt,omitempty"`
-	// The skills attached to this conversation when the message was accepted,
-	// captured then rather than read at execution time so that editing a skill
-	// never changes what an already-queued run was told to do.
-	Skills []*AttachedSkill `protobuf:"bytes,13,rep,name=skills,proto3" json:"skills,omitempty"`
+	// The eligible filesystem skills when the message was accepted, captured
+	// then rather than read at execution time so edits cannot rewrite a queued
+	// run. Older queued jobs may still carry the legacy name/instructions pair.
+	Skills []*SkillSnapshot `protobuf:"bytes,13,rep,name=skills,proto3" json:"skills,omitempty"`
 	// Set only when the conversation was deliberately routed away from the
 	// local assistant. Absent is the default and means "run this here".
 	ExternalAgent *ExternalAgentTarget `protobuf:"bytes,14,opt,name=external_agent,json=externalAgent,proto3" json:"external_agent,omitempty"`
@@ -213,7 +213,7 @@ func (x *AgentJob) GetAttempt() int32 {
 	return 0
 }
 
-func (x *AgentJob) GetSkills() []*AttachedSkill {
+func (x *AgentJob) GetSkills() []*SkillSnapshot {
 	if x != nil {
 		return x.Skills
 	}
@@ -299,32 +299,40 @@ func (x *ExternalAgentTarget) GetCredentialRef() string {
 	return ""
 }
 
-// A skill as the runtime sees it: a name for attribution and the instructions
-// themselves. Deliberately not the full Skill message — the runtime has no use
-// for identifiers or timestamps, and the job is replayed from a stored payload
-// where a narrower shape is a narrower thing to keep in sync.
-type AttachedSkill struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Instructions  string                 `protobuf:"bytes,2,opt,name=instructions,proto3" json:"instructions,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+// A frozen skill snapshot as the runtime sees it. instructions retains field 2
+// for wire compatibility with jobs queued by the database-backed model; for
+// filesystem skills it carries the SKILL.md body.
+type SkillSnapshot struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Name         string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Instructions string                 `protobuf:"bytes,2,opt,name=instructions,proto3" json:"instructions,omitempty"`
+	SkillId      string                 `protobuf:"bytes,3,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
+	Description  string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
+	Category     string                 `protobuf:"bytes,5,opt,name=category,proto3" json:"category,omitempty"`
+	References   map[string]string      `protobuf:"bytes,6,rep,name=references,proto3" json:"references,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// True when this enabled skill was missing one or more declared grants when
+	// the run was queued. Metadata remains visible in the enabled index, but
+	// neither its body nor its references are present in the snapshot.
+	Withheld            bool     `protobuf:"varint,7,opt,name=withheld,proto3" json:"withheld,omitempty"`
+	MissingCapabilities []string `protobuf:"bytes,8,rep,name=missing_capabilities,json=missingCapabilities,proto3" json:"missing_capabilities,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
-func (x *AttachedSkill) Reset() {
-	*x = AttachedSkill{}
+func (x *SkillSnapshot) Reset() {
+	*x = SkillSnapshot{}
 	mi := &file_turing_v1_runtime_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *AttachedSkill) String() string {
+func (x *SkillSnapshot) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*AttachedSkill) ProtoMessage() {}
+func (*SkillSnapshot) ProtoMessage() {}
 
-func (x *AttachedSkill) ProtoReflect() protoreflect.Message {
+func (x *SkillSnapshot) ProtoReflect() protoreflect.Message {
 	mi := &file_turing_v1_runtime_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -336,23 +344,65 @@ func (x *AttachedSkill) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use AttachedSkill.ProtoReflect.Descriptor instead.
-func (*AttachedSkill) Descriptor() ([]byte, []int) {
+// Deprecated: Use SkillSnapshot.ProtoReflect.Descriptor instead.
+func (*SkillSnapshot) Descriptor() ([]byte, []int) {
 	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *AttachedSkill) GetName() string {
+func (x *SkillSnapshot) GetName() string {
 	if x != nil {
 		return x.Name
 	}
 	return ""
 }
 
-func (x *AttachedSkill) GetInstructions() string {
+func (x *SkillSnapshot) GetInstructions() string {
 	if x != nil {
 		return x.Instructions
 	}
 	return ""
+}
+
+func (x *SkillSnapshot) GetSkillId() string {
+	if x != nil {
+		return x.SkillId
+	}
+	return ""
+}
+
+func (x *SkillSnapshot) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *SkillSnapshot) GetCategory() string {
+	if x != nil {
+		return x.Category
+	}
+	return ""
+}
+
+func (x *SkillSnapshot) GetReferences() map[string]string {
+	if x != nil {
+		return x.References
+	}
+	return nil
+}
+
+func (x *SkillSnapshot) GetWithheld() bool {
+	if x != nil {
+		return x.Withheld
+	}
+	return false
+}
+
+func (x *SkillSnapshot) GetMissingCapabilities() []string {
+	if x != nil {
+		return x.MissingCapabilities
+	}
+	return nil
 }
 
 type DiscoveredTool struct {
@@ -1316,15 +1366,26 @@ const file_turing_v1_runtime_proto_rawDesc = "" +
 	" \x01(\tR\buserText\x12'\n" +
 	"\x0frequested_tools\x18\v \x03(\tR\x0erequestedTools\x12\x18\n" +
 	"\aattempt\x18\f \x01(\x05R\aattempt\x120\n" +
-	"\x06skills\x18\r \x03(\v2\x18.turing.v1.AttachedSkillR\x06skills\x12E\n" +
+	"\x06skills\x18\r \x03(\v2\x18.turing.v1.SkillSnapshotR\x06skills\x12E\n" +
 	"\x0eexternal_agent\x18\x0e \x01(\v2\x1e.turing.v1.ExternalAgentTargetR\rexternalAgent\"z\n" +
 	"\x13ExternalAgentTarget\x12!\n" +
 	"\fdisplay_name\x18\x01 \x01(\tR\vdisplayName\x12\x19\n" +
 	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12%\n" +
-	"\x0ecredential_ref\x18\x03 \x01(\tR\rcredentialRef\"G\n" +
-	"\rAttachedSkill\x12\x12\n" +
+	"\x0ecredential_ref\x18\x03 \x01(\tR\rcredentialRef\"\xf8\x02\n" +
+	"\rSkillSnapshot\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\"\n" +
-	"\finstructions\x18\x02 \x01(\tR\finstructions\"\x7f\n" +
+	"\finstructions\x18\x02 \x01(\tR\finstructions\x12\x19\n" +
+	"\bskill_id\x18\x03 \x01(\tR\askillId\x12 \n" +
+	"\vdescription\x18\x04 \x01(\tR\vdescription\x12\x1a\n" +
+	"\bcategory\x18\x05 \x01(\tR\bcategory\x12H\n" +
+	"\n" +
+	"references\x18\x06 \x03(\v2(.turing.v1.SkillSnapshot.ReferencesEntryR\n" +
+	"references\x12\x1a\n" +
+	"\bwithheld\x18\a \x01(\bR\bwithheld\x121\n" +
+	"\x14missing_capabilities\x18\b \x03(\tR\x13missingCapabilities\x1a=\n" +
+	"\x0fReferencesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x7f\n" +
 	"\x0eDiscoveredTool\x12\x1f\n" +
 	"\vserver_name\x18\x01 \x01(\tR\n" +
 	"serverName\x12\x1b\n" +
@@ -1408,12 +1469,12 @@ func file_turing_v1_runtime_proto_rawDescGZIP() []byte {
 }
 
 var file_turing_v1_runtime_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_turing_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_turing_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_turing_v1_runtime_proto_goTypes = []any{
 	(ToolDiscoveryStatus)(0),         // 0: turing.v1.ToolDiscoveryStatus
 	(*AgentJob)(nil),                 // 1: turing.v1.AgentJob
 	(*ExternalAgentTarget)(nil),      // 2: turing.v1.ExternalAgentTarget
-	(*AttachedSkill)(nil),            // 3: turing.v1.AttachedSkill
+	(*SkillSnapshot)(nil),            // 3: turing.v1.SkillSnapshot
 	(*DiscoveredTool)(nil),           // 4: turing.v1.DiscoveredTool
 	(*RuntimeWorkerReady)(nil),       // 5: turing.v1.RuntimeWorkerReady
 	(*RuntimeHeartbeat)(nil),         // 6: turing.v1.RuntimeHeartbeat
@@ -1427,44 +1488,46 @@ var file_turing_v1_runtime_proto_goTypes = []any{
 	(*RuntimeApprovalUpdated)(nil),   // 14: turing.v1.RuntimeApprovalUpdated
 	(*RuntimeShutdownRequested)(nil), // 15: turing.v1.RuntimeShutdownRequested
 	(*RuntimeCommand)(nil),           // 16: turing.v1.RuntimeCommand
-	(AgentId)(0),                     // 17: turing.v1.AgentId
-	(ModelProvider)(0),               // 18: turing.v1.ModelProvider
-	(*structpb.Struct)(nil),          // 19: google.protobuf.Struct
-	(*TuringEvent)(nil),              // 20: turing.v1.TuringEvent
-	(*ToolCallBeacon)(nil),           // 21: turing.v1.ToolCallBeacon
-	(*ToolPolicyDecision)(nil),       // 22: turing.v1.ToolPolicyDecision
+	nil,                              // 17: turing.v1.SkillSnapshot.ReferencesEntry
+	(AgentId)(0),                     // 18: turing.v1.AgentId
+	(ModelProvider)(0),               // 19: turing.v1.ModelProvider
+	(*structpb.Struct)(nil),          // 20: google.protobuf.Struct
+	(*TuringEvent)(nil),              // 21: turing.v1.TuringEvent
+	(*ToolCallBeacon)(nil),           // 22: turing.v1.ToolCallBeacon
+	(*ToolPolicyDecision)(nil),       // 23: turing.v1.ToolPolicyDecision
 }
 var file_turing_v1_runtime_proto_depIdxs = []int32{
-	17, // 0: turing.v1.AgentJob.agent_id:type_name -> turing.v1.AgentId
-	18, // 1: turing.v1.AgentJob.model_provider:type_name -> turing.v1.ModelProvider
-	3,  // 2: turing.v1.AgentJob.skills:type_name -> turing.v1.AttachedSkill
+	18, // 0: turing.v1.AgentJob.agent_id:type_name -> turing.v1.AgentId
+	19, // 1: turing.v1.AgentJob.model_provider:type_name -> turing.v1.ModelProvider
+	3,  // 2: turing.v1.AgentJob.skills:type_name -> turing.v1.SkillSnapshot
 	2,  // 3: turing.v1.AgentJob.external_agent:type_name -> turing.v1.ExternalAgentTarget
-	19, // 4: turing.v1.DiscoveredTool.schema:type_name -> google.protobuf.Struct
-	17, // 5: turing.v1.RuntimeWorkerReady.agent_id:type_name -> turing.v1.AgentId
-	4,  // 6: turing.v1.RuntimeWorkerReady.tools:type_name -> turing.v1.DiscoveredTool
-	0,  // 7: turing.v1.RuntimeWorkerReady.tool_discovery_status:type_name -> turing.v1.ToolDiscoveryStatus
-	19, // 8: turing.v1.RuntimeRunCompleted.usage:type_name -> google.protobuf.Struct
-	7,  // 9: turing.v1.RuntimeRunCompleted.token_usage:type_name -> turing.v1.RunTokenUsage
-	5,  // 10: turing.v1.RuntimeUpdate.worker_ready:type_name -> turing.v1.RuntimeWorkerReady
-	6,  // 11: turing.v1.RuntimeUpdate.heartbeat:type_name -> turing.v1.RuntimeHeartbeat
-	20, // 12: turing.v1.RuntimeUpdate.event:type_name -> turing.v1.TuringEvent
-	21, // 13: turing.v1.RuntimeUpdate.tool_beacon:type_name -> turing.v1.ToolCallBeacon
-	8,  // 14: turing.v1.RuntimeUpdate.run_completed:type_name -> turing.v1.RuntimeRunCompleted
-	9,  // 15: turing.v1.RuntimeUpdate.run_failed:type_name -> turing.v1.RuntimeRunFailed
-	10, // 16: turing.v1.RuntimeUpdate.run_cancelled_ack:type_name -> turing.v1.RuntimeCancelledAck
-	12, // 17: turing.v1.RuntimeCommand.worker_accepted:type_name -> turing.v1.RuntimeWorkerAccepted
-	1,  // 18: turing.v1.RuntimeCommand.run_assigned:type_name -> turing.v1.AgentJob
-	13, // 19: turing.v1.RuntimeCommand.run_cancelled:type_name -> turing.v1.RuntimeRunCancelled
-	14, // 20: turing.v1.RuntimeCommand.approval_updated:type_name -> turing.v1.RuntimeApprovalUpdated
-	15, // 21: turing.v1.RuntimeCommand.shutdown_requested:type_name -> turing.v1.RuntimeShutdownRequested
-	22, // 22: turing.v1.RuntimeCommand.tool_policy_decision:type_name -> turing.v1.ToolPolicyDecision
-	11, // 23: turing.v1.RuntimeService.ConnectWorker:input_type -> turing.v1.RuntimeUpdate
-	16, // 24: turing.v1.RuntimeService.ConnectWorker:output_type -> turing.v1.RuntimeCommand
-	24, // [24:25] is the sub-list for method output_type
-	23, // [23:24] is the sub-list for method input_type
-	23, // [23:23] is the sub-list for extension type_name
-	23, // [23:23] is the sub-list for extension extendee
-	0,  // [0:23] is the sub-list for field type_name
+	17, // 4: turing.v1.SkillSnapshot.references:type_name -> turing.v1.SkillSnapshot.ReferencesEntry
+	20, // 5: turing.v1.DiscoveredTool.schema:type_name -> google.protobuf.Struct
+	18, // 6: turing.v1.RuntimeWorkerReady.agent_id:type_name -> turing.v1.AgentId
+	4,  // 7: turing.v1.RuntimeWorkerReady.tools:type_name -> turing.v1.DiscoveredTool
+	0,  // 8: turing.v1.RuntimeWorkerReady.tool_discovery_status:type_name -> turing.v1.ToolDiscoveryStatus
+	20, // 9: turing.v1.RuntimeRunCompleted.usage:type_name -> google.protobuf.Struct
+	7,  // 10: turing.v1.RuntimeRunCompleted.token_usage:type_name -> turing.v1.RunTokenUsage
+	5,  // 11: turing.v1.RuntimeUpdate.worker_ready:type_name -> turing.v1.RuntimeWorkerReady
+	6,  // 12: turing.v1.RuntimeUpdate.heartbeat:type_name -> turing.v1.RuntimeHeartbeat
+	21, // 13: turing.v1.RuntimeUpdate.event:type_name -> turing.v1.TuringEvent
+	22, // 14: turing.v1.RuntimeUpdate.tool_beacon:type_name -> turing.v1.ToolCallBeacon
+	8,  // 15: turing.v1.RuntimeUpdate.run_completed:type_name -> turing.v1.RuntimeRunCompleted
+	9,  // 16: turing.v1.RuntimeUpdate.run_failed:type_name -> turing.v1.RuntimeRunFailed
+	10, // 17: turing.v1.RuntimeUpdate.run_cancelled_ack:type_name -> turing.v1.RuntimeCancelledAck
+	12, // 18: turing.v1.RuntimeCommand.worker_accepted:type_name -> turing.v1.RuntimeWorkerAccepted
+	1,  // 19: turing.v1.RuntimeCommand.run_assigned:type_name -> turing.v1.AgentJob
+	13, // 20: turing.v1.RuntimeCommand.run_cancelled:type_name -> turing.v1.RuntimeRunCancelled
+	14, // 21: turing.v1.RuntimeCommand.approval_updated:type_name -> turing.v1.RuntimeApprovalUpdated
+	15, // 22: turing.v1.RuntimeCommand.shutdown_requested:type_name -> turing.v1.RuntimeShutdownRequested
+	23, // 23: turing.v1.RuntimeCommand.tool_policy_decision:type_name -> turing.v1.ToolPolicyDecision
+	11, // 24: turing.v1.RuntimeService.ConnectWorker:input_type -> turing.v1.RuntimeUpdate
+	16, // 25: turing.v1.RuntimeService.ConnectWorker:output_type -> turing.v1.RuntimeCommand
+	25, // [25:26] is the sub-list for method output_type
+	24, // [24:25] is the sub-list for method input_type
+	24, // [24:24] is the sub-list for extension type_name
+	24, // [24:24] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_runtime_proto_init() }
@@ -1499,7 +1562,7 @@ func file_turing_v1_runtime_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_runtime_proto_rawDesc), len(file_turing_v1_runtime_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   16,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

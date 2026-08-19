@@ -388,6 +388,15 @@ preview/diff UX, and no approval viewer UI ships here.
 **Likely files:** proto files, `tools/proto`, CI workflow and self-guard tests.  
 **Acceptance:** Additive changes pass; renumbering/removing a live field fails CI.  
 **Dependencies:** None.
+**Implementation pending merge:** `buf.yaml` selects Buf 1.72.0 `FILE`
+compatibility for the `proto` module; `tools/proto/breaking.sh` refreshes and
+resolves the requested remote-tracking base before comparison; real fixtures in
+`tools/proto/breaking_test.go` prove additive changes pass and live-field
+removal or renumbering fails, including removal that reserves the old name and
+number; `.github/workflows/ci.yml` and its self-guard run the pinned check
+without replacing deterministic Go/Dart generation. Mainline history contains
+no removed protobuf fields, enum values, or files, so this pending
+implementation adds no speculative reservations.
 
 ### Phase 2: Make recall measurable before changing technology
 

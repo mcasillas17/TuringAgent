@@ -170,7 +170,18 @@ class GrpcMappers {
     return model_skill.Skill(
       skillId: skill.skillId,
       name: skill.name,
-      instructions: skill.instructions,
+      description: skill.description,
+      body: skill.body,
+      category: skill.category,
+      version: skill.version,
+      author: skill.author,
+      license: skill.license,
+      requires: List.unmodifiable(skill.requires),
+      grantedCapabilities: List.unmodifiable(skill.grantedCapabilities),
+      missingCapabilities: List.unmodifiable(skill.missingCapabilities),
+      enabled: skill.enabled,
+      parseError: skill.parseError,
+      folderPath: skill.folderPath,
     );
   }
 

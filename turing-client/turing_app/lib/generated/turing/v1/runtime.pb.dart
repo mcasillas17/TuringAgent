@@ -39,7 +39,7 @@ class AgentJob extends $pb.GeneratedMessage {
     $core.String? userText,
     $core.Iterable<$core.String>? requestedTools,
     $core.int? attempt,
-    $core.Iterable<AttachedSkill>? skills,
+    $core.Iterable<SkillSnapshot>? skills,
     ExternalAgentTarget? externalAgent,
   }) {
     final result = create();
@@ -93,8 +93,8 @@ class AgentJob extends $pb.GeneratedMessage {
     ..aOS(10, _omitFieldNames ? '' : 'userText')
     ..pPS(11, _omitFieldNames ? '' : 'requestedTools')
     ..a<$core.int>(12, _omitFieldNames ? '' : 'attempt', $pb.PbFieldType.O3)
-    ..pc<AttachedSkill>(13, _omitFieldNames ? '' : 'skills', $pb.PbFieldType.PM,
-        subBuilder: AttachedSkill.create)
+    ..pc<SkillSnapshot>(13, _omitFieldNames ? '' : 'skills', $pb.PbFieldType.PM,
+        subBuilder: SkillSnapshot.create)
     ..aOM<ExternalAgentTarget>(14, _omitFieldNames ? '' : 'externalAgent',
         subBuilder: ExternalAgentTarget.create)
     ..hasRequiredFields = false;
@@ -220,11 +220,11 @@ class AgentJob extends $pb.GeneratedMessage {
   @$pb.TagNumber(12)
   void clearAttempt() => $_clearField(12);
 
-  /// The skills attached to this conversation when the message was accepted,
-  /// captured then rather than read at execution time so that editing a skill
-  /// never changes what an already-queued run was told to do.
+  /// The eligible filesystem skills when the message was accepted, captured
+  /// then rather than read at execution time so edits cannot rewrite a queued
+  /// run. Older queued jobs may still carry the legacy name/instructions pair.
   @$pb.TagNumber(13)
-  $pb.PbList<AttachedSkill> get skills => $_getList(12);
+  $pb.PbList<SkillSnapshot> get skills => $_getList(12);
 
   /// Set only when the conversation was deliberately routed away from the
   /// local assistant. Absent is the default and means "run this here".
@@ -332,58 +332,80 @@ class ExternalAgentTarget extends $pb.GeneratedMessage {
   void clearCredentialRef() => $_clearField(3);
 }
 
-/// A skill as the runtime sees it: a name for attribution and the instructions
-/// themselves. Deliberately not the full Skill message — the runtime has no use
-/// for identifiers or timestamps, and the job is replayed from a stored payload
-/// where a narrower shape is a narrower thing to keep in sync.
-class AttachedSkill extends $pb.GeneratedMessage {
-  factory AttachedSkill({
+/// A frozen skill snapshot as the runtime sees it. instructions retains field 2
+/// for wire compatibility with jobs queued by the database-backed model; for
+/// filesystem skills it carries the SKILL.md body.
+class SkillSnapshot extends $pb.GeneratedMessage {
+  factory SkillSnapshot({
     $core.String? name,
     $core.String? instructions,
+    $core.String? skillId,
+    $core.String? description,
+    $core.String? category,
+    $core.Iterable<$core.MapEntry<$core.String, $core.String>>? references,
+    $core.bool? withheld,
+    $core.Iterable<$core.String>? missingCapabilities,
   }) {
     final result = create();
     if (name != null) result.name = name;
     if (instructions != null) result.instructions = instructions;
+    if (skillId != null) result.skillId = skillId;
+    if (description != null) result.description = description;
+    if (category != null) result.category = category;
+    if (references != null) result.references.addEntries(references);
+    if (withheld != null) result.withheld = withheld;
+    if (missingCapabilities != null)
+      result.missingCapabilities.addAll(missingCapabilities);
     return result;
   }
 
-  AttachedSkill._();
+  SkillSnapshot._();
 
-  factory AttachedSkill.fromBuffer($core.List<$core.int> data,
+  factory SkillSnapshot.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
       create()..mergeFromBuffer(data, registry);
-  factory AttachedSkill.fromJson($core.String json,
+  factory SkillSnapshot.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
       create()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
-      _omitMessageNames ? '' : 'AttachedSkill',
+      _omitMessageNames ? '' : 'SkillSnapshot',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'name')
     ..aOS(2, _omitFieldNames ? '' : 'instructions')
+    ..aOS(3, _omitFieldNames ? '' : 'skillId')
+    ..aOS(4, _omitFieldNames ? '' : 'description')
+    ..aOS(5, _omitFieldNames ? '' : 'category')
+    ..m<$core.String, $core.String>(6, _omitFieldNames ? '' : 'references',
+        entryClassName: 'SkillSnapshot.ReferencesEntry',
+        keyFieldType: $pb.PbFieldType.OS,
+        valueFieldType: $pb.PbFieldType.OS,
+        packageName: const $pb.PackageName('turing.v1'))
+    ..aOB(7, _omitFieldNames ? '' : 'withheld')
+    ..pPS(8, _omitFieldNames ? '' : 'missingCapabilities')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  AttachedSkill clone() => AttachedSkill()..mergeFromMessage(this);
+  SkillSnapshot clone() => SkillSnapshot()..mergeFromMessage(this);
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  AttachedSkill copyWith(void Function(AttachedSkill) updates) =>
-      super.copyWith((message) => updates(message as AttachedSkill))
-          as AttachedSkill;
+  SkillSnapshot copyWith(void Function(SkillSnapshot) updates) =>
+      super.copyWith((message) => updates(message as SkillSnapshot))
+          as SkillSnapshot;
 
   @$core.override
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
-  static AttachedSkill create() => AttachedSkill._();
+  static SkillSnapshot create() => SkillSnapshot._();
   @$core.override
-  AttachedSkill createEmptyInstance() => create();
-  static $pb.PbList<AttachedSkill> createRepeated() =>
-      $pb.PbList<AttachedSkill>();
+  SkillSnapshot createEmptyInstance() => create();
+  static $pb.PbList<SkillSnapshot> createRepeated() =>
+      $pb.PbList<SkillSnapshot>();
   @$core.pragma('dart2js:noInline')
-  static AttachedSkill getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<AttachedSkill>(create);
-  static AttachedSkill? _defaultInstance;
+  static SkillSnapshot getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<SkillSnapshot>(create);
+  static SkillSnapshot? _defaultInstance;
 
   @$pb.TagNumber(1)
   $core.String get name => $_getSZ(0);
@@ -402,6 +424,51 @@ class AttachedSkill extends $pb.GeneratedMessage {
   $core.bool hasInstructions() => $_has(1);
   @$pb.TagNumber(2)
   void clearInstructions() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get skillId => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set skillId($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasSkillId() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearSkillId() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get description => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set description($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasDescription() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearDescription() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get category => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set category($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasCategory() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearCategory() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $pb.PbMap<$core.String, $core.String> get references => $_getMap(5);
+
+  /// True when this enabled skill was missing one or more declared grants when
+  /// the run was queued. Metadata remains visible in the enabled index, but
+  /// neither its body nor its references are present in the snapshot.
+  @$pb.TagNumber(7)
+  $core.bool get withheld => $_getBF(6);
+  @$pb.TagNumber(7)
+  set withheld($core.bool value) => $_setBool(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasWithheld() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearWithheld() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $pb.PbList<$core.String> get missingCapabilities => $_getList(7);
 }
 
 class DiscoveredTool extends $pb.GeneratedMessage {

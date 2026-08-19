@@ -359,65 +359,38 @@ class TuringGrpcApi implements ClosableTuringApi {
   }
 
   @override
-  Future<Skill> createSkill({
-    required String name,
-    required String instructions,
-  }) async {
-    final response = await _skills.createSkill(
-      skillpb.CreateSkillRequest(name: name, instructions: instructions),
+  Future<Skill> getSkill({required String skillId}) async {
+    final response = await _skills.getSkill(
+      skillpb.GetSkillRequest(skillId: skillId),
     );
     return GrpcMappers.skillToModel(response);
   }
 
   @override
-  Future<Skill> updateSkill({
+  Future<Skill> setSkillEnabled({
     required String skillId,
-    required String name,
-    required String instructions,
+    required bool enabled,
   }) async {
-    final response = await _skills.updateSkill(
-      skillpb.UpdateSkillRequest(
+    final response = await _skills.setSkillEnabled(
+      skillpb.SetSkillEnabledRequest(skillId: skillId, enabled: enabled),
+    );
+    return GrpcMappers.skillToModel(response);
+  }
+
+  @override
+  Future<Skill> setSkillCapabilityGrant({
+    required String skillId,
+    required String capability,
+    required bool granted,
+  }) async {
+    final response = await _skills.setSkillCapabilityGrant(
+      skillpb.SetSkillCapabilityGrantRequest(
         skillId: skillId,
-        name: name,
-        instructions: instructions,
+        capability: capability,
+        granted: granted,
       ),
     );
     return GrpcMappers.skillToModel(response);
-  }
-
-  @override
-  Future<void> deleteSkill({required String skillId}) async {
-    await _skills.deleteSkill(skillpb.DeleteSkillRequest(skillId: skillId));
-  }
-
-  @override
-  Future<List<Skill>> attachSkill({
-    required String sessionId,
-    required String skillId,
-  }) async {
-    final response = await _skills.attachSkill(
-      skillpb.AttachSkillRequest(sessionId: sessionId, skillId: skillId),
-    );
-    return response.skills.map(GrpcMappers.skillToModel).toList();
-  }
-
-  @override
-  Future<List<Skill>> detachSkill({
-    required String sessionId,
-    required String skillId,
-  }) async {
-    final response = await _skills.detachSkill(
-      skillpb.DetachSkillRequest(sessionId: sessionId, skillId: skillId),
-    );
-    return response.skills.map(GrpcMappers.skillToModel).toList();
-  }
-
-  @override
-  Future<List<Skill>> listSessionSkills({required String sessionId}) async {
-    final response = await _skills.listSessionSkills(
-      skillpb.ListSessionSkillsRequest(sessionId: sessionId),
-    );
-    return response.skills.map(GrpcMappers.skillToModel).toList();
   }
 
   @override

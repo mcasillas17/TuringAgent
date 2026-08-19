@@ -347,6 +347,11 @@ void main() {
         findsOneWidget,
         reason: 'the sheet states what routing does and does not send',
       );
+      expect(
+        find.textContaining('skill text the agent loads'),
+        findsOneWidget,
+        reason: 'routing disclosure includes file-backed prompt material',
+      );
 
       await tester.tap(find.text('Claude'));
       await tester.pumpAndSettle();
