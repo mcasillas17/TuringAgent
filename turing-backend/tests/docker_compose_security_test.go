@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,22 +14,42 @@ import (
 type composeDocument struct {
 	Include  yaml.Node                 `yaml:"include"`
 	Services map[string]composeService `yaml:"services"`
+	Networks map[string]yaml.Node      `yaml:"networks"`
 }
 
 type composeService struct {
-	User            string             `yaml:"user"`
-	ReadOnly        bool               `yaml:"read_only"`
-	CapDrop         []string           `yaml:"cap_drop"`
-	CapAdd          []string           `yaml:"cap_add"`
-	SecurityOpt     []string           `yaml:"security_opt"`
-	Privileged      bool               `yaml:"privileged"`
-	Volumes         []string           `yaml:"volumes"`
-	Tmpfs           []string           `yaml:"tmpfs"`
-	VolumesFrom     []string           `yaml:"volumes_from"`
-	Environment     map[string]*string `yaml:"environment"`
-	EnvironmentFile yaml.Node          `yaml:"env_file"`
-	Extends         yaml.Node          `yaml:"extends"`
-	Secrets         yaml.Node          `yaml:"secrets"`
+	Build             yaml.Node          `yaml:"build"`
+	User              string             `yaml:"user"`
+	ReadOnly          bool               `yaml:"read_only"`
+	CapDrop           []string           `yaml:"cap_drop"`
+	CapAdd            []string           `yaml:"cap_add"`
+	SecurityOpt       []string           `yaml:"security_opt"`
+	Privileged        bool               `yaml:"privileged"`
+	Volumes           []string           `yaml:"volumes"`
+	Tmpfs             []string           `yaml:"tmpfs"`
+	VolumesFrom       []string           `yaml:"volumes_from"`
+	Devices           []string           `yaml:"devices"`
+	DeviceCgroupRules []string           `yaml:"device_cgroup_rules"`
+	GPUs              yaml.Node          `yaml:"gpus"`
+	Runtime           string             `yaml:"runtime"`
+	Ports             []string           `yaml:"ports"`
+	Expose            []string           `yaml:"expose"`
+	Networks          []string           `yaml:"networks"`
+	NetworkMode       string             `yaml:"network_mode"`
+	Links             []string           `yaml:"links"`
+	ExternalLinks     []string           `yaml:"external_links"`
+	Environment       map[string]*string `yaml:"environment"`
+	EnvironmentFile   yaml.Node          `yaml:"env_file"`
+	Extends           yaml.Node          `yaml:"extends"`
+	Secrets           yaml.Node          `yaml:"secrets"`
+}
+
+type composeRuntimePolicy struct {
+	user     string
+	volumes  []string
+	ports    []string
+	expose   []string
+	networks []string
 }
 
 func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
@@ -207,6 +228,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 }
 
 func TestEveryBackendImageRunsAsExplicitNonRootUser(t *testing.T) {
+	composePath := filepath.Join("..", "infra", "docker-compose.yml")
 	tests := map[string]struct {
 		path     string
 		user     string
@@ -245,7 +267,7 @@ func TestEveryBackendImageRunsAsExplicitNonRootUser(t *testing.T) {
 			},
 		},
 	}
-	composeData, err := os.ReadFile(filepath.Join("..", "infra", "docker-compose.yml"))
+	composeData, err := os.ReadFile(composePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +278,18 @@ func TestEveryBackendImageRunsAsExplicitNonRootUser(t *testing.T) {
 			if !known {
 				t.Fatalf("%s has no Dockerfile non-root policy", serviceName)
 			}
-			data, err := os.ReadFile(test.path)
+			dockerfilePath, err := composeDockerfilePath(composePath, document.Services[serviceName].Build)
+			if err != nil {
+				t.Fatalf("%s build: %v", serviceName, err)
+			}
+			expectedPath, err := filepath.Abs(test.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if dockerfilePath != expectedPath {
+				t.Errorf("%s builds %q, want %q", serviceName, dockerfilePath, expectedPath)
+			}
+			data, err := os.ReadFile(dockerfilePath)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -268,6 +301,9 @@ func TestEveryBackendImageRunsAsExplicitNonRootUser(t *testing.T) {
 			}
 			if got := dockerfileFinalUser(dockerfile); got != test.user {
 				t.Errorf("%s final runtime USER = %q, want %q", serviceName, got, test.user)
+			}
+			if dockerfileDeclaresVolume(dockerfile) {
+				t.Errorf("%s Dockerfile declares VOLUME and bypasses the Compose writable-storage allowlist", serviceName)
 			}
 		})
 	}
@@ -282,17 +318,32 @@ func TestEveryComposeServiceUsesLeastPrivilegeRuntime(t *testing.T) {
 	for _, violation := range composeInheritanceViolations(document) {
 		t.Error(violation)
 	}
-	allowedVolumeMounts := map[string][]string{
-		"turing-orchestrator":          {"../data:/app/data"},
-		"turing-agent-runtime-general": nil,
-		"turing-mcp-system":            nil,
-		"turing-mcp-files":             {"../sandbox:/sandbox"},
+	for _, violation := range composeNetworkDefinitionViolations(document, []string{"net-files", "net-system"}) {
+		t.Error(violation)
 	}
-	expectedUsers := map[string]string{
-		"turing-orchestrator":          "${HOST_UID:?Use scripts/compose.sh to launch}:${HOST_GID:?Use scripts/compose.sh to launch}",
-		"turing-agent-runtime-general": "turing-agent-runtime:turing-agent-runtime",
-		"turing-mcp-system":            "mcp-system:mcp-system",
-		"turing-mcp-files":             "${HOST_UID:?Use scripts/compose.sh to launch}:${HOST_GID:?Use scripts/compose.sh to launch}",
+	policies := map[string]composeRuntimePolicy{
+		"turing-orchestrator": {
+			user:     "${HOST_UID:?Use scripts/compose.sh to launch}:${HOST_GID:?Use scripts/compose.sh to launch}",
+			volumes:  []string{"../data:/app/data"},
+			ports:    []string{"${ORCHESTRATOR_PUBLIC_BIND_HOST:-127.0.0.1}:${ORCHESTRATOR_PUBLIC_PORT:-3000}:3000"},
+			expose:   []string{"3001"},
+			networks: []string{"net-system", "net-files"},
+		},
+		"turing-agent-runtime-general": {
+			user:     "turing-agent-runtime:turing-agent-runtime",
+			networks: []string{"net-system", "net-files"},
+		},
+		"turing-mcp-system": {
+			user:     "mcp-system:mcp-system",
+			expose:   []string{"7100"},
+			networks: []string{"net-system"},
+		},
+		"turing-mcp-files": {
+			user:     "${HOST_UID:?Use scripts/compose.sh to launch}:${HOST_GID:?Use scripts/compose.sh to launch}",
+			volumes:  []string{"../sandbox:/sandbox"},
+			expose:   []string{"7110"},
+			networks: []string{"net-files"},
+		},
 	}
 
 	serviceNames := sortedServiceNames(document)
@@ -301,42 +352,13 @@ func TestEveryComposeServiceUsesLeastPrivilegeRuntime(t *testing.T) {
 	}
 	for _, serviceName := range serviceNames {
 		service := document.Services[serviceName]
-		allowedMounts, known := allowedVolumeMounts[serviceName]
+		policy, known := policies[serviceName]
 		if !known {
 			t.Errorf("%s has no explicit container security policy", serviceName)
 			continue
 		}
-		if !service.ReadOnly {
-			t.Errorf("%s read_only = false, want true", serviceName)
-		}
-		if !equalStrings(service.CapDrop, []string{"ALL"}) {
-			t.Errorf("%s cap_drop = %v, want [ALL]", serviceName, service.CapDrop)
-		}
-		if len(service.CapAdd) != 0 {
-			t.Errorf("%s cap_add = %v, want none", serviceName, service.CapAdd)
-		}
-		if !equalStrings(service.SecurityOpt, []string{"no-new-privileges:true"}) {
-			t.Errorf("%s security_opt = %v, want [no-new-privileges:true]", serviceName, service.SecurityOpt)
-		}
-		if service.Privileged {
-			t.Errorf("%s enables privileged mode", serviceName)
-		}
-
-		user := service.User
-		if want := expectedUsers[serviceName]; user != want {
-			t.Errorf("%s Compose user = %q, want %q", serviceName, user, want)
-		} else if composeUserIsRoot(user) {
-			t.Errorf("%s uses root Compose user %q", serviceName, user)
-		}
-
-		if !equalStrings(service.Volumes, allowedMounts) {
-			t.Errorf("%s volume mounts = %v, want %v", serviceName, service.Volumes, allowedMounts)
-		}
-		if len(service.Tmpfs) != 0 {
-			t.Errorf("%s has unapproved writable tmpfs mounts: %v", serviceName, service.Tmpfs)
-		}
-		if len(service.VolumesFrom) != 0 {
-			t.Errorf("%s inherits unapproved volumes from %v", serviceName, service.VolumesFrom)
+		for _, violation := range composeRuntimePolicyViolations(serviceName, service, policy) {
+			t.Error(violation)
 		}
 	}
 }
@@ -415,10 +437,132 @@ services:
 	}
 }
 
+func TestComposeRuntimePolicyRejectsPrivilegeAndExposureBypasses(t *testing.T) {
+	policy := composeRuntimePolicy{
+		user:     "app:app",
+		expose:   []string{"7100"},
+		networks: []string{"internal"},
+	}
+	tests := map[string]struct {
+		compose string
+		want    []string
+	}{
+		"missing identity and extra access": {
+			compose: `
+services:
+  guarded:
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    devices: ["/dev/kvm:/dev/kvm"]
+    device_cgroup_rules: ["c 195:* rmw"]
+    gpus: all
+    runtime: nvidia
+    ports: ["7100:7100"]
+    network_mode: host
+`,
+			want: []string{
+				"missing Compose user",
+				"devices",
+				"device cgroup rules",
+				"GPU access",
+				"container runtime",
+				"ports",
+				"expose",
+				"networks",
+				"network_mode",
+			},
+		},
+		"root identity": {
+			compose: `
+services:
+  guarded:
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    expose: ["7100"]
+    networks: [internal]
+`,
+			want: []string{"uses root Compose user"},
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			document := decodeComposeDocument(t, test.compose)
+			violations := strings.Join(composeRuntimePolicyViolations("guarded", document.Services["guarded"], policy), "\n")
+			for _, want := range test.want {
+				if !strings.Contains(violations, want) {
+					t.Errorf("violations %q do not contain %q", violations, want)
+				}
+			}
+		})
+	}
+}
+
+func TestComposeNetworkDefinitionsRemainProjectScoped(t *testing.T) {
+	document := decodeComposeDocument(t, `
+services:
+  guarded:
+    image: alpine
+    networks: [internal]
+networks:
+  internal:
+    external: true
+`)
+	violations := strings.Join(composeNetworkDefinitionViolations(document, []string{"internal"}), "\n")
+	if !strings.Contains(violations, "must use an empty project-scoped definition") {
+		t.Fatalf("network violations = %q, want an external-network rejection", violations)
+	}
+}
+
+func TestComposeDockerfilePathSupportsCanonicalBuildForms(t *testing.T) {
+	composePath := filepath.Join(string(filepath.Separator), "repo", "turing-backend", "infra", "docker-compose.yml")
+	document := decodeComposeDocument(t, `
+services:
+  scalar:
+    build: ../mcp-system
+  mapping:
+    build:
+      context: ../..
+      dockerfile: turing-backend/orchestrator-go/Dockerfile
+  targeted:
+    build:
+      context: ../..
+      dockerfile: turing-backend/orchestrator-go/Dockerfile
+      target: build
+`)
+	tests := map[string]string{
+		"scalar":  filepath.Join(string(filepath.Separator), "repo", "turing-backend", "mcp-system", "Dockerfile"),
+		"mapping": filepath.Join(string(filepath.Separator), "repo", "turing-backend", "orchestrator-go", "Dockerfile"),
+	}
+	for serviceName, want := range tests {
+		got, err := composeDockerfilePath(composePath, document.Services[serviceName].Build)
+		if err != nil {
+			t.Fatalf("%s build: %v", serviceName, err)
+		}
+		if got != want {
+			t.Errorf("%s Dockerfile = %q, want %q", serviceName, got, want)
+		}
+	}
+	if _, err := composeDockerfilePath(composePath, document.Services["targeted"].Build); err == nil {
+		t.Fatal("composeDockerfilePath accepted a non-default target stage")
+	}
+}
+
 func TestDockerfileFinalUserUsesLastRuntimeStageInstruction(t *testing.T) {
-	dockerfile := "FROM alpine AS build\nUSER builder\nFROM alpine\nUSER app\nUSER root\n"
-	if got := dockerfileFinalUser(dockerfile); got != "root" {
-		t.Fatalf("dockerfileFinalUser() = %q, want root", got)
+	for name, dockerfile := range map[string]string{
+		"space separated": "FROM alpine AS build\nUSER builder\nFROM alpine\nUSER app\nUSER root\n",
+		"tab separated":   "FROM alpine AS build\nUSER builder\nFROM alpine\nUSER app\nUSER\troot\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := dockerfileFinalUser(dockerfile); got != "root" {
+				t.Fatalf("dockerfileFinalUser() = %q, want root", got)
+			}
+		})
+	}
+	if !dockerfileDeclaresVolume("FROM alpine\nVOLUME /tmp\nUSER app\n") {
+		t.Fatal("dockerfileDeclaresVolume missed a writable image volume")
 	}
 }
 
@@ -569,10 +713,153 @@ func composeInheritanceViolations(document composeDocument) []string {
 	return violations
 }
 
+func composeNetworkDefinitionViolations(document composeDocument, expected []string) []string {
+	actual := make([]string, 0, len(document.Networks))
+	for name := range document.Networks {
+		actual = append(actual, name)
+	}
+	sort.Strings(actual)
+	want := append([]string(nil), expected...)
+	sort.Strings(want)
+
+	var violations []string
+	if !equalStrings(actual, want) {
+		violations = append(violations, fmt.Sprintf("Compose networks = %v, want %v", actual, want))
+	}
+	for _, name := range actual {
+		definition := document.Networks[name]
+		empty := !yamlNodePresent(definition) ||
+			(definition.Kind == yaml.ScalarNode && definition.Tag == "!!null") ||
+			(definition.Kind == yaml.MappingNode && len(definition.Content) == 0)
+		if !empty {
+			violations = append(violations, name+" must use an empty project-scoped definition")
+		}
+	}
+	return violations
+}
+
+func composeRuntimePolicyViolations(serviceName string, service composeService, policy composeRuntimePolicy) []string {
+	var violations []string
+	if !service.ReadOnly {
+		violations = append(violations, serviceName+" read_only = false, want true")
+	}
+	if !equalStrings(service.CapDrop, []string{"ALL"}) {
+		violations = append(violations, fmt.Sprintf("%s cap_drop = %v, want [ALL]", serviceName, service.CapDrop))
+	}
+	if len(service.CapAdd) != 0 {
+		violations = append(violations, fmt.Sprintf("%s cap_add = %v, want none", serviceName, service.CapAdd))
+	}
+	if !equalStrings(service.SecurityOpt, []string{"no-new-privileges:true"}) {
+		violations = append(violations, fmt.Sprintf("%s security_opt = %v, want [no-new-privileges:true]", serviceName, service.SecurityOpt))
+	}
+	if service.Privileged {
+		violations = append(violations, serviceName+" enables privileged mode")
+	}
+
+	switch {
+	case strings.TrimSpace(service.User) == "":
+		violations = append(violations, serviceName+" is missing Compose user")
+	case composeUserIsRoot(service.User):
+		violations = append(violations, fmt.Sprintf("%s uses root Compose user %q", serviceName, service.User))
+	case service.User != policy.user:
+		violations = append(violations, fmt.Sprintf("%s Compose user = %q, want %q", serviceName, service.User, policy.user))
+	}
+
+	if !equalStrings(service.Volumes, policy.volumes) {
+		violations = append(violations, fmt.Sprintf("%s volume mounts = %v, want %v", serviceName, service.Volumes, policy.volumes))
+	}
+	if len(service.Tmpfs) != 0 {
+		violations = append(violations, fmt.Sprintf("%s has unapproved writable tmpfs mounts: %v", serviceName, service.Tmpfs))
+	}
+	if len(service.VolumesFrom) != 0 {
+		violations = append(violations, fmt.Sprintf("%s inherits unapproved volumes from %v", serviceName, service.VolumesFrom))
+	}
+	if len(service.Devices) != 0 {
+		violations = append(violations, fmt.Sprintf("%s exposes unapproved devices: %v", serviceName, service.Devices))
+	}
+	if len(service.DeviceCgroupRules) != 0 {
+		violations = append(violations, fmt.Sprintf("%s adds unapproved device cgroup rules: %v", serviceName, service.DeviceCgroupRules))
+	}
+	if yamlNodePresent(service.GPUs) {
+		violations = append(violations, serviceName+" requests unapproved GPU access")
+	}
+	if service.Runtime != "" {
+		violations = append(violations, fmt.Sprintf("%s selects unapproved container runtime %q", serviceName, service.Runtime))
+	}
+
+	if !equalStrings(service.Ports, policy.ports) {
+		violations = append(violations, fmt.Sprintf("%s ports = %v, want %v", serviceName, service.Ports, policy.ports))
+	}
+	if !equalStrings(service.Expose, policy.expose) {
+		violations = append(violations, fmt.Sprintf("%s expose = %v, want %v", serviceName, service.Expose, policy.expose))
+	}
+	if !equalStrings(service.Networks, policy.networks) {
+		violations = append(violations, fmt.Sprintf("%s networks = %v, want %v", serviceName, service.Networks, policy.networks))
+	}
+	if service.NetworkMode != "" {
+		violations = append(violations, fmt.Sprintf("%s uses unapproved network_mode %q", serviceName, service.NetworkMode))
+	}
+	if len(service.Links) != 0 {
+		violations = append(violations, fmt.Sprintf("%s uses unapproved links: %v", serviceName, service.Links))
+	}
+	if len(service.ExternalLinks) != 0 {
+		violations = append(violations, fmt.Sprintf("%s uses unapproved external_links: %v", serviceName, service.ExternalLinks))
+	}
+	return violations
+}
+
 func composeUserIsRoot(user string) bool {
 	user = strings.Trim(strings.TrimSpace(user), `"'`)
 	name, _, _ := strings.Cut(user, ":")
 	return name == "root" || name == "0"
+}
+
+func composeDockerfilePath(composePath string, build yaml.Node) (string, error) {
+	if !yamlNodePresent(build) {
+		return "", fmt.Errorf("missing build configuration")
+	}
+
+	context := ""
+	dockerfile := ""
+	switch build.Kind {
+	case yaml.ScalarNode:
+		if build.Tag == "!!null" {
+			return "", fmt.Errorf("build configuration is null")
+		}
+		context = build.Value
+	case yaml.MappingNode:
+		for index := 0; index < len(build.Content); index += 2 {
+			key := build.Content[index].Value
+			value := build.Content[index+1]
+			switch key {
+			case "context", "dockerfile":
+				if value.Kind != yaml.ScalarNode || value.Tag == "!!null" {
+					return "", fmt.Errorf("build %s must be a string", key)
+				}
+				if key == "context" {
+					context = value.Value
+				} else {
+					dockerfile = value.Value
+				}
+			case "target":
+				return "", fmt.Errorf("build target is not allowed")
+			case "dockerfile_inline":
+				return "", fmt.Errorf("inline Dockerfiles are not allowed")
+			}
+		}
+	default:
+		return "", fmt.Errorf("build configuration must be a path or mapping")
+	}
+	if context == "" {
+		return "", fmt.Errorf("build context is empty")
+	}
+	if dockerfile == "" {
+		dockerfile = "Dockerfile"
+	}
+	if filepath.IsAbs(context) || filepath.IsAbs(dockerfile) {
+		return "", fmt.Errorf("build context and Dockerfile must be repository-relative")
+	}
+	return filepath.Abs(filepath.Join(filepath.Dir(composePath), context, dockerfile))
 }
 
 func dockerfileFinalUser(dockerfile string) string {
@@ -582,18 +869,28 @@ func dockerfileFinalUser(dockerfile string) string {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		instruction, value, found := strings.Cut(line, " ")
-		if !found {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
 			continue
 		}
-		switch strings.ToUpper(instruction) {
+		switch strings.ToUpper(fields[0]) {
 		case "FROM":
 			user = ""
 		case "USER":
-			user = strings.TrimSpace(value)
+			user = strings.Join(fields[1:], " ")
 		}
 	}
 	return user
+}
+
+func dockerfileDeclaresVolume(dockerfile string) bool {
+	for _, line := range strings.Split(dockerfile, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && !strings.HasPrefix(fields[0], "#") && strings.EqualFold(fields[0], "VOLUME") {
+			return true
+		}
+	}
+	return false
 }
 
 func composeServiceHeader(line string) (string, bool) {
