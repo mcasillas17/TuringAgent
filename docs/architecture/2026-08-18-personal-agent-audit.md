@@ -2,7 +2,7 @@
 
 **Audit date:** 2026-08-18
 **Original audit snapshot:** `be2c8c9`
-**Roadmap status last verified against the code:** 2026-08-18, at `e2982b2`
+**Roadmap status last verified against the code:** 2026-08-18, at `3e82b95`
 **Scope:** Backend architecture, local personal-agent behavior, durable memory, privacy, reliability, integrations, and the path to multiple specialized agents.
 
 ## Executive conclusion
