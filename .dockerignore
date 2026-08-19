@@ -14,13 +14,13 @@
 **/*.key
 **/*.cert
 **/.runtime
-# Root-context backend builds copy turing-backend/, so exclude only its runtime
-# storage paths; recursive basename globs can also remove Go source packages.
-turing-backend/data
-turing-backend/data.backup-*
-turing-backend/data.worktree-backup-*
+# Runtime database and sandbox paths can be created at multiple worktree depths.
+# Skills stay repository-scoped because **/skills would hide the Go skills package.
+**/data
+**/data.backup-*
+**/data.worktree-backup-*
 turing-backend/skills
-turing-backend/sandbox
+**/sandbox
 
 # Dependency caches, generated build output, and test artifacts
 **/node_modules

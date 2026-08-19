@@ -498,6 +498,7 @@ func TestComposeRuntimePolicyRejectsPrivilegeAndExposureBypasses(t *testing.T) {
 			compose: `
 services:
   guarded:
+    image: alpine:3.20
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -521,6 +522,7 @@ services:
 `,
 			want: []string{
 				"missing Compose user",
+				"unapproved image",
 				"devices",
 				"device cgroup rules",
 				"GPU access",
@@ -734,11 +736,11 @@ func TestRepositoryDockerignoreExcludesSensitiveAndGeneratedContent(t *testing.T
 		"**/.env",
 		"**/.env.*",
 		"**/.runtime",
-		"turing-backend/data",
-		"turing-backend/data.backup-*",
-		"turing-backend/data.worktree-backup-*",
+		"**/data",
+		"**/data.backup-*",
+		"**/data.worktree-backup-*",
 		"turing-backend/skills",
-		"turing-backend/sandbox",
+		"**/sandbox",
 		"**/node_modules",
 		"**/.dart_tool",
 		"**/build",
@@ -753,7 +755,7 @@ func TestRepositoryDockerignoreExcludesSensitiveAndGeneratedContent(t *testing.T
 			t.Errorf(".dockerignore missing %q", pattern)
 		}
 	}
-	for _, overbroad := range []string{"**/data", "**/skills", "**/sandbox"} {
+	for _, overbroad := range []string{"**/skills"} {
 		if lines[overbroad] {
 			t.Errorf(".dockerignore uses overbroad runtime-state pattern %q", overbroad)
 		}
@@ -863,6 +865,9 @@ func composeNetworkDefinitionViolations(document composeDocument, expected []str
 
 func composeRuntimePolicyViolations(serviceName string, service composeService, policy composeRuntimePolicy) []string {
 	var violations []string
+	if service.Image != "" {
+		violations = append(violations, fmt.Sprintf("%s uses unapproved image %q instead of its pinned build", serviceName, service.Image))
+	}
 	if !service.ReadOnly {
 		violations = append(violations, serviceName+" read_only = false, want true")
 	}
