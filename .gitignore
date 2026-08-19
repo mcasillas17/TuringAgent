@@ -174,3 +174,14 @@ turing-backend/.runtime/
 data/turing.db*
 turing-backend/data/turing.db*
 .claude/worktrees/
+
+# ==========================
+# 🗄️ RUNTIME DATABASE BACKUPS
+# ==========================
+# Ad-hoc backup copies of the runtime SQLite database, created beside data/ by
+# maintenance and worktree tooling. They hold live database state and this
+# repository is public, so they must never be tracked. Patterns are unanchored so
+# they apply at any depth, and carry no trailing slash so a stray backup file is
+# caught alongside a backup directory.
+data.backup-*
+data.worktree-backup-*
