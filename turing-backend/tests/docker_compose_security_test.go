@@ -3,6 +3,7 @@ package tests
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -351,6 +352,59 @@ func TestEveryBackendImageRunsAsExplicitNonRootUser(t *testing.T) {
 	}
 }
 
+func TestBuiltBackendImagesDeclareNoWritableVolumes(t *testing.T) {
+	if os.Getenv("TURING_DOCKER_SECURITY_LIVE") != "1" {
+		t.Skip("set TURING_DOCKER_SECURITY_LIVE=1 to build and inspect backend images")
+	}
+	project := fmt.Sprintf("tur005-image-security-%d", os.Getpid())
+	composeArgs := []string{
+		"compose",
+		"--project-name", project,
+		"--env-file", filepath.Join("..", ".env.example"),
+		"-f", filepath.Join("..", "infra", "docker-compose.yml"),
+	}
+	environment := append(os.Environ(),
+		fmt.Sprintf("HOST_UID=%d", os.Getuid()),
+		fmt.Sprintf("HOST_GID=%d", os.Getgid()),
+	)
+	runDocker := func(input string, args ...string) string {
+		t.Helper()
+		command := exec.Command("docker", args...)
+		command.Env = environment
+		if input != "" {
+			command.Stdin = strings.NewReader(input)
+		}
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("docker %v: %v\n%s", args, err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+
+	runDocker("", append(composeArgs, "build", "--quiet")...)
+	images := strings.Fields(runDocker("", append(composeArgs, "config", "--images")...))
+	if len(images) != 4 {
+		t.Fatalf("built image count = %d (%v), want 4", len(images), images)
+	}
+	t.Cleanup(func() {
+		for _, image := range images {
+			_ = exec.Command("docker", "image", "rm", image).Run()
+		}
+	})
+	for _, image := range images {
+		if volumes := dockerImageDeclaredVolumes(t, image); volumes != "null" && volumes != "{}" {
+			t.Errorf("%s declares inherited writable volumes: %s", image, volumes)
+		}
+	}
+
+	fixture := project + "-declared-volume"
+	t.Cleanup(func() { _ = exec.Command("docker", "image", "rm", fixture).Run() })
+	runDocker("FROM alpine:3.20\nVOLUME /probe\n", "build", "--quiet", "--tag", fixture, "-")
+	if volumes := dockerImageDeclaredVolumes(t, fixture); volumes == "null" || volumes == "{}" {
+		t.Fatalf("volume detector missed fixture image metadata: %s", volumes)
+	}
+}
+
 func TestEveryComposeServiceUsesLeastPrivilegeRuntime(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "infra", "docker-compose.yml"))
 	if err != nil {
@@ -368,7 +422,7 @@ func TestEveryComposeServiceUsesLeastPrivilegeRuntime(t *testing.T) {
 			user:     "${HOST_UID:?Use scripts/compose.sh to launch}:${HOST_GID:?Use scripts/compose.sh to launch}",
 			volumes:  []string{"../data:/app/data", "../skills:/skills"},
 			tmpfs:    []string{"/dev/shm:ro,nosuid,nodev,noexec,size=64k"},
-			ports:    []string{"127.0.0.1:${ORCHESTRATOR_PUBLIC_PORT:-3000}:3000"},
+			ports:    []string{"127.0.0.1:${ORCHESTRATOR_PUBLIC_PORT:-3000}:${ORCHESTRATOR_PUBLIC_PORT:-3000}"},
 			expose:   []string{"3001"},
 			networks: []string{"net-system", "net-files"},
 		},
@@ -1066,6 +1120,16 @@ func dockerfileDeclaresVolume(dockerfile string) bool {
 		}
 	}
 	return false
+}
+
+func dockerImageDeclaredVolumes(t *testing.T, image string) string {
+	t.Helper()
+	command := exec.Command("docker", "image", "inspect", "--format", "{{json .Config.Volumes}}", image)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("inspect image %s: %v\n%s", image, err, output)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func composeServiceHeader(line string) (string, bool) {

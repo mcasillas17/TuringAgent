@@ -34,7 +34,11 @@ decodes the complete Compose service map, rejects unresolved `include` or
 allowlist, and rejects root or missing users, writable roots, capability
 additions, incomplete capability drops, missing `no-new-privileges`, device or
 deploy-resource mappings, namespace sharing, supplementary groups,
-image-declared volumes, host aliases, and unapproved secrets. The guard also
+image overrides or Dockerfile-declared volumes, host aliases, and unapproved
+secrets. A Docker-gated companion check builds the four images and rejects
+volumes inherited through their base-image metadata; run it with
+`TURING_DOCKER_SECURITY_LIVE=1 go test -tags sqlite_fts5 ./turing-backend/tests -run TestBuiltBackendImagesDeclareNoWritableVolumes -count=1`.
+The guard also
 pins each service to its reviewed build context and Dockerfile, keeps both
 networks project-scoped, and permits only one orchestrator public port on the
 fixed loopback bind; MCP ports are exposed only inside their assigned network.

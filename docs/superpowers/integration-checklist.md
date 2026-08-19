@@ -16,6 +16,9 @@ Use this checklist against the current Go gRPC, MCP, and Flutter architecture.
   orchestrator, agent runtime, `mcp-system`, and `mcp-files` services.
 - [ ] Every backend container uses an explicit non-root identity, a read-only
   root filesystem, `cap_drop: ALL`, and `no-new-privileges`.
+- [ ] `TURING_DOCKER_SECURITY_LIVE=1 go test -tags sqlite_fts5
+  ./turing-backend/tests -run TestBuiltBackendImagesDeclareNoWritableVolumes
+  -count=1` confirms no built image inherits a writable volume.
 - [ ] Only orchestrator `/app/data` and `/skills` plus `mcp-files` `/sandbox`
   are writable; every service replaces Docker's default writable `/dev/shm`
   with the approved read-only tmpfs.
