@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 )
@@ -60,11 +61,30 @@ type contextWindowProvider interface {
 	ContextWindowTokens() int
 }
 
+type requestTokenEstimator interface {
+	EstimateRequestTokens(ChatRequest) (int, error)
+}
+
 func ProviderContextWindowTokens(provider Provider) int {
 	if configured, ok := provider.(contextWindowProvider); ok && configured.ContextWindowTokens() > 0 {
 		return configured.ContextWindowTokens()
 	}
 	return DefaultContextWindowTokens
+}
+
+// EstimateRequestTokens applies the runtime's conservative admission rule: one
+// serialized UTF-8 request byte counts as one estimated token. Built-in
+// providers estimate their exact wire representation; provider test doubles and
+// future implementations fall back to the provider-neutral request shape.
+func EstimateRequestTokens(provider Provider, req ChatRequest) (int, error) {
+	if estimator, ok := provider.(requestTokenEstimator); ok {
+		return estimator.EstimateRequestTokens(req)
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return 0, err
+	}
+	return len(body), nil
 }
 
 type providerRequestSizeError struct {
@@ -85,80 +105,16 @@ func (providerRequestSizeError) Retryable() bool { return false }
 
 func marshalProviderRequest(
 	provider string,
-	messages []ChatMessage,
-	marshal func([]ChatMessage) ([]byte, error),
+	marshal func() ([]byte, error),
 ) ([]byte, error) {
-	body, err := marshal(messages)
+	body, err := marshal()
 	if err != nil {
 		return nil, err
 	}
-	if len(body) <= maxProviderRequestBytes {
-		return body, nil
-	}
-
-	preservedPrefix, dropEnds := historyDropBoundaries(messages)
-	if len(dropEnds) == 0 {
+	if len(body) > maxProviderRequestBytes {
 		return nil, providerRequestSizeError{provider: provider, encodedBytes: len(body)}
 	}
-
-	var bounded []byte
-	oversizedBytes := len(body)
-	for low, high := 0, len(dropEnds)-1; low <= high; {
-		middle := low + (high-low)/2
-		candidate := trimHistory(messages, preservedPrefix, dropEnds[middle])
-		candidateBody, err := marshal(candidate)
-		if err != nil {
-			return nil, err
-		}
-		if len(candidateBody) <= maxProviderRequestBytes {
-			bounded = candidateBody
-			high = middle - 1
-			continue
-		}
-		oversizedBytes = len(candidateBody)
-		low = middle + 1
-	}
-	if bounded != nil {
-		return bounded, nil
-	}
-	return nil, providerRequestSizeError{provider: provider, encodedBytes: oversizedBytes}
-}
-
-func historyDropBoundaries(messages []ChatMessage) (int, []int) {
-	currentUser := -1
-	for index := len(messages) - 1; index >= 0; index-- {
-		if messages[index].Role == "user" {
-			currentUser = index
-			break
-		}
-	}
-	if currentUser <= 0 {
-		return 0, nil
-	}
-
-	preservedPrefix := 0
-	for preservedPrefix < currentUser && messages[preservedPrefix].Role == "system" {
-		preservedPrefix++
-	}
-	if preservedPrefix == currentUser {
-		return 0, nil
-	}
-
-	var dropEnds []int
-	for index := preservedPrefix + 1; index < currentUser; index++ {
-		if messages[index].Role == "user" {
-			dropEnds = append(dropEnds, index)
-		}
-	}
-	dropEnds = append(dropEnds, currentUser)
-	return preservedPrefix, dropEnds
-}
-
-func trimHistory(messages []ChatMessage, preservedPrefix int, dropEnd int) []ChatMessage {
-	trimmed := make([]ChatMessage, 0, len(messages)-(dropEnd-preservedPrefix))
-	trimmed = append(trimmed, messages[:preservedPrefix]...)
-	trimmed = append(trimmed, messages[dropEnd:]...)
-	return trimmed
+	return body, nil
 }
 
 func providerHTTPErrorCode(status int) string {

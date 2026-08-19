@@ -101,17 +101,8 @@ func (p *Ollama) ID() string { return "ollama" }
 func (p *Ollama) ContextWindowTokens() int { return p.contextWindowTokens }
 
 func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
-	options := ollamaRequestOptions(req.Temperature, req.MaxTokens, p.contextWindowTokens)
-	tools := ollamaTools(req.Tools)
-	body, err := marshalProviderRequest("Ollama", req.Messages, func(messages []ChatMessage) ([]byte, error) {
-		return json.Marshal(ollamaChatRequest{
-			Model:     req.Model,
-			Messages:  ollamaMessages(messages),
-			Stream:    true,
-			Options:   options,
-			Tools:     tools,
-			KeepAlive: p.keepAlive,
-		})
+	body, err := marshalProviderRequest("Ollama", func() ([]byte, error) {
+		return p.marshalRequest(req)
 	})
 	if err != nil {
 		return nil, err
@@ -240,6 +231,27 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 		}
 	}()
 	return out, nil
+}
+
+func (p *Ollama) EstimateRequestTokens(req ChatRequest) (int, error) {
+	body, err := p.marshalRequest(req)
+	if err != nil {
+		return 0, err
+	}
+	return len(body), nil
+}
+
+func (p *Ollama) marshalRequest(req ChatRequest) ([]byte, error) {
+	options := ollamaRequestOptions(req.Temperature, req.MaxTokens, p.contextWindowTokens)
+	tools := ollamaTools(req.Tools)
+	return json.Marshal(ollamaChatRequest{
+		Model:     req.Model,
+		Messages:  ollamaMessages(req.Messages),
+		Stream:    true,
+		Options:   options,
+		Tools:     tools,
+		KeepAlive: p.keepAlive,
+	})
 }
 
 type ollamaStreamToolCall struct {

@@ -54,24 +54,12 @@ func (p *OpenAICompatible) WithContextWindowTokens(tokens int) *OpenAICompatible
 }
 
 func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
-	aliases, err := buildOpenAIToolAliases(req.Tools)
+	body, aliases, err := p.marshalRequest(req)
 	if err != nil {
 		return nil, err
 	}
-	tools := openAITools(req.Tools, aliases.byOriginal)
-	body, err := marshalProviderRequest("OpenAI-compatible", req.Messages, func(messages []ChatMessage) ([]byte, error) {
-		converted, err := openAIMessages(messages, aliases.byOriginal)
-		if err != nil {
-			return nil, err
-		}
-		return json.Marshal(openAIChatRequest{
-			Model:       req.Model,
-			Messages:    converted,
-			Stream:      true,
-			Temperature: req.Temperature,
-			MaxTokens:   req.MaxTokens,
-			Tools:       tools,
-		})
+	body, err = marshalProviderRequest("OpenAI-compatible", func() ([]byte, error) {
+		return body, nil
 	})
 	if err != nil {
 		return nil, err
@@ -202,6 +190,35 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 		sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_stream_error", Message: message})
 	}()
 	return out, nil
+}
+
+func (p *OpenAICompatible) EstimateRequestTokens(req ChatRequest) (int, error) {
+	body, _, err := p.marshalRequest(req)
+	if err != nil {
+		return 0, err
+	}
+	return len(body), nil
+}
+
+func (p *OpenAICompatible) marshalRequest(req ChatRequest) ([]byte, openAIToolAliases, error) {
+	aliases, err := buildOpenAIToolAliases(req.Tools)
+	if err != nil {
+		return nil, openAIToolAliases{}, err
+	}
+	tools := openAITools(req.Tools, aliases.byOriginal)
+	converted, err := openAIMessages(req.Messages, aliases.byOriginal)
+	if err != nil {
+		return nil, openAIToolAliases{}, err
+	}
+	body, err := json.Marshal(openAIChatRequest{
+		Model:       req.Model,
+		Messages:    converted,
+		Stream:      true,
+		Temperature: req.Temperature,
+		MaxTokens:   req.MaxTokens,
+		Tools:       tools,
+	})
+	return body, aliases, err
 }
 
 func splitSSELines(data []byte, atEOF bool) (advance int, token []byte, err error) {

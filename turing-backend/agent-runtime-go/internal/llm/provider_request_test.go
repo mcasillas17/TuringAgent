@@ -2,7 +2,6 @@ package llm
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -42,7 +41,33 @@ func providerRequestFixtures() []providerRequestFixture {
 	}
 }
 
-func TestProviderRequestBudgetTrimsOldestCompleteHistory(t *testing.T) {
+func TestProviderRequestByteLimitNeverSilentlyTrimsHistory(t *testing.T) {
+	for _, fixture := range providerRequestFixtures() {
+		t.Run(fixture.name, func(t *testing.T) {
+			provider, requests := providerRejectingBudgetHarness(t, fixture)
+			events, err := provider.StreamChat(context.Background(), ChatRequest{
+				Model: fixture.model,
+				Messages: []ChatMessage{
+					{Role: "user", Content: strings.Repeat("o", 9*1024*1024)},
+					{Role: "assistant", Content: strings.Repeat("a", 8*1024*1024)},
+					{Role: "user", Content: "recent question"},
+					{Role: "assistant", Content: "recent answer"},
+					{Role: "user", Content: "current question"},
+				},
+			})
+			if err == nil {
+				collectEvents(events)
+				t.Fatal("StreamChat silently trimmed oversized history")
+			}
+			assertProviderRequestBudgetError(t, err, fixture.name)
+			if got := requests.Load(); got != 0 {
+				t.Fatalf("provider HTTP requests = %d, want none", got)
+			}
+		})
+	}
+}
+
+func TestProviderRequestEstimateMatchesExactWireBody(t *testing.T) {
 	for _, fixture := range providerRequestFixtures() {
 		t.Run(fixture.name, func(t *testing.T) {
 			bodies := make(chan []byte, 1)
@@ -56,44 +81,31 @@ func TestProviderRequestBudgetTrimsOldestCompleteHistory(t *testing.T) {
 				_, _ = io.WriteString(w, fixture.responseBody)
 			}))
 			t.Cleanup(server.Close)
-
 			provider := fixture.newProvider(server.URL, server.Client())
-			events, err := provider.StreamChat(context.Background(), ChatRequest{
+			request := ChatRequest{
 				Model: fixture.model,
 				Messages: []ChatMessage{
-					{Role: "user", Content: strings.Repeat("o", 9*1024*1024)},
-					{Role: "assistant", Content: strings.Repeat("a", 8*1024*1024)},
-					{Role: "user", Content: "recent question"},
-					{Role: "assistant", Content: "recent answer"},
-					{Role: "user", Content: "current question"},
+					{Role: "system", Content: "Be concise."},
+					{Role: "user", Content: "Use the tool."},
 				},
-			})
+				Tools: []ToolDefinition{{
+					Name:        "tool.with-provider-specific-encoding",
+					Description: "A provider-neutral tool.",
+					Parameters:  map[string]any{"type": "object"},
+				}},
+			}
+
+			estimate, err := EstimateRequestTokens(provider, request)
 			if err != nil {
-				t.Fatalf("StreamChat rejected trimmable history: %v", err)
+				t.Fatalf("EstimateRequestTokens failed: %v", err)
+			}
+			events, err := provider.StreamChat(context.Background(), request)
+			if err != nil {
+				t.Fatalf("StreamChat failed: %v", err)
 			}
 			collectEvents(events)
-
-			var request map[string]any
-			if err := json.Unmarshal(<-bodies, &request); err != nil {
-				t.Fatalf("decode request: %v", err)
-			}
-			messages, ok := request["messages"].([]any)
-			if !ok || len(messages) != 3 {
-				t.Fatalf("serialized message count = %d, want recent user/assistant pair and current user (3)", len(messages))
-			}
-			want := []struct {
-				role    string
-				content string
-			}{
-				{role: "user", content: "recent question"},
-				{role: "assistant", content: "recent answer"},
-				{role: "user", content: "current question"},
-			}
-			for index, expected := range want {
-				message, _ := messages[index].(map[string]any)
-				if message["role"] != expected.role || message["content"] != expected.content {
-					t.Fatalf("message %d = %#v, want role=%q content=%q", index, message, expected.role, expected.content)
-				}
+			if wireBytes := len(<-bodies); estimate != wireBytes {
+				t.Fatalf("estimate = %d, exact wire body = %d bytes", estimate, wireBytes)
 			}
 		})
 	}
