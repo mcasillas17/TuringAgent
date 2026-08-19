@@ -160,6 +160,18 @@ jobs:
           go-version: "1.23.x"
           cache: true
 
+      - name: Set up Buf
+        uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
+        with:
+          version: "1.72.0"
+          setup_only: true
+
+      - name: Test protobuf compatibility guard
+        run: TURING_REQUIRE_BUF=1 go test ./tools/proto -run '^TestBreakingCompatibility$' -count=1
+
+      - name: Check protobuf compatibility
+        run: tools/proto/breaking.sh "origin/${GITHUB_BASE_REF:-main}"
+
       - name: Set up protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -185,7 +197,7 @@ jobs:
         run: tools/proto/check.sh
 
       - name: Check shell scripts
-        run: bash -n turing-backend/scripts/compose.sh turing-backend/scripts/dev.sh turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/rotate-client-key.sh turing-backend/scripts/smoke-grpc.sh turing-backend/scripts/smoke.sh turing-backend/scripts/verify-tool-loop.sh
+        run: bash -n tools/proto/breaking.sh turing-backend/scripts/compose.sh turing-backend/scripts/dev.sh turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/rotate-client-key.sh turing-backend/scripts/smoke-grpc.sh turing-backend/scripts/smoke.sh turing-backend/scripts/verify-tool-loop.sh
 
       - name: Check workflow coverage
         run: go test -tags sqlite_fts5 ./.github/workflows
