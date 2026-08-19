@@ -3,7 +3,6 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 // agentAPIKeysVar holds every third-party API key an external agent can use,
@@ -19,6 +18,8 @@ import (
 // rather than shared — the two sides deliberately keep different halves of the
 // same value, and `internal/` prevents importing across the two trees anyway.
 const agentAPIKeysVar = "TURING_AGENT_API_KEYS"
+
+const maxAgentCredentialNameRunes = 64
 
 // parseAgentAPIKeys decodes agentAPIKeysVar. Unset or empty is not an error:
 // it is the normal state of an install with no cloud agents configured.
@@ -37,9 +38,27 @@ func parseAgentAPIKeys(raw string) (map[string]string, error) {
 		if name == "" || key == "" {
 			return nil, fmt.Errorf("%s has an entry with an empty name or key", agentAPIKeysVar)
 		}
-		if strings.TrimSpace(name) != name {
-			return nil, fmt.Errorf("%s has an entry with a non-normalized credential name", agentAPIKeysVar)
+		if !validAgentCredentialName(name) {
+			return nil, fmt.Errorf("%s has an entry with an invalid credential name", agentAPIKeysVar)
 		}
 	}
 	return keys, nil
+}
+
+func validAgentCredentialName(name string) bool {
+	if name == "" || len([]rune(name)) > maxAgentCredentialNameRunes {
+		return false
+	}
+	for _, character := range name {
+		switch {
+		case character >= 'a' && character <= 'z',
+			character >= 'A' && character <= 'Z',
+			character >= '0' && character <= '9',
+			character == '_', character == '-', character == '.':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }

@@ -790,7 +790,7 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 			if !errors.Is(err, repository.ErrAssignmentFenced) {
 				return err
 			}
-			if err := s.acknowledgeFencedAssignment(assigned.RunId); err != nil {
+			if err := s.acknowledgeFencedExecutionExit(assigned.RunId); err != nil {
 				return err
 			}
 		}
@@ -805,7 +805,7 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 	if err := s.repo.BeginAssignmentSend(ctx, repositoryAssignment); err != nil {
 		_ = connectedWorker.releaseRun(assigned.RunId)
 		if errors.Is(err, repository.ErrAssignmentFenced) {
-			if err := s.acknowledgeFencedAssignment(assigned.RunId); err != nil {
+			if err := s.acknowledgeFencedExecutionExit(assigned.RunId); err != nil {
 				return err
 			}
 			return s.DispatchPending(ctx)
@@ -835,7 +835,7 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 	return nil
 }
 
-func (s *Server) acknowledgeFencedAssignment(runID string) error {
+func (s *Server) acknowledgeFencedExecutionExit(runID string) error {
 	recoveryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err := s.repo.AcknowledgeExecutionExit(recoveryCtx, runID)
