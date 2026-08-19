@@ -407,6 +407,12 @@ func TestAppRegistersPublicAndInternalServices(t *testing.T) {
 	// Third-party connections are the user's business, not the runtime's.
 	// Registering them internally would put them behind the runtime token,
 	// which every tool server already holds.
+	// Nothing outside the orchestrator schedules a run, and the runtime has no
+	// reason to read the automation library — including the tool allowlists
+	// that decide what it may do unattended.
+	if _, ok := internalServices["turing.v1.AutomationService"]; ok {
+		t.Fatal("internal server should not expose the automation library to the runtime")
+	}
 	if _, ok := internalServices["turing.v1.IntegrationService"]; ok {
 		t.Fatal("internal server should not expose the integration service to the runtime")
 	}
@@ -447,11 +453,6 @@ func TestAppStartsWithAndWithoutAnIntegrationKey(t *testing.T) {
 		DatabasePath:      t.TempDir() + "/turing.db",
 	}); err == nil {
 		t.Fatal("started with a malformed integration key")
-	// Nothing outside the orchestrator schedules a run, and the runtime has no
-	// reason to read the automation library — including the tool allowlists
-	// that decide what it may do unattended.
-	if _, ok := internalServices["turing.v1.AutomationService"]; ok {
-		t.Fatal("internal server should not expose the automation library to the runtime")
 	}
 }
 

@@ -190,6 +190,8 @@ func baseIntegrationEnv(extra map[string]string) map[string]string {
 		env[key] = value
 	}
 	return env
+}
+
 // The scheduler is the one thing in this process that creates work nobody
 // asked for, so "off" has to be expressible and has to be the literal 0.
 func TestAutomationTickDefaultsAndAcceptsZeroAsOff(t *testing.T) {
