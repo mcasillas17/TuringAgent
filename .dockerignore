@@ -14,9 +14,9 @@
 **/*.key
 **/*.cert
 **/.runtime
-**/data
-**/skills
-**/sandbox
+turing-backend/data
+turing-backend/skills
+turing-backend/sandbox
 
 # Dependency caches, generated build output, and test artifacts
 **/node_modules

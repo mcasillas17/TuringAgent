@@ -718,9 +718,9 @@ func TestRepositoryDockerignoreExcludesSensitiveAndGeneratedContent(t *testing.T
 		"**/.env",
 		"**/.env.*",
 		"**/.runtime",
-		"**/data",
-		"**/skills",
-		"**/sandbox",
+		"turing-backend/data",
+		"turing-backend/skills",
+		"turing-backend/sandbox",
 		"**/node_modules",
 		"**/.dart_tool",
 		"**/build",
@@ -733,6 +733,11 @@ func TestRepositoryDockerignoreExcludesSensitiveAndGeneratedContent(t *testing.T
 	} {
 		if !lines[pattern] {
 			t.Errorf(".dockerignore missing %q", pattern)
+		}
+	}
+	for _, overbroad := range []string{"**/data", "**/skills", "**/sandbox"} {
+		if lines[overbroad] {
+			t.Errorf(".dockerignore uses overbroad runtime-state pattern %q", overbroad)
 		}
 	}
 	for _, requiredInput := range []string{"go.mod", "go.sum", "gen", "turing-backend"} {
