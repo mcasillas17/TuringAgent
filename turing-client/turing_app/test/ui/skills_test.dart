@@ -14,6 +14,7 @@ import '../support/no_automations_api.dart';
 
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
+import '../support/no_telemetry_api.dart';
 
 void main() {
   group('the skill library', () {
@@ -368,7 +369,11 @@ class _Offline implements Exception {
 }
 
 class _SkillApi
-    with NoExternalAgentsApi, NoIntegrationsApi, NoAutomationsApi
+    with
+        NoExternalAgentsApi,
+        NoIntegrationsApi,
+        NoAutomationsApi,
+        NoTelemetryApi
     implements TuringApi {
   final List<Skill> skills = [];
   final Map<String, List<String>> attached = {};

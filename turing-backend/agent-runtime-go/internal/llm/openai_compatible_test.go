@@ -435,6 +435,10 @@ func TestOpenAIIgnoresEmptyChoiceUsageAndKeepaliveChunks(t *testing.T) {
 	if got[0].Text != "done" || got[1].FinishReason != "stop" {
 		t.Fatalf("events = %+v, want normal completion after ignored chunks", got)
 	}
+	// The choiceless chunk carries no text, but it does carry the token counts,
+	// and a completion_tokens of 0 reported by the provider is a measurement
+	// rather than the absence of one.
+	assertTokenUsage(t, got[1].Usage, 3, 0)
 }
 
 func TestOpenAIToolCallDeltaAcceptsRepeatedIDAndName(t *testing.T) {
@@ -838,7 +842,7 @@ func TestOpenAIRequestSerializesAssistantToolCalls(t *testing.T) {
 	collectEvents(events)
 
 	body := <-requestBody
-	const wantJSON = `{"model":"gpt-4o-mini","messages":[{"role":"assistant","content":null,"name":"planner","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}}]}],"stream":true}`
+	const wantJSON = `{"model":"gpt-4o-mini","messages":[{"role":"assistant","content":null,"name":"planner","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}}]}],"stream":true,"stream_options":{"include_usage":true}}`
 	if string(body) != wantJSON {
 		t.Fatalf("request JSON = %s, want %s", body, wantJSON)
 	}

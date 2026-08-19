@@ -8,6 +8,7 @@ import '../models/message.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
 import '../models/skill.dart';
+import '../models/telemetry.dart';
 import '../models/tool_descriptor.dart';
 import '../models/turing_event.dart';
 
@@ -206,6 +207,17 @@ abstract class TuringApi {
   /// flight, are left alone — the record of what it did outlives the schedule
   /// that caused it.
   Future<void> deleteAutomation({required String automationId});
+
+  /// What this installation has been doing over the last [windowDays] days.
+  ///
+  /// Read-only, and computed by the backend from its own database — no counter
+  /// is kept here, and nothing is sent anywhere. There is no write side, which
+  /// is why this is the only telemetry method: every number it returns was
+  /// recorded by some other part of the system doing its actual work.
+  ///
+  /// The backend REFUSES a window it cannot answer rather than narrowing it,
+  /// so the returned window always describes the returned numbers.
+  Future<TelemetrySummary> getTelemetrySummary({required int windowDays});
 }
 
 class TuringApiException implements Exception {

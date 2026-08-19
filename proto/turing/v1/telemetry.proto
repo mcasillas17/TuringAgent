@@ -1,0 +1,191 @@
+syntax = "proto3";
+
+package turing.v1;
+
+option go_package = "github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1";
+
+import "google/protobuf/timestamp.proto";
+
+// Telemetry: what this installation has been doing, computed on this machine
+// from this machine's own database and served only to this machine's client.
+//
+// NOTHING HERE IS ANALYTICS. There is no collector, no endpoint, no sampling,
+// no identifier. The orchestrator aggregates rows it already holds and answers
+// one RPC with the result. A future change that ships any of this anywhere
+// would break the project's central commitment, so the absence of an egress
+// path is the point rather than an implementation detail.
+//
+// Nothing here carries content either: no prompt, no reply, no tool argument,
+// no credential. Every field below is a count, a name the user chose, a
+// duration, or a status.
+//
+// Every number that can be unknown is `optional`, and an unknown number is
+// ABSENT rather than zero. A provider that does not report token usage leaves
+// the token fields unset; the client says "not reported" rather than drawing a
+// zero, because a zero would be read as a measurement.
+
+// A closed window of time the report covers. Sent back with the report so a
+// client renders the window the server actually used rather than the one it
+// asked for, and so a screenshot of the numbers still says what they cover.
+message TelemetryWindow {
+  int32 days = 1;
+  // Inclusive lower bound, snapped to the start of a UTC day so that "N days"
+  // means today plus the N-1 before it, and the daily series has exactly N
+  // buckets.
+  google.protobuf.Timestamp start = 2;
+  // Exclusive upper bound: the instant the report was computed.
+  google.protobuf.Timestamp end = 3;
+}
+
+// Runs started in the window, by outcome.
+//
+// `in_flight` is every run that has not reached a terminal status yet —
+// queued, running or waiting on an approval. It is reported separately rather
+// than folded into a failure count, because a run that has not finished has
+// not failed.
+message RunTotals {
+  int64 total = 1;
+  int64 completed = 2;
+  int64 failed = 3;
+  int64 cancelled = 4;
+  int64 in_flight = 5;
+  // DERIVED: the mean of finished_at - started_at over runs in the window that
+  // recorded both. Absent when no run in the window did, which is not the same
+  // as a mean of zero.
+  optional int64 average_duration_ms = 6;
+}
+
+// Token usage, and how much of the work it actually describes.
+//
+// The two counters exist because the totals are honest only alongside them. A
+// provider that reports nothing contributes no tokens and no error — it simply
+// does not appear in the sum — so a total read without `runs_without_usage`
+// beside it silently understates by an unknown amount.
+message TokenTotals {
+  // MEASURED, summed over the runs whose provider reported usage. Absent when
+  // no run in the window reported any.
+  optional int64 input_tokens = 1;
+  optional int64 output_tokens = 2;
+  // Finished runs in the window whose provider reported token usage.
+  int64 runs_with_usage = 3;
+  // Finished runs in the window whose provider reported none. Their token
+  // count is unknown; it is never estimated.
+  int64 runs_without_usage = 4;
+}
+
+// One tool, and how it was used. Keyed by (server, tool) to match the
+// orchestrator's own policy lookup: a same-named tool on another server is a
+// different tool.
+message ToolUsage {
+  string server_name = 1;
+  string tool_name = 2;
+  int64 calls = 3;
+  int64 failed = 4;
+  int64 denied = 5;
+  // DERIVED: mean over the calls that recorded a duration. Absent when none
+  // did — a tool whose calls were all denied never ran, and reporting 0 ms for
+  // it would claim it did.
+  optional int64 average_duration_ms = 6;
+}
+
+// One (provider, model) pair the runs in the window used. `provider` and
+// `model` are the strings the run was recorded with, not an enum, so a model
+// pulled after this build still reports under its own name.
+message ModelUsage {
+  string provider = 1;
+  string model = 2;
+  int64 runs = 3;
+  optional int64 input_tokens = 4;
+  optional int64 output_tokens = 5;
+  // Runs in this group with no recorded token usage — the same denominator as
+  // `runs`, whatever their status. Counting only completed ones would let a
+  // group of 40 runs where 12 failed report a token total covering 28 and
+  // nothing without usage, which reads as a complete measurement of all 40.
+  int64 runs_without_usage = 6;
+}
+
+// What left the machine, and where it went.
+//
+// Recorded per run at the moment the message was accepted, not looked up from
+// the conversation's current destination: re-pointing or deleting an agent
+// afterwards must not rewrite the record of where earlier messages were sent.
+message ExternalAgentUsage {
+  string display_name = 1;
+  // Host only — never the full URL, never a path, never a credential.
+  string endpoint_host = 2;
+  int64 runs = 3;
+  optional int64 input_tokens = 4;
+  optional int64 output_tokens = 5;
+  // Runs in this group with no recorded token usage — the same denominator as
+  // `runs`, whatever their status. Counting only completed ones would let a
+  // group of 40 runs where 12 failed report a token total covering 28 and
+  // nothing without usage, which reads as a complete measurement of all 40.
+  int64 runs_without_usage = 6;
+}
+
+// Runs nobody was present for, and the approvals they granted themselves.
+message AutomationTotals {
+  int64 runs = 1;
+  int64 completed = 2;
+  int64 failed = 3;
+  // Approvals decided by an automation's allowlist rather than by a person.
+  // Counted because consent given in advance is weaker than consent given in
+  // the moment, and the weaker kind should be visible.
+  int64 unattended_approvals = 4;
+}
+
+// Connected third-party accounts.
+//
+// NOT WINDOWED and deliberately not a usage count: nothing in a run reads a
+// connection yet, so there is no usage to measure. These are current state,
+// and the client labels them as such rather than letting them read as activity
+// during the window.
+message IntegrationTotals {
+  int64 connected = 1;
+  int64 revoked = 2;
+}
+
+// One UTC day inside the window. Days with no activity are present with zeroes
+// so a client can draw a continuous axis without inventing the gaps.
+//
+// The window starts on a UTC day boundary, so a request for N days returns
+// exactly N entries and the label over a chart matches the bars under it. The
+// LAST entry is the day still in progress and is expected to read low.
+message DailyActivity {
+  // YYYY-MM-DD, UTC. UTC rather than local time because that is what the rows
+  // are stored in; converting would move activity across day boundaries in a
+  // way no stored value could justify.
+  string date = 1;
+  int64 runs = 2;
+  int64 tool_calls = 3;
+  optional int64 input_tokens = 4;
+  optional int64 output_tokens = 5;
+}
+
+message GetTelemetrySummaryRequest {
+  // Whole days back from now. Must be between 1 and 365; the server clamps
+  // nothing and rejects out-of-range values, so a client never renders a
+  // window different from the one it asked for without being told.
+  int32 window_days = 1;
+}
+
+message GetTelemetrySummaryResponse {
+  TelemetryWindow window = 1;
+  RunTotals runs = 2;
+  TokenTotals tokens = 3;
+  // Ordered by calls descending, then by name, and capped server-side. "Most
+  // used" is the question being asked, so the order is part of the answer.
+  repeated ToolUsage tools = 4;
+  repeated ModelUsage models = 5;
+  repeated ExternalAgentUsage external_agents = 6;
+  AutomationTotals automations = 7;
+  IntegrationTotals integrations = 8;
+  repeated DailyActivity daily = 9;
+}
+
+service TelemetryService {
+  // Read-only, and the only RPC here. There is deliberately no write side:
+  // telemetry is derived from what the rest of the system already records, so
+  // nothing can report a number that no other subsystem produced.
+  rpc GetTelemetrySummary(GetTelemetrySummaryRequest) returns (GetTelemetrySummaryResponse);
+}

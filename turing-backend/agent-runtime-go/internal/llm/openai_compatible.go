@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -25,44 +26,36 @@ const (
 
 var errOpenAIPhysicalSSELineTooLong = errors.New("OpenAI-compatible SSE line exceeds maximum size")
 
+// defaultOpenAIUsageDrainTimeout bounds how long the stream waits after the
+// terminal event for the trailing usage chunk. Generous next to a conforming
+// provider, which sends it in the same breath, and short enough that one which
+// never closes costs a token count rather than the whole answer.
+const defaultOpenAIUsageDrainTimeout = 2 * time.Second
+
 type OpenAICompatible struct {
 	baseURL string
 	apiKey  string
 	client  *http.Client
+	// usageDrainTimeout is per-provider rather than a package variable so a
+	// test can shorten it without reaching into shared state.
+	usageDrainTimeout time.Duration
 }
 
 func NewOpenAICompatible(baseURL string, apiKey string, client *http.Client) *OpenAICompatible {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return &OpenAICompatible{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, client: client}
+	return &OpenAICompatible{
+		baseURL:           strings.TrimRight(baseURL, "/"),
+		apiKey:            apiKey,
+		client:            client,
+		usageDrainTimeout: defaultOpenAIUsageDrainTimeout,
+	}
 }
 
 func (p *OpenAICompatible) ID() string { return "openai_compatible" }
 
-func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
-	aliases, err := buildOpenAIToolAliases(req.Tools)
-	if err != nil {
-		return nil, err
-	}
-	tools := openAITools(req.Tools, aliases.byOriginal)
-	body, err := marshalProviderRequest("OpenAI-compatible", req.Messages, func(messages []ChatMessage) ([]byte, error) {
-		converted, err := openAIMessages(messages, aliases.byOriginal)
-		if err != nil {
-			return nil, err
-		}
-		return json.Marshal(openAIChatRequest{
-			Model:       req.Model,
-			Messages:    converted,
-			Stream:      true,
-			Temperature: req.Temperature,
-			MaxTokens:   req.MaxTokens,
-			Tools:       tools,
-		})
-	})
-	if err != nil {
-		return nil, err
-	}
+func (p *OpenAICompatible) post(ctx context.Context, body []byte) (*http.Response, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -71,9 +64,71 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 	if p.apiKey != "" {
 		httpReq.Header.Set("authorization", "Bearer "+p.apiKey)
 	}
-	resp, err := p.client.Do(httpReq)
+	return p.client.Do(httpReq)
+}
+
+// isOpenAIMalformedRequestStatus reports the two statuses a server uses to say
+// the request body was not acceptable. Deliberately narrow: 401, 403 and 429
+// are about who is asking and how often, and retrying those without
+// stream_options would only spend a second request to fail the same way.
+func isOpenAIMalformedRequestStatus(status int) bool {
+	return status == http.StatusBadRequest || status == http.StatusUnprocessableEntity
+}
+
+func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
+	aliases, err := buildOpenAIToolAliases(req.Tools)
 	if err != nil {
 		return nil, err
+	}
+	tools := openAITools(req.Tools, aliases.byOriginal)
+	buildBody := func(includeUsage bool) ([]byte, error) {
+		return marshalProviderRequest("OpenAI-compatible", req.Messages, func(messages []ChatMessage) ([]byte, error) {
+			converted, err := openAIMessages(messages, aliases.byOriginal)
+			if err != nil {
+				return nil, err
+			}
+			request := openAIChatRequest{
+				Model:       req.Model,
+				Messages:    converted,
+				Stream:      true,
+				Temperature: req.Temperature,
+				MaxTokens:   req.MaxTokens,
+				Tools:       tools,
+			}
+			// Asking for usage is the only way to get it while streaming: a
+			// streamed response carries no usage object unless this is set,
+			// and the alternative to asking is estimating.
+			if includeUsage {
+				request.StreamOptions = &openAIStreamOptions{IncludeUsage: true}
+			}
+			return json.Marshal(request)
+		})
+	}
+	body, err := buildBody(true)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := p.post(ctx, body)
+	if err != nil {
+		return nil, err
+	}
+	// Not every OpenAI-compatible server accepts an unknown body field: older
+	// vLLM builds, some corporate proxies and older Azure API versions reject
+	// the whole request rather than ignoring it. Those installations work
+	// today, and losing every run on them to collect a number the user did not
+	// ask for is the wrong trade — so a rejection that looks like "I do not
+	// know that field" is retried once without it, and the run simply reports
+	// no tokens.
+	if isOpenAIMalformedRequestStatus(resp.StatusCode) {
+		_ = resp.Body.Close()
+		retryBody, retryErr := buildBody(false)
+		if retryErr != nil {
+			return nil, retryErr
+		}
+		resp, err = p.post(ctx, retryBody)
+		if err != nil {
+			return nil, err
+		}
 	}
 	out := make(chan StreamEvent)
 	go func() {
@@ -94,11 +149,49 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 		scanner.Buffer(make([]byte, 0, 64*1024), maxStreamTokenBytes)
 		scanner.Split(splitSSELines)
 		state := newOpenAIStreamState(aliases.byAlias)
+		// The completed event is held rather than sent the moment
+		// finish_reason arrives, because the usage chunk OpenAI sends in
+		// response to stream_options.include_usage arrives AFTER it. Returning
+		// on finish_reason closed this channel before that chunk was ever read,
+		// which is why nothing here could report tokens.
+		//
+		// Nothing else about the stream changes: the same events go out in the
+		// same order, the completed one simply waits for the tail.
+		var pendingCompleted *StreamEvent
+		// Waiting for the tail must never cost the user the answer. A provider
+		// that finishes, sends no [DONE], and leaves the connection open would
+		// otherwise turn a completed response into a model timeout — the run
+		// would fail on a change made to collect a token count. Closing the
+		// body unblocks the read; the scanner error that follows is handled by
+		// emitting the held completion.
+		var drainDeadline *time.Timer
+		defer func() {
+			if drainDeadline != nil {
+				drainDeadline.Stop()
+			}
+		}()
+		holdCompleted := func(event StreamEvent) {
+			pendingCompleted = &event
+			if drainDeadline == nil {
+				drainDeadline = time.AfterFunc(p.usageDrainTimeout, func() {
+					_ = resp.Body.Close()
+				})
+			}
+		}
+		sendCompleted := func(event StreamEvent) {
+			event.Usage = state.usage
+			sendStreamEvent(ctx, out, event)
+		}
 		dispatch := func(data string) bool {
-			if strings.TrimSpace(data) == "" {
+			trimmed := strings.TrimSpace(data)
+			if trimmed == "" {
 				return false
 			}
-			if strings.TrimSpace(data) == "[DONE]" {
+			if trimmed == "[DONE]" {
+				if pendingCompleted != nil {
+					sendCompleted(*pendingCompleted)
+					return true
+				}
 				if len(state.toolCalls) > 0 {
 					sendStreamEvent(ctx, out, StreamEvent{
 						Type:    "error",
@@ -106,9 +199,17 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 						Message: fmt.Sprintf("[DONE] received with %d unfinished tool call(s)", len(state.toolCalls)),
 					})
 				} else {
-					sendStreamEvent(ctx, out, StreamEvent{Type: "completed", FinishReason: "stop"})
+					sendCompleted(StreamEvent{Type: "completed", FinishReason: "stop"})
 				}
 				return true
+			}
+			// Past the terminal event the stream has nothing left to say about
+			// the answer, so this tail is mined for usage and otherwise
+			// ignored rather than validated. A response that already finished
+			// must not be turned into a failure by trailing bytes.
+			if pendingCompleted != nil {
+				state.absorbUsageFromChunk([]byte(data))
+				return false
 			}
 			events, done, err := parseOpenAIData([]byte(data), state)
 			if err != nil {
@@ -116,9 +217,16 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 				return true
 			}
 			for _, event := range events {
+				if event.Type == "completed" {
+					holdCompleted(event)
+					continue
+				}
 				if !sendStreamEvent(ctx, out, event) {
 					return true
 				}
+			}
+			if pendingCompleted != nil {
+				return false
 			}
 			return done
 		}
@@ -159,6 +267,14 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 				additionalBytes++
 			}
 			if additionalBytes > maxOpenAIEventDataBytes-dataBytes {
+				// An oversized chunk arriving after the terminal event is a
+				// trailing chunk, and the answer is already complete. Same rule
+				// as everywhere past that point: it costs a token count, never
+				// the response.
+				if pendingCompleted != nil {
+					sendCompleted(*pendingCompleted)
+					return
+				}
 				sendStreamEvent(ctx, out, StreamEvent{
 					Type:    "error",
 					Code:    "model_bad_chunk",
@@ -170,6 +286,13 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 			dataBytes += additionalBytes
 		}
 		if err := scanner.Err(); err != nil {
+			// A read error in the tail after the answer already finished costs
+			// a token count, not the response. Reporting it as a stream failure
+			// would discard a complete answer over telemetry.
+			if pendingCompleted != nil {
+				sendCompleted(*pendingCompleted)
+				return
+			}
 			if ctx.Err() == nil {
 				code := "model_stream_error"
 				if errors.Is(err, errOpenAIPhysicalSSELineTooLong) {
@@ -177,6 +300,12 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 				}
 				sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: code, Message: err.Error()})
 			}
+			return
+		}
+		// A stream that ends without [DONE] still finished if finish_reason
+		// arrived, which is what many OpenAI-compatible servers do.
+		if pendingCompleted != nil {
+			sendCompleted(*pendingCompleted)
 			return
 		}
 		if ctx.Err() != nil {
@@ -217,12 +346,17 @@ func splitSSELines(data []byte, atEOF bool) (advance int, token []byte, err erro
 }
 
 type openAIChatRequest struct {
-	Model       string          `json:"model"`
-	Messages    []openAIMessage `json:"messages"`
-	Stream      bool            `json:"stream"`
-	Temperature float64         `json:"temperature,omitempty"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
-	Tools       []openAITool    `json:"tools,omitempty"`
+	Model         string               `json:"model"`
+	Messages      []openAIMessage      `json:"messages"`
+	Stream        bool                 `json:"stream"`
+	Temperature   float64              `json:"temperature,omitempty"`
+	MaxTokens     int                  `json:"max_tokens,omitempty"`
+	Tools         []openAITool         `json:"tools,omitempty"`
+	StreamOptions *openAIStreamOptions `json:"stream_options,omitempty"`
+}
+
+type openAIStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type openAIMessage struct {
@@ -428,6 +562,15 @@ func sanitizeOpenAIToolName(name string) string {
 type openAIEnvelope struct {
 	Choices json.RawMessage `json:"choices"`
 	Error   json.RawMessage `json:"error"`
+	Usage   json.RawMessage `json:"usage"`
+}
+
+// openAIUsage is the shape OpenAI-compatible providers report token counts in.
+// Pointers so an omitted field stays unknown: several proxies send `usage`
+// with only the field they happen to track.
+type openAIUsage struct {
+	PromptTokens     *int64 `json:"prompt_tokens"`
+	CompletionTokens *int64 `json:"completion_tokens"`
 }
 
 type openAIChoice struct {
@@ -468,6 +611,60 @@ type openAIStreamState struct {
 	argumentBytes   int
 	identifierBytes int
 	toolAliases     map[string]string
+	usage           *TokenUsage
+}
+
+// absorbUsage records token counts from a chunk that carries them.
+//
+// Lenient by design, unlike everything else this file parses. A malformed
+// `usage` object costs a number in a report; failing the stream over it would
+// cost the user the answer they were waiting for. The last well-formed report
+// wins, which is what a provider that re-sends a growing usage object means.
+func (state *openAIStreamState) absorbUsage(raw json.RawMessage) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return
+	}
+	var reported openAIUsage
+	if err := json.Unmarshal(raw, &reported); err != nil {
+		return
+	}
+	input := nonNegativeTokenCount(reported.PromptTokens)
+	output := nonNegativeTokenCount(reported.CompletionTokens)
+	if input == nil && output == nil {
+		return
+	}
+	// Merged per field rather than replacing wholesale. A provider that sends
+	// prompt and completion counts in one object and then a second object
+	// carrying only one of them would otherwise lose the other — the later
+	// report is more complete for what it mentions, not for what it omits.
+	if state.usage == nil {
+		state.usage = &TokenUsage{}
+	}
+	if input != nil {
+		state.usage.InputTokens = input
+	}
+	if output != nil {
+		state.usage.OutputTokens = output
+	}
+}
+
+// absorbUsageFromChunk pulls usage out of a raw SSE payload without caring
+// whether the rest of it parses. Used once the terminal event is already in
+// hand, where the only thing still worth reading is the trailing usage chunk
+// OpenAI sends after finish_reason.
+func (state *openAIStreamState) absorbUsageFromChunk(data []byte) {
+	var envelope openAIEnvelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return
+	}
+	state.absorbUsage(envelope.Usage)
+}
+
+func nonNegativeTokenCount(value *int64) *int64 {
+	if value == nil || *value < 0 {
+		return nil
+	}
+	return TokenCount(*value)
 }
 
 func newOpenAIStreamState(toolAliases ...map[string]string) *openAIStreamState {
@@ -492,6 +689,10 @@ func parseOpenAIData(data []byte, state *openAIStreamState) ([]StreamEvent, bool
 		return nil, false, fmt.Errorf("malformed chunk: %w", err)
 	}
 
+	// Read before anything can reject the chunk: a provider that reports usage
+	// alongside something this parser refuses still measured what it measured.
+	state.absorbUsage(envelope.Usage)
+
 	if len(envelope.Error) > 0 {
 		if len(envelope.Choices) > 0 {
 			return nil, false, fmt.Errorf("malformed error envelope: contains choices")
@@ -505,6 +706,13 @@ func parseOpenAIData(data []byte, state *openAIStreamState) ([]StreamEvent, bool
 
 	var choices []openAIChoice
 	if len(envelope.Choices) == 0 {
+		// A chunk whose only content is a usage report is not malformed, it is
+		// how several providers deliver the counts requested by
+		// stream_options.include_usage. It carries no choice because it
+		// describes the response as a whole.
+		if len(envelope.Usage) > 0 && string(envelope.Usage) != "null" {
+			return nil, false, nil
+		}
 		return nil, false, fmt.Errorf("chunk must contain exactly one choice, got 0")
 	}
 	if err := json.Unmarshal(envelope.Choices, &choices); err != nil {

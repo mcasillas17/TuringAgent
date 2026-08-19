@@ -182,7 +182,7 @@ func TestMaximumModelOutputCompletionUpdatesFitGRPCTransport(t *testing.T) {
 	err := completeRun(func(update *turingv1.RuntimeUpdate) error {
 		updates = append(updates, update)
 		return nil
-	}, job, strings.Repeat("x", maxModelOutputBytes))
+	}, job, strings.Repeat("x", maxModelOutputBytes), nil)
 	if err != nil {
 		t.Fatalf("completeRun returned error: %v", err)
 	}

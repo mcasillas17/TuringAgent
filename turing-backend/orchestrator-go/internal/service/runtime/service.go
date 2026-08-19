@@ -1391,6 +1391,34 @@ func isTerminalRunStatus(runStatus string) bool {
 	}
 }
 
+// runTokenUsage carries the runtime's reported counts into storage without
+// filling anything in. A worker that reports nothing yields nil, which the
+// repository stores as NULL and every reader treats as unknown rather than as
+// zero. Presence is preserved per field: a provider that reported only output
+// tokens must not have an input count invented for it here.
+func runTokenUsage(reported *turingv1.RunTokenUsage) *repository.RunTokenUsage {
+	if reported == nil {
+		return nil
+	}
+	// An empty message carries no numbers, so it is silence with an envelope
+	// around it.
+	if reported.InputTokens == nil && reported.OutputTokens == nil {
+		return nil
+	}
+	// Copied rather than aliased: the proto message belongs to the stream and
+	// must not be able to change a value already handed to storage.
+	usage := &repository.RunTokenUsage{}
+	if reported.InputTokens != nil {
+		input := *reported.InputTokens
+		usage.InputTokens = &input
+	}
+	if reported.OutputTokens != nil {
+		output := *reported.OutputTokens
+		usage.OutputTokens = &output
+	}
+	return usage
+}
+
 func (s *Server) handleRunCompleted(ctx context.Context, completed *turingv1.RuntimeRunCompleted) error {
 	if completed == nil || completed.RunId == "" {
 		return status.Error(codes.InvalidArgument, "run_completed is required")
@@ -1423,7 +1451,7 @@ func (s *Server) handleRunCompleted(ctx context.Context, completed *turingv1.Run
 	if err != nil {
 		return err
 	}
-	events, err := s.repo.CompleteRunWithEvent(ctx, completed.RunId, assistantMessageID, completed.Content, payloadJSON)
+	events, err := s.repo.CompleteRunWithEvent(ctx, completed.RunId, assistantMessageID, completed.Content, payloadJSON, runTokenUsage(completed.GetTokenUsage()))
 	if err != nil {
 		return mapRunStateError(err)
 	}
