@@ -13,10 +13,23 @@ runtime and orchestrator.
 
 Compose exposes these ports only to internal Docker networks; it does not
 publish them to the host. An empty configured bearer token denies every
-request rather than opening the service. Both images run as non-root users.
-Compose also makes both MCP root filesystems read-only, drops all Linux
-capabilities, and sets `no-new-privileges`. The `mcp-files` `/sandbox` bind
-mount remains writable. Neither service needs a writable temporary filesystem.
+request rather than opening the service.
+
+All four backend services run as explicit non-root users. Compose makes every
+root filesystem read-only, drops all Linux capabilities without adding any
+back, and sets `no-new-privileges`. Writable storage is allowlisted:
+
+| Service | Runtime identity | Writable storage |
+|---|---|---|
+| `turing-orchestrator` | Validated host UID/GID | `data/` at `/app/data` |
+| `turing-agent-runtime-general` | Image user `turing-agent-runtime` (UID/GID 1000) | None |
+| `turing-mcp-system` | Image user `mcp-system` (UID/GID 1000) | None |
+| `turing-mcp-files` | Validated host UID/GID | `sandbox/` at `/sandbox` |
+
+No service receives a writable temporary filesystem. The static security guard
+enumerates the Compose service block, applies this mount allowlist, and rejects
+root or missing users, writable roots, capability additions, incomplete
+capability drops, missing `no-new-privileges`, and unapproved secrets.
 The servers bound request bodies and configure header, read, write, and idle
 HTTP timeouts. `mcp-system` accepts at most 1 MiB per request; `mcp-files`
 allows the worst-case escaped 512 KiB mutation envelope (about 3.1 MiB). Both
@@ -242,10 +255,12 @@ writers.
 
 ## Bind-mount identities and host security systems
 
-The standalone `mcp-files` and orchestrator images use non-root UID/GID 1000.
-Repository Compose overrides both bind-mount writers with the validated current
-host UID/GID so `sandbox/` and `data/` remain writable without broadening their
-permissions.
+Every backend image defines a non-root user. The standalone orchestrator,
+agent-runtime, `mcp-system`, and `mcp-files` identities use UID/GID 1000.
+Repository Compose overrides the orchestrator and `mcp-files` bind-mount writers
+with the validated current host UID/GID so `data/` and `sandbox/` remain
+writable without broadening their permissions. The runtime and `mcp-system`
+retain their fixed image identities because they have no writable mount.
 
 `scripts/init.sh` accepts only canonical positive UID/GID values for the
 current process and rejects root, invalid, or out-of-range identities before it

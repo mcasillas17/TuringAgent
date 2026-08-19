@@ -50,7 +50,9 @@ This builds and runs the orchestrator, agent runtime, and MCP servers through Do
 Use the repository scripts rather than invoking this Compose file directly.
 `scripts/compose.sh` validates and injects the current non-root host UID/GID;
 this prevents stale `.env` values or exported `HOST_UID`/`HOST_GID` variables
-from selecting the identity used for the sandbox bind mount.
+from selecting the identity used for the data and sandbox bind mounts. All
+backend services otherwise run with read-only roots, no Linux capabilities, and
+`no-new-privileges`; only `/app/data` and `/sandbox` are writable.
 
 In another terminal, run the Flutter app:
 

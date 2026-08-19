@@ -57,6 +57,11 @@ The public orchestrator gRPC port defaults to `3000`. The internal runtime gRPC 
 
 Compose uses explicit `environment:` blocks instead of `env_file:` so services receive only the secrets and config they need.
 
+Every service has an explicit non-root runtime identity, a read-only root
+filesystem, `cap_drop: ALL`, and `no-new-privileges`. Only the orchestrator's
+`/app/data` and `mcp-files`' `/sandbox` are writable; the runtime and
+`mcp-system` have no writable mount or tmpfs.
+
 ## Model providers
 
 The default local model path is Ollama:

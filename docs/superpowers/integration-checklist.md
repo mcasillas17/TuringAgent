@@ -14,8 +14,12 @@ Use this checklist against the current Go gRPC, MCP, and Flutter architecture.
   host UID/GID for both bind-mount writers.
 - [ ] `cd turing-backend && ./scripts/compose.sh config --quiet` resolves the
   orchestrator, agent runtime, `mcp-system`, and `mcp-files` services.
-- [ ] MCP containers are non-root, read-only, capability-free, and reachable
-  only on their intended internal Docker networks.
+- [ ] Every backend container uses an explicit non-root identity, a read-only
+  root filesystem, `cap_drop: ALL`, and `no-new-privileges`.
+- [ ] Only orchestrator `/app/data` and `mcp-files` `/sandbox` are writable;
+  runtime and `mcp-system` have no writable mounts or tmpfs.
+- [ ] Only the orchestrator publishes a host port; MCP services remain on their
+  intended internal Docker networks.
 - [ ] MCP healthchecks run through the service binaries without write access or
   extra image utilities, and the runtime waits for both services to be healthy.
 

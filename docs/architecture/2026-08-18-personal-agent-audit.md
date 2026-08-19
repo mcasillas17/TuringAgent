@@ -302,6 +302,11 @@ read path and TUR-021 remains the approval preview/diff UX.
 **Likely files:** orchestrator/runtime Dockerfiles, Compose, Docker security tests.  
 **Acceptance:** Security tests cover all services; normal startup, model calls, and persistence still work.  
 **Dependencies:** None.
+**Status:** Pending merge. Branch `mcasillas17-tur-005-container-hardening`
+adds the runtime image identity, applies one fail-closed Compose posture to all
+four backend services, and allowlists only `/app/data` and `/sandbox` as writable
+storage. Deployment documentation and Docker-backed startup, model-loop, and
+persistence evidence are included with the pending pull request.
 
 #### TUR-006 — Introduce service-scoped internal identities
 
