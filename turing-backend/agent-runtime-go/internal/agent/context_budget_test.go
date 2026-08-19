@@ -327,6 +327,69 @@ func TestBuildBudgetedContextFailsWhenLiveProtocolCannotFit(t *testing.T) {
 	}
 }
 
+func TestBuildBudgetedContextCompactsOnlyTheLargestUsefulToolResults(t *testing.T) {
+	provider := &budgetTestProvider{output: 100}
+	smallContent := `{"ok":true}`
+	largeContent := strings.Repeat("large result ", 200)
+	live := []llm.ChatMessage{
+		{Role: "user", Content: strings.Repeat("current context ", 20)},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{
+			{ID: "call_small", Name: "small"},
+			{ID: "call_large", Name: "large"},
+		}},
+		{Role: "tool", ToolCallID: "call_small", Name: "small", Content: smallContent},
+		{Role: "tool", ToolCallID: "call_large", Name: "large", Content: largeContent},
+	}
+	minimalLive := cloneChatMessages(live)
+	minimalLive[3].Content = compactedToolResultForBytes(len(largeContent))
+	provider.window = estimateRequest(t, provider, "model", minimalLive, nil) + provider.output
+
+	got, err := buildBudgetedContext(provider, "model", contextInput{live: live}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Omissions.ToolResults != 1 {
+		t.Fatalf("ToolResults = %d, want only the large result omitted", got.Omissions.ToolResults)
+	}
+	if got.Request.Messages[2].Content != smallContent {
+		t.Fatalf("small result changed from %q to %q", smallContent, got.Request.Messages[2].Content)
+	}
+	if !strings.Contains(got.Request.Messages[3].Content, `"omitted":true`) {
+		t.Fatalf("large result was not compacted: %q", got.Request.Messages[3].Content)
+	}
+	for index := 2; index <= 3; index++ {
+		if got.Request.Messages[index].Role != live[index].Role ||
+			got.Request.Messages[index].Name != live[index].Name ||
+			got.Request.Messages[index].ToolCallID != live[index].ToolCallID {
+			t.Fatalf("tool protocol message %d changed: got=%#v want=%#v", index, got.Request.Messages[index], live[index])
+		}
+	}
+}
+
+func TestBuildBudgetedContextCompactsLegitimateMarkerShapedToolOutput(t *testing.T) {
+	provider := &budgetTestProvider{output: 100}
+	content := strings.Repeat("source before ", 40) +
+		`"contextBudget":{"omitted":true` +
+		strings.Repeat(" source after", 40)
+	live := []llm.ChatMessage{
+		{Role: "user", Content: "read the file"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "files.read"}}},
+		{Role: "tool", ToolCallID: "call_1", Name: "files.read", Content: content},
+	}
+	minimalLive := cloneChatMessages(live)
+	minimalLive[2].Content = compactedToolResultForBytes(len(content))
+	provider.window = estimateRequest(t, provider, "model", minimalLive, nil) + provider.output
+
+	got, err := buildBudgetedContext(provider, "model", contextInput{live: live}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Omissions.ToolResults != 1 ||
+		!strings.HasPrefix(got.Request.Messages[2].Content, `{"contextBudget":{"omitted":true`) {
+		t.Fatalf("marker-shaped legitimate result was not compacted: %#v", got)
+	}
+}
+
 func TestBuildBudgetedContextRequiresDefinitionsReferencedByLiveProtocol(t *testing.T) {
 	provider := &budgetTestProvider{}
 	live := []llm.ChatMessage{

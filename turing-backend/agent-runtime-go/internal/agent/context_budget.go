@@ -3,6 +3,7 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
@@ -15,6 +16,10 @@ type contextInput struct {
 	history []llm.ChatMessage
 	recall  *llm.ChatMessage
 	live    []llm.ChatMessage
+	// minimalToolResults marks synthetic protocol placeholders supplied by the
+	// caller for preflight. Real tool content is never identified by sniffing
+	// untrusted bytes.
+	minimalToolResults map[int]struct{}
 }
 
 type contextOmissions struct {
@@ -136,14 +141,40 @@ func buildBudgetedContext(
 	if err != nil {
 		return budgetedContext{}, fmt.Errorf("estimate mandatory model context: %w", err)
 	}
-	for index := range liveMessages {
+	type toolResultCandidate struct {
+		index         int
+		originalBytes int
+		marker        string
+	}
+	candidates := make([]toolResultCandidate, 0)
+	for index, message := range liveMessages {
+		if message.Role != "tool" {
+			continue
+		}
+		if _, minimal := input.minimalToolResults[index]; minimal {
+			continue
+		}
+		marker := compactedToolResultForBytes(len(message.Content))
+		if len(marker) >= len(message.Content) {
+			continue
+		}
+		candidates = append(candidates, toolResultCandidate{
+			index:         index,
+			originalBytes: len(message.Content),
+			marker:        marker,
+		})
+	}
+	sort.Slice(candidates, func(left, right int) bool {
+		if candidates[left].originalBytes != candidates[right].originalBytes {
+			return candidates[left].originalBytes > candidates[right].originalBytes
+		}
+		return candidates[left].index < candidates[right].index
+	})
+	for _, candidate := range candidates {
 		if ok {
 			break
 		}
-		if liveMessages[index].Role != "tool" || isCompactedToolResult(liveMessages[index].Content) {
-			continue
-		}
-		liveMessages[index].Content = compactedToolResult(liveMessages[index].Content)
+		liveMessages[candidate.index].Content = candidate.marker
 		omissions.ToolResults++
 		ok, mandatoryEstimate, err = fits()
 		if err != nil {
@@ -231,14 +262,14 @@ func buildBudgetedContext(
 }
 
 func compactedToolResult(content string) string {
-	return fmt.Sprintf(
-		`{"contextBudget":{"omitted":true,"originalBytes":%d,"message":"Tool result content omitted to fit the configured context window."}}`,
-		len(content),
-	)
+	return compactedToolResultForBytes(len(content))
 }
 
-func isCompactedToolResult(content string) bool {
-	return strings.Contains(content, `"contextBudget":{"omitted":true`)
+func compactedToolResultForBytes(originalBytes int) string {
+	return fmt.Sprintf(
+		`{"contextBudget":{"omitted":true,"originalBytes":%d,"message":"Tool result content omitted to fit the configured context window."}}`,
+		originalBytes,
+	)
 }
 
 func cloneChatMessages(messages []llm.ChatMessage) []llm.ChatMessage {

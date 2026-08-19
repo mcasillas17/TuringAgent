@@ -378,19 +378,23 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			ToolCalls: calls,
 		})
 		prospectiveLive := cloneChatMessages(liveMessages)
+		minimalToolResults := make(map[int]struct{}, len(calls))
 		for _, call := range calls {
+			minimalIndex := len(prospectiveLive)
 			prospectiveLive = append(prospectiveLive, llm.ChatMessage{
 				Role:       "tool",
 				Name:       call.Name,
 				ToolCallID: call.ID,
-				Content:    compactedToolResult(""),
+				Content:    compactedToolResultForBytes(maxToolResultBytes),
 			})
+			minimalToolResults[minimalIndex] = struct{}{}
 		}
 		if _, err := buildBudgetedContext(provider, job.GetModel(), contextInput{
-			skills:  skillMessage,
-			history: historyMessages,
-			recall:  recallMessage,
-			live:    prospectiveLive,
+			skills:             skillMessage,
+			history:            historyMessages,
+			recall:             recallMessage,
+			live:               prospectiveLive,
+			minimalToolResults: minimalToolResults,
 		}, toolDefinitions); err != nil {
 			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
 		}

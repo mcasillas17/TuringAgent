@@ -235,7 +235,6 @@ func TestExecuteCompactsOversizedToolResultWithoutSplittingProtocol(t *testing.T
 
 func TestExecuteRejectsUnfitToolProtocolBeforeSideEffect(t *testing.T) {
 	provider := &budgetCapturingProvider{
-		window: 520,
 		output: 100,
 		responses: [][]llm.StreamEvent{
 			{{Type: "tool_call", ToolCalls: []llm.ToolCall{{
@@ -247,6 +246,29 @@ func TestExecuteRejectsUnfitToolProtocolBeforeSideEffect(t *testing.T) {
 		definitions: []map[string]any{{"name": "files.create"}},
 		result:      map[string]any{"ok": true},
 	}
+	emptyMarkerMessages := []llm.ChatMessage{
+		{Role: "user", Content: testJob().GetUserText()},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{
+			ID: "call_1", Name: "files.create", Arguments: map[string]any{"path": "note.txt"},
+		}}},
+		{
+			Role:       "tool",
+			Name:       "files.create",
+			ToolCallID: "call_1",
+			Content:    compactedToolResultForBytes(0),
+		},
+	}
+	toolDefinitions := []llm.ToolDefinition{{
+		Name:       "files.create",
+		Parameters: map[string]any{"type": "object"},
+	}}
+	provider.window = estimateRequest(
+		t,
+		provider,
+		testJob().GetModel(),
+		emptyMarkerMessages,
+		toolDefinitions,
+	) + provider.output
 	assistant := NewGeneralAssistant(
 		map[turingv1.ModelProvider]llm.Provider{
 			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
@@ -363,6 +385,31 @@ func TestExecuteEmitsEachChangedOmissionSetBeforeItsDispatch(t *testing.T) {
 				eventIndex,
 				updatesBeforeRequest,
 			)
+		}
+		var last omissionSet
+		emittedIndex := 0
+		for _, request := range provider.requests {
+			current := omissionSet{}
+			for _, message := range request.Messages {
+				if strings.HasPrefix(message.Content, `{"contextBudget":{"omitted":true`) {
+					current.results++
+				}
+			}
+			for _, message := range history {
+				if !containsMessageContent(request.Messages, message.Content) {
+					current.history++
+				}
+			}
+			if emittedIndex == 0 || current != last {
+				if emittedIndex >= len(emitted) || emitted[emittedIndex] != current {
+					t.Fatalf("notice sets = %#v, request omission set = %#v", emitted, current)
+				}
+				emittedIndex++
+				last = current
+			}
+		}
+		if emittedIndex != len(emitted) {
+			t.Fatalf("notice sets = %#v, only %d matched request omissions", emitted, emittedIndex)
 		}
 	}
 }
