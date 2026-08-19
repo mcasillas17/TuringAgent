@@ -82,20 +82,26 @@ func (r *Repository) ListLatestSessionUpdatedEvents(ctx context.Context, limit i
 		limit = 50
 	}
 	query := `
-		WITH latest AS (
-			SELECT session_id, MAX(sequence) AS sequence
-			FROM events
-			WHERE type = 'session.updated'
-			GROUP BY session_id
+		WITH page AS (
+			SELECT id, updated_at
+			FROM sessions
+			ORDER BY ` + sqliteTimestampNanos("updated_at") + ` DESC, id DESC
+			LIMIT ?
+		),
+		latest AS (
+			SELECT e.session_id, MAX(e.sequence) AS sequence
+			FROM events e
+			JOIN page ON page.id = e.session_id
+			WHERE e.type = 'session.updated'
+			GROUP BY e.session_id
 		)
 		SELECT e.id, e.session_id, e.run_id, e.trace_id, e.sequence, e.type, e.payload_json, e.created_at
 		FROM events e
 		JOIN latest
 			ON latest.session_id = e.session_id
 			AND latest.sequence = e.sequence
-		JOIN sessions s ON s.id = e.session_id
-		ORDER BY ` + sqliteTimestampNanos("s.updated_at") + ` DESC, s.id DESC
-		LIMIT ?
+		JOIN page ON page.id = e.session_id
+		ORDER BY ` + sqliteTimestampNanos("page.updated_at") + ` DESC, page.id DESC
 	`
 	rows, err := r.db.QueryContext(ctx, query, limit)
 	if err != nil {

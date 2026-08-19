@@ -253,6 +253,38 @@ func TestListLatestSessionUpdatedEventsUsesSessionListBoundAndOrder(t *testing.T
 	}
 }
 
+func TestListLatestSessionUpdatedEventsExcludesUpdatedSessionOutsideCanonicalPage(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	older, err := repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID:     older.SessionID,
+		Content:       "Older updated conversation",
+		AgentID:       "general_assistant",
+		ModelProvider: "ollama",
+		Model:         "qwen2.5:7b",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for range 50 {
+		if _, err := repo.CreateSession(ctx, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	events, err := repo.ListLatestSessionUpdatedEvents(ctx, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.SessionID == older.SessionID {
+			t.Fatalf("off-page session %s was replayed", older.SessionID)
+		}
+	}
+}
+
 func TestEnqueueUserMessageTitlesAnUntitledSession(t *testing.T) {
 	repo, ctx := newTitleTestRepo(t)
 
