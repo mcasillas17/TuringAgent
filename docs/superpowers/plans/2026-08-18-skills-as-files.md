@@ -202,6 +202,98 @@ the 7B case without making the common path depend on it.
   unattended run can pull any skill. Worth deciding whether an automation
   should be able to restrict that, the way it restricts tools.
 
+## The grant tests, written out
+
+The escalation rule is easy to implement as a single `granted` boolean and call
+it done, and a boolean passes any test that only ever grants one capability.
+These four are written here so that cannot happen. Names and helpers may be
+adapted to whatever the implementation looks like; **every assertion must
+survive.**
+
+Note what is *not* being built: there is no "detect escalation" step. The rule
+is that a skill loads only if every capability it currently declares is
+granted. Escalation then handles itself — a new capability is not in the
+grants, so the skill stops loading. Test 2 is what proves that.
+
+```go
+// 1. The baseline the other three are measured against.
+func TestSkillLoadsWhenEveryDeclaredCapabilityIsGranted(t *testing.T) {
+	skills := writeSkill(t, "writing/tone", []string{"files.write"})
+	grant(t, "writing/tone", "files.write")
+	enable(t, "writing/tone")
+
+	loaded := mustLoad(t, skills)
+
+	if !loaded.Has("writing/tone") {
+		t.Fatal("a skill with every declared capability granted must load")
+	}
+}
+
+// 2. THE test. A boolean grant stays true when the declaration widens, so a
+// boolean implementation keeps loading the skill and fails only here.
+func TestACapabilityAddedAfterTheGrantIsNotGranted(t *testing.T) {
+	skills := writeSkill(t, "writing/tone", []string{"files.write"})
+	grant(t, "writing/tone", "files.write")
+	enable(t, "writing/tone")
+	mustLoad(t, skills) // granted and loading, before the declaration changes
+
+	// The file is edited by hand, or pulled from upstream.
+	rewriteSkill(t, "writing/tone", []string{"files.write", "system.exec"})
+
+	loaded := mustLoad(t, skills)
+
+	if loaded.Has("writing/tone") {
+		t.Fatal("a skill must not load while a declared capability is ungranted")
+	}
+	if reason := loaded.Withheld("writing/tone"); !strings.Contains(reason, "system.exec") {
+		t.Fatalf("reason = %q, want it to name the capability that is ungranted", reason)
+	}
+	// The grant already given is not destroyed by the declaration changing.
+	if !isGranted(t, "writing/tone", "files.write") {
+		t.Fatal("widening a declaration must not revoke what was already granted")
+	}
+}
+
+// 3. Grants are per capability, so half of them is a state that must exist.
+func TestRevokingOneCapabilityLeavesTheOthers(t *testing.T) {
+	skills := writeSkill(t, "writing/tone", []string{"files.write", "files.read"})
+	grant(t, "writing/tone", "files.write")
+	grant(t, "writing/tone", "files.read")
+	enable(t, "writing/tone")
+
+	revoke(t, "writing/tone", "files.read")
+
+	if !isGranted(t, "writing/tone", "files.write") {
+		t.Fatal("revoking one capability revoked another")
+	}
+	if mustLoad(t, skills).Has("writing/tone") {
+		t.Fatal("a skill with a revoked declared capability must not load")
+	}
+}
+
+// 4. A stale row must not silently re-grant. See the decision below.
+func TestReAddingACapabilityDoesNotRestoreItsOldGrant(t *testing.T) {
+	skills := writeSkill(t, "writing/tone", []string{"files.write"})
+	grant(t, "writing/tone", "files.write")
+	enable(t, "writing/tone")
+
+	rewriteSkill(t, "writing/tone", []string{})            // capability dropped
+	rewriteSkill(t, "writing/tone", []string{"files.write"}) // and later re-added
+
+	if isGranted(t, "writing/tone", "files.write") {
+		t.Fatal("a capability re-appearing in a declaration must be consented to again")
+	}
+}
+```
+
+**The decision behind test 4.** Re-adding a previously granted capability is a
+*fresh* consent, not a restored one. The user agreed to a declaration, not to a
+permission in perpetuity, and a skill that drops a capability and quietly
+regains it later is exactly the shape of an attack on a shared skill. The cost
+is one extra click in a rare case. If this is ever reversed it should be
+reversed deliberately, by editing this test rather than by discovering that the
+code does something else.
+
 ## Verification
 
 Loader: valid skill folder, missing frontmatter, unreadable `SKILL.md`, a
