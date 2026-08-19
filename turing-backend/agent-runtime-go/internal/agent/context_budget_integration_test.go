@@ -278,7 +278,7 @@ func TestExecuteBoundsInjectedSkillIndexToProviderContext(t *testing.T) {
 }
 
 func TestExecuteDisclosesOmittedEnabledSkillIndex(t *testing.T) {
-	provider := &budgetCapturingProvider{window: 700, output: 100}
+	provider := &budgetCapturingProvider{window: 1200, output: 100}
 	job := testJob()
 	job.Skills = []*turingv1.SkillSnapshot{{
 		SkillId:     "writing/tone",
@@ -304,6 +304,10 @@ func TestExecuteDisclosesOmittedEnabledSkillIndex(t *testing.T) {
 	}
 	if containsMessageContent(provider.requests[0].Messages, "The user enabled the following local skills") {
 		t.Fatalf("skill index unexpectedly fit the constrained request: %#v", provider.requests[0].Messages)
+	}
+	if containsToolDefinition(provider.requests[0].Tools, skillsListToolName) ||
+		containsToolDefinition(provider.requests[0].Tools, skillViewToolName) {
+		t.Fatalf("skill access tools reached a request without their index: %#v", provider.requests[0].Tools)
 	}
 	for _, update := range updates {
 		event := update.GetEvent()
@@ -350,6 +354,98 @@ func TestExecuteDoesNotReportSkillIndexOmissionForLegacyOnlySkills(t *testing.T)
 		if event.GetPayload().AsMap()["skillIndexOmitted"] == true {
 			t.Fatalf("legacy-only skills produced a false index omission: %#v", update)
 		}
+	}
+}
+
+func TestBuildBudgetedContextWithRecallDoesNotReturnOmittedRecall(t *testing.T) {
+	provider := &budgetCapturingProvider{window: 700, output: 100}
+	assistant := NewGeneralAssistant(nil, nil, nil)
+
+	budgeted, recallMessage, err := assistant.buildBudgetedContextWithRecall(
+		context.Background(),
+		provider,
+		testJob(),
+		nil,
+		false,
+		nil,
+		nil,
+		nil,
+		[]llm.ChatMessage{{Role: "user", Content: "current question"}},
+		nil,
+		func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool) {
+			return llm.ChatMessage{
+				Role:    "system",
+				Content: strings.Repeat("oversized recall ", 100),
+			}, true
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if budgeted.RecallUsed {
+		t.Fatal("oversized recall unexpectedly reached the budgeted request")
+	}
+	if recallMessage != nil {
+		t.Fatalf("omitted recall returned for later preflight: %#v", recallMessage)
+	}
+}
+
+func TestExecuteRebudgetsSkillIndexBeforeToolPreflight(t *testing.T) {
+	provider := &budgetCapturingProvider{
+		window: 4096,
+		output: 512,
+		responses: [][]llm.StreamEvent{
+			{{Type: "tool_call", ToolCalls: []llm.ToolCall{{
+				ID: "call_1", Name: "system.read", Arguments: map[string]any{},
+			}}}},
+			{{Type: "completed", FinishReason: "stop"}},
+		},
+	}
+	job := testJob()
+	for index := 0; index < 100; index++ {
+		job.Skills = append(job.Skills, &turingv1.SkillSnapshot{
+			SkillId:     fmt.Sprintf("category/skill-%03d", index),
+			Name:        fmt.Sprintf("Skill %03d", index),
+			Category:    "category",
+			Description: strings.Repeat("bounded description ", 10),
+		})
+	}
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{
+			"name":        "system.read",
+			"description": strings.Repeat("large system tool schema ", 80),
+		}},
+		result: map[string]any{"ok": true},
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
+		},
+		fakeMessageClient{},
+		&GeneralAssistantTools{
+			SystemMCP: client,
+			Runner:    &tools.Runner{PostBeacon: allowToolCall},
+		},
+	)
+
+	updates := collectUpdates(t, assistant, job)
+
+	if failure := findRunFailed(updates); failure != nil {
+		t.Fatalf("run failed instead of re-budgeting the skill index: %#v", failure)
+	}
+	if len(client.calls) != 1 || len(provider.requests) != 2 {
+		t.Fatalf("tool calls/provider requests = %d/%d, want 1/2", len(client.calls), len(provider.requests))
+	}
+	if !containsMessageContent(provider.requests[0].Messages, "The user enabled the following local skills") {
+		t.Fatal("initial request did not include the skill index")
+	}
+	if provider.estimates[1]+provider.output > provider.window {
+		t.Fatalf(
+			"second request estimate %d + output reserve %d exceeds window %d",
+			provider.estimates[1],
+			provider.output,
+			provider.window,
+		)
 	}
 }
 

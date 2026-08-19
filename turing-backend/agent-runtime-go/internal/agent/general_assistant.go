@@ -210,24 +210,6 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	// through skill_view or an exact $path/id invocation. Legacy queued jobs
 	// retain their old full-body snapshot behavior until they drain.
 	toolDefinitions := registry.Definitions()
-	skillMessages, skillIndexIncluded, skillIndexOmitted, err := buildSkillMessagesWithinContext(
-		provider,
-		job.GetModel(),
-		job.GetSkills(),
-		job.GetUserText(),
-		liveMessages,
-		toolDefinitions,
-	)
-	if err != nil {
-		return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
-	}
-	var requiredToolNames map[string]struct{}
-	if skillIndexIncluded {
-		requiredToolNames = map[string]struct{}{
-			skillsListToolName: {},
-			skillViewToolName:  {},
-		}
-	}
 	recallForContext := a.prepareRecallForRun(ctx, job)
 	var content strings.Builder
 	var tokens runTokenAccumulator
@@ -242,6 +224,18 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		skillMessages, skillIndexIncluded, skillIndexOmitted, err := buildSkillMessagesWithinContext(
+			provider,
+			job.GetModel(),
+			job.GetSkills(),
+			job.GetUserText(),
+			liveMessages,
+			toolDefinitions,
+		)
+		if err != nil {
+			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
+		}
+		requiredToolNames := requiredSkillToolNames(skillIndexIncluded)
 		budgeted, recallMessage, err := a.buildBudgetedContextWithRecall(
 			ctx,
 			provider,
@@ -249,6 +243,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			skillMessages,
 			skillIndexOmitted,
 			requiredToolNames,
+			excludedOptionalSkillToolNames(skillIndexIncluded, skillIndexOmitted),
 			historyMessages,
 			liveMessages,
 			toolDefinitions,
@@ -432,13 +427,29 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			})
 			minimalToolResults[minimalIndex] = struct{}{}
 		}
+		prospectiveSkillMessages, prospectiveSkillIndexIncluded, prospectiveSkillIndexOmitted, err :=
+			buildSkillMessagesWithinContext(
+				provider,
+				job.GetModel(),
+				job.GetSkills(),
+				job.GetUserText(),
+				prospectiveLive,
+				toolDefinitions,
+			)
+		if err != nil {
+			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
+		}
 		if _, err := buildBudgetedContext(provider, job.GetModel(), contextInput{
-			skills:             skillMessages,
-			history:            historyMessages,
-			recall:             recallMessage,
-			live:               prospectiveLive,
-			requiredToolNames:  requiredToolNames,
-			skillIndexOmitted:  skillIndexOmitted,
+			skills:            prospectiveSkillMessages,
+			history:           historyMessages,
+			recall:            recallMessage,
+			live:              prospectiveLive,
+			requiredToolNames: requiredSkillToolNames(prospectiveSkillIndexIncluded),
+			excludedOptionalToolNames: excludedOptionalSkillToolNames(
+				prospectiveSkillIndexIncluded,
+				prospectiveSkillIndexOmitted,
+			),
+			skillIndexOmitted:  prospectiveSkillIndexOmitted,
 			minimalToolResults: minimalToolResults,
 		}, toolDefinitions); err != nil {
 			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
@@ -510,21 +521,25 @@ func buildSkillMessagesWithinContext(
 		messages = append(messages, required...)
 		return messages, len(index) > 0, metadataOmitted
 	}
-	skillTools := make([]llm.ToolDefinition, 0, 2)
-	for _, definition := range toolDefinitions {
-		if definition.Name == skillsListToolName || definition.Name == skillViewToolName {
-			skillTools = append(skillTools, definition)
-		}
-	}
-	fits := func(messages []llm.ChatMessage) (bool, error) {
+	liveRequiredToolNames := liveToolNames(liveMessages)
+	fits := func(messages []llm.ChatMessage, indexIncluded bool) (bool, error) {
 		requestMessages := make([]llm.ChatMessage, 0, len(messages)+len(liveMessages))
 		requestMessages = append(requestMessages, messages...)
 		requestMessages = append(requestMessages, liveMessages...)
+		requiredTools := make([]llm.ToolDefinition, 0, len(liveRequiredToolNames)+2)
+		for _, definition := range toolDefinitions {
+			_, liveRequired := liveRequiredToolNames[definition.Name]
+			skillRequired := indexIncluded &&
+				(definition.Name == skillsListToolName || definition.Name == skillViewToolName)
+			if liveRequired || skillRequired {
+				requiredTools = append(requiredTools, definition)
+			}
+		}
 		estimate, err := llm.EstimateRequestTokens(provider, llm.ChatRequest{
 			Model:     model,
 			Messages:  requestMessages,
 			MaxTokens: provider.MaxOutputTokens(),
-			Tools:     skillTools,
+			Tools:     requiredTools,
 		})
 		if err != nil {
 			return false, fmt.Errorf("estimate model context with skill index: %w", err)
@@ -533,14 +548,14 @@ func buildSkillMessagesWithinContext(
 	}
 
 	full, fullIncludesIndex, fullMetadataOmitted := indexAtLimit(maxInjectedSkillIndexBytes)
-	requiredFits, err := fits(required)
+	requiredFits, err := fits(required, false)
 	if err != nil {
 		return nil, false, false, err
 	}
 	if !requiredFits {
 		return required, false, fullIncludesIndex, nil
 	}
-	fullFits, err := fits(full)
+	fullFits, err := fits(full, fullIncludesIndex)
 	if err != nil {
 		return nil, false, false, err
 	}
@@ -554,7 +569,7 @@ func buildSkillMessagesWithinContext(
 	for low, high := 0, maxInjectedSkillIndexBytes; low <= high; {
 		middle := low + (high-low)/2
 		candidate, candidateIncludesIndex, candidateMetadataOmitted := indexAtLimit(middle)
-		candidateFits, err := fits(candidate)
+		candidateFits, err := fits(candidate, candidateIncludesIndex)
 		if err != nil {
 			return nil, false, false, err
 		}
@@ -570,6 +585,26 @@ func buildSkillMessagesWithinContext(
 	return best, bestIncludesIndex, bestMetadataOmitted, nil
 }
 
+func requiredSkillToolNames(skillIndexIncluded bool) map[string]struct{} {
+	if !skillIndexIncluded {
+		return nil
+	}
+	return map[string]struct{}{
+		skillsListToolName: {},
+		skillViewToolName:  {},
+	}
+}
+
+func excludedOptionalSkillToolNames(skillIndexIncluded bool, skillIndexOmitted bool) map[string]struct{} {
+	if skillIndexIncluded || !skillIndexOmitted {
+		return nil
+	}
+	return map[string]struct{}{
+		skillsListToolName: {},
+		skillViewToolName:  {},
+	}
+}
+
 func (a *GeneralAssistant) buildBudgetedContextWithRecall(
 	ctx context.Context,
 	provider llm.Provider,
@@ -577,17 +612,19 @@ func (a *GeneralAssistant) buildBudgetedContextWithRecall(
 	skillMessages []llm.ChatMessage,
 	skillIndexOmitted bool,
 	requiredToolNames map[string]struct{},
+	excludedOptionalToolNames map[string]struct{},
 	historyMessages []llm.ChatMessage,
 	liveMessages []llm.ChatMessage,
 	toolDefinitions []llm.ToolDefinition,
 	recallForContext func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool),
 ) (budgetedContext, *llm.ChatMessage, error) {
 	baseInput := contextInput{
-		skills:            skillMessages,
-		history:           historyMessages,
-		live:              liveMessages,
-		requiredToolNames: requiredToolNames,
-		skillIndexOmitted: skillIndexOmitted,
+		skills:                    skillMessages,
+		history:                   historyMessages,
+		live:                      liveMessages,
+		requiredToolNames:         requiredToolNames,
+		excludedOptionalToolNames: excludedOptionalToolNames,
+		skillIndexOmitted:         skillIndexOmitted,
 	}
 	budgeted, err := buildBudgetedContext(provider, job.GetModel(), baseInput, toolDefinitions)
 	if err != nil || recallForContext == nil {
@@ -618,6 +655,9 @@ func (a *GeneralAssistant) buildBudgetedContextWithRecall(
 			return budgetedContext{}, nil, nextErr
 		}
 		if next.Omissions.HistoryMessages == budgeted.Omissions.HistoryMessages {
+			if !next.RecallUsed {
+				recallMessage = nil
+			}
 			return next, recallMessage, nil
 		}
 		budgeted = next
@@ -630,10 +670,11 @@ func (a *GeneralAssistant) buildBudgetedContextWithRecall(
 		return budgetedContext{}, nil, err
 	}
 	broadInput := contextInput{
-		skills:            skillMessages,
-		live:              liveMessages,
-		requiredToolNames: requiredToolNames,
-		skillIndexOmitted: skillIndexOmitted,
+		skills:                    skillMessages,
+		live:                      liveMessages,
+		requiredToolNames:         requiredToolNames,
+		excludedOptionalToolNames: excludedOptionalToolNames,
+		skillIndexOmitted:         skillIndexOmitted,
 	}
 	broad, err := buildBudgetedContext(provider, job.GetModel(), broadInput, toolDefinitions)
 	if err != nil {
@@ -648,6 +689,9 @@ func (a *GeneralAssistant) buildBudgetedContextWithRecall(
 	}
 	baseInput.recall = recallMessage
 	final, err := buildBudgetedContext(provider, job.GetModel(), baseInput, toolDefinitions)
+	if err == nil && !final.RecallUsed {
+		recallMessage = nil
+	}
 	return final, recallMessage, err
 }
 

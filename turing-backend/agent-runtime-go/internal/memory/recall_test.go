@@ -878,11 +878,10 @@ func TestRecallSurfacesCurrentSessionHistoryOutsideTheFetchWindow(t *testing.T) 
 // an on-topic current session can fill the global page before an earlier match
 // is returned.
 func TestRecallSeparatesCurrentAndEarlierSessionSearches(t *testing.T) {
-	// A busy on-topic session: a full global page of its own messages scores
-	// highest for the term,
-	// and the one earlier-session message that recall exists to find sits behind
-	// them. Every current-session row is discarded after the query, so a narrow
-	// page spends itself on rows that never reach the block.
+	// A busy on-topic session would fill an unscoped page before the one
+	// earlier-session message that recall exists to find. The earlier-session
+	// query must exclude those rows before applying its limit, while the separate
+	// current-session query preserves history outside the admitted fetch window.
 	const currentSessionRows = perScopeTermHits
 	page := make([]Excerpt, 0, currentSessionRows+1)
 	for i := 1; i <= currentSessionRows; i++ {

@@ -12,12 +12,13 @@ import (
 var errContextBudgetExceeded = errors.New("required context exceeds the configured model window")
 
 type contextInput struct {
-	skills            []llm.ChatMessage
-	history           []llm.ChatMessage
-	recall            *llm.ChatMessage
-	live              []llm.ChatMessage
-	requiredToolNames map[string]struct{}
-	skillIndexOmitted bool
+	skills                    []llm.ChatMessage
+	history                   []llm.ChatMessage
+	recall                    *llm.ChatMessage
+	live                      []llm.ChatMessage
+	requiredToolNames         map[string]struct{}
+	excludedOptionalToolNames map[string]struct{}
+	skillIndexOmitted         bool
 	// minimalToolResults marks synthetic protocol placeholders supplied by the
 	// caller for preflight. Real tool content is never identified by sniffing
 	// untrusted bytes.
@@ -208,10 +209,14 @@ func buildBudgetedContext(
 	}
 
 	optionalTools := make([]int, 0, len(tools))
-	for index := range tools {
-		if !selectedTools[index] {
-			optionalTools = append(optionalTools, index)
+	for index, definition := range tools {
+		if selectedTools[index] {
+			continue
 		}
+		if _, excluded := input.excludedOptionalToolNames[definition.Name]; excluded {
+			continue
+		}
+		optionalTools = append(optionalTools, index)
 	}
 	setOptionalPrefix := func(count int) {
 		for optionalIndex, toolIndex := range optionalTools {
@@ -234,7 +239,11 @@ func buildBudgetedContext(
 		}
 	}
 	setOptionalPrefix(best)
-	omissions.ToolDefinitions = len(optionalTools) - best
+	for _, selected := range selectedTools {
+		if !selected {
+			omissions.ToolDefinitions++
+		}
+	}
 
 	if input.recall != nil {
 		recallUsed = true

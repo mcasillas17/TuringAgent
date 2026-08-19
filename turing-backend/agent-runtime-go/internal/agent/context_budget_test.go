@@ -305,7 +305,10 @@ func TestBuildBudgetedContextKeepsLiveToolCallAndResultTogether(t *testing.T) {
 		Parameters: map[string]any{"type": "object"},
 	}}
 
-	got, err := buildBudgetedContext(provider, "model", contextInput{live: live}, tools)
+	got, err := buildBudgetedContext(provider, "model", contextInput{
+		live:                      live,
+		excludedOptionalToolNames: map[string]struct{}{"files.read": {}},
+	}, tools)
 	if err != nil {
 		t.Fatal(err)
 	}
