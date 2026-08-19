@@ -44,7 +44,7 @@ func TestCIWorkflowCoversCoreChecks(t *testing.T) {
 	requireContains(t, protoJob, "uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0")
 	requireContains(t, protoJob, `version: "1.72.0"`)
 	requireContains(t, protoJob, "setup_only: true")
-	requireContains(t, protoJob, `TURING_REQUIRE_BUF=1 go test ./tools/proto -run '^TestBreakingCompatibility$' -count=1`)
+	requireContains(t, protoJob, `TURING_REQUIRE_BUF=1 go test ./tools/proto -run '^TestBreaking' -count=1`)
 	requireContains(t, protoJob, `tools/proto/breaking.sh "origin/${GITHUB_BASE_REF:-main}"`)
 	requireContains(t, protoJob, "tools/proto/check.sh")
 	requireContains(t, protoJob, "bash -n tools/proto/breaking.sh turing-backend/scripts/compose.sh turing-backend/scripts/dev.sh turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/rotate-client-key.sh turing-backend/scripts/smoke-grpc.sh turing-backend/scripts/smoke.sh turing-backend/scripts/verify-tool-loop.sh")

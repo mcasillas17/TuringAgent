@@ -14,6 +14,8 @@ require() {
 
 require git
 require buf
+require mktemp
+require tar
 
 buf_version="$(buf --version 2>/dev/null || true)"
 if [[ "$buf_version" != "$REQUIRED_BUF_VERSION" ]]; then
@@ -42,7 +44,7 @@ if [[ "$(git -C "$ROOT" rev-parse --is-shallow-repository)" == "true" ]]; then
   fetch_args+=(--depth=1)
 fi
 if ! git -C "$ROOT" fetch "${fetch_args[@]}" "$remote" \
-  "refs/heads/$branch:refs/remotes/$remote/$branch"; then
+  "+refs/heads/$branch:refs/remotes/$remote/$branch"; then
   echo "failed to refresh base ref $BASE_REF; verify the remote and branch are reachable" >&2
   exit 1
 fi
@@ -52,5 +54,11 @@ if ! base_commit="$(git -C "$ROOT" rev-parse --verify "refs/remotes/$remote/$bra
   exit 1
 fi
 
-buf breaking "$ROOT/proto" \
-  --against "$ROOT#format=git,ref=$base_commit,subdir=proto"
+baseline="$(mktemp -d "${TMPDIR:-/tmp}/turing-proto-breaking.XXXXXX")"
+trap 'rm -rf -- "$baseline"' EXIT
+if ! git -C "$ROOT" archive "$base_commit" proto | tar -x -C "$baseline"; then
+  echo "failed to extract protobuf schema from base ref $BASE_REF ($base_commit)" >&2
+  exit 1
+fi
+
+buf breaking "$ROOT/proto" --against "$baseline/proto"

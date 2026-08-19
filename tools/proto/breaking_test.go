@@ -28,6 +28,12 @@ func TestBreakingCompatibility(t *testing.T) {
 			wantDiagnostics: []string{`field "2"`, "was deleted"},
 		},
 		{
+			name:            "removed and reserved live field",
+			fixture:         "removed_reserved",
+			wantFailure:     true,
+			wantDiagnostics: []string{`field "2"`, "was deleted"},
+		},
+		{
 			name:            "renumbered live field",
 			fixture:         "renumbered",
 			wantFailure:     true,
@@ -148,6 +154,58 @@ func TestBreakingDoesNotUseStaleBaseWhenFetchFails(t *testing.T) {
 	}
 	if _, err := os.Stat(bufLog); !os.IsNotExist(err) {
 		t.Fatalf("buf was called after fetch failure; stat error = %v", err)
+	}
+}
+
+func TestBreakingRefreshesRewrittenBaseBranch(t *testing.T) {
+	tempDir := t.TempDir()
+	remote := filepath.Join(tempDir, "origin.git")
+	runGit(t, tempDir, "init", "--bare", remote)
+
+	seed := filepath.Join(tempDir, "seed")
+	runGit(t, tempDir, "init", "--initial-branch=main", seed)
+	runGit(t, seed, "config", "user.name", "Turing Proto Test")
+	runGit(t, seed, "config", "user.email", "proto-test@example.invalid")
+	copyFile(t,
+		filepath.Join("testdata", "breaking", "base", "turing", "v1", "example.proto"),
+		filepath.Join(seed, "proto", "turing", "v1", "example.proto"),
+		0o644,
+	)
+	runGit(t, seed, "add", "proto")
+	runGit(t, seed, "commit", "-m", "baseline")
+	runGit(t, seed, "remote", "add", "origin", remote)
+	runGit(t, seed, "push", "--set-upstream", "origin", "main")
+
+	repo := filepath.Join(tempDir, "repo")
+	runGit(t, tempDir, "clone", "--branch=main", remote, repo)
+	copyFile(t, "breaking.sh", filepath.Join(repo, "tools", "proto", "breaking.sh"), 0o755)
+
+	if err := os.WriteFile(filepath.Join(seed, "marker"), []byte("rewritten\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, seed, "add", "marker")
+	runGit(t, seed, "commit", "--amend", "-m", "rewritten baseline")
+	runGit(t, seed, "push", "--force", "origin", "main")
+	rewrittenCommit := runGit(t, seed, "rev-parse", "HEAD")
+
+	bufLog := filepath.Join(tempDir, "buf.log")
+	binDir := t.TempDir()
+	writeTool(t, binDir, "buf", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '1.72.0'; exit 0; fi\nprintf '%s\\n' \"$*\" > \"$BUF_LOG\"\n")
+
+	command := exec.Command(filepath.Join(repo, "tools", "proto", "breaking.sh"), "origin/main")
+	command.Dir = repo
+	command.Env = append(os.Environ(),
+		"PATH="+binDir+":/usr/bin:/bin",
+		"BUF_LOG="+bufLog,
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("breaking.sh rejected rewritten base branch: %v\n%s", err, output)
+	}
+	if got := runGit(t, repo, "rev-parse", "refs/remotes/origin/main"); got != rewrittenCommit {
+		t.Fatalf("refreshed base commit = %s, want %s", got, rewrittenCommit)
+	}
+	if _, err := os.Stat(bufLog); err != nil {
+		t.Fatalf("buf was not called after base refresh: %v", err)
 	}
 }
 

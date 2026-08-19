@@ -167,7 +167,7 @@ jobs:
           setup_only: true
 
       - name: Test protobuf compatibility guard
-        run: TURING_REQUIRE_BUF=1 go test ./tools/proto -run '^TestBreakingCompatibility$' -count=1
+        run: TURING_REQUIRE_BUF=1 go test ./tools/proto -run '^TestBreaking' -count=1
 
       - name: Check protobuf compatibility
         run: tools/proto/breaking.sh "origin/${GITHUB_BASE_REF:-main}"

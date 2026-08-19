@@ -13,7 +13,7 @@
 - Create `buf.yaml`: declare the `proto` module and `FILE` breaking policy.
 - Create `tools/proto/breaking.sh`: validate tools/base ref, refresh the base branch, resolve its commit, and run Buf.
 - Create `tools/proto/breaking_test.go`: exercise the repository script with real Buf and temporary Git repositories.
-- Create `tools/proto/testdata/breaking/{base,additive,removed,renumbered}/turing/v1/example.proto`: compatibility regression schemas.
+- Create `tools/proto/testdata/breaking/{base,additive,removed,removed_reserved,renumbered}/turing/v1/example.proto`: compatibility regression schemas.
 - Modify `.github/workflows/ci.yml`: install pinned Buf and run the compatibility guard and required fixture tests.
 - Modify `.github/workflows/ci_test.go`: guard the exact action pin, CLI version, base-ref command, fixture test command, and deterministic generation command.
 - Modify `tools/proto/README.md`: document installation, compatibility policy, local usage, and reservation rules.
@@ -26,11 +26,12 @@
 - Create: `tools/proto/testdata/breaking/base/turing/v1/example.proto`
 - Create: `tools/proto/testdata/breaking/additive/turing/v1/example.proto`
 - Create: `tools/proto/testdata/breaking/removed/turing/v1/example.proto`
+- Create: `tools/proto/testdata/breaking/removed_reserved/turing/v1/example.proto`
 - Create: `tools/proto/testdata/breaking/renumbered/turing/v1/example.proto`
 
 - [ ] **Step 1: Add the baseline and candidate schemas**
 
-The baseline message contains `id = 1` and `display_name = 2`. The additive fixture keeps both and adds `description = 3`. The removed fixture deletes `display_name`. The renumbered fixture moves `display_name` from 2 to 3.
+The baseline message contains `id = 1` and `display_name = 2`. The additive fixture keeps both and adds a field, enum, message, and service. The removed fixture deletes `display_name`; the removed-and-reserved fixture deletes it while reserving both its old name and number, proving `FILE` remains stricter than wire-only policies. The renumbered fixture moves `display_name` from 2 to 3.
 
 ```proto
 syntax = "proto3";
@@ -128,7 +129,7 @@ Expected result: failure because `breaking.sh` does not exist.
 
 The script uses `set -euo pipefail`, resolves the repository root from its own path, checks `git` and `buf`, and requires `buf --version` to equal `1.72.0`. The base defaults to `${PROTO_BREAKING_BASE_REF:-origin/main}` and must match a real configured remote plus a branch accepted by `git check-ref-format --branch`.
 
-The refresh and comparison commands preserve full history while keeping an existing shallow checkout shallow:
+The refresh and comparison commands preserve full history while keeping an existing shallow checkout shallow. The forced refspec accepts a base branch whose tip was legitimately rewritten, and the exact resolved commit is exported locally for Buf:
 
 ```bash
 fetch_args=(--no-tags)
@@ -136,10 +137,11 @@ if [[ "$(git -C "$ROOT" rev-parse --is-shallow-repository)" == "true" ]]; then
   fetch_args+=(--depth=1)
 fi
 git -C "$ROOT" fetch "${fetch_args[@]}" "$remote" \
-  "refs/heads/$branch:refs/remotes/$remote/$branch"
+  "+refs/heads/$branch:refs/remotes/$remote/$branch"
 base_commit="$(git -C "$ROOT" rev-parse --verify "refs/remotes/$remote/$branch^{commit}")"
-buf breaking "$ROOT/proto" \
-  --against "$ROOT#format=git,ref=$base_commit,subdir=proto"
+baseline="$(mktemp -d "${TMPDIR:-/tmp}/turing-proto-breaking.XXXXXX")"
+git -C "$ROOT" archive "$base_commit" proto | tar -x -C "$baseline"
+buf breaking "$ROOT/proto" --against "$baseline/proto"
 ```
 
 Every failure path prints the failing tool, ref, or recovery action. A fetch failure exits; it never reuses an older remote-tracking ref.
@@ -188,7 +190,7 @@ Assert the proto job contains all of these exact fragments:
 requireContains(t, protoJob, "uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0")
 requireContains(t, protoJob, `version: "1.72.0"`)
 requireContains(t, protoJob, "setup_only: true")
-requireContains(t, protoJob, `TURING_REQUIRE_BUF=1 go test ./tools/proto -run '^TestBreakingCompatibility$' -count=1`)
+requireContains(t, protoJob, `TURING_REQUIRE_BUF=1 go test ./tools/proto -run '^TestBreaking' -count=1`)
 requireContains(t, protoJob, `tools/proto/breaking.sh "origin/${GITHUB_BASE_REF:-main}"`)
 requireContains(t, protoJob, "tools/proto/check.sh")
 requireContains(t, protoJob, "bash -n tools/proto/breaking.sh turing-backend/scripts/compose.sh turing-backend/scripts/dev.sh turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/rotate-client-key.sh turing-backend/scripts/smoke-grpc.sh turing-backend/scripts/smoke.sh turing-backend/scripts/verify-tool-loop.sh")
@@ -216,7 +218,7 @@ Add setup-only Buf action configuration and these repository commands:
     setup_only: true
 
 - name: Test protobuf compatibility guard
-  run: TURING_REQUIRE_BUF=1 go test ./tools/proto -run '^TestBreakingCompatibility$' -count=1
+  run: TURING_REQUIRE_BUF=1 go test ./tools/proto -run '^TestBreaking' -count=1
 
 - name: Check protobuf compatibility
   run: tools/proto/breaking.sh "origin/${GITHUB_BASE_REF:-main}"
