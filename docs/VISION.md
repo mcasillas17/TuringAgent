@@ -4,7 +4,7 @@
 
 Supersedes the stack claims in `docs/superpowers/specs/2026-05-09-project-turing-v1-design.md`, which still describes a Node.js/TypeScript orchestrator over REST/WebSocket. That was replaced by Go + gRPC in #10.
 
-**Last verified against the code:** 2026-08-18, at `0ca4e5f` (TUR-020 review fixes).
+**Last verified against the code:** 2026-08-18, at `8136827` (TUR-020 review fixes).
 
 ---
 
@@ -60,7 +60,7 @@ Each is a decision already made and defended in review, cited to where it happen
 | Model-driven tool calling | Working, live-verified against a real model (#19, #27) |
 | Dynamic tool discovery | Working; runtime reports its registry to the orchestrator (#17, #26) |
 | Cross-session recall | Working — SQLite FTS5, keyword search, attributed to the user (#15, #18, #25, #33) |
-| Context budgeting | Working — provider windows and output reservations are explicit, Ollama `num_ctx` is pinned per request, omissions are durable run events, and live tool protocol messages/correlation are never dropped (TUR-020) |
+| Context budgeting | Working — provider caps and output reservations are explicit, Ollama `num_ctx` is derived and pinned per request below its cap, omissions are durable run events, and live tool protocol messages/correlation are never dropped (TUR-020) |
 | Approvals | Working; single-use argument-bound JWT, consumed over internal gRPC |
 | Audit | **Write-only.** Rows are recorded; there is no read path in any proto or client |
 | Streaming + resilience | Working; reconnect, requeue, lease recovery, run-visibility notices (#24, #30, #33) |
