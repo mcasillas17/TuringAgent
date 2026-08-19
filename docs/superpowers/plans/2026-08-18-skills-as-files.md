@@ -61,9 +61,56 @@ This is a consequence of matching the ecosystem rather than inventing an id
 field, and it is the right behaviour anyway: a renamed skill is a different
 thing, and re-enabling it is one click.
 
+### What a skill may ask for, and what the user grants
+
+A skill's frontmatter may declare capabilities it wants:
+
+```yaml
+name: invoice-filing
+description: Files invoices into the sandbox by month
+requires: [files.write]
+```
+
+The file declares the **request**. The database records the **grant**. Those
+are different facts and both belong where they are — this is not a second
+source of truth for the same thing.
+
+Grants reuse the vocabulary tools already speak — `safe`,
+`approval_required`, `disabled` — rather than inventing a parallel permission
+language for skills.
+
+**Enabled is not granted.** A skill can be enabled with nothing granted, and
+then it is what every skill is today: instructions. Turning a skill on must
+never imply agreeing to what it asks for.
+
+**Nothing is granted by default.** A skill arriving in the folder is disabled
+and ungranted.
+
+**A change to the declaration revokes the grant for what changed.** If a skill
+is granted `files.write` and is later edited — by hand or pulled from
+upstream — to also want `system.exec`, the new capability is ungranted and the
+skill says so. Without this, updating a skill is a silent privilege
+escalation, which is the bug every permission system gets wrong once. The
+comparison is between the declaration seen at grant time and the declaration
+now, so it needs the granted set stored per capability, not a single flag.
+
+**What this enforces today, precisely.** A grant gates whether the skill is
+loaded at all — checkable now, and enforced in the loader. It does **not** yet
+restrict which tools the agent may call while that skill is active, because
+tool access is not scoped per skill. That arrives with executable skills; the
+plan for those inherits this grant model rather than inventing another.
+
+Deliberately stricter than the ecosystem here: Hermes' `requires_toolsets` is
+a visibility filter and their docs say plainly that nothing stops a skill
+calling a tool it did not declare. Ours refuses to load. Same idea, opposite
+enforcement — worth keeping the distinction sharp so the assumption is not
+imported by mistake along with the file format.
+
 ### The database keeps exactly one column
 
-`(skill_id, enabled)`. Nothing else.
+`(skill_id, enabled)` and `(skill_id, capability, granted_at)`. Nothing else.
+
+Both are user decisions. Neither is derivable from the files.
 
 Name, description and category are read from the files. Copying them into the
 database would create a second source of truth that drifts the moment someone
@@ -160,6 +207,11 @@ the 7B case without making the common path depend on it.
 Loader: valid skill folder, missing frontmatter, unreadable `SKILL.md`, a
 folder with no `SKILL.md` at all, two skills of the same name under different
 categories, path escape, empty root, root absent entirely.
+
+Grants: a skill loads with a granted capability and refuses to load without
+it; enabling does not grant; a declaration that gains a capability leaves the
+new one ungranted while keeping the old grant; a declaration that loses one
+drops it.
 
 Identity and enablement: a new folder arrives disabled; enabling then renaming
 the folder leaves the new path disabled and does not resurrect the old row;
