@@ -22,6 +22,15 @@ var ErrSessionHasActiveRun = errors.New("session has an active run")
 // session" from "never carried a payload".
 const scrubbedAuditPayload = `{"scrubbed":true}`
 
+const scrubSessionAuditPayloadsSQL = `
+	UPDATE audit_logs SET payload_json = ?
+	WHERE correlation_id IN (SELECT id FROM agent_runs WHERE session_id = ?)
+		OR (
+			target = ?
+			AND (correlation_id IS NULL OR correlation_id = '')
+		)
+`
+
 // DeleteSession removes a session and everything it produced, and scrubs the
 // content out of the audit rows it leaves behind.
 //
@@ -34,14 +43,11 @@ const scrubbedAuditPayload = `{"scrubbed":true}`
 // what the user asked it to forget.
 //
 // The audit scrub runs BEFORE the cascade, as a single statement whose
-// subquery resolves the run ids inline. audit_logs has no foreign key — most
-// of its rows link to a session only through correlation_id, which is the run
-// id, resolvable only through agent_runs.session_id, and the cascade deletes
-// that. Doing it in one statement ahead of the DELETE means there is no
-// snapshot to forget to take; an earlier version captured the ids into a slice
-// first, which worked but left a real ordering trap for the next reader. The
-// same statement also scrubs the routing rows, which link by target instead —
-// see the call site.
+// subquery resolves run ownership inline. Run-owned rows link through
+// correlation_id; uncorrelated session-level actions, including routing rows,
+// use the session as their target. Both links disappear or become unresolvable
+// after deletion, so the update resolves them while the source rows still
+// exist.
 func (r *Repository) DeleteSession(ctx context.Context, sessionID string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -90,21 +96,17 @@ func (r *Repository) DeleteSession(ctx context.Context, sessionID string) error 
 		return err
 	}
 
-	// Two disjoint sets of rows, scrubbed in one statement so they cannot
-	// diverge: rows correlated by one of this session's run ids, and the
-	// routing rows. Routing is the exception the correlation rule misses —
-	// SetSessionAgent / ClearSessionAgent write correlation_id NULL and put
-	// the session id in target (external_agents.go), so a run-id scrub never
-	// reaches them and the third-party endpoint, model, and agent display name
-	// would outlive the conversation they describe. The action match is exact,
-	// not a prefix, so it can only ever cover the two writers that use this
-	// target convention; session.deleted is inserted after this statement and
-	// is deliberately left PRESENT as the evidence of the deletion.
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE audit_logs SET payload_json = ?
-		WHERE correlation_id IN (SELECT id FROM agent_runs WHERE session_id = ?)
-			OR (target = ? AND action IN ('session.routed', 'session.unrouted'))
-	`, scrubbedAuditPayload, sessionID, sessionID); err != nil {
+	// Scrub both run-owned rows and every uncorrelated session-targeted action.
+	// The latter includes routing payloads and future derived session actions.
+	// session.deleted is inserted after this statement and deliberately remains
+	// PRESENT as evidence of the deletion.
+	if _, err := tx.ExecContext(
+		ctx,
+		scrubSessionAuditPayloadsSQL,
+		scrubbedAuditPayload,
+		sessionID,
+		sessionID,
+	); err != nil {
 		return err
 	}
 

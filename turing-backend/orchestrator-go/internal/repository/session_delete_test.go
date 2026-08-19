@@ -78,6 +78,16 @@ func TestDeleteSessionRemovesEverythingItProduced(t *testing.T) {
 	ctx := context.Background()
 	enqueued := seedDeletableSession(t, repo, "Delete me", "remember the passphrase hunter2")
 	finishRun(t, repo, enqueued.RunID)
+	agent := mustCreateAgent(t, ctx, repo, anthropicAgent())
+	if _, err := repo.SetSessionAgent(ctx, enqueued.SessionID, agent.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.db.ExecContext(ctx, `
+		INSERT INTO automation_runs (run_id, automation_id, automation_name, allowed_tools_json, fired_at)
+		VALUES (?, 'automation-delete', 'Delete automation run', '[]', datetime('now'))
+	`, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := repo.DeleteSession(ctx, enqueued.SessionID); err != nil {
 		t.Fatal(err)
@@ -91,6 +101,7 @@ func TestDeleteSessionRemovesEverythingItProduced(t *testing.T) {
 		{"messages", `SELECT COUNT(*) FROM messages WHERE session_id = ?`},
 		{"agent_runs", `SELECT COUNT(*) FROM agent_runs WHERE session_id = ?`},
 		{"events", `SELECT COUNT(*) FROM events WHERE session_id = ?`},
+		{"session_external_agent", `SELECT COUNT(*) FROM session_external_agent WHERE session_id = ?`},
 	} {
 		if got := countRows(t, repo, check.query, enqueued.SessionID); got != 0 {
 			t.Fatalf("%s still has %d rows for the deleted session", check.table, got)
@@ -105,6 +116,7 @@ func TestDeleteSessionRemovesEverythingItProduced(t *testing.T) {
 		{"jobs", `SELECT COUNT(*) FROM jobs WHERE run_id = ?`},
 		{"tool_calls", `SELECT COUNT(*) FROM tool_calls WHERE run_id = ?`},
 		{"approvals", `SELECT COUNT(*) FROM approvals WHERE run_id = ?`},
+		{"automation_runs", `SELECT COUNT(*) FROM automation_runs WHERE run_id = ?`},
 	} {
 		if got := countRows(t, repo, check.query, enqueued.RunID); got != 0 {
 			t.Fatalf("%s still has %d rows for the deleted run", check.table, got)
@@ -320,12 +332,223 @@ func TestDeleteSessionScrubsRoutingAuditRowsTargetingThatSession(t *testing.T) {
 	}
 }
 
+func TestDeleteSessionAuditScrubUsesOwnershipIndexes(t *testing.T) {
+	repo := New(openTestDB(t))
+	rows, err := repo.db.QueryContext(
+		context.Background(),
+		"EXPLAIN QUERY PLAN\n"+scrubSessionAuditPayloadsSQL,
+		scrubbedAuditPayload,
+		"session_query_plan",
+		"session_query_plan",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var usesCorrelationIndex, usesTargetIndex bool
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(detail, "SCAN audit_logs") {
+			t.Fatalf("audit scrub performs an unbounded table scan: %s", detail)
+		}
+		usesCorrelationIndex = usesCorrelationIndex || strings.Contains(detail, "idx_audit_correlation")
+		usesTargetIndex = usesTargetIndex || strings.Contains(detail, "idx_audit_target")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !usesCorrelationIndex || !usesTargetIndex {
+		t.Fatalf(
+			"audit scrub plan uses correlation index=%t target index=%t, want both",
+			usesCorrelationIndex,
+			usesTargetIndex,
+		)
+	}
+}
+
+func TestDeleteSessionScrubsSessionTargetedRoutingAudit(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Delete routed session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := mustCreateAgent(t, ctx, repo, anthropicAgent())
+	if _, err := repo.SetSessionAgent(ctx, session.SessionID, agent.AgentID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.DeleteSession(ctx, session.SessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	var payload string
+	if err := repo.db.QueryRowContext(ctx, `
+		SELECT COALESCE(payload_json, '')
+		FROM audit_logs
+		WHERE action = 'session.routed' AND target = ?
+	`, session.SessionID).Scan(&payload); err != nil {
+		t.Fatalf("routing audit row did not survive deletion: %v", err)
+	}
+	if payload != scrubbedAuditPayload {
+		t.Fatalf("routing audit payload = %q, want %q", payload, scrubbedAuditPayload)
+	}
+}
+
+func TestDeleteSessionScrubsSessionTargetedUnroutingAudit(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Delete unrouted session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := mustCreateAgent(t, ctx, repo, anthropicAgent())
+	if _, err := repo.SetSessionAgent(ctx, session.SessionID, agent.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ClearSessionAgent(ctx, session.SessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	var payloadBefore string
+	if err := repo.db.QueryRowContext(ctx, `
+		SELECT COALESCE(payload_json, '')
+		FROM audit_logs
+		WHERE action = 'session.unrouted' AND target = ?
+	`, session.SessionID).Scan(&payloadBefore); err != nil {
+		t.Fatal(err)
+	}
+	if payloadBefore != "{}" {
+		t.Fatalf("unrouting audit payload before deletion = %q, want %q", payloadBefore, "{}")
+	}
+
+	if err := repo.DeleteSession(ctx, session.SessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	var payloadAfter string
+	if err := repo.db.QueryRowContext(ctx, `
+		SELECT COALESCE(payload_json, '')
+		FROM audit_logs
+		WHERE action = 'session.unrouted' AND target = ?
+	`, session.SessionID).Scan(&payloadAfter); err != nil {
+		t.Fatalf("unrouting audit row did not survive deletion: %v", err)
+	}
+	if payloadAfter != scrubbedAuditPayload {
+		t.Fatalf("unrouting audit payload after deletion = %q, want %q", payloadAfter, scrubbedAuditPayload)
+	}
+}
+
+func TestDeleteSessionScrubsUncorrelatedSessionTargetedAuditActionsByDefault(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Delete future session action")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordAudit(
+		ctx,
+		"",
+		"client",
+		"",
+		"conversation.renamed",
+		session.SessionID,
+		`{"title":"private title"}`,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.DeleteSession(ctx, session.SessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	var payload string
+	if err := repo.db.QueryRowContext(ctx, `
+		SELECT COALESCE(payload_json, '')
+		FROM audit_logs
+		WHERE action = 'conversation.renamed' AND target = ?
+	`, session.SessionID).Scan(&payload); err != nil {
+		t.Fatalf("session-targeted audit row did not survive deletion: %v", err)
+	}
+	if payload != scrubbedAuditPayload {
+		t.Fatalf("session-targeted audit payload = %q, want %q", payload, scrubbedAuditPayload)
+	}
+}
+
+func TestDeleteSessionScrubsLegacyEmptyCorrelationAudit(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Delete legacy audit session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const payloadBefore = `{"title":"legacy private title"}`
+	if _, err := repo.db.ExecContext(ctx, `
+		INSERT INTO audit_logs (
+			id, correlation_id, actor_type, action, target, payload_json, created_at
+		)
+		VALUES (
+			'audit_legacy_empty_correlation', '', 'client', 'conversation.renamed', ?, ?, datetime('now')
+		)
+	`, session.SessionID, payloadBefore); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.DeleteSession(ctx, session.SessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	var payloadAfter string
+	if err := repo.db.QueryRowContext(ctx, `
+		SELECT COALESCE(payload_json, '')
+		FROM audit_logs
+		WHERE id = 'audit_legacy_empty_correlation'
+	`).Scan(&payloadAfter); err != nil {
+		t.Fatal(err)
+	}
+	if payloadAfter != scrubbedAuditPayload {
+		t.Fatalf("legacy empty-correlation payload after deletion = %q, want %q", payloadAfter, scrubbedAuditPayload)
+	}
+}
+
 // The scrub is correlated, not global: another session's audit must be intact.
 func TestDeleteSessionLeavesOtherSessionsAuditIntact(t *testing.T) {
 	repo := New(openTestDB(t))
 	ctx := context.Background()
 	doomed := seedDeletableSession(t, repo, "Delete me", "doomed content")
 	survivor := seedDeletableSession(t, repo, "Keep me", "surviving content")
+	agent := mustCreateAgent(t, ctx, repo, anthropicAgent())
+	if _, err := repo.SetSessionAgent(ctx, doomed.SessionID, agent.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetSessionAgent(ctx, survivor.SessionID, agent.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	var routingPayloadBefore string
+	if err := repo.db.QueryRowContext(ctx, `
+		SELECT COALESCE(payload_json, '')
+		FROM audit_logs
+		WHERE action = 'session.routed' AND target = ?
+	`, survivor.SessionID).Scan(&routingPayloadBefore); err != nil {
+		t.Fatal(err)
+	}
+	const unrelatedPayload = `{"scope":"surviving run"}`
+	if err := repo.RecordAudit(
+		ctx,
+		survivor.RunID,
+		"runtime",
+		"",
+		"tool.call.shared-target",
+		doomed.SessionID,
+		unrelatedPayload,
+	); err != nil {
+		t.Fatal(err)
+	}
 	finishRun(t, repo, doomed.RunID)
 
 	if err := repo.DeleteSession(ctx, doomed.SessionID); err != nil {
@@ -344,6 +567,38 @@ func TestDeleteSessionLeavesOtherSessionsAuditIntact(t *testing.T) {
 	}
 	if _, present := decoded["args"]; !present {
 		t.Fatalf("an unrelated session's audit payload was scrubbed: %q", payload)
+	}
+
+	var routingPayloadAfter string
+	if err := repo.db.QueryRowContext(ctx, `
+		SELECT COALESCE(payload_json, '')
+		FROM audit_logs
+		WHERE action = 'session.routed' AND target = ?
+	`, survivor.SessionID).Scan(&routingPayloadAfter); err != nil {
+		t.Fatal(err)
+	}
+	if routingPayloadAfter != routingPayloadBefore {
+		t.Fatalf(
+			"an unrelated session's routing audit payload changed from %q to %q",
+			routingPayloadBefore,
+			routingPayloadAfter,
+		)
+	}
+
+	var unrelatedPayloadAfter string
+	if err := repo.db.QueryRowContext(ctx, `
+		SELECT COALESCE(payload_json, '')
+		FROM audit_logs
+		WHERE action = 'tool.call.shared-target' AND correlation_id = ?
+	`, survivor.RunID).Scan(&unrelatedPayloadAfter); err != nil {
+		t.Fatal(err)
+	}
+	if unrelatedPayloadAfter != unrelatedPayload {
+		t.Fatalf(
+			"an unrelated audit payload sharing the deleted session target changed from %q to %q",
+			unrelatedPayload,
+			unrelatedPayloadAfter,
+		)
 	}
 }
 

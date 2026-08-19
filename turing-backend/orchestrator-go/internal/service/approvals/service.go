@@ -125,7 +125,7 @@ func (s *Server) CreateApprovalForTool(ctx context.Context, runID string, toolCa
 	}
 	if event.EventID != "" {
 		s.publishEvent(event)
-		_ = s.audit.Record(ctx, approval.RunID, "runtime", "", "approval.requested", approval.ApprovalID, map[string]any{"toolName": approval.ToolName})
+		_, _ = s.audit.RecordForExistingRun(ctx, approval.RunID, "runtime", "", "approval.requested", approval.ApprovalID, map[string]any{"toolName": approval.ToolName})
 	}
 	return approval.ApprovalID, nil
 }
@@ -438,12 +438,13 @@ func (s *Server) GrantUnattendedApproval(ctx context.Context, approvalID string,
 	// so an unrecordable grant is not granted at all. Over-recording — a row
 	// for a grant that then failed to commit — is the safe direction, and the
 	// approvals table still says what actually happened.
-	if err := s.audit.Record(ctx, approval.RunID, "automation", grant.AutomationID, "approval.approved", approval.ApprovalID, map[string]any{
+	recorded, err := s.audit.RecordForExistingRun(ctx, approval.RunID, "automation", grant.AutomationID, "approval.approved", approval.ApprovalID, map[string]any{
 		"toolName":       approval.ToolName,
 		"unattended":     true,
 		"automationId":   grant.AutomationID,
 		"automationName": grant.AutomationName,
-	}); err != nil {
+	})
+	if err != nil || !recorded {
 		return status.Error(codes.Internal, "unattended approval could not be recorded")
 	}
 	token, err := s.signApprovalToken(approval)
@@ -514,7 +515,7 @@ func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeAppro
 	if transition.ApprovalEvent.EventID != "" {
 		s.publishEvent(transition.ApprovalEvent)
 	}
-	_ = s.audit.Record(ctx, consumed.RunID, "mcp", "", "approval.consumed", consumed.ApprovalID, map[string]any{"toolName": consumed.ToolName})
+	_, _ = s.audit.RecordForExistingRun(ctx, consumed.RunID, "mcp", "", "approval.consumed", consumed.ApprovalID, map[string]any{"toolName": consumed.ToolName})
 	return &turingv1.ApprovalResponse{ApprovalId: consumed.ApprovalID, Status: turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED}, nil
 }
 
