@@ -902,7 +902,7 @@ func (r *Repository) requeueAssignment(
 	if err != nil {
 		return err
 	}
-	if err := expectOneRow(result, "claimed job not found for requeue"); err != nil {
+	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
 		return err
 	}
 	result, err = tx.ExecContext(ctx, `
@@ -921,7 +921,7 @@ func (r *Repository) requeueAssignment(
 	if err != nil {
 		return err
 	}
-	if err := expectOneRow(result, "running run not found for requeue"); err != nil {
+	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -936,7 +936,17 @@ func (r *Repository) BeginAssignmentSend(ctx context.Context, assignment Assignm
 			AND execution_attempt_id = ?
 			AND execution_active = 1
 			AND execution_state = 'pending_send'
-	`, assignment.RunID, assignment.WorkerID, assignment.AttemptID)
+			AND status = 'running'
+			AND EXISTS (
+				SELECT 1
+				FROM jobs j
+				WHERE j.id = ?
+					AND j.run_id = agent_runs.id
+					AND j.status = 'in_progress'
+					AND j.lease_owner = ?
+					AND j.assignment_attempt_id = ?
+			)
+	`, assignment.RunID, assignment.WorkerID, assignment.AttemptID, assignment.JobID, assignment.WorkerID, assignment.AttemptID)
 	if err != nil {
 		return err
 	}

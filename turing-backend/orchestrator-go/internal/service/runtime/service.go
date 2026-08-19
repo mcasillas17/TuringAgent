@@ -786,9 +786,13 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 	connectedWorker.mu.Unlock()
 	if !supported {
 		_ = connectedWorker.releaseRun(assigned.RunId)
-		if err := s.requeueAssignments([]assignment{currentAssignment}); err != nil &&
-			!errors.Is(err, repository.ErrAssignmentFenced) {
-			return err
+		if err := s.requeueAssignments([]assignment{currentAssignment}); err != nil {
+			if !errors.Is(err, repository.ErrAssignmentFenced) {
+				return err
+			}
+			if err := s.acknowledgeFencedAssignment(assigned.RunId); err != nil {
+				return err
+			}
 		}
 		s.refreshPendingCapabilityStateAdvisory(
 			ctx, "worker route changed before assignment delivery", workerID, true, false,
@@ -801,6 +805,9 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 	if err := s.repo.BeginAssignmentSend(ctx, repositoryAssignment); err != nil {
 		_ = connectedWorker.releaseRun(assigned.RunId)
 		if errors.Is(err, repository.ErrAssignmentFenced) {
+			if err := s.acknowledgeFencedAssignment(assigned.RunId); err != nil {
+				return err
+			}
 			return s.DispatchPending(ctx)
 		}
 		_ = s.repo.AbortPendingAssignment(context.Background(), repositoryAssignment)
@@ -826,6 +833,16 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 		return err
 	}
 	return nil
+}
+
+func (s *Server) acknowledgeFencedAssignment(runID string) error {
+	recoveryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := s.repo.AcknowledgeExecutionExit(recoveryCtx, runID)
+	if errors.Is(err, repository.ErrRunNotActive) {
+		return nil
+	}
+	return err
 }
 
 func (s *Server) terminalizeApprovalDeliveryFailure(_ context.Context, approvalID string, _ *worker) error {

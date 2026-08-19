@@ -1036,6 +1036,78 @@ func TestSendCommandIgnoresConcurrentAbortFence(t *testing.T) {
 	}
 }
 
+func TestSendCommandIgnoresConcurrentCancellationFence(t *testing.T) {
+	tests := []struct {
+		name         string
+		capabilities *turingv1.WorkerCapabilities
+	}{
+		{
+			name: "before send transition",
+			capabilities: modelCapabilities(
+				turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+			),
+		},
+		{
+			name: "before capability requeue",
+			capabilities: modelCapabilities(
+				turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, "gpt-4o-mini", 8192, 1,
+			),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newHarness(t)
+			enqueued := h.enqueueRun(t, "concurrent cancellation fence")
+			job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-cancel-fence")
+			if err != nil {
+				t.Fatal(err)
+			}
+			capabilities, _, err := decodeWorkerCapabilities(test.capabilities)
+			if err != nil {
+				t.Fatal(err)
+			}
+			connected := &worker{
+				commands:       make(chan *turingv1.RuntimeCommand, 1),
+				done:           make(chan struct{}),
+				registrationID: "registration-cancel-fence",
+				capabilities:   capabilities,
+				maxConcurrent:  1,
+				lastHeartbeat:  time.Now().UTC(),
+				assignments: map[string]assignment{
+					job.RunID: {jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID},
+				},
+			}
+			h.service.mu.Lock()
+			h.service.workers["worker-cancel-fence"] = connected
+			h.service.mu.Unlock()
+			if _, err := h.repo.CancelRunWithEvent(
+				context.Background(), enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`,
+			); err != nil {
+				t.Fatal(err)
+			}
+			stream := &reconnectAcceptanceStream{ctx: context.Background(), assigned: make(chan struct{})}
+			command := &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: mapJob(job)}}
+			if err := h.service.sendCommand(
+				context.Background(), stream, command, connected, "worker-cancel-fence",
+			); err != nil {
+				t.Fatalf("concurrent cancellation disconnected healthy worker: %v", err)
+			}
+			select {
+			case <-stream.assigned:
+				t.Fatal("cancelled assignment was delivered")
+			default:
+			}
+			run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if run.Status != "cancelled" || run.ExecutionActive || run.ExecutionState != "exited" {
+				t.Fatalf("released cancelled assignment = %+v, want inactive exited execution", run)
+			}
+		})
+	}
+}
+
 // TestIsStreamCancellationCanonicalisesOnlyCancelledStreams pins the predicate
 // that lets ConnectWorker report one error for a cancelled stream no matter
 // which of its two concurrently-ready paths observed the cancellation. The

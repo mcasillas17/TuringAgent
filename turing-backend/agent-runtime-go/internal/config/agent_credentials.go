@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // agentAPIKeysVar holds every third-party API key an external agent can use,
@@ -35,6 +36,9 @@ func parseAgentAPIKeys(raw string) (map[string]string, error) {
 	for name, key := range keys {
 		if name == "" || key == "" {
 			return nil, fmt.Errorf("%s has an entry with an empty name or key", agentAPIKeysVar)
+		}
+		if strings.TrimSpace(name) != name {
+			return nil, fmt.Errorf("%s has an entry with a non-normalized credential name", agentAPIKeysVar)
 		}
 	}
 	return keys, nil
