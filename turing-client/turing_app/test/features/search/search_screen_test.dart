@@ -11,6 +11,10 @@ import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
+import 'package:turing_flutter_app/models/agent_descriptor.dart';
+import 'package:turing_flutter_app/models/tool_descriptor.dart';
+
+import '../../support/no_skills_api.dart';
 
 void main() {
   group('SearchScreen', () {
@@ -915,7 +919,7 @@ void main() {
       expect(find.text('Session session-1'), findsNothing);
     });
 
-    testWidgets('falls back to Untitled chat for an empty resolved title', (
+    testWidgets('falls back to the same placeholder the sidebar uses', (
       tester,
     ) async {
       final api = _FakeSearchApi();
@@ -943,7 +947,10 @@ void main() {
       );
       await tester.pump();
 
-      expect(find.text('Untitled chat'), findsOneWidget);
+      // Must match the sidebar exactly: one session showing two different
+      // names in two places reads as two sessions.
+      expect(find.text('New chat'), findsOneWidget);
+      expect(find.text('Untitled chat'), findsNothing);
     });
 
     testWidgets('keeps the ID fallback when title lookup fails', (
@@ -2441,7 +2448,7 @@ class _SessionCall {
   final Completer<Session> completer;
 }
 
-class _FakeSearchApi implements TuringApi {
+class _FakeSearchApi with NoSkillsApi implements TuringApi {
   final List<_SearchCall> searchCalls = [];
   final List<_SessionCall> sessionCalls = [];
   final List<String> sessionRequests = [];
@@ -2502,6 +2509,12 @@ class _FakeSearchApi implements TuringApi {
   }) async {
     return {'approvalId': approvalId, 'status': 'denied'};
   }
+
+  @override
+  Future<List<ToolDescriptor>> listTools() async => const [];
+
+  @override
+  Future<List<AgentDescriptor>> listAgents() async => const [];
 
   @override
   Future<Map<String, dynamic>> getConfig() async {

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	eventsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	runtimesvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/runtime"
 	sessionsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/sessions"
+	skillsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/skills"
 	"google.golang.org/grpc"
 )
 
@@ -60,6 +62,14 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	repo := repository.New(database)
+	// Conversations created before naming moved to the backend are all called
+	// "New chat". Naming only happens as a message is enqueued, so without a
+	// pass at startup a conversation the user never writes to again would keep
+	// that placeholder forever.
+	if _, err := repo.BackfillSessionTitles(context.Background()); err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("backfill session titles: %w", err)
+	}
 	eventBus := eventsvc.NewBus(128)
 	recoveredEvents, err := repo.RecoverAllActiveAssignmentsWithLimit(context.Background(), cfg.JobMaxAttempts)
 	if err != nil {
@@ -77,6 +87,7 @@ func New(cfg config.Config) (*App, error) {
 		MaxAttempts:       cfg.JobMaxAttempts,
 	}, approvalService)
 	sessionService := sessionsvc.New(repo, cfg)
+	skillService := skillsvc.New(repo)
 	eventService := eventsvc.NewServer(repo, eventBus)
 	chatService := chatsvc.New(repo, eventBus, runtimeService, cfg.OllamaModel, cfg.OpenAIModel)
 	auditService := auditsvc.New(repo)
@@ -114,6 +125,9 @@ func New(cfg config.Config) (*App, error) {
 
 	turingv1.RegisterHealthServiceServer(publicServer, healthService)
 	turingv1.RegisterSessionServiceServer(publicServer, sessionService)
+	// Public only: the runtime never reads skills over gRPC, it receives the
+	// snapshot on the job it claims.
+	turingv1.RegisterSkillServiceServer(publicServer, skillService)
 	turingv1.RegisterEventServiceServer(publicServer, eventService)
 	turingv1.RegisterChatServiceServer(publicServer, chatService)
 	turingv1.RegisterApprovalServiceServer(publicServer, approvalsvc.NewPublicServer(approvalService))

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:grpc/grpc.dart' show GrpcError, StatusCode;
 
 import '../../constants/app_colors.dart';
@@ -11,7 +12,6 @@ import '../../networking/event_source.dart';
 import '../approvals/approval_card.dart';
 import 'message_send_failure_card.dart';
 import 'message_send_unconfirmed_card.dart';
-import 'model_provider_selector.dart';
 import 'run_cancelled_card.dart';
 import 'run_failure_card.dart';
 import 'run_notice_card.dart';
@@ -24,6 +24,8 @@ class ChatScreen extends StatefulWidget {
     required this.apiClient,
     required this.eventSource,
     this.embedded = false,
+    this.modelProvider = 'ollama',
+    this.onMessageSent,
   });
 
   final String sessionId;
@@ -35,11 +37,25 @@ class ChatScreen extends StatefulWidget {
   /// Scaffold or repeat an app bar.
   final bool embedded;
 
+  /// Chosen once in Settings rather than shown above every conversation.
+  final String modelProvider;
+
+  /// Called once the backend has accepted a message and queued a run.
+  ///
+  /// The host uses this to re-read the conversation list: the backend names a
+  /// session after its first message, so the sidebar's label is out of date
+  /// from this moment until something asks for it again.
+  final VoidCallback? onMessageSent;
+
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  /// The event source this screen actually subscribed to, captured once so
+  /// that connect and close always refer to the same instance.
+  late final TuringEventSource _eventSource = widget.eventSource;
+
   final _controller = TextEditingController();
   final _scrollController = ScrollController();
   final List<_ChatEntry> _messages = [];
@@ -90,7 +106,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// screen existed — see [_applyToolCall]. Null until the boundary is loaded.
   int? _replayWatermarkSequence;
   StreamSubscription<TuringEvent>? _subscription;
-  String _modelProvider = 'ollama';
+  String get _modelProvider => widget.modelProvider;
 
   /// True whenever the live subscription is not currently able to deliver —
   /// set by [_handleStreamEnded], whether reached from an `onError`, an
@@ -292,7 +308,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // would have no reader left to observe it.
     var subscriptionClosed = false;
     try {
-      _subscription = widget.eventSource
+      _subscription = _eventSource
           .connect(
             sessionId: widget.sessionId,
             // Replay approval lifecycle events so an unresolved request is
@@ -934,6 +950,10 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       if (!mounted) return;
       setState(() => _sending = false);
+      // Only on the success path: the title is written in the same
+      // transaction that queues the run, so a rejected send changed nothing
+      // for the host to re-read.
+      widget.onMessageSent?.call();
     } on Exception catch (error) {
       if (!mounted) return;
       setState(() {
@@ -1017,20 +1037,28 @@ class _ChatScreenState extends State<ChatScreen> {
     final body = Column(
       children: [
         Expanded(
-          child: ListView.builder(
-            controller: _scrollController,
-            padding: const EdgeInsets.all(12),
-            itemCount: _messages.length,
-            // Key on the entry itself: `_loadInitialMessages` prepends
-            // history with `insertAll(0, ...)`, shifting every live entry's
-            // index. Without a key Flutter re-associates Elements by
-            // position, tearing down and re-subscribing each
-            // ValueListenableBuilder and resetting a running card's spinner.
-            itemBuilder: (context, index) => _ChatMessageTile(
-              key: ObjectKey(_messages[index]),
-              entry: _messages[index],
-            ),
-          ),
+          // A selected-but-empty conversation rendered as a tall black void
+          // with the composer stranded at the bottom. An empty room should say
+          // what to do in it.
+          child: _messages.isEmpty && !_initializing
+              ? const _EmptyConversation()
+              : ListView.builder(
+                  controller: _scrollController,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 28,
+                    vertical: 20,
+                  ),
+                  itemCount: _messages.length,
+                  // Key on the entry itself: `_loadInitialMessages` prepends
+                  // history with `insertAll(0, ...)`, shifting every live entry's
+                  // index. Without a key Flutter re-associates Elements by
+                  // position, tearing down and re-subscribing each
+                  // ValueListenableBuilder and resetting a running card's spinner.
+                  itemBuilder: (context, index) => _ChatMessageTile(
+                    key: ObjectKey(_messages[index]),
+                    entry: _messages[index],
+                  ),
+                ),
         ),
         if (_historyLoadFailed)
           _SessionNotice(
@@ -1072,22 +1100,6 @@ class _ChatScreenState extends State<ChatScreen> {
             onDeny: () => _deny(approval),
             busy: _approvalsInFlight.contains(approval.approvalId),
           ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
-          child: Row(
-            children: [
-              Text(
-                'Model provider',
-                style: Theme.of(context).textTheme.labelLarge,
-              ),
-              const SizedBox(width: 12),
-              ModelProviderSelector(
-                value: _modelProvider,
-                onChanged: (value) => setState(() => _modelProvider = value),
-              ),
-            ],
-          ),
-        ),
         SafeArea(
           top: false,
           child: Padding(
@@ -1246,7 +1258,11 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _subscription?.cancel();
-    widget.eventSource.close();
+    // The instance captured at mount, not widget.eventSource: if the host
+    // rebuilt with a different source, widget.eventSource is one this screen
+    // never connected to, and closing THAT would leave the live channel open
+    // forever while shutting down an unused one.
+    _eventSource.close();
     for (final entry in _messages) {
       entry.dispose();
     }
@@ -1312,7 +1328,7 @@ class _SessionNotice extends StatelessWidget {
       child: Container(
         width: double.infinity,
         color: colorScheme.errorContainer,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(
           children: [
             Icon(icon, size: 18, color: colorScheme.onErrorContainer),
@@ -1321,6 +1337,94 @@ class _SessionNotice extends StatelessWidget {
               child: Text(
                 message,
                 style: TextStyle(color: colorScheme.onErrorContainer),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Markdown styling for assistant turns. Code and inline code sit on the
+/// raised surface so they read as quoted machine output rather than prose,
+/// and headings stay close to body size — an answer inside a conversation
+/// should not shout like a document title.
+MarkdownStyleSheet _assistantMarkdown(
+  BuildContext context,
+  AppPalette palette,
+) {
+  final body = TextStyle(fontSize: 15, height: 1.6, color: palette.text);
+  final mono = TextStyle(
+    fontFamily: 'Menlo',
+    fontSize: 13,
+    height: 1.5,
+    color: palette.text,
+  );
+  return MarkdownStyleSheet(
+    p: body,
+    listBullet: body,
+    a: const TextStyle(color: AppColors.brand),
+    strong: body.copyWith(fontWeight: FontWeight.w600),
+    em: body.copyWith(fontStyle: FontStyle.italic),
+    h1: body.copyWith(fontSize: 19, fontWeight: FontWeight.w700),
+    h2: body.copyWith(fontSize: 17, fontWeight: FontWeight.w700),
+    h3: body.copyWith(fontSize: 15.5, fontWeight: FontWeight.w700),
+    code: mono.copyWith(backgroundColor: Colors.transparent),
+    codeblockDecoration: BoxDecoration(
+      color: palette.raised,
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: palette.border),
+    ),
+    codeblockPadding: const EdgeInsets.all(12),
+    blockquoteDecoration: BoxDecoration(
+      border: Border(left: BorderSide(color: palette.border, width: 3)),
+    ),
+    blockquotePadding: const EdgeInsets.only(left: 12),
+    tableBorder: TableBorder.all(color: palette.border),
+    tableCellsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+    horizontalRuleDecoration: BoxDecoration(
+      border: Border(top: BorderSide(color: palette.border)),
+    ),
+    blockSpacing: 10,
+  );
+}
+
+class _EmptyConversation extends StatelessWidget {
+  const _EmptyConversation();
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppColors.of(context);
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 380),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.auto_awesome,
+              size: 26,
+              color: AppColors.brand.withValues(alpha: 0.7),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              'What can I help with?',
+              style: TextStyle(
+                fontSize: 16.5,
+                fontWeight: FontWeight.w600,
+                color: palette.text,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Runs on this machine, can use tools, and remembers earlier '
+              'conversations.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.5,
+                color: palette.textMuted,
               ),
             ),
           ],
@@ -1388,19 +1492,20 @@ class _MessageBubble extends StatelessWidget {
             ),
           );
         }
+        // Rendered as markdown, not plain text: the assistant writes lists,
+        // code and tables, and a wall of unformatted characters is the
+        // difference between a transcript you can read and one you have to
+        // decode. Selectable so answers can be copied out.
         return Align(
           alignment: Alignment.centerLeft,
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 760),
             child: Padding(
               padding: const EdgeInsets.only(top: 6, bottom: 14, right: 40),
-              child: SelectableText(
-                content,
-                style: TextStyle(
-                  fontSize: 15,
-                  height: 1.6,
-                  color: palette.text,
-                ),
+              child: MarkdownBody(
+                data: content,
+                selectable: true,
+                styleSheet: _assistantMarkdown(context, palette),
               ),
             ),
           ),

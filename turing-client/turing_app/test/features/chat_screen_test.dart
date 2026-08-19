@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grpc/grpc.dart' show GrpcError;
 import 'package:turing_flutter_app/features/chat/message_send_failure_card.dart';
@@ -16,8 +17,49 @@ import 'package:turing_flutter_app/models/session.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 import 'package:turing_flutter_app/networking/event_source.dart';
+import 'package:turing_flutter_app/models/agent_descriptor.dart';
+import 'package:turing_flutter_app/models/tool_descriptor.dart';
+
+import '../support/no_skills_api.dart';
 
 void main() {
+  testWidgets('assistant markdown renders as formatting, not raw syntax', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: const {
+          'messageId': 'msg_a',
+          'role': 'assistant',
+          'delta': '**bold** and `code`',
+        },
+      ),
+    );
+    await tester.pump();
+
+    // The assistant writes lists, code and tables; showing the raw characters
+    // makes a transcript you have to decode rather than read.
+    expect(find.textContaining('**bold**'), findsNothing);
+    expect(find.byType(MarkdownBody), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
   testWidgets('chat streams message deltas into one assistant bubble', (
     tester,
   ) async {
@@ -1397,7 +1439,9 @@ void main() {
     },
   );
 
-  testWidgets('chat sends selected provider through API client', (
+  // The provider is a preference chosen once in Settings, not a control shown
+  // above every conversation. The chat still has to send whatever was chosen.
+  testWidgets('chat sends the configured provider through API client', (
     tester,
   ) async {
     final events = StreamController<TuringEvent>(sync: true);
@@ -1409,15 +1453,15 @@ void main() {
           sessionId: 'sess_1',
           apiClient: apiClient,
           eventSource: _FakeEventSource(events.stream),
+          modelProvider: 'openai_compatible',
         ),
       ),
     );
     await tester.pump();
 
-    await tester.tap(find.byType(DropdownButton<String>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('OpenAI-compatible').last);
-    await tester.pump();
+    // No picker clutters the conversation any more.
+    expect(find.byType(DropdownButton<String>), findsNothing);
+    expect(find.text('Model provider'), findsNothing);
 
     await tester.enterText(find.byType(TextField), 'Use cloud model');
     await tester.tap(find.byIcon(Icons.send));
@@ -7200,7 +7244,7 @@ TuringEvent _event({
   );
 }
 
-class _FakeApiClient implements TuringApi {
+class _FakeApiClient with NoSkillsApi implements TuringApi {
   String? lastSentContent;
   String? lastModelProvider;
 
@@ -7291,6 +7335,12 @@ class _FakeApiClient implements TuringApi {
     }
     return Future.value({'approvalId': approvalId, 'status': 'denied'});
   }
+
+  @override
+  Future<List<ToolDescriptor>> listTools() async => const [];
+
+  @override
+  Future<List<AgentDescriptor>> listAgents() async => const [];
 
   @override
   Future<Map<String, dynamic>> getConfig() async {

@@ -164,6 +164,14 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	}
 	requestMessages := append([]llm.ChatMessage{}, messages...)
 	requestMessages = append(requestMessages, llm.ChatMessage{Role: "user", Content: job.GetUserText()})
+	// Skills open the request, ahead of the conversation history: they are
+	// standing instructions about how to behave here, not a turn in the
+	// conversation. Applied before recall so that a recalled block, which is
+	// prepended below, still lands above them and reads as background rather
+	// than as a rule.
+	if system, ok := skillsSystemMessage(job.GetSkills()); ok {
+		requestMessages = append([]llm.ChatMessage{system}, requestMessages...)
+	}
 	// Recalled material is prepended so it sits before the live conversation and
 	// cannot be read as the user's latest turn. Recall is given the request as
 	// built, which is how it knows what is already in front of the model; it

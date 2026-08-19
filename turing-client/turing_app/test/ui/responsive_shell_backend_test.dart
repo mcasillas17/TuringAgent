@@ -2,14 +2,18 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:turing_flutter_app/models/agent_descriptor.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
+import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 import 'package:turing_flutter_app/networking/auth_storage.dart';
 import 'package:turing_flutter_app/networking/event_source.dart';
 import 'package:turing_flutter_app/ui/shell/responsive_shell.dart';
+
+import '../support/no_skills_api.dart';
 
 void main() {
   testWidgets('the shell is one surface: conversations beside a chat', (
@@ -33,13 +37,19 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // Every destination must lead somewhere real. The old rail carried
-    // Devices/Stats/Integrations, which rendered placeholder screens for
-    // features that do not exist and that docs/VISION.md refuses outright.
+    // The old rail carried Devices/Stats/IoT: destinations for features
+    // docs/VISION.md refuses outright, rendering mock dashboards that implied
+    // the feature existed. Those stay gone.
     expect(find.text('Devices'), findsNothing);
     expect(find.text('Stats'), findsNothing);
-    expect(find.text('Integrations'), findsNothing);
     expect(find.text('IoT Devices Dashboard'), findsNothing);
+
+    // Destinations that ARE on the roadmap do appear — the rule is not "only
+    // implemented destinations" but "no destination that pretends", and each
+    // unimplemented one says so on arrival (asserted below).
+    for (final label in ['Skills', 'Integrations', 'MCPs', 'Automations']) {
+      expect(find.text(label), findsOneWidget, reason: '$label is navigable');
+    }
 
     // What is there instead: start a conversation, find an old one, settings.
     // Two while the pane is empty: the sidebar button and the empty state's.
@@ -152,7 +162,7 @@ void main() {
   });
 }
 
-class _FakeApiClient implements TuringApi {
+class _FakeApiClient with NoSkillsApi implements TuringApi {
   @override
   Future<Map<String, dynamic>> approveApproval(
     String approvalId, {
@@ -223,16 +233,27 @@ class _FakeApiClient implements TuringApi {
     return const [];
   }
 
+  /// Mutable so a test can change what the backend reports between calls —
+  /// which is exactly what happens when the first message renames a session.
+  List<Session> sessions = [
+    Session(
+      sessionId: 'sess_existing',
+      title: 'Existing chat',
+      updatedAt: DateTime.utc(2026, 5, 10),
+    ),
+  ];
   @override
-  Future<List<Session>> listSessions({int limit = 50, String? after}) async {
-    return [
-      Session(
-        sessionId: 'sess_existing',
-        title: 'Existing chat',
-        updatedAt: DateTime.utc(2026, 5, 10),
-      ),
-    ];
-  }
+  Future<List<Session>> listSessions({int limit = 50, String? after}) async =>
+      sessions;
+
+  List<ToolDescriptor> tools = const [];
+  List<AgentDescriptor> agents = const [];
+
+  @override
+  Future<List<ToolDescriptor>> listTools() async => tools;
+
+  @override
+  Future<List<AgentDescriptor>> listAgents() async => agents;
 
   @override
   Future<Map<String, dynamic>> sendMessage({
@@ -253,6 +274,12 @@ class _FakeApiClient implements TuringApi {
 }
 
 class _FakeAuthStorage implements ClientAuthStorage {
+  @override
+  Future<String?> readModelProvider() async => 'ollama';
+
+  @override
+  Future<void> saveModelProvider(String provider) async {}
+
   @override
   Future<String?> readApiKey() async => 'tk_test';
 

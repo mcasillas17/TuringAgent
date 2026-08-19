@@ -6,12 +6,58 @@ import '../generated/turing/v1/chat.pb.dart' as chatpb;
 import '../generated/turing/v1/common.pb.dart' as commonpb;
 import '../generated/turing/v1/events.pb.dart' as eventpb;
 import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
+import '../generated/turing/v1/skills.pb.dart' as skillpb;
+import 'agent_descriptor.dart' as model_agent;
 import 'message.dart' as model_message;
 import 'search_hit.dart' as model_search_hit;
 import 'session.dart' as model_session;
+import 'skill.dart' as model_skill;
+import 'tool_descriptor.dart' as model_tool;
 import 'turing_event.dart' as model_event;
 
 class GrpcMappers {
+  static model_skill.Skill skillToModel(skillpb.Skill skill) {
+    return model_skill.Skill(
+      skillId: skill.skillId,
+      name: skill.name,
+      instructions: skill.instructions,
+    );
+  }
+
+  static model_tool.ToolDescriptor toolToModel(sessionpb.ToolDescriptor tool) {
+    return model_tool.ToolDescriptor(
+      serverName: tool.serverName,
+      toolName: tool.toolName,
+      policy: toolPolicyToModel(tool.policy),
+    );
+  }
+
+  static model_tool.ToolPolicy toolPolicyToModel(commonpb.ToolPolicy policy) {
+    switch (policy) {
+      case commonpb.ToolPolicy.TOOL_POLICY_SAFE:
+        return model_tool.ToolPolicy.safe;
+      case commonpb.ToolPolicy.TOOL_POLICY_APPROVAL_REQUIRED:
+        return model_tool.ToolPolicy.approvalRequired;
+      case commonpb.ToolPolicy.TOOL_POLICY_DISABLED:
+        return model_tool.ToolPolicy.disabled;
+      default:
+        // Includes UNSPECIFIED and any value added to the proto after this
+        // build. Reported as unknown rather than defaulted to safe, because
+        // guessing "safe" for something the backend gates would misdescribe
+        // what the agent can do without asking.
+        return model_tool.ToolPolicy.unspecified;
+    }
+  }
+
+  static model_agent.AgentDescriptor agentToModel(
+    commonpb.AgentDescriptor agent,
+  ) {
+    return model_agent.AgentDescriptor(
+      id: agent.id.name,
+      displayName: agent.displayName,
+    );
+  }
+
   static model_session.Session sessionToModel(sessionpb.Session session) {
     return model_session.Session(
       sessionId: session.sessionId,

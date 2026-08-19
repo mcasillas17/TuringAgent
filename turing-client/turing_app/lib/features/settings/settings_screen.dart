@@ -1,4 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+
+import '../chat/model_provider_selector.dart';
 
 import '../../networking/auth_storage.dart';
 
@@ -25,6 +29,7 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _backendUrl;
   late final TextEditingController _apiKey;
+  String _modelProvider = 'ollama';
   bool _saving = false;
 
   @override
@@ -32,6 +37,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _backendUrl = TextEditingController(text: widget.initialBackendUrl);
     _apiKey = TextEditingController(text: widget.initialApiKey);
+    unawaited(_loadModelProvider());
   }
 
   @override
@@ -50,7 +56,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
           decoration: const InputDecoration(labelText: 'API key'),
           obscureText: true,
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 20),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Model provider',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            ModelProviderSelector(
+              value: _modelProvider,
+              onChanged: (value) => setState(() => _modelProvider = value),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Ollama runs entirely on this machine. An OpenAI-compatible provider '
+          'sends your conversation off it.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 20),
         Align(
           alignment: Alignment.centerLeft,
           child: FilledButton.icon(
@@ -72,6 +99,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Future<void> _loadModelProvider() async {
+    final stored = await widget.authStorage.readModelProvider();
+    if (!mounted || stored == null || stored.isEmpty) return;
+    setState(() => _modelProvider = stored);
+  }
+
   Future<void> _save() async {
     setState(() => _saving = true);
     // Without this the button just flashes and nothing else happens: any
@@ -82,6 +115,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         backendUrl: _backendUrl.text,
         apiKey: _apiKey.text,
       );
+      await widget.authStorage.saveModelProvider(_modelProvider);
       if (!mounted) return;
       widget.onSaved?.call();
       if (Navigator.of(context).canPop()) {

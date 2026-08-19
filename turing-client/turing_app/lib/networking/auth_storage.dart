@@ -6,6 +6,13 @@ abstract class ClientAuthStorage {
   Future<String?> readBackendUrl();
 
   Future<String?> readApiKey();
+
+  /// Which model provider to send with. A preference, not a per-conversation
+  /// decision — it lived above the composer on every chat, which put a setting
+  /// you change once in the way of the thing you do constantly.
+  Future<String?> readModelProvider();
+
+  Future<void> saveModelProvider(String provider);
 }
 
 class AuthStorage implements ClientAuthStorage {
@@ -24,6 +31,7 @@ class AuthStorage implements ClientAuthStorage {
   final FlutterSecureStorage _storage;
   static const _backendUrlKey = 'turing_backend_url';
   static const _apiKeyKey = 'turing_api_key';
+  static const _modelProviderKey = 'turing_model_provider';
 
   @override
   Future<void> save({
@@ -33,6 +41,13 @@ class AuthStorage implements ClientAuthStorage {
     await _storage.write(key: _backendUrlKey, value: backendUrl.trim());
     await _storage.write(key: _apiKeyKey, value: apiKey.trim());
   }
+
+  @override
+  Future<String?> readModelProvider() => _storage.read(key: _modelProviderKey);
+
+  @override
+  Future<void> saveModelProvider(String provider) =>
+      _storage.write(key: _modelProviderKey, value: provider.trim());
 
   @override
   Future<String?> readBackendUrl() => _storage.read(key: _backendUrlKey);

@@ -22,6 +22,19 @@ message AgentJob {
   string user_text = 10;
   repeated string requested_tools = 11;
   int32 attempt = 12;
+  // The skills attached to this conversation when the message was accepted,
+  // captured then rather than read at execution time so that editing a skill
+  // never changes what an already-queued run was told to do.
+  repeated AttachedSkill skills = 13;
+}
+
+// A skill as the runtime sees it: a name for attribution and the instructions
+// themselves. Deliberately not the full Skill message — the runtime has no use
+// for identifiers or timestamps, and the job is replayed from a stored payload
+// where a narrower shape is a narrower thing to keep in sync.
+message AttachedSkill {
+  string name = 1;
+  string instructions = 2;
 }
 
 message DiscoveredTool {

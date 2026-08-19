@@ -4,13 +4,17 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:turing_flutter_app/app.dart';
+import 'package:turing_flutter_app/models/agent_descriptor.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
+import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/auth_storage.dart';
 import 'package:turing_flutter_app/networking/grpc_client.dart';
 import 'package:turing_flutter_app/networking/event_source.dart';
+
+import 'support/no_skills_api.dart';
 
 void main() {
   testWidgets('Turing app renders settings when credentials are missing', (
@@ -60,6 +64,12 @@ class _FakeAuthStorage implements ClientAuthStorage {
   final String? apiKey;
 
   @override
+  Future<String?> readModelProvider() async => 'ollama';
+
+  @override
+  Future<void> saveModelProvider(String provider) async {}
+
+  @override
   Future<String?> readApiKey() async => apiKey;
 
   @override
@@ -72,7 +82,7 @@ class _FakeAuthStorage implements ClientAuthStorage {
   }) async {}
 }
 
-class _ClosableFakeApiClient implements ClosableTuringApi {
+class _ClosableFakeApiClient with NoSkillsApi implements ClosableTuringApi {
   bool closed = false;
 
   @override
@@ -107,6 +117,12 @@ class _ClosableFakeApiClient implements ClosableTuringApi {
       'enabledProviders': ['ollama'],
     };
   }
+
+  @override
+  Future<List<ToolDescriptor>> listTools() async => const [];
+
+  @override
+  Future<List<AgentDescriptor>> listAgents() async => const [];
 
   @override
   Future<void> deleteSession({required String sessionId}) async {}

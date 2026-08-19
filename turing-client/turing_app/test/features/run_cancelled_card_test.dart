@@ -9,9 +9,7 @@ void main() {
   testWidgets('renders the cancellation message text', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
-        home: Scaffold(
-          body: RunCancelledCard(message: _cancellationMessage),
-        ),
+        home: Scaffold(body: RunCancelledCard(message: _cancellationMessage)),
       ),
     );
 
@@ -19,14 +17,10 @@ void main() {
   });
 
   testWidgets('renders the "Run cancelled" outcome label visibly, not just '
-      'in the semantics label, and never renders "Run failed"', (
-    tester,
-  ) async {
+      'in the semantics label, and never renders "Run failed"', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
-        home: Scaffold(
-          body: RunCancelledCard(message: _cancellationMessage),
-        ),
+        home: Scaffold(body: RunCancelledCard(message: _cancellationMessage)),
       ),
     );
 
@@ -42,9 +36,7 @@ void main() {
     final handle = tester.ensureSemantics();
     await tester.pumpWidget(
       const MaterialApp(
-        home: Scaffold(
-          body: RunCancelledCard(message: _cancellationMessage),
-        ),
+        home: Scaffold(body: RunCancelledCard(message: _cancellationMessage)),
       ),
     );
 

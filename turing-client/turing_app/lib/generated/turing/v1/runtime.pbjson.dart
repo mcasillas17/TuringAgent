@@ -66,6 +66,14 @@ const AgentJob$json = {
     {'1': 'user_text', '3': 10, '4': 1, '5': 9, '10': 'userText'},
     {'1': 'requested_tools', '3': 11, '4': 3, '5': 9, '10': 'requestedTools'},
     {'1': 'attempt', '3': 12, '4': 1, '5': 5, '10': 'attempt'},
+    {
+      '1': 'skills',
+      '3': 13,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.AttachedSkill',
+      '10': 'skills'
+    },
   ],
 };
 
@@ -78,7 +86,22 @@ final $typed_data.Uint8List agentJobDescriptor = $convert.base64Decode(
     'SWQSGQoIdHJhY2VfaWQYByABKAlSB3RyYWNlSWQSPwoObW9kZWxfcHJvdmlkZXIYCCABKA4yGC'
     '50dXJpbmcudjEuTW9kZWxQcm92aWRlclINbW9kZWxQcm92aWRlchIUCgVtb2RlbBgJIAEoCVIF'
     'bW9kZWwSGwoJdXNlcl90ZXh0GAogASgJUgh1c2VyVGV4dBInCg9yZXF1ZXN0ZWRfdG9vbHMYCy'
-    'ADKAlSDnJlcXVlc3RlZFRvb2xzEhgKB2F0dGVtcHQYDCABKAVSB2F0dGVtcHQ=');
+    'ADKAlSDnJlcXVlc3RlZFRvb2xzEhgKB2F0dGVtcHQYDCABKAVSB2F0dGVtcHQSMAoGc2tpbGxz'
+    'GA0gAygLMhgudHVyaW5nLnYxLkF0dGFjaGVkU2tpbGxSBnNraWxscw==');
+
+@$core.Deprecated('Use attachedSkillDescriptor instead')
+const AttachedSkill$json = {
+  '1': 'AttachedSkill',
+  '2': [
+    {'1': 'name', '3': 1, '4': 1, '5': 9, '10': 'name'},
+    {'1': 'instructions', '3': 2, '4': 1, '5': 9, '10': 'instructions'},
+  ],
+};
+
+/// Descriptor for `AttachedSkill`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List attachedSkillDescriptor = $convert.base64Decode(
+    'Cg1BdHRhY2hlZFNraWxsEhIKBG5hbWUYASABKAlSBG5hbWUSIgoMaW5zdHJ1Y3Rpb25zGAIgAS'
+    'gJUgxpbnN0cnVjdGlvbnM=');
 
 @$core.Deprecated('Use discoveredToolDescriptor instead')
 const DiscoveredTool$json = {

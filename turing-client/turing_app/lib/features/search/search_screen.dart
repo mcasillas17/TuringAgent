@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../models/search_hit.dart';
+import '../../models/session_title.dart';
 import '../../networking/api_client.dart';
 
 /// Shown and announced when a search completes with no matches.
@@ -34,9 +35,7 @@ const _maxExcerptLines = 3;
 String _excerpt(String content) {
   final head = content.runes.take(_maxExcerptRunes + 1).toList();
   if (head.length <= _maxExcerptRunes) return content;
-  final kept = String.fromCharCodes(
-    head.take(_maxExcerptRunes),
-  ).trimRight();
+  final kept = String.fromCharCodes(head.take(_maxExcerptRunes)).trimRight();
   return '$kept…';
 }
 
@@ -364,9 +363,7 @@ class _SearchScreenState extends State<SearchScreen> {
       // so skip the request entirely.
       if (!mounted) return;
       final session = await widget.apiClient.getSession(sessionId: sessionId);
-      final title = session.title?.isNotEmpty == true
-          ? session.title!
-          : 'Untitled chat';
+      final title = sessionDisplayTitle(session);
       if (!mounted) return;
       setState(() {
         _titles[sessionId] = title;
@@ -600,10 +597,7 @@ class _SearchScreenState extends State<SearchScreen> {
           child: Semantics(
             key: ValueKey('group-header-${group.sessionId}'),
             header: true,
-            child: Text(
-              title,
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
+            child: Text(title, style: Theme.of(context).textTheme.titleMedium),
           ),
         ),
         for (final hit in group.hits) _buildHit(context, group.sessionId, hit),

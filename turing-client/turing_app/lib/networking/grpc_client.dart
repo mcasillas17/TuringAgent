@@ -13,10 +13,15 @@ import '../generated/turing/v1/events.pb.dart' as eventpb;
 import '../generated/turing/v1/events.pbgrpc.dart' as eventgrpc;
 import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
 import '../generated/turing/v1/sessions.pbgrpc.dart' as sessiongrpc;
+import '../generated/turing/v1/skills.pb.dart' as skillpb;
+import '../generated/turing/v1/skills.pbgrpc.dart' as skillgrpc;
+import '../models/agent_descriptor.dart';
 import '../models/grpc_mappers.dart';
 import '../models/message.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
+import '../models/skill.dart';
+import '../models/tool_descriptor.dart';
 import '../models/turing_event.dart';
 import 'api_client.dart';
 
@@ -78,6 +83,7 @@ class TuringGrpcApi implements ClosableTuringApi {
     _events = eventgrpc.EventServiceClient(_channel, options: options);
     _chat = chatgrpc.ChatServiceClient(_channel, options: options);
     _approvals = approvalgrpc.ApprovalServiceClient(_channel, options: options);
+    _skills = skillgrpc.SkillServiceClient(_channel, options: options);
   }
 
   final String baseUrl;
@@ -88,6 +94,7 @@ class TuringGrpcApi implements ClosableTuringApi {
   late final eventgrpc.EventServiceClient _events;
   late final chatgrpc.ChatServiceClient _chat;
   late final approvalgrpc.ApprovalServiceClient _approvals;
+  late final skillgrpc.SkillServiceClient _skills;
 
   GrpcAuthMetadata get _metadata => GrpcAuthMetadata(apiKey: apiKey);
 
@@ -290,6 +297,86 @@ class TuringGrpcApi implements ClosableTuringApi {
       'approvalId': response.approvalId,
       'status': GrpcMappers.approvalStatusToString(response.status),
     };
+  }
+
+  @override
+  Future<List<ToolDescriptor>> listTools() async {
+    final response = await _sessions.listTools(sessionpb.ListToolsRequest());
+    return response.tools.map(GrpcMappers.toolToModel).toList();
+  }
+
+  @override
+  Future<List<AgentDescriptor>> listAgents() async {
+    final response = await _sessions.listAgents(sessionpb.ListAgentsRequest());
+    return response.agents.map(GrpcMappers.agentToModel).toList();
+  }
+
+  @override
+  Future<List<Skill>> listSkills() async {
+    final response = await _skills.listSkills(skillpb.ListSkillsRequest());
+    return response.skills.map(GrpcMappers.skillToModel).toList();
+  }
+
+  @override
+  Future<Skill> createSkill({
+    required String name,
+    required String instructions,
+  }) async {
+    final response = await _skills.createSkill(
+      skillpb.CreateSkillRequest(name: name, instructions: instructions),
+    );
+    return GrpcMappers.skillToModel(response);
+  }
+
+  @override
+  Future<Skill> updateSkill({
+    required String skillId,
+    required String name,
+    required String instructions,
+  }) async {
+    final response = await _skills.updateSkill(
+      skillpb.UpdateSkillRequest(
+        skillId: skillId,
+        name: name,
+        instructions: instructions,
+      ),
+    );
+    return GrpcMappers.skillToModel(response);
+  }
+
+  @override
+  Future<void> deleteSkill({required String skillId}) async {
+    await _skills.deleteSkill(skillpb.DeleteSkillRequest(skillId: skillId));
+  }
+
+  @override
+  Future<List<Skill>> attachSkill({
+    required String sessionId,
+    required String skillId,
+  }) async {
+    final response = await _skills.attachSkill(
+      skillpb.AttachSkillRequest(sessionId: sessionId, skillId: skillId),
+    );
+    return response.skills.map(GrpcMappers.skillToModel).toList();
+  }
+
+  @override
+  Future<List<Skill>> detachSkill({
+    required String sessionId,
+    required String skillId,
+  }) async {
+    final response = await _skills.detachSkill(
+      skillpb.DetachSkillRequest(sessionId: sessionId, skillId: skillId),
+    );
+    return response.skills.map(GrpcMappers.skillToModel).toList();
+  }
+
+  @override
+  Future<List<Skill>> listSessionSkills({required String sessionId}) async {
+    final response = await _skills.listSessionSkills(
+      skillpb.ListSessionSkillsRequest(sessionId: sessionId),
+    );
+    return response.skills.map(GrpcMappers.skillToModel).toList();
   }
 
   @override

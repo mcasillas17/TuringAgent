@@ -38,6 +38,7 @@ class AgentJob extends $pb.GeneratedMessage {
     $core.String? userText,
     $core.Iterable<$core.String>? requestedTools,
     $core.int? attempt,
+    $core.Iterable<AttachedSkill>? skills,
   }) {
     final result = create();
     if (jobId != null) result.jobId = jobId;
@@ -53,6 +54,7 @@ class AgentJob extends $pb.GeneratedMessage {
     if (userText != null) result.userText = userText;
     if (requestedTools != null) result.requestedTools.addAll(requestedTools);
     if (attempt != null) result.attempt = attempt;
+    if (skills != null) result.skills.addAll(skills);
     return result;
   }
 
@@ -88,6 +90,8 @@ class AgentJob extends $pb.GeneratedMessage {
     ..aOS(10, _omitFieldNames ? '' : 'userText')
     ..pPS(11, _omitFieldNames ? '' : 'requestedTools')
     ..a<$core.int>(12, _omitFieldNames ? '' : 'attempt', $pb.PbFieldType.O3)
+    ..pc<AttachedSkill>(13, _omitFieldNames ? '' : 'skills', $pb.PbFieldType.PM,
+        subBuilder: AttachedSkill.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -210,6 +214,84 @@ class AgentJob extends $pb.GeneratedMessage {
   $core.bool hasAttempt() => $_has(11);
   @$pb.TagNumber(12)
   void clearAttempt() => $_clearField(12);
+
+  /// The skills attached to this conversation when the message was accepted,
+  /// captured then rather than read at execution time so that editing a skill
+  /// never changes what an already-queued run was told to do.
+  @$pb.TagNumber(13)
+  $pb.PbList<AttachedSkill> get skills => $_getList(12);
+}
+
+/// A skill as the runtime sees it: a name for attribution and the instructions
+/// themselves. Deliberately not the full Skill message — the runtime has no use
+/// for identifiers or timestamps, and the job is replayed from a stored payload
+/// where a narrower shape is a narrower thing to keep in sync.
+class AttachedSkill extends $pb.GeneratedMessage {
+  factory AttachedSkill({
+    $core.String? name,
+    $core.String? instructions,
+  }) {
+    final result = create();
+    if (name != null) result.name = name;
+    if (instructions != null) result.instructions = instructions;
+    return result;
+  }
+
+  AttachedSkill._();
+
+  factory AttachedSkill.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory AttachedSkill.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'AttachedSkill',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'name')
+    ..aOS(2, _omitFieldNames ? '' : 'instructions')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  AttachedSkill clone() => AttachedSkill()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  AttachedSkill copyWith(void Function(AttachedSkill) updates) =>
+      super.copyWith((message) => updates(message as AttachedSkill))
+          as AttachedSkill;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static AttachedSkill create() => AttachedSkill._();
+  @$core.override
+  AttachedSkill createEmptyInstance() => create();
+  static $pb.PbList<AttachedSkill> createRepeated() =>
+      $pb.PbList<AttachedSkill>();
+  @$core.pragma('dart2js:noInline')
+  static AttachedSkill getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<AttachedSkill>(create);
+  static AttachedSkill? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get name => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set name($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasName() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearName() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get instructions => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set instructions($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasInstructions() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearInstructions() => $_clearField(2);
 }
 
 class DiscoveredTool extends $pb.GeneratedMessage {
