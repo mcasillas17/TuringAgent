@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -293,6 +294,73 @@ func TestExecuteRejectsUnfitToolProtocolBeforeSideEffect(t *testing.T) {
 	failure := findRunFailed(updates)
 	if failure == nil || failure.GetCode() != "context_budget_exceeded" {
 		t.Fatalf("failure = %#v, want context_budget_exceeded", failure)
+	}
+}
+
+func TestExecuteCompletesAfterEscapeHeavyResultAtPreflightBoundary(t *testing.T) {
+	result := make(map[string]any, 12)
+	for index := range 12 {
+		result[fmt.Sprintf("k%d", index)] = "v"
+	}
+	provider := &budgetCapturingProvider{
+		output: 100,
+		responses: [][]llm.StreamEvent{
+			{{Type: "tool_call", ToolCalls: []llm.ToolCall{{
+				ID: "call_1", Name: "files.create", Arguments: map[string]any{"path": "note.txt"},
+			}}}},
+			{{Type: "delta", Text: "done"}, {Type: "completed", FinishReason: "stop"}},
+		},
+	}
+	toolDefinitions := []llm.ToolDefinition{{
+		Name:       "files.create",
+		Parameters: map[string]any{"type": "object"},
+	}}
+	prospectiveMessages := []llm.ChatMessage{
+		{Role: "user", Content: testJob().GetUserText()},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{
+			ID: "call_1", Name: "files.create", Arguments: map[string]any{"path": "note.txt"},
+		}}},
+		{
+			Role:       "tool",
+			Name:       "files.create",
+			ToolCallID: "call_1",
+			Content:    compactedToolResultForBytes(maxToolResultBytes),
+		},
+	}
+	provider.window = estimateRequest(
+		t,
+		provider,
+		testJob().GetModel(),
+		prospectiveMessages,
+		toolDefinitions,
+	) + provider.output
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{"name": "files.create"}},
+		result:      result,
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
+		},
+		fakeMessageClient{},
+		&GeneralAssistantTools{
+			FilesMCP: client,
+			Runner: &tools.Runner{
+				PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+					return approvalToolCall(beacon), nil
+				},
+				WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+			},
+		},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	if len(client.calls) != 1 || len(provider.requests) != 2 {
+		t.Fatalf("tool calls/provider requests = %d/%d, want 1/2", len(client.calls), len(provider.requests))
+	}
+	if failure := findRunFailed(updates); failure != nil {
+		t.Fatalf("run failed after permitted side effect: %#v", failure)
 	}
 }
 

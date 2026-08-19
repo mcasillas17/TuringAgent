@@ -390,6 +390,66 @@ func TestBuildBudgetedContextCompactsLegitimateMarkerShapedToolOutput(t *testing
 	}
 }
 
+func TestBuildBudgetedContextUsesWireSizeForEscapedToolResultCompaction(t *testing.T) {
+	provider := &budgetTestProvider{output: 100}
+	result := make(map[string]string, 12)
+	for index := range 12 {
+		result[fmt.Sprintf("k%d", index)] = "v"
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) >= len(compactedToolResultForBytes(maxToolResultBytes)) {
+		t.Fatalf("fixture raw bytes = %d, want below maximum marker bytes", len(encoded))
+	}
+	live := []llm.ChatMessage{
+		{Role: "user", Content: "create the file"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "files.create"}}},
+		{Role: "tool", ToolCallID: "call_1", Name: "files.create", Content: string(encoded)},
+	}
+	minimalLive := cloneChatMessages(live)
+	minimalLive[2].Content = compactedToolResultForBytes(maxToolResultBytes)
+	provider.window = estimateRequest(t, provider, "model", minimalLive, nil) + provider.output
+
+	got, err := buildBudgetedContext(provider, "model", contextInput{live: live}, nil)
+	if err != nil {
+		t.Fatalf("escaped result did not fit after exact-wire compaction: %v", err)
+	}
+	if got.Omissions.ToolResults != 1 {
+		t.Fatalf("ToolResults = %d, want escaped result compacted", got.Omissions.ToolResults)
+	}
+}
+
+func TestBuildBudgetedContextBoundsHistoryAdmissionEstimatesLogarithmically(t *testing.T) {
+	provider := &budgetTestProvider{
+		window: llm.MaxContextWindowTokens,
+		output: 100,
+	}
+	history := make([]llm.ChatMessage, 0, 1024)
+	for index := range 512 {
+		history = append(history,
+			llm.ChatMessage{Role: "user", Content: fmt.Sprintf("question %d", index)},
+			llm.ChatMessage{Role: "assistant", Content: fmt.Sprintf("answer %d", index)},
+		)
+	}
+	provider.estimateCalls = 0
+
+	got, err := buildBudgetedContext(provider, "model", contextInput{
+		history: history,
+		live:    []llm.ChatMessage{{Role: "user", Content: "current"}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Omissions.HistoryMessages != 0 {
+		t.Fatalf("HistoryMessages = %d, want all history admitted", got.Omissions.HistoryMessages)
+	}
+	if provider.estimateCalls > 24 {
+		t.Fatalf("request estimates = %d, want logarithmic history admission", provider.estimateCalls)
+	}
+}
+
 func TestBuildBudgetedContextRequiresDefinitionsReferencedByLiveProtocol(t *testing.T) {
 	provider := &budgetTestProvider{}
 	live := []llm.ChatMessage{

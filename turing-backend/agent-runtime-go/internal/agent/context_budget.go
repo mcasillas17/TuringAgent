@@ -142,9 +142,9 @@ func buildBudgetedContext(
 		return budgetedContext{}, fmt.Errorf("estimate mandatory model context: %w", err)
 	}
 	type toolResultCandidate struct {
-		index         int
-		originalBytes int
-		marker        string
+		index   int
+		savings int
+		marker  string
 	}
 	candidates := make([]toolResultCandidate, 0)
 	for index, message := range liveMessages {
@@ -155,18 +155,25 @@ func buildBudgetedContext(
 			continue
 		}
 		marker := compactedToolResultForBytes(len(message.Content))
-		if len(marker) >= len(message.Content) {
+		liveMessages[index].Content = marker
+		candidateEstimate, err := estimate()
+		liveMessages[index].Content = message.Content
+		if err != nil {
+			return budgetedContext{}, fmt.Errorf("estimate compacted tool result %d: %w", index, err)
+		}
+		savings := mandatoryEstimate - candidateEstimate
+		if savings <= 0 {
 			continue
 		}
 		candidates = append(candidates, toolResultCandidate{
-			index:         index,
-			originalBytes: len(message.Content),
-			marker:        marker,
+			index:   index,
+			savings: savings,
+			marker:  marker,
 		})
 	}
 	sort.Slice(candidates, func(left, right int) bool {
-		if candidates[left].originalBytes != candidates[right].originalBytes {
-			return candidates[left].originalBytes > candidates[right].originalBytes
+		if candidates[left].savings != candidates[right].savings {
+			return candidates[left].savings > candidates[right].savings
 		}
 		return candidates[left].index < candidates[right].index
 	})
@@ -233,19 +240,24 @@ func buildBudgetedContext(
 	}
 
 	units := completeHistoryUnits(input.history)
-	for index := len(units) - 1; index >= 0; index-- {
-		selectedHistory = append([][]llm.ChatMessage{units[index]}, selectedHistory...)
-		ok, _, err := fits()
+	bestHistoryUnits := 0
+	for low, high := 0, len(units); low <= high; {
+		middle := low + (high-low)/2
+		selectedHistory = units[len(units)-middle:]
+		candidateFits, _, err := fits()
 		if err != nil {
-			return budgetedContext{}, fmt.Errorf("estimate model context with history: %w", err)
+			return budgetedContext{}, fmt.Errorf("estimate model context with %d history units: %w", middle, err)
 		}
-		if !ok {
-			selectedHistory = selectedHistory[1:]
-			for omittedIndex := 0; omittedIndex <= index; omittedIndex++ {
-				omissions.HistoryMessages += len(units[omittedIndex])
-			}
-			break
+		if candidateFits {
+			bestHistoryUnits = middle
+			low = middle + 1
+		} else {
+			high = middle - 1
 		}
+	}
+	selectedHistory = units[len(units)-bestHistoryUnits:]
+	for omittedIndex := 0; omittedIndex < len(units)-bestHistoryUnits; omittedIndex++ {
+		omissions.HistoryMessages += len(units[omittedIndex])
 	}
 
 	request := buildRequest()
