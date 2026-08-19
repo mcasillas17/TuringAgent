@@ -14,6 +14,7 @@ import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 
 import '../support/no_skills_api.dart';
+import '../support/no_integrations_api.dart';
 
 void main() {
   group('the agents page', () {
@@ -563,7 +564,7 @@ class _Offline implements Exception {
 
 /// A working in-memory backend, so the UI is exercised against something that
 /// behaves like the real one rather than a stub that always says yes.
-class _AgentApi with NoSkillsApi implements TuringApi {
+class _AgentApi with NoSkillsApi, NoIntegrationsApi implements TuringApi {
   final List<ExternalAgent> agents = [];
   final Map<String, String> routes = {};
   final List<ExternalAgent> created = [];

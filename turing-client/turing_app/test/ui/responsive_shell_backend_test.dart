@@ -165,9 +165,8 @@ void main() {
 }
 
 class _FakeApiClient
-    with NoSkillsApi, NoExternalAgentsApi
+    with NoSkillsApi, NoExternalAgentsApi, NoIntegrationsApi
     implements TuringApi {
-class _FakeApiClient with NoSkillsApi, NoIntegrationsApi implements TuringApi {
   @override
   Future<Map<String, dynamic>> approveApproval(
     String approvalId, {

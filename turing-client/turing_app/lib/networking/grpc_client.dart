@@ -91,6 +91,9 @@ class TuringGrpcApi implements ClosableTuringApi {
     _approvals = approvalgrpc.ApprovalServiceClient(_channel, options: options);
     _skills = skillgrpc.SkillServiceClient(_channel, options: options);
     _externalAgents = agentgrpc.ExternalAgentServiceClient(
+      _channel,
+      options: options,
+    );
     _integrations = integrationgrpc.IntegrationServiceClient(
       _channel,
       options: options,
@@ -446,6 +449,45 @@ class TuringGrpcApi implements ClosableTuringApi {
   Future<void> deleteExternalAgent({required String agentId}) async {
     await _externalAgents.deleteExternalAgent(
       agentpb.DeleteExternalAgentRequest(agentId: agentId),
+    );
+  }
+
+  @override
+  Future<ExternalAgent?> getSessionAgent({required String sessionId}) async {
+    final response = await _externalAgents.getSessionAgent(
+      agentpb.GetSessionAgentRequest(sessionId: sessionId),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+    return _sessionAgentOrLocal(response);
+  }
+
+  @override
+  Future<ExternalAgent?> setSessionAgent({
+    required String sessionId,
+    required String agentId,
+  }) async {
+    final response = await _externalAgents.setSessionAgent(
+      agentpb.SetSessionAgentRequest(sessionId: sessionId, agentId: agentId),
+    );
+    return _sessionAgentOrLocal(response);
+  }
+
+  @override
+  Future<ExternalAgent?> clearSessionAgent({required String sessionId}) async {
+    final response = await _externalAgents.clearSessionAgent(
+      agentpb.ClearSessionAgentRequest(sessionId: sessionId),
+    );
+    return _sessionAgentOrLocal(response);
+  }
+
+  /// An absent agent is not a missing field: it is the local assistant, which
+  /// is what every conversation does unless someone routed it elsewhere.
+  ExternalAgent? _sessionAgentOrLocal(agentpb.SessionAgentResponse response) {
+    if (!response.hasAgent()) return null;
+    return GrpcMappers.externalAgentToModel(response.agent);
+  }
+
+  @override
   Future<IntegrationCatalogue> listIntegrationProviders() async {
     final response = await _integrations.listProviders(
       integrationpb.ListProvidersRequest(),
@@ -500,41 +542,6 @@ class TuringGrpcApi implements ClosableTuringApi {
     await _integrations.deleteConnection(
       integrationpb.DeleteConnectionRequest(connectionId: connectionId),
     );
-  }
-
-  @override
-  Future<ExternalAgent?> getSessionAgent({required String sessionId}) async {
-    final response = await _externalAgents.getSessionAgent(
-      agentpb.GetSessionAgentRequest(sessionId: sessionId),
-      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
-    );
-    return _sessionAgentOrLocal(response);
-  }
-
-  @override
-  Future<ExternalAgent?> setSessionAgent({
-    required String sessionId,
-    required String agentId,
-  }) async {
-    final response = await _externalAgents.setSessionAgent(
-      agentpb.SetSessionAgentRequest(sessionId: sessionId, agentId: agentId),
-    );
-    return _sessionAgentOrLocal(response);
-  }
-
-  @override
-  Future<ExternalAgent?> clearSessionAgent({required String sessionId}) async {
-    final response = await _externalAgents.clearSessionAgent(
-      agentpb.ClearSessionAgentRequest(sessionId: sessionId),
-    );
-    return _sessionAgentOrLocal(response);
-  }
-
-  /// An absent agent is not a missing field: it is the local assistant, which
-  /// is what every conversation does unless someone routed it elsewhere.
-  ExternalAgent? _sessionAgentOrLocal(agentpb.SessionAgentResponse response) {
-    if (!response.hasAgent()) return null;
-    return GrpcMappers.externalAgentToModel(response.agent);
   }
 
   @override

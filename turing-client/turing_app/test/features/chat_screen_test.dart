@@ -7247,9 +7247,8 @@ TuringEvent _event({
 }
 
 class _FakeApiClient
-    with NoSkillsApi, NoExternalAgentsApi
+    with NoSkillsApi, NoExternalAgentsApi, NoIntegrationsApi
     implements TuringApi {
-class _FakeApiClient with NoSkillsApi, NoIntegrationsApi implements TuringApi {
   String? lastSentContent;
   String? lastModelProvider;
 

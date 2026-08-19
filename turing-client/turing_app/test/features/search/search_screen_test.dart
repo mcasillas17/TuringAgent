@@ -2451,9 +2451,8 @@ class _SessionCall {
 }
 
 class _FakeSearchApi
-    with NoSkillsApi, NoExternalAgentsApi
+    with NoSkillsApi, NoExternalAgentsApi, NoIntegrationsApi
     implements TuringApi {
-class _FakeSearchApi with NoSkillsApi, NoIntegrationsApi implements TuringApi {
   final List<_SearchCall> searchCalls = [];
   final List<_SessionCall> sessionCalls = [];
   final List<String> sessionRequests = [];

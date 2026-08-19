@@ -85,8 +85,7 @@ class _FakeAuthStorage implements ClientAuthStorage {
 }
 
 class _ClosableFakeApiClient
-    with NoSkillsApi, NoExternalAgentsApi
-    with NoSkillsApi, NoIntegrationsApi
+    with NoSkillsApi, NoExternalAgentsApi, NoIntegrationsApi
     implements ClosableTuringApi {
   bool closed = false;
 
