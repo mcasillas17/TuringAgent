@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -36,24 +37,28 @@ func TestGitignoreCoversRuntimeDatabaseBackupDirectories(t *testing.T) {
 	}
 }
 
-// A later negation would silently re-admit exactly what this containment removed,
-// while the pattern-presence assertions above still passed.
-func TestRuntimeBackupIgnoreRulesAreNotNegated(t *testing.T) {
-	for _, ignoreFile := range []string{".gitignore", ".dockerignore"} {
-		for line := range ignoreFileLines(t, ignoreFile) {
-			if !strings.HasPrefix(line, "!") {
-				continue
-			}
-			if runtimeBackupComponent(strings.TrimPrefix(line, "!")) != "" {
-				t.Errorf("%s re-includes a runtime database backup path: %q", ignoreFile, line)
-			}
+// Docker's matcher is not a dependency of this module, so there is no way here to
+// evaluate whether a given negation would re-admit a backup directory. .dockerignore
+// carries no negations today, so reject them outright: a future one has to be
+// weighed against this containment rather than silently re-including a build-context
+// path that an earlier pattern excluded.
+func TestDockerignoreHasNoNegationRules(t *testing.T) {
+	for line := range ignoreFileLines(t, ".dockerignore") {
+		if strings.HasPrefix(line, "!") {
+			t.Errorf(".dockerignore adds negation %q; check it against the runtime database backup exclusions before allowing it", line)
 		}
 	}
 }
 
 func TestRuntimeDatabaseBackupPathsAreNotTracked(t *testing.T) {
+	paths := gitTrackedPaths(t, repoRootFromTests)
+	// This test proves an absence, which is only meaningful if the scan actually
+	// saw the repository. A sentinel turns an empty scan into a failure.
+	if !slices.Contains(paths, "go.mod") {
+		t.Fatalf("tracked-path scan returned %d paths and no go.mod; it did not see this repository", len(paths))
+	}
 	var tracked []string
-	for _, path := range gitTrackedPaths(t) {
+	for _, path := range paths {
 		if runtimeBackupComponent(path) != "" {
 			tracked = append(tracked, path)
 		}
@@ -63,6 +68,9 @@ func TestRuntimeDatabaseBackupPathsAreNotTracked(t *testing.T) {
 	}
 }
 
+// A negation anywhere in .gitignore is caught here rather than by scanning the
+// file for "!" lines: git evaluates the full ordered rule chain, so this covers
+// every form a negation could take, including globs like "!data.?ackup-*".
 func TestRuntimeDatabaseBackupPathsAreGitIgnored(t *testing.T) {
 	for _, path := range []string{
 		// The paths this containment work removed from the repository tip.
@@ -106,21 +114,41 @@ func TestRuntimeBackupComponentMatchesOnlyBackupPaths(t *testing.T) {
 
 // git quotes non-ASCII paths unless -z is used. A quoted repository-root backup
 // directory arrives as `"data.backup-\303\251/...`, whose first component starts
-// with a quote and would slip past the scan, so tracked paths are read NUL
-// separated instead.
-func TestTrackedPathsAreReadUnquoted(t *testing.T) {
-	paths := splitNUL("go.mod\x00data.backup-\u00e9/turing.db\x00")
-	want := []string{"go.mod", "data.backup-\u00e9/turing.db"}
-	if len(paths) != len(want) {
-		t.Fatalf("splitNUL returned %d paths (%v), want %d", len(paths), paths, len(want))
-	}
-	for index, path := range paths {
-		if path != want[index] {
-			t.Errorf("path %d = %q, want %q", index, path, want[index])
+// with a quote and would slip past the scan. Prove on a throwaway repository that
+// the scan reads tracked paths unquoted; this fails if -z is ever dropped.
+func TestTrackedPathScanDetectsNonASCIIBackupDirectory(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		command := exec.Command(gitBinary(t), append([]string{"-C", repo}, args...)...)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
 		}
 	}
-	if component := runtimeBackupComponent(paths[1]); component != "data.backup-\u00e9" {
-		t.Errorf("unquoted non-ASCII backup path was not detected, got %q", component)
+	runGit("init", "-q")
+
+	backup := filepath.Join(repo, "data.backup-\u00e9")
+	if err := os.MkdirAll(backup, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(backup, "probe"), []byte("probe"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "--force", ".")
+
+	var found []string
+	for _, path := range gitTrackedPaths(t, repo) {
+		if component := runtimeBackupComponent(path); component != "" {
+			found = append(found, component)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("scan found %v, want exactly one runtime backup component", found)
+	}
+	// Compared by prefix, not by exact name: macOS may store the directory name
+	// in a different unicode normalization than it was written in.
+	if !strings.HasPrefix(found[0], "data.backup-") || strings.Contains(found[0], `"`) {
+		t.Errorf("backup component %q was not read unquoted", found[0])
 	}
 }
 
@@ -154,9 +182,9 @@ func ignoreFileLines(t *testing.T, name string) map[string]bool {
 	return lines
 }
 
-func gitTrackedPaths(t *testing.T) []string {
+func gitTrackedPaths(t *testing.T, repoDir string) []string {
 	t.Helper()
-	return splitNUL(gitOutput(t, "ls-files", "-z"))
+	return splitNUL(gitOutput(t, repoDir, "ls-files", "-z"))
 }
 
 func splitNUL(output string) []string {
@@ -187,9 +215,9 @@ func gitIgnores(t *testing.T, path string) bool {
 	return false
 }
 
-func gitOutput(t *testing.T, args ...string) string {
+func gitOutput(t *testing.T, repoDir string, args ...string) string {
 	t.Helper()
-	command := exec.Command(gitBinary(t), append([]string{"-C", repoRootFromTests}, args...)...)
+	command := exec.Command(gitBinary(t), append([]string{"-C", repoDir}, args...)...)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	output, err := command.Output()
