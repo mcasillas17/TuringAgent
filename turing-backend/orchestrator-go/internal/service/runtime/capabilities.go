@@ -207,7 +207,7 @@ func workerCapabilitiesSupportRoute(capabilities *registeredWorkerCapabilities, 
 		return false
 	}
 	if route.ExternalAgent {
-		if !capabilities.supportsExternalAgents {
+		if !capabilities.supportsExternalAgents || route.RequiredContextTokens > 0 {
 			return false
 		}
 	} else {
@@ -569,6 +569,13 @@ func (s *Server) ValidateRouting(ctx context.Context, route repository.RoutingRe
 			return routingUnavailable(
 				turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_PROVIDER,
 				"external_agent",
+				nil,
+			)
+		}
+		if route.RequiredContextTokens > 0 {
+			return routingUnavailable(
+				turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_CONTEXT,
+				strconv.Itoa(route.RequiredContextTokens),
 				nil,
 			)
 		}

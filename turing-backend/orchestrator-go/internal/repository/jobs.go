@@ -715,7 +715,10 @@ func claimRoutingFilterSQL(capabilities *WorkerRoutingCapabilities) (string, []a
 	var destinations []string
 	var args []any
 	if capabilities.SupportsExternalAgents {
-		destinations = append(destinations, externalAgentType+` = 'object'`)
+		destinations = append(destinations, `(
+			`+externalAgentType+` = 'object'
+			AND COALESCE(CAST(json_extract(j.payload_json, '$.requiredContextTokens') AS INTEGER), 0) <= 0
+		)`)
 	}
 	for _, model := range capabilities.Models {
 		destinations = append(destinations, `(

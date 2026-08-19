@@ -103,6 +103,7 @@ func TestListPendingRoutingWorkPageUsesStableKeyset(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
 			SessionID: session.SessionID, Content: title, AgentID: "general_assistant",
 			ModelProvider: "ollama", Model: "llama3.2",
@@ -127,5 +128,40 @@ func TestListPendingRoutingWorkPageUsesStableKeyset(t *testing.T) {
 	}
 	if len(first) != 2 || len(second) != 1 || !slices.Equal(got, want) {
 		t.Fatalf("paged run IDs = %v (%d/%d), want %v", got, len(first), len(second), want)
+	}
+}
+
+func TestClaimExternalAgentJobRejectsPositiveContextWithoutGuarantee(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "External context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := mustCreateAgent(t, ctx, repo, anthropicAgent())
+	if _, err := repo.SetSessionAgent(ctx, session.SessionID, agent.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "external", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "ignored", RequiredContextTokens: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(
+		ctx,
+		"general_assistant",
+		"worker-external",
+		0,
+		time.Hour,
+		&WorkerRoutingCapabilities{SupportsExternalAgents: true, MaxConcurrentRuns: 1},
+		func(RoutingRequirements) bool { return true },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.JobID != "" {
+		t.Fatalf("claimed external job %q with unguaranteed context; enqueued %q", claimed.JobID, enqueued.JobID)
 	}
 }

@@ -292,18 +292,6 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 	}
 	s.workerStreams.Add(1)
 	defer s.workerStreams.Done()
-	if err := s.persistDiscoveredTools(ctx, ready.GetWorkerId(), connectedWorker, discovered); err != nil {
-		_ = connectedWorker.close()
-		s.removeWorkerRegistration(ready.GetWorkerId(), connectedWorker)
-		return status.Error(codes.Internal, "persist worker tool capabilities")
-	}
-	if err := s.refreshPendingCapabilityState(ctx, "worker connected", ready.GetWorkerId(), true, true); err != nil {
-		_ = connectedWorker.close()
-		s.removeWorkerRegistration(ready.GetWorkerId(), connectedWorker)
-		_ = s.removeDiscoveredTools(ready.GetWorkerId(), connectedWorker)
-		return err
-	}
-
 	defer func() {
 		// Cancelling the stream makes several exit paths ready at once — the
 		// receive goroutine's Recv, an in-flight dispatch, and the command
@@ -336,6 +324,12 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 			}
 		}
 	}()
+	if err := s.persistDiscoveredTools(ctx, ready.GetWorkerId(), connectedWorker, discovered); err != nil {
+		return status.Error(codes.Internal, "persist worker tool capabilities")
+	}
+	if err := s.refreshPendingCapabilityState(ctx, "worker connected", ready.GetWorkerId(), true, true); err != nil {
+		return err
+	}
 	acceptedCtx, cancelAccepted := withDefaultTimeout(ctx, commandSendTimeout)
 	err = connectedWorker.commandSender(stream).send(acceptedCtx, &turingv1.RuntimeCommand{
 		Command: &turingv1.RuntimeCommand_WorkerAccepted{WorkerAccepted: &turingv1.RuntimeWorkerAccepted{

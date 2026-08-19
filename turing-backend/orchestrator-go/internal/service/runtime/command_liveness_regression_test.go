@@ -570,6 +570,68 @@ func TestConnectWorkerKeepsTeardownFailuresAlongsideCancellation(t *testing.T) {
 	}
 }
 
+func TestConnectWorkerRequeuesAssignmentsWhenCapabilityPersistenceFailsBeforeAcceptance(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "handshake persistence failure")
+	if err := h.repo.UpsertTools(context.Background(), []repository.DiscoveredTool{{
+		ServerName: "system", ToolName: "system.time", SchemaJSON: `{}`, Policy: "safe",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.database.ExecContext(context.Background(), `
+		CREATE TRIGGER fail_handshake_tool_persist
+		BEFORE UPDATE ON tools
+		BEGIN
+			SELECT RAISE(FAIL, 'tool persistence blocked');
+		END`); err != nil {
+		t.Fatal(err)
+	}
+
+	h.service.toolsMu.Lock()
+	toolsLocked := true
+	defer func() {
+		if toolsLocked {
+			h.service.toolsMu.Unlock()
+		}
+	}()
+	streamCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	const workerID = "worker-handshake-persist-failure"
+	stream := &reconnectAcceptanceStream{
+		ctx: streamCtx, ready: workerReady(workerID), accepted: make(chan struct{}),
+	}
+	done := make(chan error, 1)
+	go func() { done <- h.service.ConnectWorker(stream) }()
+	eventually(t, time.Second, func() bool {
+		return h.service.registeredWorker(workerID) != nil
+	})
+	if err := h.service.DispatchPending(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	connected := h.service.registeredWorker(workerID)
+	if connected == nil || !connected.hasAssignment(enqueued.RunID) {
+		t.Fatal("worker did not claim the run during the registration window")
+	}
+	h.service.toolsMu.Unlock()
+	toolsLocked = false
+
+	select {
+	case err := <-done:
+		if status.Code(err) != codes.Internal {
+			t.Fatalf("ConnectWorker error = %v, want Internal", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConnectWorker did not return after persistence failure")
+	}
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "queued" || run.ExecutionActive {
+		t.Fatalf("run after failed handshake = %+v, want queued and inactive", run)
+	}
+}
+
 // TestIsStreamCancellationCanonicalisesOnlyCancelledStreams pins the predicate
 // that lets ConnectWorker report one error for a cancelled stream no matter
 // which of its two concurrently-ready paths observed the cancellation. The

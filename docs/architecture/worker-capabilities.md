@@ -47,6 +47,9 @@ stream's `registration_id` plus its connection object.
 - A complete capability update replaces only the matching registration's snapshot.
 - Heartbeats refresh the connection timestamp but do not mutate capabilities.
 - Dispatch and public configuration views ignore entries past the heartbeat lease.
+- If registration persistence or initial queue reconciliation fails after the worker
+  becomes visible, normal teardown fences the registration and requeues every claim
+  made during that window before the handshake returns an error.
 - Recovery ticks publish capability-loss notices for queued routes whose worker
   heartbeat lease expires; a later heartbeat publishes restoration before dispatch.
 - Disconnect or lease recovery removes only the matching owner, so teardown from an
@@ -79,7 +82,8 @@ route:
 Failure returns `FailedPrecondition` with a typed `RoutingUnavailableDetail` naming
 the failed capability and requested value. A failed validation commits nothing.
 Legacy workers are validated against their explicit profile rather than bypassing the
-check.
+check. External-agent support carries no model context guarantee, so any positive
+context requirement on an external route fails closed.
 
 The accepted requirements are frozen into the job payload. Dispatch claims only jobs
 that match the selected worker's current snapshot. A route that was valid when
@@ -115,6 +119,8 @@ persistence. Deduplication advances after each committed notice, even if a later
 in the same refresh fails. Queue refreshes use an indexed keyset scan in bounded pages
 and a five-second deadline, so retries neither duplicate transitions nor monopolize the
 registry lock indefinitely. Idempotent snapshots do not duplicate notices.
+After an enqueue commits, a refresh failure is logged but does not cancel the durable
+run or prevent dispatch; later lifecycle and recovery passes retry notice state.
 On orchestrator restart the empty registry is restored by worker reconnects; queued
 routes receive restoration notices and become dispatchable again.
 

@@ -215,6 +215,36 @@ func TestProviderAndAgentAvailabilityReflectLiveWorkerUnion(t *testing.T) {
 	})
 }
 
+func TestExternalAgentRouteRejectsPositiveContextRequirement(t *testing.T) {
+	h := newHarness(t)
+	stream := connectWorkerCapabilities(t, h, "worker-external-context", "registration-external-context", &turingv1.WorkerCapabilities{
+		Models: []*turingv1.ModelCapability{{
+			Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "llama3.2", MaxContextTokens: 8192,
+		}},
+		AgentIds:               []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+		MaxConcurrentRuns:      1,
+		SupportsExternalAgents: true,
+	})
+	defer func() { _ = stream.CloseSend() }()
+	route := repository.RoutingRequirements{
+		AgentID: "general_assistant", ExternalAgent: true, RequiredContextTokens: 1,
+	}
+	err := h.service.ValidateRouting(context.Background(), route)
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("ValidateRouting error = %v, want FailedPrecondition", err)
+	}
+	if detail := routingUnavailableDetail(t, err); detail.GetKind() != turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_CONTEXT {
+		t.Fatalf("routing detail = %+v, want context", detail)
+	}
+	connected := h.service.registeredWorker("worker-external-context")
+	if connected == nil {
+		t.Fatal("worker is not registered")
+	}
+	if workerCapabilitiesSupportRoute(connected.capabilities, route) {
+		t.Fatal("dispatch matcher accepted an external route with an unguaranteed context requirement")
+	}
+}
+
 func connectWorkerCapabilities(
 	t *testing.T,
 	h *harness,

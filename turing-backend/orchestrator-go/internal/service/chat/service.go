@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -133,8 +133,7 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 	}
 	if s.runtime != nil {
 		if err := s.runtime.RefreshPendingRoutingState(context.WithoutCancel(ctx), "message enqueued"); err != nil {
-			s.cancelRun(enqueued.RunID)
-			return status.Error(codes.Internal, "refresh pending routing state failed")
+			log.Printf("refresh pending routing state for run %s: %v", enqueued.RunID, err)
 		}
 		if err := s.runtime.DispatchPending(context.WithoutCancel(ctx)); err != nil {
 			s.cancelRun(enqueued.RunID)
@@ -215,7 +214,7 @@ func requestAgentID(agentID turingv1.AgentId) (string, error) {
 	case turingv1.AgentId_AGENT_ID_UNSPECIFIED, turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT:
 		return "general_assistant", nil
 	default:
-		return fmt.Sprintf("agent_id_%d", agentID), nil
+		return "", status.Errorf(codes.InvalidArgument, "agent_id %d is unsupported", agentID)
 	}
 }
 

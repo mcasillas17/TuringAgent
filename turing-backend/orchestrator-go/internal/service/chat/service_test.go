@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -146,6 +147,31 @@ func TestSendMessageDispatchContextSurvivesClientCancellation(t *testing.T) {
 	}
 }
 
+func TestSendMessageDispatchesDurableRunAfterRoutingRefreshFailure(t *testing.T) {
+	database := openChatTestDB(t)
+	repo := repository.New(database)
+	bus := events.NewBus(8)
+	dispatcher := &dispatchContextRecorder{refreshErr: errors.New("refresh failed")}
+	service := New(repo, bus, dispatcher, "llama3.2", "gpt-4o-mini")
+	session, err := repo.CreateSession(context.Background(), "Refresh failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamCtx, cancel := context.WithCancel(context.Background())
+	stream := &cancellingChatStream{ctx: streamCtx, cancel: cancel}
+
+	err = service.SendMessage(&turingv1.SendMessageRequest{
+		SessionId: session.SessionID, Content: "keep queued work",
+		ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "llama3.2",
+	}, stream)
+	if status.Code(err) != codes.Canceled {
+		t.Fatalf("SendMessage error = %v, want client cancellation after dispatch", err)
+	}
+	if dispatcher.dispatchCalls != 1 {
+		t.Fatalf("DispatchPending calls = %d, want 1 after refresh failure", dispatcher.dispatchCalls)
+	}
+}
+
 func TestSendMessageUsesLiveRoutableDefaultWhenModelIsOmitted(t *testing.T) {
 	h := newHarness(t)
 	capabilities := defaultChatWorkerCapabilities(false)
@@ -176,11 +202,14 @@ func TestSendMessageUsesLiveRoutableDefaultWhenModelIsOmitted(t *testing.T) {
 }
 
 type dispatchContextRecorder struct {
-	contextErr error
+	contextErr    error
+	refreshErr    error
+	dispatchCalls int
 }
 
 func (d *dispatchContextRecorder) DispatchPending(ctx context.Context) error {
 	d.contextErr = ctx.Err()
+	d.dispatchCalls++
 	return nil
 }
 
@@ -191,7 +220,7 @@ func (d *dispatchContextRecorder) ValidateRouting(context.Context, repository.Ro
 }
 
 func (d *dispatchContextRecorder) RefreshPendingRoutingState(context.Context, string) error {
-	return nil
+	return d.refreshErr
 }
 
 func (d *dispatchContextRecorder) RoutableDefaultModel(_ string, configured string) string {
@@ -243,6 +272,7 @@ func TestSendMessageRejectsUnavailableRoutingBeforePersistence(t *testing.T) {
 		name    string
 		request func(sessionID string) *turingv1.SendMessageRequest
 		kind    turingv1.RoutingRequirementKind
+		code    codes.Code
 	}{
 		{
 			name: "provider",
@@ -284,6 +314,7 @@ func TestSendMessageRejectsUnavailableRoutingBeforePersistence(t *testing.T) {
 				}
 			},
 			kind: turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_AGENT,
+			code: codes.InvalidArgument,
 		},
 		{
 			name: "context",
@@ -325,12 +356,18 @@ func TestSendMessageRejectsUnavailableRoutingBeforePersistence(t *testing.T) {
 			sessionID := h.createSession(t)
 
 			err := sendMessageError(h, test.request(sessionID))
-			if status.Code(err) != codes.FailedPrecondition {
-				t.Fatalf("SendMessage error = %v, want FailedPrecondition", err)
+			wantCode := test.code
+			if wantCode == codes.OK {
+				wantCode = codes.FailedPrecondition
 			}
-			detail := chatRoutingUnavailableDetail(t, err)
-			if detail.GetKind() != test.kind || detail.GetRequested() == "" {
-				t.Fatalf("routing detail = %+v, want kind %v with requested value", detail, test.kind)
+			if status.Code(err) != wantCode {
+				t.Fatalf("SendMessage error = %v, want %v", err, wantCode)
+			}
+			if wantCode == codes.FailedPrecondition {
+				detail := chatRoutingUnavailableDetail(t, err)
+				if detail.GetKind() != test.kind || detail.GetRequested() == "" {
+					t.Fatalf("routing detail = %+v, want kind %v with requested value", detail, test.kind)
+				}
 			}
 			for _, table := range []string{"messages", "agent_runs", "jobs"} {
 				var count int
@@ -483,11 +520,8 @@ func TestSendMessageRejectsUnsupportedAgent(t *testing.T) {
 	if err == nil {
 		_, err = stream.Recv()
 	}
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("SendMessage error = %v, want FailedPrecondition", err)
-	}
-	if detail := chatRoutingUnavailableDetail(t, err); detail.GetKind() != turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_AGENT {
-		t.Fatalf("routing detail = %+v, want agent", detail)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("SendMessage error = %v, want InvalidArgument", err)
 	}
 }
 
