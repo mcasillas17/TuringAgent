@@ -1,0 +1,220 @@
+package runtime
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
+)
+
+func TestValidateRoutingRejectsEachUnavailableCapability(t *testing.T) {
+	h := newHarness(t)
+	stream := connectWorkerCapabilities(t, h, "worker-routing", "registration-routing", &turingv1.WorkerCapabilities{
+		Models: []*turingv1.ModelCapability{{
+			Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+			Model:            "llama3.2",
+			MaxContextTokens: 8192,
+		}},
+		AgentIds:          []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+		Tools:             []*turingv1.DiscoveredTool{{ServerName: "system", ToolName: "system.time", Schema: &structpb.Struct{}}},
+		MaxConcurrentRuns: 2,
+	})
+	defer func() { _ = stream.CloseSend() }()
+
+	base := repository.RoutingRequirements{
+		AgentID:                        "general_assistant",
+		ModelProvider:                  "ollama",
+		Model:                          "llama3.2",
+		RequestedTools:                 []string{"system/system.time"},
+		RequiredContextTokens:          8192,
+		MinimumWorkerMaxConcurrentRuns: 2,
+	}
+	if err := h.service.ValidateRouting(context.Background(), base); err != nil {
+		t.Fatalf("supported route rejected: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		edit func(*repository.RoutingRequirements)
+		kind turingv1.RoutingRequirementKind
+	}{
+		{
+			name: "provider",
+			edit: func(route *repository.RoutingRequirements) {
+				route.ModelProvider = "openai_compatible"
+				route.Model = "gpt-4o-mini"
+			},
+			kind: turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_PROVIDER,
+		},
+		{
+			name: "model",
+			edit: func(route *repository.RoutingRequirements) {
+				route.Model = "other-model"
+			},
+			kind: turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_MODEL,
+		},
+		{
+			name: "tool",
+			edit: func(route *repository.RoutingRequirements) {
+				route.RequestedTools = []string{"files/files.read"}
+			},
+			kind: turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_TOOL,
+		},
+		{
+			name: "agent",
+			edit: func(route *repository.RoutingRequirements) {
+				route.AgentID = "specialist"
+			},
+			kind: turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_AGENT,
+		},
+		{
+			name: "context",
+			edit: func(route *repository.RoutingRequirements) {
+				route.RequiredContextTokens = 8193
+			},
+			kind: turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_CONTEXT,
+		},
+		{
+			name: "capacity",
+			edit: func(route *repository.RoutingRequirements) {
+				route.MinimumWorkerMaxConcurrentRuns = 3
+			},
+			kind: turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_CAPACITY,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			route := base
+			route.RequestedTools = append([]string(nil), base.RequestedTools...)
+			test.edit(&route)
+			err := h.service.ValidateRouting(context.Background(), route)
+			if status.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("ValidateRouting error = %v, want FailedPrecondition", err)
+			}
+			detail := routingUnavailableDetail(t, err)
+			if detail.GetKind() != test.kind || detail.GetRequested() == "" {
+				t.Fatalf("routing detail = %+v, want kind %v with requested value", detail, test.kind)
+			}
+		})
+	}
+}
+
+func TestLegacyWorkerCapabilitiesRequireExplicitProfile(t *testing.T) {
+	ready := &turingv1.RuntimeWorkerReady{
+		WorkerId: "legacy-worker", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 2,
+		Tools:               []*turingv1.DiscoveredTool{{ServerName: "system", ToolName: "system.time", Schema: &structpb.Struct{}}},
+		ToolDiscoveryStatus: turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_COMPLETE,
+	}
+	if _, _, err := decodeLegacyWorkerCapabilities(nil, ready); err == nil {
+		t.Fatal("legacy worker without an explicit profile was accepted")
+	}
+	profile := &LegacyCapabilityProfile{
+		Models: []*turingv1.ModelCapability{{
+			Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+			Model:            "llama3.2",
+			MaxContextTokens: 8192,
+		}},
+		AgentIds: []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+	}
+	capabilities, tools, err := decodeLegacyWorkerCapabilities(profile, ready)
+	if err != nil {
+		t.Fatalf("decode legacy capabilities: %v", err)
+	}
+	if capabilities.maxConcurrentRuns != 2 || len(capabilities.models) != 1 {
+		t.Fatalf("legacy capabilities = %+v", capabilities)
+	}
+	if len(tools) != 1 || tools[0].ToolName != "system.time" {
+		t.Fatalf("legacy tools = %+v", tools)
+	}
+}
+
+func TestProviderAndAgentAvailabilityReflectLiveWorkerUnion(t *testing.T) {
+	h := newHarness(t)
+	first := connectWorkerCapabilities(t, h, "worker-view-a", "registration-view-a", &turingv1.WorkerCapabilities{
+		Models: []*turingv1.ModelCapability{{
+			Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "llama3.2", MaxContextTokens: 4096,
+		}},
+		AgentIds: []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT}, MaxConcurrentRuns: 1,
+	})
+	defer func() { _ = first.CloseSend() }()
+	second := connectWorkerCapabilities(t, h, "worker-view-b", "registration-view-b", &turingv1.WorkerCapabilities{
+		Models: []*turingv1.ModelCapability{
+			{Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "llama3.2", MaxContextTokens: 8192},
+			{Provider: turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, Model: "gpt-4o-mini", MaxContextTokens: 16384},
+		},
+		AgentIds: []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT}, MaxConcurrentRuns: 1,
+	})
+	defer func() { _ = second.CloseSend() }()
+
+	providers := h.service.ProviderCapabilities()
+	if got := providers[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA]; len(got) != 1 ||
+		got[0].GetModel() != "llama3.2" || got[0].GetMaxContextTokens() != 8192 {
+		t.Fatalf("Ollama provider view = %+v", got)
+	}
+	if got := providers[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE]; len(got) != 1 ||
+		got[0].GetModel() != "gpt-4o-mini" || got[0].GetMaxContextTokens() != 16384 {
+		t.Fatalf("OpenAI provider view = %+v", got)
+	}
+	if !h.service.AgentAvailable(turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT) {
+		t.Fatal("connected general assistant is unavailable")
+	}
+
+	if err := first.CloseSend(); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.CloseSend(); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, time.Second, func() bool {
+		return len(h.service.ProviderCapabilities()) == 0 &&
+			!h.service.AgentAvailable(turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT)
+	})
+}
+
+func connectWorkerCapabilities(
+	t *testing.T,
+	h *harness,
+	workerID string,
+	registrationID string,
+	capabilities *turingv1.WorkerCapabilities,
+) turingv1.RuntimeService_ConnectWorkerClient {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(h.internalContext(), 3*time.Second)
+	t.Cleanup(cancel)
+	stream, err := h.runtimeClient(t).ConnectWorker(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{
+		WorkerReady: &turingv1.RuntimeWorkerReady{
+			WorkerId:       workerID,
+			RegistrationId: registrationID,
+			Capabilities:   capabilities,
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	accepted := recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetWorkerAccepted() != nil
+	}).GetWorkerAccepted()
+	if accepted.GetWorkerId() != workerID || accepted.GetRegistrationId() != registrationID {
+		t.Fatalf("worker accepted identity = %q/%q, want %q/%q", accepted.GetWorkerId(), accepted.GetRegistrationId(), workerID, registrationID)
+	}
+	return stream
+}
+
+func routingUnavailableDetail(t *testing.T, err error) *turingv1.RoutingUnavailableDetail {
+	t.Helper()
+	for _, detail := range status.Convert(err).Details() {
+		if unavailable, ok := detail.(*turingv1.RoutingUnavailableDetail); ok {
+			return unavailable
+		}
+	}
+	t.Fatalf("error %v has no RoutingUnavailableDetail", err)
+	return nil
+}

@@ -16,6 +16,8 @@ import (
 // told" for a message that already left.
 func TestSendMessagePublishesTheEgressNoticeToOtherSubscribers(t *testing.T) {
 	h := newHarness(t)
+	worker := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(true))
+	defer func() { _ = worker.CloseSend() }()
 	sessionID := h.createSession(t)
 	agent, err := h.repo.CreateExternalAgent(context.Background(), repository.ExternalAgentInput{
 		DisplayName:   "Claude",
@@ -66,6 +68,8 @@ func TestSendMessagePublishesTheEgressNoticeToOtherSubscribers(t *testing.T) {
 // or the notice would become background noise nobody reads.
 func TestSendMessagePublishesNoEgressNoticeForALocalConversation(t *testing.T) {
 	h := newHarness(t)
+	worker := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(false))
+	defer func() { _ = worker.CloseSend() }()
 	sessionID := h.createSession(t)
 
 	subscription, unsubscribe := h.bus.Subscribe(sessionID)

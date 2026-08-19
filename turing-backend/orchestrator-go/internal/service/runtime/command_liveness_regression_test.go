@@ -304,6 +304,7 @@ func TestRecoveryReclaimsAssignmentAfterSameIDWorkerReconnects(t *testing.T) {
 	reconnected := &worker{
 		commands:      make(chan *turingv1.RuntimeCommand, 1),
 		done:          make(chan struct{}),
+		capabilities:  testWorkerCapabilities(1),
 		maxConcurrent: 1,
 		assignments:   map[string]assignment{},
 		lastHeartbeat: time.Now().UTC(),
@@ -351,6 +352,7 @@ func TestHeartbeatRevivalDispatchesQueuedWorkToIdleWorker(t *testing.T) {
 	connected := &worker{
 		commands:      make(chan *turingv1.RuntimeCommand, 1),
 		done:          make(chan struct{}),
+		capabilities:  testWorkerCapabilities(1),
 		maxConcurrent: 1,
 		assignments:   map[string]assignment{},
 		lastHeartbeat: time.Now().Add(-time.Minute),

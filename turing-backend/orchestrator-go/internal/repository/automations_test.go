@@ -621,6 +621,40 @@ func TestAnUnfinishedPreviousRunSkipsTheOccurrenceInsteadOfQueueingAnother(t *te
 	}
 }
 
+func TestUnavailableAutomationRouteAdvancesWithoutPersistingWork(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	automation := mustCreateDueAutomation(t, repo, ctx, "Unavailable", everyFiveMinutes())
+	due := mustParse(t, automation.NextDueAt)
+	defaults := automationDefaults
+	defaults.ValidateRouting = func(context.Context, RoutingRequirements) error {
+		return errors.New("no compatible worker")
+	}
+
+	fire, found, err := repo.ClaimDueAutomation(ctx, due, defaults)
+	if err != nil || !found {
+		t.Fatalf("claim unavailable route = found %v err %v", found, err)
+	}
+	if !fire.Skipped || fire.SkippedReason != SkippedRoutingUnavailable || fire.RunID != "" {
+		t.Fatalf("fire = %+v, want routing-unavailable skip", fire)
+	}
+	for _, table := range []string{"sessions", "messages", "agent_runs", "jobs"} {
+		var count int
+		if err := repo.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("%s count = %d, want no persisted work", table, count)
+		}
+	}
+	reloaded, err := repo.GetAutomation(ctx, automation.AutomationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mustParse(t, reloaded.NextDueAt).After(due) {
+		t.Fatalf("next due = %s, want after %s", reloaded.NextDueAt, due)
+	}
+}
+
 // A row whose schedule cannot be read has no next due time to advance to, so
 // leaving it enabled would re-select it on every tick and starve every
 // automation behind it.

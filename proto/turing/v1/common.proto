@@ -18,6 +18,16 @@ enum ModelProvider {
   MODEL_PROVIDER_OPENAI_COMPATIBLE = 2;
 }
 
+enum RoutingRequirementKind {
+  ROUTING_REQUIREMENT_KIND_UNSPECIFIED = 0;
+  ROUTING_REQUIREMENT_KIND_PROVIDER = 1;
+  ROUTING_REQUIREMENT_KIND_MODEL = 2;
+  ROUTING_REQUIREMENT_KIND_CONTEXT = 3;
+  ROUTING_REQUIREMENT_KIND_TOOL = 4;
+  ROUTING_REQUIREMENT_KIND_AGENT = 5;
+  ROUTING_REQUIREMENT_KIND_CAPACITY = 6;
+}
+
 enum MessageRole {
   MESSAGE_ROLE_UNSPECIFIED = 0;
   MESSAGE_ROLE_SYSTEM = 1;
@@ -63,15 +73,31 @@ message ErrorDetail {
   google.protobuf.Struct details = 4;
 }
 
+message RoutingUnavailableDetail {
+  RoutingRequirementKind kind = 1;
+  string requested = 2;
+  repeated string available = 3;
+}
+
+message ModelCapability {
+  ModelProvider provider = 1;
+  string model = 2;
+  // An operator-configured routing guarantee, not a value inferred from a
+  // provider label or model name.
+  int32 max_context_tokens = 3;
+}
+
 message ProviderConfig {
   ModelProvider provider = 1;
   bool enabled = 2;
   string default_model = 3;
+  repeated ModelCapability models = 4;
 }
 
 message AgentDescriptor {
   AgentId id = 1;
   string display_name = 2;
+  bool available = 3;
 }
 
 message Message {

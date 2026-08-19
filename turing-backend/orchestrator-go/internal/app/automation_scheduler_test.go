@@ -5,9 +5,11 @@ import (
 	"testing"
 	"time"
 
+	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"google.golang.org/grpc/metadata"
 )
 
 // The scheduler is the only thing in this process that creates a run nobody
@@ -28,6 +30,25 @@ func TestAppSchedulerFiresADueAutomationAndStops(t *testing.T) {
 			application.Stop()
 		}
 	}()
+	conn := newBufconnClient(t, application.InternalServer)
+	runtimeClient := turingv1.NewRuntimeServiceClient(conn)
+	worker, err := runtimeClient.ConnectWorker(metadata.NewOutgoingContext(
+		context.Background(), metadata.Pairs("authorization", "Bearer internal"),
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = worker.CloseSend() }()
+	if err := worker.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{
+		WorkerReady: &turingv1.RuntimeWorkerReady{
+			WorkerId: "worker-automation", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	recvRuntimeCommand(t, worker, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetWorkerAccepted() != nil
+	})
 	ctx := context.Background()
 	automation := createEnabledAutomation(t, application, "Digest")
 	makeAutomationDue(t, cfg.DatabasePath, automation.AutomationID)

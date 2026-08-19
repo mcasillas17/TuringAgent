@@ -17,12 +17,18 @@ import (
 
 type Server struct {
 	turingv1.UnimplementedSessionServiceServer
-	repo *repository.Repository
-	cfg  config.Config
+	repo         *repository.Repository
+	cfg          config.Config
+	capabilities capabilitySource
 }
 
-func New(repo *repository.Repository, cfg config.Config) *Server {
-	return &Server{repo: repo, cfg: cfg}
+type capabilitySource interface {
+	ProviderCapabilities() map[turingv1.ModelProvider][]*turingv1.ModelCapability
+	AgentAvailable(turingv1.AgentId) bool
+}
+
+func New(repo *repository.Repository, cfg config.Config, capabilities capabilitySource) *Server {
+	return &Server{repo: repo, cfg: cfg, capabilities: capabilities}
 }
 
 func (s *Server) CreateSession(ctx context.Context, req *turingv1.CreateSessionRequest) (*turingv1.CreateSessionResponse, error) {
@@ -135,9 +141,23 @@ func (s *Server) SearchMessages(ctx context.Context, req *turingv1.SearchMessage
 }
 
 func (s *Server) GetConfig(context.Context, *turingv1.GetConfigRequest) (*turingv1.GetConfigResponse, error) {
+	var advertised map[turingv1.ModelProvider][]*turingv1.ModelCapability
+	if s.capabilities != nil {
+		advertised = s.capabilities.ProviderCapabilities()
+	}
 	providers := []*turingv1.ProviderConfig{
-		{Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Enabled: s.cfg.OllamaModel != "", DefaultModel: s.cfg.OllamaModel},
-		{Provider: turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, Enabled: s.cfg.OpenAIAPIKey != "", DefaultModel: s.cfg.OpenAIModel},
+		{
+			Provider:     turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+			Enabled:      len(advertised[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA]) > 0,
+			DefaultModel: s.cfg.OllamaModel,
+			Models:       advertised[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA],
+		},
+		{
+			Provider:     turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
+			Enabled:      len(advertised[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE]) > 0,
+			DefaultModel: s.cfg.OpenAIModel,
+			Models:       advertised[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE],
+		},
 	}
 	return &turingv1.GetConfigResponse{
 		Providers:        providers,
@@ -147,7 +167,15 @@ func (s *Server) GetConfig(context.Context, *turingv1.GetConfigRequest) (*turing
 }
 
 func (s *Server) ListAgents(context.Context, *turingv1.ListAgentsRequest) (*turingv1.ListAgentsResponse, error) {
-	agents := []*turingv1.AgentDescriptor{{Id: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, DisplayName: "General Assistant"}}
+	available := false
+	if s.capabilities != nil {
+		available = s.capabilities.AgentAvailable(turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT)
+	}
+	agents := []*turingv1.AgentDescriptor{{
+		Id:          turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		DisplayName: "General Assistant",
+		Available:   available,
+	}}
 	return &turingv1.ListAgentsResponse{Agents: agents}, nil
 }
 

@@ -64,6 +64,7 @@ The default local model path is Ollama:
 ```text
 OLLAMA_BASE_URL=http://host.docker.internal:11434
 OLLAMA_MODEL=qwen2.5:7b
+OLLAMA_MAX_CONTEXT_TOKENS=0
 ```
 
 OpenAI-compatible models can be configured with:
@@ -72,9 +73,13 @@ OpenAI-compatible models can be configured with:
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini
+OPENAI_MAX_CONTEXT_TOKENS=0
 ```
 
-The Flutter client sends the selected provider with each message. The backend owns provider routing and model execution.
+The context values are operator guarantees advertised by the runtime, not
+limits inferred from model names. `0` means no positive context guarantee.
+The Flutter client sends the selected provider with each message. The backend
+owns provider routing and model execution.
 
 ## Approval flow
 

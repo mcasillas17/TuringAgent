@@ -544,6 +544,7 @@ read path and TUR-021 remains the approval preview/diff UX.
 **Likely files:** runtime proto, worker registration, dispatcher, session config APIs.  
 **Acceptance:** Unsupported selections fail before enqueue; capability loss updates queue notices; reconnect restores the registry.  
 **Dependencies:** None.
+**Pending-merge artifact:** [Worker capability routing](worker-capabilities.md).
 
 ### Phase 6: Connectors and multiple agents
 

@@ -7,8 +7,28 @@ import (
 	"testing"
 	"time"
 
+	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/worker"
 )
+
+func TestAdvertisedModelsReflectConfiguredProvidersAndContextLimits(t *testing.T) {
+	cfg := config.Config{
+		OllamaModel: "qwen", OllamaMaxContextTokens: 32768,
+		OpenAIModel: "gpt", OpenAIMaxContextTokens: 128000,
+	}
+	models := advertisedModels(cfg)
+	if len(models) != 1 || models[0].GetProvider() != turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA ||
+		models[0].GetModel() != "qwen" || models[0].GetMaxContextTokens() != 32768 {
+		t.Fatalf("models without OpenAI key = %+v", models)
+	}
+	cfg.OpenAIAPIKey = "configured"
+	models = advertisedModels(cfg)
+	if len(models) != 2 || models[1].GetProvider() != turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE ||
+		models[1].GetModel() != "gpt" || models[1].GetMaxContextTokens() != 128000 {
+		t.Fatalf("models with OpenAI key = %+v", models)
+	}
+}
 
 func TestShouldReconnect(t *testing.T) {
 	cancelled, cancel := context.WithCancel(context.Background())

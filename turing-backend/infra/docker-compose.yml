@@ -23,9 +23,11 @@ services:
       DATABASE_PATH: ${DATABASE_PATH:-/app/data/turing.db}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
+      OLLAMA_MAX_CONTEXT_TOKENS: ${OLLAMA_MAX_CONTEXT_TOKENS:-0}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_MAX_CONTEXT_TOKENS: ${OPENAI_MAX_CONTEXT_TOKENS:-0}
       # Parsed here for the names only: the orchestrator answers "can this
       # agent actually run?" for the client and never calls a vendor, so it
       # keeps the credential names and drops the keys.
@@ -75,10 +77,12 @@ services:
       MCP_FILES_TOKEN_GENERAL: ${MCP_FILES_TOKEN_GENERAL}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
+      OLLAMA_MAX_CONTEXT_TOKENS: ${OLLAMA_MAX_CONTEXT_TOKENS:-0}
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-2m}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_MAX_CONTEXT_TOKENS: ${OPENAI_MAX_CONTEXT_TOKENS:-0}
       # The only process that actually calls an external agent, and so the only
       # one that needs the keys themselves rather than just their names.
       TURING_AGENT_API_KEYS: ${TURING_AGENT_API_KEYS:-}

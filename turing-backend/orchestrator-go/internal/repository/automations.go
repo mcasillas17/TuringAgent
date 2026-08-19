@@ -95,9 +95,10 @@ func (g AutomationRunGrant) Allows(serverName string, toolName string) bool {
 // scheduler has no user in front of it to pick a provider, so the process
 // defaults stand in.
 type AutomationRunDefaults struct {
-	AgentID       string
-	ModelProvider string
-	Model         string
+	AgentID         string
+	ModelProvider   string
+	Model           string
+	ValidateRouting func(context.Context, RoutingRequirements) error
 }
 
 // AutomationFire describes what one claim did. A claim either queues a run or
@@ -132,6 +133,7 @@ const (
 	// re-selected by every future tick, which would block every automation
 	// behind it forever.
 	SkippedScheduleUnreadable = "schedule_unreadable"
+	SkippedRoutingUnavailable = "routing_unavailable"
 )
 
 func validateAutomation(input AutomationInput) (AutomationInput, error) {
@@ -487,6 +489,37 @@ func (r *Repository) ClaimDueAutomation(ctx context.Context, at time.Time, defau
 			AutomationID: automationID, Name: name,
 			Skipped: true, SkippedReason: SkippedPreviousRunUnfinished,
 		}, true, nil
+	}
+	if defaults.ValidateRouting != nil {
+		err := defaults.ValidateRouting(ctx, RoutingRequirements{
+			AgentID:       defaults.AgentID,
+			ModelProvider: defaults.ModelProvider,
+			Model:         defaults.Model,
+		})
+		if err != nil {
+			result, err := tx.ExecContext(ctx, `
+				UPDATE automations
+				SET next_due_at = ?, updated_at = ?
+				WHERE id = ? AND enabled = 1 AND next_due_at = ?
+			`, FormatTimestamp(nextDue), firedAt, automationID, dueAt)
+			if err != nil {
+				return AutomationFire{}, false, err
+			}
+			skipped, err := result.RowsAffected()
+			if err != nil {
+				return AutomationFire{}, false, err
+			}
+			if skipped != 1 {
+				return AutomationFire{}, false, nil
+			}
+			if err := tx.Commit(); err != nil {
+				return AutomationFire{}, false, err
+			}
+			return AutomationFire{
+				AutomationID: automationID, Name: name,
+				Skipped: true, SkippedReason: SkippedRoutingUnavailable,
+			}, true, nil
+		}
 	}
 	// The compare-and-set described above: next_due_at must still be the value
 	// this transaction read.

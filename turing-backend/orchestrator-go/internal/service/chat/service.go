@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -29,6 +31,7 @@ type Server struct {
 type runtimeDispatcher interface {
 	DispatchPending(context.Context) error
 	CancelRun(context.Context, string, string)
+	ValidateRouting(context.Context, repository.RoutingRequirements) error
 }
 
 func New(repo *repository.Repository, bus *events.Bus, runtimeServer runtimeDispatcher, ollamaModel string, openAIModel string) *Server {
@@ -50,6 +53,16 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 	if err := requestContentType(req.ContentType); err != nil {
 		return err
 	}
+	requestedTools, err := requestTools(req.GetRequestedTools())
+	if err != nil {
+		return err
+	}
+	if req.GetRequiredContextTokens() < 0 {
+		return status.Error(codes.InvalidArgument, "required_context_tokens must be non-negative")
+	}
+	if req.GetMinimumWorkerMaxConcurrentRuns() < 0 {
+		return status.Error(codes.InvalidArgument, "minimum_worker_max_concurrent_runs must be non-negative")
+	}
 	agentID, err := requestAgentID(req.AgentId)
 	if err != nil {
 		return err
@@ -70,13 +83,20 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 	}
 	ch, unsubscribe := s.bus.Subscribe(req.SessionId)
 	defer unsubscribe()
-	enqueued, err := s.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
-		SessionID:     req.SessionId,
-		Content:       req.Content,
-		AgentID:       agentID,
-		ModelProvider: modelProvider,
-		Model:         model,
-	})
+	input := repository.EnqueueUserMessageInput{
+		SessionID:                      req.SessionId,
+		Content:                        req.Content,
+		AgentID:                        agentID,
+		ModelProvider:                  modelProvider,
+		Model:                          model,
+		RequestedTools:                 requestedTools,
+		RequiredContextTokens:          int(req.GetRequiredContextTokens()),
+		MinimumWorkerMaxConcurrentRuns: int(req.GetMinimumWorkerMaxConcurrentRuns()),
+	}
+	if s.runtime != nil {
+		input.ValidateRouting = s.runtime.ValidateRouting
+	}
+	enqueued, err := s.repo.EnqueueUserMessage(ctx, input)
 	if err != nil {
 		return mapEnqueueError(ctx, err)
 	}
@@ -185,8 +205,26 @@ func requestAgentID(agentID turingv1.AgentId) (string, error) {
 	case turingv1.AgentId_AGENT_ID_UNSPECIFIED, turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT:
 		return "general_assistant", nil
 	default:
-		return "", status.Error(codes.InvalidArgument, "agent_id is unsupported")
+		return fmt.Sprintf("agent_id_%d", agentID), nil
 	}
+}
+
+func requestTools(requested []string) ([]string, error) {
+	unique := make(map[string]struct{}, len(requested))
+	for _, value := range requested {
+		value = strings.TrimSpace(value)
+		parts := strings.Split(value, "/")
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+			return nil, status.Error(codes.InvalidArgument, "requested_tools entries must use server/tool")
+		}
+		unique[strings.TrimSpace(parts[0])+"/"+strings.TrimSpace(parts[1])] = struct{}{}
+	}
+	tools := make([]string, 0, len(unique))
+	for tool := range unique {
+		tools = append(tools, tool)
+	}
+	sort.Strings(tools)
+	return tools, nil
 }
 
 func requestModelProvider(provider turingv1.ModelProvider) (string, error) {
@@ -229,6 +267,9 @@ func mapSessionError(ctx context.Context, err error) error {
 func mapEnqueueError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return status.Error(codes.Canceled, "client cancelled stream")
+	}
+	if status.Code(err) == codes.FailedPrecondition {
+		return err
 	}
 	return status.Error(codes.Internal, "enqueue user message failed")
 }

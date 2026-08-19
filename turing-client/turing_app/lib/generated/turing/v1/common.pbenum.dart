@@ -55,6 +55,48 @@ class ModelProvider extends $pb.ProtobufEnum {
   const ModelProvider._(super.value, super.name);
 }
 
+class RoutingRequirementKind extends $pb.ProtobufEnum {
+  static const RoutingRequirementKind ROUTING_REQUIREMENT_KIND_UNSPECIFIED =
+      RoutingRequirementKind._(
+          0, _omitEnumNames ? '' : 'ROUTING_REQUIREMENT_KIND_UNSPECIFIED');
+  static const RoutingRequirementKind ROUTING_REQUIREMENT_KIND_PROVIDER =
+      RoutingRequirementKind._(
+          1, _omitEnumNames ? '' : 'ROUTING_REQUIREMENT_KIND_PROVIDER');
+  static const RoutingRequirementKind ROUTING_REQUIREMENT_KIND_MODEL =
+      RoutingRequirementKind._(
+          2, _omitEnumNames ? '' : 'ROUTING_REQUIREMENT_KIND_MODEL');
+  static const RoutingRequirementKind ROUTING_REQUIREMENT_KIND_CONTEXT =
+      RoutingRequirementKind._(
+          3, _omitEnumNames ? '' : 'ROUTING_REQUIREMENT_KIND_CONTEXT');
+  static const RoutingRequirementKind ROUTING_REQUIREMENT_KIND_TOOL =
+      RoutingRequirementKind._(
+          4, _omitEnumNames ? '' : 'ROUTING_REQUIREMENT_KIND_TOOL');
+  static const RoutingRequirementKind ROUTING_REQUIREMENT_KIND_AGENT =
+      RoutingRequirementKind._(
+          5, _omitEnumNames ? '' : 'ROUTING_REQUIREMENT_KIND_AGENT');
+  static const RoutingRequirementKind ROUTING_REQUIREMENT_KIND_CAPACITY =
+      RoutingRequirementKind._(
+          6, _omitEnumNames ? '' : 'ROUTING_REQUIREMENT_KIND_CAPACITY');
+
+  static const $core.List<RoutingRequirementKind> values =
+      <RoutingRequirementKind>[
+    ROUTING_REQUIREMENT_KIND_UNSPECIFIED,
+    ROUTING_REQUIREMENT_KIND_PROVIDER,
+    ROUTING_REQUIREMENT_KIND_MODEL,
+    ROUTING_REQUIREMENT_KIND_CONTEXT,
+    ROUTING_REQUIREMENT_KIND_TOOL,
+    ROUTING_REQUIREMENT_KIND_AGENT,
+    ROUTING_REQUIREMENT_KIND_CAPACITY,
+  ];
+
+  static final $core.List<RoutingRequirementKind?> _byValue =
+      $pb.ProtobufEnum.$_initByValueList(values, 6);
+  static RoutingRequirementKind? valueOf($core.int value) =>
+      value < 0 || value >= _byValue.length ? null : _byValue[value];
+
+  const RoutingRequirementKind._(super.value, super.name);
+}
+
 class MessageRole extends $pb.ProtobufEnum {
   static const MessageRole MESSAGE_ROLE_UNSPECIFIED =
       MessageRole._(0, _omitEnumNames ? '' : 'MESSAGE_ROLE_UNSPECIFIED');

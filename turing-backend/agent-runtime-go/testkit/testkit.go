@@ -16,21 +16,24 @@ import (
 )
 
 type WorkerConfig struct {
-	Conn               *grpc.ClientConn
-	InternalToken      string
-	WorkerID           string
-	MaxConcurrentRuns  int
-	MaxToolCallsPerRun int
-	ModelTimeout       time.Duration
-	ToolTimeout        time.Duration
-	ApprovalTimeout    time.Duration
-	TotalToolTimeout   time.Duration
-	OpenAIBaseURL      string
-	OpenAIAPIKey       string
-	MCPSystemBaseURL   string
-	MCPFilesBaseURL    string
-	MCPSystemToken     string
-	MCPFilesToken      string
+	Conn                   *grpc.ClientConn
+	InternalToken          string
+	WorkerID               string
+	MaxConcurrentRuns      int
+	MaxToolCallsPerRun     int
+	ModelTimeout           time.Duration
+	ToolTimeout            time.Duration
+	ApprovalTimeout        time.Duration
+	TotalToolTimeout       time.Duration
+	OpenAIBaseURL          string
+	OpenAIAPIKey           string
+	OpenAIModel            string
+	OpenAIMaxContextTokens int
+	MCPSystemBaseURL       string
+	MCPFilesBaseURL        string
+	MCPSystemToken         string
+	MCPFilesToken          string
+	DiscoveredTools        []*turingv1.DiscoveredTool
 }
 
 type WorkerExecutor interface {
@@ -60,17 +63,27 @@ func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 		AgentID:                  turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
 		MaxConcurrentRuns:        cfg.MaxConcurrentRuns,
 		DisconnectCleanupTimeout: cfg.totalToolTimeout(),
+		Models:                   cfg.models(),
+		DiscoverTools:            executor.AdvertisedTools,
 	}, runtimeClientAdapter{client: client}, executor)
 	return runtimeWorker.Run(ctx)
 }
 
 func RunWorkerWithExecutor(ctx context.Context, cfg WorkerConfig, executor WorkerExecutor) error {
 	client := orchestrator.New(cfg.Conn, cfg.InternalToken)
+	var discoverTools func(context.Context) ([]*turingv1.DiscoveredTool, error)
+	if cfg.DiscoveredTools != nil {
+		discoverTools = func(context.Context) ([]*turingv1.DiscoveredTool, error) {
+			return cfg.DiscoveredTools, nil
+		}
+	}
 	runtimeWorker := worker.New(worker.Options{
 		WorkerID:                 cfg.WorkerID,
 		AgentID:                  turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
 		MaxConcurrentRuns:        cfg.MaxConcurrentRuns,
 		DisconnectCleanupTimeout: cfg.totalToolTimeout(),
+		Models:                   cfg.models(),
+		DiscoverTools:            discoverTools,
 	}, runtimeClientAdapter{client: client}, executor)
 	return runtimeWorker.Run(ctx)
 }
@@ -101,6 +114,18 @@ func (cfg WorkerConfig) totalToolTimeout() time.Duration {
 		return cfg.TotalToolTimeout
 	}
 	return 30 * time.Second
+}
+
+func (cfg WorkerConfig) models() []*turingv1.ModelCapability {
+	model := cfg.OpenAIModel
+	if model == "" {
+		model = "gpt-4o-mini"
+	}
+	return []*turingv1.ModelCapability{{
+		Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
+		Model:            model,
+		MaxContextTokens: int32(cfg.OpenAIMaxContextTokens),
+	}}
 }
 
 type runtimeClientAdapter struct{ client *orchestrator.Client }

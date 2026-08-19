@@ -1,0 +1,82 @@
+package repository
+
+import (
+	"context"
+	"testing"
+	"time"
+)
+
+func TestClaimNextCompatibleJobSkipsUnsupportedPendingWork(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+
+	unsupportedSession, err := repo.CreateSession(ctx, "Unsupported")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsupported, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID:             unsupportedSession.SessionID,
+		Content:               "needs files",
+		AgentID:               "general_assistant",
+		ModelProvider:         "ollama",
+		Model:                 "llama3.2",
+		RequestedTools:        []string{"files/files.read"},
+		RequiredContextTokens: 8192,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	supportedSession, err := repo.CreateSession(ctx, "Supported")
+	if err != nil {
+		t.Fatal(err)
+	}
+	supported, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID:                      supportedSession.SessionID,
+		Content:                        "tell the time",
+		AgentID:                        "general_assistant",
+		ModelProvider:                  "ollama",
+		Model:                          "llama3.2",
+		RequestedTools:                 []string{"system/system.time"},
+		RequiredContextTokens:          4096,
+		MinimumWorkerMaxConcurrentRuns: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(
+		ctx,
+		"general_assistant",
+		"worker-system",
+		0,
+		time.Hour,
+		func(route RoutingRequirements) bool {
+			return route.ModelProvider == "ollama" &&
+				route.Model == "llama3.2" &&
+				len(route.RequestedTools) == 1 &&
+				route.RequestedTools[0] == "system/system.time" &&
+				route.RequiredContextTokens == 4096 &&
+				route.MinimumWorkerMaxConcurrentRuns == 2 &&
+				!route.ExternalAgent
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.JobID != supported.JobID {
+		t.Fatalf("claimed job = %q, want compatible %q; unsupported was %q", claimed.JobID, supported.JobID, unsupported.JobID)
+	}
+	if len(claimed.RequestedTools) != 1 || claimed.RequestedTools[0] != "system/system.time" ||
+		claimed.RequiredContextTokens != 4096 || claimed.MinimumWorkerMaxConcurrentRuns != 2 {
+		t.Fatalf("claimed routing requirements = %+v", claimed)
+	}
+
+	var unsupportedStatus string
+	if err := repo.db.QueryRowContext(ctx, `SELECT status FROM jobs WHERE id = ?`, unsupported.JobID).Scan(&unsupportedStatus); err != nil {
+		t.Fatal(err)
+	}
+	if unsupportedStatus != "pending" {
+		t.Fatalf("unsupported job status = %q, want pending", unsupportedStatus)
+	}
+}

@@ -1226,6 +1226,92 @@ func TestWorkerReportsDiscoveredToolsOnEveryConnect(t *testing.T) {
 	<-done
 }
 
+func TestWorkerReadyAdvertisesCompleteCapabilities(t *testing.T) {
+	stream := newFakeStream()
+	worker := New(Options{
+		WorkerID:          "worker-capabilities",
+		AgentID:           turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		MaxConcurrentRuns: 3,
+		Models: []*turingv1.ModelCapability{{
+			Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+			Model:            "qwen2.5:7b",
+			MaxContextTokens: 32768,
+		}},
+		SupportsExternalAgents: true,
+		NewRegistrationID:      func() (string, error) { return "registration-1", nil },
+		DiscoverTools: func(context.Context) ([]*turingv1.DiscoveredTool, error) {
+			return []*turingv1.DiscoveredTool{{ServerName: "system", ToolName: "system.time"}}, nil
+		},
+	}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+
+	ready := nextSent(t, stream).GetWorkerReady()
+	if ready.GetRegistrationId() != "registration-1" {
+		t.Fatalf("registration_id = %q, want registration-1", ready.GetRegistrationId())
+	}
+	capabilities := ready.GetCapabilities()
+	if capabilities == nil {
+		t.Fatal("capabilities are missing")
+	}
+	if capabilities.GetMaxConcurrentRuns() != 3 || !capabilities.GetSupportsExternalAgents() {
+		t.Fatalf("capacity/external support = %d/%v, want 3/true", capabilities.GetMaxConcurrentRuns(), capabilities.GetSupportsExternalAgents())
+	}
+	if len(capabilities.GetAgentIds()) != 1 || capabilities.GetAgentIds()[0] != turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT {
+		t.Fatalf("agent_ids = %v, want general assistant", capabilities.GetAgentIds())
+	}
+	if len(capabilities.GetModels()) != 1 || capabilities.GetModels()[0].GetModel() != "qwen2.5:7b" || capabilities.GetModels()[0].GetMaxContextTokens() != 32768 {
+		t.Fatalf("models = %+v, want qwen2.5:7b with 32768 tokens", capabilities.GetModels())
+	}
+	if len(capabilities.GetTools()) != 1 || capabilities.GetTools()[0].GetToolName() != "system.time" {
+		t.Fatalf("tools = %+v, want system.time", capabilities.GetTools())
+	}
+	if ready.GetAgentId() != turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT ||
+		ready.GetMaxConcurrentRuns() != 3 ||
+		len(ready.GetTools()) != 1 {
+		t.Fatalf("legacy ready fields are not mirrored: %+v", ready)
+	}
+	cancel()
+	<-done
+}
+
+func TestWorkerReconnectUsesFreshRegistrationIdentity(t *testing.T) {
+	first, second := newFakeStream(), newFakeStream()
+	client := &fakeRuntimeClient{stream: second, queued: []*fakeStream{first}}
+	registrationIDs := []string{"registration-1", "registration-2"}
+	worker := New(Options{
+		WorkerID:          "worker-reconnect-identity",
+		MaxConcurrentRuns: 1,
+		Models: []*turingv1.ModelCapability{{
+			Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+			Model:    "qwen2.5:7b",
+		}},
+		NewRegistrationID: func() (string, error) {
+			registrationID := registrationIDs[0]
+			registrationIDs = registrationIDs[1:]
+			return registrationID, nil
+		},
+	}, client, terminalExecutor{})
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(firstCtx) }()
+	firstReady := nextSent(t, first).GetWorkerReady()
+	cancelFirst()
+	<-done
+
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	go func() { done <- worker.Run(secondCtx) }()
+	secondReady := nextSent(t, second).GetWorkerReady()
+	cancelSecond()
+	<-done
+
+	if firstReady.GetRegistrationId() != "registration-1" || secondReady.GetRegistrationId() != "registration-2" {
+		t.Fatalf("registration IDs = %q, %q; want a fresh ID per stream", firstReady.GetRegistrationId(), secondReady.GetRegistrationId())
+	}
+}
+
 // A worker that cannot enumerate its tools must say so rather than register a
 // snapshot it does not have. The orchestrator rejects FAILED, and the reconnect
 // loop retries — which is what should happen when MCP is briefly down.

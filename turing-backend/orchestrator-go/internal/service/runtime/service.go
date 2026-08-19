@@ -37,15 +37,18 @@ const (
 
 type Server struct {
 	turingv1.UnimplementedRuntimeServiceServer
-	repo      *repository.Repository
-	bus       *events.Bus
-	approvals approvalCreator
-	audit     *auditsvc.Server
-	mu        sync.Mutex
-	workers   map[string]*worker
-	toolsMu   sync.Mutex
-	toolsets  map[string]workerToolset
-	dispatch  DispatchConfig
+	repo               *repository.Repository
+	bus                *events.Bus
+	approvals          approvalCreator
+	audit              *auditsvc.Server
+	mu                 sync.Mutex
+	workers            map[string]*worker
+	availabilityMu     sync.Mutex
+	unavailablePending map[string]string
+	workerStreams      sync.WaitGroup
+	toolsMu            sync.Mutex
+	toolsets           map[string]workerToolset
+	dispatch           DispatchConfig
 }
 
 type approvalCreator interface {
@@ -70,15 +73,17 @@ type unattendedApprover interface {
 const AutomationNotAllowlistedCode = "automation_tool_not_allowlisted"
 
 type worker struct {
-	commands      chan *turingv1.RuntimeCommand
-	done          chan struct{}
-	maxConcurrent int
-	assignments   map[string]assignment
-	updateMu      sync.Mutex
-	mu            sync.Mutex
-	closed        bool
-	lastHeartbeat time.Time
-	sender        *runtimeCommandSender
+	commands       chan *turingv1.RuntimeCommand
+	done           chan struct{}
+	registrationID string
+	capabilities   *registeredWorkerCapabilities
+	maxConcurrent  int
+	assignments    map[string]assignment
+	updateMu       sync.Mutex
+	mu             sync.Mutex
+	closed         bool
+	lastHeartbeat  time.Time
+	sender         *runtimeCommandSender
 }
 
 type workerToolset struct {
@@ -93,9 +98,10 @@ type assignment struct {
 }
 
 type DispatchConfig struct {
-	MaxConcurrentRuns int
-	LeaseDuration     time.Duration
-	MaxAttempts       int
+	MaxConcurrentRuns  int
+	LeaseDuration      time.Duration
+	MaxAttempts        int
+	LegacyCapabilities *LegacyCapabilityProfile
 }
 
 var errRuntimeCommandSenderClosed = errors.New("runtime command sender closed")
@@ -194,7 +200,10 @@ func NewWithConfig(repo *repository.Repository, bus *events.Bus, dispatch Dispat
 	}
 	server := &Server{
 		repo: repo, bus: bus, approvals: approvals, audit: auditsvc.New(repo),
-		workers: map[string]*worker{}, toolsets: map[string]workerToolset{}, dispatch: dispatch,
+		workers:            map[string]*worker{},
+		unavailablePending: map[string]string{},
+		toolsets:           map[string]workerToolset{},
+		dispatch:           dispatch,
 	}
 	if setter, ok := approvals.(interface{ SetNotifier(approvalsvc.Notifier) }); ok {
 		setter.SetNotifier(server)
@@ -209,45 +218,51 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 		return err
 	}
 	ready := first.GetWorkerReady()
-	if ready == nil || ready.WorkerId == "" || ready.AgentId != turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT {
+	if ready == nil || ready.WorkerId == "" {
 		return status.Error(codes.InvalidArgument, "worker_ready is required")
 	}
-	reportsDiscovery := false
-	switch ready.GetToolDiscoveryStatus() {
-	case turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_UNSPECIFIED:
-		// Legacy workers leave the status unset. A non-empty snapshot is still
-		// authoritative for compatibility with transitional implementations.
-		reportsDiscovery = len(ready.GetTools()) > 0
-	case turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_COMPLETE:
-		reportsDiscovery = true
-	case turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_FAILED:
-		return status.Error(codes.FailedPrecondition, "worker tool discovery failed")
-	default:
-		return status.Error(codes.InvalidArgument, "worker tool discovery status is invalid")
-	}
-	var discovered []repository.DiscoveredTool
-	if reportsDiscovery {
-		discovered, err = decodeDiscoveredTools(ready.GetTools())
-		if err != nil {
-			return status.Error(codes.InvalidArgument, "worker tool discovery snapshot is invalid")
+	var (
+		capabilities  *registeredWorkerCapabilities
+		discovered    []repository.DiscoveredTool
+		maxConcurrent int
+	)
+	if ready.GetCapabilities() != nil {
+		if ready.GetToolDiscoveryStatus() == turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_FAILED {
+			return status.Error(codes.FailedPrecondition, "worker capabilities are unavailable: worker tool discovery failed")
 		}
+		if ready.GetRegistrationId() == "" {
+			return status.Error(codes.InvalidArgument, "worker registration_id is required")
+		}
+		capabilities, discovered, err = decodeWorkerCapabilities(ready.GetCapabilities())
+		if err != nil {
+			return status.Errorf(codes.InvalidArgument, "worker capabilities are invalid: %v", err)
+		}
+		maxConcurrent = capabilities.maxConcurrentRuns
 	} else {
-		discovered = legacyDiscoveredTools()
+		if s.dispatch.LegacyCapabilities == nil {
+			return status.Error(codes.FailedPrecondition, "legacy worker capabilities are unavailable: legacy capability profile is not configured")
+		}
+		if ready.GetToolDiscoveryStatus() == turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_FAILED {
+			return status.Error(codes.FailedPrecondition, "legacy worker capabilities are unavailable: worker tool discovery failed")
+		}
+		capabilities, discovered, err = decodeLegacyWorkerCapabilities(s.dispatch.LegacyCapabilities, ready)
+		if err != nil {
+			return status.Errorf(codes.InvalidArgument, "legacy worker capabilities are invalid: %v", err)
+		}
+		maxConcurrent = capabilities.maxConcurrentRuns
 	}
-	maxConcurrent := int(ready.MaxConcurrentRuns)
-	if maxConcurrent <= 0 {
-		maxConcurrent = defaultMaxConcurrentRuns
+	if err := s.refreshPendingCapabilityState(ctx, "", "", false, false); err != nil {
+		return err
 	}
-	if maxConcurrent > maxWorkerConcurrentRuns {
-		maxConcurrent = maxWorkerConcurrentRuns
-	}
-	commands := make(chan *turingv1.RuntimeCommand, maxConcurrent)
+	commands := make(chan *turingv1.RuntimeCommand, maxWorkerConcurrentRuns)
 	connectedWorker := &worker{
-		commands:      commands,
-		done:          make(chan struct{}),
-		maxConcurrent: maxConcurrent,
-		assignments:   map[string]assignment{},
-		lastHeartbeat: time.Now().UTC(),
+		commands:       commands,
+		done:           make(chan struct{}),
+		registrationID: ready.GetRegistrationId(),
+		capabilities:   capabilities,
+		maxConcurrent:  maxConcurrent,
+		assignments:    map[string]assignment{},
+		lastHeartbeat:  time.Now().UTC(),
 	}
 	for {
 		s.mu.Lock()
@@ -269,7 +284,20 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 		}
 		s.mu.Unlock()
 	}
-	s.persistDiscoveredTools(ctx, ready.GetWorkerId(), connectedWorker, discovered)
+	s.workerStreams.Add(1)
+	defer s.workerStreams.Done()
+	if err := s.persistDiscoveredTools(ctx, ready.GetWorkerId(), connectedWorker, discovered); err != nil {
+		_ = connectedWorker.close()
+		s.removeWorkerRegistration(ready.GetWorkerId(), connectedWorker)
+		return status.Error(codes.Internal, "persist worker tool capabilities")
+	}
+	if err := s.refreshPendingCapabilityState(ctx, "worker connected", ready.GetWorkerId(), false, true); err != nil {
+		_ = connectedWorker.close()
+		s.removeWorkerRegistration(ready.GetWorkerId(), connectedWorker)
+		_ = s.removeDiscoveredTools(ready.GetWorkerId(), connectedWorker)
+		return err
+	}
+
 	defer func() {
 		// Cancelling the stream makes several exit paths ready at once — the
 		// receive goroutine's Recv, an in-flight dispatch, and the command
@@ -282,11 +310,18 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 		}
 		assignments := connectedWorker.close()
 		s.removeWorkerRegistration(ready.WorkerId, connectedWorker)
-		s.removeDiscoveredTools(ready.GetWorkerId(), connectedWorker)
+		if err := s.removeDiscoveredTools(ready.GetWorkerId(), connectedWorker); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("remove worker tool capabilities: %w", err))
+		}
 		reconciled, err := s.reconcileAssignments(assignments, ready.WorkerId)
 		if err != nil {
 			returnErr = errors.Join(returnErr, fmt.Errorf("reconcile worker assignments: %w", err))
 		}
+		availabilityCtx, cancelAvailability := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.refreshPendingCapabilityState(availabilityCtx, "worker disconnected", ready.GetWorkerId(), true, false); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("update unavailable queue notices: %w", err))
+		}
+		cancelAvailability()
 		if reconciled {
 			recoveryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -297,7 +332,9 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 	}()
 	acceptedCtx, cancelAccepted := withDefaultTimeout(ctx, commandSendTimeout)
 	err = connectedWorker.commandSender(stream).send(acceptedCtx, &turingv1.RuntimeCommand{
-		Command: &turingv1.RuntimeCommand_WorkerAccepted{WorkerAccepted: &turingv1.RuntimeWorkerAccepted{WorkerId: ready.WorkerId}},
+		Command: &turingv1.RuntimeCommand_WorkerAccepted{WorkerAccepted: &turingv1.RuntimeWorkerAccepted{
+			WorkerId: ready.WorkerId, RegistrationId: ready.GetRegistrationId(),
+		}},
 	})
 	cancelAccepted()
 	if err != nil {
@@ -316,6 +353,16 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 			}
 			if heartbeat := update.GetHeartbeat(); heartbeat != nil {
 				if err := s.renewWorkerLeases(ctx, ready.WorkerId, connectedWorker, heartbeat); err != nil {
+					recvErr <- err
+					return
+				}
+				continue
+			}
+			if capabilitiesUpdated := update.GetWorkerCapabilitiesUpdated(); capabilitiesUpdated != nil {
+				connectedWorker.updateMu.Lock()
+				err := s.replaceWorkerCapabilities(ctx, ready.GetWorkerId(), connectedWorker, capabilitiesUpdated)
+				connectedWorker.updateMu.Unlock()
+				if err != nil {
 					recvErr <- err
 					return
 				}
@@ -415,6 +462,10 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 	}
 }
 
+func (s *Server) WaitForWorkerStreams() {
+	s.workerStreams.Wait()
+}
+
 // isStreamCancellation reports whether err carries nothing but a cancelled
 // worker stream, so ConnectWorker can report every shape of that one event as
 // errWorkerStreamCancelled. It is asked during teardown, once the stream
@@ -499,28 +550,36 @@ func legacyDiscoveredTools() []repository.DiscoveredTool {
 	return discovered
 }
 
-func (s *Server) persistDiscoveredTools(ctx context.Context, workerID string, owner *worker, discovered []repository.DiscoveredTool) {
+func (s *Server) persistDiscoveredTools(ctx context.Context, workerID string, owner *worker, discovered []repository.DiscoveredTool) error {
 	s.toolsMu.Lock()
 	defer s.toolsMu.Unlock()
+	previous, hadPrevious := s.toolsets[workerID]
 	s.toolsets[workerID] = workerToolset{owner: owner, tools: discovered}
 	if err := s.repo.UpsertTools(ctx, unionToolsets(s.toolsets)); err != nil {
-		log.Printf("runtime tool discovery: persist snapshot: %v", err)
+		if hadPrevious {
+			s.toolsets[workerID] = previous
+		} else {
+			delete(s.toolsets, workerID)
+		}
+		return err
 	}
+	return nil
 }
 
-func (s *Server) removeDiscoveredTools(workerID string, owner *worker) {
+func (s *Server) removeDiscoveredTools(workerID string, owner *worker) error {
 	s.toolsMu.Lock()
 	defer s.toolsMu.Unlock()
 	toolset, ok := s.toolsets[workerID]
 	if !ok || toolset.owner != owner {
-		return
+		return nil
 	}
 	delete(s.toolsets, workerID)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.repo.UpsertTools(ctx, unionToolsets(s.toolsets)); err != nil {
-		log.Printf("runtime tool discovery: persist snapshot after worker disconnect: %v", err)
+		return err
 	}
+	return nil
 }
 
 func unionToolsets(toolsets map[string]workerToolset) []repository.DiscoveredTool {
@@ -799,7 +858,7 @@ func (s *Server) DispatchPending(ctx context.Context) error {
 				return err
 			}
 			if noJob {
-				return nil
+				break
 			}
 			if !assigned {
 				break
@@ -929,7 +988,16 @@ func (s *Server) dispatchToWorker(ctx context.Context, workerID string, worker *
 		len(worker.assignments) >= worker.maxConcurrent {
 		return false, false, nil
 	}
-	job, err := s.repo.ClaimNextJobWithLimit(ctx, "general_assistant", workerID, s.dispatch.MaxConcurrentRuns, s.dispatch.LeaseDuration)
+	job, err := s.repo.ClaimNextCompatibleJobWithLimit(
+		ctx,
+		"general_assistant",
+		workerID,
+		s.dispatch.MaxConcurrentRuns,
+		s.dispatch.LeaseDuration,
+		func(route repository.RoutingRequirements) bool {
+			return workerCapabilitiesSupportRoute(worker.capabilities, route)
+		},
+	)
 	if err != nil {
 		return false, false, err
 	}
@@ -2083,20 +2151,27 @@ func mapJob(job repository.Job) *turingv1.AgentJob {
 	if job.ModelProvider == "openai_compatible" {
 		provider = turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE
 	}
+	agentID := turingv1.AgentId_AGENT_ID_UNSPECIFIED
+	if job.AgentID == "general_assistant" {
+		agentID = turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT
+	}
 	return &turingv1.AgentJob{
-		JobId:              job.JobID,
-		RunId:              job.RunID,
-		SessionId:          job.SessionID,
-		UserMessageId:      job.UserMessageID,
-		AssistantMessageId: job.AssistantMessageID,
-		AgentId:            turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
-		TraceId:            job.TraceID,
-		ModelProvider:      provider,
-		Model:              job.Model,
-		UserText:           job.UserText,
-		Attempt:            int32(job.Attempt),
-		Skills:             toProtoSkills(job.Skills),
-		ExternalAgent:      toProtoExternalAgent(job.ExternalAgent),
+		JobId:                          job.JobID,
+		RunId:                          job.RunID,
+		SessionId:                      job.SessionID,
+		UserMessageId:                  job.UserMessageID,
+		AssistantMessageId:             job.AssistantMessageID,
+		AgentId:                        agentID,
+		TraceId:                        job.TraceID,
+		ModelProvider:                  provider,
+		Model:                          job.Model,
+		UserText:                       job.UserText,
+		RequestedTools:                 append([]string(nil), job.RequestedTools...),
+		Attempt:                        int32(job.Attempt),
+		Skills:                         toProtoSkills(job.Skills),
+		ExternalAgent:                  toProtoExternalAgent(job.ExternalAgent),
+		RequiredContextTokens:          int32(job.RequiredContextTokens),
+		MinimumWorkerMaxConcurrentRuns: int32(job.MinimumWorkerMaxConcurrentRuns),
 	}
 }
 

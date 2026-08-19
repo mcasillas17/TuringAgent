@@ -20,15 +20,41 @@ import (
 )
 
 type sessionHarness struct {
-	database *db.DB
-	repo     *repository.Repository
-	conn     *grpc.ClientConn
+	database     *db.DB
+	repo         *repository.Repository
+	conn         *grpc.ClientConn
+	capabilities *sessionCapabilitySource
+}
+
+type sessionCapabilitySource struct {
+	providers map[turingv1.ModelProvider][]*turingv1.ModelCapability
+	agents    map[turingv1.AgentId]bool
+}
+
+func (s *sessionCapabilitySource) ProviderCapabilities() map[turingv1.ModelProvider][]*turingv1.ModelCapability {
+	return s.providers
+}
+
+func (s *sessionCapabilitySource) AgentAvailable(agentID turingv1.AgentId) bool {
+	return s.agents[agentID]
 }
 
 func newSessionHarness(t *testing.T) *sessionHarness {
 	t.Helper()
 	database := openSessionTestDB(t)
 	repo := repository.New(database)
+	capabilities := &sessionCapabilitySource{
+		providers: map[turingv1.ModelProvider][]*turingv1.ModelCapability{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: {{
+				Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+				Model:            "llama3.2",
+				MaxContextTokens: 8192,
+			}},
+		},
+		agents: map[turingv1.AgentId]bool{
+			turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT: true,
+		},
+	}
 	lis := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
 	turingv1.RegisterSessionServiceServer(grpcServer, New(repo, config.Config{
@@ -38,7 +64,7 @@ func newSessionHarness(t *testing.T) *sessionHarness {
 		OllamaModel:           "llama3.2",
 		OpenAIAPIKey:          "openai-key",
 		OpenAIModel:           "gpt-4o-mini",
-	}))
+	}, capabilities))
 	go func() {
 		_ = grpcServer.Serve(lis)
 	}()
@@ -59,7 +85,7 @@ func newSessionHarness(t *testing.T) *sessionHarness {
 		grpcServer.Stop()
 		_ = conn.Close()
 	})
-	return &sessionHarness{database: database, repo: repo, conn: conn}
+	return &sessionHarness{database: database, repo: repo, conn: conn, capabilities: capabilities}
 }
 
 func openSessionTestDB(t *testing.T) *db.DB {
@@ -134,12 +160,20 @@ func TestSessionServiceServesPublicReadEndpoints(t *testing.T) {
 	if len(cfg.Providers) != 2 {
 		t.Fatalf("provider count = %d, want 2", len(cfg.Providers))
 	}
+	if !cfg.Providers[0].GetEnabled() || len(cfg.Providers[0].GetModels()) != 1 ||
+		cfg.Providers[0].GetModels()[0].GetMaxContextTokens() != 8192 {
+		t.Fatalf("Ollama live capabilities = %+v", cfg.Providers[0])
+	}
+	if cfg.Providers[1].GetEnabled() || len(cfg.Providers[1].GetModels()) != 0 {
+		t.Fatalf("unadvertised OpenAI provider = %+v, want disabled with no models", cfg.Providers[1])
+	}
 
 	agents, err := client.ListAgents(ctx, &turingv1.ListAgentsRequest{})
 	if err != nil {
 		t.Fatalf("ListAgents: %v", err)
 	}
-	if len(agents.Agents) != 1 || agents.Agents[0].Id != turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT {
+	if len(agents.Agents) != 1 || agents.Agents[0].Id != turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT ||
+		!agents.Agents[0].GetAvailable() {
 		t.Fatalf("agents = %+v", agents.Agents)
 	}
 
@@ -201,7 +235,7 @@ func TestSessionServiceSearchMessagesValidatesQuery(t *testing.T) {
 		})
 	}
 
-	_, err := New(h.repo, config.Config{}).SearchMessages(ctx, nil)
+	_, err := New(h.repo, config.Config{}, h.capabilities).SearchMessages(ctx, nil)
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("SearchMessages nil request error = %v, want InvalidArgument", err)
 	}

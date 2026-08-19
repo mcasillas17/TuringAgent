@@ -45,6 +45,24 @@ func newHarness(t *testing.T) *harness {
 
 func newHarnessWithDispatch(t *testing.T, dispatch DispatchConfig) *harness {
 	t.Helper()
+	if dispatch.LegacyCapabilities == nil {
+		dispatch.LegacyCapabilities = &LegacyCapabilityProfile{
+			Models: []*turingv1.ModelCapability{
+				{
+					Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+					Model:            "llama3.2",
+					MaxContextTokens: 8192,
+				},
+				{
+					Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
+					Model:            "gpt-4o-mini",
+					MaxContextTokens: 8192,
+				},
+			},
+			AgentIds:               []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+			SupportsExternalAgents: true,
+		}
+	}
 	database := openRuntimeTestDB(t)
 	repo := repository.New(database)
 	bus := events.NewBus(8)
@@ -71,9 +89,23 @@ func newHarnessWithDispatch(t *testing.T, dispatch DispatchConfig) *harness {
 	conn.Connect()
 	t.Cleanup(func() {
 		grpcServer.Stop()
+		service.WaitForWorkerStreams()
 		_ = conn.Close()
 	})
 	return &harness{repo: repo, database: database, bus: bus, service: service, approvals: approvals, conn: conn}
+}
+
+func testWorkerCapabilities(maxConcurrentRuns int) *registeredWorkerCapabilities {
+	return &registeredWorkerCapabilities{
+		models: []registeredModelCapability{{
+			provider:         "ollama",
+			model:            "llama3.2",
+			maxContextTokens: 8192,
+		}},
+		agentIDs:          map[string]struct{}{"general_assistant": {}},
+		tools:             map[string]struct{}{},
+		maxConcurrentRuns: maxConcurrentRuns,
+	}
 }
 
 func openRuntimeTestDB(t *testing.T) *db.DB {

@@ -24,15 +24,17 @@ type Config struct {
 	// IntegrationKey seals third-party credentials before they are stored.
 	// Optional: when it is empty, connecting an account is refused with a
 	// reason rather than the credential being stored in the clear.
-	IntegrationKey string
-	PublicPort     int
-	InternalPort   int
-	DatabasePath   string
-	OllamaBaseURL  string
-	OllamaModel    string
-	OpenAIBaseURL  string
-	OpenAIAPIKey   string
-	OpenAIModel    string
+	IntegrationKey         string
+	PublicPort             int
+	InternalPort           int
+	DatabasePath           string
+	OllamaBaseURL          string
+	OllamaModel            string
+	OllamaMaxContextTokens int
+	OpenAIBaseURL          string
+	OpenAIAPIKey           string
+	OpenAIModel            string
+	OpenAIMaxContextTokens int
 	// AgentCredentialNames is the set of credential names an external agent may
 	// refer to — names only. The keys themselves are decoded, counted and
 	// dropped: the orchestrator never calls a third-party API, so holding the
@@ -172,6 +174,20 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if maxRuns < 1 || maxRuns > maxConcurrentRunsLimit {
 		return Config{}, fmt.Errorf("TURING_MAX_CONCURRENT_RUNS_GENERAL must be between 1 and %d", maxConcurrentRunsLimit)
 	}
+	ollamaMaxContextTokens, err := intValue("OLLAMA_MAX_CONTEXT_TOKENS", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	if int64(ollamaMaxContextTokens) > math.MaxInt32 {
+		return Config{}, fmt.Errorf("OLLAMA_MAX_CONTEXT_TOKENS must be between 0 and %d", int64(math.MaxInt32))
+	}
+	openAIMaxContextTokens, err := intValue("OPENAI_MAX_CONTEXT_TOKENS", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	if int64(openAIMaxContextTokens) > math.MaxInt32 {
+		return Config{}, fmt.Errorf("OPENAI_MAX_CONTEXT_TOKENS must be between 0 and %d", int64(math.MaxInt32))
+	}
 	maxTools, err := positiveIntValue("TURING_MAX_TOOL_CALLS_PER_RUN", 10)
 	if err != nil {
 		return Config{}, err
@@ -208,9 +224,11 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		DatabasePath:             stringValue("DATABASE_PATH", "/app/data/turing.db"),
 		OllamaBaseURL:            stringValue("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
 		OllamaModel:              stringValue("OLLAMA_MODEL", "qwen2.5:7b"),
+		OllamaMaxContextTokens:   ollamaMaxContextTokens,
 		OpenAIBaseURL:            stringValue("OPENAI_BASE_URL", "https://api.openai.com/v1"),
 		OpenAIAPIKey:             env["OPENAI_API_KEY"],
 		OpenAIModel:              stringValue("OPENAI_MODEL", "gpt-4o-mini"),
+		OpenAIMaxContextTokens:   openAIMaxContextTokens,
 		AgentCredentialNames:     AgentCredentialNames(agentAPIKeys),
 		JobTimeoutMS:             jobTimeout,
 		JobReaperIntervalMS:      reaperInterval,

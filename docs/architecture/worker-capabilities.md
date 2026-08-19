@@ -84,6 +84,10 @@ that match the selected worker's current snapshot. A route that was valid when
 accepted therefore cannot be handed to an incompatible worker after capabilities
 change.
 
+Scheduled runs use the same validator before creating a session, message, run, or job.
+An unavailable occurrence advances its schedule and records `routing_unavailable`
+instead of creating work that cannot currently execute.
+
 ## Capability loss and queue notices
 
 After every insert, replacement, or removal, the runtime compares queued routes
@@ -134,4 +138,3 @@ Tests must fail without the implementation for:
   race detector;
 - live provider/model/agent configuration responses;
 - additive Go and Dart protobuf generation.
-

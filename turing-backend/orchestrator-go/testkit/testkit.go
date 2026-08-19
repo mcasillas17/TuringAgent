@@ -63,6 +63,14 @@ func (a *App) Stop() {
 	}
 }
 
+func (a *App) ValidateRuntimeRoute(ctx context.Context, agentID, provider, model string) error {
+	return a.inner.RuntimeService.ValidateRouting(ctx, repository.RoutingRequirements{
+		AgentID:       agentID,
+		ModelProvider: provider,
+		Model:         model,
+	})
+}
+
 func (r *Repository) GetRun(ctx context.Context, runID string) (Run, error) {
 	run, err := r.inner.GetRun(ctx, runID)
 	if err != nil {
