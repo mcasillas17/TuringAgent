@@ -38,11 +38,11 @@ Commit a descriptor image and compare changes against it. This works offline, bu
 2. Accept a remote-tracking base ref, defaulting to `origin/main`.
 3. Validate the ref shape before using it as a fetch destination.
 4. Refresh that branch from its configured remote with a depth-one fetch. This makes shallow CI checkouts safe and prevents a stale local remote-tracking ref from silently becoming the baseline.
-5. Resolve the fetched commit and run `buf breaking proto --against ".git#ref=<commit>,subdir=proto"`.
+5. Resolve the fetched commit and run `buf breaking proto --against "<repo-root>#format=git,ref=<commit>,subdir=proto"`. The explicit Git format works for both normal checkouts and linked worktrees, whose `.git` entry is a file.
 
 The script emits distinct diagnostics for a missing tool, unsupported Buf version, invalid base ref, failed fetch, unresolved commit, and schema incompatibility. It never falls back to an older local baseline after a fetch failure.
 
-CI installs Buf 1.72.0 with the official Buf action in setup-only mode, then calls the repository script with `origin/${{ github.base_ref }}` for pull requests and `origin/main` for pushes. The existing deterministic generation step remains unchanged and runs in the same job.
+CI installs Buf 1.72.0 with the official Buf action in setup-only mode, then calls the repository script with `origin/${GITHUB_BASE_REF:-main}`. Pull requests supply their actual base branch through `GITHUB_BASE_REF`; pushes compare with `origin/main`. The existing deterministic generation step remains unchanged and runs in the same job.
 
 ## Testing
 

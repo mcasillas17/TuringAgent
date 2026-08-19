@@ -59,13 +59,13 @@ tests := []struct {
 		name:           "removed live field",
 		fixture:        "removed",
 		wantFailure:    true,
-		wantDiagnostic: []string{`Field "2"`, "was deleted"},
+		wantDiagnostic: []string{`field "2"`, "was deleted"},
 	},
 	{
 		name:           "renumbered live field",
 		fixture:        "renumbered",
 		wantFailure:    true,
-		wantDiagnostic: []string{`Field "2"`, "was deleted"},
+		wantDiagnostic: []string{`field "2"`, "was deleted"},
 	},
 }
 ```
@@ -187,7 +187,7 @@ requireContains(t, protoJob, "setup_only: true")
 requireContains(t, protoJob, `TURING_REQUIRE_BUF=1 go test ./tools/proto -run '^TestBreakingCompatibility$' -count=1`)
 requireContains(t, protoJob, `tools/proto/breaking.sh "origin/${GITHUB_BASE_REF:-main}"`)
 requireContains(t, protoJob, "tools/proto/check.sh")
-requireContains(t, protoJob, "bash -n tools/proto/breaking.sh")
+requireContains(t, protoJob, "bash -n tools/proto/breaking.sh turing-backend/scripts/compose.sh turing-backend/scripts/dev.sh turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/rotate-client-key.sh turing-backend/scripts/smoke-grpc.sh turing-backend/scripts/smoke.sh turing-backend/scripts/verify-tool-loop.sh")
 ```
 
 - [ ] **Step 2: Run the workflow test and observe failure**
