@@ -390,6 +390,8 @@ func TestAppRegistersPublicAndInternalServices(t *testing.T) {
 		"turing.v1.ChatService",
 		"turing.v1.ApprovalService",
 		"turing.v1.IntegrationService",
+		"turing.v1.SkillService",
+		"turing.v1.AutomationService",
 	} {
 		if _, ok := publicServices[name]; !ok {
 			t.Fatalf("public server missing %s", name)
@@ -405,6 +407,12 @@ func TestAppRegistersPublicAndInternalServices(t *testing.T) {
 	// Third-party connections are the user's business, not the runtime's.
 	// Registering them internally would put them behind the runtime token,
 	// which every tool server already holds.
+	// Nothing outside the orchestrator schedules a run, and the runtime has no
+	// reason to read the automation library — including the tool allowlists
+	// that decide what it may do unattended.
+	if _, ok := internalServices["turing.v1.AutomationService"]; ok {
+		t.Fatal("internal server should not expose the automation library to the runtime")
+	}
 	if _, ok := internalServices["turing.v1.IntegrationService"]; ok {
 		t.Fatal("internal server should not expose the integration service to the runtime")
 	}

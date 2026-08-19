@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package turing.v1;
+
+option go_package = "github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1";
+
+import "google/protobuf/timestamp.proto";
+
+// A saved prompt the orchestrator sends on a schedule, without the user
+// starting it.
+//
+// Every other run in the system exists because someone typed something. An
+// automation is the exception, which is why it carries an explicit allowlist:
+// a run nobody is watching cannot stop and ask.
+message Automation {
+  string automation_id = 1;
+  string name = 2;
+  string prompt = 3;
+  AutomationSchedule schedule = 4;
+  bool enabled = 5;
+
+  // The tools this automation may run WITHOUT asking, named one by one. There
+  // is deliberately no wildcard: "everything" is not a consent anyone can
+  // give in advance. A tool that needs approval and is not in this list stops
+  // the run rather than waiting for a person who is not there.
+  //
+  // Scoped to this automation only. It is never consulted for a conversation
+  // the user drives by hand.
+  repeated AutomationTool allowed_tools = 6;
+
+  google.protobuf.Timestamp last_run_at = 7;
+
+  // Absent while the automation is disabled: a disabled automation has no
+  // next run, and showing one would be a claim about the future that is false.
+  google.protobuf.Timestamp next_run_at = 8;
+
+  // Where the automation's runs land. Empty until it has fired once.
+  string session_id = 9;
+  string last_run_id = 10;
+
+  // The outcome of the most recent run, so "what did this thing do while I
+  // was asleep" has an answer without opening the conversation.
+  string last_run_status = 11;
+  string last_run_error = 12;
+
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+}
+
+// A tool named by the pair the orchestrator's policy lookup uses, so an
+// allowlist entry cannot accidentally match a same-named tool on a different
+// server.
+message AutomationTool {
+  string server_name = 1;
+  string tool_name = 2;
+}
+
+enum AutomationScheduleKind {
+  AUTOMATION_SCHEDULE_KIND_UNSPECIFIED = 0;
+  AUTOMATION_SCHEDULE_KIND_INTERVAL = 1;
+  AUTOMATION_SCHEDULE_KIND_DAILY = 2;
+}
+
+// Two shapes, both trivially checkable. A cron expression would be more
+// expressive and much harder to be sure about; nothing here needs it yet.
+message AutomationSchedule {
+  AutomationScheduleKind kind = 1;
+
+  // INTERVAL: how often, in minutes.
+  int32 interval_minutes = 2;
+
+  // DAILY: minutes past midnight, UTC. Stored in UTC rather than a local
+  // wall-clock time because the orchestrator has no reliable notion of the
+  // user's zone; clients convert for display.
+  int32 daily_minute_utc = 3;
+}
+
+message CreateAutomationRequest {
+  string name = 1;
+  string prompt = 2;
+  AutomationSchedule schedule = 3;
+  bool enabled = 4;
+  repeated AutomationTool allowed_tools = 5;
+}
+
+message UpdateAutomationRequest {
+  string automation_id = 1;
+  string name = 2;
+  string prompt = 3;
+  AutomationSchedule schedule = 4;
+  repeated AutomationTool allowed_tools = 5;
+}
+
+message SetAutomationEnabledRequest {
+  string automation_id = 1;
+  bool enabled = 2;
+}
+
+message DeleteAutomationRequest {
+  string automation_id = 1;
+}
+
+message DeleteAutomationResponse {}
+
+message ListAutomationsRequest {}
+
+message ListAutomationsResponse {
+  repeated Automation automations = 1;
+}
+
+service AutomationService {
+  rpc CreateAutomation(CreateAutomationRequest) returns (Automation);
+  rpc UpdateAutomation(UpdateAutomationRequest) returns (Automation);
+
+  // Enabling and disabling is its own call rather than a field on update,
+  // because a toggle must not require the caller to resend a prompt and a
+  // schedule it did not intend to change.
+  rpc SetAutomationEnabled(SetAutomationEnabledRequest) returns (Automation);
+  rpc DeleteAutomation(DeleteAutomationRequest) returns (DeleteAutomationResponse);
+  rpc ListAutomations(ListAutomationsRequest) returns (ListAutomationsResponse);
+}

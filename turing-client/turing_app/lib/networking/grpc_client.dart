@@ -8,6 +8,8 @@ import '../generated/turing/v1/agents.pb.dart' as agentpb;
 import '../generated/turing/v1/agents.pbgrpc.dart' as agentgrpc;
 import '../generated/turing/v1/approvals.pb.dart' as approvalpb;
 import '../generated/turing/v1/approvals.pbgrpc.dart' as approvalgrpc;
+import '../generated/turing/v1/automations.pb.dart' as automationpb;
+import '../generated/turing/v1/automations.pbgrpc.dart' as automationgrpc;
 import '../generated/turing/v1/chat.pb.dart' as chatpb;
 import '../generated/turing/v1/chat.pbgrpc.dart' as chatgrpc;
 import '../generated/turing/v1/common.pb.dart' as commonpb;
@@ -20,6 +22,7 @@ import '../generated/turing/v1/sessions.pbgrpc.dart' as sessiongrpc;
 import '../generated/turing/v1/skills.pb.dart' as skillpb;
 import '../generated/turing/v1/skills.pbgrpc.dart' as skillgrpc;
 import '../models/agent_descriptor.dart';
+import '../models/automation.dart';
 import '../models/external_agent.dart';
 import '../models/grpc_mappers.dart';
 import '../models/integration.dart';
@@ -98,6 +101,10 @@ class TuringGrpcApi implements ClosableTuringApi {
       _channel,
       options: options,
     );
+    _automations = automationgrpc.AutomationServiceClient(
+      _channel,
+      options: options,
+    );
   }
 
   final String baseUrl;
@@ -111,6 +118,7 @@ class TuringGrpcApi implements ClosableTuringApi {
   late final skillgrpc.SkillServiceClient _skills;
   late final agentgrpc.ExternalAgentServiceClient _externalAgents;
   late final integrationgrpc.IntegrationServiceClient _integrations;
+  late final automationgrpc.AutomationServiceClient _automations;
 
   GrpcAuthMetadata get _metadata => GrpcAuthMetadata(apiKey: apiKey);
 
@@ -541,6 +549,75 @@ class TuringGrpcApi implements ClosableTuringApi {
   Future<void> deleteConnection({required String connectionId}) async {
     await _integrations.deleteConnection(
       integrationpb.DeleteConnectionRequest(connectionId: connectionId),
+    );
+  }
+
+  @override
+  Future<List<Automation>> listAutomations() async {
+    final response = await _automations.listAutomations(
+      automationpb.ListAutomationsRequest(),
+    );
+    return response.automations.map(GrpcMappers.automationToModel).toList();
+  }
+
+  @override
+  Future<Automation> createAutomation({
+    required String name,
+    required String prompt,
+    required AutomationSchedule schedule,
+    required bool enabled,
+    required List<AutomationTool> allowedTools,
+  }) async {
+    final response = await _automations.createAutomation(
+      automationpb.CreateAutomationRequest(
+        name: name,
+        prompt: prompt,
+        schedule: GrpcMappers.automationScheduleToProto(schedule),
+        enabled: enabled,
+        allowedTools: allowedTools.map(GrpcMappers.automationToolToProto),
+      ),
+    );
+    return GrpcMappers.automationToModel(response);
+  }
+
+  @override
+  Future<Automation> updateAutomation({
+    required String automationId,
+    required String name,
+    required String prompt,
+    required AutomationSchedule schedule,
+    required List<AutomationTool> allowedTools,
+  }) async {
+    final response = await _automations.updateAutomation(
+      automationpb.UpdateAutomationRequest(
+        automationId: automationId,
+        name: name,
+        prompt: prompt,
+        schedule: GrpcMappers.automationScheduleToProto(schedule),
+        allowedTools: allowedTools.map(GrpcMappers.automationToolToProto),
+      ),
+    );
+    return GrpcMappers.automationToModel(response);
+  }
+
+  @override
+  Future<Automation> setAutomationEnabled({
+    required String automationId,
+    required bool enabled,
+  }) async {
+    final response = await _automations.setAutomationEnabled(
+      automationpb.SetAutomationEnabledRequest(
+        automationId: automationId,
+        enabled: enabled,
+      ),
+    );
+    return GrpcMappers.automationToModel(response);
+  }
+
+  @override
+  Future<void> deleteAutomation({required String automationId}) async {
+    await _automations.deleteAutomation(
+      automationpb.DeleteAutomationRequest(automationId: automationId),
     );
   }
 

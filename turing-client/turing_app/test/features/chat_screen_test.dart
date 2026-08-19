@@ -22,6 +22,7 @@ import 'package:turing_flutter_app/models/tool_descriptor.dart';
 
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
+import '../support/no_automations_api.dart';
 import '../support/no_skills_api.dart';
 
 void main() {
@@ -7247,7 +7248,7 @@ TuringEvent _event({
 }
 
 class _FakeApiClient
-    with NoSkillsApi, NoExternalAgentsApi, NoIntegrationsApi
+    with NoSkillsApi, NoExternalAgentsApi, NoIntegrationsApi, NoAutomationsApi
     implements TuringApi {
   String? lastSentContent;
   String? lastModelProvider;

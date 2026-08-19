@@ -6,11 +6,12 @@ import 'package:turing_flutter_app/features/chat/chat_screen.dart';
 import 'package:turing_flutter_app/features/workspace/agents_page.dart';
 import 'package:turing_flutter_app/features/workspace/session_agent_bar.dart';
 import 'package:turing_flutter_app/features/workspace/integrations_page.dart';
+import 'package:turing_flutter_app/features/workspace/automations_page.dart';
 import 'package:turing_flutter_app/features/workspace/session_skills_bar.dart';
 import 'package:turing_flutter_app/features/workspace/skills_page.dart';
-import 'package:turing_flutter_app/features/workspace/workspace_pages.dart';
 import 'package:turing_flutter_app/models/agent_descriptor.dart';
 import 'package:turing_flutter_app/models/external_agent.dart';
+import 'package:turing_flutter_app/models/automation.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
@@ -24,6 +25,7 @@ import 'package:turing_flutter_app/ui/shell/responsive_shell.dart';
 import 'package:turing_flutter_app/ui/shell/shell_destination.dart';
 
 import '../support/no_integrations_api.dart';
+import '../support/no_automations_api.dart';
 
 /// Wide enough to keep the sidebar beside the conversation.
 const Size _desktop = Size(1400, 900);
@@ -34,7 +36,30 @@ const Size _phone = Size(420, 900);
 
 void main() {
   group('destinations', () {
-    testWidgets('an unimplemented destination says so and says why', (
+    // Integrations was this test's example of an unbuilt destination until it
+    // shipped. With every destination now implemented, the claim worth pinning
+    // is the inverse: nothing in the rail leads to a placeholder.
+    testWidgets('every destination opens something real', (tester) async {
+      for (final label in [
+        'Skills',
+        'Integrations',
+        'MCPs',
+        'Automations',
+        'Agents',
+      ]) {
+        await _pumpShell(tester, api: _FakeApi(), size: _desktop);
+        await tester.tap(find.text(label));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text('Not built yet'),
+          findsNothing,
+          reason: '$label still says it is unbuilt',
+        );
+      }
+    });
+
+    testWidgets('Automations opens the real page, not a placeholder', (
       tester,
     ) async {
       await _pumpShell(tester, api: _FakeApi(), size: _desktop);
@@ -42,15 +67,10 @@ void main() {
       await tester.tap(find.text('Automations'));
       await tester.pumpAndSettle();
 
-      expect(find.byType(PlannedDestinationPage), findsOneWidget);
-      expect(find.text('Not built yet'), findsOneWidget);
-      // The specific obstacle, not a generic "coming soon" — this is the
-      // sentence that stops the gap reading as a bug.
-      expect(
-        find.textContaining('nobody is watching'),
-        findsOneWidget,
-        reason: 'the page explains what actually blocks it',
-      );
+      expect(find.byType(AutomationsPage), findsOneWidget);
+      // The "not built yet" card is gone, because it is.
+      expect(find.text('Not built yet'), findsNothing);
+      expect(find.text('New automation'), findsOneWidget);
     });
 
     testWidgets('MCPs lists discovered tools grouped by server', (
@@ -138,15 +158,11 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(AgentsPage), findsOneWidget);
-      expect(find.byType(PlannedDestinationPage), findsNothing);
       expect(find.text('General Assistant'), findsOneWidget);
       expect(find.text('Claude'), findsOneWidget);
       // The two kinds are not interchangeable rows in one list, and the page
       // has to say which is which.
-      expect(
-        find.text('These receive whatever you send them'),
-        findsOneWidget,
-      );
+      expect(find.text('These receive whatever you send them'), findsOneWidget);
     });
 
     testWidgets('a backend failure offers a retry instead of an empty page', (
@@ -173,7 +189,6 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(SkillsPage), findsOneWidget);
-      expect(find.byType(PlannedDestinationPage), findsNothing);
     });
 
     testWidgets('the attached skills sit above the conversation', (
@@ -287,57 +302,58 @@ void main() {
       );
     });
 
-    testWidgets('switching conversations never shows the previous destination', (
-      tester,
-    ) async {
-      final api = _FakeApi()
-        ..sessions = [
-          Session(
-            sessionId: 'sess_a',
-            title: 'Chat A',
-            updatedAt: DateTime.utc(2026, 5, 11),
-          ),
-          Session(
-            sessionId: 'sess_b',
-            title: 'Chat B',
-            updatedAt: DateTime.utc(2026, 5, 10),
-          ),
-        ]
-        ..externalAgents.add(
-          const ExternalAgent(
-            agentId: 'agent_1',
-            displayName: 'Claude',
-            provider: ExternalAgentProvider.anthropic,
-            baseUrl: 'https://api.anthropic.com/v1',
-            model: 'claude-sonnet-4-5',
-            credentialRef: 'claude',
-            credentialAvailable: true,
-          ),
-        )
-        ..routes['sess_a'] = 'agent_1';
-      await _pumpShell(tester, api: api, size: _desktop);
+    testWidgets(
+      'switching conversations never shows the previous destination',
+      (tester) async {
+        final api = _FakeApi()
+          ..sessions = [
+            Session(
+              sessionId: 'sess_a',
+              title: 'Chat A',
+              updatedAt: DateTime.utc(2026, 5, 11),
+            ),
+            Session(
+              sessionId: 'sess_b',
+              title: 'Chat B',
+              updatedAt: DateTime.utc(2026, 5, 10),
+            ),
+          ]
+          ..externalAgents.add(
+            const ExternalAgent(
+              agentId: 'agent_1',
+              displayName: 'Claude',
+              provider: ExternalAgentProvider.anthropic,
+              baseUrl: 'https://api.anthropic.com/v1',
+              model: 'claude-sonnet-4-5',
+              credentialRef: 'claude',
+              credentialAvailable: true,
+            ),
+          )
+          ..routes['sess_a'] = 'agent_1';
+        await _pumpShell(tester, api: api, size: _desktop);
 
-      await tester.tap(find.text('Chat A'));
-      await tester.pumpAndSettle();
-      expect(
-        find.text('Goes to Claude — messages leave your machine'),
-        findsOneWidget,
-      );
+        await tester.tap(find.text('Chat A'));
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Goes to Claude — messages leave your machine'),
+          findsOneWidget,
+        );
 
-      await tester.tap(find.text('Chat B'));
-      await tester.pumpAndSettle();
+        await tester.tap(find.text('Chat B'));
+        await tester.pumpAndSettle();
 
-      // B is local; carrying A's warning over would be a lie about egress in
-      // the one place the user is told about it.
-      expect(
-        find.text('Goes to Claude — messages leave your machine'),
-        findsNothing,
-      );
-      expect(
-        find.text('Turing — this conversation stays on your machine'),
-        findsOneWidget,
-      );
-    });
+        // B is local; carrying A's warning over would be a lie about egress in
+        // the one place the user is told about it.
+        expect(
+          find.text('Goes to Claude — messages leave your machine'),
+          findsNothing,
+        );
+        expect(
+          find.text('Turing — this conversation stays on your machine'),
+          findsOneWidget,
+        );
+      },
+    );
   });
 
   group('conversation naming', () {
@@ -466,6 +482,38 @@ void main() {
 
       expect(find.byType(Drawer), findsNothing);
       expect(find.byType(IntegrationsPage), findsOneWidget);
+    });
+
+    testWidgets('Automations is reachable and usable through the drawer', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..automations.add(
+          Automation(
+            automationId: 'auto_1',
+            name: 'Morning digest',
+            prompt: 'Summarise the sandbox.',
+            schedule: const AutomationSchedule.interval(60),
+            enabled: true,
+            allowedTools: const [],
+            nextRunAt: DateTime(2026, 8, 18, 8, 30),
+          ),
+        );
+      await _pumpShell(tester, api: api, size: _phone);
+
+      await tester.tap(find.byTooltip('Open navigation menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Automations'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(Drawer), findsNothing);
+      expect(find.byType(AutomationsPage), findsOneWidget);
+      expect(find.text('Morning digest'), findsOneWidget);
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: 'the page has to fit a phone',
+      );
     });
 
     testWidgets('above the breakpoint the sidebar is always present', (
@@ -709,18 +757,18 @@ void main() {
     });
   });
 
-  test('every destination either works or explains itself', () {
+  // The rule the removed placeholder machinery used to enforce, kept as the
+  // assertion that actually matters: nothing reaches the rail before it works.
+  // Adding an unbuilt destination fails here, which is the moment to decide
+  // whether to finish it or restore the honest placeholder from git history.
+  test('every destination is backed by something real', () {
     for (final destination in ShellDestination.values) {
-      if (destination.implemented) continue;
       expect(
-        destination.summary,
-        isNotNull,
-        reason: '${destination.label} must say what it is for',
-      );
-      expect(
-        destination.blockedOn,
-        isNotNull,
-        reason: '${destination.label} must say what blocks it',
+        destination.implemented,
+        isTrue,
+        reason:
+            '${destination.label} is in the rail but not implemented — build '
+            'it, or give it a view that says what is missing and why',
       );
     }
   });
@@ -748,7 +796,7 @@ Future<void> _pumpShell(
   await tester.pumpAndSettle();
 }
 
-class _FakeApi with NoIntegrationsApi implements TuringApi {
+class _FakeApi with NoIntegrationsApi, NoAutomationsApi implements TuringApi {
   List<Session> sessions = [
     Session(
       sessionId: 'sess_existing',
@@ -861,6 +909,101 @@ class _FakeApi with NoIntegrationsApi implements TuringApi {
   Future<List<Skill>> listSessionSkills({required String sessionId}) async {
     final ids = attached[sessionId] ?? const <String>[];
     return skills.where((s) => ids.contains(s.skillId)).toList();
+  }
+
+  /// A working in-memory automation library, so the Automations UI is tested
+  /// against something that behaves like the backend rather than a stub that
+  /// always says yes.
+  final List<Automation> automations = [];
+  Object? automationsError;
+  int nextAutomationId = 1;
+  int listAutomationsCalls = 0;
+
+  @override
+  Future<List<Automation>> listAutomations() async {
+    listAutomationsCalls++;
+    final error = automationsError;
+    if (error != null) throw error;
+    return List.unmodifiable(automations);
+  }
+
+  @override
+  Future<Automation> createAutomation({
+    required String name,
+    required String prompt,
+    required AutomationSchedule schedule,
+    required bool enabled,
+    required List<AutomationTool> allowedTools,
+  }) async {
+    if (automations.any((a) => a.name.toLowerCase() == name.toLowerCase())) {
+      throw StateError('an automation with that name already exists');
+    }
+    final automation = Automation(
+      automationId: 'auto_${nextAutomationId++}',
+      name: name,
+      prompt: prompt,
+      schedule: schedule,
+      enabled: enabled,
+      allowedTools: allowedTools,
+    );
+    automations.add(automation);
+    return automation;
+  }
+
+  @override
+  Future<Automation> updateAutomation({
+    required String automationId,
+    required String name,
+    required String prompt,
+    required AutomationSchedule schedule,
+    required List<AutomationTool> allowedTools,
+  }) async {
+    final index = automations.indexWhere((a) => a.automationId == automationId);
+    if (index < 0) throw StateError('automation not found');
+    final previous = automations[index];
+    final updated = Automation(
+      automationId: automationId,
+      name: name,
+      prompt: prompt,
+      schedule: schedule,
+      enabled: previous.enabled,
+      allowedTools: allowedTools,
+      lastRunAt: previous.lastRunAt,
+      nextRunAt: previous.nextRunAt,
+      sessionId: previous.sessionId,
+    );
+    automations[index] = updated;
+    return updated;
+  }
+
+  @override
+  Future<Automation> setAutomationEnabled({
+    required String automationId,
+    required bool enabled,
+  }) async {
+    final index = automations.indexWhere((a) => a.automationId == automationId);
+    if (index < 0) throw StateError('automation not found');
+    final previous = automations[index];
+    final updated = Automation(
+      automationId: automationId,
+      name: previous.name,
+      prompt: previous.prompt,
+      schedule: previous.schedule,
+      enabled: enabled,
+      allowedTools: previous.allowedTools,
+      lastRunAt: previous.lastRunAt,
+      // A disabled automation has no next run, which is what the backend does
+      // too — the card must not keep showing one.
+      nextRunAt: enabled ? previous.nextRunAt : null,
+      sessionId: previous.sessionId,
+    );
+    automations[index] = updated;
+    return updated;
+  }
+
+  @override
+  Future<void> deleteAutomation({required String automationId}) async {
+    automations.removeWhere((a) => a.automationId == automationId);
   }
 
   @override

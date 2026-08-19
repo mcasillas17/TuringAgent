@@ -642,3 +642,31 @@ func runtimeEventType(value turingv1.TuringEventType) string {
 	normalized := strings.ToLower(strings.TrimPrefix(value.String(), "TURING_EVENT_TYPE_"))
 	return strings.ReplaceAll(normalized, "_", ".")
 }
+
+// AppendRunNotice publishes a user-facing note against a live run, outside any
+// transaction of the caller's own.
+//
+// appendRunNoticeTx exists for notices that must land with the event they
+// explain. This one is for a notice about something that has already happened
+// and is separately durable — an approval the orchestrator granted on an
+// automation's behalf, for instance.
+func (r *Repository) AppendRunNotice(ctx context.Context, runID string, note string, extras map[string]any) (Event, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Event{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var sessionID, traceID string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&sessionID, &traceID); err != nil {
+		return Event{}, err
+	}
+	event, err := appendRunNoticeTx(ctx, tx, sessionID, runID, traceID, note, extras, now())
+	if err != nil {
+		return Event{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Event{}, err
+	}
+	return event, nil
+}

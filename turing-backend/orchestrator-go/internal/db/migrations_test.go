@@ -185,9 +185,99 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 		"0006_skills",
 		"0007_agents",
 		"0008_integrations",
+		"0009_automations",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("applied migrations = %v, want %v", got, want)
+	}
+}
+
+// 0009 rebuilds audit_logs to widen its actor CHECK. A rebuild that dropped
+// rows would erase the record of what already happened, which is the one thing
+// an audit table must never do.
+func TestAuditRebuildKeepsExistingRowsAndAcceptsAutomationActors(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	for _, name := range []string{
+		"0001_initial.sql", "0002_go_runtime.sql", "0003_messages_fts.sql",
+		"0003_tool_call_model_identity.sql", "0004_execution_exit_gate.sql",
+		"0005_timestamp_ordering.sql", "0006_skills.sql",
+	} {
+		applyMigration(t, ctx, database, name)
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO audit_logs (id, correlation_id, actor_type, actor_id, action, target, payload_json, created_at)
+		VALUES ('audit_first', 'run_1', 'client', 'actor_1', 'approval.approved', 'appr_1', '{"toolName":"files.update"}', '2026-01-01T00:00:00Z'),
+		       ('audit_second', 'run_2', 'runtime', NULL, 'tool.call.before', 'call_1', '{"toolName":"files.read"}', '2026-01-02T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	var firstRowID, secondRowID int64
+	if err := database.QueryRowContext(ctx, `SELECT rowid FROM audit_logs WHERE id = 'audit_first'`).Scan(&firstRowID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `SELECT rowid FROM audit_logs WHERE id = 'audit_second'`).Scan(&secondRowID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+
+	// Every column, not just the one the migration widened: an INSERT…SELECT
+	// with two TEXT columns transposed would corrupt the whole table and still
+	// leave actor_type looking right.
+	var correlationID, actorType, actorID, action, target, payload, createdAt string
+	var rowID int64
+	if err := database.QueryRowContext(ctx, `
+		SELECT rowid, correlation_id, actor_type, COALESCE(actor_id, ''), action, target, payload_json, created_at
+		FROM audit_logs WHERE id = 'audit_first'`).Scan(
+		&rowID, &correlationID, &actorType, &actorID, &action, &target, &payload, &createdAt); err != nil {
+		t.Fatalf("the pre-existing audit row did not survive the rebuild: %v", err)
+	}
+	got := []string{correlationID, actorType, actorID, action, target, payload, createdAt}
+	want := []string{"run_1", "client", "actor_1", "approval.approved", "appr_1", `{"toolName":"files.update"}`, "2026-01-01T00:00:00Z"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("preserved row = %q, want %q", got, want)
+	}
+	// rowid is what audit reads order by, so a rebuild that renumbered would
+	// silently reorder history.
+	if rowID != firstRowID {
+		t.Fatalf("rowid changed from %d to %d", firstRowID, rowID)
+	}
+	var secondAfter int64
+	if err := database.QueryRowContext(ctx, `SELECT rowid FROM audit_logs WHERE id = 'audit_second'`).Scan(&secondAfter); err != nil {
+		t.Fatal(err)
+	}
+	if secondAfter != secondRowID {
+		t.Fatalf("second rowid changed from %d to %d", secondRowID, secondAfter)
+	}
+	// The rename drops the old indexes with the old table; the migration has
+	// to put them back or every audit read becomes a scan.
+	for _, index := range []string{"idx_audit_action", "idx_audit_correlation"} {
+		var exists int
+		if err := database.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ? AND tbl_name = 'audit_logs'`,
+			index).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if exists != 1 {
+			t.Fatalf("index %s is missing after the rebuild", index)
+		}
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO audit_logs (id, correlation_id, actor_type, actor_id, action, target, payload_json, created_at)
+		VALUES ('audit_auto', 'run_1', 'automation', 'auto_1', 'approval.approved', 'appr_2', '{"unattended":true}', '2026-01-02T00:00:00Z')`); err != nil {
+		t.Fatalf("an automation actor was rejected: %v", err)
+	}
+	// The constraint is widened, not removed.
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO audit_logs (id, actor_type, action, created_at)
+		VALUES ('audit_bogus', 'whoever', 'approval.approved', '2026-01-03T00:00:00Z')`); err == nil {
+		t.Fatal("an unknown actor kind was accepted")
 	}
 }
 
@@ -196,8 +286,8 @@ func TestCurrentSchemaVersionUsesLatestEmbeddedMigrationPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "0008" {
-		t.Fatalf("CurrentSchemaVersion = %q, want 0008", got)
+	if got != "0009" {
+		t.Fatalf("CurrentSchemaVersion = %q, want 0009", got)
 	}
 }
 

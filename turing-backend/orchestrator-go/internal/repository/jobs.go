@@ -211,24 +211,40 @@ func requeueRunForRetryTx(ctx context.Context, tx *sql.Tx, runID string) error {
 }
 
 func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMessageInput) (EnqueueUserMessageResult, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := enqueueUserMessageTx(ctx, tx, input)
+	if err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	return result, nil
+}
+
+// enqueueUserMessageTx is the whole of "a message arrives and a run is
+// queued", minus the transaction around it. It is separate so the scheduler
+// can claim a due automation and queue its run in ONE transaction: a crash
+// between advancing the schedule and creating the run would otherwise either
+// lose a run or fire the same one twice.
+func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMessageInput) (EnqueueUserMessageResult, error) {
 	created := time.Now().UTC()
 	userMessageID := ids.New("msg")
 	assistantMessageID := ids.New("msg")
 	runID := ids.New("run")
 	jobID := ids.New("job")
 	traceID := ids.New("trace")
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return EnqueueUserMessageResult{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
 	var next int64
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence), 0) + 1 FROM messages WHERE session_id = ?`, input.SessionID).Scan(&next); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	var latestCreatedAt string
 	latestQuery := `SELECT created_at FROM messages WHERE session_id = ? ORDER BY ` + sqliteTimestampNanos("created_at") + ` DESC, id DESC LIMIT 1`
-	err = tx.QueryRowContext(ctx, latestQuery, input.SessionID).Scan(&latestCreatedAt)
+	err := tx.QueryRowContext(ctx, latestQuery, input.SessionID).Scan(&latestCreatedAt)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return EnqueueUserMessageResult{}, err
 	}
@@ -366,9 +382,6 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 			return EnqueueUserMessageResult{}, err
 		}
 		routingEvents = append(routingEvents, notice)
-	}
-	if err := tx.Commit(); err != nil {
-		return EnqueueUserMessageResult{}, err
 	}
 	return EnqueueUserMessageResult{SessionID: input.SessionID, UserMessageID: userMessageID, AssistantMessageID: assistantMessageID, RunID: runID, JobID: jobID, TraceID: traceID, Status: "queued", QueuedEvent: queuedEvent, RoutingEvents: routingEvents}, nil
 }

@@ -40,6 +40,7 @@ type Config struct {
 	AgentCredentialNames     []string
 	JobTimeoutMS             int
 	JobReaperIntervalMS      int
+	AutomationTickMS         int
 	JobMaxAttempts           int
 	MaxConcurrentRunsGeneral int
 	MaxToolCallsPerRun       int
@@ -153,6 +154,13 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// 0 turns the scheduler off entirely, which is the same shape as the job
+	// reaper's interval and the only honest way to say "do not run unattended
+	// work on this machine".
+	automationTick, err := intValue("TURING_AUTOMATION_TICK_MS", 30000)
+	if err != nil {
+		return Config{}, err
+	}
 	maxAttempts, err := intValue("TURING_JOB_MAX_ATTEMPTS", 3)
 	if err != nil {
 		return Config{}, err
@@ -206,6 +214,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		AgentCredentialNames:     AgentCredentialNames(agentAPIKeys),
 		JobTimeoutMS:             jobTimeout,
 		JobReaperIntervalMS:      reaperInterval,
+		AutomationTickMS:         automationTick,
 		JobMaxAttempts:           maxAttempts,
 		MaxConcurrentRunsGeneral: maxRuns,
 		MaxToolCallsPerRun:       maxTools,

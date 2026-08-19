@@ -293,6 +293,10 @@ func (s *Server) finishPostCommit(approval repository.ApprovalRecord, actorType 
 		log.Printf("record %s audit for %s: %v", action, approval.ApprovalID, err)
 	}
 	cancelAudit()
+	s.notifyPostCommit(approval, approvalStatus, approvalToken)
+}
+
+func (s *Server) notifyPostCommit(approval repository.ApprovalRecord, approvalStatus string, approvalToken string) {
 	if s.notifier == nil {
 		return
 	}
@@ -301,6 +305,112 @@ func (s *Server) finishPostCommit(approval repository.ApprovalRecord, actorType 
 		log.Printf("notify %s approval %s: %v", approvalStatus, approval.ApprovalID, err)
 	}
 	cancelNotify()
+}
+
+// GrantUnattendedApproval approves a pending approval on the strength of an
+// automation's allowlist rather than a person deciding in the moment.
+//
+// It deliberately takes the SAME path a human approval takes:
+// signApprovalToken mints the same short-lived HS256 token carrying the same
+// tool and args_hash, and ApproveApprovalWithEvent performs the same
+// pending -> approved transition and emits the same lifecycle event. mcp-files
+// verifies and consumes it exactly as before, so the token remains single-use
+// and bound to these arguments. What is weakened is who decided and when —
+// not what a decision is worth, and not the token.
+//
+// serverName and toolName are the pair the policy lookup just used, passed in
+// rather than parsed back out of the approval, so the check here is against
+// the same identity the decision was made about.
+//
+// The grant itself is re-read from storage rather than accepted from the
+// caller. That is what makes this the last gate: a caller cannot widen an
+// automation's permissions by handing in an allowlist of its own, and a run
+// that is not an automation's has no grant to find, so it cannot be approved
+// through this door at all.
+func (s *Server) GrantUnattendedApproval(ctx context.Context, approvalID string, serverName string, toolName string) error {
+	if approvalID == "" {
+		return status.Error(codes.InvalidArgument, "approval_id is required")
+	}
+	approval, err := s.repo.GetApproval(ctx, approvalID)
+	if err != nil {
+		return mapApprovalError(err)
+	}
+	grant, unattended, err := s.repo.GetAutomationRunGrant(ctx, approval.RunID)
+	if err != nil {
+		return status.Error(codes.Internal, "read automation grant failed")
+	}
+	if !unattended {
+		return status.Error(codes.PermissionDenied, "run was not started by an automation")
+	}
+	if !grant.Allows(serverName, toolName) {
+		return status.Error(codes.PermissionDenied, "tool is not on the automation's allowlist")
+	}
+	if approval.ToolName != toolName {
+		return status.Error(codes.FailedPrecondition, "approval does not match the tool being allowed")
+	}
+	if approval.Status == "approved" {
+		return nil
+	}
+	if approval.Status != "pending" {
+		return status.Error(codes.FailedPrecondition, "approval is not pending")
+	}
+	if expired(approval.ExpiresAt) {
+		if _, expireErr := s.expireApproval(ctx, approvalID); expireErr != nil {
+			return mapApprovalError(expireErr)
+		}
+		return status.Error(codes.FailedPrecondition, "approval expired")
+	}
+	// Recorded BEFORE the token exists, and its failure returned rather than
+	// logged. Every other approval audits after the fact because a person
+	// watched themselves approve it; here the audit row is the only witness,
+	// so an unrecordable grant is not granted at all. Over-recording — a row
+	// for a grant that then failed to commit — is the safe direction, and the
+	// approvals table still says what actually happened.
+	if err := s.audit.Record(ctx, approval.RunID, "automation", grant.AutomationID, "approval.approved", approval.ApprovalID, map[string]any{
+		"toolName":       approval.ToolName,
+		"unattended":     true,
+		"automationId":   grant.AutomationID,
+		"automationName": grant.AutomationName,
+	}); err != nil {
+		return status.Error(codes.Internal, "unattended approval could not be recorded")
+	}
+	token, err := s.signApprovalToken(approval)
+	if err != nil {
+		return err
+	}
+	transition, err := s.repo.ApproveApprovalWithEvent(ctx, approvalID, token, "")
+	if errors.Is(err, repository.ErrApprovalExpired) {
+		if _, expireErr := s.expireApproval(ctx, approvalID); expireErr != nil {
+			return mapApprovalError(expireErr)
+		}
+		return status.Error(codes.FailedPrecondition, "approval expired")
+	}
+	if err != nil {
+		return mapApprovalError(err)
+	}
+	approved := transition.Approval
+	if transition.ApprovalEvent.EventID != "" {
+		s.publishEvent(transition.ApprovalEvent)
+	}
+	// The approval event itself is byte-identical to a person's, so without
+	// this the conversation shows an approval card appearing and resolving
+	// with nothing to say nobody was asked. The audit row records it too, but
+	// audit has no read path — this notice is the only place the user sees it.
+	notice, err := s.repo.AppendRunNotice(ctx, approved.RunID, fmt.Sprintf(
+		"Approved automatically: %s is on %q's allowlist, so nobody was asked.",
+		approved.ToolName, grant.AutomationName), map[string]any{
+		"unattended":     true,
+		"automationId":   grant.AutomationID,
+		"automationName": grant.AutomationName,
+		"toolName":       approved.ToolName,
+	})
+	if err != nil {
+		log.Printf("record unattended approval notice for %s: %v", approved.ApprovalID, err)
+	} else {
+		s.publishEvent(notice)
+	}
+	s.notifyPostCommit(approved, "approved", approved.ApprovalToken)
+	return nil
 }
 
 func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeApprovalRequest) (*turingv1.ApprovalResponse, error) {

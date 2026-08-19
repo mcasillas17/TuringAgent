@@ -16,6 +16,7 @@ import (
 	agentsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/agents"
 	approvalsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/approvals"
 	auditsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/audit"
+	automationsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/automations"
 	chatsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/chat"
 	eventsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	integrationsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/integrations"
@@ -46,7 +47,13 @@ type App struct {
 	stopOnce     sync.Once
 	reaperCancel context.CancelFunc
 	reaperDone   chan struct{}
-	authFailures *auth.AsyncFailureRecorder
+	// The scheduler gets its own cancel/done pair rather than sharing the
+	// reaper's: they stop independently, and a shutdown that waited on one
+	// while the other was still firing runs would be a shutdown that queues
+	// work on its way out.
+	schedulerCancel context.CancelFunc
+	schedulerDone   chan struct{}
+	authFailures    *auth.AsyncFailureRecorder
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -92,6 +99,7 @@ func New(cfg config.Config) (*App, error) {
 	sessionService := sessionsvc.New(repo, cfg)
 	skillService := skillsvc.New(repo)
 	agentService := agentsvc.New(repo, cfg.AgentCredentialNames)
+	automationService := automationsvc.New(repo)
 	eventService := eventsvc.NewServer(repo, eventBus)
 	chatService := chatsvc.New(repo, eventBus, runtimeService, cfg.OllamaModel, cfg.OpenAIModel)
 	auditService := auditsvc.New(repo)
@@ -151,6 +159,9 @@ func New(cfg config.Config) (*App, error) {
 	// Public only: nothing internal reads a connection today, and the sealed
 	// credential is not served to anyone at all.
 	turingv1.RegisterIntegrationServiceServer(publicServer, integrationService)
+	// Public only: nothing outside the orchestrator schedules a run, and the
+	// runtime has no reason to read the automation library.
+	turingv1.RegisterAutomationServiceServer(publicServer, automationService)
 	turingv1.RegisterEventServiceServer(publicServer, eventService)
 	turingv1.RegisterChatServiceServer(publicServer, chatService)
 	turingv1.RegisterApprovalServiceServer(publicServer, approvalsvc.NewPublicServer(approvalService))
@@ -173,6 +184,7 @@ func New(cfg config.Config) (*App, error) {
 		database:        database,
 		authFailures:    authFailures,
 		reaperDone:      make(chan struct{}),
+		schedulerDone:   make(chan struct{}),
 	}
 	reaperCtx, reaperCancel := context.WithCancel(context.Background())
 	application.reaperCancel = reaperCancel
@@ -184,6 +196,22 @@ func New(cfg config.Config) (*App, error) {
 	} else {
 		reaperCancel()
 		close(application.reaperDone)
+	}
+	scheduler := automationsvc.NewScheduler(repo, eventBus, runtimeService, repository.AutomationRunDefaults{
+		AgentID:       "general_assistant",
+		ModelProvider: "ollama",
+		Model:         cfg.OllamaModel,
+	})
+	schedulerCtx, schedulerCancel := context.WithCancel(context.Background())
+	application.schedulerCancel = schedulerCancel
+	if cfg.AutomationTickMS > 0 {
+		go func() {
+			defer close(application.schedulerDone)
+			scheduler.Run(schedulerCtx, time.Duration(cfg.AutomationTickMS)*time.Millisecond)
+		}()
+	} else {
+		schedulerCancel()
+		close(application.schedulerDone)
 	}
 	return application, nil
 }
@@ -198,6 +226,12 @@ func (a *App) Stop() {
 		}
 		if a.reaperDone != nil {
 			<-a.reaperDone
+		}
+		if a.schedulerCancel != nil {
+			a.schedulerCancel()
+		}
+		if a.schedulerDone != nil {
+			<-a.schedulerDone
 		}
 		var wg sync.WaitGroup
 		if a.PublicServer != nil {

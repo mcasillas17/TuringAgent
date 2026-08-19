@@ -191,3 +191,37 @@ func baseIntegrationEnv(extra map[string]string) map[string]string {
 	}
 	return env
 }
+
+// The scheduler is the one thing in this process that creates work nobody
+// asked for, so "off" has to be expressible and has to be the literal 0.
+func TestAutomationTickDefaultsAndAcceptsZeroAsOff(t *testing.T) {
+	cfg, err := LoadFromMap(requiredEnv())
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.AutomationTickMS != 30000 {
+		t.Fatalf("default automation tick = %d, want 30000", cfg.AutomationTickMS)
+	}
+
+	env := requiredEnv()
+	env["TURING_AUTOMATION_TICK_MS"] = "0"
+	cfg, err = LoadFromMap(env)
+	if err != nil {
+		t.Fatalf("load with tick 0: %v", err)
+	}
+	if cfg.AutomationTickMS != 0 {
+		t.Fatalf("automation tick = %d, want 0 to mean off", cfg.AutomationTickMS)
+	}
+
+	env = requiredEnv()
+	env["TURING_AUTOMATION_TICK_MS"] = "soon"
+	if _, err := LoadFromMap(env); err == nil {
+		t.Fatal("a non-integer automation tick was accepted")
+	}
+
+	env = requiredEnv()
+	env["TURING_AUTOMATION_TICK_MS"] = "-1"
+	if _, err := LoadFromMap(env); err == nil {
+		t.Fatal("a negative automation tick was accepted")
+	}
+}
