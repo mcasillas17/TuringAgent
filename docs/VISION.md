@@ -4,7 +4,7 @@
 
 Supersedes the stack claims in `docs/superpowers/specs/2026-05-09-project-turing-v1-design.md`, which still describes a Node.js/TypeScript orchestrator over REST/WebSocket. That was replaced by Go + gRPC in #10.
 
-**Last verified against the code:** 2026-08-18, including TUR-020 context budgeting.
+**Last verified against the code:** 2026-08-18, at `4a7da6e` (TUR-020 review fixes).
 
 ---
 
