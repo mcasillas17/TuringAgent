@@ -108,6 +108,11 @@ void main() {
     await tester.tap(find.widgetWithText(TextButton, 'Delete'));
     await tester.pumpAndSettle();
     expect(api.deletedSessionIds, ['sess_existing']);
+    expect(
+      find.text('Existing chat'),
+      findsNothing,
+      reason: 'a stale list response must not resurrect the deleted session',
+    );
   });
 
   testWidgets('cancelling a delete removes nothing', (tester) async {

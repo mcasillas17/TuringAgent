@@ -306,13 +306,18 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE sessions
 		SET title = CASE
-				WHEN (title IS NULL OR title = '' OR title = ?) AND ? <> ''
+				WHEN title_origin = 'unset' AND ? <> ''
 					THEN ?
 				ELSE title
 			END,
+			title_origin = CASE
+				WHEN title_origin = 'unset' AND ? <> ''
+					THEN 'derived'
+				ELSE title_origin
+			END,
 			updated_at = ?
 		WHERE id = ?
-	`, legacyPlaceholderTitle, derivedTitle, derivedTitle, createdAt, input.SessionID); err != nil {
+	`, derivedTitle, derivedTitle, derivedTitle, createdAt, input.SessionID); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	var sessionTitle string

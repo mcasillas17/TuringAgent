@@ -246,6 +246,62 @@ func TestEnqueueUserMessageDoesNotOverwriteAUserSuppliedTitle(t *testing.T) {
 	}
 }
 
+func TestEnqueueUserMessageDoesNotOverwriteExplicitNewChatTitle(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "New chat")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if _, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID:     session.SessionID,
+		Content:       "This must not replace the explicit title",
+		AgentID:       "general_assistant",
+		ModelProvider: "ollama",
+		Model:         "qwen2.5:7b",
+	}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	stored, err := repo.GetSession(ctx, session.SessionID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if stored.Title.String != "New chat" {
+		t.Fatalf("title = %q, want explicit New chat preserved", stored.Title.String)
+	}
+}
+
+func TestEnqueueUserMessageDoesNotOverwriteDerivedNewChatTitle(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	input := EnqueueUserMessageInput{
+		SessionID:     session.SessionID,
+		Content:       "New chat",
+		AgentID:       "general_assistant",
+		ModelProvider: "ollama",
+		Model:         "qwen2.5:7b",
+	}
+	if _, err := repo.EnqueueUserMessage(ctx, input); err != nil {
+		t.Fatalf("first enqueue: %v", err)
+	}
+	input.Content = "This must not replace the derived title"
+	if _, err := repo.EnqueueUserMessage(ctx, input); err != nil {
+		t.Fatalf("second enqueue: %v", err)
+	}
+
+	stored, err := repo.GetSession(ctx, session.SessionID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if stored.Title.String != "New chat" {
+		t.Fatalf("title = %q, want derived New chat preserved", stored.Title.String)
+	}
+}
+
 // Sending a message must move a conversation to the top of the client's list.
 // Before updated_at was bumped here, the list was ordered by creation time and
 // an old conversation you had just used stayed buried.
@@ -416,6 +472,25 @@ func TestBackfillSessionTitlesNamesLegacyConversations(t *testing.T) {
 	assertTitle(t, ctx, repo, empty, "New chat")
 }
 
+func TestBackfillSessionTitlesDoesNotOverwriteExplicitNewChatTitle(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "New chat")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := repo.db.ExecContext(ctx,
+		`INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at) VALUES (?, ?, 'user', ?, 'text', 1, ?)`,
+		ids.New("msg"), session.SessionID, "This is not the title", now()); err != nil {
+		t.Fatalf("insert message: %v", err)
+	}
+
+	if _, err := repo.BackfillSessionTitles(ctx); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+
+	assertTitle(t, ctx, repo, session.SessionID, "New chat")
+}
+
 // Startup runs this every time, so a second pass must be a no-op rather than
 // re-deriving titles over ones already assigned.
 func TestBackfillSessionTitlesIsIdempotent(t *testing.T) {
@@ -505,8 +580,12 @@ func seedSession(t *testing.T, ctx context.Context, repo *Repository, title, con
 	}
 	// CreateSession stores NULL for "", so force the exact stored value under
 	// test rather than trusting it to round-trip.
-	if _, err := repo.db.ExecContext(ctx, `UPDATE sessions SET title = ? WHERE id = ?`,
-		nullableString(sql.NullString{String: title, Valid: title != ""}), session.SessionID); err != nil {
+	titleOrigin := "explicit"
+	if title == "" || title == "New chat" {
+		titleOrigin = "unset"
+	}
+	if _, err := repo.db.ExecContext(ctx, `UPDATE sessions SET title = ?, title_origin = ? WHERE id = ?`,
+		nullableString(sql.NullString{String: title, Valid: title != ""}), titleOrigin, session.SessionID); err != nil {
 		t.Fatalf("set title: %v", err)
 	}
 	if content != "" {

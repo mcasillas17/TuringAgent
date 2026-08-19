@@ -99,6 +99,9 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   String _modelProvider = 'ollama';
   bool _creating = false;
   final Set<String> _deleting = {};
+  final Set<String> _locallyDeletedSessionIds = {};
+  final Map<String, _SessionEventSnapshot> _sessionEventSnapshots = {};
+  int _sessionUpdateRevision = 0;
 
   @override
   void initState() {
@@ -115,11 +118,12 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   }
 
   Future<void> _refreshSessions() async {
+    final startingRevision = _sessionUpdateRevision;
     try {
       final sessions = await widget.apiClient.listSessions();
       if (!mounted) return;
       setState(() {
-        _sessions = sessions;
+        _sessions = _reconcileSessionRefresh(sessions, startingRevision);
         _sessionsLoading = false;
         _sessionsFailed = false;
       });
@@ -135,6 +139,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   }
 
   void _applySessionUpdated(TuringEvent event) {
+    if (_locallyDeletedSessionIds.contains(event.sessionId)) return;
     final title = event.payload['title'];
     final updatedAtValue = event.payload['updatedAt'];
     if (title is! String || updatedAtValue is! String) return;
@@ -143,18 +148,87 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     final index = _sessions.indexWhere(
       (session) => session.sessionId == event.sessionId,
     );
-    if (index < 0) return;
+    if (index >= 0 && _sessions[index].updatedAt.isAfter(updatedAt)) return;
     final updated = Session(
       sessionId: event.sessionId,
       title: title.isEmpty ? null : title,
       updatedAt: updatedAt.toUtc(),
     );
     setState(() {
-      _sessions = [
-        updated,
-        ..._sessions.where((session) => session.sessionId != event.sessionId),
-      ];
+      final next = List<Session>.of(_sessions);
+      if (index >= 0) {
+        final previous = next.removeAt(index);
+        if (previous.updatedAt.isAtSameMomentAs(updated.updatedAt)) {
+          next.insert(index, updated);
+        } else {
+          _insertSessionByRecency(next, updated);
+        }
+      } else {
+        _insertSessionByRecency(next, updated);
+      }
+      _sessions = next;
+      _sessionUpdateRevision++;
+      _sessionEventSnapshots[event.sessionId] = _SessionEventSnapshot(
+        session: updated,
+        revision: _sessionUpdateRevision,
+      );
     });
+  }
+
+  static void _insertSessionByRecency(
+    List<Session> sessions,
+    Session inserted,
+  ) {
+    final index = sessions.indexWhere(
+      (session) => session.updatedAt.isBefore(inserted.updatedAt),
+    );
+    if (index < 0) {
+      sessions.add(inserted);
+    } else {
+      sessions.insert(index, inserted);
+    }
+  }
+
+  List<Session> _reconcileSessionRefresh(
+    Iterable<Session> refreshed,
+    int startingRevision,
+  ) {
+    final refreshedSessions = refreshed.toList();
+    final refreshedIDs = refreshedSessions
+        .map((session) => session.sessionId)
+        .toSet();
+    _locallyDeletedSessionIds.removeWhere(
+      (sessionID) => !refreshedIDs.contains(sessionID),
+    );
+    final merged = refreshedSessions
+        .where(
+          (session) => !_locallyDeletedSessionIds.contains(session.sessionId),
+        )
+        .toList();
+    final concurrentSnapshots = _sessionEventSnapshots.values
+        .where((snapshot) => snapshot.revision > startingRevision)
+        .toList();
+    _sessionEventSnapshots.removeWhere(
+      (_, snapshot) => snapshot.revision <= startingRevision,
+    );
+    for (final snapshot in concurrentSnapshots) {
+      final current = snapshot.session;
+      final index = merged.indexWhere(
+        (session) => session.sessionId == current.sessionId,
+      );
+      if (index < 0) {
+        _insertSessionByRecency(merged, current);
+        continue;
+      }
+      final replacement = merged[index];
+      if (current.updatedAt.isAfter(replacement.updatedAt)) {
+        merged.removeAt(index);
+        _insertSessionByRecency(merged, current);
+      } else if (current.updatedAt.isAtSameMomentAs(replacement.updatedAt)) {
+        merged[index] = current;
+      }
+    }
+    return merged;
   }
 
   /// Null when the active conversation has not been named yet, or is not in
@@ -234,9 +308,16 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       if (confirmed != true) return;
       await widget.apiClient.deleteSession(sessionId: session.sessionId);
       if (!mounted) return;
-      if (_activeSessionId == session.sessionId) {
-        setState(() => _activeSessionId = null);
-      }
+      setState(() {
+        _locallyDeletedSessionIds.add(session.sessionId);
+        _sessionEventSnapshots.remove(session.sessionId);
+        _sessions = _sessions
+            .where((candidate) => candidate.sessionId != session.sessionId)
+            .toList();
+        if (_activeSessionId == session.sessionId) {
+          _activeSessionId = null;
+        }
+      });
       unawaited(_refreshSessions());
     } catch (error) {
       if (!mounted) return;
@@ -966,4 +1047,11 @@ class _EmptyState extends StatelessWidget {
       ),
     );
   }
+}
+
+class _SessionEventSnapshot {
+  const _SessionEventSnapshot({required this.session, required this.revision});
+
+  final Session session;
+  final int revision;
 }

@@ -186,6 +186,7 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 		"0007_agents",
 		"0008_integrations",
 		"0009_automations",
+		"0010_session_title_origin",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("applied migrations = %v, want %v", got, want)
@@ -286,8 +287,8 @@ func TestCurrentSchemaVersionUsesLatestEmbeddedMigrationPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "0009" {
-		t.Fatalf("CurrentSchemaVersion = %q, want 0009", got)
+	if got != "0010" {
+		t.Fatalf("CurrentSchemaVersion = %q, want 0010", got)
 	}
 }
 
@@ -379,6 +380,61 @@ func TestApplyMigrationsUpgradesPopulated0002DatabaseWithNullableModelToolCallID
 	}
 	if applied != 1 {
 		t.Fatalf("0005 migration count = %d, want 1", applied)
+	}
+}
+
+func TestSessionTitleOriginMigrationClassifiesLegacyPlaceholders(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.ExecContext(ctx,
+		`CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	names, err := migrationNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if name == "0010_session_title_origin.sql" {
+			break
+		}
+		applyMigration(t, ctx, database, name)
+	}
+	for _, row := range []struct {
+		id    string
+		title any
+	}{
+		{id: "legacy", title: "New chat"},
+		{id: "blank", title: nil},
+		{id: "named", title: "Budget planning"},
+	} {
+		if _, err := database.ExecContext(ctx, `
+			INSERT INTO sessions (id, title, created_at, updated_at)
+			VALUES (?, ?, datetime('now'), datetime('now'))
+		`, row.id, row.title); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	applyMigration(t, ctx, database, "0010_session_title_origin.sql")
+
+	for id, want := range map[string]string{
+		"legacy": "unset",
+		"blank":  "unset",
+		"named":  "explicit",
+	} {
+		var got string
+		if err := database.QueryRowContext(ctx,
+			`SELECT title_origin FROM sessions WHERE id = ?`, id).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("session %s title_origin = %q, want %q", id, got, want)
+		}
 	}
 }
 

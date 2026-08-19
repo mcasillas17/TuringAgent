@@ -12,8 +12,10 @@ not the value written for a new session.
 When a user message is accepted, the repository updates the session in the same
 SQLite transaction that inserts the message, creates the assistant placeholder,
 queues the run, and appends its events. A title is assigned only when the stored
-title is null, empty, or the legacy literal `New chat`. A caller-supplied title
-and a title derived by an earlier message are never replaced.
+`title_origin` is `unset`. Creating a session with any non-empty explicit title
+sets the origin to `explicit`; assignment from a message changes it to `derived`.
+The text itself is never used as a sentinel, so an explicit or derived title
+whose words are exactly `New chat` is not replaced by a later message.
 
 `DeriveSessionTitle` applies one deterministic policy:
 
@@ -46,10 +48,13 @@ subscriber that reconnects can replay the same event from the event log.
 
 Flutter maps protocol event
 `TURING_EVENT_TYPE_SESSION_UPDATED` to `session.updated`, applies `title` and
-`updatedAt` to its local session list, and moves that session to the front. It
-does not call `ListSessions` after sending a message. Search group headings load
-the same stored session title, so the sidebar and search do not invent separate
-names for one conversation.
+`updatedAt` to its local session list, and sorts by that durable recency key. A
+replayed older event cannot reorder the list. An update for a session outside
+the loaded page inserts it, and a concurrent older `ListSessions` response is
+merged without overwriting newer event state. Flutter does not call
+`ListSessions` after sending a message. Search group headings load the same
+stored session title, so the sidebar and search do not invent separate names for
+one conversation.
 
 Whitespace-only messages still produce a session update because they touch
 `updated_at`, but their empty title snapshot keeps the `New chat` display
@@ -57,10 +62,15 @@ fallback. A later usable message can assign the title.
 
 ## Existing data and deletion
 
+Migration `0010_session_title_origin.sql` classifies legacy null, empty, and
+literal `New chat` rows as `unset`; other existing non-empty titles become
+`explicit`. New sessions record provenance at creation, so a new explicit
+`New chat` is distinguishable from old placeholder data.
+
 At startup, before gRPC servers accept subscriptions, the orchestrator scans
-legacy sessions whose title is null, empty, or the old literal `New chat`. It
-derives each title from that session's first stored user message using the same
-function as the live path. The pass is idempotent, leaves explicitly named and
+only sessions whose origin is `unset`. It derives each title from that session's
+first stored user message using the same function as the live path and marks the
+result `derived`. The pass is idempotent, leaves explicitly named and
 never-started sessions alone, and emits no live event because no subscriber can
 exist yet. Startup fails if this compatibility pass cannot complete rather than
 serving a partially repaired session list.

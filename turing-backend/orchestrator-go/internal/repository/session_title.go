@@ -6,12 +6,6 @@ import (
 	"strings"
 )
 
-// legacyPlaceholderTitle is the literal the client used to send on every
-// create, before naming moved to the backend. It was never a choice a user
-// made — there was no way to type it — so a session carrying it is untitled
-// in every sense except the database's.
-const legacyPlaceholderTitle = "New chat"
-
 // maxTitleRunes bounds a derived title to about one line of the client's
 // conversation list. Titles are counted in runes rather than bytes, so a
 // message in a non-Latin script is not cut to a third of the length of an
@@ -80,8 +74,8 @@ func (r *Repository) BackfillSessionTitles(ctx context.Context) (int, error) {
 			LIMIT 1
 		)
 		FROM sessions s
-		WHERE s.title IS NULL OR s.title = '' OR s.title = ?
-	`, legacyPlaceholderTitle)
+		WHERE s.title_origin = 'unset'
+	`)
 	if err != nil {
 		return 0, err
 	}
@@ -109,7 +103,11 @@ func (r *Repository) BackfillSessionTitles(ctx context.Context) (int, error) {
 	// Collected first, then written: SQLite will not let this connection write
 	// through a cursor it is still reading from.
 	for sessionID, title := range titles {
-		if _, err := r.db.ExecContext(ctx, `UPDATE sessions SET title = ? WHERE id = ?`, title, sessionID); err != nil {
+		if _, err := r.db.ExecContext(ctx, `
+			UPDATE sessions
+			SET title = ?, title_origin = 'derived'
+			WHERE id = ? AND title_origin = 'unset'
+		`, title, sessionID); err != nil {
 			return 0, err
 		}
 	}

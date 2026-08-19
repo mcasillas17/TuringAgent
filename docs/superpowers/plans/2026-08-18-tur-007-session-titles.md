@@ -4,7 +4,7 @@
 
 **Goal:** Make the orchestrator publish every committed session metadata update so Flutter can show the deterministic first-turn title and current session ordering without polling.
 
-**Architecture:** Keep title derivation and ownership in the Go repository transaction that inserts the user message and queues its run. That transaction will persist a `session.updated` event containing the authoritative title and `updatedAt` snapshot; services publish the committed event, the protocol maps it explicitly, and Flutter applies it to its local session list. Existing startup backfill remains the compatibility path for pre-feature conversations, while live clients use only the durable event path.
+**Architecture:** Keep title derivation and ownership in the Go repository transaction that inserts the user message and queues its run. Explicit `title_origin` provenance distinguishes legacy placeholders from valid titles whose text is `New chat`. The enqueue transaction persists a `session.updated` event containing the authoritative title and `updatedAt` snapshot; services publish the committed event, the protocol maps it explicitly, and Flutter merges it into its local session list by durable recency rather than delivery order. Existing startup backfill remains the compatibility path for pre-feature conversations, while live clients use only the durable event path.
 
 **Tech Stack:** Go 1.23, SQLite transactions, gRPC/protobuf, Flutter/Dart, Go `testing`, Flutter widget tests.
 
@@ -15,6 +15,8 @@
 - `turing-backend/orchestrator-go/internal/repository/jobs.go`: update session metadata in the enqueue transaction, persist the authoritative event, and return it to publishers.
 - `turing-backend/orchestrator-go/internal/repository/runs.go`: share one transaction-safe event insertion helper between run-scoped and session-scoped events.
 - `turing-backend/orchestrator-go/internal/repository/session_title_test.go`: prove event durability, title stability, whitespace handling, payload shape, and replay.
+- `turing-backend/orchestrator-go/internal/db/schema/0010_session_title_origin.sql`: distinguish unset/legacy titles from explicit and derived titles.
+- `turing-backend/orchestrator-go/internal/db/migrations_test.go`: prove legacy placeholder classification and schema-version guards.
 - `turing-backend/orchestrator-go/internal/repository/automations.go`: carry the session update event out of automation enqueue transactions.
 - `turing-backend/orchestrator-go/internal/service/chat/service.go`: publish `session.updated` before later event sequences.
 - `turing-backend/orchestrator-go/internal/service/chat/service_test.go`: prove a second subscriber receives the committed update without polling.
@@ -32,6 +34,7 @@
 - `turing-client/turing_app/lib/features/chat/chat_screen.dart`: forward live session metadata events to its shell host and stop requesting a post-send refresh.
 - `turing-client/turing_app/lib/ui/shell/responsive_shell.dart`: apply the title and timestamp snapshot locally and reorder the list.
 - `turing-client/turing_app/test/ui/shell_navigation_test.dart`: prove a live event updates the row without another `ListSessions` call.
+- `turing-client/turing_app/test/ui/responsive_shell_backend_test.dart`: prove refresh merging cannot resurrect a locally deleted session.
 - `README.md`: describe user-visible automatic naming and the relevant focused verification command.
 - `docs/architecture/session-titles.md`: document derivation, persistence, event delivery, compatibility, limits, deletion, configuration, and testing.
 - `docs/architecture/session-recall.md`: state that search group headings consume the same orchestrator-owned title.
@@ -106,7 +109,7 @@ sessionUpdatedPayload, err := json.Marshal(map[string]string{
 })
 ```
 
-Append `session.updated` before `agent.run.queued`, with the enqueue trace ID and no run ID. Return it as `SessionUpdatedEvent`. This event is written for every accepted message because `updated_at` changes every time; the title changes only while the stored title is untitled and the derived title is non-empty.
+Append `session.updated` before `agent.run.queued`, with the enqueue trace ID and no run ID. Return it as `SessionUpdatedEvent`. This event is written for every accepted message because `updated_at` changes every time; the title changes only while `title_origin = 'unset'` and the derived title is non-empty. Set the origin to `derived` in that same update so an explicit or derived title equal to `New chat` is immutable.
 
 - [ ] **Step 5: Run the focused repository tests**
 
@@ -261,7 +264,7 @@ TuringEvent(
 )
 ```
 
-Assert the sidebar row changes from `New chat` to the derived title, the session moves to the front of an older list, and `listSessionsCalls` is still unchanged.
+Assert the sidebar row changes from `New chat` to the derived title, recency follows `updatedAt`, and `listSessionsCalls` is still unchanged. Add replay and delayed-refresh cases proving an older event cannot reorder the list and an event for a newly created or unpaged session survives a stale list response.
 
 - [ ] **Step 2: Run the focused Flutter tests and observe failure**
 
@@ -295,7 +298,7 @@ Delete the post-`sendMessage` callback. Successful sends wait for the authoritat
 
 - [ ] **Step 4: Apply the authoritative snapshot in ResponsiveShell**
 
-Replace `_onMessageSent` with `_applySessionUpdated(TuringEvent event)`. Validate that the event targets a listed session, `title` is a string, and `updatedAt` parses as a UTC `DateTime`. Rebuild that immutable `Session`, remove its old copy, and insert the updated copy at index zero:
+Replace `_onMessageSent` with `_applySessionUpdated(TuringEvent event)`. Validate `title` and `updatedAt`, ignore an event older than the held snapshot, and update or insert the immutable `Session` by durable recency. Merge later list responses with newer event snapshots instead of replacing the list:
 
 ```dart
 void _applySessionUpdated(TuringEvent event) {
@@ -307,17 +310,17 @@ void _applySessionUpdated(TuringEvent event) {
   final index = _sessions.indexWhere(
     (session) => session.sessionId == event.sessionId,
   );
-  if (index < 0) return;
+  if (index >= 0 && _sessions[index].updatedAt.isAfter(updatedAt)) return;
   final updated = Session(
     sessionId: event.sessionId,
     title: title.isEmpty ? null : title,
     updatedAt: updatedAt.toUtc(),
   );
   setState(() {
-    _sessions = [
-      updated,
-      ..._sessions.where((session) => session.sessionId != event.sessionId),
-    ];
+    final next = List<Session>.of(_sessions);
+    if (index >= 0) next.removeAt(index);
+    _insertSessionByRecency(next, updated);
+    _sessions = next;
   });
 }
 ```
@@ -365,7 +368,8 @@ Document these exact contracts:
 - New Flutter sessions are created with no stored title; `New chat` is display-only.
 - `DeriveSessionTitle` collapses Unicode whitespace to one line, uses at most 60 runes plus an ellipsis, prefers a word boundary after 30 runes, and makes no model call.
 - Empty or whitespace-only input leaves the title unset; the next usable user message may set it.
-- The repository guards assignment in the enqueue transaction, so later messages and explicit caller titles are preserved.
+- Migration `0010_session_title_origin.sql` classifies old null, empty, and placeholder rows as `unset`; new explicit and derived titles record their provenance, so even a valid title equal to `New chat` is preserved.
+- The repository guards assignment by `title_origin` in the enqueue transaction, so later messages and explicit caller titles are preserved.
 - Every accepted message updates `sessions.updated_at` and persists `session.updated` with `title` and RFC3339Nano `updatedAt`; subscribed clients apply it without polling.
 - Startup backfill repairs legacy null, empty, and literal `New chat` rows from their first stored user message. It is idempotent and emits no live event because it runs before servers accept subscriptions.
 - Session deletion removes the session row, title, messages, and title events through existing cascades.

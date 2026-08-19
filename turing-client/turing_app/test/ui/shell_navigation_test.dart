@@ -477,6 +477,105 @@ void main() {
         reason: 'the event payload is authoritative; no list poll is needed',
       );
     });
+
+    testWidgets('a replayed older session update does not reorder the list', (
+      tester,
+    ) async {
+      final source = _FakeEventSource();
+      final api = _FakeApi()
+        ..sessions = [
+          Session(
+            sessionId: 'sess_recent',
+            title: 'Recent chat',
+            updatedAt: DateTime.utc(2026, 5, 11),
+          ),
+          Session(
+            sessionId: 'sess_old',
+            title: 'Old chat',
+            updatedAt: DateTime.utc(2026, 5, 10),
+          ),
+        ];
+      await _pumpShell(
+        tester,
+        api: api,
+        size: _desktop,
+        eventSourceFactory: () => source,
+      );
+      await tester.tap(find.text('Old chat'));
+      await tester.pumpAndSettle();
+
+      source.add(
+        TuringEvent(
+          eventId: 'evt_replayed_session_updated',
+          sessionId: 'sess_old',
+          traceId: 'trace_old',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 5, 10),
+          payload: const {
+            'title': 'Old chat',
+            'updatedAt': '2026-05-10T00:00:00Z',
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.getTopLeft(find.text('Recent chat')).dy,
+        lessThan(tester.getTopLeft(find.text('Old chat')).dy),
+        reason: 'durable activity time, not replay delivery, owns ordering',
+      );
+    });
+
+    testWidgets('a session update survives an older list response', (
+      tester,
+    ) async {
+      final api = _FakeApi();
+      final sources = <_FakeEventSource>[];
+      await _pumpShell(
+        tester,
+        api: api,
+        size: _desktop,
+        eventSourceFactory: () {
+          final source = _FakeEventSource();
+          sources.add(source);
+          return source;
+        },
+      );
+      final delayedList = Completer<List<Session>>();
+      api.nextListSessions = delayedList;
+
+      await tester.tap(find.text('New chat').first);
+      for (var i = 0; i < 5; i++) {
+        await tester.pump();
+      }
+      expect(sources, isNotEmpty);
+      sources.last.add(
+        TuringEvent(
+          eventId: 'evt_new_session_updated',
+          sessionId: 'sess_new',
+          traceId: 'trace_new',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 8, 18, 20),
+          payload: const {
+            'title': 'Brand new conversation',
+            'updatedAt': '2026-08-18T20:00:00Z',
+          },
+        ),
+      );
+      await tester.pump();
+
+      delayedList.complete(api.sessions);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Brand new conversation'), findsOneWidget);
+      expect(
+        find.text('Existing chat'),
+        findsOneWidget,
+        reason: 'the older response is merged rather than discarded wholesale',
+      );
+    });
   });
 
   group('compact layout', () {
@@ -850,12 +949,18 @@ class _FakeApi with NoIntegrationsApi, NoAutomationsApi implements TuringApi {
   int listMessagesCalls = 0;
   final List<String?> createSessionTitles = [];
   final List<String> sentMessages = [];
+  Completer<List<Session>>? nextListSessions;
 
   int listSessionsCalls = 0;
 
   @override
   Future<List<Session>> listSessions({int limit = 50, String? after}) async {
     listSessionsCalls++;
+    final next = nextListSessions;
+    if (next != null) {
+      nextListSessions = null;
+      return next.future;
+    }
     return sessions;
   }
 
