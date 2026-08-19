@@ -573,7 +573,15 @@ func appendRunNoticeTx(ctx context.Context, tx *sql.Tx, sessionID string, runID 
 	return appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.step", string(payloadJSON), createdAt)
 }
 
+func appendSessionEventTx(ctx context.Context, tx *sql.Tx, sessionID string, traceID string, eventType string, payloadJSON string, createdAt string) (Event, error) {
+	return appendEventTx(ctx, tx, sessionID, sql.NullString{}, traceID, eventType, payloadJSON, createdAt)
+}
+
 func appendRunEventTx(ctx context.Context, tx *sql.Tx, sessionID string, runID string, traceID string, eventType string, payloadJSON string, createdAt string) (Event, error) {
+	return appendEventTx(ctx, tx, sessionID, sql.NullString{String: runID, Valid: true}, traceID, eventType, payloadJSON, createdAt)
+}
+
+func appendEventTx(ctx context.Context, tx *sql.Tx, sessionID string, runID sql.NullString, traceID string, eventType string, payloadJSON string, createdAt string) (Event, error) {
 	if payloadJSON == "" {
 		payloadJSON = "{}"
 	}
@@ -584,14 +592,14 @@ func appendRunEventTx(ctx context.Context, tx *sql.Tx, sessionID string, runID s
 	event := Event{
 		EventID:     ids.New("evt"),
 		SessionID:   sessionID,
-		RunID:       sql.NullString{String: runID, Valid: true},
+		RunID:       runID,
 		TraceID:     traceID,
 		Sequence:    sequence,
 		Type:        eventType,
 		PayloadJSON: payloadJSON,
 		CreatedAt:   createdAt,
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO events (id, session_id, run_id, trace_id, sequence, type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, event.EventID, event.SessionID, runID, event.TraceID, event.Sequence, event.Type, event.PayloadJSON, event.CreatedAt); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO events (id, session_id, run_id, trace_id, sequence, type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, event.EventID, event.SessionID, nullableString(runID), event.TraceID, event.Sequence, event.Type, event.PayloadJSON, event.CreatedAt); err != nil {
 		return Event{}, err
 	}
 	return event, nil

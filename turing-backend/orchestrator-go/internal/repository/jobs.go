@@ -21,14 +21,15 @@ type EnqueueUserMessageInput struct {
 }
 
 type EnqueueUserMessageResult struct {
-	SessionID          string
-	UserMessageID      string
-	AssistantMessageID string
-	RunID              string
-	JobID              string
-	TraceID            string
-	Status             string
-	QueuedEvent        Event
+	SessionID           string
+	UserMessageID       string
+	AssistantMessageID  string
+	RunID               string
+	JobID               string
+	TraceID             string
+	Status              string
+	SessionUpdatedEvent Event
+	QueuedEvent         Event
 	// RoutingEvents carries the notices written in the same transaction as the
 	// run — today, the one saying this message is leaving the machine. They are
 	// returned rather than published here because the repository does not own
@@ -314,6 +315,21 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 	`, legacyPlaceholderTitle, derivedTitle, derivedTitle, createdAt, input.SessionID); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
+	var sessionTitle string
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(title, '') FROM sessions WHERE id = ?`, input.SessionID).Scan(&sessionTitle); err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	sessionUpdatedPayload, err := json.Marshal(map[string]string{
+		"title":     sessionTitle,
+		"updatedAt": createdAt,
+	})
+	if err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	sessionUpdatedEvent, err := appendSessionEventTx(ctx, tx, input.SessionID, traceID, "session.updated", string(sessionUpdatedPayload), createdAt)
+	if err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
 	// Frozen into the payload rather than read when the job is claimed: a
 	// skill edited or detached while the job waits must not change what this
 	// run was told to do. It is the same reason userText is stored here.
@@ -383,7 +399,7 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 		}
 		routingEvents = append(routingEvents, notice)
 	}
-	return EnqueueUserMessageResult{SessionID: input.SessionID, UserMessageID: userMessageID, AssistantMessageID: assistantMessageID, RunID: runID, JobID: jobID, TraceID: traceID, Status: "queued", QueuedEvent: queuedEvent, RoutingEvents: routingEvents}, nil
+	return EnqueueUserMessageResult{SessionID: input.SessionID, UserMessageID: userMessageID, AssistantMessageID: assistantMessageID, RunID: runID, JobID: jobID, TraceID: traceID, Status: "queued", SessionUpdatedEvent: sessionUpdatedEvent, QueuedEvent: queuedEvent, RoutingEvents: routingEvents}, nil
 }
 
 // flattenNoticeText collapses a user-chosen name to a single line before it is

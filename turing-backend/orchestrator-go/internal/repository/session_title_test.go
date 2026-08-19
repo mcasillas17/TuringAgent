@@ -3,11 +3,26 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 )
+
+type sessionUpdatedPayload struct {
+	Title     string `json:"title"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+func decodeSessionUpdatedPayload(t *testing.T, event Event) sessionUpdatedPayload {
+	t.Helper()
+	var payload sessionUpdatedPayload
+	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+		t.Fatalf("decode session.updated payload: %v", err)
+	}
+	return payload
+}
 
 func TestDeriveSessionTitle(t *testing.T) {
 	longWord := strings.Repeat("a", 90)
@@ -94,6 +109,51 @@ func TestDeriveSessionTitleCountsRunesNotBytes(t *testing.T) {
 	}
 	if runes := []rune(got); len(runes) != maxTitleRunes+1 {
 		t.Fatalf("title has %d runes, want %d", len(runes), maxTitleRunes+1)
+	}
+}
+
+func TestEnqueueUserMessagePersistsSessionUpdatedEvent(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID:     session.SessionID,
+		Content:       "What is in the sandbox?",
+		AgentID:       "general_assistant",
+		ModelProvider: "ollama",
+		Model:         "qwen2.5:7b",
+	})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	event := enqueued.SessionUpdatedEvent
+	if event.Type != "session.updated" {
+		t.Fatalf("event type = %q, want session.updated", event.Type)
+	}
+	if event.RunID.Valid {
+		t.Fatalf("session event has run_id %q", event.RunID.String)
+	}
+	if event.Sequence >= enqueued.QueuedEvent.Sequence {
+		t.Fatalf("session event sequence %d, want before queued event %d", event.Sequence, enqueued.QueuedEvent.Sequence)
+	}
+	payload := decodeSessionUpdatedPayload(t, event)
+	if payload.Title != "What is in the sandbox?" {
+		t.Fatalf("event title = %q, want derived title", payload.Title)
+	}
+	if payload.UpdatedAt == "" {
+		t.Fatal("event updatedAt is empty")
+	}
+
+	replayed, _, err := repo.ReplayEvents(ctx, session.SessionID, 0, 10)
+	if err != nil {
+		t.Fatalf("replay events: %v", err)
+	}
+	if len(replayed) < 2 || replayed[0].EventID != event.EventID {
+		t.Fatalf("replayed events = %+v, want session update first", replayed)
 	}
 }
 
