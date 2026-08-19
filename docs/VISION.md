@@ -4,7 +4,7 @@
 
 Supersedes the stack claims in `docs/superpowers/specs/2026-05-09-project-turing-v1-design.md`, which still describes a Node.js/TypeScript orchestrator over REST/WebSocket. That was replaced by Go + gRPC in #10.
 
-**Last verified against the code:** 2026-08-13, at `e4ae748` (#33).
+**Last verified against the code:** 2026-08-18, including TUR-020 context budgeting.
 
 ---
 
@@ -43,7 +43,7 @@ A north star that cannot be falsified is decoration. These are the checks:
 
 Each is a decision already made and defended in review, cited to where it happened. They are written down so the next decision matches.
 
-**The user is never left guessing.** A run that retries, exhausts its attempts, hits the tool-iteration cap, or answers from recalled context emits a notice (#23, #24, #30, #33). Silence is indistinguishable from a hang, so anything that delays or shapes an answer must be visible.
+**The user is never left guessing.** A run that retries, exhausts its attempts, hits the tool-iteration cap, answers from recalled context, or omits optional prompt material to honor a configured model window emits a durable notice (#23, #24, #30, #33, TUR-020). Silence is indistinguishable from a hang, so anything that delays or shapes an answer must be visible.
 
 **Recalled context is attributed.** Memory that arrives unattributed reads as confabulation. If an answer draws on an earlier conversation, the user is told (#33).
 
@@ -60,6 +60,7 @@ Each is a decision already made and defended in review, cited to where it happen
 | Model-driven tool calling | Working, live-verified against a real model (#19, #27) |
 | Dynamic tool discovery | Working; runtime reports its registry to the orchestrator (#17, #26) |
 | Cross-session recall | Working — SQLite FTS5, keyword search, attributed to the user (#15, #18, #25, #33) |
+| Context budgeting | Working — provider windows are explicit, Ollama `num_ctx` is pinned per request, whole-unit omissions are durable notices, and live tool protocol is never partially truncated (TUR-020) |
 | Approvals | Working; single-use argument-bound JWT, consumed over internal gRPC |
 | Audit | **Write-only.** Rows are recorded; there is no read path in any proto or client |
 | Streaming + resilience | Working; reconnect, requeue, lease recovery, run-visibility notices (#24, #30, #33) |
@@ -70,6 +71,8 @@ Each is a decision already made and defended in review, cited to where it happen
 | Process split | **Shipped** — the agent runtime is its own container, leased over a bidi gRPC stream. (It is *not* its own Go module; only `mcp-files` and `mcp-system` are.) |
 | Clients | **One** (Flutter, macOS-focused). Codegen emits Go and Dart only; both are consumed today |
 | Providers | Ollama (default), OpenAI-compatible (opt-in per request) |
+
+Context admission is conservative rather than tokenizer-exact: built-in providers measure their exact serialized request and count one UTF-8 byte as one estimated token. The operator configures each provider/model window; Turing does not yet discover model capabilities or persist exact provider token usage. Provenance-preserving summaries remain MEM-014, not part of TUR-020.
 
 Known gaps, honestly: a live `agent.run.failed` or `agent.run.cancelled` now renders as an inline failure or cancellation card, but — like tool cards and run notices — that entry is suppressed on session reopen by the replay watermark, so a past failed or cancelled run can still surface as an unexplained empty turn; a requeued run with no worker waits indefinitely; startup-recovery notices are published before the gRPC servers exist and so reach no subscriber; there is no curated user memory, only keyword recall over raw messages; audit is not inspectable.
 

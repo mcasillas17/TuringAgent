@@ -250,11 +250,17 @@ Task IDs are stable references, not priority numbers. Delivery order follows `do
 
 #### TUR-020 — Pin and enforce the model context budget
 
-**Outcome:** The assembled prompt cannot silently exceed the model's context window, and recall cannot be dropped without notice.  
-**Scope:** Set Ollama `num_ctx` explicitly from configuration; measure history, recall, tool schemas, and tool results before dispatch; apply an explicit priority/truncation policy; emit a durable notice when content is omitted.  
-**Likely files:** Ollama provider/config, general-assistant context assembly, events, long-context tests.  
-**Acceptance:** The runtime never relies on a host default; an overflowing fixture produces a notice; a representative long session proves the recall block reaches the provider.  
-**Dependencies:** None. No `num_ctx` or equivalent is configured today; the runtime combines a 50-message history, bounded recall, tool schemas, and potentially large tool results without measuring the final prompt.
+**Status:** Implemented 2026-08-18.
+
+**Outcome:** The assembled prompt cannot silently exceed the model's context window, and recall cannot be dropped without notice.
+
+**Shipped behavior:** `OLLAMA_CONTEXT_WINDOW_TOKENS` is validated at startup and sent as Ollama `options.num_ctx` on every request; `OPENAI_CONTEXT_WINDOW_TOKENS` applies the same local admission contract without leaking Ollama fields. Built-in providers conservatively account from their exact serialized request. The runtime keeps skills, the current turn, complete live tool protocol, required schemas, whole optional schemas, whole recall, and newest complete history in that order. Changed omissions produce durable `agent.run.step` notices. Mandatory live protocol that cannot fit fails rather than being cut.
+
+**Limit:** The estimate is intentionally conservative—one serialized UTF-8 request byte per estimated token—not tokenizer-exact usage. Model capability discovery and provenance-preserving summaries remain future work (MEM-014).
+
+**Acceptance evidence:** Configuration, Ollama/OpenAI wire, long-session recall, recall-omission, evolving tool-result, live-protocol integrity, and persisted-notice tests cover the contract.
+
+**Dependencies:** None.
 
 #### TUR-001 — Make `SendMessage` idempotent
 

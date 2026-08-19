@@ -64,6 +64,7 @@ The default local model path is Ollama:
 ```text
 OLLAMA_BASE_URL=http://host.docker.internal:11434
 OLLAMA_MODEL=qwen2.5:7b
+OLLAMA_CONTEXT_WINDOW_TOKENS=8192
 ```
 
 OpenAI-compatible models can be configured with:
@@ -72,9 +73,23 @@ OpenAI-compatible models can be configured with:
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini
+OPENAI_CONTEXT_WINDOW_TOKENS=8192
 ```
 
-The Flutter client sends the selected provider with each message. The backend owns provider routing and model execution.
+Both context values must be integers from `1` through `16777216`; invalid configuration stops the runtime at startup. Ollama receives its value as `options.num_ctx` on every request. OpenAI-compatible providers and routed external agents use their value for local admission only, so no Ollama-only option leaks onto their wire format. Operators must match each value to the selected model because Turing does not currently discover model capabilities.
+
+Before dispatch, each built-in provider serializes the exact JSON request it would send. The runtime conservatively counts one UTF-8 request byte as one estimated token. This intentionally avoids claiming exact tokenizer or billing usage while providing one deterministic bound for messages, tool schemas, aliases, and provider framing.
+
+Admission priority is:
+
+1. Attached skills, the current user turn, and the complete live assistant tool-call/result chain.
+2. Whole tool definitions in stable registry order; any definition referenced by live protocol is mandatory.
+3. The whole attributed recall block.
+4. Complete history turns, newest first.
+
+Optional material is removed only in whole units. Whenever the omission set changes, the runtime emits an `agent.run.step` with `reason=context_budget`; the orchestrator persists it and the Flutter client renders its `note` inline. Mandatory live protocol that does not fit fails with `context_budget_exceeded` and is never partially truncated. Provider request marshaling retains a separate 16 MiB hard limit but no longer trims history itself.
+
+The Flutter client sends the selected provider with each message. The backend owns provider routing, context admission, and model execution.
 
 ## Approval flow
 
