@@ -26,12 +26,54 @@ Keep: the enqueue-time snapshot. Freezing what a run was told to do is
 independent of where the text came from, and it is what stops an edit
 rewriting a reply already in flight.
 
-## Where the folder lives
+## Layout, identity, and what the database still holds
 
-`turing-backend/skills/` on the host, mounted into the orchestrator at
-`/skills`, exactly as `../sandbox:/sandbox` is today. `init.sh` creates it.
-This is the only reason the question needs asking at all: OpenClaw, Hermes and
-Scout run natively and simply use a home directory.
+The ecosystem's shape, confirmed from Hermes' and OpenClaw's own docs — a
+folder per skill, not a flat pile of markdown:
+
+```
+turing-backend/skills/
+└── writing/              <- category
+    └── tone/             <- the skill; this path is its identity
+        ├── SKILL.md
+        └── references/   <- optional, addressable by skill_view
+```
+
+Mounted into the orchestrator at `/skills`, exactly as `../sandbox:/sandbox` is
+today, and created by `init.sh`. This only needs deciding because we run in
+Docker; OpenClaw, Hermes and Scout run natively and use a home directory.
+
+**Category is the parent folder, not frontmatter.** That is where the
+`category` in `skills_list()` comes from.
+
+**Identity is the path from the skills root** — `writing/tone`. Neither system
+has an `id` field; the folder name is the identifier. The folder name alone is
+not enough for us because `writing/tone` and `email/tone` can both exist, so
+the relative path is the id.
+
+Frontmatter carries `name` and `description` (both required), and may carry
+`version`, `author`, `license`. A skill folder may hold more than `SKILL.md` —
+`scripts/`, `references/` — which is what Hermes' third disclosure level
+addresses.
+
+**Renaming a folder creates a new skill.** Its enabled flag resets to off.
+This is a consequence of matching the ecosystem rather than inventing an id
+field, and it is the right behaviour anyway: a renamed skill is a different
+thing, and re-enabling it is one click.
+
+### The database keeps exactly one column
+
+`(skill_id, enabled)`. Nothing else.
+
+Name, description and category are read from the files. Copying them into the
+database would create a second source of truth that drifts the moment someone
+edits a description — a stale answer with no error to notice. Parsing a few
+hundred small markdown files is milliseconds; there is nothing to cache.
+
+Reconciliation runs at startup and when the Skills page opens. **A file that
+appears is disabled by default**, so dropping a folder into the mount cannot
+silently start influencing answers. A file that disappears leaves its row
+harmlessly; the row is keyed by a path that no longer resolves.
 
 ## The selection problem, which is the real risk
 
@@ -62,11 +104,16 @@ only becomes worth reconsidering in the hundreds — at which point the fetch
 model earns its keep and this should be revisited with real numbers from
 Telemetry rather than a guess.
 
-Bodies stay on demand, via one tool:
+Both are provided:
 
-1. Every request carries the index.
-2. The model asks for a body by name through `skill_view`.
-3. If it never asks, nothing is lost but that skill.
+1. Every request carries the **enabled** index. Enabling is curation, so the
+   set is small by construction — this is what makes injection affordable and
+   removes the dependency on a 7B deciding to look.
+2. `skills_list()` exists anyway, returning `{name, description, category}`
+   for enabled skills. It costs nothing until called, and it is the path that
+   still works when a library outgrows injection.
+3. `skill_view(id)` returns a body; `skill_view(id, path)` a reference file
+   inside the skill folder.
 
 **Degrades in the safe direction.** A model too weak to select gets an
 unhelpful answer, not a wrong action — the tool only reads a file the user
@@ -110,8 +157,14 @@ the 7B case without making the common path depend on it.
 
 ## Verification
 
-Loader: valid file, missing frontmatter, unreadable file, duplicate names,
-path escape, empty folder, folder absent entirely. Index: bounded size,
+Loader: valid skill folder, missing frontmatter, unreadable `SKILL.md`, a
+folder with no `SKILL.md` at all, two skills of the same name under different
+categories, path escape, empty root, root absent entirely.
+
+Identity and enablement: a new folder arrives disabled; enabling then renaming
+the folder leaves the new path disabled and does not resurrect the old row;
+editing a description changes what `skills_list()` returns without any
+database write. Index: bounded size,
 excludes bodies. `skill_view`: refuses paths outside the root, returns a body
 by id and by filename stem. Export: every DB skill lands as a readable file
 with its name and instructions intact, and is idempotent on a second run.
