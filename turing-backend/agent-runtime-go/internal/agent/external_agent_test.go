@@ -2,6 +2,7 @@ package agent
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -232,6 +233,39 @@ func TestExternalAgentProviderUsesConfiguredContextWindow(t *testing.T) {
 	if got := provider.ContextWindowTokens(); got != 4096 {
 		t.Fatalf("context window = %d, want 4096", got)
 	}
+}
+
+func TestRoutedExternalAgentNoticesOpenAIOutputLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(
+			"data: " + `{"choices":[{"index":0,"delta":{"content":"partial"}}]}` + "\n\n" +
+				"data: " + `{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}` + "\n\n",
+		))
+	}))
+	t.Cleanup(server.Close)
+	provider, err := llm.NewOpenAICompatibleWithLimits(server.URL, "", server.Client(), 4096, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assistant := NewGeneralAssistant(nil, fakeMessageClient{}, &GeneralAssistantTools{})
+	assistant.SetExternalAgentProvider(func(*turingv1.ExternalAgentTarget) (llm.Provider, error) {
+		return provider, nil
+	})
+
+	updates := collectUpdates(t, assistant, routedJob())
+
+	for _, update := range updates {
+		event := update.GetEvent()
+		if event == nil || event.Type != turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
+			continue
+		}
+		payload := event.GetPayload().AsMap()
+		if payload["reason"] == "model_output_limit" &&
+			payload["setting"] == "OPENAI_MAX_OUTPUT_TOKENS" {
+			return
+		}
+	}
+	t.Fatalf("routed output-limit notice missing from updates: %#v", updates)
 }
 
 // The user opted ONE conversation into leaving. Recall draws on conversations

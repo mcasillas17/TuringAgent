@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -502,6 +504,7 @@ func TestExecuteNoticesWhenOllamaReachesConfiguredOutputLimit(t *testing.T) {
 		if completed := update.GetRunCompleted(); completed != nil {
 			completionIndex = index
 		}
+
 		event := update.GetEvent()
 		if event == nil || event.Type != turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
 			continue
@@ -519,8 +522,49 @@ func TestExecuteNoticesWhenOllamaReachesConfiguredOutputLimit(t *testing.T) {
 			t.Fatalf("notice = %q, want Ollama configuration guidance", note)
 		}
 	}
+
 	if noticeIndex < 0 || completionIndex < 0 || noticeIndex >= completionIndex {
 		t.Fatalf("notice/completion indices = %d/%d, want notice before successful completion", noticeIndex, completionIndex)
+	}
+}
+
+func TestExecuteNoticesRealOpenAILengthStopWithPendingToolFragment(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w,
+			"data: "+`{"choices":[{"index":0,"delta":{"content":"partial","tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"files_create","arguments":"{\"path\":\""}}]}}]}`+"\n\n"+
+				"data: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`+"\n\n",
+		)
+	}))
+	t.Cleanup(server.Close)
+	provider, err := llm.NewOpenAICompatibleWithLimits(server.URL, "", server.Client(), 4096, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := testJob()
+	job.ModelProvider = turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE: provider,
+		},
+		fakeMessageClient{},
+		&GeneralAssistantTools{},
+	)
+
+	updates := collectUpdates(t, assistant, job)
+
+	if failure := findRunFailed(updates); failure != nil {
+		t.Fatalf("OpenAI length stop failed the run: %#v", failure)
+	}
+	var notice map[string]any
+	for _, update := range updates {
+		event := update.GetEvent()
+		if event != nil && event.Type == turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP &&
+			event.GetPayload().AsMap()["reason"] == "model_output_limit" {
+			notice = event.GetPayload().AsMap()
+		}
+	}
+	if notice == nil || notice["setting"] != "OPENAI_MAX_OUTPUT_TOKENS" {
+		t.Fatalf("output-limit notice = %#v, want OpenAI setting", notice)
 	}
 }
 

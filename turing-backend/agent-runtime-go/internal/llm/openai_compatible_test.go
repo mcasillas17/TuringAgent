@@ -193,10 +193,23 @@ func TestOpenAIRejectsDoneWithPendingToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	got := collectEvents(events)
 	if len(got) != 1 || got[0].Type != "error" || got[0].Code != "model_bad_chunk" ||
 		!strings.Contains(got[0].Message, "[DONE]") || !strings.Contains(got[0].Message, "unfinished tool call") {
 		t.Fatalf("events = %+v, want malformed premature DONE error", got)
+	}
+}
+
+func TestOpenAIReportsLengthWithPendingToolCallAsOutputLimitCompletion(t *testing.T) {
+	got := streamOpenAIEvents(t,
+		"data: "+`{"choices":[{"index":0,"delta":{"content":"partial","tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"files_create","arguments":"{\"path\":\""}}]}}]}`+"\n\n"+
+			"data: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`+"\n\n",
+	)
+
+	assertOpenAIEventTypes(t, got, "delta", "completed")
+	if got[0].Text != "partial" || got[1].FinishReason != "length" {
+		t.Fatalf("events = %+v, want partial delta then length completion", got)
 	}
 }
 

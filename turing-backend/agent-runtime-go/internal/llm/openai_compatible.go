@@ -647,7 +647,7 @@ func parseOpenAIData(data []byte, state *openAIStreamState) ([]StreamEvent, bool
 				calls = append(calls, ToolCall{ID: id, Name: name, Arguments: arguments})
 			}
 			events = append(events, StreamEvent{Type: "tool_call", ToolCalls: calls})
-		} else if len(state.toolCalls) > 0 {
+		} else if len(state.toolCalls) > 0 && *choice.FinishReason != "length" {
 			return nil, false, fmt.Errorf("finish_reason %q received with unfinished tool calls", *choice.FinishReason)
 		}
 		events = append(events, StreamEvent{Type: "completed", FinishReason: *choice.FinishReason})
