@@ -37,20 +37,12 @@ const (
 	minTermLen = 3
 	ellipsis   = "…"
 
-	// perTermHits is deliberately far larger than maxExcerpts, because the rows
-	// this package throws away are drawn from the same window as the ones it
-	// keeps. The server cannot exclude a session — SearchMessagesRequest.SessionId
-	// only scopes *to* one — so it returns the best `limit` rows by bm25 across
-	// ALL sessions and rank() filters here. When the user asks about the topic
-	// they have been discussing in this very session, that session's own messages
-	// are the ones carrying those terms: with a small window they fill it, get
-	// dropped, and recall goes quiet in exactly the case it is most wanted.
-	//
-	// Upper bound is the repository's, and it does not clamp: a limit above 100
-	// falls back to 20 (repository.SearchMessages), which would be worse than
-	// asking for less. The store is a local SQLite file over loopback, so a wider
-	// page costs almost nothing.
-	perTermHits = 40
+	// perScopeTermHits is deliberately far larger than maxExcerpts. Each term
+	// gets one earlier-session search and one current-session search so neither
+	// scope can crowd the other out before rank() removes admitted duplicates.
+	// At maxTerms this is bounded to 12 local queries and 480 returned rows under
+	// one shared deadline.
+	perScopeTermHits = 40
 
 	// Defaults applied when a Recaller leaves a budget unset, so that a
 	// hand-constructed recaller recalls rather than silently doing nothing.
@@ -149,7 +141,13 @@ func (p *preparedRecallHits) addTerm(term string, found []Excerpt, maxChars int)
 // Searcher is the orchestrator lookup this package needs, kept narrow so tests
 // can supply a fake without standing up a gRPC server.
 type Searcher interface {
-	SearchMessages(ctx context.Context, query string, limit int) ([]Excerpt, error)
+	SearchMessages(
+		ctx context.Context,
+		query string,
+		sessionID string,
+		excludedSessionID string,
+		limit int,
+	) ([]Excerpt, error)
 }
 
 // Recaller surfaces excerpts from earlier sessions.
@@ -223,7 +221,7 @@ func (r *Recaller) PrepareRecall(
 	// a local SQLite file over loopback, so the extra round-trips are cheap.
 	prepared := newPreparedRecallHits()
 	for _, query := range queries {
-		found, err := r.Search.SearchMessages(ctx, query, perTermHits)
+		found, err := r.Search.SearchMessages(ctx, query, "", currentSessionID, perScopeTermHits)
 		if err != nil {
 			// Stop, but keep what earlier terms already returned. The queries share
 			// one deadline, so the usual failure is a late term tripping it —
@@ -231,6 +229,20 @@ func (r *Recaller) PrepareRecall(
 			// recall into no recall for nothing. An error on the first query still
 			// leaves hits empty, so a dead backend produces no block at all.
 			break
+		}
+		if currentSessionID != "" {
+			currentSessionFound, currentErr := r.Search.SearchMessages(
+				ctx,
+				query,
+				currentSessionID,
+				"",
+				perScopeTermHits,
+			)
+			found = append(found, currentSessionFound...)
+			if currentErr != nil {
+				prepared.addTerm(query, found, r.MaxChars)
+				break
+			}
 		}
 		prepared.addTerm(query, found, r.MaxChars)
 	}
@@ -384,7 +396,7 @@ func rank(hits map[string][]Excerpt, currentSessionID string, inContext *inConte
 			next++
 		}
 	}
-	return budgetScored(byKey, maxExcerpts, maxChars)
+	return budgetScored(byKey, currentSessionID, maxExcerpts, maxChars)
 }
 
 func rankPrepared(
@@ -432,7 +444,7 @@ func rankPrepared(
 			next++
 		}
 	}
-	return budgetScored(byKey, maxExcerpts, maxChars)
+	return budgetScored(byKey, currentSessionID, maxExcerpts, maxChars)
 }
 
 func suppressedCurrentSessionCandidates(
@@ -491,21 +503,35 @@ func suppressedCurrentSessionCandidates(
 	return suppressed
 }
 
-func budgetScored(byKey map[string]*scored, maxExcerpts int, maxChars int) []Excerpt {
-
-	ordered := make([]*scored, 0, len(byKey))
+func budgetScored(
+	byKey map[string]*scored,
+	currentSessionID string,
+	maxExcerpts int,
+	maxChars int,
+) []Excerpt {
+	earlierSession := make([]*scored, 0, len(byKey))
+	currentSession := make([]*scored, 0, len(byKey))
 	for _, entry := range byKey {
-		ordered = append(ordered, entry)
+		if entry.excerpt.SessionID == currentSessionID {
+			currentSession = append(currentSession, entry)
+		} else {
+			earlierSession = append(earlierSession, entry)
+		}
 	}
-	sort.SliceStable(ordered, func(i, j int) bool {
-		if ordered[i].matches != ordered[j].matches {
-			return ordered[i].matches > ordered[j].matches
-		}
-		if !ordered[i].excerpt.CreatedAt.Equal(ordered[j].excerpt.CreatedAt) {
-			return ordered[i].excerpt.CreatedAt.After(ordered[j].excerpt.CreatedAt)
-		}
-		return ordered[i].order < ordered[j].order
-	})
+	sortScope := func(entries []*scored) {
+		sort.SliceStable(entries, func(i, j int) bool {
+			if entries[i].matches != entries[j].matches {
+				return entries[i].matches > entries[j].matches
+			}
+			if !entries[i].excerpt.CreatedAt.Equal(entries[j].excerpt.CreatedAt) {
+				return entries[i].excerpt.CreatedAt.After(entries[j].excerpt.CreatedAt)
+			}
+			return entries[i].order < entries[j].order
+		})
+	}
+	sortScope(earlierSession)
+	sortScope(currentSession)
+	ordered := append(earlierSession, currentSession...)
 
 	out := make([]Excerpt, 0, len(ordered))
 	remaining := maxChars

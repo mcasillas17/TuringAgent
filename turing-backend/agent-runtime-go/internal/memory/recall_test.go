@@ -20,14 +20,22 @@ func at(day int) time.Time {
 type fakeSearcher struct {
 	byTerm map[string][]Excerpt
 	// failFrom, when non-zero, fails the failFrom'th query onwards (1-based).
-	failFrom int
-	queries  []string
-	limits   []int
-	err      error
-	block    chan struct{}
+	failFrom           int
+	queries            []string
+	sessionIDs         []string
+	excludedSessionIDs []string
+	limits             []int
+	err                error
+	block              chan struct{}
 }
 
-func (f *fakeSearcher) SearchMessages(ctx context.Context, query string, limit int) ([]Excerpt, error) {
+func (f *fakeSearcher) SearchMessages(
+	ctx context.Context,
+	query string,
+	sessionID string,
+	excludedSessionID string,
+	limit int,
+) ([]Excerpt, error) {
 	// A real gRPC search fails immediately under an already-expired context, so
 	// model that here: it is what makes a missing Timeout default observable
 	// rather than a silently permanent no-op.
@@ -35,6 +43,8 @@ func (f *fakeSearcher) SearchMessages(ctx context.Context, query string, limit i
 		return nil, err
 	}
 	f.queries = append(f.queries, query)
+	f.sessionIDs = append(f.sessionIDs, sessionID)
+	f.excludedSessionIDs = append(f.excludedSessionIDs, excludedSessionID)
 	f.limits = append(f.limits, limit)
 	if f.failFrom > 0 && len(f.queries) >= f.failFrom {
 		return nil, errors.New("search failed")
@@ -49,12 +59,19 @@ func (f *fakeSearcher) SearchMessages(ctx context.Context, query string, limit i
 	if f.err != nil {
 		return nil, f.err
 	}
-	// Honour the limit as the server does: SearchMessages returns the best `limit`
-	// rows by bm25 across ALL sessions and cannot exclude one, so asking for too
-	// few is indistinguishable from those rows not existing.
-	found := f.byTerm[query]
-	if limit > 0 && len(found) > limit {
-		found = found[:limit]
+	// Honour the scope, exclusion, and limit as the server does.
+	var found []Excerpt
+	for _, excerpt := range f.byTerm[query] {
+		if sessionID != "" && excerpt.SessionID != sessionID {
+			continue
+		}
+		if excludedSessionID != "" && excerpt.SessionID == excludedSessionID {
+			continue
+		}
+		found = append(found, excerpt)
+		if limit > 0 && len(found) == limit {
+			break
+		}
 	}
 	return found, nil
 }
@@ -101,8 +118,8 @@ func TestPrepareRecallSearchesOnceAndReranksForEachAdmittedContext(t *testing.T)
 	if !ok || !strings.Contains(withoutCurrent.Content, current.Content) {
 		t.Fatalf("prepared recall without current context = %#v", withoutCurrent)
 	}
-	if len(search.queries) != 1 {
-		t.Fatalf("search queries = %v, want one prepared search", search.queries)
+	if len(search.queries) != 2 {
+		t.Fatalf("search queries = %v, want one earlier-session and one current-session search", search.queries)
 	}
 }
 
@@ -168,6 +185,38 @@ func TestPreparedRecallSuppressesOnlyAdmittedDuplicateOccurrences(t *testing.T) 
 	)
 	if len(got) != 1 || got[0].MessageID != "older" {
 		t.Fatalf("prepared duplicate ranking = %+v, want only omitted older occurrence", got)
+	}
+}
+
+func TestRankPreparedReservesEarlierSessionBeforeCurrentHistory(t *testing.T) {
+	earlier := Excerpt{
+		MessageID: "earlier",
+		SessionID: "session-earlier",
+		Role:      "assistant",
+		Content:   "earlier session detail",
+		CreatedAt: at(1),
+	}
+	current := Excerpt{
+		MessageID: "current",
+		SessionID: "session-current",
+		Role:      "assistant",
+		Content:   "omitted current session detail",
+		CreatedAt: at(2),
+	}
+	prepared := newPreparedRecallHits()
+	prepared.addTerm("alpha", []Excerpt{earlier, current}, defaultMaxChars)
+	prepared.addTerm("bravo", []Excerpt{current}, defaultMaxChars)
+
+	got := rankPrepared(
+		prepared,
+		"session-current",
+		inContextKeys([]llm.ChatMessage{{Role: "user", Content: "different admitted message"}}),
+		1,
+		defaultMaxChars,
+	)
+
+	if len(got) != 1 || got[0].MessageID != earlier.MessageID {
+		t.Fatalf("ranked excerpts = %+v, want the earlier-session match reserved first", got)
 	}
 }
 
@@ -699,8 +748,8 @@ func TestRecallQueriesEachTermAndRendersABlock(t *testing.T) {
 	if !ok {
 		t.Fatal("expected a recalled block")
 	}
-	if len(f.queries) != 2 {
-		t.Fatalf("expected one query per term, got %v", f.queries)
+	if len(f.queries) != 4 {
+		t.Fatalf("expected an earlier-session and current-session query per term, got %v", f.queries)
 	}
 	if !strings.Contains(block.Content, "cluster notes") {
 		t.Fatalf("block missing recalled content:\n%s", block.Content)
@@ -773,7 +822,7 @@ func TestRecallKeepsHitsGatheredBeforeAFailingQuery(t *testing.T) {
 		byTerm: map[string][]Excerpt{
 			"cluster": {{SessionID: "s1", Role: "user", Content: "cluster notes", CreatedAt: at(1)}},
 		},
-		failFrom: 2,
+		failFrom: 3,
 	}
 	block, ok := (&Recaller{Search: f}).Recall(context.Background(), "current", "cluster deploy", nil)
 	if !ok {
@@ -825,17 +874,16 @@ func TestRecallSurfacesCurrentSessionHistoryOutsideTheFetchWindow(t *testing.T) 
 	}
 }
 
-// The server has no "exclude this session" option — SearchMessagesRequest only
-// scopes TO a session — so the rows dropped here come out of the same page as
-// the rows kept. When the user asks about what they have been discussing in this
-// very session, that session's messages are the ones carrying the terms and they
-// fill the page. Ask for a page wide enough that earlier material survives.
-func TestRecallAsksForFarMoreRowsThanItRenders(t *testing.T) {
-	// A busy on-topic session: 30 of its own messages score highest for the term,
+// Current-session and earlier-session hits need independent windows. Otherwise
+// an on-topic current session can fill the global page before an earlier match
+// is returned.
+func TestRecallSeparatesCurrentAndEarlierSessionSearches(t *testing.T) {
+	// A busy on-topic session: a full global page of its own messages scores
+	// highest for the term,
 	// and the one earlier-session message that recall exists to find sits behind
 	// them. Every current-session row is discarded after the query, so a narrow
 	// page spends itself on rows that never reach the block.
-	const currentSessionRows = 30
+	const currentSessionRows = perScopeTermHits
 	page := make([]Excerpt, 0, currentSessionRows+1)
 	for i := 1; i <= currentSessionRows; i++ {
 		page = append(page, Excerpt{
@@ -859,7 +907,20 @@ func TestRecallAsksForFarMoreRowsThanItRenders(t *testing.T) {
 	}
 	// The repository does not clamp, it falls back: a limit over 100 becomes 20
 	// (repository.SearchMessages), i.e. less than asking for less.
-	if len(f.limits) != 1 || f.limits[0] <= 0 || f.limits[0] > 100 {
-		t.Fatalf("query limit must be a positive value the repository honours, got %v", f.limits)
+	if len(f.limits) != 2 {
+		t.Fatalf("searches = %v, want one excluded-session and one current-session query", f.queries)
+	}
+	if f.sessionIDs[0] != "" || f.excludedSessionIDs[0] != "current" ||
+		f.sessionIDs[1] != "current" || f.excludedSessionIDs[1] != "" {
+		t.Fatalf(
+			"search scopes = session %v excluded %v, want earlier/current split",
+			f.sessionIDs,
+			f.excludedSessionIDs,
+		)
+	}
+	for _, limit := range f.limits {
+		if limit <= 0 || limit > 100 {
+			t.Fatalf("query limit must be a positive value the repository honours, got %v", f.limits)
+		}
 	}
 }

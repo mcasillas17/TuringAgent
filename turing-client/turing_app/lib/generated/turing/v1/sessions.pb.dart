@@ -691,11 +691,13 @@ class SearchMessagesRequest extends $pb.GeneratedMessage {
     $core.String? query,
     $core.String? sessionId,
     $core.int? limit,
+    $core.String? excludeSessionId,
   }) {
     final result = create();
     if (query != null) result.query = query;
     if (sessionId != null) result.sessionId = sessionId;
     if (limit != null) result.limit = limit;
+    if (excludeSessionId != null) result.excludeSessionId = excludeSessionId;
     return result;
   }
 
@@ -715,6 +717,7 @@ class SearchMessagesRequest extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'query')
     ..aOS(2, _omitFieldNames ? '' : 'sessionId')
     ..a<$core.int>(3, _omitFieldNames ? '' : 'limit', $pb.PbFieldType.O3)
+    ..aOS(4, _omitFieldNames ? '' : 'excludeSessionId')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -766,6 +769,15 @@ class SearchMessagesRequest extends $pb.GeneratedMessage {
   $core.bool hasLimit() => $_has(2);
   @$pb.TagNumber(3)
   void clearLimit() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get excludeSessionId => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set excludeSessionId($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasExcludeSessionId() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearExcludeSessionId() => $_clearField(4);
 }
 
 class SearchMessagesResponse extends $pb.GeneratedMessage {

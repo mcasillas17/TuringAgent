@@ -83,6 +83,8 @@ type staticRecallSearcher struct {
 func (s staticRecallSearcher) SearchMessages(
 	context.Context,
 	string,
+	string,
+	string,
 	int,
 ) ([]memory.Excerpt, error) {
 	return s.excerpts, nil
@@ -262,6 +264,17 @@ func TestExecuteBoundsInjectedSkillIndexToProviderContext(t *testing.T) {
 		!containsToolDefinition(provider.requests[0].Tools, "skill_view") {
 		t.Fatalf("bounded skill index lost its access tools: %#v", provider.requests[0].Tools)
 	}
+	for _, update := range updates {
+		event := update.GetEvent()
+		if event == nil || event.Type != turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
+			continue
+		}
+		payload := event.GetPayload().AsMap()
+		if payload["reason"] == "context_budget" && payload["skillIndexOmitted"] == true {
+			return
+		}
+	}
+	t.Fatalf("updates did not durably disclose the partial enabled skill index: %#v", updates)
 }
 
 func TestExecuteDisclosesOmittedEnabledSkillIndex(t *testing.T) {
@@ -306,6 +319,38 @@ func TestExecuteDisclosesOmittedEnabledSkillIndex(t *testing.T) {
 		}
 	}
 	t.Fatalf("updates did not disclose the omitted enabled skill index: %#v", updates)
+}
+
+func TestExecuteDoesNotReportSkillIndexOmissionForLegacyOnlySkills(t *testing.T) {
+	provider := &budgetCapturingProvider{window: 4096, output: 100}
+	job := testJob()
+	job.Skills = []*turingv1.SkillSnapshot{{
+		Name:         "Legacy tone",
+		Instructions: "Keep responses concise.",
+	}}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
+		},
+		fakeMessageClient{},
+		&GeneralAssistantTools{},
+	)
+
+	updates := collectUpdates(t, assistant, job)
+
+	if len(provider.requests) != 1 ||
+		!containsMessageContent(provider.requests[0].Messages, "Keep responses concise.") {
+		t.Fatalf("legacy skill did not reach the provider: %#v", provider.requests)
+	}
+	for _, update := range updates {
+		event := update.GetEvent()
+		if event == nil || event.Type != turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
+			continue
+		}
+		if event.GetPayload().AsMap()["skillIndexOmitted"] == true {
+			t.Fatalf("legacy-only skills produced a false index omission: %#v", update)
+		}
+	}
 }
 
 func TestExecuteRecallsCurrentSessionHistoryOmittedByBudget(t *testing.T) {

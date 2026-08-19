@@ -210,7 +210,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	// through skill_view or an exact $path/id invocation. Legacy queued jobs
 	// retain their old full-body snapshot behavior until they drain.
 	toolDefinitions := registry.Definitions()
-	skillMessages, skillIndexIncluded, err := buildSkillMessagesWithinContext(
+	skillMessages, skillIndexIncluded, skillIndexOmitted, err := buildSkillMessagesWithinContext(
 		provider,
 		job.GetModel(),
 		job.GetSkills(),
@@ -221,8 +221,6 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	if err != nil {
 		return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
 	}
-	_, skillIndexAvailable := skillIndexUserMessage(job.GetSkills())
-	skillIndexOmitted := skillIndexAvailable && !skillIndexIncluded
 	var requiredToolNames map[string]struct{}
 	if skillIndexIncluded {
 		requiredToolNames = map[string]struct{}{
@@ -498,19 +496,19 @@ func buildSkillMessagesWithinContext(
 	userText string,
 	liveMessages []llm.ChatMessage,
 	toolDefinitions []llm.ToolDefinition,
-) ([]llm.ChatMessage, bool, error) {
+) ([]llm.ChatMessage, bool, bool, error) {
 	var required []llm.ChatMessage
 	if legacy, ok := legacySkillsMessage(skills); ok {
 		required = append(required, legacy)
 	}
 	required = append(required, explicitlyInvokedSkillMessages(skills, userText)...)
 
-	indexAtLimit := func(maxContentBytes int) ([]llm.ChatMessage, bool) {
-		index := skillIndexMessagesWithinBytes(skills, maxContentBytes)
+	indexAtLimit := func(maxContentBytes int) ([]llm.ChatMessage, bool, bool) {
+		index, metadataOmitted := skillIndexMessagesWithinBytes(skills, maxContentBytes)
 		messages := make([]llm.ChatMessage, 0, len(index)+len(required))
 		messages = append(messages, index...)
 		messages = append(messages, required...)
-		return messages, len(index) > 0
+		return messages, len(index) > 0, metadataOmitted
 	}
 	skillTools := make([]llm.ToolDefinition, 0, 2)
 	for _, definition := range toolDefinitions {
@@ -534,40 +532,42 @@ func buildSkillMessagesWithinContext(
 		return estimate <= provider.ContextWindowTokens()-provider.MaxOutputTokens(), nil
 	}
 
+	full, fullIncludesIndex, fullMetadataOmitted := indexAtLimit(maxInjectedSkillIndexBytes)
 	requiredFits, err := fits(required)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	if !requiredFits {
-		return required, false, nil
+		return required, false, fullIncludesIndex, nil
 	}
-	full, fullIncludesIndex := indexAtLimit(maxInjectedSkillIndexBytes)
 	fullFits, err := fits(full)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	if fullFits {
-		return full, fullIncludesIndex, nil
+		return full, fullIncludesIndex, fullMetadataOmitted, nil
 	}
 
 	best := required
 	bestIncludesIndex := false
+	bestMetadataOmitted := fullIncludesIndex
 	for low, high := 0, maxInjectedSkillIndexBytes; low <= high; {
 		middle := low + (high-low)/2
-		candidate, candidateIncludesIndex := indexAtLimit(middle)
+		candidate, candidateIncludesIndex, candidateMetadataOmitted := indexAtLimit(middle)
 		candidateFits, err := fits(candidate)
 		if err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
 		if candidateFits {
 			best = candidate
 			bestIncludesIndex = candidateIncludesIndex
+			bestMetadataOmitted = candidateMetadataOmitted || (fullIncludesIndex && !candidateIncludesIndex)
 			low = middle + 1
 		} else {
 			high = middle - 1
 		}
 	}
-	return best, bestIncludesIndex, nil
+	return best, bestIncludesIndex, bestMetadataOmitted, nil
 }
 
 func (a *GeneralAssistant) buildBudgetedContextWithRecall(
