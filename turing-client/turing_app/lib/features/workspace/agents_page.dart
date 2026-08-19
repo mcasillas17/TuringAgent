@@ -411,6 +411,18 @@ class _ExternalAgentEditorState extends State<ExternalAgentEditor> {
   bool _saving = false;
   String? _error;
 
+  /// The dropdown's options.
+  ///
+  /// An agent stored by a newer backend can carry a provider this build does
+  /// not know. Its row still has to be editable, and a dropdown whose value is
+  /// absent from its items throws — so the unrecognised value is listed while
+  /// it is the current one. Saving it is refused below: relabelling it as a
+  /// vendor the user did not pick would change who receives the conversation.
+  List<ExternalAgentProvider> get _providerChoices => [
+    if (_provider == ExternalAgentProvider.unknown) _provider,
+    ...ExternalAgentProvider.selectable,
+  ];
+
   @override
   void dispose() {
     _name.dispose();
@@ -451,6 +463,14 @@ class _ExternalAgentEditorState extends State<ExternalAgentEditor> {
         model.isEmpty ||
         credentialRef.isEmpty) {
       setState(() => _error = 'Every field is required.');
+      return;
+    }
+    if (_provider == ExternalAgentProvider.unknown) {
+      setState(
+        () => _error =
+            'This agent was set up by a newer version and its provider is not '
+            'one this app recognises. Pick one before saving.',
+      );
       return;
     }
     setState(() {
@@ -522,7 +542,7 @@ class _ExternalAgentEditorState extends State<ExternalAgentEditor> {
                 isExpanded: true,
                 decoration: const InputDecoration(labelText: 'Provider'),
                 items: [
-                  for (final provider in ExternalAgentProvider.selectable)
+                  for (final provider in _providerChoices)
                     DropdownMenuItem(
                       value: provider,
                       child: Text(provider.label),

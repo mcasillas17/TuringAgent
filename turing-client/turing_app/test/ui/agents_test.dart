@@ -186,6 +186,39 @@ void main() {
       expect(find.text('Claude'), findsOneWidget);
     });
 
+    // A row stored by a newer backend must still be editable. A dropdown whose
+    // current value is absent from its items throws, so this would crash the
+    // whole page rather than degrade.
+    testWidgets('an agent with a provider this build does not know opens', (
+      tester,
+    ) async {
+      final api = _AgentApi()
+        ..agents.add(
+          const ExternalAgent(
+            agentId: 'agent_1',
+            displayName: 'Something new',
+            provider: ExternalAgentProvider.unknown,
+            baseUrl: 'https://example.com/v1',
+            model: 'model-x',
+            credentialRef: 'x',
+            credentialAvailable: true,
+          ),
+        );
+      await _pumpAgents(tester, api);
+
+      await tester.tap(find.byTooltip('Edit agent'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      // And saving it unchanged is refused rather than silently relabelling it
+      // as a vendor the user did not pick.
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Pick one before saving'), findsOneWidget);
+      expect(api.updated, isEmpty);
+    });
+
     testWidgets('editing an agent starts from what it already is', (
       tester,
     ) async {
