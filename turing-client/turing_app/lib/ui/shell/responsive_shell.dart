@@ -7,6 +7,7 @@ import '../../features/chat/chat_screen.dart';
 import '../../features/search/search_screen.dart';
 import '../../features/settings/settings_screen.dart';
 import '../../features/workspace/agents_page.dart';
+import '../../features/workspace/automations_page.dart';
 import '../../features/workspace/session_agent_bar.dart';
 import '../../features/workspace/session_skills_bar.dart';
 import '../../features/workspace/integrations_page.dart';
@@ -405,7 +406,10 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       case ShellDestination.integrations:
         return IntegrationsPage(apiClient: widget.apiClient);
       case ShellDestination.automations:
-        return PlannedDestinationPage(destination: _destination);
+        return AutomationsPage(
+          apiClient: widget.apiClient,
+          onOpenSession: _selectSession,
+        );
     }
   }
 

@@ -390,6 +390,8 @@ func TestAppRegistersPublicAndInternalServices(t *testing.T) {
 		"turing.v1.ChatService",
 		"turing.v1.ApprovalService",
 		"turing.v1.IntegrationService",
+		"turing.v1.SkillService",
+		"turing.v1.AutomationService",
 	} {
 		if _, ok := publicServices[name]; !ok {
 			t.Fatalf("public server missing %s", name)
@@ -445,6 +447,11 @@ func TestAppStartsWithAndWithoutAnIntegrationKey(t *testing.T) {
 		DatabasePath:      t.TempDir() + "/turing.db",
 	}); err == nil {
 		t.Fatal("started with a malformed integration key")
+	// Nothing outside the orchestrator schedules a run, and the runtime has no
+	// reason to read the automation library — including the tool allowlists
+	// that decide what it may do unattended.
+	if _, ok := internalServices["turing.v1.AutomationService"]; ok {
+		t.Fatal("internal server should not expose the automation library to the runtime")
 	}
 }
 

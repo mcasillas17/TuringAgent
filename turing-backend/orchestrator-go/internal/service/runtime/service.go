@@ -52,6 +52,23 @@ type approvalCreator interface {
 	CreateApprovalForTool(ctx context.Context, runID string, toolCallID string, agentID string, toolName string, args map[string]any) (string, error)
 }
 
+// unattendedApprover is satisfied by the real approval service and is how an
+// automation's pre-approval reaches the ordinary approval path.
+//
+// It is a separate, optional interface rather than a second method on
+// approvalCreator so that an approval service which cannot grant unattended
+// approvals is a possible state rather than a compile error. When it is
+// missing, an automation's approval-required tool is blocked rather than
+// silently waiting — the safe direction.
+type unattendedApprover interface {
+	GrantUnattendedApproval(ctx context.Context, approvalID string, serverName string, toolName string) error
+}
+
+// AutomationNotAllowlistedCode is the run error an automation gets when it
+// reaches a tool it was not pre-approved for. Named because the client shows
+// it and a test asserts on it.
+const AutomationNotAllowlistedCode = "automation_tool_not_allowlisted"
+
 type worker struct {
 	commands      chan *turingv1.RuntimeCommand
 	done          chan struct{}
@@ -1549,6 +1566,16 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "tool_disabled")
 	}
 	if policy == tools.PolicyApprovalRequired {
+		// Whether anyone is awake to answer decides what "approval required"
+		// can mean here, so it is read before the approval is created rather
+		// than discovered while something waits.
+		grant, unattended, err := s.repo.GetAutomationRunGrant(ctx, beacon.RunId)
+		if err != nil {
+			return nil, status.Error(codes.Internal, "read automation grant failed")
+		}
+		if unattended && !grant.Allows(beaconServerName(beacon), beacon.ToolName) {
+			return s.blockUnattendedTool(ctx, beacon, run, argsJSON, argsHash, grant)
+		}
 		eventInput, err := toolStartedEventInput(beacon, run)
 		if err != nil {
 			return nil, err
@@ -1574,6 +1601,16 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 				return nil, errors.Join(err, terminalizeErr)
 			}
 			return terminalRunDecision(beacon, "approval_delivery_failed"), err
+		}
+		if unattended {
+			// Granted before the decision goes back, so the runtime's first
+			// poll already finds it approved. Nothing about the wait changes;
+			// there is simply no wait.
+			if err := s.grantUnattendedApproval(ctx, approvalID, beacon); err != nil {
+				log.Printf("grant unattended approval %s for automation %s: %v", approvalID, grant.AutomationID, err)
+				return s.failUnattendedRun(ctx, beacon, "automation_approval_failed",
+					"This automation could not be granted the approval it was pre-authorised for, so the run stopped rather than waiting for someone to answer.")
+			}
 		}
 		return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED, ToolCallId: beacon.ToolCallId, ApprovalId: approvalID}, nil
 	}
@@ -1608,6 +1645,79 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 	default:
 		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "unknown_policy")
 	}
+}
+
+// grantUnattendedApproval routes an automation's pre-approval through the
+// approval service's own approve path, so the token it produces is the same
+// single-use, argument-bound token a person's click produces.
+func (s *Server) grantUnattendedApproval(ctx context.Context, approvalID string, beacon *turingv1.ToolCallBeacon) error {
+	approver, ok := s.approvals.(unattendedApprover)
+	if !ok {
+		return errors.New("approval service cannot grant unattended approvals")
+	}
+	// Only the tool identity crosses this call. The allowlist it is checked
+	// against is re-read from storage on the other side, so this path cannot
+	// be the one that decides what an automation may do.
+	return approver.GrantUnattendedApproval(ctx, approvalID, beaconServerName(beacon), beacon.ToolName)
+}
+
+// blockUnattendedTool is what happens when an automation reaches a tool it was
+// not pre-approved for.
+//
+// The alternative — creating the approval and letting it sit — is the failure
+// mode this whole feature exists to avoid: a run waiting on a person who is
+// asleep, silent until the approval TTL quietly expires. So the tool call is
+// denied and the run is failed with a reason naming the automation and the
+// tool, which is what the client renders and what the automation's last-run
+// status reports.
+func (s *Server) blockUnattendedTool(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run, argsJSON string, argsHash string, grant repository.AutomationRunGrant) (*turingv1.ToolPolicyDecision, error) {
+	decision, err := s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, AutomationNotAllowlistedCode)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.audit.Record(ctx, beacon.RunId, "automation", grant.AutomationID, "automation.tool.blocked", beacon.ToolCallId, map[string]any{
+		"toolName":       beacon.ToolName,
+		"serverName":     beaconServerName(beacon),
+		"automationId":   grant.AutomationID,
+		"automationName": grant.AutomationName,
+	}); err != nil {
+		log.Printf("record blocked automation tool audit for %s: %v", beacon.ToolCallId, err)
+	}
+	message := fmt.Sprintf(
+		"%q needs approval to run %s, and that tool is not on this automation's allowlist. Nobody was asked, because an automation runs unattended; the run stopped here instead of waiting.",
+		grant.AutomationName, beacon.ToolName)
+	// The decision is discarded rather than merged: on a replayed beacon
+	// denyToolBefore reports why the tool call is ALREADY terminal
+	// ("tool_call_already_completed"), and letting that overwrite the reason
+	// here would make the runtime's terminal error disagree with the run's
+	// stored error_code.
+	_ = decision
+	return s.failUnattendedRun(ctx, beacon, AutomationNotAllowlistedCode, message)
+}
+
+// failUnattendedRun terminalises a run nobody is watching, and returns the
+// decision that tells the runtime to stop rather than keep calling tools.
+func (s *Server) failUnattendedRun(ctx context.Context, beacon *turingv1.ToolCallBeacon, code string, message string) (*turingv1.ToolPolicyDecision, error) {
+	payloadJSON, err := encodePayload(map[string]any{
+		"runId": beacon.GetRunId(), "code": code, "message": message, "retryable": false,
+	})
+	if err != nil {
+		return nil, err
+	}
+	events, err := s.repo.FailRunWithEventPreservingExecution(ctx, beacon.GetRunId(), code, message, payloadJSON)
+	if err != nil {
+		// The run is already terminal (cancelled, or failed by another path).
+		// Telling the runtime to stop is still right; failing the RPC would
+		// only leave it waiting.
+		if errors.Is(err, repository.ErrRunNotFailable) {
+			return terminalRunDecision(beacon, code), nil
+		}
+		return nil, err
+	}
+	for _, event := range events {
+		s.publishEvent(event)
+	}
+	return terminalRunDecision(beacon, code), nil
 }
 
 func (s *Server) terminalizePostCommitApprovalFailure(_ context.Context, runID string, toolCallID string) error {

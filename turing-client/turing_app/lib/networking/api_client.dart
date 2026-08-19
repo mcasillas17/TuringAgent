@@ -3,6 +3,7 @@ import 'dart:async';
 import '../models/agent_descriptor.dart';
 import '../models/external_agent.dart';
 import '../models/integration.dart';
+import '../models/automation.dart';
 import '../models/message.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
@@ -172,6 +173,37 @@ abstract class TuringApi {
   /// Removes the connection and its history. Deleting a live one destroys its
   /// credential too.
   Future<void> deleteConnection({required String connectionId});
+  /// Every automation, whether enabled or not.
+  Future<List<Automation>> listAutomations();
+
+  Future<Automation> createAutomation({
+    required String name,
+    required String prompt,
+    required AutomationSchedule schedule,
+    required bool enabled,
+    required List<AutomationTool> allowedTools,
+  });
+
+  /// Enabling is deliberately NOT part of this: a save must not require
+  /// resending a schedule you did not intend to change, and a toggle must not
+  /// require resending a prompt.
+  Future<Automation> updateAutomation({
+    required String automationId,
+    required String name,
+    required String prompt,
+    required AutomationSchedule schedule,
+    required List<AutomationTool> allowedTools,
+  });
+
+  Future<Automation> setAutomationEnabled({
+    required String automationId,
+    required bool enabled,
+  });
+
+  /// Stops future runs. The conversation it produced, and any run already in
+  /// flight, are left alone — the record of what it did outlives the schedule
+  /// that caused it.
+  Future<void> deleteAutomation({required String automationId});
 }
 
 class TuringApiException implements Exception {

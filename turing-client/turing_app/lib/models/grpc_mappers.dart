@@ -3,6 +3,7 @@ import '../generated/google/protobuf/timestamp.pb.dart' as timestamppb;
 
 import '../generated/turing/v1/agents.pb.dart' as agentpb;
 import '../generated/turing/v1/approvals.pb.dart' as approvalpb;
+import '../generated/turing/v1/automations.pb.dart' as automationpb;
 import '../generated/turing/v1/chat.pb.dart' as chatpb;
 import '../generated/turing/v1/common.pb.dart' as commonpb;
 import '../generated/turing/v1/events.pb.dart' as eventpb;
@@ -12,6 +13,7 @@ import '../generated/turing/v1/skills.pb.dart' as skillpb;
 import 'agent_descriptor.dart' as model_agent;
 import 'external_agent.dart' as model_external_agent;
 import 'integration.dart' as model_integration;
+import 'automation.dart' as model_automation;
 import 'message.dart' as model_message;
 import 'search_hit.dart' as model_search_hit;
 import 'session.dart' as model_session;
@@ -77,6 +79,88 @@ class GrpcMappers {
             .ExternalAgentProvider
             .EXTERNAL_AGENT_PROVIDER_UNSPECIFIED;
     }
+  }
+
+  static model_automation.Automation automationToModel(
+    automationpb.Automation automation,
+  ) {
+    return model_automation.Automation(
+      automationId: automation.automationId,
+      name: automation.name,
+      prompt: automation.prompt,
+      schedule: automationScheduleToModel(automation.schedule),
+      enabled: automation.enabled,
+      allowedTools: automation.allowedTools
+          .map(
+            (tool) => model_automation.AutomationTool(
+              serverName: tool.serverName,
+              toolName: tool.toolName,
+            ),
+          )
+          .toList(growable: false),
+      lastRunAt: automation.hasLastRunAt()
+          ? automation.lastRunAt.toDateTime().toLocal()
+          : null,
+      // Absent rather than epoch-zero: a disabled automation has no next run,
+      // and 1970 would render as a date that means something.
+      nextRunAt: automation.hasNextRunAt()
+          ? automation.nextRunAt.toDateTime().toLocal()
+          : null,
+      sessionId: automation.sessionId,
+      lastRunId: automation.lastRunId,
+      lastRunStatus: automation.lastRunStatus,
+      lastRunError: automation.lastRunError,
+    );
+  }
+
+  static model_automation.AutomationSchedule automationScheduleToModel(
+    automationpb.AutomationSchedule schedule,
+  ) {
+    switch (schedule.kind) {
+      case automationpb.AutomationScheduleKind
+          .AUTOMATION_SCHEDULE_KIND_DAILY:
+        return model_automation.AutomationSchedule.daily(
+          schedule.dailyMinuteUtc,
+        );
+      default:
+        // Includes INTERVAL, UNSPECIFIED, and anything added to the proto
+        // after this build. An unknown kind reads as an interval of the
+        // minutes it carries, which is inert rather than wrong: the editor
+        // shows what the server sent and the user can correct it.
+        return model_automation.AutomationSchedule.interval(
+          schedule.intervalMinutes,
+        );
+    }
+  }
+
+  static automationpb.AutomationSchedule automationScheduleToProto(
+    model_automation.AutomationSchedule schedule,
+  ) {
+    switch (schedule.kind) {
+      case model_automation.AutomationScheduleKind.daily:
+        return automationpb.AutomationSchedule(
+          kind: automationpb
+              .AutomationScheduleKind
+              .AUTOMATION_SCHEDULE_KIND_DAILY,
+          dailyMinuteUtc: schedule.dailyMinuteUtc,
+        );
+      case model_automation.AutomationScheduleKind.interval:
+        return automationpb.AutomationSchedule(
+          kind: automationpb
+              .AutomationScheduleKind
+              .AUTOMATION_SCHEDULE_KIND_INTERVAL,
+          intervalMinutes: schedule.intervalMinutes,
+        );
+    }
+  }
+
+  static automationpb.AutomationTool automationToolToProto(
+    model_automation.AutomationTool tool,
+  ) {
+    return automationpb.AutomationTool(
+      serverName: tool.serverName,
+      toolName: tool.toolName,
+    );
   }
 
   static model_skill.Skill skillToModel(skillpb.Skill skill) {

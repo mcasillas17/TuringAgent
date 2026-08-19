@@ -12,6 +12,7 @@ import 'package:turing_flutter_app/networking/api_client.dart';
 
 import '../support/no_skills_api.dart';
 import '../support/no_external_agents_api.dart';
+import '../support/no_automations_api.dart';
 
 /// What the user types into the credential field. Nothing on screen may ever
 /// contain it after the form is submitted.
@@ -594,7 +595,7 @@ class _ConnectCall {
 
 /// A working in-memory backend, so the UI is tested against something that
 /// behaves like the real one rather than a stub that always says yes.
-class _IntegrationsApi with NoSkillsApi, NoExternalAgentsApi implements TuringApi {
+class _IntegrationsApi with NoSkillsApi, NoExternalAgentsApi, NoAutomationsApi implements TuringApi {
   final List<IntegrationConnection> connections = [];
   final List<_ConnectCall> connectCalls = [];
   final List<String> revoked = [];

@@ -15,6 +15,7 @@ import 'package:turing_flutter_app/ui/shell/responsive_shell.dart';
 
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
+import '../support/no_automations_api.dart';
 import '../support/no_skills_api.dart';
 
 void main() {
@@ -165,7 +166,7 @@ void main() {
 }
 
 class _FakeApiClient
-    with NoSkillsApi, NoExternalAgentsApi, NoIntegrationsApi
+    with NoSkillsApi, NoExternalAgentsApi, NoIntegrationsApi, NoAutomationsApi
     implements TuringApi {
   @override
   Future<Map<String, dynamic>> approveApproval(

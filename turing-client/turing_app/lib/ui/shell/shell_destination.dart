@@ -4,8 +4,9 @@ import 'package:flutter/material.dart';
 ///
 /// Most of these are backed by something the backend actually does today; the
 /// rest are named here because they are the intended shape of the product,
-/// and their views say plainly that they are not built yet. A destination that looks functional but silently does
-/// nothing is worse than one that admits what it is.
+/// and their views say plainly that they are not built yet. A destination
+/// that looks functional but silently does nothing is worse than one that
+/// admits what it is.
 enum ShellDestination {
   chats(
     label: 'Chats',
@@ -35,15 +36,7 @@ enum ShellDestination {
     label: 'Automations',
     icon: Icons.schedule_outlined,
     selectedIcon: Icons.schedule,
-    implemented: false,
-    summary:
-        'Work that runs without you starting it — on a schedule, or when '
-        'something changes.',
-    blockedOn:
-        'Runs are only ever created by you sending a message. A scheduler '
-        'would need to create them on its own, and unattended runs raise a '
-        'question the approval flow currently answers by asking you: what '
-        'happens when a tool needs approval and nobody is watching.',
+    implemented: true,
   ),
   agents(
     label: 'Agents',
