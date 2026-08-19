@@ -11,6 +11,7 @@ import (
 )
 
 type composeDocument struct {
+	Include  yaml.Node                 `yaml:"include"`
 	Services map[string]composeService `yaml:"services"`
 }
 
@@ -26,6 +27,7 @@ type composeService struct {
 	VolumesFrom     []string           `yaml:"volumes_from"`
 	Environment     map[string]*string `yaml:"environment"`
 	EnvironmentFile yaml.Node          `yaml:"env_file"`
+	Extends         yaml.Node          `yaml:"extends"`
 	Secrets         yaml.Node          `yaml:"secrets"`
 }
 
@@ -277,6 +279,9 @@ func TestEveryComposeServiceUsesLeastPrivilegeRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	document := decodeComposeDocument(t, string(data))
+	for _, violation := range composeInheritanceViolations(document) {
+		t.Error(violation)
+	}
 	allowedVolumeMounts := map[string][]string{
 		"turing-orchestrator":          {"../data:/app/data"},
 		"turing-agent-runtime-general": nil,
@@ -370,6 +375,43 @@ services:
 	}
 	if !yamlNodePresent(service.EnvironmentFile) || !yamlNodePresent(service.Secrets) {
 		t.Fatal("env_file or secrets escaped structured decoding")
+	}
+}
+
+func TestComposeInheritanceCannotBypassSecurityPolicy(t *testing.T) {
+	tests := map[string]struct {
+		compose string
+		want    string
+	}{
+		"top-level include": {
+			compose: `
+include: [inherited-compose.yml]
+services:
+  guarded:
+    image: alpine
+`,
+			want: "top-level include",
+		},
+		"service extends": {
+			compose: `
+services:
+  guarded:
+    extends:
+      file: inherited-compose.yml
+      service: inherited
+    image: alpine
+`,
+			want: "guarded uses extends",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			document := decodeComposeDocument(t, test.compose)
+			violations := composeInheritanceViolations(document)
+			if !strings.Contains(strings.Join(violations, "\n"), test.want) {
+				t.Fatalf("composeInheritanceViolations() = %v, want a violation containing %q", violations, test.want)
+			}
+		})
 	}
 }
 
@@ -512,6 +554,19 @@ func sortedServiceNames(document composeDocument) []string {
 
 func yamlNodePresent(node yaml.Node) bool {
 	return node.Kind != 0
+}
+
+func composeInheritanceViolations(document composeDocument) []string {
+	var violations []string
+	if yamlNodePresent(document.Include) {
+		violations = append(violations, "docker-compose.yml uses top-level include; keep every backend service in the guarded Compose file")
+	}
+	for _, serviceName := range sortedServiceNames(document) {
+		if yamlNodePresent(document.Services[serviceName].Extends) {
+			violations = append(violations, serviceName+" uses extends; define its complete policy in the guarded service block")
+		}
+	}
+	return violations
 }
 
 func composeUserIsRoot(user string) bool {

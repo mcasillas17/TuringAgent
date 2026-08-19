@@ -27,9 +27,10 @@ back, and sets `no-new-privileges`. Writable storage is allowlisted:
 | `turing-mcp-files` | Validated host UID/GID | `sandbox/` at `/sandbox` |
 
 No service receives a writable temporary filesystem. The static security guard
-enumerates the Compose service block, applies this mount allowlist, and rejects
-root or missing users, writable roots, capability additions, incomplete
-capability drops, missing `no-new-privileges`, and unapproved secrets.
+decodes the complete Compose service map, rejects unresolved `include` or
+`extends` inheritance, applies this mount allowlist, and rejects root or missing
+users, writable roots, capability additions, incomplete capability drops,
+missing `no-new-privileges`, and unapproved secrets.
 The orchestrator configures SQLite `temp_store=MEMORY`, so sorts and transient
 b-trees do not require write access to `/tmp`; durable SQLite files and WAL
 artifacts remain under `/app/data`.
