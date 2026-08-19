@@ -15,14 +15,15 @@ the request text in the idempotency record.
 
 On the first request, the messages, run, job, durable events, and idempotency
 record commit in one bounded SQLite transaction. Only that request publishes
-events or dispatches runtime work. A matching replay returns the original
-run/job/trace IDs, emits the original `RunQueued` event, and continues from the
-persisted event sequence. This record survives an orchestrator restart; model
-and tool work never run inside the transaction. Once a keyed operation commits,
-losing or closing its delivery stream does not cancel the run; transport loss
-only affects event delivery, so a replay can resume it. The runtime recovery
-loop also re-dispatches still-pending jobs, so a transient dispatch failure
-cannot leave a committed keyed operation stranded.
+new events. A matching replay returns the original run/job/trace IDs, emits the
+original `RunQueued` event, and continues from the persisted event sequence.
+If a prior dispatch left its run queued, the replay re-dispatches the existing
+job rather than creating one. This record survives an orchestrator restart;
+model and tool work never run inside the transaction. Once a keyed operation
+commits, losing or closing its delivery stream does not cancel the run;
+transport loss only affects event delivery, so a replay can resume it. The
+runtime recovery loop also re-dispatches still-pending jobs, so a transient
+dispatch failure cannot leave a committed keyed operation stranded.
 
 Calls without a key retain the existing non-idempotent behavior for backwards
 compatibility and must not be retried as if they were idempotent.

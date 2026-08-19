@@ -111,8 +111,8 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 			TraceId: enqueued.TraceID,
 		}},
 	}); err != nil {
-		if !enqueued.Replayed && req.IdempotencyKey != "" {
-			if dispatchErr := s.dispatchPending(ctx, enqueued.RunID, cancelRunOnClientDisconnect); dispatchErr != nil {
+		if req.IdempotencyKey != "" {
+			if dispatchErr := s.dispatchEnqueued(ctx, enqueued, cancelRunOnClientDisconnect); dispatchErr != nil {
 				return dispatchErr
 			}
 		}
@@ -121,10 +121,8 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 		}
 		return err
 	}
-	if !enqueued.Replayed {
-		if err := s.dispatchPending(ctx, enqueued.RunID, cancelRunOnClientDisconnect); err != nil {
-			return err
-		}
+	if err := s.dispatchEnqueued(ctx, enqueued, cancelRunOnClientDisconnect); err != nil {
+		return err
 	}
 	lastSent := queuedEvent.Sequence
 	ticker := time.NewTicker(50 * time.Millisecond)
@@ -157,6 +155,24 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 			}
 		}
 	}
+}
+
+func (s *Server) dispatchEnqueued(ctx context.Context, enqueued repository.EnqueueUserMessageResult, cancelRunOnFailure bool) error {
+	if enqueued.Replayed {
+		replayCtx, replayCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		run, err := s.repo.GetRun(replayCtx, enqueued.RunID)
+		replayCancel()
+		if err != nil {
+			if ctx.Err() != nil {
+				return status.Error(codes.Canceled, "client cancelled stream")
+			}
+			return status.Error(codes.Internal, "get replayed run failed")
+		}
+		if run.Status != "queued" {
+			return nil
+		}
+	}
+	return s.dispatchPending(ctx, enqueued.RunID, cancelRunOnFailure)
 }
 
 func (s *Server) dispatchPending(ctx context.Context, runID string, cancelRunOnFailure bool) error {

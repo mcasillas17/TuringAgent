@@ -266,6 +266,68 @@ func TestSendMessageWithIdempotencyKeyKeepsQueuedRunOnDispatchFailure(t *testing
 	}
 }
 
+func TestSendMessageReplayDispatchesPendingRunAfterPriorFailure(t *testing.T) {
+	database := openChatTestDB(t)
+	repo := repository.New(database)
+	bus := events.NewBus(8)
+	dispatcher := &dispatchContextRecorder{err: errors.New("dispatch unavailable")}
+	service := New(repo, bus, dispatcher, "llama3.2", "gpt-4o-mini")
+	session, err := repo.CreateSession(context.Background(), "Replay dispatch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &turingv1.SendMessageRequest{
+		SessionId:      session.SessionID,
+		Content:        "replay dispatches pending run",
+		ModelProvider:  turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:          "llama3.2",
+		IdempotencyKey: "replay-dispatch",
+	}
+	if err := service.SendMessage(request, &queuedChatStream{ctx: context.Background()}); status.Code(err) != codes.Internal {
+		t.Fatalf("initial SendMessage error = %v, want Internal", err)
+	}
+	dispatcher.err = nil
+	replayCtx, cancel := context.WithCancel(context.Background())
+	replay := &cancellingChatStream{ctx: replayCtx, cancel: cancel}
+	if err := service.SendMessage(request, replay); status.Code(err) != codes.Canceled {
+		t.Fatalf("replay SendMessage error = %v, want Canceled", err)
+	}
+	if dispatcher.calls != 2 {
+		t.Fatalf("DispatchPending calls = %d, want retry on replay", dispatcher.calls)
+	}
+}
+
+func TestSendMessageReplayDispatchesPendingRunWhenQueuedAckIsLost(t *testing.T) {
+	database := openChatTestDB(t)
+	repo := repository.New(database)
+	bus := events.NewBus(8)
+	dispatcher := &dispatchContextRecorder{err: errors.New("dispatch unavailable")}
+	service := New(repo, bus, dispatcher, "llama3.2", "gpt-4o-mini")
+	session, err := repo.CreateSession(context.Background(), "Replay acknowledgement loss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &turingv1.SendMessageRequest{
+		SessionId:      session.SessionID,
+		Content:        "replay dispatches after acknowledgement loss",
+		ModelProvider:  turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:          "llama3.2",
+		IdempotencyKey: "replay-queued-acknowledgement-loss",
+	}
+	if err := service.SendMessage(request, &queuedChatStream{ctx: context.Background()}); status.Code(err) != codes.Internal {
+		t.Fatalf("initial SendMessage error = %v, want Internal", err)
+	}
+	dispatcher.err = nil
+	replayCtx, cancel := context.WithCancel(context.Background())
+	replay := &failingQueuedChatStream{ctx: replayCtx, cancel: cancel}
+	if err := service.SendMessage(request, replay); status.Code(err) != codes.Unavailable {
+		t.Fatalf("replay SendMessage error = %v, want Unavailable", err)
+	}
+	if dispatcher.calls != 2 {
+		t.Fatalf("DispatchPending calls = %d, want retry after lost acknowledgement", dispatcher.calls)
+	}
+}
+
 func TestSendMessageCancellingReplayDoesNotCancelOriginalRun(t *testing.T) {
 	database := openChatTestDB(t)
 	repo := repository.New(database)
