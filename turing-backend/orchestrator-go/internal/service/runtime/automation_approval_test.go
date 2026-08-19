@@ -9,6 +9,8 @@ import (
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	approvalsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/approvals"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -527,6 +529,43 @@ func TestAnUnrecordableGrantIsNotGranted(t *testing.T) {
 	if approval.Status != "pending" || approval.ApprovalToken != "" {
 		t.Fatalf("approval = %q with token %q, want it left pending and unsigned",
 			approval.Status, approval.ApprovalToken)
+	}
+}
+
+func TestUnattendedGrantWithoutRunIsNotGranted(t *testing.T) {
+	h := newHarness(t)
+	fire := h.fireAutomation(t, "Nightly note", []repository.AutomationTool{
+		{ServerName: "files", ToolName: "files.update"},
+	})
+	approvalID := h.pendingApprovalFor(t, fire.RunID, fire.SessionID, fire.TraceID, "call_allowed", "files.update")
+	if _, err := h.database.ExecContext(context.Background(), `PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.database.ExecContext(
+		context.Background(),
+		`DELETE FROM agent_runs WHERE id = ?`,
+		fire.RunID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.database.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatal(err)
+	}
+
+	err := h.approvals.GrantUnattendedApproval(context.Background(), approvalID, "files", "files.update")
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("GrantUnattendedApproval error = %v, want Internal", err)
+	}
+	approval, err := h.repo.GetApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval.Status != "pending" || approval.ApprovalToken != "" {
+		t.Fatalf(
+			"approval = %q with token %q, want it left pending and unsigned",
+			approval.Status,
+			approval.ApprovalToken,
+		)
 	}
 }
 

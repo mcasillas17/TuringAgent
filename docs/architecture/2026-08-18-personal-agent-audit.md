@@ -407,6 +407,13 @@ implementation adds no speculative reservations.
 **Acceptance:** The guard passes today and fails for a synthetic derived-text table with no source cascade; exceptions are explicit and justified.  
 **Dependencies:** None. **Blocks every derived memory task.**
 
+**Completion contract:** The same landed change must contain
+`docs/architecture/memory-governance.md`,
+`TestDerivedStateSchemaPoliciesCoverCurrentSchema`, and
+`TestDerivedStateSchemaRejectsTableWithoutSourceCascade`. A branch or open pull
+request does not satisfy this dependency; downstream derived-memory work
+remains blocked until the commit containing the contract is on `main`.
+
 #### MEM-002 — Return scored, explainable search hits
 
 **Outcome:** Search consumers receive the ranking signal SQLite already computes.  
