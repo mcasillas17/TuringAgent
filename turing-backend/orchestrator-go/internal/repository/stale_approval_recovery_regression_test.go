@@ -36,7 +36,7 @@ func TestRecoverStaleApprovedAuthorizationTerminalizesInsteadOfRequeueing(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ApproveApproval(ctx, approval.ApprovalID, "approved-token", ""); err != nil {
+	if _, err := repo.ApproveApproval(ctx, approval.ApprovalID, "approved-token", sql.NullString{}, ""); err != nil {
 		t.Fatal(err)
 	}
 	cutoff := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)

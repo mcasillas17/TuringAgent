@@ -36,7 +36,7 @@ func TestTerminalRunRevokesApprovedToolLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ApproveApproval(ctx, approval.ApprovalID, "issued-token", ""); err != nil {
+	if _, err := repo.ApproveApproval(ctx, approval.ApprovalID, "issued-token", sql.NullString{}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repo.CancelRunWithEvent(ctx, enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`); err != nil {
@@ -92,7 +92,7 @@ func TestApproveApprovalRejectsDatabaseExpiryBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := repo.ApproveApprovalWithEvent(ctx, approval.ApprovalID, "must-not-issue", ""); err == nil {
+	if _, err := repo.ApproveApprovalWithEvent(ctx, approval.ApprovalID, "must-not-issue", sql.NullString{}, ""); err == nil {
 		t.Fatal("ApproveApprovalWithEvent accepted an approval at its database expiry boundary")
 	}
 	current, err := repo.GetApproval(ctx, approval.ApprovalID)

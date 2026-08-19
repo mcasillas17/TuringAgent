@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -400,7 +401,7 @@ func TestHeartbeatReconcilesAssignmentThatDatabaseCannotRenew(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.repo.DenyApprovalWithEvent(context.Background(), approval.ApprovalID, ""); err != nil {
+	if _, err := h.repo.DenyApprovalWithEvent(context.Background(), approval.ApprovalID, sql.NullString{}, ""); err != nil {
 		t.Fatal(err)
 	}
 	connected := &worker{

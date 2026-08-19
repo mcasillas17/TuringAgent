@@ -25,15 +25,19 @@ func TestDeniedApprovalEventFailureRollsBackAndRetryCommitsOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := h.service.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{ApprovalId: approvalID}); err == nil {
+	const reason = "The generated change is not the one I intended"
+	if _, err := h.service.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{
+		ApprovalId: approvalID,
+		Reason:     reason,
+	}); err == nil {
 		t.Fatal("DenyApproval succeeded despite required approval.denied event failure")
 	}
 	approval, err := h.repo.GetApproval(context.Background(), approvalID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if approval.Status != "pending" {
-		t.Fatalf("approval became %q after required event failure, want pending rollback", approval.Status)
+	if approval.Status != "pending" || approval.DenialReason.Valid {
+		t.Fatalf("failed denial leaked state: %+v", approval)
 	}
 	var runStatus, jobStatus, toolStatus string
 	if err := h.database.QueryRowContext(context.Background(), `SELECT status FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&runStatus); err != nil {
@@ -51,11 +55,24 @@ func TestDeniedApprovalEventFailureRollsBackAndRetryCommitsOnce(t *testing.T) {
 	if _, err := h.database.ExecContext(context.Background(), `DROP TRIGGER fail_atomic_denied_event`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.service.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{ApprovalId: approvalID}); err != nil {
+	if _, err := h.service.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{
+		ApprovalId: approvalID,
+		Reason:     reason,
+	}); err != nil {
 		t.Fatalf("DenyApproval retry: %v", err)
 	}
-	if _, err := h.service.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{ApprovalId: approvalID}); err != nil {
+	if _, err := h.service.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{
+		ApprovalId: approvalID,
+		Reason:     "replacement reason",
+	}); err != nil {
 		t.Fatalf("same denial retry: %v", err)
+	}
+	approval, err = h.repo.GetApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval.Status != "denied" || !approval.DenialReason.Valid || approval.DenialReason.String != reason {
+		t.Fatalf("committed denial rationale = %+v", approval)
 	}
 	var terminalEvents int
 	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'agent.run.failed'`, enqueued.RunID).Scan(&terminalEvents); err != nil {
@@ -63,6 +80,63 @@ func TestDeniedApprovalEventFailureRollsBackAndRetryCommitsOnce(t *testing.T) {
 	}
 	if terminalEvents != 1 {
 		t.Fatalf("agent.run.failed count = %d, want one committed terminal event", terminalEvents)
+	}
+}
+
+func TestApprovedApprovalEventFailureRollsBackCommentAndDecision(t *testing.T) {
+	h := newApprovalHarness(t)
+	enqueued := h.createRunningToolCall(t)
+	approvalID, err := h.service.CreateApprovalForTool(
+		context.Background(),
+		enqueued.RunID,
+		"call_1",
+		"general_assistant",
+		"files.update",
+		map[string]any{"path": "note.txt"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.database.ExecContext(context.Background(), `
+		CREATE TRIGGER fail_atomic_approved_event
+		BEFORE INSERT ON events
+		WHEN NEW.type = 'approval.approved'
+		BEGIN
+			SELECT RAISE(ABORT, 'approval approved event failed');
+		END;
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	const comment = "I checked the exact path"
+	if _, err := h.service.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{
+		ApprovalId: approvalID,
+		Comment:    comment,
+	}); err == nil {
+		t.Fatal("ApproveApproval succeeded despite required approval.approved event failure")
+	}
+	approval, err := h.repo.GetApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval.Status != "pending" || approval.ApprovalComment.Valid {
+		t.Fatalf("failed approval leaked state: %+v", approval)
+	}
+	if _, err := h.database.ExecContext(context.Background(), `DROP TRIGGER fail_atomic_approved_event`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.service.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{
+		ApprovalId: approvalID,
+		Comment:    comment,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	approval, err = h.repo.GetApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval.Status != "approved" || !approval.ApprovalComment.Valid || approval.ApprovalComment.String != comment {
+		t.Fatalf("committed approval rationale = %+v", approval)
 	}
 }
 

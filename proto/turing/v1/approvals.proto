@@ -15,11 +15,15 @@ enum ApprovalStatus {
 
 message ApproveApprovalRequest {
   string approval_id = 1;
+  // Optional by convention. Proto3 scalar presence is not enabled, so omission
+  // and an explicitly empty value are both persisted as an empty human comment.
   string comment = 2;
 }
 
 message DenyApprovalRequest {
   string approval_id = 1;
+  // Optional by convention. Proto3 scalar presence is not enabled, so omission
+  // and an explicitly empty value are both persisted as an empty human reason.
   string reason = 2;
 }
 
