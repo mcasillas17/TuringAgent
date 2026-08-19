@@ -719,6 +719,8 @@ func TestRepositoryDockerignoreExcludesSensitiveAndGeneratedContent(t *testing.T
 		"**/.env.*",
 		"**/.runtime",
 		"turing-backend/data",
+		"turing-backend/data.backup-*",
+		"turing-backend/data.worktree-backup-*",
 		"turing-backend/skills",
 		"turing-backend/sandbox",
 		"**/node_modules",
@@ -743,6 +745,28 @@ func TestRepositoryDockerignoreExcludesSensitiveAndGeneratedContent(t *testing.T
 	for _, requiredInput := range []string{"go.mod", "go.sum", "gen", "turing-backend"} {
 		if lines[requiredInput] {
 			t.Errorf(".dockerignore excludes required Dockerfile input %q", requiredInput)
+		}
+	}
+}
+
+func TestRepositoryGitignoreExcludesRuntimeDatabaseBackups(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := make(map[string]bool)
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			lines[line] = true
+		}
+	}
+	for _, pattern := range []string{
+		"turing-backend/data.backup-*/",
+		"turing-backend/data.worktree-backup-*/",
+	} {
+		if !lines[pattern] {
+			t.Errorf(".gitignore missing %q", pattern)
 		}
 	}
 }
