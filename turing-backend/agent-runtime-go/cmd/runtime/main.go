@@ -42,10 +42,14 @@ func run() error {
 	}
 	defer func() { _ = client.Close() }()
 	providers := map[turingv1.ModelProvider]llm.Provider{
-		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: llm.NewOllama(cfg.OllamaBaseURL, http.DefaultClient).WithKeepAlive(cfg.OllamaKeepAlive),
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: llm.NewOllama(cfg.OllamaBaseURL, http.DefaultClient).
+			WithKeepAlive(cfg.OllamaKeepAlive).
+			WithContextWindowTokens(cfg.OllamaContextWindowTokens),
 	}
 	if cfg.OpenAIAPIKey != "" {
-		providers[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE] = llm.NewOpenAICompatible(cfg.OpenAIBaseURL, cfg.OpenAIAPIKey, http.DefaultClient)
+		providers[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE] =
+			llm.NewOpenAICompatible(cfg.OpenAIBaseURL, cfg.OpenAIAPIKey, http.DefaultClient).
+				WithContextWindowTokens(cfg.OpenAIContextWindowTokens)
 	}
 	toolRunner := &tools.Runner{WaitApproval: func(ctx context.Context, approvalID string) (string, error) {
 		return client.WaitForApprovalToken(ctx, approvalID, time.Second, cfg.ApprovalTimeout)
@@ -67,7 +71,11 @@ func run() error {
 	// The only place a third-party API key exists at runtime. It is read from
 	// this process's environment and used to build a per-job client; nothing
 	// puts it back on a job, an event, or a response.
-	executor.SetExternalAgentProvider(agent.NewExternalAgentProviderFunc(cfg.AgentAPIKeys, http.DefaultClient))
+	executor.SetExternalAgentProvider(agent.NewExternalAgentProviderFunc(
+		cfg.AgentAPIKeys,
+		cfg.OpenAIContextWindowTokens,
+		http.DefaultClient,
+	))
 	runtimeWorker := worker.New(worker.Options{
 		WorkerID:                 cfg.WorkerID,
 		AgentID:                  turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,

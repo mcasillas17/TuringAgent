@@ -16,21 +16,22 @@ import (
 )
 
 type WorkerConfig struct {
-	Conn               *grpc.ClientConn
-	InternalToken      string
-	WorkerID           string
-	MaxConcurrentRuns  int
-	MaxToolCallsPerRun int
-	ModelTimeout       time.Duration
-	ToolTimeout        time.Duration
-	ApprovalTimeout    time.Duration
-	TotalToolTimeout   time.Duration
-	OpenAIBaseURL      string
-	OpenAIAPIKey       string
-	MCPSystemBaseURL   string
-	MCPFilesBaseURL    string
-	MCPSystemToken     string
-	MCPFilesToken      string
+	Conn                *grpc.ClientConn
+	InternalToken       string
+	WorkerID            string
+	MaxConcurrentRuns   int
+	MaxToolCallsPerRun  int
+	ModelTimeout        time.Duration
+	ToolTimeout         time.Duration
+	ApprovalTimeout     time.Duration
+	TotalToolTimeout    time.Duration
+	OpenAIBaseURL       string
+	OpenAIAPIKey        string
+	ContextWindowTokens int
+	MCPSystemBaseURL    string
+	MCPFilesBaseURL     string
+	MCPSystemToken      string
+	MCPFilesToken       string
 }
 
 type WorkerExecutor interface {
@@ -40,8 +41,13 @@ type WorkerExecutor interface {
 func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 	client := orchestrator.New(cfg.Conn, cfg.InternalToken)
 	providers := map[turingv1.ModelProvider]llm.Provider{
-		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE: llm.NewOpenAICompatible(cfg.OpenAIBaseURL, cfg.OpenAIAPIKey, http.DefaultClient),
+		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE: llm.NewOpenAICompatible(
+			cfg.OpenAIBaseURL,
+			cfg.OpenAIAPIKey,
+			http.DefaultClient,
+		).WithContextWindowTokens(cfg.contextWindowTokens()),
 	}
+
 	toolRunner := &tools.Runner{WaitApproval: func(ctx context.Context, approvalID string) (string, error) {
 		return client.WaitForApprovalToken(ctx, approvalID, 10*time.Millisecond, cfg.approvalTimeout())
 	}}
@@ -62,6 +68,13 @@ func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 		DisconnectCleanupTimeout: cfg.totalToolTimeout(),
 	}, runtimeClientAdapter{client: client}, executor)
 	return runtimeWorker.Run(ctx)
+}
+
+func (cfg WorkerConfig) contextWindowTokens() int {
+	if cfg.ContextWindowTokens > 0 {
+		return cfg.ContextWindowTokens
+	}
+	return llm.DefaultContextWindowTokens
 }
 
 func RunWorkerWithExecutor(ctx context.Context, cfg WorkerConfig, executor WorkerExecutor) error {

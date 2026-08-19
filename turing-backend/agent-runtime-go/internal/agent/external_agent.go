@@ -31,7 +31,11 @@ var ErrExternalAgentRoutingUnavailable = errors.New("this runtime is not configu
 // environment. The name travels on the job; the key never does, so a database
 // copied off this machine, a job payload, and every gRPC message on the wire
 // are all free of third-party secrets.
-func NewExternalAgentProviderFunc(keys map[string]string, client *http.Client) ExternalAgentProviderFunc {
+func NewExternalAgentProviderFunc(
+	keys map[string]string,
+	contextWindowTokens int,
+	client *http.Client,
+) ExternalAgentProviderFunc {
 	return func(target *turingv1.ExternalAgentTarget) (llm.Provider, error) {
 		if target == nil {
 			return nil, ErrExternalAgentRoutingUnavailable
@@ -51,6 +55,7 @@ func NewExternalAgentProviderFunc(keys map[string]string, client *http.Client) E
 		// Every vendor this section is for — Anthropic, OpenAI, Google, xAI —
 		// exposes an OpenAI-compatible chat-completions endpoint, so this is
 		// one client configured four ways rather than four integrations.
-		return llm.NewOpenAICompatible(target.GetBaseUrl(), apiKey, client), nil
+		return llm.NewOpenAICompatible(target.GetBaseUrl(), apiKey, client).
+			WithContextWindowTokens(contextWindowTokens), nil
 	}
 }

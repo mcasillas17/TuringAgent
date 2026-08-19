@@ -23,7 +23,7 @@ func routedJob() *turingv1.AgentJob {
 }
 
 func TestExternalAgentProviderResolvesTheNamedKey(t *testing.T) {
-	resolve := NewExternalAgentProviderFunc(map[string]string{"claude": "sk-test"}, http.DefaultClient)
+	resolve := NewExternalAgentProviderFunc(map[string]string{"claude": "sk-test"}, 8192, http.DefaultClient)
 
 	provider, err := resolve(routedJob().GetExternalAgent())
 	if err != nil {
@@ -39,7 +39,7 @@ func TestExternalAgentProviderResolvesTheNamedKey(t *testing.T) {
 // The error has to name the credential and where to put it. "401 unauthorized"
 // from a vendor sends the user to the wrong place entirely.
 func TestExternalAgentProviderSaysWhichKeyIsMissing(t *testing.T) {
-	resolve := NewExternalAgentProviderFunc(map[string]string{"openai": "sk-other"}, http.DefaultClient)
+	resolve := NewExternalAgentProviderFunc(map[string]string{"openai": "sk-other"}, 8192, http.DefaultClient)
 
 	_, err := resolve(routedJob().GetExternalAgent())
 	if err == nil {
@@ -60,7 +60,7 @@ func TestExternalAgentProviderSaysWhichKeyIsMissing(t *testing.T) {
 // An agent with no endpoint would otherwise be handed to the HTTP client as an
 // empty base URL, which fails somewhere far less legible than here.
 func TestExternalAgentProviderRefusesATargetWithNoEndpoint(t *testing.T) {
-	resolve := NewExternalAgentProviderFunc(map[string]string{"claude": "sk-test"}, http.DefaultClient)
+	resolve := NewExternalAgentProviderFunc(map[string]string{"claude": "sk-test"}, 8192, http.DefaultClient)
 
 	_, err := resolve(&turingv1.ExternalAgentTarget{
 		DisplayName:   "Claude",
@@ -77,7 +77,7 @@ func TestExternalAgentProviderRefusesATargetWithNoEndpoint(t *testing.T) {
 // nil means "not routed", so a nil target reaching the resolver at all is a
 // wiring mistake, not a run that should quietly proceed locally.
 func TestExternalAgentProviderRefusesANilTarget(t *testing.T) {
-	resolve := NewExternalAgentProviderFunc(map[string]string{"claude": "sk-test"}, http.DefaultClient)
+	resolve := NewExternalAgentProviderFunc(map[string]string{"claude": "sk-test"}, 8192, http.DefaultClient)
 
 	if _, err := resolve(nil); err == nil {
 		t.Fatal("resolve succeeded with a nil target")
@@ -203,7 +203,7 @@ func TestRoutedRunFailsWithTheResolverError(t *testing.T) {
 		fakeMessageClient{},
 		&GeneralAssistantTools{Runner: &tools.Runner{PostBeacon: allowToolCall}},
 	)
-	assistant.SetExternalAgentProvider(NewExternalAgentProviderFunc(nil, http.DefaultClient))
+	assistant.SetExternalAgentProvider(NewExternalAgentProviderFunc(nil, 8192, http.DefaultClient))
 
 	updates := collectUpdates(t, assistant, routedJob())
 
@@ -211,8 +211,25 @@ func TestRoutedRunFailsWithTheResolverError(t *testing.T) {
 	if failure == nil {
 		t.Fatal("no run failure emitted")
 	}
+
 	if !strings.Contains(failure.GetMessage(), "TURING_AGENT_API_KEYS") {
 		t.Fatalf("message = %q, want the resolver's explanation", failure.GetMessage())
+	}
+}
+
+func TestExternalAgentProviderUsesConfiguredContextWindow(t *testing.T) {
+	resolve := NewExternalAgentProviderFunc(
+		map[string]string{"claude": "sk-test"},
+		4096,
+		http.DefaultClient,
+	)
+
+	provider, err := resolve(routedJob().GetExternalAgent())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := llm.ProviderContextWindowTokens(provider); got != 4096 {
+		t.Fatalf("context window = %d, want 4096", got)
 	}
 }
 
