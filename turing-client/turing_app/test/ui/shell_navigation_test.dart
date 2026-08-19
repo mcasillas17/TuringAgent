@@ -615,6 +615,44 @@ void main() {
       );
     });
 
+    testWidgets('a local session survives a limited refresh page', (
+      tester,
+    ) async {
+      final api = _FakeApi();
+      await _pumpShell(tester, api: api, size: _desktop);
+      final limitedPage = Completer<List<Session>>();
+      api.nextListSessions = limitedPage;
+
+      await tester.tap(find.text('New chat').first);
+      for (var i = 0; i < 5; i++) {
+        await tester.pump();
+      }
+      limitedPage.complete(api.sessions);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byTooltip('Delete chat'),
+        findsOneWidget,
+        reason: 'page omission does not discard a retained local snapshot',
+      );
+    });
+
+    testWidgets('equal timestamps use the backend session id tie-breaker', (
+      tester,
+    ) async {
+      final api = _FakeApi();
+      await _pumpShell(tester, api: api, size: _desktop);
+
+      await tester.tap(find.text('New chat').first);
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.getTopLeft(find.text('New chat').last).dy,
+        lessThan(tester.getTopLeft(find.text('Existing chat')).dy),
+        reason: 'sess_new sorts before sess_existing when timestamps tie',
+      );
+    });
+
     testWidgets('a later stale page does not resurrect a deleted session', (
       tester,
     ) async {

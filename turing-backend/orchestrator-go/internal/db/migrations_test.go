@@ -411,6 +411,7 @@ func TestSessionTitleOriginMigrationClassifiesLegacyPlaceholders(t *testing.T) {
 		{id: "legacy", title: "New chat"},
 		{id: "blank", title: nil},
 		{id: "named", title: "Budget planning"},
+		{id: "automation", title: "New chat"},
 	} {
 		if _, err := database.ExecContext(ctx, `
 			INSERT INTO sessions (id, title, created_at, updated_at)
@@ -419,13 +420,27 @@ func TestSessionTitleOriginMigrationClassifiesLegacyPlaceholders(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO automations (
+			id, name, prompt, schedule_kind, interval_seconds, enabled,
+			next_due_at, session_id, created_at, updated_at
+		)
+		VALUES (
+			'auto_new_chat', 'New chat', 'Summarise the sandbox.', 'interval',
+			300, 1, '2099-01-01T00:00:00Z', 'automation',
+			'2026-08-18T00:00:00Z', '2026-08-18T00:00:00Z'
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
 
 	applyMigration(t, ctx, database, "0010_session_title_origin.sql")
 
 	for id, want := range map[string]string{
-		"legacy": "unset",
-		"blank":  "unset",
-		"named":  "explicit",
+		"legacy":     "unset",
+		"blank":      "unset",
+		"named":      "explicit",
+		"automation": "explicit",
 	} {
 		var got string
 		if err := database.QueryRowContext(ctx,

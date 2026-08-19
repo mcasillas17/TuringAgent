@@ -53,12 +53,14 @@ Flutter maps protocol event
 replayed older event cannot reorder the list. An update for a session outside
 the loaded page inserts it, and a concurrent older `ListSessions` response is
 merged without overwriting newer event state. Locally created sessions enter
-the same snapshot journal before their refresh starts, and older refresh
-responses are discarded by request generation. Locally deleted IDs remain
-tombstoned for the shell lifetime because omission from the 50-row page cannot
-prove absence. Flutter does not call `ListSessions` after sending a message.
-Search group headings load the same stored session title, so the sidebar and
-search do not invent separate names for one conversation.
+the same snapshot journal before their refresh starts, snapshots are retained
+when a limited page omits them, and older refresh responses are discarded by
+request generation. Ordering matches the backend: `updatedAt` descending, then
+session ID descending when timestamps tie. Locally deleted IDs remain tombstoned
+for the shell lifetime because omission from the 50-row page cannot prove
+absence. Flutter does not call `ListSessions` after sending a message. Search
+group headings load the same stored session title, so the sidebar and search do
+not invent separate names for one conversation.
 
 Whitespace-only messages still produce a session update because they touch
 `updated_at`, but their empty title snapshot keeps the `New chat` display
@@ -66,10 +68,12 @@ fallback. A later usable message can assign the title.
 
 ## Existing data and deletion
 
-Migration `0010_session_title_origin.sql` classifies legacy null, empty, and
-literal `New chat` rows as `unset`; other existing non-empty titles become
-`explicit`. New sessions record provenance at creation, so a new explicit
-`New chat` is distinguishable from old placeholder data.
+Migration `0010_session_title_origin.sql` first marks sessions linked from an
+automation as `explicit`, including an automation legitimately named
+`New chat`. It then classifies remaining legacy null, empty, and literal
+`New chat` rows as `unset`; other existing non-empty titles become `explicit`.
+New sessions record provenance at creation, so a new explicit `New chat` is
+distinguishable from old placeholder data.
 
 At startup, before gRPC servers accept subscriptions, the orchestrator scans
 only sessions whose origin is `unset`. It derives each title from that session's

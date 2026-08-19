@@ -10,6 +10,9 @@ ALTER TABLE sessions ADD COLUMN title_origin TEXT NOT NULL DEFAULT 'unset'
 -- backfill will turn legacy placeholders into derived titles.
 UPDATE sessions
 SET title_origin = CASE
+  WHEN EXISTS (
+    SELECT 1 FROM automations WHERE automations.session_id = sessions.id
+  ) THEN 'explicit'
   WHEN title IS NULL OR title = '' OR title = 'New chat' THEN 'unset'
   ELSE 'explicit'
 END;

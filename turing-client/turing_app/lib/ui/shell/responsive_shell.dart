@@ -100,8 +100,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   bool _creating = false;
   final Set<String> _deleting = {};
   final Set<String> _locallyDeletedSessionIds = {};
-  final Map<String, _SessionSnapshot> _sessionSnapshots = {};
-  int _sessionStateRevision = 0;
+  final Map<String, Session> _sessionSnapshots = {};
   int _sessionRefreshRequest = 0;
 
   @override
@@ -120,12 +119,11 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
 
   Future<void> _refreshSessions() async {
     final request = ++_sessionRefreshRequest;
-    final startingRevision = _sessionStateRevision;
     try {
       final sessions = await widget.apiClient.listSessions();
       if (!mounted || request != _sessionRefreshRequest) return;
       setState(() {
-        _sessions = _reconcileSessionRefresh(sessions, startingRevision);
+        _sessions = _reconcileSessionRefresh(sessions);
         _sessionsLoading = false;
         _sessionsFailed = false;
       });
@@ -178,7 +176,10 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     Session inserted,
   ) {
     final index = sessions.indexWhere(
-      (session) => session.updatedAt.isBefore(inserted.updatedAt),
+      (session) =>
+          session.updatedAt.isBefore(inserted.updatedAt) ||
+          (session.updatedAt.isAtSameMomentAs(inserted.updatedAt) &&
+              session.sessionId.compareTo(inserted.sessionId) < 0),
     );
     if (index < 0) {
       sessions.add(inserted);
@@ -187,24 +188,14 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     }
   }
 
-  List<Session> _reconcileSessionRefresh(
-    Iterable<Session> refreshed,
-    int startingRevision,
-  ) {
+  List<Session> _reconcileSessionRefresh(Iterable<Session> refreshed) {
     final refreshedSessions = refreshed.toList();
     final merged = refreshedSessions
         .where(
           (session) => !_locallyDeletedSessionIds.contains(session.sessionId),
         )
         .toList();
-    final concurrentSnapshots = _sessionSnapshots.values
-        .where((snapshot) => snapshot.revision > startingRevision)
-        .toList();
-    _sessionSnapshots.removeWhere(
-      (_, snapshot) => snapshot.revision <= startingRevision,
-    );
-    for (final snapshot in concurrentSnapshots) {
-      final current = snapshot.session;
+    for (final current in _sessionSnapshots.values) {
       final index = merged.indexWhere(
         (session) => session.sessionId == current.sessionId,
       );
@@ -224,11 +215,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   }
 
   void _recordSessionSnapshot(Session session) {
-    _sessionStateRevision++;
-    _sessionSnapshots[session.sessionId] = _SessionSnapshot(
-      session: session,
-      revision: _sessionStateRevision,
-    );
+    _sessionSnapshots[session.sessionId] = session;
   }
 
   /// Null when the active conversation has not been named yet, or is not in
@@ -1056,11 +1043,4 @@ class _EmptyState extends StatelessWidget {
       ),
     );
   }
-}
-
-class _SessionSnapshot {
-  const _SessionSnapshot({required this.session, required this.revision});
-
-  final Session session;
-  final int revision;
 }
