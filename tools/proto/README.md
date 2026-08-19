@@ -34,7 +34,7 @@ To compare with another base branch, pass its remote-tracking ref:
 tools/proto/breaking.sh origin/release-branch
 ```
 
-The script validates the ref, fetches that branch at depth one, and fails instead of falling back to a stale local baseline when the fetch cannot complete. CI passes the pull request's base branch, so compatibility is not hardcoded to `main`.
+The script validates the ref and refreshes that branch. It uses a depth-one fetch only when the checkout is already shallow; a full local repository stays full. The script fails instead of falling back to a stale local baseline when the fetch cannot complete. CI passes the pull request's base branch, so compatibility is not hardcoded to `main`.
 
 `buf.yaml` uses Buf's `FILE` breaking category because the repository tracks generated Flutter and Go source. Additive fields, messages, enums, and RPCs pass. Removing or renumbering a live field fails even if the removed field is reserved, because generated client source would still break.
 

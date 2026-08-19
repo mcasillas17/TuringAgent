@@ -70,7 +70,7 @@ tests := []struct {
 }
 ```
 
-The test copies the repository script and `buf.yaml` into the temporary checkout, deletes `refs/remotes/origin/main`, and verifies the script restores that ref. This proves the compatibility behavior and shallow/missing-base retrieval through the same entry point CI uses.
+The tests copy the repository script and `buf.yaml` into temporary full and shallow checkouts, delete `refs/remotes/origin/main`, and verify the script restores that ref without changing the repository's existing shallow/full state. This proves the compatibility behavior and missing-base retrieval through the same entry point CI uses.
 
 - [ ] **Step 3: Run the regression test and observe the intended failure**
 
@@ -128,10 +128,14 @@ Expected result: failure because `breaking.sh` does not exist.
 
 The script uses `set -euo pipefail`, resolves the repository root from its own path, checks `git` and `buf`, and requires `buf --version` to equal `1.72.0`. The base defaults to `${PROTO_BREAKING_BASE_REF:-origin/main}` and must match a real configured remote plus a branch accepted by `git check-ref-format --branch`.
 
-The refresh and comparison commands are:
+The refresh and comparison commands preserve full history while keeping an existing shallow checkout shallow:
 
 ```bash
-git -C "$ROOT" fetch --no-tags --depth=1 "$remote" \
+fetch_args=(--no-tags)
+if [[ "$(git -C "$ROOT" rev-parse --is-shallow-repository)" == "true" ]]; then
+  fetch_args+=(--depth=1)
+fi
+git -C "$ROOT" fetch "${fetch_args[@]}" "$remote" \
   "refs/heads/$branch:refs/remotes/$remote/$branch"
 base_commit="$(git -C "$ROOT" rev-parse --verify "refs/remotes/$remote/$branch^{commit}")"
 buf breaking "$ROOT/proto" \

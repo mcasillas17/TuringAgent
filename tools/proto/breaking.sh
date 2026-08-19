@@ -37,7 +37,11 @@ if ! git -C "$ROOT" remote get-url "$remote" >/dev/null 2>&1; then
   exit 2
 fi
 
-if ! git -C "$ROOT" fetch --no-tags --depth=1 "$remote" \
+fetch_args=(--no-tags)
+if [[ "$(git -C "$ROOT" rev-parse --is-shallow-repository)" == "true" ]]; then
+  fetch_args+=(--depth=1)
+fi
+if ! git -C "$ROOT" fetch "${fetch_args[@]}" "$remote" \
   "refs/heads/$branch:refs/remotes/$remote/$branch"; then
   echo "failed to refresh base ref $BASE_REF; verify the remote and branch are reachable" >&2
   exit 1

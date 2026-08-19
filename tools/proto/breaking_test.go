@@ -37,7 +37,7 @@ func TestBreakingCompatibility(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			repo := newCompatibilityRepo(t, test.fixture)
+			repo := newCompatibilityRepo(t, test.fixture, false)
 			command := exec.Command(filepath.Join(repo, "tools", "proto", "breaking.sh"), "origin/main")
 			command.Dir = repo
 			output, err := command.CombinedOutput()
@@ -55,7 +55,25 @@ func TestBreakingCompatibility(t *testing.T) {
 			}
 
 			runGit(t, repo, "rev-parse", "--verify", "refs/remotes/origin/main")
+			if shallow := runGit(t, repo, "rev-parse", "--is-shallow-repository"); shallow != "false" {
+				t.Fatalf("breaking.sh changed a full repository into a shallow one")
+			}
 		})
+	}
+}
+
+func TestBreakingCompatibilityInShallowCheckout(t *testing.T) {
+	requireBuf(t)
+
+	repo := newCompatibilityRepo(t, "additive", true)
+	command := exec.Command(filepath.Join(repo, "tools", "proto", "breaking.sh"), "origin/main")
+	command.Dir = repo
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("breaking.sh failed in shallow checkout: %v\n%s", err, output)
+	}
+	runGit(t, repo, "rev-parse", "--verify", "refs/remotes/origin/main")
+	if shallow := runGit(t, repo, "rev-parse", "--is-shallow-repository"); shallow != "true" {
+		t.Fatalf("breaking.sh unexpectedly changed shallow repository state to %q", shallow)
 	}
 }
 
@@ -152,26 +170,34 @@ func requireBuf(t *testing.T) {
 	}
 }
 
-func newCompatibilityRepo(t *testing.T, fixture string) string {
+func newCompatibilityRepo(t *testing.T, fixture string, shallow bool) string {
 	t.Helper()
 	tempDir := t.TempDir()
 	remote := filepath.Join(tempDir, "origin.git")
 	runGit(t, tempDir, "init", "--bare", remote)
 
-	repo := filepath.Join(tempDir, "repo")
-	runGit(t, tempDir, "init", "--initial-branch=main", repo)
-	runGit(t, repo, "config", "user.name", "Turing Proto Test")
-	runGit(t, repo, "config", "user.email", "proto-test@example.invalid")
-
+	seed := filepath.Join(tempDir, "seed")
+	runGit(t, tempDir, "init", "--initial-branch=main", seed)
+	runGit(t, seed, "config", "user.name", "Turing Proto Test")
+	runGit(t, seed, "config", "user.email", "proto-test@example.invalid")
 	copyFile(t,
 		filepath.Join("testdata", "breaking", "base", "turing", "v1", "example.proto"),
-		filepath.Join(repo, "proto", "turing", "v1", "example.proto"),
+		filepath.Join(seed, "proto", "turing", "v1", "example.proto"),
 		0o644,
 	)
-	runGit(t, repo, "add", "proto")
-	runGit(t, repo, "commit", "-m", "baseline")
-	runGit(t, repo, "remote", "add", "origin", remote)
-	runGit(t, repo, "push", "--set-upstream", "origin", "main")
+	runGit(t, seed, "add", "proto")
+	runGit(t, seed, "commit", "-m", "baseline")
+	runGit(t, seed, "remote", "add", "origin", remote)
+	runGit(t, seed, "push", "--set-upstream", "origin", "main")
+
+	repo := filepath.Join(tempDir, "repo")
+	if shallow {
+		runGit(t, tempDir, "clone", "--depth=1", "--branch=main", "file://"+remote, repo)
+	} else {
+		runGit(t, tempDir, "clone", "--branch=main", remote, repo)
+	}
+	runGit(t, repo, "config", "user.name", "Turing Proto Test")
+	runGit(t, repo, "config", "user.email", "proto-test@example.invalid")
 	runGit(t, repo, "switch", "-c", "feature")
 	runGit(t, repo, "update-ref", "-d", "refs/remotes/origin/main")
 

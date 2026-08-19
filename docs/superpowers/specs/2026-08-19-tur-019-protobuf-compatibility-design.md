@@ -37,7 +37,7 @@ Commit a descriptor image and compare changes against it. This works offline, bu
 1. Require Git and Buf CLI 1.72.0.
 2. Accept a remote-tracking base ref, defaulting to `origin/main`.
 3. Validate the ref shape before using it as a fetch destination.
-4. Refresh that branch from its configured remote with a depth-one fetch. This makes shallow CI checkouts safe and prevents a stale local remote-tracking ref from silently becoming the baseline.
+4. Refresh that branch from its configured remote, adding `--depth=1` only when the repository is already shallow. This makes shallow CI checkouts safe without converting a full local repository into a shallow one, and prevents a stale local remote-tracking ref from silently becoming the baseline.
 5. Resolve the fetched commit and run `buf breaking proto --against "<repo-root>#format=git,ref=<commit>,subdir=proto"`. The explicit Git format works for both normal checkouts and linked worktrees, whose `.git` entry is a file.
 
 The script emits distinct diagnostics for a missing tool, unsupported Buf version, invalid base ref, failed fetch, unresolved commit, and schema incompatibility. It never falls back to an older local baseline after a fetch failure.
@@ -52,7 +52,7 @@ Real compatibility fixtures start from one baseline message and exercise three c
 - removed live field: fails with a field-deletion diagnostic;
 - renumbered live field: fails because the original field number was deleted.
 
-The Go regression test creates a temporary shallow-style Git repository with a bare `origin`, publishes the baseline to `main`, installs each candidate as the working tree, and invokes `tools/proto/breaking.sh`. It skips only when Buf is absent so ordinary root tests remain portable; the proto CI job installs the pinned Buf version and reruns the compatibility tests with skipping disabled.
+The Go regression test creates temporary full and shallow Git repositories with a bare `origin`, publishes the baseline to `main`, installs each candidate as the working tree, and invokes `tools/proto/breaking.sh`. It proves a missing base ref is fetched while the repository's existing shallow/full state is preserved. It skips only when Buf is absent so ordinary root tests remain portable; the proto CI job installs the pinned Buf version and reruns the compatibility tests with skipping disabled.
 
 CI self-guard tests assert the exact pinned setup action inputs, compatibility command, base-ref expression, and deterministic generation command. Script unit coverage also checks unsupported Buf versions and invalid base refs.
 
