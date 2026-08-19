@@ -137,6 +137,24 @@ Common values:
 | `OLLAMA_KEEP_ALIVE` | How long Ollama holds the model in memory after a reply (default `2m`). Accepts a duration (`30s`, `2m`) or whole seconds (`-1` = forever). Sent per request, so it does not depend on Ollama's own env var. Keep it above `TURING_APPROVAL_WAIT_TIMEOUT_MS` or the model unloads mid-run |
 | `OPENAI_API_KEY` / `OPENAI_MODEL` | Optional OpenAI-compatible model configuration |
 
+### Legacy skill recovery cleanup
+
+An upgrade through migration 0011 exports old database-backed skills into
+`turing-backend/skills/imported/` and retains a recovery copy in SQLite.
+TuringAgent re-exports that copy on startup but never deletes nonempty recovery
+rows automatically, because SQLite and the filesystem cannot commit atomically.
+
+To remove the recovery copy, stop the orchestrator, back up the configured
+database (the Compose default is `turing-backend/data/turing.db`), and verify
+every row returned by
+`SELECT id FROM legacy_skill_export_recovery ORDER BY id;`. An ID matching
+`^[A-Za-z0-9][A-Za-z0-9._-]*$` (except `.` and `..`) maps directly to
+`skills/imported/<id>/SKILL.md`. Every other ID maps to
+`skills/imported/skill-<hash>/SKILL.md`, where `<hash>` is the first 16 lowercase
+hex characters of SHA-256 over the ID's exact UTF-8 bytes. While the
+orchestrator remains stopped, use a SQLite client to run
+`DROP TABLE legacy_skill_export_recovery;`, then restart.
+
 ## Troubleshooting
 
 - **Backend is not reachable:** check that Docker Compose is running and port `3000` is free.

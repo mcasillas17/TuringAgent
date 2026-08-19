@@ -431,8 +431,8 @@ func validateOpenAIRequest(body map[string]any, requestNumber int, requireToolFl
 
 	rawTools, toolsPresent := body["tools"]
 	tools, toolsAreArray := rawTools.([]any)
-	if requireToolFlow && (!toolsPresent || !toolsAreArray || len(tools) != 1) {
-		return fmt.Errorf("OpenAI tools = %#v, want one function tool", rawTools)
+	if requireToolFlow && (!toolsPresent || !toolsAreArray || len(tools) != 3) {
+		return fmt.Errorf("OpenAI tools = %#v, want two skill tools and one MCP tool", rawTools)
 	}
 	if toolsPresent && !toolsAreArray {
 		return fmt.Errorf("OpenAI tools = %#v, want array", rawTools)
@@ -458,6 +458,9 @@ func validateOpenAIRequest(body map[string]any, requestNumber int, requireToolFl
 	}
 	if !requireToolFlow {
 		return nil
+	}
+	if !hasAdvertisedFunctionNamed(tools, "skills_list") || !hasAdvertisedFunctionNamed(tools, "skill_view") {
+		return fmt.Errorf("OpenAI tools = %#v, want skills_list and skill_view", rawTools)
 	}
 
 	switch requestNumber {
@@ -498,7 +501,7 @@ func validateOpenAIRequest(body map[string]any, requestNumber int, requireToolFl
 func (f *fakeModelServer) writeModelDrivenResponse(w http.ResponseWriter, flusher http.Flusher, body map[string]any, requestNumber int, toolName string) {
 	switch requestNumber {
 	case 1:
-		alias := advertisedFunctionAlias(body)
+		alias := advertisedFunctionAlias(body, toolName)
 		if alias == "" {
 			writeOpenAIChunk(w, "", "stop")
 			return
@@ -537,15 +540,32 @@ func (f *fakeModelServer) writeModelDrivenResponse(w http.ResponseWriter, flushe
 	}
 }
 
-func advertisedFunctionAlias(body map[string]any) string {
+func advertisedFunctionAlias(body map[string]any, toolName string) string {
 	tools, _ := body["tools"].([]any)
-	if len(tools) == 0 {
-		return ""
+	wantDescription := map[string]string{
+		"system.time":  "Get the current system time for a time zone.",
+		"files.create": "Create a file.",
+	}[toolName]
+	for _, raw := range tools {
+		tool, _ := raw.(map[string]any)
+		function, _ := tool["function"].(map[string]any)
+		if function["description"] == wantDescription {
+			alias, _ := function["name"].(string)
+			return alias
+		}
 	}
-	tool, _ := tools[0].(map[string]any)
-	function, _ := tool["function"].(map[string]any)
-	alias, _ := function["name"].(string)
-	return alias
+	return ""
+}
+
+func hasAdvertisedFunctionNamed(tools []any, name string) bool {
+	for _, raw := range tools {
+		tool, _ := raw.(map[string]any)
+		function, _ := tool["function"].(map[string]any)
+		if function["name"] == name {
+			return true
+		}
+	}
+	return false
 }
 
 func writeOpenAIToolCallChunk(w http.ResponseWriter, alias, arguments string, initial bool) {
@@ -1971,10 +1991,11 @@ func assertToolLifecycleEvent(t *testing.T, label string, event *turingv1.Turing
 func assertInitialOpenAIRequest(t *testing.T, body map[string]any, priorUserText, priorAssistantText, userText string) string {
 	t.Helper()
 	tools, _ := body["tools"].([]any)
-	if len(tools) != 1 {
-		t.Fatalf("initial OpenAI tools = %#v, want one tool", body["tools"])
+	if len(tools) != 3 {
+		t.Fatalf("initial OpenAI tools = %#v, want two skill tools and system.time", body["tools"])
 	}
-	tool, _ := tools[0].(map[string]any)
+	assertSkillToolAdvertisements(t, tools)
+	tool := advertisedToolByDescription(t, tools, "Get the current system time for a time zone.")
 	if tool["type"] != "function" {
 		t.Fatalf("advertised OpenAI tool type = %#v, want function", tool["type"])
 	}
@@ -2010,10 +2031,11 @@ func assertInitialOpenAIRequest(t *testing.T, body map[string]any, priorUserText
 func assertInitialFilesOpenAIRequest(t *testing.T, body map[string]any, userText string) string {
 	t.Helper()
 	tools, _ := body["tools"].([]any)
-	if len(tools) != 1 {
-		t.Fatalf("initial OpenAI tools = %#v, want files.create only", body["tools"])
+	if len(tools) != 3 {
+		t.Fatalf("initial OpenAI tools = %#v, want two skill tools and files.create", body["tools"])
 	}
-	tool, _ := tools[0].(map[string]any)
+	assertSkillToolAdvertisements(t, tools)
+	tool := advertisedToolByDescription(t, tools, "Create a file.")
 	function, _ := tool["function"].(map[string]any)
 	alias, _ := function["name"].(string)
 	if tool["type"] != "function" || alias == "" || strings.Contains(alias, ".") || !isOpenAIFunctionAlias(alias) {
@@ -2028,6 +2050,26 @@ func assertInitialFilesOpenAIRequest(t *testing.T, body map[string]any, userText
 		t.Fatalf("initial messages = %#v, want %#v", messages, wantMessages)
 	}
 	return alias
+}
+
+func assertSkillToolAdvertisements(t *testing.T, tools []any) {
+	t.Helper()
+	if !hasAdvertisedFunctionNamed(tools, "skills_list") || !hasAdvertisedFunctionNamed(tools, "skill_view") {
+		t.Fatalf("advertised tools = %#v, want skills_list and skill_view", tools)
+	}
+}
+
+func advertisedToolByDescription(t *testing.T, tools []any, description string) map[string]any {
+	t.Helper()
+	for _, raw := range tools {
+		tool, _ := raw.(map[string]any)
+		function, _ := tool["function"].(map[string]any)
+		if function["description"] == description {
+			return tool
+		}
+	}
+	t.Fatalf("advertised tools = %#v, want description %q", tools, description)
+	return nil
 }
 
 func assertFollowupOpenAIRequest(t *testing.T, body map[string]any, priorUserText, priorAssistantText, userText, alias, toolCallID string) {

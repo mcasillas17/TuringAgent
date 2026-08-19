@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package turing.v1;
+
+message CompatibilityExample {
+  string id = 1;
+  string display_name = 2;
+  string description = 3;
+}
+
+enum AddedState {
+  ADDED_STATE_UNSPECIFIED = 0;
+  ADDED_STATE_READY = 1;
+}
+
+message AddedRequest {}
+
+message AddedResponse {
+  AddedState state = 1;
+}
+
+service AddedService {
+  rpc GetAdded(AddedRequest) returns (AddedResponse);
+}

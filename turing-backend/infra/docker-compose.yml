@@ -28,6 +28,7 @@ services:
       ORCHESTRATOR_PUBLIC_PORT: ${ORCHESTRATOR_PUBLIC_PORT:-3000}
       ORCHESTRATOR_INTERNAL_PORT: ${ORCHESTRATOR_INTERNAL_PORT:-3001}
       DATABASE_PATH: ${DATABASE_PATH:-/app/data/turing.db}
+      SKILLS_ROOT: /skills
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
@@ -53,6 +54,7 @@ services:
       - "3001"
     volumes:
       - ../data:/app/data
+      - ../skills:/skills
     networks:
       - net-system
       - net-files

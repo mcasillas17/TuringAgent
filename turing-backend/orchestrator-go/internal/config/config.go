@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -28,6 +29,7 @@ type Config struct {
 	PublicPort     int
 	InternalPort   int
 	DatabasePath   string
+	SkillsRoot     string
 	OllamaBaseURL  string
 	OllamaModel    string
 	OpenAIBaseURL  string
@@ -196,6 +198,10 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		return Config{}, err
 	}
 
+	skillsRoot := stringValue("SKILLS_ROOT", "/skills")
+	if !filepath.IsAbs(skillsRoot) || filepath.Clean(skillsRoot) != skillsRoot {
+		return Config{}, fmt.Errorf("SKILLS_ROOT must be a clean absolute path")
+	}
 	return Config{
 		ClientAPIKey:             clientKey,
 		InternalToken:            internalToken,
@@ -206,6 +212,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		PublicPort:               publicPort,
 		InternalPort:             internalPort,
 		DatabasePath:             stringValue("DATABASE_PATH", "/app/data/turing.db"),
+		SkillsRoot:               skillsRoot,
 		OllamaBaseURL:            stringValue("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
 		OllamaModel:              stringValue("OLLAMA_MODEL", "qwen2.5:7b"),
 		OpenAIBaseURL:            stringValue("OPENAI_BASE_URL", "https://api.openai.com/v1"),

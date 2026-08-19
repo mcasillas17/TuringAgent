@@ -4,7 +4,7 @@
 
 Supersedes the stack claims in `docs/superpowers/specs/2026-05-09-project-turing-v1-design.md`, which still describes a Node.js/TypeScript orchestrator over REST/WebSocket. That was replaced by Go + gRPC in #10.
 
-**Last verified against the code:** 2026-08-13, at `e4ae748` (#33).
+**Last verified against the code:** 2026-08-19.
 
 ---
 
@@ -67,6 +67,7 @@ Each is a decision already made and defended in review, cited to where it happen
 | Streaming + resilience | Working; reconnect, requeue, lease recovery, run-visibility notices (#24, #30, #33) |
 | Job queue | Durable: SQLite job table with leases, fencing token, heartbeat renewal, orphan recovery, 3-attempt cap |
 | Tool servers | Two: safe system tools, sandboxed file tools |
+| Skills | File-backed `SKILL.md` library under `turing-backend/skills/`. Enabled metadata is indexed for every run; bodies and references load progressively only after every declared capability is granted. Grants gate loading and do **not** authorize tools. The 0011 upgrade retains legacy rows in a migration-only recovery table and re-exports them on startup; conflicts preserve recovery, and application code never removes nonempty rows. Cleanup is an offline/manual operator action after the files are verified. Enabled skill text selected by a routed run leaves the machine, and the routing picker says so |
 | Third-party accounts | **Stored, not used.** Connections hold a credential the user minted themselves (IMAP/CalDAV app password, Notion integration token, GitHub PAT), under explicit consent and revocable. No tool reads one yet, and the page says so. OAuth-only providers are listed as unsupported with the reason |
 | Agents | **One** (`general_assistant`) behind an executor *interface* with one implementation. Multi-agent is a **goal** — see below |
 | Process split | **Shipped** — the agent runtime is its own container, leased over a bidi gRPC stream. (It is *not* its own Go module; only `mcp-files` and `mcp-system` are.) |
@@ -87,6 +88,7 @@ These are not capabilities we are declining. They are the properties the rest of
 - **Every mutation is approved, argument-bound, and single-use.** New mutating capability inherits the existing approval flow; it does not get its own weaker one.
   - **Qualified once, by automations.** A scheduled run has nobody to ask, so an automation carries a per-automation allowlist of specific `(server, tool)` pairs — never global, never a wildcard, never inherited by a conversation the user drives by hand. What that buys is *when* the decision is made, not *whether*: the orchestrator still creates the approval and still grants it through the same signing and state transition a person's click takes, so the token mcp-files verifies is the same short-lived, single-use, `args_hash`-bound token it always was. What is genuinely weaker is that consent is given in advance and in general ("this automation may run `files.update`") rather than in the moment and in particular ("write *this* to *that* path"). Unattended approvals are recorded with `actor_type = 'automation'` so an operator can tell them from a person's afterwards. A tool an automation was not pre-approved for fails the run rather than waiting for someone who is not there.
 - **Tools stay confined to the sandbox.** Capability may grow inside that boundary; nothing gets an escape hatch out of it.
+- **Skill text is untrusted input, not authority.** A copied `SKILL.md` may guide an answer only after enablement and any declared grants. It cannot override system/user precedence, tool policy, or approval, and its capability grants never become tool permissions.
 - **The orchestrator owns durable state and control flow.** The job queue, leases, fencing, retries, recovery, and event streaming are ours. This is what was previously written as "no graph orchestration frameworks" — that framing was wrong. The real constraint is that nothing may take ownership of those, because they are the hard-won parts (#30, #31, #33).
 - **The backend stays a single language.** It is 100% Go today. A framework requiring a Python or Node runtime in the backend costs a second toolchain, image, and dependency surface — that cost, not the abstraction, is the reason LangGraph-style tools are a poor fit here.
 

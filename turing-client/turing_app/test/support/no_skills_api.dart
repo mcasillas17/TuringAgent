@@ -1,39 +1,21 @@
 import 'package:turing_flutter_app/models/skill.dart';
 
 /// Fills in the skill surface for fakes belonging to tests that are not about
-/// skills.
-///
-/// Reads answer empty; every mutation throws. A test that unexpectedly reaches
-/// one of these should fail loudly rather than quietly succeed against a stub
-/// that records nothing — silent success is how a broken call site survives a
-/// green suite.
+/// skills. Unexpected mutations fail loudly.
 mixin NoSkillsApi {
   Future<List<Skill>> listSkills() async => const [];
 
-  Future<List<Skill>> listSessionSkills({required String sessionId}) async =>
-      const [];
-
-  Future<Skill> createSkill({
-    required String name,
-    required String instructions,
-  }) async => throw UnimplementedError('this test does not exercise skills');
-
-  Future<Skill> updateSkill({
-    required String skillId,
-    required String name,
-    required String instructions,
-  }) async => throw UnimplementedError('this test does not exercise skills');
-
-  Future<void> deleteSkill({required String skillId}) async =>
+  Future<Skill> getSkill({required String skillId}) async =>
       throw UnimplementedError('this test does not exercise skills');
 
-  Future<List<Skill>> attachSkill({
-    required String sessionId,
+  Future<Skill> setSkillEnabled({
     required String skillId,
+    required bool enabled,
   }) async => throw UnimplementedError('this test does not exercise skills');
 
-  Future<List<Skill>> detachSkill({
-    required String sessionId,
+  Future<Skill> setSkillCapabilityGrant({
     required String skillId,
+    required String capability,
+    required bool granted,
   }) async => throw UnimplementedError('this test does not exercise skills');
 }

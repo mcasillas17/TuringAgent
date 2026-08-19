@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/features/workspace/automations_page.dart';
 import 'package:turing_flutter_app/models/automation.dart';
+import 'package:turing_flutter_app/models/skill.dart';
 import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 
@@ -318,6 +319,20 @@ void main() {
   });
 
   group('the editor', () {
+    testWidgets('shows the ready skills an unattended run can load', (
+      tester,
+    ) async {
+      final api = _FakeApi()..skills.add(_skill());
+      await _pumpAutomations(tester, api);
+
+      await tester.tap(find.text('New automation'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Skills available while it runs'), findsOneWidget);
+      expect(find.text('Tone (writing/tone)'), findsOneWidget);
+      expect(find.textContaining('does not grant those tools'), findsOneWidget);
+    });
+
     testWidgets('offers only the tools that would otherwise stop and ask', (
       tester,
     ) async {
@@ -349,7 +364,13 @@ void main() {
         findsWidgets,
       );
 
+      await tester.ensureVisible(find.text('files.create'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('files.create'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.textContaining('Without asking you, this automation may run'),
+      );
       await tester.pumpAndSettle();
 
       expect(
@@ -373,7 +394,11 @@ void main() {
         'Summarise the sandbox.',
       );
       await tester.enterText(_field(tester, 'Minutes between runs'), '30');
+      await tester.ensureVisible(find.text('files.update'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('files.update'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Save'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
@@ -651,6 +676,23 @@ Automation _automation({
   );
 }
 
+Skill _skill() => const Skill(
+  skillId: 'writing/tone',
+  name: 'Tone',
+  description: 'Keeps prose direct',
+  body: 'Be brief.',
+  category: 'writing',
+  version: '',
+  author: '',
+  license: '',
+  requires: [],
+  grantedCapabilities: [],
+  missingCapabilities: [],
+  enabled: true,
+  parseError: '',
+  folderPath: '/skills/writing/tone',
+);
+
 Future<void> _pumpAutomations(
   WidgetTester tester,
   _FakeApi api, {
@@ -682,6 +724,7 @@ class _FakeApi
     with NoSkillsApi, NoExternalAgentsApi, NoIntegrationsApi, NoTelemetryApi
     implements TuringApi {
   final List<Automation> automations = [];
+  final List<Skill> skills = [];
   final List<String> deleted = [];
   final List<(String, bool)> enabledCalls = [];
   Object? automationsError;
@@ -689,6 +732,9 @@ class _FakeApi
   Object? toggleError;
   Object? toolsError;
   int nextId = 1;
+
+  @override
+  Future<List<Skill>> listSkills() async => List.unmodifiable(skills);
 
   @override
   Future<List<Automation>> listAutomations() async {
