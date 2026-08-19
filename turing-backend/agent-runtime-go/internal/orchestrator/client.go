@@ -83,7 +83,11 @@ func (c *Client) FetchMessages(ctx context.Context, sessionID string, beforeMess
 		if !ok {
 			continue
 		}
-		out = append(out, llm.ChatMessage{Role: role, Content: message.GetContent()})
+		out = append(out, llm.ChatMessage{
+			MessageID: message.GetMessageId(),
+			Role:      role,
+			Content:   message.GetContent(),
+		})
 	}
 	if len(out) > historyLimit {
 		out = out[len(out)-historyLimit:]
@@ -96,16 +100,20 @@ func (c *Client) FetchMessages(ctx context.Context, sessionID string, beforeMess
 // only where they are wired together.
 var _ memory.Searcher = (*Client)(nil)
 
-// SearchMessages finds messages across ALL of the user's sessions. The empty
-// SessionId is deliberate: scoping to one session would defeat the point, which
-// is recalling what was said in earlier ones.
-//
 // Note the orchestrator treats the query as an exact phrase, so callers should
 // pass a single term rather than a sentence (see the memory package).
-func (c *Client) SearchMessages(ctx context.Context, query string, limit int) ([]memory.Excerpt, error) {
+func (c *Client) SearchMessages(
+	ctx context.Context,
+	query string,
+	sessionID string,
+	excludedSessionID string,
+	limit int,
+) ([]memory.Excerpt, error) {
 	resp, err := c.sessions.SearchMessages(c.withAuth(ctx), &turingv1.SearchMessagesRequest{
-		Query: query,
-		Limit: int32(limit),
+		Query:            query,
+		SessionId:        sessionID,
+		Limit:            int32(limit),
+		ExcludeSessionId: excludedSessionID,
 	})
 	if err != nil {
 		return nil, err

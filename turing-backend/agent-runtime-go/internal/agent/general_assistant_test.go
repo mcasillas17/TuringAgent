@@ -223,7 +223,7 @@ func TestExecuteEnforcesAggregateSuccessfulToolResultLimit(t *testing.T) {
 			provider := &queuedProvider{responses: [][]llm.StreamEvent{
 				{{Type: "tool_call", ToolCalls: calls}},
 				{{Type: "delta", Text: "done"}},
-			}}
+			}, contextWindow: 8 * 1024 * 1024}
 			client := &assistantTestToolLister{
 				definitions: []map[string]any{{"name": "files.create"}},
 				result:      toolResultWithSerializedSize(t, test.resultSize),
@@ -2751,7 +2751,7 @@ func TestGeneralAssistantStreamsDeltasAndCompletesRun(t *testing.T) {
 	}
 	wantMessages := []llm.ChatMessage{
 		{Role: "system", Content: "Be helpful"},
-		{Role: "user", Content: "hi"},
+		{MessageID: "msg_user", Role: "user", Content: "hi"},
 	}
 	if len(provider.requests) != 1 || !reflect.DeepEqual(provider.requests[0].Messages, wantMessages) {
 		t.Fatalf("provider requests = %+v, want messages %+v", provider.requests, wantMessages)
@@ -2839,6 +2839,12 @@ type scriptedProvider struct {
 
 func (p *scriptedProvider) ID() string { return "ollama" }
 
+func (p *scriptedProvider) ContextWindowTokens() int { return llm.DefaultContextWindowTokens }
+func (p *scriptedProvider) MaxOutputTokens() int     { return llm.DefaultMaxOutputTokens }
+func (p *scriptedProvider) EstimateRequestTokens(req llm.ChatRequest) (int, error) {
+	return estimateTestProviderRequest(req)
+}
+
 func (p *scriptedProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	p.requests = append(p.requests, req)
 	out := make(chan llm.StreamEvent, len(p.events))
@@ -2865,11 +2871,24 @@ func (c fakeMessageClient) FetchMessages(ctx context.Context, sessionID string, 
 }
 
 type queuedProvider struct {
-	responses [][]llm.StreamEvent
-	requests  []llm.ChatRequest
+	responses     [][]llm.StreamEvent
+	requests      []llm.ChatRequest
+	contextWindow int
 }
 
 func (p *queuedProvider) ID() string { return "queued" }
+
+func (p *queuedProvider) ContextWindowTokens() int {
+	if p.contextWindow > 0 {
+		return p.contextWindow
+	}
+	return llm.DefaultContextWindowTokens
+}
+
+func (p *queuedProvider) MaxOutputTokens() int { return llm.DefaultMaxOutputTokens }
+func (p *queuedProvider) EstimateRequestTokens(req llm.ChatRequest) (int, error) {
+	return estimateTestProviderRequest(req)
+}
 
 func (p *queuedProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	p.requests = append(p.requests, req)
@@ -2950,6 +2969,12 @@ type completionProvider struct {
 }
 
 func (p *completionProvider) ID() string { return "completion" }
+
+func (p *completionProvider) ContextWindowTokens() int { return llm.DefaultContextWindowTokens }
+func (p *completionProvider) MaxOutputTokens() int     { return llm.DefaultMaxOutputTokens }
+func (p *completionProvider) EstimateRequestTokens(req llm.ChatRequest) (int, error) {
+	return estimateTestProviderRequest(req)
+}
 
 func (p *completionProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	p.calls.Add(1)
@@ -3036,6 +3061,12 @@ type loopingToolProvider struct {
 
 func (p *loopingToolProvider) ID() string { return "looping" }
 
+func (p *loopingToolProvider) ContextWindowTokens() int { return llm.DefaultContextWindowTokens }
+func (p *loopingToolProvider) MaxOutputTokens() int     { return llm.DefaultMaxOutputTokens }
+func (p *loopingToolProvider) EstimateRequestTokens(req llm.ChatRequest) (int, error) {
+	return estimateTestProviderRequest(req)
+}
+
 func (p *loopingToolProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	p.calls++
 	out := make(chan llm.StreamEvent, 2)
@@ -3057,6 +3088,14 @@ type whitespaceLoopingToolProvider struct {
 
 func (p *whitespaceLoopingToolProvider) ID() string { return "whitespace-looping" }
 
+func (p *whitespaceLoopingToolProvider) ContextWindowTokens() int {
+	return llm.DefaultContextWindowTokens
+}
+func (p *whitespaceLoopingToolProvider) MaxOutputTokens() int { return llm.DefaultMaxOutputTokens }
+func (p *whitespaceLoopingToolProvider) EstimateRequestTokens(req llm.ChatRequest) (int, error) {
+	return estimateTestProviderRequest(req)
+}
+
 func (p *whitespaceLoopingToolProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	p.calls++
 	out := make(chan llm.StreamEvent, 2)
@@ -3069,6 +3108,14 @@ func (p *whitespaceLoopingToolProvider) StreamChat(context.Context, llm.ChatRequ
 }
 
 func (p *silentLoopingToolProvider) ID() string { return "silent-looping" }
+
+func (p *silentLoopingToolProvider) ContextWindowTokens() int {
+	return llm.DefaultContextWindowTokens
+}
+func (p *silentLoopingToolProvider) MaxOutputTokens() int { return llm.DefaultMaxOutputTokens }
+func (p *silentLoopingToolProvider) EstimateRequestTokens(req llm.ChatRequest) (int, error) {
+	return estimateTestProviderRequest(req)
+}
 
 func (p *silentLoopingToolProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	p.calls++
@@ -3087,6 +3134,14 @@ type toolThenModelFailureProvider struct {
 }
 
 func (p *toolThenModelFailureProvider) ID() string { return "tool-then-failure" }
+
+func (p *toolThenModelFailureProvider) ContextWindowTokens() int {
+	return llm.DefaultContextWindowTokens
+}
+func (p *toolThenModelFailureProvider) MaxOutputTokens() int { return llm.DefaultMaxOutputTokens }
+func (p *toolThenModelFailureProvider) EstimateRequestTokens(req llm.ChatRequest) (int, error) {
+	return estimateTestProviderRequest(req)
+}
 
 func (p *toolThenModelFailureProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	p.calls++
@@ -3117,6 +3172,12 @@ type blockingProvider struct {
 
 func (p *blockingProvider) ID() string { return "blocking" }
 
+func (p *blockingProvider) ContextWindowTokens() int { return llm.DefaultContextWindowTokens }
+func (p *blockingProvider) MaxOutputTokens() int     { return llm.DefaultMaxOutputTokens }
+func (p *blockingProvider) EstimateRequestTokens(req llm.ChatRequest) (int, error) {
+	return estimateTestProviderRequest(req)
+}
+
 func (p *blockingProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	close(p.entered)
 	return p.events, nil
@@ -3128,6 +3189,12 @@ type neverClosingProvider struct {
 
 func (p *neverClosingProvider) ID() string { return "never-closing" }
 
+func (p *neverClosingProvider) ContextWindowTokens() int { return llm.DefaultContextWindowTokens }
+func (p *neverClosingProvider) MaxOutputTokens() int     { return llm.DefaultMaxOutputTokens }
+func (p *neverClosingProvider) EstimateRequestTokens(req llm.ChatRequest) (int, error) {
+	return estimateTestProviderRequest(req)
+}
+
 func (p *neverClosingProvider) StreamChat(ctx context.Context, _ llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	p.contextSeen <- ctx
 	return make(chan llm.StreamEvent), nil
@@ -3138,6 +3205,14 @@ type toolThenNeverClosingProvider struct {
 }
 
 func (p *toolThenNeverClosingProvider) ID() string { return "tool-then-never-closing" }
+
+func (p *toolThenNeverClosingProvider) ContextWindowTokens() int {
+	return llm.DefaultContextWindowTokens
+}
+func (p *toolThenNeverClosingProvider) MaxOutputTokens() int { return llm.DefaultMaxOutputTokens }
+func (p *toolThenNeverClosingProvider) EstimateRequestTokens(req llm.ChatRequest) (int, error) {
+	return estimateTestProviderRequest(req)
+}
 
 func (p *toolThenNeverClosingProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	p.calls++
@@ -3157,6 +3232,12 @@ type errorProvider struct {
 }
 
 func (p errorProvider) ID() string { return "error" }
+
+func (p errorProvider) ContextWindowTokens() int { return llm.DefaultContextWindowTokens }
+func (p errorProvider) MaxOutputTokens() int     { return llm.DefaultMaxOutputTokens }
+func (p errorProvider) EstimateRequestTokens(req llm.ChatRequest) (int, error) {
+	return estimateTestProviderRequest(req)
+}
 
 func (p errorProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	return nil, p.err
@@ -3185,6 +3266,12 @@ type capturingProvider struct {
 
 func (p *capturingProvider) ID() string { return "ollama" }
 
+func (p *capturingProvider) ContextWindowTokens() int { return llm.DefaultContextWindowTokens }
+func (p *capturingProvider) MaxOutputTokens() int     { return llm.DefaultMaxOutputTokens }
+func (p *capturingProvider) EstimateRequestTokens(req llm.ChatRequest) (int, error) {
+	return estimateTestProviderRequest(req)
+}
+
 func (p *capturingProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	p.seen = append([]llm.ChatMessage{}, req.Messages...)
 	out := make(chan llm.StreamEvent, 2)
@@ -3192,6 +3279,11 @@ func (p *capturingProvider) StreamChat(ctx context.Context, req llm.ChatRequest)
 	out <- llm.StreamEvent{Type: "completed", FinishReason: "stop"}
 	close(out)
 	return out, nil
+}
+
+func estimateTestProviderRequest(req llm.ChatRequest) (int, error) {
+	body, err := json.Marshal(req)
+	return len(body), err
 }
 
 type fakeRecaller struct {
@@ -3208,6 +3300,16 @@ func (r *fakeRecaller) Recall(_ context.Context, sessionID string, userText stri
 	r.sessionID, r.userText = sessionID, userText
 	r.inContext = append([]llm.ChatMessage{}, inContext...)
 	return r.block, r.ok
+}
+
+func (r *fakeRecaller) PrepareRecall(
+	_ context.Context,
+	sessionID string,
+	userText string,
+) func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool) {
+	return func(ctx context.Context, inContext []llm.ChatMessage) (llm.ChatMessage, bool) {
+		return r.Recall(ctx, sessionID, userText, inContext)
+	}
 }
 
 func TestExecutePrependsRecalledContext(t *testing.T) {
@@ -3257,6 +3359,24 @@ func TestExecuteRunsWithoutARecaller(t *testing.T) {
 		if message.Role == "system" {
 			t.Fatalf("unconfigured recall injected a system message: %+v", message)
 		}
+	}
+}
+
+func TestExecuteTreatsTypedNilProviderAsUnavailable(t *testing.T) {
+	var provider *capturingProvider
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
+		},
+		fakeMessageClient{},
+		&GeneralAssistantTools{},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	failure := findRunFailed(updates)
+	if failure == nil || failure.GetCode() != "model_provider_unavailable" {
+		t.Fatalf("failure = %#v, want model_provider_unavailable", failure)
 	}
 }
 

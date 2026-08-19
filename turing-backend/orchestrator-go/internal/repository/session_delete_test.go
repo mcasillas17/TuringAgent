@@ -120,7 +120,7 @@ func TestDeleteSessionRemovesMessagesFromTheSearchIndex(t *testing.T) {
 	enqueued := seedDeletableSession(t, repo, "Delete me", "remember the passphrase hunter2")
 	finishRun(t, repo, enqueued.RunID)
 
-	found, err := repo.SearchMessages(ctx, "", "hunter2", 10)
+	found, err := repo.SearchMessages(ctx, "", "", "hunter2", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestDeleteSessionRemovesMessagesFromTheSearchIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	found, err = repo.SearchMessages(ctx, "", "hunter2", 10)
+	found, err = repo.SearchMessages(ctx, "", "", "hunter2", 10)
 	if err != nil {
 		t.Fatal(err)
 	}

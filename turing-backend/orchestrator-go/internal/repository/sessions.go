@@ -158,7 +158,13 @@ func (r *Repository) ListMessagesBefore(ctx context.Context, sessionID, beforeMe
 	return reversed, nil
 }
 
-func (r *Repository) SearchMessages(ctx context.Context, sessionID, query string, limit int) ([]Message, error) {
+func (r *Repository) SearchMessages(
+	ctx context.Context,
+	sessionID string,
+	excludedSessionID string,
+	query string,
+	limit int,
+) ([]Message, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
@@ -176,6 +182,10 @@ func (r *Repository) SearchMessages(ctx context.Context, sessionID, query string
 	if sessionID != "" {
 		sqlQuery += ` AND m.session_id = ?`
 		args = append(args, sessionID)
+	}
+	if excludedSessionID != "" {
+		sqlQuery += ` AND m.session_id <> ?`
+		args = append(args, excludedSessionID)
 	}
 	sqlQuery += ` ORDER BY bm25(messages_fts), m.id LIMIT ?`
 	args = append(args, limit)

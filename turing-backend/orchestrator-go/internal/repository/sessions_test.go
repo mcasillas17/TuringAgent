@@ -24,7 +24,7 @@ func TestSearchMessagesRanksAndScopes(t *testing.T) {
 		t.Fatalf("set message run_id: %v", err)
 	}
 
-	global, err := repo.SearchMessages(ctx, "", "rankterm", 10)
+	global, err := repo.SearchMessages(ctx, "", "", "rankterm", 10)
 	if err != nil {
 		t.Fatalf("SearchMessages global: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestSearchMessagesRanksAndScopes(t *testing.T) {
 		t.Fatalf("global run ID = %q, want run-rank-high", global[0].RunID)
 	}
 
-	scoped, err := repo.SearchMessages(ctx, "s2", "rankterm", 10)
+	scoped, err := repo.SearchMessages(ctx, "s2", "", "rankterm", 10)
 	if err != nil {
 		t.Fatalf("SearchMessages scoped: %v", err)
 	}
@@ -44,6 +44,12 @@ func TestSearchMessagesRanksAndScopes(t *testing.T) {
 	if scoped[0].SessionID != "s2" {
 		t.Fatalf("scoped SessionID = %q, want s2", scoped[0].SessionID)
 	}
+
+	excluded, err := repo.SearchMessages(ctx, "", "s1", "rankterm", 10)
+	if err != nil {
+		t.Fatalf("SearchMessages excluded: %v", err)
+	}
+	assertSearchMessageIDs(t, excluded, []string{"m-rank-s2"})
 }
 
 func TestSearchMessagesLimitsAndNoMatches(t *testing.T) {
@@ -55,14 +61,14 @@ func TestSearchMessagesLimitsAndNoMatches(t *testing.T) {
 		insertSearchMessage(t, ctx, database, fmt.Sprintf("m-limit-%02d", i), "s1", "limitterm", int64(i))
 	}
 
-	valid, err := repo.SearchMessages(ctx, "", "limitterm", 2)
+	valid, err := repo.SearchMessages(ctx, "", "", "limitterm", 2)
 	if err != nil {
 		t.Fatalf("SearchMessages valid limit: %v", err)
 	}
 	assertSearchMessageIDs(t, valid, []string{"m-limit-01", "m-limit-02"})
 
 	for _, limit := range []int{0, -1, 101} {
-		results, err := repo.SearchMessages(ctx, "", "limitterm", limit)
+		results, err := repo.SearchMessages(ctx, "", "", "limitterm", limit)
 		if err != nil {
 			t.Fatalf("SearchMessages limit %d: %v", limit, err)
 		}
@@ -74,7 +80,7 @@ func TestSearchMessagesLimitsAndNoMatches(t *testing.T) {
 		})
 	}
 
-	noMatch, err := repo.SearchMessages(ctx, "", "missingterm", 10)
+	noMatch, err := repo.SearchMessages(ctx, "", "", "missingterm", 10)
 	if err != nil {
 		t.Fatalf("SearchMessages no match: %v", err)
 	}
@@ -91,13 +97,13 @@ func TestSearchMessagesTreatsInputAsLiteralPhrase(t *testing.T) {
 	insertSearchMessage(t, ctx, database, "m-broad-only", "s1", "broadword", 3)
 	insertSearchMessage(t, ctx, database, "m-malformed", "s1", "\"unterminated", 4)
 
-	operatorLooking, err := repo.SearchMessages(ctx, "", "operatorword OR broadword", 10)
+	operatorLooking, err := repo.SearchMessages(ctx, "", "", "operatorword OR broadword", 10)
 	if err != nil {
 		t.Fatalf("SearchMessages operator-looking query: %v", err)
 	}
 	assertSearchMessageIDs(t, operatorLooking, []string{"m-literal"})
 
-	malformed, err := repo.SearchMessages(ctx, "", "\"unterminated", 10)
+	malformed, err := repo.SearchMessages(ctx, "", "", "\"unterminated", 10)
 	if err != nil {
 		t.Fatalf("SearchMessages malformed query: %v", err)
 	}
@@ -113,7 +119,7 @@ func TestSearchMessagesTreatsNULAsLiteralDelimiter(t *testing.T) {
 	insertSearchMessage(t, ctx, database, "m-nul-alpha", "s1", "alpha", 2)
 	insertSearchMessage(t, ctx, database, "m-nul-beta", "s1", "beta", 3)
 
-	results, err := repo.SearchMessages(ctx, "", "alpha\x00beta", 10)
+	results, err := repo.SearchMessages(ctx, "", "", "alpha\x00beta", 10)
 	if err != nil {
 		t.Fatalf("SearchMessages NUL query: %v", err)
 	}
@@ -127,7 +133,7 @@ func TestSearchMessagesNULOnlyInputReturnsNoMatches(t *testing.T) {
 	insertSearchSession(t, ctx, database, "s1")
 	insertSearchMessage(t, ctx, database, "m-nul-content", "s1", "anything", 1)
 
-	results, err := repo.SearchMessages(ctx, "", "\x00", 10)
+	results, err := repo.SearchMessages(ctx, "", "", "\x00", 10)
 	if err != nil {
 		t.Fatalf("SearchMessages NUL-only query: %v", err)
 	}
@@ -142,7 +148,7 @@ func TestSearchMessagesPunctuationOnlyInputReturnsNoMatches(t *testing.T) {
 	insertSearchMessage(t, ctx, database, "m-punctuation", "s1", "ordinary searchable content", 1)
 
 	for _, query := range []string{"...", "!!!", "🤖"} {
-		results, err := repo.SearchMessages(ctx, "", query, 10)
+		results, err := repo.SearchMessages(ctx, "", "", query, 10)
 		if err != nil {
 			t.Fatalf("SearchMessages punctuation-only query %q: %v", query, err)
 		}
@@ -175,7 +181,7 @@ func TestSearchMessagesReturnsQueryErrors(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := repo.SearchMessages(ctx, "", "anything", 10)
+	_, err := repo.SearchMessages(ctx, "", "", "anything", 10)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("SearchMessages error = %v, want context canceled", err)
 	}
