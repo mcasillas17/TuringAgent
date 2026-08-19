@@ -3,9 +3,31 @@ package tests
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
+
+type composeDocument struct {
+	Services map[string]composeService `yaml:"services"`
+}
+
+type composeService struct {
+	User            string             `yaml:"user"`
+	ReadOnly        bool               `yaml:"read_only"`
+	CapDrop         []string           `yaml:"cap_drop"`
+	CapAdd          []string           `yaml:"cap_add"`
+	SecurityOpt     []string           `yaml:"security_opt"`
+	Privileged      bool               `yaml:"privileged"`
+	Volumes         []string           `yaml:"volumes"`
+	Tmpfs           []string           `yaml:"tmpfs"`
+	VolumesFrom     []string           `yaml:"volumes_from"`
+	Environment     map[string]*string `yaml:"environment"`
+	EnvironmentFile yaml.Node          `yaml:"env_file"`
+	Secrets         yaml.Node          `yaml:"secrets"`
+}
 
 func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "infra", "docker-compose.yml"))
@@ -85,45 +107,99 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"${FILES_SANDBOX_ROOT",
 	)
 
-	allowedSecrets := map[string]map[string]bool{
+	allowedEnvironment := map[string][]string{
 		"turing-orchestrator": {
-			"TURING_CLIENT_API_KEY":      true,
-			"TURING_INTERNAL_TOKEN":      true,
-			"MCP_SYSTEM_TOKEN_GENERAL":   true,
-			"MCP_FILES_TOKEN_GENERAL":    true,
-			"TURING_APPROVAL_JWT_SECRET": true,
-			"TURING_INTEGRATION_KEY":     true,
-			"OPENAI_API_KEY":             true,
-			"TURING_AGENT_API_KEYS":      true,
+			"TURING_CLIENT_API_KEY",
+			"TURING_INTERNAL_TOKEN",
+			"MCP_SYSTEM_TOKEN_GENERAL",
+			"MCP_FILES_TOKEN_GENERAL",
+			"TURING_APPROVAL_JWT_SECRET",
+			"TURING_INTEGRATION_KEY",
+			"ORCHESTRATOR_PUBLIC_PORT",
+			"ORCHESTRATOR_INTERNAL_PORT",
+			"DATABASE_PATH",
+			"OLLAMA_BASE_URL",
+			"OLLAMA_MODEL",
+			"OPENAI_BASE_URL",
+			"OPENAI_API_KEY",
+			"OPENAI_MODEL",
+			"TURING_AGENT_API_KEYS",
+			"TURING_JOB_TIMEOUT_MS",
+			"TURING_JOB_REAPER_INTERVAL_MS",
+			"TURING_AUTOMATION_TICK_MS",
+			"TURING_JOB_MAX_ATTEMPTS",
+			"TURING_MAX_CONCURRENT_RUNS_GENERAL",
+			"TURING_MAX_TOOL_CALLS_PER_RUN",
+			"TURING_MODEL_TIMEOUT_MS",
+			"TURING_TOOL_TIMEOUT_MS",
+			"TURING_APPROVAL_TIMEOUT_MS",
+			"LOG_LEVEL",
 		},
 		"turing-agent-runtime-general": {
-			"TURING_INTERNAL_TOKEN":    true,
-			"MCP_SYSTEM_TOKEN_GENERAL": true,
-			"MCP_FILES_TOKEN_GENERAL":  true,
-			"OPENAI_API_KEY":           true,
-			"TURING_AGENT_API_KEYS":    true,
+			"TURING_INTERNAL_TOKEN",
+			"ORCHESTRATOR_GRPC_ADDR",
+			"TURING_WORKER_ID",
+			"TURING_JOB_TIMEOUT_MS",
+			"TURING_MAX_CONCURRENT_RUNS_GENERAL",
+			"TURING_MAX_TOOL_CALLS_PER_RUN",
+			"TURING_MODEL_TIMEOUT_MS",
+			"TURING_TOOL_TIMEOUT_MS",
+			"TURING_APPROVAL_TIMEOUT_MS",
+			"TURING_APPROVAL_WAIT_TIMEOUT_MS",
+			"TURING_TOOL_TOTAL_TIMEOUT_MS",
+			"MCP_SYSTEM_BASE_URL",
+			"MCP_FILES_BASE_URL",
+			"MCP_SYSTEM_TOKEN_GENERAL",
+			"MCP_FILES_TOKEN_GENERAL",
+			"OLLAMA_BASE_URL",
+			"OLLAMA_MODEL",
+			"OLLAMA_KEEP_ALIVE",
+			"OPENAI_BASE_URL",
+			"OPENAI_API_KEY",
+			"OPENAI_MODEL",
+			"TURING_AGENT_API_KEYS",
+			"LOG_LEVEL",
 		},
 		"turing-mcp-system": {
-			"MCP_SYSTEM_TOKEN_GENERAL": true,
+			"MCP_SYSTEM_TOKEN_GENERAL",
+			"LOG_LEVEL",
+			"LOG_PRETTY",
 		},
 		"turing-mcp-files": {
-			"TURING_INTERNAL_TOKEN":      true,
-			"MCP_FILES_TOKEN_GENERAL":    true,
-			"TURING_APPROVAL_JWT_SECRET": true,
+			"MCP_FILES_TOKEN_GENERAL",
+			"TURING_APPROVAL_JWT_SECRET",
+			"TURING_INTERNAL_TOKEN",
+			"ORCHESTRATOR_GRPC_ADDR",
+			"FILES_SANDBOX_ROOT",
+			"LOG_LEVEL",
+			"LOG_PRETTY",
 		},
 	}
-	for _, serviceName := range composeServiceNames(t, compose) {
-		service := composeServiceBlock(t, compose, serviceName)
-		requireNoEnvFile(t, serviceName, service)
-		allowed, known := allowedSecrets[serviceName]
+	document := decodeComposeDocument(t, compose)
+	for _, serviceName := range sortedServiceNames(document) {
+		service := document.Services[serviceName]
+		allowed, known := allowedEnvironment[serviceName]
 		if !known {
-			t.Errorf("%s has no explicit secret policy", serviceName)
+			t.Errorf("%s has no explicit environment policy", serviceName)
 			continue
 		}
-		for _, environmentName := range composeEnvironmentNames(t, service) {
-			if environmentNameLooksSensitive(environmentName) && !allowed[environmentName] {
-				t.Errorf("%s receives unapproved secret %s", serviceName, environmentName)
+		if yamlNodePresent(service.EnvironmentFile) {
+			t.Errorf("%s uses env_file instead of explicit environment entries", serviceName)
+		}
+		if yamlNodePresent(service.Secrets) {
+			t.Errorf("%s uses unapproved Compose secrets", serviceName)
+		}
+		actual := make([]string, 0, len(service.Environment))
+		for name, value := range service.Environment {
+			actual = append(actual, name)
+			if value == nil {
+				t.Errorf("%s inherits %s from the host environment", serviceName, name)
 			}
+		}
+		sort.Strings(actual)
+		sort.Strings(allowed)
+		if !equalStrings(actual, allowed) {
+			t.Errorf("%s environment = %v, want %v", serviceName, actual, allowed)
 		}
 	}
 }
@@ -171,7 +247,8 @@ func TestEveryBackendImageRunsAsExplicitNonRootUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, serviceName := range composeServiceNames(t, string(composeData)) {
+	document := decodeComposeDocument(t, string(composeData))
+	for _, serviceName := range sortedServiceNames(document) {
 		t.Run(serviceName, func(t *testing.T) {
 			test, known := tests[serviceName]
 			if !known {
@@ -199,7 +276,7 @@ func TestEveryComposeServiceUsesLeastPrivilegeRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	compose := string(data)
+	document := decodeComposeDocument(t, string(data))
 	allowedVolumeMounts := map[string][]string{
 		"turing-orchestrator":          {"../data:/app/data"},
 		"turing-agent-runtime-general": nil,
@@ -213,76 +290,86 @@ func TestEveryComposeServiceUsesLeastPrivilegeRuntime(t *testing.T) {
 		"turing-mcp-files":             "${HOST_UID:?Use scripts/compose.sh to launch}:${HOST_GID:?Use scripts/compose.sh to launch}",
 	}
 
-	serviceNames := composeServiceNames(t, compose)
+	serviceNames := sortedServiceNames(document)
 	if len(serviceNames) == 0 {
 		t.Fatal("docker-compose.yml has no backend services")
 	}
 	for _, serviceName := range serviceNames {
-		block := composeServiceBlock(t, compose, serviceName)
+		service := document.Services[serviceName]
 		allowedMounts, known := allowedVolumeMounts[serviceName]
 		if !known {
 			t.Errorf("%s has no explicit container security policy", serviceName)
 			continue
 		}
-		if got := composeScalar(t, block, "read_only"); got != "true" {
-			t.Errorf("%s read_only = %q, want true", serviceName, got)
+		if !service.ReadOnly {
+			t.Errorf("%s read_only = false, want true", serviceName)
 		}
-		if got := composeList(t, block, "cap_drop"); !equalStrings(got, []string{"ALL"}) {
-			t.Errorf("%s cap_drop = %v, want [ALL]", serviceName, got)
+		if !equalStrings(service.CapDrop, []string{"ALL"}) {
+			t.Errorf("%s cap_drop = %v, want [ALL]", serviceName, service.CapDrop)
 		}
-		if got := composeList(t, block, "security_opt"); !equalStrings(got, []string{"no-new-privileges:true"}) {
-			t.Errorf("%s security_opt = %v, want [no-new-privileges:true]", serviceName, got)
+		if len(service.CapAdd) != 0 {
+			t.Errorf("%s cap_add = %v, want none", serviceName, service.CapAdd)
 		}
-		for _, forbiddenKey := range []string{"cap_add", "privileged"} {
-			if composeKeyPresent(block, forbiddenKey) {
-				t.Errorf("%s sets forbidden Compose key %s", serviceName, forbiddenKey)
-			}
+		if !equalStrings(service.SecurityOpt, []string{"no-new-privileges:true"}) {
+			t.Errorf("%s security_opt = %v, want [no-new-privileges:true]", serviceName, service.SecurityOpt)
+		}
+		if service.Privileged {
+			t.Errorf("%s enables privileged mode", serviceName)
 		}
 
-		user := strings.Trim(composeScalar(t, block, "user"), `"'`)
+		user := service.User
 		if want := expectedUsers[serviceName]; user != want {
 			t.Errorf("%s Compose user = %q, want %q", serviceName, user, want)
 		} else if composeUserIsRoot(user) {
 			t.Errorf("%s uses root Compose user %q", serviceName, user)
 		}
 
-		if got, want := composeList(t, block, "volumes"), allowedMounts; !equalStrings(got, want) {
-			t.Errorf("%s volume mounts = %v, want %v", serviceName, got, want)
+		if !equalStrings(service.Volumes, allowedMounts) {
+			t.Errorf("%s volume mounts = %v, want %v", serviceName, service.Volumes, allowedMounts)
 		}
-		if got := composeList(t, block, "tmpfs"); len(got) != 0 {
-			t.Errorf("%s has unapproved writable tmpfs mounts: %v", serviceName, got)
+		if len(service.Tmpfs) != 0 {
+			t.Errorf("%s has unapproved writable tmpfs mounts: %v", serviceName, service.Tmpfs)
+		}
+		if len(service.VolumesFrom) != 0 {
+			t.Errorf("%s inherits unapproved volumes from %v", serviceName, service.VolumesFrom)
 		}
 	}
 }
 
-func TestComposeServiceNamesKeepServicesAfterTopLevelComments(t *testing.T) {
-	compose := "services:\n  first:\n    image: alpine\n# grouping comment\n  second:\n    image: alpine\nnetworks:\n  internal:\n"
-	if got := composeServiceNames(t, compose); !equalStrings(got, []string{"first", "second"}) {
-		t.Fatalf("composeServiceNames() = %v, want [first second]", got)
+func TestDecodeComposeDocumentResolvesSecurityRelevantYAMLForms(t *testing.T) {
+	compose := `
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+services:
+  guarded: # inline comments remain part of the service map
+    <<: *hardening
+    user: "1000:1000"
+    "cap_add": [SYS_ADMIN]
+    "volumes": ["/etc:/host-etc"]
+    volumes_from: [another]
+    environment:
+      # comments do not truncate the environment policy
+      "TURING_AGENT_API_KEYS": ${TURING_AGENT_API_KEYS:-}
+    "env_file": [".env"]
+    secrets: [api_key]
+`
+	document := decodeComposeDocument(t, compose)
+	service := document.Services["guarded"]
+	if !service.ReadOnly ||
+		!equalStrings(service.CapDrop, []string{"ALL"}) ||
+		!equalStrings(service.SecurityOpt, []string{"no-new-privileges:true"}) ||
+		!equalStrings(service.CapAdd, []string{"SYS_ADMIN"}) ||
+		!equalStrings(service.Volumes, []string{"/etc:/host-etc"}) ||
+		!equalStrings(service.VolumesFrom, []string{"another"}) {
+		t.Fatalf("decoded security policy = %+v", service)
 	}
-}
-
-func TestComposeListDoesNotHideInlineWritableStorage(t *testing.T) {
-	for _, test := range []struct {
-		name  string
-		block string
-		key   string
-	}{
-		{name: "scalar tmpfs", block: "    tmpfs: /tmp", key: "tmpfs"},
-		{name: "flow volumes", block: `    volumes: ["/etc:/host-etc"]`, key: "volumes"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := composeList(t, test.block, test.key); len(got) == 0 {
-				t.Fatalf("composeList(%q) silently accepted unsupported inline syntax", test.key)
-			}
-		})
+	if _, ok := service.Environment["TURING_AGENT_API_KEYS"]; !ok {
+		t.Fatal("quoted environment key was not decoded")
 	}
-}
-
-func TestComposeEnvironmentNamesNormalizeQuotedKeys(t *testing.T) {
-	block := "    environment:\n      \"TURING_AGENT_API_KEYS\": ${TURING_AGENT_API_KEYS:-}\n"
-	if got := composeEnvironmentNames(t, block); !equalStrings(got, []string{"TURING_AGENT_API_KEYS"}) {
-		t.Fatalf("composeEnvironmentNames() = %v, want [TURING_AGENT_API_KEYS]", got)
+	if !yamlNodePresent(service.EnvironmentFile) || !yamlNodePresent(service.Secrets) {
+		t.Fatal("env_file or secrets escaped structured decoding")
 	}
 }
 
@@ -381,11 +468,10 @@ func TestRepositoryDockerignoreExcludesSensitiveAndGeneratedContent(t *testing.T
 
 func composeServiceBlock(t *testing.T, compose string, serviceName string) string {
 	t.Helper()
-	header := "  " + serviceName + ":"
 	allLines := strings.Split(compose, "\n")
 	start := -1
 	for index, line := range allLines {
-		if line == header {
+		if name, ok := composeServiceHeader(line); ok && name == serviceName {
 			start = index
 			break
 		}
@@ -395,7 +481,7 @@ func composeServiceBlock(t *testing.T, compose string, serviceName string) strin
 	}
 	var block []string
 	for _, line := range allLines[start+1:] {
-		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "    ") && strings.HasSuffix(strings.TrimSpace(line), ":") {
+		if _, ok := composeServiceHeader(line); ok {
 			break
 		}
 		block = append(block, line)
@@ -403,151 +489,35 @@ func composeServiceBlock(t *testing.T, compose string, serviceName string) strin
 	return strings.Join(block, "\n")
 }
 
-func composeServiceNames(t *testing.T, compose string) []string {
+func decodeComposeDocument(t *testing.T, compose string) composeDocument {
 	t.Helper()
-	lines := strings.Split(compose, "\n")
-	start := -1
-	for index, line := range lines {
-		if line == "services:" {
-			start = index
-			break
-		}
+	var document composeDocument
+	if err := yaml.Unmarshal([]byte(compose), &document); err != nil {
+		t.Fatalf("decode docker-compose.yml: %v", err)
 	}
-	if start == -1 {
-		t.Fatal("docker-compose.yml has no services block")
+	if len(document.Services) == 0 {
+		t.Fatal("docker-compose.yml has no backend services")
 	}
-	var names []string
-	seen := make(map[string]bool)
-	for _, line := range lines[start+1:] {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		if !strings.HasPrefix(line, " ") {
-			break
-		}
-		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "    ") && strings.HasSuffix(line, ":") {
-			name := strings.TrimSuffix(strings.TrimSpace(line), ":")
-			if seen[name] {
-				t.Fatalf("docker-compose.yml repeats service %q", name)
-			}
-			seen[name] = true
-			names = append(names, name)
-		}
+	return document
+}
+
+func sortedServiceNames(document composeDocument) []string {
+	names := make([]string, 0, len(document.Services))
+	for name := range document.Services {
+		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 
-func composeEnvironmentNames(t *testing.T, block string) []string {
-	t.Helper()
-	var names []string
-	inEnvironment := false
-	for _, line := range strings.Split(block, "\n") {
-		if strings.HasPrefix(line, "    environment:") && line != "    environment:" {
-			t.Fatalf("environment must use block mapping syntax, got %q", line)
-		}
-		if line == "    environment:" {
-			if inEnvironment {
-				t.Fatal("service repeats environment block")
-			}
-			inEnvironment = true
-			continue
-		}
-		if !inEnvironment {
-			continue
-		}
-		if strings.HasPrefix(line, "      ") {
-			trimmed := strings.TrimSpace(line)
-			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-				continue
-			}
-			if strings.HasPrefix(trimmed, "- ") {
-				t.Fatalf("environment must use mapping syntax, got %q", line)
-			}
-			name, _, found := strings.Cut(trimmed, ":")
-			if !found {
-				t.Fatalf("invalid environment entry %q", line)
-			}
-			name = strings.Trim(strings.TrimSpace(name), `"'`)
-			names = append(names, name)
-			continue
-		}
-		if strings.TrimSpace(line) != "" {
-			break
-		}
-	}
-	return names
-}
-
-func composeScalar(t *testing.T, block string, key string) string {
-	t.Helper()
-	prefix := "    " + key + ":"
-	value := ""
-	found := false
-	for _, line := range strings.Split(block, "\n") {
-		if strings.HasPrefix(line, prefix) {
-			if found {
-				t.Fatalf("service repeats %s", key)
-			}
-			found = true
-			value = strings.TrimSpace(strings.TrimPrefix(line, prefix))
-		}
-	}
-	return value
+func yamlNodePresent(node yaml.Node) bool {
+	return node.Kind != 0
 }
 
 func composeUserIsRoot(user string) bool {
 	user = strings.Trim(strings.TrimSpace(user), `"'`)
 	name, _, _ := strings.Cut(user, ":")
 	return name == "root" || name == "0"
-}
-
-func composeKeyPresent(block string, key string) bool {
-	prefix := "    " + key + ":"
-	for _, line := range strings.Split(block, "\n") {
-		if strings.HasPrefix(line, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func composeList(t *testing.T, block string, key string) []string {
-	t.Helper()
-	header := "    " + key + ":"
-	var entries []string
-	inList := false
-	found := false
-	for _, line := range strings.Split(block, "\n") {
-		if strings.HasPrefix(line, header) && line != header {
-			if found {
-				t.Fatalf("service repeats %s", key)
-			}
-			return []string{strings.TrimSpace(strings.TrimPrefix(line, header))}
-		}
-		if line == header {
-			if found {
-				t.Fatalf("service repeats %s", key)
-			}
-			found = true
-			inList = true
-			continue
-		}
-		if !inList {
-			continue
-		}
-		if strings.HasPrefix(strings.TrimSpace(line), "#") {
-			continue
-		}
-		if strings.HasPrefix(line, "      - ") {
-			entries = append(entries, strings.TrimSpace(strings.TrimPrefix(line, "      - ")))
-			continue
-		}
-		if strings.TrimSpace(line) != "" {
-			break
-		}
-	}
-	return entries
 }
 
 func dockerfileFinalUser(dockerfile string) string {
@@ -571,14 +541,37 @@ func dockerfileFinalUser(dockerfile string) string {
 	return user
 }
 
-func environmentNameLooksSensitive(name string) bool {
-	upper := strings.ToUpper(name)
-	for _, marker := range []string{"KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"} {
-		if strings.Contains(upper, marker) {
-			return true
+func composeServiceHeader(line string) (string, bool) {
+	line = yamlLineWithoutComment(line)
+	if !strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "    ") {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasSuffix(trimmed, ":") {
+		return "", false
+	}
+	name := strings.Trim(strings.TrimSuffix(trimmed, ":"), `"'`)
+	return name, name != ""
+}
+
+func yamlLineWithoutComment(line string) string {
+	var singleQuoted, doubleQuoted, escaped bool
+	for index, character := range line {
+		switch {
+		case escaped:
+			escaped = false
+		case character == '\\' && doubleQuoted:
+			escaped = true
+		case character == '\'' && !doubleQuoted:
+			singleQuoted = !singleQuoted
+		case character == '"' && !singleQuoted:
+			doubleQuoted = !doubleQuoted
+		case character == '#' && !singleQuoted && !doubleQuoted &&
+			(index == 0 || line[index-1] == ' ' || line[index-1] == '\t'):
+			return strings.TrimRight(line[:index], " \t")
 		}
 	}
-	return false
+	return strings.TrimRight(line, " \t")
 }
 
 func equalStrings(got, want []string) bool {
