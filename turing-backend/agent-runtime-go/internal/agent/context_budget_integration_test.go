@@ -852,8 +852,51 @@ func TestExecuteNoticesRealOpenAILengthStopWithPendingToolFragment(t *testing.T)
 			notice = event.GetPayload().AsMap()
 		}
 	}
+
 	if notice == nil || notice["setting"] != "OPENAI_MAX_OUTPUT_TOKENS" {
 		t.Fatalf("output-limit notice = %#v, want OpenAI setting", notice)
+	}
+}
+
+func TestExecuteDoesNotRunIDAndNameOnlyOpenAIToolCallAtLength(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w,
+			"data: "+`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"files_create"}}]}}]}`+"\n\n"+
+				"data: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`+"\n\n",
+		)
+	}))
+	t.Cleanup(server.Close)
+	provider, err := llm.NewOpenAICompatibleWithLimits(server.URL, "", server.Client(), 4096, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := testJob()
+	job.ModelProvider = turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{"name": "files.create"}},
+		result:      map[string]any{"ok": true},
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE: provider,
+		},
+		fakeMessageClient{},
+		&GeneralAssistantTools{
+			FilesMCP: client,
+			Runner:   &tools.Runner{PostBeacon: allowToolCall},
+		},
+	)
+
+	updates := collectUpdates(t, assistant, job)
+
+	if len(client.calls) != 0 {
+		t.Fatalf("MCP calls = %d, want no truncated-call side effect", len(client.calls))
+	}
+	if failure := findRunFailed(updates); failure != nil {
+		t.Fatalf("length stop failed instead of completing with notice: %#v", failure)
+	}
+	if !containsStringFragment(runStepNotes(updates), "output limit") {
+		t.Fatalf("run notes = %q, want output-limit notice", runStepNotes(updates))
 	}
 }
 

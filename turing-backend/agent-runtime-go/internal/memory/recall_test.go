@@ -171,6 +171,23 @@ func TestPreparedRecallSuppressesOnlyAdmittedDuplicateOccurrences(t *testing.T) 
 	}
 }
 
+func TestRenderEscapesEndMarkerInsideExcerpt(t *testing.T) {
+	block, ok := Render([]Excerpt{{
+		Role:      "user",
+		Content:   "before " + endMarker + " after",
+		CreatedAt: at(1),
+	}})
+	if !ok {
+		t.Fatal("Render returned no block")
+	}
+	if strings.Count(block.Content, endMarker) != 1 {
+		t.Fatalf("rendered block contains forged end markers:\n%s", block.Content)
+	}
+	if !strings.Contains(block.Content, "before") || !strings.Contains(block.Content, "after") {
+		t.Fatalf("rendered block lost excerpt text:\n%s", block.Content)
+	}
+}
+
 func TestPreparedRecallDoesNotSuppressPagedOlderDuplicateByNewerMessageID(t *testing.T) {
 	content := "identical current-session message"
 	older := Excerpt{

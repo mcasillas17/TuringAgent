@@ -640,8 +640,10 @@ func Render(excerpts []Excerpt) (llm.ChatMessage, bool) {
 }
 
 // singleLine collapses every run of line breaks and other control characters
-// into one space, so an excerpt occupies exactly one rendered line. Content is
-// already character-budgeted, so folding it loses nothing but the line breaks.
+// into one space, so an excerpt occupies exactly one rendered line. It also
+// neutralizes the fixed block delimiter so quoted history cannot terminate its
+// own trust boundary. Content is already character-budgeted, so folding it
+// loses nothing but the line breaks.
 func singleLine(content string) string {
 	var builder strings.Builder
 	builder.Grow(len(content))
@@ -657,5 +659,6 @@ func singleLine(content string) string {
 		space = false
 		builder.WriteRune(r)
 	}
-	return strings.TrimSpace(builder.String())
+	line := strings.TrimSpace(builder.String())
+	return strings.ReplaceAll(line, endMarker, "[end marker in recalled text]")
 }
