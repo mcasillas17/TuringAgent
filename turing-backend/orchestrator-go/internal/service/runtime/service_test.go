@@ -59,10 +59,10 @@ func newHarnessWithDispatch(t *testing.T, dispatch DispatchConfig) *harness {
 					MaxContextTokens: 8192,
 				},
 			},
-			AgentIds:               []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
-			Tools:                  LegacyPolicyToolCapabilities(),
+			AgentIds:                    []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+			Tools:                       LegacyPolicyToolCapabilities(),
 			ExternalAgentCredentialRefs: []string{"claude", "external"},
-			SupportsExternalAgents: true,
+			SupportsExternalAgents:      true,
 		}
 	}
 	database := openRuntimeTestDB(t)

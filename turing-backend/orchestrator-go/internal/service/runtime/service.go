@@ -258,9 +258,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 		}
 		maxConcurrent = capabilities.maxConcurrentRuns
 	}
-	if err := s.refreshPendingCapabilityState(ctx, "", "", false, false); err != nil {
-		return err
-	}
+	s.refreshPendingCapabilityStateAdvisory(ctx, "registry seed", "", false, false)
 	commands := make(chan *turingv1.RuntimeCommand, maxWorkerConcurrentRuns)
 	connectedWorker := &worker{
 		commands:       commands,
@@ -313,9 +311,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 			returnErr = errors.Join(returnErr, fmt.Errorf("reconcile worker assignments: %w", err))
 		}
 		availabilityCtx, cancelAvailability := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := s.refreshPendingCapabilityState(availabilityCtx, "worker disconnected", ready.GetWorkerId(), true, false); err != nil {
-			returnErr = errors.Join(returnErr, fmt.Errorf("update unavailable queue notices: %w", err))
-		}
+		s.refreshPendingCapabilityStateAdvisory(availabilityCtx, "worker disconnected", ready.GetWorkerId(), true, false)
 		cancelAvailability()
 		if reconciled {
 			recoveryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -328,9 +324,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 	if err := s.persistDiscoveredTools(ctx, ready.GetWorkerId(), connectedWorker, discovered); err != nil {
 		return status.Error(codes.Internal, "persist worker tool capabilities")
 	}
-	if err := s.refreshPendingCapabilityState(ctx, "worker connected", ready.GetWorkerId(), true, true); err != nil {
-		return err
-	}
+	s.refreshPendingCapabilityStateAdvisory(ctx, "worker connected", ready.GetWorkerId(), true, true)
 	acceptedCtx, cancelAccepted := withDefaultTimeout(ctx, commandSendTimeout)
 	err = connectedWorker.commandSender(stream).send(acceptedCtx, &turingv1.RuntimeCommand{
 		Command: &turingv1.RuntimeCommand_WorkerAccepted{WorkerAccepted: &turingv1.RuntimeWorkerAccepted{
@@ -664,9 +658,7 @@ func (s *Server) renewWorkerLeases(ctx context.Context, workerID string, connect
 	}
 	revived := connectedWorker.recordHeartbeat(time.Now().UTC(), s.dispatch.LeaseDuration)
 	if revived {
-		if err := s.refreshPendingCapabilityState(ctx, "worker heartbeat restored", workerID, false, true); err != nil {
-			return err
-		}
+		s.refreshPendingCapabilityStateAdvisory(ctx, "worker heartbeat restored", workerID, false, true)
 	}
 	if reconciled || revived {
 		return s.DispatchPending(ctx)
@@ -937,9 +929,7 @@ func (s *Server) RecoverOrphanedAssignments(ctx context.Context) error {
 		}
 		recovered = recovered || result.Requeued || result.Cleared || released
 	}
-	if err := s.refreshPendingCapabilityState(recoveryCtx, "worker heartbeat expired", "", true, false); err != nil {
-		return err
-	}
+	s.refreshPendingCapabilityStateAdvisory(recoveryCtx, "worker heartbeat expired", "", true, false)
 	if recovered {
 		return s.DispatchPending(recoveryCtx)
 	}
@@ -976,6 +966,18 @@ func (s *Server) RunRecoveryLoop(ctx context.Context, interval time.Duration) {
 		case <-ticker.C:
 			_ = s.RecoverOrphanedAssignments(ctx)
 		}
+	}
+}
+
+func (s *Server) refreshPendingCapabilityStateAdvisory(
+	ctx context.Context,
+	cause string,
+	workerID string,
+	publishLosses bool,
+	publishRestorations bool,
+) {
+	if err := s.refreshPendingCapabilityState(ctx, cause, workerID, publishLosses, publishRestorations); err != nil {
+		log.Printf("refresh pending routing state after %s: %v", cause, err)
 	}
 }
 

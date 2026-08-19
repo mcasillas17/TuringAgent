@@ -198,11 +198,11 @@ func providerContextLimits(
 	contextName string,
 	outputName string,
 ) (int, int, error) {
-	contextWindowTokens, err := intValue(getenv, contextName, llm.DefaultContextWindowTokens)
+	contextWindowTokens, err := nonNegativeInt32Value(getenv, contextName, llm.DefaultContextWindowTokens)
 	if err != nil {
 		return 0, 0, err
 	}
-	maxOutputTokens, err := intValue(getenv, outputName, llm.DefaultMaxOutputTokens)
+	maxOutputTokens, err := nonNegativeInt32Value(getenv, outputName, llm.DefaultMaxOutputTokens)
 	if err != nil {
 		return 0, 0, err
 	}

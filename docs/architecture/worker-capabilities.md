@@ -139,10 +139,13 @@ persistence. Deduplication advances after each committed notice, even if a later
 in the same refresh fails. Queue refreshes use an indexed keyset scan in bounded pages
 and a five-second deadline, so retries neither duplicate transitions nor monopolize the
 registry lock indefinitely. Idempotent snapshots do not duplicate notices.
-After an enqueue commits, a refresh failure is logged but does not cancel the durable
-run or prevent dispatch; later lifecycle and recovery passes retry notice state.
-On orchestrator restart the empty registry is restored by worker reconnects; queued
-routes receive restoration notices and become dispatchable again.
+Notice refresh is advisory after durable queue, registration, capability, lease, or
+recovery state commits: a failure is logged but does not tear down a healthy worker or
+prevent dispatch. Later lifecycle and recovery passes retry notice state. A reconnecting
+runtime does not advertise capacity until executors cancelled with the previous stream
+have actually drained, preventing a requeued assignment from colliding with stale local
+run state. On orchestrator restart the empty registry is restored by worker reconnects;
+queued routes receive restoration notices and become dispatchable again.
 
 ## Configuration APIs
 
@@ -183,8 +186,11 @@ Tests must fail without the implementation for:
 - tool-persistence failure preserving the previous live snapshot and assignment-send
   revalidation against the committed replacement;
 - worker reconnect advertising a fresh registration and complete snapshot;
+- reconnect waiting for prior-stream executors to drain before advertising capacity;
 - modern no-discovery workers reporting an authoritative empty tool set;
 - capability-fence requeues preserving execution attempts;
+- registration, capability, heartbeat revival, and recovery dispatch continuing when
+  advisory queue-notice persistence fails;
 - populated pre-capability migration backfill and stable nanosecond keyset ordering;
 - automation routing-notice publication and durable routing-unavailable audit
   occurrences;

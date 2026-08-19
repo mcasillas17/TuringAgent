@@ -93,6 +93,103 @@ func TestCapabilityPersistenceFailureRestoresThePreviousSnapshot(t *testing.T) {
 	}
 }
 
+func TestWorkerRegistrationSurvivesRoutingNoticeFailure(t *testing.T) {
+	h := newHarness(t)
+	session, err := h.repo.CreateSession(context.Background(), "Registration notice failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "needs Ollama", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	failRoutingNoticeInserts(t, h)
+
+	stream := connectWorkerCapabilities(t, h, "worker-notice-failure", "registration-notice-failure", modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, "gpt-4o-mini", 8192, 1,
+	))
+	defer func() { _ = stream.CloseSend() }()
+	if err := h.service.ValidateRouting(context.Background(), repository.RoutingRequirements{
+		AgentID: "general_assistant", ModelProvider: "openai_compatible", Model: "gpt-4o-mini",
+	}); err != nil {
+		t.Fatalf("registered route unavailable after advisory notice failure: %v", err)
+	}
+}
+
+func TestCapabilityReplacementSurvivesRoutingNoticeFailure(t *testing.T) {
+	h := newHarness(t)
+	stream := connectWorkerCapabilities(t, h, "worker-update-notice", "registration-update-notice", modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+	))
+	defer func() { _ = stream.CloseSend() }()
+	session, err := h.repo.CreateSession(context.Background(), "Capability notice failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "needs Ollama", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	failRoutingNoticeInserts(t, h)
+
+	connected := h.service.registeredWorker("worker-update-notice")
+	err = h.service.replaceWorkerCapabilities(context.Background(), "worker-update-notice", connected,
+		&turingv1.RuntimeWorkerCapabilitiesUpdated{
+			WorkerId: "worker-update-notice", RegistrationId: "registration-update-notice",
+			Capabilities: modelCapabilities(
+				turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, "gpt-4o-mini", 8192, 1,
+			),
+		})
+	if err != nil {
+		t.Fatalf("capability replacement reported advisory notice failure: %v", err)
+	}
+	if h.service.registeredWorker("worker-update-notice") != connected {
+		t.Fatal("capability replacement removed the healthy registration")
+	}
+}
+
+func TestHeartbeatRevivalDispatchesAfterRoutingNoticeFailure(t *testing.T) {
+	h := newHarnessWithDispatch(t, DispatchConfig{LeaseDuration: 40 * time.Millisecond})
+	stream := connectWorkerCapabilities(t, h, "worker-revival-notice", "registration-revival-notice", modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+	))
+	defer func() { _ = stream.CloseSend() }()
+	session, err := h.repo.CreateSession(context.Background(), "Revival notice failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "needs revival", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connected := h.service.registeredWorker("worker-revival-notice")
+	connected.mu.Lock()
+	connected.lastHeartbeat = time.Now().Add(-time.Second)
+	connected.mu.Unlock()
+	if err := h.service.refreshPendingCapabilityState(context.Background(), "worker expired", "", true, false); err != nil {
+		t.Fatal(err)
+	}
+	failRoutingNoticeInserts(t, h)
+
+	if err := h.service.renewWorkerLeases(context.Background(), "worker-revival-notice", connected,
+		&turingv1.RuntimeHeartbeat{WorkerId: "worker-revival-notice"}); err != nil {
+		t.Fatalf("heartbeat revival reported advisory notice failure: %v", err)
+	}
+	assigned := recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetRunAssigned() != nil
+	}).GetRunAssigned()
+	if assigned.GetRunId() != enqueued.RunID {
+		t.Fatalf("revival assignment = %+v, want run %q", assigned, enqueued.RunID)
+	}
+}
+
 func TestStaleCapabilityUpdateDisconnectsOnlyItsRegistrationAndReconnectRestoresIt(t *testing.T) {
 	h := newHarness(t)
 	stream := connectWorkerCapabilities(t, h, "worker-fenced", "registration-current", modelCapabilities(
@@ -784,6 +881,24 @@ func eventually(t *testing.T, timeout time.Duration, condition func() bool) {
 			t.Fatal("condition was not satisfied before timeout")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func failRoutingNoticeInserts(t *testing.T, h *harness) {
+	t.Helper()
+	if _, err := h.database.ExecContext(context.Background(), `
+		CREATE TRIGGER fail_pending_routing_notice
+		BEFORE INSERT ON events
+		WHEN NEW.type = 'agent.run.step'
+			AND json_extract(NEW.payload_json, '$.reason') IN (
+				'routing_capability_unavailable',
+				'routing_capability_restored'
+			)
+		BEGIN
+			SELECT RAISE(ABORT, 'routing notice unavailable');
+		END
+	`); err != nil {
+		t.Fatal(err)
 	}
 }
 

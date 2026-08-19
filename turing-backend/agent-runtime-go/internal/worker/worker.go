@@ -364,6 +364,9 @@ func (w *Worker) Run(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := w.waitForPriorRuns(ctx); err != nil {
+		return fmt.Errorf("wait for prior active runs: %w", err)
+	}
 	modernRegistration := len(w.options.Models) > 0 ||
 		len(w.options.ExternalAgentCredentialRefs) > 0 ||
 		w.options.SupportsExternalAgents
@@ -532,6 +535,29 @@ func (w *Worker) waitForActiveRuns(entries map[string]*activeRun, timeout time.D
 			delete(entries, runID)
 		case <-timer.C:
 			return
+		}
+	}
+}
+
+func (w *Worker) waitForPriorRuns(ctx context.Context) error {
+	for {
+		var (
+			runID string
+			entry *activeRun
+		)
+		w.mu.Lock()
+		for runID, entry = range w.active {
+			break
+		}
+		w.mu.Unlock()
+		if entry == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-entry.done:
+			w.deleteActiveEntry(runID, entry)
 		}
 	}
 }

@@ -312,9 +312,7 @@ func (s *Server) replaceWorkerCapabilities(
 	connectedWorker.capabilities = capabilities
 	connectedWorker.maxConcurrent = capabilities.maxConcurrentRuns
 	connectedWorker.mu.Unlock()
-	if err := s.refreshPendingCapabilityState(ctx, "worker capabilities changed", workerID, true, true); err != nil {
-		return err
-	}
+	s.refreshPendingCapabilityStateAdvisory(ctx, "worker capabilities changed", workerID, true, true)
 	return s.DispatchPending(ctx)
 }
 

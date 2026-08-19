@@ -55,9 +55,9 @@ func newHarness(t *testing.T) *harness {
 					MaxContextTokens: 8192,
 				},
 			},
-			AgentIds:               []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+			AgentIds:                    []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
 			ExternalAgentCredentialRefs: []string{"claude", "external"},
-			SupportsExternalAgents: true,
+			SupportsExternalAgents:      true,
 		},
 	})
 	chatServer := New(repo, bus, runtimeServer, "llama3.2", "gpt-4o-mini")
