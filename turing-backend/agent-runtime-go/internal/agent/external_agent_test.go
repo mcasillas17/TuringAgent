@@ -57,6 +57,75 @@ func TestExternalAgentProviderSaysWhichKeyIsMissing(t *testing.T) {
 	}
 }
 
+// An agent with no endpoint would otherwise be handed to the HTTP client as an
+// empty base URL, which fails somewhere far less legible than here.
+func TestExternalAgentProviderRefusesATargetWithNoEndpoint(t *testing.T) {
+	resolve := NewExternalAgentProviderFunc(map[string]string{"claude": "sk-test"}, http.DefaultClient)
+
+	_, err := resolve(&turingv1.ExternalAgentTarget{
+		DisplayName:   "Claude",
+		CredentialRef: "claude",
+	})
+	if err == nil {
+		t.Fatal("resolve succeeded with no base URL")
+	}
+	if !strings.Contains(err.Error(), "endpoint") {
+		t.Fatalf("error = %q, want it to name the missing endpoint", err)
+	}
+}
+
+// nil means "not routed", so a nil target reaching the resolver at all is a
+// wiring mistake, not a run that should quietly proceed locally.
+func TestExternalAgentProviderRefusesANilTarget(t *testing.T) {
+	resolve := NewExternalAgentProviderFunc(map[string]string{"claude": "sk-test"}, http.DefaultClient)
+
+	if _, err := resolve(nil); err == nil {
+		t.Fatal("resolve succeeded with a nil target")
+	}
+}
+
+// The asymmetry with recall is deliberate and worth pinning: recall is
+// suppressed for a routed run because it draws on OTHER conversations the user
+// never chose to send anywhere, while the tools stay because they act on this
+// conversation, at this user's request, with mutations still gated by the
+// approval token. If that decision is ever reversed it should be by editing
+// this test, not by a change nobody noticed.
+func TestRoutedRunStillOffersTheLocalToolsItWasDiscoveredWith(t *testing.T) {
+	remote := &scriptedProvider{events: []llm.StreamEvent{
+		{Type: "delta", Text: "ok"},
+		{Type: "completed", FinishReason: "stop"},
+	}}
+	local := &scriptedProvider{events: []llm.StreamEvent{
+		{Type: "delta", Text: "ok"},
+		{Type: "completed", FinishReason: "stop"},
+	}}
+	newAssistant := func() *GeneralAssistant {
+		assistant := NewGeneralAssistant(
+			map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: local},
+			fakeMessageClient{},
+			&GeneralAssistantTools{Runner: &tools.Runner{PostBeacon: allowToolCall}},
+		)
+		assistant.SetExternalAgentProvider(func(*turingv1.ExternalAgentTarget) (llm.Provider, error) {
+			return remote, nil
+		})
+		return assistant
+	}
+
+	collectUpdates(t, newAssistant(), routedJob())
+	collectUpdates(t, newAssistant(), testJob())
+
+	if len(remote.requests) != 1 || len(local.requests) != 1 {
+		t.Fatalf("requests = %d routed / %d local, want one each", len(remote.requests), len(local.requests))
+	}
+	// Same tool set both ways. A routed run being handed a different registry
+	// than the local one would mean the disclosure in the client ("the results
+	// of any tool it runs") describes something other than what happens.
+	if len(remote.requests[0].Tools) != len(local.requests[0].Tools) {
+		t.Fatalf("routed run saw %d tools, local run saw %d; the two must match",
+			len(remote.requests[0].Tools), len(local.requests[0].Tools))
+	}
+}
+
 // A routed run must never fall back to the local provider map. Answering
 // locally under another assistant's name is the one failure this feature
 // cannot have, because the user was told the message went elsewhere.

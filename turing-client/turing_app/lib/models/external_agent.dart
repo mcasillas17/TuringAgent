@@ -61,7 +61,9 @@ class ExternalAgent {
   final bool credentialAvailable;
 
   /// The part of the endpoint worth showing: who receives the conversation.
-  String get endpointHost => Uri.tryParse(baseUrl)?.host.isNotEmpty == true
-      ? Uri.parse(baseUrl).host
-      : baseUrl;
+  String get endpointHost {
+    final uri = Uri.tryParse(baseUrl);
+    if (uri == null || uri.host.isEmpty) return baseUrl;
+    return uri.host;
+  }
 }

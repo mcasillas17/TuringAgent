@@ -53,7 +53,7 @@ func TestSendMessagePublishesTheEgressNoticeToOtherSubscribers(t *testing.T) {
 			if !ok {
 				t.Fatal("bus closed before the egress notice arrived")
 			}
-			if event.Type == "agent.run.step" && strings.Contains(event.PayloadJSON, "left your machine") {
+			if event.Type == "agent.run.step" && strings.Contains(event.PayloadJSON, "leaves your machine") {
 				return
 			}
 		case <-deadline:
@@ -90,7 +90,7 @@ func TestSendMessagePublishesNoEgressNoticeForALocalConversation(t *testing.T) {
 			if !ok {
 				return
 			}
-			if strings.Contains(event.PayloadJSON, "left your machine") {
+			if strings.Contains(event.PayloadJSON, "leaves your machine") {
 				t.Fatalf("a local conversation reported egress: %s", event.PayloadJSON)
 			}
 		case <-deadline:

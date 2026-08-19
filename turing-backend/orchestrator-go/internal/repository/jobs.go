@@ -343,10 +343,20 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 	// where it happens rather than only in a settings screen the user is not
 	// looking at. Ordered after the queued event so it lands inside the run
 	// the sender is already streaming.
+	//
+	// Worded prospectively, and that is not a stylistic choice. Nothing has
+	// left the machine at this point — the job is only queued — and several
+	// designed paths mean it never will: a missing API key or an unwired
+	// runtime fails the run with external_agent_unavailable, a debug tool
+	// command is answered locally before a provider is ever chosen, and a
+	// cancelled or unclaimed run never reaches a vendor at all. "Sent … left
+	// your machine" would be a false statement in the transcript on every one
+	// of those, which this project ranks as the worst kind of defect. "Sending
+	// … leaves" is true in both outcomes.
 	var routingEvents []Event
 	if routed {
 		notice, err := appendRunNoticeTx(ctx, tx, input.SessionID, runID, traceID,
-			"Sent to "+flattenNoticeText(routedAgent.DisplayName)+" — this message left your machine",
+			"Sending to "+flattenNoticeText(routedAgent.DisplayName)+" — this message leaves your machine",
 			map[string]any{
 				"externalAgent": routedAgent.DisplayName,
 				"endpoint":      ExternalAgentEndpointHost(routedAgent.BaseURL),

@@ -79,7 +79,21 @@ class _SessionAgentBarState extends State<SessionAgentBar> {
   @override
   Widget build(BuildContext context) {
     final palette = AppColors.of(context);
-    if (_loading) return const SizedBox.shrink();
+    // Not SizedBox.shrink(). The composer is usable while this loads, and a
+    // missing strip during that window reads exactly like "nothing to say
+    // here" — which is the reassurance-by-omission the failure branch below
+    // refuses to give. It occupies its own height and says what it is doing.
+    if (_loading) {
+      return _BarShell(
+        palette: palette,
+        onTap: _load,
+        icon: Icons.more_horiz,
+        iconColor: palette.textMuted,
+        label: 'Checking where this conversation goes',
+        labelColor: palette.textMuted,
+        action: '',
+      );
+    }
     if (_failed) {
       return _BarShell(
         palette: palette,
@@ -266,27 +280,12 @@ class _DestinationPickerState extends State<_DestinationPicker> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
-              child: Text(
-                'Where this conversation goes',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: palette.text,
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-              child: Text(
-                'Choosing an agent below sends every message in this '
-                'conversation, and the results of any tool it runs, to that '
-                'company. Material recalled from your other conversations is '
-                'never sent to one.',
-                style: TextStyle(fontSize: 12.5, color: palette.textMuted),
-              ),
-            ),
+            // The heading and its explanation scroll WITH the options rather
+            // than sitting above them at a fixed height. On a landscape phone
+            // the sheet gets ~220px total, and four lines of standing text
+            // plus two option rows do not fit — a fixed header there pushes
+            // the choices off the bottom, which is worse than making the
+            // explanation scroll.
             if (_loading)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 30),
@@ -302,6 +301,30 @@ class _DestinationPickerState extends State<_DestinationPicker> {
                 child: ListView(
                   shrinkWrap: true,
                   children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
+                      child: Text(
+                        'Where this conversation goes',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: palette.text,
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+                      child: Text(
+                        'Choosing an agent below sends every message in this '
+                        'conversation, and the results of any tool it runs, '
+                        'to that company. Material recalled from your other '
+                        'conversations is never sent to one.',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: palette.textMuted,
+                        ),
+                      ),
+                    ),
                     _DestinationTile(
                       selected: _selectedId == null,
                       onTap: () => _select(null),

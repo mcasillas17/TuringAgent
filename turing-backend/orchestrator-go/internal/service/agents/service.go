@@ -156,12 +156,19 @@ func agentError(err error, fallback string) error {
 		return status.Error(codes.InvalidArgument, "agent base URL is required")
 	case errors.Is(err, repository.ErrExternalAgentBaseURLInvalid):
 		return status.Error(codes.InvalidArgument, "agent base URL must be an absolute http or https URL with no query or fragment")
+	case errors.Is(err, repository.ErrExternalAgentBaseURLTooLong):
+		return status.Error(codes.InvalidArgument, "agent base URL is too long")
 	case errors.Is(err, repository.ErrExternalAgentBaseURLInsecure):
 		return status.Error(codes.InvalidArgument, "an agent that is not on this machine must be reached over https")
+	case errors.Is(err, repository.ErrExternalAgentBaseURLCredentials):
+		return status.Error(codes.InvalidArgument,
+			"the endpoint must not contain a username or password; put the API key in TURING_AGENT_API_KEYS and name it above")
 	case errors.Is(err, repository.ErrExternalAgentCredentialRefEmpty):
 		return status.Error(codes.InvalidArgument, "agent credential name is required")
 	case errors.Is(err, repository.ErrExternalAgentCredentialRefFormat):
 		return status.Error(codes.InvalidArgument, "agent credential name may only contain letters, digits, dot, dash and underscore")
+	case errors.Is(err, repository.ErrExternalAgentCredentialRefLong):
+		return status.Error(codes.InvalidArgument, "agent credential name is too long")
 	case errors.Is(err, repository.ErrExternalAgentProviderInvalid):
 		return status.Error(codes.InvalidArgument, "agent provider is unsupported")
 	default:

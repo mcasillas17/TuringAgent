@@ -32,9 +32,12 @@ func TestAgentErrorMapsEachFailureToItsCode(t *testing.T) {
 		{"model too long", repository.ErrExternalAgentModelTooLong, codes.InvalidArgument},
 		{"empty base URL", repository.ErrExternalAgentBaseURLEmpty, codes.InvalidArgument},
 		{"malformed base URL", repository.ErrExternalAgentBaseURLInvalid, codes.InvalidArgument},
+		{"over-long base URL", repository.ErrExternalAgentBaseURLTooLong, codes.InvalidArgument},
 		{"plaintext remote base URL", repository.ErrExternalAgentBaseURLInsecure, codes.InvalidArgument},
+		{"credentials in the base URL", repository.ErrExternalAgentBaseURLCredentials, codes.InvalidArgument},
 		{"empty credential name", repository.ErrExternalAgentCredentialRefEmpty, codes.InvalidArgument},
 		{"malformed credential name", repository.ErrExternalAgentCredentialRefFormat, codes.InvalidArgument},
+		{"over-long credential name", repository.ErrExternalAgentCredentialRefLong, codes.InvalidArgument},
 		{"unsupported provider", repository.ErrExternalAgentProviderInvalid, codes.InvalidArgument},
 	}
 	for _, tt := range tests {
@@ -180,6 +183,13 @@ func TestExternalAgentRequestsMapToActionableCodes(t *testing.T) {
 			_, err := server.CreateExternalAgent(ctx, request)
 			return err
 		}, codes.InvalidArgument},
+		{"credentials in the endpoint", func() error {
+			request := createRequest()
+			request.DisplayName = "Other"
+			request.BaseUrl = "https://user:sk-secret@api.anthropic.com/v1"
+			_, err := server.CreateExternalAgent(ctx, request)
+			return err
+		}, codes.InvalidArgument},
 		{"credential name with a slash", func() error {
 			request := createRequest()
 			request.DisplayName = "Other"
@@ -246,6 +256,26 @@ func TestExternalAgentRequestsMapToActionableCodes(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			assertCode(t, testCase.call(), testCase.want)
 		})
+	}
+}
+
+// The rejection has to say where the key actually goes, and must not echo the
+// one the user just pasted — an error string is one of the places a secret
+// most easily ends up in a log.
+func TestRejectingAnEndpointWithCredentialsSaysWhereTheKeyGoesWithoutEchoingIt(t *testing.T) {
+	server, _, _, ctx := newAgentServer(t)
+
+	request := createRequest()
+	request.BaseUrl = "https://user:sk-supersecret@api.anthropic.com/v1"
+	_, err := server.CreateExternalAgent(ctx, request)
+
+	assertCode(t, err, codes.InvalidArgument)
+	message := status.Convert(err).Message()
+	if !strings.Contains(message, "TURING_AGENT_API_KEYS") {
+		t.Fatalf("message = %q, want it to point at the file the key belongs in", message)
+	}
+	if strings.Contains(message, "sk-supersecret") {
+		t.Fatalf("message echoed the pasted key: %q", message)
 	}
 }
 

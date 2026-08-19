@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/url"
@@ -30,9 +31,12 @@ var (
 	ErrExternalAgentModelTooLong        = errors.New("agent model is too long")
 	ErrExternalAgentBaseURLEmpty        = errors.New("agent base URL is required")
 	ErrExternalAgentBaseURLInvalid      = errors.New("agent base URL must be an absolute http or https URL with no query or fragment")
+	ErrExternalAgentBaseURLTooLong      = errors.New("agent base URL is too long")
 	ErrExternalAgentBaseURLInsecure     = errors.New("a base URL that is not on this machine must use https")
+	ErrExternalAgentBaseURLCredentials  = errors.New("agent base URL must not carry a username or password")
 	ErrExternalAgentCredentialRefEmpty  = errors.New("agent credential name is required")
 	ErrExternalAgentCredentialRefFormat = errors.New("agent credential name may only contain letters, digits, dot, dash and underscore")
+	ErrExternalAgentCredentialRefLong   = errors.New("agent credential name is too long")
 	ErrExternalAgentProviderInvalid     = errors.New("agent provider is unsupported")
 )
 
@@ -60,6 +64,24 @@ type ExternalAgent struct {
 	CredentialRef string
 	CreatedAt     string
 	UpdatedAt     string
+}
+
+// externalAgentColumns is the one place the column list lives. Every read below
+// selects exactly this and scans it with scanExternalAgent, so adding a column
+// is one edit rather than four that must agree.
+const externalAgentColumns = `id, display_name, provider, base_url, model, credential_ref, created_at, updated_at`
+
+// scanRow is what *sql.Row and *sql.Rows have in common, so one scan serves
+// single-row reads inside and outside a transaction as well as list reads.
+type scanRow interface {
+	Scan(dest ...any) error
+}
+
+func scanExternalAgent(row scanRow) (ExternalAgent, error) {
+	var agent ExternalAgent
+	err := row.Scan(&agent.AgentID, &agent.DisplayName, &agent.Provider, &agent.BaseURL,
+		&agent.Model, &agent.CredentialRef, &agent.CreatedAt, &agent.UpdatedAt)
+	return agent, err
 }
 
 // ExternalAgentInput is what a caller supplies for a create or an update.
@@ -129,13 +151,24 @@ func validateExternalAgentBaseURL(baseURL string) error {
 		return ErrExternalAgentBaseURLEmpty
 	}
 	if len([]rune(baseURL)) > maxExternalAgentBaseURLRunes {
-		return ErrExternalAgentBaseURLInvalid
+		return ErrExternalAgentBaseURLTooLong
 	}
 	parsed, err := url.Parse(baseURL)
 	if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" ||
 		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
 		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
 		return ErrExternalAgentBaseURLInvalid
+	}
+	// https://user:sk-secret@host/v1 passes every check above — it is absolute,
+	// https, has a hostname, and carries no query or fragment — and Go's HTTP
+	// client turns that userinfo into an Authorization header. It IS a
+	// credential. Accepting it would put a third-party secret in the one place
+	// this whole design exists to keep clean: the base_url column, from which it
+	// would be copied into every job payload, sent over the runtime stream, and
+	// handed back to any client that lists agents. Refused here, at the only
+	// door into that column.
+	if parsed.User != nil {
+		return ErrExternalAgentBaseURLCredentials
 	}
 	if parsed.Scheme == "http" && !isLocalHostname(parsed.Hostname()) {
 		return ErrExternalAgentBaseURLInsecure
@@ -162,7 +195,7 @@ func validateCredentialRef(ref string) error {
 		return ErrExternalAgentCredentialRefEmpty
 	}
 	if len([]rune(ref)) > maxExternalAgentCredentialRefRunes {
-		return ErrExternalAgentCredentialRefFormat
+		return ErrExternalAgentCredentialRefLong
 	}
 	for _, character := range ref {
 		switch {
@@ -234,12 +267,8 @@ func (r *Repository) UpdateExternalAgent(ctx context.Context, agentID string, in
 }
 
 func (r *Repository) GetExternalAgent(ctx context.Context, agentID string) (ExternalAgent, error) {
-	var agent ExternalAgent
-	err := r.db.QueryRowContext(ctx, `
-		SELECT id, display_name, provider, base_url, model, credential_ref, created_at, updated_at
-		FROM external_agents WHERE id = ?`, agentID).
-		Scan(&agent.AgentID, &agent.DisplayName, &agent.Provider, &agent.BaseURL, &agent.Model,
-			&agent.CredentialRef, &agent.CreatedAt, &agent.UpdatedAt)
+	agent, err := scanExternalAgent(r.db.QueryRowContext(ctx,
+		`SELECT `+externalAgentColumns+` FROM external_agents WHERE id = ?`, agentID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return ExternalAgent{}, ErrExternalAgentNotFound
 	}
@@ -267,18 +296,16 @@ func (r *Repository) DeleteExternalAgent(ctx context.Context, agentID string) er
 // ListExternalAgents orders by name so the list reads the same way every
 // visit. A list that reorders itself between visits is one nobody can learn.
 func (r *Repository) ListExternalAgents(ctx context.Context) ([]ExternalAgent, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, display_name, provider, base_url, model, credential_ref, created_at, updated_at
-		FROM external_agents ORDER BY display_name COLLATE NOCASE, id`)
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+externalAgentColumns+` FROM external_agents ORDER BY display_name COLLATE NOCASE, id`)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 	var agents []ExternalAgent
 	for rows.Next() {
-		var agent ExternalAgent
-		if err := rows.Scan(&agent.AgentID, &agent.DisplayName, &agent.Provider, &agent.BaseURL,
-			&agent.Model, &agent.CredentialRef, &agent.CreatedAt, &agent.UpdatedAt); err != nil {
+		agent, err := scanExternalAgent(rows)
+		if err != nil {
 			return nil, err
 		}
 		agents = append(agents, agent)
@@ -290,33 +317,85 @@ func (r *Repository) ListExternalAgents(ctx context.Context) ([]ExternalAgent, e
 // going before. Idempotent: choosing the same destination twice is what a
 // double tap looks like and it means the same as choosing it once.
 func (r *Repository) SetSessionAgent(ctx context.Context, sessionID string, agentID string) (ExternalAgent, error) {
-	_, err := r.db.ExecContext(ctx, `
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ExternalAgent{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO session_external_agent (session_id, agent_id, routed_at) VALUES (?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET agent_id = excluded.agent_id, routed_at = excluded.routed_at`,
-		sessionID, agentID, now())
-	if err != nil {
+		sessionID, agentID, now()); err != nil {
 		if isForeignKeyViolation(err) {
 			// The constraint does not say which side is missing, and telling
 			// someone their agent is gone when it is the conversation that
 			// went stale sends them to look in the wrong place.
-			return ExternalAgent{}, r.missingRouteSide(ctx, sessionID)
+			//
+			// Probed on tx, NOT on the pool. The connection pool is capped at
+			// one connection (db.Open), so a read issued through r.db while
+			// this transaction still holds that connection waits for a
+			// connection the transaction will not release until the read
+			// returns — a deadlock that only shows up on the error path.
+			return ExternalAgent{}, missingRouteSideTx(ctx, tx, sessionID)
 		}
 		return ExternalAgent{}, err
 	}
-	return r.GetExternalAgent(ctx, agentID)
+	agent, err := scanExternalAgent(tx.QueryRowContext(ctx,
+		`SELECT `+externalAgentColumns+` FROM external_agents WHERE id = ?`, agentID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ExternalAgent{}, ErrExternalAgentNotFound
+	}
+	if err != nil {
+		return ExternalAgent{}, err
+	}
+	// Pointing a conversation at a third party is the most consequential thing
+	// this app lets someone do, so it leaves a record — in the same
+	// transaction as the routing itself, or the record could disagree with
+	// reality. The endpoint host, not the full URL: enough to say who the
+	// recipient is without copying a string a user might have pasted anything
+	// into.
+	if err := recordAuditTx(ctx, tx, "", "client", "", "session.routed", sessionID,
+		auditPayload(map[string]any{
+			"agentId":  agent.AgentID,
+			"agent":    agent.DisplayName,
+			"endpoint": ExternalAgentEndpointHost(agent.BaseURL),
+			"model":    agent.Model,
+		})); err != nil {
+		return ExternalAgent{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ExternalAgent{}, err
+	}
+	return agent, nil
 }
 
-// missingRouteSide probes which end of a failed route does not exist. Only
-// reached on the error path, so the extra read costs nothing in the normal case.
-func (r *Repository) missingRouteSide(ctx context.Context, sessionID string) error {
+// auditPayload marshals an audit payload, degrading to an empty object rather
+// than failing the change it describes. An unrecordable detail is worth less
+// than the routing decision itself succeeding.
+func auditPayload(fields map[string]any) string {
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return "{}"
+	}
+	return string(encoded)
+}
+
+// missingRouteSideTx probes which end of a failed route does not exist. Only
+// reached on the error path, so the extra read costs nothing in the normal
+// case. Takes the transaction rather than the repository because the pool
+// holds a single connection — see the call site.
+func missingRouteSideTx(ctx context.Context, tx *sql.Tx, sessionID string) error {
 	var exists int
-	err := r.db.QueryRowContext(ctx, `SELECT 1 FROM sessions WHERE id = ?`, sessionID).Scan(&exists)
+	err := tx.QueryRowContext(ctx, sessionExistsQuery, sessionID).Scan(&exists)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrSessionNotFound
 	}
 	if err != nil {
 		return err
 	}
+	// The conversation exists, so the other end of the constraint is what does
+	// not.
 	return ErrExternalAgentNotFound
 }
 
@@ -327,8 +406,28 @@ func (r *Repository) ClearSessionAgent(ctx context.Context, sessionID string) er
 	if err := r.requireSession(ctx, sessionID); err != nil {
 		return err
 	}
-	_, err := r.db.ExecContext(ctx, `DELETE FROM session_external_agent WHERE session_id = ?`, sessionID)
-	return err
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	result, err := tx.ExecContext(ctx, `DELETE FROM session_external_agent WHERE session_id = ?`, sessionID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	// Only when something actually changed. Recording every no-op clear would
+	// bury the routing decisions the log exists to show.
+	if affected > 0 {
+		if err := recordAuditTx(ctx, tx, "", "client", "", "session.unrouted", sessionID, "{}"); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // GetSessionAgent reports where a conversation's messages go. The boolean is
@@ -338,14 +437,7 @@ func (r *Repository) GetSessionAgent(ctx context.Context, sessionID string) (Ext
 	if err := r.requireSession(ctx, sessionID); err != nil {
 		return ExternalAgent{}, false, err
 	}
-	var agent ExternalAgent
-	err := r.db.QueryRowContext(ctx, `
-		SELECT a.id, a.display_name, a.provider, a.base_url, a.model, a.credential_ref, a.created_at, a.updated_at
-		FROM session_external_agent r
-		JOIN external_agents a ON a.id = r.agent_id
-		WHERE r.session_id = ?`, sessionID).
-		Scan(&agent.AgentID, &agent.DisplayName, &agent.Provider, &agent.BaseURL, &agent.Model,
-			&agent.CredentialRef, &agent.CreatedAt, &agent.UpdatedAt)
+	agent, err := scanExternalAgent(r.db.QueryRowContext(ctx, sessionAgentQuery, sessionID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return ExternalAgent{}, false, nil
 	}
@@ -355,9 +447,20 @@ func (r *Repository) GetSessionAgent(ctx context.Context, sessionID string) (Ext
 	return agent, true, nil
 }
 
+// sessionAgentQuery is shared by the read-committed path and the one inside
+// the enqueue transaction, so the two can never disagree about what a
+// conversation's destination is.
+const sessionAgentQuery = `
+	SELECT a.id, a.display_name, a.provider, a.base_url, a.model, a.credential_ref, a.created_at, a.updated_at
+	FROM session_external_agent r
+	JOIN external_agents a ON a.id = r.agent_id
+	WHERE r.session_id = ?`
+
+const sessionExistsQuery = `SELECT 1 FROM sessions WHERE id = ?`
+
 func (r *Repository) requireSession(ctx context.Context, sessionID string) error {
 	var exists int
-	err := r.db.QueryRowContext(ctx, `SELECT 1 FROM sessions WHERE id = ?`, sessionID).Scan(&exists)
+	err := r.db.QueryRowContext(ctx, sessionExistsQuery, sessionID).Scan(&exists)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrSessionNotFound
 	}
@@ -370,14 +473,7 @@ func (r *Repository) requireSession(ctx context.Context, sessionID string) error
 // job waits in the queue must not change where an accepted message goes, and
 // must not silently redirect a transcript to a different company.
 func sessionExternalAgentTx(ctx context.Context, tx *sql.Tx, sessionID string) (ExternalAgent, bool, error) {
-	var agent ExternalAgent
-	err := tx.QueryRowContext(ctx, `
-		SELECT a.id, a.display_name, a.provider, a.base_url, a.model, a.credential_ref, a.created_at, a.updated_at
-		FROM session_external_agent r
-		JOIN external_agents a ON a.id = r.agent_id
-		WHERE r.session_id = ?`, sessionID).
-		Scan(&agent.AgentID, &agent.DisplayName, &agent.Provider, &agent.BaseURL, &agent.Model,
-			&agent.CredentialRef, &agent.CreatedAt, &agent.UpdatedAt)
+	agent, err := scanExternalAgent(tx.QueryRowContext(ctx, sessionAgentQuery, sessionID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return ExternalAgent{}, false, nil
 	}
@@ -387,7 +483,7 @@ func sessionExternalAgentTx(ctx context.Context, tx *sql.Tx, sessionID string) (
 	return agent, true, nil
 }
 
-// ExternalAgentEndpointHost is what the "this left your machine" notice names.
+// ExternalAgentEndpointHost is what the "leaves your machine" notice names.
 // The host alone, not the full URL: it is the part that identifies who
 // received the conversation, and a path adds noise to a sentence that has to
 // be read in a hurry.

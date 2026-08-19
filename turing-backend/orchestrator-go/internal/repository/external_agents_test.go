@@ -93,7 +93,13 @@ func TestCreateExternalAgentValidatesEveryField(t *testing.T) {
 		// The whole conversation travels over this URL. Plaintext to somewhere
 		// off this machine would carry it in the clear.
 		{"plaintext remote", func(in *ExternalAgentInput) { in.BaseURL = "http://api.anthropic.com/v1" }, ErrExternalAgentBaseURLInsecure},
+		{"long base URL", func(in *ExternalAgentInput) {
+			in.BaseURL = "https://example.com/" + strings.Repeat("p", maxExternalAgentBaseURLRunes)
+		}, ErrExternalAgentBaseURLTooLong},
 		{"blank credential", func(in *ExternalAgentInput) { in.CredentialRef = " " }, ErrExternalAgentCredentialRefEmpty},
+		{"long credential", func(in *ExternalAgentInput) {
+			in.CredentialRef = strings.Repeat("c", maxExternalAgentCredentialRefRunes+1)
+		}, ErrExternalAgentCredentialRefLong},
 		{"credential with a space", func(in *ExternalAgentInput) { in.CredentialRef = "my key" }, ErrExternalAgentCredentialRefFormat},
 		{"credential with a slash", func(in *ExternalAgentInput) { in.CredentialRef = "../secret" }, ErrExternalAgentCredentialRefFormat},
 		{"unknown provider", func(in *ExternalAgentInput) { in.Provider = "skynet" }, ErrExternalAgentProviderInvalid},
@@ -106,6 +112,60 @@ func TestCreateExternalAgentValidatesEveryField(t *testing.T) {
 				t.Fatalf("error = %v, want %v", err, testCase.wantErr)
 			}
 		})
+	}
+}
+
+// A URL is the one field that can smuggle a secret past a design built to keep
+// secrets out of the database: Go's HTTP client turns userinfo into an
+// Authorization header, so https://user:sk-secret@host/v1 IS a credential — and
+// it passes every other check, being absolute, https, and free of query and
+// fragment. Accepting it would put a third-party key in base_url, and from
+// there into every job payload, the runtime stream, and any client that lists
+// agents.
+func TestCreateExternalAgentRefusesCredentialsSmuggledIntoTheURL(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	existing := mustCreateAgent(t, ctx, repo, anthropicAgent())
+
+	for _, baseURL := range []string{
+		"https://user:sk-secret@api.anthropic.com/v1",
+		"https://sk-secret@api.anthropic.com/v1",
+		"http://user:sk-secret@localhost:4000/v1",
+	} {
+		input := anthropicAgent()
+		input.DisplayName = "Smuggler"
+		input.BaseURL = baseURL
+		if _, err := repo.CreateExternalAgent(ctx, input); !errors.Is(err, ErrExternalAgentBaseURLCredentials) {
+			t.Fatalf("create with %q = %v, want ErrExternalAgentBaseURLCredentials", baseURL, err)
+		}
+		if _, err := repo.UpdateExternalAgent(ctx, existing.AgentID, input); !errors.Is(err, ErrExternalAgentBaseURLCredentials) {
+			t.Fatalf("update with %q = %v, want ErrExternalAgentBaseURLCredentials", baseURL, err)
+		}
+	}
+
+	// And nothing key-shaped reached the table by any route.
+	var stored int
+	if err := repo.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM external_agents WHERE base_url LIKE '%@%'`).Scan(&stored); err != nil {
+		t.Fatalf("scan stored URLs: %v", err)
+	}
+	if stored != 0 {
+		t.Fatalf("%d stored base URLs carry userinfo", stored)
+	}
+}
+
+// Renaming one agent onto another's name is a different statement from
+// creating a duplicate, and reaches a different unique-violation branch.
+func TestUpdateExternalAgentRejectsRenamingOntoAnotherName(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	mustCreateAgent(t, ctx, repo, anthropicAgent())
+	other := anthropicAgent()
+	other.DisplayName = "ChatGPT"
+	second := mustCreateAgent(t, ctx, repo, other)
+
+	renamed := other
+	renamed.DisplayName = "claude"
+	if _, err := repo.UpdateExternalAgent(ctx, second.AgentID, renamed); !errors.Is(err, ErrExternalAgentNameTaken) {
+		t.Fatalf("rename onto an existing name = %v, want ErrExternalAgentNameTaken", err)
 	}
 }
 
@@ -229,6 +289,69 @@ func TestSessionAgentRoundTripAndReplacement(t *testing.T) {
 	// in, which is not a failure.
 	if err := repo.ClearSessionAgent(ctx, session.SessionID); err != nil {
 		t.Fatalf("second clear: %v", err)
+	}
+}
+
+// Pointing a conversation at a third party is the most consequential thing the
+// app lets someone do. Without a record, "when did this start going to
+// Anthropic?" has no answer.
+func TestRoutingAConversationLeavesAnAuditRecord(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	agent := mustCreateAgent(t, ctx, repo, anthropicAgent())
+
+	if _, err := repo.SetSessionAgent(ctx, session.SessionID, agent.AgentID); err != nil {
+		t.Fatalf("route: %v", err)
+	}
+
+	var payloadJSON string
+	if err := repo.db.QueryRowContext(ctx,
+		`SELECT COALESCE(payload_json, '') FROM audit_logs WHERE action = 'session.routed' AND target = ?`,
+		session.SessionID).Scan(&payloadJSON); err != nil {
+		t.Fatalf("read audit row: %v", err)
+	}
+	var payload struct {
+		Agent    string `json:"agent"`
+		AgentID  string `json:"agentId"`
+		Endpoint string `json:"endpoint"`
+		Model    string `json:"model"`
+	}
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		t.Fatalf("decode audit payload: %v", err)
+	}
+	if payload.Agent != "Claude" || payload.AgentID != agent.AgentID ||
+		payload.Endpoint != "api.anthropic.com" || payload.Model != "claude-sonnet-4-5" {
+		t.Fatalf("audit payload = %+v, want the destination it recorded", payload)
+	}
+
+	if err := repo.ClearSessionAgent(ctx, session.SessionID); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	var unrouted int
+	if err := repo.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM audit_logs WHERE action = 'session.unrouted' AND target = ?`,
+		session.SessionID).Scan(&unrouted); err != nil {
+		t.Fatalf("count unroute rows: %v", err)
+	}
+	if unrouted != 1 {
+		t.Fatalf("session.unrouted rows = %d, want 1", unrouted)
+	}
+
+	// Clearing an already-local conversation changed nothing, so it records
+	// nothing — otherwise the log fills with no-ops and buries the decisions.
+	if err := repo.ClearSessionAgent(ctx, session.SessionID); err != nil {
+		t.Fatalf("second clear: %v", err)
+	}
+	if err := repo.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM audit_logs WHERE action = 'session.unrouted' AND target = ?`,
+		session.SessionID).Scan(&unrouted); err != nil {
+		t.Fatalf("re-count unroute rows: %v", err)
+	}
+	if unrouted != 1 {
+		t.Fatalf("session.unrouted rows after a no-op clear = %d, want still 1", unrouted)
 	}
 }
 
@@ -406,8 +529,16 @@ func TestEnqueueUserMessageRecordsThatTheMessageLeftTheMachine(t *testing.T) {
 	if err := json.Unmarshal([]byte(notice.PayloadJSON), &payload); err != nil {
 		t.Fatalf("decode notice payload: %v", err)
 	}
-	if !strings.Contains(payload.Note, "left your machine") {
-		t.Fatalf("note = %q, want it to say the message left the machine", payload.Note)
+	if !strings.Contains(payload.Note, "leaves your machine") {
+		t.Fatalf("note = %q, want it to say the message leaves the machine", payload.Note)
+	}
+	// Prospective, never past tense. Nothing has left at enqueue time, and the
+	// designed failure paths (missing key, unwired runtime, a debug tool
+	// command answered locally, a cancelled run) mean it may never leave at
+	// all — a past-tense claim would then be a lie sitting in the transcript.
+	if strings.Contains(payload.Note, "left your machine") ||
+		strings.HasPrefix(payload.Note, "Sent ") {
+		t.Fatalf("note = %q, want a prospective claim: nothing has left the machine at enqueue time", payload.Note)
 	}
 	if strings.Contains(payload.Note, "\n") {
 		t.Fatalf("note = %q, want the agent name flattened to one line", payload.Note)
@@ -484,6 +615,53 @@ func TestClaimNextJobCarriesTheRoutedAgent(t *testing.T) {
 	}
 	if job.ModelProvider != "openai_compatible" || job.Model != "claude-sonnet-4-5" {
 		t.Fatalf("claimed job = %q/%q, want openai_compatible/claude-sonnet-4-5", job.ModelProvider, job.Model)
+	}
+}
+
+// A retry re-reads payload_json through the same claim path, so the second
+// attempt is a second chance to lose the destination — and losing it there
+// would answer a routed conversation locally on attempt two, silently.
+func TestARequeuedRoutedJobIsStillRoutedOnItsNextAttempt(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	agent := mustCreateAgent(t, ctx, repo, anthropicAgent())
+	if _, err := repo.SetSessionAgent(ctx, session.SessionID, agent.AgentID); err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "hello",
+		AgentID: "general_assistant", ModelProvider: "ollama", Model: "qwen2.5:7b",
+	})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-1"); err != nil {
+		t.Fatalf("first claim: %v", err)
+	}
+
+	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, "worker_busy", "busy", 3)
+	if err != nil {
+		t.Fatalf("requeue: %v", err)
+	}
+	if !decision.Requeued {
+		t.Fatal("run was not requeued, so this test proves nothing about attempt two")
+	}
+
+	retried, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-2")
+	if err != nil {
+		t.Fatalf("second claim: %v", err)
+	}
+	if retried.Attempt < 2 {
+		t.Fatalf("claimed attempt = %d, want the retry", retried.Attempt)
+	}
+	if retried.ExternalAgent == nil || retried.ExternalAgent.BaseURL != "https://api.anthropic.com/v1" {
+		t.Fatalf("retried job target = %+v, want the destination frozen at enqueue", retried.ExternalAgent)
+	}
+	if retried.ModelProvider != "openai_compatible" || retried.Model != "claude-sonnet-4-5" {
+		t.Fatalf("retried job = %q/%q, want the routed provider and model", retried.ModelProvider, retried.Model)
 	}
 }
 

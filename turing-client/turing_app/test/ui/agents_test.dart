@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/features/workspace/agents_page.dart';
@@ -52,7 +54,13 @@ void main() {
       final api = _AgentApi()..agents.add(_claude(credentialAvailable: false));
       await _pumpAgents(tester, api);
 
-      expect(find.text('No API key named "claude"'), findsOneWidget);
+      expect(
+        find.textContaining('No API key named "claude"'),
+        findsOneWidget,
+      );
+      // Naming the fix matters: the badge is computed at backend startup, so
+      // adding the key without a restart leaves it saying this forever.
+      expect(find.textContaining('restart the backend'), findsOneWidget);
       expect(find.text('API key "claude" found'), findsNothing);
     });
 
@@ -265,6 +273,40 @@ void main() {
       );
     });
 
+    // The composer is usable while this loads. A strip that is simply absent
+    // during that window reads as "nothing to say here", which is the same
+    // reassurance-by-omission the failure state refuses to give.
+    testWidgets('while loading it says it is checking, not nothing', (
+      tester,
+    ) async {
+      final api = _AgentApi()..holdSessionAgent = true;
+      tester.view.physicalSize = const Size(1200, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SessionAgentBar(apiClient: api, sessionId: 'sess_1'),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.text('Checking where this conversation goes'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('stays on your machine'), findsNothing);
+
+      api.releaseSessionAgent();
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Turing — this conversation stays on your machine'),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('a failed read never claims the conversation is local', (
       tester,
     ) async {
@@ -422,13 +464,34 @@ void main() {
         expect(tester.takeException(), isNull);
       });
 
+      // The sheet carries the longest strings in the feature — the two-line
+      // "no API key named …" subtitle — so it belongs in this matrix too.
+      testWidgets(
+        'the picker does not overflow at ${size.width}x${size.height}',
+        (tester) async {
+          final api = _AgentApi()
+            ..agents.add(
+              _claude(
+                displayName:
+                    'A deliberately very long agent name that will not fit',
+                credentialAvailable: false,
+              ),
+            );
+          await _pumpBar(tester, api, size: size);
+
+          await tester.tap(find.text('Change'));
+          await tester.pumpAndSettle();
+
+          expect(tester.takeException(), isNull);
+        },
+      );
+
       testWidgets(
         'the editor does not overflow at ${size.width}x${size.height}',
         (tester) async {
           await _pumpAgents(tester, _AgentApi(), size: size);
 
-          await tester.tap(find.text('New agent'));
-          await tester.pumpAndSettle();
+          await _openEditor(tester);
 
           expect(tester.takeException(), isNull);
         },
@@ -510,7 +573,15 @@ class _AgentApi with NoSkillsApi implements TuringApi {
   Object? createError;
   Object? setError;
   Object? sessionAgentError;
+  bool holdSessionAgent = false;
+  Completer<void>? _held;
   int nextId = 2;
+
+  void releaseSessionAgent() {
+    holdSessionAgent = false;
+    _held?.complete();
+    _held = null;
+  }
 
   @override
   Future<List<ExternalAgent>> listExternalAgents() async {
@@ -576,6 +647,10 @@ class _AgentApi with NoSkillsApi implements TuringApi {
 
   @override
   Future<ExternalAgent?> getSessionAgent({required String sessionId}) async {
+    if (holdSessionAgent) {
+      final gate = _held ??= Completer<void>();
+      await gate.future;
+    }
     final error = sessionAgentError;
     if (error != null) throw error;
     return _routed(sessionId);

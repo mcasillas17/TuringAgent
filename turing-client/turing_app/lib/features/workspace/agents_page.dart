@@ -318,7 +318,9 @@ class _ExternalAgentCard extends StatelessWidget {
             )
           else
             _CredentialChip(
-              label: 'No API key named "${agent.credentialRef}"',
+              label:
+                  'No API key named "${agent.credentialRef}" — add it and '
+                  'restart the backend',
               color: AppColors.danger,
               icon: Icons.key_off_outlined,
             ),
@@ -559,7 +561,10 @@ class _ExternalAgentEditorState extends State<ExternalAgentEditor> {
                   labelText: 'Endpoint',
                   helperText:
                       'The OpenAI-compatible base URL. Prefilled as a '
-                      'starting point — check it against the vendor.',
+                      'starting point — check it against the vendor. A '
+                      'gateway on this machine is reached at '
+                      'host.docker.internal, not localhost, because the '
+                      'backend runs in a container.',
                 ),
               ),
               const SizedBox(height: 16),
@@ -577,7 +582,8 @@ class _ExternalAgentEditorState extends State<ExternalAgentEditor> {
                   labelText: 'API key name',
                   helperText:
                       'A name, not the key. Put the key itself in '
-                      'TURING_AGENT_API_KEYS in turing-backend/.env.',
+                      'TURING_AGENT_API_KEYS in turing-backend/.env, then '
+                      'restart the backend.',
                 ),
               ),
               if (_error != null) ...[
