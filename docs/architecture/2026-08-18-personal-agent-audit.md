@@ -1,8 +1,8 @@
 # TuringAgent Personal-Agent Audit — Memory, Trust, and Operability
 
-**Audit date:** 2026-08-18  
-**Repository snapshot:** `be2c8c9`  
-**Last verified against the code:** 2026-08-18, at `be2c8c9`  
+**Audit date:** 2026-08-18
+**Original audit snapshot:** `be2c8c9`
+**Roadmap status last verified against the code:** 2026-08-18, at `f266d9e`
 **Scope:** Backend architecture, local personal-agent behavior, durable memory, privacy, reliability, integrations, and the path to multiple specialized agents.
 
 ## Executive conclusion
@@ -264,11 +264,17 @@ preview/diff UX, and no approval viewer UI ships here.
 
 #### TUR-020 — Pin and enforce the model context budget
 
-**Outcome:** The assembled prompt cannot silently exceed the model's context window, and recall cannot be dropped without notice.  
-**Scope:** Set Ollama `num_ctx` explicitly from configuration; measure history, recall, tool schemas, and tool results before dispatch; apply an explicit priority/truncation policy; emit a durable notice when content is omitted.  
-**Likely files:** Ollama provider/config, general-assistant context assembly, events, long-context tests.  
-**Acceptance:** The runtime never relies on a host default; an overflowing fixture produces a notice; a representative long session proves the recall block reaches the provider.  
-**Dependencies:** None. No `num_ctx` or equivalent is configured today; the runtime combines a 50-message history, bounded recall, tool schemas, and potentially large tool results without measuring the final prompt.
+**Status:** Implemented 2026-08-18.
+
+**Outcome:** The assembled prompt cannot silently exceed the model's context window, and recall cannot be dropped without notice.
+
+**Shipped behavior:** Provider caps and output reservations are validated at startup. Ollama receives `num_predict` plus an explicit per-request `num_ctx` rounded to a stable power-of-two bucket below its configured cap; OpenAI-compatible providers receive `max_completion_tokens` for o1/o3/o4 and GPT-5 model families, or `max_tokens` otherwise, without Ollama fields. Built-in providers conservatively account from their exact serialized request. The runtime keeps skills, the current turn, live tool protocol messages/correlation, required schemas, a stable optional-schema prefix, whole recall, and a contiguous newest-history suffix in that order. Recall searches once per run, caches one bounded payload per unique message plus term references, and re-ranks against admitted history using exact fetched and live user-message IDs, with occurrence counts only as an ID-less fallback, three convergence passes under one two-second deadline, then one broad fallback. Oversized tool-result bodies become explicit omission markers; prospective protocol is checked before executing tools. Changed omissions and provider `length` stops produce durable `agent.run.step` events, rendered during the live run but currently suppressed by the client replay watermark on reopen.
+
+**Limit:** The estimate is intentionally conservative—one serialized UTF-8 request byte as an upper bound of one prompt token plus a configured output reservation—not tokenizer-exact usage. Model capability discovery and provenance-preserving summaries remain future work (MEM-014).
+
+**Acceptance evidence:** Configuration, Ollama/OpenAI wire, long-session recall, recall-omission, evolving tool-result, live-protocol integrity, and persisted-notice tests cover the contract.
+
+**Dependencies:** None.
 
 #### TUR-001 — Make `SendMessage` idempotent
 

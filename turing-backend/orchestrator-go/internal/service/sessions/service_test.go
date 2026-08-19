@@ -253,6 +253,18 @@ func TestSessionServiceSearchMessagesReturnsGlobalAndScopedResults(t *testing.T)
 	if len(scoped.Messages) != 1 || scoped.Messages[0].MessageId != "message-b" || scoped.Messages[0].SessionId != "session-b" {
 		t.Fatalf("scoped messages = %+v", scoped.Messages)
 	}
+
+	excluded, err := client.SearchMessages(ctx, &turingv1.SearchMessagesRequest{
+		Query:            "recallneedle",
+		ExcludeSessionId: "session-b",
+		Limit:            10,
+	})
+	if err != nil {
+		t.Fatalf("SearchMessages excluded: %v", err)
+	}
+	if len(excluded.Messages) != 1 || excluded.Messages[0].MessageId != "message-a" || excluded.Messages[0].SessionId != "session-a" {
+		t.Fatalf("excluded messages = %+v", excluded.Messages)
+	}
 }
 
 func TestSessionServiceSearchMessagesHonorsLimit(t *testing.T) {

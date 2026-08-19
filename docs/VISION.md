@@ -43,7 +43,7 @@ A north star that cannot be falsified is decoration. These are the checks:
 
 Each is a decision already made and defended in review, cited to where it happened. They are written down so the next decision matches.
 
-**The user is never left guessing.** A run that retries, exhausts its attempts, hits the tool-iteration cap, or answers from recalled context emits a notice (#23, #24, #30, #33). Silence is indistinguishable from a hang, so anything that delays or shapes an answer must be visible.
+**The user is never left guessing.** A run that retries, exhausts its attempts, hits the tool-iteration cap, answers from recalled context, omits optional prompt material, or stops at its configured output cap emits a durable notice (#23, #24, #30, #33, TUR-020). Silence is indistinguishable from a hang, so anything that delays or shapes an answer must be visible.
 
 **Recalled context is attributed.** Memory that arrives unattributed reads as confabulation. If an answer draws on an earlier conversation, the user is told (#33).
 
@@ -60,6 +60,7 @@ Each is a decision already made and defended in review, cited to where it happen
 | Model-driven tool calling | Working, live-verified against a real model (#19, #27) |
 | Dynamic tool discovery | Working; runtime reports its registry to the orchestrator (#17, #26) |
 | Cross-session recall | Working — SQLite FTS5, keyword search, attributed to the user (#15, #18, #25, #33) |
+| Context budgeting | Working — provider caps and output reservations are explicit, Ollama `num_ctx` is pinned to a stable per-request bucket below its cap, omissions are durable run events, and live tool protocol messages/correlation are never dropped (TUR-020) |
 | Stable session titles | Working — derived deterministically from the first usable user turn, persisted by the orchestrator, and streamed to subscribed clients |
 | Approvals | Working; single-use argument-bound JWT, consumed over internal gRPC |
 | Audit | **Write + redacted read.** Selected approval, tool, integration, routing, deletion, and auth-failure actions are recorded today — not every mutation; a future memory or retry writer can use the same recording API but none is implemented yet. `AuditService.ListAuditEntries` (public gRPC, same bearer auth as everything else) reads back what is recorded through a per-action typed field allowlist, including the approval comment or denial reason a person actually typed — free text the service discloses deliberately and cannot content-inspect, so it is not the place to paste a secret. Filterable by correlation/action/time, keyset-paginated, absent/present/scrubbed payload states. The Flutter client can call it (`TuringApi.listAuditEntries`), but there is no viewer screen yet — see [Audit read API](architecture/audit-read-api.md) |
@@ -73,6 +74,8 @@ Each is a decision already made and defended in review, cited to where it happen
 | Process split | **Shipped** — the agent runtime is its own container, leased over a bidi gRPC stream. (It is *not* its own Go module; only `mcp-files` and `mcp-system` are.) |
 | Clients | **One** (Flutter, macOS-focused). Codegen emits Go and Dart only; both are consumed today |
 | Providers | Ollama (default), OpenAI-compatible (opt-in per request) |
+
+Context admission is conservative rather than tokenizer-exact: built-in providers measure their exact serialized request, count one UTF-8 byte as an upper bound of one prompt token, and reserve configured output tokens inside the window. Recall deduplicates against admitted history and converges if the suffix changes, so a budgeted-out current-session turn is not silently excluded from both paths. Oversized tool-result bodies can be replaced by explicit omission markers without dropping the tool message or its correlation ID. The operator configures each provider/model window; Turing does not yet discover model capabilities or persist exact provider token usage. Provenance-preserving summaries remain MEM-014, not part of TUR-020.
 
 Known gaps, honestly: a live `agent.run.failed` or `agent.run.cancelled` now renders as an inline failure or cancellation card, but — like tool cards and run notices — that entry is suppressed on session reopen by the replay watermark, so a past failed or cancelled run can still surface as an unexplained empty turn; a requeued run with no worker waits indefinitely; startup-recovery notices are published before the gRPC servers exist and so reach no subscriber; there is no curated user memory, only keyword recall over raw messages; audit is now readable through a redacted public API and a thin Flutter client call, but there is no large audit viewer, and this API surfaces only the actions already recorded today — it does not make memory decisions or run retries inspectable beyond what `tool.call.*`'s `reason` field already says.
 
