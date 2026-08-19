@@ -117,6 +117,7 @@ func TestPreparedRecallDeduplicatesAndBoundsCachedPayloads(t *testing.T) {
 			CreatedAt: at(1),
 		}
 	}
+
 	prepared := newPreparedRecallHits()
 	for _, term := range []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot"} {
 		prepared.addTerm(term, found, defaultMaxChars)
@@ -136,6 +137,37 @@ func TestPreparedRecallDeduplicatesAndBoundsCachedPayloads(t *testing.T) {
 		if len(candidate.excerpt.Content) > defaultMaxChars {
 			t.Fatalf("candidate %q retained %d bytes, want <= %d", key, len(candidate.excerpt.Content), defaultMaxChars)
 		}
+	}
+}
+
+func TestPreparedRecallSuppressesOnlyAdmittedDuplicateOccurrences(t *testing.T) {
+	content := "identical current-session message"
+	older := Excerpt{
+		MessageID: "older",
+		SessionID: "session-current",
+		Role:      "user",
+		Content:   content,
+		CreatedAt: at(1),
+	}
+	newer := Excerpt{
+		MessageID: "newer",
+		SessionID: "session-current",
+		Role:      "user",
+		Content:   content,
+		CreatedAt: at(2),
+	}
+	prepared := newPreparedRecallHits()
+	prepared.addTerm("identical", []Excerpt{newer, older}, defaultMaxChars)
+
+	got := rankPrepared(
+		prepared,
+		"session-current",
+		inContextKeys([]llm.ChatMessage{{Role: "user", Content: content}}),
+		defaultMaxExcerpts,
+		defaultMaxChars,
+	)
+	if len(got) != 1 || got[0].MessageID != "older" {
+		t.Fatalf("prepared duplicate ranking = %+v, want only omitted older occurrence", got)
 	}
 }
 

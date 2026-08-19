@@ -245,9 +245,11 @@ func (r *Recaller) PrepareRecall(
 	}
 }
 
-// inContextKeys indexes the messages the caller has already placed in the
-// request. nil means "the caller did not say", which rank reads as the
-// conservative assumption that the whole current session is present.
+// inContextKeys counts the messages the caller has already placed in the
+// request. Counts matter because distinct current-session rows can have the same
+// role and content; admitting one must not suppress every older duplicate. nil
+// means "the caller did not say", which rank reads as the conservative
+// assumption that the whole current session is present.
 //
 // The key is role plus content because that is all the caller has: its copy of
 // the request is []llm.ChatMessage, which carries no row ids. That is fine for
@@ -255,13 +257,13 @@ func (r *Recaller) PrepareRecall(
 // text, not about identity — and it is the opposite of the mistake dedupKey
 // avoids, where the row id exists and must be used. A miss costs one duplicated
 // line; it can never surface a wrong answer.
-func inContextKeys(messages []llm.ChatMessage) map[string]bool {
+func inContextKeys(messages []llm.ChatMessage) map[string]int {
 	if len(messages) == 0 {
 		return nil
 	}
-	keys := make(map[string]bool, len(messages))
+	keys := make(map[string]int, len(messages))
 	for _, message := range messages {
-		keys[inContextKey(message.Role, message.Content)] = true
+		keys[inContextKey(message.Role, message.Content)]++
 	}
 	return keys
 }
@@ -320,11 +322,11 @@ type scored struct {
 // rank merges per-term hits into one ordered, budgeted list: most distinct terms
 // matched first, most recent breaking ties.
 //
-// inContext holds the keys of the messages already in the request (see
+// inContext holds occurrence counts for messages already in the request (see
 // inContextKeys); nil means the caller did not say, and the whole current
 // session is assumed present. Budgets are optional here too: a non-positive
 // value takes the package default rather than meaning "none".
-func rank(hits map[string][]Excerpt, currentSessionID string, inContext map[string]bool, maxExcerpts int, maxChars int) []Excerpt {
+func rank(hits map[string][]Excerpt, currentSessionID string, inContext map[string]int, maxExcerpts int, maxChars int) []Excerpt {
 	if maxExcerpts <= 0 {
 		maxExcerpts = defaultMaxExcerpts
 	}
@@ -332,6 +334,19 @@ func rank(hits map[string][]Excerpt, currentSessionID string, inContext map[stri
 		maxChars = defaultMaxChars
 	}
 	byKey := map[string]*scored{}
+	candidates := make(map[string]preparedRecallCandidate)
+	for _, found := range hits {
+		for _, excerpt := range found {
+			key := dedupKey(excerpt)
+			if _, exists := candidates[key]; !exists {
+				candidates[key] = preparedRecallCandidate{
+					excerpt:    excerpt,
+					contextKey: inContextKey(excerpt.Role, excerpt.Content),
+				}
+			}
+		}
+	}
+	suppressed := suppressedCurrentSessionCandidates(candidates, currentSessionID, inContext)
 	next := 0
 	// Iterate terms in a stable order so the result does not depend on Go's
 	// randomised map iteration.
@@ -343,16 +358,6 @@ func rank(hits map[string][]Excerpt, currentSessionID string, inContext map[stri
 
 	for _, term := range termKeys {
 		for _, excerpt := range hits[term] {
-			// Drop what the model can already see. For the current session that is
-			// the messages the caller fetched — NOT the whole session: the runtime
-			// fetches a bounded window (50 messages), so anything older is absent
-			// from the request and recallable like any other past material. When the
-			// caller says nothing, assume the whole session is present: duplicating
-			// context is the worse failure of the two to make silently.
-			if excerpt.SessionID == currentSessionID &&
-				(inContext == nil || inContext[inContextKey(excerpt.Role, excerpt.Content)]) {
-				continue
-			}
 			if excerpt.Role != "user" && excerpt.Role != "assistant" {
 				continue
 			}
@@ -360,6 +365,9 @@ func rank(hits map[string][]Excerpt, currentSessionID string, inContext map[stri
 				continue
 			}
 			key := dedupKey(excerpt)
+			if suppressed[key] {
+				continue
+			}
 			if existing, ok := byKey[key]; ok {
 				existing.matches++
 				continue
@@ -374,7 +382,7 @@ func rank(hits map[string][]Excerpt, currentSessionID string, inContext map[stri
 func rankPrepared(
 	prepared *preparedRecallHits,
 	currentSessionID string,
-	inContext map[string]bool,
+	inContext map[string]int,
 	maxExcerpts int,
 	maxChars int,
 ) []Excerpt {
@@ -388,6 +396,7 @@ func rankPrepared(
 		maxChars = defaultMaxChars
 	}
 	byKey := make(map[string]*scored, len(prepared.candidates))
+	suppressed := suppressedCurrentSessionCandidates(prepared.candidates, currentSessionID, inContext)
 	next := 0
 	termKeys := make([]string, 0, len(prepared.byTerm))
 	for term := range prepared.byTerm {
@@ -400,8 +409,7 @@ func rankPrepared(
 			if !ok {
 				continue
 			}
-			if candidate.excerpt.SessionID == currentSessionID &&
-				(inContext == nil || inContext[candidate.contextKey]) {
+			if suppressed[key] {
 				continue
 			}
 			if existing, ok := byKey[key]; ok {
@@ -417,6 +425,58 @@ func rankPrepared(
 		}
 	}
 	return budgetScored(byKey, maxExcerpts, maxChars)
+}
+
+func suppressedCurrentSessionCandidates(
+	candidates map[string]preparedRecallCandidate,
+	currentSessionID string,
+	inContext map[string]int,
+) map[string]bool {
+	suppressed := make(map[string]bool)
+	if inContext == nil {
+		for key, candidate := range candidates {
+			if candidate.excerpt.SessionID == currentSessionID {
+				suppressed[key] = true
+			}
+		}
+		return suppressed
+	}
+
+	type keyedCandidate struct {
+		key       string
+		candidate preparedRecallCandidate
+	}
+	byContextKey := make(map[string][]keyedCandidate)
+	for key, candidate := range candidates {
+		if candidate.excerpt.SessionID != currentSessionID {
+			continue
+		}
+		byContextKey[candidate.contextKey] = append(byContextKey[candidate.contextKey], keyedCandidate{
+			key:       key,
+			candidate: candidate,
+		})
+	}
+	for contextKey, group := range byContextKey {
+		count := inContext[contextKey]
+		if count <= 0 {
+			continue
+		}
+		sort.Slice(group, func(left, right int) bool {
+			leftTime := group[left].candidate.excerpt.CreatedAt
+			rightTime := group[right].candidate.excerpt.CreatedAt
+			if !leftTime.Equal(rightTime) {
+				return leftTime.After(rightTime)
+			}
+			return group[left].key < group[right].key
+		})
+		if count > len(group) {
+			count = len(group)
+		}
+		for index := 0; index < count; index++ {
+			suppressed[group[index].key] = true
+		}
+	}
+	return suppressed
 }
 
 func budgetScored(byKey map[string]*scored, maxExcerpts int, maxChars int) []Excerpt {

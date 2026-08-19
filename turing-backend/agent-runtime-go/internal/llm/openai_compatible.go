@@ -302,7 +302,9 @@ func usesMaxCompletionTokens(model string) bool {
 			return true
 		}
 	}
-	return false
+	return name == "gpt-5" ||
+		strings.HasPrefix(name, "gpt-5-") ||
+		strings.HasPrefix(name, "gpt-5.")
 }
 
 type openAIMessage struct {

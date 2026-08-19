@@ -87,7 +87,15 @@ func TestOpenAICompatibleLimitsRejectInvalidValues(t *testing.T) {
 }
 
 func TestOpenAIReasoningModelUsesMaxCompletionTokens(t *testing.T) {
-	for _, model := range []string{"o1", "o3-mini", "o4-mini", "openai/o3"} {
+	for _, model := range []string{
+		"o1",
+		"o3-mini",
+		"o4-mini",
+		"openai/o3",
+		"gpt-5",
+		"gpt-5-mini",
+		"openai/gpt-5.1",
+	} {
 		t.Run(model, func(t *testing.T) {
 			_, body := captureOpenAIRequestForModel(t, model, nil, nil)
 			if body["max_completion_tokens"] != float64(DefaultMaxOutputTokens) {
@@ -95,6 +103,20 @@ func TestOpenAIReasoningModelUsesMaxCompletionTokens(t *testing.T) {
 			}
 			if _, present := body["max_tokens"]; present {
 				t.Fatalf("o-series request included incompatible max_tokens: %#v", body)
+			}
+		})
+	}
+}
+
+func TestOpenAILegacyCompatibleModelsKeepMaxTokens(t *testing.T) {
+	for _, model := range []string{"gpt-4o-mini", "claude-sonnet-4"} {
+		t.Run(model, func(t *testing.T) {
+			_, body := captureOpenAIRequestForModel(t, model, nil, nil)
+			if body["max_tokens"] != float64(DefaultMaxOutputTokens) {
+				t.Fatalf("max_tokens = %#v, want %d", body["max_tokens"], DefaultMaxOutputTokens)
+			}
+			if _, present := body["max_completion_tokens"]; present {
+				t.Fatalf("legacy-compatible request included max_completion_tokens: %#v", body)
 			}
 		})
 	}
