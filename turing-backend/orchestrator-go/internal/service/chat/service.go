@@ -80,6 +80,7 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 	if err != nil {
 		return mapEnqueueError(ctx, err)
 	}
+	s.bus.Publish(busEventFromRepository(enqueued.SessionUpdatedEvent))
 	queuedEvent := enqueued.QueuedEvent
 	s.bus.Publish(busEventFromRepository(queuedEvent))
 	// Published alongside the queued event so a subscriber that is not this
@@ -454,6 +455,8 @@ func mapEventType(value string) turingv1.TuringEventType {
 		return turingv1.TuringEventType_TURING_EVENT_TYPE_ERROR
 	case "system":
 		return turingv1.TuringEventType_TURING_EVENT_TYPE_SYSTEM
+	case "session.updated":
+		return turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_UPDATED
 	default:
 		return turingv1.TuringEventType_TURING_EVENT_TYPE_UNSPECIFIED
 	}

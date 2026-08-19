@@ -107,11 +107,14 @@ func TestSessionMessageRunJobTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if latest != 1 || len(replayed) != 1 {
-		t.Fatalf("queued event replay latest=%d events=%+v", latest, replayed)
+	if latest != result.QueuedEvent.Sequence || len(replayed) != 2 {
+		t.Fatalf("enqueue event replay latest=%d events=%+v", latest, replayed)
 	}
-	if replayed[0].EventID != result.QueuedEvent.EventID || replayed[0].Type != "agent.run.queued" {
-		t.Fatalf("bad queued replay event: %+v", replayed[0])
+	if replayed[0].EventID != result.SessionUpdatedEvent.EventID || replayed[0].Type != "session.updated" {
+		t.Fatalf("bad session update replay event: %+v", replayed[0])
+	}
+	if replayed[1].EventID != result.QueuedEvent.EventID || replayed[1].Type != "agent.run.queued" {
+		t.Fatalf("bad queued replay event: %+v", replayed[1])
 	}
 }
 

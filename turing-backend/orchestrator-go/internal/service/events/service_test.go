@@ -105,6 +105,45 @@ func TestEventServiceListsPersistedEvents(t *testing.T) {
 	}
 }
 
+func TestEventServiceMapsSessionUpdated(t *testing.T) {
+	h := newEventHarness(t)
+	client := turingv1.NewEventServiceClient(h.conn)
+	ctx := context.Background()
+	session, err := h.repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.AppendEvent(ctx, repository.AppendEventInput{
+		SessionID:   session.SessionID,
+		TraceID:     "trace_1",
+		Type:        "session.updated",
+		PayloadJSON: `{"title":"First turn","updatedAt":"2026-08-18T20:00:00Z"}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := client.ListEvents(ctx, &turingv1.ListEventsRequest{
+		SessionId: session.SessionID,
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if len(resp.Events) != 1 {
+		t.Fatalf("events = %+v, want one session update", resp.Events)
+	}
+	got := resp.Events[0]
+	if got.Type != turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_UPDATED {
+		t.Fatalf("event type = %v, want SESSION_UPDATED", got.Type)
+	}
+	if got.Payload.GetFields()["title"].GetStringValue() != "First turn" {
+		t.Fatalf("payload = %+v", got.Payload)
+	}
+	if got.Payload.GetFields()["updatedAt"].GetStringValue() != "2026-08-18T20:00:00Z" {
+		t.Fatalf("payload = %+v", got.Payload)
+	}
+}
+
 func TestEventServiceListEventsRequiresResyncWhenClientSequenceIsAhead(t *testing.T) {
 	h := newEventHarness(t)
 	client := turingv1.NewEventServiceClient(h.conn)
@@ -183,6 +222,72 @@ func TestEventServiceSubscribesToReplayAndBusEvents(t *testing.T) {
 			h.bus.Publish(Event{EventID: "evt_live_2", SessionID: session.SessionID, TraceID: "trace_1", Sequence: 2, Type: "message.delta", CreatedAt: "2026-05-15T00:00:00Z", PayloadJSON: `{"delta":"hi"}`})
 		case <-deadline:
 			t.Fatal("timed out waiting for bus event")
+		}
+	}
+}
+
+func TestEventServiceSubscribesToAllSessionUpdates(t *testing.T) {
+	h := newEventHarness(t)
+	ctx := context.Background()
+	for _, title := range []string{"First", "Second"} {
+		session, err := h.repo.CreateSession(ctx, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+			SessionID:     session.SessionID,
+			Content:       title,
+			AgentID:       "general_assistant",
+			ModelProvider: "ollama",
+			Model:         "qwen2.5:7b",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream := &fakeEventStream{ctx: streamCtx}
+	stream.afterSend = func(event *turingv1.TuringEvent) {
+		switch len(stream.sent) {
+		case 2:
+			live, err := h.repo.AppendEvent(ctx, repository.AppendEventInput{
+				SessionID:   event.SessionId,
+				TraceID:     "trace_live",
+				Type:        "session.updated",
+				PayloadJSON: `{"title":"Live","updatedAt":"2026-08-18T20:00:00Z"}`,
+			})
+			if err != nil {
+				t.Errorf("append live update: %v", err)
+				cancel()
+				return
+			}
+			h.bus.Publish(Event{
+				EventID:     live.EventID,
+				SessionID:   live.SessionID,
+				TraceID:     live.TraceID,
+				Sequence:    live.Sequence,
+				Type:        live.Type,
+				CreatedAt:   live.CreatedAt,
+				PayloadJSON: live.PayloadJSON,
+			})
+		case 3:
+			cancel()
+		}
+	}
+
+	err := NewServer(h.repo, h.bus).SubscribeSessionUpdates(
+		&turingv1.SubscribeSessionUpdatesRequest{},
+		stream,
+	)
+	if status.Code(err) != codes.Canceled {
+		t.Fatalf("SubscribeSessionUpdates error = %v, want Canceled", err)
+	}
+	if len(stream.sent) != 3 {
+		t.Fatalf("sent %d events, want two snapshots and one live update", len(stream.sent))
+	}
+	for _, event := range stream.sent {
+		if event.Type != turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_UPDATED {
+			t.Fatalf("event type = %v, want SESSION_UPDATED", event.Type)
 		}
 	}
 }

@@ -17,6 +17,7 @@ import '../../features/workspace/workspace_pages.dart';
 import '../../logic/theme_logic.dart';
 import '../../models/session.dart';
 import '../../models/session_title.dart';
+import '../../models/turing_event.dart';
 import '../../networking/api_client.dart';
 import '../../networking/auth_storage.dart';
 import '../../networking/event_source.dart';
@@ -40,6 +41,7 @@ class ResponsiveShell extends StatefulWidget {
     super.key,
     required this.apiClient,
     required this.eventSourceFactory,
+    this.sessionUpdateSourceFactory,
     this.authStorage,
     this.initialBackendUrl = 'http://localhost:3000',
     this.initialApiKey = '',
@@ -48,6 +50,7 @@ class ResponsiveShell extends StatefulWidget {
 
   final TuringApi apiClient;
   final TuringEventSource Function() eventSourceFactory;
+  final TuringSessionUpdateSource? Function()? sessionUpdateSourceFactory;
   final ClientAuthStorage? authStorage;
   final String initialBackendUrl;
   final String initialApiKey;
@@ -87,6 +90,11 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   // chat is about to unmount, since ChatScreen closes what it was given.
   TuringEventSource? _chatEventSource;
   String? _chatEventSourceSessionId;
+  TuringSessionUpdateSource? _sessionUpdateSource;
+  StreamSubscription<TuringEvent>? _sessionUpdateSubscription;
+  Timer? _sessionUpdateReconnectTimer;
+  Timer? _sessionUpdateStabilityTimer;
+  int _sessionUpdateReconnectAttempts = 0;
 
   // The resolved list is held rather than a Future so the shell can answer
   // questions about it — chiefly "what is the active conversation called",
@@ -99,12 +107,76 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   String _modelProvider = 'ollama';
   bool _creating = false;
   final Set<String> _deleting = {};
+  final Set<String> _locallyDeletedSessionIds = {};
+  final Map<String, _SessionSnapshot> _sessionSnapshots = {};
+  int _sessionStateRevision = 0;
+  int _sessionRefreshRequest = 0;
 
   @override
   void initState() {
     super.initState();
+    _openSessionUpdateSubscription();
     unawaited(_refreshSessions());
     unawaited(_loadModelProvider());
+  }
+
+  void _openSessionUpdateSubscription() {
+    TuringSessionUpdateSource? source;
+    try {
+      source = widget.sessionUpdateSourceFactory?.call();
+      if (source == null) return;
+      _sessionUpdateSource = source;
+      _sessionUpdateSubscription = source.connectSessionUpdates().listen(
+        _applyGlobalSessionUpdated,
+        onError: (_, _) => _handleSessionUpdateStreamEnded(),
+        onDone: _handleSessionUpdateStreamEnded,
+        cancelOnError: true,
+      );
+      _sessionUpdateStabilityTimer?.cancel();
+      final openedSource = source;
+      _sessionUpdateStabilityTimer = Timer(const Duration(seconds: 30), () {
+        _sessionUpdateStabilityTimer = null;
+        if (!mounted || !identical(_sessionUpdateSource, openedSource)) return;
+        _sessionUpdateReconnectAttempts = 0;
+      });
+    } catch (_) {
+      source?.close();
+      _sessionUpdateSource = null;
+      _scheduleSessionUpdateReconnect();
+    }
+  }
+
+  void _handleSessionUpdateStreamEnded() {
+    if (!mounted) return;
+    _sessionUpdateStabilityTimer?.cancel();
+    _sessionUpdateStabilityTimer = null;
+    unawaited(_sessionUpdateSubscription?.cancel());
+    _sessionUpdateSubscription = null;
+    _sessionUpdateSource?.close();
+    _sessionUpdateSource = null;
+    _scheduleSessionUpdateReconnect();
+  }
+
+  void _scheduleSessionUpdateReconnect() {
+    if (!mounted || _sessionUpdateReconnectTimer != null) return;
+    final exponent = _sessionUpdateReconnectAttempts.clamp(0, 5);
+    final delay = Duration(seconds: 1 << exponent);
+    _sessionUpdateReconnectAttempts++;
+    _sessionUpdateReconnectTimer = Timer(delay, () {
+      _sessionUpdateReconnectTimer = null;
+      if (!mounted) return;
+      _openSessionUpdateSubscription();
+      unawaited(_refreshSessions());
+    });
+  }
+
+  @override
+  void dispose() {
+    _sessionUpdateReconnectTimer?.cancel();
+    _sessionUpdateStabilityTimer?.cancel();
+    unawaited(_sessionUpdateSubscription?.cancel());
+    _sessionUpdateSource?.close();
+    super.dispose();
   }
 
   /// Chosen once in Settings; re-read whenever settings change.
@@ -115,16 +187,18 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   }
 
   Future<void> _refreshSessions() async {
+    final request = ++_sessionRefreshRequest;
+    final startingRevision = _sessionStateRevision;
     try {
       final sessions = await widget.apiClient.listSessions();
-      if (!mounted) return;
+      if (!mounted || request != _sessionRefreshRequest) return;
       setState(() {
-        _sessions = sessions;
+        _sessions = _reconcileSessionRefresh(sessions, startingRevision);
         _sessionsLoading = false;
         _sessionsFailed = false;
       });
     } on Exception {
-      if (!mounted) return;
+      if (!mounted || request != _sessionRefreshRequest) return;
       // The list is left as it was: a failed refresh should not blank out
       // conversations that are still perfectly valid on screen.
       setState(() {
@@ -134,10 +208,119 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     }
   }
 
-  /// The backend names a conversation after its first message, so the sidebar
-  /// is stale the moment a message is accepted. Re-listing here is what turns
-  /// "New chat" into the actual subject without the user reloading anything.
-  void _onMessageSent() => unawaited(_refreshSessions());
+  void _applyGlobalSessionUpdated(TuringEvent event) {
+    _applySessionUpdated(event);
+  }
+
+  void _applySessionUpdated(TuringEvent event) {
+    if (!mounted) return;
+    if (_locallyDeletedSessionIds.contains(event.sessionId)) return;
+    final title = event.payload['title'];
+    final updatedAtValue = event.payload['updatedAt'];
+    if (title is! String || updatedAtValue is! String) return;
+    final updatedAt = DateTime.tryParse(updatedAtValue);
+    final updatedAtNanoseconds = _parseTimestampNanoseconds(updatedAtValue);
+    if (updatedAt == null || updatedAtNanoseconds == null) return;
+    final index = _sessions.indexWhere(
+      (session) => session.sessionId == event.sessionId,
+    );
+    if (index >= 0 &&
+        _sessions[index].updatedAtNanoseconds > updatedAtNanoseconds) {
+      return;
+    }
+    final updated = Session(
+      sessionId: event.sessionId,
+      title: title.isEmpty ? null : title,
+      updatedAt: updatedAt.toUtc(),
+      updatedAtNanoseconds: updatedAtNanoseconds,
+    );
+    setState(() {
+      final next = List<Session>.of(_sessions);
+      if (index >= 0) {
+        final previous = next.removeAt(index);
+        if (previous.updatedAtNanoseconds == updated.updatedAtNanoseconds) {
+          next.insert(index, updated);
+        } else {
+          _insertSessionByRecency(next, updated);
+        }
+      } else {
+        _insertSessionByRecency(next, updated);
+      }
+      _sessions = next;
+      _recordSessionSnapshot(
+        updated,
+        retainUntilObserved:
+            _sessionSnapshots[event.sessionId]?.retainUntilObserved ?? false,
+      );
+    });
+  }
+
+  static void _insertSessionByRecency(
+    List<Session> sessions,
+    Session inserted,
+  ) {
+    final index = sessions.indexWhere(
+      (session) =>
+          session.updatedAtNanoseconds < inserted.updatedAtNanoseconds ||
+          (session.updatedAtNanoseconds == inserted.updatedAtNanoseconds &&
+              session.sessionId.compareTo(inserted.sessionId) < 0),
+    );
+    if (index < 0) {
+      sessions.add(inserted);
+    } else {
+      sessions.insert(index, inserted);
+    }
+  }
+
+  List<Session> _reconcileSessionRefresh(
+    Iterable<Session> refreshed,
+    int startingRevision,
+  ) {
+    final refreshedSessions = refreshed.toList();
+    final merged = refreshedSessions
+        .where(
+          (session) => !_locallyDeletedSessionIds.contains(session.sessionId),
+        )
+        .toList();
+    for (final entry in _sessionSnapshots.entries.toList()) {
+      final snapshot = entry.value;
+      final current = snapshot.session;
+      final index = merged.indexWhere(
+        (session) => session.sessionId == current.sessionId,
+      );
+      if (index < 0) {
+        if (snapshot.retainUntilObserved ||
+            snapshot.revision > startingRevision) {
+          _insertSessionByRecency(merged, current);
+        } else {
+          _sessionSnapshots.remove(entry.key);
+        }
+        continue;
+      }
+      final replacement = merged[index];
+      if (current.updatedAtNanoseconds > replacement.updatedAtNanoseconds) {
+        merged.removeAt(index);
+        _insertSessionByRecency(merged, current);
+      } else if (current.updatedAtNanoseconds ==
+          replacement.updatedAtNanoseconds) {
+        merged[index] = current;
+      }
+      _sessionSnapshots.remove(entry.key);
+    }
+    return merged;
+  }
+
+  void _recordSessionSnapshot(
+    Session session, {
+    required bool retainUntilObserved,
+  }) {
+    _sessionStateRevision++;
+    _sessionSnapshots[session.sessionId] = _SessionSnapshot(
+      session: session,
+      revision: _sessionStateRevision,
+      retainUntilObserved: retainUntilObserved,
+    );
+  }
 
   /// Null when the active conversation has not been named yet, or is not in
   /// the list the shell last loaded.
@@ -176,8 +359,21 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       // in a title that is still empty.
       final result = await widget.apiClient.createSession();
       if (!mounted) return;
+      final createdAtValue = result['createdAt'] as String;
+      final session = Session(
+        sessionId: result['sessionId'] as String,
+        title: null,
+        updatedAt: DateTime.parse(createdAtValue).toUtc(),
+        updatedAtNanoseconds:
+            result['createdAtNanoseconds'] as int? ??
+            _parseTimestampNanoseconds(createdAtValue),
+      );
       setState(() {
-        _activeSessionId = result['sessionId'] as String?;
+        final sessions = List<Session>.of(_sessions);
+        _insertSessionByRecency(sessions, session);
+        _sessions = sessions;
+        _recordSessionSnapshot(session, retainUntilObserved: true);
+        _activeSessionId = session.sessionId;
         _destination = ShellDestination.chats;
         _creating = false;
       });
@@ -187,6 +383,16 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       setState(() => _creating = false);
       _toast('Could not start a new chat: $error');
     }
+  }
+
+  static int? _parseTimestampNanoseconds(String value) {
+    final timestamp = DateTime.tryParse(value);
+    if (timestamp == null) return null;
+    final match = RegExp(r'\.(\d+)(?:Z|[+-]\d{2}:\d{2})$').firstMatch(value);
+    final fraction = match?.group(1) ?? '';
+    final nanos = int.parse(fraction.padRight(9, '0').substring(0, 9));
+    final seconds = timestamp.toUtc().millisecondsSinceEpoch ~/ 1000;
+    return seconds * 1000000000 + nanos;
   }
 
   Future<void> _deleteConversation(Session session) async {
@@ -216,9 +422,16 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       if (confirmed != true) return;
       await widget.apiClient.deleteSession(sessionId: session.sessionId);
       if (!mounted) return;
-      if (_activeSessionId == session.sessionId) {
-        setState(() => _activeSessionId = null);
-      }
+      setState(() {
+        _locallyDeletedSessionIds.add(session.sessionId);
+        _sessionSnapshots.remove(session.sessionId);
+        _sessions = _sessions
+            .where((candidate) => candidate.sessionId != session.sessionId)
+            .toList();
+        if (_activeSessionId == session.sessionId) {
+          _activeSessionId = null;
+        }
+      });
       unawaited(_refreshSessions());
     } catch (error) {
       if (!mounted) return;
@@ -458,7 +671,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
             eventSource: _eventSourceForChat(sessionId),
             embedded: true,
             modelProvider: _modelProvider,
-            onMessageSent: _onMessageSent,
+            onSessionUpdated: (event) => _applySessionUpdated(event),
           ),
         ),
       ],
@@ -954,4 +1167,16 @@ class _EmptyState extends StatelessWidget {
       ),
     );
   }
+}
+
+class _SessionSnapshot {
+  const _SessionSnapshot({
+    required this.session,
+    required this.revision,
+    required this.retainUntilObserved,
+  });
+
+  final Session session;
+  final int revision;
+  final bool retainUntilObserved;
 }

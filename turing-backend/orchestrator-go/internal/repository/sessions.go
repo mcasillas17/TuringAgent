@@ -45,10 +45,12 @@ func now() string {
 func (r *Repository) CreateSession(ctx context.Context, title string) (Session, error) {
 	createdAt := now()
 	session := Session{SessionID: ids.New("sess"), Status: "active", CreatedAt: createdAt, UpdatedAt: createdAt}
+	titleOrigin := "unset"
 	if title != "" {
 		session.Title = sql.NullString{String: title, Valid: true}
+		titleOrigin = "explicit"
 	}
-	_, err := r.db.ExecContext(ctx, `INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)`, session.SessionID, nullableString(session.Title), createdAt, createdAt)
+	_, err := r.db.ExecContext(ctx, `INSERT INTO sessions (id, title, title_origin, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`, session.SessionID, nullableString(session.Title), titleOrigin, createdAt, createdAt)
 	return session, err
 }
 

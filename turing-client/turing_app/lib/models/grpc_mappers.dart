@@ -332,6 +332,9 @@ class GrpcMappers {
       sessionId: session.sessionId,
       title: session.title.isEmpty ? null : session.title,
       updatedAt: _timestampToDateTime(session.updatedAt),
+      updatedAtNanoseconds:
+          session.updatedAt.seconds.toInt() * 1000000000 +
+          session.updatedAt.nanos,
     );
   }
 
@@ -467,6 +470,8 @@ class GrpcMappers {
         return 'error';
       case eventpb.TuringEventType.TURING_EVENT_TYPE_SYSTEM:
         return 'system';
+      case eventpb.TuringEventType.TURING_EVENT_TYPE_SESSION_UPDATED:
+        return 'session.updated';
       case eventpb.TuringEventType.TURING_EVENT_TYPE_UNSPECIFIED:
       default:
         return 'system';

@@ -22,14 +22,15 @@ type EnqueueUserMessageInput struct {
 }
 
 type EnqueueUserMessageResult struct {
-	SessionID          string
-	UserMessageID      string
-	AssistantMessageID string
-	RunID              string
-	JobID              string
-	TraceID            string
-	Status             string
-	QueuedEvent        Event
+	SessionID           string
+	UserMessageID       string
+	AssistantMessageID  string
+	RunID               string
+	JobID               string
+	TraceID             string
+	Status              string
+	SessionUpdatedEvent Event
+	QueuedEvent         Event
 	// RoutingEvents carries the notices written in the same transaction as the
 	// run — today, the one saying this message is leaving the machine. They are
 	// returned rather than published here because the repository does not own
@@ -325,13 +326,33 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE sessions
 		SET title = CASE
-				WHEN (title IS NULL OR title = '' OR title = ?) AND ? <> ''
+				WHEN title_origin = 'unset' AND ? <> ''
 					THEN ?
 				ELSE title
 			END,
+			title_origin = CASE
+				WHEN title_origin = 'unset' AND ? <> ''
+					THEN 'derived'
+				ELSE title_origin
+			END,
 			updated_at = ?
 		WHERE id = ?
-	`, legacyPlaceholderTitle, derivedTitle, derivedTitle, createdAt, input.SessionID); err != nil {
+	`, derivedTitle, derivedTitle, derivedTitle, createdAt, input.SessionID); err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	var sessionTitle string
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(title, '') FROM sessions WHERE id = ?`, input.SessionID).Scan(&sessionTitle); err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	sessionUpdatedPayload, err := json.Marshal(map[string]string{
+		"title":     sessionTitle,
+		"updatedAt": createdAt,
+	})
+	if err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	sessionUpdatedEvent, err := appendSessionEventTx(ctx, tx, input.SessionID, traceID, "session.updated", string(sessionUpdatedPayload), createdAt)
+	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	// Frozen into the payload rather than read when the job is claimed: a
@@ -403,7 +424,7 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 		}
 		routingEvents = append(routingEvents, notice)
 	}
-	return EnqueueUserMessageResult{SessionID: input.SessionID, UserMessageID: userMessageID, AssistantMessageID: assistantMessageID, RunID: runID, JobID: jobID, TraceID: traceID, Status: "queued", QueuedEvent: queuedEvent, RoutingEvents: routingEvents}, nil
+	return EnqueueUserMessageResult{SessionID: input.SessionID, UserMessageID: userMessageID, AssistantMessageID: assistantMessageID, RunID: runID, JobID: jobID, TraceID: traceID, Status: "queued", SessionUpdatedEvent: sessionUpdatedEvent, QueuedEvent: queuedEvent, RoutingEvents: routingEvents}, nil
 }
 
 // flattenNoticeText collapses a user-chosen name to a single line before it is

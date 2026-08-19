@@ -23,6 +23,7 @@ type Bus struct {
 type subscription struct {
 	sessionID string
 	ch        chan Event
+	updates   *sessionUpdateSubscription
 }
 
 func NewBus(bufferSize int) *Bus {
@@ -48,10 +49,34 @@ func (b *Bus) Subscribe(sessionID string) (<-chan Event, func()) {
 	}
 }
 
+func (b *Bus) SubscribeSessionUpdates() (<-chan Event, func()) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.nextID++
+	id := b.nextID
+	updates := newSessionUpdateSubscription()
+	b.subs[id] = subscription{updates: updates}
+	return updates.out, func() {
+		b.mu.Lock()
+		sub, ok := b.subs[id]
+		if ok {
+			delete(b.subs, id)
+		}
+		b.mu.Unlock()
+		if ok {
+			sub.updates.stop()
+		}
+	}
+}
+
 func (b *Bus) Publish(event Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, sub := range b.subs {
+		if sub.updates != nil {
+			sub.updates.publish(event)
+			continue
+		}
 		if sub.sessionID != event.SessionID {
 			continue
 		}
@@ -76,4 +101,75 @@ func (b *Bus) Publish(event Event) {
 			}
 		}
 	}
+}
+
+type sessionUpdateSubscription struct {
+	mu       sync.Mutex
+	pending  map[string]Event
+	wake     chan struct{}
+	out      chan Event
+	done     chan struct{}
+	stopOnce sync.Once
+}
+
+func newSessionUpdateSubscription() *sessionUpdateSubscription {
+	sub := &sessionUpdateSubscription{
+		pending: make(map[string]Event),
+		wake:    make(chan struct{}, 1),
+		out:     make(chan Event),
+		done:    make(chan struct{}),
+	}
+	go sub.run()
+	return sub
+}
+
+func (s *sessionUpdateSubscription) publish(event Event) {
+	if event.Type != "session.updated" {
+		return
+	}
+	s.mu.Lock()
+	previous, found := s.pending[event.SessionID]
+	if !found || event.Sequence >= previous.Sequence {
+		s.pending[event.SessionID] = event
+	}
+	s.mu.Unlock()
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *sessionUpdateSubscription) run() {
+	defer close(s.out)
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-s.wake:
+			for {
+				s.mu.Lock()
+				var next Event
+				for sessionID, event := range s.pending {
+					next = event
+					delete(s.pending, sessionID)
+					break
+				}
+				s.mu.Unlock()
+				if next.SessionID == "" {
+					break
+				}
+				select {
+				case <-s.done:
+					return
+				case s.out <- next:
+				}
+			}
+		}
+	}
+}
+
+func (s *sessionUpdateSubscription) stop() {
+	s.stopOnce.Do(func() {
+		close(s.done)
+	})
 }

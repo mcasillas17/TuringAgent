@@ -29,6 +29,7 @@ enum TuringEventType {
   TURING_EVENT_TYPE_APPROVAL_CONSUMED = 18;
   TURING_EVENT_TYPE_ERROR = 19;
   TURING_EVENT_TYPE_SYSTEM = 20;
+  TURING_EVENT_TYPE_SESSION_UPDATED = 21;
 }
 
 message TuringEvent {
@@ -59,7 +60,10 @@ message SubscribeSessionEventsRequest {
   int64 after_sequence = 2;
 }
 
+message SubscribeSessionUpdatesRequest {}
+
 service EventService {
   rpc ListEvents(ListEventsRequest) returns (ListEventsResponse);
   rpc SubscribeSessionEvents(SubscribeSessionEventsRequest) returns (stream TuringEvent);
+  rpc SubscribeSessionUpdates(SubscribeSessionUpdatesRequest) returns (stream TuringEvent);
 }

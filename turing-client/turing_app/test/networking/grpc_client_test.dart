@@ -100,6 +100,33 @@ void main() {
     expect(session.updatedAt, DateTime.utc(2026, 8, 13, 12, 34, 56));
   });
 
+  test('createSession preserves timestamp nanoseconds for ordering', () async {
+    final service = _CapturingSessionService();
+    final server = grpc.Server.create(services: [service]);
+    await server.serve(address: '127.0.0.1', port: 0);
+    final channel = grpc.ClientChannel(
+      '127.0.0.1',
+      port: server.port!,
+      options: const grpc.ChannelOptions(
+        credentials: grpc.ChannelCredentials.insecure(),
+      ),
+    );
+    addTearDown(() async {
+      await channel.shutdown();
+      await server.shutdown();
+    });
+    final api = TuringGrpcApi(
+      baseUrl: 'http://127.0.0.1:${server.port}',
+      apiKey: 'client-key',
+      channel: channel,
+    );
+
+    final created = await api.createSession();
+
+    expect(created['sessionId'], 'session-created');
+    expect(created['createdAtNanoseconds'], 1000000900);
+  });
+
   test(
     'searchMessages preserves the raw query, empty session filter, limit, and bounded deadline',
     () async {
@@ -189,6 +216,18 @@ void main() {
 class _CapturingSessionService extends sessiongrpc.SessionServiceBase {
   sessionpb.GetSessionRequest? getSessionRequest;
   DateTime? getSessionDeadline;
+
+  @override
+  Future<sessionpb.CreateSessionResponse> createSession(
+    grpc.ServiceCall call,
+    sessionpb.CreateSessionRequest request,
+  ) async {
+    return sessionpb.CreateSessionResponse(
+      sessionId: 'session-created',
+      createdAt: timestamppb.Timestamp(seconds: Int64(1), nanos: 900),
+    );
+  }
+
   sessionpb.ListMessagesRequest? listMessagesRequest;
   DateTime? listMessagesDeadline;
   sessionpb.SearchMessagesRequest? searchMessagesRequest;

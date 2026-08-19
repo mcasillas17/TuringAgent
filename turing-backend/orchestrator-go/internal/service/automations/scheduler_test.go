@@ -42,6 +42,7 @@ type schedulerHarness struct {
 	scheduler  *Scheduler
 	repo       *repository.Repository
 	database   *db.DB
+	bus        *events.Bus
 	dispatcher *countingDispatcher
 	ctx        context.Context
 }
@@ -58,11 +59,13 @@ func newSchedulerHarness(t *testing.T) *schedulerHarness {
 		t.Fatalf("apply migrations: %v", err)
 	}
 	repo := repository.New(database)
+	bus := events.NewBus(8)
 	dispatcher := &countingDispatcher{}
 	return &schedulerHarness{
-		scheduler:  NewScheduler(repo, events.NewBus(8), dispatcher, schedulerDefaults),
+		scheduler:  NewScheduler(repo, bus, dispatcher, schedulerDefaults),
 		repo:       repo,
 		database:   database,
+		bus:        bus,
 		dispatcher: dispatcher,
 		ctx:        ctx,
 	}
@@ -167,6 +170,36 @@ func TestTickFiresOnceWhenDueAndAgainOnlyAfterTheNextInterval(t *testing.T) {
 	}
 	if got := h.firedRuns(t, automation.AutomationID); got != 2 {
 		t.Fatalf("after the next interval it had fired %d times, want 2", got)
+	}
+}
+
+func TestTickPublishesSessionUpdatedBeforeQueued(t *testing.T) {
+	h := newSchedulerHarness(t)
+	automation := createEnabled(t, h.repo, h.ctx, "Digest", repository.Schedule{Kind: repository.ScheduleInterval, Interval: 5 * time.Minute})
+	session, err := h.repo.CreateSession(h.ctx, automation.Name)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := h.database.ExecContext(h.ctx,
+		`UPDATE automations SET session_id = ? WHERE id = ?`,
+		session.SessionID, automation.AutomationID); err != nil {
+		t.Fatalf("attach session: %v", err)
+	}
+	published, unsubscribe := h.bus.Subscribe(session.SessionID)
+	defer unsubscribe()
+	h.scheduler.now = func() time.Time { return parseTime(t, automation.NextDueAt) }
+
+	if err := h.scheduler.Tick(h.ctx); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	first := <-published
+	if first.Type != "session.updated" {
+		t.Fatalf("first published event = %q, want session.updated", first.Type)
+	}
+	second := <-published
+	if second.Type != "agent.run.queued" {
+		t.Fatalf("second published event = %q, want agent.run.queued", second.Type)
 	}
 }
 

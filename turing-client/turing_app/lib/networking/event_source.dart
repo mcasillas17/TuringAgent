@@ -7,3 +7,9 @@ abstract class TuringEventSource {
 
   void close();
 }
+
+abstract class TuringSessionUpdateSource {
+  Stream<TuringEvent> connectSessionUpdates();
+
+  void close();
+}

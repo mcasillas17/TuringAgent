@@ -3,11 +3,26 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 )
+
+type sessionUpdatedPayload struct {
+	Title     string `json:"title"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+func decodeSessionUpdatedPayload(t *testing.T, event Event) sessionUpdatedPayload {
+	t.Helper()
+	var payload sessionUpdatedPayload
+	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+		t.Fatalf("decode session.updated payload: %v", err)
+	}
+	return payload
+}
 
 func TestDeriveSessionTitle(t *testing.T) {
 	longWord := strings.Repeat("a", 90)
@@ -97,6 +112,179 @@ func TestDeriveSessionTitleCountsRunesNotBytes(t *testing.T) {
 	}
 }
 
+func TestEnqueueUserMessagePersistsSessionUpdatedEvent(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID:     session.SessionID,
+		Content:       "What is in the sandbox?",
+		AgentID:       "general_assistant",
+		ModelProvider: "ollama",
+		Model:         "qwen2.5:7b",
+	})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	event := enqueued.SessionUpdatedEvent
+	if event.Type != "session.updated" {
+		t.Fatalf("event type = %q, want session.updated", event.Type)
+	}
+	if event.RunID.Valid {
+		t.Fatalf("session event has run_id %q", event.RunID.String)
+	}
+	if event.Sequence >= enqueued.QueuedEvent.Sequence {
+		t.Fatalf("session event sequence %d, want before queued event %d", event.Sequence, enqueued.QueuedEvent.Sequence)
+	}
+	payload := decodeSessionUpdatedPayload(t, event)
+	if payload.Title != "What is in the sandbox?" {
+		t.Fatalf("event title = %q, want derived title", payload.Title)
+	}
+	if payload.UpdatedAt == "" {
+		t.Fatal("event updatedAt is empty")
+	}
+
+	replayed, _, err := repo.ReplayEvents(ctx, session.SessionID, 0, 10)
+	if err != nil {
+		t.Fatalf("replay events: %v", err)
+	}
+	if len(replayed) < 2 || replayed[0].EventID != event.EventID {
+		t.Fatalf("replayed events = %+v, want session update first", replayed)
+	}
+}
+
+func TestListLatestSessionUpdatedEventsReturnsOneSnapshotPerSession(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	first, err := repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := EnqueueUserMessageInput{
+		SessionID:     first.SessionID,
+		Content:       "First session",
+		AgentID:       "general_assistant",
+		ModelProvider: "ollama",
+		Model:         "qwen2.5:7b",
+	}
+	firstEnqueue, err := repo.EnqueueUserMessage(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Content = "Later activity"
+	latestFirst, err := repo.EnqueueUserMessage(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.SessionID = second.SessionID
+	input.Content = "Second session"
+	latestSecond, err := repo.EnqueueUserMessage(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events, err := repo.ListLatestSessionUpdatedEvents(ctx, 50)
+	if err != nil {
+		t.Fatalf("list latest session updates: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %+v, want one per session", events)
+	}
+	got := map[string]string{}
+	for _, event := range events {
+		got[event.SessionID] = event.EventID
+	}
+	if got[first.SessionID] != latestFirst.SessionUpdatedEvent.EventID {
+		t.Fatalf("first latest = %q, want %q (not %q)",
+			got[first.SessionID], latestFirst.SessionUpdatedEvent.EventID, firstEnqueue.SessionUpdatedEvent.EventID)
+	}
+	if got[second.SessionID] != latestSecond.SessionUpdatedEvent.EventID {
+		t.Fatalf("second latest = %q, want %q",
+			got[second.SessionID], latestSecond.SessionUpdatedEvent.EventID)
+	}
+}
+
+func TestListLatestSessionUpdatedEventsUsesSessionListBoundAndOrder(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	var oldestSessionID, newestSessionID string
+	for i := range 51 {
+		session, err := repo.CreateSession(ctx, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			oldestSessionID = session.SessionID
+		}
+		newestSessionID = session.SessionID
+		if _, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+			SessionID:     session.SessionID,
+			Content:       "Conversation",
+			AgentID:       "general_assistant",
+			ModelProvider: "ollama",
+			Model:         "qwen2.5:7b",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	events, err := repo.ListLatestSessionUpdatedEvents(ctx, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 50 {
+		t.Fatalf("events = %d, want the 50-row session page", len(events))
+	}
+	found := map[string]bool{}
+	for _, event := range events {
+		found[event.SessionID] = true
+	}
+	if found[oldestSessionID] {
+		t.Fatalf("oldest session %s was not bounded out", oldestSessionID)
+	}
+	if !found[newestSessionID] {
+		t.Fatalf("newest session %s is missing", newestSessionID)
+	}
+}
+
+func TestListLatestSessionUpdatedEventsExcludesUpdatedSessionOutsideCanonicalPage(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	older, err := repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID:     older.SessionID,
+		Content:       "Older updated conversation",
+		AgentID:       "general_assistant",
+		ModelProvider: "ollama",
+		Model:         "qwen2.5:7b",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for range 50 {
+		if _, err := repo.CreateSession(ctx, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	events, err := repo.ListLatestSessionUpdatedEvents(ctx, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.SessionID == older.SessionID {
+			t.Fatalf("off-page session %s was replayed", older.SessionID)
+		}
+	}
+}
+
 func TestEnqueueUserMessageTitlesAnUntitledSession(t *testing.T) {
 	repo, ctx := newTitleTestRepo(t)
 
@@ -183,6 +371,62 @@ func TestEnqueueUserMessageDoesNotOverwriteAUserSuppliedTitle(t *testing.T) {
 	}
 	if stored.Title.String != "Budget planning" {
 		t.Fatalf("title = %q, want the caller-supplied title preserved", stored.Title.String)
+	}
+}
+
+func TestEnqueueUserMessageDoesNotOverwriteExplicitNewChatTitle(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "New chat")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if _, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID:     session.SessionID,
+		Content:       "This must not replace the explicit title",
+		AgentID:       "general_assistant",
+		ModelProvider: "ollama",
+		Model:         "qwen2.5:7b",
+	}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	stored, err := repo.GetSession(ctx, session.SessionID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if stored.Title.String != "New chat" {
+		t.Fatalf("title = %q, want explicit New chat preserved", stored.Title.String)
+	}
+}
+
+func TestEnqueueUserMessageDoesNotOverwriteDerivedNewChatTitle(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	input := EnqueueUserMessageInput{
+		SessionID:     session.SessionID,
+		Content:       "New chat",
+		AgentID:       "general_assistant",
+		ModelProvider: "ollama",
+		Model:         "qwen2.5:7b",
+	}
+	if _, err := repo.EnqueueUserMessage(ctx, input); err != nil {
+		t.Fatalf("first enqueue: %v", err)
+	}
+	input.Content = "This must not replace the derived title"
+	if _, err := repo.EnqueueUserMessage(ctx, input); err != nil {
+		t.Fatalf("second enqueue: %v", err)
+	}
+
+	stored, err := repo.GetSession(ctx, session.SessionID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if stored.Title.String != "New chat" {
+		t.Fatalf("title = %q, want derived New chat preserved", stored.Title.String)
 	}
 }
 
@@ -356,6 +600,41 @@ func TestBackfillSessionTitlesNamesLegacyConversations(t *testing.T) {
 	assertTitle(t, ctx, repo, empty, "New chat")
 }
 
+func TestBackfillSessionTitlesDoesNotOverwriteExplicitNewChatTitle(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "New chat")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := repo.db.ExecContext(ctx,
+		`INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at) VALUES (?, ?, 'user', ?, 'text', 1, ?)`,
+		ids.New("msg"), session.SessionID, "This is not the title", now()); err != nil {
+		t.Fatalf("insert message: %v", err)
+	}
+
+	if _, err := repo.BackfillSessionTitles(ctx); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+
+	assertTitle(t, ctx, repo, session.SessionID, "New chat")
+}
+
+func TestBackfillSessionTitlesSkipsWhitespaceOnlyUserTurns(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session := seedSession(t, ctx, repo, "New chat", " \n\t ")
+	if _, err := repo.db.ExecContext(ctx,
+		`INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at) VALUES (?, ?, 'user', ?, 'text', 2, ?)`,
+		ids.New("msg"), session, "First usable turn", now()); err != nil {
+		t.Fatalf("insert second message: %v", err)
+	}
+
+	if _, err := repo.BackfillSessionTitles(ctx); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+
+	assertTitle(t, ctx, repo, session, "First usable turn")
+}
+
 // Startup runs this every time, so a second pass must be a no-op rather than
 // re-deriving titles over ones already assigned.
 func TestBackfillSessionTitlesIsIdempotent(t *testing.T) {
@@ -445,8 +724,12 @@ func seedSession(t *testing.T, ctx context.Context, repo *Repository, title, con
 	}
 	// CreateSession stores NULL for "", so force the exact stored value under
 	// test rather than trusting it to round-trip.
-	if _, err := repo.db.ExecContext(ctx, `UPDATE sessions SET title = ? WHERE id = ?`,
-		nullableString(sql.NullString{String: title, Valid: title != ""}), session.SessionID); err != nil {
+	titleOrigin := "explicit"
+	if title == "" || title == "New chat" {
+		titleOrigin = "unset"
+	}
+	if _, err := repo.db.ExecContext(ctx, `UPDATE sessions SET title = ?, title_origin = ? WHERE id = ?`,
+		nullableString(sql.NullString{String: title, Valid: title != ""}), titleOrigin, session.SessionID); err != nil {
 		t.Fatalf("set title: %v", err)
 	}
 	if content != "" {
