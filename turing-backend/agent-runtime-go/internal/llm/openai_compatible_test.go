@@ -265,6 +265,21 @@ func TestOpenAIEmitsCompleteToolCallBeforeLengthCompletion(t *testing.T) {
 	}
 }
 
+func TestOpenAIEmitsCompleteCallsAndDropsIncompleteCallsAtLength(t *testing.T) {
+	got := streamOpenAIEvents(t,
+		"data: "+`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_complete","type":"function","function":{"name":"files_create","arguments":"{\"path\":\"note.txt\"}"}},{"index":1,"id":"call_incomplete","type":"function","function":{"name":"files_update","arguments":"{\"path\":\""}}]}}]}`+"\n\n"+
+			"data: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`+"\n\n",
+	)
+
+	assertOpenAIEventTypes(t, got, "tool_call", "completed")
+	if len(got[0].ToolCalls) != 1 ||
+		got[0].ToolCalls[0].ID != "call_complete" ||
+		got[0].ToolCalls[0].Name != "files_create" ||
+		got[1].FinishReason != "length" {
+		t.Fatalf("events = %+v, want only complete call before length completion", got)
+	}
+}
+
 func TestOpenAIParsesMultilineSSEDataEvent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")

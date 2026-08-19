@@ -241,6 +241,12 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			recallForContext,
 		)
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
 			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
 		}
 		if notice := budgeted.Omissions.Notice(); notice != "" &&

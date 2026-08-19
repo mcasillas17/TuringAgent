@@ -853,7 +853,7 @@ func parseOpenAIData(data []byte, state *openAIStreamState) ([]StreamEvent, bool
 			// one. Execute only calls that are already structurally complete;
 			// truncated fragments are discarded and the output-limit notice still
 			// explains why the turn stopped.
-			if calls, err := finalizeOpenAIToolCalls(state); err == nil {
+			if calls := finalizeCompleteOpenAIToolCalls(state); len(calls) > 0 {
 				events = append(events, StreamEvent{Type: "tool_call", ToolCalls: calls})
 			}
 		} else if len(state.toolCalls) > 0 {
@@ -869,48 +869,77 @@ func finalizeOpenAIToolCalls(state *openAIStreamState) ([]ToolCall, error) {
 	calls := make([]ToolCall, 0, len(state.toolCalls))
 	ids := make(map[string]struct{}, len(state.toolCalls))
 	for index := 0; index < len(state.toolCalls); index++ {
-		call, ok := state.toolCalls[index]
-		if !ok {
+		if _, ok := state.toolCalls[index]; !ok {
 			return nil, fmt.Errorf("tool call indices are non-contiguous: missing index %d", index)
 		}
-		id := call.id
-		if id == "" {
-			return nil, fmt.Errorf("tool call %d is missing an ID", index)
+		call, err := finalizeOpenAIToolCall(state, index, ids)
+		if err != nil {
+			return nil, err
 		}
-		if _, duplicate := ids[id]; duplicate {
-			return nil, fmt.Errorf("tool call %d has duplicate ID %q", index, id)
-		}
-		ids[id] = struct{}{}
-		name := call.name
-		if name == "" {
-			return nil, fmt.Errorf("tool call %d is missing a function name", index)
-		}
-		if original, ok := state.toolAliases[name]; ok {
-			name = original
-		}
-		arguments := make(map[string]any)
-		if call.arguments.Len() > 0 {
-			decoder := json.NewDecoder(strings.NewReader(call.arguments.String()))
-			decoder.UseNumber()
-			var decoded any
-			if err := decoder.Decode(&decoded); err != nil {
-				return nil, fmt.Errorf("tool call %d arguments are malformed: %w", index, err)
-			}
-			if err := decoder.Decode(&struct{}{}); err != io.EOF {
-				if err == nil {
-					err = fmt.Errorf("multiple JSON values")
-				}
-				return nil, fmt.Errorf("tool call %d arguments are malformed: %w", index, err)
-			}
-			var ok bool
-			arguments, ok = decoded.(map[string]any)
-			if !ok {
-				return nil, fmt.Errorf("tool call %d arguments must be a JSON object", index)
-			}
-		}
-		calls = append(calls, ToolCall{ID: id, Name: name, Arguments: arguments})
+		calls = append(calls, call)
 	}
 	return calls, nil
+}
+
+func finalizeCompleteOpenAIToolCalls(state *openAIStreamState) []ToolCall {
+	indices := make([]int, 0, len(state.toolCalls))
+	for index := range state.toolCalls {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+	calls := make([]ToolCall, 0, len(indices))
+	ids := make(map[string]struct{}, len(indices))
+	for _, index := range indices {
+		call, err := finalizeOpenAIToolCall(state, index, ids)
+		if err == nil {
+			calls = append(calls, call)
+		}
+	}
+	return calls
+}
+
+func finalizeOpenAIToolCall(
+	state *openAIStreamState,
+	index int,
+	ids map[string]struct{},
+) (ToolCall, error) {
+	call := state.toolCalls[index]
+	id := call.id
+	if id == "" {
+		return ToolCall{}, fmt.Errorf("tool call %d is missing an ID", index)
+	}
+	if _, duplicate := ids[id]; duplicate {
+		return ToolCall{}, fmt.Errorf("tool call %d has duplicate ID %q", index, id)
+	}
+	name := call.name
+	if name == "" {
+		return ToolCall{}, fmt.Errorf("tool call %d is missing a function name", index)
+	}
+	if original, ok := state.toolAliases[name]; ok {
+		name = original
+	}
+	arguments := make(map[string]any)
+	if call.arguments.Len() > 0 {
+		decoder := json.NewDecoder(strings.NewReader(call.arguments.String()))
+		decoder.UseNumber()
+		var decoded any
+		if err := decoder.Decode(&decoded); err != nil {
+			return ToolCall{}, fmt.Errorf("tool call %d arguments are malformed: %w", index, err)
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			if err == nil {
+				err = fmt.Errorf("multiple JSON values")
+			}
+			return ToolCall{}, fmt.Errorf("tool call %d arguments are malformed: %w", index, err)
+		}
+		var ok bool
+		arguments, ok = decoded.(map[string]any)
+		if !ok {
+			return ToolCall{}, fmt.Errorf("tool call %d arguments must be a JSON object", index)
+		}
+	}
+	ids[id] = struct{}{}
+	return ToolCall{ID: id, Name: name, Arguments: arguments}, nil
 }
 
 func decodeOpenAIDelta(data []byte) (openAIDelta, error) {

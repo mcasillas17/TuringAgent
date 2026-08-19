@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -58,6 +59,21 @@ type preparedCountingRecaller struct {
 	prepareCalls int
 	directCalls  int
 	rankCalls    int
+}
+
+type cancelingPreparedRecaller struct {
+	cancel context.CancelFunc
+}
+
+func (r cancelingPreparedRecaller) PrepareRecall(
+	context.Context,
+	string,
+	string,
+) func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool) {
+	return func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool) {
+		r.cancel()
+		return llm.ChatMessage{}, false
+	}
 }
 
 type staticRecallSearcher struct {
@@ -290,6 +306,34 @@ func TestExecuteBoundsOscillatingRecallConvergence(t *testing.T) {
 	}
 	if failure := findRunFailed(updates); failure != nil {
 		t.Fatalf("oscillating recall failed the run: %#v", failure)
+	}
+}
+
+func TestExecutePropagatesCancellationDuringRecallConvergence(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	provider := &budgetCapturingProvider{window: 2048}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
+		},
+		fakeMessageClient{},
+		&GeneralAssistantTools{Recall: cancelingPreparedRecaller{cancel: cancel}},
+	)
+
+	var updates []*turingv1.RuntimeUpdate
+	err := assistant.Execute(ctx, testJob(), func(update *turingv1.RuntimeUpdate) error {
+		updates = append(updates, update)
+		return nil
+	})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Execute error = %v, want context.Canceled", err)
+	}
+	if failure := findRunFailed(updates); failure != nil {
+		t.Fatalf("cancellation emitted run failure: %#v", failure)
+	}
+	if len(provider.requests) != 0 {
+		t.Fatalf("provider requests = %d, want none after cancellation", len(provider.requests))
 	}
 }
 
