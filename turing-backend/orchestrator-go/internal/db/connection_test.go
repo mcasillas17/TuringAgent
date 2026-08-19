@@ -1,6 +1,9 @@
 package db
 
 import (
+	"context"
+	"database/sql/driver"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -86,6 +89,33 @@ func TestOpenKeepsFileBackedSQLiteTemporaryStorageInMemory(t *testing.T) {
 	}
 	if rows != 128*128 {
 		t.Fatalf("temporary row count = %d, want %d", rows, 128*128)
+	}
+}
+
+func TestOpenReappliesInMemoryTemporaryStorageAfterReconnect(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "turing.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	connection, err := database.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := connection.Raw(func(any) error {
+		return driver.ErrBadConn
+	}); !errors.Is(err, driver.ErrBadConn) {
+		t.Fatalf("discard SQLite connection: %v", err)
+	}
+	_ = connection.Close()
+
+	var tempStore int
+	if err := database.QueryRow(`PRAGMA temp_store`).Scan(&tempStore); err != nil {
+		t.Fatal(err)
+	}
+	if tempStore != 2 {
+		t.Fatalf("PRAGMA temp_store after reconnect = %d, want 2 (MEMORY)", tempStore)
 	}
 }
 

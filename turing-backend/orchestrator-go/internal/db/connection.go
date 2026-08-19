@@ -6,12 +6,29 @@ import (
 	"fmt"
 	"os"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/mattn/go-sqlite3"
 	"golang.org/x/sys/unix"
 )
 
+const sqliteDriverName = "turing_sqlite3"
+
 type DB struct {
 	*sql.DB
+}
+
+func init() {
+	sql.Register(sqliteDriverName, &sqlite3.SQLiteDriver{
+		ConnectHook: configureSQLiteConnection,
+	})
+}
+
+func configureSQLiteConnection(connection *sqlite3.SQLiteConn) error {
+	// The orchestrator runs with a read-only root filesystem. Keep SQLite sort
+	// and transient b-tree storage off /tmp on every pooled connection.
+	if _, err := connection.Exec(`PRAGMA temp_store = MEMORY`, nil); err != nil {
+		return fmt.Errorf("configure SQLite temporary storage: %w", err)
+	}
+	return nil
 }
 
 func Open(path string) (*DB, error) {
@@ -23,7 +40,7 @@ func Open(path string) (*DB, error) {
 		}
 		dsn = fmt.Sprintf("file:%s?_foreign_keys=on&_journal_mode=WAL", path)
 	}
-	database, err := sql.Open("sqlite3", dsn)
+	database, err := sql.Open(sqliteDriverName, dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -31,13 +48,6 @@ func Open(path string) (*DB, error) {
 	if err := database.Ping(); err != nil {
 		_ = database.Close()
 		return nil, err
-	}
-	// The orchestrator runs with a read-only root filesystem. Keep SQLite sort
-	// and transient b-tree storage off /tmp while the durable database remains
-	// on the narrowly writable /app/data mount.
-	if _, err := database.Exec(`PRAGMA temp_store = MEMORY`); err != nil {
-		_ = database.Close()
-		return nil, fmt.Errorf("configure SQLite temporary storage: %w", err)
 	}
 	if !inMemory {
 		if err := secureSQLiteArtifacts(path); err != nil {
