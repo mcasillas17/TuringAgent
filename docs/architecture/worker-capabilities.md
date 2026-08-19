@@ -109,9 +109,12 @@ against the current registration, heartbeat lease, and committed live snapshot; 
 stale or incompatible claim is requeued instead of being sent. Capability fencing
 occurs before execution and therefore does not consume the run's execution retry
 budget. Pending-send recovery uses the same non-consuming rule, while recovery after
-delivery remains an execution retry. A post-claim fence restarts the worker scan so a
-compatible worker that appeared or became idle during the claim can receive the run.
-Advisory notice failure at the delivery fence is logged without blocking redispatch.
+delivery remains an execution retry. If the serialized sender fails before
+`stream.Send` starts, the orchestrator rolls back `sending` as confirmed-unsent without
+charging an attempt; only a send that actually started becomes delivery-uncertain. A
+post-claim fence restarts the worker scan so a compatible worker that appeared or became
+idle during the claim can receive the run. Concurrent abort/recovery fences are benign,
+and advisory notice failure at the delivery fence is logged without blocking redispatch.
 
 Scheduled runs use the same validator before creating a session, message, run, or job.
 An unavailable occurrence advances its schedule and records `routing_unavailable`

@@ -926,6 +926,116 @@ func TestSendCommandDropsRepositoryFencedAssignmentWithoutDisconnectingWorker(t 
 	}
 }
 
+func TestSendCommandRequeuesConfirmedUnsentAssignmentWithoutChargingAttempt(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "confirmed unsent assignment")
+	job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-unsent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compatible, _, err := decodeWorkerCapabilities(modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	connected := &worker{
+		commands:       make(chan *turingv1.RuntimeCommand, 1),
+		done:           make(chan struct{}),
+		registrationID: "registration-unsent",
+		capabilities:   compatible,
+		maxConcurrent:  1,
+		lastHeartbeat:  time.Now().UTC(),
+		assignments: map[string]assignment{
+			job.RunID: {jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID},
+		},
+	}
+	h.service.mu.Lock()
+	h.service.workers["worker-unsent"] = connected
+	h.service.mu.Unlock()
+	stream := &reconnectAcceptanceStream{ctx: context.Background(), assigned: make(chan struct{})}
+	connected.commandSender(stream).close()
+	command := &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: mapJob(job)}}
+	if err := h.service.sendCommand(context.Background(), stream, command, connected, "worker-unsent"); err == nil {
+		t.Fatal("confirmed pre-send failure returned nil")
+	}
+	select {
+	case <-stream.assigned:
+		t.Fatal("closed sender reached stream.Send")
+	default:
+	}
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "queued" || run.ExecutionActive || run.ExecutionState != "none" {
+		t.Fatalf("confirmed unsent run = %+v, want queued and inactive", run)
+	}
+	var attempt int
+	if err := h.database.QueryRowContext(
+		context.Background(), `SELECT attempt FROM jobs WHERE id = ?`, enqueued.JobID,
+	).Scan(&attempt); err != nil {
+		t.Fatal(err)
+	}
+	if attempt != 1 {
+		t.Fatalf("confirmed unsent job attempt = %d, want 1", attempt)
+	}
+}
+
+func TestSendCommandIgnoresConcurrentAbortFence(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "concurrent capability abort")
+	job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-concurrent-abort")
+	if err != nil {
+		t.Fatal(err)
+	}
+	incompatible, _, err := decodeWorkerCapabilities(modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, "gpt-4o-mini", 8192, 1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	connected := &worker{
+		commands:       make(chan *turingv1.RuntimeCommand, 1),
+		done:           make(chan struct{}),
+		registrationID: "registration-concurrent-abort",
+		capabilities:   incompatible,
+		maxConcurrent:  1,
+		lastHeartbeat:  time.Now().UTC(),
+		assignments: map[string]assignment{
+			job.RunID: {jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID},
+		},
+	}
+	h.service.mu.Lock()
+	h.service.workers["worker-concurrent-abort"] = connected
+	h.service.mu.Unlock()
+	if err := h.repo.AbortPendingAssignment(context.Background(), repository.Assignment{
+		JobID: job.JobID, RunID: job.RunID,
+		WorkerID: "worker-concurrent-abort", AttemptID: job.AssignmentAttemptID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stream := &reconnectAcceptanceStream{ctx: context.Background(), assigned: make(chan struct{})}
+	command := &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: mapJob(job)}}
+	if err := h.service.sendCommand(
+		context.Background(), stream, command, connected, "worker-concurrent-abort",
+	); err != nil {
+		t.Fatalf("concurrent abort fence disconnected healthy worker: %v", err)
+	}
+	select {
+	case <-stream.assigned:
+		t.Fatal("concurrently aborted assignment was delivered")
+	default:
+	}
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "queued" || run.ExecutionActive {
+		t.Fatalf("concurrently aborted run = %+v, want queued and inactive", run)
+	}
+}
+
 // TestIsStreamCancellationCanonicalisesOnlyCancelledStreams pins the predicate
 // that lets ConnectWorker report one error for a cancelled stream no matter
 // which of its two concurrently-ready paths observed the cancellation. The

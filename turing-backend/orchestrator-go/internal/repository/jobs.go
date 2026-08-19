@@ -840,14 +840,23 @@ func (r *Repository) ListPendingRoutingWorkPage(
 }
 
 func (r *Repository) RequeueClaimedJob(ctx context.Context, jobID string, runID string) error {
-	return r.requeueAssignment(ctx, Assignment{JobID: jobID, RunID: runID}, false, true)
+	return r.requeueAssignment(ctx, Assignment{JobID: jobID, RunID: runID}, "", true)
 }
 
 func (r *Repository) AbortPendingAssignment(ctx context.Context, assignment Assignment) error {
-	return r.requeueAssignment(ctx, assignment, true, false)
+	return r.requeueAssignment(ctx, assignment, "pending_send", false)
 }
 
-func (r *Repository) requeueAssignment(ctx context.Context, assignment Assignment, onlyPendingSend bool, incrementAttempt bool) error {
+func (r *Repository) AbortUnsentAssignment(ctx context.Context, assignment Assignment) error {
+	return r.requeueAssignment(ctx, assignment, "sending", false)
+}
+
+func (r *Repository) requeueAssignment(
+	ctx context.Context,
+	assignment Assignment,
+	requiredExecutionState string,
+	incrementAttempt bool,
+) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -869,10 +878,10 @@ func (r *Repository) requeueAssignment(ctx context.Context, assignment Assignmen
 	if assignment.WorkerID != "" && (!workerID.Valid || workerID.String != assignment.WorkerID) {
 		return ErrAssignmentFenced
 	}
-	if onlyPendingSend && executionState != "pending_send" {
+	if requiredExecutionState != "" && executionState != requiredExecutionState {
 		return ErrAssignmentFenced
 	}
-	if executionState == "sending" || executionState == "uncertain" {
+	if requiredExecutionState == "" && (executionState == "sending" || executionState == "uncertain") {
 		return ErrAssignmentFenced
 	}
 	attemptIncrement := 0

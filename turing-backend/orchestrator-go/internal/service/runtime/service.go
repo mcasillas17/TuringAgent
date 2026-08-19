@@ -130,26 +130,31 @@ func newRuntimeCommandSender(stream turingv1.RuntimeService_ConnectWorkerServer)
 }
 
 func (s *runtimeCommandSender) send(ctx context.Context, command *turingv1.RuntimeCommand) error {
+	_, err := s.sendTracked(ctx, command)
+	return err
+}
+
+func (s *runtimeCommandSender) sendTracked(ctx context.Context, command *turingv1.RuntimeCommand) (bool, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if s.closed.Load() {
 		if err := ctx.Err(); err != nil {
-			return err
+			return false, err
 		}
-		return errRuntimeCommandSenderClosed
+		return false, errRuntimeCommandSenderClosed
 	}
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return false, ctx.Err()
 	case <-s.gate:
 	}
 	if s.closed.Load() {
 		s.gate <- struct{}{}
 		if err := ctx.Err(); err != nil {
-			return err
+			return false, err
 		}
-		return errRuntimeCommandSenderClosed
+		return false, errRuntimeCommandSenderClosed
 	}
 	result := make(chan error, 1)
 	go func() {
@@ -158,7 +163,7 @@ func (s *runtimeCommandSender) send(ctx context.Context, command *turingv1.Runti
 	}()
 	select {
 	case err := <-result:
-		return err
+		return true, err
 	case <-ctx.Done():
 		if errors.Is(ctx.Err(), context.Canceled) {
 			timer := time.NewTimer(commandSendCancelGrace)
@@ -170,12 +175,12 @@ func (s *runtimeCommandSender) send(ctx context.Context, command *turingv1.Runti
 					default:
 					}
 				}
-				return err
+				return true, err
 			case <-timer.C:
 			}
 		}
 		s.closed.Store(true)
-		return ctx.Err()
+		return true, ctx.Err()
 	}
 }
 
@@ -781,7 +786,8 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 	connectedWorker.mu.Unlock()
 	if !supported {
 		_ = connectedWorker.releaseRun(assigned.RunId)
-		if err := s.requeueAssignments([]assignment{currentAssignment}); err != nil {
+		if err := s.requeueAssignments([]assignment{currentAssignment}); err != nil &&
+			!errors.Is(err, repository.ErrAssignmentFenced) {
 			return err
 		}
 		s.refreshPendingCapabilityStateAdvisory(
@@ -800,9 +806,17 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 		_ = s.repo.AbortPendingAssignment(context.Background(), repositoryAssignment)
 		return err
 	}
-	if err := connectedWorker.commandSender(stream).send(sendCtx, cmd); err != nil {
+	sendStarted, err := connectedWorker.commandSender(stream).sendTracked(sendCtx, cmd)
+	if err != nil {
 		recoveryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		if !sendStarted {
+			abortErr := s.repo.AbortUnsentAssignment(recoveryCtx, repositoryAssignment)
+			if abortErr != nil && !errors.Is(abortErr, repository.ErrAssignmentFenced) {
+				return errors.Join(err, abortErr)
+			}
+			return errors.Join(err, s.DispatchPending(recoveryCtx))
+		}
 		return errors.Join(err, s.repo.MarkAssignmentDeliveryUncertain(recoveryCtx, repositoryAssignment))
 	}
 	if err := s.repo.MarkAssignmentDelivered(ctx, repositoryAssignment); err != nil {
