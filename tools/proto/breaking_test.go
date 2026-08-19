@@ -135,6 +135,23 @@ func TestBreakingRejectsUnsupportedBufVersion(t *testing.T) {
 	}
 }
 
+func TestBreakingRequiresBuf(t *testing.T) {
+	command := exec.Command("/bin/bash", "./breaking.sh", "origin/main")
+	command.Env = append(os.Environ(), "PATH=/usr/bin:/bin")
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatal("breaking.sh succeeded without Buf")
+	}
+	exitError, ok := err.(*exec.ExitError)
+	if !ok || exitError.ExitCode() != 127 {
+		t.Fatalf("breaking.sh error = %v, want exit code 127\n%s", err, output)
+	}
+	want := "missing required tool: buf"
+	if !strings.Contains(string(output), want) {
+		t.Fatalf("breaking.sh output = %q, want it to contain %q", output, want)
+	}
+}
+
 func TestBreakingRejectsInvalidBaseRef(t *testing.T) {
 	binDir := t.TempDir()
 	writeTool(t, binDir, "buf", "#!/bin/sh\necho '1.72.0'\n")
@@ -152,6 +169,42 @@ func TestBreakingRejectsInvalidBaseRef(t *testing.T) {
 				t.Fatalf("breaking.sh output = %q, want it to contain %q", output, want)
 			}
 		})
+	}
+}
+
+func TestBreakingRejectsUnconfiguredRemote(t *testing.T) {
+	binDir := t.TempDir()
+	writeTool(t, binDir, "buf", "#!/bin/sh\necho '1.72.0'\n")
+
+	command := exec.Command("./breaking.sh", "missing/main")
+	command.Env = append(os.Environ(), "PATH="+binDir+":/usr/bin:/bin")
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatal("breaking.sh succeeded with an unconfigured remote")
+	}
+	exitError, ok := err.(*exec.ExitError)
+	if !ok || exitError.ExitCode() != 2 {
+		t.Fatalf("breaking.sh error = %v, want exit code 2\n%s", err, output)
+	}
+	want := "base ref remote is not configured: missing"
+	if !strings.Contains(string(output), want) {
+		t.Fatalf("breaking.sh output = %q, want it to contain %q", output, want)
+	}
+}
+
+func TestBreakingDefaultsToOriginMain(t *testing.T) {
+	repo := newCompatibilityRepo(t, "additive", false)
+	binDir := t.TempDir()
+	writeTool(t, binDir, "buf", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '1.72.0'; fi\n")
+
+	command := exec.Command(filepath.Join(repo, "tools", "proto", "breaking.sh"))
+	command.Dir = repo
+	command.Env = append(os.Environ(),
+		"PATH="+binDir+":/usr/bin:/bin",
+		"PROTO_BREAKING_BASE_REF=missing/main",
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("breaking.sh did not default to origin/main: %v\n%s", err, output)
 	}
 }
 

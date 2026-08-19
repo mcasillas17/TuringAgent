@@ -127,7 +127,7 @@ Expected result: failure because `breaking.sh` does not exist.
 
 - [ ] **Step 3: Implement `tools/proto/breaking.sh`**
 
-The script uses `set -euo pipefail`, resolves the repository root from its own path, checks `git` and `buf`, and requires `buf --version` to equal `1.72.0`. The base defaults to `${PROTO_BREAKING_BASE_REF:-origin/main}` and must match a real configured remote plus a branch accepted by `git check-ref-format --branch`.
+The script uses `set -euo pipefail`, resolves the repository root from its own path, checks `git` and `buf`, and requires `buf --version` to equal `1.72.0`. The positional base defaults to `origin/main` and must match a real configured remote plus a branch accepted by `git check-ref-format --branch`.
 
 The refresh and comparison commands preserve full history while keeping an existing shallow checkout shallow. The forced refspec accepts a base branch whose tip was legitimately rewritten, and the exact resolved commit is exported locally for Buf:
 

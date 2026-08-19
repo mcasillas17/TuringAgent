@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REQUIRED_BUF_VERSION="1.72.0"
-BASE_REF="${1:-${PROTO_BREAKING_BASE_REF:-origin/main}}"
+BASE_REF="${1:-origin/main}"
 
 require() {
   if ! command -v "$1" >/dev/null 2>&1; then
