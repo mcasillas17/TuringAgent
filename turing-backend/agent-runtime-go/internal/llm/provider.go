@@ -6,7 +6,10 @@ import (
 	"net/http"
 )
 
-const maxProviderRequestBytes = 16 * 1024 * 1024
+const (
+	maxProviderRequestBytes    = 16 * 1024 * 1024
+	DefaultContextWindowTokens = 8192
+)
 
 type ChatMessage struct {
 	Role       string     `json:"role"`
@@ -51,6 +54,17 @@ type StreamEvent struct {
 type Provider interface {
 	ID() string
 	StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error)
+}
+
+type contextWindowProvider interface {
+	ContextWindowTokens() int
+}
+
+func ProviderContextWindowTokens(provider Provider) int {
+	if configured, ok := provider.(contextWindowProvider); ok && configured.ContextWindowTokens() > 0 {
+		return configured.ContextWindowTokens()
+	}
+	return DefaultContextWindowTokens
 }
 
 type providerRequestSizeError struct {

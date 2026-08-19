@@ -26,19 +26,32 @@ const (
 var errOpenAIPhysicalSSELineTooLong = errors.New("OpenAI-compatible SSE line exceeds maximum size")
 
 type OpenAICompatible struct {
-	baseURL string
-	apiKey  string
-	client  *http.Client
+	baseURL             string
+	apiKey              string
+	client              *http.Client
+	contextWindowTokens int
 }
 
 func NewOpenAICompatible(baseURL string, apiKey string, client *http.Client) *OpenAICompatible {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return &OpenAICompatible{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, client: client}
+	return &OpenAICompatible{
+		baseURL:             strings.TrimRight(baseURL, "/"),
+		apiKey:              apiKey,
+		client:              client,
+		contextWindowTokens: DefaultContextWindowTokens,
+	}
 }
 
 func (p *OpenAICompatible) ID() string { return "openai_compatible" }
+
+func (p *OpenAICompatible) ContextWindowTokens() int { return p.contextWindowTokens }
+
+func (p *OpenAICompatible) WithContextWindowTokens(tokens int) *OpenAICompatible {
+	p.contextWindowTokens = tokens
+	return p
+}
 
 func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
 	aliases, err := buildOpenAIToolAliases(req.Tools)

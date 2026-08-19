@@ -33,6 +33,44 @@ func TestOpenAICompatibleStreamChatAcceptsRequiredFixtureWithoutChoiceIndex(t *t
 	}
 }
 
+func TestOpenAICompatibleContextWindowDoesNotChangeWireFormat(t *testing.T) {
+	requestBody := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request: %v", err)
+			return
+		}
+		requestBody <- body
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(server.Close)
+
+	provider := NewOpenAICompatible(server.URL, "", server.Client()).WithContextWindowTokens(6144)
+	events, err := provider.StreamChat(context.Background(), ChatRequest{
+		Model:    "compatible-model",
+		Messages: []ChatMessage{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collectEvents(events)
+
+	var body map[string]any
+	if err := json.Unmarshal(<-requestBody, &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := body["num_ctx"]; present {
+		t.Fatalf("OpenAI-compatible request contained num_ctx: %#v", body)
+	}
+	if _, present := body["options"]; present {
+		t.Fatalf("OpenAI-compatible request contained Ollama options: %#v", body)
+	}
+	if got := provider.ContextWindowTokens(); got != 6144 {
+		t.Fatalf("ContextWindowTokens = %d, want 6144", got)
+	}
+}
+
 func TestOpenAIChunkEmitsDeltaAndFinishReason(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")

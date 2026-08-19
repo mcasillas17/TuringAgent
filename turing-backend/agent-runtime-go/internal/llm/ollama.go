@@ -24,16 +24,21 @@ const (
 )
 
 type Ollama struct {
-	baseURL   string
-	client    *http.Client
-	keepAlive json.RawMessage
+	baseURL             string
+	client              *http.Client
+	keepAlive           json.RawMessage
+	contextWindowTokens int
 }
 
 func NewOllama(baseURL string, client *http.Client) *Ollama {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return &Ollama{baseURL: strings.TrimRight(baseURL, "/"), client: client}
+	return &Ollama{
+		baseURL:             strings.TrimRight(baseURL, "/"),
+		client:              client,
+		contextWindowTokens: DefaultContextWindowTokens,
+	}
 }
 
 // WithKeepAlive sets how long Ollama should hold the model in memory after a
@@ -52,6 +57,11 @@ func (p *Ollama) WithKeepAlive(keepAlive string) *Ollama {
 	// still works, Ollama just uses its own default.
 	encoded, _ := EncodeOllamaKeepAlive(keepAlive)
 	p.keepAlive = encoded
+	return p
+}
+
+func (p *Ollama) WithContextWindowTokens(tokens int) *Ollama {
+	p.contextWindowTokens = tokens
 	return p
 }
 
@@ -88,8 +98,10 @@ func EncodeOllamaKeepAlive(value string) (json.RawMessage, error) {
 
 func (p *Ollama) ID() string { return "ollama" }
 
+func (p *Ollama) ContextWindowTokens() int { return p.contextWindowTokens }
+
 func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
-	options := ollamaRequestOptions(req.Temperature, req.MaxTokens)
+	options := ollamaRequestOptions(req.Temperature, req.MaxTokens, p.contextWindowTokens)
 	tools := ollamaTools(req.Tools)
 	body, err := marshalProviderRequest("Ollama", req.Messages, func(messages []ChatMessage) ([]byte, error) {
 		return json.Marshal(ollamaChatRequest{
@@ -484,13 +496,15 @@ type ollamaChatRequest struct {
 type ollamaOptions struct {
 	Temperature float64 `json:"temperature,omitempty"`
 	NumPredict  int     `json:"num_predict,omitempty"`
+	NumCtx      int     `json:"num_ctx"`
 }
 
-func ollamaRequestOptions(temperature float64, maxTokens int) *ollamaOptions {
-	if temperature == 0 && maxTokens == 0 {
-		return nil
+func ollamaRequestOptions(temperature float64, maxTokens int, contextWindowTokens int) *ollamaOptions {
+	return &ollamaOptions{
+		Temperature: temperature,
+		NumPredict:  maxTokens,
+		NumCtx:      contextWindowTokens,
 	}
-	return &ollamaOptions{Temperature: temperature, NumPredict: maxTokens}
 }
 
 type ollamaMessage struct {

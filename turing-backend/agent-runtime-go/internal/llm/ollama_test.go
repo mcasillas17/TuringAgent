@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -190,13 +191,51 @@ func TestOllamaRequestNestsOptions(t *testing.T) {
 		t.Fatalf("top-level num_predict was serialized: %#v", body)
 	}
 	options, ok := body["options"].(map[string]any)
-	if !ok || options["temperature"] != json.Number("0.25") || options["num_predict"] != json.Number("321") {
+	if !ok || options["temperature"] != json.Number("0.25") ||
+		options["num_predict"] != json.Number("321") ||
+		options["num_ctx"] != json.Number("8192") {
 		t.Fatalf("options = %#v", body["options"])
 	}
 
 	withoutOptions := captureOllamaRequest(t, ChatRequest{Model: "llama3.2"})
-	if _, present := withoutOptions["options"]; present {
-		t.Fatalf("zero options were serialized: %#v", withoutOptions)
+	defaultOptions, ok := withoutOptions["options"].(map[string]any)
+	if !ok || len(defaultOptions) != 1 || defaultOptions["num_ctx"] != json.Number("8192") {
+		t.Fatalf("default options = %#v, want only num_ctx=8192", withoutOptions["options"])
+	}
+}
+
+func TestOllamaRequestPinsConfiguredContextWindow(t *testing.T) {
+	requestBody := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request: %v", err)
+			return
+		}
+		requestBody <- body
+		_, _ = io.WriteString(w, `{"done":true,"done_reason":"stop"}`+"\n")
+	}))
+	t.Cleanup(server.Close)
+
+	provider := NewOllama(server.URL, server.Client()).WithContextWindowTokens(6144)
+	events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "qwen2.5:7b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collectEvents(events)
+
+	decoder := json.NewDecoder(bytes.NewReader(<-requestBody))
+	decoder.UseNumber()
+	var body map[string]any
+	if err := decoder.Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	options, ok := body["options"].(map[string]any)
+	if !ok || options["num_ctx"] != json.Number("6144") {
+		t.Fatalf("options = %#v, want num_ctx=6144", body["options"])
+	}
+	if got := provider.ContextWindowTokens(); got != 6144 {
+		t.Fatalf("ContextWindowTokens = %d, want 6144", got)
 	}
 }
 

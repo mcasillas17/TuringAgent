@@ -18,6 +18,7 @@ const (
 	approvalWaitPollTransportMargin = 5 * time.Second
 	maxConcurrentRunsLimit          = 128
 	maxHeartbeatInterval            = 30 * time.Second
+	maxContextWindowTokens          = 16 * 1024 * 1024
 )
 
 // defaultOllamaModel keeps this side in step with the orchestrator, which is
@@ -35,15 +36,17 @@ const defaultOllamaModel = "qwen2.5:7b"
 const defaultOllamaKeepAlive = "2m"
 
 type Config struct {
-	OrchestratorGRPCAddr string
-	InternalToken        string
-	WorkerID             string
-	OllamaBaseURL        string
-	OllamaModel          string
-	OllamaKeepAlive      string
-	OpenAIBaseURL        string
-	OpenAIAPIKey         string
-	OpenAIModel          string
+	OrchestratorGRPCAddr      string
+	InternalToken             string
+	WorkerID                  string
+	OllamaBaseURL             string
+	OllamaModel               string
+	OllamaKeepAlive           string
+	OllamaContextWindowTokens int
+	OpenAIBaseURL             string
+	OpenAIAPIKey              string
+	OpenAIModel               string
+	OpenAIContextWindowTokens int
 	// AgentAPIKeys maps an external agent's credential_ref to its API key.
 	// This is the only place a third-party key exists in the whole system: it
 	// is never written to SQLite, never crosses the orchestrator, and never
@@ -77,6 +80,14 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 	// rather than an opaque "Ollama returned 400" on every chat request.
 	if _, err := llm.EncodeOllamaKeepAlive(keepAlive); err != nil {
 		return Config{}, fmt.Errorf("OLLAMA_KEEP_ALIVE: %w", err)
+	}
+	ollamaContextWindowTokens, err := contextWindowTokensValue(getenv, "OLLAMA_CONTEXT_WINDOW_TOKENS")
+	if err != nil {
+		return Config{}, err
+	}
+	openAIContextWindowTokens, err := contextWindowTokensValue(getenv, "OPENAI_CONTEXT_WINDOW_TOKENS")
+	if err != nil {
+		return Config{}, err
 	}
 	maxConcurrentRuns, err := intValue(getenv, "TURING_MAX_CONCURRENT_RUNS_GENERAL", 1)
 	if err != nil {
@@ -144,29 +155,42 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	return Config{
-		OrchestratorGRPCAddr: grpcAddr(getenv),
-		InternalToken:        internalToken,
-		WorkerID:             defaultString(getenv("TURING_WORKER_ID"), "worker-general-go"),
-		OllamaBaseURL:        ollamaBaseURL,
-		OllamaModel:          defaultString(getenv("OLLAMA_MODEL"), defaultOllamaModel),
-		OllamaKeepAlive:      keepAlive,
-		OpenAIBaseURL:        openAIBaseURL,
-		OpenAIAPIKey:         getenv("OPENAI_API_KEY"),
-		OpenAIModel:          defaultString(getenv("OPENAI_MODEL"), "gpt-4o-mini"),
-		AgentAPIKeys:         agentAPIKeys,
-		MCPSystemBaseURL:     mcpSystemBaseURL,
-		MCPFilesBaseURL:      mcpFilesBaseURL,
-		MCPSystemToken:       getenv("MCP_SYSTEM_TOKEN_GENERAL"),
-		MCPFilesToken:        getenv("MCP_FILES_TOKEN_GENERAL"),
-		MaxConcurrentRuns:    maxConcurrentRuns,
-		MaxToolCallsPerRun:   maxToolCalls,
-		HeartbeatInterval:    heartbeatInterval,
-		ModelTimeout:         modelTimeout,
-		ToolTimeout:          toolTimeout,
-		ApprovalTimeout:      approvalTimeout,
-		TotalToolTimeout:     totalToolTimeout,
-		LogLevel:             defaultString(getenv("LOG_LEVEL"), "info"),
+		OrchestratorGRPCAddr:      grpcAddr(getenv),
+		InternalToken:             internalToken,
+		WorkerID:                  defaultString(getenv("TURING_WORKER_ID"), "worker-general-go"),
+		OllamaBaseURL:             ollamaBaseURL,
+		OllamaModel:               defaultString(getenv("OLLAMA_MODEL"), defaultOllamaModel),
+		OllamaKeepAlive:           keepAlive,
+		OllamaContextWindowTokens: ollamaContextWindowTokens,
+		OpenAIBaseURL:             openAIBaseURL,
+		OpenAIAPIKey:              getenv("OPENAI_API_KEY"),
+		OpenAIModel:               defaultString(getenv("OPENAI_MODEL"), "gpt-4o-mini"),
+		OpenAIContextWindowTokens: openAIContextWindowTokens,
+		AgentAPIKeys:              agentAPIKeys,
+		MCPSystemBaseURL:          mcpSystemBaseURL,
+		MCPFilesBaseURL:           mcpFilesBaseURL,
+		MCPSystemToken:            getenv("MCP_SYSTEM_TOKEN_GENERAL"),
+		MCPFilesToken:             getenv("MCP_FILES_TOKEN_GENERAL"),
+		MaxConcurrentRuns:         maxConcurrentRuns,
+		MaxToolCallsPerRun:        maxToolCalls,
+		HeartbeatInterval:         heartbeatInterval,
+		ModelTimeout:              modelTimeout,
+		ToolTimeout:               toolTimeout,
+		ApprovalTimeout:           approvalTimeout,
+		TotalToolTimeout:          totalToolTimeout,
+		LogLevel:                  defaultString(getenv("LOG_LEVEL"), "info"),
 	}, nil
+}
+
+func contextWindowTokensValue(getenv func(string) string, name string) (int, error) {
+	value, err := intValue(getenv, name, llm.DefaultContextWindowTokens)
+	if err != nil {
+		return 0, err
+	}
+	if value <= 0 || value > maxContextWindowTokens {
+		return 0, fmt.Errorf("%s must be between 1 and %d", name, maxContextWindowTokens)
+	}
+	return value, nil
 }
 
 func endpointURLValue(getenv func(string) string, name string, defaultValue string) (string, error) {

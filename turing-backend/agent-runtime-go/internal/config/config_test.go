@@ -377,3 +377,54 @@ func TestLoadFromEnvHonoursExplicitModelAndKeepAlive(t *testing.T) {
 		t.Fatalf("overrides ignored: model=%q keepAlive=%q", cfg.OllamaModel, cfg.OllamaKeepAlive)
 	}
 }
+
+func TestLoadFromEnvDefaultsProviderContextWindows(t *testing.T) {
+	cfg, err := LoadFromEnv(mapEnv(map[string]string{
+		"TURING_INTERNAL_TOKEN": "internal",
+	}))
+	if err != nil {
+		t.Fatalf("LoadFromEnv failed: %v", err)
+	}
+	if cfg.OllamaContextWindowTokens != 8192 {
+		t.Fatalf("OllamaContextWindowTokens = %d, want 8192", cfg.OllamaContextWindowTokens)
+	}
+	if cfg.OpenAIContextWindowTokens != 8192 {
+		t.Fatalf("OpenAIContextWindowTokens = %d, want 8192", cfg.OpenAIContextWindowTokens)
+	}
+}
+
+func TestLoadFromEnvHonoursProviderContextWindowOverrides(t *testing.T) {
+	cfg, err := LoadFromEnv(mapEnv(map[string]string{
+		"TURING_INTERNAL_TOKEN":        "internal",
+		"OLLAMA_CONTEXT_WINDOW_TOKENS": "4096",
+		"OPENAI_CONTEXT_WINDOW_TOKENS": "65536",
+	}))
+	if err != nil {
+		t.Fatalf("LoadFromEnv failed: %v", err)
+	}
+	if cfg.OllamaContextWindowTokens != 4096 {
+		t.Fatalf("OllamaContextWindowTokens = %d, want 4096", cfg.OllamaContextWindowTokens)
+	}
+	if cfg.OpenAIContextWindowTokens != 65536 {
+		t.Fatalf("OpenAIContextWindowTokens = %d, want 65536", cfg.OpenAIContextWindowTokens)
+	}
+}
+
+func TestLoadFromEnvValidatesProviderContextWindows(t *testing.T) {
+	for _, name := range []string{
+		"OLLAMA_CONTEXT_WINDOW_TOKENS",
+		"OPENAI_CONTEXT_WINDOW_TOKENS",
+	} {
+		for _, value := range []string{"0", "-1", "not-a-number", "16777217"} {
+			t.Run(name+"/"+value, func(t *testing.T) {
+				_, err := LoadFromEnv(mapEnv(map[string]string{
+					"TURING_INTERNAL_TOKEN": "internal",
+					name:                    value,
+				}))
+				if err == nil || !strings.Contains(err.Error(), name) {
+					t.Fatalf("LoadFromEnv error = %v, want %s validation", err, name)
+				}
+			})
+		}
+	}
+}
