@@ -32,8 +32,9 @@ Use this checklist against the current Go gRPC, MCP, and Flutter architecture.
 - [ ] `proto/turing/v1/` is the source of truth for public and internal APIs.
 - [ ] `tools/proto/check.sh` leaves the Go generated output unchanged; the
   Flutter contract test separately verifies checked-in Dart fields.
-- [ ] The orchestrator exposes the public gRPC API on port `3000` and its
-  authenticated runtime API only on the internal port `3001`.
+- [ ] The orchestrator exposes the public gRPC API on the configured loopback
+  port (default `3000`) and its authenticated runtime API only on the internal
+  port `3001`.
 - [ ] Health, session creation, message sending, event replay/subscription, and
   approval RPCs reject missing or invalid bearer credentials.
 
