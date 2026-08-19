@@ -695,10 +695,9 @@ type openAIToolCallDelta struct {
 }
 
 type openAIToolCall struct {
-	id            string
-	name          string
-	arguments     strings.Builder
-	argumentsSeen bool
+	id        string
+	name      string
+	arguments strings.Builder
 }
 
 type openAIStreamState struct {
@@ -911,7 +910,7 @@ func finalizeCompleteOpenAIToolCalls(state *openAIStreamState) ([]ToolCall, erro
 	calls := make([]ToolCall, 0, len(indices))
 	ids := make(map[string]struct{}, len(indices))
 	for _, index := range indices {
-		if !state.toolCalls[index].argumentsSeen {
+		if state.toolCalls[index].arguments.Len() == 0 {
 			continue
 		}
 		call, err := finalizeOpenAIToolCall(state, index, ids)
@@ -1157,9 +1156,6 @@ func (state *openAIStreamState) appendToolCallFragment(index int, fragment openA
 	}
 	if fragment.Function.Name != "" {
 		call.name = fragment.Function.Name
-	}
-	if len(fragment.Function.Arguments) > 0 {
-		call.argumentsSeen = true
 	}
 	call.arguments.WriteString(argumentFragment)
 	state.identifierBytes = identifierBytes

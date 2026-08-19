@@ -861,7 +861,7 @@ func TestExecuteNoticesRealOpenAILengthStopWithPendingToolFragment(t *testing.T)
 func TestExecuteDoesNotRunIDAndNameOnlyOpenAIToolCallAtLength(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w,
-			"data: "+`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"files_create"}}]}}]}`+"\n\n"+
+			"data: "+`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"files_create","arguments":""}}]}}]}`+"\n\n"+
 				"data: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`+"\n\n",
 		)
 	}))

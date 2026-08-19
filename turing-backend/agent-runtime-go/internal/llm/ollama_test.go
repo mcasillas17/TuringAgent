@@ -257,6 +257,39 @@ func TestOllamaRequestPinsConfiguredContextWindow(t *testing.T) {
 	}
 }
 
+func TestOllamaRequestUsesStableContextBucketForGrowingConversation(t *testing.T) {
+	provider, err := NewOllamaWithLimits("http://example.test", nil, 32768, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := provider.marshalRequest(ChatRequest{
+		Model:    "qwen2.5:7b",
+		Messages: []ChatMessage{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := provider.marshalRequest(ChatRequest{
+		Model: "qwen2.5:7b",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "hello"},
+			{Role: "assistant", Content: "world"},
+			{Role: "user", Content: "again"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstNumCtx := decodeOllamaNumCtx(t, first)
+	secondNumCtx := decodeOllamaNumCtx(t, second)
+	if firstNumCtx != secondNumCtx {
+		t.Fatalf("num_ctx changed from %d to %d for the same small-context bucket", firstNumCtx, secondNumCtx)
+	}
+	if firstNumCtx >= 32768 {
+		t.Fatalf("small request num_ctx = %d, want below configured cap", firstNumCtx)
+	}
+}
+
 func TestOllamaLimitsRejectInvalidValues(t *testing.T) {
 	for _, test := range []struct {
 		window int
@@ -852,6 +885,7 @@ func captureOllamaRequestWith(t *testing.T, request ChatRequest, keepAlive strin
 		if err != nil {
 			t.Errorf("read request: %v", err)
 		}
+
 		requestBody <- body
 		fmt.Fprintln(w, `{"done":true,"done_reason":"stop"}`)
 	}))
@@ -870,6 +904,29 @@ func captureOllamaRequestWith(t *testing.T, request ChatRequest, keepAlive strin
 		t.Fatalf("decode request: %v", err)
 	}
 	return body
+}
+
+func decodeOllamaNumCtx(t *testing.T, body []byte) int64 {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var decoded map[string]any
+	if err := decoder.Decode(&decoded); err != nil {
+		t.Fatal(err)
+	}
+	options, ok := decoded["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("options = %#v, want object", decoded["options"])
+	}
+	numCtx, ok := options["num_ctx"].(json.Number)
+	if !ok {
+		t.Fatalf("num_ctx = %#v, want JSON number", options["num_ctx"])
+	}
+	value, err := numCtx.Int64()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
 }
 
 func streamOllamaEvents(t *testing.T, body string) []StreamEvent {

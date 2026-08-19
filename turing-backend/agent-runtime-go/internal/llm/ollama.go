@@ -284,15 +284,28 @@ func (p *Ollama) marshalRequest(req ChatRequest) ([]byte, error) {
 			return nil, err
 		}
 		required := len(body) + maxTokens
-		if required > p.contextWindowTokens {
-			required = p.contextWindowTokens
-		}
-		if required == contextWindowTokens {
+		targetContext := ollamaContextBucket(required, p.contextWindowTokens)
+		if targetContext == contextWindowTokens {
 			return body, nil
 		}
-		contextWindowTokens = required
+		contextWindowTokens = targetContext
 	}
 	return nil, errors.New("Ollama request context size did not converge")
+}
+
+func ollamaContextBucket(required, cap int) int {
+	const minimumBucket = 4096
+	if cap <= minimumBucket {
+		return cap
+	}
+	bucket := minimumBucket
+	for bucket < required && bucket < cap {
+		bucket *= 2
+	}
+	if bucket > cap {
+		return cap
+	}
+	return bucket
 }
 
 // ollamaTokenUsage reads the token counts Ollama puts on its terminal chunk.

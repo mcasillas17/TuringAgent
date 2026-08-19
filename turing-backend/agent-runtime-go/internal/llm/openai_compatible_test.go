@@ -251,13 +251,27 @@ func TestOpenAIReportsLengthWithPendingToolCallAsOutputLimitCompletion(t *testin
 
 func TestOpenAIDropsIDAndNameOnlyToolCallAtLength(t *testing.T) {
 	got := streamOpenAIEvents(t,
-		"data: "+`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"files_create"}}]}}]}`+"\n\n"+
+		"data: "+`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"files_create","arguments":""}}]}}]}`+"\n\n"+
 			"data: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`+"\n\n",
 	)
 
 	assertOpenAIEventTypes(t, got, "completed")
 	if got[0].FinishReason != "length" {
 		t.Fatalf("events = %+v, want length completion without tool call", got)
+	}
+}
+
+func TestOpenAIEmitsExplicitEmptyObjectToolCallAtLength(t *testing.T) {
+	got := streamOpenAIEvents(t,
+		"data: "+`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"system_time","arguments":"{}"}}]}}]}`+"\n\n"+
+			"data: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`+"\n\n",
+	)
+
+	assertOpenAIEventTypes(t, got, "tool_call", "completed")
+	if len(got[0].ToolCalls) != 1 ||
+		got[0].ToolCalls[0].ID != "call_0" ||
+		len(got[0].ToolCalls[0].Arguments) != 0 {
+		t.Fatalf("events = %+v, want explicit empty-object call", got)
 	}
 }
 
