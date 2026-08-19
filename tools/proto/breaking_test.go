@@ -83,6 +83,42 @@ func TestBreakingCompatibilityInShallowCheckout(t *testing.T) {
 	}
 }
 
+func TestBreakingCompatibilityAgainstNonDefaultBase(t *testing.T) {
+	requireBuf(t)
+
+	repo := newCompatibilityRepoForBase(t, "additive", false, "release/v1")
+	command := exec.Command(filepath.Join(repo, "tools", "proto", "breaking.sh"), "origin/release/v1")
+	command.Dir = repo
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("breaking.sh failed against non-default base: %v\n%s", err, output)
+	}
+	runGit(t, repo, "rev-parse", "--verify", "refs/remotes/origin/release/v1")
+}
+
+func TestBreakingCompatibilityInLinkedWorktree(t *testing.T) {
+	requireBuf(t)
+
+	repo := newCompatibilityRepo(t, "additive", false)
+	runGit(t, repo, "add", "buf.yaml", "proto", "tools/proto/breaking.sh")
+	runGit(t, repo, "commit", "-m", "candidate")
+
+	linked := filepath.Join(filepath.Dir(repo), "linked")
+	runGit(t, repo, "worktree", "add", "-b", "linked-test", linked, "HEAD")
+	gitEntry, err := os.Stat(filepath.Join(linked, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gitEntry.Mode().IsRegular() {
+		t.Fatalf("linked worktree .git mode = %v, want regular file", gitEntry.Mode())
+	}
+
+	command := exec.Command(filepath.Join(linked, "tools", "proto", "breaking.sh"), "origin/main")
+	command.Dir = linked
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("breaking.sh failed in linked worktree: %v\n%s", err, output)
+	}
+}
+
 func TestBreakingRejectsUnsupportedBufVersion(t *testing.T) {
 	binDir := t.TempDir()
 	writeTool(t, binDir, "buf", "#!/bin/sh\necho '9.9.9'\n")
@@ -180,17 +216,19 @@ func TestBreakingRefreshesRewrittenBaseBranch(t *testing.T) {
 	runGit(t, tempDir, "clone", "--branch=main", remote, repo)
 	copyFile(t, "breaking.sh", filepath.Join(repo, "tools", "proto", "breaking.sh"), 0o755)
 
-	if err := os.WriteFile(filepath.Join(seed, "marker"), []byte("rewritten\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, seed, "add", "marker")
+	copyFile(t,
+		filepath.Join("testdata", "breaking", "additive", "turing", "v1", "example.proto"),
+		filepath.Join(seed, "proto", "turing", "v1", "example.proto"),
+		0o644,
+	)
+	runGit(t, seed, "add", "proto")
 	runGit(t, seed, "commit", "--amend", "-m", "rewritten baseline")
 	runGit(t, seed, "push", "--force", "origin", "main")
 	rewrittenCommit := runGit(t, seed, "rev-parse", "HEAD")
 
 	bufLog := filepath.Join(tempDir, "buf.log")
 	binDir := t.TempDir()
-	writeTool(t, binDir, "buf", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '1.72.0'; exit 0; fi\nprintf '%s\\n' \"$*\" > \"$BUF_LOG\"\n")
+	writeTool(t, binDir, "buf", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '1.72.0'; exit 0; fi\nif ! /usr/bin/grep -q 'string description = 3;' \"$4/turing/v1/example.proto\"; then\n  echo 'buf received stale baseline' >&2\n  exit 41\nfi\nprintf '%s\\n' \"$*\" > \"$BUF_LOG\"\n")
 
 	command := exec.Command(filepath.Join(repo, "tools", "proto", "breaking.sh"), "origin/main")
 	command.Dir = repo
@@ -230,12 +268,17 @@ func requireBuf(t *testing.T) {
 
 func newCompatibilityRepo(t *testing.T, fixture string, shallow bool) string {
 	t.Helper()
+	return newCompatibilityRepoForBase(t, fixture, shallow, "main")
+}
+
+func newCompatibilityRepoForBase(t *testing.T, fixture string, shallow bool, baseBranch string) string {
+	t.Helper()
 	tempDir := t.TempDir()
 	remote := filepath.Join(tempDir, "origin.git")
 	runGit(t, tempDir, "init", "--bare", remote)
 
 	seed := filepath.Join(tempDir, "seed")
-	runGit(t, tempDir, "init", "--initial-branch=main", seed)
+	runGit(t, tempDir, "init", "--initial-branch="+baseBranch, seed)
 	runGit(t, seed, "config", "user.name", "Turing Proto Test")
 	runGit(t, seed, "config", "user.email", "proto-test@example.invalid")
 	copyFile(t,
@@ -246,18 +289,18 @@ func newCompatibilityRepo(t *testing.T, fixture string, shallow bool) string {
 	runGit(t, seed, "add", "proto")
 	runGit(t, seed, "commit", "-m", "baseline")
 	runGit(t, seed, "remote", "add", "origin", remote)
-	runGit(t, seed, "push", "--set-upstream", "origin", "main")
+	runGit(t, seed, "push", "--set-upstream", "origin", baseBranch)
 
 	repo := filepath.Join(tempDir, "repo")
 	if shallow {
-		runGit(t, tempDir, "clone", "--depth=1", "--branch=main", "file://"+remote, repo)
+		runGit(t, tempDir, "clone", "--depth=1", "--branch="+baseBranch, "file://"+remote, repo)
 	} else {
-		runGit(t, tempDir, "clone", "--branch=main", remote, repo)
+		runGit(t, tempDir, "clone", "--branch="+baseBranch, remote, repo)
 	}
 	runGit(t, repo, "config", "user.name", "Turing Proto Test")
 	runGit(t, repo, "config", "user.email", "proto-test@example.invalid")
 	runGit(t, repo, "switch", "-c", "feature")
-	runGit(t, repo, "update-ref", "-d", "refs/remotes/origin/main")
+	runGit(t, repo, "update-ref", "-d", "refs/remotes/origin/"+baseBranch)
 
 	copyFile(t,
 		filepath.Join("testdata", "breaking", fixture, "turing", "v1", "example.proto"),

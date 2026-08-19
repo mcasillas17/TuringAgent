@@ -71,7 +71,7 @@ tests := []struct {
 }
 ```
 
-The tests copy the repository script and `buf.yaml` into temporary full and shallow checkouts, delete `refs/remotes/origin/main`, and verify the script restores that ref without changing the repository's existing shallow/full state. This proves the compatibility behavior and missing-base retrieval through the same entry point CI uses.
+The tests copy the repository script and `buf.yaml` into temporary full, shallow, and linked-worktree checkouts, delete the remote-tracking base, and verify the script restores that ref without changing the repository's existing shallow/full state. Additional cases prove a rewritten base supplies its exact updated schema and a non-default base such as `origin/release/v1` resolves correctly. This exercises the same entry point CI uses.
 
 - [ ] **Step 3: Run the regression test and observe the intended failure**
 

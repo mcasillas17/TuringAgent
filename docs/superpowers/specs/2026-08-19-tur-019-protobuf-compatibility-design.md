@@ -53,7 +53,7 @@ Real compatibility fixtures start from one baseline message and exercise three c
 - removed-and-reserved live field: still fails, locking the source-level `FILE` policy;
 - renumbered live field: fails because the original field number was deleted.
 
-The Go regression test creates temporary full and shallow Git repositories with a bare `origin`, publishes the baseline to `main`, installs each candidate as the working tree, and invokes `tools/proto/breaking.sh`. It proves a missing base ref is fetched while the repository's existing shallow/full state is preserved. It skips only when Buf is absent so ordinary root tests remain portable; the proto CI job installs the pinned Buf version and reruns the compatibility tests with skipping disabled.
+The Go regression test creates temporary full, shallow, and linked-worktree Git repositories with a bare `origin`, publishes the baseline, installs each candidate as the working tree, and invokes `tools/proto/breaking.sh`. It proves a missing base ref is fetched while the repository's existing shallow/full state is preserved, a rewritten base supplies the exact updated schema, and a non-default base containing a slash resolves correctly. It skips only when Buf is absent so ordinary root tests remain portable; the proto CI job installs the pinned Buf version and reruns every `TestBreaking` case with skipping disabled.
 
 CI self-guard tests assert the exact pinned setup action inputs, compatibility command, base-ref expression, and deterministic generation command. Script unit coverage also checks unsupported Buf versions and invalid base refs.
 
