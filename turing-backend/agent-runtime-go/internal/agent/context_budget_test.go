@@ -36,10 +36,13 @@ func (p *budgetTestProvider) StreamChat(context.Context, llm.ChatRequest) (<-cha
 
 func TestBuildBudgetedContextKeepsMandatoryMessagesAndStableOrder(t *testing.T) {
 	provider := &budgetTestProvider{window: 64 * 1024}
-	skills := llm.ChatMessage{Role: "system", Content: "attached skill"}
+	skills := []llm.ChatMessage{
+		{Role: "system", Content: "skill index guidance"},
+		{Role: "user", Content: "attached skill metadata"},
+	}
 	recall := llm.ChatMessage{Role: "system", Content: "recalled fact"}
 	input := contextInput{
-		skills: &skills,
+		skills: skills,
 		history: []llm.ChatMessage{
 			{Role: "user", Content: "old question"},
 			{Role: "assistant", Content: "old answer"},
@@ -54,7 +57,8 @@ func TestBuildBudgetedContextKeepsMandatoryMessagesAndStableOrder(t *testing.T) 
 	}
 	want := []llm.ChatMessage{
 		recall,
-		skills,
+		skills[0],
+		skills[1],
 		{Role: "user", Content: "old question"},
 		{Role: "assistant", Content: "old answer"},
 		{Role: "user", Content: "current question"},
@@ -138,20 +142,20 @@ func TestBuildBudgetedContextReservesOutputTokens(t *testing.T) {
 func TestBuildBudgetedContextOmitsOldestCompleteHistoryFirst(t *testing.T) {
 	provider := &budgetTestProvider{}
 	recall := llm.ChatMessage{Role: "system", Content: "recalled"}
-	skills := llm.ChatMessage{Role: "system", Content: "skill"}
+	skills := []llm.ChatMessage{{Role: "system", Content: "skill"}}
 	newest := []llm.ChatMessage{
 		{Role: "user", Content: "new question"},
 		{Role: "assistant", Content: "new answer"},
 	}
 	live := []llm.ChatMessage{{Role: "user", Content: "current"}}
 	provider.window = estimateRequest(t, provider, "model", appendMessages(
-		[]llm.ChatMessage{recall, skills},
+		[]llm.ChatMessage{recall, skills[0]},
 		newest,
 		live,
 	), nil)
 
 	got, err := buildBudgetedContext(provider, "model", contextInput{
-		skills: &skills,
+		skills: skills,
 		recall: &recall,
 		history: []llm.ChatMessage{
 			{Role: "user", Content: strings.Repeat("old question", 20)},

@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package turing.v1;
+
+message CompatibilityExample {
+  reserved 2;
+  reserved "display_name";
+
+  string id = 1;
+}

@@ -215,8 +215,101 @@ func TestExecuteLongSessionStaysWithinBudgetAndPreservesRecall(t *testing.T) {
 	}
 }
 
+func TestExecuteBoundsInjectedSkillIndexToProviderContext(t *testing.T) {
+	provider := &budgetCapturingProvider{window: 4096, output: 512}
+	job := testJob()
+	for index := 0; index < 1000; index++ {
+		job.Skills = append(job.Skills, &turingv1.SkillSnapshot{
+			SkillId:     fmt.Sprintf("category/skill-%04d", index),
+			Name:        fmt.Sprintf("Skill %04d", index),
+			Category:    "category",
+			Description: strings.Repeat("bounded description ", 20),
+		})
+	}
+	files := &assistantTestToolLister{definitions: []map[string]any{{
+		"name":        "files.large",
+		"description": strings.Repeat("large file tool schema ", 100),
+	}}}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
+		},
+		fakeMessageClient{},
+		&GeneralAssistantTools{FilesMCP: files},
+	)
+
+	updates := collectUpdates(t, assistant, job)
+
+	if failure := findRunFailed(updates); failure != nil {
+		t.Fatalf("bounded skill index failed the run: %#v", failure)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider requests = %d, want 1", len(provider.requests))
+	}
+	if provider.estimates[0]+provider.output > provider.window {
+		t.Fatalf(
+			"request estimate %d + output reserve %d exceeds context window %d",
+			provider.estimates[0],
+			provider.output,
+			provider.window,
+		)
+	}
+	if !containsMessageContent(provider.requests[0].Messages, "skills omitted") ||
+		!containsMessageContent(provider.requests[0].Messages, "skills_list") {
+		t.Fatalf("bounded skill index did not disclose truncation: %#v", provider.requests[0].Messages)
+	}
+	if !containsToolDefinition(provider.requests[0].Tools, "skills_list") ||
+		!containsToolDefinition(provider.requests[0].Tools, "skill_view") {
+		t.Fatalf("bounded skill index lost its access tools: %#v", provider.requests[0].Tools)
+	}
+}
+
+func TestExecuteDisclosesOmittedEnabledSkillIndex(t *testing.T) {
+	provider := &budgetCapturingProvider{window: 700, output: 100}
+	job := testJob()
+	job.Skills = []*turingv1.SkillSnapshot{{
+		SkillId:     "writing/tone",
+		Name:        "Tone",
+		Category:    "writing",
+		Description: "Keep responses concise.",
+	}}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
+		},
+		fakeMessageClient{},
+		&GeneralAssistantTools{},
+	)
+
+	updates := collectUpdates(t, assistant, job)
+
+	if failure := findRunFailed(updates); failure != nil {
+		t.Fatalf("run failed instead of omitting the skill index: %#v", failure)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider requests = %d, want 1", len(provider.requests))
+	}
+	if containsMessageContent(provider.requests[0].Messages, "The user enabled the following local skills") {
+		t.Fatalf("skill index unexpectedly fit the constrained request: %#v", provider.requests[0].Messages)
+	}
+	for _, update := range updates {
+		event := update.GetEvent()
+		if event == nil || event.Type != turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
+			continue
+		}
+		payload := event.GetPayload().AsMap()
+		if payload["reason"] == "context_budget" && payload["skillIndexOmitted"] == true {
+			if note, _ := payload["note"].(string); !strings.Contains(note, "enabled skill metadata") {
+				t.Fatalf("context omission note = %q, want enabled skill metadata", note)
+			}
+			return
+		}
+	}
+	t.Fatalf("updates did not disclose the omitted enabled skill index: %#v", updates)
+}
+
 func TestExecuteRecallsCurrentSessionHistoryOmittedByBudget(t *testing.T) {
-	provider := &budgetCapturingProvider{window: 700}
+	provider := &budgetCapturingProvider{window: 900}
 	target := "important current-session fact to preserve"
 	recaller := &admissionAwareRecaller{target: target}
 	assistant := NewGeneralAssistant(
@@ -708,8 +801,11 @@ func TestExecuteEmitsEachChangedOmissionSetBeforeItsDispatch(t *testing.T) {
 		t.Fatalf("requests/update markers = %d/%d, want 3/3", len(provider.requests), len(updatesBeforeRequest))
 	}
 	type omissionSet struct {
-		history int
-		results int
+		history         int
+		recall          bool
+		skillIndex      bool
+		toolDefinitions int
+		results         int
 	}
 	var emitted []omissionSet
 	var eventIndices []int
@@ -723,8 +819,11 @@ func TestExecuteEmitsEachChangedOmissionSetBeforeItsDispatch(t *testing.T) {
 			continue
 		}
 		emitted = append(emitted, omissionSet{
-			history: int(payload["historyMessagesOmitted"].(float64)),
-			results: int(payload["toolResultsOmitted"].(float64)),
+			history:         int(payload["historyMessagesOmitted"].(float64)),
+			recall:          payload["recallOmitted"].(bool),
+			skillIndex:      payload["skillIndexOmitted"].(bool),
+			toolDefinitions: int(payload["toolDefinitionsOmitted"].(float64)),
+			results:         int(payload["toolResultsOmitted"].(float64)),
 		})
 		eventIndices = append(eventIndices, index)
 	}
@@ -748,8 +847,9 @@ func TestExecuteEmitsEachChangedOmissionSetBeforeItsDispatch(t *testing.T) {
 	}
 	var last omissionSet
 	emittedIndex := 0
+	totalToolDefinitions := len(client.definitions) + 2
 	for _, request := range provider.requests {
-		current := omissionSet{}
+		current := omissionSet{toolDefinitions: totalToolDefinitions - len(request.Tools)}
 		for _, message := range request.Messages {
 			if strings.HasPrefix(message.Content, `{"contextBudget":{"omitted":true`) {
 				current.results++
@@ -1006,6 +1106,15 @@ func containsString(values []string, want string) bool {
 func containsStringFragment(values []string, want string) bool {
 	for _, value := range values {
 		if strings.Contains(value, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsToolDefinition(definitions []llm.ToolDefinition, name string) bool {
+	for _, definition := range definitions {
+		if definition.Name == name {
 			return true
 		}
 	}

@@ -143,7 +143,7 @@ Common values:
 
 Before every model dispatch, the runtime measures the exact provider-specific JSON request. Without provider tokenizers, it conservatively treats each serialized UTF-8 byte as an upper bound of one prompt token, then requires that upper bound plus the configured output reservation fit the context window. This is intentionally not exact tokenizer usage or billable provider usage; Turing does not currently discover model capabilities.
 
-The runtime always keeps attached skills, the current user turn, and every assistant tool-call/result message and correlation ID. If a result body is too large, its whole content is replaced by an explicit JSON omission marker; the protocol message itself is never dropped or split. The runtime then admits a stable prefix of whole optional tool definitions (definitions referenced by live protocol are mandatory), the whole recall block, and a contiguous suffix of newest complete history turns.
+The runtime always keeps mandatory skill context (legacy attached bodies and explicitly invoked file-skill bodies), the current user turn, and every assistant tool-call/result message and correlation ID. A bounded enabled-skill metadata index is included when it fits; if it cannot fit, the runtime emits a durable omission notice instead of hiding the loss. If a result body is too large, its whole content is replaced by an explicit JSON omission marker; the protocol message itself is never dropped or split. The runtime then admits a stable prefix of whole optional tool definitions (definitions referenced by live protocol are mandatory), the whole recall block, and a contiguous suffix of newest complete history turns.
 
 Recall search runs once per agent run; cached hits are re-ranked against each dispatch's budget-admitted request rather than re-querying the unchanged terms across tool iterations. The cache retains one recall-budget-bounded payload per unique message plus lightweight per-term references, so overlapping search pages do not retain duplicate full messages. Fetched history and the live user turn carry message IDs into budgeting, so current-session deduplication suppresses exact admitted rows; occurrence counts are only a defensive fallback for ID-less callers. Admitting one of two identical turns therefore does not erase an older omitted row even when the newer row is absent from the search page. If adding recall changes the admitted history suffix, the runtime allows up to three ranking/budget passes under one two-second deadline; one broad fallback then prefers a possible duplicate over silently losing a current-session turn from both history and recall.
 
@@ -156,6 +156,24 @@ Focused verification:
 ```bash
 go test -tags sqlite_fts5 ./turing-backend/agent-runtime-go/internal/config ./turing-backend/agent-runtime-go/internal/llm ./turing-backend/agent-runtime-go/internal/agent ./turing-backend/orchestrator-go/internal/service/runtime ./turing-backend/tests -count=1
 ```
+
+### Legacy skill recovery cleanup
+
+An upgrade through migration 0011 exports old database-backed skills into
+`turing-backend/skills/imported/` and retains a recovery copy in SQLite.
+TuringAgent re-exports that copy on startup but never deletes nonempty recovery
+rows automatically, because SQLite and the filesystem cannot commit atomically.
+
+To remove the recovery copy, stop the orchestrator, back up the configured
+database (the Compose default is `turing-backend/data/turing.db`), and verify
+every row returned by
+`SELECT id FROM legacy_skill_export_recovery ORDER BY id;`. An ID matching
+`^[A-Za-z0-9][A-Za-z0-9._-]*$` (except `.` and `..`) maps directly to
+`skills/imported/<id>/SKILL.md`. Every other ID maps to
+`skills/imported/skill-<hash>/SKILL.md`, where `<hash>` is the first 16 lowercase
+hex characters of SHA-256 over the ID's exact UTF-8 bytes. While the
+orchestrator remains stopped, use a SQLite client to run
+`DROP TABLE legacy_skill_export_recovery;`, then restart.
 
 ## Troubleshooting
 

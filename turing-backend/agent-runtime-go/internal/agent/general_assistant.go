@@ -206,16 +206,30 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		Role:      "user",
 		Content:   job.GetUserText(),
 	}}
-	// Skills open the request, ahead of the conversation history: they are
-	// standing instructions about how to behave here, not a turn in the
-	// conversation. Applied before recall so that a recalled block, which is
-	// prepended below, still lands above them and reads as background rather
-	// than as a rule.
-	var skillMessage *llm.ChatMessage
-	if system, ok := skillsSystemMessage(job.GetSkills()); ok {
-		skillMessage = &system
-	}
+	// Filesystem skills contribute a bounded metadata index. Bodies arrive only
+	// through skill_view or an exact $path/id invocation. Legacy queued jobs
+	// retain their old full-body snapshot behavior until they drain.
 	toolDefinitions := registry.Definitions()
+	skillMessages, skillIndexIncluded, err := buildSkillMessagesWithinContext(
+		provider,
+		job.GetModel(),
+		job.GetSkills(),
+		job.GetUserText(),
+		liveMessages,
+		toolDefinitions,
+	)
+	if err != nil {
+		return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
+	}
+	_, skillIndexAvailable := skillIndexUserMessage(job.GetSkills())
+	skillIndexOmitted := skillIndexAvailable && !skillIndexIncluded
+	var requiredToolNames map[string]struct{}
+	if skillIndexIncluded {
+		requiredToolNames = map[string]struct{}{
+			skillsListToolName: {},
+			skillViewToolName:  {},
+		}
+	}
 	recallForContext := a.prepareRecallForRun(ctx, job)
 	var content strings.Builder
 	var tokens runTokenAccumulator
@@ -234,7 +248,9 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			ctx,
 			provider,
 			job,
-			skillMessage,
+			skillMessages,
+			skillIndexOmitted,
+			requiredToolNames,
 			historyMessages,
 			liveMessages,
 			toolDefinitions,
@@ -256,6 +272,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				"reason":                 "context_budget",
 				"historyMessagesOmitted": budgeted.Omissions.HistoryMessages,
 				"recallOmitted":          budgeted.Omissions.RecallOmitted,
+				"skillIndexOmitted":      budgeted.Omissions.SkillIndexOmitted,
 				"toolDefinitionsOmitted": budgeted.Omissions.ToolDefinitions,
 				"toolResultsOmitted":     budgeted.Omissions.ToolResults,
 			})); err != nil {
@@ -418,10 +435,12 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			minimalToolResults[minimalIndex] = struct{}{}
 		}
 		if _, err := buildBudgetedContext(provider, job.GetModel(), contextInput{
-			skills:             skillMessage,
+			skills:             skillMessages,
 			history:            historyMessages,
 			recall:             recallMessage,
 			live:               prospectiveLive,
+			requiredToolNames:  requiredToolNames,
+			skillIndexOmitted:  skillIndexOmitted,
 			minimalToolResults: minimalToolResults,
 		}, toolDefinitions); err != nil {
 			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
@@ -472,20 +491,103 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	}
 }
 
+func buildSkillMessagesWithinContext(
+	provider llm.Provider,
+	model string,
+	skills []*turingv1.SkillSnapshot,
+	userText string,
+	liveMessages []llm.ChatMessage,
+	toolDefinitions []llm.ToolDefinition,
+) ([]llm.ChatMessage, bool, error) {
+	var required []llm.ChatMessage
+	if legacy, ok := legacySkillsMessage(skills); ok {
+		required = append(required, legacy)
+	}
+	required = append(required, explicitlyInvokedSkillMessages(skills, userText)...)
+
+	indexAtLimit := func(maxContentBytes int) ([]llm.ChatMessage, bool) {
+		index := skillIndexMessagesWithinBytes(skills, maxContentBytes)
+		messages := make([]llm.ChatMessage, 0, len(index)+len(required))
+		messages = append(messages, index...)
+		messages = append(messages, required...)
+		return messages, len(index) > 0
+	}
+	skillTools := make([]llm.ToolDefinition, 0, 2)
+	for _, definition := range toolDefinitions {
+		if definition.Name == skillsListToolName || definition.Name == skillViewToolName {
+			skillTools = append(skillTools, definition)
+		}
+	}
+	fits := func(messages []llm.ChatMessage) (bool, error) {
+		requestMessages := make([]llm.ChatMessage, 0, len(messages)+len(liveMessages))
+		requestMessages = append(requestMessages, messages...)
+		requestMessages = append(requestMessages, liveMessages...)
+		estimate, err := llm.EstimateRequestTokens(provider, llm.ChatRequest{
+			Model:     model,
+			Messages:  requestMessages,
+			MaxTokens: provider.MaxOutputTokens(),
+			Tools:     skillTools,
+		})
+		if err != nil {
+			return false, fmt.Errorf("estimate model context with skill index: %w", err)
+		}
+		return estimate <= provider.ContextWindowTokens()-provider.MaxOutputTokens(), nil
+	}
+
+	requiredFits, err := fits(required)
+	if err != nil {
+		return nil, false, err
+	}
+	if !requiredFits {
+		return required, false, nil
+	}
+	full, fullIncludesIndex := indexAtLimit(maxInjectedSkillIndexBytes)
+	fullFits, err := fits(full)
+	if err != nil {
+		return nil, false, err
+	}
+	if fullFits {
+		return full, fullIncludesIndex, nil
+	}
+
+	best := required
+	bestIncludesIndex := false
+	for low, high := 0, maxInjectedSkillIndexBytes; low <= high; {
+		middle := low + (high-low)/2
+		candidate, candidateIncludesIndex := indexAtLimit(middle)
+		candidateFits, err := fits(candidate)
+		if err != nil {
+			return nil, false, err
+		}
+		if candidateFits {
+			best = candidate
+			bestIncludesIndex = candidateIncludesIndex
+			low = middle + 1
+		} else {
+			high = middle - 1
+		}
+	}
+	return best, bestIncludesIndex, nil
+}
+
 func (a *GeneralAssistant) buildBudgetedContextWithRecall(
 	ctx context.Context,
 	provider llm.Provider,
 	job *turingv1.AgentJob,
-	skillMessage *llm.ChatMessage,
+	skillMessages []llm.ChatMessage,
+	skillIndexOmitted bool,
+	requiredToolNames map[string]struct{},
 	historyMessages []llm.ChatMessage,
 	liveMessages []llm.ChatMessage,
 	toolDefinitions []llm.ToolDefinition,
 	recallForContext func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool),
 ) (budgetedContext, *llm.ChatMessage, error) {
 	baseInput := contextInput{
-		skills:  skillMessage,
-		history: historyMessages,
-		live:    liveMessages,
+		skills:            skillMessages,
+		history:           historyMessages,
+		live:              liveMessages,
+		requiredToolNames: requiredToolNames,
+		skillIndexOmitted: skillIndexOmitted,
 	}
 	budgeted, err := buildBudgetedContext(provider, job.GetModel(), baseInput, toolDefinitions)
 	if err != nil || recallForContext == nil {
@@ -527,7 +629,12 @@ func (a *GeneralAssistant) buildBudgetedContextWithRecall(
 	if err := ctx.Err(); err != nil {
 		return budgetedContext{}, nil, err
 	}
-	broadInput := contextInput{skills: skillMessage, live: liveMessages}
+	broadInput := contextInput{
+		skills:            skillMessages,
+		live:              liveMessages,
+		requiredToolNames: requiredToolNames,
+		skillIndexOmitted: skillIndexOmitted,
+	}
 	broad, err := buildBudgetedContext(provider, job.GetModel(), broadInput, toolDefinitions)
 	if err != nil {
 		return budgetedContext{}, nil, err
@@ -607,7 +714,7 @@ func (a *GeneralAssistant) discoverTools(ctx context.Context) (*ToolRegistry, er
 		a.discovery = discovery
 		a.registryMu.Unlock()
 
-		servers := make(map[string]ToolLister)
+		servers := map[string]ToolLister{"skills": newSkillToolLister()}
 		if a.tools != nil {
 			if !isNilToolLister(a.tools.SystemMCP) {
 				servers["system"] = a.tools.SystemMCP
@@ -655,6 +762,10 @@ func (a *GeneralAssistant) executeToolCall(
 		}
 		return toolErrorOutcome(call, "tool_runner_unavailable")
 	}
+	client := entry.Client
+	if entry.ServerName == "skills" {
+		client = newSkillSnapshotClient(job.GetSkills())
+	}
 	runOutcome, err := a.tools.Runner.RunWithOutcome(ctx, tools.RunInput{
 		AgentID:         turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
 		RunID:           job.GetRunId(),
@@ -663,7 +774,7 @@ func (a *GeneralAssistant) executeToolCall(
 		ServerName:      entry.ServerName,
 		ToolName:        call.Name,
 		Args:            call.Arguments,
-		MCPClient:       entry.Client,
+		MCPClient:       client,
 		Timeout:         a.toolTimeout(),
 		TotalTimeout:    a.totalToolTimeout(),
 	})

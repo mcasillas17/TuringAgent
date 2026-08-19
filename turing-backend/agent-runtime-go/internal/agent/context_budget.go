@@ -12,10 +12,12 @@ import (
 var errContextBudgetExceeded = errors.New("required context exceeds the configured model window")
 
 type contextInput struct {
-	skills  *llm.ChatMessage
-	history []llm.ChatMessage
-	recall  *llm.ChatMessage
-	live    []llm.ChatMessage
+	skills            []llm.ChatMessage
+	history           []llm.ChatMessage
+	recall            *llm.ChatMessage
+	live              []llm.ChatMessage
+	requiredToolNames map[string]struct{}
+	skillIndexOmitted bool
 	// minimalToolResults marks synthetic protocol placeholders supplied by the
 	// caller for preflight. Real tool content is never identified by sniffing
 	// untrusted bytes.
@@ -23,10 +25,11 @@ type contextInput struct {
 }
 
 type contextOmissions struct {
-	HistoryMessages int
-	RecallOmitted   bool
-	ToolDefinitions int
-	ToolResults     int
+	HistoryMessages   int
+	RecallOmitted     bool
+	SkillIndexOmitted bool
+	ToolDefinitions   int
+	ToolResults       int
 }
 
 func (o contextOmissions) Notice() string {
@@ -40,6 +43,9 @@ func (o contextOmissions) Notice() string {
 	}
 	if o.RecallOmitted {
 		omitted = append(omitted, "recalled material")
+	}
+	if o.SkillIndexOmitted {
+		omitted = append(omitted, "enabled skill metadata")
 	}
 	if o.ToolDefinitions > 0 {
 		label := "tool definitions"
@@ -90,6 +96,9 @@ func buildBudgetedContext(
 	liveMessages := cloneChatMessages(input.live)
 	selectedTools := make([]bool, len(tools))
 	requiredNames := liveToolNames(liveMessages)
+	for name := range input.requiredToolNames {
+		requiredNames[name] = struct{}{}
+	}
 	for index, definition := range tools {
 		if _, required := requiredNames[definition.Name]; required {
 			selectedTools[index] = true
@@ -98,15 +107,13 @@ func buildBudgetedContext(
 
 	selectedHistory := make([][]llm.ChatMessage, 0)
 	recallUsed := false
-	omissions := contextOmissions{}
+	omissions := contextOmissions{SkillIndexOmitted: input.skillIndexOmitted}
 	buildRequest := func() llm.ChatRequest {
-		messages := make([]llm.ChatMessage, 0, len(input.history)+len(liveMessages)+2)
+		messages := make([]llm.ChatMessage, 0, len(input.skills)+len(input.history)+len(liveMessages)+1)
 		if recallUsed && input.recall != nil {
 			messages = append(messages, *input.recall)
 		}
-		if input.skills != nil {
-			messages = append(messages, *input.skills)
-		}
+		messages = append(messages, input.skills...)
 		for _, unit := range selectedHistory {
 			messages = append(messages, unit...)
 		}

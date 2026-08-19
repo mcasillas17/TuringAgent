@@ -71,7 +71,7 @@ const AgentJob$json = {
       '3': 13,
       '4': 3,
       '5': 11,
-      '6': '.turing.v1.AttachedSkill',
+      '6': '.turing.v1.SkillSnapshot',
       '10': 'skills'
     },
     {
@@ -95,7 +95,7 @@ final $typed_data.Uint8List agentJobDescriptor = $convert.base64Decode(
     '50dXJpbmcudjEuTW9kZWxQcm92aWRlclINbW9kZWxQcm92aWRlchIUCgVtb2RlbBgJIAEoCVIF'
     'bW9kZWwSGwoJdXNlcl90ZXh0GAogASgJUgh1c2VyVGV4dBInCg9yZXF1ZXN0ZWRfdG9vbHMYCy'
     'ADKAlSDnJlcXVlc3RlZFRvb2xzEhgKB2F0dGVtcHQYDCABKAVSB2F0dGVtcHQSMAoGc2tpbGxz'
-    'GA0gAygLMhgudHVyaW5nLnYxLkF0dGFjaGVkU2tpbGxSBnNraWxscxJFCg5leHRlcm5hbF9hZ2'
+    'GA0gAygLMhgudHVyaW5nLnYxLlNraWxsU25hcHNob3RSBnNraWxscxJFCg5leHRlcm5hbF9hZ2'
     'VudBgOIAEoCzIeLnR1cmluZy52MS5FeHRlcm5hbEFnZW50VGFyZ2V0Ug1leHRlcm5hbEFnZW50');
 
 @$core.Deprecated('Use externalAgentTargetDescriptor instead')
@@ -114,19 +114,54 @@ final $typed_data.Uint8List externalAgentTargetDescriptor = $convert.base64Decod
     'USGQoIYmFzZV91cmwYAiABKAlSB2Jhc2VVcmwSJQoOY3JlZGVudGlhbF9yZWYYAyABKAlSDWNy'
     'ZWRlbnRpYWxSZWY=');
 
-@$core.Deprecated('Use attachedSkillDescriptor instead')
-const AttachedSkill$json = {
-  '1': 'AttachedSkill',
+@$core.Deprecated('Use skillSnapshotDescriptor instead')
+const SkillSnapshot$json = {
+  '1': 'SkillSnapshot',
   '2': [
     {'1': 'name', '3': 1, '4': 1, '5': 9, '10': 'name'},
     {'1': 'instructions', '3': 2, '4': 1, '5': 9, '10': 'instructions'},
+    {'1': 'skill_id', '3': 3, '4': 1, '5': 9, '10': 'skillId'},
+    {'1': 'description', '3': 4, '4': 1, '5': 9, '10': 'description'},
+    {'1': 'category', '3': 5, '4': 1, '5': 9, '10': 'category'},
+    {
+      '1': 'references',
+      '3': 6,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.SkillSnapshot.ReferencesEntry',
+      '10': 'references'
+    },
+    {'1': 'withheld', '3': 7, '4': 1, '5': 8, '10': 'withheld'},
+    {
+      '1': 'missing_capabilities',
+      '3': 8,
+      '4': 3,
+      '5': 9,
+      '10': 'missingCapabilities'
+    },
   ],
+  '3': [SkillSnapshot_ReferencesEntry$json],
 };
 
-/// Descriptor for `AttachedSkill`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List attachedSkillDescriptor = $convert.base64Decode(
-    'Cg1BdHRhY2hlZFNraWxsEhIKBG5hbWUYASABKAlSBG5hbWUSIgoMaW5zdHJ1Y3Rpb25zGAIgAS'
-    'gJUgxpbnN0cnVjdGlvbnM=');
+@$core.Deprecated('Use skillSnapshotDescriptor instead')
+const SkillSnapshot_ReferencesEntry$json = {
+  '1': 'ReferencesEntry',
+  '2': [
+    {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
+    {'1': 'value', '3': 2, '4': 1, '5': 9, '10': 'value'},
+  ],
+  '7': {'7': true},
+};
+
+/// Descriptor for `SkillSnapshot`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List skillSnapshotDescriptor = $convert.base64Decode(
+    'Cg1Ta2lsbFNuYXBzaG90EhIKBG5hbWUYASABKAlSBG5hbWUSIgoMaW5zdHJ1Y3Rpb25zGAIgAS'
+    'gJUgxpbnN0cnVjdGlvbnMSGQoIc2tpbGxfaWQYAyABKAlSB3NraWxsSWQSIAoLZGVzY3JpcHRp'
+    'b24YBCABKAlSC2Rlc2NyaXB0aW9uEhoKCGNhdGVnb3J5GAUgASgJUghjYXRlZ29yeRJICgpyZW'
+    'ZlcmVuY2VzGAYgAygLMigudHVyaW5nLnYxLlNraWxsU25hcHNob3QuUmVmZXJlbmNlc0VudHJ5'
+    'UgpyZWZlcmVuY2VzEhoKCHdpdGhoZWxkGAcgASgIUgh3aXRoaGVsZBIxChRtaXNzaW5nX2NhcG'
+    'FiaWxpdGllcxgIIAMoCVITbWlzc2luZ0NhcGFiaWxpdGllcxo9Cg9SZWZlcmVuY2VzRW50cnkS'
+    'EAoDa2V5GAEgASgJUgNrZXkSFAoFdmFsdWUYAiABKAlSBXZhbHVlOgI4AQ==');
 
 @$core.Deprecated('Use discoveredToolDescriptor instead')
 const DiscoveredTool$json = {

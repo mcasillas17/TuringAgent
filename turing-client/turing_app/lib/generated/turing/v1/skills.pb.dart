@@ -14,31 +14,45 @@ import 'dart:core' as $core;
 
 import 'package:protobuf/protobuf.dart' as $pb;
 
-import '../../google/protobuf/timestamp.pb.dart' as $1;
-
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
 
-/// A named block of instructions the user writes once and attaches to the
-/// conversations where it applies.
-///
-/// Skills are explicit, not inferred: the agent never decides which ones are
-/// relevant. What is attached to a conversation is exactly what was attached by
-/// hand, which is what makes a change in behaviour traceable to a specific
-/// skill rather than to a selection step nobody can see.
+/// A SKILL.md file and the user's decisions about whether it may load.
+/// Metadata and body come from disk on every read; only enabled and capability
+/// grants are persisted in SQLite.
 class Skill extends $pb.GeneratedMessage {
   factory Skill({
     $core.String? skillId,
     $core.String? name,
-    $core.String? instructions,
-    $1.Timestamp? createdAt,
-    $1.Timestamp? updatedAt,
+    $core.String? description,
+    $core.String? body,
+    $core.String? category,
+    $core.String? version,
+    $core.String? author,
+    $core.String? license,
+    $core.Iterable<$core.String>? requires,
+    $core.Iterable<$core.String>? grantedCapabilities,
+    $core.Iterable<$core.String>? missingCapabilities,
+    $core.bool? enabled,
+    $core.String? parseError,
+    $core.String? folderPath,
   }) {
     final result = create();
     if (skillId != null) result.skillId = skillId;
     if (name != null) result.name = name;
-    if (instructions != null) result.instructions = instructions;
-    if (createdAt != null) result.createdAt = createdAt;
-    if (updatedAt != null) result.updatedAt = updatedAt;
+    if (description != null) result.description = description;
+    if (body != null) result.body = body;
+    if (category != null) result.category = category;
+    if (version != null) result.version = version;
+    if (author != null) result.author = author;
+    if (license != null) result.license = license;
+    if (requires != null) result.requires.addAll(requires);
+    if (grantedCapabilities != null)
+      result.grantedCapabilities.addAll(grantedCapabilities);
+    if (missingCapabilities != null)
+      result.missingCapabilities.addAll(missingCapabilities);
+    if (enabled != null) result.enabled = enabled;
+    if (parseError != null) result.parseError = parseError;
+    if (folderPath != null) result.folderPath = folderPath;
     return result;
   }
 
@@ -57,11 +71,18 @@ class Skill extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'skillId')
     ..aOS(2, _omitFieldNames ? '' : 'name')
-    ..aOS(3, _omitFieldNames ? '' : 'instructions')
-    ..aOM<$1.Timestamp>(4, _omitFieldNames ? '' : 'createdAt',
-        subBuilder: $1.Timestamp.create)
-    ..aOM<$1.Timestamp>(5, _omitFieldNames ? '' : 'updatedAt',
-        subBuilder: $1.Timestamp.create)
+    ..aOS(3, _omitFieldNames ? '' : 'description')
+    ..aOS(4, _omitFieldNames ? '' : 'body')
+    ..aOS(5, _omitFieldNames ? '' : 'category')
+    ..aOS(6, _omitFieldNames ? '' : 'version')
+    ..aOS(7, _omitFieldNames ? '' : 'author')
+    ..aOS(8, _omitFieldNames ? '' : 'license')
+    ..pPS(9, _omitFieldNames ? '' : 'requires')
+    ..pPS(10, _omitFieldNames ? '' : 'grantedCapabilities')
+    ..pPS(11, _omitFieldNames ? '' : 'missingCapabilities')
+    ..aOB(12, _omitFieldNames ? '' : 'enabled')
+    ..aOS(13, _omitFieldNames ? '' : 'parseError')
+    ..aOS(14, _omitFieldNames ? '' : 'folderPath')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -102,279 +123,94 @@ class Skill extends $pb.GeneratedMessage {
   void clearName() => $_clearField(2);
 
   @$pb.TagNumber(3)
-  $core.String get instructions => $_getSZ(2);
+  $core.String get description => $_getSZ(2);
   @$pb.TagNumber(3)
-  set instructions($core.String value) => $_setString(2, value);
+  set description($core.String value) => $_setString(2, value);
   @$pb.TagNumber(3)
-  $core.bool hasInstructions() => $_has(2);
+  $core.bool hasDescription() => $_has(2);
   @$pb.TagNumber(3)
-  void clearInstructions() => $_clearField(3);
+  void clearDescription() => $_clearField(3);
 
   @$pb.TagNumber(4)
-  $1.Timestamp get createdAt => $_getN(3);
+  $core.String get body => $_getSZ(3);
   @$pb.TagNumber(4)
-  set createdAt($1.Timestamp value) => $_setField(4, value);
+  set body($core.String value) => $_setString(3, value);
   @$pb.TagNumber(4)
-  $core.bool hasCreatedAt() => $_has(3);
+  $core.bool hasBody() => $_has(3);
   @$pb.TagNumber(4)
-  void clearCreatedAt() => $_clearField(4);
-  @$pb.TagNumber(4)
-  $1.Timestamp ensureCreatedAt() => $_ensure(3);
+  void clearBody() => $_clearField(4);
 
   @$pb.TagNumber(5)
-  $1.Timestamp get updatedAt => $_getN(4);
+  $core.String get category => $_getSZ(4);
   @$pb.TagNumber(5)
-  set updatedAt($1.Timestamp value) => $_setField(5, value);
+  set category($core.String value) => $_setString(4, value);
   @$pb.TagNumber(5)
-  $core.bool hasUpdatedAt() => $_has(4);
+  $core.bool hasCategory() => $_has(4);
   @$pb.TagNumber(5)
-  void clearUpdatedAt() => $_clearField(5);
-  @$pb.TagNumber(5)
-  $1.Timestamp ensureUpdatedAt() => $_ensure(4);
-}
+  void clearCategory() => $_clearField(5);
 
-class CreateSkillRequest extends $pb.GeneratedMessage {
-  factory CreateSkillRequest({
-    $core.String? name,
-    $core.String? instructions,
-  }) {
-    final result = create();
-    if (name != null) result.name = name;
-    if (instructions != null) result.instructions = instructions;
-    return result;
-  }
+  @$pb.TagNumber(6)
+  $core.String get version => $_getSZ(5);
+  @$pb.TagNumber(6)
+  set version($core.String value) => $_setString(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasVersion() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearVersion() => $_clearField(6);
 
-  CreateSkillRequest._();
+  @$pb.TagNumber(7)
+  $core.String get author => $_getSZ(6);
+  @$pb.TagNumber(7)
+  set author($core.String value) => $_setString(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasAuthor() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearAuthor() => $_clearField(7);
 
-  factory CreateSkillRequest.fromBuffer($core.List<$core.int> data,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
-  factory CreateSkillRequest.fromJson($core.String json,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+  @$pb.TagNumber(8)
+  $core.String get license => $_getSZ(7);
+  @$pb.TagNumber(8)
+  set license($core.String value) => $_setString(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasLicense() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearLicense() => $_clearField(8);
 
-  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
-      _omitMessageNames ? '' : 'CreateSkillRequest',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
-    ..aOS(1, _omitFieldNames ? '' : 'name')
-    ..aOS(2, _omitFieldNames ? '' : 'instructions')
-    ..hasRequiredFields = false;
+  @$pb.TagNumber(9)
+  $pb.PbList<$core.String> get requires => $_getList(8);
 
-  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  CreateSkillRequest clone() => CreateSkillRequest()..mergeFromMessage(this);
-  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  CreateSkillRequest copyWith(void Function(CreateSkillRequest) updates) =>
-      super.copyWith((message) => updates(message as CreateSkillRequest))
-          as CreateSkillRequest;
+  @$pb.TagNumber(10)
+  $pb.PbList<$core.String> get grantedCapabilities => $_getList(9);
 
-  @$core.override
-  $pb.BuilderInfo get info_ => _i;
+  @$pb.TagNumber(11)
+  $pb.PbList<$core.String> get missingCapabilities => $_getList(10);
 
-  @$core.pragma('dart2js:noInline')
-  static CreateSkillRequest create() => CreateSkillRequest._();
-  @$core.override
-  CreateSkillRequest createEmptyInstance() => create();
-  static $pb.PbList<CreateSkillRequest> createRepeated() =>
-      $pb.PbList<CreateSkillRequest>();
-  @$core.pragma('dart2js:noInline')
-  static CreateSkillRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<CreateSkillRequest>(create);
-  static CreateSkillRequest? _defaultInstance;
+  @$pb.TagNumber(12)
+  $core.bool get enabled => $_getBF(11);
+  @$pb.TagNumber(12)
+  set enabled($core.bool value) => $_setBool(11, value);
+  @$pb.TagNumber(12)
+  $core.bool hasEnabled() => $_has(11);
+  @$pb.TagNumber(12)
+  void clearEnabled() => $_clearField(12);
 
-  @$pb.TagNumber(1)
-  $core.String get name => $_getSZ(0);
-  @$pb.TagNumber(1)
-  set name($core.String value) => $_setString(0, value);
-  @$pb.TagNumber(1)
-  $core.bool hasName() => $_has(0);
-  @$pb.TagNumber(1)
-  void clearName() => $_clearField(1);
+  @$pb.TagNumber(13)
+  $core.String get parseError => $_getSZ(12);
+  @$pb.TagNumber(13)
+  set parseError($core.String value) => $_setString(12, value);
+  @$pb.TagNumber(13)
+  $core.bool hasParseError() => $_has(12);
+  @$pb.TagNumber(13)
+  void clearParseError() => $_clearField(13);
 
-  @$pb.TagNumber(2)
-  $core.String get instructions => $_getSZ(1);
-  @$pb.TagNumber(2)
-  set instructions($core.String value) => $_setString(1, value);
-  @$pb.TagNumber(2)
-  $core.bool hasInstructions() => $_has(1);
-  @$pb.TagNumber(2)
-  void clearInstructions() => $_clearField(2);
-}
-
-class UpdateSkillRequest extends $pb.GeneratedMessage {
-  factory UpdateSkillRequest({
-    $core.String? skillId,
-    $core.String? name,
-    $core.String? instructions,
-  }) {
-    final result = create();
-    if (skillId != null) result.skillId = skillId;
-    if (name != null) result.name = name;
-    if (instructions != null) result.instructions = instructions;
-    return result;
-  }
-
-  UpdateSkillRequest._();
-
-  factory UpdateSkillRequest.fromBuffer($core.List<$core.int> data,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
-  factory UpdateSkillRequest.fromJson($core.String json,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
-
-  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
-      _omitMessageNames ? '' : 'UpdateSkillRequest',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
-    ..aOS(1, _omitFieldNames ? '' : 'skillId')
-    ..aOS(2, _omitFieldNames ? '' : 'name')
-    ..aOS(3, _omitFieldNames ? '' : 'instructions')
-    ..hasRequiredFields = false;
-
-  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  UpdateSkillRequest clone() => UpdateSkillRequest()..mergeFromMessage(this);
-  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  UpdateSkillRequest copyWith(void Function(UpdateSkillRequest) updates) =>
-      super.copyWith((message) => updates(message as UpdateSkillRequest))
-          as UpdateSkillRequest;
-
-  @$core.override
-  $pb.BuilderInfo get info_ => _i;
-
-  @$core.pragma('dart2js:noInline')
-  static UpdateSkillRequest create() => UpdateSkillRequest._();
-  @$core.override
-  UpdateSkillRequest createEmptyInstance() => create();
-  static $pb.PbList<UpdateSkillRequest> createRepeated() =>
-      $pb.PbList<UpdateSkillRequest>();
-  @$core.pragma('dart2js:noInline')
-  static UpdateSkillRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<UpdateSkillRequest>(create);
-  static UpdateSkillRequest? _defaultInstance;
-
-  @$pb.TagNumber(1)
-  $core.String get skillId => $_getSZ(0);
-  @$pb.TagNumber(1)
-  set skillId($core.String value) => $_setString(0, value);
-  @$pb.TagNumber(1)
-  $core.bool hasSkillId() => $_has(0);
-  @$pb.TagNumber(1)
-  void clearSkillId() => $_clearField(1);
-
-  @$pb.TagNumber(2)
-  $core.String get name => $_getSZ(1);
-  @$pb.TagNumber(2)
-  set name($core.String value) => $_setString(1, value);
-  @$pb.TagNumber(2)
-  $core.bool hasName() => $_has(1);
-  @$pb.TagNumber(2)
-  void clearName() => $_clearField(2);
-
-  @$pb.TagNumber(3)
-  $core.String get instructions => $_getSZ(2);
-  @$pb.TagNumber(3)
-  set instructions($core.String value) => $_setString(2, value);
-  @$pb.TagNumber(3)
-  $core.bool hasInstructions() => $_has(2);
-  @$pb.TagNumber(3)
-  void clearInstructions() => $_clearField(3);
-}
-
-class DeleteSkillRequest extends $pb.GeneratedMessage {
-  factory DeleteSkillRequest({
-    $core.String? skillId,
-  }) {
-    final result = create();
-    if (skillId != null) result.skillId = skillId;
-    return result;
-  }
-
-  DeleteSkillRequest._();
-
-  factory DeleteSkillRequest.fromBuffer($core.List<$core.int> data,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
-  factory DeleteSkillRequest.fromJson($core.String json,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
-
-  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
-      _omitMessageNames ? '' : 'DeleteSkillRequest',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
-    ..aOS(1, _omitFieldNames ? '' : 'skillId')
-    ..hasRequiredFields = false;
-
-  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DeleteSkillRequest clone() => DeleteSkillRequest()..mergeFromMessage(this);
-  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DeleteSkillRequest copyWith(void Function(DeleteSkillRequest) updates) =>
-      super.copyWith((message) => updates(message as DeleteSkillRequest))
-          as DeleteSkillRequest;
-
-  @$core.override
-  $pb.BuilderInfo get info_ => _i;
-
-  @$core.pragma('dart2js:noInline')
-  static DeleteSkillRequest create() => DeleteSkillRequest._();
-  @$core.override
-  DeleteSkillRequest createEmptyInstance() => create();
-  static $pb.PbList<DeleteSkillRequest> createRepeated() =>
-      $pb.PbList<DeleteSkillRequest>();
-  @$core.pragma('dart2js:noInline')
-  static DeleteSkillRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<DeleteSkillRequest>(create);
-  static DeleteSkillRequest? _defaultInstance;
-
-  @$pb.TagNumber(1)
-  $core.String get skillId => $_getSZ(0);
-  @$pb.TagNumber(1)
-  set skillId($core.String value) => $_setString(0, value);
-  @$pb.TagNumber(1)
-  $core.bool hasSkillId() => $_has(0);
-  @$pb.TagNumber(1)
-  void clearSkillId() => $_clearField(1);
-}
-
-class DeleteSkillResponse extends $pb.GeneratedMessage {
-  factory DeleteSkillResponse() => create();
-
-  DeleteSkillResponse._();
-
-  factory DeleteSkillResponse.fromBuffer($core.List<$core.int> data,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
-  factory DeleteSkillResponse.fromJson($core.String json,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
-
-  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
-      _omitMessageNames ? '' : 'DeleteSkillResponse',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
-    ..hasRequiredFields = false;
-
-  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DeleteSkillResponse clone() => DeleteSkillResponse()..mergeFromMessage(this);
-  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DeleteSkillResponse copyWith(void Function(DeleteSkillResponse) updates) =>
-      super.copyWith((message) => updates(message as DeleteSkillResponse))
-          as DeleteSkillResponse;
-
-  @$core.override
-  $pb.BuilderInfo get info_ => _i;
-
-  @$core.pragma('dart2js:noInline')
-  static DeleteSkillResponse create() => DeleteSkillResponse._();
-  @$core.override
-  DeleteSkillResponse createEmptyInstance() => create();
-  static $pb.PbList<DeleteSkillResponse> createRepeated() =>
-      $pb.PbList<DeleteSkillResponse>();
-  @$core.pragma('dart2js:noInline')
-  static DeleteSkillResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<DeleteSkillResponse>(create);
-  static DeleteSkillResponse? _defaultInstance;
+  @$pb.TagNumber(14)
+  $core.String get folderPath => $_getSZ(13);
+  @$pb.TagNumber(14)
+  set folderPath($core.String value) => $_setString(13, value);
+  @$pb.TagNumber(14)
+  $core.bool hasFolderPath() => $_has(13);
+  @$pb.TagNumber(14)
+  void clearFolderPath() => $_clearField(14);
 }
 
 class ListSkillsRequest extends $pb.GeneratedMessage {
@@ -468,251 +304,214 @@ class ListSkillsResponse extends $pb.GeneratedMessage {
   $pb.PbList<Skill> get skills => $_getList(0);
 }
 
-class AttachSkillRequest extends $pb.GeneratedMessage {
-  factory AttachSkillRequest({
-    $core.String? sessionId,
+class GetSkillRequest extends $pb.GeneratedMessage {
+  factory GetSkillRequest({
     $core.String? skillId,
   }) {
     final result = create();
-    if (sessionId != null) result.sessionId = sessionId;
     if (skillId != null) result.skillId = skillId;
     return result;
   }
 
-  AttachSkillRequest._();
+  GetSkillRequest._();
 
-  factory AttachSkillRequest.fromBuffer($core.List<$core.int> data,
+  factory GetSkillRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
       create()..mergeFromBuffer(data, registry);
-  factory AttachSkillRequest.fromJson($core.String json,
+  factory GetSkillRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
       create()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
-      _omitMessageNames ? '' : 'AttachSkillRequest',
+      _omitMessageNames ? '' : 'GetSkillRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..aOS(1, _omitFieldNames ? '' : 'sessionId')
-    ..aOS(2, _omitFieldNames ? '' : 'skillId')
+    ..aOS(1, _omitFieldNames ? '' : 'skillId')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  AttachSkillRequest clone() => AttachSkillRequest()..mergeFromMessage(this);
+  GetSkillRequest clone() => GetSkillRequest()..mergeFromMessage(this);
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  AttachSkillRequest copyWith(void Function(AttachSkillRequest) updates) =>
-      super.copyWith((message) => updates(message as AttachSkillRequest))
-          as AttachSkillRequest;
+  GetSkillRequest copyWith(void Function(GetSkillRequest) updates) =>
+      super.copyWith((message) => updates(message as GetSkillRequest))
+          as GetSkillRequest;
 
   @$core.override
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
-  static AttachSkillRequest create() => AttachSkillRequest._();
+  static GetSkillRequest create() => GetSkillRequest._();
   @$core.override
-  AttachSkillRequest createEmptyInstance() => create();
-  static $pb.PbList<AttachSkillRequest> createRepeated() =>
-      $pb.PbList<AttachSkillRequest>();
+  GetSkillRequest createEmptyInstance() => create();
+  static $pb.PbList<GetSkillRequest> createRepeated() =>
+      $pb.PbList<GetSkillRequest>();
   @$core.pragma('dart2js:noInline')
-  static AttachSkillRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<AttachSkillRequest>(create);
-  static AttachSkillRequest? _defaultInstance;
+  static GetSkillRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<GetSkillRequest>(create);
+  static GetSkillRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
-  $core.String get sessionId => $_getSZ(0);
+  $core.String get skillId => $_getSZ(0);
   @$pb.TagNumber(1)
-  set sessionId($core.String value) => $_setString(0, value);
+  set skillId($core.String value) => $_setString(0, value);
   @$pb.TagNumber(1)
-  $core.bool hasSessionId() => $_has(0);
+  $core.bool hasSkillId() => $_has(0);
   @$pb.TagNumber(1)
-  void clearSessionId() => $_clearField(1);
-
-  @$pb.TagNumber(2)
-  $core.String get skillId => $_getSZ(1);
-  @$pb.TagNumber(2)
-  set skillId($core.String value) => $_setString(1, value);
-  @$pb.TagNumber(2)
-  $core.bool hasSkillId() => $_has(1);
-  @$pb.TagNumber(2)
-  void clearSkillId() => $_clearField(2);
+  void clearSkillId() => $_clearField(1);
 }
 
-class DetachSkillRequest extends $pb.GeneratedMessage {
-  factory DetachSkillRequest({
-    $core.String? sessionId,
+class SetSkillEnabledRequest extends $pb.GeneratedMessage {
+  factory SetSkillEnabledRequest({
     $core.String? skillId,
+    $core.bool? enabled,
   }) {
     final result = create();
-    if (sessionId != null) result.sessionId = sessionId;
     if (skillId != null) result.skillId = skillId;
+    if (enabled != null) result.enabled = enabled;
     return result;
   }
 
-  DetachSkillRequest._();
+  SetSkillEnabledRequest._();
 
-  factory DetachSkillRequest.fromBuffer($core.List<$core.int> data,
+  factory SetSkillEnabledRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
       create()..mergeFromBuffer(data, registry);
-  factory DetachSkillRequest.fromJson($core.String json,
+  factory SetSkillEnabledRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
       create()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
-      _omitMessageNames ? '' : 'DetachSkillRequest',
+      _omitMessageNames ? '' : 'SetSkillEnabledRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..aOS(1, _omitFieldNames ? '' : 'sessionId')
-    ..aOS(2, _omitFieldNames ? '' : 'skillId')
+    ..aOS(1, _omitFieldNames ? '' : 'skillId')
+    ..aOB(2, _omitFieldNames ? '' : 'enabled')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DetachSkillRequest clone() => DetachSkillRequest()..mergeFromMessage(this);
+  SetSkillEnabledRequest clone() =>
+      SetSkillEnabledRequest()..mergeFromMessage(this);
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DetachSkillRequest copyWith(void Function(DetachSkillRequest) updates) =>
-      super.copyWith((message) => updates(message as DetachSkillRequest))
-          as DetachSkillRequest;
+  SetSkillEnabledRequest copyWith(
+          void Function(SetSkillEnabledRequest) updates) =>
+      super.copyWith((message) => updates(message as SetSkillEnabledRequest))
+          as SetSkillEnabledRequest;
 
   @$core.override
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
-  static DetachSkillRequest create() => DetachSkillRequest._();
+  static SetSkillEnabledRequest create() => SetSkillEnabledRequest._();
   @$core.override
-  DetachSkillRequest createEmptyInstance() => create();
-  static $pb.PbList<DetachSkillRequest> createRepeated() =>
-      $pb.PbList<DetachSkillRequest>();
+  SetSkillEnabledRequest createEmptyInstance() => create();
+  static $pb.PbList<SetSkillEnabledRequest> createRepeated() =>
+      $pb.PbList<SetSkillEnabledRequest>();
   @$core.pragma('dart2js:noInline')
-  static DetachSkillRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<DetachSkillRequest>(create);
-  static DetachSkillRequest? _defaultInstance;
+  static SetSkillEnabledRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<SetSkillEnabledRequest>(create);
+  static SetSkillEnabledRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
-  $core.String get sessionId => $_getSZ(0);
+  $core.String get skillId => $_getSZ(0);
   @$pb.TagNumber(1)
-  set sessionId($core.String value) => $_setString(0, value);
+  set skillId($core.String value) => $_setString(0, value);
   @$pb.TagNumber(1)
-  $core.bool hasSessionId() => $_has(0);
+  $core.bool hasSkillId() => $_has(0);
   @$pb.TagNumber(1)
-  void clearSessionId() => $_clearField(1);
+  void clearSkillId() => $_clearField(1);
 
   @$pb.TagNumber(2)
-  $core.String get skillId => $_getSZ(1);
+  $core.bool get enabled => $_getBF(1);
   @$pb.TagNumber(2)
-  set skillId($core.String value) => $_setString(1, value);
+  set enabled($core.bool value) => $_setBool(1, value);
   @$pb.TagNumber(2)
-  $core.bool hasSkillId() => $_has(1);
+  $core.bool hasEnabled() => $_has(1);
   @$pb.TagNumber(2)
-  void clearSkillId() => $_clearField(2);
+  void clearEnabled() => $_clearField(2);
 }
 
-class SessionSkillsResponse extends $pb.GeneratedMessage {
-  factory SessionSkillsResponse({
-    $core.Iterable<Skill>? skills,
+class SetSkillCapabilityGrantRequest extends $pb.GeneratedMessage {
+  factory SetSkillCapabilityGrantRequest({
+    $core.String? skillId,
+    $core.String? capability,
+    $core.bool? granted,
   }) {
     final result = create();
-    if (skills != null) result.skills.addAll(skills);
+    if (skillId != null) result.skillId = skillId;
+    if (capability != null) result.capability = capability;
+    if (granted != null) result.granted = granted;
     return result;
   }
 
-  SessionSkillsResponse._();
+  SetSkillCapabilityGrantRequest._();
 
-  factory SessionSkillsResponse.fromBuffer($core.List<$core.int> data,
+  factory SetSkillCapabilityGrantRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
       create()..mergeFromBuffer(data, registry);
-  factory SessionSkillsResponse.fromJson($core.String json,
+  factory SetSkillCapabilityGrantRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
       create()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
-      _omitMessageNames ? '' : 'SessionSkillsResponse',
+      _omitMessageNames ? '' : 'SetSkillCapabilityGrantRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<Skill>(1, _omitFieldNames ? '' : 'skills', $pb.PbFieldType.PM,
-        subBuilder: Skill.create)
+    ..aOS(1, _omitFieldNames ? '' : 'skillId')
+    ..aOS(2, _omitFieldNames ? '' : 'capability')
+    ..aOB(3, _omitFieldNames ? '' : 'granted')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SessionSkillsResponse clone() =>
-      SessionSkillsResponse()..mergeFromMessage(this);
+  SetSkillCapabilityGrantRequest clone() =>
+      SetSkillCapabilityGrantRequest()..mergeFromMessage(this);
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SessionSkillsResponse copyWith(
-          void Function(SessionSkillsResponse) updates) =>
-      super.copyWith((message) => updates(message as SessionSkillsResponse))
-          as SessionSkillsResponse;
+  SetSkillCapabilityGrantRequest copyWith(
+          void Function(SetSkillCapabilityGrantRequest) updates) =>
+      super.copyWith(
+              (message) => updates(message as SetSkillCapabilityGrantRequest))
+          as SetSkillCapabilityGrantRequest;
 
   @$core.override
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
-  static SessionSkillsResponse create() => SessionSkillsResponse._();
+  static SetSkillCapabilityGrantRequest create() =>
+      SetSkillCapabilityGrantRequest._();
   @$core.override
-  SessionSkillsResponse createEmptyInstance() => create();
-  static $pb.PbList<SessionSkillsResponse> createRepeated() =>
-      $pb.PbList<SessionSkillsResponse>();
+  SetSkillCapabilityGrantRequest createEmptyInstance() => create();
+  static $pb.PbList<SetSkillCapabilityGrantRequest> createRepeated() =>
+      $pb.PbList<SetSkillCapabilityGrantRequest>();
   @$core.pragma('dart2js:noInline')
-  static SessionSkillsResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SessionSkillsResponse>(create);
-  static SessionSkillsResponse? _defaultInstance;
+  static SetSkillCapabilityGrantRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<SetSkillCapabilityGrantRequest>(create);
+  static SetSkillCapabilityGrantRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
-  $pb.PbList<Skill> get skills => $_getList(0);
-}
-
-class ListSessionSkillsRequest extends $pb.GeneratedMessage {
-  factory ListSessionSkillsRequest({
-    $core.String? sessionId,
-  }) {
-    final result = create();
-    if (sessionId != null) result.sessionId = sessionId;
-    return result;
-  }
-
-  ListSessionSkillsRequest._();
-
-  factory ListSessionSkillsRequest.fromBuffer($core.List<$core.int> data,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
-  factory ListSessionSkillsRequest.fromJson($core.String json,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
-
-  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
-      _omitMessageNames ? '' : 'ListSessionSkillsRequest',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
-    ..aOS(1, _omitFieldNames ? '' : 'sessionId')
-    ..hasRequiredFields = false;
-
-  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListSessionSkillsRequest clone() =>
-      ListSessionSkillsRequest()..mergeFromMessage(this);
-  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListSessionSkillsRequest copyWith(
-          void Function(ListSessionSkillsRequest) updates) =>
-      super.copyWith((message) => updates(message as ListSessionSkillsRequest))
-          as ListSessionSkillsRequest;
-
-  @$core.override
-  $pb.BuilderInfo get info_ => _i;
-
-  @$core.pragma('dart2js:noInline')
-  static ListSessionSkillsRequest create() => ListSessionSkillsRequest._();
-  @$core.override
-  ListSessionSkillsRequest createEmptyInstance() => create();
-  static $pb.PbList<ListSessionSkillsRequest> createRepeated() =>
-      $pb.PbList<ListSessionSkillsRequest>();
-  @$core.pragma('dart2js:noInline')
-  static ListSessionSkillsRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListSessionSkillsRequest>(create);
-  static ListSessionSkillsRequest? _defaultInstance;
-
+  $core.String get skillId => $_getSZ(0);
   @$pb.TagNumber(1)
-  $core.String get sessionId => $_getSZ(0);
+  set skillId($core.String value) => $_setString(0, value);
   @$pb.TagNumber(1)
-  set sessionId($core.String value) => $_setString(0, value);
+  $core.bool hasSkillId() => $_has(0);
   @$pb.TagNumber(1)
-  $core.bool hasSessionId() => $_has(0);
-  @$pb.TagNumber(1)
-  void clearSessionId() => $_clearField(1);
+  void clearSkillId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get capability => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set capability($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasCapability() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearCapability() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.bool get granted => $_getBF(2);
+  @$pb.TagNumber(3)
+  set granted($core.bool value) => $_setBool(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasGranted() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearGranted() => $_clearField(3);
 }
 
 const $core.bool _omitFieldNames =
