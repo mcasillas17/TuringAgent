@@ -18,6 +18,19 @@ func TestComposeLaunchUsesCanonicalCurrentIdentityInsteadOfEnvironment(t *testin
 	}
 }
 
+func TestComposeMountsFileBackedSkillsIntoTheOrchestrator(t *testing.T) {
+	content, err := os.ReadFile("../infra/docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := string(content)
+	for _, want := range []string{"SKILLS_ROOT: /skills", "- ../skills:/skills"} {
+		if !strings.Contains(compose, want) {
+			t.Fatalf("docker-compose.yml is missing %q", want)
+		}
+	}
+}
+
 func TestComposeLaunchAllowsRecoveryDownWithoutEnvFile(t *testing.T) {
 	result := executeComposeWithEnv(t, false, "501", "20", "0", "999", "down", "--remove-orphans")
 	if result.err != nil {

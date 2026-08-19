@@ -9,14 +9,20 @@ import (
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/skillfiles"
 )
 
 type Repository struct {
-	db *db.DB
+	db         *db.DB
+	skillStore *skillfiles.Store
 }
 
 func New(database *db.DB) *Repository {
 	return &Repository{db: database}
+}
+
+func (r *Repository) SetSkillStore(store *skillfiles.Store) {
+	r.skillStore = store
 }
 
 type Session struct {

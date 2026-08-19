@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../constants/app_colors.dart';
 import '../../models/automation.dart';
+import '../../models/skill.dart';
 import '../../models/tool_descriptor.dart';
 import '../../networking/api_client.dart';
 import 'workspace_pages.dart';
@@ -532,6 +533,7 @@ class _AutomationEditorState extends State<_AutomationEditor> {
   );
   late final Set<AutomationTool> _allowed = {...?widget.existing?.allowedTools};
   late Future<List<ToolDescriptor>> _tools;
+  late Future<List<Skill>> _skills;
   bool _saving = false;
   String? _error;
 
@@ -539,6 +541,7 @@ class _AutomationEditorState extends State<_AutomationEditor> {
   void initState() {
     super.initState();
     _tools = widget.apiClient.listTools();
+    _skills = widget.apiClient.listSkills();
   }
 
   @override
@@ -723,6 +726,30 @@ class _AutomationEditorState extends State<_AutomationEditor> {
               ],
               const SizedBox(height: 20),
               Text(
+                'Skills available while it runs',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: palette.text,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'An unattended run can select any enabled skill whose '
+                'capabilities you have granted. A skill can guide how the '
+                'agent uses this automation\'s allowed tools; it does not '
+                'grant those tools. The ready set is frozen when each run '
+                'is queued.',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  height: 1.5,
+                  color: palette.textMuted,
+                ),
+              ),
+              const SizedBox(height: 8),
+              _AutomationSkills(skills: _skills),
+              const SizedBox(height: 20),
+              Text(
                 'What it may do without asking',
                 style: TextStyle(
                   fontSize: 13,
@@ -794,6 +821,59 @@ class _AutomationEditorState extends State<_AutomationEditor> {
           child: Text(_saving ? 'Saving...' : 'Save'),
         ),
       ],
+    );
+  }
+}
+
+class _AutomationSkills extends StatelessWidget {
+  const _AutomationSkills({required this.skills});
+
+  final Future<List<Skill>> skills;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppColors.of(context);
+    return FutureBuilder<List<Skill>>(
+      future: skills,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const SizedBox.square(
+            dimension: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          );
+        }
+        if (snapshot.hasError) {
+          return Text(
+            'The skill library could not be read, so this cannot say which '
+            'skills will be available.',
+            style: TextStyle(fontSize: 12.5, color: AppColors.danger),
+          );
+        }
+        final ready =
+            (snapshot.data ?? const <Skill>[])
+                .where(
+                  (skill) =>
+                      skill.enabled &&
+                      skill.parseError.isEmpty &&
+                      skill.missingCapabilities.isEmpty,
+                )
+                .toList()
+              ..sort((a, b) => a.skillId.compareTo(b.skillId));
+        if (ready.isEmpty) {
+          return Text(
+            'No skill is enabled and fully granted right now.',
+            style: TextStyle(fontSize: 12.5, color: palette.textMuted),
+          );
+        }
+        return Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final skill in ready)
+              Chip(label: Text('${skill.name} (${skill.skillId})')),
+          ],
+        );
+      },
     );
   }
 }

@@ -18,9 +18,17 @@ const (
 	schemaTableScrubbedException schemaTablePolicyKind = "scrubbed_exception"
 )
 
+type schemaTablePresence int
+
+const (
+	schemaTableRequired schemaTablePresence = iota
+	schemaTableOptional
+)
+
 type schemaTablePolicy struct {
 	table         string
 	kind          schemaTablePolicyKind
+	presence      schemaTablePresence
 	sourceTable   string
 	deleteTrigger string
 	rationale     string
@@ -74,11 +82,21 @@ var currentSchemaTablePolicies = []schemaTablePolicy{
 		deleteTrigger: "messages_fts_ad",
 	},
 	{
-		table:     "skills",
+		table:     "skill_settings",
 		kind:      schemaTableIndependent,
-		rationale: "Skills are user-authored source instructions deleted through their own lifecycle.",
+		rationale: "Skill enablement is user-managed source configuration with its own lifecycle.",
 	},
-	{table: "session_skills", kind: schemaTableCascadeOwned, sourceTable: "sessions"},
+	{
+		table:     "skill_capability_grants",
+		kind:      schemaTableIndependent,
+		rationale: "Capability grants are user-managed consent records with explicit revocation.",
+	},
+	{
+		table:     "legacy_skill_export_recovery",
+		kind:      schemaTableIndependent,
+		presence:  schemaTableOptional,
+		rationale: "Legacy skill rows are migration recovery state retained until explicit operator cleanup.",
+	},
 	{
 		table:     "external_agents",
 		kind:      schemaTableIndependent,
@@ -102,6 +120,23 @@ var currentSchemaTablePolicies = []schemaTablePolicy{
 func TestDerivedStateSchemaPoliciesCoverCurrentSchema(t *testing.T) {
 	ctx := context.Background()
 	database := openMigratedInvariantDB(t, ctx)
+	if err := validateDerivedStateSchema(ctx, database, currentSchemaTablePolicies); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDerivedStateSchemaPoliciesCoverMigrationRecoverySchema(t *testing.T) {
+	ctx := context.Background()
+	database := databaseThrough0010(t, ctx)
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO skills (id, name, instructions, created_at, updated_at)
+		VALUES ('skill_recovery_policy', 'Recovery policy', 'Retain until verified.', datetime('now'), datetime('now'))`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyMigrationsWithSkillsRoot(ctx, database, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
 	if err := validateDerivedStateSchema(ctx, database, currentSchemaTablePolicies); err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +455,7 @@ func validateDerivedStateSchema(ctx context.Context, database *DB, policies []sc
 		}
 	}
 	for _, policy := range policies {
-		if _, exists := tableTypes[policy.table]; !exists {
+		if _, exists := tableTypes[policy.table]; !exists && policy.presence != schemaTableOptional {
 			return fmt.Errorf("derived-state policy names absent application table %q", policy.table)
 		}
 	}

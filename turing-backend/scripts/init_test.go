@@ -83,6 +83,39 @@ func TestInitCreatesRealOwnedWritableTraversableSandboxWithoutChown(t *testing.T
 	}
 }
 
+func TestInitCreatesPrivateSkillsDirectory(t *testing.T) {
+	result := runInit(t, "501", "20", "")
+
+	info, err := os.Lstat(result.skills)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("skills mode = %v, want a real directory", info.Mode())
+	}
+	if info.Mode().Perm() != 0700 {
+		t.Fatalf("fresh skills permissions = %04o, want 0700", info.Mode().Perm())
+	}
+}
+
+func TestInitRejectsSymlinkedSkillsDirectory(t *testing.T) {
+	result := executeInitWithSetup(t, "501", "20", "", 0, func(t *testing.T, root string) {
+		target := filepath.Join(t.TempDir(), "skills")
+		if err := os.Mkdir(target, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(root, "skills")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if result.err == nil {
+		t.Fatal("init.sh accepted a symlinked skills directory")
+	}
+	if !strings.Contains(result.output, "skills must be a real directory, not a symlink") {
+		t.Fatalf("failure did not explain the skills symlink rejection:\n%s", result.output)
+	}
+}
+
 func TestInitCreatesPrivateDataDirectoryWithoutChown(t *testing.T) {
 	result := runInit(t, "501", "20", "")
 
@@ -442,6 +475,7 @@ func TestInitRejectsNonRegularEnvBeforeChmod(t *testing.T) {
 
 type initResult struct {
 	sandbox  string
+	skills   string
 	data     string
 	env      string
 	envErr   error
@@ -519,6 +553,7 @@ func executeInitWithSetup(t *testing.T, uid, gid, identityConfig string, chownEx
 	updated, err := os.ReadFile(filepath.Join(root, ".env"))
 	return initResult{
 		sandbox:  filepath.Join(root, "sandbox"),
+		skills:   filepath.Join(root, "skills"),
 		data:     filepath.Join(root, "data"),
 		env:      string(updated),
 		envErr:   err,

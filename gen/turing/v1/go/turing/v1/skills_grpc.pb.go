@@ -19,28 +19,20 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SkillService_CreateSkill_FullMethodName       = "/turing.v1.SkillService/CreateSkill"
-	SkillService_UpdateSkill_FullMethodName       = "/turing.v1.SkillService/UpdateSkill"
-	SkillService_DeleteSkill_FullMethodName       = "/turing.v1.SkillService/DeleteSkill"
-	SkillService_ListSkills_FullMethodName        = "/turing.v1.SkillService/ListSkills"
-	SkillService_AttachSkill_FullMethodName       = "/turing.v1.SkillService/AttachSkill"
-	SkillService_DetachSkill_FullMethodName       = "/turing.v1.SkillService/DetachSkill"
-	SkillService_ListSessionSkills_FullMethodName = "/turing.v1.SkillService/ListSessionSkills"
+	SkillService_ListSkills_FullMethodName              = "/turing.v1.SkillService/ListSkills"
+	SkillService_GetSkill_FullMethodName                = "/turing.v1.SkillService/GetSkill"
+	SkillService_SetSkillEnabled_FullMethodName         = "/turing.v1.SkillService/SetSkillEnabled"
+	SkillService_SetSkillCapabilityGrant_FullMethodName = "/turing.v1.SkillService/SetSkillCapabilityGrant"
 )
 
 // SkillServiceClient is the client API for SkillService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type SkillServiceClient interface {
-	CreateSkill(ctx context.Context, in *CreateSkillRequest, opts ...grpc.CallOption) (*Skill, error)
-	UpdateSkill(ctx context.Context, in *UpdateSkillRequest, opts ...grpc.CallOption) (*Skill, error)
-	DeleteSkill(ctx context.Context, in *DeleteSkillRequest, opts ...grpc.CallOption) (*DeleteSkillResponse, error)
 	ListSkills(ctx context.Context, in *ListSkillsRequest, opts ...grpc.CallOption) (*ListSkillsResponse, error)
-	// Attach and detach return the conversation's full skill set so a client
-	// never has to guess what the server now believes is attached.
-	AttachSkill(ctx context.Context, in *AttachSkillRequest, opts ...grpc.CallOption) (*SessionSkillsResponse, error)
-	DetachSkill(ctx context.Context, in *DetachSkillRequest, opts ...grpc.CallOption) (*SessionSkillsResponse, error)
-	ListSessionSkills(ctx context.Context, in *ListSessionSkillsRequest, opts ...grpc.CallOption) (*SessionSkillsResponse, error)
+	GetSkill(ctx context.Context, in *GetSkillRequest, opts ...grpc.CallOption) (*Skill, error)
+	SetSkillEnabled(ctx context.Context, in *SetSkillEnabledRequest, opts ...grpc.CallOption) (*Skill, error)
+	SetSkillCapabilityGrant(ctx context.Context, in *SetSkillCapabilityGrantRequest, opts ...grpc.CallOption) (*Skill, error)
 }
 
 type skillServiceClient struct {
@@ -49,36 +41,6 @@ type skillServiceClient struct {
 
 func NewSkillServiceClient(cc grpc.ClientConnInterface) SkillServiceClient {
 	return &skillServiceClient{cc}
-}
-
-func (c *skillServiceClient) CreateSkill(ctx context.Context, in *CreateSkillRequest, opts ...grpc.CallOption) (*Skill, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Skill)
-	err := c.cc.Invoke(ctx, SkillService_CreateSkill_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *skillServiceClient) UpdateSkill(ctx context.Context, in *UpdateSkillRequest, opts ...grpc.CallOption) (*Skill, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Skill)
-	err := c.cc.Invoke(ctx, SkillService_UpdateSkill_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *skillServiceClient) DeleteSkill(ctx context.Context, in *DeleteSkillRequest, opts ...grpc.CallOption) (*DeleteSkillResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DeleteSkillResponse)
-	err := c.cc.Invoke(ctx, SkillService_DeleteSkill_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 func (c *skillServiceClient) ListSkills(ctx context.Context, in *ListSkillsRequest, opts ...grpc.CallOption) (*ListSkillsResponse, error) {
@@ -91,30 +53,30 @@ func (c *skillServiceClient) ListSkills(ctx context.Context, in *ListSkillsReque
 	return out, nil
 }
 
-func (c *skillServiceClient) AttachSkill(ctx context.Context, in *AttachSkillRequest, opts ...grpc.CallOption) (*SessionSkillsResponse, error) {
+func (c *skillServiceClient) GetSkill(ctx context.Context, in *GetSkillRequest, opts ...grpc.CallOption) (*Skill, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SessionSkillsResponse)
-	err := c.cc.Invoke(ctx, SkillService_AttachSkill_FullMethodName, in, out, cOpts...)
+	out := new(Skill)
+	err := c.cc.Invoke(ctx, SkillService_GetSkill_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *skillServiceClient) DetachSkill(ctx context.Context, in *DetachSkillRequest, opts ...grpc.CallOption) (*SessionSkillsResponse, error) {
+func (c *skillServiceClient) SetSkillEnabled(ctx context.Context, in *SetSkillEnabledRequest, opts ...grpc.CallOption) (*Skill, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SessionSkillsResponse)
-	err := c.cc.Invoke(ctx, SkillService_DetachSkill_FullMethodName, in, out, cOpts...)
+	out := new(Skill)
+	err := c.cc.Invoke(ctx, SkillService_SetSkillEnabled_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *skillServiceClient) ListSessionSkills(ctx context.Context, in *ListSessionSkillsRequest, opts ...grpc.CallOption) (*SessionSkillsResponse, error) {
+func (c *skillServiceClient) SetSkillCapabilityGrant(ctx context.Context, in *SetSkillCapabilityGrantRequest, opts ...grpc.CallOption) (*Skill, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SessionSkillsResponse)
-	err := c.cc.Invoke(ctx, SkillService_ListSessionSkills_FullMethodName, in, out, cOpts...)
+	out := new(Skill)
+	err := c.cc.Invoke(ctx, SkillService_SetSkillCapabilityGrant_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -125,15 +87,10 @@ func (c *skillServiceClient) ListSessionSkills(ctx context.Context, in *ListSess
 // All implementations must embed UnimplementedSkillServiceServer
 // for forward compatibility.
 type SkillServiceServer interface {
-	CreateSkill(context.Context, *CreateSkillRequest) (*Skill, error)
-	UpdateSkill(context.Context, *UpdateSkillRequest) (*Skill, error)
-	DeleteSkill(context.Context, *DeleteSkillRequest) (*DeleteSkillResponse, error)
 	ListSkills(context.Context, *ListSkillsRequest) (*ListSkillsResponse, error)
-	// Attach and detach return the conversation's full skill set so a client
-	// never has to guess what the server now believes is attached.
-	AttachSkill(context.Context, *AttachSkillRequest) (*SessionSkillsResponse, error)
-	DetachSkill(context.Context, *DetachSkillRequest) (*SessionSkillsResponse, error)
-	ListSessionSkills(context.Context, *ListSessionSkillsRequest) (*SessionSkillsResponse, error)
+	GetSkill(context.Context, *GetSkillRequest) (*Skill, error)
+	SetSkillEnabled(context.Context, *SetSkillEnabledRequest) (*Skill, error)
+	SetSkillCapabilityGrant(context.Context, *SetSkillCapabilityGrantRequest) (*Skill, error)
 	mustEmbedUnimplementedSkillServiceServer()
 }
 
@@ -144,26 +101,17 @@ type SkillServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedSkillServiceServer struct{}
 
-func (UnimplementedSkillServiceServer) CreateSkill(context.Context, *CreateSkillRequest) (*Skill, error) {
-	return nil, status.Error(codes.Unimplemented, "method CreateSkill not implemented")
-}
-func (UnimplementedSkillServiceServer) UpdateSkill(context.Context, *UpdateSkillRequest) (*Skill, error) {
-	return nil, status.Error(codes.Unimplemented, "method UpdateSkill not implemented")
-}
-func (UnimplementedSkillServiceServer) DeleteSkill(context.Context, *DeleteSkillRequest) (*DeleteSkillResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method DeleteSkill not implemented")
-}
 func (UnimplementedSkillServiceServer) ListSkills(context.Context, *ListSkillsRequest) (*ListSkillsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListSkills not implemented")
 }
-func (UnimplementedSkillServiceServer) AttachSkill(context.Context, *AttachSkillRequest) (*SessionSkillsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method AttachSkill not implemented")
+func (UnimplementedSkillServiceServer) GetSkill(context.Context, *GetSkillRequest) (*Skill, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSkill not implemented")
 }
-func (UnimplementedSkillServiceServer) DetachSkill(context.Context, *DetachSkillRequest) (*SessionSkillsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method DetachSkill not implemented")
+func (UnimplementedSkillServiceServer) SetSkillEnabled(context.Context, *SetSkillEnabledRequest) (*Skill, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetSkillEnabled not implemented")
 }
-func (UnimplementedSkillServiceServer) ListSessionSkills(context.Context, *ListSessionSkillsRequest) (*SessionSkillsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListSessionSkills not implemented")
+func (UnimplementedSkillServiceServer) SetSkillCapabilityGrant(context.Context, *SetSkillCapabilityGrantRequest) (*Skill, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetSkillCapabilityGrant not implemented")
 }
 func (UnimplementedSkillServiceServer) mustEmbedUnimplementedSkillServiceServer() {}
 func (UnimplementedSkillServiceServer) testEmbeddedByValue()                      {}
@@ -186,60 +134,6 @@ func RegisterSkillServiceServer(s grpc.ServiceRegistrar, srv SkillServiceServer)
 	s.RegisterService(&SkillService_ServiceDesc, srv)
 }
 
-func _SkillService_CreateSkill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateSkillRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(SkillServiceServer).CreateSkill(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: SkillService_CreateSkill_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SkillServiceServer).CreateSkill(ctx, req.(*CreateSkillRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _SkillService_UpdateSkill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UpdateSkillRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(SkillServiceServer).UpdateSkill(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: SkillService_UpdateSkill_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SkillServiceServer).UpdateSkill(ctx, req.(*UpdateSkillRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _SkillService_DeleteSkill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeleteSkillRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(SkillServiceServer).DeleteSkill(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: SkillService_DeleteSkill_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SkillServiceServer).DeleteSkill(ctx, req.(*DeleteSkillRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _SkillService_ListSkills_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListSkillsRequest)
 	if err := dec(in); err != nil {
@@ -258,56 +152,56 @@ func _SkillService_ListSkills_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _SkillService_AttachSkill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AttachSkillRequest)
+func _SkillService_GetSkill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSkillRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(SkillServiceServer).AttachSkill(ctx, in)
+		return srv.(SkillServiceServer).GetSkill(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: SkillService_AttachSkill_FullMethodName,
+		FullMethod: SkillService_GetSkill_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SkillServiceServer).AttachSkill(ctx, req.(*AttachSkillRequest))
+		return srv.(SkillServiceServer).GetSkill(ctx, req.(*GetSkillRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _SkillService_DetachSkill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DetachSkillRequest)
+func _SkillService_SetSkillEnabled_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetSkillEnabledRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(SkillServiceServer).DetachSkill(ctx, in)
+		return srv.(SkillServiceServer).SetSkillEnabled(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: SkillService_DetachSkill_FullMethodName,
+		FullMethod: SkillService_SetSkillEnabled_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SkillServiceServer).DetachSkill(ctx, req.(*DetachSkillRequest))
+		return srv.(SkillServiceServer).SetSkillEnabled(ctx, req.(*SetSkillEnabledRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _SkillService_ListSessionSkills_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListSessionSkillsRequest)
+func _SkillService_SetSkillCapabilityGrant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetSkillCapabilityGrantRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(SkillServiceServer).ListSessionSkills(ctx, in)
+		return srv.(SkillServiceServer).SetSkillCapabilityGrant(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: SkillService_ListSessionSkills_FullMethodName,
+		FullMethod: SkillService_SetSkillCapabilityGrant_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SkillServiceServer).ListSessionSkills(ctx, req.(*ListSessionSkillsRequest))
+		return srv.(SkillServiceServer).SetSkillCapabilityGrant(ctx, req.(*SetSkillCapabilityGrantRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -320,32 +214,20 @@ var SkillService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*SkillServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "CreateSkill",
-			Handler:    _SkillService_CreateSkill_Handler,
-		},
-		{
-			MethodName: "UpdateSkill",
-			Handler:    _SkillService_UpdateSkill_Handler,
-		},
-		{
-			MethodName: "DeleteSkill",
-			Handler:    _SkillService_DeleteSkill_Handler,
-		},
-		{
 			MethodName: "ListSkills",
 			Handler:    _SkillService_ListSkills_Handler,
 		},
 		{
-			MethodName: "AttachSkill",
-			Handler:    _SkillService_AttachSkill_Handler,
+			MethodName: "GetSkill",
+			Handler:    _SkillService_GetSkill_Handler,
 		},
 		{
-			MethodName: "DetachSkill",
-			Handler:    _SkillService_DetachSkill_Handler,
+			MethodName: "SetSkillEnabled",
+			Handler:    _SkillService_SetSkillEnabled_Handler,
 		},
 		{
-			MethodName: "ListSessionSkills",
-			Handler:    _SkillService_ListSessionSkills_Handler,
+			MethodName: "SetSkillCapabilityGrant",
+			Handler:    _SkillService_SetSkillCapabilityGrant_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
