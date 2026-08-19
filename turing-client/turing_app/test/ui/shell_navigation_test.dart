@@ -764,6 +764,114 @@ void main() {
       expect(api.listSessionsCalls, callsBefore);
     });
 
+    testWidgets(
+      'an unlisted global update expires after a later page omits it',
+      (tester) async {
+        final globalUpdates = _FakeSessionUpdateSource();
+        final api = _FakeApi();
+        await _pumpShell(
+          tester,
+          api: api,
+          size: _desktop,
+          sessionUpdateSourceFactory: () => globalUpdates,
+        );
+        globalUpdates.add(
+          TuringEvent(
+            eventId: 'evt_off_page',
+            sessionId: 'sess_off_page',
+            traceId: 'trace_off_page',
+            sequence: 1,
+            type: 'session.updated',
+            createdAt: DateTime.utc(2026, 8, 18, 20),
+            payload: const {
+              'title': 'Off-page update',
+              'updatedAt': '2026-08-18T20:00:00.000000000Z',
+            },
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Off-page update'), findsOneWidget);
+
+        api.addCreatedSessionToList = true;
+        await tester.tap(find.text('New chat').first);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Off-page update'), findsNothing);
+      },
+    );
+
+    testWidgets('a queued global update after teardown is ignored', (
+      tester,
+    ) async {
+      final events = StreamController<TuringEvent>();
+      addTearDown(events.close);
+      await _pumpShell(
+        tester,
+        api: _FakeApi(),
+        size: _desktop,
+        sessionUpdateSourceFactory: () =>
+            _UncancellableSessionUpdateSource(events.stream),
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      events.add(
+        TuringEvent(
+          eventId: 'evt_after_dispose',
+          sessionId: 'sess_after_dispose',
+          traceId: 'trace_after_dispose',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 8, 18, 20),
+          payload: const {
+            'title': 'Too late',
+            'updatedAt': '2026-08-18T20:00:00.000000000Z',
+          },
+        ),
+      );
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a failed global stream reconnects and resumes updates', (
+      tester,
+    ) async {
+      final sources = <_FakeSessionUpdateSource>[];
+      await _pumpShell(
+        tester,
+        api: _FakeApi(),
+        size: _desktop,
+        sessionUpdateSourceFactory: () {
+          final source = _FakeSessionUpdateSource();
+          sources.add(source);
+          return source;
+        },
+      );
+      expect(sources, hasLength(1));
+
+      sources.single.addError(StateError('connection lost'));
+      await tester.pump(const Duration(seconds: 1));
+      expect(sources, hasLength(2));
+
+      sources.last.add(
+        TuringEvent(
+          eventId: 'evt_after_reconnect',
+          sessionId: 'sess_after_reconnect',
+          traceId: 'trace_after_reconnect',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 8, 18, 20),
+          payload: const {
+            'title': 'After reconnect',
+            'updatedAt': '2026-08-18T20:00:00.000000000Z',
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('After reconnect'), findsOneWidget);
+    });
+
     testWidgets('a later stale page does not resurrect a deleted session', (
       tester,
     ) async {
@@ -1603,6 +1711,8 @@ class _FakeSessionUpdateSource implements TuringSessionUpdateSource {
 
   void add(TuringEvent event) => _events.add(event);
 
+  void addError(Object error) => _events.addError(error);
+
   @override
   Stream<TuringEvent> connectSessionUpdates() => _events.stream;
 
@@ -1610,6 +1720,74 @@ class _FakeSessionUpdateSource implements TuringSessionUpdateSource {
   void close() {
     unawaited(_events.close());
   }
+}
+
+class _UncancellableSessionUpdateSource implements TuringSessionUpdateSource {
+  _UncancellableSessionUpdateSource(this._events);
+
+  final Stream<TuringEvent> _events;
+
+  @override
+  Stream<TuringEvent> connectSessionUpdates() =>
+      _UncancellableSessionUpdateStream(_events);
+
+  @override
+  void close() {}
+}
+
+class _UncancellableSessionUpdateStream extends Stream<TuringEvent> {
+  _UncancellableSessionUpdateStream(this._source);
+
+  final Stream<TuringEvent> _source;
+
+  @override
+  StreamSubscription<TuringEvent> listen(
+    void Function(TuringEvent event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) {
+    return _UncancellableSessionUpdateSubscription(
+      _source.listen(
+        onData,
+        onError: onError,
+        onDone: onDone,
+        cancelOnError: cancelOnError,
+      ),
+    );
+  }
+}
+
+class _UncancellableSessionUpdateSubscription
+    implements StreamSubscription<TuringEvent> {
+  _UncancellableSessionUpdateSubscription(this._inner);
+
+  final StreamSubscription<TuringEvent> _inner;
+
+  @override
+  Future<void> cancel() async {}
+
+  @override
+  Future<E> asFuture<E>([E? futureValue]) => _inner.asFuture(futureValue);
+
+  @override
+  bool get isPaused => _inner.isPaused;
+
+  @override
+  void onData(void Function(TuringEvent event)? handleData) =>
+      _inner.onData(handleData);
+
+  @override
+  void onDone(void Function()? handleDone) => _inner.onDone(handleDone);
+
+  @override
+  void onError(Function? handleError) => _inner.onError(handleError);
+
+  @override
+  void pause([Future<void>? resumeSignal]) => _inner.pause(resumeSignal);
+
+  @override
+  void resume() => _inner.resume();
 }
 
 class _FakeAuthStorage implements ClientAuthStorage {

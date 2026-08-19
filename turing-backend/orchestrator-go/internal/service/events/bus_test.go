@@ -37,20 +37,41 @@ func TestBusPublishesOnlyMatchingSessionAndUnsubscribes(t *testing.T) {
 
 func TestBusPublishesEverySessionToGlobalSubscriber(t *testing.T) {
 	bus := NewBus(8)
-	ch, unsubscribe := bus.SubscribeAll()
+	ch, unsubscribe := bus.SubscribeSessionUpdates()
 	defer unsubscribe()
 
 	bus.Publish(Event{SessionID: "sess_1", Sequence: 1, Type: "session.updated"})
 	bus.Publish(Event{SessionID: "sess_2", Sequence: 1, Type: "session.updated"})
 
-	for _, want := range []string{"sess_1", "sess_2"} {
+	received := map[string]bool{}
+	for len(received) < 2 {
 		select {
 		case event := <-ch:
-			if event.SessionID != want {
-				t.Fatalf("session_id = %q, want %q", event.SessionID, want)
-			}
+			received[event.SessionID] = true
 		case <-time.After(time.Second):
-			t.Fatalf("timed out waiting for %s", want)
+			t.Fatalf("timed out waiting for both sessions: %+v", received)
+		}
+	}
+}
+
+func TestBusSessionUpdateOverflowRetainsLatestUpdatePerSession(t *testing.T) {
+	bus := NewBus(1)
+	ch, unsubscribe := bus.SubscribeSessionUpdates()
+	defer unsubscribe()
+
+	bus.Publish(Event{SessionID: "sess_1", Sequence: 1, Type: "session.updated"})
+	bus.Publish(Event{SessionID: "sess_2", Sequence: 1, Type: "message.delta"})
+	bus.Publish(Event{SessionID: "sess_2", Sequence: 2, Type: "session.updated"})
+	bus.Publish(Event{SessionID: "sess_1", Sequence: 3, Type: "session.updated"})
+
+	latest := map[string]int64{}
+	deadline := time.After(time.Second)
+	for latest["sess_1"] != 3 || latest["sess_2"] != 2 {
+		select {
+		case event := <-ch:
+			latest[event.SessionID] = event.Sequence
+		case <-deadline:
+			t.Fatalf("latest updates = %+v, want sess_1=3 and sess_2=2", latest)
 		}
 	}
 }

@@ -77,8 +77,11 @@ func (r *Repository) ReplayEvents(ctx context.Context, sessionID string, afterSe
 	return events, latest, rows.Err()
 }
 
-func (r *Repository) ListLatestSessionUpdatedEvents(ctx context.Context) ([]Event, error) {
-	rows, err := r.db.QueryContext(ctx, `
+func (r *Repository) ListLatestSessionUpdatedEvents(ctx context.Context, limit int) ([]Event, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 50
+	}
+	query := `
 		WITH latest AS (
 			SELECT session_id, MAX(sequence) AS sequence
 			FROM events
@@ -90,8 +93,11 @@ func (r *Repository) ListLatestSessionUpdatedEvents(ctx context.Context) ([]Even
 		JOIN latest
 			ON latest.session_id = e.session_id
 			AND latest.sequence = e.sequence
-		ORDER BY e.session_id
-	`)
+		JOIN sessions s ON s.id = e.session_id
+		ORDER BY ` + sqliteTimestampNanos("s.updated_at") + ` DESC, s.id DESC
+		LIMIT ?
+	`
+	rows, err := r.db.QueryContext(ctx, query, limit)
 	if err != nil {
 		return nil, err
 	}

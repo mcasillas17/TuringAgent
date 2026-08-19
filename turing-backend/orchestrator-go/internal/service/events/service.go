@@ -116,10 +116,10 @@ func (s *Server) SubscribeSessionEvents(req *turingv1.SubscribeSessionEventsRequ
 
 func (s *Server) SubscribeSessionUpdates(_ *turingv1.SubscribeSessionUpdatesRequest, stream turingv1.EventService_SubscribeSessionUpdatesServer) error {
 	ctx := stream.Context()
-	ch, unsubscribe := s.bus.SubscribeAll()
+	ch, unsubscribe := s.bus.SubscribeSessionUpdates()
 	defer unsubscribe()
 
-	snapshots, err := s.repo.ListLatestSessionUpdatedEvents(ctx)
+	snapshots, err := s.repo.ListLatestSessionUpdatedEvents(ctx, 50)
 	if err != nil {
 		return status.Error(codes.Internal, "list session updates failed")
 	}

@@ -190,7 +190,7 @@ func TestListLatestSessionUpdatedEventsReturnsOneSnapshotPerSession(t *testing.T
 		t.Fatal(err)
 	}
 
-	events, err := repo.ListLatestSessionUpdatedEvents(ctx)
+	events, err := repo.ListLatestSessionUpdatedEvents(ctx, 50)
 	if err != nil {
 		t.Fatalf("list latest session updates: %v", err)
 	}
@@ -208,6 +208,48 @@ func TestListLatestSessionUpdatedEventsReturnsOneSnapshotPerSession(t *testing.T
 	if got[second.SessionID] != latestSecond.SessionUpdatedEvent.EventID {
 		t.Fatalf("second latest = %q, want %q",
 			got[second.SessionID], latestSecond.SessionUpdatedEvent.EventID)
+	}
+}
+
+func TestListLatestSessionUpdatedEventsUsesSessionListBoundAndOrder(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	var oldestSessionID, newestSessionID string
+	for i := range 51 {
+		session, err := repo.CreateSession(ctx, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			oldestSessionID = session.SessionID
+		}
+		newestSessionID = session.SessionID
+		if _, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+			SessionID:     session.SessionID,
+			Content:       "Conversation",
+			AgentID:       "general_assistant",
+			ModelProvider: "ollama",
+			Model:         "qwen2.5:7b",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	events, err := repo.ListLatestSessionUpdatedEvents(ctx, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 50 {
+		t.Fatalf("events = %d, want the 50-row session page", len(events))
+	}
+	found := map[string]bool{}
+	for _, event := range events {
+		found[event.SessionID] = true
+	}
+	if found[oldestSessionID] {
+		t.Fatalf("oldest session %s was not bounded out", oldestSessionID)
+	}
+	if !found[newestSessionID] {
+		t.Fatalf("newest session %s is missing", newestSessionID)
 	}
 }
 

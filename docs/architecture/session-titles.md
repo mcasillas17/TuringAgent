@@ -51,25 +51,32 @@ Flutter maps protocol event
 `TURING_EVENT_TYPE_SESSION_UPDATED` to `session.updated`, applies `title` and
 `updatedAt` to its local session list, and sorts by that durable recency key.
 The shell opens `SubscribeSessionUpdates`, which first replays the latest
-durable snapshot for every session and then receives live updates from every
-session, including inactive conversations and new automation conversations.
-The active chat's per-session stream can deliver the same event; timestamp
+durable snapshot for the same 50 most-recent sessions returned by the session
+list and then receives live updates from every session, including inactive
+conversations and new automation conversations. The event bus filters this
+subscription to `session.updated` and coalesces backlog by session, so a slow
+client retains each session's latest update without an unrelated event evicting
+it. The active chat's per-session stream can deliver the same event; timestamp
 idempotency makes the duplicate harmless.
 
 Each global subscription performs one indexed replay query. Migration `0010`
 adds a partial index containing only `session.updated` rows, so reconnect work
-scales with title-update history and returns exactly one row per session; there
-is no timer or polling loop.
+scales with title-update history and returns at most 50 rows; there is no timer
+or polling loop. A terminal stream error or completion triggers a refresh and a
+capped exponential reconnect (1, 2, 4, 8, 16, then 32 seconds). A durable event
+on the replacement stream resets that backoff.
 
 A replayed older event cannot reorder the list. An update for a session outside
 the loaded page inserts it, and a concurrent older `ListSessions` response is
-merged without overwriting newer event state. Locally created and off-page
-sessions stay retained until a server page observes them; ordinary observed
-snapshots expire so a later refresh can remove a session deleted elsewhere.
-Older refresh responses are discarded by request generation. Ordering matches
-the backend with an exact nanosecond key: `updatedAt` descending, then session
-ID descending when timestamps tie. Locally deleted IDs remain tombstoned for
-the shell lifetime because omission from the 50-row page cannot prove absence.
+merged without overwriting newer event state. Sessions created by this shell
+stay retained until a server page observes them;
+unknown global/per-session snapshots survive a concurrent refresh but expire
+when a later page omits them, so off-page or remotely deleted rows are not
+pinned. Older refresh responses are discarded by request generation. Ordering
+matches the backend with an exact nanosecond key: `updatedAt` descending, then
+session ID descending when timestamps tie. Locally deleted IDs remain
+tombstoned for the shell lifetime because omission from the 50-row page cannot
+prove absence.
 Flutter does not call `ListSessions` after sending a message. Search group
 headings load the same stored session title, so the sidebar and search do not
 invent separate names for one conversation.

@@ -91,6 +91,8 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   String? _chatEventSourceSessionId;
   TuringSessionUpdateSource? _sessionUpdateSource;
   StreamSubscription<TuringEvent>? _sessionUpdateSubscription;
+  Timer? _sessionUpdateReconnectTimer;
+  int _sessionUpdateReconnectAttempts = 0;
 
   // The resolved list is held rather than a Future so the shell can answer
   // questions about it — chiefly "what is the active conversation called",
@@ -120,17 +122,46 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     final source = widget.sessionUpdateSourceFactory?.call();
     if (source == null) return;
     _sessionUpdateSource = source;
-    _sessionUpdateSubscription = source.connectSessionUpdates().listen(
-      _applySessionUpdated,
-      onError: (_) {
-        if (!mounted) return;
-        setState(() => _sessionsFailed = true);
-      },
-    );
+    try {
+      _sessionUpdateSubscription = source.connectSessionUpdates().listen(
+        _applySessionUpdated,
+        onError: (_, _) => _handleSessionUpdateStreamEnded(),
+        onDone: _handleSessionUpdateStreamEnded,
+        cancelOnError: true,
+      );
+    } on Exception {
+      source.close();
+      _sessionUpdateSource = null;
+      _scheduleSessionUpdateReconnect();
+    }
+  }
+
+  void _handleSessionUpdateStreamEnded() {
+    if (!mounted) return;
+    unawaited(_sessionUpdateSubscription?.cancel());
+    _sessionUpdateSubscription = null;
+    _sessionUpdateSource?.close();
+    _sessionUpdateSource = null;
+    setState(() => _sessionsFailed = true);
+    _scheduleSessionUpdateReconnect();
+  }
+
+  void _scheduleSessionUpdateReconnect() {
+    if (!mounted || _sessionUpdateReconnectTimer != null) return;
+    final exponent = _sessionUpdateReconnectAttempts.clamp(0, 5);
+    final delay = Duration(seconds: 1 << exponent);
+    _sessionUpdateReconnectAttempts++;
+    _sessionUpdateReconnectTimer = Timer(delay, () {
+      _sessionUpdateReconnectTimer = null;
+      if (!mounted) return;
+      _openSessionUpdateSubscription();
+      unawaited(_refreshSessions());
+    });
   }
 
   @override
   void dispose() {
+    _sessionUpdateReconnectTimer?.cancel();
     unawaited(_sessionUpdateSubscription?.cancel());
     _sessionUpdateSource?.close();
     super.dispose();
@@ -166,6 +197,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   }
 
   void _applySessionUpdated(TuringEvent event) {
+    if (!mounted) return;
     if (_locallyDeletedSessionIds.contains(event.sessionId)) return;
     final title = event.payload['title'];
     final updatedAtValue = event.payload['updatedAt'];
@@ -187,6 +219,8 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       updatedAtNanoseconds: updatedAtNanoseconds,
     );
     setState(() {
+      _sessionUpdateReconnectAttempts = 0;
+      _sessionsFailed = false;
       final next = List<Session>.of(_sessions);
       if (index >= 0) {
         final previous = next.removeAt(index);
@@ -202,8 +236,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       _recordSessionSnapshot(
         updated,
         retainUntilObserved:
-            index < 0 ||
-            (_sessionSnapshots[event.sessionId]?.retainUntilObserved ?? false),
+            _sessionSnapshots[event.sessionId]?.retainUntilObserved ?? false,
       );
     });
   }
