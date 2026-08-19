@@ -9,7 +9,6 @@ import 'package:turing_flutter_app/features/workspace/integrations_page.dart';
 import 'package:turing_flutter_app/features/workspace/automations_page.dart';
 import 'package:turing_flutter_app/features/workspace/session_skills_bar.dart';
 import 'package:turing_flutter_app/features/workspace/skills_page.dart';
-import 'package:turing_flutter_app/features/workspace/workspace_pages.dart';
 import 'package:turing_flutter_app/models/agent_descriptor.dart';
 import 'package:turing_flutter_app/models/external_agent.dart';
 import 'package:turing_flutter_app/models/automation.dart';
@@ -53,11 +52,10 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(
-          find.byType(PlannedDestinationPage),
+          find.text('Not built yet'),
           findsNothing,
-          reason: '$label still renders the not-built-yet placeholder',
+          reason: '$label still says it is unbuilt',
         );
-        expect(find.text('Not built yet'), findsNothing, reason: label);
       }
     });
 
@@ -70,7 +68,6 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(AutomationsPage), findsOneWidget);
-      expect(find.byType(PlannedDestinationPage), findsNothing);
       // The "not built yet" card is gone, because it is.
       expect(find.text('Not built yet'), findsNothing);
       expect(find.text('New automation'), findsOneWidget);
@@ -161,15 +158,11 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(AgentsPage), findsOneWidget);
-      expect(find.byType(PlannedDestinationPage), findsNothing);
       expect(find.text('General Assistant'), findsOneWidget);
       expect(find.text('Claude'), findsOneWidget);
       // The two kinds are not interchangeable rows in one list, and the page
       // has to say which is which.
-      expect(
-        find.text('These receive whatever you send them'),
-        findsOneWidget,
-      );
+      expect(find.text('These receive whatever you send them'), findsOneWidget);
     });
 
     testWidgets('a backend failure offers a retry instead of an empty page', (
@@ -196,7 +189,6 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(SkillsPage), findsOneWidget);
-      expect(find.byType(PlannedDestinationPage), findsNothing);
     });
 
     testWidgets('the attached skills sit above the conversation', (
@@ -310,57 +302,58 @@ void main() {
       );
     });
 
-    testWidgets('switching conversations never shows the previous destination', (
-      tester,
-    ) async {
-      final api = _FakeApi()
-        ..sessions = [
-          Session(
-            sessionId: 'sess_a',
-            title: 'Chat A',
-            updatedAt: DateTime.utc(2026, 5, 11),
-          ),
-          Session(
-            sessionId: 'sess_b',
-            title: 'Chat B',
-            updatedAt: DateTime.utc(2026, 5, 10),
-          ),
-        ]
-        ..externalAgents.add(
-          const ExternalAgent(
-            agentId: 'agent_1',
-            displayName: 'Claude',
-            provider: ExternalAgentProvider.anthropic,
-            baseUrl: 'https://api.anthropic.com/v1',
-            model: 'claude-sonnet-4-5',
-            credentialRef: 'claude',
-            credentialAvailable: true,
-          ),
-        )
-        ..routes['sess_a'] = 'agent_1';
-      await _pumpShell(tester, api: api, size: _desktop);
+    testWidgets(
+      'switching conversations never shows the previous destination',
+      (tester) async {
+        final api = _FakeApi()
+          ..sessions = [
+            Session(
+              sessionId: 'sess_a',
+              title: 'Chat A',
+              updatedAt: DateTime.utc(2026, 5, 11),
+            ),
+            Session(
+              sessionId: 'sess_b',
+              title: 'Chat B',
+              updatedAt: DateTime.utc(2026, 5, 10),
+            ),
+          ]
+          ..externalAgents.add(
+            const ExternalAgent(
+              agentId: 'agent_1',
+              displayName: 'Claude',
+              provider: ExternalAgentProvider.anthropic,
+              baseUrl: 'https://api.anthropic.com/v1',
+              model: 'claude-sonnet-4-5',
+              credentialRef: 'claude',
+              credentialAvailable: true,
+            ),
+          )
+          ..routes['sess_a'] = 'agent_1';
+        await _pumpShell(tester, api: api, size: _desktop);
 
-      await tester.tap(find.text('Chat A'));
-      await tester.pumpAndSettle();
-      expect(
-        find.text('Goes to Claude — messages leave your machine'),
-        findsOneWidget,
-      );
+        await tester.tap(find.text('Chat A'));
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Goes to Claude — messages leave your machine'),
+          findsOneWidget,
+        );
 
-      await tester.tap(find.text('Chat B'));
-      await tester.pumpAndSettle();
+        await tester.tap(find.text('Chat B'));
+        await tester.pumpAndSettle();
 
-      // B is local; carrying A's warning over would be a lie about egress in
-      // the one place the user is told about it.
-      expect(
-        find.text('Goes to Claude — messages leave your machine'),
-        findsNothing,
-      );
-      expect(
-        find.text('Turing — this conversation stays on your machine'),
-        findsOneWidget,
-      );
-    });
+        // B is local; carrying A's warning over would be a lie about egress in
+        // the one place the user is told about it.
+        expect(
+          find.text('Goes to Claude — messages leave your machine'),
+          findsNothing,
+        );
+        expect(
+          find.text('Turing — this conversation stays on your machine'),
+          findsOneWidget,
+        );
+      },
+    );
   });
 
   group('conversation naming', () {
@@ -764,21 +757,18 @@ void main() {
     });
   });
 
-  // Vacuous while everything is built, and deliberately kept: it goes live the
-  // moment someone adds a destination that is not, which is exactly when the
-  // rule needs enforcing rather than remembering.
-  test('every destination either works or explains itself', () {
+  // The rule the removed placeholder machinery used to enforce, kept as the
+  // assertion that actually matters: nothing reaches the rail before it works.
+  // Adding an unbuilt destination fails here, which is the moment to decide
+  // whether to finish it or restore the honest placeholder from git history.
+  test('every destination is backed by something real', () {
     for (final destination in ShellDestination.values) {
-      if (destination.implemented) continue;
       expect(
-        destination.summary,
-        isNotNull,
-        reason: '${destination.label} must say what it is for',
-      );
-      expect(
-        destination.blockedOn,
-        isNotNull,
-        reason: '${destination.label} must say what blocks it',
+        destination.implemented,
+        isTrue,
+        reason:
+            '${destination.label} is in the rail but not implemented — build '
+            'it, or give it a view that says what is missing and why',
       );
     }
   });

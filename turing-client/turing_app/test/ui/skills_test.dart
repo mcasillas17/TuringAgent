@@ -367,7 +367,9 @@ class _Offline implements Exception {
   String toString() => 'offline';
 }
 
-class _SkillApi with NoExternalAgentsApi, NoIntegrationsApi, NoAutomationsApi implements TuringApi {
+class _SkillApi
+    with NoExternalAgentsApi, NoIntegrationsApi, NoAutomationsApi
+    implements TuringApi {
   final List<Skill> skills = [];
   final Map<String, List<String>> attached = {};
   final List<(String, String)> created = [];

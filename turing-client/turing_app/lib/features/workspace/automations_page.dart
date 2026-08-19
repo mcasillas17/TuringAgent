@@ -320,10 +320,7 @@ class _AutomationCard extends StatelessWidget {
           value: automation.enabled,
           onChanged: onToggle,
           thumbIcon: WidgetStateProperty.all(
-            Icon(
-              automation.enabled ? Icons.play_arrow : Icons.pause,
-              size: 14,
-            ),
+            Icon(automation.enabled ? Icons.play_arrow : Icons.pause, size: 14),
           ),
         ),
         IconButton(
@@ -350,7 +347,12 @@ class _AutomationCard extends StatelessWidget {
             children: [name, controls],
           );
         }
-        return Row(children: [Expanded(child: name), controls]);
+        return Row(
+          children: [
+            Expanded(child: name),
+            controls,
+          ],
+        );
       },
     );
   }
@@ -836,16 +838,15 @@ class _AllowlistPicker extends StatelessWidget {
             style: TextStyle(fontSize: 12.5, color: AppColors.danger),
           );
         }
-        final gated =
-            (snapshot.data ?? const <ToolDescriptor>[])
-                .where((tool) => tool.policy == ToolPolicy.approvalRequired)
-                .map(
-                  (tool) => AutomationTool(
-                    serverName: tool.serverName,
-                    toolName: tool.toolName,
-                  ),
-                )
-                .toList();
+        final gated = (snapshot.data ?? const <ToolDescriptor>[])
+            .where((tool) => tool.policy == ToolPolicy.approvalRequired)
+            .map(
+              (tool) => AutomationTool(
+                serverName: tool.serverName,
+                toolName: tool.toolName,
+              ),
+            )
+            .toList();
         // An entry for a tool no server currently offers is still enforced if
         // that tool comes back, and is still sent on every save. Hiding it
         // would make it un-untickable — a permission the user cannot withdraw

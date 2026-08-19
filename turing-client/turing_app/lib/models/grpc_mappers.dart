@@ -117,8 +117,7 @@ class GrpcMappers {
     automationpb.AutomationSchedule schedule,
   ) {
     switch (schedule.kind) {
-      case automationpb.AutomationScheduleKind
-          .AUTOMATION_SCHEDULE_KIND_DAILY:
+      case automationpb.AutomationScheduleKind.AUTOMATION_SCHEDULE_KIND_DAILY:
         return model_automation.AutomationSchedule.daily(
           schedule.dailyMinuteUtc,
         );

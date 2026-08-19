@@ -139,6 +139,7 @@ abstract class TuringApi {
 
   /// Returns a conversation to the local assistant.
   Future<ExternalAgent?> clearSessionAgent({required String sessionId});
+
   /// What can be connected, what cannot, what each kind of credential grants,
   /// and whether this backend is set up to store one at all. Served by the
   /// backend so the client does not have its own idea of what connecting
@@ -173,6 +174,7 @@ abstract class TuringApi {
   /// Removes the connection and its history. Deleting a live one destroys its
   /// credential too.
   Future<void> deleteConnection({required String connectionId});
+
   /// Every automation, whether enabled or not.
   Future<List<Automation>> listAutomations();
 

@@ -56,10 +56,7 @@ void main() {
       final api = _AgentApi()..agents.add(_claude(credentialAvailable: false));
       await _pumpAgents(tester, api);
 
-      expect(
-        find.textContaining('No API key named "claude"'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('No API key named "claude"'), findsOneWidget);
       // Naming the fix matters: the badge is computed at backend startup, so
       // adding the key without a restart leaves it saying this forever.
       expect(find.textContaining('restart the backend'), findsOneWidget);
@@ -565,7 +562,9 @@ class _Offline implements Exception {
 
 /// A working in-memory backend, so the UI is exercised against something that
 /// behaves like the real one rather than a stub that always says yes.
-class _AgentApi with NoSkillsApi, NoIntegrationsApi, NoAutomationsApi implements TuringApi {
+class _AgentApi
+    with NoSkillsApi, NoIntegrationsApi, NoAutomationsApi
+    implements TuringApi {
   final List<ExternalAgent> agents = [];
   final Map<String, String> routes = {};
   final List<ExternalAgent> created = [];
@@ -762,4 +761,3 @@ class _AgentApi with NoSkillsApi, NoIntegrationsApi, NoAutomationsApi implements
     String? reason,
   }) async => {'approvalId': approvalId, 'status': 'denied'};
 }
-

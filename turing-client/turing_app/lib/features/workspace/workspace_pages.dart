@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../../constants/app_colors.dart';
 import '../../models/tool_descriptor.dart';
 import '../../networking/api_client.dart';
-import '../../ui/shell/shell_destination.dart';
 
 /// Shared page scaffolding so every destination gets the same measure,
 /// heading rhythm and scroll behaviour.
@@ -52,65 +51,6 @@ class WorkspacePage extends StatelessWidget {
               child,
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The view for a destination that is named but not built.
-///
-/// It states what the feature is for and what stands in the way, rather than
-/// showing an empty list that looks broken or a mock that implies it works.
-class PlannedDestinationPage extends StatelessWidget {
-  const PlannedDestinationPage({super.key, required this.destination});
-
-  final ShellDestination destination;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = AppColors.of(context);
-    return WorkspacePage(
-      title: destination.label,
-      subtitle: destination.summary ?? '',
-      child: Container(
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          color: palette.raised,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: palette.border),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  Icons.construction_outlined,
-                  size: 17,
-                  color: AppColors.warning,
-                ),
-                const SizedBox(width: 9),
-                Text(
-                  'Not built yet',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: palette.text,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 11),
-            Text(
-              destination.blockedOn ?? '',
-              style: TextStyle(
-                fontSize: 13.5,
-                height: 1.6,
-                color: palette.textMuted,
-              ),
-            ),
-          ],
         ),
       ),
     );
