@@ -111,6 +111,7 @@ func New(cfg config.Config) (*App, error) {
 		LegacyCapabilities: &runtimesvc.LegacyCapabilityProfile{
 			Models:                 legacyModels,
 			AgentIds:               []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+			Tools:                  runtimesvc.LegacyPolicyToolCapabilities(),
 			SupportsExternalAgents: len(cfg.AgentCredentialNames) > 0,
 		},
 	}, approvalService)

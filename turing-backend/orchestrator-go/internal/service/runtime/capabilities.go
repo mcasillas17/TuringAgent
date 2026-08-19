@@ -18,6 +18,7 @@ import (
 type LegacyCapabilityProfile struct {
 	Models                 []*turingv1.ModelCapability
 	AgentIds               []turingv1.AgentId
+	Tools                  []*turingv1.DiscoveredTool
 	SupportsExternalAgents bool
 }
 
@@ -114,6 +115,19 @@ func decodeLegacyWorkerCapabilities(profile *LegacyCapabilityProfile, ready *tur
 	if ready == nil {
 		return nil, nil, fmt.Errorf("worker_ready is required")
 	}
+	if agentIDName(ready.GetAgentId()) == "" {
+		return nil, nil, fmt.Errorf("worker ready agent_id %d is unsupported", ready.GetAgentId())
+	}
+	agentSupported := false
+	for _, agentID := range profile.AgentIds {
+		if agentID == ready.GetAgentId() {
+			agentSupported = true
+			break
+		}
+	}
+	if !agentSupported {
+		return nil, nil, fmt.Errorf("worker ready agent_id %d is not in the legacy capability profile", ready.GetAgentId())
+	}
 	var discovered []repository.DiscoveredTool
 	switch ready.GetToolDiscoveryStatus() {
 	case turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_UNSPECIFIED:
@@ -123,8 +137,12 @@ func decodeLegacyWorkerCapabilities(profile *LegacyCapabilityProfile, ready *tur
 			if err != nil {
 				return nil, nil, err
 			}
-		} else {
-			discovered = legacyDiscoveredTools()
+		} else if len(profile.Tools) > 0 {
+			var err error
+			discovered, err = decodeDiscoveredTools(profile.Tools)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 	case turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_COMPLETE:
 		var err error
@@ -264,19 +282,19 @@ func (s *Server) replaceWorkerCapabilities(
 		connectedWorker.mu.Unlock()
 		return status.Error(codes.Canceled, "worker is disconnected")
 	}
-	previousCapabilities := connectedWorker.capabilities
-	previousMaxConcurrent := connectedWorker.maxConcurrent
-	connectedWorker.capabilities = capabilities
-	connectedWorker.maxConcurrent = capabilities.maxConcurrentRuns
 	connectedWorker.mu.Unlock()
 
 	if err := s.persistDiscoveredTools(ctx, workerID, connectedWorker, discovered); err != nil {
-		connectedWorker.mu.Lock()
-		connectedWorker.capabilities = previousCapabilities
-		connectedWorker.maxConcurrent = previousMaxConcurrent
-		connectedWorker.mu.Unlock()
 		return status.Error(codes.Internal, "persist worker tool capabilities")
 	}
+	connectedWorker.mu.Lock()
+	if connectedWorker.closed {
+		connectedWorker.mu.Unlock()
+		return status.Error(codes.Canceled, "worker is disconnected")
+	}
+	connectedWorker.capabilities = capabilities
+	connectedWorker.maxConcurrent = capabilities.maxConcurrentRuns
+	connectedWorker.mu.Unlock()
 	if err := s.refreshPendingCapabilityState(ctx, "worker capabilities changed", workerID, true, true); err != nil {
 		return err
 	}
@@ -422,7 +440,7 @@ func (s *Server) refreshPendingCapabilityState(
 			}
 			label := routingRequirementLabel(detail.GetKind())
 			requested := strings.Join(strings.Fields(detail.GetRequested()), " ")
-			event, err := s.repo.AppendRunNotice(
+			event, appended, err := s.repo.AppendPendingRunNotice(
 				ctx,
 				item.RunID,
 				fmt.Sprintf("Waiting for a compatible worker: %s %q is unavailable", label, requested),
@@ -444,6 +462,11 @@ func (s *Server) refreshPendingCapabilityState(
 			)
 			if err != nil {
 				return err
+			}
+			if !appended {
+				delete(nextUnavailable, item.RunID)
+				delete(s.unavailablePending, item.RunID)
+				continue
 			}
 			s.publishEvent(event)
 			state.lossPublished = true
@@ -467,7 +490,7 @@ func (s *Server) refreshPendingCapabilityState(
 		}
 		sort.Strings(restoredRunIDs)
 		for _, runID := range restoredRunIDs {
-			event, err := s.repo.AppendRunNotice(
+			event, appended, err := s.repo.AppendPendingRunNotice(
 				ctx,
 				runID,
 				"Compatible worker available; retrying dispatch",
@@ -480,8 +503,22 @@ func (s *Server) refreshPendingCapabilityState(
 			if err != nil {
 				return err
 			}
-			s.publishEvent(event)
+			if appended {
+				s.publishEvent(event)
+			}
 			delete(s.unavailablePending, runID)
+		}
+	} else {
+		for runID, state := range s.unavailablePending {
+			if !state.lossPublished {
+				continue
+			}
+			if _, stillPending := previousPending[runID]; !stillPending {
+				continue
+			}
+			if _, stillUnavailable := nextUnavailable[runID]; !stillUnavailable {
+				nextUnavailable[runID] = state
+			}
 		}
 	}
 	s.unavailablePending = nextUnavailable

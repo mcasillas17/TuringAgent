@@ -33,9 +33,12 @@ stale values. Updates with a different worker or registration identity fail.
 
 Workers that predate the snapshot are accepted only when the orchestrator was created
 with an explicit `LegacyCapabilityProfile`. The profile supplies exact configured
-models, context ceilings, agent IDs, and external-agent support; the ready message
-still supplies its tool snapshot and capacity. There is no "unknown means supported"
-path.
+models, context ceilings, agent IDs, external-agent support, and any rollout-only
+fallback tool list; the ready message still supplies its tool snapshot and capacity.
+The ready agent ID must be recognized and included in the profile. A completed empty
+tool discovery is authoritative. A legacy ready message without tools uses only the
+profile's explicit fallback list, and an empty list means no tool capability. There is
+no "unknown means supported" path.
 
 ## Registry lifecycle
 
@@ -44,7 +47,9 @@ runtime stream is live. Each entry is keyed by stable `worker_id` and owned by t
 stream's `registration_id` plus its connection object.
 
 - Ready inserts one entry. A second live registration for the same worker ID fails.
-- A complete capability update replaces only the matching registration's snapshot.
+- A complete capability update persists its discovered-tool snapshot before replacing
+  only the matching registration's live capability snapshot. Persistence failure
+  leaves both views unchanged.
 - Heartbeats refresh the connection timestamp but do not mutate capabilities.
 - Dispatch and public configuration views ignore entries past the heartbeat lease.
 - If registration persistence or initial queue reconciliation fails after the worker
@@ -92,6 +97,9 @@ change. Coarse provider/model/context/tool/capacity predicates run in SQLite bef
 the final typed matcher, and the indexed query claims at most one compatible row, so
 an incompatible backlog is not decoded and rescanned for every worker. Dispatch
 reserves worker capacity without holding the worker lock while waiting for SQLite.
+Immediately before assignment delivery, the sender revalidates the frozen route
+against the committed live snapshot; an incompatible claim is requeued instead of
+being sent.
 
 Scheduled runs use the same validator before creating a session, message, run, or job.
 An unavailable occurrence advances its schedule and records `routing_unavailable`
@@ -107,10 +115,12 @@ against the registry before and after the transition.
 - Unsupported to supported appends a restoration notice and immediately retries
   dispatch.
 
-Only pending jobs are considered. An already assigned run keeps its frozen assignment;
-reducing capacity or removing a model does not cancel work already executing.
-Stream disconnect reconciliation continues to own notices and retries for assigned
-runs.
+Only pending jobs with queued runs are considered. Notice insertion repeats those
+conditions atomically at the SQLite write boundary, so work claimed after a scan does
+not receive a stale loss or restoration notice. An already delivered run keeps its
+frozen assignment; reducing capacity or removing a model does not cancel work already
+executing. Stream disconnect reconciliation continues to own notices and retries for
+assigned runs.
 
 The before/after comparison tracks whether each loss was actually published, so a
 restart seed cannot suppress the first actionable notice. Enqueue callers recheck
@@ -150,12 +160,16 @@ Tests must fail without the implementation for:
 - unsupported provider, model, tool, agent, context ceiling, and minimum concurrency
   before any enqueue persistence;
 - exact typed error details;
-- legacy-profile validation without an allow-all fallback;
+- legacy-profile and ready-agent validation without an allow-all or implicit tool
+  fallback outside the profile;
 - multi-worker dispatch selecting only a compatible worker;
 - capacity reduction and model/tool loss while work is queued;
+- pending-only queue-notice insertion when a scan races with assignment;
 - disconnect loss notices and reconnect restoration notices;
 - duplicate live registration rejection and owner-safe replacement;
 - authoritative capability replacement and mismatched-registration rejection;
+- tool-persistence failure preserving the previous live snapshot and assignment-send
+  revalidation against the committed replacement;
 - worker reconnect advertising a fresh registration and complete snapshot;
 - concurrent validation, snapshot replacement, dispatch, and disconnect under the Go
   race detector;

@@ -60,6 +60,7 @@ func newHarnessWithDispatch(t *testing.T, dispatch DispatchConfig) *harness {
 				},
 			},
 			AgentIds:               []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+			Tools:                  LegacyPolicyToolCapabilities(),
 			SupportsExternalAgents: true,
 		}
 	}

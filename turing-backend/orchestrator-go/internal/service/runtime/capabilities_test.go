@@ -151,6 +151,41 @@ func TestLegacyWorkerCapabilitiesRequireExplicitProfile(t *testing.T) {
 	}
 }
 
+func TestLegacyWorkerDoesNotSynthesizeUnadvertisedToolCapabilities(t *testing.T) {
+	ready := &turingv1.RuntimeWorkerReady{
+		WorkerId: "legacy-no-tools", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+	}
+	profile := &LegacyCapabilityProfile{
+		Models: []*turingv1.ModelCapability{{
+			Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "llama3.2", MaxContextTokens: 8192,
+		}},
+		AgentIds: []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+	}
+
+	capabilities, discovered, err := decodeLegacyWorkerCapabilities(profile, ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(discovered) != 0 || len(capabilities.tools) != 0 {
+		t.Fatalf("legacy no-tool snapshot produced discovered=%+v capabilities=%+v", discovered, capabilities.tools)
+	}
+}
+
+func TestLegacyWorkerRejectsUnknownReadyAgentID(t *testing.T) {
+	ready := &turingv1.RuntimeWorkerReady{
+		WorkerId: "legacy-unknown-agent", AgentId: turingv1.AgentId(99), MaxConcurrentRuns: 1,
+	}
+	profile := &LegacyCapabilityProfile{
+		Models: []*turingv1.ModelCapability{{
+			Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "llama3.2", MaxContextTokens: 8192,
+		}},
+		AgentIds: []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+	}
+	if _, _, err := decodeLegacyWorkerCapabilities(profile, ready); err == nil {
+		t.Fatal("legacy worker with unknown ready agent_id was accepted")
+	}
+}
+
 func TestModernWorkerRejectsUnknownToolDiscoveryStatus(t *testing.T) {
 	h := newHarness(t)
 	stream, err := h.runtimeClient(t).ConnectWorker(h.internalContext())

@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const (
@@ -536,18 +537,19 @@ func decodeDiscoveredTools(reported []*turingv1.DiscoveredTool) ([]repository.Di
 	return discovered, nil
 }
 
-func legacyDiscoveredTools() []repository.DiscoveredTool {
+// LegacyPolicyToolCapabilities returns the exact rollout fallback that callers
+// may opt into through LegacyCapabilityProfile.
+func LegacyPolicyToolCapabilities() []*turingv1.DiscoveredTool {
 	defaults := tools.LegacyPolicyDefaults()
-	discovered := make([]repository.DiscoveredTool, 0, len(defaults))
+	capabilities := make([]*turingv1.DiscoveredTool, 0, len(defaults))
 	for _, tool := range defaults {
-		discovered = append(discovered, repository.DiscoveredTool{
+		capabilities = append(capabilities, &turingv1.DiscoveredTool{
 			ServerName: tool.ServerName,
 			ToolName:   tool.ToolName,
-			SchemaJSON: `{}`,
-			Policy:     string(tool.Policy),
+			Schema:     &structpb.Struct{},
 		})
 	}
-	return discovered
+	return capabilities
 }
 
 func (s *Server) persistDiscoveredTools(ctx context.Context, workerID string, owner *worker, discovered []repository.DiscoveredTool) error {
@@ -750,7 +752,7 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 	}
 	connectedWorker.updateMu.Lock()
 	defer connectedWorker.updateMu.Unlock()
-	assignment, ok := connectedWorker.assignmentForRun(assigned.RunId)
+	currentAssignment, ok := connectedWorker.assignmentForRun(assigned.RunId)
 	if !ok {
 		// The command was queued while this worker held the run; by the time it
 		// reached the front of the queue the assignment had been released —
@@ -772,8 +774,21 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 		// already owns requeueing or terminalizing the run.
 		return nil
 	}
+	connectedWorker.mu.Lock()
+	supported := workerCapabilitiesSupportRoute(connectedWorker.capabilities, routingRequirementsForAgentJob(assigned))
+	connectedWorker.mu.Unlock()
+	if !supported {
+		_ = connectedWorker.releaseRun(assigned.RunId)
+		if err := s.requeueAssignments([]assignment{currentAssignment}); err != nil {
+			return err
+		}
+		if err := s.refreshPendingCapabilityState(ctx, "worker capabilities changed before assignment delivery", workerID, true, false); err != nil {
+			return err
+		}
+		return s.DispatchPending(ctx)
+	}
 	repositoryAssignment := repository.Assignment{
-		JobID: assignment.jobID, RunID: assignment.runID, WorkerID: workerID, AttemptID: assignment.attemptID,
+		JobID: currentAssignment.jobID, RunID: currentAssignment.runID, WorkerID: workerID, AttemptID: currentAssignment.attemptID,
 	}
 	if err := s.repo.BeginAssignmentSend(ctx, repositoryAssignment); err != nil {
 		_ = connectedWorker.releaseRun(assigned.RunId)
@@ -1080,6 +1095,21 @@ func routingRequirementsForJob(job repository.Job) repository.RoutingRequirement
 		RequiredContextTokens:          job.RequiredContextTokens,
 		MinimumWorkerMaxConcurrentRuns: job.MinimumWorkerMaxConcurrentRuns,
 		ExternalAgent:                  job.ExternalAgent != nil,
+	}
+}
+
+func routingRequirementsForAgentJob(job *turingv1.AgentJob) repository.RoutingRequirements {
+	if job == nil {
+		return repository.RoutingRequirements{}
+	}
+	return repository.RoutingRequirements{
+		AgentID:                        agentIDName(job.GetAgentId()),
+		ModelProvider:                  modelProviderName(job.GetModelProvider()),
+		Model:                          job.GetModel(),
+		RequestedTools:                 append([]string(nil), job.GetRequestedTools()...),
+		RequiredContextTokens:          int(job.GetRequiredContextTokens()),
+		MinimumWorkerMaxConcurrentRuns: int(job.GetMinimumWorkerMaxConcurrentRuns()),
+		ExternalAgent:                  job.GetExternalAgent() != nil,
 	}
 }
 

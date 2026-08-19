@@ -632,6 +632,53 @@ func TestConnectWorkerRequeuesAssignmentsWhenCapabilityPersistenceFailsBeforeAcc
 	}
 }
 
+func TestSendCommandRevalidatesCapabilitiesBeforeAssignmentDelivery(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "delivery capability fence")
+	job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-delivery-fence")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.RunID != enqueued.RunID {
+		t.Fatalf("claimed run = %q, want %q", job.RunID, enqueued.RunID)
+	}
+	incompatible, _, err := decodeWorkerCapabilities(modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, "gpt-4o-mini", 8192, 1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	connected := &worker{
+		commands:      make(chan *turingv1.RuntimeCommand, 1),
+		done:          make(chan struct{}),
+		capabilities:  incompatible,
+		maxConcurrent: 1,
+		lastHeartbeat: time.Now().UTC(),
+		assignments: map[string]assignment{
+			job.RunID: {jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID},
+		},
+	}
+	stream := &reconnectAcceptanceStream{
+		ctx: context.Background(), assigned: make(chan struct{}),
+	}
+	command := &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: mapJob(job)}}
+	if err := h.service.sendCommand(context.Background(), stream, command, connected, "worker-delivery-fence"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-stream.assigned:
+		t.Fatal("incompatible assignment was delivered")
+	default:
+	}
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "queued" || run.ExecutionActive {
+		t.Fatalf("run after delivery fence = %+v, want queued and inactive", run)
+	}
+}
+
 // TestIsStreamCancellationCanonicalisesOnlyCancelledStreams pins the predicate
 // that lets ConnectWorker report one error for a cancelled stream no matter
 // which of its two concurrently-ready paths observed the cancellation. The

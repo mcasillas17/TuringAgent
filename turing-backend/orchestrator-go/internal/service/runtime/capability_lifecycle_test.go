@@ -303,6 +303,63 @@ func TestCapabilityNoticeDedupSurvivesPartialPersistenceFailure(t *testing.T) {
 	}
 }
 
+func TestNonRestoringRefreshKeepsPublishedLossUntilRestorationCanBeEmitted(t *testing.T) {
+	h := newHarness(t)
+	stream := connectWorkerCapabilities(t, h, "worker-delayed-restoration", "registration-delayed-restoration", modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+	))
+	defer func() { _ = stream.CloseSend() }()
+	session, err := h.repo.CreateSession(context.Background(), "Delayed restoration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "wait", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connected := h.service.registeredWorker("worker-delayed-restoration")
+	if connected == nil {
+		t.Fatal("worker is not registered")
+	}
+	unsupported, _, err := decodeWorkerCapabilities(modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, "gpt-4o-mini", 8192, 1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	supported, _, err := decodeWorkerCapabilities(modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	connected.mu.Lock()
+	connected.capabilities = unsupported
+	connected.mu.Unlock()
+	if err := h.service.refreshPendingCapabilityState(context.Background(), "loss", "", true, false); err != nil {
+		t.Fatal(err)
+	}
+	connected.mu.Lock()
+	connected.capabilities = supported
+	connected.mu.Unlock()
+
+	if err := h.service.refreshPendingCapabilityState(context.Background(), "interleaved non-restoring refresh", "", false, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, tracked := h.service.unavailablePending[enqueued.RunID]; !tracked {
+		t.Fatal("non-restoring refresh dropped the published loss")
+	}
+	if err := h.service.refreshPendingCapabilityState(context.Background(), "restored", "", false, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRoutingNotices(t, h, enqueued.RunID, "routing_capability_restored"); got != 1 {
+		t.Fatalf("restoration notices = %d, want 1", got)
+	}
+}
+
 func TestToolCapabilityLossLeavesIncompatibleJobQueued(t *testing.T) {
 	h := newHarness(t)
 	initial := modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1)
