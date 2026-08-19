@@ -22,6 +22,7 @@ type Bus struct {
 
 type subscription struct {
 	sessionID string
+	all       bool
 	ch        chan Event
 }
 
@@ -30,12 +31,20 @@ func NewBus(bufferSize int) *Bus {
 }
 
 func (b *Bus) Subscribe(sessionID string) (<-chan Event, func()) {
+	return b.subscribe(sessionID, false)
+}
+
+func (b *Bus) SubscribeAll() (<-chan Event, func()) {
+	return b.subscribe("", true)
+}
+
+func (b *Bus) subscribe(sessionID string, all bool) (<-chan Event, func()) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.nextID++
 	id := b.nextID
 	ch := make(chan Event, b.bufferSize)
-	b.subs[id] = subscription{sessionID: sessionID, ch: ch}
+	b.subs[id] = subscription{sessionID: sessionID, all: all, ch: ch}
 	return ch, func() {
 		b.mu.Lock()
 		defer b.mu.Unlock()
@@ -52,7 +61,7 @@ func (b *Bus) Publish(event Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, sub := range b.subs {
-		if sub.sessionID != event.SessionID {
+		if !sub.all && sub.sessionID != event.SessionID {
 			continue
 		}
 		select {
@@ -63,7 +72,7 @@ func (b *Bus) Publish(event Event) {
 			for draining {
 				select {
 				case queued := <-sub.ch:
-					if queued.Sequence >= latest.Sequence {
+					if !sub.all && queued.Sequence >= latest.Sequence {
 						latest = queued
 					}
 				default:

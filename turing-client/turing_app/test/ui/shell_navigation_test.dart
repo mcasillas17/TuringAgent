@@ -653,6 +653,117 @@ void main() {
       );
     });
 
+    testWidgets('nanoseconds outrank the session id tie-breaker', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..sessions = [
+          Session(
+            sessionId: 'sess_z',
+            title: 'Earlier nanoseconds',
+            updatedAt: DateTime.fromMicrosecondsSinceEpoch(
+              1000000,
+              isUtc: true,
+            ),
+            updatedAtNanoseconds: 1000000100,
+          ),
+        ]
+        ..createdSessionId = 'sess_a'
+        ..createdSessionTimestamp = '1970-01-01T00:00:01.000000900Z';
+      await _pumpShell(tester, api: api, size: _desktop);
+
+      await tester.tap(find.text('New chat').first);
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.getTopLeft(find.text('New chat').last).dy,
+        lessThan(tester.getTopLeft(find.text('Earlier nanoseconds')).dy),
+        reason: '900ns is newer than 100ns despite sess_a sorting below sess_z',
+      );
+    });
+
+    testWidgets('a refresh can remove an externally deleted listed session', (
+      tester,
+    ) async {
+      final source = _FakeEventSource();
+      final api = _FakeApi();
+      await _pumpShell(
+        tester,
+        api: api,
+        size: _desktop,
+        eventSourceFactory: () => source,
+      );
+      await tester.tap(find.text('Existing chat'));
+      await tester.pumpAndSettle();
+      source.add(
+        TuringEvent(
+          eventId: 'evt_existing_updated',
+          sessionId: 'sess_existing',
+          traceId: 'trace_existing',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 5, 11),
+          payload: const {
+            'title': 'Updated existing chat',
+            'updatedAt': '2026-05-11T00:00:00.000000000Z',
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      api
+        ..sessions = []
+        ..addCreatedSessionToList = true;
+      await tester.tap(find.text('New chat').first);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Updated existing chat'),
+        findsNothing,
+        reason:
+            'an observed session snapshot expires when a later page omits it',
+      );
+    });
+
+    testWidgets('a global update adds a non-active session without polling', (
+      tester,
+    ) async {
+      final globalUpdates = _FakeSessionUpdateSource();
+      final api = _FakeApi();
+      await _pumpShell(
+        tester,
+        api: api,
+        size: _desktop,
+        sessionUpdateSourceFactory: () => globalUpdates,
+      );
+      await tester.tap(find.text('Existing chat'));
+      await tester.pumpAndSettle();
+      final callsBefore = api.listSessionsCalls;
+
+      globalUpdates.add(
+        TuringEvent(
+          eventId: 'evt_automation_session',
+          sessionId: 'sess_automation',
+          traceId: 'trace_automation',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 8, 18, 20),
+          payload: const {
+            'title': 'Morning digest',
+            'updatedAt': '2026-08-18T20:00:00.000000000Z',
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Morning digest'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.text('Morning digest')).dy,
+        lessThan(tester.getTopLeft(find.text('Existing chat')).dy),
+      );
+      expect(api.listSessionsCalls, callsBefore);
+    });
+
     testWidgets('a later stale page does not resurrect a deleted session', (
       tester,
     ) async {
@@ -1025,6 +1136,7 @@ Future<void> _pumpShell(
   required _FakeApi api,
   required Size size,
   TuringEventSource Function()? eventSourceFactory,
+  TuringSessionUpdateSource? Function()? sessionUpdateSourceFactory,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -1036,6 +1148,7 @@ Future<void> _pumpShell(
       home: ResponsiveShell(
         apiClient: api,
         eventSourceFactory: eventSourceFactory ?? () => _FakeEventSource(),
+        sessionUpdateSourceFactory: sessionUpdateSourceFactory,
         authStorage: _FakeAuthStorage(),
       ),
     ),
@@ -1062,6 +1175,8 @@ class _FakeApi with NoIntegrationsApi, NoAutomationsApi implements TuringApi {
   Completer<List<Session>>? nextListSessions;
   bool addCreatedSessionToList = false;
   bool removeDeletedSessionFromList = false;
+  String createdSessionId = 'sess_new';
+  String createdSessionTimestamp = '2026-05-10T00:00:00.000Z';
 
   int listSessionsCalls = 0;
 
@@ -1274,14 +1389,17 @@ class _FakeApi with NoIntegrationsApi, NoAutomationsApi implements TuringApi {
     if (addCreatedSessionToList) {
       sessions = [
         Session(
-          sessionId: 'sess_new',
+          sessionId: createdSessionId,
           title: title,
-          updatedAt: DateTime.utc(2026, 5, 10),
+          updatedAt: DateTime.parse(createdSessionTimestamp),
         ),
         ...sessions,
       ];
     }
-    return {'sessionId': 'sess_new', 'createdAt': '2026-05-10T00:00:00.000Z'};
+    return {
+      'sessionId': createdSessionId,
+      'createdAt': createdSessionTimestamp,
+    };
   }
 
   @override
@@ -1473,6 +1591,20 @@ class _FakeEventSource implements TuringEventSource {
   Stream<TuringEvent> connect({required String sessionId, int? lastSequence}) {
     return _events.stream;
   }
+
+  @override
+  void close() {
+    unawaited(_events.close());
+  }
+}
+
+class _FakeSessionUpdateSource implements TuringSessionUpdateSource {
+  final _events = StreamController<TuringEvent>();
+
+  void add(TuringEvent event) => _events.add(event);
+
+  @override
+  Stream<TuringEvent> connectSessionUpdates() => _events.stream;
 
   @override
   void close() {

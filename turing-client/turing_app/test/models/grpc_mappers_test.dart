@@ -5,6 +5,8 @@ import 'package:turing_flutter_app/generated/turing/v1/common.pb.dart'
     as commonpb;
 import 'package:turing_flutter_app/generated/turing/v1/events.pb.dart'
     as eventpb;
+import 'package:turing_flutter_app/generated/turing/v1/sessions.pb.dart'
+    as sessionpb;
 import 'package:turing_flutter_app/generated/google/protobuf/timestamp.pb.dart'
     as timestamppb;
 import 'package:turing_flutter_app/models/grpc_mappers.dart';
@@ -58,6 +60,25 @@ void main() {
       ),
       'session.updated',
     );
+  });
+
+  test('preserves session timestamp nanoseconds for ordering', () {
+    final earlier = GrpcMappers.sessionToModel(
+      sessionpb.Session(
+        sessionId: 'sess_z',
+        updatedAt: timestamppb.Timestamp(seconds: Int64(1), nanos: 100),
+      ),
+    );
+    final later = GrpcMappers.sessionToModel(
+      sessionpb.Session(
+        sessionId: 'sess_a',
+        updatedAt: timestamppb.Timestamp(seconds: Int64(1), nanos: 900),
+      ),
+    );
+
+    expect(earlier.updatedAt, later.updatedAt);
+    expect(earlier.updatedAtNanoseconds, 1000000100);
+    expect(later.updatedAtNanoseconds, 1000000900);
   });
 
   test('maps token deltas into assistant message content', () {

@@ -40,6 +40,7 @@ class ResponsiveShell extends StatefulWidget {
     super.key,
     required this.apiClient,
     required this.eventSourceFactory,
+    this.sessionUpdateSourceFactory,
     this.authStorage,
     this.initialBackendUrl = 'http://localhost:3000',
     this.initialApiKey = '',
@@ -48,6 +49,7 @@ class ResponsiveShell extends StatefulWidget {
 
   final TuringApi apiClient;
   final TuringEventSource Function() eventSourceFactory;
+  final TuringSessionUpdateSource? Function()? sessionUpdateSourceFactory;
   final ClientAuthStorage? authStorage;
   final String initialBackendUrl;
   final String initialApiKey;
@@ -87,6 +89,8 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   // chat is about to unmount, since ChatScreen closes what it was given.
   TuringEventSource? _chatEventSource;
   String? _chatEventSourceSessionId;
+  TuringSessionUpdateSource? _sessionUpdateSource;
+  StreamSubscription<TuringEvent>? _sessionUpdateSubscription;
 
   // The resolved list is held rather than a Future so the shell can answer
   // questions about it — chiefly "what is the active conversation called",
@@ -100,14 +104,36 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   bool _creating = false;
   final Set<String> _deleting = {};
   final Set<String> _locallyDeletedSessionIds = {};
-  final Map<String, Session> _sessionSnapshots = {};
+  final Map<String, _SessionSnapshot> _sessionSnapshots = {};
+  int _sessionStateRevision = 0;
   int _sessionRefreshRequest = 0;
 
   @override
   void initState() {
     super.initState();
+    _openSessionUpdateSubscription();
     unawaited(_refreshSessions());
     unawaited(_loadModelProvider());
+  }
+
+  void _openSessionUpdateSubscription() {
+    final source = widget.sessionUpdateSourceFactory?.call();
+    if (source == null) return;
+    _sessionUpdateSource = source;
+    _sessionUpdateSubscription = source.connectSessionUpdates().listen(
+      _applySessionUpdated,
+      onError: (_) {
+        if (!mounted) return;
+        setState(() => _sessionsFailed = true);
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    unawaited(_sessionUpdateSubscription?.cancel());
+    _sessionUpdateSource?.close();
+    super.dispose();
   }
 
   /// Chosen once in Settings; re-read whenever settings change.
@@ -119,11 +145,12 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
 
   Future<void> _refreshSessions() async {
     final request = ++_sessionRefreshRequest;
+    final startingRevision = _sessionStateRevision;
     try {
       final sessions = await widget.apiClient.listSessions();
       if (!mounted || request != _sessionRefreshRequest) return;
       setState(() {
-        _sessions = _reconcileSessionRefresh(sessions);
+        _sessions = _reconcileSessionRefresh(sessions, startingRevision);
         _sessionsLoading = false;
         _sessionsFailed = false;
       });
@@ -144,21 +171,26 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     final updatedAtValue = event.payload['updatedAt'];
     if (title is! String || updatedAtValue is! String) return;
     final updatedAt = DateTime.tryParse(updatedAtValue);
-    if (updatedAt == null) return;
+    final updatedAtNanoseconds = _parseTimestampNanoseconds(updatedAtValue);
+    if (updatedAt == null || updatedAtNanoseconds == null) return;
     final index = _sessions.indexWhere(
       (session) => session.sessionId == event.sessionId,
     );
-    if (index >= 0 && _sessions[index].updatedAt.isAfter(updatedAt)) return;
+    if (index >= 0 &&
+        _sessions[index].updatedAtNanoseconds > updatedAtNanoseconds) {
+      return;
+    }
     final updated = Session(
       sessionId: event.sessionId,
       title: title.isEmpty ? null : title,
       updatedAt: updatedAt.toUtc(),
+      updatedAtNanoseconds: updatedAtNanoseconds,
     );
     setState(() {
       final next = List<Session>.of(_sessions);
       if (index >= 0) {
         final previous = next.removeAt(index);
-        if (previous.updatedAt.isAtSameMomentAs(updated.updatedAt)) {
+        if (previous.updatedAtNanoseconds == updated.updatedAtNanoseconds) {
           next.insert(index, updated);
         } else {
           _insertSessionByRecency(next, updated);
@@ -167,7 +199,12 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
         _insertSessionByRecency(next, updated);
       }
       _sessions = next;
-      _recordSessionSnapshot(updated);
+      _recordSessionSnapshot(
+        updated,
+        retainUntilObserved:
+            index < 0 ||
+            (_sessionSnapshots[event.sessionId]?.retainUntilObserved ?? false),
+      );
     });
   }
 
@@ -177,8 +214,8 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   ) {
     final index = sessions.indexWhere(
       (session) =>
-          session.updatedAt.isBefore(inserted.updatedAt) ||
-          (session.updatedAt.isAtSameMomentAs(inserted.updatedAt) &&
+          session.updatedAtNanoseconds < inserted.updatedAtNanoseconds ||
+          (session.updatedAtNanoseconds == inserted.updatedAtNanoseconds &&
               session.sessionId.compareTo(inserted.sessionId) < 0),
     );
     if (index < 0) {
@@ -188,34 +225,54 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     }
   }
 
-  List<Session> _reconcileSessionRefresh(Iterable<Session> refreshed) {
+  List<Session> _reconcileSessionRefresh(
+    Iterable<Session> refreshed,
+    int startingRevision,
+  ) {
     final refreshedSessions = refreshed.toList();
     final merged = refreshedSessions
         .where(
           (session) => !_locallyDeletedSessionIds.contains(session.sessionId),
         )
         .toList();
-    for (final current in _sessionSnapshots.values) {
+    for (final entry in _sessionSnapshots.entries.toList()) {
+      final snapshot = entry.value;
+      final current = snapshot.session;
       final index = merged.indexWhere(
         (session) => session.sessionId == current.sessionId,
       );
       if (index < 0) {
-        _insertSessionByRecency(merged, current);
+        if (snapshot.retainUntilObserved ||
+            snapshot.revision > startingRevision) {
+          _insertSessionByRecency(merged, current);
+        } else {
+          _sessionSnapshots.remove(entry.key);
+        }
         continue;
       }
       final replacement = merged[index];
-      if (current.updatedAt.isAfter(replacement.updatedAt)) {
+      if (current.updatedAtNanoseconds > replacement.updatedAtNanoseconds) {
         merged.removeAt(index);
         _insertSessionByRecency(merged, current);
-      } else if (current.updatedAt.isAtSameMomentAs(replacement.updatedAt)) {
+      } else if (current.updatedAtNanoseconds ==
+          replacement.updatedAtNanoseconds) {
         merged[index] = current;
       }
+      _sessionSnapshots.remove(entry.key);
     }
     return merged;
   }
 
-  void _recordSessionSnapshot(Session session) {
-    _sessionSnapshots[session.sessionId] = session;
+  void _recordSessionSnapshot(
+    Session session, {
+    required bool retainUntilObserved,
+  }) {
+    _sessionStateRevision++;
+    _sessionSnapshots[session.sessionId] = _SessionSnapshot(
+      session: session,
+      revision: _sessionStateRevision,
+      retainUntilObserved: retainUntilObserved,
+    );
   }
 
   /// Null when the active conversation has not been named yet, or is not in
@@ -255,16 +312,18 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       // in a title that is still empty.
       final result = await widget.apiClient.createSession();
       if (!mounted) return;
+      final createdAtValue = result['createdAt'] as String;
       final session = Session(
         sessionId: result['sessionId'] as String,
         title: null,
-        updatedAt: DateTime.parse(result['createdAt'] as String).toUtc(),
+        updatedAt: DateTime.parse(createdAtValue).toUtc(),
+        updatedAtNanoseconds: _parseTimestampNanoseconds(createdAtValue),
       );
       setState(() {
         final sessions = List<Session>.of(_sessions);
         _insertSessionByRecency(sessions, session);
         _sessions = sessions;
-        _recordSessionSnapshot(session);
+        _recordSessionSnapshot(session, retainUntilObserved: true);
         _activeSessionId = session.sessionId;
         _destination = ShellDestination.chats;
         _creating = false;
@@ -275,6 +334,16 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       setState(() => _creating = false);
       _toast('Could not start a new chat: $error');
     }
+  }
+
+  static int? _parseTimestampNanoseconds(String value) {
+    final timestamp = DateTime.tryParse(value);
+    if (timestamp == null) return null;
+    final match = RegExp(r'\.(\d+)(?:Z|[+-]\d{2}:\d{2})$').firstMatch(value);
+    final fraction = match?.group(1) ?? '';
+    final nanos = int.parse(fraction.padRight(9, '0').substring(0, 9));
+    final seconds = timestamp.toUtc().millisecondsSinceEpoch ~/ 1000;
+    return seconds * 1000000000 + nanos;
   }
 
   Future<void> _deleteConversation(Session session) async {
@@ -1043,4 +1112,16 @@ class _EmptyState extends StatelessWidget {
       ),
     );
   }
+}
+
+class _SessionSnapshot {
+  const _SessionSnapshot({
+    required this.session,
+    required this.revision,
+    required this.retainUntilObserved,
+  });
+
+  final Session session;
+  final int revision;
+  final bool retainUntilObserved;
 }

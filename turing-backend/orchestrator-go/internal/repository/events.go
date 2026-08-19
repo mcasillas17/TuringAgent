@@ -56,6 +56,7 @@ func (r *Repository) ReplayEvents(ctx context.Context, sessionID string, afterSe
 	if limit <= 0 || limit > 500 {
 		limit = 500
 	}
+
 	var latest int64
 	if err := r.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence), 0) FROM events WHERE session_id = ?`, sessionID).Scan(&latest); err != nil {
 		return nil, 0, err
@@ -74,4 +75,44 @@ func (r *Repository) ReplayEvents(ctx context.Context, sessionID string, afterSe
 		events = append(events, event)
 	}
 	return events, latest, rows.Err()
+}
+
+func (r *Repository) ListLatestSessionUpdatedEvents(ctx context.Context) ([]Event, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		WITH latest AS (
+			SELECT session_id, MAX(sequence) AS sequence
+			FROM events
+			WHERE type = 'session.updated'
+			GROUP BY session_id
+		)
+		SELECT e.id, e.session_id, e.run_id, e.trace_id, e.sequence, e.type, e.payload_json, e.created_at
+		FROM events e
+		JOIN latest
+			ON latest.session_id = e.session_id
+			AND latest.sequence = e.sequence
+		ORDER BY e.session_id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var events []Event
+	for rows.Next() {
+		var event Event
+		if err := rows.Scan(
+			&event.EventID,
+			&event.SessionID,
+			&event.RunID,
+			&event.TraceID,
+			&event.Sequence,
+			&event.Type,
+			&event.PayloadJSON,
+			&event.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
 }

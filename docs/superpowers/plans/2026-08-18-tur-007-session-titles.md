@@ -23,8 +23,10 @@
 - `turing-backend/orchestrator-go/internal/service/automations/scheduler.go`: publish the session update for automation-owned conversations too.
 - `proto/turing/v1/events.proto`: assign the additive `TURING_EVENT_TYPE_SESSION_UPDATED` wire value.
 - `gen/turing/v1/go/turing/v1/events.pb.go`: generated Go event enum.
+- `gen/turing/v1/go/turing/v1/events_grpc.pb.go`: generated Go global update stream service contract.
 - `turing-client/turing_app/lib/generated/turing/v1/events.pbenum.dart`: generated Dart event enum.
 - `turing-client/turing_app/lib/generated/turing/v1/events.pb.dart`: generated Dart event message bindings.
+- `turing-client/turing_app/lib/generated/turing/v1/events.pbgrpc.dart`: generated Dart global update stream client.
 - `turing-client/turing_app/lib/generated/turing/v1/events.pbjson.dart`: generated Dart event descriptors.
 - `turing-backend/orchestrator-go/internal/service/events/service.go`: map the persisted event name to the protocol enum.
 - `turing-backend/orchestrator-go/internal/service/events/service_test.go`: prove replay maps the new event type and payload.
@@ -375,6 +377,8 @@ Document these exact contracts:
 - Automation-created conversations set `title_origin = 'explicit'`, preserving their configured name rather than replacing it with the scheduled prompt.
 - Migration classifies sessions already linked from automations as `explicit` before evaluating the legacy `New chat` sentinel.
 - Flutter records locally created sessions in the same retained snapshot journal, ignores older refresh generations, preserves snapshots omitted from limited pages, orders equal timestamps by session ID descending, and retains local deletion tombstones for the shell lifetime because page omission cannot prove deletion.
+- `SubscribeSessionUpdates` replays the latest durable snapshot per session and then streams live updates across all sessions, so inactive and automation conversations update without polling.
+- Flutter preserves the backend's nanosecond timestamp ordering key; observed snapshots expire so refresh can heal a remote deletion instead of resurrecting it.
 - Session deletion removes the session row, title, messages, and title events through existing cascades.
 - There is no title-related configuration knob. The 60-rune policy is a code-level UX contract.
 - The rune boundary is not a grapheme-cluster boundary; a combining sequence or emoji ZWJ sequence exactly at the cutoff can end oddly.

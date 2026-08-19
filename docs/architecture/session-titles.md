@@ -49,18 +49,30 @@ subscriber that reconnects can replay the same event from the event log.
 
 Flutter maps protocol event
 `TURING_EVENT_TYPE_SESSION_UPDATED` to `session.updated`, applies `title` and
-`updatedAt` to its local session list, and sorts by that durable recency key. A
-replayed older event cannot reorder the list. An update for a session outside
+`updatedAt` to its local session list, and sorts by that durable recency key.
+The shell opens `SubscribeSessionUpdates`, which first replays the latest
+durable snapshot for every session and then receives live updates from every
+session, including inactive conversations and new automation conversations.
+The active chat's per-session stream can deliver the same event; timestamp
+idempotency makes the duplicate harmless.
+
+Each global subscription performs one indexed replay query. Migration `0010`
+adds a partial index containing only `session.updated` rows, so reconnect work
+scales with title-update history and returns exactly one row per session; there
+is no timer or polling loop.
+
+A replayed older event cannot reorder the list. An update for a session outside
 the loaded page inserts it, and a concurrent older `ListSessions` response is
-merged without overwriting newer event state. Locally created sessions enter
-the same snapshot journal before their refresh starts, snapshots are retained
-when a limited page omits them, and older refresh responses are discarded by
-request generation. Ordering matches the backend: `updatedAt` descending, then
-session ID descending when timestamps tie. Locally deleted IDs remain tombstoned
-for the shell lifetime because omission from the 50-row page cannot prove
-absence. Flutter does not call `ListSessions` after sending a message. Search
-group headings load the same stored session title, so the sidebar and search do
-not invent separate names for one conversation.
+merged without overwriting newer event state. Locally created and off-page
+sessions stay retained until a server page observes them; ordinary observed
+snapshots expire so a later refresh can remove a session deleted elsewhere.
+Older refresh responses are discarded by request generation. Ordering matches
+the backend with an exact nanosecond key: `updatedAt` descending, then session
+ID descending when timestamps tie. Locally deleted IDs remain tombstoned for
+the shell lifetime because omission from the 50-row page cannot prove absence.
+Flutter does not call `ListSessions` after sending a message. Search group
+headings load the same stored session title, so the sidebar and search do not
+invent separate names for one conversation.
 
 Whitespace-only messages still produce a session update because they touch
 `updated_at`, but their empty title snapshot keeps the `New chat` display
@@ -89,10 +101,10 @@ cascades also remove its messages, jobs, runs, and durable `session.updated`
 events, so neither search nor event replay can recover the deleted title.
 
 `session.updated` is not a deletion event. A deletion performed by this Flutter
-shell is removed locally and guarded against buffered stale updates. As already
-documented in `docs/VISION.md`, a different subscribed client is not notified
-when another client deletes the session; cross-client deletion propagation is a
-separate existing protocol gap.
+shell is removed locally and guarded against buffered stale updates. A later
+list refresh can remove a session deleted elsewhere, but as already documented
+in `docs/VISION.md`, the deletion itself is not pushed to another subscribed
+client; cross-client deletion propagation is a separate existing protocol gap.
 
 ## Configuration and limits
 

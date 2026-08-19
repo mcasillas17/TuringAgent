@@ -157,6 +157,60 @@ func TestEnqueueUserMessagePersistsSessionUpdatedEvent(t *testing.T) {
 	}
 }
 
+func TestListLatestSessionUpdatedEventsReturnsOneSnapshotPerSession(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	first, err := repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := EnqueueUserMessageInput{
+		SessionID:     first.SessionID,
+		Content:       "First session",
+		AgentID:       "general_assistant",
+		ModelProvider: "ollama",
+		Model:         "qwen2.5:7b",
+	}
+	firstEnqueue, err := repo.EnqueueUserMessage(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Content = "Later activity"
+	latestFirst, err := repo.EnqueueUserMessage(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.SessionID = second.SessionID
+	input.Content = "Second session"
+	latestSecond, err := repo.EnqueueUserMessage(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events, err := repo.ListLatestSessionUpdatedEvents(ctx)
+	if err != nil {
+		t.Fatalf("list latest session updates: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %+v, want one per session", events)
+	}
+	got := map[string]string{}
+	for _, event := range events {
+		got[event.SessionID] = event.EventID
+	}
+	if got[first.SessionID] != latestFirst.SessionUpdatedEvent.EventID {
+		t.Fatalf("first latest = %q, want %q (not %q)",
+			got[first.SessionID], latestFirst.SessionUpdatedEvent.EventID, firstEnqueue.SessionUpdatedEvent.EventID)
+	}
+	if got[second.SessionID] != latestSecond.SessionUpdatedEvent.EventID {
+		t.Fatalf("second latest = %q, want %q",
+			got[second.SessionID], latestSecond.SessionUpdatedEvent.EventID)
+	}
+}
+
 func TestEnqueueUserMessageTitlesAnUntitledSession(t *testing.T) {
 	repo, ctx := newTitleTestRepo(t)
 

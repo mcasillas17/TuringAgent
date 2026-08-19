@@ -114,6 +114,38 @@ func (s *Server) SubscribeSessionEvents(req *turingv1.SubscribeSessionEventsRequ
 	}
 }
 
+func (s *Server) SubscribeSessionUpdates(_ *turingv1.SubscribeSessionUpdatesRequest, stream turingv1.EventService_SubscribeSessionUpdatesServer) error {
+	ctx := stream.Context()
+	ch, unsubscribe := s.bus.SubscribeAll()
+	defer unsubscribe()
+
+	snapshots, err := s.repo.ListLatestSessionUpdatedEvents(ctx)
+	if err != nil {
+		return status.Error(codes.Internal, "list session updates failed")
+	}
+	for _, event := range snapshots {
+		if err := stream.Send(mapEvent(event)); err != nil {
+			return err
+		}
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return status.Error(codes.Canceled, "client cancelled session update stream")
+		case event, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			if event.Type != "session.updated" {
+				continue
+			}
+			if err := stream.Send(mapBusEvent(event)); err != nil {
+				return err
+			}
+		}
+	}
+}
+
 func (s *Server) replayAvailable(ctx context.Context, sessionID string, lastSent *int64, stream turingv1.EventService_SubscribeSessionEventsServer) error {
 	const replayLimit = 500
 	for {

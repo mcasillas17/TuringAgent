@@ -330,6 +330,9 @@ class GrpcMappers {
       sessionId: session.sessionId,
       title: session.title.isEmpty ? null : session.title,
       updatedAt: _timestampToDateTime(session.updatedAt),
+      updatedAtNanoseconds:
+          session.updatedAt.seconds.toInt() * 1000000000 +
+          session.updatedAt.nanos,
     );
   }
 

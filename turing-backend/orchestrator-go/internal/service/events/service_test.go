@@ -226,6 +226,72 @@ func TestEventServiceSubscribesToReplayAndBusEvents(t *testing.T) {
 	}
 }
 
+func TestEventServiceSubscribesToAllSessionUpdates(t *testing.T) {
+	h := newEventHarness(t)
+	ctx := context.Background()
+	for _, title := range []string{"First", "Second"} {
+		session, err := h.repo.CreateSession(ctx, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+			SessionID:     session.SessionID,
+			Content:       title,
+			AgentID:       "general_assistant",
+			ModelProvider: "ollama",
+			Model:         "qwen2.5:7b",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream := &fakeEventStream{ctx: streamCtx}
+	stream.afterSend = func(event *turingv1.TuringEvent) {
+		switch len(stream.sent) {
+		case 2:
+			live, err := h.repo.AppendEvent(ctx, repository.AppendEventInput{
+				SessionID:   event.SessionId,
+				TraceID:     "trace_live",
+				Type:        "session.updated",
+				PayloadJSON: `{"title":"Live","updatedAt":"2026-08-18T20:00:00Z"}`,
+			})
+			if err != nil {
+				t.Errorf("append live update: %v", err)
+				cancel()
+				return
+			}
+			h.bus.Publish(Event{
+				EventID:     live.EventID,
+				SessionID:   live.SessionID,
+				TraceID:     live.TraceID,
+				Sequence:    live.Sequence,
+				Type:        live.Type,
+				CreatedAt:   live.CreatedAt,
+				PayloadJSON: live.PayloadJSON,
+			})
+		case 3:
+			cancel()
+		}
+	}
+
+	err := NewServer(h.repo, h.bus).SubscribeSessionUpdates(
+		&turingv1.SubscribeSessionUpdatesRequest{},
+		stream,
+	)
+	if status.Code(err) != codes.Canceled {
+		t.Fatalf("SubscribeSessionUpdates error = %v, want Canceled", err)
+	}
+	if len(stream.sent) != 3 {
+		t.Fatalf("sent %d events, want two snapshots and one live update", len(stream.sent))
+	}
+	for _, event := range stream.sent {
+		if event.Type != turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_UPDATED {
+			t.Fatalf("event type = %v, want SESSION_UPDATED", event.Type)
+		}
+	}
+}
+
 func TestEventServiceCatchesEventsPublishedBetweenReplayAndSubscribe(t *testing.T) {
 	h := newEventHarness(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

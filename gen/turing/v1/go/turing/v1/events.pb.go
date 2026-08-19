@@ -401,6 +401,42 @@ func (x *SubscribeSessionEventsRequest) GetAfterSequence() int64 {
 	return 0
 }
 
+type SubscribeSessionUpdatesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubscribeSessionUpdatesRequest) Reset() {
+	*x = SubscribeSessionUpdatesRequest{}
+	mi := &file_turing_v1_events_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubscribeSessionUpdatesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubscribeSessionUpdatesRequest) ProtoMessage() {}
+
+func (x *SubscribeSessionUpdatesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_events_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubscribeSessionUpdatesRequest.ProtoReflect.Descriptor instead.
+func (*SubscribeSessionUpdatesRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_events_proto_rawDescGZIP(), []int{4}
+}
+
 var File_turing_v1_events_proto protoreflect.FileDescriptor
 
 const file_turing_v1_events_proto_rawDesc = "" +
@@ -429,7 +465,8 @@ const file_turing_v1_events_proto_rawDesc = "" +
 	"\x1dSubscribeSessionEventsRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12%\n" +
-	"\x0eafter_sequence\x18\x02 \x01(\x03R\rafterSequence*\xef\x06\n" +
+	"\x0eafter_sequence\x18\x02 \x01(\x03R\rafterSequence\" \n" +
+	"\x1eSubscribeSessionUpdatesRequest*\xef\x06\n" +
 	"\x0fTuringEventType\x12!\n" +
 	"\x1dTURING_EVENT_TYPE_UNSPECIFIED\x10\x00\x12%\n" +
 	"!TURING_EVENT_TYPE_MESSAGE_STARTED\x10\x01\x12#\n" +
@@ -453,11 +490,12 @@ const file_turing_v1_events_proto_rawDesc = "" +
 	"#TURING_EVENT_TYPE_APPROVAL_CONSUMED\x10\x12\x12\x1b\n" +
 	"\x17TURING_EVENT_TYPE_ERROR\x10\x13\x12\x1c\n" +
 	"\x18TURING_EVENT_TYPE_SYSTEM\x10\x14\x12%\n" +
-	"!TURING_EVENT_TYPE_SESSION_UPDATED\x10\x152\xb7\x01\n" +
+	"!TURING_EVENT_TYPE_SESSION_UPDATED\x10\x152\x97\x02\n" +
 	"\fEventService\x12I\n" +
 	"\n" +
 	"ListEvents\x12\x1c.turing.v1.ListEventsRequest\x1a\x1d.turing.v1.ListEventsResponse\x12\\\n" +
-	"\x16SubscribeSessionEvents\x12(.turing.v1.SubscribeSessionEventsRequest\x1a\x16.turing.v1.TuringEvent0\x01B>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
+	"\x16SubscribeSessionEvents\x12(.turing.v1.SubscribeSessionEventsRequest\x1a\x16.turing.v1.TuringEvent0\x01\x12^\n" +
+	"\x17SubscribeSessionUpdates\x12).turing.v1.SubscribeSessionUpdatesRequest\x1a\x16.turing.v1.TuringEvent0\x01B>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
 
 var (
 	file_turing_v1_events_proto_rawDescOnce sync.Once
@@ -472,27 +510,30 @@ func file_turing_v1_events_proto_rawDescGZIP() []byte {
 }
 
 var file_turing_v1_events_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_turing_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_turing_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_turing_v1_events_proto_goTypes = []any{
-	(TuringEventType)(0),                  // 0: turing.v1.TuringEventType
-	(*TuringEvent)(nil),                   // 1: turing.v1.TuringEvent
-	(*ListEventsRequest)(nil),             // 2: turing.v1.ListEventsRequest
-	(*ListEventsResponse)(nil),            // 3: turing.v1.ListEventsResponse
-	(*SubscribeSessionEventsRequest)(nil), // 4: turing.v1.SubscribeSessionEventsRequest
-	(*timestamppb.Timestamp)(nil),         // 5: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),               // 6: google.protobuf.Struct
+	(TuringEventType)(0),                   // 0: turing.v1.TuringEventType
+	(*TuringEvent)(nil),                    // 1: turing.v1.TuringEvent
+	(*ListEventsRequest)(nil),              // 2: turing.v1.ListEventsRequest
+	(*ListEventsResponse)(nil),             // 3: turing.v1.ListEventsResponse
+	(*SubscribeSessionEventsRequest)(nil),  // 4: turing.v1.SubscribeSessionEventsRequest
+	(*SubscribeSessionUpdatesRequest)(nil), // 5: turing.v1.SubscribeSessionUpdatesRequest
+	(*timestamppb.Timestamp)(nil),          // 6: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),                // 7: google.protobuf.Struct
 }
 var file_turing_v1_events_proto_depIdxs = []int32{
 	0, // 0: turing.v1.TuringEvent.type:type_name -> turing.v1.TuringEventType
-	5, // 1: turing.v1.TuringEvent.created_at:type_name -> google.protobuf.Timestamp
-	6, // 2: turing.v1.TuringEvent.payload:type_name -> google.protobuf.Struct
+	6, // 1: turing.v1.TuringEvent.created_at:type_name -> google.protobuf.Timestamp
+	7, // 2: turing.v1.TuringEvent.payload:type_name -> google.protobuf.Struct
 	1, // 3: turing.v1.ListEventsResponse.events:type_name -> turing.v1.TuringEvent
 	2, // 4: turing.v1.EventService.ListEvents:input_type -> turing.v1.ListEventsRequest
 	4, // 5: turing.v1.EventService.SubscribeSessionEvents:input_type -> turing.v1.SubscribeSessionEventsRequest
-	3, // 6: turing.v1.EventService.ListEvents:output_type -> turing.v1.ListEventsResponse
-	1, // 7: turing.v1.EventService.SubscribeSessionEvents:output_type -> turing.v1.TuringEvent
-	6, // [6:8] is the sub-list for method output_type
-	4, // [4:6] is the sub-list for method input_type
+	5, // 6: turing.v1.EventService.SubscribeSessionUpdates:input_type -> turing.v1.SubscribeSessionUpdatesRequest
+	3, // 7: turing.v1.EventService.ListEvents:output_type -> turing.v1.ListEventsResponse
+	1, // 8: turing.v1.EventService.SubscribeSessionEvents:output_type -> turing.v1.TuringEvent
+	1, // 9: turing.v1.EventService.SubscribeSessionUpdates:output_type -> turing.v1.TuringEvent
+	7, // [7:10] is the sub-list for method output_type
+	4, // [4:7] is the sub-list for method input_type
 	4, // [4:4] is the sub-list for extension type_name
 	4, // [4:4] is the sub-list for extension extendee
 	0, // [0:4] is the sub-list for field type_name
@@ -509,7 +550,7 @@ func file_turing_v1_events_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_events_proto_rawDesc), len(file_turing_v1_events_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   4,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

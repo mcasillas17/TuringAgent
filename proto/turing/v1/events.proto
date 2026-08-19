@@ -60,7 +60,10 @@ message SubscribeSessionEventsRequest {
   int64 after_sequence = 2;
 }
 
+message SubscribeSessionUpdatesRequest {}
+
 service EventService {
   rpc ListEvents(ListEventsRequest) returns (ListEventsResponse);
   rpc SubscribeSessionEvents(SubscribeSessionEventsRequest) returns (stream TuringEvent);
+  rpc SubscribeSessionUpdates(SubscribeSessionUpdatesRequest) returns (stream TuringEvent);
 }

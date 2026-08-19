@@ -159,3 +159,12 @@ final $typed_data.Uint8List subscribeSessionEventsRequestDescriptor =
     $convert.base64Decode(
         'Ch1TdWJzY3JpYmVTZXNzaW9uRXZlbnRzUmVxdWVzdBIdCgpzZXNzaW9uX2lkGAEgASgJUglzZX'
         'NzaW9uSWQSJQoOYWZ0ZXJfc2VxdWVuY2UYAiABKANSDWFmdGVyU2VxdWVuY2U=');
+
+@$core.Deprecated('Use subscribeSessionUpdatesRequestDescriptor instead')
+const SubscribeSessionUpdatesRequest$json = {
+  '1': 'SubscribeSessionUpdatesRequest',
+};
+
+/// Descriptor for `SubscribeSessionUpdatesRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List subscribeSessionUpdatesRequestDescriptor =
+    $convert.base64Decode('Ch5TdWJzY3JpYmVTZXNzaW9uVXBkYXRlc1JlcXVlc3Q=');

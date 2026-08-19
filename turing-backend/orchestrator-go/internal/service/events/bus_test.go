@@ -35,6 +35,26 @@ func TestBusPublishesOnlyMatchingSessionAndUnsubscribes(t *testing.T) {
 	}
 }
 
+func TestBusPublishesEverySessionToGlobalSubscriber(t *testing.T) {
+	bus := NewBus(8)
+	ch, unsubscribe := bus.SubscribeAll()
+	defer unsubscribe()
+
+	bus.Publish(Event{SessionID: "sess_1", Sequence: 1, Type: "session.updated"})
+	bus.Publish(Event{SessionID: "sess_2", Sequence: 1, Type: "session.updated"})
+
+	for _, want := range []string{"sess_1", "sess_2"} {
+		select {
+		case event := <-ch:
+			if event.SessionID != want {
+				t.Fatalf("session_id = %q, want %q", event.SessionID, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for %s", want)
+		}
+	}
+}
+
 func TestBusOverflowRetainsLatestTerminalNotification(t *testing.T) {
 	bus := NewBus(128)
 	ch, unsubscribe := bus.Subscribe("sess_slow")

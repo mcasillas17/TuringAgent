@@ -16,3 +16,10 @@ SET title_origin = CASE
   WHEN title IS NULL OR title = '' OR title = 'New chat' THEN 'unset'
   ELSE 'explicit'
 END;
+
+-- The shell-wide update stream replays one latest title snapshot per session
+-- on connect. Keep that read proportional to session-update rows rather than
+-- every token/tool/run event in the log.
+CREATE INDEX IF NOT EXISTS idx_events_session_updates
+  ON events(session_id, sequence DESC)
+  WHERE type = 'session.updated';
