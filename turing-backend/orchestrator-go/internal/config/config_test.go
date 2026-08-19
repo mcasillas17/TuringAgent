@@ -88,17 +88,17 @@ func TestLoadFromMapValidatesMaxConcurrentRunsWithinRuntimeBound(t *testing.T) {
 
 func TestLoadFromMapLoadsBoundedAdvertisedContextLimits(t *testing.T) {
 	env := requiredEnv()
-	env["OLLAMA_MAX_CONTEXT_TOKENS"] = "32768"
-	env["OPENAI_MAX_CONTEXT_TOKENS"] = "128000"
+	env["OLLAMA_CONTEXT_WINDOW_TOKENS"] = "32768"
+	env["OPENAI_CONTEXT_WINDOW_TOKENS"] = "128000"
 	cfg, err := LoadFromMap(env)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.OllamaMaxContextTokens != 32768 || cfg.OpenAIMaxContextTokens != 128000 {
-		t.Fatalf("context limits = %d/%d", cfg.OllamaMaxContextTokens, cfg.OpenAIMaxContextTokens)
+	if cfg.OllamaContextWindowTokens != 32768 || cfg.OpenAIContextWindowTokens != 128000 {
+		t.Fatalf("context limits = %d/%d", cfg.OllamaContextWindowTokens, cfg.OpenAIContextWindowTokens)
 	}
-	env["OLLAMA_MAX_CONTEXT_TOKENS"] = "2147483648"
-	if _, err := LoadFromMap(env); err == nil || !strings.Contains(err.Error(), "OLLAMA_MAX_CONTEXT_TOKENS") {
+	env["OLLAMA_CONTEXT_WINDOW_TOKENS"] = "16777217"
+	if _, err := LoadFromMap(env); err == nil || !strings.Contains(err.Error(), "OLLAMA_CONTEXT_WINDOW_TOKENS") {
 		t.Fatalf("oversized context limit error = %v", err)
 	}
 }
@@ -168,6 +168,29 @@ func TestLoadFromMapLeavesTheIntegrationKeyOptional(t *testing.T) {
 	}
 	if cfg.IntegrationKey != "" {
 		t.Fatalf("IntegrationKey = %q, want empty", cfg.IntegrationKey)
+	}
+}
+
+func TestLoadFromMapDefaultsAndOverridesSkillsRoot(t *testing.T) {
+	cfg, err := LoadFromMap(requiredEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SkillsRoot != "/skills" {
+		t.Fatalf("SkillsRoot = %q, want /skills", cfg.SkillsRoot)
+	}
+	env := requiredEnv()
+	env["SKILLS_ROOT"] = "/tmp/test-skills"
+	cfg, err = LoadFromMap(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SkillsRoot != "/tmp/test-skills" {
+		t.Fatalf("SkillsRoot = %q", cfg.SkillsRoot)
+	}
+	env["SKILLS_ROOT"] = "relative/skills"
+	if _, err := LoadFromMap(env); err == nil {
+		t.Fatal("relative SKILLS_ROOT was accepted")
 	}
 }
 

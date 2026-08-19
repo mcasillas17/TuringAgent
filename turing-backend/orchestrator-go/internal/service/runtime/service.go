@@ -2286,16 +2286,37 @@ func toProtoExternalAgent(target *repository.ExternalAgentTarget) *turingv1.Exte
 	}
 }
 
-func toProtoSkills(skills []repository.AttachedSkill) []*turingv1.AttachedSkill {
+func toProtoSkills(skills []repository.SkillSnapshot) []*turingv1.SkillSnapshot {
 	if len(skills) == 0 {
 		return nil
 	}
-	converted := make([]*turingv1.AttachedSkill, 0, len(skills))
+	converted := make([]*turingv1.SkillSnapshot, 0, len(skills))
 	for _, skill := range skills {
-		converted = append(converted, &turingv1.AttachedSkill{
-			Name:         skill.Name,
-			Instructions: skill.Instructions,
+		body := skill.Body
+		if body == "" {
+			body = skill.Instructions
+		}
+		converted = append(converted, &turingv1.SkillSnapshot{
+			Name:                skill.Name,
+			Instructions:        body,
+			SkillId:             skill.SkillID,
+			Description:         skill.Description,
+			Category:            skill.Category,
+			References:          cloneStringMap(skill.References),
+			Withheld:            skill.Withheld,
+			MissingCapabilities: append([]string(nil), skill.MissingCapabilities...),
 		})
 	}
 	return converted
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	if len(source) == 0 {
+		return nil
+	}
+	clone := make(map[string]string, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
 }

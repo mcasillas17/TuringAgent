@@ -9,14 +9,20 @@ import (
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/skillfiles"
 )
 
 type Repository struct {
-	db *db.DB
+	db         *db.DB
+	skillStore *skillfiles.Store
 }
 
 func New(database *db.DB) *Repository {
 	return &Repository{db: database}
+}
+
+func (r *Repository) SetSkillStore(store *skillfiles.Store) {
+	r.skillStore = store
 }
 
 type Session struct {
@@ -152,7 +158,13 @@ func (r *Repository) ListMessagesBefore(ctx context.Context, sessionID, beforeMe
 	return reversed, nil
 }
 
-func (r *Repository) SearchMessages(ctx context.Context, sessionID, query string, limit int) ([]Message, error) {
+func (r *Repository) SearchMessages(
+	ctx context.Context,
+	sessionID string,
+	excludedSessionID string,
+	query string,
+	limit int,
+) ([]Message, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
@@ -170,6 +182,10 @@ func (r *Repository) SearchMessages(ctx context.Context, sessionID, query string
 	if sessionID != "" {
 		sqlQuery += ` AND m.session_id = ?`
 		args = append(args, sessionID)
+	}
+	if excludedSessionID != "" {
+		sqlQuery += ` AND m.session_id <> ?`
+		args = append(args, excludedSessionID)
 	}
 	sqlQuery += ` ORDER BY bm25(messages_fts), m.id LIMIT ?`
 	args = append(args, limit)

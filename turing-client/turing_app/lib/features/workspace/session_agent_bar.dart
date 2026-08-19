@@ -317,8 +317,10 @@ class _DestinationPickerState extends State<_DestinationPicker> {
                       child: Text(
                         'Choosing an agent below sends every message in this '
                         'conversation, and the results of any tool it runs, '
-                        'to that company. Material recalled from your other '
-                        'conversations is never sent to one.',
+                        'to that company. Enabled skill metadata and any '
+                        'skill text the agent loads are sent too. Material '
+                        'recalled from your other conversations is never sent '
+                        'to one.',
                         style: TextStyle(
                           fontSize: 12.5,
                           color: palette.textMuted,

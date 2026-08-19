@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 const (
 	maxConcurrentRunsLimit = 128
 	maxApprovalTTLMS       = 24 * 60 * 60 * 1000
+	maxContextWindowTokens = 16 * 1024 * 1024
 )
 
 type Config struct {
@@ -24,17 +26,18 @@ type Config struct {
 	// IntegrationKey seals third-party credentials before they are stored.
 	// Optional: when it is empty, connecting an account is refused with a
 	// reason rather than the credential being stored in the clear.
-	IntegrationKey         string
-	PublicPort             int
-	InternalPort           int
-	DatabasePath           string
-	OllamaBaseURL          string
-	OllamaModel            string
-	OllamaMaxContextTokens int
-	OpenAIBaseURL          string
-	OpenAIAPIKey           string
-	OpenAIModel            string
-	OpenAIMaxContextTokens int
+	IntegrationKey            string
+	PublicPort                int
+	InternalPort              int
+	DatabasePath              string
+	SkillsRoot                string
+	OllamaBaseURL             string
+	OllamaModel               string
+	OllamaContextWindowTokens int
+	OpenAIBaseURL             string
+	OpenAIAPIKey              string
+	OpenAIModel               string
+	OpenAIContextWindowTokens int
 	// AgentCredentialNames is the set of credential names an external agent may
 	// refer to — names only. The keys themselves are decoded, counted and
 	// dropped: the orchestrator never calls a third-party API, so holding the
@@ -174,19 +177,19 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if maxRuns < 1 || maxRuns > maxConcurrentRunsLimit {
 		return Config{}, fmt.Errorf("TURING_MAX_CONCURRENT_RUNS_GENERAL must be between 1 and %d", maxConcurrentRunsLimit)
 	}
-	ollamaMaxContextTokens, err := intValue("OLLAMA_MAX_CONTEXT_TOKENS", 0)
+	ollamaContextWindowTokens, err := positiveIntValue("OLLAMA_CONTEXT_WINDOW_TOKENS", 32768)
 	if err != nil {
 		return Config{}, err
 	}
-	if int64(ollamaMaxContextTokens) > math.MaxInt32 {
-		return Config{}, fmt.Errorf("OLLAMA_MAX_CONTEXT_TOKENS must be between 0 and %d", int64(math.MaxInt32))
+	if ollamaContextWindowTokens > maxContextWindowTokens {
+		return Config{}, fmt.Errorf("OLLAMA_CONTEXT_WINDOW_TOKENS must be between 1 and %d", maxContextWindowTokens)
 	}
-	openAIMaxContextTokens, err := intValue("OPENAI_MAX_CONTEXT_TOKENS", 0)
+	openAIContextWindowTokens, err := positiveIntValue("OPENAI_CONTEXT_WINDOW_TOKENS", 32768)
 	if err != nil {
 		return Config{}, err
 	}
-	if int64(openAIMaxContextTokens) > math.MaxInt32 {
-		return Config{}, fmt.Errorf("OPENAI_MAX_CONTEXT_TOKENS must be between 0 and %d", int64(math.MaxInt32))
+	if openAIContextWindowTokens > maxContextWindowTokens {
+		return Config{}, fmt.Errorf("OPENAI_CONTEXT_WINDOW_TOKENS must be between 1 and %d", maxContextWindowTokens)
 	}
 	maxTools, err := positiveIntValue("TURING_MAX_TOOL_CALLS_PER_RUN", 10)
 	if err != nil {
@@ -212,33 +215,38 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		return Config{}, err
 	}
 
+	skillsRoot := stringValue("SKILLS_ROOT", "/skills")
+	if !filepath.IsAbs(skillsRoot) || filepath.Clean(skillsRoot) != skillsRoot {
+		return Config{}, fmt.Errorf("SKILLS_ROOT must be a clean absolute path")
+	}
 	return Config{
-		ClientAPIKey:             clientKey,
-		InternalToken:            internalToken,
-		MCPSystemTokenGeneral:    systemToken,
-		MCPFilesTokenGeneral:     filesToken,
-		ApprovalJWTSecret:        approvalSecret,
-		IntegrationKey:           integrationKey,
-		PublicPort:               publicPort,
-		InternalPort:             internalPort,
-		DatabasePath:             stringValue("DATABASE_PATH", "/app/data/turing.db"),
-		OllamaBaseURL:            stringValue("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
-		OllamaModel:              stringValue("OLLAMA_MODEL", "qwen2.5:7b"),
-		OllamaMaxContextTokens:   ollamaMaxContextTokens,
-		OpenAIBaseURL:            stringValue("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-		OpenAIAPIKey:             env["OPENAI_API_KEY"],
-		OpenAIModel:              stringValue("OPENAI_MODEL", "gpt-4o-mini"),
-		OpenAIMaxContextTokens:   openAIMaxContextTokens,
-		AgentCredentialNames:     AgentCredentialNames(agentAPIKeys),
-		JobTimeoutMS:             jobTimeout,
-		JobReaperIntervalMS:      reaperInterval,
-		AutomationTickMS:         automationTick,
-		JobMaxAttempts:           maxAttempts,
-		MaxConcurrentRunsGeneral: maxRuns,
-		MaxToolCallsPerRun:       maxTools,
-		ModelTimeoutMS:           modelTimeout,
-		ToolTimeoutMS:            toolTimeout,
-		ApprovalTTLMS:            approvalTTL,
-		LogLevel:                 stringValue("LOG_LEVEL", "info"),
+		ClientAPIKey:              clientKey,
+		InternalToken:             internalToken,
+		MCPSystemTokenGeneral:     systemToken,
+		MCPFilesTokenGeneral:      filesToken,
+		ApprovalJWTSecret:         approvalSecret,
+		IntegrationKey:            integrationKey,
+		PublicPort:                publicPort,
+		InternalPort:              internalPort,
+		DatabasePath:              stringValue("DATABASE_PATH", "/app/data/turing.db"),
+		SkillsRoot:                skillsRoot,
+		OllamaBaseURL:             stringValue("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
+		OllamaModel:               stringValue("OLLAMA_MODEL", "qwen2.5:7b"),
+		OllamaContextWindowTokens: ollamaContextWindowTokens,
+		OpenAIBaseURL:             stringValue("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+		OpenAIAPIKey:              env["OPENAI_API_KEY"],
+		OpenAIModel:               stringValue("OPENAI_MODEL", "gpt-4o-mini"),
+		OpenAIContextWindowTokens: openAIContextWindowTokens,
+		AgentCredentialNames:      AgentCredentialNames(agentAPIKeys),
+		JobTimeoutMS:              jobTimeout,
+		JobReaperIntervalMS:       reaperInterval,
+		AutomationTickMS:          automationTick,
+		JobMaxAttempts:            maxAttempts,
+		MaxConcurrentRunsGeneral:  maxRuns,
+		MaxToolCallsPerRun:        maxTools,
+		ModelTimeoutMS:            modelTimeout,
+		ToolTimeoutMS:             toolTimeout,
+		ApprovalTTLMS:             approvalTTL,
+		LogLevel:                  stringValue("LOG_LEVEL", "info"),
 	}, nil
 }

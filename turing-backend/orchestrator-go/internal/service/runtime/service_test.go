@@ -1521,6 +1521,55 @@ func TestRuntimeEventUsesPersistedRunSessionAndTrace(t *testing.T) {
 	t.Fatalf("message.delta not replayed for run session: %+v", replayed)
 }
 
+func TestRuntimePersistsContextBudgetNotice(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "context budget notice")
+	payload, err := structpb.NewStruct(map[string]any{
+		"note":                   "Context window limit: omitted recalled material from this model request.",
+		"reason":                 "context_budget",
+		"recallOmitted":          true,
+		"historyMessagesOmitted": 0,
+		"toolDefinitionsOmitted": 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{
+		Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
+			RunId:   enqueued.RunID,
+			Type:    turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP,
+			Payload: payload,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	replayed, _, err := h.repo.ReplayEvents(
+		context.Background(),
+		enqueued.SessionID,
+		enqueued.QueuedEvent.Sequence,
+		10,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range replayed {
+		if event.Type != "agent.run.step" || !event.RunID.Valid || event.RunID.String != enqueued.RunID {
+			continue
+		}
+		var got map[string]any
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["reason"] != "context_budget" || got["recallOmitted"] != true ||
+			got["note"] != "Context window limit: omitted recalled material from this model request." {
+			t.Fatalf("persisted context notice payload = %#v", got)
+		}
+		return
+	}
+	t.Fatalf("context budget notice not replayed: %+v", replayed)
+}
+
 // normalizeRuntimeEvent must not write through to the worker's event. It clones
 // rather than dereferencing (a generated message embeds a mutex, so copying by
 // value is unsafe), and this pins the observable half of that: the caller's

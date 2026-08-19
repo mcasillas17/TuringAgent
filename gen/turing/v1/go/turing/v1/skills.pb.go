@@ -9,7 +9,6 @@ package turingv1
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
-	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -22,22 +21,27 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// A named block of instructions the user writes once and attaches to the
-// conversations where it applies.
-//
-// Skills are explicit, not inferred: the agent never decides which ones are
-// relevant. What is attached to a conversation is exactly what was attached by
-// hand, which is what makes a change in behaviour traceable to a specific
-// skill rather than to a selection step nobody can see.
+// A SKILL.md file and the user's decisions about whether it may load.
+// Metadata and body come from disk on every read; only enabled and capability
+// grants are persisted in SQLite.
 type Skill struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SkillId       string                 `protobuf:"bytes,1,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Instructions  string                 `protobuf:"bytes,3,opt,name=instructions,proto3" json:"instructions,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	SkillId             string                 `protobuf:"bytes,1,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
+	Name                string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Description         string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	Body                string                 `protobuf:"bytes,4,opt,name=body,proto3" json:"body,omitempty"`
+	Category            string                 `protobuf:"bytes,5,opt,name=category,proto3" json:"category,omitempty"`
+	Version             string                 `protobuf:"bytes,6,opt,name=version,proto3" json:"version,omitempty"`
+	Author              string                 `protobuf:"bytes,7,opt,name=author,proto3" json:"author,omitempty"`
+	License             string                 `protobuf:"bytes,8,opt,name=license,proto3" json:"license,omitempty"`
+	Requires            []string               `protobuf:"bytes,9,rep,name=requires,proto3" json:"requires,omitempty"`
+	GrantedCapabilities []string               `protobuf:"bytes,10,rep,name=granted_capabilities,json=grantedCapabilities,proto3" json:"granted_capabilities,omitempty"`
+	MissingCapabilities []string               `protobuf:"bytes,11,rep,name=missing_capabilities,json=missingCapabilities,proto3" json:"missing_capabilities,omitempty"`
+	Enabled             bool                   `protobuf:"varint,12,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	ParseError          string                 `protobuf:"bytes,13,opt,name=parse_error,json=parseError,proto3" json:"parse_error,omitempty"`
+	FolderPath          string                 `protobuf:"bytes,14,opt,name=folder_path,json=folderPath,proto3" json:"folder_path,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *Skill) Reset() {
@@ -84,217 +88,88 @@ func (x *Skill) GetName() string {
 	return ""
 }
 
-func (x *Skill) GetInstructions() string {
+func (x *Skill) GetDescription() string {
 	if x != nil {
-		return x.Instructions
+		return x.Description
 	}
 	return ""
 }
 
-func (x *Skill) GetCreatedAt() *timestamppb.Timestamp {
+func (x *Skill) GetBody() string {
 	if x != nil {
-		return x.CreatedAt
+		return x.Body
+	}
+	return ""
+}
+
+func (x *Skill) GetCategory() string {
+	if x != nil {
+		return x.Category
+	}
+	return ""
+}
+
+func (x *Skill) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *Skill) GetAuthor() string {
+	if x != nil {
+		return x.Author
+	}
+	return ""
+}
+
+func (x *Skill) GetLicense() string {
+	if x != nil {
+		return x.License
+	}
+	return ""
+}
+
+func (x *Skill) GetRequires() []string {
+	if x != nil {
+		return x.Requires
 	}
 	return nil
 }
 
-func (x *Skill) GetUpdatedAt() *timestamppb.Timestamp {
+func (x *Skill) GetGrantedCapabilities() []string {
 	if x != nil {
-		return x.UpdatedAt
+		return x.GrantedCapabilities
 	}
 	return nil
 }
 
-type CreateSkillRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Instructions  string                 `protobuf:"bytes,2,opt,name=instructions,proto3" json:"instructions,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CreateSkillRequest) Reset() {
-	*x = CreateSkillRequest{}
-	mi := &file_turing_v1_skills_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateSkillRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateSkillRequest) ProtoMessage() {}
-
-func (x *CreateSkillRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_skills_proto_msgTypes[1]
+func (x *Skill) GetMissingCapabilities() []string {
 	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
+		return x.MissingCapabilities
 	}
-	return mi.MessageOf(x)
+	return nil
 }
 
-// Deprecated: Use CreateSkillRequest.ProtoReflect.Descriptor instead.
-func (*CreateSkillRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_skills_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *CreateSkillRequest) GetName() string {
+func (x *Skill) GetEnabled() bool {
 	if x != nil {
-		return x.Name
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *Skill) GetParseError() string {
+	if x != nil {
+		return x.ParseError
 	}
 	return ""
 }
 
-func (x *CreateSkillRequest) GetInstructions() string {
+func (x *Skill) GetFolderPath() string {
 	if x != nil {
-		return x.Instructions
+		return x.FolderPath
 	}
 	return ""
-}
-
-type UpdateSkillRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SkillId       string                 `protobuf:"bytes,1,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Instructions  string                 `protobuf:"bytes,3,opt,name=instructions,proto3" json:"instructions,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UpdateSkillRequest) Reset() {
-	*x = UpdateSkillRequest{}
-	mi := &file_turing_v1_skills_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UpdateSkillRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UpdateSkillRequest) ProtoMessage() {}
-
-func (x *UpdateSkillRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_skills_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UpdateSkillRequest.ProtoReflect.Descriptor instead.
-func (*UpdateSkillRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_skills_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *UpdateSkillRequest) GetSkillId() string {
-	if x != nil {
-		return x.SkillId
-	}
-	return ""
-}
-
-func (x *UpdateSkillRequest) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *UpdateSkillRequest) GetInstructions() string {
-	if x != nil {
-		return x.Instructions
-	}
-	return ""
-}
-
-type DeleteSkillRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SkillId       string                 `protobuf:"bytes,1,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeleteSkillRequest) Reset() {
-	*x = DeleteSkillRequest{}
-	mi := &file_turing_v1_skills_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeleteSkillRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeleteSkillRequest) ProtoMessage() {}
-
-func (x *DeleteSkillRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_skills_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeleteSkillRequest.ProtoReflect.Descriptor instead.
-func (*DeleteSkillRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_skills_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *DeleteSkillRequest) GetSkillId() string {
-	if x != nil {
-		return x.SkillId
-	}
-	return ""
-}
-
-type DeleteSkillResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeleteSkillResponse) Reset() {
-	*x = DeleteSkillResponse{}
-	mi := &file_turing_v1_skills_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeleteSkillResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeleteSkillResponse) ProtoMessage() {}
-
-func (x *DeleteSkillResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_skills_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeleteSkillResponse.ProtoReflect.Descriptor instead.
-func (*DeleteSkillResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_skills_proto_rawDescGZIP(), []int{4}
 }
 
 type ListSkillsRequest struct {
@@ -305,7 +180,7 @@ type ListSkillsRequest struct {
 
 func (x *ListSkillsRequest) Reset() {
 	*x = ListSkillsRequest{}
-	mi := &file_turing_v1_skills_proto_msgTypes[5]
+	mi := &file_turing_v1_skills_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -317,7 +192,7 @@ func (x *ListSkillsRequest) String() string {
 func (*ListSkillsRequest) ProtoMessage() {}
 
 func (x *ListSkillsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_skills_proto_msgTypes[5]
+	mi := &file_turing_v1_skills_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -330,7 +205,7 @@ func (x *ListSkillsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSkillsRequest.ProtoReflect.Descriptor instead.
 func (*ListSkillsRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_skills_proto_rawDescGZIP(), []int{5}
+	return file_turing_v1_skills_proto_rawDescGZIP(), []int{1}
 }
 
 type ListSkillsResponse struct {
@@ -342,7 +217,7 @@ type ListSkillsResponse struct {
 
 func (x *ListSkillsResponse) Reset() {
 	*x = ListSkillsResponse{}
-	mi := &file_turing_v1_skills_proto_msgTypes[6]
+	mi := &file_turing_v1_skills_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -354,7 +229,7 @@ func (x *ListSkillsResponse) String() string {
 func (*ListSkillsResponse) ProtoMessage() {}
 
 func (x *ListSkillsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_skills_proto_msgTypes[6]
+	mi := &file_turing_v1_skills_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -367,7 +242,7 @@ func (x *ListSkillsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSkillsResponse.ProtoReflect.Descriptor instead.
 func (*ListSkillsResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_skills_proto_rawDescGZIP(), []int{6}
+	return file_turing_v1_skills_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ListSkillsResponse) GetSkills() []*Skill {
@@ -377,29 +252,28 @@ func (x *ListSkillsResponse) GetSkills() []*Skill {
 	return nil
 }
 
-type AttachSkillRequest struct {
+type GetSkillRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	SkillId       string                 `protobuf:"bytes,2,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
+	SkillId       string                 `protobuf:"bytes,1,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *AttachSkillRequest) Reset() {
-	*x = AttachSkillRequest{}
-	mi := &file_turing_v1_skills_proto_msgTypes[7]
+func (x *GetSkillRequest) Reset() {
+	*x = GetSkillRequest{}
+	mi := &file_turing_v1_skills_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *AttachSkillRequest) String() string {
+func (x *GetSkillRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*AttachSkillRequest) ProtoMessage() {}
+func (*GetSkillRequest) ProtoMessage() {}
 
-func (x *AttachSkillRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_skills_proto_msgTypes[7]
+func (x *GetSkillRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_skills_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -410,48 +284,41 @@ func (x *AttachSkillRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use AttachSkillRequest.ProtoReflect.Descriptor instead.
-func (*AttachSkillRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_skills_proto_rawDescGZIP(), []int{7}
+// Deprecated: Use GetSkillRequest.ProtoReflect.Descriptor instead.
+func (*GetSkillRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_skills_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *AttachSkillRequest) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *AttachSkillRequest) GetSkillId() string {
+func (x *GetSkillRequest) GetSkillId() string {
 	if x != nil {
 		return x.SkillId
 	}
 	return ""
 }
 
-type DetachSkillRequest struct {
+type SetSkillEnabledRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	SkillId       string                 `protobuf:"bytes,2,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
+	SkillId       string                 `protobuf:"bytes,1,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
+	Enabled       bool                   `protobuf:"varint,2,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *DetachSkillRequest) Reset() {
-	*x = DetachSkillRequest{}
-	mi := &file_turing_v1_skills_proto_msgTypes[8]
+func (x *SetSkillEnabledRequest) Reset() {
+	*x = SetSkillEnabledRequest{}
+	mi := &file_turing_v1_skills_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *DetachSkillRequest) String() string {
+func (x *SetSkillEnabledRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*DetachSkillRequest) ProtoMessage() {}
+func (*SetSkillEnabledRequest) ProtoMessage() {}
 
-func (x *DetachSkillRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_skills_proto_msgTypes[8]
+func (x *SetSkillEnabledRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_skills_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -462,47 +329,49 @@ func (x *DetachSkillRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use DetachSkillRequest.ProtoReflect.Descriptor instead.
-func (*DetachSkillRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_skills_proto_rawDescGZIP(), []int{8}
+// Deprecated: Use SetSkillEnabledRequest.ProtoReflect.Descriptor instead.
+func (*SetSkillEnabledRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_skills_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *DetachSkillRequest) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *DetachSkillRequest) GetSkillId() string {
+func (x *SetSkillEnabledRequest) GetSkillId() string {
 	if x != nil {
 		return x.SkillId
 	}
 	return ""
 }
 
-type SessionSkillsResponse struct {
+func (x *SetSkillEnabledRequest) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+type SetSkillCapabilityGrantRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Skills        []*Skill               `protobuf:"bytes,1,rep,name=skills,proto3" json:"skills,omitempty"`
+	SkillId       string                 `protobuf:"bytes,1,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
+	Capability    string                 `protobuf:"bytes,2,opt,name=capability,proto3" json:"capability,omitempty"`
+	Granted       bool                   `protobuf:"varint,3,opt,name=granted,proto3" json:"granted,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *SessionSkillsResponse) Reset() {
-	*x = SessionSkillsResponse{}
-	mi := &file_turing_v1_skills_proto_msgTypes[9]
+func (x *SetSkillCapabilityGrantRequest) Reset() {
+	*x = SetSkillCapabilityGrantRequest{}
+	mi := &file_turing_v1_skills_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SessionSkillsResponse) String() string {
+func (x *SetSkillCapabilityGrantRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SessionSkillsResponse) ProtoMessage() {}
+func (*SetSkillCapabilityGrantRequest) ProtoMessage() {}
 
-func (x *SessionSkillsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_skills_proto_msgTypes[9]
+func (x *SetSkillCapabilityGrantRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_skills_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -513,110 +382,75 @@ func (x *SessionSkillsResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SessionSkillsResponse.ProtoReflect.Descriptor instead.
-func (*SessionSkillsResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_skills_proto_rawDescGZIP(), []int{9}
+// Deprecated: Use SetSkillCapabilityGrantRequest.ProtoReflect.Descriptor instead.
+func (*SetSkillCapabilityGrantRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_skills_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *SessionSkillsResponse) GetSkills() []*Skill {
+func (x *SetSkillCapabilityGrantRequest) GetSkillId() string {
 	if x != nil {
-		return x.Skills
-	}
-	return nil
-}
-
-type ListSessionSkillsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListSessionSkillsRequest) Reset() {
-	*x = ListSessionSkillsRequest{}
-	mi := &file_turing_v1_skills_proto_msgTypes[10]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListSessionSkillsRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListSessionSkillsRequest) ProtoMessage() {}
-
-func (x *ListSessionSkillsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_skills_proto_msgTypes[10]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListSessionSkillsRequest.ProtoReflect.Descriptor instead.
-func (*ListSessionSkillsRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_skills_proto_rawDescGZIP(), []int{10}
-}
-
-func (x *ListSessionSkillsRequest) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
+		return x.SkillId
 	}
 	return ""
+}
+
+func (x *SetSkillCapabilityGrantRequest) GetCapability() string {
+	if x != nil {
+		return x.Capability
+	}
+	return ""
+}
+
+func (x *SetSkillCapabilityGrantRequest) GetGranted() bool {
+	if x != nil {
+		return x.Granted
+	}
+	return false
 }
 
 var File_turing_v1_skills_proto protoreflect.FileDescriptor
 
 const file_turing_v1_skills_proto_rawDesc = "" +
 	"\n" +
-	"\x16turing/v1/skills.proto\x12\tturing.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd0\x01\n" +
+	"\x16turing/v1/skills.proto\x12\tturing.v1\"\xb2\x03\n" +
 	"\x05Skill\x12\x19\n" +
 	"\bskill_id\x18\x01 \x01(\tR\askillId\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12\"\n" +
-	"\finstructions\x18\x03 \x01(\tR\finstructions\x129\n" +
-	"\n" +
-	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
-	"\n" +
-	"updated_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"L\n" +
-	"\x12CreateSkillRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\"\n" +
-	"\finstructions\x18\x02 \x01(\tR\finstructions\"g\n" +
-	"\x12UpdateSkillRequest\x12\x19\n" +
-	"\bskill_id\x18\x01 \x01(\tR\askillId\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12\"\n" +
-	"\finstructions\x18\x03 \x01(\tR\finstructions\"/\n" +
-	"\x12DeleteSkillRequest\x12\x19\n" +
-	"\bskill_id\x18\x01 \x01(\tR\askillId\"\x15\n" +
-	"\x13DeleteSkillResponse\"\x13\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x12\n" +
+	"\x04body\x18\x04 \x01(\tR\x04body\x12\x1a\n" +
+	"\bcategory\x18\x05 \x01(\tR\bcategory\x12\x18\n" +
+	"\aversion\x18\x06 \x01(\tR\aversion\x12\x16\n" +
+	"\x06author\x18\a \x01(\tR\x06author\x12\x18\n" +
+	"\alicense\x18\b \x01(\tR\alicense\x12\x1a\n" +
+	"\brequires\x18\t \x03(\tR\brequires\x121\n" +
+	"\x14granted_capabilities\x18\n" +
+	" \x03(\tR\x13grantedCapabilities\x121\n" +
+	"\x14missing_capabilities\x18\v \x03(\tR\x13missingCapabilities\x12\x18\n" +
+	"\aenabled\x18\f \x01(\bR\aenabled\x12\x1f\n" +
+	"\vparse_error\x18\r \x01(\tR\n" +
+	"parseError\x12\x1f\n" +
+	"\vfolder_path\x18\x0e \x01(\tR\n" +
+	"folderPath\"\x13\n" +
 	"\x11ListSkillsRequest\">\n" +
 	"\x12ListSkillsResponse\x12(\n" +
-	"\x06skills\x18\x01 \x03(\v2\x10.turing.v1.SkillR\x06skills\"N\n" +
-	"\x12AttachSkillRequest\x12\x1d\n" +
+	"\x06skills\x18\x01 \x03(\v2\x10.turing.v1.SkillR\x06skills\",\n" +
+	"\x0fGetSkillRequest\x12\x19\n" +
+	"\bskill_id\x18\x01 \x01(\tR\askillId\"M\n" +
+	"\x16SetSkillEnabledRequest\x12\x19\n" +
+	"\bskill_id\x18\x01 \x01(\tR\askillId\x12\x18\n" +
+	"\aenabled\x18\x02 \x01(\bR\aenabled\"u\n" +
+	"\x1eSetSkillCapabilityGrantRequest\x12\x19\n" +
+	"\bskill_id\x18\x01 \x01(\tR\askillId\x12\x1e\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x19\n" +
-	"\bskill_id\x18\x02 \x01(\tR\askillId\"N\n" +
-	"\x12DetachSkillRequest\x12\x1d\n" +
+	"capability\x18\x02 \x01(\tR\n" +
+	"capability\x12\x18\n" +
+	"\agranted\x18\x03 \x01(\bR\agranted2\xb3\x02\n" +
+	"\fSkillService\x12I\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x19\n" +
-	"\bskill_id\x18\x02 \x01(\tR\askillId\"A\n" +
-	"\x15SessionSkillsResponse\x12(\n" +
-	"\x06skills\x18\x01 \x03(\v2\x10.turing.v1.SkillR\x06skills\"9\n" +
-	"\x18ListSessionSkillsRequest\x12\x1d\n" +
-	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId2\xa3\x04\n" +
-	"\fSkillService\x12>\n" +
-	"\vCreateSkill\x12\x1d.turing.v1.CreateSkillRequest\x1a\x10.turing.v1.Skill\x12>\n" +
-	"\vUpdateSkill\x12\x1d.turing.v1.UpdateSkillRequest\x1a\x10.turing.v1.Skill\x12L\n" +
-	"\vDeleteSkill\x12\x1d.turing.v1.DeleteSkillRequest\x1a\x1e.turing.v1.DeleteSkillResponse\x12I\n" +
-	"\n" +
-	"ListSkills\x12\x1c.turing.v1.ListSkillsRequest\x1a\x1d.turing.v1.ListSkillsResponse\x12N\n" +
-	"\vAttachSkill\x12\x1d.turing.v1.AttachSkillRequest\x1a .turing.v1.SessionSkillsResponse\x12N\n" +
-	"\vDetachSkill\x12\x1d.turing.v1.DetachSkillRequest\x1a .turing.v1.SessionSkillsResponse\x12Z\n" +
-	"\x11ListSessionSkills\x12#.turing.v1.ListSessionSkillsRequest\x1a .turing.v1.SessionSkillsResponseB>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
+	"ListSkills\x12\x1c.turing.v1.ListSkillsRequest\x1a\x1d.turing.v1.ListSkillsResponse\x128\n" +
+	"\bGetSkill\x12\x1a.turing.v1.GetSkillRequest\x1a\x10.turing.v1.Skill\x12F\n" +
+	"\x0fSetSkillEnabled\x12!.turing.v1.SetSkillEnabledRequest\x1a\x10.turing.v1.Skill\x12V\n" +
+	"\x17SetSkillCapabilityGrant\x12).turing.v1.SetSkillCapabilityGrantRequest\x1a\x10.turing.v1.SkillB>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
 
 var (
 	file_turing_v1_skills_proto_rawDescOnce sync.Once
@@ -630,45 +464,30 @@ func file_turing_v1_skills_proto_rawDescGZIP() []byte {
 	return file_turing_v1_skills_proto_rawDescData
 }
 
-var file_turing_v1_skills_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_turing_v1_skills_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_turing_v1_skills_proto_goTypes = []any{
-	(*Skill)(nil),                    // 0: turing.v1.Skill
-	(*CreateSkillRequest)(nil),       // 1: turing.v1.CreateSkillRequest
-	(*UpdateSkillRequest)(nil),       // 2: turing.v1.UpdateSkillRequest
-	(*DeleteSkillRequest)(nil),       // 3: turing.v1.DeleteSkillRequest
-	(*DeleteSkillResponse)(nil),      // 4: turing.v1.DeleteSkillResponse
-	(*ListSkillsRequest)(nil),        // 5: turing.v1.ListSkillsRequest
-	(*ListSkillsResponse)(nil),       // 6: turing.v1.ListSkillsResponse
-	(*AttachSkillRequest)(nil),       // 7: turing.v1.AttachSkillRequest
-	(*DetachSkillRequest)(nil),       // 8: turing.v1.DetachSkillRequest
-	(*SessionSkillsResponse)(nil),    // 9: turing.v1.SessionSkillsResponse
-	(*ListSessionSkillsRequest)(nil), // 10: turing.v1.ListSessionSkillsRequest
-	(*timestamppb.Timestamp)(nil),    // 11: google.protobuf.Timestamp
+	(*Skill)(nil),                          // 0: turing.v1.Skill
+	(*ListSkillsRequest)(nil),              // 1: turing.v1.ListSkillsRequest
+	(*ListSkillsResponse)(nil),             // 2: turing.v1.ListSkillsResponse
+	(*GetSkillRequest)(nil),                // 3: turing.v1.GetSkillRequest
+	(*SetSkillEnabledRequest)(nil),         // 4: turing.v1.SetSkillEnabledRequest
+	(*SetSkillCapabilityGrantRequest)(nil), // 5: turing.v1.SetSkillCapabilityGrantRequest
 }
 var file_turing_v1_skills_proto_depIdxs = []int32{
-	11, // 0: turing.v1.Skill.created_at:type_name -> google.protobuf.Timestamp
-	11, // 1: turing.v1.Skill.updated_at:type_name -> google.protobuf.Timestamp
-	0,  // 2: turing.v1.ListSkillsResponse.skills:type_name -> turing.v1.Skill
-	0,  // 3: turing.v1.SessionSkillsResponse.skills:type_name -> turing.v1.Skill
-	1,  // 4: turing.v1.SkillService.CreateSkill:input_type -> turing.v1.CreateSkillRequest
-	2,  // 5: turing.v1.SkillService.UpdateSkill:input_type -> turing.v1.UpdateSkillRequest
-	3,  // 6: turing.v1.SkillService.DeleteSkill:input_type -> turing.v1.DeleteSkillRequest
-	5,  // 7: turing.v1.SkillService.ListSkills:input_type -> turing.v1.ListSkillsRequest
-	7,  // 8: turing.v1.SkillService.AttachSkill:input_type -> turing.v1.AttachSkillRequest
-	8,  // 9: turing.v1.SkillService.DetachSkill:input_type -> turing.v1.DetachSkillRequest
-	10, // 10: turing.v1.SkillService.ListSessionSkills:input_type -> turing.v1.ListSessionSkillsRequest
-	0,  // 11: turing.v1.SkillService.CreateSkill:output_type -> turing.v1.Skill
-	0,  // 12: turing.v1.SkillService.UpdateSkill:output_type -> turing.v1.Skill
-	4,  // 13: turing.v1.SkillService.DeleteSkill:output_type -> turing.v1.DeleteSkillResponse
-	6,  // 14: turing.v1.SkillService.ListSkills:output_type -> turing.v1.ListSkillsResponse
-	9,  // 15: turing.v1.SkillService.AttachSkill:output_type -> turing.v1.SessionSkillsResponse
-	9,  // 16: turing.v1.SkillService.DetachSkill:output_type -> turing.v1.SessionSkillsResponse
-	9,  // 17: turing.v1.SkillService.ListSessionSkills:output_type -> turing.v1.SessionSkillsResponse
-	11, // [11:18] is the sub-list for method output_type
-	4,  // [4:11] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	0, // 0: turing.v1.ListSkillsResponse.skills:type_name -> turing.v1.Skill
+	1, // 1: turing.v1.SkillService.ListSkills:input_type -> turing.v1.ListSkillsRequest
+	3, // 2: turing.v1.SkillService.GetSkill:input_type -> turing.v1.GetSkillRequest
+	4, // 3: turing.v1.SkillService.SetSkillEnabled:input_type -> turing.v1.SetSkillEnabledRequest
+	5, // 4: turing.v1.SkillService.SetSkillCapabilityGrant:input_type -> turing.v1.SetSkillCapabilityGrantRequest
+	2, // 5: turing.v1.SkillService.ListSkills:output_type -> turing.v1.ListSkillsResponse
+	0, // 6: turing.v1.SkillService.GetSkill:output_type -> turing.v1.Skill
+	0, // 7: turing.v1.SkillService.SetSkillEnabled:output_type -> turing.v1.Skill
+	0, // 8: turing.v1.SkillService.SetSkillCapabilityGrant:output_type -> turing.v1.Skill
+	5, // [5:9] is the sub-list for method output_type
+	1, // [1:5] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_skills_proto_init() }
@@ -682,7 +501,7 @@ func file_turing_v1_skills_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_skills_proto_rawDesc), len(file_turing_v1_skills_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   11,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

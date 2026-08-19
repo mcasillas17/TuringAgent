@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync/atomic"
@@ -19,6 +20,13 @@ type blockingProvider struct {
 }
 
 func (p *blockingProvider) ID() string { return "ollama" }
+
+func (p *blockingProvider) ContextWindowTokens() int { return llm.DefaultContextWindowTokens }
+func (p *blockingProvider) MaxOutputTokens() int     { return llm.DefaultMaxOutputTokens }
+func (p *blockingProvider) EstimateRequestTokens(req llm.ChatRequest) (int, error) {
+	body, err := json.Marshal(req)
+	return len(body), err
+}
 
 func (p *blockingProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	close(p.started)

@@ -142,6 +142,39 @@ provision_sandbox() {
   validate_sandbox_entries "$sandbox_path" "$sandbox_path"
 }
 
+provision_skills() {
+  local skills_path="$PWD/skills"
+
+  if [[ -L "$skills_path" ]]; then
+    printf 'Initialization failed: skills must be a real directory, not a symlink.\n' >&2
+    return 1
+  fi
+  if [[ -e "$skills_path" && ! -d "$skills_path" ]]; then
+    printf 'Initialization failed: skills must be a real directory.\n' >&2
+    return 1
+  fi
+  if [[ ! -e "$skills_path" ]] && ! (umask 077 && mkdir -m 0700 -- "$skills_path"); then
+    printf 'Initialization failed: could not create skills directory.\n' >&2
+    return 1
+  fi
+  if [[ -L "$skills_path" || ! -d "$skills_path" ]]; then
+    printf 'Initialization failed: skills must be a real directory, not a symlink.\n' >&2
+    return 1
+  fi
+  if [[ ! -O "$skills_path" || ! -r "$skills_path" || ! -w "$skills_path" || ! -x "$skills_path" ]]; then
+    printf 'Initialization failed: skills is not owned, readable, writable, and traversable by the host user.\n' >&2
+    return 1
+  fi
+  if ! chmod 0700 "$skills_path"; then
+    printf 'Initialization failed: could not secure skills directory.\n' >&2
+    return 1
+  fi
+  if [[ "$(path_mode "$skills_path")" != "700" ]]; then
+    printf 'Initialization failed: skills must have mode 0700.\n' >&2
+    return 1
+  fi
+}
+
 path_mode() {
   local path="$1"
   local mode
@@ -257,6 +290,7 @@ if ! is_positive_id "$current_uid" || ! is_positive_id "$current_gid"; then
   exit 1
 fi
 provision_sandbox
+provision_skills
 
 validate_env_file
 if [[ ! -e .env ]]; then

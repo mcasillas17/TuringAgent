@@ -31,7 +31,11 @@ type MessageClient interface {
 // type and a test can substitute a fake. Optional: a nil recaller simply means
 // no recall.
 type ContextRecaller interface {
-	Recall(ctx context.Context, sessionID string, userText string, inContext []llm.ChatMessage) (llm.ChatMessage, bool)
+	PrepareRecall(
+		ctx context.Context,
+		sessionID string,
+		userText string,
+	) func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool)
 }
 
 type GeneralAssistantTools struct {
@@ -61,6 +65,11 @@ const (
 	// payload lists the first maxUnknownToolListing, flags the truncation, and
 	// reports the true total so the truncation is never silent.
 	maxUnknownToolListing = 32
+	// Recall itself has a two-second default timeout. Convergence shares one
+	// deadline across a small pass budget, then uses one broad fallback query so
+	// an oscillating suffix cannot occupy a worker for minutes.
+	maxRecallConvergencePasses = 3
+	recallConvergenceTimeout   = 2 * time.Second
 )
 
 // joinedDiscoveryHook is set only by tests; see the call site in discoverTools.
@@ -202,7 +211,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		// a person editing .env, not by another attempt in thirty seconds.
 		return emitRunFailed(emit, job, "external_agent_unavailable", err.Error(), false)
 	}
-	if provider == nil {
+	if llm.ProviderIsNil(provider) {
 		return emitRunFailed(emit, job, "model_provider_unavailable", fmt.Sprintf("Provider %s is not configured", job.GetModelProvider().String()), false)
 	}
 	registry, err := a.discoverTools(ctx)
@@ -212,58 +221,94 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		}
 		return emitRunFailed(emit, job, "tool_discovery_failed", err.Error(), ToolDiscoveryRetryable(err))
 	}
-	requestMessages := append([]llm.ChatMessage{}, messages...)
-	requestMessages = append(requestMessages, llm.ChatMessage{Role: "user", Content: job.GetUserText()})
-	// Skills open the request, ahead of the conversation history: they are
-	// standing instructions about how to behave here, not a turn in the
-	// conversation. Applied before recall so that a recalled block, which is
-	// prepended below, still lands above them and reads as background rather
-	// than as a rule.
-	if system, ok := skillsSystemMessage(job.GetSkills()); ok {
-		requestMessages = append([]llm.ChatMessage{system}, requestMessages...)
-	}
-	// Recalled material is prepended so it sits before the live conversation and
-	// cannot be read as the user's latest turn. Recall is given the request as
-	// built, which is how it knows what is already in front of the model; it
-	// never returns an error, degrading to "no block" instead, so a slow or
-	// unavailable search cannot fail the run.
-	//
-	// Recall is skipped entirely for a run routed off this machine. The user
-	// opted ONE conversation into leaving; recall would quietly widen that to
-	// material from conversations they never chose to send anywhere, which is
-	// exactly the surprise the first commitment exists to prevent. Capability
-	// loses to consent here, and the client says so where the choice is made.
-	if a.recall != nil && job.GetExternalAgent() == nil {
-		if block, ok := a.recall.Recall(ctx, job.GetSessionId(), job.GetUserText(), requestMessages); ok {
-			requestMessages = append([]llm.ChatMessage{block}, requestMessages...)
-			// The block tells the model where the material came from; without this
-			// the user gets no such hint, and an answer drawn from a conversation
-			// weeks ago reads as confabulation. Emitted before the model request so
-			// it precedes the answer it explains. Recall returning nothing stays
-			// silent — that is the common case.
-			if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP, map[string]any{
-				"note": "Using material recalled from earlier conversations",
-			})); err != nil {
-				return err
-			}
-		}
-	}
+	historyMessages := append([]llm.ChatMessage{}, messages...)
+	liveMessages := []llm.ChatMessage{{
+		MessageID: job.GetUserMessageId(),
+		Role:      "user",
+		Content:   job.GetUserText(),
+	}}
+	// Filesystem skills contribute a bounded metadata index. Bodies arrive only
+	// through skill_view or an exact $path/id invocation. Legacy queued jobs
+	// retain their old full-body snapshot behavior until they drain.
+	toolDefinitions := registry.Definitions()
+	recallForContext := a.prepareRecallForRun(ctx, job)
 	var content strings.Builder
 	var tokens runTokenAccumulator
 	toolCallCount := 0
 	successfulToolSideEffect := false
 	usedModelToolCallIDs := make(map[string]struct{})
 	toolResultBytes := 0
+	var lastOmissions contextOmissions
+	omissionNoticeEmitted := false
+	recallNoticeEmitted := false
 	for toolIteration := 0; ; {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		skillMessages, skillIndexIncluded, skillIndexOmitted, err := buildSkillMessagesWithinContext(
+			provider,
+			job.GetModel(),
+			job.GetSkills(),
+			job.GetUserText(),
+			liveMessages,
+			toolDefinitions,
+		)
+		if err != nil {
+			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
+		}
+		requiredToolNames := requiredSkillToolNames(skillIndexIncluded)
+		budgeted, recallMessage, err := a.buildBudgetedContextWithRecall(
+			ctx,
+			provider,
+			job,
+			skillMessages,
+			skillIndexOmitted,
+			requiredToolNames,
+			excludedOptionalSkillToolNames(skillIndexIncluded, skillIndexOmitted),
+			historyMessages,
+			liveMessages,
+			toolDefinitions,
+			recallForContext,
+		)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
+		}
+		if notice := budgeted.Omissions.Notice(); notice != "" &&
+			(!omissionNoticeEmitted || budgeted.Omissions != lastOmissions) {
+			if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP, map[string]any{
+				"note":                   notice,
+				"reason":                 "context_budget",
+				"historyMessagesOmitted": budgeted.Omissions.HistoryMessages,
+				"recallOmitted":          budgeted.Omissions.RecallOmitted,
+				"skillIndexOmitted":      budgeted.Omissions.SkillIndexOmitted,
+				"toolDefinitionsOmitted": budgeted.Omissions.ToolDefinitions,
+				"toolResultsOmitted":     budgeted.Omissions.ToolResults,
+			})); err != nil {
+				return err
+			}
+			lastOmissions = budgeted.Omissions
+			omissionNoticeEmitted = true
+		}
+		if budgeted.RecallUsed && !recallNoticeEmitted {
+			// The block tells the model where the material came from; without this
+			// the user gets no such hint, and an answer drawn from a conversation
+			// weeks ago reads as confabulation. Emit only after admission so an
+			// omitted block is never described as used.
+			if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP, map[string]any{
+				"note": "Using material recalled from earlier conversations",
+			})); err != nil {
+				return err
+			}
+			recallNoticeEmitted = true
+		}
 		modelCtx, cancelModel := boundedContext(ctx, a.modelTimeout())
-		events, err := provider.StreamChat(modelCtx, llm.ChatRequest{
-			Model:    job.GetModel(),
-			Messages: requestMessages,
-			Tools:    registry.Definitions(),
-		})
+		events, err := provider.StreamChat(modelCtx, budgeted.Request)
 		if err != nil {
 			modelErr := modelCtx.Err()
 			cancelModel()
@@ -280,6 +325,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		}
 		var turnText strings.Builder
 		var calls []llm.ToolCall
+		finishReason := ""
 	stream:
 		for {
 			var event llm.StreamEvent
@@ -318,6 +364,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			case "tool_call":
 				calls = append(calls, event.ToolCalls...)
 			case "completed":
+				finishReason = event.FinishReason
 				// A run can make several model turns — one per tool round — and
 				// what the user is charged, in time or in money, is their sum.
 				// Accumulated here rather than at the end because only this
@@ -344,6 +391,21 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		if errors.Is(modelErr, context.DeadlineExceeded) {
 			return emitRunFailed(emit, job, "model_timeout", modelErr.Error(), !successfulToolSideEffect)
 		}
+		if finishReason == "length" {
+			setting := maxOutputTokensSetting(provider)
+			if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP, map[string]any{
+				"note": fmt.Sprintf(
+					"Model stopped after reaching the configured %d-token output limit. Increase %s if the selected model supports a longer answer.",
+					provider.MaxOutputTokens(),
+					setting,
+				),
+				"reason":          "model_output_limit",
+				"maxOutputTokens": provider.MaxOutputTokens(),
+				"setting":         setting,
+			})); err != nil {
+				return err
+			}
+		}
 		if len(calls) == 0 {
 			if strings.TrimSpace(content.String()) == "" {
 				if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA, map[string]any{
@@ -352,6 +414,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				})); err != nil {
 					return err
 				}
+
 				content.Reset()
 				content.WriteString(emptyFinalFallback)
 			}
@@ -368,11 +431,50 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		}
 		toolCallCount += len(calls)
 		normalizeToolCallIDs(calls, job.GetRunId(), toolIteration, usedModelToolCallIDs)
-		requestMessages = append(requestMessages, llm.ChatMessage{
+		liveMessages = append(liveMessages, llm.ChatMessage{
 			Role:      "assistant",
 			Content:   turnText.String(),
 			ToolCalls: calls,
 		})
+		prospectiveLive := cloneChatMessages(liveMessages)
+		minimalToolResults := make(map[int]struct{}, len(calls))
+		for _, call := range calls {
+			minimalIndex := len(prospectiveLive)
+			prospectiveLive = append(prospectiveLive, llm.ChatMessage{
+				Role:       "tool",
+				Name:       call.Name,
+				ToolCallID: call.ID,
+				Content:    compactedToolResultForBytes(maxToolResultBytes),
+			})
+			minimalToolResults[minimalIndex] = struct{}{}
+		}
+		prospectiveSkillMessages, prospectiveSkillIndexIncluded, prospectiveSkillIndexOmitted, err :=
+			buildSkillMessagesWithinContext(
+				provider,
+				job.GetModel(),
+				job.GetSkills(),
+				job.GetUserText(),
+				prospectiveLive,
+				toolDefinitions,
+			)
+		if err != nil {
+			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
+		}
+		if _, err := buildBudgetedContext(provider, job.GetModel(), contextInput{
+			skills:            prospectiveSkillMessages,
+			history:           historyMessages,
+			recall:            recallMessage,
+			live:              prospectiveLive,
+			requiredToolNames: requiredSkillToolNames(prospectiveSkillIndexIncluded),
+			excludedOptionalToolNames: excludedOptionalSkillToolNames(
+				prospectiveSkillIndexIncluded,
+				prospectiveSkillIndexOmitted,
+			),
+			skillIndexOmitted:  prospectiveSkillIndexOmitted,
+			minimalToolResults: minimalToolResults,
+		}, toolDefinitions); err != nil {
+			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
+		}
 		for _, call := range calls {
 			outcome, err := a.executeToolCall(ctx, job, emit, registry, call)
 			successfulToolSideEffect = successfulToolSideEffect || outcome.SuccessfulSideEffect
@@ -392,7 +494,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 						false,
 					)
 				}
-				requestMessages = append(requestMessages, *outcome.ResultMessage)
+				liveMessages = append(liveMessages, *outcome.ResultMessage)
 				toolResultBytes += outcome.AppendedBytes
 			}
 		}
@@ -416,6 +518,222 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			}
 			return completeRun(emit, job, content.String(), tokens.reported())
 		}
+	}
+}
+
+func buildSkillMessagesWithinContext(
+	provider llm.Provider,
+	model string,
+	skills []*turingv1.SkillSnapshot,
+	userText string,
+	liveMessages []llm.ChatMessage,
+	toolDefinitions []llm.ToolDefinition,
+) ([]llm.ChatMessage, bool, bool, error) {
+	var required []llm.ChatMessage
+	if legacy, ok := legacySkillsMessage(skills); ok {
+		required = append(required, legacy)
+	}
+	required = append(required, explicitlyInvokedSkillMessages(skills, userText)...)
+
+	indexAtLimit := func(maxContentBytes int) ([]llm.ChatMessage, bool, bool) {
+		index, metadataOmitted := skillIndexMessagesWithinBytes(skills, maxContentBytes)
+		messages := make([]llm.ChatMessage, 0, len(index)+len(required))
+		messages = append(messages, index...)
+		messages = append(messages, required...)
+		return messages, len(index) > 0, metadataOmitted
+	}
+	liveRequiredToolNames := liveToolNames(liveMessages)
+	fits := func(messages []llm.ChatMessage, indexIncluded bool) (bool, error) {
+		requestMessages := make([]llm.ChatMessage, 0, len(messages)+len(liveMessages))
+		requestMessages = append(requestMessages, messages...)
+		requestMessages = append(requestMessages, liveMessages...)
+		requiredTools := make([]llm.ToolDefinition, 0, len(liveRequiredToolNames)+2)
+		for _, definition := range toolDefinitions {
+			_, liveRequired := liveRequiredToolNames[definition.Name]
+			skillRequired := indexIncluded &&
+				(definition.Name == skillsListToolName || definition.Name == skillViewToolName)
+			if liveRequired || skillRequired {
+				requiredTools = append(requiredTools, definition)
+			}
+		}
+		estimate, err := llm.EstimateRequestTokens(provider, llm.ChatRequest{
+			Model:     model,
+			Messages:  requestMessages,
+			MaxTokens: provider.MaxOutputTokens(),
+			Tools:     requiredTools,
+		})
+		if err != nil {
+			return false, fmt.Errorf("estimate model context with skill index: %w", err)
+		}
+		return estimate <= provider.ContextWindowTokens()-provider.MaxOutputTokens(), nil
+	}
+
+	full, fullIncludesIndex, fullMetadataOmitted := indexAtLimit(maxInjectedSkillIndexBytes)
+	requiredFits, err := fits(required, false)
+	if err != nil {
+		return nil, false, false, err
+	}
+	if !requiredFits {
+		return required, false, fullIncludesIndex, nil
+	}
+	fullFits, err := fits(full, fullIncludesIndex)
+	if err != nil {
+		return nil, false, false, err
+	}
+	if fullFits {
+		return full, fullIncludesIndex, fullMetadataOmitted, nil
+	}
+
+	best := required
+	bestIncludesIndex := false
+	bestMetadataOmitted := fullIncludesIndex
+	for low, high := 0, maxInjectedSkillIndexBytes; low <= high; {
+		middle := low + (high-low)/2
+		candidate, candidateIncludesIndex, candidateMetadataOmitted := indexAtLimit(middle)
+		candidateFits, err := fits(candidate, candidateIncludesIndex)
+		if err != nil {
+			return nil, false, false, err
+		}
+		if candidateFits {
+			best = candidate
+			bestIncludesIndex = candidateIncludesIndex
+			bestMetadataOmitted = candidateMetadataOmitted || (fullIncludesIndex && !candidateIncludesIndex)
+			low = middle + 1
+		} else {
+			high = middle - 1
+		}
+	}
+	return best, bestIncludesIndex, bestMetadataOmitted, nil
+}
+
+func requiredSkillToolNames(skillIndexIncluded bool) map[string]struct{} {
+	if !skillIndexIncluded {
+		return nil
+	}
+	return map[string]struct{}{
+		skillsListToolName: {},
+		skillViewToolName:  {},
+	}
+}
+
+func excludedOptionalSkillToolNames(skillIndexIncluded bool, skillIndexOmitted bool) map[string]struct{} {
+	if skillIndexIncluded || !skillIndexOmitted {
+		return nil
+	}
+	return map[string]struct{}{
+		skillsListToolName: {},
+		skillViewToolName:  {},
+	}
+}
+
+func (a *GeneralAssistant) buildBudgetedContextWithRecall(
+	ctx context.Context,
+	provider llm.Provider,
+	job *turingv1.AgentJob,
+	skillMessages []llm.ChatMessage,
+	skillIndexOmitted bool,
+	requiredToolNames map[string]struct{},
+	excludedOptionalToolNames map[string]struct{},
+	historyMessages []llm.ChatMessage,
+	liveMessages []llm.ChatMessage,
+	toolDefinitions []llm.ToolDefinition,
+	recallForContext func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool),
+) (budgetedContext, *llm.ChatMessage, error) {
+	baseInput := contextInput{
+		skills:                    skillMessages,
+		history:                   historyMessages,
+		live:                      liveMessages,
+		requiredToolNames:         requiredToolNames,
+		excludedOptionalToolNames: excludedOptionalToolNames,
+		skillIndexOmitted:         skillIndexOmitted,
+	}
+	budgeted, err := buildBudgetedContext(provider, job.GetModel(), baseInput, toolDefinitions)
+	if err != nil || recallForContext == nil {
+		return budgeted, nil, err
+	}
+
+	// Recall must dedupe against what the model will actually see, not the
+	// pre-budget fetch window. Rebuild until the admitted contiguous history
+	// suffix is stable; this lets newly omitted current-session turns become
+	// recallable instead of disappearing from both paths.
+	convergenceCtx, cancelConvergence := context.WithTimeout(ctx, recallConvergenceTimeout)
+	defer cancelConvergence()
+	for range maxRecallConvergencePasses {
+		var recallMessage *llm.ChatMessage
+		if block, ok := recallForContext(
+			convergenceCtx,
+			budgeted.Request.Messages,
+		); ok {
+			recallMessage = &block
+		}
+		if convergenceCtx.Err() != nil {
+			break
+		}
+		nextInput := baseInput
+		nextInput.recall = recallMessage
+		next, nextErr := buildBudgetedContext(provider, job.GetModel(), nextInput, toolDefinitions)
+		if nextErr != nil {
+			return budgetedContext{}, nil, nextErr
+		}
+		if next.Omissions.HistoryMessages == budgeted.Omissions.HistoryMessages {
+			if !next.RecallUsed {
+				recallMessage = nil
+			}
+			return next, recallMessage, nil
+		}
+		budgeted = next
+	}
+
+	// A pathological oscillation must still prefer a possible duplicate over
+	// silently losing a fetched turn. Recall against live context only, then let
+	// the normal budget either admit that block or emit a recall-omission notice.
+	if err := ctx.Err(); err != nil {
+		return budgetedContext{}, nil, err
+	}
+	broadInput := contextInput{
+		skills:                    skillMessages,
+		live:                      liveMessages,
+		requiredToolNames:         requiredToolNames,
+		excludedOptionalToolNames: excludedOptionalToolNames,
+		skillIndexOmitted:         skillIndexOmitted,
+	}
+	broad, err := buildBudgetedContext(provider, job.GetModel(), broadInput, toolDefinitions)
+	if err != nil {
+		return budgetedContext{}, nil, err
+	}
+	var recallMessage *llm.ChatMessage
+	if block, ok := recallForContext(
+		ctx,
+		broad.Request.Messages,
+	); ok {
+		recallMessage = &block
+	}
+	baseInput.recall = recallMessage
+	final, err := buildBudgetedContext(provider, job.GetModel(), baseInput, toolDefinitions)
+	if err == nil && !final.RecallUsed {
+		recallMessage = nil
+	}
+	return final, recallMessage, err
+}
+
+func (a *GeneralAssistant) prepareRecallForRun(
+	ctx context.Context,
+	job *turingv1.AgentJob,
+) func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool) {
+	if a.recall == nil || job.GetExternalAgent() != nil {
+		return nil
+	}
+	return a.recall.PrepareRecall(ctx, job.GetSessionId(), job.GetUserText())
+}
+
+func maxOutputTokensSetting(provider llm.Provider) string {
+	switch provider.ID() {
+	case "ollama":
+		return "OLLAMA_MAX_OUTPUT_TOKENS"
+	case "openai_compatible":
+		return "OPENAI_MAX_OUTPUT_TOKENS"
+	default:
+		return "the provider max-output setting"
 	}
 }
 
@@ -461,7 +779,7 @@ func (a *GeneralAssistant) discoverTools(ctx context.Context) (*ToolRegistry, er
 		a.discovery = discovery
 		a.registryMu.Unlock()
 
-		servers := make(map[string]ToolLister)
+		servers := map[string]ToolLister{"skills": newSkillToolLister()}
 		if a.tools != nil {
 			if !isNilToolLister(a.tools.SystemMCP) {
 				servers["system"] = a.tools.SystemMCP
@@ -509,6 +827,10 @@ func (a *GeneralAssistant) executeToolCall(
 		}
 		return toolErrorOutcome(call, "tool_runner_unavailable")
 	}
+	client := entry.Client
+	if entry.ServerName == "skills" {
+		client = newSkillSnapshotClient(job.GetSkills())
+	}
 	runOutcome, err := a.tools.Runner.RunWithOutcome(ctx, tools.RunInput{
 		AgentID:         turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
 		RunID:           job.GetRunId(),
@@ -517,7 +839,7 @@ func (a *GeneralAssistant) executeToolCall(
 		ServerName:      entry.ServerName,
 		ToolName:        call.Name,
 		Args:            call.Arguments,
-		MCPClient:       entry.Client,
+		MCPClient:       client,
 		Timeout:         a.toolTimeout(),
 		TotalTimeout:    a.totalToolTimeout(),
 	})

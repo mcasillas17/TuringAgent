@@ -24,6 +24,7 @@ import (
 	sessionsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/sessions"
 	skillsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/skills"
 	telemetrysvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/telemetry"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/skillfiles"
 	"google.golang.org/grpc"
 )
 
@@ -58,11 +59,15 @@ type App struct {
 }
 
 func New(cfg config.Config) (*App, error) {
+	skillsRoot := cfg.SkillsRoot
+	if skillsRoot == "" {
+		skillsRoot = "/skills"
+	}
 	database, err := db.Open(cfg.DatabasePath)
 	if err != nil {
 		return nil, err
 	}
-	if err := db.ApplyMigrations(context.Background(), database); err != nil {
+	if err := db.ApplyMigrationsWithSkillsRoot(context.Background(), database, skillsRoot); err != nil {
 		_ = database.Close()
 		return nil, err
 	}
@@ -73,6 +78,11 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	repo := repository.New(database)
+	repo.SetSkillStore(skillfiles.New(skillsRoot))
+	if err := repo.ReconcileSkills(context.Background()); err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("reconcile skills: %w", err)
+	}
 	// Conversations created before naming moved to the backend are all called
 	// "New chat". Naming only happens as a message is enqueued, so without a
 	// pass at startup a conversation the user never writes to again would keep
@@ -95,13 +105,13 @@ func New(cfg config.Config) (*App, error) {
 	legacyModels := []*turingv1.ModelCapability{{
 		Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
 		Model:            cfg.OllamaModel,
-		MaxContextTokens: int32(cfg.OllamaMaxContextTokens),
+		MaxContextTokens: int32(cfg.OllamaContextWindowTokens),
 	}}
 	if cfg.OpenAIAPIKey != "" {
 		legacyModels = append(legacyModels, &turingv1.ModelCapability{
 			Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
 			Model:            cfg.OpenAIModel,
-			MaxContextTokens: int32(cfg.OpenAIMaxContextTokens),
+			MaxContextTokens: int32(cfg.OpenAIContextWindowTokens),
 		})
 	}
 	runtimeService := runtimesvc.NewWithConfig(repo, eventBus, runtimesvc.DispatchConfig{

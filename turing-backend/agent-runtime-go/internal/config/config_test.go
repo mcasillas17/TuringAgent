@@ -72,23 +72,23 @@ func TestLoadFromEnvValidatesMaxConcurrentRunsWithinServerAndProtobufBounds(t *t
 
 func TestLoadFromEnvLoadsBoundedAdvertisedContextLimits(t *testing.T) {
 	cfg, err := LoadFromEnv(mapEnv(map[string]string{
-		"TURING_INTERNAL_TOKEN":     "internal",
-		"OLLAMA_MAX_CONTEXT_TOKENS": "32768",
-		"OPENAI_MAX_CONTEXT_TOKENS": "128000",
+		"TURING_INTERNAL_TOKEN":        "internal",
+		"OLLAMA_CONTEXT_WINDOW_TOKENS": "32768",
+		"OPENAI_CONTEXT_WINDOW_TOKENS": "128000",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.OllamaMaxContextTokens != 32768 || cfg.OpenAIMaxContextTokens != 128000 {
-		t.Fatalf("context limits = %d/%d", cfg.OllamaMaxContextTokens, cfg.OpenAIMaxContextTokens)
+	if cfg.OllamaContextWindowTokens != 32768 || cfg.OpenAIContextWindowTokens != 128000 {
+		t.Fatalf("context limits = %d/%d", cfg.OllamaContextWindowTokens, cfg.OpenAIContextWindowTokens)
 	}
 	for _, value := range []string{"-1", "2147483648"} {
 		t.Run(value, func(t *testing.T) {
 			_, err := LoadFromEnv(mapEnv(map[string]string{
-				"TURING_INTERNAL_TOKEN":     "internal",
-				"OLLAMA_MAX_CONTEXT_TOKENS": value,
+				"TURING_INTERNAL_TOKEN":        "internal",
+				"OLLAMA_CONTEXT_WINDOW_TOKENS": value,
 			}))
-			if err == nil || !strings.Contains(err.Error(), "OLLAMA_MAX_CONTEXT_TOKENS") {
+			if err == nil || !strings.Contains(err.Error(), "OLLAMA_CONTEXT_WINDOW_TOKENS") {
 				t.Fatalf("context limit %s error = %v", value, err)
 			}
 		})
@@ -400,5 +400,109 @@ func TestLoadFromEnvHonoursExplicitModelAndKeepAlive(t *testing.T) {
 	}
 	if cfg.OllamaModel != "llama3.2" || cfg.OllamaKeepAlive != "5m" {
 		t.Fatalf("overrides ignored: model=%q keepAlive=%q", cfg.OllamaModel, cfg.OllamaKeepAlive)
+	}
+}
+
+func TestLoadFromEnvDefaultsProviderContextWindows(t *testing.T) {
+	cfg, err := LoadFromEnv(mapEnv(map[string]string{
+		"TURING_INTERNAL_TOKEN": "internal",
+	}))
+	if err != nil {
+		t.Fatalf("LoadFromEnv failed: %v", err)
+	}
+	if cfg.OllamaContextWindowTokens != 32768 {
+		t.Fatalf("OllamaContextWindowTokens = %d, want 32768", cfg.OllamaContextWindowTokens)
+	}
+	if cfg.OpenAIContextWindowTokens != 32768 {
+		t.Fatalf("OpenAIContextWindowTokens = %d, want 32768", cfg.OpenAIContextWindowTokens)
+	}
+	if cfg.OllamaMaxOutputTokens != 2048 {
+		t.Fatalf("OllamaMaxOutputTokens = %d, want 2048", cfg.OllamaMaxOutputTokens)
+	}
+	if cfg.OpenAIMaxOutputTokens != 2048 {
+		t.Fatalf("OpenAIMaxOutputTokens = %d, want 2048", cfg.OpenAIMaxOutputTokens)
+	}
+}
+
+func TestLoadFromEnvHonoursProviderContextWindowOverrides(t *testing.T) {
+	cfg, err := LoadFromEnv(mapEnv(map[string]string{
+		"TURING_INTERNAL_TOKEN":        "internal",
+		"OLLAMA_CONTEXT_WINDOW_TOKENS": "4096",
+		"OPENAI_CONTEXT_WINDOW_TOKENS": "65536",
+		"OLLAMA_MAX_OUTPUT_TOKENS":     "512",
+		"OPENAI_MAX_OUTPUT_TOKENS":     "4096",
+	}))
+	if err != nil {
+		t.Fatalf("LoadFromEnv failed: %v", err)
+	}
+	if cfg.OllamaContextWindowTokens != 4096 {
+		t.Fatalf("OllamaContextWindowTokens = %d, want 4096", cfg.OllamaContextWindowTokens)
+	}
+	if cfg.OpenAIContextWindowTokens != 65536 {
+		t.Fatalf("OpenAIContextWindowTokens = %d, want 65536", cfg.OpenAIContextWindowTokens)
+	}
+	if cfg.OllamaMaxOutputTokens != 512 || cfg.OpenAIMaxOutputTokens != 4096 {
+		t.Fatalf("output limits = %d/%d, want 512/4096", cfg.OllamaMaxOutputTokens, cfg.OpenAIMaxOutputTokens)
+	}
+}
+
+func TestLoadFromEnvValidatesProviderContextWindows(t *testing.T) {
+	for _, name := range []string{
+		"OLLAMA_CONTEXT_WINDOW_TOKENS",
+		"OPENAI_CONTEXT_WINDOW_TOKENS",
+	} {
+		for _, value := range []string{"0", "-1", "not-a-number", "16777217"} {
+			t.Run(name+"/"+value, func(t *testing.T) {
+				_, err := LoadFromEnv(mapEnv(map[string]string{
+					"TURING_INTERNAL_TOKEN": "internal",
+					name:                    value,
+				}))
+				if err == nil || !strings.Contains(err.Error(), name) {
+					t.Fatalf("LoadFromEnv error = %v, want %s validation", err, name)
+				}
+			})
+		}
+	}
+}
+
+func TestLoadFromEnvValidatesProviderOutputReservations(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		values map[string]string
+	}{
+		{
+			name: "Ollama zero",
+			values: map[string]string{
+				"OLLAMA_MAX_OUTPUT_TOKENS": "0",
+			},
+		},
+		{
+			name: "OpenAI negative",
+			values: map[string]string{
+				"OPENAI_MAX_OUTPUT_TOKENS": "-1",
+			},
+		},
+		{
+			name: "Ollama reserve equals window",
+			values: map[string]string{
+				"OLLAMA_CONTEXT_WINDOW_TOKENS": "4096",
+				"OLLAMA_MAX_OUTPUT_TOKENS":     "4096",
+			},
+		},
+		{
+			name: "OpenAI reserve exceeds window",
+			values: map[string]string{
+				"OPENAI_CONTEXT_WINDOW_TOKENS": "4096",
+				"OPENAI_MAX_OUTPUT_TOKENS":     "4097",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			test.values["TURING_INTERNAL_TOKEN"] = "internal"
+			_, err := LoadFromEnv(mapEnv(test.values))
+			if err == nil || !strings.Contains(err.Error(), "OUTPUT_TOKENS") {
+				t.Fatalf("LoadFromEnv error = %v, want output reservation validation", err)
+			}
+		})
 	}
 }

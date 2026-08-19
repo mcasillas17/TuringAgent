@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package turing.v1;
+
+message CompatibilityExample {
+  string id = 1;
+}

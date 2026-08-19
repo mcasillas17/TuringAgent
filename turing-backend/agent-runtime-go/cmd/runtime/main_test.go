@@ -14,8 +14,8 @@ import (
 
 func TestAdvertisedModelsReflectConfiguredProvidersAndContextLimits(t *testing.T) {
 	cfg := config.Config{
-		OllamaModel: "qwen", OllamaMaxContextTokens: 32768,
-		OpenAIModel: "gpt", OpenAIMaxContextTokens: 128000,
+		OllamaModel: "qwen", OllamaContextWindowTokens: 32768,
+		OpenAIModel: "gpt", OpenAIContextWindowTokens: 128000,
 	}
 	models := advertisedModels(cfg)
 	if len(models) != 1 || models[0].GetProvider() != turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA ||

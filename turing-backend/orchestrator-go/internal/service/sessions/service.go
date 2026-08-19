@@ -131,7 +131,13 @@ func (s *Server) SearchMessages(ctx context.Context, req *turingv1.SearchMessage
 	if req == nil || strings.TrimSpace(req.Query) == "" {
 		return nil, status.Error(codes.InvalidArgument, "query is required")
 	}
-	messages, err := s.repo.SearchMessages(ctx, req.SessionId, req.Query, int(req.Limit))
+	messages, err := s.repo.SearchMessages(
+		ctx,
+		req.SessionId,
+		req.ExcludeSessionId,
+		req.Query,
+		int(req.Limit),
+	)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "search messages failed")
 	}

@@ -92,7 +92,7 @@ type Job struct {
 	MinimumWorkerMaxConcurrentRuns int
 	Attempt                        int
 	AssignmentAttemptID            string
-	Skills                         []AttachedSkill
+	Skills                         []SkillSnapshot
 	// ExternalAgent is nil for the local assistant, which is the default and
 	// the common case.
 	ExternalAgent *ExternalAgentTarget
@@ -104,7 +104,7 @@ type queuedJobPayload struct {
 	RequestedTools                 []string             `json:"requestedTools"`
 	RequiredContextTokens          int                  `json:"requiredContextTokens"`
 	MinimumWorkerMaxConcurrentRuns int                  `json:"minimumWorkerMaxConcurrentRuns"`
-	Skills                         []AttachedSkill      `json:"skills"`
+	Skills                         []SkillSnapshot      `json:"skills"`
 	ExternalAgent                  *ExternalAgentTarget `json:"externalAgent"`
 }
 
@@ -268,7 +268,7 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 		return EnqueueUserMessageResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	result, err := enqueueUserMessageTx(ctx, tx, input)
+	result, err := r.enqueueUserMessageTx(ctx, tx, input)
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
@@ -323,7 +323,7 @@ func resolveEnqueueRouteTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMes
 // can claim a due automation and queue its run in ONE transaction: a crash
 // between advancing the schedule and creating the run would otherwise either
 // lose a run or fire the same one twice.
-func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMessageInput) (EnqueueUserMessageResult, error) {
+func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMessageInput) (EnqueueUserMessageResult, error) {
 	// Resolve the effective destination before writing anything. A conversation
 	// routed to an external agent overrides request provider/model fields, and
 	// routing validation must evaluate that same frozen destination.
@@ -424,10 +424,11 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
-	// Frozen into the payload rather than read when the job is claimed: a
-	// skill edited or detached while the job waits must not change what this
-	// run was told to do. It is the same reason userText is stored here.
-	attachedSkills, err := attachedSkillsTx(ctx, tx, input.SessionID)
+	// Frozen into the payload rather than read when the job is claimed: a skill
+	// edited, disabled, or re-granted while the job waits must not change the
+	// metadata and content this run was offered. It is the same reason userText
+	// is stored here.
+	skillSnapshots, err := r.enabledSkillSnapshotsTx(ctx, tx)
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
@@ -442,7 +443,7 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 		"requestedTools":                 input.RequestedTools,
 		"requiredContextTokens":          input.RequiredContextTokens,
 		"minimumWorkerMaxConcurrentRuns": input.MinimumWorkerMaxConcurrentRuns,
-		"skills":                         attachedSkills,
+		"skills":                         skillSnapshots,
 		// Frozen for the same reason the skills are: re-pointing or deleting
 		// the agent while this job waits must not redirect a message the user
 		// already sent, and must not send it to a company they did not pick.

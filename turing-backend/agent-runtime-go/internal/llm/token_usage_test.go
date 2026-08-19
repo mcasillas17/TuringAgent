@@ -210,6 +210,36 @@ func TestOpenAICompletesWhenTheTailNeverArrives(t *testing.T) {
 	}
 }
 
+func TestOpenAICompletesBeforeNearModelDeadlineWhenUsageTailNeverArrives(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		fmt.Fprint(w, "data: "+`{"choices":[{"index":0,"delta":{"content":"Hi"}}]}`+"\n\n")
+		fmt.Fprint(w, "data: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`+"\n\n")
+		w.(http.Flusher).Flush()
+		<-release
+	}))
+	t.Cleanup(func() {
+		close(release)
+		server.Close()
+	})
+
+	provider := NewOpenAICompatible(server.URL, "", server.Client())
+	provider.usageDrainTimeout = time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	events, err := provider.StreamChat(ctx, ChatRequest{Model: "gpt-4o-mini"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := collectEvents(events)
+	assertEventTypes(t, got, "delta", "completed")
+	if got[1].FinishReason != "stop" {
+		t.Fatalf("finish reason = %q, want stop", got[1].FinishReason)
+	}
+}
+
 // A server that rejects the unknown stream_options field must still answer.
 // Those installations work today, and losing every run on them to collect a
 // number nobody asked for is the wrong trade.

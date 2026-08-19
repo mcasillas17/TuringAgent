@@ -79,20 +79,18 @@ Grants reuse the vocabulary tools already speak — `safe`,
 `approval_required`, `disabled` — rather than inventing a parallel permission
 language for skills.
 
-**Enabled is not granted.** A skill can be enabled with nothing granted, and
-then it is what every skill is today: instructions. Turning a skill on must
-never imply agreeing to what it asks for.
+**Enabled is not granted.** Turning a skill on makes its metadata eligible for
+the enabled index. It does not imply agreeing to any declared capability, and
+the body remains withheld until every declaration is granted.
 
 **Nothing is granted by default.** A skill arriving in the folder is disabled
 and ungranted.
 
-**A change to the declaration revokes the grant for what changed.** If a skill
-is granted `files.write` and is later edited — by hand or pulled from
-upstream — to also want `system.exec`, the new capability is ungranted and the
-skill says so. Without this, updating a skill is a silent privilege
-escalation, which is the bug every permission system gets wrong once. The
-comparison is between the declaration seen at grant time and the declaration
-now, so it needs the granted set stored per capability, not a single flag.
+**Declarations and grants reconcile per capability.** If a skill granted
+`files.write` later also requests `system.exec`, the old grant remains but the
+new capability is ungranted, so the body is withheld. A capability removed
+from the file has its stale grant deleted; re-adding it therefore requires new
+consent. This needs a granted set, not a single boolean.
 
 **What this enforces today, precisely.** A grant gates whether the skill is
 loaded at all — checkable now, and enforced in the loader. It does **not** yet
@@ -106,11 +104,22 @@ calling a tool it did not declare. Ours refuses to load. Same idea, opposite
 enforcement — worth keeping the distinction sharp so the assumption is not
 imported by mistake along with the file format.
 
-### The database keeps exactly one column
+### The database keeps exactly the user's decisions
 
-`(skill_id, enabled)` and `(skill_id, capability, granted_at)`. Nothing else.
+`(skill_id, enabled)` and
+`(skill_id, capability, grant_scope, granted_at)`. Nothing else.
 
-Both are user decisions. Neither is derivable from the files.
+Both are user decisions. Neither is derivable from the files. `grant_scope` is
+decision provenance, not cached display metadata: it binds consent to the
+observed declaration and file revision. When a declaration widens or narrows,
+grants for capabilities present on both sides survive and the scope advances;
+removed capabilities lose their rows. When the declared set is unchanged but
+the file revision changes, its grants are conservatively revoked—even for a
+body or description edit—because a capability may have been dropped and
+re-added between reconciliation passes. This is what makes the fourth grant
+test enforceable without requiring an editor to call TuringAgent between two
+filesystem writes. The Skills page states this fail-closed behavior so a user
+knows an ordinary edit may ask for consent again.
 
 Name, description and category are read from the files. Copying them into the
 database would create a second source of truth that drifts the moment someone
@@ -172,22 +181,32 @@ the 7B case without making the common path depend on it.
 
 ## Build order
 
-1. **Loader** — read `/skills/*.md`, parse frontmatter (`name`, `description`,
-   optional stable `id`), body is the instructions. Malformed file: skipped
-   and reported in the list with its parse error, never silently absent.
-2. **Identity** — the `id` in frontmatter if present, else the filename stem.
-   Renaming a file with an `id` keeps its identity; renaming one without
-   changes it. Say so in the UI rather than pretending renames are free.
+1. **Loader** — read `/skills/<category>/<skill>/SKILL.md`, parse frontmatter
+   (`name`, `description`, and optional metadata); the body is the instructions.
+   A malformed file is withheld and reported in the list with its parse error,
+   never silently absent.
+2. **Identity** — the folder path relative to `/skills`; there is no
+   frontmatter `id`. Renaming the folder creates a new disabled identity whose
+   grants reset.
 3. **Index into the request** — replaces `skillsSystemMessage`'s current job.
 4. **`skill_view` tool** — reads only from the skills root, path-escape
    refused like mcp-files does. Not approval-gated: reading a file the user
    wrote for this purpose is not a mutation.
-5. **`SkillService` becomes read-only** — list skills, read one. Same proto
-   file, fewer RPCs.
+5. **`SkillService` stops writing files** — list/read file-owned content and
+   mutate only enablement and per-capability consent.
 6. **`SkillsPage` becomes a browser** — name, description, body, parse errors,
    and the folder path so you know where to put files.
 7. **One-time export** — on first run after the migration, write existing DB
-   skills out as files, then drop the tables. Nobody loses a skill they wrote.
+   skills out as files, then drop the old tables. Because SQLite and the
+   filesystem cannot commit atomically, upgraded databases retain a
+   migration-only recovery copy of legacy rows. Every later startup retries the
+   file export into the current verified skills root and retains those rows; a
+   conflict leaves both copies intact and startup reports the refusal. After an
+   operator stops the orchestrator, backs up the database, verifies every
+   exported file under `skills/imported/`, and manually drops the recovery table
+   with a SQLite client. Runtime skill code never reads it, fresh installs drop
+   it empty, and application code never deletes a nonempty recovery copy based
+   on a non-atomic filesystem check.
 
 ## What this costs, stated plainly
 
@@ -309,7 +328,7 @@ Identity and enablement: a new folder arrives disabled; enabling then renaming
 the folder leaves the new path disabled and does not resurrect the old row;
 editing a description changes what `skills_list()` returns without any
 database write. Index: bounded size,
-excludes bodies. `skill_view`: refuses paths outside the root, returns a body
-by id and by filename stem. Export: every DB skill lands as a readable file
+excludes bodies. `skill_view`: refuses paths outside the root and returns a
+body by exact relative-path id. Export: every DB skill lands as a readable file
 with its name and instructions intact, and is idempotent on a second run.
 Client: browser renders parse errors, and says where the folder is.

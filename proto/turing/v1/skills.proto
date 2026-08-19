@@ -4,39 +4,25 @@ package turing.v1;
 
 option go_package = "github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1";
 
-import "google/protobuf/timestamp.proto";
-
-// A named block of instructions the user writes once and attaches to the
-// conversations where it applies.
-//
-// Skills are explicit, not inferred: the agent never decides which ones are
-// relevant. What is attached to a conversation is exactly what was attached by
-// hand, which is what makes a change in behaviour traceable to a specific
-// skill rather than to a selection step nobody can see.
+// A SKILL.md file and the user's decisions about whether it may load.
+// Metadata and body come from disk on every read; only enabled and capability
+// grants are persisted in SQLite.
 message Skill {
   string skill_id = 1;
   string name = 2;
-  string instructions = 3;
-  google.protobuf.Timestamp created_at = 4;
-  google.protobuf.Timestamp updated_at = 5;
+  string description = 3;
+  string body = 4;
+  string category = 5;
+  string version = 6;
+  string author = 7;
+  string license = 8;
+  repeated string requires = 9;
+  repeated string granted_capabilities = 10;
+  repeated string missing_capabilities = 11;
+  bool enabled = 12;
+  string parse_error = 13;
+  string folder_path = 14;
 }
-
-message CreateSkillRequest {
-  string name = 1;
-  string instructions = 2;
-}
-
-message UpdateSkillRequest {
-  string skill_id = 1;
-  string name = 2;
-  string instructions = 3;
-}
-
-message DeleteSkillRequest {
-  string skill_id = 1;
-}
-
-message DeleteSkillResponse {}
 
 message ListSkillsRequest {}
 
@@ -44,33 +30,24 @@ message ListSkillsResponse {
   repeated Skill skills = 1;
 }
 
-message AttachSkillRequest {
-  string session_id = 1;
-  string skill_id = 2;
+message GetSkillRequest {
+  string skill_id = 1;
 }
 
-message DetachSkillRequest {
-  string session_id = 1;
-  string skill_id = 2;
+message SetSkillEnabledRequest {
+  string skill_id = 1;
+  bool enabled = 2;
 }
 
-message SessionSkillsResponse {
-  repeated Skill skills = 1;
-}
-
-message ListSessionSkillsRequest {
-  string session_id = 1;
+message SetSkillCapabilityGrantRequest {
+  string skill_id = 1;
+  string capability = 2;
+  bool granted = 3;
 }
 
 service SkillService {
-  rpc CreateSkill(CreateSkillRequest) returns (Skill);
-  rpc UpdateSkill(UpdateSkillRequest) returns (Skill);
-  rpc DeleteSkill(DeleteSkillRequest) returns (DeleteSkillResponse);
   rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);
-
-  // Attach and detach return the conversation's full skill set so a client
-  // never has to guess what the server now believes is attached.
-  rpc AttachSkill(AttachSkillRequest) returns (SessionSkillsResponse);
-  rpc DetachSkill(DetachSkillRequest) returns (SessionSkillsResponse);
-  rpc ListSessionSkills(ListSessionSkillsRequest) returns (SessionSkillsResponse);
+  rpc GetSkill(GetSkillRequest) returns (Skill);
+  rpc SetSkillEnabled(SetSkillEnabledRequest) returns (Skill);
+  rpc SetSkillCapabilityGrant(SetSkillCapabilityGrantRequest) returns (Skill);
 }

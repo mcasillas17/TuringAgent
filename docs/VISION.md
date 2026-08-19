@@ -4,7 +4,7 @@
 
 Supersedes the stack claims in `docs/superpowers/specs/2026-05-09-project-turing-v1-design.md`, which still describes a Node.js/TypeScript orchestrator over REST/WebSocket. That was replaced by Go + gRPC in #10.
 
-**Last verified against the code:** 2026-08-13, at `e4ae748` (#33).
+**Last verified against the code:** 2026-08-19.
 
 ---
 
@@ -43,7 +43,7 @@ A north star that cannot be falsified is decoration. These are the checks:
 
 Each is a decision already made and defended in review, cited to where it happened. They are written down so the next decision matches.
 
-**The user is never left guessing.** A run that retries, exhausts its attempts, hits the tool-iteration cap, or answers from recalled context emits a notice (#23, #24, #30, #33). Silence is indistinguishable from a hang, so anything that delays or shapes an answer must be visible.
+**The user is never left guessing.** A run that retries, exhausts its attempts, hits the tool-iteration cap, answers from recalled context, omits optional prompt material, or stops at its configured output cap emits a durable notice (#23, #24, #30, #33, TUR-020). Silence is indistinguishable from a hang, so anything that delays or shapes an answer must be visible.
 
 **Recalled context is attributed.** Memory that arrives unattributed reads as confabulation. If an answer draws on an earlier conversation, the user is told (#33).
 
@@ -60,6 +60,7 @@ Each is a decision already made and defended in review, cited to where it happen
 | Model-driven tool calling | Working, live-verified against a real model (#19, #27) |
 | Dynamic tool discovery | Working; runtime reports its registry to the orchestrator (#17, #26) |
 | Cross-session recall | Working — SQLite FTS5, keyword search, attributed to the user (#15, #18, #25, #33) |
+| Context budgeting | Working — provider caps and output reservations are explicit, Ollama `num_ctx` is pinned to a stable per-request bucket below its cap, omissions are durable run events, and live tool protocol messages/correlation are never dropped (TUR-020) |
 | Stable session titles | Working — derived deterministically from the first usable user turn, persisted by the orchestrator, and streamed to subscribed clients |
 | Approvals | Working; single-use argument-bound JWT, consumed over internal gRPC |
 | Audit | **Write-only.** Rows are recorded; there is no read path in any proto or client |
@@ -67,11 +68,14 @@ Each is a decision already made and defended in review, cited to where it happen
 | Streaming + resilience | Working; reconnect, requeue, lease recovery, run-visibility notices (#24, #30, #33) |
 | Job queue | Durable: SQLite job table with leases, fencing token, heartbeat renewal, orphan recovery, 3-attempt cap |
 | Tool servers | Two: safe system tools, sandboxed file tools |
+| Skills | File-backed `SKILL.md` library under `turing-backend/skills/`. Enabled metadata is indexed for every run; bodies and references load progressively only after every declared capability is granted. Grants gate loading and do **not** authorize tools. The 0011 upgrade retains legacy rows in a migration-only recovery table and re-exports them on startup; conflicts preserve recovery, and application code never removes nonempty rows. Cleanup is an offline/manual operator action after the files are verified. Enabled skill text selected by a routed run leaves the machine, and the routing picker says so |
 | Third-party accounts | **Stored, not used.** Connections hold a credential the user minted themselves (IMAP/CalDAV app password, Notion integration token, GitHub PAT), under explicit consent and revocable. No tool reads one yet, and the page says so. OAuth-only providers are listed as unsupported with the reason |
 | Agents | **One** (`general_assistant`) behind an executor *interface* with one implementation. Multi-agent is a **goal** — see below |
 | Process split | **Shipped** — the agent runtime is its own container, leased over a bidi gRPC stream. (It is *not* its own Go module; only `mcp-files` and `mcp-system` are.) |
 | Clients | **One** (Flutter, macOS-focused). Codegen emits Go and Dart only; both are consumed today |
 | Providers | Ollama (default), OpenAI-compatible (opt-in per request) |
+
+Context admission is conservative rather than tokenizer-exact: built-in providers measure their exact serialized request, count one UTF-8 byte as an upper bound of one prompt token, and reserve configured output tokens inside the window. Recall deduplicates against admitted history and converges if the suffix changes, so a budgeted-out current-session turn is not silently excluded from both paths. Oversized tool-result bodies can be replaced by explicit omission markers without dropping the tool message or its correlation ID. The operator configures each provider/model window; Turing does not yet discover model capabilities or persist exact provider token usage. Provenance-preserving summaries remain MEM-014, not part of TUR-020.
 
 Known gaps, honestly: a live `agent.run.failed` or `agent.run.cancelled` now renders as an inline failure or cancellation card, but — like tool cards and run notices — that entry is suppressed on session reopen by the replay watermark, so a past failed or cancelled run can still surface as an unexplained empty turn; a requeued run with no worker waits indefinitely; startup-recovery notices are published before the gRPC servers exist and so reach no subscriber; there is no curated user memory, only keyword recall over raw messages; audit is not inspectable.
 
@@ -87,6 +91,7 @@ These are not capabilities we are declining. They are the properties the rest of
 - **Every mutation is approved, argument-bound, and single-use.** New mutating capability inherits the existing approval flow; it does not get its own weaker one.
   - **Qualified once, by automations.** A scheduled run has nobody to ask, so an automation carries a per-automation allowlist of specific `(server, tool)` pairs — never global, never a wildcard, never inherited by a conversation the user drives by hand. What that buys is *when* the decision is made, not *whether*: the orchestrator still creates the approval and still grants it through the same signing and state transition a person's click takes, so the token mcp-files verifies is the same short-lived, single-use, `args_hash`-bound token it always was. What is genuinely weaker is that consent is given in advance and in general ("this automation may run `files.update`") rather than in the moment and in particular ("write *this* to *that* path"). Unattended approvals are recorded with `actor_type = 'automation'` so an operator can tell them from a person's afterwards. A tool an automation was not pre-approved for fails the run rather than waiting for someone who is not there.
 - **Tools stay confined to the sandbox.** Capability may grow inside that boundary; nothing gets an escape hatch out of it.
+- **Skill text is untrusted input, not authority.** A copied `SKILL.md` may guide an answer only after enablement and any declared grants. It cannot override system/user precedence, tool policy, or approval, and its capability grants never become tool permissions.
 - **The orchestrator owns durable state and control flow.** The job queue, leases, fencing, retries, recovery, and event streaming are ours. This is what was previously written as "no graph orchestration frameworks" — that framing was wrong. The real constraint is that nothing may take ownership of those, because they are the hard-won parts (#30, #31, #33).
 - **The backend stays a single language.** It is 100% Go today. A framework requiring a Python or Node runtime in the backend costs a second toolchain, image, and dependency surface — that cost, not the abstraction, is the reason LangGraph-style tools are a poor fit here.
 

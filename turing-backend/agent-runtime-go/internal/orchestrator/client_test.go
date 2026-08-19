@@ -53,7 +53,7 @@ func TestSearchMessagesMapsEveryFieldIncludingTheRowID(t *testing.T) {
 	}}}}
 	client := &Client{sessions: fake, token: "secret-token"}
 
-	got, err := client.SearchMessages(context.Background(), "flight", 10)
+	got, err := client.SearchMessages(context.Background(), "flight", "", "", 10)
 	if err != nil {
 		t.Fatalf("SearchMessages: %v", err)
 	}
@@ -84,20 +84,21 @@ func TestSearchMessagesMapsEveryFieldIncludingTheRowID(t *testing.T) {
 	}
 }
 
-// The empty SessionId is the whole point: scoping the search to the current
-// session would recall only what the request already contains.
-func TestSearchMessagesRequestsAllSessionsWithAuth(t *testing.T) {
+func TestSearchMessagesForwardsScopeExclusionAndAuth(t *testing.T) {
 	fake := &fakeSessions{resp: &turingv1.SearchMessagesResponse{}}
 	client := &Client{sessions: fake, token: "secret-token"}
 
-	if _, err := client.SearchMessages(context.Background(), "flight", 7); err != nil {
+	if _, err := client.SearchMessages(context.Background(), "flight", "session-a", "session-b", 7); err != nil {
 		t.Fatalf("SearchMessages: %v", err)
 	}
 	if fake.gotReq.GetQuery() != "flight" {
 		t.Errorf("Query = %q, want %q", fake.gotReq.GetQuery(), "flight")
 	}
-	if fake.gotReq.GetSessionId() != "" {
-		t.Errorf("SessionId = %q, want empty so the search spans earlier sessions", fake.gotReq.GetSessionId())
+	if fake.gotReq.GetSessionId() != "session-a" {
+		t.Errorf("SessionId = %q, want session-a", fake.gotReq.GetSessionId())
+	}
+	if fake.gotReq.GetExcludeSessionId() != "session-b" {
+		t.Errorf("ExcludeSessionId = %q, want session-b", fake.gotReq.GetExcludeSessionId())
 	}
 	if fake.gotReq.GetLimit() != 7 {
 		t.Errorf("Limit = %d, want 7", fake.gotReq.GetLimit())
@@ -118,7 +119,7 @@ func TestSearchMessagesDropsRolesItCannotRender(t *testing.T) {
 	}}}
 	client := &Client{sessions: fake}
 
-	got, err := client.SearchMessages(context.Background(), "term", 10)
+	got, err := client.SearchMessages(context.Background(), "term", "", "", 10)
 	if err != nil {
 		t.Fatalf("SearchMessages: %v", err)
 	}
@@ -139,7 +140,7 @@ func TestSearchMessagesReturnsTheRPCError(t *testing.T) {
 	wantErr := errors.New("boom")
 	client := &Client{sessions: &fakeSessions{err: wantErr}}
 
-	got, err := client.SearchMessages(context.Background(), "term", 10)
+	got, err := client.SearchMessages(context.Background(), "term", "", "", 10)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err = %v, want %v", err, wantErr)
 	}
@@ -165,9 +166,9 @@ func TestFetchMessagesRequestsCausalHistoryBeforeCurrentUserMessage(t *testing.T
 		t.Fatalf("FetchMessages returned error: %v", err)
 	}
 	want := []llm.ChatMessage{
-		{Role: "system", Content: "instructions"},
-		{Role: "user", Content: "repeat me"},
-		{Role: "assistant", Content: ""},
+		{MessageID: "msg_system", Role: "system", Content: "instructions"},
+		{MessageID: "msg_older_user", Role: "user", Content: "repeat me"},
+		{MessageID: "msg_older_empty_assistant", Role: "assistant", Content: ""},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("FetchMessages = %#v, want %#v", got, want)
@@ -195,8 +196,8 @@ func TestFetchMessagesFiltersLegacyResponseAtAssignedAnchor(t *testing.T) {
 		t.Fatalf("FetchMessages returned error: %v", err)
 	}
 	want := []llm.ChatMessage{
-		{Role: "user", Content: "older"},
-		{Role: "assistant", Content: "answer"},
+		{MessageID: "msg_older_user", Role: "user", Content: "older"},
+		{MessageID: "msg_older_assistant", Role: "assistant", Content: "answer"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("FetchMessages legacy response = %#v, want only pre-anchor history %#v", got, want)
@@ -224,7 +225,7 @@ func TestFetchMessagesRetainsFiftyCausallyBoundEntries(t *testing.T) {
 	}
 	for i, message := range got {
 		want := fmt.Sprintf("message %02d", i)
-		if message.Role != "user" || message.Content != want {
+		if message.MessageID != fmt.Sprintf("msg_%02d", i) || message.Role != "user" || message.Content != want {
 			t.Fatalf("FetchMessages[%d] = %#v, want user %q", i, message, want)
 		}
 	}
@@ -257,7 +258,7 @@ func TestFetchMessagesKeepsMostRecentFiftyFromCausalResponse(t *testing.T) {
 	}
 	for i, message := range got {
 		want := fmt.Sprintf("message %02d", i+1)
-		if message.Role != "assistant" || message.Content != want {
+		if message.MessageID != fmt.Sprintf("msg_%02d", i+1) || message.Role != "assistant" || message.Content != want {
 			t.Fatalf("FetchMessages[%d] = %#v, want assistant %q", i, message, want)
 		}
 	}

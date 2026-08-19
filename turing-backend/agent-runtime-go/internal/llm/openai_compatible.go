@@ -33,27 +33,53 @@ var errOpenAIPhysicalSSELineTooLong = errors.New("OpenAI-compatible SSE line exc
 const defaultOpenAIUsageDrainTimeout = 2 * time.Second
 
 type OpenAICompatible struct {
-	baseURL string
-	apiKey  string
-	client  *http.Client
+	baseURL             string
+	apiKey              string
+	client              *http.Client
+	contextWindowTokens int
+	maxOutputTokens     int
 	// usageDrainTimeout is per-provider rather than a package variable so a
 	// test can shorten it without reaching into shared state.
 	usageDrainTimeout time.Duration
 }
+
+var _ Provider = (*OpenAICompatible)(nil)
 
 func NewOpenAICompatible(baseURL string, apiKey string, client *http.Client) *OpenAICompatible {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	return &OpenAICompatible{
-		baseURL:           strings.TrimRight(baseURL, "/"),
-		apiKey:            apiKey,
-		client:            client,
-		usageDrainTimeout: defaultOpenAIUsageDrainTimeout,
+		baseURL:             strings.TrimRight(baseURL, "/"),
+		apiKey:              apiKey,
+		client:              client,
+		contextWindowTokens: DefaultContextWindowTokens,
+		maxOutputTokens:     DefaultMaxOutputTokens,
+		usageDrainTimeout:   defaultOpenAIUsageDrainTimeout,
 	}
 }
 
+func NewOpenAICompatibleWithLimits(
+	baseURL string,
+	apiKey string,
+	client *http.Client,
+	contextWindowTokens int,
+	maxOutputTokens int,
+) (*OpenAICompatible, error) {
+	if err := ValidateContextLimits(contextWindowTokens, maxOutputTokens); err != nil {
+		return nil, err
+	}
+	provider := NewOpenAICompatible(baseURL, apiKey, client)
+	provider.contextWindowTokens = contextWindowTokens
+	provider.maxOutputTokens = maxOutputTokens
+	return provider, nil
+}
+
 func (p *OpenAICompatible) ID() string { return "openai_compatible" }
+
+func (p *OpenAICompatible) ContextWindowTokens() int { return p.contextWindowTokens }
+
+func (p *OpenAICompatible) MaxOutputTokens() int { return p.maxOutputTokens }
 
 func (p *OpenAICompatible) post(ctx context.Context, body []byte) (*http.Response, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/chat/completions", bytes.NewReader(body))
@@ -76,35 +102,17 @@ func isOpenAIMalformedRequestStatus(status int) bool {
 }
 
 func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
-	aliases, err := buildOpenAIToolAliases(req.Tools)
-	if err != nil {
-		return nil, err
-	}
-	tools := openAITools(req.Tools, aliases.byOriginal)
-	buildBody := func(includeUsage bool) ([]byte, error) {
-		return marshalProviderRequest("OpenAI-compatible", req.Messages, func(messages []ChatMessage) ([]byte, error) {
-			converted, err := openAIMessages(messages, aliases.byOriginal)
-			if err != nil {
-				return nil, err
-			}
-			request := openAIChatRequest{
-				Model:       req.Model,
-				Messages:    converted,
-				Stream:      true,
-				Temperature: req.Temperature,
-				MaxTokens:   req.MaxTokens,
-				Tools:       tools,
-			}
-			// Asking for usage is the only way to get it while streaming: a
-			// streamed response carries no usage object unless this is set,
-			// and the alternative to asking is estimating.
-			if includeUsage {
-				request.StreamOptions = &openAIStreamOptions{IncludeUsage: true}
-			}
-			return json.Marshal(request)
+	buildBody := func(includeUsage bool) ([]byte, openAIToolAliases, error) {
+		body, aliases, err := p.marshalRequestWithUsage(req, includeUsage)
+		if err != nil {
+			return nil, openAIToolAliases{}, err
+		}
+		bounded, err := marshalProviderRequest("OpenAI-compatible", func() ([]byte, error) {
+			return body, nil
 		})
+		return bounded, aliases, err
 	}
-	body, err := buildBody(true)
+	body, aliases, err := buildBody(true)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +129,7 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 	// no tokens.
 	if isOpenAIMalformedRequestStatus(resp.StatusCode) {
 		_ = resp.Body.Close()
-		retryBody, retryErr := buildBody(false)
+		retryBody, _, retryErr := buildBody(false)
 		if retryErr != nil {
 			return nil, retryErr
 		}
@@ -170,17 +178,26 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 				drainDeadline.Stop()
 			}
 		}()
-		holdCompleted := func(event StreamEvent) {
+		sendCompleted := func(event StreamEvent) {
+			event.Usage = state.usage
+			sendStreamEvent(ctx, out, event)
+		}
+		holdCompleted := func(event StreamEvent) bool {
+			if deadline, ok := ctx.Deadline(); ok &&
+				time.Until(deadline) <= p.usageDrainTimeout {
+				// The answer already finished. Do not spend the remaining model
+				// deadline waiting for optional telemetry and then lose the
+				// completion because its delivery context expired.
+				sendCompleted(event)
+				return true
+			}
 			pendingCompleted = &event
 			if drainDeadline == nil {
 				drainDeadline = time.AfterFunc(p.usageDrainTimeout, func() {
 					_ = resp.Body.Close()
 				})
 			}
-		}
-		sendCompleted := func(event StreamEvent) {
-			event.Usage = state.usage
-			sendStreamEvent(ctx, out, event)
+			return false
 		}
 		dispatch := func(data string) bool {
 			trimmed := strings.TrimSpace(data)
@@ -218,7 +235,9 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 			}
 			for _, event := range events {
 				if event.Type == "completed" {
-					holdCompleted(event)
+					if holdCompleted(event) {
+						return true
+					}
 					continue
 				}
 				if !sendStreamEvent(ctx, out, event) {
@@ -320,6 +339,51 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 	return out, nil
 }
 
+func (p *OpenAICompatible) EstimateRequestTokens(req ChatRequest) (int, error) {
+	body, _, err := p.marshalRequest(req)
+	if err != nil {
+		return 0, err
+	}
+	return len(body), nil
+}
+
+func (p *OpenAICompatible) marshalRequest(req ChatRequest) ([]byte, openAIToolAliases, error) {
+	return p.marshalRequestWithUsage(req, true)
+}
+
+func (p *OpenAICompatible) marshalRequestWithUsage(
+	req ChatRequest,
+	includeUsage bool,
+) ([]byte, openAIToolAliases, error) {
+	aliases, err := buildOpenAIToolAliases(req.Tools)
+	if err != nil {
+		return nil, openAIToolAliases{}, err
+	}
+	tools := openAITools(req.Tools, aliases.byOriginal)
+	converted, err := openAIMessages(req.Messages, aliases.byOriginal)
+	if err != nil {
+		return nil, openAIToolAliases{}, err
+	}
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = p.maxOutputTokens
+	}
+	request := openAIChatRequest{
+		Model:               req.Model,
+		Messages:            converted,
+		Stream:              true,
+		Temperature:         req.Temperature,
+		MaxTokens:           legacyMaxTokens(req.Model, maxTokens),
+		MaxCompletionTokens: reasoningMaxTokens(req.Model, maxTokens),
+		Tools:               tools,
+	}
+	if includeUsage {
+		request.StreamOptions = &openAIStreamOptions{IncludeUsage: true}
+	}
+	body, err := json.Marshal(request)
+	return body, aliases, err
+}
+
 func splitSSELines(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	for i, b := range data {
 		switch b {
@@ -346,13 +410,43 @@ func splitSSELines(data []byte, atEOF bool) (advance int, token []byte, err erro
 }
 
 type openAIChatRequest struct {
-	Model         string               `json:"model"`
-	Messages      []openAIMessage      `json:"messages"`
-	Stream        bool                 `json:"stream"`
-	Temperature   float64              `json:"temperature,omitempty"`
-	MaxTokens     int                  `json:"max_tokens,omitempty"`
-	Tools         []openAITool         `json:"tools,omitempty"`
-	StreamOptions *openAIStreamOptions `json:"stream_options,omitempty"`
+	Model               string               `json:"model"`
+	Messages            []openAIMessage      `json:"messages"`
+	Stream              bool                 `json:"stream"`
+	Temperature         float64              `json:"temperature,omitempty"`
+	MaxTokens           int                  `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int                  `json:"max_completion_tokens,omitempty"`
+	Tools               []openAITool         `json:"tools,omitempty"`
+	StreamOptions       *openAIStreamOptions `json:"stream_options,omitempty"`
+}
+
+func legacyMaxTokens(model string, maxTokens int) int {
+	if usesMaxCompletionTokens(model) {
+		return 0
+	}
+	return maxTokens
+}
+
+func reasoningMaxTokens(model string, maxTokens int) int {
+	if usesMaxCompletionTokens(model) {
+		return maxTokens
+	}
+	return 0
+}
+
+func usesMaxCompletionTokens(model string) bool {
+	name := strings.ToLower(strings.TrimSpace(model))
+	if index := strings.LastIndexByte(name, '/'); index >= 0 {
+		name = name[index+1:]
+	}
+	for _, family := range []string{"o1", "o3", "o4"} {
+		if name == family || strings.HasPrefix(name, family+"-") {
+			return true
+		}
+	}
+	return name == "gpt-5" ||
+		strings.HasPrefix(name, "gpt-5-") ||
+		strings.HasPrefix(name, "gpt-5.")
 }
 
 type openAIStreamOptions struct {
@@ -755,62 +849,120 @@ func parseOpenAIData(data []byte, state *openAIStreamState) ([]StreamEvent, bool
 		}
 	}
 	if choice.FinishReason != nil {
-		if *choice.FinishReason == "tool_calls" {
+		reason := *choice.FinishReason
+		if reason == "tool_calls" {
 			if len(state.toolCalls) == 0 {
 				return nil, false, fmt.Errorf("finish_reason tool_calls received without any accumulated tool calls")
 			}
-			calls := make([]ToolCall, 0, len(state.toolCalls))
-			ids := make(map[string]struct{}, len(state.toolCalls))
-			for index := 0; index < len(state.toolCalls); index++ {
-				call, ok := state.toolCalls[index]
-				if !ok {
-					return nil, false, fmt.Errorf("tool call indices are non-contiguous: missing index %d", index)
-				}
-				id := call.id
-				if id == "" {
-					return nil, false, fmt.Errorf("tool call %d is missing an ID", index)
-				}
-				if _, duplicate := ids[id]; duplicate {
-					return nil, false, fmt.Errorf("tool call %d has duplicate ID %q", index, id)
-				}
-				ids[id] = struct{}{}
-				name := call.name
-				if name == "" {
-					return nil, false, fmt.Errorf("tool call %d is missing a function name", index)
-				}
-				if original, ok := state.toolAliases[name]; ok {
-					name = original
-				}
-				arguments := make(map[string]any)
-				if call.arguments.Len() > 0 {
-					decoder := json.NewDecoder(strings.NewReader(call.arguments.String()))
-					decoder.UseNumber()
-					var decoded any
-					if err := decoder.Decode(&decoded); err != nil {
-						return nil, false, fmt.Errorf("tool call %d arguments are malformed: %w", index, err)
-					}
-					if err := decoder.Decode(&struct{}{}); err != io.EOF {
-						if err == nil {
-							err = fmt.Errorf("multiple JSON values")
-						}
-						return nil, false, fmt.Errorf("tool call %d arguments are malformed: %w", index, err)
-					}
-					var ok bool
-					arguments, ok = decoded.(map[string]any)
-					if !ok {
-						return nil, false, fmt.Errorf("tool call %d arguments must be a JSON object", index)
-					}
-				}
-				calls = append(calls, ToolCall{ID: id, Name: name, Arguments: arguments})
+			calls, err := finalizeOpenAIToolCalls(state)
+			if err != nil {
+				return nil, false, err
 			}
 			events = append(events, StreamEvent{Type: "tool_call", ToolCalls: calls})
+		} else if reason == "length" && len(state.toolCalls) > 0 {
+			// A length stop may arrive after a complete call or in the middle of
+			// one. Execute only calls that are already structurally complete;
+			// truncated fragments are discarded and the output-limit notice still
+			// explains why the turn stopped.
+			calls, err := finalizeCompleteOpenAIToolCalls(state)
+			if err != nil {
+				return nil, false, err
+			}
+			if len(calls) > 0 {
+				events = append(events, StreamEvent{Type: "tool_call", ToolCalls: calls})
+			}
 		} else if len(state.toolCalls) > 0 {
-			return nil, false, fmt.Errorf("finish_reason %q received with unfinished tool calls", *choice.FinishReason)
+			return nil, false, fmt.Errorf("finish_reason %q received with unfinished tool calls", reason)
 		}
-		events = append(events, StreamEvent{Type: "completed", FinishReason: *choice.FinishReason})
+		events = append(events, StreamEvent{Type: "completed", FinishReason: reason})
 		return events, true, nil
 	}
 	return events, false, nil
+}
+
+func finalizeOpenAIToolCalls(state *openAIStreamState) ([]ToolCall, error) {
+	calls := make([]ToolCall, 0, len(state.toolCalls))
+	ids := make(map[string]struct{}, len(state.toolCalls))
+	for index := 0; index < len(state.toolCalls); index++ {
+		if _, ok := state.toolCalls[index]; !ok {
+			return nil, fmt.Errorf("tool call indices are non-contiguous: missing index %d", index)
+		}
+		call, err := finalizeOpenAIToolCall(state, index, ids)
+		if err != nil {
+			return nil, err
+		}
+		calls = append(calls, call)
+	}
+	return calls, nil
+}
+
+func finalizeCompleteOpenAIToolCalls(state *openAIStreamState) ([]ToolCall, error) {
+	indices := make([]int, 0, len(state.toolCalls))
+	for index := range state.toolCalls {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+	for position, index := range indices {
+		if index != position {
+			return nil, fmt.Errorf("tool call indices are non-contiguous: missing index %d", position)
+		}
+	}
+	calls := make([]ToolCall, 0, len(indices))
+	ids := make(map[string]struct{}, len(indices))
+	for _, index := range indices {
+		if state.toolCalls[index].arguments.Len() == 0 {
+			continue
+		}
+		call, err := finalizeOpenAIToolCall(state, index, ids)
+		if err == nil {
+			calls = append(calls, call)
+		}
+	}
+	return calls, nil
+}
+
+func finalizeOpenAIToolCall(
+	state *openAIStreamState,
+	index int,
+	ids map[string]struct{},
+) (ToolCall, error) {
+	call := state.toolCalls[index]
+	id := call.id
+	if id == "" {
+		return ToolCall{}, fmt.Errorf("tool call %d is missing an ID", index)
+	}
+	if _, duplicate := ids[id]; duplicate {
+		return ToolCall{}, fmt.Errorf("tool call %d has duplicate ID %q", index, id)
+	}
+	name := call.name
+	if name == "" {
+		return ToolCall{}, fmt.Errorf("tool call %d is missing a function name", index)
+	}
+	if original, ok := state.toolAliases[name]; ok {
+		name = original
+	}
+	arguments := make(map[string]any)
+	if call.arguments.Len() > 0 {
+		decoder := json.NewDecoder(strings.NewReader(call.arguments.String()))
+		decoder.UseNumber()
+		var decoded any
+		if err := decoder.Decode(&decoded); err != nil {
+			return ToolCall{}, fmt.Errorf("tool call %d arguments are malformed: %w", index, err)
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			if err == nil {
+				err = fmt.Errorf("multiple JSON values")
+			}
+			return ToolCall{}, fmt.Errorf("tool call %d arguments are malformed: %w", index, err)
+		}
+		var ok bool
+		arguments, ok = decoded.(map[string]any)
+		if !ok {
+			return ToolCall{}, fmt.Errorf("tool call %d arguments must be a JSON object", index)
+		}
+	}
+	ids[id] = struct{}{}
+	return ToolCall{ID: id, Name: name, Arguments: arguments}, nil
 }
 
 func decodeOpenAIDelta(data []byte) (openAIDelta, error) {
