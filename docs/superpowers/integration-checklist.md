@@ -5,20 +5,20 @@ Use this checklist against the current Go gRPC, MCP, and Flutter architecture.
 ## 1. Initialization and Compose
 
 - [ ] `turing-backend/scripts/init.sh` creates mode-`0700` data and sandbox
-  directories, mode-`0600` SQLite files, and a mode-`0600` regular `.env` while
-  running as a non-root host user.
+  directories, a mode-`0700` skills directory, mode-`0600` SQLite files, and a
+  mode-`0600` regular `.env` while running as a non-root host user.
 - [ ] Initialization rejects symlinked, non-owned, inaccessible, or
   group/world-writable sandbox roots and unsafe writable legacy entries.
-- [ ] `turing-backend/scripts/compose.sh` revalidates the sandbox bind source
-  and data/SQLite modes immediately before a launch, then injects the current
-  host UID/GID for both bind-mount writers.
+- [ ] `turing-backend/scripts/compose.sh` revalidates the sandbox, skills, and
+  data bind sources plus SQLite modes immediately before a launch, then injects
+  the current host UID/GID for both bind-mount writers.
 - [ ] `cd turing-backend && ./scripts/compose.sh config --quiet` resolves the
   orchestrator, agent runtime, `mcp-system`, and `mcp-files` services.
 - [ ] Every backend container uses an explicit non-root identity, a read-only
   root filesystem, `cap_drop: ALL`, and `no-new-privileges`.
-- [ ] Only orchestrator `/app/data` and `mcp-files` `/sandbox` are writable;
-  every service replaces Docker's default writable `/dev/shm` with the approved
-  read-only tmpfs.
+- [ ] Only orchestrator `/app/data` and `/skills` plus `mcp-files` `/sandbox`
+  are writable; every service replaces Docker's default writable `/dev/shm`
+  with the approved read-only tmpfs.
 - [ ] Only the orchestrator publishes a host port, fixed to `127.0.0.1`; MCP
   services remain on their intended internal Docker networks.
 - [ ] MCP healthchecks run through the service binaries without write access or

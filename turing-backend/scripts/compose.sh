@@ -40,6 +40,26 @@ validate_sandbox_bind_source() {
   fi
 }
 
+validate_skills_bind_source() {
+  local skills_path="$PWD/skills"
+  if [[ -L "$skills_path" ]]; then
+    printf 'Compose launch failed: skills must be a real directory, not a symlink.\n' >&2
+    return 1
+  fi
+  if [[ ! -d "$skills_path" ]]; then
+    printf 'Compose launch failed: skills must be a real directory.\n' >&2
+    return 1
+  fi
+  if [[ ! -O "$skills_path" || ! -r "$skills_path" || ! -w "$skills_path" || ! -x "$skills_path" ]]; then
+    printf 'Compose launch failed: skills is not owned, readable, writable, and traversable by the host user.\n' >&2
+    return 1
+  fi
+  if [[ "$(path_mode "$skills_path")" != "700" ]]; then
+    printf 'Compose launch failed: skills must have mode 0700.\n' >&2
+    return 1
+  fi
+}
+
 path_mode() {
   local path="$1"
   local mode
@@ -144,6 +164,7 @@ fi
 if [[ -f .env ]]; then
   if [[ "${1:-}" != "down" ]]; then
     validate_sandbox_bind_source
+    validate_skills_bind_source
     validate_data_bind_source
   fi
   exec env HOST_UID="$current_uid" HOST_GID="$current_gid" \

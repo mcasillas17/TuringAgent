@@ -59,8 +59,9 @@ Compose uses explicit `environment:` blocks instead of `env_file:` so services r
 
 Every service has an explicit non-root runtime identity, a read-only root
 filesystem, `cap_drop: ALL`, and `no-new-privileges`. Only the orchestrator's
-`/app/data` and `mcp-files`' `/sandbox` are writable. Each service replaces
-Docker's default writable `/dev/shm` with a 64 KiB read-only tmpfs.
+`/app/data` and `/skills` plus `mcp-files`' `/sandbox` are writable. Each
+service replaces Docker's default writable `/dev/shm` with a 64 KiB read-only
+tmpfs.
 
 ## Model providers
 
@@ -115,11 +116,12 @@ See [MCP security and approval flow](../mcp-security-and-integration.md) for the
 
 - `turing-backend/.env`
 - `turing-backend/data/`
+- `turing-backend/skills/`
 - `turing-backend/sandbox/`
 
-Initialization must run as the non-root host owner. It rejects a symlinked
-sandbox and inaccessible legacy entries rather than recursively changing
-ownership or permissions. Compose must be launched through
+Initialization must run as the non-root host owner. It rejects symlinked
+sandbox or skills roots and inaccessible legacy entries rather than recursively
+changing ownership or permissions. Compose must be launched through
 `turing-backend/scripts/compose.sh` (direct invocation is unsupported because
 exported variables override `.env`). Do not commit generated secrets, local
 databases, or sandbox files.

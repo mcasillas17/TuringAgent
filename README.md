@@ -34,8 +34,8 @@ cd TuringAgent/turing-backend
 ```
 
 `init.sh` rejects root execution, creates `turing-backend/.env`, generates local
-bearer tokens, records the current non-root UID/GID for the bind-mounted
-sandbox, creates `data/` and a real (non-symlink) `sandbox/`, and prints the
+bearer tokens, records the current non-root UID/GID for bind-mounted storage,
+creates `data/`, `skills/`, and a real (non-symlink) `sandbox/`, and prints the
 Flutter client API key. It fails rather than changing ownership or permissions
 when existing sandbox content is inaccessible. Do not commit `.env`.
 
@@ -45,14 +45,14 @@ Start the backend stack:
 ./scripts/dev.sh
 ```
 
-This builds and runs the orchestrator, agent runtime, and MCP servers through Docker Compose. The public gRPC API listens on `localhost:3000` by default.
+This builds and runs the orchestrator, agent runtime, and MCP servers through Docker Compose. The public gRPC API is fixed to `localhost:3000`.
 
 Use the repository scripts rather than invoking this Compose file directly.
 `scripts/compose.sh` validates and injects the current non-root host UID/GID;
 this prevents stale `.env` values or exported `HOST_UID`/`HOST_GID` variables
-from selecting the identity used for the data and sandbox bind mounts. All
+from selecting the identity used for the data, skills, and sandbox bind mounts. All
 backend services otherwise run with read-only roots, no Linux capabilities, and
-`no-new-privileges`; only `/app/data` and `/sandbox` are writable.
+`no-new-privileges`; only `/app/data`, `/skills`, and `/sandbox` are writable.
 
 In another terminal, run the Flutter app:
 

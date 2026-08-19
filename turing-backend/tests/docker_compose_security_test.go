@@ -80,6 +80,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"MCP_FILES_TOKEN_GENERAL:",
 		"TURING_APPROVAL_JWT_SECRET:",
 		"DATABASE_PATH:",
+		"SKILLS_ROOT:",
 		"OLLAMA_BASE_URL:",
 		"OPENAI_API_KEY:",
 		"TURING_AGENT_API_KEYS:",
@@ -153,6 +154,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"ORCHESTRATOR_PUBLIC_PORT",
 			"ORCHESTRATOR_INTERNAL_PORT",
 			"DATABASE_PATH",
+			"SKILLS_ROOT",
 			"OLLAMA_BASE_URL",
 			"OLLAMA_MODEL",
 			"OPENAI_BASE_URL",
@@ -348,7 +350,7 @@ func TestEveryComposeServiceUsesLeastPrivilegeRuntime(t *testing.T) {
 	policies := map[string]composeRuntimePolicy{
 		"turing-orchestrator": {
 			user:     "${HOST_UID:?Use scripts/compose.sh to launch}:${HOST_GID:?Use scripts/compose.sh to launch}",
-			volumes:  []string{"../data:/app/data"},
+			volumes:  []string{"../data:/app/data", "../skills:/skills"},
 			tmpfs:    []string{"/dev/shm:ro,nosuid,nodev,noexec,size=64k"},
 			ports:    []string{"127.0.0.1:${ORCHESTRATOR_PUBLIC_PORT:-3000}:3000"},
 			expose:   []string{"3001"},
