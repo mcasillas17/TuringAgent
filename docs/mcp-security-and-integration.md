@@ -28,13 +28,14 @@ back, and sets `no-new-privileges`. Writable storage is allowlisted:
 
 No service receives a writable temporary filesystem. The static security guard
 decodes the complete Compose service map, rejects unresolved `include` or
-`extends` inheritance, applies this mount allowlist, and rejects root or missing
-users, writable roots, capability additions, incomplete capability drops,
-missing `no-new-privileges`, device mappings, image-declared volumes, and
-unapproved secrets. The guard also pins each service to its reviewed Dockerfile,
-keeps both networks project-scoped, and permits only the orchestrator's
-loopback-bound public port; MCP ports are exposed only inside their assigned
-network.
+`extends` inheritance and unknown service/build keys, applies this mount
+allowlist, and rejects root or missing users, writable roots, capability
+additions, incomplete capability drops, missing `no-new-privileges`, device or
+deploy-resource mappings, namespace sharing, supplementary groups,
+image-declared volumes, and unapproved secrets. The guard also pins each service
+to its reviewed Dockerfile, keeps both networks project-scoped, and permits only
+the orchestrator's loopback-bound public port; MCP ports are exposed only inside
+their assigned network.
 The orchestrator configures SQLite `temp_store=MEMORY`, so sorts and transient
 b-trees do not require write access to `/tmp`; durable SQLite files and WAL
 artifacts remain under `/app/data`.

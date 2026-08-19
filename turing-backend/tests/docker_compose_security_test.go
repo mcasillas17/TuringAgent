@@ -18,6 +18,8 @@ type composeDocument struct {
 }
 
 type composeService struct {
+	Image             string             `yaml:"image"`
+	Restart           string             `yaml:"restart"`
 	Build             yaml.Node          `yaml:"build"`
 	User              string             `yaml:"user"`
 	ReadOnly          bool               `yaml:"read_only"`
@@ -32,6 +34,11 @@ type composeService struct {
 	DeviceCgroupRules []string           `yaml:"device_cgroup_rules"`
 	GPUs              yaml.Node          `yaml:"gpus"`
 	Runtime           string             `yaml:"runtime"`
+	Deploy            yaml.Node          `yaml:"deploy"`
+	PID               string             `yaml:"pid"`
+	IPC               string             `yaml:"ipc"`
+	UsernsMode        string             `yaml:"userns_mode"`
+	GroupAdd          []string           `yaml:"group_add"`
 	Ports             []string           `yaml:"ports"`
 	Expose            []string           `yaml:"expose"`
 	Networks          []string           `yaml:"networks"`
@@ -42,6 +49,9 @@ type composeService struct {
 	EnvironmentFile   yaml.Node          `yaml:"env_file"`
 	Extends           yaml.Node          `yaml:"extends"`
 	Secrets           yaml.Node          `yaml:"secrets"`
+	DependsOn         yaml.Node          `yaml:"depends_on"`
+	ExtraHosts        []string           `yaml:"extra_hosts"`
+	Healthcheck       yaml.Node          `yaml:"healthcheck"`
 }
 
 type composeRuntimePolicy struct {
@@ -365,11 +375,11 @@ func TestEveryComposeServiceUsesLeastPrivilegeRuntime(t *testing.T) {
 
 func TestDecodeComposeDocumentResolvesSecurityRelevantYAMLForms(t *testing.T) {
 	compose := `
-x-hardening: &hardening
-  read_only: true
-  cap_drop: [ALL]
-  security_opt: ["no-new-privileges:true"]
 services:
+  base: &hardening
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
   guarded: # inline comments remain part of the service map
     <<: *hardening
     user: "1000:1000"
@@ -458,6 +468,16 @@ services:
     device_cgroup_rules: ["c 195:* rmw"]
     gpus: all
     runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+    pid: host
+    ipc: host
+    userns_mode: host
+    group_add: ["0"]
     ports: ["7100:7100"]
     network_mode: host
 `,
@@ -467,6 +487,11 @@ services:
 				"device cgroup rules",
 				"GPU access",
 				"container runtime",
+				"deploy resources",
+				"pid namespace",
+				"IPC namespace",
+				"user namespace",
+				"supplementary groups",
 				"ports",
 				"expose",
 				"networks",
@@ -497,6 +522,18 @@ services:
 				}
 			}
 		})
+	}
+}
+
+func TestDecodeComposeDocumentRejectsUnknownServiceKeys(t *testing.T) {
+	_, err := parseComposeDocument(`
+services:
+  guarded:
+    image: alpine
+    unreviewed_privilege_path: enabled
+`)
+	if err == nil {
+		t.Fatal("parseComposeDocument accepted an unknown service key")
 	}
 }
 
@@ -677,14 +714,24 @@ func composeServiceBlock(t *testing.T, compose string, serviceName string) strin
 
 func decodeComposeDocument(t *testing.T, compose string) composeDocument {
 	t.Helper()
-	var document composeDocument
-	if err := yaml.Unmarshal([]byte(compose), &document); err != nil {
+	document, err := parseComposeDocument(compose)
+	if err != nil {
 		t.Fatalf("decode docker-compose.yml: %v", err)
 	}
 	if len(document.Services) == 0 {
 		t.Fatal("docker-compose.yml has no backend services")
 	}
 	return document
+}
+
+func parseComposeDocument(compose string) (composeDocument, error) {
+	var document composeDocument
+	decoder := yaml.NewDecoder(strings.NewReader(compose))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&document); err != nil {
+		return composeDocument{}, err
+	}
+	return document, nil
 }
 
 func sortedServiceNames(document composeDocument) []string {
@@ -786,6 +833,21 @@ func composeRuntimePolicyViolations(serviceName string, service composeService, 
 	if service.Runtime != "" {
 		violations = append(violations, fmt.Sprintf("%s selects unapproved container runtime %q", serviceName, service.Runtime))
 	}
+	if yamlNodePresent(service.Deploy) {
+		violations = append(violations, serviceName+" uses unapproved deploy resources")
+	}
+	if service.PID != "" {
+		violations = append(violations, fmt.Sprintf("%s shares unapproved pid namespace %q", serviceName, service.PID))
+	}
+	if service.IPC != "" {
+		violations = append(violations, fmt.Sprintf("%s shares unapproved IPC namespace %q", serviceName, service.IPC))
+	}
+	if service.UsernsMode != "" {
+		violations = append(violations, fmt.Sprintf("%s selects unapproved user namespace mode %q", serviceName, service.UsernsMode))
+	}
+	if len(service.GroupAdd) != 0 {
+		violations = append(violations, fmt.Sprintf("%s adds unapproved supplementary groups: %v", serviceName, service.GroupAdd))
+	}
 
 	if !equalStrings(service.Ports, policy.ports) {
 		violations = append(violations, fmt.Sprintf("%s ports = %v, want %v", serviceName, service.Ports, policy.ports))
@@ -845,6 +907,12 @@ func composeDockerfilePath(composePath string, build yaml.Node) (string, error) 
 				return "", fmt.Errorf("build target is not allowed")
 			case "dockerfile_inline":
 				return "", fmt.Errorf("inline Dockerfiles are not allowed")
+			case "args":
+				if err := validateComposeBuildArgs(*value); err != nil {
+					return "", err
+				}
+			default:
+				return "", fmt.Errorf("unapproved build key %q", key)
 			}
 		}
 	default:
@@ -860,6 +928,20 @@ func composeDockerfilePath(composePath string, build yaml.Node) (string, error) 
 		return "", fmt.Errorf("build context and Dockerfile must be repository-relative")
 	}
 	return filepath.Abs(filepath.Join(filepath.Dir(composePath), context, dockerfile))
+}
+
+func validateComposeBuildArgs(args yaml.Node) error {
+	if args.Kind != yaml.MappingNode {
+		return fmt.Errorf("build args must use mapping syntax")
+	}
+	for index := 0; index < len(args.Content); index += 2 {
+		name := args.Content[index].Value
+		value := args.Content[index+1]
+		if name != "GOFLAGS" || value.Kind != yaml.ScalarNode || value.Value != "-tags=sqlite_fts5" {
+			return fmt.Errorf("unapproved build argument %q", name)
+		}
+	}
+	return nil
 }
 
 func dockerfileFinalUser(dockerfile string) string {
