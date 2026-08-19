@@ -21,6 +21,8 @@ import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
 import '../generated/turing/v1/sessions.pbgrpc.dart' as sessiongrpc;
 import '../generated/turing/v1/skills.pb.dart' as skillpb;
 import '../generated/turing/v1/skills.pbgrpc.dart' as skillgrpc;
+import '../generated/turing/v1/telemetry.pb.dart' as telemetrypb;
+import '../generated/turing/v1/telemetry.pbgrpc.dart' as telemetrygrpc;
 import '../models/agent_descriptor.dart';
 import '../models/automation.dart';
 import '../models/external_agent.dart';
@@ -30,6 +32,7 @@ import '../models/message.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
 import '../models/skill.dart';
+import '../models/telemetry.dart';
 import '../models/tool_descriptor.dart';
 import '../models/turing_event.dart';
 import 'api_client.dart';
@@ -105,6 +108,10 @@ class TuringGrpcApi implements ClosableTuringApi {
       _channel,
       options: options,
     );
+    _telemetry = telemetrygrpc.TelemetryServiceClient(
+      _channel,
+      options: options,
+    );
   }
 
   final String baseUrl;
@@ -119,6 +126,7 @@ class TuringGrpcApi implements ClosableTuringApi {
   late final agentgrpc.ExternalAgentServiceClient _externalAgents;
   late final integrationgrpc.IntegrationServiceClient _integrations;
   late final automationgrpc.AutomationServiceClient _automations;
+  late final telemetrygrpc.TelemetryServiceClient _telemetry;
 
   GrpcAuthMetadata get _metadata => GrpcAuthMetadata(apiKey: apiKey);
 
@@ -622,6 +630,16 @@ class TuringGrpcApi implements ClosableTuringApi {
     await _automations.deleteAutomation(
       automationpb.DeleteAutomationRequest(automationId: automationId),
     );
+  }
+
+  @override
+  Future<TelemetrySummary> getTelemetrySummary({
+    required int windowDays,
+  }) async {
+    final response = await _telemetry.getTelemetrySummary(
+      telemetrypb.GetTelemetrySummaryRequest(windowDays: windowDays),
+    );
+    return GrpcMappers.telemetrySummaryToModel(response);
   }
 
   @override

@@ -86,11 +86,29 @@ message RuntimeHeartbeat {
   string worker_id = 1;
 }
 
+// Token counts a provider reported, summed over every model turn a run made.
+//
+// Both fields are optional and unset means UNKNOWN, never zero. Ollama reports
+// prompt_eval_count/eval_count on its terminal chunk and an OpenAI-compatible
+// provider reports a usage object; a provider that reports neither leaves this
+// message absent entirely. Nothing anywhere estimates these — a token count
+// nobody measured is worse than no token count, because someone will spend a
+// decision on it.
+message RunTokenUsage {
+  optional int64 input_tokens = 1;
+  optional int64 output_tokens = 2;
+}
+
 message RuntimeRunCompleted {
   string run_id = 1;
   string assistant_message_id = 2;
   string content = 3;
+  // Free-form provider payload, echoed into the run-completed event. Kept as
+  // it was rather than repurposed: token counts need presence semantics a
+  // Struct cannot express without the reader guessing whether a missing key
+  // means zero, so they travel in their own typed field below.
   google.protobuf.Struct usage = 4;
+  RunTokenUsage token_usage = 5;
 }
 
 message RuntimeRunFailed {

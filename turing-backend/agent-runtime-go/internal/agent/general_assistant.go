@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"strings"
 	"sync"
@@ -227,6 +228,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		}
 	}
 	var content strings.Builder
+	var tokens runTokenAccumulator
 	toolCallCount := 0
 	successfulToolSideEffect := false
 	usedModelToolCallIDs := make(map[string]struct{})
@@ -294,6 +296,12 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				}
 			case "tool_call":
 				calls = append(calls, event.ToolCalls...)
+			case "completed":
+				// A run can make several model turns — one per tool round — and
+				// what the user is charged, in time or in money, is their sum.
+				// Accumulated here rather than at the end because only this
+				// point sees every turn.
+				tokens.add(event.Usage)
 			case "error":
 				code := event.Code
 				if code == "" {
@@ -326,7 +334,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				content.Reset()
 				content.WriteString(emptyFinalFallback)
 			}
-			return completeRun(emit, job, content.String())
+			return completeRun(emit, job, content.String(), tokens.reported())
 		}
 		if toolCallCount+len(calls) > a.maxToolCallsPerRun {
 			return emitRunFailed(
@@ -385,7 +393,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				content.Reset()
 				content.WriteString(toolIterationFallback)
 			}
-			return completeRun(emit, job, content.String())
+			return completeRun(emit, job, content.String(), tokens.reported())
 		}
 	}
 }
@@ -672,11 +680,75 @@ func validProviderToolCallID(id string) bool {
 	return true
 }
 
-func completeRun(emit func(*turingv1.RuntimeUpdate) error, job *turingv1.AgentJob, content string) error {
+// runTokenAccumulator sums what providers reported across a run's model turns.
+//
+// The zero value has reported nothing, which is the state a run stays in when
+// its provider is silent. Input and output are tracked independently because a
+// provider can report one and not the other, and folding a missing half into a
+// zero would turn silence into a claim.
+type runTokenAccumulator struct {
+	input      int64
+	output     int64
+	hasInput   bool
+	hasOutput  bool
+	overflowed bool
+}
+
+func (a *runTokenAccumulator) add(usage *llm.TokenUsage) {
+	if usage == nil {
+		return
+	}
+	// A negative count cannot reach here — the providers drop those before
+	// building a TokenUsage — and is ignored rather than trusted if one ever
+	// does. There is no token count worth publishing that is below zero.
+	if count := usage.InputTokens; count != nil && *count >= 0 {
+		if a.input > math.MaxInt64-*count {
+			a.overflowed = true
+			return
+		}
+		a.input += *count
+		a.hasInput = true
+	}
+	if count := usage.OutputTokens; count != nil && *count >= 0 {
+		if a.output > math.MaxInt64-*count {
+			a.overflowed = true
+			return
+		}
+		a.output += *count
+		a.hasOutput = true
+	}
+}
+
+// reported returns nil when nothing was reported, which is what "unknown"
+// looks like on the wire.
+//
+// An overflowed sum reports nothing at all rather than a wrapped number.
+// Reaching it needs roughly nine quintillion tokens, so this is not a case
+// anyone will hit — it exists because the alternative to discarding a
+// nonsensical total is publishing one.
+func (a *runTokenAccumulator) reported() *turingv1.RunTokenUsage {
+	if a.overflowed || (!a.hasInput && !a.hasOutput) {
+		return nil
+	}
+	// Copied, not aliased: nothing handed to the emitted message may still be
+	// reachable through the accumulator.
+	usage := &turingv1.RunTokenUsage{}
+	if a.hasInput {
+		input := a.input
+		usage.InputTokens = &input
+	}
+	if a.hasOutput {
+		output := a.output
+		usage.OutputTokens = &output
+	}
+	return usage
+}
+
+func completeRun(emit func(*turingv1.RuntimeUpdate) error, job *turingv1.AgentJob, content string, usage *turingv1.RunTokenUsage) error {
 	if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_COMPLETED, map[string]any{"messageId": job.GetAssistantMessageId(), "content": content})); err != nil {
 		return err
 	}
-	return emit(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{RunCompleted: &turingv1.RuntimeRunCompleted{RunId: job.GetRunId(), AssistantMessageId: job.GetAssistantMessageId(), Content: content}}})
+	return emit(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{RunCompleted: &turingv1.RuntimeRunCompleted{RunId: job.GetRunId(), AssistantMessageId: job.GetAssistantMessageId(), Content: content, TokenUsage: usage}}})
 }
 
 func (a *GeneralAssistant) tryDebugTool(ctx context.Context, job *turingv1.AgentJob, trimmed string, emit func(*turingv1.RuntimeUpdate) error) (bool, error) {

@@ -17,6 +17,7 @@ import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
 import '../support/no_automations_api.dart';
 import '../support/no_skills_api.dart';
+import '../support/no_telemetry_api.dart';
 
 void main() {
   testWidgets('the shell is one surface: conversations beside a chat', (
@@ -171,7 +172,12 @@ void main() {
 }
 
 class _FakeApiClient
-    with NoSkillsApi, NoExternalAgentsApi, NoIntegrationsApi, NoAutomationsApi
+    with
+        NoSkillsApi,
+        NoExternalAgentsApi,
+        NoIntegrationsApi,
+        NoAutomationsApi,
+        NoTelemetryApi
     implements TuringApi {
   @override
   Future<Map<String, dynamic>> approveApproval(

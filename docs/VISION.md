@@ -63,6 +63,7 @@ Each is a decision already made and defended in review, cited to where it happen
 | Stable session titles | Working — derived deterministically from the first usable user turn, persisted by the orchestrator, and streamed to subscribed clients |
 | Approvals | Working; single-use argument-bound JWT, consumed over internal gRPC |
 | Audit | **Write-only.** Rows are recorded; there is no read path in any proto or client |
+| Telemetry | Working, and **local by construction** — aggregation over the orchestrator's own SQLite, served to the user's own client, with no collector, no identifier and no write path. Token counts are captured from what a provider reports (Ollama's `prompt_eval_count`/`eval_count`, an OpenAI-compatible `usage` object) and are **NULL when nothing reported them**; nothing estimates a token count anywhere. Runs routed off the machine are attributed per run at enqueue, so a later settings change cannot rewrite what left |
 | Streaming + resilience | Working; reconnect, requeue, lease recovery, run-visibility notices (#24, #30, #33) |
 | Job queue | Durable: SQLite job table with leases, fencing token, heartbeat renewal, orphan recovery, 3-attempt cap |
 | Tool servers | Two: safe system tools, sandboxed file tools |

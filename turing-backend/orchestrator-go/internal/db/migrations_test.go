@@ -187,6 +187,7 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 		"0008_integrations",
 		"0009_automations",
 		"0010_session_title_origin",
+		"0010_telemetry",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("applied migrations = %v, want %v", got, want)

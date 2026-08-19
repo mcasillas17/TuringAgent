@@ -23,6 +23,7 @@ import (
 	runtimesvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/runtime"
 	sessionsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/sessions"
 	skillsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/skills"
+	telemetrysvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/telemetry"
 	"google.golang.org/grpc"
 )
 
@@ -103,6 +104,7 @@ func New(cfg config.Config) (*App, error) {
 	eventService := eventsvc.NewServer(repo, eventBus)
 	chatService := chatsvc.New(repo, eventBus, runtimeService, cfg.OllamaModel, cfg.OpenAIModel)
 	auditService := auditsvc.New(repo)
+	telemetryService := telemetrysvc.New(repo)
 	// A missing key is not fatal: everything else still works, and the
 	// integrations service says so on its catalogue and refuses to connect an
 	// account, rather than storing a credential in the clear. A malformed key
@@ -162,6 +164,10 @@ func New(cfg config.Config) (*App, error) {
 	// Public only: nothing outside the orchestrator schedules a run, and the
 	// runtime has no reason to read the automation library.
 	turingv1.RegisterAutomationServiceServer(publicServer, automationService)
+	// Public only, and read-only. The runtime has nothing to ask it, and there
+	// is no internal registration because nothing off this process should be
+	// able to read a usage report either.
+	turingv1.RegisterTelemetryServiceServer(publicServer, telemetryService)
 	turingv1.RegisterEventServiceServer(publicServer, eventService)
 	turingv1.RegisterChatServiceServer(publicServer, chatService)
 	turingv1.RegisterApprovalServiceServer(publicServer, approvalsvc.NewPublicServer(approvalService))

@@ -9,6 +9,7 @@ import 'package:turing_flutter_app/features/workspace/integrations_page.dart';
 import 'package:turing_flutter_app/features/workspace/automations_page.dart';
 import 'package:turing_flutter_app/features/workspace/session_skills_bar.dart';
 import 'package:turing_flutter_app/features/workspace/skills_page.dart';
+import 'package:turing_flutter_app/features/workspace/telemetry_page.dart';
 import 'package:turing_flutter_app/models/agent_descriptor.dart';
 import 'package:turing_flutter_app/models/external_agent.dart';
 import 'package:turing_flutter_app/models/automation.dart';
@@ -26,6 +27,7 @@ import 'package:turing_flutter_app/ui/shell/shell_destination.dart';
 
 import '../support/no_integrations_api.dart';
 import '../support/no_automations_api.dart';
+import '../support/no_telemetry_api.dart';
 
 /// Wide enough to keep the sidebar beside the conversation.
 const Size _desktop = Size(1400, 900);
@@ -40,13 +42,10 @@ void main() {
     // shipped. With every destination now implemented, the claim worth pinning
     // is the inverse: nothing in the rail leads to a placeholder.
     testWidgets('every destination opens something real', (tester) async {
-      for (final label in [
-        'Skills',
-        'Integrations',
-        'MCPs',
-        'Automations',
-        'Agents',
-      ]) {
+      // Derived from the enum rather than hand-listed: a destination added to
+      // the rail but forgotten here would go unchecked, and nothing would
+      // fail.
+      for (final label in ShellDestination.navigation.map((d) => d.label)) {
         await _pumpShell(tester, api: _FakeApi(), size: _desktop);
         await tester.tap(find.text(label));
         await tester.pumpAndSettle();
@@ -71,6 +70,21 @@ void main() {
       // The "not built yet" card is gone, because it is.
       expect(find.text('Not built yet'), findsNothing);
       expect(find.text('New automation'), findsOneWidget);
+    });
+
+    testWidgets('Telemetry opens the real page, not a placeholder', (
+      tester,
+    ) async {
+      await _pumpShell(tester, api: _FakeApi(), size: _desktop);
+
+      await tester.tap(find.text('Telemetry'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(TelemetryPage), findsOneWidget);
+      expect(find.text('Not built yet'), findsNothing);
+      // Something only the real page draws.
+      expect(find.text('7 days'), findsOneWidget);
+      expect(find.text('Tokens'), findsOneWidget);
     });
 
     testWidgets('MCPs lists discovered tools grouped by server', (
@@ -1018,6 +1032,25 @@ void main() {
       );
     });
 
+    testWidgets('Telemetry is reachable and usable through the drawer', (
+      tester,
+    ) async {
+      await _pumpShell(tester, api: _FakeApi(), size: _phone);
+
+      await tester.tap(find.byTooltip('Open navigation menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Telemetry'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(Drawer), findsNothing);
+      expect(find.byType(TelemetryPage), findsOneWidget);
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: 'the page has to fit a phone',
+      );
+    });
+
     testWidgets('above the breakpoint the sidebar is always present', (
       tester,
     ) async {
@@ -1092,7 +1125,7 @@ void main() {
       await _pumpShell(tester, api: api, size: _desktop);
       expect(find.text('Skills'), findsOneWidget);
 
-      // Enough to run the list well past where five nav rows used to sit.
+      // Enough to run the list well past where the nav rows sit.
       await tester.drag(
         find.text('Conversation number 0'),
         const Offset(0, -1200),
@@ -1101,14 +1134,12 @@ void main() {
 
       // The destinations are this app's primary navigation on desktop; a long
       // chat list must never take them off screen.
-      for (final label in [
-        'Skills',
-        'Integrations',
-        'MCPs',
-        'Automations',
-        'Agents',
-      ]) {
-        expect(find.text(label), findsOneWidget, reason: ' scrolled away');
+      for (final label in ShellDestination.navigation.map((d) => d.label)) {
+        expect(
+          find.text(label),
+          findsOneWidget,
+          reason: '$label scrolled away',
+        );
       }
       // And the list really did move, or the assertion above proves nothing.
       expect(find.text('Conversation number 0'), findsNothing);
@@ -1301,7 +1332,9 @@ Future<void> _pumpShell(
   await tester.pumpAndSettle();
 }
 
-class _FakeApi with NoIntegrationsApi, NoAutomationsApi implements TuringApi {
+class _FakeApi
+    with NoIntegrationsApi, NoAutomationsApi, NoTelemetryApi
+    implements TuringApi {
   List<Session> sessions = [
     Session(
       sessionId: 'sess_existing',
