@@ -26,8 +26,9 @@ the session. The remaining row may prove that an action or deletion occurred;
 it may not preserve prompts, arguments, results, extracted facts, summaries,
 identifiers copied from content, or any other recoverable user material.
 The schema manifest restricts the exception to an explicit allowlist, while
-repository deletion tests cover both run-correlated and session-targeted audit
-rows.
+repository deletion tests cover run-correlated rows, uncorrelated rows that
+target the session, and unrelated correlated rows that merely share a target
+value.
 
 This contract applies to future facts, preferences, instructions, candidates,
 revisions, summaries, embeddings, vector indexes, graph edges, caches,
@@ -200,6 +201,8 @@ The regression suite proves:
 - today's complete schema is classified and valid;
 - a synthetic derived-text table with a source foreign key but no
   `ON DELETE CASCADE` is rejected;
+- a scrubbed-exception table cannot become another derived table's provenance
+  source;
 - a new unclassified application table is rejected; and
 - an unapproved or unjustified scrubbed exception is rejected.
 

@@ -22,6 +22,15 @@ var ErrSessionHasActiveRun = errors.New("session has an active run")
 // session" from "never carried a payload".
 const scrubbedAuditPayload = `{"scrubbed":true}`
 
+const scrubSessionAuditPayloadsSQL = `
+	UPDATE audit_logs SET payload_json = ?
+	WHERE correlation_id IN (SELECT id FROM agent_runs WHERE session_id = ?)
+		OR (
+			target = ?
+			AND (correlation_id IS NULL OR correlation_id = '')
+		)
+`
+
 // DeleteSession removes a session and everything it produced, and scrubs the
 // content out of the audit rows it leaves behind.
 //
@@ -34,9 +43,9 @@ const scrubbedAuditPayload = `{"scrubbed":true}`
 // what the user asked it to forget.
 //
 // The audit scrub runs BEFORE the cascade. Run-owned rows link through
-// correlation_id; session-level rows such as routing decisions use the session
-// as their target. Both links disappear or become unresolvable after deletion,
-// so the update resolves them while the source rows still exist.
+// correlation_id; uncorrelated session-level actions use the session as their
+// target. Both links disappear or become unresolvable after deletion, so the
+// update resolves them while the source rows still exist.
 func (r *Repository) DeleteSession(ctx context.Context, sessionID string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -85,11 +94,13 @@ func (r *Repository) DeleteSession(ctx context.Context, sessionID string) error 
 		return err
 	}
 
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE audit_logs SET payload_json = ?
-		WHERE correlation_id IN (SELECT id FROM agent_runs WHERE session_id = ?)
-			OR target = ?
-	`, scrubbedAuditPayload, sessionID, sessionID); err != nil {
+	if _, err := tx.ExecContext(
+		ctx,
+		scrubSessionAuditPayloadsSQL,
+		scrubbedAuditPayload,
+		sessionID,
+		sessionID,
+	); err != nil {
 		return err
 	}
 

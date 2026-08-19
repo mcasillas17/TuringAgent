@@ -1681,7 +1681,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 		}
 	}
 	if recorded.Inserted {
-		if err := s.audit.Record(ctx, beacon.RunId, "runtime", "", "tool.call.before", beacon.ToolCallId, toolAuditPayload(beacon)); err != nil {
+		if _, err := s.audit.RecordForExistingRun(ctx, beacon.RunId, "runtime", "", "tool.call.before", beacon.ToolCallId, toolAuditPayload(beacon)); err != nil {
 			log.Printf("record tool before audit for %s: %v", beacon.ToolCallId, err)
 		}
 	}
@@ -1721,7 +1721,7 @@ func (s *Server) blockUnattendedTool(ctx context.Context, beacon *turingv1.ToolC
 	if err != nil {
 		return nil, err
 	}
-	if err := s.audit.Record(ctx, beacon.RunId, "automation", grant.AutomationID, "automation.tool.blocked", beacon.ToolCallId, map[string]any{
+	if _, err := s.audit.RecordForExistingRun(ctx, beacon.RunId, "automation", grant.AutomationID, "automation.tool.blocked", beacon.ToolCallId, map[string]any{
 		"toolName":       beacon.ToolName,
 		"serverName":     beaconServerName(beacon),
 		"automationId":   grant.AutomationID,
@@ -1842,7 +1842,7 @@ func (s *Server) denyToolBefore(ctx context.Context, beacon *turingv1.ToolCallBe
 	}
 	payload := toolAuditPayload(beacon)
 	payload["reason"] = reason
-	if err := s.audit.Record(ctx, beacon.RunId, "runtime", "", "tool.call.before", beacon.ToolCallId, payload); err != nil {
+	if _, err := s.audit.RecordForExistingRun(ctx, beacon.RunId, "runtime", "", "tool.call.before", beacon.ToolCallId, payload); err != nil {
 		log.Printf("record denied tool before audit for %s: %v", beacon.ToolCallId, err)
 	}
 	return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_DENY, ToolCallId: beacon.ToolCallId, Reason: reason}, nil
@@ -1918,7 +1918,7 @@ func (s *Server) handleToolAfter(ctx context.Context, beacon *turingv1.ToolCallB
 		return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: beacon.ToolCallId}, nil
 	}
 	s.publishEvent(event)
-	if err := s.audit.Record(ctx, beacon.RunId, "runtime", "", "tool.call.after", beacon.ToolCallId, toolAuditPayload(beacon)); err != nil {
+	if _, err := s.audit.RecordForExistingRun(ctx, beacon.RunId, "runtime", "", "tool.call.after", beacon.ToolCallId, toolAuditPayload(beacon)); err != nil {
 		log.Printf("record tool after audit for %s: %v", beacon.ToolCallId, err)
 	}
 	return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: beacon.ToolCallId}, nil

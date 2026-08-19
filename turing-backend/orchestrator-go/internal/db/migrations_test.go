@@ -407,6 +407,21 @@ func TestDerivedStateProvenanceMigrationPreservesExistingRows(t *testing.T) {
 	if automationName != "Existing automation" {
 		t.Fatalf("automation name = %q, want Existing automation", automationName)
 	}
+	for _, indexName := range []string{
+		"session_external_agent_by_agent",
+		"automation_runs_by_automation",
+	} {
+		var exists int
+		if err := database.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM sqlite_master
+			WHERE type = 'index' AND name = ?
+		`, indexName).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if exists != 1 {
+			t.Fatalf("rebuilt-table index %q count = %d, want 1", indexName, exists)
+		}
+	}
 }
 
 func TestDerivedStateProvenanceMigrationRejectsLegacyNullOwnershipKeys(t *testing.T) {

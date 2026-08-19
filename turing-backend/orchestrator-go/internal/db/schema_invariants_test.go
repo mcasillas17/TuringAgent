@@ -183,6 +183,28 @@ func TestDerivedStateSchemaRejectsUnclassifiedTable(t *testing.T) {
 	}
 }
 
+func TestDerivedStateSchemaDoesNotCollapseDistinctNonASCIIIdentifiers(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	if _, err := database.ExecContext(ctx, `
+		CREATE TABLE "Å" (id TEXT PRIMARY KEY);
+		CREATE TABLE "å" (id TEXT PRIMARY KEY);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	policies = append(policies, schemaTablePolicy{
+		table:     "Å",
+		kind:      schemaTableIndependent,
+		rationale: "Uppercase non-ASCII identifier for this regression.",
+	})
+
+	err := validateDerivedStateSchema(ctx, database, policies)
+	if err == nil || !strings.Contains(err.Error(), `application table "å" has no derived-state policy`) {
+		t.Fatalf("validateDerivedStateSchema error = %v, want distinct non-ASCII table rejection", err)
+	}
+}
+
 func TestDerivedStateSchemaRequiresScrubbedExceptionJustification(t *testing.T) {
 	ctx := context.Background()
 	database := openMigratedInvariantDB(t, ctx)
@@ -219,6 +241,382 @@ func TestDerivedStateSchemaRejectsUnapprovedScrubbedException(t *testing.T) {
 	err := validateDerivedStateSchema(ctx, database, policies)
 	if err == nil || !strings.Contains(err.Error(), `scrubbed exception "memory_tombstones" is not approved`) {
 		t.Fatalf("validateDerivedStateSchema error = %v, want unapproved scrubbed exception", err)
+	}
+}
+
+func TestDerivedStateSchemaRejectsScrubbedExceptionAsProvenanceSource(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	if _, err := database.ExecContext(ctx, `
+		CREATE TABLE audit_projections (
+			id TEXT PRIMARY KEY,
+			audit_id TEXT NOT NULL REFERENCES audit_logs(id) ON DELETE CASCADE,
+			content TEXT NOT NULL
+		)`); err != nil {
+		t.Fatal(err)
+	}
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	policies = append(policies, schemaTablePolicy{
+		table:       "audit_projections",
+		kind:        schemaTableCascadeOwned,
+		sourceTable: "audit_logs",
+	})
+
+	err := validateDerivedStateSchema(ctx, database, policies)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		`derived table "audit_projections" cannot use scrubbed exception "audit_logs" as its provenance source`,
+	) {
+		t.Fatalf("validateDerivedStateSchema error = %v, want scrubbed-source rejection", err)
+	}
+}
+
+func TestDerivedStateSchemaRejectsApprovedScrubbedExceptionAsProvenanceSourceAfterReclassification(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	if _, err := database.ExecContext(ctx, `
+		CREATE TABLE audit_projections (
+			id TEXT PRIMARY KEY,
+			audit_id TEXT NOT NULL REFERENCES audit_logs(id) ON DELETE CASCADE,
+			content TEXT NOT NULL
+		)`); err != nil {
+		t.Fatal(err)
+	}
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	for index := range policies {
+		if policies[index].table == "audit_logs" {
+			policies[index].kind = schemaTableIndependent
+			policies[index].rationale = "Incorrectly reclassified for this regression."
+		}
+	}
+	policies = append(policies, schemaTablePolicy{
+		table:       "audit_projections",
+		kind:        schemaTableCascadeOwned,
+		sourceTable: "audit_logs",
+	})
+
+	err := validateDerivedStateSchema(ctx, database, policies)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		`derived table "audit_projections" cannot use scrubbed exception "audit_logs" as its provenance source`,
+	) {
+		t.Fatalf("validateDerivedStateSchema error = %v, want approved scrubbed-source rejection", err)
+	}
+}
+
+func TestDerivedStateSchemaRejectsFTSProjectionOverScrubbedException(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	for index := range policies {
+		if policies[index].table == "messages_fts" {
+			policies[index].sourceTable = "AUDIT_LOGS"
+		}
+	}
+
+	err := validateDerivedStateSchema(ctx, database, policies)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		`derived table "messages_fts" cannot use scrubbed exception "AUDIT_LOGS" as its provenance source`,
+	) {
+		t.Fatalf("validateDerivedStateSchema error = %v, want FTS scrubbed-source rejection", err)
+	}
+}
+
+func TestDerivedStateSchemaRejectsMixedCaseSourceOnScrubbedExceptionPolicy(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	for index := range policies {
+		if policies[index].table == "audit_logs" {
+			policies[index].sourceTable = "AUDIT_LOGS"
+		}
+	}
+
+	err := validateDerivedStateSchema(ctx, database, policies)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		`derived table "audit_logs" cannot use scrubbed exception "AUDIT_LOGS" as its provenance source`,
+	) {
+		t.Fatalf("validateDerivedStateSchema error = %v, want scrubbed-policy source rejection", err)
+	}
+}
+
+func TestDerivedStateSchemaRequiresApprovedScrubbedExceptionPolicy(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	for index := range policies {
+		if policies[index].table == "audit_logs" {
+			policies[index].kind = schemaTableIndependent
+			policies[index].rationale = "Incorrectly reclassified for this regression."
+		}
+	}
+
+	err := validateDerivedStateSchema(ctx, database, policies)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		`approved scrubbed exception "audit_logs" must use the scrubbed_exception policy`,
+	) {
+		t.Fatalf("validateDerivedStateSchema error = %v, want approved exception policy rejection", err)
+	}
+}
+
+func TestDerivedStateSchemaRejectsIndependentTableReferencingScrubbedException(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	if _, err := database.ExecContext(ctx, `
+		CREATE TABLE memory_facts (
+			id TEXT PRIMARY KEY,
+			audit_id TEXT NOT NULL REFERENCES audit_logs(id),
+			content TEXT NOT NULL
+		)`); err != nil {
+		t.Fatal(err)
+	}
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	policies = append(policies, schemaTablePolicy{
+		table:     "memory_facts",
+		kind:      schemaTableIndependent,
+		rationale: "Incorrectly classified for this regression.",
+	})
+
+	err := validateDerivedStateSchema(ctx, database, policies)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		`table "memory_facts" has a foreign-key path to scrubbed exception "audit_logs"`,
+	) {
+		t.Fatalf("validateDerivedStateSchema error = %v, want structural scrubbed-source rejection", err)
+	}
+}
+
+func TestDerivedStateSchemaRejectsAdditionalNullableScrubbedProvenance(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	if _, err := database.ExecContext(ctx, `
+		CREATE TABLE memory_facts (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+			audit_id TEXT REFERENCES audit_logs(id) ON DELETE CASCADE,
+			content TEXT NOT NULL
+		)`); err != nil {
+		t.Fatal(err)
+	}
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	policies = append(policies, schemaTablePolicy{
+		table:       "memory_facts",
+		kind:        schemaTableCascadeOwned,
+		sourceTable: "sessions",
+	})
+
+	err := validateDerivedStateSchema(ctx, database, policies)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		`table "memory_facts" has a foreign-key path to scrubbed exception "audit_logs"`,
+	) {
+		t.Fatalf("validateDerivedStateSchema error = %v, want additional scrubbed-source rejection", err)
+	}
+}
+
+func TestDerivedStateSchemaRejectsMixedCaseScrubbedProvenance(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	if _, err := database.ExecContext(ctx, `
+		CREATE TABLE memory_facts (
+			id TEXT PRIMARY KEY,
+			audit_id TEXT NOT NULL REFERENCES AUDIT_LOGS(id),
+			content TEXT NOT NULL
+		)`); err != nil {
+		t.Fatal(err)
+	}
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	policies = append(policies, schemaTablePolicy{
+		table:     "memory_facts",
+		kind:      schemaTableIndependent,
+		rationale: "Incorrectly classified for this regression.",
+	})
+
+	err := validateDerivedStateSchema(ctx, database, policies)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		`table "memory_facts" has a foreign-key path to scrubbed exception "audit_logs"`,
+	) {
+		t.Fatalf("validateDerivedStateSchema error = %v, want case-insensitive scrubbed-source rejection", err)
+	}
+}
+
+func TestDerivedStateSchemaRejectsTransitiveMixedCaseScrubbedProvenance(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	if _, err := database.ExecContext(ctx, `
+		CREATE TABLE memory_index (
+			id TEXT PRIMARY KEY,
+			audit_id TEXT NOT NULL REFERENCES AUDIT_LOGS(id)
+		);
+		CREATE TABLE memory_facts (
+			id TEXT PRIMARY KEY,
+			index_id TEXT NOT NULL REFERENCES memory_index(id) ON DELETE CASCADE,
+			content TEXT NOT NULL
+		);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	policies = append(policies,
+		schemaTablePolicy{
+			table:       "memory_facts",
+			kind:        schemaTableCascadeOwned,
+			sourceTable: "memory_index",
+		},
+		schemaTablePolicy{
+			table:     "memory_index",
+			kind:      schemaTableIndependent,
+			rationale: "Incorrectly classified for this regression.",
+		},
+	)
+
+	err := validateDerivedStateSchema(ctx, database, policies)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		`table "memory_facts" has a foreign-key path to scrubbed exception "audit_logs"`,
+	) {
+		t.Fatalf("validateDerivedStateSchema error = %v, want transitive scrubbed-source rejection", err)
+	}
+}
+
+func TestDerivedStateSchemaAcceptsTransitiveSourceCascade(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	if _, err := database.ExecContext(ctx, `
+		CREATE TABLE memory_facts (
+			id TEXT PRIMARY KEY,
+			source_message_id TEXT NOT NULL REFERENCES MESSAGES(id) ON DELETE CASCADE,
+			content TEXT NOT NULL
+		)`); err != nil {
+		t.Fatal(err)
+	}
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	policies = append(policies, schemaTablePolicy{
+		table:       "memory_facts",
+		kind:        schemaTableCascadeOwned,
+		sourceTable: "SeSsIoNs",
+	})
+
+	if err := validateDerivedStateSchema(ctx, database, policies); err != nil {
+		t.Fatalf("validateDerivedStateSchema rejected transitive source cascade: %v", err)
+	}
+}
+
+func TestDerivedStateSchemaRejectsNullableCompositeSourceCascade(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	if _, err := database.ExecContext(ctx, `
+		CREATE TABLE memory_sources (
+			tenant_id TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			PRIMARY KEY (tenant_id, source_id)
+		);
+		CREATE TABLE memory_facts (
+			id TEXT PRIMARY KEY,
+			source_tenant_id TEXT NOT NULL,
+			source_id TEXT,
+			content TEXT NOT NULL,
+			FOREIGN KEY (source_tenant_id, source_id)
+				REFERENCES memory_sources(tenant_id, source_id) ON DELETE CASCADE
+		);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	policies = append(policies,
+		schemaTablePolicy{
+			table:     "memory_sources",
+			kind:      schemaTableIndependent,
+			rationale: "Synthetic composite source for this regression.",
+		},
+		schemaTablePolicy{
+			table:       "memory_facts",
+			kind:        schemaTableCascadeOwned,
+			sourceTable: "memory_sources",
+		},
+	)
+
+	err := validateDerivedStateSchema(ctx, database, policies)
+	if err == nil || !strings.Contains(err.Error(), "no ON DELETE CASCADE path with non-null source columns") {
+		t.Fatalf("validateDerivedStateSchema error = %v, want nullable composite source rejection", err)
+	}
+}
+
+func TestDerivedStateSchemaAcceptsNonNullCompositeSourceCascade(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	if _, err := database.ExecContext(ctx, `
+		CREATE TABLE memory_sources (
+			tenant_id TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			PRIMARY KEY (tenant_id, source_id)
+		);
+		CREATE TABLE memory_facts (
+			id TEXT PRIMARY KEY,
+			source_tenant_id TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			content TEXT NOT NULL,
+			FOREIGN KEY (source_tenant_id, source_id)
+				REFERENCES memory_sources(tenant_id, source_id) ON DELETE CASCADE
+		);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	policies = append(policies,
+		schemaTablePolicy{
+			table:     "memory_sources",
+			kind:      schemaTableIndependent,
+			rationale: "Synthetic composite source for this regression.",
+		},
+		schemaTablePolicy{
+			table:       "memory_facts",
+			kind:        schemaTableCascadeOwned,
+			sourceTable: "memory_sources",
+		},
+	)
+
+	if err := validateDerivedStateSchema(ctx, database, policies); err != nil {
+		t.Fatalf("validateDerivedStateSchema rejected non-null composite source: %v", err)
+	}
+}
+
+func TestDerivedStateSchemaForeignKeyCyclesTerminate(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	if _, err := database.ExecContext(ctx, `
+		CREATE TABLE cycle_a (
+			id TEXT PRIMARY KEY,
+			b_id TEXT NOT NULL REFERENCES cycle_b(id) ON DELETE CASCADE
+		);
+		CREATE TABLE cycle_b (
+			id TEXT PRIMARY KEY,
+			a_id TEXT NOT NULL REFERENCES cycle_a(id) ON DELETE CASCADE
+		);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	policies = append(policies,
+		schemaTablePolicy{
+			table:       "cycle_a",
+			kind:        schemaTableCascadeOwned,
+			sourceTable: "sessions",
+		},
+		schemaTablePolicy{
+			table:     "cycle_b",
+			kind:      schemaTableIndependent,
+			rationale: "Synthetic cycle for this regression.",
+		},
+	)
+
+	err := validateDerivedStateSchema(ctx, database, policies)
+	if err == nil || !strings.Contains(err.Error(), `derived table "cycle_a" has no ON DELETE CASCADE path`) {
+		t.Fatalf("validateDerivedStateSchema error = %v, want finite missing-cascade rejection", err)
 	}
 }
 
@@ -307,6 +705,76 @@ func TestDerivedStateSchemaRejectsFTSProjectionWithoutExternalContentSource(t *t
 	}
 }
 
+func TestDerivedStateSchemaAcceptsMixedCaseFTSPolicyIdentifiers(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	for index := range policies {
+		if policies[index].table == "messages_fts" {
+			policies[index].table = "MESSAGES_FTS"
+			policies[index].sourceTable = "MESSAGES"
+			policies[index].deleteTrigger = "MESSAGES_FTS_AD"
+		}
+	}
+
+	if err := validateDerivedStateSchema(ctx, database, policies); err != nil {
+		t.Fatalf("validateDerivedStateSchema rejected mixed-case FTS policy identifiers: %v", err)
+	}
+}
+
+func TestDerivedStateSchemaRejectsFTSProjectionOverDistinctNonASCIIIdentifier(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	if _, err := database.ExecContext(ctx, `
+		CREATE TABLE "Å" (
+			id INTEGER PRIMARY KEY,
+			content TEXT NOT NULL
+		);
+		CREATE TABLE "å" (
+			id INTEGER PRIMARY KEY,
+			content TEXT NOT NULL
+		);
+		CREATE VIRTUAL TABLE unicode_fts USING fts5(
+			content,
+			content='å',
+			content_rowid='rowid'
+		);
+		CREATE TRIGGER unicode_fts_ad AFTER DELETE ON "å" BEGIN
+			INSERT INTO unicode_fts(unicode_fts, rowid, content)
+			VALUES ('delete', old.rowid, old.content);
+		END;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	policies = append(policies,
+		schemaTablePolicy{
+			table:     "Å",
+			kind:      schemaTableIndependent,
+			rationale: "Distinct uppercase non-ASCII source for this regression.",
+		},
+		schemaTablePolicy{
+			table:     "å",
+			kind:      schemaTableIndependent,
+			rationale: "Distinct lowercase non-ASCII source for this regression.",
+		},
+		schemaTablePolicy{
+			table:         "unicode_fts",
+			kind:          schemaTableFTSProjection,
+			sourceTable:   "Å",
+			deleteTrigger: "unicode_fts_ad",
+		},
+	)
+
+	err := validateDerivedStateSchema(ctx, database, policies)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		`FTS projection "unicode_fts" must use "Å" as external content keyed by rowid`,
+	) {
+		t.Fatalf("validateDerivedStateSchema error = %v, want distinct non-ASCII FTS source rejection", err)
+	}
+}
+
 func TestDerivedStateSchemaRejectsUnknownPolicyKind(t *testing.T) {
 	ctx := context.Background()
 	database := openMigratedInvariantDB(t, ctx)
@@ -320,6 +788,113 @@ func TestDerivedStateSchemaRejectsUnknownPolicyKind(t *testing.T) {
 	err := validateDerivedStateSchema(ctx, database, policies)
 	if err == nil || !strings.Contains(err.Error(), `application table "settings" has unsupported derived-state policy kind "unchecked"`) {
 		t.Fatalf("validateDerivedStateSchema error = %v, want unsupported policy kind", err)
+	}
+}
+
+func TestDerivedStateSchemaRejectsDuplicatePolicy(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	policies = append(policies, schemaTablePolicy{
+		table:     "settings",
+		kind:      schemaTableIndependent,
+		rationale: "Duplicate policy for this regression.",
+	})
+
+	err := validateDerivedStateSchema(ctx, database, policies)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		`application table "settings" has duplicate derived-state policies`,
+	) {
+		t.Fatalf("validateDerivedStateSchema error = %v, want duplicate policy rejection", err)
+	}
+}
+
+func TestDerivedStateSchemaRejectsPolicyForAbsentTable(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	policies = append(policies, schemaTablePolicy{
+		table:     "never_created",
+		kind:      schemaTableIndependent,
+		rationale: "Absent table policy for this regression.",
+	})
+
+	err := validateDerivedStateSchema(ctx, database, policies)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		`derived-state policy names absent application table "never_created"`,
+	) {
+		t.Fatalf("validateDerivedStateSchema error = %v, want absent table policy rejection", err)
+	}
+}
+
+func TestDerivedStateSchemaRejectsFTSProjectionThatIsNotVirtual(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	if _, err := database.ExecContext(ctx, `
+		CREATE TABLE memory_fts (
+			id TEXT PRIMARY KEY,
+			content TEXT NOT NULL
+		)`); err != nil {
+		t.Fatal(err)
+	}
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	policies = append(policies, schemaTablePolicy{
+		table:         "memory_fts",
+		kind:          schemaTableFTSProjection,
+		sourceTable:   "messages",
+		deleteTrigger: "memory_fts_ad",
+	})
+
+	err := validateDerivedStateSchema(ctx, database, policies)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		`FTS projection "memory_fts" is not a virtual table`,
+	) {
+		t.Fatalf("validateDerivedStateSchema error = %v, want non-virtual FTS rejection", err)
+	}
+}
+
+func TestDerivedStateSchemaRejectsFTSProjectionWithoutBehavioralDeleteCheck(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedInvariantDB(t, ctx)
+	if _, err := database.ExecContext(ctx, `
+		CREATE TABLE memory_sources (
+			id INTEGER PRIMARY KEY,
+			content TEXT NOT NULL
+		);
+		CREATE VIRTUAL TABLE memory_fts USING fts5(
+			content,
+			content='memory_sources',
+			content_rowid='rowid'
+		);
+		CREATE TRIGGER memory_fts_ad AFTER DELETE ON memory_sources BEGIN
+			INSERT INTO memory_fts(memory_fts, rowid, content)
+			VALUES ('delete', old.rowid, old.content);
+		END;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	policies := append([]schemaTablePolicy(nil), currentSchemaTablePolicies...)
+	policies = append(policies, schemaTablePolicy{
+		table:     "memory_sources",
+		kind:      schemaTableIndependent,
+		rationale: "Synthetic FTS source for this regression.",
+	})
+	policies = append(policies, schemaTablePolicy{
+		table:         "memory_fts",
+		kind:          schemaTableFTSProjection,
+		sourceTable:   "memory_sources",
+		deleteTrigger: "memory_fts_ad",
+	})
+
+	err := validateDerivedStateSchema(ctx, database, policies)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		`FTS projection "memory_fts" has no behavioral delete check`,
+	) {
+		t.Fatalf("validateDerivedStateSchema error = %v, want missing behavioral check rejection", err)
 	}
 }
 
@@ -434,10 +1009,11 @@ func openMigratedInvariantDB(t *testing.T, ctx context.Context) *DB {
 func validateDerivedStateSchema(ctx context.Context, database *DB, policies []schemaTablePolicy) error {
 	policyByTable := make(map[string]schemaTablePolicy, len(policies))
 	for _, policy := range policies {
-		if _, exists := policyByTable[policy.table]; exists {
+		tableName := canonicalSQLiteIdentifier(policy.table)
+		if _, exists := policyByTable[tableName]; exists {
 			return fmt.Errorf("application table %q has duplicate derived-state policies", policy.table)
 		}
-		policyByTable[policy.table] = policy
+		policyByTable[tableName] = policy
 	}
 
 	tableTypes, err := applicationSchemaTableTypes(ctx, database)
@@ -455,8 +1031,70 @@ func validateDerivedStateSchema(ctx context.Context, database *DB, policies []sc
 		}
 	}
 	for _, policy := range policies {
-		if _, exists := tableTypes[policy.table]; !exists && policy.presence != schemaTableOptional {
+		if _, exists := tableTypes[canonicalSQLiteIdentifier(policy.table)]; !exists &&
+			policy.presence != schemaTableOptional {
 			return fmt.Errorf("derived-state policy names absent application table %q", policy.table)
+		}
+	}
+
+	for _, policy := range policies {
+		if policy.sourceTable == "" {
+			continue
+		}
+		sourceTable := canonicalSQLiteIdentifier(policy.sourceTable)
+		sourcePolicy, sourceClassified := policyByTable[sourceTable]
+		_, sourceApproved := approvedScrubbedExceptionTables[sourceTable]
+		if sourceApproved ||
+			(sourceClassified && sourcePolicy.kind == schemaTableScrubbedException) {
+			return fmt.Errorf(
+				"derived table %q cannot use scrubbed exception %q as its provenance source",
+				policy.table,
+				policy.sourceTable,
+			)
+		}
+	}
+	for table := range approvedScrubbedExceptionTables {
+		policy, classified := policyByTable[canonicalSQLiteIdentifier(table)]
+		if !classified || policy.kind != schemaTableScrubbedException {
+			return fmt.Errorf(
+				"approved scrubbed exception %q must use the scrubbed_exception policy",
+				table,
+			)
+		}
+	}
+	scrubbedExceptionTables := make(map[string]struct{}, len(approvedScrubbedExceptionTables))
+	for table := range approvedScrubbedExceptionTables {
+		scrubbedExceptionTables[canonicalSQLiteIdentifier(table)] = struct{}{}
+	}
+	for _, policy := range policies {
+		if policy.kind == schemaTableScrubbedException {
+			scrubbedExceptionTables[canonicalSQLiteIdentifier(policy.table)] = struct{}{}
+		}
+	}
+	for _, policy := range policies {
+		tableName := canonicalSQLiteIdentifier(policy.table)
+		if _, exists := tableTypes[tableName]; !exists {
+			continue
+		}
+		if _, scrubbed := scrubbedExceptionTables[tableName]; scrubbed {
+			continue
+		}
+		scrubbedAncestor, err := findForeignKeyAncestor(
+			ctx,
+			database,
+			policy.table,
+			scrubbedExceptionTables,
+			nil,
+		)
+		if err != nil {
+			return err
+		}
+		if scrubbedAncestor != "" {
+			return fmt.Errorf(
+				"table %q has a foreign-key path to scrubbed exception %q",
+				policy.table,
+				scrubbedAncestor,
+			)
 		}
 	}
 
@@ -470,20 +1108,21 @@ func validateDerivedStateSchema(ctx context.Context, database *DB, policies []sc
 				)
 			}
 		case schemaTableCascadeOwned:
-			if policy.sourceTable == policy.table {
+			sourceTable := canonicalSQLiteIdentifier(policy.sourceTable)
+			if sourceTable == canonicalSQLiteIdentifier(policy.table) {
 				return fmt.Errorf(
 					"derived table %q cannot declare itself as its source",
 					policy.table,
 				)
 			}
-			if _, exists := tableTypes[policy.sourceTable]; !exists {
+			if _, exists := tableTypes[sourceTable]; !exists {
 				return fmt.Errorf(
 					"derived table %q declares absent source table %q",
 					policy.table,
 					policy.sourceTable,
 				)
 			}
-			hasCascadePath, err := tableHasCascadePath(ctx, database, policy.table, policy.sourceTable, nil)
+			hasCascadePath, err := tableHasCascadePath(ctx, database, policy.table, sourceTable, nil)
 			if err != nil {
 				return err
 			}
@@ -495,7 +1134,7 @@ func validateDerivedStateSchema(ctx context.Context, database *DB, policies []sc
 				)
 			}
 		case schemaTableFTSProjection:
-			if tableTypes[policy.table] != "virtual" {
+			if tableTypes[canonicalSQLiteIdentifier(policy.table)] != "virtual" {
 				return fmt.Errorf("FTS projection %q is not a virtual table", policy.table)
 			}
 			if err := validateExternalContentFTSProjection(ctx, database, policy); err != nil {
@@ -508,7 +1147,7 @@ func validateDerivedStateSchema(ctx context.Context, database *DB, policies []sc
 					policy.table,
 				)
 			}
-			if _, approved := approvedScrubbedExceptionTables[policy.table]; !approved {
+			if _, approved := approvedScrubbedExceptionTables[canonicalSQLiteIdentifier(policy.table)]; !approved {
 				return fmt.Errorf("scrubbed exception %q is not approved", policy.table)
 			}
 		default:
@@ -530,13 +1169,13 @@ func validateExternalContentFTSProjection(
 	var tableSQL string
 	if err := database.QueryRowContext(
 		ctx,
-		`SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?`,
+		`SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ? COLLATE NOCASE`,
 		policy.table,
 	).Scan(&tableSQL); err != nil {
 		return fmt.Errorf("inspect FTS projection %q: %w", policy.table, err)
 	}
 	compactTableSQL := normalizeSQLiteSQLForComparison(tableSQL)
-	expectedContent := "content='" + strings.ToLower(policy.sourceTable) + "'"
+	expectedContent := "content='" + canonicalSQLiteIdentifier(policy.sourceTable) + "'"
 	if !strings.Contains(compactTableSQL, expectedContent) ||
 		!strings.Contains(compactTableSQL, "content_rowid='rowid'") {
 		return fmt.Errorf(
@@ -549,7 +1188,7 @@ func validateExternalContentFTSProjection(
 	var triggerSQL string
 	if err := database.QueryRowContext(
 		ctx,
-		`SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?`,
+		`SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ? COLLATE NOCASE`,
 		policy.deleteTrigger,
 	).Scan(&triggerSQL); err != nil {
 		return fmt.Errorf(
@@ -560,9 +1199,9 @@ func validateExternalContentFTSProjection(
 		)
 	}
 	compactTriggerSQL := normalizeSQLiteSQLForComparison(triggerSQL)
-	expectedDeleteTarget := "afterdeleteon" + strings.ToLower(policy.sourceTable)
-	expectedDeleteCommand := "insertinto" + strings.ToLower(policy.table) +
-		"(" + strings.ToLower(policy.table) + ",rowid,content)" +
+	expectedDeleteTarget := "afterdeleteon" + canonicalSQLiteIdentifier(policy.sourceTable)
+	expectedDeleteCommand := "insertinto" + canonicalSQLiteIdentifier(policy.table) +
+		"(" + canonicalSQLiteIdentifier(policy.table) + ",rowid,content)" +
 		"values('delete',old.rowid,old.content)"
 	if !strings.Contains(compactTriggerSQL, expectedDeleteTarget) ||
 		!strings.Contains(compactTriggerSQL, expectedDeleteCommand) {
@@ -572,7 +1211,7 @@ func validateExternalContentFTSProjection(
 			policy.deleteTrigger,
 		)
 	}
-	checkDeleteBehavior, exists := ftsProjectionDeleteChecks[policy.table]
+	checkDeleteBehavior, exists := ftsProjectionDeleteChecks[canonicalSQLiteIdentifier(policy.table)]
 	if !exists {
 		return fmt.Errorf("FTS projection %q has no behavioral delete check", policy.table)
 	}
@@ -635,7 +1274,17 @@ func validateMessagesFTSDeleteBehavior(ctx context.Context, database *DB) error 
 }
 
 func normalizeSQLiteSQLForComparison(sqlText string) string {
-	return strings.ToLower(strings.Join(strings.Fields(sqlText), ""))
+	return canonicalSQLiteIdentifier(strings.Join(strings.Fields(sqlText), ""))
+}
+
+func canonicalSQLiteIdentifier(identifier string) string {
+	canonical := []byte(identifier)
+	for index, value := range canonical {
+		if value >= 'A' && value <= 'Z' {
+			canonical[index] = value + ('a' - 'A')
+		}
+	}
+	return string(canonical)
 }
 
 func applicationSchemaTableTypes(ctx context.Context, database *DB) (map[string]string, error) {
@@ -664,12 +1313,84 @@ func applicationSchemaTableTypes(ctx context.Context, database *DB) (map[string]
 			(tableType != "table" && tableType != "virtual") {
 			continue
 		}
-		tableTypes[tableName] = tableType
+		tableTypes[canonicalSQLiteIdentifier(tableName)] = tableType
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return tableTypes, nil
+}
+
+func findForeignKeyAncestor(
+	ctx context.Context,
+	database *DB,
+	table string,
+	candidates map[string]struct{},
+	visited map[string]bool,
+) (string, error) {
+	table = canonicalSQLiteIdentifier(table)
+	if visited == nil {
+		visited = make(map[string]bool)
+	}
+	if visited[table] {
+		return "", nil
+	}
+	visited[table] = true
+
+	parentTables, err := foreignKeyParentTables(ctx, database, table)
+	if err != nil {
+		return "", err
+	}
+	for _, parentTable := range parentTables {
+		if _, candidate := candidates[parentTable]; candidate {
+			return parentTable, nil
+		}
+		ancestor, err := findForeignKeyAncestor(ctx, database, parentTable, candidates, visited)
+		if err != nil {
+			return "", err
+		}
+		if ancestor != "" {
+			return ancestor, nil
+		}
+	}
+	return "", nil
+}
+
+func foreignKeyParentTables(ctx context.Context, database *DB, table string) ([]string, error) {
+	rows, err := database.QueryContext(ctx, "PRAGMA foreign_key_list("+quoteSQLiteIdentifier(table)+")")
+	if err != nil {
+		return nil, fmt.Errorf("inspect foreign keys for %q: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	parentSet := make(map[string]struct{})
+	for rows.Next() {
+		var id, sequence int
+		var referencedTable, fromColumn, onUpdate, onDelete, match string
+		var toColumn sql.NullString
+		if err := rows.Scan(
+			&id,
+			&sequence,
+			&referencedTable,
+			&fromColumn,
+			&toColumn,
+			&onUpdate,
+			&onDelete,
+			&match,
+		); err != nil {
+			return nil, fmt.Errorf("scan foreign key for %q: %w", table, err)
+		}
+		parentSet[canonicalSQLiteIdentifier(referencedTable)] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate foreign keys for %q: %w", table, err)
+	}
+	parentTables := make([]string, 0, len(parentSet))
+	for parentTable := range parentSet {
+		parentTables = append(parentTables, parentTable)
+	}
+	sort.Strings(parentTables)
+	return parentTables, nil
 }
 
 func tableHasCascadePath(
@@ -679,6 +1400,8 @@ func tableHasCascadePath(
 	sourceTable string,
 	visited map[string]bool,
 ) (bool, error) {
+	table = canonicalSQLiteIdentifier(table)
+	sourceTable = canonicalSQLiteIdentifier(sourceTable)
 	if visited == nil {
 		visited = make(map[string]bool)
 	}
@@ -748,7 +1471,7 @@ func cascadeDeleteParentTables(ctx context.Context, database *DB, table string) 
 			foreignKey, exists := cascadeForeignKeys[id]
 			if !exists {
 				foreignKey = &cascadeForeignKey{
-					parent:                  referencedTable,
+					parent:                  canonicalSQLiteIdentifier(referencedTable),
 					allSourceColumnsNonNull: true,
 				}
 				cascadeForeignKeys[id] = foreignKey

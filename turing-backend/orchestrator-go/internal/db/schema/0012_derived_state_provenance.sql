@@ -54,3 +54,6 @@ ALTER TABLE automation_runs_0012 RENAME TO automation_runs;
 
 CREATE INDEX automation_runs_by_automation
   ON automation_runs (automation_id, fired_at);
+
+CREATE INDEX idx_audit_target
+  ON audit_logs (target);
