@@ -211,6 +211,41 @@ const RuntimeHeartbeat$json = {
 final $typed_data.Uint8List runtimeHeartbeatDescriptor = $convert.base64Decode(
     'ChBSdW50aW1lSGVhcnRiZWF0EhsKCXdvcmtlcl9pZBgBIAEoCVIId29ya2VySWQ=');
 
+@$core.Deprecated('Use runTokenUsageDescriptor instead')
+const RunTokenUsage$json = {
+  '1': 'RunTokenUsage',
+  '2': [
+    {
+      '1': 'input_tokens',
+      '3': 1,
+      '4': 1,
+      '5': 3,
+      '9': 0,
+      '10': 'inputTokens',
+      '17': true
+    },
+    {
+      '1': 'output_tokens',
+      '3': 2,
+      '4': 1,
+      '5': 3,
+      '9': 1,
+      '10': 'outputTokens',
+      '17': true
+    },
+  ],
+  '8': [
+    {'1': '_input_tokens'},
+    {'1': '_output_tokens'},
+  ],
+};
+
+/// Descriptor for `RunTokenUsage`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List runTokenUsageDescriptor = $convert.base64Decode(
+    'Cg1SdW5Ub2tlblVzYWdlEiYKDGlucHV0X3Rva2VucxgBIAEoA0gAUgtpbnB1dFRva2Vuc4gBAR'
+    'IoCg1vdXRwdXRfdG9rZW5zGAIgASgDSAFSDG91dHB1dFRva2Vuc4gBAUIPCg1faW5wdXRfdG9r'
+    'ZW5zQhAKDl9vdXRwdXRfdG9rZW5z');
+
 @$core.Deprecated('Use runtimeRunCompletedDescriptor instead')
 const RuntimeRunCompleted$json = {
   '1': 'RuntimeRunCompleted',
@@ -232,6 +267,14 @@ const RuntimeRunCompleted$json = {
       '6': '.google.protobuf.Struct',
       '10': 'usage'
     },
+    {
+      '1': 'token_usage',
+      '3': 5,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.RunTokenUsage',
+      '10': 'tokenUsage'
+    },
   ],
 };
 
@@ -240,7 +283,8 @@ final $typed_data.Uint8List runtimeRunCompletedDescriptor = $convert.base64Decod
     'ChNSdW50aW1lUnVuQ29tcGxldGVkEhUKBnJ1bl9pZBgBIAEoCVIFcnVuSWQSMAoUYXNzaXN0YW'
     '50X21lc3NhZ2VfaWQYAiABKAlSEmFzc2lzdGFudE1lc3NhZ2VJZBIYCgdjb250ZW50GAMgASgJ'
     'Ugdjb250ZW50Ei0KBXVzYWdlGAQgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdFIFdXNhZ2'
-    'U=');
+    'USOQoLdG9rZW5fdXNhZ2UYBSABKAsyGC50dXJpbmcudjEuUnVuVG9rZW5Vc2FnZVIKdG9rZW5V'
+    'c2FnZQ==');
 
 @$core.Deprecated('Use runtimeRunFailedDescriptor instead')
 const RuntimeRunFailed$json = {

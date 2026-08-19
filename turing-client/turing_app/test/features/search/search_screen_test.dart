@@ -18,6 +18,7 @@ import '../../support/no_external_agents_api.dart';
 import '../../support/no_integrations_api.dart';
 import '../../support/no_automations_api.dart';
 import '../../support/no_skills_api.dart';
+import '../../support/no_telemetry_api.dart';
 
 void main() {
   group('SearchScreen', () {
@@ -2452,7 +2453,12 @@ class _SessionCall {
 }
 
 class _FakeSearchApi
-    with NoSkillsApi, NoExternalAgentsApi, NoIntegrationsApi, NoAutomationsApi
+    with
+        NoSkillsApi,
+        NoExternalAgentsApi,
+        NoIntegrationsApi,
+        NoAutomationsApi,
+        NoTelemetryApi
     implements TuringApi {
   final List<_SearchCall> searchCalls = [];
   final List<_SessionCall> sessionCalls = [];

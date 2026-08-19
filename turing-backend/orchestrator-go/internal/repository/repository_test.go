@@ -684,7 +684,7 @@ func TestCompleteRunWithEventRollsBackWhenEventAppendFails(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	_, err = repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done", `{"assistantMessageId":"`+enqueued.AssistantMessageID+`"}`)
+	_, err = repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done", `{"assistantMessageId":"`+enqueued.AssistantMessageID+`"}`, nil)
 	if err == nil {
 		t.Fatal("CompleteRunWithEvent succeeded, want trigger failure")
 	}
@@ -724,7 +724,7 @@ func TestCompleteRunWithEventAppendsMessageCompletedBeforeRunCompleted(t *testin
 	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	completedEvents, err := repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done", `{"assistantMessageId":"`+enqueued.AssistantMessageID+`"}`)
+	completedEvents, err := repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done", `{"assistantMessageId":"`+enqueued.AssistantMessageID+`"}`, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -792,7 +792,7 @@ func TestCompleteRunWithEventAppendsAuthoritativeMessageCompleted(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	completedEvents, err := repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "authoritative", `{"assistantMessageId":"`+enqueued.AssistantMessageID+`"}`)
+	completedEvents, err := repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "authoritative", `{"assistantMessageId":"`+enqueued.AssistantMessageID+`"}`, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

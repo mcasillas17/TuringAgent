@@ -44,6 +44,12 @@ enum ShellDestination {
     icon: Icons.groups_outlined,
     selectedIcon: Icons.groups,
     implemented: true,
+  ),
+  telemetry(
+    label: 'Telemetry',
+    icon: Icons.insights_outlined,
+    selectedIcon: Icons.insights,
+    implemented: true,
   );
 
   const ShellDestination({

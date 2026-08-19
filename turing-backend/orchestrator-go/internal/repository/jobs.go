@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -279,6 +280,15 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 	}
 	modelProvider, model := input.ModelProvider, input.Model
 	var externalTarget *ExternalAgentTarget
+	// Recorded on the run itself, not left to be derived later from
+	// session_external_agent. That table says where the conversation points
+	// NOW; re-pointing or deleting an agent afterwards would silently rewrite
+	// the history of where earlier messages were actually sent, and "what left
+	// this machine" is exactly the record that must not be rewritable.
+	//
+	// The host rather than the base URL: a URL can carry a path, a query, and
+	// from a careless paste a credential. Only the recipient is worth keeping.
+	var externalAgentName, externalAgentHost sql.NullString
 	if routed {
 		// Every supported vendor speaks the OpenAI chat-completions dialect, so
 		// this reuses the existing provider rather than adding one client per
@@ -290,8 +300,18 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 			BaseURL:       routedAgent.BaseURL,
 			CredentialRef: routedAgent.CredentialRef,
 		}
+		externalAgentName = sql.NullString{String: routedAgent.DisplayName, Valid: true}
+		// Parsed here rather than through ExternalAgentEndpointHost, which
+		// falls back to returning the URL whole when it cannot find a host.
+		// That fallback is fine for a transcript notice; it is not fine for a
+		// column that is read straight back into a report promising a host and
+		// nothing else. No host recorded beats the wrong thing recorded, and
+		// the client already words the absence.
+		if parsed, parseErr := url.Parse(routedAgent.BaseURL); parseErr == nil && parsed.Host != "" {
+			externalAgentHost = sql.NullString{String: parsed.Host, Valid: true}
+		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status, model_provider, model_name, created_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`, runID, input.SessionID, userMessageID, assistantMessageID, input.AgentID, traceID, modelProvider, model, createdAt); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status, model_provider, model_name, external_agent_name, external_agent_host, created_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`, runID, input.SessionID, userMessageID, assistantMessageID, input.AgentID, traceID, modelProvider, model, externalAgentName, externalAgentHost, createdAt); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	// Name the conversation after the first thing said in it, and mark the

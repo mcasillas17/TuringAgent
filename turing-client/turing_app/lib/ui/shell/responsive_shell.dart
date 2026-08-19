@@ -12,6 +12,7 @@ import '../../features/workspace/session_agent_bar.dart';
 import '../../features/workspace/session_skills_bar.dart';
 import '../../features/workspace/integrations_page.dart';
 import '../../features/workspace/skills_page.dart';
+import '../../features/workspace/telemetry_page.dart';
 import '../../features/workspace/workspace_pages.dart';
 import '../../logic/theme_logic.dart';
 import '../../models/session.dart';
@@ -410,6 +411,8 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
           apiClient: widget.apiClient,
           onOpenSession: _selectSession,
         );
+      case ShellDestination.telemetry:
+        return TelemetryPage(apiClient: widget.apiClient);
     }
   }
 
@@ -501,7 +504,11 @@ class _Sidebar extends StatelessWidget {
   /// it they stay pinned, because on a desktop the destinations are the app's
   /// primary navigation and scrolling a long chat list must never take them
   /// off screen.
-  static const double _pinnedNavMinHeight = 460;
+  ///
+  /// Raised with each destination added: every nav row is about 37 logical
+  /// pixels of FIXED height, and the thing that overflows first when there is
+  /// not enough room is the footer, where Settings lives.
+  static const double _pinnedNavMinHeight = 500;
 
   @override
   Widget build(BuildContext context) {

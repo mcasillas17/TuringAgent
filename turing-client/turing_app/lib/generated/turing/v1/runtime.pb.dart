@@ -12,6 +12,7 @@
 
 import 'dart:core' as $core;
 
+import 'package:fixnum/fixnum.dart' as $fixnum;
 import 'package:protobuf/protobuf.dart' as $pb;
 
 import '../../google/protobuf/struct.pb.dart' as $1;
@@ -651,12 +652,89 @@ class RuntimeHeartbeat extends $pb.GeneratedMessage {
   void clearWorkerId() => $_clearField(1);
 }
 
+/// Token counts a provider reported, summed over every model turn a run made.
+///
+/// Both fields are optional and unset means UNKNOWN, never zero. Ollama reports
+/// prompt_eval_count/eval_count on its terminal chunk and an OpenAI-compatible
+/// provider reports a usage object; a provider that reports neither leaves this
+/// message absent entirely. Nothing anywhere estimates these — a token count
+/// nobody measured is worse than no token count, because someone will spend a
+/// decision on it.
+class RunTokenUsage extends $pb.GeneratedMessage {
+  factory RunTokenUsage({
+    $fixnum.Int64? inputTokens,
+    $fixnum.Int64? outputTokens,
+  }) {
+    final result = create();
+    if (inputTokens != null) result.inputTokens = inputTokens;
+    if (outputTokens != null) result.outputTokens = outputTokens;
+    return result;
+  }
+
+  RunTokenUsage._();
+
+  factory RunTokenUsage.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RunTokenUsage.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RunTokenUsage',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aInt64(1, _omitFieldNames ? '' : 'inputTokens')
+    ..aInt64(2, _omitFieldNames ? '' : 'outputTokens')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RunTokenUsage clone() => RunTokenUsage()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RunTokenUsage copyWith(void Function(RunTokenUsage) updates) =>
+      super.copyWith((message) => updates(message as RunTokenUsage))
+          as RunTokenUsage;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RunTokenUsage create() => RunTokenUsage._();
+  @$core.override
+  RunTokenUsage createEmptyInstance() => create();
+  static $pb.PbList<RunTokenUsage> createRepeated() =>
+      $pb.PbList<RunTokenUsage>();
+  @$core.pragma('dart2js:noInline')
+  static RunTokenUsage getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RunTokenUsage>(create);
+  static RunTokenUsage? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $fixnum.Int64 get inputTokens => $_getI64(0);
+  @$pb.TagNumber(1)
+  set inputTokens($fixnum.Int64 value) => $_setInt64(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasInputTokens() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearInputTokens() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $fixnum.Int64 get outputTokens => $_getI64(1);
+  @$pb.TagNumber(2)
+  set outputTokens($fixnum.Int64 value) => $_setInt64(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasOutputTokens() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearOutputTokens() => $_clearField(2);
+}
+
 class RuntimeRunCompleted extends $pb.GeneratedMessage {
   factory RuntimeRunCompleted({
     $core.String? runId,
     $core.String? assistantMessageId,
     $core.String? content,
     $1.Struct? usage,
+    RunTokenUsage? tokenUsage,
   }) {
     final result = create();
     if (runId != null) result.runId = runId;
@@ -664,6 +742,7 @@ class RuntimeRunCompleted extends $pb.GeneratedMessage {
       result.assistantMessageId = assistantMessageId;
     if (content != null) result.content = content;
     if (usage != null) result.usage = usage;
+    if (tokenUsage != null) result.tokenUsage = tokenUsage;
     return result;
   }
 
@@ -685,6 +764,8 @@ class RuntimeRunCompleted extends $pb.GeneratedMessage {
     ..aOS(3, _omitFieldNames ? '' : 'content')
     ..aOM<$1.Struct>(4, _omitFieldNames ? '' : 'usage',
         subBuilder: $1.Struct.create)
+    ..aOM<RunTokenUsage>(5, _omitFieldNames ? '' : 'tokenUsage',
+        subBuilder: RunTokenUsage.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -735,6 +816,10 @@ class RuntimeRunCompleted extends $pb.GeneratedMessage {
   @$pb.TagNumber(3)
   void clearContent() => $_clearField(3);
 
+  /// Free-form provider payload, echoed into the run-completed event. Kept as
+  /// it was rather than repurposed: token counts need presence semantics a
+  /// Struct cannot express without the reader guessing whether a missing key
+  /// means zero, so they travel in their own typed field below.
   @$pb.TagNumber(4)
   $1.Struct get usage => $_getN(3);
   @$pb.TagNumber(4)
@@ -745,6 +830,17 @@ class RuntimeRunCompleted extends $pb.GeneratedMessage {
   void clearUsage() => $_clearField(4);
   @$pb.TagNumber(4)
   $1.Struct ensureUsage() => $_ensure(3);
+
+  @$pb.TagNumber(5)
+  RunTokenUsage get tokenUsage => $_getN(4);
+  @$pb.TagNumber(5)
+  set tokenUsage(RunTokenUsage value) => $_setField(5, value);
+  @$pb.TagNumber(5)
+  $core.bool hasTokenUsage() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearTokenUsage() => $_clearField(5);
+  @$pb.TagNumber(5)
+  RunTokenUsage ensureTokenUsage() => $_ensure(4);
 }
 
 class RuntimeRunFailed extends $pb.GeneratedMessage {

@@ -18,6 +18,7 @@ import 'support/no_external_agents_api.dart';
 import 'support/no_integrations_api.dart';
 import 'support/no_automations_api.dart';
 import 'support/no_skills_api.dart';
+import 'support/no_telemetry_api.dart';
 
 void main() {
   testWidgets('Turing app renders settings when credentials are missing', (
@@ -86,7 +87,12 @@ class _FakeAuthStorage implements ClientAuthStorage {
 }
 
 class _ClosableFakeApiClient
-    with NoSkillsApi, NoExternalAgentsApi, NoIntegrationsApi, NoAutomationsApi
+    with
+        NoSkillsApi,
+        NoExternalAgentsApi,
+        NoIntegrationsApi,
+        NoAutomationsApi,
+        NoTelemetryApi
     implements ClosableTuringApi {
   bool closed = false;
 

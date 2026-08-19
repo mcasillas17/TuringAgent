@@ -210,7 +210,7 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 					return
 				}
 			}
-			sendStreamEvent(ctx, out, StreamEvent{Type: "completed", FinishReason: reason})
+			sendStreamEvent(ctx, out, StreamEvent{Type: "completed", FinishReason: reason, Usage: ollamaTokenUsage(obj)})
 			return
 		}
 		if err := scanner.Err(); err != nil {
@@ -228,6 +228,42 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 		}
 	}()
 	return out, nil
+}
+
+// ollamaTokenUsage reads the token counts Ollama puts on its terminal chunk.
+//
+// prompt_eval_count is the prompt Ollama actually evaluated and eval_count is
+// what it generated. Both are documented but neither is guaranteed: an older
+// Ollama, a proxy in front of it, or a cached prompt (where prompt_eval_count
+// is omitted entirely) can leave either absent. Absent stays absent — nil, not
+// zero.
+//
+// Deliberately lenient where the rest of this file is strict. Everything else
+// parsed from a chunk shapes the answer, so a malformed value has to fail the
+// run; a token count only shapes a report about the run, and failing a
+// completed answer because a number could not be parsed would trade something
+// the user asked for against something they did not.
+func ollamaTokenUsage(chunk map[string]any) *TokenUsage {
+	usage := TokenUsage{
+		InputTokens:  ollamaTokenCount(chunk["prompt_eval_count"]),
+		OutputTokens: ollamaTokenCount(chunk["eval_count"]),
+	}
+	if !usage.Reported() {
+		return nil
+	}
+	return &usage
+}
+
+func ollamaTokenCount(value any) *int64 {
+	number, ok := value.(json.Number)
+	if !ok {
+		return nil
+	}
+	parsed, err := number.Int64()
+	if err != nil || parsed < 0 {
+		return nil
+	}
+	return TokenCount(parsed)
 }
 
 type ollamaStreamToolCall struct {

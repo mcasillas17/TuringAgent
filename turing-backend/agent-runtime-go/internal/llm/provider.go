@@ -38,6 +38,31 @@ type ChatRequest struct {
 	Tools       []ToolDefinition
 }
 
+// TokenUsage carries token counts a provider REPORTED. It is never computed,
+// estimated, or inferred from message lengths here or anywhere downstream.
+//
+// Each field is a pointer because "the provider did not say" and "the provider
+// said zero" are different facts, and only one of them is a measurement. A
+// tokeniser-based estimate would be a plausible-looking number that no
+// provider ever produced, and somebody would eventually make a decision with
+// it — so this type has no way to hold one.
+type TokenUsage struct {
+	InputTokens  *int64
+	OutputTokens *int64
+}
+
+// Reported says whether the provider gave any number at all. A TokenUsage with
+// both fields nil is indistinguishable from silence and callers should treat
+// it as such.
+func (u *TokenUsage) Reported() bool {
+	return u != nil && (u.InputTokens != nil || u.OutputTokens != nil)
+}
+
+// TokenCount is the constructor for a count that was actually observed.
+func TokenCount(value int64) *int64 {
+	return &value
+}
+
 type StreamEvent struct {
 	// Type is one of "delta", "tool_call", "completed", or "error".
 	Type         string
@@ -46,6 +71,9 @@ type StreamEvent struct {
 	Code         string
 	Message      string
 	ToolCalls    []ToolCall
+	// Usage is set only on a "completed" event, and only when the provider
+	// reported counts. nil means unknown.
+	Usage *TokenUsage
 }
 
 type Provider interface {

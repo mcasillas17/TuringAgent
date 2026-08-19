@@ -24,6 +24,7 @@ import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
 import '../support/no_automations_api.dart';
 import '../support/no_skills_api.dart';
+import '../support/no_telemetry_api.dart';
 
 void main() {
   testWidgets('assistant markdown renders as formatting, not raw syntax', (
@@ -7248,7 +7249,12 @@ TuringEvent _event({
 }
 
 class _FakeApiClient
-    with NoSkillsApi, NoExternalAgentsApi, NoIntegrationsApi, NoAutomationsApi
+    with
+        NoSkillsApi,
+        NoExternalAgentsApi,
+        NoIntegrationsApi,
+        NoAutomationsApi,
+        NoTelemetryApi
     implements TuringApi {
   String? lastSentContent;
   String? lastModelProvider;
