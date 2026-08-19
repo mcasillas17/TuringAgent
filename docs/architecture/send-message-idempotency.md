@@ -20,7 +20,9 @@ run/job/trace IDs, emits the original `RunQueued` event, and continues from the
 persisted event sequence. This record survives an orchestrator restart; model
 and tool work never run inside the transaction. Once a keyed operation commits,
 losing or closing its delivery stream does not cancel the run; transport loss
-only affects event delivery, so a replay can resume it.
+only affects event delivery, so a replay can resume it. The runtime recovery
+loop also re-dispatches still-pending jobs, so a transient dispatch failure
+cannot leave a committed keyed operation stranded.
 
 Calls without a key retain the existing non-idempotent behavior for backwards
 compatibility and must not be retried as if they were idempotent.

@@ -817,12 +817,10 @@ func (s *Server) RecoverOrphanedAssignments(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	recovered := false
 	for _, candidate := range assignments {
 		if s.hasLiveAssignment(candidate) {
 			continue
 		}
-		released := false
 		if connected := s.registeredWorker(candidate.WorkerID); connected != nil {
 			closedAssignments, closed, live := connected.closeForStaleAssignment(
 				candidate.RunID, candidate.AttemptID, cutoff, s.dispatch.LeaseDuration,
@@ -832,7 +830,6 @@ func (s *Server) RecoverOrphanedAssignments(ctx context.Context) error {
 			}
 			if closed {
 				s.removeWorkerRegistration(candidate.WorkerID, connected)
-				released = true
 				var remaining []assignment
 				for _, assigned := range closedAssignments {
 					if assigned.runID != candidate.RunID || assigned.attemptID != candidate.AttemptID {
@@ -851,12 +848,8 @@ func (s *Server) RecoverOrphanedAssignments(ctx context.Context) error {
 		for _, event := range result.Events {
 			s.publishEvent(event)
 		}
-		recovered = recovered || result.Requeued || result.Cleared || released
 	}
-	if recovered {
-		return s.DispatchPending(recoveryCtx)
-	}
-	return nil
+	return s.DispatchPending(recoveryCtx)
 }
 
 func (s *Server) registeredWorker(workerID string) *worker {

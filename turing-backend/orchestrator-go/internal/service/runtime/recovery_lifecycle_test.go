@@ -9,6 +9,34 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 )
 
+func TestRecoveryDispatchesQueuedJobsWithoutOrphanedAssignment(t *testing.T) {
+	h := newHarness(t)
+	client := h.runtimeClient(t)
+	stream, err := client.ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.CloseSend() }()
+	if err := stream.Send(workerReady("recovery-dispatch-worker")); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetWorkerAccepted() != nil
+	})
+
+	enqueued := h.enqueueRun(t, "dispatch after transient failure")
+	if err := h.service.RecoverOrphanedAssignments(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assigned := recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
+		run := command.GetRunAssigned()
+		return run != nil && run.RunId == enqueued.RunID
+	}).GetRunAssigned()
+	if assigned.JobId != enqueued.JobID {
+		t.Fatalf("recovery assignment = %+v, want job %q", assigned, enqueued.JobID)
+	}
+}
+
 func TestCancelRunFencesUnownedUncertainExecutionUntilRecovery(t *testing.T) {
 	h := newHarness(t)
 	first := h.enqueueRun(t, "cancel uncertain attempt")
