@@ -190,15 +190,16 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		}
 		return emitRunFailed(emit, job, "tool_discovery_failed", err.Error(), ToolDiscoveryRetryable(err))
 	}
-	requestMessages := append([]llm.ChatMessage{}, messages...)
-	requestMessages = append(requestMessages, llm.ChatMessage{Role: "user", Content: job.GetUserText()})
+	historyMessages := append([]llm.ChatMessage{}, messages...)
+	liveMessages := []llm.ChatMessage{{Role: "user", Content: job.GetUserText()}}
 	// Skills open the request, ahead of the conversation history: they are
 	// standing instructions about how to behave here, not a turn in the
 	// conversation. Applied before recall so that a recalled block, which is
 	// prepended below, still lands above them and reads as background rather
 	// than as a rule.
+	var skillMessage *llm.ChatMessage
 	if system, ok := skillsSystemMessage(job.GetSkills()); ok {
-		requestMessages = append([]llm.ChatMessage{system}, requestMessages...)
+		skillMessage = &system
 	}
 	// Recalled material is prepended so it sits before the live conversation and
 	// cannot be read as the user's latest turn. Recall is given the request as
@@ -211,36 +212,69 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	// material from conversations they never chose to send anywhere, which is
 	// exactly the surprise the first commitment exists to prevent. Capability
 	// loses to consent here, and the client says so where the choice is made.
+	var recallMessage *llm.ChatMessage
 	if a.recall != nil && job.GetExternalAgent() == nil {
-		if block, ok := a.recall.Recall(ctx, job.GetSessionId(), job.GetUserText(), requestMessages); ok {
-			requestMessages = append([]llm.ChatMessage{block}, requestMessages...)
-			// The block tells the model where the material came from; without this
-			// the user gets no such hint, and an answer drawn from a conversation
-			// weeks ago reads as confabulation. Emitted before the model request so
-			// it precedes the answer it explains. Recall returning nothing stays
-			// silent — that is the common case.
-			if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP, map[string]any{
-				"note": "Using material recalled from earlier conversations",
-			})); err != nil {
-				return err
-			}
+		recallContext := append([]llm.ChatMessage{}, historyMessages...)
+		recallContext = append(recallContext, liveMessages...)
+		if skillMessage != nil {
+			recallContext = append([]llm.ChatMessage{*skillMessage}, recallContext...)
+		}
+		if block, ok := a.recall.Recall(ctx, job.GetSessionId(), job.GetUserText(), recallContext); ok {
+			recallMessage = &block
 		}
 	}
+	toolDefinitions := registry.Definitions()
 	var content strings.Builder
 	toolCallCount := 0
 	successfulToolSideEffect := false
 	usedModelToolCallIDs := make(map[string]struct{})
 	toolResultBytes := 0
+	var lastOmissions contextOmissions
+	omissionNoticeEmitted := false
+	recallNoticeEmitted := false
 	for toolIteration := 0; ; {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		budgeted, err := buildBudgetedContext(provider, job.GetModel(), contextInput{
+			skills:  skillMessage,
+			history: historyMessages,
+			recall:  recallMessage,
+			live:    liveMessages,
+		}, toolDefinitions)
+		if err != nil {
+			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
+		}
+		if notice := budgeted.Omissions.Notice(); notice != "" &&
+			(!omissionNoticeEmitted || budgeted.Omissions != lastOmissions) {
+			if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP, map[string]any{
+				"note":                        notice,
+				"reason":                      "context_budget",
+				"historyMessagesOmitted":      budgeted.Omissions.HistoryMessages,
+				"recallOmitted":               budgeted.Omissions.RecallOmitted,
+				"toolDefinitionsOmitted":      budgeted.Omissions.ToolDefinitions,
+				"conservativeRequestEstimate": budgeted.Estimate,
+				"configuredContextWindow":     llm.ProviderContextWindowTokens(provider),
+			})); err != nil {
+				return err
+			}
+			lastOmissions = budgeted.Omissions
+			omissionNoticeEmitted = true
+		}
+		if budgeted.RecallUsed && !recallNoticeEmitted {
+			// The block tells the model where the material came from; without this
+			// the user gets no such hint, and an answer drawn from a conversation
+			// weeks ago reads as confabulation. Emit only after admission so an
+			// omitted block is never described as used.
+			if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP, map[string]any{
+				"note": "Using material recalled from earlier conversations",
+			})); err != nil {
+				return err
+			}
+			recallNoticeEmitted = true
+		}
 		modelCtx, cancelModel := boundedContext(ctx, a.modelTimeout())
-		events, err := provider.StreamChat(modelCtx, llm.ChatRequest{
-			Model:    job.GetModel(),
-			Messages: requestMessages,
-			Tools:    registry.Definitions(),
-		})
+		events, err := provider.StreamChat(modelCtx, budgeted.Request)
 		if err != nil {
 			modelErr := modelCtx.Err()
 			cancelModel()
@@ -339,7 +373,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		}
 		toolCallCount += len(calls)
 		normalizeToolCallIDs(calls, job.GetRunId(), toolIteration, usedModelToolCallIDs)
-		requestMessages = append(requestMessages, llm.ChatMessage{
+		liveMessages = append(liveMessages, llm.ChatMessage{
 			Role:      "assistant",
 			Content:   turnText.String(),
 			ToolCalls: calls,
@@ -363,7 +397,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 						false,
 					)
 				}
-				requestMessages = append(requestMessages, *outcome.ResultMessage)
+				liveMessages = append(liveMessages, *outcome.ResultMessage)
 				toolResultBytes += outcome.AppendedBytes
 			}
 		}

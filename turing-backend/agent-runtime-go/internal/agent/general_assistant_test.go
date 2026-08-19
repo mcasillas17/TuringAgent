@@ -223,7 +223,7 @@ func TestExecuteEnforcesAggregateSuccessfulToolResultLimit(t *testing.T) {
 			provider := &queuedProvider{responses: [][]llm.StreamEvent{
 				{{Type: "tool_call", ToolCalls: calls}},
 				{{Type: "delta", Text: "done"}},
-			}}
+			}, contextWindow: 8 * 1024 * 1024}
 			client := &assistantTestToolLister{
 				definitions: []map[string]any{{"name": "files.create"}},
 				result:      toolResultWithSerializedSize(t, test.resultSize),
@@ -2799,11 +2799,19 @@ func (c fakeMessageClient) FetchMessages(ctx context.Context, sessionID string, 
 }
 
 type queuedProvider struct {
-	responses [][]llm.StreamEvent
-	requests  []llm.ChatRequest
+	responses     [][]llm.StreamEvent
+	requests      []llm.ChatRequest
+	contextWindow int
 }
 
 func (p *queuedProvider) ID() string { return "queued" }
+
+func (p *queuedProvider) ContextWindowTokens() int {
+	if p.contextWindow > 0 {
+		return p.contextWindow
+	}
+	return llm.DefaultContextWindowTokens
+}
 
 func (p *queuedProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	p.requests = append(p.requests, req)
