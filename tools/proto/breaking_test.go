@@ -1,0 +1,136 @@
+package proto_test
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestBreakingCompatibility(t *testing.T) {
+	requireBuf(t)
+
+	tests := []struct {
+		name            string
+		fixture         string
+		wantFailure     bool
+		wantDiagnostics []string
+	}{
+		{
+			name:    "additive field",
+			fixture: "additive",
+		},
+		{
+			name:            "removed live field",
+			fixture:         "removed",
+			wantFailure:     true,
+			wantDiagnostics: []string{`Field "2"`, "was deleted"},
+		},
+		{
+			name:            "renumbered live field",
+			fixture:         "renumbered",
+			wantFailure:     true,
+			wantDiagnostics: []string{`Field "2"`, "was deleted"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := newCompatibilityRepo(t, test.fixture)
+			command := exec.Command(filepath.Join(repo, "tools", "proto", "breaking.sh"), "origin/main")
+			command.Dir = repo
+			output, err := command.CombinedOutput()
+
+			if test.wantFailure && err == nil {
+				t.Fatalf("breaking.sh succeeded for %s schema", test.fixture)
+			}
+			if !test.wantFailure && err != nil {
+				t.Fatalf("breaking.sh failed for %s schema: %v\n%s", test.fixture, err, output)
+			}
+			for _, diagnostic := range test.wantDiagnostics {
+				if !strings.Contains(string(output), diagnostic) {
+					t.Fatalf("breaking.sh output = %q, want it to contain %q", output, diagnostic)
+				}
+			}
+
+			runGit(t, repo, "rev-parse", "--verify", "refs/remotes/origin/main")
+		})
+	}
+}
+
+func requireBuf(t *testing.T) {
+	t.Helper()
+	path, err := exec.LookPath("buf")
+	if err != nil {
+		if os.Getenv("TURING_REQUIRE_BUF") == "1" {
+			t.Fatal("buf is required when TURING_REQUIRE_BUF=1")
+		}
+		t.Skip("buf is not installed")
+	}
+	command := exec.Command(path, "--version")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("buf --version: %v\n%s", err, output)
+	}
+	if version := strings.TrimSpace(string(output)); version != "1.72.0" {
+		t.Fatalf("buf version = %q, want 1.72.0", version)
+	}
+}
+
+func newCompatibilityRepo(t *testing.T, fixture string) string {
+	t.Helper()
+	tempDir := t.TempDir()
+	remote := filepath.Join(tempDir, "origin.git")
+	runGit(t, tempDir, "init", "--bare", remote)
+
+	repo := filepath.Join(tempDir, "repo")
+	runGit(t, tempDir, "init", "--initial-branch=main", repo)
+	runGit(t, repo, "config", "user.name", "Turing Proto Test")
+	runGit(t, repo, "config", "user.email", "proto-test@example.invalid")
+
+	copyFile(t,
+		filepath.Join("testdata", "breaking", "base", "turing", "v1", "example.proto"),
+		filepath.Join(repo, "proto", "turing", "v1", "example.proto"),
+		0o644,
+	)
+	runGit(t, repo, "add", "proto")
+	runGit(t, repo, "commit", "-m", "baseline")
+	runGit(t, repo, "remote", "add", "origin", remote)
+	runGit(t, repo, "push", "--set-upstream", "origin", "main")
+	runGit(t, repo, "switch", "-c", "feature")
+	runGit(t, repo, "update-ref", "-d", "refs/remotes/origin/main")
+
+	copyFile(t,
+		filepath.Join("testdata", "breaking", fixture, "turing", "v1", "example.proto"),
+		filepath.Join(repo, "proto", "turing", "v1", "example.proto"),
+		0o644,
+	)
+	copyFile(t, "breaking.sh", filepath.Join(repo, "tools", "proto", "breaking.sh"), 0o755)
+	copyFile(t, filepath.Join("..", "..", "buf.yaml"), filepath.Join(repo, "buf.yaml"), 0o644)
+	return repo
+}
+
+func copyFile(t *testing.T, source, destination string, mode os.FileMode) {
+	t.Helper()
+	data, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatalf("read %s: %v", source, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		t.Fatalf("create parent for %s: %v", destination, err)
+	}
+	if err := os.WriteFile(destination, data, mode); err != nil {
+		t.Fatalf("write %s: %v", destination, err)
+	}
+}
+
+func runGit(t *testing.T, directory string, arguments ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", directory}, arguments...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(arguments, " "), err, output)
+	}
+	return strings.TrimSpace(string(output))
+}
