@@ -7,6 +7,8 @@
 data/turing.db*
 sandbox/*
 !sandbox/.gitkeep
+skills/*
+!skills/.gitkeep
 node_modules/
 dist/
 coverage/
