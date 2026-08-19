@@ -1,8 +1,8 @@
 # TuringAgent Personal-Agent Audit — Memory, Trust, and Operability
 
-**Audit date:** 2026-08-18  
-**Repository snapshot:** `be2c8c9`  
-**Last verified against the code:** 2026-08-18, at `be2c8c9`  
+**Audit date:** 2026-08-18
+**Original audit snapshot:** `be2c8c9`
+**Roadmap status last verified against the code:** 2026-08-18, at `d665a3f`
 **Scope:** Backend architecture, local personal-agent behavior, durable memory, privacy, reliability, integrations, and the path to multiple specialized agents.
 
 ## Executive conclusion
