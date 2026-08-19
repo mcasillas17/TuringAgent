@@ -5,6 +5,7 @@ import 'package:turing_flutter_app/models/automation.dart';
 import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 
+import '../support/no_audit_api.dart';
 import '../support/no_skills_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
@@ -679,7 +680,12 @@ Future<void> _pumpAutomations(
 /// something that behaves like the backend rather than a stub that always says
 /// yes.
 class _FakeApi
-    with NoSkillsApi, NoExternalAgentsApi, NoIntegrationsApi, NoTelemetryApi
+    with
+        NoAuditApi,
+        NoSkillsApi,
+        NoExternalAgentsApi,
+        NoIntegrationsApi,
+        NoTelemetryApi
     implements TuringApi {
   final List<Automation> automations = [];
   final List<String> deleted = [];

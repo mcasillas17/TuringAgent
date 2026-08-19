@@ -13,6 +13,7 @@ import 'package:turing_flutter_app/networking/auth_storage.dart';
 import 'package:turing_flutter_app/networking/event_source.dart';
 import 'package:turing_flutter_app/ui/shell/responsive_shell.dart';
 
+import '../support/no_audit_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
 import '../support/no_automations_api.dart';
@@ -173,6 +174,7 @@ void main() {
 
 class _FakeApiClient
     with
+        NoAuditApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,

@@ -14,6 +14,7 @@ import 'package:turing_flutter_app/networking/api_client.dart';
 import 'package:turing_flutter_app/models/agent_descriptor.dart';
 import 'package:turing_flutter_app/models/tool_descriptor.dart';
 
+import '../../support/no_audit_api.dart';
 import '../../support/no_external_agents_api.dart';
 import '../../support/no_integrations_api.dart';
 import '../../support/no_automations_api.dart';
@@ -2454,6 +2455,7 @@ class _SessionCall {
 
 class _FakeSearchApi
     with
+        NoAuditApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,

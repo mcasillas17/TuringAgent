@@ -202,8 +202,10 @@ func TestAnUnattendedApprovalIsAuditedAsAnAutomationsAndNotAPersons(t *testing.T
 	}
 }
 
-// The audit trail has no read path, so a notice in the conversation is the
-// only place a person can see that an approval was not theirs.
+// The audit trail is readable through the redacted audit API, but that is a
+// separate operator-grade query surface: a notice in the conversation is the
+// only place a person reading it in context sees that an approval was not
+// theirs.
 func TestAnUnattendedApprovalIsAnnouncedInTheConversation(t *testing.T) {
 	h := newHarness(t)
 	fire := h.fireAutomation(t, "Nightly note", []repository.AutomationTool{

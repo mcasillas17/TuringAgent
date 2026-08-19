@@ -3,6 +3,7 @@ import '../generated/google/protobuf/timestamp.pb.dart' as timestamppb;
 
 import '../generated/turing/v1/agents.pb.dart' as agentpb;
 import '../generated/turing/v1/approvals.pb.dart' as approvalpb;
+import '../generated/turing/v1/audit.pb.dart' as auditpb;
 import '../generated/turing/v1/automations.pb.dart' as automationpb;
 import '../generated/turing/v1/chat.pb.dart' as chatpb;
 import '../generated/turing/v1/common.pb.dart' as commonpb;
@@ -12,6 +13,7 @@ import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
 import '../generated/turing/v1/skills.pb.dart' as skillpb;
 import '../generated/turing/v1/telemetry.pb.dart' as telemetrypb;
 import 'agent_descriptor.dart' as model_agent;
+import 'audit.dart' as model_audit;
 import 'external_agent.dart' as model_external_agent;
 import 'integration.dart' as model_integration;
 import 'automation.dart' as model_automation;
@@ -761,6 +763,97 @@ class GrpcMappers {
         return value.listValue.values.map(_valueToDart).toList();
       case structpb.Value_Kind.notSet:
         return null;
+    }
+  }
+
+  /// Audit reads, where every optional field is mapped from protobuf's
+  /// `has*` presence bit rather than compared against a default. A falsy or
+  /// empty value the server explicitly set (an empty string, `false`, `0`)
+  /// must survive as that value, not collapse to null because it looks like
+  /// "unset" — only the absence of the field itself means null here.
+  static model_audit.AuditPage auditPageToModel(
+    auditpb.ListAuditEntriesResponse response,
+  ) {
+    final nextCursor = response.page.nextCursor;
+    return model_audit.AuditPage(
+      entries: response.entries.map(auditEntryToModel).toList(growable: false),
+      nextCursor: nextCursor.isEmpty ? null : nextCursor,
+    );
+  }
+
+  static model_audit.AuditEntry auditEntryToModel(auditpb.AuditEntry entry) {
+    return model_audit.AuditEntry(
+      auditId: entry.auditId,
+      correlationId: entry.hasCorrelationId() ? entry.correlationId : null,
+      actorType: entry.actorType,
+      actorId: entry.hasActorId() ? entry.actorId : null,
+      action: entry.action,
+      target: entry.hasTarget() ? entry.target : null,
+      payload: auditPayloadToModel(entry.payload),
+      createdAt: entry.createdAt.toDateTime().toUtc(),
+    );
+  }
+
+  static model_audit.AuditPayload auditPayloadToModel(
+    auditpb.AuditPayload payload,
+  ) {
+    return model_audit.AuditPayload(
+      state: auditPayloadStateToModel(payload.state),
+      toolName: payload.hasToolName() ? payload.toolName : null,
+      serverName: payload.hasServerName() ? payload.serverName : null,
+      phase: payload.hasPhase() ? payload.phase : null,
+      status: payload.hasStatus() ? payload.status : null,
+      reason: payload.hasReason() ? payload.reason : null,
+      durationMs: payload.hasDurationMs() ? payload.durationMs.toInt() : null,
+      errorCode: payload.hasErrorCode() ? payload.errorCode : null,
+      provider: payload.hasProvider() ? payload.provider : null,
+      displayName: payload.hasDisplayName() ? payload.displayName : null,
+      unattended: payload.hasUnattended() ? payload.unattended : null,
+      automationId: payload.hasAutomationId() ? payload.automationId : null,
+      automationName: payload.hasAutomationName()
+          ? payload.automationName
+          : null,
+      method: payload.hasMethod() ? payload.method : null,
+      requestId: payload.hasRequestId() ? payload.requestId : null,
+      deletedRuns: payload.hasDeletedRuns()
+          ? payload.deletedRuns.toInt()
+          : null,
+      deletedMessages: payload.hasDeletedMessages()
+          ? payload.deletedMessages.toInt()
+          : null,
+      decisionComment: payload.hasDecisionComment()
+          ? payload.decisionComment
+          : null,
+      decisionCommentTruncated: payload.hasDecisionCommentTruncated()
+          ? payload.decisionCommentTruncated
+          : null,
+      denialReason: payload.hasDenialReason() ? payload.denialReason : null,
+      denialReasonTruncated: payload.hasDenialReasonTruncated()
+          ? payload.denialReasonTruncated
+          : null,
+    );
+  }
+
+  /// Unspecified is not a fourth state this client can safely render: it
+  /// means the server sent something this contract does not define, so this
+  /// throws rather than guessing among absent, present, and scrubbed.
+  static model_audit.AuditPayloadState auditPayloadStateToModel(
+    auditpb.AuditPayloadState state,
+  ) {
+    switch (state) {
+      case auditpb.AuditPayloadState.AUDIT_PAYLOAD_STATE_ABSENT:
+        return model_audit.AuditPayloadState.absent;
+      case auditpb.AuditPayloadState.AUDIT_PAYLOAD_STATE_PRESENT:
+        return model_audit.AuditPayloadState.present;
+      case auditpb.AuditPayloadState.AUDIT_PAYLOAD_STATE_SCRUBBED:
+        return model_audit.AuditPayloadState.scrubbed;
+      case auditpb.AuditPayloadState.AUDIT_PAYLOAD_STATE_UNSPECIFIED:
+      default:
+        throw FormatException(
+          'audit payload state is unspecified: the server sent no state '
+          'for this row, which this client refuses to render as absent, '
+          'present, or scrubbed',
+        );
     }
   }
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -212,6 +213,110 @@ func TestDeleteSessionKeepsAuditRowButScrubsItsPayload(t *testing.T) {
 	}
 	if counts.Runs != 1 || counts.Messages == 0 {
 		t.Fatalf("session.deleted counts = %+v, want 1 run and some messages", counts)
+	}
+}
+
+// routeAndUnrouteSession points a conversation at a third party and then
+// returns it to the local assistant, which is the only way to produce a real
+// session.routed / session.unrouted pair. Both rows carry the session id as
+// target and a NULL correlation_id, so neither is reachable from the run-id
+// scrub — which is exactly what the deletion test below has to prove is no
+// longer true.
+func routeAndUnrouteSession(t *testing.T, repo *Repository, sessionID string, agent ExternalAgentInput) {
+	t.Helper()
+	ctx := context.Background()
+	created := mustCreateAgent(t, ctx, repo, agent)
+	if _, err := repo.SetSessionAgent(ctx, sessionID, created.AgentID); err != nil {
+		t.Fatalf("route %s: %v", sessionID, err)
+	}
+	if err := repo.ClearSessionAgent(ctx, sessionID); err != nil {
+		t.Fatalf("unroute %s: %v", sessionID, err)
+	}
+}
+
+func routingAuditPayload(t *testing.T, repo *Repository, sessionID, action string) string {
+	t.Helper()
+	var payload string
+	if err := repo.db.QueryRowContext(context.Background(), `
+		SELECT COALESCE(payload_json, '') FROM audit_logs WHERE action = ? AND target = ?
+	`, action, sessionID).Scan(&payload); err != nil {
+		t.Fatalf("%s row for %s: %v", action, sessionID, err)
+	}
+	return payload
+}
+
+// Routing rows are the one audit shape whose sensitive content is not reachable
+// from a run id: SetSessionAgent / ClearSessionAgent write correlation_id NULL
+// and put the session id in target. Deleting the conversation therefore has to
+// scrub them by target as well, or the third-party endpoint, model, and agent
+// display name a user asked to forget outlive the session they belong to.
+func TestDeleteSessionScrubsRoutingAuditRowsTargetingThatSession(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+
+	const sentinelAgent = "SENTINEL-AGENT-a41f7c-do-not-leak"
+	const sentinelHost = "sentinel-endpoint-a41f7c-do-not-leak.example.com"
+	const sentinelModel = "sentinel-model-a41f7c-do-not-leak"
+
+	enqueued := seedDeletableSession(t, repo, "Delete me", "routed content")
+	doomedAgent := anthropicAgent()
+	doomedAgent.DisplayName = sentinelAgent
+	doomedAgent.BaseURL = "https://" + sentinelHost + "/v1"
+	doomedAgent.Model = sentinelModel
+	routeAndUnrouteSession(t, repo, enqueued.SessionID, doomedAgent)
+
+	// A second conversation routed to its own destination: the scrub must be
+	// targeted, not a blanket wipe of every routing row in the table.
+	survivor := seedDeletableSession(t, repo, "Keep me", "surviving content")
+	survivorAgent := anthropicAgent()
+	survivorAgent.DisplayName = "Survivor Agent"
+	survivorAgent.BaseURL = "https://survivor.example.com/v1"
+	survivorAgent.Model = "survivor-model"
+	survivorAgent.CredentialRef = "survivor"
+	routeAndUnrouteSession(t, repo, survivor.SessionID, survivorAgent)
+
+	// Precondition: the sensitive routing payload really is stored before the
+	// delete, so a passing assertion afterwards is the scrub and not a fixture
+	// that never carried the sentinel.
+	before := routingAuditPayload(t, repo, enqueued.SessionID, "session.routed")
+	for _, sentinel := range []string{sentinelAgent, sentinelHost, sentinelModel} {
+		if !strings.Contains(before, sentinel) {
+			t.Fatalf("precondition failed: session.routed payload %q is missing sentinel %q", before, sentinel)
+		}
+	}
+
+	finishRun(t, repo, enqueued.RunID)
+	if err := repo.DeleteSession(ctx, enqueued.SessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, action := range []string{"session.routed", "session.unrouted"} {
+		got := routingAuditPayload(t, repo, enqueued.SessionID, action)
+		if got != scrubbedAuditPayload {
+			t.Fatalf("%s payload after delete = %q, want the exact tombstone %q", action, got, scrubbedAuditPayload)
+		}
+	}
+
+	// The deletion's own row is inserted after the scrub and is the evidence the
+	// deletion happened, so it must stay PRESENT with its counts.
+	deleted := routingAuditPayload(t, repo, enqueued.SessionID, "session.deleted")
+	if deleted == scrubbedAuditPayload || deleted == "" {
+		t.Fatalf("session.deleted payload = %q, want the unscrubbed counts", deleted)
+	}
+	var counts struct {
+		Runs     int `json:"runs"`
+		Messages int `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(deleted), &counts); err != nil {
+		t.Fatalf("session.deleted payload %q: %v", deleted, err)
+	}
+	if counts.Runs != 1 || counts.Messages == 0 {
+		t.Fatalf("session.deleted counts = %+v, want 1 run and some messages", counts)
+	}
+
+	survivorRouted := routingAuditPayload(t, repo, survivor.SessionID, "session.routed")
+	if survivorRouted == scrubbedAuditPayload || !strings.Contains(survivorRouted, "survivor.example.com") {
+		t.Fatalf("an unrelated session's routing audit was scrubbed: %q", survivorRouted)
 	}
 }
 

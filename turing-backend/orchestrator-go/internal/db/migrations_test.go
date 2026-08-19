@@ -189,6 +189,7 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 		"0010_session_title_origin",
 		"0010_telemetry",
 		"0011_approval_rationale",
+		"0012_audit_read",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("applied migrations = %v, want %v", got, want)
@@ -242,7 +243,10 @@ func TestAuditRebuildKeepsExistingRowsAndAcceptsAutomationActors(t *testing.T) {
 		t.Fatalf("the pre-existing audit row did not survive the rebuild: %v", err)
 	}
 	got := []string{correlationID, actorType, actorID, action, target, payload, createdAt}
-	want := []string{"run_1", "client", "actor_1", "approval.approved", "appr_1", `{"toolName":"files.update"}`, "2026-01-01T00:00:00Z"}
+	// created_at is normalized to the canonical fixed-width form by 0012 (see
+	// TestAuditReadMigrationNormalizesLegacyVariableWidthCreatedAt), so the
+	// inserted "2026-01-01T00:00:00Z" is expected to come back zero-padded.
+	want := []string{"run_1", "client", "actor_1", "approval.approved", "appr_1", `{"toolName":"files.update"}`, "2026-01-01T00:00:00.000000000Z"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("preserved row = %q, want %q", got, want)
 	}
@@ -289,8 +293,8 @@ func TestCurrentSchemaVersionUsesLatestEmbeddedMigrationPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "0011" {
-		t.Fatalf("CurrentSchemaVersion = %q, want 0011", got)
+	if got != "0012" {
+		t.Fatalf("CurrentSchemaVersion = %q, want 0012", got)
 	}
 }
 
@@ -335,6 +339,102 @@ func TestApprovalRationaleMigrationPreservesExistingApprovals(t *testing.T) {
 			approvalComment,
 			denialReason,
 		)
+	}
+}
+
+// TestAuditReadMigrationAddsCreatedAtIndex guards the index the audit read
+// path depends on for an unfiltered page: 0009 only left (action, created_at)
+// and (correlation_id, created_at), neither of which helps a query ordered by
+// created_at alone.
+func TestAuditReadMigrationAddsCreatedAtIndex(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	var exists int
+	if err := database.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_audit_created_at' AND tbl_name = 'audit_logs'`,
+	).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	if exists != 1 {
+		t.Fatal("idx_audit_created_at is missing after migrations")
+	}
+}
+
+// TestAuditReadMigrationNormalizesLegacyVariableWidthCreatedAt guards against
+// raw text ordering going wrong for audit_logs rows written before
+// FormatTimestamp's fixed 9-digit fraction existed. The original now() was
+// time.Now().UTC().Format(time.RFC3339Nano) (see commit ad935cb, "fix: close
+// lifecycle recovery gaps", which introduced 0005 for exactly this class of
+// bug on agent_runs/jobs but never touched audit_logs). RFC3339Nano trims a
+// fraction that is exactly zero down to nothing at all — no digits and no
+// '.' — while every other row keeps its '.'. Since '.' (0x2E) sorts below
+// every digit and below 'Z' (0x5A), a row landed exactly on a whole second
+// serializes as "...:05Z" and sorts *after* "...:05.000000001Z", even though
+// 05.000000001 is one nanosecond *later*. 0012 must normalize every legacy
+// row to the canonical fixed-width format before it builds the ordering
+// index, or this reversal survives forever.
+func TestAuditReadMigrationNormalizesLegacyVariableWidthCreatedAt(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	names, err := migrationNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if name == "0012_audit_read.sql" {
+			break
+		}
+		applyMigration(t, ctx, database, name)
+	}
+
+	// legacy_on_second reproduces the old now()'s output for an instant with
+	// zero nanoseconds. later_with_fraction is one nanosecond later, in the
+	// same second, and keeps its fraction because it isn't exactly zero.
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO audit_logs (id, actor_type, action, created_at)
+		VALUES ('legacy_on_second', 'runtime', 'tool.call.before', '2026-01-01T00:00:05Z'),
+		       ('later_with_fraction', 'runtime', 'tool.call.after', '2026-01-01T00:00:05.000000001Z')`); err != nil {
+		t.Fatal(err)
+	}
+
+	applyMigration(t, ctx, database, "0012_audit_read.sql")
+
+	rows, err := database.QueryContext(ctx, `SELECT id, created_at FROM audit_logs ORDER BY created_at ASC, rowid ASC`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var gotIDs, gotCreatedAt []string
+	for rows.Next() {
+		var id, createdAt string
+		if err := rows.Scan(&id, &createdAt); err != nil {
+			t.Fatal(err)
+		}
+		gotIDs = append(gotIDs, id)
+		gotCreatedAt = append(gotCreatedAt, createdAt)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	wantIDs := []string{"legacy_on_second", "later_with_fraction"}
+	if !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("created_at ASC order = %v, want %v (05.000000000 must sort before 05.000000001)", gotIDs, wantIDs)
+	}
+	wantCreatedAt := []string{"2026-01-01T00:00:05.000000000Z", "2026-01-01T00:00:05.000000001Z"}
+	if !reflect.DeepEqual(gotCreatedAt, wantCreatedAt) {
+		t.Fatalf("normalized created_at = %v, want %v (fixed 9-digit fraction, matching repository.FormatTimestamp)", gotCreatedAt, wantCreatedAt)
 	}
 }
 
