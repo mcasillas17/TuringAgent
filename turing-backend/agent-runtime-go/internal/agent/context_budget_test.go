@@ -450,6 +450,40 @@ func TestBuildBudgetedContextBoundsHistoryAdmissionEstimatesLogarithmically(t *t
 	}
 }
 
+func TestBuildBudgetedContextSkipsCompactionEstimatesWhenLiveProtocolFits(t *testing.T) {
+	provider := &budgetTestProvider{
+		window: llm.MaxContextWindowTokens,
+		output: 100,
+	}
+	live := []llm.ChatMessage{{Role: "user", Content: "current"}}
+	for index := range 128 {
+		id := fmt.Sprintf("call_%d", index)
+		live = append(live,
+			llm.ChatMessage{Role: "assistant", ToolCalls: []llm.ToolCall{{
+				ID: id, Name: "tool",
+			}}},
+			llm.ChatMessage{
+				Role:       "tool",
+				Name:       "tool",
+				ToolCallID: id,
+				Content:    strings.Repeat("result", 32),
+			},
+		)
+	}
+	provider.estimateCalls = 0
+
+	got, err := buildBudgetedContext(provider, "model", contextInput{live: live}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Omissions.ToolResults != 0 {
+		t.Fatalf("ToolResults = %d, want none omitted from fitting request", got.Omissions.ToolResults)
+	}
+	if provider.estimateCalls > 5 {
+		t.Fatalf("request estimates = %d, want constant fitting-path estimates", provider.estimateCalls)
+	}
+}
+
 func TestBuildBudgetedContextRequiresDefinitionsReferencedByLiveProtocol(t *testing.T) {
 	provider := &budgetTestProvider{}
 	live := []llm.ChatMessage{

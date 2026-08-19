@@ -141,51 +141,53 @@ func buildBudgetedContext(
 	if err != nil {
 		return budgetedContext{}, fmt.Errorf("estimate mandatory model context: %w", err)
 	}
-	type toolResultCandidate struct {
-		index   int
-		savings int
-		marker  string
-	}
-	candidates := make([]toolResultCandidate, 0)
-	for index, message := range liveMessages {
-		if message.Role != "tool" {
-			continue
+	if !ok {
+		type toolResultCandidate struct {
+			index   int
+			savings int
+			marker  string
 		}
-		if _, minimal := input.minimalToolResults[index]; minimal {
-			continue
+		candidates := make([]toolResultCandidate, 0)
+		for index, message := range liveMessages {
+			if message.Role != "tool" {
+				continue
+			}
+			if _, minimal := input.minimalToolResults[index]; minimal {
+				continue
+			}
+			marker := compactedToolResultForBytes(len(message.Content))
+			liveMessages[index].Content = marker
+			candidateEstimate, err := estimate()
+			liveMessages[index].Content = message.Content
+			if err != nil {
+				return budgetedContext{}, fmt.Errorf("estimate compacted tool result %d: %w", index, err)
+			}
+			savings := mandatoryEstimate - candidateEstimate
+			if savings <= 0 {
+				continue
+			}
+			candidates = append(candidates, toolResultCandidate{
+				index:   index,
+				savings: savings,
+				marker:  marker,
+			})
 		}
-		marker := compactedToolResultForBytes(len(message.Content))
-		liveMessages[index].Content = marker
-		candidateEstimate, err := estimate()
-		liveMessages[index].Content = message.Content
-		if err != nil {
-			return budgetedContext{}, fmt.Errorf("estimate compacted tool result %d: %w", index, err)
-		}
-		savings := mandatoryEstimate - candidateEstimate
-		if savings <= 0 {
-			continue
-		}
-		candidates = append(candidates, toolResultCandidate{
-			index:   index,
-			savings: savings,
-			marker:  marker,
+		sort.Slice(candidates, func(left, right int) bool {
+			if candidates[left].savings != candidates[right].savings {
+				return candidates[left].savings > candidates[right].savings
+			}
+			return candidates[left].index < candidates[right].index
 		})
-	}
-	sort.Slice(candidates, func(left, right int) bool {
-		if candidates[left].savings != candidates[right].savings {
-			return candidates[left].savings > candidates[right].savings
-		}
-		return candidates[left].index < candidates[right].index
-	})
-	for _, candidate := range candidates {
-		if ok {
-			break
-		}
-		liveMessages[candidate.index].Content = candidate.marker
-		omissions.ToolResults++
-		ok, mandatoryEstimate, err = fits()
-		if err != nil {
-			return budgetedContext{}, fmt.Errorf("estimate compacted live tool protocol: %w", err)
+		for _, candidate := range candidates {
+			if ok {
+				break
+			}
+			liveMessages[candidate.index].Content = candidate.marker
+			omissions.ToolResults++
+			ok, mandatoryEstimate, err = fits()
+			if err != nil {
+				return budgetedContext{}, fmt.Errorf("estimate compacted live tool protocol: %w", err)
+			}
 		}
 	}
 	if !ok {
