@@ -509,7 +509,7 @@ func (r *Repository) ClaimDueAutomation(ctx context.Context, at time.Time, defau
 	if err != nil {
 		return AutomationFire{}, false, err
 	}
-	enqueued, err := enqueueUserMessageTx(ctx, tx, EnqueueUserMessageInput{
+	enqueued, err := r.enqueueUserMessageTx(ctx, tx, EnqueueUserMessageInput{
 		SessionID:     runSessionID,
 		Content:       prompt,
 		AgentID:       defaults.AgentID,

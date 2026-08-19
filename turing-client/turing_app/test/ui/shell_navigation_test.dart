@@ -7,7 +7,6 @@ import 'package:turing_flutter_app/features/workspace/agents_page.dart';
 import 'package:turing_flutter_app/features/workspace/session_agent_bar.dart';
 import 'package:turing_flutter_app/features/workspace/integrations_page.dart';
 import 'package:turing_flutter_app/features/workspace/automations_page.dart';
-import 'package:turing_flutter_app/features/workspace/session_skills_bar.dart';
 import 'package:turing_flutter_app/features/workspace/skills_page.dart';
 import 'package:turing_flutter_app/features/workspace/telemetry_page.dart';
 import 'package:turing_flutter_app/models/agent_descriptor.dart';
@@ -16,7 +15,6 @@ import 'package:turing_flutter_app/models/automation.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
-import 'package:turing_flutter_app/models/skill.dart';
 import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
@@ -28,6 +26,7 @@ import 'package:turing_flutter_app/ui/shell/shell_destination.dart';
 import '../support/no_integrations_api.dart';
 import '../support/no_automations_api.dart';
 import '../support/no_telemetry_api.dart';
+import '../support/no_skills_api.dart';
 
 /// Wide enough to keep the sidebar beside the conversation.
 const Size _desktop = Size(1400, 900);
@@ -204,69 +203,6 @@ void main() {
 
       expect(find.byType(SkillsPage), findsOneWidget);
     });
-
-    testWidgets('the attached skills sit above the conversation', (
-      tester,
-    ) async {
-      final api = _FakeApi()
-        ..skills.add(
-          const Skill(
-            skillId: 'skill_1',
-            name: 'Tone',
-            instructions: 'Be brief.',
-          ),
-        )
-        ..attached['sess_existing'] = ['skill_1'];
-      await _pumpShell(tester, api: api, size: _desktop);
-
-      await tester.tap(find.text('Existing chat'));
-      await tester.pumpAndSettle();
-
-      expect(find.byType(SessionSkillsBar), findsOneWidget);
-      // Above the transcript, not below it: standing instructions that change
-      // the answers should be visible while you read them.
-      final bar = tester.getTopLeft(find.byType(SessionSkillsBar));
-      final chat = tester.getTopLeft(find.byType(ChatScreen));
-      expect(bar.dy, lessThan(chat.dy));
-    });
-
-    testWidgets('switching conversations never shows the previous set', (
-      tester,
-    ) async {
-      final api = _FakeApi()
-        ..sessions = [
-          Session(
-            sessionId: 'sess_a',
-            title: 'Chat A',
-            updatedAt: DateTime.utc(2026, 5, 11),
-          ),
-          Session(
-            sessionId: 'sess_b',
-            title: 'Chat B',
-            updatedAt: DateTime.utc(2026, 5, 10),
-          ),
-        ]
-        ..skills.add(
-          const Skill(
-            skillId: 'skill_1',
-            name: 'Tone',
-            instructions: 'Be brief.',
-          ),
-        )
-        ..attached['sess_a'] = ['skill_1'];
-      await _pumpShell(tester, api: api, size: _desktop);
-
-      await tester.tap(find.text('Chat A'));
-      await tester.pumpAndSettle();
-      expect(find.text('Tone'), findsOneWidget);
-
-      await tester.tap(find.text('Chat B'));
-      await tester.pumpAndSettle();
-
-      // B has none attached; showing A's would misstate what B is following.
-      expect(find.text('Tone'), findsNothing);
-      expect(find.text('No skills attached'), findsOneWidget);
-    });
   });
 
   group('where a conversation goes', () {
@@ -279,13 +215,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(SessionAgentBar), findsOneWidget);
-      // Above the skills strip and the transcript: where a conversation goes
-      // decides whether anything typed below it leaves the machine, which is
-      // more fundamental than how it is told to answer.
+      // Above the transcript: routing decides whether anything typed below it
+      // leaves the machine.
       final agentBar = tester.getTopLeft(find.byType(SessionAgentBar));
-      final skillsBar = tester.getTopLeft(find.byType(SessionSkillsBar));
       final chat = tester.getTopLeft(find.byType(ChatScreen));
-      expect(agentBar.dy, lessThan(skillsBar.dy));
       expect(agentBar.dy, lessThan(chat.dy));
     });
 
@@ -828,7 +761,7 @@ Future<void> _pumpShell(
 }
 
 class _FakeApi
-    with NoIntegrationsApi, NoAutomationsApi, NoTelemetryApi
+    with NoIntegrationsApi, NoAutomationsApi, NoTelemetryApi, NoSkillsApi
     implements TuringApi {
   List<Session> sessions = [
     Session(
@@ -860,88 +793,6 @@ class _FakeApi
     final error = toolsError;
     if (error != null) throw error;
     return tools;
-  }
-
-  /// A working in-memory library, so the Skills UI is tested against
-  /// something that behaves like the backend rather than a stub that always
-  /// says yes.
-  final List<Skill> skills = [];
-  final Map<String, List<String>> attached = {};
-  Object? skillsError;
-  int nextSkillId = 1;
-
-  @override
-  Future<List<Skill>> listSkills() async {
-    final error = skillsError;
-    if (error != null) throw error;
-    return List.unmodifiable(skills);
-  }
-
-  @override
-  Future<Skill> createSkill({
-    required String name,
-    required String instructions,
-  }) async {
-    if (skills.any((s) => s.name.toLowerCase() == name.toLowerCase())) {
-      throw StateError('a skill with that name already exists');
-    }
-    final skill = Skill(
-      skillId: 'skill_${nextSkillId++}',
-      name: name,
-      instructions: instructions,
-    );
-    skills.add(skill);
-    return skill;
-  }
-
-  @override
-  Future<Skill> updateSkill({
-    required String skillId,
-    required String name,
-    required String instructions,
-  }) async {
-    final index = skills.indexWhere((s) => s.skillId == skillId);
-    if (index < 0) throw StateError('skill not found');
-    final updated = Skill(
-      skillId: skillId,
-      name: name,
-      instructions: instructions,
-    );
-    skills[index] = updated;
-    return updated;
-  }
-
-  @override
-  Future<void> deleteSkill({required String skillId}) async {
-    skills.removeWhere((s) => s.skillId == skillId);
-    for (final ids in attached.values) {
-      ids.remove(skillId);
-    }
-  }
-
-  @override
-  Future<List<Skill>> attachSkill({
-    required String sessionId,
-    required String skillId,
-  }) async {
-    final ids = attached.putIfAbsent(sessionId, () => []);
-    if (!ids.contains(skillId)) ids.add(skillId);
-    return listSessionSkills(sessionId: sessionId);
-  }
-
-  @override
-  Future<List<Skill>> detachSkill({
-    required String sessionId,
-    required String skillId,
-  }) async {
-    attached[sessionId]?.remove(skillId);
-    return listSessionSkills(sessionId: sessionId);
-  }
-
-  @override
-  Future<List<Skill>> listSessionSkills({required String sessionId}) async {
-    final ids = attached[sessionId] ?? const <String>[];
-    return skills.where((s) => ids.contains(s.skillId)).toList();
   }
 
   /// A working in-memory automation library, so the Automations UI is tested

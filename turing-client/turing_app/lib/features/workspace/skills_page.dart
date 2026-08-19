@@ -5,11 +5,8 @@ import '../../models/skill.dart';
 import '../../networking/api_client.dart';
 import 'workspace_pages.dart';
 
-/// The library of named instructions, and where they are written.
-///
-/// Attaching happens in a conversation rather than here: a skill is a thing
-/// you own, and which conversations use it is a property of those
-/// conversations.
+/// A read-only browser for the SKILL.md files mounted into the backend.
+/// TuringAgent owns only enablement and per-capability consent.
 class SkillsPage extends StatefulWidget {
   const SkillsPage({super.key, required this.apiClient});
 
@@ -21,6 +18,7 @@ class SkillsPage extends StatefulWidget {
 
 class _SkillsPageState extends State<SkillsPage> {
   late Future<List<Skill>> _skills;
+  final Set<String> _busy = {};
 
   @override
   void initState() {
@@ -34,47 +32,57 @@ class _SkillsPageState extends State<SkillsPage> {
     });
   }
 
-  Future<void> _edit({Skill? existing}) async {
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (_) =>
-          _SkillEditor(apiClient: widget.apiClient, existing: existing),
+  Future<void> _setEnabled(Skill skill, bool enabled) async {
+    await _mutate(
+      skill,
+      () => widget.apiClient.setSkillEnabled(
+        skillId: skill.skillId,
+        enabled: enabled,
+      ),
+      'change enablement',
     );
-    if (saved == true) _reload();
   }
 
-  Future<void> _delete(Skill skill) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text('Delete "${skill.name}"?'),
-        content: const Text(
-          'This removes the skill from every conversation using it. Replies '
-          'already being generated are unaffected — they were given a copy of '
-          'the instructions when you sent the message.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Delete'),
-          ),
-        ],
+  Future<void> _setCapability(
+    Skill skill,
+    String capability,
+    bool granted,
+  ) async {
+    await _mutate(
+      skill,
+      () => widget.apiClient.setSkillCapabilityGrant(
+        skillId: skill.skillId,
+        capability: capability,
+        granted: granted,
       ),
+      'change capability consent',
     );
-    if (confirmed != true) return;
+  }
+
+  Future<void> _mutate(
+    Skill skill,
+    Future<Skill> Function() request,
+    String operation,
+  ) async {
+    if (_busy.contains(skill.skillId)) return;
+    setState(() => _busy.add(skill.skillId));
     try {
-      await widget.apiClient.deleteSkill(skillId: skill.skillId);
+      final updated = await request();
+      final current = await _skills;
+      final next = [...current];
+      final index = next.indexWhere((item) => item.skillId == skill.skillId);
+      if (index >= 0) next[index] = updated;
       if (!mounted) return;
-      _reload();
+      setState(() => _skills = Future.value(List.unmodifiable(next)));
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Could not delete it: $error')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not $operation for ${skill.skillId}: $error'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _busy.remove(skill.skillId));
     }
   }
 
@@ -84,9 +92,11 @@ class _SkillsPageState extends State<SkillsPage> {
     return WorkspacePage(
       title: 'Skills',
       subtitle:
-          'Instructions you write once and attach to the conversations where '
-          'they apply. Nothing is chosen for you — a conversation follows '
-          'exactly the skills you attach to it, and no others.',
+          'Skills are files in turing-backend/skills. Enabled skill metadata '
+          'is available on every request; the agent reads a body only when it '
+          'selects that skill or you name its path explicitly. Editing a skill '
+          'can require fresh capability consent so a remove-and-restore cannot '
+          'silently reuse an old grant.',
       child: FutureBuilder<List<Skill>>(
         future: _skills,
         builder: (context, snapshot) {
@@ -103,39 +113,31 @@ class _SkillsPageState extends State<SkillsPage> {
             );
           }
           final skills = snapshot.data ?? const <Skill>[];
+          if (skills.isEmpty) {
+            return WorkspaceNotice(
+              icon: Icons.description_outlined,
+              title: 'No skill files found',
+              body:
+                  'Create turing-backend/skills/<category>/<skill>/SKILL.md, '
+                  'then refresh this page. New folders start disabled.',
+              onRetry: _reload,
+            );
+          }
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Align(
-                alignment: Alignment.centerLeft,
-                child: FilledButton.icon(
-                  onPressed: () => _edit(),
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('New skill'),
-                ),
-              ),
-              const SizedBox(height: 18),
-              if (skills.isEmpty)
-                WorkspaceNotice(
-                  icon: Icons.auto_awesome_outlined,
-                  title: 'No skills yet',
-                  body:
-                      'A skill is a standing instruction: how you want answers '
-                      'written, a procedure to follow every time, a place to '
-                      'always check first. Write one, then attach it to a '
-                      'conversation from the bar above the messages.',
-                )
-              else
-                for (final skill in skills)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: _SkillCard(
-                      skill: skill,
-                      palette: palette,
-                      onEdit: () => _edit(existing: skill),
-                      onDelete: () => _delete(skill),
-                    ),
+              for (final skill in skills)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: _SkillCard(
+                    skill: skill,
+                    palette: palette,
+                    busy: _busy.contains(skill.skillId),
+                    onEnabled: (value) => _setEnabled(skill, value),
+                    onCapability: (capability, granted) =>
+                        _setCapability(skill, capability, granted),
                   ),
+                ),
             ],
           );
         },
@@ -148,17 +150,27 @@ class _SkillCard extends StatelessWidget {
   const _SkillCard({
     required this.skill,
     required this.palette,
-    required this.onEdit,
-    required this.onDelete,
+    required this.busy,
+    required this.onEnabled,
+    required this.onCapability,
   });
 
   final Skill skill;
   final AppPalette palette;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
+  final bool busy;
+  final ValueChanged<bool> onEnabled;
+  final void Function(String capability, bool granted) onCapability;
 
   @override
   Widget build(BuildContext context) {
+    final displayPath = skill.folderPath.startsWith('/skills')
+        ? 'turing-backend/skills${skill.folderPath.substring('/skills'.length)}'
+        : skill.folderPath;
+    final metadata = <String>[
+      if (skill.version.isNotEmpty) 'Version ${skill.version}',
+      if (skill.author.isNotEmpty) 'Author ${skill.author}',
+      if (skill.license.isNotEmpty) 'License ${skill.license}',
+    ];
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -170,172 +182,153 @@ class _SkillCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: Text(
-                  skill.name,
-                  style: TextStyle(
-                    fontSize: 14.5,
-                    fontWeight: FontWeight.w600,
-                    color: palette.text,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      skill.name.isEmpty ? skill.skillId : skill.name,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: palette.text,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    SelectableText(
+                      skill.skillId,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: palette.textMuted,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              IconButton(
-                icon: const Icon(Icons.edit_outlined, size: 17),
-                tooltip: 'Edit skill',
-                color: palette.textMuted,
-                visualDensity: VisualDensity.compact,
-                onPressed: onEdit,
-              ),
-              IconButton(
-                icon: const Icon(Icons.delete_outline, size: 17),
-                tooltip: 'Delete skill',
-                color: palette.textMuted,
-                visualDensity: VisualDensity.compact,
-                onPressed: onDelete,
-              ),
+              const SizedBox(width: 12),
+              Switch(value: skill.enabled, onChanged: busy ? null : onEnabled),
             ],
           ),
-          const SizedBox(height: 6),
-          Text(
-            skill.instructions,
-            maxLines: 4,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 13.5,
-              height: 1.55,
-              color: palette.textMuted,
-            ),
+          const SizedBox(height: 8),
+          SelectableText(
+            displayPath,
+            style: TextStyle(fontSize: 12, color: palette.textMuted),
           ),
+          if (metadata.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              metadata.join(' · '),
+              style: TextStyle(fontSize: 12.5, color: palette.textMuted),
+            ),
+          ],
+          if (skill.parseError.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            _StatusBox(
+              icon: Icons.warning_amber_rounded,
+              text: 'SKILL.md could not be parsed: ${skill.parseError}',
+              color: AppColors.danger,
+            ),
+          ] else ...[
+            if (skill.description.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                skill.description,
+                style: TextStyle(fontSize: 13.5, color: palette.textMuted),
+              ),
+            ],
+            if (skill.body.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              SelectableText(
+                skill.body,
+                style: TextStyle(
+                  fontSize: 13.5,
+                  height: 1.5,
+                  color: palette.text,
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            _StatusBox(
+              icon: _statusIcon(skill),
+              text: _statusText(skill),
+              color: _statusColor(skill),
+            ),
+            if (skill.requires.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                'Capability consent',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  color: palette.text,
+                ),
+              ),
+              for (final capability in skill.requires)
+                CheckboxListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: Text(capability),
+                  value: skill.grantedCapabilities.contains(capability),
+                  onChanged: busy
+                      ? null
+                      : (value) => onCapability(capability, value ?? false),
+                ),
+            ],
+          ],
         ],
       ),
     );
   }
-}
 
-class _SkillEditor extends StatefulWidget {
-  const _SkillEditor({required this.apiClient, this.existing});
-
-  final TuringApi apiClient;
-  final Skill? existing;
-
-  @override
-  State<_SkillEditor> createState() => _SkillEditorState();
-}
-
-class _SkillEditorState extends State<_SkillEditor> {
-  late final TextEditingController _name = TextEditingController(
-    text: widget.existing?.name ?? '',
-  );
-  late final TextEditingController _instructions = TextEditingController(
-    text: widget.existing?.instructions ?? '',
-  );
-  bool _saving = false;
-  String? _error;
-
-  @override
-  void dispose() {
-    _name.dispose();
-    _instructions.dispose();
-    super.dispose();
+  static String _statusText(Skill skill) {
+    if (!skill.enabled) return 'Disabled';
+    if (skill.missingCapabilities.isNotEmpty) {
+      return 'Withheld until every capability is granted: '
+          '${skill.missingCapabilities.join(', ')}';
+    }
+    return 'Ready to load';
   }
 
-  Future<void> _save() async {
-    if (_saving) return;
-    final name = _name.text.trim();
-    final instructions = _instructions.text.trim();
-    // Checked here as well as on the server so the reason appears next to the
-    // field rather than as a failed round trip.
-    if (name.isEmpty || instructions.isEmpty) {
-      setState(() => _error = 'A skill needs both a name and instructions.');
-      return;
-    }
-    setState(() {
-      _saving = true;
-      _error = null;
-    });
-    try {
-      final existing = widget.existing;
-      if (existing == null) {
-        await widget.apiClient.createSkill(
-          name: name,
-          instructions: instructions,
-        );
-      } else {
-        await widget.apiClient.updateSkill(
-          skillId: existing.skillId,
-          name: name,
-          instructions: instructions,
-        );
-      }
-      if (!mounted) return;
-      Navigator.of(context).pop(true);
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _error = '$error';
-      });
-    }
+  static IconData _statusIcon(Skill skill) {
+    if (!skill.enabled) return Icons.pause_circle_outline;
+    if (skill.missingCapabilities.isNotEmpty) return Icons.lock_outline;
+    return Icons.check_circle_outline;
   }
+
+  static Color _statusColor(Skill skill) {
+    if (!skill.enabled || skill.missingCapabilities.isNotEmpty) {
+      return AppColors.warning;
+    }
+    return AppColors.success;
+  }
+}
+
+class _StatusBox extends StatelessWidget {
+  const _StatusBox({
+    required this.icon,
+    required this.text,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String text;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
-    final palette = AppColors.of(context);
-    return AlertDialog(
-      title: Text(widget.existing == null ? 'New skill' : 'Edit skill'),
-      content: SizedBox(
-        width: 460,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextField(
-                controller: _name,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  labelText: 'Name',
-                  helperText: 'How you will recognise it in a list',
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _instructions,
-                minLines: 5,
-                maxLines: 12,
-                decoration: const InputDecoration(
-                  labelText: 'Instructions',
-                  alignLabelWithHint: true,
-                  helperText: 'Written to the agent, in your own words',
-                ),
-              ),
-              if (_error != null) ...[
-                const SizedBox(height: 14),
-                Text(
-                  _error!,
-                  style: TextStyle(fontSize: 13, color: AppColors.danger),
-                ),
-              ],
-              const SizedBox(height: 14),
-              Text(
-                'Attached skills are sent with every message in the '
-                'conversations you attach them to.',
-                style: TextStyle(fontSize: 12.5, color: palette.textMuted),
-              ),
-            ],
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(fontSize: 12.5, height: 1.35, color: color),
           ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: _saving ? null : _save,
-          child: Text(_saving ? 'Saving...' : 'Save'),
         ),
       ],
     );

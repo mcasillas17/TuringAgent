@@ -193,14 +193,16 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	}
 	requestMessages := append([]llm.ChatMessage{}, messages...)
 	requestMessages = append(requestMessages, llm.ChatMessage{Role: "user", Content: job.GetUserText()})
-	// Skills open the request, ahead of the conversation history: they are
-	// standing instructions about how to behave here, not a turn in the
-	// conversation. Applied before recall so that a recalled block, which is
-	// prepended below, still lands above them and reads as background rather
-	// than as a rule.
-	if system, ok := skillsSystemMessage(job.GetSkills()); ok {
-		requestMessages = append([]llm.ChatMessage{system}, requestMessages...)
+	// Filesystem skills contribute a bounded metadata index. Bodies arrive only
+	// through skill_view or an exact $path/id invocation. Legacy queued jobs
+	// retain their old full-body snapshot behavior until they drain.
+	var skillMessages []llm.ChatMessage
+	skillMessages = append(skillMessages, skillIndexMessages(job.GetSkills())...)
+	if legacy, ok := legacySkillsMessage(job.GetSkills()); ok {
+		skillMessages = append(skillMessages, legacy)
 	}
+	skillMessages = append(skillMessages, explicitlyInvokedSkillMessages(job.GetSkills(), job.GetUserText())...)
+	requestMessages = append(skillMessages, requestMessages...)
 	// Recalled material is prepended so it sits before the live conversation and
 	// cannot be read as the user's latest turn. Recall is given the request as
 	// built, which is how it knows what is already in front of the model; it
@@ -440,7 +442,7 @@ func (a *GeneralAssistant) discoverTools(ctx context.Context) (*ToolRegistry, er
 		a.discovery = discovery
 		a.registryMu.Unlock()
 
-		servers := make(map[string]ToolLister)
+		servers := map[string]ToolLister{"skills": newSkillToolLister()}
 		if a.tools != nil {
 			if !isNilToolLister(a.tools.SystemMCP) {
 				servers["system"] = a.tools.SystemMCP
@@ -488,6 +490,10 @@ func (a *GeneralAssistant) executeToolCall(
 		}
 		return toolErrorOutcome(call, "tool_runner_unavailable")
 	}
+	client := entry.Client
+	if entry.ServerName == "skills" {
+		client = newSkillSnapshotClient(job.GetSkills())
+	}
 	runOutcome, err := a.tools.Runner.RunWithOutcome(ctx, tools.RunInput{
 		AgentID:         turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
 		RunID:           job.GetRunId(),
@@ -496,7 +502,7 @@ func (a *GeneralAssistant) executeToolCall(
 		ServerName:      entry.ServerName,
 		ToolName:        call.Name,
 		Args:            call.Arguments,
-		MCPClient:       entry.Client,
+		MCPClient:       client,
 		Timeout:         a.toolTimeout(),
 		TotalTimeout:    a.totalToolTimeout(),
 	})

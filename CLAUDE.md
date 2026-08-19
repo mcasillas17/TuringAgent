@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Local-first AI orchestration platform: a Flutter desktop client + Go gRPC backend that owns chat sessions, model routing, streaming events, tool execution, approvals, and audit state. Runs locally via Docker Compose; secrets live in `turing-backend/.env`, data under `turing-backend/data/`, file tools sandboxed to `turing-backend/sandbox/`.
+Local-first AI orchestration platform: a Flutter desktop client + Go gRPC backend that owns chat sessions, model routing, streaming events, tool execution, approvals, and audit state. Runs locally via Docker Compose; secrets live in `turing-backend/.env`, data under `turing-backend/data/`, file tools are sandboxed to `turing-backend/sandbox/`, and file-backed skills live under `turing-backend/skills/` (mounted read/write at `/skills` in the orchestrator).
 
 ## Multi-module layout (important)
 
@@ -40,12 +40,13 @@ The `/verify` skill runs this matrix.
 - **CI is self-guarding:** `.github/workflows/ci_test.go` asserts `ci.yml` contains specific commands — editing CI commands may require updating that test.
 - **mcp-files approval flow:** mutating file tools require a short-lived HS256 approval JWT (signed by the orchestrator after user approval, passed as `params._meta.approvalToken`), verified by mcp-files, then consumed via `ApprovalService.ConsumeApproval` over internal gRPC. The write proceeds only on `APPROVAL_STATUS_CONSUMED`.
 - **Compose uses explicit `environment:` blocks (not `env_file:`)** so each service gets only the secrets it needs. MCP servers are never published to the host (internal Docker networks only); only orchestrator `:3000` is public.
+- **Skills are files, not durable content rows.** A skill is `skills/<category>/<skill>/SKILL.md`; its relative folder path is its identity. SQLite stores only enablement and per-capability grants during normal operation. The 0011 upgrade is the explicit exception: it retains legacy bodies in `legacy_skill_export_recovery` and re-exports them on every startup because SQLite and the filesystem cannot commit atomically. Conflicts fail closed and keep recovery intact; application code never deletes nonempty recovery. Cleanup is deliberately offline/manual: stop the orchestrator, back up the database, verify every legacy file under `skills/imported/`, then use a SQLite client to `DROP TABLE legacy_skill_export_recovery;` before restarting. The orchestrator snapshots enabled metadata at enqueue and includes bodies/references only for skills whose declared capabilities are all granted. Skill content is untrusted prompt material and a grant controls whether it loads — it does not authorize a tool call.
 - Do not commit `.env` (gitignored; `init.sh` sets it `chmod 600`). `.env.example` is the whitelisted template.
 
 ## Running the stack
 
 ```bash
-cd turing-backend && ./scripts/init.sh   # generates .env, tokens, data/ & sandbox/; prints the Flutter API key
+cd turing-backend && ./scripts/init.sh   # generates .env, tokens, data/, sandbox/ & skills/; prints the Flutter API key
 ./scripts/dev.sh                          # docker compose up --build (foreground)
 ```
 Requires Docker + Compose, Go 1.23+, Flutter, and Ollama running on the host (`OLLAMA_BASE_URL=http://host.docker.internal:11434`, default model `qwen2.5:7b` (~4.9 GB resident). The runtime sends Ollama a per-request `keep_alive` (`OLLAMA_KEEP_ALIVE`, default `2m`) instead of relying on Ollama's own server-side env var, so the model is released once you stop talking to it. Keep it above `TURING_APPROVAL_WAIT_TIMEOUT_MS` or it unloads mid-run). Run the client: `cd turing-client/turing_app && flutter pub get && flutter run -d macos`.

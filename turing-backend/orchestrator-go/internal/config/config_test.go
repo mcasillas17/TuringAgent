@@ -154,6 +154,29 @@ func TestLoadFromMapLeavesTheIntegrationKeyOptional(t *testing.T) {
 	}
 }
 
+func TestLoadFromMapDefaultsAndOverridesSkillsRoot(t *testing.T) {
+	cfg, err := LoadFromMap(requiredEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SkillsRoot != "/skills" {
+		t.Fatalf("SkillsRoot = %q, want /skills", cfg.SkillsRoot)
+	}
+	env := requiredEnv()
+	env["SKILLS_ROOT"] = "/tmp/test-skills"
+	cfg, err = LoadFromMap(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SkillsRoot != "/tmp/test-skills" {
+		t.Fatalf("SkillsRoot = %q", cfg.SkillsRoot)
+	}
+	env["SKILLS_ROOT"] = "relative/skills"
+	if _, err := LoadFromMap(env); err == nil {
+		t.Fatal("relative SKILLS_ROOT was accepted")
+	}
+}
+
 // A key that is present but the wrong shape fails at startup, not while
 // somebody is pasting a token into the connect dialog.
 func TestLoadFromMapRejectsAMalformedIntegrationKey(t *testing.T) {

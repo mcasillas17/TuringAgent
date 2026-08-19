@@ -3,459 +3,438 @@ package repository
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/skillfiles"
 )
 
-func TestCreateSkillTrimsAndRejectsEmptyFields(t *testing.T) {
-	repo, ctx := newTitleTestRepo(t)
+func TestSkillLoadsWhenEveryDeclaredCapabilityIsGranted(t *testing.T) {
+	repo, root := newSkillRepository(t)
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief prose", []string{"files.update"}, "Be brief.")
+	grantRepositoryCapability(t, repo, "writing/tone", "files.update")
+	enableRepositorySkill(t, repo, "writing/tone")
 
-	skill, err := repo.CreateSkill(ctx, "  Tone  ", "  Answer in short sentences.  ")
-	if err != nil {
-		t.Fatalf("create skill: %v", err)
-	}
-	if skill.Name != "Tone" || skill.Instructions != "Answer in short sentences." {
-		t.Fatalf("stored %q / %q, want both trimmed", skill.Name, skill.Instructions)
-	}
-
-	if _, err := repo.CreateSkill(ctx, "   ", "something"); !errors.Is(err, ErrSkillNameEmpty) {
-		t.Fatalf("whitespace name error = %v, want ErrSkillNameEmpty", err)
-	}
-	// A skill with no instructions would attach fine and do nothing, which is
-	// indistinguishable from the feature being broken.
-	if _, err := repo.CreateSkill(ctx, "Named", "  \n "); !errors.Is(err, ErrSkillNoContent) {
-		t.Fatalf("whitespace instructions error = %v, want ErrSkillNoContent", err)
+	loaded := loadableRepositorySkills(t, repo)
+	if len(loaded) != 1 || loaded[0].SkillID != "writing/tone" {
+		t.Fatalf("loaded = %+v, want writing/tone", loaded)
 	}
 }
 
-// Names are how a user refers to a skill and how the runtime attributes an
-// instruction back to one, so two skills sharing a name makes both ambiguous.
-func TestCreateSkillRejectsDuplicateNamesRegardlessOfCase(t *testing.T) {
-	repo, ctx := newTitleTestRepo(t)
-
-	if _, err := repo.CreateSkill(ctx, "Tone", "first"); err != nil {
-		t.Fatalf("create skill: %v", err)
+func TestACapabilityAddedAfterTheGrantIsNotGranted(t *testing.T) {
+	repo, root := newSkillRepository(t)
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief prose", []string{"files.update"}, "Be brief.")
+	grantRepositoryCapability(t, repo, "writing/tone", "files.update")
+	enableRepositorySkill(t, repo, "writing/tone")
+	if len(loadableRepositorySkills(t, repo)) != 1 {
+		t.Fatal("skill did not load before its declaration changed")
 	}
 
-	if _, err := repo.CreateSkill(ctx, "Tone", "second"); !errors.Is(err, ErrSkillNameTaken) {
-		t.Fatalf("duplicate error = %v, want ErrSkillNameTaken", err)
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief prose", []string{"files.update", "system.time"}, "Be brief.")
+	if loaded := loadableRepositorySkills(t, repo); len(loaded) != 0 {
+		t.Fatalf("loaded = %+v, want widened skill withheld", loaded)
 	}
-	if _, err := repo.CreateSkill(ctx, "tone", "third"); !errors.Is(err, ErrSkillNameTaken) {
-		t.Fatalf("case-different duplicate error = %v, want ErrSkillNameTaken", err)
+	skill := repositorySkillByID(t, repo, "writing/tone")
+	if !reflect.DeepEqual(skill.GrantedCapabilities, []string{"files.update"}) {
+		t.Fatalf("grants = %v, want existing grant retained", skill.GrantedCapabilities)
+	}
+	if !reflect.DeepEqual(skill.MissingCapabilities, []string{"system.time"}) {
+		t.Fatalf("missing = %v, want system.time", skill.MissingCapabilities)
 	}
 }
 
-func TestUpdateSkillReportsMissingSkills(t *testing.T) {
-	repo, ctx := newTitleTestRepo(t)
-
-	if _, err := repo.UpdateSkill(ctx, "skill_nope", "Name", "Instructions"); !errors.Is(err, ErrSkillNotFound) {
-		t.Fatalf("update error = %v, want ErrSkillNotFound", err)
+func TestRevokingOneCapabilityLeavesTheOthers(t *testing.T) {
+	repo, root := newSkillRepository(t)
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief prose", []string{"files.read", "files.update"}, "Be brief.")
+	for _, capability := range []string{"files.read", "files.update"} {
+		grantRepositoryCapability(t, repo, "writing/tone", capability)
 	}
-	if err := repo.DeleteSkill(ctx, "skill_nope"); !errors.Is(err, ErrSkillNotFound) {
-		t.Fatalf("delete error = %v, want ErrSkillNotFound", err)
+	enableRepositorySkill(t, repo, "writing/tone")
+
+	if _, err := repo.SetSkillGrant(context.Background(), "writing/tone", "files.read", false); err != nil {
+		t.Fatal(err)
+	}
+	skill := repositorySkillByID(t, repo, "writing/tone")
+	if !reflect.DeepEqual(skill.GrantedCapabilities, []string{"files.update"}) {
+		t.Fatalf("grants = %v, want files.update retained", skill.GrantedCapabilities)
+	}
+	if len(loadableRepositorySkills(t, repo)) != 0 {
+		t.Fatal("skill loaded with a revoked declared capability")
 	}
 }
 
-func TestAttachSkillIsIdempotentAndReturnsTheFullSet(t *testing.T) {
-	repo, ctx := newTitleTestRepo(t)
-	session, err := repo.CreateSession(ctx, "")
+func TestReAddingACapabilityDoesNotRestoreItsOldGrant(t *testing.T) {
+	repo, root := newSkillRepository(t)
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief prose", []string{"files.update"}, "Be brief.")
+	grantRepositoryCapability(t, repo, "writing/tone", "files.update")
+	enableRepositorySkill(t, repo, "writing/tone")
+	path := filepath.Join(root, "writing", "tone", "SKILL.md")
+	originalInfo, err := os.Stat(path)
 	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-	tone, err := repo.CreateSkill(ctx, "Tone", "Be brief.")
-	if err != nil {
-		t.Fatalf("create tone: %v", err)
-	}
-	format, err := repo.CreateSkill(ctx, "Format", "Use bullet points.")
-	if err != nil {
-		t.Fatalf("create format: %v", err)
+		t.Fatal(err)
 	}
 
-	if _, err := repo.AttachSkill(ctx, session.SessionID, tone.SkillID); err != nil {
-		t.Fatalf("attach tone: %v", err)
-	}
-	// A double tap must mean the same as one tap.
-	attached, err := repo.AttachSkill(ctx, session.SessionID, tone.SkillID)
-	if err != nil {
-		t.Fatalf("re-attach tone: %v", err)
-	}
-	if len(attached) != 1 {
-		t.Fatalf("attached %d skills after re-attach, want 1", len(attached))
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief prose", nil, "Be brief.")
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief prose", []string{"files.update"}, "Be brief.")
+	if err := os.Chtimes(path, originalInfo.ModTime(), originalInfo.ModTime()); err != nil {
+		t.Fatal(err)
 	}
 
-	attached, err = repo.AttachSkill(ctx, session.SessionID, format.SkillID)
-	if err != nil {
-		t.Fatalf("attach format: %v", err)
-	}
-	// Sorted by name so the set reads the same way every time it is shown.
-	if len(attached) != 2 || attached[0].Name != "Format" || attached[1].Name != "Tone" {
-		t.Fatalf("attached = %+v, want Format then Tone", attached)
+	skill := repositorySkillByID(t, repo, "writing/tone")
+	if len(skill.GrantedCapabilities) != 0 {
+		t.Fatalf("grants = %v, want fresh consent after re-add", skill.GrantedCapabilities)
 	}
 }
 
-func TestAttachSkillRejectsUnknownIDs(t *testing.T) {
-	repo, ctx := newTitleTestRepo(t)
-	session, err := repo.CreateSession(ctx, "")
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
+func TestBodyAndDescriptionEditsRequireFreshConsentForSameDeclaration(t *testing.T) {
+	repo, root := newSkillRepository(t)
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "First description", []string{"files.update"}, "First body.")
+	grantRepositoryCapability(t, repo, "writing/tone", "files.update")
+	enableRepositorySkill(t, repo, "writing/tone")
 
-	if _, err := repo.AttachSkill(ctx, session.SessionID, "skill_nope"); !errors.Is(err, ErrSkillNotFound) {
-		t.Fatalf("attach unknown skill error = %v, want ErrSkillNotFound", err)
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Edited description", []string{"files.update"}, "Edited body.")
+	skill := repositorySkillByID(t, repo, "writing/tone")
+	if len(skill.GrantedCapabilities) != 0 || !reflect.DeepEqual(skill.MissingCapabilities, []string{"files.update"}) {
+		t.Fatalf("grant state after content edit = granted %v missing %v", skill.GrantedCapabilities, skill.MissingCapabilities)
 	}
-	skill, err := repo.CreateSkill(ctx, "Tone", "Be brief.")
-	if err != nil {
-		t.Fatalf("create skill: %v", err)
-	}
-	// Deliberately NOT ErrSkillNotFound: the skill is fine, the conversation is
-	// gone, and saying otherwise sends the user looking in the wrong place.
-	if _, err := repo.AttachSkill(ctx, "sess_nope", skill.SkillID); !errors.Is(err, ErrSessionNotFound) {
-		t.Fatalf("attach to unknown session error = %v, want ErrSessionNotFound", err)
+	if len(loadableRepositorySkills(t, repo)) != 0 {
+		t.Fatal("content-only edit retained consent for an unobserved declaration history")
 	}
 }
 
-func TestDetachSkillReportsWhenItWasNotAttached(t *testing.T) {
-	repo, ctx := newTitleTestRepo(t)
-	session, err := repo.CreateSession(ctx, "")
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-	skill, err := repo.CreateSkill(ctx, "Tone", "Be brief.")
-	if err != nil {
-		t.Fatalf("create skill: %v", err)
-	}
+func TestReAddingCapabilityWithChangedBodyStillRequiresFreshConsent(t *testing.T) {
+	repo, root := newSkillRepository(t)
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief prose", []string{"files.update"}, "First body.")
+	grantRepositoryCapability(t, repo, "writing/tone", "files.update")
+	enableRepositorySkill(t, repo, "writing/tone")
 
-	if _, err := repo.DetachSkill(ctx, session.SessionID, skill.SkillID); !errors.Is(err, ErrSkillNotAttached) {
-		t.Fatalf("detach error = %v, want ErrSkillNotAttached", err)
-	}
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief prose", nil, "Intermediate body.")
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Edited description", []string{"files.update"}, "Changed body.")
 
-	if _, err := repo.AttachSkill(ctx, session.SessionID, skill.SkillID); err != nil {
-		t.Fatalf("attach: %v", err)
-	}
-	remaining, err := repo.DetachSkill(ctx, session.SessionID, skill.SkillID)
-	if err != nil {
-		t.Fatalf("detach: %v", err)
-	}
-	if len(remaining) != 0 {
-		t.Fatalf("remaining = %+v, want none", remaining)
+	skill := repositorySkillByID(t, repo, "writing/tone")
+	if len(skill.GrantedCapabilities) != 0 || !reflect.DeepEqual(skill.MissingCapabilities, []string{"files.update"}) {
+		t.Fatalf("grant state after changed re-add = granted %v missing %v", skill.GrantedCapabilities, skill.MissingCapabilities)
 	}
 }
 
-// A deleted skill cannot keep instructing conversations it was attached to.
-func TestDeletingASkillDetachesItEverywhere(t *testing.T) {
-	repo, ctx := newTitleTestRepo(t)
-	session, err := repo.CreateSession(ctx, "")
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-	skill, err := repo.CreateSkill(ctx, "Tone", "Be brief.")
-	if err != nil {
-		t.Fatalf("create skill: %v", err)
-	}
-	if _, err := repo.AttachSkill(ctx, session.SessionID, skill.SkillID); err != nil {
-		t.Fatalf("attach: %v", err)
-	}
+func TestNewSkillIsDisabledAndEnablingDoesNotGrant(t *testing.T) {
+	repo, root := newSkillRepository(t)
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief prose", []string{"files.update"}, "Be brief.")
 
-	if err := repo.DeleteSkill(ctx, skill.SkillID); err != nil {
-		t.Fatalf("delete: %v", err)
+	skill := repositorySkillByID(t, repo, "writing/tone")
+	if skill.Enabled {
+		t.Fatal("new skill arrived enabled")
 	}
-
-	attached, err := repo.ListSessionSkills(ctx, session.SessionID)
-	if err != nil {
-		t.Fatalf("list session skills: %v", err)
-	}
-	if len(attached) != 0 {
-		t.Fatalf("attached = %+v, want none after the skill was deleted", attached)
+	enableRepositorySkill(t, repo, "writing/tone")
+	skill = repositorySkillByID(t, repo, "writing/tone")
+	if len(skill.GrantedCapabilities) != 0 || !reflect.DeepEqual(skill.MissingCapabilities, []string{"files.update"}) {
+		t.Fatalf("enabled skill grants = %v, missing = %v", skill.GrantedCapabilities, skill.MissingCapabilities)
 	}
 }
 
-// The payload is the contract with the runtime: the skills a run was told to
-// follow are the ones attached when the message was sent.
-func TestEnqueueUserMessageSnapshotsAttachedSkills(t *testing.T) {
-	repo, ctx := newTitleTestRepo(t)
-	session, err := repo.CreateSession(ctx, "")
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-	skill, err := repo.CreateSkill(ctx, "Tone", "Be brief.")
-	if err != nil {
-		t.Fatalf("create skill: %v", err)
-	}
-	if _, err := repo.AttachSkill(ctx, session.SessionID, skill.SkillID); err != nil {
-		t.Fatalf("attach: %v", err)
+func TestRenamingFolderCreatesANewDisabledIdentity(t *testing.T) {
+	repo, root := newSkillRepository(t)
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief prose", nil, "Be brief.")
+	enableRepositorySkill(t, repo, "writing/tone")
+	oldFolder := filepath.Join(root, "writing", "tone")
+	newFolder := filepath.Join(root, "writing", "voice")
+	if err := os.Rename(oldFolder, newFolder); err != nil {
+		t.Fatal(err)
 	}
 
-	result, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
-		SessionID:     session.SessionID,
-		Content:       "hello",
-		AgentID:       "general_assistant",
-		ModelProvider: "ollama",
-		Model:         "qwen2.5:7b",
-	})
+	skills, err := repo.ListSkills(context.Background())
 	if err != nil {
-		t.Fatalf("enqueue: %v", err)
+		t.Fatal(err)
 	}
-
-	skills := payloadSkills(t, ctx, repo, result.JobID)
-	if len(skills) != 1 || skills[0].Name != "Tone" || skills[0].Instructions != "Be brief." {
-		t.Fatalf("payload skills = %+v, want the attached skill", skills)
+	if len(skills) != 1 || skills[0].SkillID != "writing/voice" || skills[0].Enabled {
+		t.Fatalf("skills = %+v, want renamed path disabled", skills)
 	}
 }
 
-// Editing a skill must not reach back into a run that is already waiting: the
-// user pressed send on the instructions as they were at that moment.
-func TestQueuedJobKeepsTheSkillsItWasEnqueuedWith(t *testing.T) {
-	repo, ctx := newTitleTestRepo(t)
-	session, err := repo.CreateSession(ctx, "")
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-	skill, err := repo.CreateSkill(ctx, "Tone", "Be brief.")
-	if err != nil {
-		t.Fatalf("create skill: %v", err)
-	}
-	if _, err := repo.AttachSkill(ctx, session.SessionID, skill.SkillID); err != nil {
-		t.Fatalf("attach: %v", err)
-	}
-	result, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
-		SessionID:     session.SessionID,
-		Content:       "hello",
-		AgentID:       "general_assistant",
-		ModelProvider: "ollama",
-		Model:         "qwen2.5:7b",
-	})
-	if err != nil {
-		t.Fatalf("enqueue: %v", err)
-	}
+func TestListSkillsReadsEditedDescriptionWithoutDatabaseWrite(t *testing.T) {
+	repo, root := newSkillRepository(t)
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "First description", nil, "Be brief.")
+	_ = repositorySkillByID(t, repo, "writing/tone")
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Edited on disk", nil, "Be brief.")
 
-	if _, err := repo.UpdateSkill(ctx, skill.SkillID, "Tone", "Write at length."); err != nil {
-		t.Fatalf("update skill: %v", err)
+	skill := repositorySkillByID(t, repo, "writing/tone")
+	if skill.Description != "Edited on disk" {
+		t.Fatalf("description = %q", skill.Description)
 	}
-	if _, err := repo.DetachSkill(ctx, session.SessionID, skill.SkillID); err != nil {
-		t.Fatalf("detach: %v", err)
-	}
-
-	skills := payloadSkills(t, ctx, repo, result.JobID)
-	if len(skills) != 1 || skills[0].Instructions != "Be brief." {
-		t.Fatalf("payload skills = %+v, want the instructions as they were at enqueue", skills)
-	}
-}
-
-// The order the runtime renders sections in comes from here, so a snapshot
-// that reorders between messages would silently reorder the instructions.
-func TestEnqueueSnapshotIsOrderedByName(t *testing.T) {
-	repo, ctx := newTitleTestRepo(t)
-	session, err := repo.CreateSession(ctx, "")
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-	// Attached in an order that does not match the expected output, so passing
-	// cannot be an accident of insertion order.
-	for _, name := range []string{"Zeta", "alpha", "Middle"} {
-		skill, err := repo.CreateSkill(ctx, name, "instructions for "+name)
-		if err != nil {
-			t.Fatalf("create %s: %v", name, err)
+	for _, column := range []string{"name", "description", "category"} {
+		var count int
+		if err := repo.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('skill_settings') WHERE name = ?`, column).Scan(&count); err != nil {
+			t.Fatal(err)
 		}
-		if _, err := repo.AttachSkill(ctx, session.SessionID, skill.SkillID); err != nil {
-			t.Fatalf("attach %s: %v", name, err)
+		if count != 0 {
+			t.Fatalf("skill_settings unexpectedly caches %s", column)
 		}
 	}
+}
 
-	result, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
-		SessionID:     session.SessionID,
-		Content:       "hello",
-		AgentID:       "general_assistant",
-		ModelProvider: "ollama",
-		Model:         "qwen2.5:7b",
+func TestMalformedSkillIsListedButNeverLoadable(t *testing.T) {
+	repo, root := newSkillRepository(t)
+	path := filepath.Join(root, "writing", "broken", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("---\nname: Broken\n---\nBody\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	skill := repositorySkillByID(t, repo, "writing/broken")
+	if !strings.Contains(skill.ParseError, "description") {
+		t.Fatalf("parse error = %q", skill.ParseError)
+	}
+	if _, err := repo.SetSkillEnabled(context.Background(), "writing/broken", true); err != nil {
+		t.Fatal(err)
+	}
+	if len(loadableRepositorySkills(t, repo)) != 0 {
+		t.Fatal("malformed skill became loadable")
+	}
+}
+
+func TestEnqueueFreezesEnabledSkillBodyAndReferences(t *testing.T) {
+	repo, root := newSkillRepository(t)
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief prose", []string{"files.update"}, "Original body.")
+	reference := filepath.Join(root, "writing", "tone", "references", "example.md")
+	if err := os.MkdirAll(filepath.Dir(reference), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(reference, []byte("Original reference."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	grantRepositoryCapability(t, repo, "writing/tone", "files.update")
+	enableRepositorySkill(t, repo, "writing/tone")
+	session, err := repo.CreateSession(context.Background(), "Snapshot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(context.Background(), EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "hello", AgentID: "general_assistant", ModelProvider: "ollama", Model: "test",
 	})
 	if err != nil {
-		t.Fatalf("enqueue: %v", err)
+		t.Fatal(err)
+	}
+	if _, err := repo.SetSkillEnabled(context.Background(), "writing/tone", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetSkillGrant(context.Background(), "writing/tone", "files.update", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetSkillGrant(context.Background(), "writing/tone", "files.update", true); err != nil {
+		t.Fatal(err)
+	}
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Changed", nil, "Changed body.")
+	if err := os.WriteFile(reference, []byte("Changed reference."), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
-	skills := payloadSkills(t, ctx, repo, result.JobID)
-	var names []string
-	for _, skill := range skills {
-		names = append(names, skill.Name)
+	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker")
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Case-insensitive, so "alpha" sorts before "Middle" rather than after "Zeta".
-	if got := strings.Join(names, ","); got != "alpha,Middle,Zeta" {
-		t.Fatalf("snapshot order = %s, want alpha,Middle,Zeta", got)
+	if job.JobID != enqueued.JobID || len(job.Skills) != 1 {
+		t.Fatalf("job = %+v", job)
+	}
+	skill := job.Skills[0]
+	if skill.Body != "Original body." || skill.References["references/example.md"] != "Original reference." {
+		t.Fatalf("snapshot = %+v", skill)
 	}
 }
 
-// The payload is persisted and read back by a possibly different build, so the
-// key names are part of the contract, not an implementation detail.
-func TestJobPayloadUsesStableSkillKeys(t *testing.T) {
-	repo, ctx := newTitleTestRepo(t)
-	session, err := repo.CreateSession(ctx, "")
+func TestEnqueueIndexesEnabledWithheldSkillWithoutItsContent(t *testing.T) {
+	repo, root := newSkillRepository(t)
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief prose", []string{"files.update"}, "Must stay withheld.")
+	enableRepositorySkill(t, repo, "writing/tone")
+	session, err := repo.CreateSession(context.Background(), "Withheld snapshot")
 	if err != nil {
-		t.Fatalf("create session: %v", err)
+		t.Fatal(err)
 	}
-	skill, err := repo.CreateSkill(ctx, "Tone", "Be brief.")
-	if err != nil {
-		t.Fatalf("create skill: %v", err)
-	}
-	if _, err := repo.AttachSkill(ctx, session.SessionID, skill.SkillID); err != nil {
-		t.Fatalf("attach: %v", err)
-	}
-	result, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
-		SessionID:     session.SessionID,
-		Content:       "hello",
-		AgentID:       "general_assistant",
-		ModelProvider: "ollama",
-		Model:         "qwen2.5:7b",
-	})
-	if err != nil {
-		t.Fatalf("enqueue: %v", err)
-	}
-
-	var payloadJSON string
-	if err := repo.db.QueryRowContext(ctx, `SELECT payload_json FROM jobs WHERE id = ?`, result.JobID).Scan(&payloadJSON); err != nil {
-		t.Fatalf("read payload: %v", err)
-	}
-	if !strings.Contains(payloadJSON, `"name":"Tone"`) {
-		t.Fatalf("payload does not use the lower-case key: %s", payloadJSON)
-	}
-	if !strings.Contains(payloadJSON, `"instructions":"Be brief."`) {
-		t.Fatalf("payload does not use the lower-case key: %s", payloadJSON)
-	}
-}
-
-// Renaming a skill onto another's name must be refused the same way creating a
-// duplicate is.
-func TestUpdateSkillRejectsRenamingOntoAnExistingName(t *testing.T) {
-	repo, ctx := newTitleTestRepo(t)
-	if _, err := repo.CreateSkill(ctx, "Tone", "Be brief."); err != nil {
-		t.Fatalf("create tone: %v", err)
-	}
-	format, err := repo.CreateSkill(ctx, "Format", "Use bullets.")
-	if err != nil {
-		t.Fatalf("create format: %v", err)
-	}
-
-	if _, err := repo.UpdateSkill(ctx, format.SkillID, "tone", "Use bullets."); !errors.Is(err, ErrSkillNameTaken) {
-		t.Fatalf("rename error = %v, want ErrSkillNameTaken", err)
-	}
-}
-
-// Deleting a conversation must not leave orphaned attachment rows behind.
-func TestDeletingASessionRemovesItsAttachments(t *testing.T) {
-	repo, ctx := newTitleTestRepo(t)
-	session, err := repo.CreateSession(ctx, "")
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-	skill, err := repo.CreateSkill(ctx, "Tone", "Be brief.")
-	if err != nil {
-		t.Fatalf("create skill: %v", err)
-	}
-	if _, err := repo.AttachSkill(ctx, session.SessionID, skill.SkillID); err != nil {
-		t.Fatalf("attach: %v", err)
-	}
-
-	if err := repo.DeleteSession(ctx, session.SessionID); err != nil {
-		t.Fatalf("delete session: %v", err)
-	}
-
-	var remaining int
-	if err := repo.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM session_skills WHERE session_id = ?`, session.SessionID).Scan(&remaining); err != nil {
-		t.Fatalf("count attachments: %v", err)
-	}
-	if remaining != 0 {
-		t.Fatalf("attachments remaining = %d, want 0", remaining)
-	}
-	// The skill itself is the user's, and outlives any one conversation.
-	if _, err := repo.GetSkill(ctx, skill.SkillID); err != nil {
-		t.Fatalf("skill should have survived: %v", err)
-	}
-}
-
-// A claimed job carries its snapshot through to the worker.
-func TestClaimNextJobReturnsTheSnapshottedSkills(t *testing.T) {
-	repo, ctx := newTitleTestRepo(t)
-	session, err := repo.CreateSession(ctx, "")
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-	skill, err := repo.CreateSkill(ctx, "Tone", "Be brief.")
-	if err != nil {
-		t.Fatalf("create skill: %v", err)
-	}
-	if _, err := repo.AttachSkill(ctx, session.SessionID, skill.SkillID); err != nil {
-		t.Fatalf("attach: %v", err)
-	}
-	if _, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
-		SessionID:     session.SessionID,
-		Content:       "hello",
-		AgentID:       "general_assistant",
-		ModelProvider: "ollama",
-		Model:         "qwen2.5:7b",
+	if _, err := repo.EnqueueUserMessage(context.Background(), EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "hello", AgentID: "general_assistant", ModelProvider: "ollama", Model: "test",
 	}); err != nil {
-		t.Fatalf("enqueue: %v", err)
+		t.Fatal(err)
 	}
+	grantRepositoryCapability(t, repo, "writing/tone", "files.update")
 
-	job, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-1")
+	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker")
 	if err != nil {
-		t.Fatalf("claim: %v", err)
+		t.Fatal(err)
 	}
-	if len(job.Skills) != 1 || job.Skills[0].Name != "Tone" {
-		t.Fatalf("claimed job skills = %+v, want the attached skill", job.Skills)
+	if len(job.Skills) != 1 {
+		t.Fatalf("skills = %+v, want enabled metadata snapshot", job.Skills)
+	}
+	skill := job.Skills[0]
+	if skill.SkillID != "writing/tone" || !skill.Withheld ||
+		!reflect.DeepEqual(skill.MissingCapabilities, []string{"files.update"}) {
+		t.Fatalf("skill = %+v, want withheld files.update", skill)
+	}
+	if skill.Body != "" || len(skill.References) != 0 {
+		t.Fatalf("withheld content leaked into job: %+v", skill)
 	}
 }
 
-// Jobs enqueued before skills existed have no "skills" key at all. Decoding
-// must treat that as "none attached" rather than failing the claim, which
-// would strand every queued run across the upgrade.
-func TestClaimNextJobToleratesAPayloadWithoutSkills(t *testing.T) {
-	repo, ctx := newTitleTestRepo(t)
-	session, err := repo.CreateSession(ctx, "")
+func TestClaimNextJobReadsLegacyNameInstructionsPayload(t *testing.T) {
+	repo, _ := newSkillRepository(t)
+	session, err := repo.CreateSession(context.Background(), "Legacy skills payload")
 	if err != nil {
-		t.Fatalf("create session: %v", err)
+		t.Fatal(err)
 	}
-	result, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
-		SessionID:     session.SessionID,
-		Content:       "hello",
-		AgentID:       "general_assistant",
-		ModelProvider: "ollama",
-		Model:         "qwen2.5:7b",
+	enqueued, err := repo.EnqueueUserMessage(context.Background(), EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "hello", AgentID: "general_assistant", ModelProvider: "ollama", Model: "test",
 	})
 	if err != nil {
-		t.Fatalf("enqueue: %v", err)
+		t.Fatal(err)
 	}
-	// Rewrite the payload to the shape this version never writes but must read.
-	legacy := `{"userText":"hello","sessionId":"` + session.SessionID + `","modelProvider":"ollama","model":"qwen2.5:7b"}`
-	if _, err := repo.db.ExecContext(ctx, `UPDATE jobs SET payload_json = ? WHERE id = ?`, legacy, result.JobID); err != nil {
-		t.Fatalf("rewrite payload: %v", err)
+	var payloadJSON string
+	if err := repo.db.QueryRow(`SELECT payload_json FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&payloadJSON); err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["skills"] = []map[string]string{{"name": "Legacy tone", "instructions": "Use bullets."}}
+	legacyJSON, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.db.Exec(`UPDATE jobs SET payload_json = ? WHERE id = ?`, string(legacyJSON), enqueued.JobID); err != nil {
+		t.Fatal(err)
 	}
 
-	job, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-1")
+	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker")
 	if err != nil {
-		t.Fatalf("claim: %v", err)
+		t.Fatal(err)
 	}
-	if job.JobID != result.JobID {
-		t.Fatalf("claimed %q, want %q", job.JobID, result.JobID)
-	}
-	if len(job.Skills) != 0 {
-		t.Fatalf("skills = %+v, want none", job.Skills)
-	}
-	if job.UserText != "hello" {
-		t.Fatalf("userText = %q, want it still decoded", job.UserText)
+	if len(job.Skills) != 1 || job.Skills[0].Name != "Legacy tone" || job.Skills[0].Instructions != "Use bullets." {
+		t.Fatalf("legacy snapshot = %+v", job.Skills)
 	}
 }
 
-func payloadSkills(t *testing.T, ctx context.Context, repo *Repository, jobID string) []AttachedSkill {
+func TestUnreadableUnrelatedSubtreeDoesNotBlockEnqueue(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission bits are not enforced on Windows")
+	}
+	repo, root := newSkillRepository(t)
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief prose", nil, "Original body.")
+	enableRepositorySkill(t, repo, "writing/tone")
+	blocked := filepath.Join(root, "broken", "blocked")
+	if err := os.MkdirAll(blocked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(blocked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o700) })
+	session, err := repo.CreateSession(context.Background(), "Unreadable sibling")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.EnqueueUserMessage(context.Background(), EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "hello", AgentID: "general_assistant", ModelProvider: "ollama", Model: "test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(job.Skills) != 1 || job.Skills[0].SkillID != "writing/tone" {
+		t.Fatalf("skills = %+v, want valid sibling snapshotted", job.Skills)
+	}
+}
+
+func newSkillRepository(t *testing.T) (*Repository, string) {
 	t.Helper()
-	var payloadJSON string
-	if err := repo.db.QueryRowContext(ctx, `SELECT payload_json FROM jobs WHERE id = ?`, jobID).Scan(&payloadJSON); err != nil {
-		t.Fatalf("read payload: %v", err)
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
 	}
-	var payload struct {
-		Skills []AttachedSkill `json:"skills"`
+	t.Cleanup(func() { _ = database.Close() })
+	if err := db.ApplyMigrations(context.Background(), database); err != nil {
+		t.Fatal(err)
 	}
-	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
-		t.Fatalf("decode payload: %v", err)
+	repo := New(database)
+	root := t.TempDir()
+	repo.SetSkillStore(skillfiles.New(root))
+	return repo, root
+}
+
+func writeRepositorySkill(t *testing.T, root, id, name, description string, requires []string, body string) {
+	t.Helper()
+	var declaration strings.Builder
+	declaration.WriteString("---\nname: ")
+	declaration.WriteString(name)
+	declaration.WriteString("\ndescription: ")
+	declaration.WriteString(description)
+	declaration.WriteString("\n")
+	if len(requires) > 0 {
+		declaration.WriteString("requires:\n")
+		for _, capability := range requires {
+			declaration.WriteString("  - ")
+			declaration.WriteString(capability)
+			declaration.WriteString("\n")
+		}
 	}
-	return payload.Skills
+	declaration.WriteString("---\n")
+	declaration.WriteString(body)
+	declaration.WriteString("\n")
+	path := filepath.Join(root, filepath.FromSlash(id), "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(declaration.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func repositorySkillByID(t *testing.T, repo *Repository, id string) Skill {
+	t.Helper()
+	skills, err := repo.ListSkills(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, skill := range skills {
+		if skill.SkillID == id {
+			return skill
+		}
+	}
+	t.Fatalf("skill %q not found in %+v", id, skills)
+	return Skill{}
+}
+
+func enableRepositorySkill(t *testing.T, repo *Repository, id string) {
+	t.Helper()
+	if _, err := repo.SetSkillEnabled(context.Background(), id, true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func grantRepositoryCapability(t *testing.T, repo *Repository, id, capability string) {
+	t.Helper()
+	if _, err := repo.SetSkillGrant(context.Background(), id, capability, true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func loadableRepositorySkills(t *testing.T, repo *Repository) []SkillSnapshot {
+	t.Helper()
+	skills, err := repo.ListSkills(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var loadable []SkillSnapshot
+	for _, snapshot := range enabledSnapshots(skills) {
+		if !snapshot.Withheld {
+			loadable = append(loadable, snapshot)
+		}
+	}
+	return loadable
 }
