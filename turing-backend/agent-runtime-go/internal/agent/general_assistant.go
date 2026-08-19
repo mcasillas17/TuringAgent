@@ -290,6 +290,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		}
 		var turnText strings.Builder
 		var calls []llm.ToolCall
+		finishReason := ""
 	stream:
 		for {
 			var event llm.StreamEvent
@@ -327,6 +328,8 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				}
 			case "tool_call":
 				calls = append(calls, event.ToolCalls...)
+			case "completed":
+				finishReason = event.FinishReason
 			case "error":
 				code := event.Code
 				if code == "" {
@@ -348,6 +351,21 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		if errors.Is(modelErr, context.DeadlineExceeded) {
 			return emitRunFailed(emit, job, "model_timeout", modelErr.Error(), !successfulToolSideEffect)
 		}
+		if finishReason == "length" {
+			setting := maxOutputTokensSetting(provider)
+			if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP, map[string]any{
+				"note": fmt.Sprintf(
+					"Model stopped after reaching the configured %d-token output limit. Increase %s if the selected model supports a longer answer.",
+					provider.MaxOutputTokens(),
+					setting,
+				),
+				"reason":          "model_output_limit",
+				"maxOutputTokens": provider.MaxOutputTokens(),
+				"setting":         setting,
+			})); err != nil {
+				return err
+			}
+		}
 		if len(calls) == 0 {
 			if strings.TrimSpace(content.String()) == "" {
 				if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA, map[string]any{
@@ -356,6 +374,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				})); err != nil {
 					return err
 				}
+
 				content.Reset()
 				content.WriteString(emptyFinalFallback)
 			}
@@ -441,6 +460,17 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			}
 			return completeRun(emit, job, content.String())
 		}
+	}
+}
+
+func maxOutputTokensSetting(provider llm.Provider) string {
+	switch provider.ID() {
+	case "ollama":
+		return "OLLAMA_MAX_OUTPUT_TOKENS"
+	case "openai_compatible":
+		return "OPENAI_MAX_OUTPUT_TOKENS"
+	default:
+		return "the provider max-output setting"
 	}
 }
 

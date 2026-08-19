@@ -454,31 +454,127 @@ func TestExecuteEmitsEachChangedOmissionSetBeforeItsDispatch(t *testing.T) {
 				updatesBeforeRequest,
 			)
 		}
-		var last omissionSet
-		emittedIndex := 0
-		for _, request := range provider.requests {
-			current := omissionSet{}
-			for _, message := range request.Messages {
-				if strings.HasPrefix(message.Content, `{"contextBudget":{"omitted":true`) {
-					current.results++
-				}
-			}
-			for _, message := range history {
-				if !containsMessageContent(request.Messages, message.Content) {
-					current.history++
-				}
-			}
-			if emittedIndex == 0 || current != last {
-				if emittedIndex >= len(emitted) || emitted[emittedIndex] != current {
-					t.Fatalf("notice sets = %#v, request omission set = %#v", emitted, current)
-				}
-				emittedIndex++
-				last = current
+	}
+	var last omissionSet
+	emittedIndex := 0
+	for _, request := range provider.requests {
+		current := omissionSet{}
+		for _, message := range request.Messages {
+			if strings.HasPrefix(message.Content, `{"contextBudget":{"omitted":true`) {
+				current.results++
 			}
 		}
-		if emittedIndex != len(emitted) {
-			t.Fatalf("notice sets = %#v, only %d matched request omissions", emitted, emittedIndex)
+		for _, message := range history {
+			if !containsMessageContent(request.Messages, message.Content) {
+				current.history++
+			}
 		}
+		if emittedIndex == 0 || current != last {
+			if emittedIndex >= len(emitted) || emitted[emittedIndex] != current {
+				t.Fatalf("notice sets = %#v, request omission set = %#v", emitted, current)
+			}
+			emittedIndex++
+			last = current
+		}
+	}
+	if emittedIndex != len(emitted) {
+		t.Fatalf("notice sets = %#v, only %d matched request omissions", emitted, emittedIndex)
+	}
+}
+
+func TestExecuteNoticesWhenOllamaReachesConfiguredOutputLimit(t *testing.T) {
+	provider := &scriptedProvider{events: []llm.StreamEvent{
+		{Type: "delta", Text: "partial answer"},
+		{Type: "completed", FinishReason: "length"},
+	}}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
+		},
+		fakeMessageClient{},
+		&GeneralAssistantTools{},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	noticeIndex, completionIndex := -1, -1
+	for index, update := range updates {
+		if completed := update.GetRunCompleted(); completed != nil {
+			completionIndex = index
+		}
+		event := update.GetEvent()
+		if event == nil || event.Type != turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
+			continue
+		}
+		payload := event.GetPayload().AsMap()
+		if payload["reason"] != "model_output_limit" {
+			continue
+		}
+		noticeIndex = index
+		if payload["maxOutputTokens"] != float64(llm.DefaultMaxOutputTokens) {
+			t.Fatalf("maxOutputTokens = %#v, want %d", payload["maxOutputTokens"], llm.DefaultMaxOutputTokens)
+		}
+		note, _ := payload["note"].(string)
+		if !strings.Contains(note, "OLLAMA_MAX_OUTPUT_TOKENS") {
+			t.Fatalf("notice = %q, want Ollama configuration guidance", note)
+		}
+	}
+	if noticeIndex < 0 || completionIndex < 0 || noticeIndex >= completionIndex {
+		t.Fatalf("notice/completion indices = %d/%d, want notice before successful completion", noticeIndex, completionIndex)
+	}
+}
+
+func TestExecuteNoticesLengthLimitedToolTurnBeforeRunningTool(t *testing.T) {
+	provider := &queuedProvider{responses: [][]llm.StreamEvent{
+		{
+			{Type: "tool_call", ToolCalls: []llm.ToolCall{{
+				ID: "call_1", Name: "system.read", Arguments: map[string]any{},
+			}}},
+			{Type: "completed", FinishReason: "length"},
+		},
+		{
+			{Type: "delta", Text: "done"},
+			{Type: "completed", FinishReason: "stop"},
+		},
+	}}
+	noticeSeen := false
+	toolExecutedAfterNotice := false
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{"name": "system.read"}},
+		callFunc: func(context.Context, string, map[string]any) (map[string]any, error) {
+			toolExecutedAfterNotice = noticeSeen
+			return map[string]any{"ok": true}, nil
+		},
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
+		},
+		fakeMessageClient{},
+		&GeneralAssistantTools{
+			SystemMCP: client,
+			Runner:    &tools.Runner{PostBeacon: allowToolCall},
+		},
+	)
+
+	var updates []*turingv1.RuntimeUpdate
+	if err := assistant.Execute(context.Background(), testJob(), func(update *turingv1.RuntimeUpdate) error {
+		updates = append(updates, update)
+		event := update.GetEvent()
+		if event == nil {
+			return nil
+		}
+		payload := event.GetPayload().AsMap()
+		if event.Type == turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP &&
+			payload["reason"] == "model_output_limit" {
+			noticeSeen = true
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !noticeSeen || !toolExecutedAfterNotice {
+		t.Fatalf("noticeSeen/toolExecutedAfterNotice = %v/%v; updates=%#v", noticeSeen, toolExecutedAfterNotice, updates)
 	}
 }
 
