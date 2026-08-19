@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -563,4 +564,41 @@ func assertEnvValue(t *testing.T, env, name, want string) {
 		}
 	}
 	t.Fatalf("%s missing from .env:\n%s", name, env)
+}
+
+// The key that seals third-party credentials has to exist before anyone can
+// connect an account, and it belongs in .env with the other secrets rather
+// than in the database it protects.
+func TestInitGeneratesAnIntegrationKeyOfTheRightShape(t *testing.T) {
+	result := runInit(t, "501", "20", "")
+
+	value := envValue(t, result.env, "TURING_INTEGRATION_KEY")
+	if len(value) != 64 {
+		t.Fatalf("TURING_INTEGRATION_KEY = %q (%d chars), want 64 hex characters", value, len(value))
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		t.Fatalf("TURING_INTEGRATION_KEY is not hex: %v", err)
+	}
+}
+
+// Re-running init.sh must not rotate it: a new key would make every stored
+// credential unreadable, and the accounts would silently stop working.
+func TestInitKeepsAnExistingIntegrationKey(t *testing.T) {
+	existing := strings.Repeat("ab", 32)
+
+	result := runInit(t, "501", "20", "TURING_INTEGRATION_KEY="+existing+"\n")
+
+	assertEnvValue(t, result.env, "TURING_INTEGRATION_KEY", existing)
+}
+
+func envValue(t *testing.T, env, name string) string {
+	t.Helper()
+	prefix := name + "="
+	for _, line := range strings.Split(env, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimPrefix(line, prefix)
+		}
+	}
+	t.Fatalf("%s missing from .env:\n%s", name, env)
+	return ""
 }

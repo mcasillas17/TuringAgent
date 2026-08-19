@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/features/chat/chat_screen.dart';
 import 'package:turing_flutter_app/features/workspace/agents_page.dart';
 import 'package:turing_flutter_app/features/workspace/session_agent_bar.dart';
+import 'package:turing_flutter_app/features/workspace/integrations_page.dart';
 import 'package:turing_flutter_app/features/workspace/session_skills_bar.dart';
 import 'package:turing_flutter_app/features/workspace/skills_page.dart';
 import 'package:turing_flutter_app/features/workspace/workspace_pages.dart';
@@ -21,6 +22,8 @@ import 'package:turing_flutter_app/networking/auth_storage.dart';
 import 'package:turing_flutter_app/networking/event_source.dart';
 import 'package:turing_flutter_app/ui/shell/responsive_shell.dart';
 import 'package:turing_flutter_app/ui/shell/shell_destination.dart';
+
+import '../support/no_integrations_api.dart';
 
 /// Wide enough to keep the sidebar beside the conversation.
 const Size _desktop = Size(1400, 900);
@@ -462,7 +465,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(Drawer), findsNothing);
-      expect(find.byType(PlannedDestinationPage), findsOneWidget);
+      expect(find.byType(IntegrationsPage), findsOneWidget);
     });
 
     testWidgets('above the breakpoint the sidebar is always present', (
@@ -606,14 +609,14 @@ void main() {
 
       await tester.tap(find.text('Integrations'));
       await tester.pumpAndSettle();
-      expect(find.byType(PlannedDestinationPage), findsOneWidget);
+      expect(find.byType(IntegrationsPage), findsOneWidget);
 
       // With no conversations to tap, this header is the only way back that
       // does not create something.
       await tester.tap(find.text('Chats'));
       await tester.pumpAndSettle();
 
-      expect(find.byType(PlannedDestinationPage), findsNothing);
+      expect(find.byType(IntegrationsPage), findsNothing);
       expect(find.text('Ask Turing anything'), findsOneWidget);
       expect(api.createSessionTitles, isEmpty, reason: 'nothing was created');
     });
@@ -745,7 +748,7 @@ Future<void> _pumpShell(
   await tester.pumpAndSettle();
 }
 
-class _FakeApi implements TuringApi {
+class _FakeApi with NoIntegrationsApi implements TuringApi {
   List<Session> sessions = [
     Session(
       sessionId: 'sess_existing',

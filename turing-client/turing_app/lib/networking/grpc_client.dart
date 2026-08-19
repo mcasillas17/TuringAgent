@@ -13,6 +13,8 @@ import '../generated/turing/v1/chat.pbgrpc.dart' as chatgrpc;
 import '../generated/turing/v1/common.pb.dart' as commonpb;
 import '../generated/turing/v1/events.pb.dart' as eventpb;
 import '../generated/turing/v1/events.pbgrpc.dart' as eventgrpc;
+import '../generated/turing/v1/integrations.pb.dart' as integrationpb;
+import '../generated/turing/v1/integrations.pbgrpc.dart' as integrationgrpc;
 import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
 import '../generated/turing/v1/sessions.pbgrpc.dart' as sessiongrpc;
 import '../generated/turing/v1/skills.pb.dart' as skillpb;
@@ -20,6 +22,7 @@ import '../generated/turing/v1/skills.pbgrpc.dart' as skillgrpc;
 import '../models/agent_descriptor.dart';
 import '../models/external_agent.dart';
 import '../models/grpc_mappers.dart';
+import '../models/integration.dart';
 import '../models/message.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
@@ -91,6 +94,10 @@ class TuringGrpcApi implements ClosableTuringApi {
       _channel,
       options: options,
     );
+    _integrations = integrationgrpc.IntegrationServiceClient(
+      _channel,
+      options: options,
+    );
   }
 
   final String baseUrl;
@@ -103,6 +110,7 @@ class TuringGrpcApi implements ClosableTuringApi {
   late final approvalgrpc.ApprovalServiceClient _approvals;
   late final skillgrpc.SkillServiceClient _skills;
   late final agentgrpc.ExternalAgentServiceClient _externalAgents;
+  late final integrationgrpc.IntegrationServiceClient _integrations;
 
   GrpcAuthMetadata get _metadata => GrpcAuthMetadata(apiKey: apiKey);
 
@@ -477,6 +485,63 @@ class TuringGrpcApi implements ClosableTuringApi {
   ExternalAgent? _sessionAgentOrLocal(agentpb.SessionAgentResponse response) {
     if (!response.hasAgent()) return null;
     return GrpcMappers.externalAgentToModel(response.agent);
+  }
+
+  @override
+  Future<IntegrationCatalogue> listIntegrationProviders() async {
+    final response = await _integrations.listProviders(
+      integrationpb.ListProvidersRequest(),
+    );
+    return GrpcMappers.catalogueToModel(response);
+  }
+
+  @override
+  Future<List<IntegrationConnection>> listConnections() async {
+    final response = await _integrations.listConnections(
+      integrationpb.ListConnectionsRequest(),
+    );
+    return response.connections.map(GrpcMappers.connectionToModel).toList();
+  }
+
+  @override
+  Future<IntegrationConnection> connectAccount({
+    required IntegrationProviderKind provider,
+    required String displayName,
+    required String credential,
+    required bool consentAcknowledged,
+    String accountLabel = '',
+    String endpoint = '',
+  }) async {
+    // The only request in this client that carries a secret, and it only goes
+    // one way. Nothing here logs the request.
+    final response = await _integrations.connectAccount(
+      integrationpb.ConnectAccountRequest(
+        provider: GrpcMappers.integrationProviderFromModel(provider),
+        displayName: displayName,
+        accountLabel: accountLabel,
+        endpoint: endpoint,
+        credential: credential,
+        consentAcknowledged: consentAcknowledged,
+      ),
+    );
+    return GrpcMappers.connectionToModel(response);
+  }
+
+  @override
+  Future<IntegrationConnection> revokeConnection({
+    required String connectionId,
+  }) async {
+    final response = await _integrations.revokeConnection(
+      integrationpb.RevokeConnectionRequest(connectionId: connectionId),
+    );
+    return GrpcMappers.connectionToModel(response);
+  }
+
+  @override
+  Future<void> deleteConnection({required String connectionId}) async {
+    await _integrations.deleteConnection(
+      integrationpb.DeleteConnectionRequest(connectionId: connectionId),
+    );
   }
 
   @override

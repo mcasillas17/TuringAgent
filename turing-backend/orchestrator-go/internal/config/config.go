@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/secretbox"
 )
 
 const (
@@ -19,14 +21,18 @@ type Config struct {
 	MCPSystemTokenGeneral string
 	MCPFilesTokenGeneral  string
 	ApprovalJWTSecret     string
-	PublicPort            int
-	InternalPort          int
-	DatabasePath          string
-	OllamaBaseURL         string
-	OllamaModel           string
-	OpenAIBaseURL         string
-	OpenAIAPIKey          string
-	OpenAIModel           string
+	// IntegrationKey seals third-party credentials before they are stored.
+	// Optional: when it is empty, connecting an account is refused with a
+	// reason rather than the credential being stored in the clear.
+	IntegrationKey string
+	PublicPort     int
+	InternalPort   int
+	DatabasePath   string
+	OllamaBaseURL  string
+	OllamaModel    string
+	OpenAIBaseURL  string
+	OpenAIAPIKey   string
+	OpenAIModel    string
 	// AgentCredentialNames is the set of credential names an external agent may
 	// refer to — names only. The keys themselves are decoded, counted and
 	// dropped: the orchestrator never calls a third-party API, so holding the
@@ -122,6 +128,15 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// Validated at startup rather than at the first connect attempt: a key
+	// that is present but malformed is a misconfiguration, and finding out
+	// about it while pasting a token is finding out too late.
+	integrationKey := env["TURING_INTEGRATION_KEY"]
+	if integrationKey != "" {
+		if _, err := secretbox.ParseKey(integrationKey); err != nil {
+			return Config{}, fmt.Errorf("invalid TURING_INTEGRATION_KEY: %w", err)
+		}
+	}
 	publicPort, err := intValue("ORCHESTRATOR_PUBLIC_PORT", 3000)
 	if err != nil {
 		return Config{}, err
@@ -179,6 +194,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		MCPSystemTokenGeneral:    systemToken,
 		MCPFilesTokenGeneral:     filesToken,
 		ApprovalJWTSecret:        approvalSecret,
+		IntegrationKey:           integrationKey,
 		PublicPort:               publicPort,
 		InternalPort:             internalPort,
 		DatabasePath:             stringValue("DATABASE_PATH", "/app/data/turing.db"),

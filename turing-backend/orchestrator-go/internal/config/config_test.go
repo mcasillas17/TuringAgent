@@ -141,3 +141,53 @@ func cloneEnv(source map[string]string) map[string]string {
 	}
 	return cloned
 }
+
+// The integration key is optional: an existing install that has never run the
+// updated init.sh still starts, and only connecting an account is refused.
+func TestLoadFromMapLeavesTheIntegrationKeyOptional(t *testing.T) {
+	cfg, err := LoadFromMap(baseIntegrationEnv(nil))
+	if err != nil {
+		t.Fatalf("LoadFromMap returned error: %v", err)
+	}
+	if cfg.IntegrationKey != "" {
+		t.Fatalf("IntegrationKey = %q, want empty", cfg.IntegrationKey)
+	}
+}
+
+// A key that is present but the wrong shape fails at startup, not while
+// somebody is pasting a token into the connect dialog.
+func TestLoadFromMapRejectsAMalformedIntegrationKey(t *testing.T) {
+	for _, bad := range []string{"not-hex", strings.Repeat("a", 32), strings.Repeat("a", 63)} {
+		_, err := LoadFromMap(baseIntegrationEnv(map[string]string{"TURING_INTEGRATION_KEY": bad}))
+		if err == nil {
+			t.Fatalf("LoadFromMap accepted TURING_INTEGRATION_KEY = %q", bad)
+		}
+		if !strings.Contains(err.Error(), "TURING_INTEGRATION_KEY") {
+			t.Fatalf("error = %v, want it to name the variable", err)
+		}
+	}
+
+	cfg, err := LoadFromMap(baseIntegrationEnv(map[string]string{
+		"TURING_INTEGRATION_KEY": strings.Repeat("ab", 32),
+	}))
+	if err != nil {
+		t.Fatalf("LoadFromMap rejected a valid key: %v", err)
+	}
+	if cfg.IntegrationKey != strings.Repeat("ab", 32) {
+		t.Fatalf("IntegrationKey = %q, want it carried through", cfg.IntegrationKey)
+	}
+}
+
+func baseIntegrationEnv(extra map[string]string) map[string]string {
+	env := map[string]string{
+		"TURING_CLIENT_API_KEY":      "client-key",
+		"TURING_INTERNAL_TOKEN":      "internal-token",
+		"MCP_SYSTEM_TOKEN_GENERAL":   "system-token",
+		"MCP_FILES_TOKEN_GENERAL":    "files-token",
+		"TURING_APPROVAL_JWT_SECRET": "approval-secret",
+	}
+	for key, value := range extra {
+		env[key] = value
+	}
+	return env
+}

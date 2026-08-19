@@ -2,10 +2,9 @@ import 'package:flutter/material.dart';
 
 /// The top-level places in the app.
 ///
-/// Three of these are backed by something the backend actually does today
-/// ([chats], [mcps], [agents]); the rest are named here because they are the
-/// intended shape of the product, and their views say plainly that they are
-/// not built yet. A destination that looks functional but silently does
+/// Most of these are backed by something the backend actually does today; the
+/// rest are named here because they are the intended shape of the product,
+/// and their views say plainly that they are not built yet. A destination that looks functional but silently does
 /// nothing is worse than one that admits what it is.
 enum ShellDestination {
   chats(
@@ -24,14 +23,7 @@ enum ShellDestination {
     label: 'Integrations',
     icon: Icons.extension_outlined,
     selectedIcon: Icons.extension,
-    implemented: false,
-    summary:
-        'Accounts and services the agent can reach on your behalf — mail, '
-        'calendars, repositories, issue trackers.',
-    blockedOn:
-        'Nothing here yet holds credentials for a third party. That needs a '
-        'place to keep tokens, a consent step before first use, and a way to '
-        'revoke access — none of which should be improvised.',
+    implemented: true,
   ),
   mcps(
     label: 'MCPs',

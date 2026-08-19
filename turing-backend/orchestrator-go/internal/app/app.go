@@ -12,11 +12,13 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/secretbox"
 	agentsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/agents"
 	approvalsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/approvals"
 	auditsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/audit"
 	chatsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/chat"
 	eventsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
+	integrationsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/integrations"
 	runtimesvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/runtime"
 	sessionsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/sessions"
 	skillsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/skills"
@@ -93,6 +95,19 @@ func New(cfg config.Config) (*App, error) {
 	eventService := eventsvc.NewServer(repo, eventBus)
 	chatService := chatsvc.New(repo, eventBus, runtimeService, cfg.OllamaModel, cfg.OpenAIModel)
 	auditService := auditsvc.New(repo)
+	// A missing key is not fatal: everything else still works, and the
+	// integrations service says so on its catalogue and refuses to connect an
+	// account, rather than storing a credential in the clear. A malformed key
+	// never reaches here — config rejects it.
+	var integrationSealer *secretbox.Sealer
+	if cfg.IntegrationKey != "" {
+		integrationSealer, err = secretbox.FromHexKey(cfg.IntegrationKey)
+		if err != nil {
+			_ = database.Close()
+			return nil, fmt.Errorf("initialize integration key: %w", err)
+		}
+	}
+	integrationService := integrationsvc.New(repo, integrationSealer, auditService)
 	healthService := &HealthServer{schemaVersion: schemaVersion}
 	persistAuthFailure := func(ctx context.Context, failure auth.Failure) error {
 		return auditService.Record(ctx, failure.RequestID, failure.ActorType, failure.Peer, "auth.failed", failure.Method, map[string]any{
@@ -133,6 +148,9 @@ func New(cfg config.Config) (*App, error) {
 	// Public only, for the same reason: the runtime is handed the destination
 	// on the job it claims and never asks for it.
 	turingv1.RegisterExternalAgentServiceServer(publicServer, agentService)
+	// Public only: nothing internal reads a connection today, and the sealed
+	// credential is not served to anyone at all.
+	turingv1.RegisterIntegrationServiceServer(publicServer, integrationService)
 	turingv1.RegisterEventServiceServer(publicServer, eventService)
 	turingv1.RegisterChatServiceServer(publicServer, chatService)
 	turingv1.RegisterApprovalServiceServer(publicServer, approvalsvc.NewPublicServer(approvalService))
