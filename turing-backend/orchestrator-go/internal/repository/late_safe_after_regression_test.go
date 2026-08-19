@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 )
@@ -84,7 +85,7 @@ func TestLateCompletedAfterCorrectsConsumedApprovalTerminalCleanup(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ApproveApproval(ctx, approval.ApprovalID, "approval-token", ""); err != nil {
+	if _, err := repo.ApproveApproval(ctx, approval.ApprovalID, "approval-token", sql.NullString{}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repo.ConsumeApprovalWithEvent(ctx, approval.ApprovalID, ""); err != nil {

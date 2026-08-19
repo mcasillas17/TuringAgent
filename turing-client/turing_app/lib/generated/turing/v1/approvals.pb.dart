@@ -80,6 +80,8 @@ class ApproveApprovalRequest extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   void clearApprovalId() => $_clearField(1);
 
+  /// Optional by convention. Proto3 scalar presence is not enabled, so omission
+  /// and an explicitly empty value are both persisted as an empty human comment.
   @$pb.TagNumber(2)
   $core.String get comment => $_getSZ(1);
   @$pb.TagNumber(2)
@@ -148,6 +150,8 @@ class DenyApprovalRequest extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   void clearApprovalId() => $_clearField(1);
 
+  /// Optional by convention. Proto3 scalar presence is not enabled, so omission
+  /// and an explicitly empty value are both persisted as an empty human reason.
   @$pb.TagNumber(2)
   $core.String get reason => $_getSZ(1);
   @$pb.TagNumber(2)

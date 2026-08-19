@@ -89,6 +89,15 @@ Approval-gated file writes use a two-step flow:
 5. `mcp-files` calls `ApprovalService.ConsumeApproval` over internal gRPC using `authorization: Bearer ${TURING_INTERNAL_TOKEN}`.
 6. The file write proceeds only if the consume response is `APPROVAL_STATUS_CONSUMED`.
 
+Human approve comments and deny reasons are stored with the decision in
+separate nullable columns. Proto3 omission and explicit empty input both become
+an empty human rationale; `NULL` is reserved for paths that did not carry a
+human field, such as automation and expiration. Audit keeps only `toolName` and
+a UTF-8-safe 512-byte rationale copy in human approval decision rows, never
+approval credentials or tool arguments. Separate `tool.call.before` and
+`tool.call.after` audit rows still record tool arguments. Whole-session deletion
+removes the approval and scrubs all of those surviving audit payloads.
+
 The default approval lifetime is 65 seconds, the runtime waits up to 71 seconds
 to observe approval or persisted expiry, each MCP request is bounded to 30
 seconds, and the complete tool lifecycle remains bounded to 180 seconds.

@@ -188,6 +188,21 @@ The runtime and file server both enforce ordering:
    mutated. A later write failure does not restore the single-use approval.
 8. The runtime posts an AFTER beacon with the result or failure.
 
+Human approval comments and denial reasons are durable decision evidence. The
+orchestrator stores them in separate nullable columns in the same transaction as
+the decision. The existing proto3 scalar fields do not expose presence, so an
+omitted human field and an explicitly empty one both persist as `""`; `NULL`
+means that a non-human path, such as an unattended approval or expiration, never
+carried that field. Non-empty rationale must be valid UTF-8 and is limited to
+4096 bytes.
+
+Human decision audit payloads use an allowlist: `toolName` plus the matching
+`comment` or `reason`. The audit copy is truncated on a UTF-8 boundary to 512
+bytes and gets a `commentTruncated` or `reasonTruncated` marker when shortened.
+Approval tokens, JTIs, argument hashes, and tool arguments are never copied into
+this payload. Deleting the session cascades the approval row and replaces
+correlated audit payloads, including rationale, with `{"scrubbed":true}`.
+
 The canonical argument digest is `sha256:<hex>` over Go `encoding/json`
 output with HTML escaping disabled and the trailing newline removed. Map keys
 are deterministically sorted by the encoder.

@@ -80,9 +80,11 @@ func (ApprovalStatus) EnumDescriptor() ([]byte, []int) {
 }
 
 type ApproveApprovalRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ApprovalId    string                 `protobuf:"bytes,1,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
-	Comment       string                 `protobuf:"bytes,2,opt,name=comment,proto3" json:"comment,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	ApprovalId string                 `protobuf:"bytes,1,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
+	// Optional by convention. Proto3 scalar presence is not enabled, so omission
+	// and an explicitly empty value are both persisted as an empty human comment.
+	Comment       string `protobuf:"bytes,2,opt,name=comment,proto3" json:"comment,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -132,9 +134,11 @@ func (x *ApproveApprovalRequest) GetComment() string {
 }
 
 type DenyApprovalRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ApprovalId    string                 `protobuf:"bytes,1,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
-	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	ApprovalId string                 `protobuf:"bytes,1,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
+	// Optional by convention. Proto3 scalar presence is not enabled, so omission
+	// and an explicitly empty value are both persisted as an empty human reason.
+	Reason        string `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

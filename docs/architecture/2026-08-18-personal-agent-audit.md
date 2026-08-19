@@ -238,7 +238,13 @@ Task IDs are stable references, not priority numbers. Delivery order follows `do
 **Scope:** Add decision-comment and denial-reason storage; consume `ApproveApprovalRequest.comment` and `DenyApprovalRequest.reason`; expose both through audit with empty and absent values distinguished.  
 **Likely files:** approvals schema/proto/service/repository and audit mapping.  
 **Acceptance:** A comment or reason survives restart; repository/service tests prove both request fields are consumed and included in the corresponding audit record. TUR-013 later makes that record user-readable.  
-**Dependencies:** None. The request fields exist today, but no database column or production handler stores them.
+**Dependencies:** None.
+**Status:** Implemented. Human decisions persist the matching field atomically;
+because the existing proto3 scalars have no presence, omitted and explicit empty
+input share the documented empty-string representation, while non-human paths
+remain `NULL`. Audit receives only a bounded rationale copy and `toolName`, and
+session deletion still scrubs that payload. TUR-013 remains the public audit
+read path and TUR-021 remains the approval preview/diff UX.
 
 #### TUR-007 — Derive stable session titles from the first user turn
 
