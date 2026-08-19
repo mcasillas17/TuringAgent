@@ -2,13 +2,21 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 )
 
-const maxProviderRequestBytes = 16 * 1024 * 1024
+const (
+	maxProviderRequestBytes    = 16 * 1024 * 1024
+	DefaultContextWindowTokens = 32768
+	DefaultMaxOutputTokens     = 2048
+	MaxContextWindowTokens     = 16 * 1024 * 1024
+)
 
 type ChatMessage struct {
+	MessageID  string     `json:"-"`
 	Role       string     `json:"role"`
 	Content    string     `json:"content"`
 	Name       string     `json:"name,omitempty"`
@@ -78,7 +86,46 @@ type StreamEvent struct {
 
 type Provider interface {
 	ID() string
+	ContextWindowTokens() int
+	MaxOutputTokens() int
+	EstimateRequestTokens(ChatRequest) (int, error)
 	StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error)
+}
+
+// EstimateRequestTokens applies the runtime's conservative admission rule: one
+// serialized UTF-8 request byte counts as one upper-bound token estimate.
+// Providers must estimate their exact wire representation.
+func EstimateRequestTokens(provider Provider, req ChatRequest) (int, error) {
+	if ProviderIsNil(provider) {
+		return 0, errors.New("model provider is unavailable")
+	}
+	return provider.EstimateRequestTokens(req)
+}
+
+func ProviderIsNil(provider Provider) bool {
+	if provider == nil {
+		return true
+	}
+	value := reflect.ValueOf(provider)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+func ValidateContextLimits(contextWindowTokens, maxOutputTokens int) error {
+	if contextWindowTokens <= 0 || contextWindowTokens > MaxContextWindowTokens {
+		return fmt.Errorf("context window tokens must be between 1 and %d", MaxContextWindowTokens)
+	}
+	if maxOutputTokens <= 0 {
+		return errors.New("max output tokens must be greater than 0")
+	}
+	if maxOutputTokens >= contextWindowTokens {
+		return errors.New("max output tokens must be less than context window tokens")
+	}
+	return nil
 }
 
 type providerRequestSizeError struct {
@@ -99,80 +146,16 @@ func (providerRequestSizeError) Retryable() bool { return false }
 
 func marshalProviderRequest(
 	provider string,
-	messages []ChatMessage,
-	marshal func([]ChatMessage) ([]byte, error),
+	marshal func() ([]byte, error),
 ) ([]byte, error) {
-	body, err := marshal(messages)
+	body, err := marshal()
 	if err != nil {
 		return nil, err
 	}
-	if len(body) <= maxProviderRequestBytes {
-		return body, nil
-	}
-
-	preservedPrefix, dropEnds := historyDropBoundaries(messages)
-	if len(dropEnds) == 0 {
+	if len(body) > maxProviderRequestBytes {
 		return nil, providerRequestSizeError{provider: provider, encodedBytes: len(body)}
 	}
-
-	var bounded []byte
-	oversizedBytes := len(body)
-	for low, high := 0, len(dropEnds)-1; low <= high; {
-		middle := low + (high-low)/2
-		candidate := trimHistory(messages, preservedPrefix, dropEnds[middle])
-		candidateBody, err := marshal(candidate)
-		if err != nil {
-			return nil, err
-		}
-		if len(candidateBody) <= maxProviderRequestBytes {
-			bounded = candidateBody
-			high = middle - 1
-			continue
-		}
-		oversizedBytes = len(candidateBody)
-		low = middle + 1
-	}
-	if bounded != nil {
-		return bounded, nil
-	}
-	return nil, providerRequestSizeError{provider: provider, encodedBytes: oversizedBytes}
-}
-
-func historyDropBoundaries(messages []ChatMessage) (int, []int) {
-	currentUser := -1
-	for index := len(messages) - 1; index >= 0; index-- {
-		if messages[index].Role == "user" {
-			currentUser = index
-			break
-		}
-	}
-	if currentUser <= 0 {
-		return 0, nil
-	}
-
-	preservedPrefix := 0
-	for preservedPrefix < currentUser && messages[preservedPrefix].Role == "system" {
-		preservedPrefix++
-	}
-	if preservedPrefix == currentUser {
-		return 0, nil
-	}
-
-	var dropEnds []int
-	for index := preservedPrefix + 1; index < currentUser; index++ {
-		if messages[index].Role == "user" {
-			dropEnds = append(dropEnds, index)
-		}
-	}
-	dropEnds = append(dropEnds, currentUser)
-	return preservedPrefix, dropEnds
-}
-
-func trimHistory(messages []ChatMessage, preservedPrefix int, dropEnd int) []ChatMessage {
-	trimmed := make([]ChatMessage, 0, len(messages)-(dropEnd-preservedPrefix))
-	trimmed = append(trimmed, messages[:preservedPrefix]...)
-	trimmed = append(trimmed, messages[dropEnd:]...)
-	return trimmed
+	return body, nil
 }
 
 func providerHTTPErrorCode(status int) string {

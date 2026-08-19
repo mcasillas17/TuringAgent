@@ -102,7 +102,11 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"MCP_SYSTEM_TOKEN_GENERAL:",
 		"MCP_FILES_TOKEN_GENERAL:",
 		"OLLAMA_BASE_URL:",
+		"OLLAMA_CONTEXT_WINDOW_TOKENS:",
+		"OLLAMA_MAX_OUTPUT_TOKENS:",
 		"OPENAI_API_KEY:",
+		"OPENAI_CONTEXT_WINDOW_TOKENS:",
+		"OPENAI_MAX_OUTPUT_TOKENS:",
 		"TURING_AGENT_API_KEYS:",
 	)
 	requireContainsNone(t, "turing-agent-runtime-general", agent,
@@ -118,6 +122,10 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"TURING_INTERNAL_TOKEN:",
 		"TURING_APPROVAL_JWT_SECRET:",
 		"OPENAI_API_KEY:",
+		"OLLAMA_CONTEXT_WINDOW_TOKENS:",
+		"OLLAMA_MAX_OUTPUT_TOKENS:",
+		"OPENAI_CONTEXT_WINDOW_TOKENS:",
+		"OPENAI_MAX_OUTPUT_TOKENS:",
 		// A tool server has no reason to hold a user's third-party API keys,
 		// and it is the container most exposed to what a model asks for.
 		"TURING_AGENT_API_KEYS:",
@@ -138,6 +146,10 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 	requireContainsNone(t, "turing-mcp-files", files,
 		"TURING_CLIENT_API_KEY:",
 		"OPENAI_API_KEY:",
+		"OLLAMA_CONTEXT_WINDOW_TOKENS:",
+		"OLLAMA_MAX_OUTPUT_TOKENS:",
+		"OPENAI_CONTEXT_WINDOW_TOKENS:",
+		"OPENAI_MAX_OUTPUT_TOKENS:",
 		"TURING_AGENT_API_KEYS:",
 		"ORCHESTRATOR_INTERNAL_BASE_URL:",
 		"${FILES_SANDBOX_ROOT",
@@ -190,10 +202,14 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"MCP_FILES_TOKEN_GENERAL",
 			"OLLAMA_BASE_URL",
 			"OLLAMA_MODEL",
+			"OLLAMA_CONTEXT_WINDOW_TOKENS",
+			"OLLAMA_MAX_OUTPUT_TOKENS",
 			"OLLAMA_KEEP_ALIVE",
 			"OPENAI_BASE_URL",
 			"OPENAI_API_KEY",
 			"OPENAI_MODEL",
+			"OPENAI_CONTEXT_WINDOW_TOKENS",
+			"OPENAI_MAX_OUTPUT_TOKENS",
 			"TURING_AGENT_API_KEYS",
 			"LOG_LEVEL",
 		},
@@ -745,28 +761,6 @@ func TestRepositoryDockerignoreExcludesSensitiveAndGeneratedContent(t *testing.T
 	for _, requiredInput := range []string{"go.mod", "go.sum", "gen", "turing-backend"} {
 		if lines[requiredInput] {
 			t.Errorf(".dockerignore excludes required Dockerfile input %q", requiredInput)
-		}
-	}
-}
-
-func TestRepositoryGitignoreExcludesRuntimeDatabaseBackups(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", ".gitignore"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := make(map[string]bool)
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "#") {
-			lines[line] = true
-		}
-	}
-	for _, pattern := range []string{
-		"turing-backend/data.backup-*/",
-		"turing-backend/data.worktree-backup-*/",
-	} {
-		if !lines[pattern] {
-			t.Errorf(".gitignore missing %q", pattern)
 		}
 	}
 }

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -23,7 +24,7 @@ func routedJob() *turingv1.AgentJob {
 }
 
 func TestExternalAgentProviderResolvesTheNamedKey(t *testing.T) {
-	resolve := NewExternalAgentProviderFunc(map[string]string{"claude": "sk-test"}, http.DefaultClient)
+	resolve := NewExternalAgentProviderFunc(map[string]string{"claude": "sk-test"}, 8192, 512, http.DefaultClient)
 
 	provider, err := resolve(routedJob().GetExternalAgent())
 	if err != nil {
@@ -39,7 +40,7 @@ func TestExternalAgentProviderResolvesTheNamedKey(t *testing.T) {
 // The error has to name the credential and where to put it. "401 unauthorized"
 // from a vendor sends the user to the wrong place entirely.
 func TestExternalAgentProviderSaysWhichKeyIsMissing(t *testing.T) {
-	resolve := NewExternalAgentProviderFunc(map[string]string{"openai": "sk-other"}, http.DefaultClient)
+	resolve := NewExternalAgentProviderFunc(map[string]string{"openai": "sk-other"}, 8192, 512, http.DefaultClient)
 
 	_, err := resolve(routedJob().GetExternalAgent())
 	if err == nil {
@@ -60,7 +61,7 @@ func TestExternalAgentProviderSaysWhichKeyIsMissing(t *testing.T) {
 // An agent with no endpoint would otherwise be handed to the HTTP client as an
 // empty base URL, which fails somewhere far less legible than here.
 func TestExternalAgentProviderRefusesATargetWithNoEndpoint(t *testing.T) {
-	resolve := NewExternalAgentProviderFunc(map[string]string{"claude": "sk-test"}, http.DefaultClient)
+	resolve := NewExternalAgentProviderFunc(map[string]string{"claude": "sk-test"}, 8192, 512, http.DefaultClient)
 
 	_, err := resolve(&turingv1.ExternalAgentTarget{
 		DisplayName:   "Claude",
@@ -77,7 +78,7 @@ func TestExternalAgentProviderRefusesATargetWithNoEndpoint(t *testing.T) {
 // nil means "not routed", so a nil target reaching the resolver at all is a
 // wiring mistake, not a run that should quietly proceed locally.
 func TestExternalAgentProviderRefusesANilTarget(t *testing.T) {
-	resolve := NewExternalAgentProviderFunc(map[string]string{"claude": "sk-test"}, http.DefaultClient)
+	resolve := NewExternalAgentProviderFunc(map[string]string{"claude": "sk-test"}, 8192, 512, http.DefaultClient)
 
 	if _, err := resolve(nil); err == nil {
 		t.Fatal("resolve succeeded with a nil target")
@@ -203,7 +204,7 @@ func TestRoutedRunFailsWithTheResolverError(t *testing.T) {
 		fakeMessageClient{},
 		&GeneralAssistantTools{Runner: &tools.Runner{PostBeacon: allowToolCall}},
 	)
-	assistant.SetExternalAgentProvider(NewExternalAgentProviderFunc(nil, http.DefaultClient))
+	assistant.SetExternalAgentProvider(NewExternalAgentProviderFunc(nil, 8192, 512, http.DefaultClient))
 
 	updates := collectUpdates(t, assistant, routedJob())
 
@@ -211,9 +212,60 @@ func TestRoutedRunFailsWithTheResolverError(t *testing.T) {
 	if failure == nil {
 		t.Fatal("no run failure emitted")
 	}
+
 	if !strings.Contains(failure.GetMessage(), "TURING_AGENT_API_KEYS") {
 		t.Fatalf("message = %q, want the resolver's explanation", failure.GetMessage())
 	}
+}
+
+func TestExternalAgentProviderUsesConfiguredContextWindow(t *testing.T) {
+	resolve := NewExternalAgentProviderFunc(
+		map[string]string{"claude": "sk-test"},
+		4096,
+		512,
+		http.DefaultClient,
+	)
+
+	provider, err := resolve(routedJob().GetExternalAgent())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := provider.ContextWindowTokens(); got != 4096 {
+		t.Fatalf("context window = %d, want 4096", got)
+	}
+}
+
+func TestRoutedExternalAgentNoticesOpenAIOutputLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(
+			"data: " + `{"choices":[{"index":0,"delta":{"content":"partial"}}]}` + "\n\n" +
+				"data: " + `{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}` + "\n\n",
+		))
+	}))
+	t.Cleanup(server.Close)
+	provider, err := llm.NewOpenAICompatibleWithLimits(server.URL, "", server.Client(), 4096, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assistant := NewGeneralAssistant(nil, fakeMessageClient{}, &GeneralAssistantTools{})
+	assistant.SetExternalAgentProvider(func(*turingv1.ExternalAgentTarget) (llm.Provider, error) {
+		return provider, nil
+	})
+
+	updates := collectUpdates(t, assistant, routedJob())
+
+	for _, update := range updates {
+		event := update.GetEvent()
+		if event == nil || event.Type != turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
+			continue
+		}
+		payload := event.GetPayload().AsMap()
+		if payload["reason"] == "model_output_limit" &&
+			payload["setting"] == "OPENAI_MAX_OUTPUT_TOKENS" {
+			return
+		}
+	}
+	t.Fatalf("routed output-limit notice missing from updates: %#v", updates)
 }
 
 // The user opted ONE conversation into leaving. Recall draws on conversations
