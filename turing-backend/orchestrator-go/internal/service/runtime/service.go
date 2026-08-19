@@ -44,7 +44,7 @@ type Server struct {
 	mu                 sync.Mutex
 	workers            map[string]*worker
 	availabilityMu     sync.Mutex
-	unavailablePending map[string]string
+	unavailablePending map[string]unavailableRoutingState
 	workerStreams      sync.WaitGroup
 	toolsMu            sync.Mutex
 	toolsets           map[string]workerToolset
@@ -79,6 +79,7 @@ type worker struct {
 	capabilities   *registeredWorkerCapabilities
 	maxConcurrent  int
 	assignments    map[string]assignment
+	pendingClaims  int
 	updateMu       sync.Mutex
 	mu             sync.Mutex
 	closed         bool
@@ -201,7 +202,7 @@ func NewWithConfig(repo *repository.Repository, bus *events.Bus, dispatch Dispat
 	server := &Server{
 		repo: repo, bus: bus, approvals: approvals, audit: auditsvc.New(repo),
 		workers:            map[string]*worker{},
-		unavailablePending: map[string]string{},
+		unavailablePending: map[string]unavailableRoutingState{},
 		toolsets:           map[string]workerToolset{},
 		dispatch:           dispatch,
 	}
@@ -291,7 +292,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 		s.removeWorkerRegistration(ready.GetWorkerId(), connectedWorker)
 		return status.Error(codes.Internal, "persist worker tool capabilities")
 	}
-	if err := s.refreshPendingCapabilityState(ctx, "worker connected", ready.GetWorkerId(), false, true); err != nil {
+	if err := s.refreshPendingCapabilityState(ctx, "worker connected", ready.GetWorkerId(), true, true); err != nil {
 		_ = connectedWorker.close()
 		s.removeWorkerRegistration(ready.GetWorkerId(), connectedWorker)
 		_ = s.removeDiscoveredTools(ready.GetWorkerId(), connectedWorker)
@@ -660,6 +661,11 @@ func (s *Server) renewWorkerLeases(ctx context.Context, workerID string, connect
 		reconciled = reconciled || result.Requeued || result.Cleared || released
 	}
 	revived := connectedWorker.recordHeartbeat(time.Now().UTC(), s.dispatch.LeaseDuration)
+	if revived {
+		if err := s.refreshPendingCapabilityState(ctx, "worker heartbeat restored", workerID, false, true); err != nil {
+			return err
+		}
+	}
 	if reconciled || revived {
 		return s.DispatchPending(ctx)
 	}
@@ -868,6 +874,10 @@ func (s *Server) DispatchPending(ctx context.Context) error {
 	return nil
 }
 
+func (s *Server) RefreshPendingRoutingState(ctx context.Context, cause string) error {
+	return s.refreshPendingCapabilityState(ctx, cause, "", true, true)
+}
+
 func (s *Server) RecoverOrphanedAssignments(ctx context.Context) error {
 	recoveryCtx, cancel := withDefaultTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -911,6 +921,9 @@ func (s *Server) RecoverOrphanedAssignments(ctx context.Context) error {
 			s.publishEvent(event)
 		}
 		recovered = recovered || result.Requeued || result.Cleared || released
+	}
+	if err := s.refreshPendingCapabilityState(recoveryCtx, "worker heartbeat expired", "", true, false); err != nil {
+		return err
 	}
 	if recovered {
 		return s.DispatchPending(recoveryCtx)
@@ -981,38 +994,92 @@ func (s *Server) hasLiveAssignment(candidate repository.Assignment) bool {
 
 func (s *Server) dispatchToWorker(ctx context.Context, workerID string, worker *worker) (assigned bool, noJob bool, err error) {
 	worker.mu.Lock()
-	defer worker.mu.Unlock()
 	if worker.closed ||
 		worker.lastHeartbeat.IsZero() ||
 		!time.Now().UTC().Before(worker.lastHeartbeat.Add(s.dispatch.LeaseDuration)) ||
-		len(worker.assignments) >= worker.maxConcurrent {
+		len(worker.assignments)+worker.pendingClaims >= worker.maxConcurrent {
+		worker.mu.Unlock()
 		return false, false, nil
 	}
+	capabilities := worker.capabilities
+	worker.pendingClaims++
+	worker.mu.Unlock()
 	job, err := s.repo.ClaimNextCompatibleJobWithLimit(
 		ctx,
 		"general_assistant",
 		workerID,
 		s.dispatch.MaxConcurrentRuns,
 		s.dispatch.LeaseDuration,
+		repositoryRoutingCapabilities(capabilities),
 		func(route repository.RoutingRequirements) bool {
-			return workerCapabilitiesSupportRoute(worker.capabilities, route)
+			return workerCapabilitiesSupportRoute(capabilities, route)
 		},
 	)
+	worker.mu.Lock()
+	worker.pendingClaims--
 	if err != nil {
+		worker.mu.Unlock()
 		return false, false, err
 	}
 	if job.JobID == "" {
+		worker.mu.Unlock()
 		return false, true, nil
 	}
 	claimedAssignment := assignment{jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID}
+	if worker.closed ||
+		worker.lastHeartbeat.IsZero() ||
+		!time.Now().UTC().Before(worker.lastHeartbeat.Add(s.dispatch.LeaseDuration)) ||
+		len(worker.assignments) >= worker.maxConcurrent ||
+		!workerCapabilitiesSupportRoute(worker.capabilities, routingRequirementsForJob(job)) {
+		worker.mu.Unlock()
+		if err := s.requeueAssignments([]assignment{claimedAssignment}); err != nil {
+			return false, false, err
+		}
+		return false, false, nil
+	}
 	worker.assignments[job.RunID] = claimedAssignment
 	select {
 	case worker.commands <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: mapJob(job)}}:
+		worker.mu.Unlock()
 		s.publishEvent(job.StartedEvent)
 		return true, false, nil
 	case <-ctx.Done():
 		delete(worker.assignments, job.RunID)
+		worker.mu.Unlock()
 		return false, false, errors.Join(ctx.Err(), s.requeueAssignments([]assignment{claimedAssignment}))
+	}
+}
+
+func repositoryRoutingCapabilities(capabilities *registeredWorkerCapabilities) *repository.WorkerRoutingCapabilities {
+	if capabilities == nil {
+		return &repository.WorkerRoutingCapabilities{}
+	}
+	models := make([]repository.RoutingModelCapability, 0, len(capabilities.models))
+	for _, model := range capabilities.models {
+		models = append(models, repository.RoutingModelCapability{
+			Provider: model.provider, Model: model.model, MaxContextTokens: model.maxContextTokens,
+		})
+	}
+	tools := make([]string, 0, len(capabilities.tools))
+	for tool := range capabilities.tools {
+		tools = append(tools, tool)
+	}
+	sort.Strings(tools)
+	return &repository.WorkerRoutingCapabilities{
+		Models: models, Tools: tools, MaxConcurrentRuns: capabilities.maxConcurrentRuns,
+		SupportsExternalAgents: capabilities.supportsExternalAgents,
+	}
+}
+
+func routingRequirementsForJob(job repository.Job) repository.RoutingRequirements {
+	return repository.RoutingRequirements{
+		AgentID:                        job.AgentID,
+		ModelProvider:                  job.ModelProvider,
+		Model:                          job.Model,
+		RequestedTools:                 job.RequestedTools,
+		RequiredContextTokens:          job.RequiredContextTokens,
+		MinimumWorkerMaxConcurrentRuns: job.MinimumWorkerMaxConcurrentRuns,
+		ExternalAgent:                  job.ExternalAgent != nil,
 	}
 }
 

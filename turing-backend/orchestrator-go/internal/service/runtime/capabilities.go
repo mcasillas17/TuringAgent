@@ -189,6 +189,11 @@ type routingCandidate struct {
 	capabilities *registeredWorkerCapabilities
 }
 
+type unavailableRoutingState struct {
+	fingerprint   string
+	lossPublished bool
+}
+
 func workerCapabilitiesSupportRoute(capabilities *registeredWorkerCapabilities, route repository.RoutingRequirements) bool {
 	if capabilities == nil {
 		return false
@@ -350,7 +355,7 @@ func (s *Server) refreshPendingCapabilityState(
 	if err != nil {
 		return err
 	}
-	nextUnavailable := make(map[string]string)
+	nextUnavailable := make(map[string]unavailableRoutingState)
 	workByRunID := make(map[string]repository.PendingRoutingWork, len(work))
 	for _, item := range work {
 		workByRunID[item.RunID] = item
@@ -366,8 +371,13 @@ func (s *Server) refreshPendingCapabilityState(
 			return routingErr
 		}
 		fingerprint := routingRequirementsFingerprint(item.Requirements)
-		nextUnavailable[item.RunID] = fingerprint
-		if !publishLosses || s.unavailablePending[item.RunID] == fingerprint {
+		previous := s.unavailablePending[item.RunID]
+		state := unavailableRoutingState{
+			fingerprint:   fingerprint,
+			lossPublished: previous.fingerprint == fingerprint && previous.lossPublished,
+		}
+		nextUnavailable[item.RunID] = state
+		if !publishLosses || state.lossPublished {
 			continue
 		}
 		label := routingRequirementLabel(detail.GetKind())
@@ -396,6 +406,8 @@ func (s *Server) refreshPendingCapabilityState(
 			return err
 		}
 		s.publishEvent(event)
+		state.lossPublished = true
+		nextUnavailable[item.RunID] = state
 	}
 	if publishRestorations {
 		restoredRunIDs := make([]string, 0)

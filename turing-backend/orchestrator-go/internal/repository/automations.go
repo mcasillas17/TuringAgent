@@ -491,11 +491,20 @@ func (r *Repository) ClaimDueAutomation(ctx context.Context, at time.Time, defau
 		}, true, nil
 	}
 	if defaults.ValidateRouting != nil {
-		err := defaults.ValidateRouting(ctx, RoutingRequirements{
-			AgentID:       defaults.AgentID,
-			ModelProvider: defaults.ModelProvider,
-			Model:         defaults.Model,
-		})
+		requirements := RoutingRequirements{
+			AgentID: defaults.AgentID, ModelProvider: defaults.ModelProvider, Model: defaults.Model,
+		}
+		if sessionID.Valid {
+			resolved, err := resolveEnqueueRouteTx(ctx, tx, EnqueueUserMessageInput{
+				SessionID: sessionID.String, AgentID: defaults.AgentID,
+				ModelProvider: defaults.ModelProvider, Model: defaults.Model,
+			})
+			if err != nil {
+				return AutomationFire{}, false, err
+			}
+			requirements = resolved.requirements
+		}
+		err := defaults.ValidateRouting(ctx, requirements)
 		if err != nil {
 			result, err := tx.ExecContext(ctx, `
 				UPDATE automations

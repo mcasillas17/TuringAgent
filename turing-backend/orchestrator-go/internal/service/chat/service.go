@@ -32,6 +32,7 @@ type runtimeDispatcher interface {
 	DispatchPending(context.Context) error
 	CancelRun(context.Context, string, string)
 	ValidateRouting(context.Context, repository.RoutingRequirements) error
+	RefreshPendingRoutingState(context.Context, string) error
 }
 
 func New(repo *repository.Repository, bus *events.Bus, runtimeServer runtimeDispatcher, ollamaModel string, openAIModel string) *Server {
@@ -126,6 +127,10 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 		return err
 	}
 	if s.runtime != nil {
+		if err := s.runtime.RefreshPendingRoutingState(context.WithoutCancel(ctx), "message enqueued"); err != nil {
+			s.cancelRun(enqueued.RunID)
+			return status.Error(codes.Internal, "refresh pending routing state failed")
+		}
 		if err := s.runtime.DispatchPending(context.WithoutCancel(ctx)); err != nil {
 			s.cancelRun(enqueued.RunID)
 			if ctx.Err() != nil {

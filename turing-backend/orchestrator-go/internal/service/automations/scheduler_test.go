@@ -32,6 +32,10 @@ func (d *countingDispatcher) DispatchPending(context.Context) error {
 	return d.err
 }
 
+func (d *countingDispatcher) RefreshPendingRoutingState(context.Context, string) error {
+	return nil
+}
+
 func (d *countingDispatcher) count() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()

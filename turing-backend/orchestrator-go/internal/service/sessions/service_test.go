@@ -167,6 +167,16 @@ func TestSessionServiceServesPublicReadEndpoints(t *testing.T) {
 	if cfg.Providers[1].GetEnabled() || len(cfg.Providers[1].GetModels()) != 0 {
 		t.Fatalf("unadvertised OpenAI provider = %+v, want disabled with no models", cfg.Providers[1])
 	}
+	h.capabilities.providers[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA] = []*turingv1.ModelCapability{{
+		Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "live-fallback",
+	}}
+	cfg, err = client.GetConfig(ctx, &turingv1.GetConfigRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Providers[0].GetDefaultModel(); got != "live-fallback" {
+		t.Fatalf("default model = %q, want advertised fallback", got)
+	}
 
 	agents, err := client.ListAgents(ctx, &turingv1.ListAgentsRequest{})
 	if err != nil {

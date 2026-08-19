@@ -655,6 +655,63 @@ func TestUnavailableAutomationRouteAdvancesWithoutPersistingWork(t *testing.T) {
 	}
 }
 
+func TestAutomationValidatesItsExistingExternalAgentRoute(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	automation := mustCreateDueAutomation(t, repo, ctx, "External route", everyFiveMinutes())
+	firstDue := mustParse(t, automation.NextDueAt)
+	first, found, err := repo.ClaimDueAutomation(ctx, firstDue, automationDefaults)
+	if err != nil || !found || first.Skipped {
+		t.Fatalf("first claim = %+v, found %v, err %v", first, found, err)
+	}
+	finishRun(t, repo, first.RunID)
+	reloaded, err := repo.GetAutomation(ctx, automation.AutomationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, err := repo.CreateExternalAgent(ctx, ExternalAgentInput{
+		DisplayName: "External", Provider: "anthropic", BaseURL: "https://example.com",
+		Model: "external-model", CredentialRef: "external",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetSessionAgent(ctx, reloaded.SessionID, agent.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	countsBefore := map[string]int{}
+	for _, table := range []string{"sessions", "messages", "agent_runs", "jobs"} {
+		var count int
+		if err := repo.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		countsBefore[table] = count
+	}
+	defaults := automationDefaults
+	defaults.ValidateRouting = func(_ context.Context, route RoutingRequirements) error {
+		if !route.ExternalAgent || route.ModelProvider != "openai_compatible" || route.Model != "external-model" {
+			t.Fatalf("validated route = %+v, want frozen external-agent destination", route)
+		}
+		return errors.New("external agents unavailable")
+	}
+
+	fire, found, err := repo.ClaimDueAutomation(ctx, mustParse(t, reloaded.NextDueAt), defaults)
+	if err != nil || !found {
+		t.Fatalf("external route claim = found %v err %v", found, err)
+	}
+	if !fire.Skipped || fire.SkippedReason != SkippedRoutingUnavailable || fire.RunID != "" {
+		t.Fatalf("fire = %+v, want routing-unavailable skip", fire)
+	}
+	for table, before := range countsBefore {
+		var after int
+		if err := repo.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&after); err != nil {
+			t.Fatal(err)
+		}
+		if after != before {
+			t.Fatalf("%s count = %d, want unchanged %d", table, after, before)
+		}
+	}
+}
+
 // A row whose schedule cannot be read has no next due time to advance to, so
 // leaving it enabled would re-select it on every tick and starve every
 // automation behind it.

@@ -45,13 +45,21 @@ func TestClaimNextCompatibleJobSkipsUnsupportedPendingWork(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	compatibilityChecks := 0
 	claimed, err := repo.ClaimNextCompatibleJobWithLimit(
 		ctx,
 		"general_assistant",
 		"worker-system",
 		0,
 		time.Hour,
+		&WorkerRoutingCapabilities{
+			Models: []RoutingModelCapability{{
+				Provider: "ollama", Model: "llama3.2", MaxContextTokens: 4096,
+			}},
+			Tools: []string{"system/system.time"}, MaxConcurrentRuns: 2,
+		},
 		func(route RoutingRequirements) bool {
+			compatibilityChecks++
 			return route.ModelProvider == "ollama" &&
 				route.Model == "llama3.2" &&
 				len(route.RequestedTools) == 1 &&
@@ -66,6 +74,9 @@ func TestClaimNextCompatibleJobSkipsUnsupportedPendingWork(t *testing.T) {
 	}
 	if claimed.JobID != supported.JobID {
 		t.Fatalf("claimed job = %q, want compatible %q; unsupported was %q", claimed.JobID, supported.JobID, unsupported.JobID)
+	}
+	if compatibilityChecks != 1 {
+		t.Fatalf("compatibility checks = %d, want SQL routing filter to return only the compatible candidate", compatibilityChecks)
 	}
 	if len(claimed.RequestedTools) != 1 || claimed.RequestedTools[0] != "system/system.time" ||
 		claimed.RequiredContextTokens != 4096 || claimed.MinimumWorkerMaxConcurrentRuns != 2 {

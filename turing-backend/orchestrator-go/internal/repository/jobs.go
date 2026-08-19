@@ -35,6 +35,19 @@ type RoutingRequirements struct {
 	ExternalAgent                  bool
 }
 
+type RoutingModelCapability struct {
+	Provider         string
+	Model            string
+	MaxContextTokens int
+}
+
+type WorkerRoutingCapabilities struct {
+	Models                 []RoutingModelCapability
+	Tools                  []string
+	MaxConcurrentRuns      int
+	SupportsExternalAgents bool
+}
+
 type PendingRoutingWork struct {
 	RunID        string
 	Requirements RoutingRequirements
@@ -260,6 +273,46 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 	return result, nil
 }
 
+type resolvedEnqueueRoute struct {
+	requirements      RoutingRequirements
+	routedAgent       ExternalAgent
+	externalTarget    *ExternalAgentTarget
+	externalAgentName sql.NullString
+	externalAgentHost sql.NullString
+}
+
+func resolveEnqueueRouteTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMessageInput) (resolvedEnqueueRoute, error) {
+	resolved := resolvedEnqueueRoute{requirements: RoutingRequirements{
+		AgentID:                        input.AgentID,
+		ModelProvider:                  input.ModelProvider,
+		Model:                          input.Model,
+		RequestedTools:                 append([]string(nil), input.RequestedTools...),
+		RequiredContextTokens:          input.RequiredContextTokens,
+		MinimumWorkerMaxConcurrentRuns: input.MinimumWorkerMaxConcurrentRuns,
+	}}
+	routedAgent, routed, err := sessionExternalAgentTx(ctx, tx, input.SessionID)
+	if err != nil {
+		return resolvedEnqueueRoute{}, err
+	}
+	if !routed {
+		return resolved, nil
+	}
+	resolved.requirements.ModelProvider = "openai_compatible"
+	resolved.requirements.Model = routedAgent.Model
+	resolved.requirements.ExternalAgent = true
+	resolved.routedAgent = routedAgent
+	resolved.externalTarget = &ExternalAgentTarget{
+		DisplayName:   routedAgent.DisplayName,
+		BaseURL:       routedAgent.BaseURL,
+		CredentialRef: routedAgent.CredentialRef,
+	}
+	resolved.externalAgentName = sql.NullString{String: routedAgent.DisplayName, Valid: true}
+	if parsed, parseErr := url.Parse(routedAgent.BaseURL); parseErr == nil && parsed.Host != "" {
+		resolved.externalAgentHost = sql.NullString{String: parsed.Host, Valid: true}
+	}
+	return resolved, nil
+}
+
 // enqueueUserMessageTx is the whole of "a message arrives and a run is
 // queued", minus the transaction around it. It is separate so the scheduler
 // can claim a due automation and queue its run in ONE transaction: a crash
@@ -269,39 +322,17 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 	// Resolve the effective destination before writing anything. A conversation
 	// routed to an external agent overrides request provider/model fields, and
 	// routing validation must evaluate that same frozen destination.
-	routedAgent, routed, err := sessionExternalAgentTx(ctx, tx, input.SessionID)
+	resolvedRoute, err := resolveEnqueueRouteTx(ctx, tx, input)
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
-	modelProvider, model := input.ModelProvider, input.Model
-	var externalTarget *ExternalAgentTarget
-	var externalAgentName, externalAgentHost sql.NullString
-	if routed {
-		modelProvider, model = "openai_compatible", routedAgent.Model
-		externalTarget = &ExternalAgentTarget{
-			DisplayName:   routedAgent.DisplayName,
-			BaseURL:       routedAgent.BaseURL,
-			CredentialRef: routedAgent.CredentialRef,
-		}
-		externalAgentName = sql.NullString{String: routedAgent.DisplayName, Valid: true}
-		if parsed, parseErr := url.Parse(routedAgent.BaseURL); parseErr == nil && parsed.Host != "" {
-			externalAgentHost = sql.NullString{String: parsed.Host, Valid: true}
-		}
-	}
 	if input.ValidateRouting != nil {
-		err := input.ValidateRouting(ctx, RoutingRequirements{
-			AgentID:                        input.AgentID,
-			ModelProvider:                  modelProvider,
-			Model:                          model,
-			RequestedTools:                 append([]string(nil), input.RequestedTools...),
-			RequiredContextTokens:          input.RequiredContextTokens,
-			MinimumWorkerMaxConcurrentRuns: input.MinimumWorkerMaxConcurrentRuns,
-			ExternalAgent:                  routed,
-		})
+		err := input.ValidateRouting(ctx, resolvedRoute.requirements)
 		if err != nil {
 			return EnqueueUserMessageResult{}, err
 		}
 	}
+	modelProvider, model := resolvedRoute.requirements.ModelProvider, resolvedRoute.requirements.Model
 
 	created := time.Now().UTC()
 	userMessageID := ids.New("msg")
@@ -345,7 +376,7 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 	//
 	// The host rather than the base URL: a URL can carry a path, a query, and
 	// from a careless paste a credential. Only the recipient is worth keeping.
-	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status, model_provider, model_name, external_agent_name, external_agent_host, created_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`, runID, input.SessionID, userMessageID, assistantMessageID, input.AgentID, traceID, modelProvider, model, externalAgentName, externalAgentHost, createdAt); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status, model_provider, model_name, external_agent_name, external_agent_host, created_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`, runID, input.SessionID, userMessageID, assistantMessageID, input.AgentID, traceID, modelProvider, model, resolvedRoute.externalAgentName, resolvedRoute.externalAgentHost, createdAt); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	// Name the conversation after the first thing said in it, and mark the
@@ -410,7 +441,7 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 		// Frozen for the same reason the skills are: re-pointing or deleting
 		// the agent while this job waits must not redirect a message the user
 		// already sent, and must not send it to a company they did not pick.
-		"externalAgent": externalTarget,
+		"externalAgent": resolvedRoute.externalTarget,
 	})
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
@@ -447,13 +478,13 @@ func enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMess
 	// of those, which this project ranks as the worst kind of defect. "Sending
 	// … leaves" is true in both outcomes.
 	var routingEvents []Event
-	if routed {
+	if resolvedRoute.requirements.ExternalAgent {
 		notice, err := appendRunNoticeTx(ctx, tx, input.SessionID, runID, traceID,
-			"Sending to "+flattenNoticeText(routedAgent.DisplayName)+" — this message leaves your machine",
+			"Sending to "+flattenNoticeText(resolvedRoute.routedAgent.DisplayName)+" — this message leaves your machine",
 			map[string]any{
-				"externalAgent": routedAgent.DisplayName,
-				"endpoint":      ExternalAgentEndpointHost(routedAgent.BaseURL),
-				"model":         routedAgent.Model,
+				"externalAgent": resolvedRoute.routedAgent.DisplayName,
+				"endpoint":      ExternalAgentEndpointHost(resolvedRoute.routedAgent.BaseURL),
+				"model":         resolvedRoute.routedAgent.Model,
 			}, createdAt)
 		if err != nil {
 			return EnqueueUserMessageResult{}, err
@@ -475,7 +506,7 @@ func (r *Repository) ClaimNextJob(ctx context.Context, agentID string, leaseOwne
 }
 
 func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, leaseOwner string, globalLimit int, leaseDuration time.Duration) (Job, error) {
-	return r.ClaimNextCompatibleJobWithLimit(ctx, agentID, leaseOwner, globalLimit, leaseDuration, nil)
+	return r.ClaimNextCompatibleJobWithLimit(ctx, agentID, leaseOwner, globalLimit, leaseDuration, nil, nil)
 }
 
 func (r *Repository) ClaimNextCompatibleJobWithLimit(
@@ -484,6 +515,7 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 	leaseOwner string,
 	globalLimit int,
 	leaseDuration time.Duration,
+	capabilities *WorkerRoutingCapabilities,
 	compatible func(RoutingRequirements) bool,
 ) (Job, error) {
 	pickedUpAt := now()
@@ -513,6 +545,7 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 			return Job{}, nil
 		}
 	}
+	routingFilter, routingArgs := claimRoutingFilterSQL(capabilities)
 	claimQuery := `
 		SELECT
 			j.id,
@@ -547,10 +580,12 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 								AND earlier_job.status NOT IN ('completed', 'failed', 'cancelled')
 						)
 					)
-			)
+			)` + routingFilter + `
 		ORDER BY ` + sqliteTimestampNanos("j.created_at") + `, j.id
 	`
-	rows, err := tx.QueryContext(ctx, claimQuery, agentID)
+	queryArgs := []any{agentID}
+	queryArgs = append(queryArgs, routingArgs...)
+	rows, err := tx.QueryContext(ctx, claimQuery, queryArgs...)
 	if err != nil {
 		return Job{}, err
 	}
@@ -664,6 +699,57 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 		return Job{}, err
 	}
 	return job, nil
+}
+
+func claimRoutingFilterSQL(capabilities *WorkerRoutingCapabilities) (string, []any) {
+	if capabilities == nil {
+		return "", nil
+	}
+	const externalAgentType = `json_type(j.payload_json, '$.externalAgent')`
+	var destinations []string
+	var args []any
+	if capabilities.SupportsExternalAgents {
+		destinations = append(destinations, externalAgentType+` = 'object'`)
+	}
+	for _, model := range capabilities.Models {
+		destinations = append(destinations, `(
+			COALESCE(`+externalAgentType+`, 'null') <> 'object'
+			AND r.model_provider = ?
+			AND r.model_name = ?
+			AND COALESCE(CAST(json_extract(j.payload_json, '$.requiredContextTokens') AS INTEGER), 0) <= ?
+		)`)
+		args = append(args, model.Provider, model.Model, model.MaxContextTokens)
+	}
+	if len(destinations) == 0 {
+		destinations = append(destinations, "0")
+	}
+	filter := `
+		AND (` + strings.Join(destinations, " OR ") + `)
+		AND MAX(
+			COALESCE(CAST(json_extract(j.payload_json, '$.minimumWorkerMaxConcurrentRuns') AS INTEGER), 0),
+			1
+		) <= ?`
+	args = append(args, capabilities.MaxConcurrentRuns)
+	if len(capabilities.Tools) == 0 {
+		filter += `
+		AND NOT EXISTS (
+			SELECT 1
+			FROM json_each(COALESCE(json_extract(j.payload_json, '$.requestedTools'), json('[]')))
+		)`
+		return filter, args
+	}
+	placeholders := make([]string, len(capabilities.Tools))
+	for index, tool := range capabilities.Tools {
+		placeholders[index] = "?"
+		args = append(args, tool)
+	}
+	filter += `
+		AND NOT EXISTS (
+			SELECT 1
+			FROM json_each(COALESCE(json_extract(j.payload_json, '$.requestedTools'), json('[]'))) requested_tool
+			WHERE requested_tool.value NOT IN (` + strings.Join(placeholders, ", ") + `)
+		)`
+	return filter, args
 }
 
 func (r *Repository) ListPendingRoutingWork(ctx context.Context) ([]PendingRoutingWork, error) {

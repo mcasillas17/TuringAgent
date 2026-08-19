@@ -18,6 +18,7 @@ const maxFiresPerTick = 20
 // needs from it: telling a worker there is work.
 type Dispatcher interface {
 	DispatchPending(context.Context) error
+	RefreshPendingRoutingState(context.Context, string) error
 }
 
 // Scheduler creates the runs nobody asked for.
@@ -101,6 +102,10 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 			}
 		}
 		if s.dispatcher != nil {
+			if err := s.dispatcher.RefreshPendingRoutingState(ctx, "automation enqueued"); err != nil {
+				log.Printf("refresh automation routing state for run %s: %v", fire.RunID, err)
+				continue
+			}
 			if err := s.dispatcher.DispatchPending(ctx); err != nil {
 				// The run is queued and durable; a worker will pick it up on
 				// the next dispatch either way. Reported, not fatal, so one

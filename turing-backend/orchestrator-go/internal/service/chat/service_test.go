@@ -160,6 +160,10 @@ func (d *dispatchContextRecorder) ValidateRouting(context.Context, repository.Ro
 	return nil
 }
 
+func (d *dispatchContextRecorder) RefreshPendingRoutingState(context.Context, string) error {
+	return nil
+}
+
 type cancellingChatStream struct {
 	grpc.ServerStream
 	ctx    context.Context

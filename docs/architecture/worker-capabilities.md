@@ -47,6 +47,8 @@ stream's `registration_id` plus its connection object.
 - A complete capability update replaces only the matching registration's snapshot.
 - Heartbeats refresh the connection timestamp but do not mutate capabilities.
 - Dispatch and public configuration views ignore entries past the heartbeat lease.
+- Recovery ticks publish capability-loss notices for queued routes whose worker
+  heartbeat lease expires; a later heartbeat publishes restoration before dispatch.
 - Disconnect or lease recovery removes only the matching owner, so teardown from an
   old stream cannot erase a replacement.
 - Reconnect with a fresh registration restores the entry from the new ready snapshot.
@@ -82,7 +84,10 @@ check.
 The accepted requirements are frozen into the job payload. Dispatch claims only jobs
 that match the selected worker's current snapshot. A route that was valid when
 accepted therefore cannot be handed to an incompatible worker after capabilities
-change.
+change. Coarse provider/model/context/tool/capacity predicates run in SQLite before
+the final typed matcher, so an incompatible backlog is not decoded and rescanned for
+every worker. Dispatch reserves worker capacity without holding the worker lock while
+waiting for SQLite.
 
 Scheduled runs use the same validator before creating a session, message, run, or job.
 An unavailable occurrence advances its schedule and records `routing_unavailable`
@@ -103,7 +108,10 @@ reducing capacity or removing a model does not cancel work already executing.
 Stream disconnect reconciliation continues to own notices and retries for assigned
 runs.
 
-The before/after comparison prevents duplicate notices from idempotent snapshots.
+The before/after comparison tracks whether each loss was actually published, so a
+restart seed cannot suppress the first actionable notice. Enqueue callers recheck
+pending routes after commit to close the capability-loss race between validation and
+persistence. Idempotent snapshots do not duplicate notices.
 On orchestrator restart the empty registry is restored by worker reconnects; queued
 routes receive restoration notices and become dispatchable again.
 
@@ -114,6 +122,8 @@ registry snapshots:
 
 - providers remain listed but are enabled only when a live worker advertises them;
 - provider entries expose the currently advertised exact models and context ceilings;
+- each provider default is the configured model when live, otherwise the first
+  deterministic live model (or empty when the provider is unavailable);
 - known agents remain listed with an explicit availability flag;
 - tools continue to come from the union of live worker tool snapshots.
 

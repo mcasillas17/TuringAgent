@@ -149,13 +149,13 @@ func (s *Server) GetConfig(context.Context, *turingv1.GetConfigRequest) (*turing
 		{
 			Provider:     turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
 			Enabled:      len(advertised[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA]) > 0,
-			DefaultModel: s.cfg.OllamaModel,
+			DefaultModel: advertisedDefaultModel(s.cfg.OllamaModel, advertised[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA]),
 			Models:       advertised[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA],
 		},
 		{
 			Provider:     turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
 			Enabled:      len(advertised[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE]) > 0,
-			DefaultModel: s.cfg.OpenAIModel,
+			DefaultModel: advertisedDefaultModel(s.cfg.OpenAIModel, advertised[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE]),
 			Models:       advertised[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE],
 		},
 	}
@@ -164,6 +164,18 @@ func (s *Server) GetConfig(context.Context, *turingv1.GetConfigRequest) (*turing
 		ApprovalsEnabled: s.cfg.ApprovalJWTSecret != "",
 		FilesMcpEnabled:  s.cfg.MCPFilesTokenGeneral != "",
 	}, nil
+}
+
+func advertisedDefaultModel(configured string, advertised []*turingv1.ModelCapability) string {
+	for _, model := range advertised {
+		if model.GetModel() == configured {
+			return configured
+		}
+	}
+	if len(advertised) > 0 {
+		return advertised[0].GetModel()
+	}
+	return ""
 }
 
 func (s *Server) ListAgents(context.Context, *turingv1.ListAgentsRequest) (*turingv1.ListAgentsResponse, error) {
