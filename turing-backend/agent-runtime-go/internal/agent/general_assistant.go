@@ -200,7 +200,11 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		return emitRunFailed(emit, job, "tool_discovery_failed", err.Error(), ToolDiscoveryRetryable(err))
 	}
 	historyMessages := append([]llm.ChatMessage{}, messages...)
-	liveMessages := []llm.ChatMessage{{Role: "user", Content: job.GetUserText()}}
+	liveMessages := []llm.ChatMessage{{
+		MessageID: job.GetUserMessageId(),
+		Role:      "user",
+		Content:   job.GetUserText(),
+	}}
 	// Skills open the request, ahead of the conversation history: they are
 	// standing instructions about how to behave here, not a turn in the
 	// conversation. Applied before recall so that a recalled block, which is

@@ -8,9 +8,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
+	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/memory"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
 )
 
@@ -56,6 +58,18 @@ type preparedCountingRecaller struct {
 	prepareCalls int
 	directCalls  int
 	rankCalls    int
+}
+
+type staticRecallSearcher struct {
+	excerpts []memory.Excerpt
+}
+
+func (s staticRecallSearcher) SearchMessages(
+	context.Context,
+	string,
+	int,
+) ([]memory.Excerpt, error) {
+	return s.excerpts, nil
 }
 
 func (r *preparedCountingRecaller) Recall(
@@ -212,6 +226,36 @@ func TestExecuteRecallsCurrentSessionHistoryOmittedByBudget(t *testing.T) {
 	}
 	if recaller.calls == 0 {
 		t.Fatal("recall was not evaluated against admitted history")
+	}
+	if !containsString(runStepNotes(updates), recallNotice) {
+		t.Fatalf("run notes = %q, want recall attribution", runStepNotes(updates))
+	}
+}
+
+func TestExecuteCurrentTurnIDDoesNotSuppressPagedOlderDuplicate(t *testing.T) {
+	job := testJob()
+	job.UserText = "repeat deployment detail"
+	provider := &budgetCapturingProvider{window: 2048}
+	recaller := memory.NewRecaller(staticRecallSearcher{excerpts: []memory.Excerpt{{
+		MessageID: "msg_older_duplicate",
+		SessionID: job.GetSessionId(),
+		Role:      "user",
+		Content:   job.GetUserText(),
+		CreatedAt: time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC),
+	}}})
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
+		},
+		fakeMessageClient{},
+		&GeneralAssistantTools{Recall: recaller},
+	)
+
+	updates := collectUpdates(t, assistant, job)
+
+	if len(provider.requests) != 1 ||
+		!containsMessageContent(provider.requests[0].Messages, "EARLIER conversations") {
+		t.Fatalf("older duplicate was suppressed by current turn: %#v", provider.requests)
 	}
 	if !containsString(runStepNotes(updates), recallNotice) {
 		t.Fatalf("run notes = %q, want recall attribution", runStepNotes(updates))

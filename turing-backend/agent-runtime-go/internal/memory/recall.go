@@ -245,23 +245,19 @@ func (r *Recaller) PrepareRecall(
 	}
 }
 
-// inContextKeys counts the messages the caller has already placed in the
-// request. Counts matter because distinct current-session rows can have the same
-// role and content; admitting one must not suppress every older duplicate. nil
-// means "the caller did not say", which rank reads as the conservative
-// assumption that the whole current session is present.
-//
-// The key is role plus content because that is all the caller has: its copy of
-// the request is []llm.ChatMessage, which carries no row ids. That is fine for
-// this question — "is this text already in front of the model?" is about the
-// text, not about identity — and it is the opposite of the mistake dedupKey
-// avoids, where the row id exists and must be used. A miss costs one duplicated
-// line; it can never surface a wrong answer.
+// inContextIndex records exact persisted message IDs when available and
+// occurrence counts for live messages that do not have an ID.
 type inContextIndex struct {
 	messageIDs  map[string]bool
 	occurrences map[string]int
 }
 
+// inContextKeys indexes messages the caller has already placed in the request.
+// Exact row identity wins. Role-plus-content counts are only the fallback for a
+// live message without an ID; counts ensure admitting one duplicate does not
+// suppress every older identical row. nil means "the caller did not say", which
+// rank reads as the conservative assumption that the whole current session is
+// present.
 func inContextKeys(messages []llm.ChatMessage) *inContextIndex {
 	if len(messages) == 0 {
 		return nil

@@ -2686,7 +2686,7 @@ func TestGeneralAssistantStreamsDeltasAndCompletesRun(t *testing.T) {
 	}
 	wantMessages := []llm.ChatMessage{
 		{Role: "system", Content: "Be helpful"},
-		{Role: "user", Content: "hi"},
+		{MessageID: "msg_user", Role: "user", Content: "hi"},
 	}
 	if len(provider.requests) != 1 || !reflect.DeepEqual(provider.requests[0].Messages, wantMessages) {
 		t.Fatalf("provider requests = %+v, want messages %+v", provider.requests, wantMessages)
