@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -25,16 +26,21 @@ type countingDispatcher struct {
 	err             error
 	refreshErr      error
 	routableDefault string
+	callOrder       []string
 }
 
 func (d *countingDispatcher) DispatchPending(context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.calls++
+	d.callOrder = append(d.callOrder, "dispatch")
 	return d.err
 }
 
 func (d *countingDispatcher) RefreshPendingRoutingState(context.Context, string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.callOrder = append(d.callOrder, "refresh")
 	return d.refreshErr
 }
 
@@ -49,6 +55,12 @@ func (d *countingDispatcher) count() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.calls
+}
+
+func (d *countingDispatcher) order() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.callOrder...)
 }
 
 type schedulerHarness struct {
@@ -199,6 +211,9 @@ func TestTickUsesLiveRoutableDefaultAndDispatchesAfterNoticeRefreshFailure(t *te
 	}
 	if h.dispatcher.count() != 1 {
 		t.Fatalf("dispatched %d times, want 1 despite notice refresh failure", h.dispatcher.count())
+	}
+	if !slices.Equal(h.dispatcher.order(), []string{"dispatch", "refresh"}) {
+		t.Fatalf("routing calls = %v, want dispatch before advisory refresh", h.dispatcher.order())
 	}
 	fired, err := h.repo.GetAutomation(h.ctx, automation.AutomationID)
 	if err != nil {

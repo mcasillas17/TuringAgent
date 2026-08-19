@@ -132,15 +132,15 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 		return err
 	}
 	if s.runtime != nil {
-		if err := s.runtime.RefreshPendingRoutingState(context.WithoutCancel(ctx), "message enqueued"); err != nil {
-			log.Printf("refresh pending routing state for run %s: %v", enqueued.RunID, err)
-		}
 		if err := s.runtime.DispatchPending(context.WithoutCancel(ctx)); err != nil {
 			s.cancelRun(enqueued.RunID)
 			if ctx.Err() != nil {
 				return status.Error(codes.Canceled, "client cancelled stream")
 			}
 			return status.Error(codes.Internal, "dispatch pending job failed")
+		}
+		if err := s.runtime.RefreshPendingRoutingState(context.WithoutCancel(ctx), "message enqueued"); err != nil {
+			log.Printf("refresh pending routing state for run %s: %v", enqueued.RunID, err)
 		}
 	}
 	lastSent := queuedEvent.Sequence

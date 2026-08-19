@@ -726,6 +726,85 @@ func TestCapabilityChangeDuringClaimRequeuesTheReservedAssignment(t *testing.T) 
 	}
 }
 
+func TestCapabilityFenceRestartsDispatchForWorkerAddedDuringClaim(t *testing.T) {
+	h := newHarness(t)
+	stream := connectWorkerCapabilities(t, h, "worker-claim-fenced", "registration-claim-fenced", modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+	))
+	defer func() { _ = stream.CloseSend() }()
+	session, err := h.repo.CreateSession(context.Background(), "Claim restart")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "route after fence", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := h.database.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitCount := h.database.Stats().WaitCount
+	dispatchDone := make(chan error, 1)
+	go func() { dispatchDone <- h.service.DispatchPending(context.Background()) }()
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for h.database.Stats().WaitCount == waitCount {
+		if time.Now().After(deadline) {
+			_ = tx.Rollback()
+			t.Fatal("dispatch never reached the database wait")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	compatible, _, err := decodeWorkerCapabilities(modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+	))
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	replacement := &worker{
+		commands:       make(chan *turingv1.RuntimeCommand, 1),
+		done:           make(chan struct{}),
+		registrationID: "registration-claim-replacement",
+		capabilities:   compatible,
+		maxConcurrent:  1,
+		lastHeartbeat:  time.Now().UTC(),
+		assignments:    map[string]assignment{},
+	}
+	h.service.mu.Lock()
+	h.service.workers["worker-claim-replacement"] = replacement
+	h.service.mu.Unlock()
+	fenced := h.service.registeredWorker("worker-claim-fenced")
+	unsupported, _, err := decodeWorkerCapabilities(modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, "gpt-4o-mini", 8192, 1,
+	))
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	fenced.mu.Lock()
+	fenced.capabilities = unsupported
+	fenced.mu.Unlock()
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-dispatchDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case command := <-replacement.commands:
+		if command.GetRunAssigned().GetRunId() != enqueued.RunID {
+			t.Fatalf("replacement assignment = %+v, want run %q", command, enqueued.RunID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("capability-fenced claim was stranded instead of restarting dispatch")
+	}
+}
+
 func TestWorkerReconnectRestoresQueuedRouteAndAppendsNotice(t *testing.T) {
 	h := newHarness(t)
 	session, err := h.repo.CreateSession(context.Background(), "Reconnect")

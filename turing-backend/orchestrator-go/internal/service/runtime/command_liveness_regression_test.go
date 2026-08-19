@@ -432,6 +432,48 @@ func TestHeartbeatReconcilesAssignmentThatDatabaseCannotRenew(t *testing.T) {
 	}
 }
 
+func TestHeartbeatRecoveryWaitsForAssignmentDeliveryFence(t *testing.T) {
+	h := newHarness(t)
+	connected := &worker{
+		commands:      make(chan *turingv1.RuntimeCommand, 1),
+		capabilities:  testWorkerCapabilities(1),
+		maxConcurrent: 1,
+		assignments:   map[string]assignment{},
+		lastHeartbeat: time.Now().UTC(),
+	}
+	connected.updateMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			connected.updateMu.Unlock()
+		}
+	}()
+	done := make(chan error, 1)
+	go func() {
+		done <- h.service.renewWorkerLeases(
+			context.Background(),
+			"worker-heartbeat-delivery-fence",
+			connected,
+			&turingv1.RuntimeHeartbeat{WorkerId: "worker-heartbeat-delivery-fence"},
+		)
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("heartbeat recovery crossed the delivery fence: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	connected.updateMu.Unlock()
+	locked = false
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat recovery did not resume after the delivery fence")
+	}
+}
+
 func TestConnectWorkerReplacesExpiredIdleSameIDRegistration(t *testing.T) {
 	h := newHarnessWithDispatch(t, DispatchConfig{LeaseDuration: time.Second})
 	const workerID = "worker-idle-reconnect"
@@ -630,6 +672,15 @@ func TestConnectWorkerRequeuesAssignmentsWhenCapabilityPersistenceFailsBeforeAcc
 	if run.Status != "queued" || run.ExecutionActive {
 		t.Fatalf("run after failed handshake = %+v, want queued and inactive", run)
 	}
+	var attempt int
+	if err := h.database.QueryRowContext(
+		context.Background(), `SELECT attempt FROM jobs WHERE id = ?`, enqueued.JobID,
+	).Scan(&attempt); err != nil {
+		t.Fatal(err)
+	}
+	if attempt != 1 {
+		t.Fatalf("job attempt after failed handshake = %d, want 1 before executor delivery", attempt)
+	}
 }
 
 func TestSendCommandRevalidatesCapabilitiesBeforeAssignmentDelivery(t *testing.T) {
@@ -812,6 +863,66 @@ func TestSendCommandRevalidatesWorkerLeaseBeforeAssignmentDelivery(t *testing.T)
 	}
 	if attempt != 1 {
 		t.Fatalf("job attempt = %d, want 1 because lease fencing is not an execution failure", attempt)
+	}
+}
+
+func TestSendCommandDropsRepositoryFencedAssignmentWithoutDisconnectingWorker(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "repository delivery fence")
+	job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-repository-fence")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compatible, _, err := decodeWorkerCapabilities(modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	connected := &worker{
+		commands:       make(chan *turingv1.RuntimeCommand, 1),
+		done:           make(chan struct{}),
+		registrationID: "registration-repository-fence",
+		capabilities:   compatible,
+		maxConcurrent:  1,
+		lastHeartbeat:  time.Now().UTC(),
+		assignments: map[string]assignment{
+			job.RunID: {jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID},
+		},
+	}
+	h.service.mu.Lock()
+	h.service.workers["worker-repository-fence"] = connected
+	h.service.mu.Unlock()
+	repositoryAssignment := repository.Assignment{
+		JobID: job.JobID, RunID: job.RunID,
+		WorkerID: "worker-repository-fence", AttemptID: job.AssignmentAttemptID,
+	}
+	if err := h.repo.AbortPendingAssignment(context.Background(), repositoryAssignment); err != nil {
+		t.Fatal(err)
+	}
+	stream := &reconnectAcceptanceStream{ctx: context.Background(), assigned: make(chan struct{})}
+	command := &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: mapJob(job)}}
+	if err := h.service.sendCommand(
+		context.Background(), stream, command, connected, "worker-repository-fence",
+	); err != nil {
+		t.Fatalf("repository-fenced command disconnected worker: %v", err)
+	}
+	select {
+	case <-stream.assigned:
+		t.Fatal("repository-fenced assignment was delivered")
+	default:
+	}
+	reassigned, ok := connected.assignmentForRun(enqueued.RunID)
+	if !ok || reassigned.attemptID == job.AssignmentAttemptID {
+		t.Fatalf("assignment after repository fence = %+v/%v, want a fresh dispatch attempt", reassigned, ok)
+	}
+	select {
+	case next := <-connected.commands:
+		if next.GetRunAssigned().GetRunId() != enqueued.RunID {
+			t.Fatalf("fresh command = %+v, want run %q", next, enqueued.RunID)
+		}
+	default:
+		t.Fatal("repository-fenced command did not trigger a fresh dispatch")
 	}
 }
 

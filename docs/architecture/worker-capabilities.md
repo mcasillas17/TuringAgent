@@ -108,7 +108,10 @@ Immediately before assignment delivery, the sender revalidates the frozen route
 against the current registration, heartbeat lease, and committed live snapshot; a
 stale or incompatible claim is requeued instead of being sent. Capability fencing
 occurs before execution and therefore does not consume the run's execution retry
-budget. Advisory notice failure at this fence is logged without blocking redispatch.
+budget. Pending-send recovery uses the same non-consuming rule, while recovery after
+delivery remains an execution retry. A post-claim fence restarts the worker scan so a
+compatible worker that appeared or became idle during the claim can receive the run.
+Advisory notice failure at the delivery fence is logged without blocking redispatch.
 
 Scheduled runs use the same validator before creating a session, message, run, or job.
 An unavailable occurrence advances its schedule and records `routing_unavailable`
@@ -142,11 +145,15 @@ and a five-second deadline, so retries neither duplicate transitions nor monopol
 registry lock indefinitely. Idempotent snapshots do not duplicate notices.
 Notice refresh is advisory after durable queue, registration, capability, lease, or
 recovery state commits: a failure is logged but does not tear down a healthy worker or
-prevent dispatch. Later lifecycle and recovery passes retry notice state. A reconnecting
-runtime does not advertise capacity until executors cancelled with the previous stream
-have actually drained, preventing a requeued assignment from colliding with stale local
-run state. On orchestrator restart the empty registry is restored by worker reconnects;
-queued routes receive restoration notices and become dispatchable again.
+prevent dispatch. Chat and automation enqueue paths dispatch first, so a bounded notice
+scan cannot delay newly durable work. Capability-transition refreshes remain ordered
+before dispatch so pending loss/restoration notices cannot race the assignment out of
+the queue; their scan is paged and bounded to five seconds. Later lifecycle and recovery
+passes retry notice state. A reconnecting runtime does not advertise capacity until
+executors cancelled with the previous stream have actually drained, preventing a
+requeued assignment from colliding with stale local run state. On orchestrator restart
+the empty registry is restored by worker reconnects; queued routes receive restoration
+notices and become dispatchable again.
 
 ## Configuration APIs
 
@@ -190,6 +197,9 @@ Tests must fail without the implementation for:
 - reconnect waiting for prior-stream executors to drain before advertising capacity;
 - modern no-discovery workers reporting an authoritative empty tool set;
 - capability-fence requeues preserving execution attempts;
+- pending-send teardown/recovery preserving attempts and heartbeat recovery serializing
+  with the final delivery fence;
+- post-claim fencing restarting dispatch when another compatible worker is available;
 - registration, capability, heartbeat revival, and recovery dispatch continuing when
   advisory queue-notice persistence fails;
 - populated pre-capability migration backfill and stable nanosecond keyset ordering;

@@ -632,6 +632,8 @@ func (s *Server) renewWorkerLeases(ctx context.Context, workerID string, connect
 	if heartbeat.GetWorkerId() != workerID {
 		return status.Error(codes.PermissionDenied, "heartbeat worker_id does not match connected worker")
 	}
+	connectedWorker.updateMu.Lock()
+	defer connectedWorker.updateMu.Unlock()
 	assignments := connectedWorker.assignmentSnapshot(workerID)
 	renewed, err := s.repo.RenewAssignments(ctx, assignments, time.Now().UTC().Add(s.dispatch.LeaseDuration))
 	if err != nil {
@@ -792,6 +794,9 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 	}
 	if err := s.repo.BeginAssignmentSend(ctx, repositoryAssignment); err != nil {
 		_ = connectedWorker.releaseRun(assigned.RunId)
+		if errors.Is(err, repository.ErrAssignmentFenced) {
+			return s.DispatchPending(ctx)
+		}
 		_ = s.repo.AbortPendingAssignment(context.Background(), repositoryAssignment)
 		return err
 	}
@@ -871,22 +876,31 @@ func (s *Server) reconcileAssignments(assignments []assignment, workerID string)
 func (s *Server) DispatchPending(ctx context.Context) error {
 	dispatchCtx, cancel := withDefaultTimeout(ctx, 5*time.Second)
 	defer cancel()
-	workers := s.snapshotWorkers()
-	for _, entry := range workers {
-		for {
-			assigned, noJob, err := s.dispatchToWorker(dispatchCtx, entry.workerID, entry.worker)
-			if err != nil {
-				return err
+	for {
+		restart := false
+		workers := s.snapshotWorkers()
+		for _, entry := range workers {
+			for {
+				assigned, noJob, restartDispatch, err := s.dispatchToWorker(dispatchCtx, entry.workerID, entry.worker)
+				if err != nil {
+					return err
+				}
+				if restartDispatch {
+					restart = true
+					break
+				}
+				if noJob || !assigned {
+					break
+				}
 			}
-			if noJob {
-				break
-			}
-			if !assigned {
+			if restart {
 				break
 			}
 		}
+		if !restart {
+			return nil
+		}
 	}
-	return nil
 }
 
 func (s *Server) RefreshPendingRoutingState(ctx context.Context, cause string) error {
@@ -1017,14 +1031,18 @@ func (s *Server) hasLiveAssignment(candidate repository.Assignment) bool {
 	return false
 }
 
-func (s *Server) dispatchToWorker(ctx context.Context, workerID string, worker *worker) (assigned bool, noJob bool, err error) {
+func (s *Server) dispatchToWorker(
+	ctx context.Context,
+	workerID string,
+	worker *worker,
+) (assigned bool, noJob bool, restartDispatch bool, err error) {
 	worker.mu.Lock()
 	if worker.closed ||
 		worker.lastHeartbeat.IsZero() ||
 		!time.Now().UTC().Before(worker.lastHeartbeat.Add(s.dispatch.LeaseDuration)) ||
 		len(worker.assignments)+worker.pendingClaims >= worker.maxConcurrent {
 		worker.mu.Unlock()
-		return false, false, nil
+		return false, false, false, nil
 	}
 	capabilities := worker.capabilities
 	worker.pendingClaims++
@@ -1044,11 +1062,11 @@ func (s *Server) dispatchToWorker(ctx context.Context, workerID string, worker *
 	worker.pendingClaims--
 	if err != nil {
 		worker.mu.Unlock()
-		return false, false, err
+		return false, false, false, err
 	}
 	if job.JobID == "" {
 		worker.mu.Unlock()
-		return false, true, nil
+		return false, true, false, nil
 	}
 	claimedAssignment := assignment{jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID}
 	if worker.closed ||
@@ -1058,20 +1076,20 @@ func (s *Server) dispatchToWorker(ctx context.Context, workerID string, worker *
 		!workerCapabilitiesSupportRoute(worker.capabilities, routingRequirementsForJob(job)) {
 		worker.mu.Unlock()
 		if err := s.requeueAssignments([]assignment{claimedAssignment}); err != nil {
-			return false, false, err
+			return false, false, false, err
 		}
-		return false, false, nil
+		return false, false, true, nil
 	}
 	worker.assignments[job.RunID] = claimedAssignment
 	select {
 	case worker.commands <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: mapJob(job)}}:
 		worker.mu.Unlock()
 		s.publishEvent(job.StartedEvent)
-		return true, false, nil
+		return true, false, false, nil
 	case <-ctx.Done():
 		delete(worker.assignments, job.RunID)
 		worker.mu.Unlock()
-		return false, false, errors.Join(ctx.Err(), s.requeueAssignments([]assignment{claimedAssignment}))
+		return false, false, false, errors.Join(ctx.Err(), s.requeueAssignments([]assignment{claimedAssignment}))
 	}
 }
 

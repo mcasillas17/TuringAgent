@@ -110,14 +110,14 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 			}
 		}
 		if s.dispatcher != nil {
-			if err := s.dispatcher.RefreshPendingRoutingState(ctx, "automation enqueued"); err != nil {
-				log.Printf("refresh automation routing state for run %s: %v", fire.RunID, err)
-			}
 			if err := s.dispatcher.DispatchPending(ctx); err != nil {
 				// The run is queued and durable; a worker will pick it up on
 				// the next dispatch either way. Reported, not fatal, so one
 				// failing dispatch does not stop the remaining automations.
 				log.Printf("dispatch automation run %s: %v", fire.RunID, err)
+			}
+			if err := s.dispatcher.RefreshPendingRoutingState(ctx, "automation enqueued"); err != nil {
+				log.Printf("refresh automation routing state for run %s: %v", fire.RunID, err)
 			}
 		}
 	}

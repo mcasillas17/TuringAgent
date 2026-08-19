@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -171,6 +172,9 @@ func TestSendMessageDispatchesDurableRunAfterRoutingRefreshFailure(t *testing.T)
 	if dispatcher.dispatchCalls != 1 {
 		t.Fatalf("DispatchPending calls = %d, want 1 after refresh failure", dispatcher.dispatchCalls)
 	}
+	if !slices.Equal(dispatcher.callOrder, []string{"dispatch", "refresh"}) {
+		t.Fatalf("routing calls = %v, want dispatch before advisory refresh", dispatcher.callOrder)
+	}
 }
 
 func TestSendMessageUsesLiveRoutableDefaultWhenModelIsOmitted(t *testing.T) {
@@ -206,11 +210,13 @@ type dispatchContextRecorder struct {
 	contextErr    error
 	refreshErr    error
 	dispatchCalls int
+	callOrder     []string
 }
 
 func (d *dispatchContextRecorder) DispatchPending(ctx context.Context) error {
 	d.contextErr = ctx.Err()
 	d.dispatchCalls++
+	d.callOrder = append(d.callOrder, "dispatch")
 	return nil
 }
 
@@ -221,6 +227,7 @@ func (d *dispatchContextRecorder) ValidateRouting(context.Context, repository.Ro
 }
 
 func (d *dispatchContextRecorder) RefreshPendingRoutingState(context.Context, string) error {
+	d.callOrder = append(d.callOrder, "refresh")
 	return d.refreshErr
 }
 
