@@ -9,6 +9,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -122,6 +123,23 @@ func TestProviderCapabilitiesIncludesModelsWithoutPositiveContextGuarantee(t *te
 	}
 }
 
+func TestWorkerCapabilitiesRejectInvalidExternalCredentialRefs(t *testing.T) {
+	base := modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1)
+	for name, refs := range map[string][]string{
+		"blank":      {""},
+		"whitespace": {" claude"},
+		"duplicate":  {"claude", "claude"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			snapshot := proto.Clone(base).(*turingv1.WorkerCapabilities)
+			snapshot.ExternalAgentCredentialRefs = refs
+			if _, _, err := decodeWorkerCapabilities(snapshot); err == nil {
+				t.Fatalf("credential refs %q were accepted", refs)
+			}
+		})
+	}
+}
+
 func TestLegacyWorkerCapabilitiesRequireExplicitProfile(t *testing.T) {
 	ready := &turingv1.RuntimeWorkerReady{
 		WorkerId: "legacy-worker", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 2,
@@ -168,6 +186,42 @@ func TestLegacyWorkerDoesNotSynthesizeUnadvertisedToolCapabilities(t *testing.T)
 	}
 	if len(discovered) != 0 || len(capabilities.tools) != 0 {
 		t.Fatalf("legacy no-tool snapshot produced discovered=%+v capabilities=%+v", discovered, capabilities.tools)
+	}
+}
+
+func TestLegacyWorkerRequiresExplicitExternalCredentialRefs(t *testing.T) {
+	ready := &turingv1.RuntimeWorkerReady{
+		WorkerId: "legacy-external", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+	}
+	profile := &LegacyCapabilityProfile{
+		Models: []*turingv1.ModelCapability{{
+			Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "llama3.2", MaxContextTokens: 8192,
+		}},
+		AgentIds:               []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+		SupportsExternalAgents: true,
+	}
+	capabilities, _, err := decodeLegacyWorkerCapabilities(profile, ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := repository.RoutingRequirements{
+		AgentID: "general_assistant", ExternalAgent: true, ExternalAgentCredentialRef: "claude",
+	}
+	if workerCapabilitiesSupportRoute(capabilities, route) {
+		t.Fatal("legacy boolean-only profile authorized an external credential")
+	}
+
+	profile.ExternalAgentCredentialRefs = []string{"claude"}
+	capabilities, _, err = decodeLegacyWorkerCapabilities(profile, ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !workerCapabilitiesSupportRoute(capabilities, route) {
+		t.Fatal("explicit legacy credential ref did not authorize its matching route")
+	}
+	route.ExternalAgentCredentialRef = "openai"
+	if workerCapabilitiesSupportRoute(capabilities, route) {
+		t.Fatal("explicit legacy credential ref authorized a different route")
 	}
 }
 
@@ -256,13 +310,14 @@ func TestExternalAgentRouteRejectsPositiveContextRequirement(t *testing.T) {
 		Models: []*turingv1.ModelCapability{{
 			Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "llama3.2", MaxContextTokens: 8192,
 		}},
-		AgentIds:               []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
-		MaxConcurrentRuns:      1,
-		SupportsExternalAgents: true,
+		AgentIds:                    []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+		MaxConcurrentRuns:           1,
+		SupportsExternalAgents:      true,
+		ExternalAgentCredentialRefs: []string{"claude"},
 	})
 	defer func() { _ = stream.CloseSend() }()
 	route := repository.RoutingRequirements{
-		AgentID: "general_assistant", ExternalAgent: true, RequiredContextTokens: 1,
+		AgentID: "general_assistant", ExternalAgent: true, ExternalAgentCredentialRef: "claude", RequiredContextTokens: 1,
 	}
 	err := h.service.ValidateRouting(context.Background(), route)
 	if status.Code(err) != codes.FailedPrecondition {
@@ -277,6 +332,39 @@ func TestExternalAgentRouteRejectsPositiveContextRequirement(t *testing.T) {
 	}
 	if workerCapabilitiesSupportRoute(connected.capabilities, route) {
 		t.Fatal("dispatch matcher accepted an external route with an unguaranteed context requirement")
+	}
+}
+
+func TestExternalAgentRouteRequiresExactCredentialRef(t *testing.T) {
+	h := newHarness(t)
+	stream := connectWorkerCapabilities(t, h, "worker-external-credential", "registration-external-credential", &turingv1.WorkerCapabilities{
+		Models: []*turingv1.ModelCapability{{
+			Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "llama3.2", MaxContextTokens: 8192,
+		}},
+		AgentIds:                    []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+		MaxConcurrentRuns:           1,
+		SupportsExternalAgents:      true,
+		ExternalAgentCredentialRefs: []string{"claude"},
+	})
+	defer func() { _ = stream.CloseSend() }()
+
+	supported := repository.RoutingRequirements{
+		AgentID: "general_assistant", ExternalAgent: true, ExternalAgentCredentialRef: "claude",
+	}
+	if err := h.service.ValidateRouting(context.Background(), supported); err != nil {
+		t.Fatalf("matching credential ref rejected: %v", err)
+	}
+	unsupported := supported
+	unsupported.ExternalAgentCredentialRef = "openai"
+	err := h.service.ValidateRouting(context.Background(), unsupported)
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("ValidateRouting error = %v, want FailedPrecondition", err)
+	}
+	detail := routingUnavailableDetail(t, err)
+	if detail.GetKind() != turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_EXTERNAL_AGENT_CREDENTIAL ||
+		detail.GetRequested() != "openai" ||
+		len(detail.GetAvailable()) != 0 {
+		t.Fatalf("routing detail = %+v, want credential kind/request without exposing available refs", detail)
 	}
 }
 

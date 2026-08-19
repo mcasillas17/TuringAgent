@@ -611,11 +611,15 @@ func TestCapabilityChangeDuringClaimRequeuesTheReservedAssignment(t *testing.T) 
 		t.Fatal(err)
 	}
 	var jobStatus string
-	if err := h.database.QueryRowContext(context.Background(), `SELECT status FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus); err != nil {
+	var attempt int
+	if err := h.database.QueryRowContext(context.Background(), `SELECT status, attempt FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus, &attempt); err != nil {
 		t.Fatal(err)
 	}
 	if jobStatus != "pending" {
 		t.Fatalf("job status = %q, want pending after capability changed during claim", jobStatus)
+	}
+	if attempt != 1 {
+		t.Fatalf("job attempt = %d, want 1 because capability fencing is not an execution failure", attempt)
 	}
 	worker.mu.Lock()
 	defer worker.mu.Unlock()

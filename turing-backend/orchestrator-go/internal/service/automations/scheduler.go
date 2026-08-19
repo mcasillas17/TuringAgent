@@ -105,6 +105,9 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 			if fire.QueuedEvent.EventID != "" {
 				s.bus.Publish(busEvent(fire.QueuedEvent))
 			}
+			for _, event := range fire.RoutingEvents {
+				s.bus.Publish(busEvent(event))
+			}
 		}
 		if s.dispatcher != nil {
 			if err := s.dispatcher.RefreshPendingRoutingState(ctx, "automation enqueued"); err != nil {

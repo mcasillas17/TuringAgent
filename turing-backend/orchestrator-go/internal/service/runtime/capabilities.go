@@ -16,10 +16,11 @@ import (
 )
 
 type LegacyCapabilityProfile struct {
-	Models                 []*turingv1.ModelCapability
-	AgentIds               []turingv1.AgentId
-	Tools                  []*turingv1.DiscoveredTool
-	SupportsExternalAgents bool
+	Models                      []*turingv1.ModelCapability
+	AgentIds                    []turingv1.AgentId
+	Tools                       []*turingv1.DiscoveredTool
+	ExternalAgentCredentialRefs []string
+	SupportsExternalAgents      bool
 }
 
 type registeredModelCapability struct {
@@ -29,11 +30,11 @@ type registeredModelCapability struct {
 }
 
 type registeredWorkerCapabilities struct {
-	models                 []registeredModelCapability
-	agentIDs               map[string]struct{}
-	tools                  map[string]struct{}
-	maxConcurrentRuns      int
-	supportsExternalAgents bool
+	models                      []registeredModelCapability
+	agentIDs                    map[string]struct{}
+	tools                       map[string]struct{}
+	externalAgentCredentialRefs map[string]struct{}
+	maxConcurrentRuns           int
 }
 
 func decodeWorkerCapabilities(snapshot *turingv1.WorkerCapabilities) (*registeredWorkerCapabilities, []repository.DiscoveredTool, error) {
@@ -54,8 +55,8 @@ func decodeWorkerCapabilities(snapshot *turingv1.WorkerCapabilities) (*registere
 		}
 		agentIDs[name] = struct{}{}
 	}
-	if len(snapshot.GetModels()) == 0 && !snapshot.GetSupportsExternalAgents() {
-		return nil, nil, fmt.Errorf("at least one model or external-agent support is required")
+	if len(snapshot.GetModels()) == 0 && len(snapshot.GetExternalAgentCredentialRefs()) == 0 {
+		return nil, nil, fmt.Errorf("at least one model or external-agent credential ref is required")
 	}
 	models := make([]registeredModelCapability, 0, len(snapshot.GetModels()))
 	seenModels := make(map[string]struct{}, len(snapshot.GetModels()))
@@ -99,12 +100,26 @@ func decodeWorkerCapabilities(snapshot *turingv1.WorkerCapabilities) (*registere
 	for _, tool := range discovered {
 		tools[tool.ServerName+"/"+tool.ToolName] = struct{}{}
 	}
+	credentialRefs := make(map[string]struct{}, len(snapshot.GetExternalAgentCredentialRefs()))
+	for _, advertised := range snapshot.GetExternalAgentCredentialRefs() {
+		credentialRef := strings.TrimSpace(advertised)
+		if credentialRef == "" {
+			return nil, nil, fmt.Errorf("external-agent credential ref is required")
+		}
+		if credentialRef != advertised {
+			return nil, nil, fmt.Errorf("external-agent credential ref %q is not normalized", advertised)
+		}
+		if _, duplicate := credentialRefs[credentialRef]; duplicate {
+			return nil, nil, fmt.Errorf("external-agent credential ref %q is duplicated", credentialRef)
+		}
+		credentialRefs[credentialRef] = struct{}{}
+	}
 	return &registeredWorkerCapabilities{
-		models:                 models,
-		agentIDs:               agentIDs,
-		tools:                  tools,
-		maxConcurrentRuns:      int(snapshot.GetMaxConcurrentRuns()),
-		supportsExternalAgents: snapshot.GetSupportsExternalAgents(),
+		models:                      models,
+		agentIDs:                    agentIDs,
+		tools:                       tools,
+		externalAgentCredentialRefs: credentialRefs,
+		maxConcurrentRuns:           int(snapshot.GetMaxConcurrentRuns()),
 	}, discovered, nil
 }
 
@@ -171,11 +186,12 @@ func decodeLegacyWorkerCapabilities(profile *LegacyCapabilityProfile, ready *tur
 		})
 	}
 	capabilities, _, err := decodeWorkerCapabilities(&turingv1.WorkerCapabilities{
-		Models:                 profile.Models,
-		AgentIds:               profile.AgentIds,
-		Tools:                  tools,
-		MaxConcurrentRuns:      int32(maxConcurrentRuns),
-		SupportsExternalAgents: profile.SupportsExternalAgents,
+		Models:                      profile.Models,
+		AgentIds:                    profile.AgentIds,
+		Tools:                       tools,
+		MaxConcurrentRuns:           int32(maxConcurrentRuns),
+		SupportsExternalAgents:      profile.SupportsExternalAgents || len(profile.ExternalAgentCredentialRefs) > 0,
+		ExternalAgentCredentialRefs: profile.ExternalAgentCredentialRefs,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -225,7 +241,8 @@ func workerCapabilitiesSupportRoute(capabilities *registeredWorkerCapabilities, 
 		return false
 	}
 	if route.ExternalAgent {
-		if !capabilities.supportsExternalAgents || route.RequiredContextTokens > 0 {
+		if _, ok := capabilities.externalAgentCredentialRefs[route.ExternalAgentCredentialRef]; !ok ||
+			route.RequiredContextTokens > 0 {
 			return false
 		}
 	} else {
@@ -548,6 +565,8 @@ func routingRequirementLabel(kind turingv1.RoutingRequirementKind) string {
 		return "context limit"
 	case turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_CAPACITY:
 		return "capacity"
+	case turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_EXTERNAL_AGENT_CREDENTIAL:
+		return "external-agent credential"
 	default:
 		return "routing capability"
 	}
@@ -562,6 +581,7 @@ func routingRequirementsFingerprint(route repository.RoutingRequirements) string
 		strconv.Itoa(route.RequiredContextTokens),
 		strconv.Itoa(route.MinimumWorkerMaxConcurrentRuns),
 		strconv.FormatBool(route.ExternalAgent),
+		route.ExternalAgentCredentialRef,
 	}, "\x00")
 }
 
@@ -600,12 +620,13 @@ func (s *Server) ValidateRouting(ctx context.Context, route repository.RoutingRe
 	}
 	if route.ExternalAgent {
 		candidates = filterRoutingCandidates(candidates, func(capabilities *registeredWorkerCapabilities) bool {
-			return capabilities.supportsExternalAgents
+			_, ok := capabilities.externalAgentCredentialRefs[route.ExternalAgentCredentialRef]
+			return ok
 		})
 		if len(candidates) == 0 {
 			return routingUnavailable(
-				turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_PROVIDER,
-				"external_agent",
+				turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_EXTERNAL_AGENT_CREDENTIAL,
+				route.ExternalAgentCredentialRef,
 				nil,
 			)
 		}

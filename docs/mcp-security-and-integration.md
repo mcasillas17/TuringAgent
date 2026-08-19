@@ -569,8 +569,10 @@ explicit:
 - `TOOL_DISCOVERY_STATUS_FAILED` rejects the worker before admission. A failed
   discovery therefore cannot fall back to a permissive compatibility catalog.
 - `TOOL_DISCOVERY_STATUS_UNSPECIFIED` is reserved for runtimes that predate
-  discovery. An admitted legacy worker contributes the static v1 compatibility
-  catalog while it remains connected.
+  discovery. An admitted legacy worker contributes only the fallback tools in its
+  explicit capability profile while it remains connected; an empty fallback means no
+  tools. A modern capability registration without a discovery callback reports
+  `COMPLETE` with an authoritative empty set rather than selecting legacy behavior.
 
 The orchestrator validates a complete snapshot before admitting the worker,
 rejecting blank identities, missing or invalid schemas, and duplicate

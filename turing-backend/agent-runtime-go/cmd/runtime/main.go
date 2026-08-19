@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os/signal"
+	"sort"
 	"syscall"
 	"time"
 
@@ -93,16 +94,26 @@ func run() error {
 		http.DefaultClient,
 	))
 	runtimeWorker := worker.New(worker.Options{
-		WorkerID:                 cfg.WorkerID,
-		AgentID:                  turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
-		MaxConcurrentRuns:        cfg.MaxConcurrentRuns,
-		HeartbeatInterval:        cfg.HeartbeatInterval,
-		DisconnectCleanupTimeout: cfg.TotalToolTimeout,
-		Models:                   advertisedModels(cfg),
-		SupportsExternalAgents:   len(cfg.AgentAPIKeys) > 0,
-		DiscoverTools:            executor.AdvertisedTools,
+		WorkerID:                    cfg.WorkerID,
+		AgentID:                     turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		MaxConcurrentRuns:           cfg.MaxConcurrentRuns,
+		HeartbeatInterval:           cfg.HeartbeatInterval,
+		DisconnectCleanupTimeout:    cfg.TotalToolTimeout,
+		Models:                      advertisedModels(cfg),
+		ExternalAgentCredentialRefs: agentCredentialRefs(cfg.AgentAPIKeys),
+		SupportsExternalAgents:      len(cfg.AgentAPIKeys) > 0,
+		DiscoverTools:               executor.AdvertisedTools,
 	}, runtimeClientAdapter{client: client}, executor)
 	return serve(ctx, runtimeWorker)
+}
+
+func agentCredentialRefs(keys map[string]string) []string {
+	refs := make([]string, 0, len(keys))
+	for ref := range keys {
+		refs = append(refs, ref)
+	}
+	sort.Strings(refs)
+	return refs
 }
 
 func advertisedModels(cfg config.Config) []*turingv1.ModelCapability {

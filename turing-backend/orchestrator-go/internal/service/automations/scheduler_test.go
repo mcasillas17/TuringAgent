@@ -243,6 +243,48 @@ func TestTickPublishesSessionUpdatedBeforeQueued(t *testing.T) {
 	}
 }
 
+func TestTickPublishesExternalRoutingEventAfterQueued(t *testing.T) {
+	h := newSchedulerHarness(t)
+	automation := createEnabled(t, h.repo, h.ctx, "External digest", repository.Schedule{Kind: repository.ScheduleInterval, Interval: 5 * time.Minute})
+	session, err := h.repo.CreateSession(h.ctx, automation.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.database.ExecContext(h.ctx,
+		`UPDATE automations SET session_id = ? WHERE id = ?`,
+		session.SessionID, automation.AutomationID); err != nil {
+		t.Fatal(err)
+	}
+	agent, err := h.repo.CreateExternalAgent(h.ctx, repository.ExternalAgentInput{
+		DisplayName: "External", Provider: "anthropic", BaseURL: "https://example.com",
+		Model: "external-model", CredentialRef: "external",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.SetSessionAgent(h.ctx, session.SessionID, agent.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	published, unsubscribe := h.bus.Subscribe(session.SessionID)
+	defer unsubscribe()
+	h.scheduler.now = func() time.Time { return parseTime(t, automation.NextDueAt) }
+
+	if err := h.scheduler.Tick(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"session.updated", "agent.run.queued", "agent.run.step"}
+	for index, wantType := range want {
+		select {
+		case event := <-published:
+			if event.Type != wantType {
+				t.Fatalf("published event %d = %q, want %q", index, event.Type, wantType)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for published event %d (%s)", index, wantType)
+		}
+	}
+}
+
 // The state that stops a re-fire lives in the row, not in this process. A
 // fresh Scheduler over the same database is a restart.
 func TestARestartedSchedulerDoesNotRefireWhatAlreadyRan(t *testing.T) {

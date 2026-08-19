@@ -483,14 +483,19 @@ func (x *DiscoveredTool) GetSchema() *structpb.Struct {
 
 // A complete, authoritative snapshot for one runtime registration.
 type WorkerCapabilities struct {
-	state                  protoimpl.MessageState `protogen:"open.v1"`
-	Models                 []*ModelCapability     `protobuf:"bytes,1,rep,name=models,proto3" json:"models,omitempty"`
-	AgentIds               []AgentId              `protobuf:"varint,2,rep,packed,name=agent_ids,json=agentIds,proto3,enum=turing.v1.AgentId" json:"agent_ids,omitempty"`
-	Tools                  []*DiscoveredTool      `protobuf:"bytes,3,rep,name=tools,proto3" json:"tools,omitempty"`
-	MaxConcurrentRuns      int32                  `protobuf:"varint,4,opt,name=max_concurrent_runs,json=maxConcurrentRuns,proto3" json:"max_concurrent_runs,omitempty"`
-	SupportsExternalAgents bool                   `protobuf:"varint,5,opt,name=supports_external_agents,json=supportsExternalAgents,proto3" json:"supports_external_agents,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Models            []*ModelCapability     `protobuf:"bytes,1,rep,name=models,proto3" json:"models,omitempty"`
+	AgentIds          []AgentId              `protobuf:"varint,2,rep,packed,name=agent_ids,json=agentIds,proto3,enum=turing.v1.AgentId" json:"agent_ids,omitempty"`
+	Tools             []*DiscoveredTool      `protobuf:"bytes,3,rep,name=tools,proto3" json:"tools,omitempty"`
+	MaxConcurrentRuns int32                  `protobuf:"varint,4,opt,name=max_concurrent_runs,json=maxConcurrentRuns,proto3" json:"max_concurrent_runs,omitempty"`
+	// Kept for older orchestrators. New routing decisions use the exact refs
+	// below and never treat this coarse bit as authorization.
+	SupportsExternalAgents bool `protobuf:"varint,5,opt,name=supports_external_agents,json=supportsExternalAgents,proto3" json:"supports_external_agents,omitempty"`
+	// Credential names only, never API keys. This complete set authorizes which
+	// frozen external-agent destinations this worker can execute.
+	ExternalAgentCredentialRefs []string `protobuf:"bytes,6,rep,name=external_agent_credential_refs,json=externalAgentCredentialRefs,proto3" json:"external_agent_credential_refs,omitempty"`
+	unknownFields               protoimpl.UnknownFields
+	sizeCache                   protoimpl.SizeCache
 }
 
 func (x *WorkerCapabilities) Reset() {
@@ -556,6 +561,13 @@ func (x *WorkerCapabilities) GetSupportsExternalAgents() bool {
 		return x.SupportsExternalAgents
 	}
 	return false
+}
+
+func (x *WorkerCapabilities) GetExternalAgentCredentialRefs() []string {
+	if x != nil {
+		return x.ExternalAgentCredentialRefs
+	}
+	return nil
 }
 
 type RuntimeWorkerReady struct {
@@ -1587,13 +1599,14 @@ const file_turing_v1_runtime_proto_rawDesc = "" +
 	"\vserver_name\x18\x01 \x01(\tR\n" +
 	"serverName\x12\x1b\n" +
 	"\ttool_name\x18\x02 \x01(\tR\btoolName\x12/\n" +
-	"\x06schema\x18\x03 \x01(\v2\x17.google.protobuf.StructR\x06schema\"\x94\x02\n" +
+	"\x06schema\x18\x03 \x01(\v2\x17.google.protobuf.StructR\x06schema\"\xd9\x02\n" +
 	"\x12WorkerCapabilities\x122\n" +
 	"\x06models\x18\x01 \x03(\v2\x1a.turing.v1.ModelCapabilityR\x06models\x12/\n" +
 	"\tagent_ids\x18\x02 \x03(\x0e2\x12.turing.v1.AgentIdR\bagentIds\x12/\n" +
 	"\x05tools\x18\x03 \x03(\v2\x19.turing.v1.DiscoveredToolR\x05tools\x12.\n" +
 	"\x13max_concurrent_runs\x18\x04 \x01(\x05R\x11maxConcurrentRuns\x128\n" +
-	"\x18supports_external_agents\x18\x05 \x01(\bR\x16supportsExternalAgents\"\x81\x03\n" +
+	"\x18supports_external_agents\x18\x05 \x01(\bR\x16supportsExternalAgents\x12C\n" +
+	"\x1eexternal_agent_credential_refs\x18\x06 \x03(\tR\x1bexternalAgentCredentialRefs\"\x81\x03\n" +
 	"\x12RuntimeWorkerReady\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12-\n" +
 	"\bagent_id\x18\x02 \x01(\x0e2\x12.turing.v1.AgentIdR\aagentId\x12.\n" +

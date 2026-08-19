@@ -1080,13 +1080,22 @@ func repositoryRoutingCapabilities(capabilities *registeredWorkerCapabilities) *
 		tools = append(tools, tool)
 	}
 	sort.Strings(tools)
+	credentialRefs := make([]string, 0, len(capabilities.externalAgentCredentialRefs))
+	for credentialRef := range capabilities.externalAgentCredentialRefs {
+		credentialRefs = append(credentialRefs, credentialRef)
+	}
+	sort.Strings(credentialRefs)
 	return &repository.WorkerRoutingCapabilities{
 		Models: models, Tools: tools, MaxConcurrentRuns: capabilities.maxConcurrentRuns,
-		SupportsExternalAgents: capabilities.supportsExternalAgents,
+		ExternalAgentCredentialRefs: credentialRefs,
 	}
 }
 
 func routingRequirementsForJob(job repository.Job) repository.RoutingRequirements {
+	externalAgentCredentialRef := ""
+	if job.ExternalAgent != nil {
+		externalAgentCredentialRef = job.ExternalAgent.CredentialRef
+	}
 	return repository.RoutingRequirements{
 		AgentID:                        job.AgentID,
 		ModelProvider:                  job.ModelProvider,
@@ -1095,12 +1104,17 @@ func routingRequirementsForJob(job repository.Job) repository.RoutingRequirement
 		RequiredContextTokens:          job.RequiredContextTokens,
 		MinimumWorkerMaxConcurrentRuns: job.MinimumWorkerMaxConcurrentRuns,
 		ExternalAgent:                  job.ExternalAgent != nil,
+		ExternalAgentCredentialRef:     externalAgentCredentialRef,
 	}
 }
 
 func routingRequirementsForAgentJob(job *turingv1.AgentJob) repository.RoutingRequirements {
 	if job == nil {
 		return repository.RoutingRequirements{}
+	}
+	externalAgentCredentialRef := ""
+	if job.GetExternalAgent() != nil {
+		externalAgentCredentialRef = job.GetExternalAgent().GetCredentialRef()
 	}
 	return repository.RoutingRequirements{
 		AgentID:                        agentIDName(job.GetAgentId()),
@@ -1110,6 +1124,7 @@ func routingRequirementsForAgentJob(job *turingv1.AgentJob) repository.RoutingRe
 		RequiredContextTokens:          int(job.GetRequiredContextTokens()),
 		MinimumWorkerMaxConcurrentRuns: int(job.GetMinimumWorkerMaxConcurrentRuns()),
 		ExternalAgent:                  job.GetExternalAgent() != nil,
+		ExternalAgentCredentialRef:     externalAgentCredentialRef,
 	}
 }
 

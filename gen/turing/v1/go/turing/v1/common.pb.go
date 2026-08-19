@@ -121,13 +121,14 @@ func (ModelProvider) EnumDescriptor() ([]byte, []int) {
 type RoutingRequirementKind int32
 
 const (
-	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_UNSPECIFIED RoutingRequirementKind = 0
-	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_PROVIDER    RoutingRequirementKind = 1
-	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_MODEL       RoutingRequirementKind = 2
-	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_CONTEXT     RoutingRequirementKind = 3
-	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_TOOL        RoutingRequirementKind = 4
-	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_AGENT       RoutingRequirementKind = 5
-	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_CAPACITY    RoutingRequirementKind = 6
+	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_UNSPECIFIED               RoutingRequirementKind = 0
+	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_PROVIDER                  RoutingRequirementKind = 1
+	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_MODEL                     RoutingRequirementKind = 2
+	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_CONTEXT                   RoutingRequirementKind = 3
+	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_TOOL                      RoutingRequirementKind = 4
+	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_AGENT                     RoutingRequirementKind = 5
+	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_CAPACITY                  RoutingRequirementKind = 6
+	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_EXTERNAL_AGENT_CREDENTIAL RoutingRequirementKind = 7
 )
 
 // Enum value maps for RoutingRequirementKind.
@@ -140,15 +141,17 @@ var (
 		4: "ROUTING_REQUIREMENT_KIND_TOOL",
 		5: "ROUTING_REQUIREMENT_KIND_AGENT",
 		6: "ROUTING_REQUIREMENT_KIND_CAPACITY",
+		7: "ROUTING_REQUIREMENT_KIND_EXTERNAL_AGENT_CREDENTIAL",
 	}
 	RoutingRequirementKind_value = map[string]int32{
-		"ROUTING_REQUIREMENT_KIND_UNSPECIFIED": 0,
-		"ROUTING_REQUIREMENT_KIND_PROVIDER":    1,
-		"ROUTING_REQUIREMENT_KIND_MODEL":       2,
-		"ROUTING_REQUIREMENT_KIND_CONTEXT":     3,
-		"ROUTING_REQUIREMENT_KIND_TOOL":        4,
-		"ROUTING_REQUIREMENT_KIND_AGENT":       5,
-		"ROUTING_REQUIREMENT_KIND_CAPACITY":    6,
+		"ROUTING_REQUIREMENT_KIND_UNSPECIFIED":               0,
+		"ROUTING_REQUIREMENT_KIND_PROVIDER":                  1,
+		"ROUTING_REQUIREMENT_KIND_MODEL":                     2,
+		"ROUTING_REQUIREMENT_KIND_CONTEXT":                   3,
+		"ROUTING_REQUIREMENT_KIND_TOOL":                      4,
+		"ROUTING_REQUIREMENT_KIND_AGENT":                     5,
+		"ROUTING_REQUIREMENT_KIND_CAPACITY":                  6,
+		"ROUTING_REQUIREMENT_KIND_EXTERNAL_AGENT_CREDENTIAL": 7,
 	}
 )
 
@@ -960,7 +963,7 @@ const file_turing_v1_common_proto_rawDesc = "" +
 	"\rModelProvider\x12\x1e\n" +
 	"\x1aMODEL_PROVIDER_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15MODEL_PROVIDER_OLLAMA\x10\x01\x12$\n" +
-	" MODEL_PROVIDER_OPENAI_COMPATIBLE\x10\x02*\xa1\x02\n" +
+	" MODEL_PROVIDER_OPENAI_COMPATIBLE\x10\x02*\xd9\x02\n" +
 	"\x16RoutingRequirementKind\x12(\n" +
 	"$ROUTING_REQUIREMENT_KIND_UNSPECIFIED\x10\x00\x12%\n" +
 	"!ROUTING_REQUIREMENT_KIND_PROVIDER\x10\x01\x12\"\n" +
@@ -968,7 +971,8 @@ const file_turing_v1_common_proto_rawDesc = "" +
 	" ROUTING_REQUIREMENT_KIND_CONTEXT\x10\x03\x12!\n" +
 	"\x1dROUTING_REQUIREMENT_KIND_TOOL\x10\x04\x12\"\n" +
 	"\x1eROUTING_REQUIREMENT_KIND_AGENT\x10\x05\x12%\n" +
-	"!ROUTING_REQUIREMENT_KIND_CAPACITY\x10\x06*\x8e\x01\n" +
+	"!ROUTING_REQUIREMENT_KIND_CAPACITY\x10\x06\x126\n" +
+	"2ROUTING_REQUIREMENT_KIND_EXTERNAL_AGENT_CREDENTIAL\x10\a*\x8e\x01\n" +
 	"\vMessageRole\x12\x1c\n" +
 	"\x18MESSAGE_ROLE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13MESSAGE_ROLE_SYSTEM\x10\x01\x12\x15\n" +

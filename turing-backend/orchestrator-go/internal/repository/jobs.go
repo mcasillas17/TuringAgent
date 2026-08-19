@@ -33,6 +33,7 @@ type RoutingRequirements struct {
 	RequiredContextTokens          int
 	MinimumWorkerMaxConcurrentRuns int
 	ExternalAgent                  bool
+	ExternalAgentCredentialRef     string
 }
 
 type RoutingModelCapability struct {
@@ -42,10 +43,10 @@ type RoutingModelCapability struct {
 }
 
 type WorkerRoutingCapabilities struct {
-	Models                 []RoutingModelCapability
-	Tools                  []string
-	MaxConcurrentRuns      int
-	SupportsExternalAgents bool
+	Models                      []RoutingModelCapability
+	Tools                       []string
+	MaxConcurrentRuns           int
+	ExternalAgentCredentialRefs []string
 }
 
 type PendingRoutingWork struct {
@@ -305,6 +306,7 @@ func resolveEnqueueRouteTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMes
 	resolved.requirements.ModelProvider = "openai_compatible"
 	resolved.requirements.Model = routedAgent.Model
 	resolved.requirements.ExternalAgent = true
+	resolved.requirements.ExternalAgentCredentialRef = routedAgent.CredentialRef
 	resolved.routedAgent = routedAgent
 	resolved.externalTarget = &ExternalAgentTarget{
 		DisplayName:   routedAgent.DisplayName,
@@ -632,6 +634,10 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 		// conversation that was never routed away. nil means the local assistant,
 		// which is the only default that keeps the transcript on this machine.
 		candidate.ExternalAgent = payload.ExternalAgent
+		externalAgentCredentialRef := ""
+		if candidate.ExternalAgent != nil {
+			externalAgentCredentialRef = candidate.ExternalAgent.CredentialRef
+		}
 		if compatible != nil && !compatible(RoutingRequirements{
 			AgentID:                        candidate.AgentID,
 			ModelProvider:                  candidate.ModelProvider,
@@ -640,6 +646,7 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 			RequiredContextTokens:          candidate.RequiredContextTokens,
 			MinimumWorkerMaxConcurrentRuns: candidate.MinimumWorkerMaxConcurrentRuns,
 			ExternalAgent:                  candidate.ExternalAgent != nil,
+			ExternalAgentCredentialRef:     externalAgentCredentialRef,
 		}) {
 			continue
 		}
@@ -715,9 +722,15 @@ func claimRoutingFilterSQL(capabilities *WorkerRoutingCapabilities) (string, []a
 	const externalAgentType = `json_type(j.payload_json, '$.externalAgent')`
 	var destinations []string
 	var args []any
-	if capabilities.SupportsExternalAgents {
+	if len(capabilities.ExternalAgentCredentialRefs) > 0 {
+		placeholders := make([]string, len(capabilities.ExternalAgentCredentialRefs))
+		for index, credentialRef := range capabilities.ExternalAgentCredentialRefs {
+			placeholders[index] = "?"
+			args = append(args, credentialRef)
+		}
 		destinations = append(destinations, `(
 			`+externalAgentType+` = 'object'
+			AND json_extract(j.payload_json, '$.externalAgent.credentialRef') IN (`+strings.Join(placeholders, ", ")+`)
 			AND COALESCE(CAST(json_extract(j.payload_json, '$.requiredContextTokens') AS INTEGER), 0) <= 0
 		)`)
 	}
@@ -815,6 +828,9 @@ func (r *Repository) ListPendingRoutingWorkPage(
 		item.Requirements.RequiredContextTokens = payload.RequiredContextTokens
 		item.Requirements.MinimumWorkerMaxConcurrentRuns = payload.MinimumWorkerMaxConcurrentRuns
 		item.Requirements.ExternalAgent = payload.ExternalAgent != nil
+		if payload.ExternalAgent != nil {
+			item.Requirements.ExternalAgentCredentialRef = payload.ExternalAgent.CredentialRef
+		}
 		work = append(work, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -824,14 +840,14 @@ func (r *Repository) ListPendingRoutingWorkPage(
 }
 
 func (r *Repository) RequeueClaimedJob(ctx context.Context, jobID string, runID string) error {
-	return r.requeueAssignment(ctx, Assignment{JobID: jobID, RunID: runID}, false)
+	return r.requeueAssignment(ctx, Assignment{JobID: jobID, RunID: runID}, false, true)
 }
 
 func (r *Repository) AbortPendingAssignment(ctx context.Context, assignment Assignment) error {
-	return r.requeueAssignment(ctx, assignment, true)
+	return r.requeueAssignment(ctx, assignment, true, false)
 }
 
-func (r *Repository) requeueAssignment(ctx context.Context, assignment Assignment, onlyPendingSend bool) error {
+func (r *Repository) requeueAssignment(ctx context.Context, assignment Assignment, onlyPendingSend bool, incrementAttempt bool) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -859,6 +875,10 @@ func (r *Repository) requeueAssignment(ctx context.Context, assignment Assignmen
 	if executionState == "sending" || executionState == "uncertain" {
 		return ErrAssignmentFenced
 	}
+	attemptIncrement := 0
+	if incrementAttempt {
+		attemptIncrement = 1
+	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE jobs
 		SET status = 'pending',
@@ -867,9 +887,9 @@ func (r *Repository) requeueAssignment(ctx context.Context, assignment Assignmen
 			lease_expires_at_ns = NULL,
 			picked_up_at = NULL,
 			assignment_attempt_id = NULL,
-			attempt = attempt + 1
+			attempt = attempt + ?
 		WHERE id = ? AND run_id = ? AND status = 'in_progress'
-	`, assignment.JobID, assignment.RunID)
+	`, attemptIncrement, assignment.JobID, assignment.RunID)
 	if err != nil {
 		return err
 	}

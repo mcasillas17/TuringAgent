@@ -591,6 +591,7 @@ class WorkerCapabilities extends $pb.GeneratedMessage {
     $core.Iterable<DiscoveredTool>? tools,
     $core.int? maxConcurrentRuns,
     $core.bool? supportsExternalAgents,
+    $core.Iterable<$core.String>? externalAgentCredentialRefs,
   }) {
     final result = create();
     if (models != null) result.models.addAll(models);
@@ -599,6 +600,8 @@ class WorkerCapabilities extends $pb.GeneratedMessage {
     if (maxConcurrentRuns != null) result.maxConcurrentRuns = maxConcurrentRuns;
     if (supportsExternalAgents != null)
       result.supportsExternalAgents = supportsExternalAgents;
+    if (externalAgentCredentialRefs != null)
+      result.externalAgentCredentialRefs.addAll(externalAgentCredentialRefs);
     return result;
   }
 
@@ -627,6 +630,7 @@ class WorkerCapabilities extends $pb.GeneratedMessage {
     ..a<$core.int>(
         4, _omitFieldNames ? '' : 'maxConcurrentRuns', $pb.PbFieldType.O3)
     ..aOB(5, _omitFieldNames ? '' : 'supportsExternalAgents')
+    ..pPS(6, _omitFieldNames ? '' : 'externalAgentCredentialRefs')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -668,6 +672,8 @@ class WorkerCapabilities extends $pb.GeneratedMessage {
   @$pb.TagNumber(4)
   void clearMaxConcurrentRuns() => $_clearField(4);
 
+  /// Kept for older orchestrators. New routing decisions use the exact refs
+  /// below and never treat this coarse bit as authorization.
   @$pb.TagNumber(5)
   $core.bool get supportsExternalAgents => $_getBF(4);
   @$pb.TagNumber(5)
@@ -676,6 +682,11 @@ class WorkerCapabilities extends $pb.GeneratedMessage {
   $core.bool hasSupportsExternalAgents() => $_has(4);
   @$pb.TagNumber(5)
   void clearSupportsExternalAgents() => $_clearField(5);
+
+  /// Credential names only, never API keys. This complete set authorizes which
+  /// frozen external-agent destinations this worker can execute.
+  @$pb.TagNumber(6)
+  $pb.PbList<$core.String> get externalAgentCredentialRefs => $_getList(5);
 }
 
 class RuntimeWorkerReady extends $pb.GeneratedMessage {

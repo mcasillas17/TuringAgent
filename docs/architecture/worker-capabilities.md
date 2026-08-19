@@ -22,9 +22,13 @@ adds:
 
 The snapshot contains exact provider/model pairs, an operator-configured maximum
 context-token ceiling for each model, supported local agent IDs, discovered tools,
-maximum concurrent runs, and whether the runtime can execute an existing external
-agent route. A modern worker reports both the snapshot and the legacy ready fields so
-an older orchestrator can still accept it.
+maximum concurrent runs, and the exact external-agent credential names the runtime
+can resolve. Credential names are routing metadata, never API keys. The coarse
+`supports_external_agents` bit remains only for older orchestrators; current routing
+authorization requires an exact credential-ref match. A modern worker reports both
+the snapshot and the legacy ready fields so an older orchestrator can still accept it.
+If a modern worker has no discovery callback, it reports `COMPLETE` with an
+authoritative empty tool set so an older orchestrator cannot synthesize legacy tools.
 
 `RuntimeWorkerCapabilitiesUpdated` replaces the complete snapshot for the current
 registration. It never patches individual fields. Complete replacement makes tool or
@@ -33,8 +37,8 @@ stale values. Updates with a different worker or registration identity fail.
 
 Workers that predate the snapshot are accepted only when the orchestrator was created
 with an explicit `LegacyCapabilityProfile`. The profile supplies exact configured
-models, context ceilings, agent IDs, external-agent support, and any rollout-only
-fallback tool list; the ready message still supplies its tool snapshot and capacity.
+models, context ceilings, agent IDs, exact external-agent credential refs, and any
+rollout-only fallback tool list; the ready message still supplies its tool snapshot and capacity.
 The ready agent ID must be recognized and included in the profile. A completed empty
 tool discovery is authoritative. A legacy ready message without tools uses only the
 profile's explicit fallback list, and an empty list means no tool capability. There is
@@ -82,13 +86,16 @@ route:
 3. model context ceiling;
 4. every requested `server/tool`;
 5. minimum advertised concurrency;
-6. external-agent execution support when applicable.
+6. exact external-agent credential ref when applicable.
 
 Failure returns `FailedPrecondition` with a typed `RoutingUnavailableDetail` naming
 the failed capability and requested value. A failed validation commits nothing.
 Legacy workers are validated against their explicit profile rather than bypassing the
-check. External-agent support carries no model context guarantee, so any positive
-context requirement on an external route fails closed.
+check. A legacy external-support boolean without an explicit credential-ref set
+authorizes nothing. Credential-specific errors name only the requested ref and do not
+enumerate other configured credential names. External-agent support carries no model
+context guarantee, so any positive context requirement on an external route fails
+closed.
 
 The accepted requirements are frozen into the job payload. Dispatch claims only jobs
 that match the selected worker's current snapshot. A route that was valid when
@@ -99,11 +106,14 @@ an incompatible backlog is not decoded and rescanned for every worker. Dispatch
 reserves worker capacity without holding the worker lock while waiting for SQLite.
 Immediately before assignment delivery, the sender revalidates the frozen route
 against the committed live snapshot; an incompatible claim is requeued instead of
-being sent.
+being sent. Capability fencing occurs before execution and therefore does not consume
+the run's execution retry budget.
 
 Scheduled runs use the same validator before creating a session, message, run, or job.
 An unavailable occurrence advances its schedule and records `routing_unavailable`
-instead of creating work that cannot currently execute.
+as a durable automation audit occurrence instead of creating work that cannot
+currently execute. Successful external automation runs publish their already-durable
+routing notices live after the queued event, matching interactive enqueue behavior.
 
 ## Capability loss and queue notices
 
@@ -159,6 +169,8 @@ Tests must fail without the implementation for:
 
 - unsupported provider, model, tool, agent, context ceiling, and minimum concurrency
   before any enqueue persistence;
+- exact external credential refs across enqueue validation, SQL claim filtering, and
+  final delivery fencing, without exposing the worker's other refs;
 - exact typed error details;
 - legacy-profile and ready-agent validation without an allow-all or implicit tool
   fallback outside the profile;
@@ -171,6 +183,11 @@ Tests must fail without the implementation for:
 - tool-persistence failure preserving the previous live snapshot and assignment-send
   revalidation against the committed replacement;
 - worker reconnect advertising a fresh registration and complete snapshot;
+- modern no-discovery workers reporting an authoritative empty tool set;
+- capability-fence requeues preserving execution attempts;
+- populated pre-capability migration backfill and stable nanosecond keyset ordering;
+- automation routing-notice publication and durable routing-unavailable audit
+  occurrences;
 - concurrent validation, snapshot replacement, dispatch, and disconnect under the Go
   race detector;
 - live provider/model/agent configuration responses;

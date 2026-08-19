@@ -106,6 +106,7 @@ func TestWorkerCapabilityRoutingProtoContract(t *testing.T) {
 		"ROUTING_REQUIREMENT_KIND_TOOL",
 		"ROUTING_REQUIREMENT_KIND_AGENT",
 		"ROUTING_REQUIREMENT_KIND_CAPACITY",
+		"ROUTING_REQUIREMENT_KIND_EXTERNAL_AGENT_CREDENTIAL",
 	} {
 		if kinds == nil || kinds.Values().ByName(name) == nil {
 			t.Fatalf("RoutingRequirementKind is missing %s", name)
@@ -119,6 +120,7 @@ func TestWorkerCapabilityRoutingProtoContract(t *testing.T) {
 	assertProtoField(t, capabilities, "tools", 3, protoreflect.MessageKind, true, "turing.v1.DiscoveredTool")
 	assertProtoField(t, capabilities, "max_concurrent_runs", 4, protoreflect.Int32Kind, false, "")
 	assertProtoField(t, capabilities, "supports_external_agents", 5, protoreflect.BoolKind, false, "")
+	assertProtoField(t, capabilities, "external_agent_credential_refs", 6, protoreflect.StringKind, true, "")
 
 	workerReady := runtimeFile.Messages().ByName("RuntimeWorkerReady")
 	assertProtoField(t, workerReady, "registration_id", 6, protoreflect.StringKind, false, "")

@@ -56,6 +56,7 @@ func newHarness(t *testing.T) *harness {
 				},
 			},
 			AgentIds:               []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+			ExternalAgentCredentialRefs: []string{"claude", "external"},
 			SupportsExternalAgents: true,
 		},
 	})
@@ -405,7 +406,7 @@ func connectChatTestWorker(t *testing.T, h *harness, capabilities *turingv1.Work
 }
 
 func defaultChatWorkerCapabilities(supportsExternalAgents bool) *turingv1.WorkerCapabilities {
-	return &turingv1.WorkerCapabilities{
+	capabilities := &turingv1.WorkerCapabilities{
 		Models: []*turingv1.ModelCapability{
 			{
 				Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
@@ -423,6 +424,10 @@ func defaultChatWorkerCapabilities(supportsExternalAgents bool) *turingv1.Worker
 		MaxConcurrentRuns:      2,
 		SupportsExternalAgents: supportsExternalAgents,
 	}
+	if supportsExternalAgents {
+		capabilities.ExternalAgentCredentialRefs = []string{"claude", "external"}
+	}
+	return capabilities
 }
 
 func sendMessageError(h *harness, request *turingv1.SendMessageRequest) error {

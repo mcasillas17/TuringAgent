@@ -245,6 +245,13 @@ const WorkerCapabilities$json = {
       '5': 8,
       '10': 'supportsExternalAgents'
     },
+    {
+      '1': 'external_agent_credential_refs',
+      '3': 6,
+      '4': 3,
+      '5': 9,
+      '10': 'externalAgentCredentialRefs'
+    },
   ],
 };
 
@@ -254,7 +261,9 @@ final $typed_data.Uint8List workerCapabilitiesDescriptor = $convert.base64Decode
     'FwYWJpbGl0eVIGbW9kZWxzEi8KCWFnZW50X2lkcxgCIAMoDjISLnR1cmluZy52MS5BZ2VudElk'
     'UghhZ2VudElkcxIvCgV0b29scxgDIAMoCzIZLnR1cmluZy52MS5EaXNjb3ZlcmVkVG9vbFIFdG'
     '9vbHMSLgoTbWF4X2NvbmN1cnJlbnRfcnVucxgEIAEoBVIRbWF4Q29uY3VycmVudFJ1bnMSOAoY'
-    'c3VwcG9ydHNfZXh0ZXJuYWxfYWdlbnRzGAUgASgIUhZzdXBwb3J0c0V4dGVybmFsQWdlbnRz');
+    'c3VwcG9ydHNfZXh0ZXJuYWxfYWdlbnRzGAUgASgIUhZzdXBwb3J0c0V4dGVybmFsQWdlbnRzEk'
+    'MKHmV4dGVybmFsX2FnZW50X2NyZWRlbnRpYWxfcmVmcxgGIAMoCVIbZXh0ZXJuYWxBZ2VudENy'
+    'ZWRlbnRpYWxSZWZz');
 
 @$core.Deprecated('Use runtimeWorkerReadyDescriptor instead')
 const RuntimeWorkerReady$json = {

@@ -80,7 +80,12 @@ message WorkerCapabilities {
   repeated AgentId agent_ids = 2;
   repeated DiscoveredTool tools = 3;
   int32 max_concurrent_runs = 4;
+  // Kept for older orchestrators. New routing decisions use the exact refs
+  // below and never treat this coarse bit as authorization.
   bool supports_external_agents = 5;
+  // Credential names only, never API keys. This complete set authorizes which
+  // frozen external-agent destinations this worker can execute.
+  repeated string external_agent_credential_refs = 6;
 }
 
 enum ToolDiscoveryStatus {

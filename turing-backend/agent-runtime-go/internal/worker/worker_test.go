@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1245,8 +1246,9 @@ func TestWorkerReadyAdvertisesCompleteCapabilities(t *testing.T) {
 			Model:            "qwen2.5:7b",
 			MaxContextTokens: 32768,
 		}},
-		SupportsExternalAgents: true,
-		NewRegistrationID:      func() (string, error) { return "registration-1", nil },
+		SupportsExternalAgents:      true,
+		ExternalAgentCredentialRefs: []string{"openai", "claude"},
+		NewRegistrationID:           func() (string, error) { return "registration-1", nil },
 		DiscoverTools: func(context.Context) ([]*turingv1.DiscoveredTool, error) {
 			return []*turingv1.DiscoveredTool{{ServerName: "system", ToolName: "system.time"}}, nil
 		},
@@ -1274,6 +1276,9 @@ func TestWorkerReadyAdvertisesCompleteCapabilities(t *testing.T) {
 	}
 	if len(capabilities.GetTools()) != 1 || capabilities.GetTools()[0].GetToolName() != "system.time" {
 		t.Fatalf("tools = %+v, want system.time", capabilities.GetTools())
+	}
+	if got := capabilities.GetExternalAgentCredentialRefs(); !slices.Equal(got, []string{"claude", "openai"}) {
+		t.Fatalf("external credential refs = %v, want sorted names only", got)
 	}
 	if ready.GetAgentId() != turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT ||
 		ready.GetMaxConcurrentRuns() != 3 ||
@@ -1367,6 +1372,36 @@ func TestWorkerWithoutDiscoveryReportsUnspecified(t *testing.T) {
 	}
 	if got := ready.GetToolDiscoveryStatus(); got != turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_UNSPECIFIED {
 		t.Fatalf("status = %v, want UNSPECIFIED", got)
+	}
+	cancel()
+	<-done
+}
+
+func TestModernWorkerWithoutDiscoveryReportsAuthoritativeEmptyTools(t *testing.T) {
+	stream := newFakeStream()
+	worker := New(Options{
+		WorkerID:          "worker-modern-no-tools",
+		MaxConcurrentRuns: 1,
+		Models: []*turingv1.ModelCapability{{
+			Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+			Model:    "qwen2.5:7b",
+		}},
+		NewRegistrationID: func() (string, error) { return "registration-no-tools", nil },
+	}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+
+	ready := nextSent(t, stream).GetWorkerReady()
+	if ready == nil {
+		t.Fatal("no worker_ready sent")
+	}
+	if got := ready.GetToolDiscoveryStatus(); got != turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_COMPLETE {
+		t.Fatalf("status = %v, want COMPLETE so older orchestrators do not synthesize legacy tools", got)
+	}
+	if len(ready.GetTools()) != 0 || len(ready.GetCapabilities().GetTools()) != 0 {
+		t.Fatalf("modern no-discovery worker advertised tools: legacy=%+v capabilities=%+v", ready.GetTools(), ready.GetCapabilities().GetTools())
 	}
 	cancel()
 	<-done

@@ -119,10 +119,11 @@ func New(cfg config.Config) (*App, error) {
 		LeaseDuration:     time.Duration(cfg.JobTimeoutMS) * time.Millisecond,
 		MaxAttempts:       cfg.JobMaxAttempts,
 		LegacyCapabilities: &runtimesvc.LegacyCapabilityProfile{
-			Models:                 legacyModels,
-			AgentIds:               []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
-			Tools:                  runtimesvc.LegacyPolicyToolCapabilities(),
-			SupportsExternalAgents: len(cfg.AgentCredentialNames) > 0,
+			Models:                      legacyModels,
+			AgentIds:                    []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+			Tools:                       runtimesvc.LegacyPolicyToolCapabilities(),
+			ExternalAgentCredentialRefs: append([]string(nil), cfg.AgentCredentialNames...),
+			SupportsExternalAgents:      len(cfg.AgentCredentialNames) > 0,
 		},
 	}, approvalService)
 	sessionService := sessionsvc.New(repo, cfg, runtimeService)

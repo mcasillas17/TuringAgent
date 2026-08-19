@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -27,6 +28,13 @@ func TestAdvertisedModelsReflectConfiguredProvidersAndContextLimits(t *testing.T
 	if len(models) != 2 || models[1].GetProvider() != turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE ||
 		models[1].GetModel() != "gpt" || models[1].GetMaxContextTokens() != 128000 {
 		t.Fatalf("models with OpenAI key = %+v", models)
+	}
+}
+
+func TestAgentCredentialRefsAdvertiseSortedNamesWithoutSecrets(t *testing.T) {
+	keys := map[string]string{"openai": "secret-openai", "claude": "secret-claude"}
+	if got := agentCredentialRefs(keys); !slices.Equal(got, []string{"claude", "openai"}) {
+		t.Fatalf("credential refs = %v, want sorted names only", got)
 	}
 }
 

@@ -1023,6 +1023,8 @@ func TestDiscoveredToolsAppearInListTools(t *testing.T) {
 	want := map[string]turingv1.ToolPolicy{
 		"custom/custom.inspect": turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
 		"files/files.create":    turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
+		"skills/skill_view":     turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
+		"skills/skills_list":    turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
 		"system/system.time":    turingv1.ToolPolicy_TOOL_POLICY_SAFE,
 	}
 	if len(got) != len(want) {

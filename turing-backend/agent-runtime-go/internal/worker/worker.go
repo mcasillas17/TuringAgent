@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -31,16 +32,19 @@ type BeaconPosterSetter interface {
 }
 
 type Options struct {
-	WorkerID                 string
-	AgentID                  turingv1.AgentId
-	MaxConcurrentRuns        int
-	HeartbeatInterval        time.Duration
-	DisconnectCleanupTimeout time.Duration
-	DecisionTombstoneTTL     time.Duration
-	UpdateSendTimeout        time.Duration
-	Models                   []*turingv1.ModelCapability
-	SupportsExternalAgents   bool
-	NewRegistrationID        func() (string, error)
+	WorkerID                    string
+	AgentID                     turingv1.AgentId
+	MaxConcurrentRuns           int
+	HeartbeatInterval           time.Duration
+	DisconnectCleanupTimeout    time.Duration
+	DecisionTombstoneTTL        time.Duration
+	UpdateSendTimeout           time.Duration
+	Models                      []*turingv1.ModelCapability
+	ExternalAgentCredentialRefs []string
+	// SupportsExternalAgents mirrors the coarse legacy wire field. Exact
+	// routing authorization comes only from ExternalAgentCredentialRefs.
+	SupportsExternalAgents bool
+	NewRegistrationID      func() (string, error)
 
 	// DiscoverTools enumerates the tools this worker can execute, reported to the
 	// orchestrator on every connect. The orchestrator persists the snapshot as
@@ -309,6 +313,7 @@ func New(options Options, client RuntimeClient, executor Executor) *Worker {
 		options.NewRegistrationID = newRegistrationID
 	}
 	options.Models = cloneModelCapabilities(options.Models)
+	options.ExternalAgentCredentialRefs = cloneCredentialRefs(options.ExternalAgentCredentialRefs)
 	return &Worker{
 		options: options, client: client, executor: executor, active: map[string]*activeRun{},
 		approvals: map[string]string{}, toolCalls: map[string]string{}, decisions: map[string][]*decisionWaiter{},
@@ -340,6 +345,12 @@ func cloneModelCapabilities(models []*turingv1.ModelCapability) []*turingv1.Mode
 	return cloned
 }
 
+func cloneCredentialRefs(refs []string) []string {
+	cloned := append([]string(nil), refs...)
+	sort.Strings(cloned)
+	return cloned
+}
+
 func (w *Worker) Run(ctx context.Context) error {
 	if w.client == nil {
 		return fmt.Errorf("%w: runtime client is required", ErrInvalidConfig)
@@ -353,7 +364,9 @@ func (w *Worker) Run(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	modernRegistration := len(w.options.Models) > 0 || w.options.SupportsExternalAgents
+	modernRegistration := len(w.options.Models) > 0 ||
+		len(w.options.ExternalAgentCredentialRefs) > 0 ||
+		w.options.SupportsExternalAgents
 	registrationID := ""
 	if modernRegistration {
 		var err error
@@ -408,14 +421,20 @@ func (w *Worker) Run(ctx context.Context) error {
 			ready.Tools = discovered
 			ready.ToolDiscoveryStatus = turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_COMPLETE
 		}
+	} else if modernRegistration {
+		// A modern capability snapshot is authoritative. Mark an absent discovery
+		// callback as a known-empty tool set so older orchestrators do not apply
+		// their legacy compatibility tools to this worker.
+		ready.ToolDiscoveryStatus = turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_COMPLETE
 	}
 	if modernRegistration {
 		ready.Capabilities = &turingv1.WorkerCapabilities{
-			Models:                 cloneModelCapabilities(w.options.Models),
-			AgentIds:               []turingv1.AgentId{w.options.AgentID},
-			Tools:                  ready.GetTools(),
-			MaxConcurrentRuns:      int32(w.options.MaxConcurrentRuns),
-			SupportsExternalAgents: w.options.SupportsExternalAgents,
+			Models:                      cloneModelCapabilities(w.options.Models),
+			AgentIds:                    []turingv1.AgentId{w.options.AgentID},
+			Tools:                       ready.GetTools(),
+			MaxConcurrentRuns:           int32(w.options.MaxConcurrentRuns),
+			SupportsExternalAgents:      w.options.SupportsExternalAgents || len(w.options.ExternalAgentCredentialRefs) > 0,
+			ExternalAgentCredentialRefs: cloneCredentialRefs(w.options.ExternalAgentCredentialRefs),
 		}
 	}
 	if err := w.send(streamCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: ready}}); err != nil {

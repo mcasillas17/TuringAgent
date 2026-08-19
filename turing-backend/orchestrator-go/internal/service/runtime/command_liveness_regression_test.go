@@ -677,6 +677,13 @@ func TestSendCommandRevalidatesCapabilitiesBeforeAssignmentDelivery(t *testing.T
 	if run.Status != "queued" || run.ExecutionActive {
 		t.Fatalf("run after delivery fence = %+v, want queued and inactive", run)
 	}
+	var attempt int
+	if err := h.database.QueryRowContext(context.Background(), `SELECT attempt FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&attempt); err != nil {
+		t.Fatal(err)
+	}
+	if attempt != 1 {
+		t.Fatalf("job attempt = %d, want 1 because capability fencing is not an execution failure", attempt)
+	}
 }
 
 // TestIsStreamCancellationCanonicalisesOnlyCancelledStreams pins the predicate

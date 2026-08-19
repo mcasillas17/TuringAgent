@@ -77,6 +77,13 @@ class RoutingRequirementKind extends $pb.ProtobufEnum {
   static const RoutingRequirementKind ROUTING_REQUIREMENT_KIND_CAPACITY =
       RoutingRequirementKind._(
           6, _omitEnumNames ? '' : 'ROUTING_REQUIREMENT_KIND_CAPACITY');
+  static const RoutingRequirementKind
+      ROUTING_REQUIREMENT_KIND_EXTERNAL_AGENT_CREDENTIAL =
+      RoutingRequirementKind._(
+          7,
+          _omitEnumNames
+              ? ''
+              : 'ROUTING_REQUIREMENT_KIND_EXTERNAL_AGENT_CREDENTIAL');
 
   static const $core.List<RoutingRequirementKind> values =
       <RoutingRequirementKind>[
@@ -87,10 +94,11 @@ class RoutingRequirementKind extends $pb.ProtobufEnum {
     ROUTING_REQUIREMENT_KIND_TOOL,
     ROUTING_REQUIREMENT_KIND_AGENT,
     ROUTING_REQUIREMENT_KIND_CAPACITY,
+    ROUTING_REQUIREMENT_KIND_EXTERNAL_AGENT_CREDENTIAL,
   ];
 
   static final $core.List<RoutingRequirementKind?> _byValue =
-      $pb.ProtobufEnum.$_initByValueList(values, 6);
+      $pb.ProtobufEnum.$_initByValueList(values, 7);
   static RoutingRequirementKind? valueOf($core.int value) =>
       value < 0 || value >= _byValue.length ? null : _byValue[value];
 
