@@ -2358,6 +2358,142 @@ func TestRunOutcomeMigrationOmitsUnprovenAssistantIdentityFromRunState(t *testin
 	}
 }
 
+// TestRunOutcomeMigrationCanonicalizesFinishedAtInRewrittenRunState covers the
+// one timestamp the projection publishes straight off the legacy row.
+// state_updated_at is derived and re-rendered at canonical fixed width, but
+// finished_at is copied verbatim by the rebuild, so an offset-bearing or
+// variable-fraction legacy value reaches the newly written public payload
+// unchanged. That is text a client text-compares: two runs that finished at the
+// same instant publish different strings, and one payload then carries two
+// renderings of a single moment — a UTC nanosecond stateUpdatedAt next to a
+// local-offset finishedAt that reads as hours apart. The rewritten payload is
+// Task 3's deliverable, so it has to speak the canonical format even though the
+// legacy column keeps its own text.
+func TestRunOutcomeMigrationCanonicalizesFinishedAtInRewrittenRunState(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedThroughLegacy(t, ctx, filepath.Join(t.TempDir(), "finished-at.db"))
+	defer database.Close()
+	seedLegacySession(t, ctx, database, "sess_finished_at")
+	// Both rows name the same instant. Only the rendering differs, which is
+	// exactly what a text-compared public field must not preserve.
+	for _, seed := range []legacyRun{
+		{
+			id: "run_offset_finish", status: "failed",
+			errorCode: "model_error", errorMessage: "provider said something rude",
+			createdAt: "2026-03-04T00:00:00.000000000Z", finishedAt: "2026-03-04T05:06:07.1+02:00",
+		},
+		{
+			id: "run_short_fraction_finish", status: "cancelled",
+			cancellationReason: "user pressed stop",
+			createdAt:          "2026-03-04T00:00:00.000000000Z", finishedAt: "2026-03-04T03:06:07.100Z",
+		},
+	} {
+		seed.sessionID = "sess_finished_at"
+		seedLegacyRun(t, ctx, database, seed)
+	}
+	seedLegacyEvent(t, ctx, database, "sess_finished_at", "run_offset_finish", 1, "agent.run.failed",
+		`{"runId":"run_offset_finish","code":"model_error","message":"provider said something rude"}`)
+	seedLegacyEvent(t, ctx, database, "sess_finished_at", "run_short_fraction_finish", 2, "agent.run.cancelled",
+		`{"runId":"run_short_fraction_finish","reason":"user pressed stop"}`)
+
+	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	const wantCanonical = "2026-03-04T03:06:07.100000000Z"
+	published := make([]string, 0, 2)
+	for _, sequence := range []int{1, 2} {
+		payload := readEventPayload(t, ctx, database, "sess_finished_at", sequence)
+		state, ok := payload["runState"].(map[string]any)
+		if !ok {
+			t.Fatalf("sequence %d runState = %#v, want the canonical projection", sequence, payload["runState"])
+		}
+		got, _ := state["finishedAt"].(string)
+		if got != wantCanonical {
+			t.Fatalf("sequence %d runState.finishedAt = %#v, want the canonical %q",
+				sequence, state["finishedAt"], wantCanonical)
+		}
+		// The projection must not report one instant twice in two formats.
+		if updated, _ := state["stateUpdatedAt"].(string); updated != got {
+			t.Fatalf("sequence %d publishes stateUpdatedAt %q beside finishedAt %q for one instant",
+				sequence, updated, got)
+		}
+		published = append(published, got)
+	}
+	if published[0] != published[1] {
+		t.Fatalf("equal instants published as %q and %q", published[0], published[1])
+	}
+	// Legacy storage is deliberately untouched: canonicalizing the public
+	// payload is a statement about what the migration newly writes, not a
+	// rewrite of the column the rebuild copied verbatim.
+	for runID, want := range map[string]string{
+		"run_offset_finish":         "2026-03-04T05:06:07.1+02:00",
+		"run_short_fraction_finish": "2026-03-04T03:06:07.100Z",
+	} {
+		var got string
+		if err := database.QueryRowContext(ctx,
+			`SELECT finished_at FROM agent_runs WHERE id = ?`, runID).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("%s finished_at = %q, want the legacy text %q left in place", runID, got, want)
+		}
+	}
+}
+
+// TestRunOutcomeMigrationFailsClosedOnUncanonicalizableFinishedAt proves the
+// projection's canonicalization is a gate rather than a best effort. The Before
+// hook already rejects an unparseable finished_at, so the only way to reach the
+// event pass with one is to write it after that hook ran — which is exactly the
+// defense-in-depth case worth pinning: the rewrite must never fall back to
+// publishing the raw text. The failure has to name the class without the value
+// and take the whole transaction with it.
+func TestRunOutcomeMigrationFailsClosedOnUncanonicalizableFinishedAt(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedThroughLegacy(t, ctx, filepath.Join(t.TempDir(), "finished-at-closed.db"))
+	defer database.Close()
+	seedLegacySession(t, ctx, database, "sess_finished_closed")
+	seedLegacyRun(t, ctx, database, legacyRun{
+		id: "run_finished_closed", sessionID: "sess_finished_closed", status: "failed",
+		errorCode: "model_error", errorMessage: "provider said something rude",
+		createdAt: "2026-01-01T00:00:00.000000000Z", finishedAt: "2026-01-01T00:00:05.000000000Z",
+	})
+	const legacyPayload = `{"runId":"run_finished_closed","code":"model_error","message":"provider said something rude"}`
+	seedLegacyEvent(t, ctx, database, "sess_finished_closed", "run_finished_closed", 1,
+		"agent.run.failed", legacyPayload)
+	// After every SQL section, and therefore after the Before hook that would
+	// otherwise have caught it.
+	mutateAtMigrationPhase(t, migrationPhaseAfterIndexes,
+		`UPDATE agent_runs SET finished_at = '2026-01-01 00:00:05' WHERE id = 'run_finished_closed'`)
+
+	err := applyRunOutcomesMigration(t, ctx, database)
+	if err == nil {
+		t.Fatal("ApplyMigrations published a finished_at it could not canonicalize")
+	}
+	if got := err.Error(); got != "invalid persisted timestamp" {
+		t.Fatalf("error = %q, want exactly the value-free timestamp sentinel", got)
+	}
+	var payload string
+	if err := database.QueryRowContext(ctx,
+		`SELECT payload_json FROM events WHERE id = 'event_sess_finished_closed_1'`).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload != legacyPayload {
+		t.Fatalf("event payload = %q, want the pre-migration text after a rolled-back migration", payload)
+	}
+	if hasColumn(t, ctx, database, "agent_runs", "outcome_reason") {
+		t.Fatal("agent_runs.outcome_reason survived a rolled-back migration")
+	}
+	var recorded int
+	if err := database.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`,
+		runOutcomesMigrationVersion).Scan(&recorded); err != nil {
+		t.Fatal(err)
+	}
+	if recorded != 0 {
+		t.Fatalf("migration record count = %d, want 0", recorded)
+	}
+}
+
 // TestRunOutcomeMigrationOmitsStateVersionFromOrphanRunStepNotices pins the one
 // number a rewritten notice must never invent. stateVersion is a protobuf
 // int64: zero is absence, not version zero. A failure-like run-step whose run

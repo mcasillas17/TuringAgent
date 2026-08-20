@@ -675,7 +675,16 @@ func deriveStateUpdatedAt(row legacyRunRow) (string, error) {
 	if row.finishedAt.Valid && row.finishedAt.String != "" {
 		source = row.finishedAt.String
 	}
-	parsed, err := persisttime.ParseLegacy(source)
+	return canonicalLegacyTime(source)
+}
+
+// canonicalLegacyTime re-renders one legacy timestamp at the canonical fixed
+// width. It is the single place a persisted time becomes public text in this
+// migration, so a value published beside state_updated_at cannot acquire a
+// second rendering rule. A present but unparseable value fails with the
+// value-free sentinel rather than being published as it stands.
+func canonicalLegacyTime(value string) (string, error) {
+	parsed, err := persisttime.ParseLegacy(value)
 	if err != nil {
 		return "", err
 	}
@@ -947,6 +956,20 @@ func readLegacyEventBatch(ctx context.Context, tx *sql.Tx, cursor int64, lastRow
 			return nil, err
 		}
 		row.runFound = runID.Valid
+		// finished_at is copied verbatim by the rebuild, so it still holds
+		// whatever shape a legacy writer chose. The public payload this
+		// migration newly writes is text clients compare, so it is re-rendered
+		// at the canonical width here; the stored column keeps its own text.
+		// An empty string is a value a legacy writer cleared, not a time.
+		publishedFinishedAt := ""
+		if finishedAt.Valid && finishedAt.String != "" {
+			canonical, err := canonicalLegacyTime(finishedAt.String)
+			if err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			publishedFinishedAt = canonical
+		}
 		row.state = runStateProjection{
 			RunID:                 runID.String,
 			UserMessageID:         userMessageID.String,
@@ -954,7 +977,7 @@ func readLegacyEventBatch(ctx context.Context, tx *sql.Tx, cursor int64, lastRow
 			OutcomeReason:         outcomeReason.String,
 			StateVersion:          stateVersion.Int64,
 			StateUpdatedAt:        stateUpdatedAt.String,
-			FinishedAt:            finishedAt.String,
+			FinishedAt:            publishedFinishedAt,
 			HasDisplayableContent: displayableContent.Int64 == 1,
 		}
 		// The assistant message ID is published only when the link proves
