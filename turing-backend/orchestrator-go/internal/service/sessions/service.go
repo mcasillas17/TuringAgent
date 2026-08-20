@@ -3,6 +3,7 @@ package sessions
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -20,11 +21,12 @@ import (
 
 type Server struct {
 	turingv1.UnimplementedSessionServiceServer
-	repo         *repository.Repository
-	cfg          config.Config
-	capabilities capabilitySource
-	cursors      sessionCursorCodec
-	bus          *eventsvc.Bus
+	repo            *repository.Repository
+	cfg             config.Config
+	capabilities    capabilitySource
+	cursors         sessionCursorCodec
+	bus             *eventsvc.Bus
+	artifactCleaner sessionArtifactCleaner
 }
 
 type capabilitySource interface {
@@ -34,7 +36,21 @@ type capabilitySource interface {
 	LiveToolNames() []string
 }
 
-func New(repo *repository.Repository, cfg config.Config, capabilities capabilitySource, bus *eventsvc.Bus) *Server {
+type sessionDeletionCanceler interface {
+	CancelSessionRuns(context.Context, string, string)
+}
+
+type sessionArtifactCleaner interface {
+	CleanupSessionArtifacts(context.Context, string, int64) error
+}
+
+const artifactCleanupTimeout = 10 * time.Second
+
+func New(repo *repository.Repository, cfg config.Config, capabilities capabilitySource, buses ...*eventsvc.Bus) *Server {
+	var bus *eventsvc.Bus
+	if len(buses) > 0 {
+		bus = buses[0]
+	}
 	return &Server{
 		repo:         repo,
 		cfg:          cfg,
@@ -42,6 +58,30 @@ func New(repo *repository.Repository, cfg config.Config, capabilities capability
 		cursors:      newSessionCursorCodec(cfg.CursorHMACKey),
 		bus:          bus,
 	}
+}
+
+func (s *Server) SetArtifactCleaner(cleaner sessionArtifactCleaner) {
+	s.artifactCleaner = cleaner
+}
+
+// ResumePendingDeletions retries durable non-completed receipts. It is safe to
+// call repeatedly: each receipt uses the same lifecycle version and only a
+// completed receipt can publish the terminal event.
+func (s *Server) ResumePendingDeletions(ctx context.Context) error {
+	sessionIDs, err := s.repo.PendingSessionDeletionIDs(ctx)
+	if err != nil {
+		return err
+	}
+	var resumeErr error
+	for _, sessionID := range sessionIDs {
+		if _, err := s.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: sessionID}); err != nil {
+			if status.Code(err) == codes.NotFound {
+				continue
+			}
+			resumeErr = errors.Join(resumeErr, err)
+		}
+	}
+	return resumeErr
 }
 
 func (s *Server) CreateSession(ctx context.Context, req *turingv1.CreateSessionRequest) (*turingv1.CreateSessionResponse, error) {
@@ -141,26 +181,153 @@ func (s *Server) GetSession(ctx context.Context, req *turingv1.GetSessionRequest
 	return mapped, nil
 }
 
-// DeleteSession removes a session and everything it produced. It is the only
-// way a user can withdraw what they have said, so the failure modes are
-// reported distinctly rather than collapsed into Internal: NotFound so the
-// client can say the session is already gone, and FailedPrecondition so it can
-// explain that work is still in flight rather than implying a bug.
+// DeleteSession starts or advances a durable, non-blocking withdrawal. A live
+// execution leaves a retryable receipt rather than keeping the RPC open or
+// deleting rows from under the worker.
 func (s *Server) DeleteSession(ctx context.Context, req *turingv1.DeleteSessionRequest) (*turingv1.DeleteSessionResponse, error) {
 	if req == nil || !validSessionID(req.SessionId) {
 		return nil, status.Error(codes.InvalidArgument, "session_id is invalid")
 	}
-	if err := s.repo.DeleteSession(ctx, req.SessionId); err != nil {
+	receipt, err := s.repo.BeginSessionDeletion(ctx, req.SessionId)
+	if err != nil {
 		switch {
 		case errors.Is(err, repository.ErrSessionNotFound):
 			return nil, status.Error(codes.NotFound, "session not found")
-		case errors.Is(err, repository.ErrSessionHasActiveRun):
-			return nil, status.Error(codes.FailedPrecondition, "session has a run in progress")
 		default:
 			return nil, status.Error(codes.Internal, "delete session failed")
 		}
 	}
-	return &turingv1.DeleteSessionResponse{SessionId: req.SessionId}, nil
+	if canceler, ok := s.capabilities.(sessionDeletionCanceler); ok {
+		canceler.CancelSessionRuns(ctx, req.SessionId, "session_deleting")
+	}
+	receipt, err = s.repo.AdvanceSessionDeletion(ctx, req.SessionId)
+	if err != nil {
+		switch {
+		case errors.Is(err, repository.ErrSessionNotFound):
+			return nil, status.Error(codes.NotFound, "session not found")
+		default:
+			return nil, status.Error(codes.Internal, "delete session failed")
+		}
+	}
+	if receipt.State == "failed_external" &&
+		receipt.ErrorCode == "artifact_cleanup_pending" &&
+		s.artifactCleaner != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), artifactCleanupTimeout)
+		cleanupErr := s.artifactCleaner.CleanupSessionArtifacts(
+			cleanupCtx,
+			receipt.SessionID,
+			receipt.LifecycleVersion,
+		)
+		cancel()
+		if cleanupErr != nil {
+			if err := s.repo.MarkSessionDeletionExternalFailure(
+				context.WithoutCancel(ctx),
+				receipt.SessionID,
+				"artifact_cleanup_failed",
+			); err != nil {
+				return nil, status.Error(codes.Internal, "record session artifact cleanup failure")
+			}
+			current, err := s.repo.SessionDeletionReceipt(ctx, req.SessionId)
+			if err != nil {
+				return nil, status.Error(codes.Internal, "read session deletion receipt")
+			}
+			if current.State == "completed" {
+				receipt = current
+			} else {
+				receipt, err = s.repo.AdvanceSessionDeletion(ctx, req.SessionId)
+				if err != nil {
+					return nil, status.Error(codes.Internal, "read session deletion receipt")
+				}
+				receipt.ErrorCode = "artifact_cleanup_failed"
+			}
+		} else {
+			if err := s.removeOwnedArtifactManifestRows(ctx, receipt.SessionID); err != nil {
+				return nil, status.Error(codes.Internal, "delete session artifacts failed")
+			}
+			receipt, err = s.repo.AdvanceSessionDeletion(ctx, req.SessionId)
+			if err != nil {
+				return nil, status.Error(codes.Internal, "delete session failed")
+			}
+		}
+	}
+	if receipt.State == "completed" {
+		s.publishSessionDeleted(receipt)
+	}
+	return &turingv1.DeleteSessionResponse{
+		SessionId: req.SessionId,
+		Deletion:  mapSessionDeletionReceipt(receipt),
+	}, nil
+}
+
+func (s *Server) ListSessionDeletionReceipts(ctx context.Context, _ *turingv1.ListSessionDeletionReceiptsRequest) (*turingv1.ListSessionDeletionReceiptsResponse, error) {
+	receipts, err := s.repo.PendingSessionDeletionReceipts(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "list session deletion receipts failed")
+	}
+	out := make([]*turingv1.SessionDeletionReceipt, 0, len(receipts))
+	for _, receipt := range receipts {
+		out = append(out, mapSessionDeletionReceipt(receipt))
+	}
+	return &turingv1.ListSessionDeletionReceiptsResponse{Deletions: out}, nil
+}
+
+func (s *Server) removeOwnedArtifactManifestRows(ctx context.Context, sessionID string) error {
+	artifacts, err := s.repo.SessionSandboxArtifacts(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	for _, artifact := range artifacts {
+		if artifact.Policy != repository.SandboxArtifactPolicyDeleteOnSessionDelete {
+			continue
+		}
+		if err := s.repo.DeleteSandboxArtifact(ctx, artifact.ArtifactID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Server) publishSessionDeleted(receipt repository.SessionDeletionReceipt) {
+	if s.bus == nil {
+		return
+	}
+	payload, err := json.Marshal(map[string]any{
+		"lifecycleVersion": receipt.LifecycleVersion,
+		"runs":             receipt.RunCount,
+		"messages":         receipt.MessageCount,
+	})
+	if err != nil {
+		return
+	}
+	s.bus.TerminateSession(eventsvc.Event{
+		EventID:     "session_deleted:" + receipt.SessionID,
+		SessionID:   receipt.SessionID,
+		Sequence:    receipt.TerminalSequence,
+		Type:        "session.deleted",
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+		PayloadJSON: string(payload),
+	})
+}
+
+func mapSessionDeletionReceipt(receipt repository.SessionDeletionReceipt) *turingv1.SessionDeletionReceipt {
+	state := turingv1.SessionDeletionState_SESSION_DELETION_STATE_IN_PROGRESS
+	switch receipt.State {
+	case "failed_external":
+		state = turingv1.SessionDeletionState_SESSION_DELETION_STATE_FAILED_EXTERNAL
+	case "completed":
+		state = turingv1.SessionDeletionState_SESSION_DELETION_STATE_COMPLETED
+	}
+	return &turingv1.SessionDeletionReceipt{
+		SessionId:                   receipt.SessionID,
+		State:                       state,
+		LifecycleVersion:            receipt.LifecycleVersion,
+		Retryable:                   receipt.Retryable,
+		ErrorCode:                   receipt.ErrorCode,
+		TerminalSequence:            receipt.TerminalSequence,
+		RunCount:                    int32(receipt.RunCount),
+		MessageCount:                int32(receipt.MessageCount),
+		RetainedLegacyArtifactCount: int32(receipt.RetainedLegacyArtifactCount),
+	}
 }
 
 func (s *Server) ListMessages(ctx context.Context, req *turingv1.ListMessagesRequest) (*turingv1.ListMessagesResponse, error) {

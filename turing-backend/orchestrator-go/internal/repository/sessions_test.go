@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"reflect"
@@ -53,6 +54,47 @@ func TestListSessionsPageFiltersAndOrders(t *testing.T) {
 			}
 			assertSessionIDs(t, sessions, testCase.want)
 		})
+	}
+}
+
+func TestListSessionsPageAndGetExcludeDeletingSessions(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	active, err := repo.CreateSession(ctx, "Delete active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	archived, err := repo.CreateSession(ctx, "Delete archived")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ArchiveSession(ctx, archived.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	for _, sessionID := range []string{active.SessionID, archived.SessionID} {
+		if _, err := repo.BeginSessionDeletion(ctx, sessionID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.GetSession(ctx, sessionID); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("GetSession(%q) error = %v, want sql.ErrNoRows", sessionID, err)
+		}
+	}
+
+	for _, filter := range []SessionListFilter{
+		SessionListActive,
+		SessionListArchived,
+		SessionListAll,
+	} {
+		sessions, err := repo.ListSessionsPage(ctx, ListSessionsInput{
+			Filter: filter,
+			Limit:  10,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(sessions) != 0 {
+			t.Fatalf("filter %q returned deleting sessions: %+v", filter, sessions)
+		}
 	}
 }
 

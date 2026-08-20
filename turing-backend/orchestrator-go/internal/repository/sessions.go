@@ -137,13 +137,13 @@ func listSessionsQuery(input ListSessionsInput) (string, []any, error) {
 		query = `
 			SELECT id, title, title_origin, status, created_at, updated_at
 			FROM sessions INDEXED BY idx_sessions_status_updated
-			WHERE status = ?`
+			WHERE deletion_state = 'active' AND status = ?`
 		args = append(args, string(input.Filter))
 	case SessionListAll:
 		query = `
 			SELECT id, title, title_origin, status, created_at, updated_at
 			FROM sessions INDEXED BY idx_sessions_updated
-			WHERE 1 = 1`
+			WHERE deletion_state = 'active'`
 	default:
 		return "", nil, ErrInvalidSessionFilter
 	}
@@ -166,7 +166,8 @@ func (r *Repository) GetSession(ctx context.Context, sessionID string) (Session,
 	var session Session
 	err := r.db.QueryRowContext(ctx, `
 		SELECT id, title, title_origin, status, created_at, updated_at
-		FROM sessions WHERE id = ?`,
+		FROM sessions
+		WHERE id = ? AND deletion_state = 'active'`,
 		sessionID,
 	).Scan(
 		&session.SessionID,
@@ -202,11 +203,36 @@ func validateSession(session Session) error {
 	return nil
 }
 
+func requireActiveSessionTx(ctx context.Context, tx *sql.Tx, sessionID string) error {
+	var deletionState string
+	err := tx.QueryRowContext(ctx, `SELECT deletion_state FROM sessions WHERE id = ?`, sessionID).Scan(&deletionState)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrSessionNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if deletionState != "active" {
+		return ErrSessionDeleting
+	}
+	return nil
+}
+
 func (r *Repository) ListMessages(ctx context.Context, sessionID string, limit int) ([]Message, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id, COALESCE(run_id, ''), role, content, content_type, sequence, created_at FROM messages WHERE session_id = ? ORDER BY sequence DESC LIMIT ?`, sessionID, limit)
+	if _, err := r.GetSession(ctx, sessionID); err != nil {
+		return nil, err
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT m.id, COALESCE(m.run_id, ''), m.role, m.content, m.content_type, m.sequence, m.created_at
+		FROM messages m
+		JOIN sessions s ON s.id = m.session_id AND s.deletion_state = 'active'
+		WHERE m.session_id = ?
+		ORDER BY m.sequence DESC
+		LIMIT ?
+	`, sessionID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -232,20 +258,25 @@ func (r *Repository) ListMessagesBefore(ctx context.Context, sessionID, beforeMe
 	if limit <= 0 {
 		limit = 50
 	}
+	if _, err := r.GetSession(ctx, sessionID); err != nil {
+		return nil, err
+	}
 	if beforeMessageID == "" {
 		return r.ListMessages(ctx, sessionID, limit)
 	}
 	var boundarySequence int64
 	if err := r.db.QueryRowContext(ctx, `
 		SELECT sequence
-		FROM messages
-		WHERE session_id = ? AND id = ?
+		FROM messages m
+		JOIN sessions s ON s.id = m.session_id AND s.deletion_state = 'active'
+		WHERE m.session_id = ? AND m.id = ?
 	`, sessionID, beforeMessageID).Scan(&boundarySequence); err != nil {
 		return nil, err
 	}
 	query := `
 		SELECT m.id, COALESCE(m.run_id, ''), m.role, m.content, m.content_type, m.sequence, m.created_at
 		FROM messages m
+		JOIN sessions s ON s.id = m.session_id AND s.deletion_state = 'active'
 		WHERE m.session_id = ?
 			AND m.sequence < ?
 		ORDER BY m.sequence DESC, m.id DESC
@@ -292,6 +323,7 @@ func (r *Repository) SearchMessages(
 		SELECT m.id, m.session_id, COALESCE(m.run_id, ''), m.role, m.content, m.content_type, m.sequence, m.created_at
 		FROM messages_fts
 		JOIN messages m ON m.rowid = messages_fts.rowid
+		JOIN sessions s ON s.id = m.session_id AND s.deletion_state = 'active'
 		WHERE messages_fts MATCH ?`
 	args := []any{fts5Phrase(query)}
 	if sessionID != "" {

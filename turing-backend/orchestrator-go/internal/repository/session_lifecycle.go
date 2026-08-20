@@ -68,6 +68,9 @@ func (r *Repository) mutateSession(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if err := requireActiveSessionTx(ctx, tx, sessionID); err != nil {
+		return SessionMutationResult{}, err
+	}
 	current, err := getSessionTx(ctx, tx, sessionID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SessionMutationResult{}, ErrSessionNotFound
@@ -91,7 +94,7 @@ func (r *Repository) mutateSession(
 	result, err := tx.ExecContext(ctx, `
 		UPDATE sessions
 		SET title = ?, title_origin = ?, status = ?, updated_at = ?
-		WHERE id = ?`,
+		WHERE id = ? AND deletion_state = 'active'`,
 		nullableString(next.Title),
 		next.TitleOrigin,
 		next.Status,

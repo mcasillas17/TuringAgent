@@ -197,7 +197,8 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 		"0012_worker_capability_routing",
 		"0013_internal_service_identities",
 		"0013_send_message_idempotency",
-		"0014_session_lifecycle",
+		"0014_session_deletion_withdrawal",
+		"0015_session_lifecycle",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("applied migrations = %v, want %v", got, want)
@@ -376,8 +377,8 @@ func TestCurrentSchemaVersionUsesLatestEmbeddedMigrationPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "0014" {
-		t.Fatalf("CurrentSchemaVersion = %q, want 0014", got)
+	if got != "0015" {
+		t.Fatalf("CurrentSchemaVersion = %q, want 0015", got)
 	}
 }
 
@@ -732,7 +733,7 @@ func TestAuditReadMigrationNormalizesLegacyVariableWidthCreatedAt(t *testing.T) 
 
 func TestSessionLifecycleMigrationNormalizesTimestampsAndAddsIndexes(t *testing.T) {
 	ctx := context.Background()
-	database := databaseBeforeMigration(t, ctx, "0014_session_lifecycle.sql")
+	database := databaseBeforeMigration(t, ctx, "0015_session_lifecycle.sql")
 
 	testCases := []struct {
 		id        string
@@ -820,9 +821,38 @@ func TestSessionLifecycleMigrationNormalizesTimestampsAndAddsIndexes(t *testing.
 	})
 }
 
+func TestSessionLifecycleMigrationUpgradesDatabaseThatAppliedOldVersion(t *testing.T) {
+	ctx := context.Background()
+	database := databaseBeforeMigration(t, ctx, "0015_session_lifecycle.sql")
+	if _, err := database.ExecContext(ctx, `
+		DROP INDEX IF EXISTS idx_sessions_updated;
+		CREATE INDEX idx_sessions_updated
+			ON sessions(updated_at DESC, id DESC);
+		CREATE INDEX idx_sessions_status_updated
+			ON sessions(status, updated_at DESC, id DESC);
+		INSERT INTO schema_migrations (version, applied_at)
+			VALUES ('0014_session_lifecycle', datetime('now'));
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatalf("upgrade old session lifecycle migration: %v", err)
+	}
+	assertIndexColumns(t, ctx, database, "idx_sessions_updated", []indexColumn{
+		{name: "updated_at", descending: true},
+		{name: "id", descending: true},
+	})
+	assertIndexColumns(t, ctx, database, "idx_sessions_status_updated", []indexColumn{
+		{name: "status"},
+		{name: "updated_at", descending: true},
+		{name: "id", descending: true},
+	})
+}
+
 func TestSessionLifecycleMigrationRollsBackMalformedTimestamp(t *testing.T) {
 	ctx := context.Background()
-	database := databaseBeforeMigration(t, ctx, "0014_session_lifecycle.sql")
+	database := databaseBeforeMigration(t, ctx, "0015_session_lifecycle.sql")
 	const original = "2026-08-20T04:00:00Z"
 	for i := 0; i < 256; i++ {
 		id := fmt.Sprintf("valid-%03d", i)
@@ -871,7 +901,7 @@ func TestSessionLifecycleMigrationRollsBackMalformedTimestamp(t *testing.T) {
 	}
 	var applied int
 	if err := database.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM schema_migrations WHERE version = '0014_session_lifecycle'`,
+		SELECT COUNT(*) FROM schema_migrations WHERE version = '0015_session_lifecycle'`,
 	).Scan(&applied); err != nil {
 		t.Fatal(err)
 	}

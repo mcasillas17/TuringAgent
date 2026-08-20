@@ -1261,6 +1261,25 @@ func TestSendMessageMissingSessionReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestSendMessageDeletingSessionReturnsFailedPrecondition(t *testing.T) {
+	h := newHarness(t)
+	sessionID := h.createSession(t)
+	if _, err := h.repo.BeginSessionDeletion(context.Background(), sessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	err := sendMessageError(h, &turingv1.SendMessageRequest{
+		SessionId:     sessionID,
+		Content:       "do not resurrect",
+		ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:         "llama3.2",
+	})
+	if status.Code(err) != codes.FailedPrecondition ||
+		status.Convert(err).Message() != "session deletion is in progress" {
+		t.Fatalf("SendMessage error = %v, want deletion FailedPrecondition", err)
+	}
+}
+
 func TestSendMessageCancellationCancelsRun(t *testing.T) {
 	h := newHarness(t)
 	worker := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(false))
@@ -1282,7 +1301,12 @@ func TestSendMessageCancellationCancelsRun(t *testing.T) {
 	}
 	runID := first.GetRunQueued().RunId
 	cancel()
-	_, err = stream.Recv()
+	for {
+		_, err = stream.Recv()
+		if err != nil {
+			break
+		}
+	}
 	if status.Code(err) != codes.Canceled && err != io.EOF {
 		t.Fatalf("Recv after cancel = %v", err)
 	}

@@ -64,6 +64,15 @@ void main() {
     );
   });
 
+  test('maps SESSION_DELETED to the terminal session event string', () {
+    expect(
+      GrpcMappers.eventTypeToString(
+        eventpb.TuringEventType.TURING_EVENT_TYPE_SESSION_DELETED,
+      ),
+      'session.deleted',
+    );
+  });
+
   test('preserves session timestamp nanoseconds for ordering', () {
     final earlier = GrpcMappers.sessionToModel(
       sessionpb.Session(

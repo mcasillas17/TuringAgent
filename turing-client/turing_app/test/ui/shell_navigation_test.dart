@@ -16,6 +16,7 @@ import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
 import 'package:turing_flutter_app/models/session_page.dart';
+import 'package:turing_flutter_app/models/session_deletion.dart';
 import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
@@ -501,6 +502,35 @@ void main() {
       expect(find.widgetWithText(TextButton, 'Load more'), findsNothing);
     });
 
+    testWidgets(
+      'a same-cursor refresh invalidates an older load-more response',
+      (tester) async {
+        final stalePage = Completer<SessionPage>();
+        final api = _FakeApi()..nextSessionCursor = 'cursor-2';
+        await _pumpShell(tester, api: api, size: _desktop);
+        api.nextSessionPage = stalePage;
+        await tester.tap(find.widgetWithText(TextButton, 'Load more'));
+        await tester.pump();
+
+        await tester.tap(find.text('New chat').first);
+        await tester.pumpAndSettle();
+        stalePage.complete(
+          SessionPage(
+            sessions: [
+              Session(
+                sessionId: 'sess_stale_tail',
+                title: 'Stale tail chat',
+                updatedAt: DateTime.utc(2026, 5, 9),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Stale tail chat'), findsNothing);
+      },
+    );
+
     testWidgets('a lifecycle refresh keeps rows from loaded tail pages', (
       tester,
     ) async {
@@ -706,6 +736,95 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Restored chat'), findsOneWidget);
+    });
+
+    testWidgets('viewing an archived row guards against a legacy update', (
+      tester,
+    ) async {
+      final updates = _FakeSessionUpdateSource();
+      final api = _FakeApi()
+        ..archivedSessions = [
+          Session(
+            sessionId: 'sess_archived',
+            title: 'Archived guard',
+            updatedAt: DateTime.utc(2026, 5, 9),
+            status: SessionStatus.archived,
+          ),
+        ];
+      await _pumpShell(
+        tester,
+        api: api,
+        size: _desktop,
+        sessionUpdateSourceFactory: () => updates,
+      );
+      await tester.tap(find.byTooltip('Archived conversations'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.pumpAndSettle();
+
+      updates.add(
+        TuringEvent(
+          eventId: 'evt_legacy_archived',
+          sessionId: 'sess_archived',
+          traceId: 'trace_legacy_archived',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 5, 12),
+          payload: const {
+            'title': 'Resurrected archived chat',
+            'updatedAt': '2026-05-12T00:00:00.000000000Z',
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Resurrected archived chat'), findsNothing);
+    });
+
+    testWidgets('a delayed archived page cannot revert a newer rename', (
+      tester,
+    ) async {
+      final stalePage = Completer<SessionPage>();
+      final api = _FakeApi()
+        ..archivedSessions = [
+          Session(
+            sessionId: 'sess_archived',
+            title: 'Archived original',
+            updatedAt: DateTime.utc(2026, 5, 9),
+            status: SessionStatus.archived,
+          ),
+        ]
+        ..nextArchivedCursor = 'archived-2';
+      await _pumpShell(tester, api: api, size: _desktop);
+      await tester.tap(find.byTooltip('Archived conversations'));
+      await tester.pumpAndSettle();
+      api.nextArchivedPage = stalePage;
+      await tester.tap(find.widgetWithText(TextButton, 'Load more'));
+      await tester.pump();
+
+      await tester.tap(find.byTooltip('Rename archived chat'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextFormField).last, 'Renamed');
+      await tester.tap(find.widgetWithText(FilledButton, 'Rename'));
+      await tester.pumpAndSettle();
+      expect(find.text('Server archived title'), findsOneWidget);
+
+      stalePage.complete(
+        SessionPage(
+          sessions: [
+            Session(
+              sessionId: 'sess_archived',
+              title: 'Stale archived title',
+              updatedAt: DateTime.utc(2026, 5, 9),
+              status: SessionStatus.archived,
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Server archived title'), findsOneWidget);
+      expect(find.text('Stale archived title'), findsNothing);
       expect(find.text('Archived one'), findsNothing);
     });
 
@@ -764,6 +883,13 @@ void main() {
 
         expect(find.text('Remotely restored'), findsNothing);
         expect(find.textContaining('Could not rename this chat'), findsNothing);
+        await tester.tap(find.widgetWithText(TextButton, 'Close'));
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Server archived title'),
+          findsOneWidget,
+          reason: 'the active authoritative rename result reaches the sidebar',
+        );
       },
     );
 
@@ -791,6 +917,103 @@ void main() {
 
       expect(api.deletedSessionIds, ['sess_archived']);
       expect(find.text('Archived delete target'), findsNothing);
+    });
+
+    testWidgets('an archived pending deletion remains available to retry', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..archivedSessions = [
+          Session(
+            sessionId: 'sess_archived',
+            title: 'Archived retry target',
+            updatedAt: DateTime.utc(2026, 5, 9),
+            status: SessionStatus.archived,
+          ),
+        ]
+        ..deletionResult = const SessionDeletionReceipt(
+          sessionId: 'sess_archived',
+          state: SessionDeletionState.failedExternal,
+          retryable: true,
+          lifecycleVersion: 1,
+        )
+        ..pendingDeletionReceipts = const [
+          SessionDeletionReceipt(
+            sessionId: 'sess_archived',
+            state: SessionDeletionState.failedExternal,
+            retryable: true,
+            lifecycleVersion: 1,
+          ),
+        ];
+      await _pumpShell(tester, api: api, size: _desktop);
+
+      await tester.tap(find.byTooltip('Archived conversations'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Delete archived chat'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Archived retry target'), findsOneWidget);
+      expect(find.byTooltip('Delete archived chat'), findsOneWidget);
+      expect(find.textContaining('Retry deletion'), findsOneWidget);
+    });
+
+    testWidgets('a terminal event removes an archived pending deletion', (
+      tester,
+    ) async {
+      final updates = _FakeSessionUpdateSource();
+      final api = _FakeApi()
+        ..archivedSessions = [
+          Session(
+            sessionId: 'sess_archived',
+            title: 'Archived pending target',
+            updatedAt: DateTime.utc(2026, 5, 9),
+            status: SessionStatus.archived,
+          ),
+        ]
+        ..deletionResult = const SessionDeletionReceipt(
+          sessionId: 'sess_archived',
+          state: SessionDeletionState.inProgress,
+          retryable: true,
+          lifecycleVersion: 1,
+        )
+        ..pendingDeletionReceipts = const [
+          SessionDeletionReceipt(
+            sessionId: 'sess_archived',
+            state: SessionDeletionState.inProgress,
+            retryable: true,
+            lifecycleVersion: 1,
+          ),
+        ];
+      await _pumpShell(
+        tester,
+        api: api,
+        size: _desktop,
+        sessionUpdateSourceFactory: () => updates,
+      );
+      await tester.tap(find.byTooltip('Archived conversations'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Delete archived chat'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+      expect(find.text('Archived pending target'), findsOneWidget);
+
+      updates.add(
+        TuringEvent(
+          eventId: 'evt_archived_deleted',
+          sessionId: 'sess_archived',
+          traceId: 'trace_archived_deleted',
+          sequence: 1,
+          type: 'session.deleted',
+          createdAt: DateTime.utc(2026, 5, 12),
+          payload: const {},
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Archived pending target'), findsNothing);
     });
 
     testWidgets('a session update survives an older list response', (
@@ -1397,6 +1620,305 @@ void main() {
         reason: 'page omission does not expire a local deletion tombstone',
       );
     });
+
+    testWidgets('pending deletion rejects a delayed lifecycle event', (
+      tester,
+    ) async {
+      final updates = _FakeSessionUpdateSource();
+      final api = _FakeApi()
+        ..deletionResult = const SessionDeletionReceipt(
+          sessionId: 'sess_existing',
+          state: SessionDeletionState.inProgress,
+          retryable: true,
+          lifecycleVersion: 1,
+        );
+      await _pumpShell(
+        tester,
+        api: api,
+        size: _desktop,
+        sessionUpdateSourceFactory: () => updates,
+      );
+      await tester.tap(find.text('Existing chat'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Delete chat'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      updates.add(
+        TuringEvent(
+          eventId: 'evt_stale_after_delete',
+          sessionId: 'sess_existing',
+          traceId: 'trace_stale_after_delete',
+          sequence: 2,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 8, 21),
+          payload: const {
+            'title': 'Resurrected title',
+            'status': 'active',
+            'updatedAt': '2026-08-21T00:00:00.000000000Z',
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Resurrected title'), findsNothing);
+      expect(find.text('Existing chat'), findsOneWidget);
+    });
+
+    testWidgets(
+      'a receipt snapshot from before deletion cannot tombstone pending work',
+      (tester) async {
+        final staleSessions = Completer<List<Session>>();
+        final staleReceipts = Completer<List<SessionDeletionReceipt>>();
+        final api = _FakeApi()
+          ..deletionResult = const SessionDeletionReceipt(
+            sessionId: 'sess_existing',
+            state: SessionDeletionState.inProgress,
+            retryable: true,
+            lifecycleVersion: 1,
+          );
+        await _pumpShell(tester, api: api, size: _desktop);
+        api
+          ..nextListSessions = staleSessions
+          ..nextDeletionReceipts = staleReceipts;
+
+        await tester.tap(find.text('New chat').first);
+        for (var i = 0; i < 5; i++) {
+          await tester.pump();
+        }
+        staleReceipts.complete(const []);
+
+        await tester.tap(find.text('Existing chat'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('Delete chat'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+        await tester.pump();
+
+        staleSessions.complete(api.sessions);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Existing chat'), findsOneWidget);
+        expect(find.textContaining('still being withdrawn'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'pending deletion placeholder survives a stale load-more page',
+      (tester) async {
+        final stalePage = Completer<SessionPage>();
+        final api = _FakeApi()..nextSessionCursor = 'cursor-2';
+        await _pumpShell(tester, api: api, size: _desktop);
+        api.nextSessionPage = stalePage;
+        await tester.tap(find.widgetWithText(TextButton, 'Load more'));
+        await tester.pump();
+
+        api
+          ..sessions = []
+          ..pendingDeletionReceipts = const [
+            SessionDeletionReceipt(
+              sessionId: 'sess_existing',
+              state: SessionDeletionState.inProgress,
+              retryable: true,
+              lifecycleVersion: 1,
+            ),
+          ];
+        await tester.tap(find.text('New chat').first);
+        await tester.pumpAndSettle();
+        expect(find.text('Deletion pending'), findsOneWidget);
+
+        stalePage.complete(
+          SessionPage(
+            sessions: [
+              Session(
+                sessionId: 'sess_existing',
+                title: 'Stale active chat',
+                updatedAt: DateTime.utc(2026, 8, 20),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Deletion pending'), findsOneWidget);
+        expect(find.text('Stale active chat'), findsNothing);
+      },
+    );
+
+    testWidgets('superseded refresh handles a delayed receipt-list failure', (
+      tester,
+    ) async {
+      final staleSessions = Completer<List<Session>>();
+      final staleReceipts = Completer<List<SessionDeletionReceipt>>();
+      final api = _FakeApi();
+      await _pumpShell(tester, api: api, size: _desktop);
+      api
+        ..nextListSessions = staleSessions
+        ..nextDeletionReceipts = staleReceipts;
+
+      await tester.tap(find.text('New chat').first);
+      for (var i = 0; i < 5; i++) {
+        await tester.pump();
+      }
+      await tester.tap(find.text('New chat').first);
+      for (var i = 0; i < 5; i++) {
+        await tester.pump();
+      }
+
+      staleSessions.complete(api.sessions);
+      await tester.pump();
+      staleReceipts.completeError(StateError('receipt list failed'));
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('current refresh handles a receipt-list failure', (
+      tester,
+    ) async {
+      final updates = _FakeSessionUpdateSource();
+      final receipts = Completer<List<SessionDeletionReceipt>>();
+      final api = _FakeApi();
+      await _pumpShell(
+        tester,
+        api: api,
+        size: _desktop,
+        sessionUpdateSourceFactory: () => updates,
+      );
+      api.nextDeletionReceipts = receipts;
+      updates.addError(StateError('refresh'));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(api.nextDeletionReceipts, isNull);
+
+      receipts.completeError(StateError('receipt list failed'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('Existing chat'), findsOneWidget);
+      expect(
+        find.byType(CircularProgressIndicator),
+        findsNothing,
+        reason: 'the current refresh must leave its loading state',
+      );
+    });
+
+    testWidgets(
+      'a completed receipt closes a chat after a missed terminal event',
+      (tester) async {
+        final updates = _FakeSessionUpdateSource();
+        final api = _FakeApi();
+        await _pumpShell(
+          tester,
+          api: api,
+          size: _desktop,
+          sessionUpdateSourceFactory: () => updates,
+        );
+        await tester.tap(find.text('Existing chat'));
+        await tester.pumpAndSettle();
+
+        api
+          ..sessions = []
+          ..pendingDeletionReceipts = const [
+            SessionDeletionReceipt(
+              sessionId: 'sess_existing',
+              state: SessionDeletionState.completed,
+              retryable: false,
+              lifecycleVersion: 1,
+            ),
+          ];
+        updates.addError(StateError('missed terminal event'));
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Ask Turing anything'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'a stale lower-generation completion cannot remove a pending deletion',
+      (tester) async {
+        final staleCompletion = Completer<SessionDeletionReceipt>();
+        final api = _FakeApi()..nextDeletion = staleCompletion;
+        await _pumpShell(tester, api: api, size: _desktop);
+        await tester.tap(find.text('Existing chat'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('Delete chat'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+        await tester.pump();
+
+        api.pendingDeletionReceipts = const [
+          SessionDeletionReceipt(
+            sessionId: 'sess_existing',
+            state: SessionDeletionState.inProgress,
+            retryable: true,
+            lifecycleVersion: 2,
+          ),
+        ];
+        await tester.tap(find.text('New chat').first);
+        for (var i = 0; i < 5; i++) {
+          await tester.pump();
+        }
+        expect(find.text('Deletion pending'), findsOneWidget);
+
+        staleCompletion.complete(
+          const SessionDeletionReceipt(
+            sessionId: 'sess_existing',
+            state: SessionDeletionState.completed,
+            retryable: false,
+            lifecycleVersion: 1,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Deletion pending'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'a terminal deletion tombstone rejects later lifecycle events',
+      (tester) async {
+        final updates = _FakeSessionUpdateSource();
+        await _pumpShell(
+          tester,
+          api: _FakeApi(),
+          size: _desktop,
+          sessionUpdateSourceFactory: () => updates,
+        );
+        updates.add(
+          TuringEvent(
+            eventId: 'evt_deleted',
+            sessionId: 'sess_existing',
+            traceId: 'trace_deleted',
+            sequence: 2,
+            type: 'session.deleted',
+            createdAt: DateTime.utc(2026, 8, 21),
+            payload: const {},
+          ),
+        );
+        updates.add(
+          TuringEvent(
+            eventId: 'evt_after_deleted',
+            sessionId: 'sess_existing',
+            traceId: 'trace_after_deleted',
+            sequence: 3,
+            type: 'session.updated',
+            createdAt: DateTime.utc(2026, 8, 21),
+            payload: const {
+              'title': 'Too late',
+              'status': 'active',
+              'updatedAt': '2026-08-21T00:00:01.000000000Z',
+            },
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Existing chat'), findsNothing);
+        expect(find.text('Too late'), findsNothing);
+      },
+    );
   });
 
   group('compact layout', () {
@@ -1802,14 +2324,21 @@ class _FakeApi
   String createdSessionTimestamp = '2026-05-10T00:00:00.000Z';
   String? nextSessionCursor;
   final Map<String, SessionPage> sessionPages = {};
+  Completer<SessionPage>? nextSessionPage;
   final List<String?> sessionPageCursors = [];
   final List<String> renamedTitles = [];
   List<Session> archivedSessions = [];
   SessionStatus archivedRenameStatus = SessionStatus.archived;
   String? nextArchivedCursor;
   final Map<String, SessionPage> archivedPages = {};
+  Completer<SessionPage>? nextArchivedPage;
   final List<String?> archivedPageCursors = [];
   final List<String> deletedSessionIds = [];
+  SessionDeletionReceipt deletionResult =
+      const SessionDeletionReceipt.completed();
+  Completer<SessionDeletionReceipt>? nextDeletion;
+  List<SessionDeletionReceipt> pendingDeletionReceipts = const [];
+  Completer<List<SessionDeletionReceipt>>? nextDeletionReceipts;
 
   int listSessionsCalls = 0;
 
@@ -1834,6 +2363,11 @@ class _FakeApi
   }) async {
     if (filter == SessionListFilter.archived) {
       archivedPageCursors.add(cursor);
+      final pendingPage = nextArchivedPage;
+      if (pendingPage != null) {
+        nextArchivedPage = null;
+        return pendingPage.future;
+      }
       if (cursor != null) {
         return archivedPages[cursor] ?? const SessionPage(sessions: []);
       }
@@ -1843,6 +2377,11 @@ class _FakeApi
       );
     }
     sessionPageCursors.add(cursor);
+    final pendingPage = nextSessionPage;
+    if (pendingPage != null) {
+      nextSessionPage = null;
+      return pendingPage.future;
+    }
     final configuredPageSize = activePageSize;
     if (configuredPageSize != null) {
       final offset = cursor == null
@@ -2008,7 +2547,9 @@ class _FakeApi
   }
 
   @override
-  Future<void> deleteSession({required String sessionId}) async {
+  Future<SessionDeletionReceipt> deleteSession({
+    required String sessionId,
+  }) async {
     deletedSessionIds.add(sessionId);
     archivedSessions = archivedSessions
         .where((session) => session.sessionId != sessionId)
@@ -2018,6 +2559,12 @@ class _FakeApi
           .where((session) => session.sessionId != sessionId)
           .toList();
     }
+    final pending = nextDeletion;
+    if (pending != null) {
+      nextDeletion = null;
+      return pending.future;
+    }
+    return deletionResult;
   }
 
   @override
@@ -2086,6 +2633,16 @@ class _FakeApi
         .toList();
     sessions = [restored, ...sessions];
     return restored;
+  }
+
+  @override
+  Future<List<SessionDeletionReceipt>> listSessionDeletionReceipts() async {
+    final pending = nextDeletionReceipts;
+    if (pending != null) {
+      nextDeletionReceipts = null;
+      return pending.future;
+    }
+    return pendingDeletionReceipts;
   }
 
   @override

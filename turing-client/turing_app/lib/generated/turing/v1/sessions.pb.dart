@@ -12,6 +12,7 @@
 
 import 'dart:core' as $core;
 
+import 'package:fixnum/fixnum.dart' as $fixnum;
 import 'package:protobuf/protobuf.dart' as $pb;
 
 import '../../google/protobuf/timestamp.pb.dart' as $1;
@@ -515,12 +516,279 @@ class DeleteSessionRequest extends $pb.GeneratedMessage {
   void clearSessionId() => $_clearField(1);
 }
 
-class DeleteSessionResponse extends $pb.GeneratedMessage {
-  factory DeleteSessionResponse({
+class SessionDeletionReceipt extends $pb.GeneratedMessage {
+  factory SessionDeletionReceipt({
     $core.String? sessionId,
+    SessionDeletionState? state,
+    $fixnum.Int64? lifecycleVersion,
+    $core.bool? retryable,
+    $core.String? errorCode,
+    $fixnum.Int64? terminalSequence,
+    $core.int? runCount,
+    $core.int? messageCount,
+    $core.int? retainedLegacyArtifactCount,
   }) {
     final result = create();
     if (sessionId != null) result.sessionId = sessionId;
+    if (state != null) result.state = state;
+    if (lifecycleVersion != null) result.lifecycleVersion = lifecycleVersion;
+    if (retryable != null) result.retryable = retryable;
+    if (errorCode != null) result.errorCode = errorCode;
+    if (terminalSequence != null) result.terminalSequence = terminalSequence;
+    if (runCount != null) result.runCount = runCount;
+    if (messageCount != null) result.messageCount = messageCount;
+    if (retainedLegacyArtifactCount != null)
+      result.retainedLegacyArtifactCount = retainedLegacyArtifactCount;
+    return result;
+  }
+
+  SessionDeletionReceipt._();
+
+  factory SessionDeletionReceipt.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory SessionDeletionReceipt.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'SessionDeletionReceipt',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'sessionId')
+    ..e<SessionDeletionState>(
+        2, _omitFieldNames ? '' : 'state', $pb.PbFieldType.OE,
+        defaultOrMaker: SessionDeletionState.SESSION_DELETION_STATE_UNSPECIFIED,
+        valueOf: SessionDeletionState.valueOf,
+        enumValues: SessionDeletionState.values)
+    ..aInt64(3, _omitFieldNames ? '' : 'lifecycleVersion')
+    ..aOB(4, _omitFieldNames ? '' : 'retryable')
+    ..aOS(5, _omitFieldNames ? '' : 'errorCode')
+    ..aInt64(6, _omitFieldNames ? '' : 'terminalSequence')
+    ..a<$core.int>(7, _omitFieldNames ? '' : 'runCount', $pb.PbFieldType.O3)
+    ..a<$core.int>(8, _omitFieldNames ? '' : 'messageCount', $pb.PbFieldType.O3)
+    ..a<$core.int>(9, _omitFieldNames ? '' : 'retainedLegacyArtifactCount',
+        $pb.PbFieldType.O3)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SessionDeletionReceipt clone() =>
+      SessionDeletionReceipt()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SessionDeletionReceipt copyWith(
+          void Function(SessionDeletionReceipt) updates) =>
+      super.copyWith((message) => updates(message as SessionDeletionReceipt))
+          as SessionDeletionReceipt;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static SessionDeletionReceipt create() => SessionDeletionReceipt._();
+  @$core.override
+  SessionDeletionReceipt createEmptyInstance() => create();
+  static $pb.PbList<SessionDeletionReceipt> createRepeated() =>
+      $pb.PbList<SessionDeletionReceipt>();
+  @$core.pragma('dart2js:noInline')
+  static SessionDeletionReceipt getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<SessionDeletionReceipt>(create);
+  static SessionDeletionReceipt? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get sessionId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set sessionId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasSessionId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearSessionId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  SessionDeletionState get state => $_getN(1);
+  @$pb.TagNumber(2)
+  set state(SessionDeletionState value) => $_setField(2, value);
+  @$pb.TagNumber(2)
+  $core.bool hasState() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearState() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $fixnum.Int64 get lifecycleVersion => $_getI64(2);
+  @$pb.TagNumber(3)
+  set lifecycleVersion($fixnum.Int64 value) => $_setInt64(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasLifecycleVersion() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearLifecycleVersion() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.bool get retryable => $_getBF(3);
+  @$pb.TagNumber(4)
+  set retryable($core.bool value) => $_setBool(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasRetryable() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearRetryable() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get errorCode => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set errorCode($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasErrorCode() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearErrorCode() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $fixnum.Int64 get terminalSequence => $_getI64(5);
+  @$pb.TagNumber(6)
+  set terminalSequence($fixnum.Int64 value) => $_setInt64(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasTerminalSequence() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearTerminalSequence() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.int get runCount => $_getIZ(6);
+  @$pb.TagNumber(7)
+  set runCount($core.int value) => $_setSignedInt32(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasRunCount() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearRunCount() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $core.int get messageCount => $_getIZ(7);
+  @$pb.TagNumber(8)
+  set messageCount($core.int value) => $_setSignedInt32(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasMessageCount() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearMessageCount() => $_clearField(8);
+
+  @$pb.TagNumber(9)
+  $core.int get retainedLegacyArtifactCount => $_getIZ(8);
+  @$pb.TagNumber(9)
+  set retainedLegacyArtifactCount($core.int value) =>
+      $_setSignedInt32(8, value);
+  @$pb.TagNumber(9)
+  $core.bool hasRetainedLegacyArtifactCount() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearRetainedLegacyArtifactCount() => $_clearField(9);
+}
+
+class ListSessionDeletionReceiptsRequest extends $pb.GeneratedMessage {
+  factory ListSessionDeletionReceiptsRequest() => create();
+
+  ListSessionDeletionReceiptsRequest._();
+
+  factory ListSessionDeletionReceiptsRequest.fromBuffer(
+          $core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ListSessionDeletionReceiptsRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ListSessionDeletionReceiptsRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListSessionDeletionReceiptsRequest clone() =>
+      ListSessionDeletionReceiptsRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListSessionDeletionReceiptsRequest copyWith(
+          void Function(ListSessionDeletionReceiptsRequest) updates) =>
+      super.copyWith((message) =>
+              updates(message as ListSessionDeletionReceiptsRequest))
+          as ListSessionDeletionReceiptsRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ListSessionDeletionReceiptsRequest create() =>
+      ListSessionDeletionReceiptsRequest._();
+  @$core.override
+  ListSessionDeletionReceiptsRequest createEmptyInstance() => create();
+  static $pb.PbList<ListSessionDeletionReceiptsRequest> createRepeated() =>
+      $pb.PbList<ListSessionDeletionReceiptsRequest>();
+  @$core.pragma('dart2js:noInline')
+  static ListSessionDeletionReceiptsRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ListSessionDeletionReceiptsRequest>(
+          create);
+  static ListSessionDeletionReceiptsRequest? _defaultInstance;
+}
+
+class ListSessionDeletionReceiptsResponse extends $pb.GeneratedMessage {
+  factory ListSessionDeletionReceiptsResponse({
+    $core.Iterable<SessionDeletionReceipt>? deletions,
+  }) {
+    final result = create();
+    if (deletions != null) result.deletions.addAll(deletions);
+    return result;
+  }
+
+  ListSessionDeletionReceiptsResponse._();
+
+  factory ListSessionDeletionReceiptsResponse.fromBuffer(
+          $core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ListSessionDeletionReceiptsResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ListSessionDeletionReceiptsResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..pc<SessionDeletionReceipt>(
+        1, _omitFieldNames ? '' : 'deletions', $pb.PbFieldType.PM,
+        subBuilder: SessionDeletionReceipt.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListSessionDeletionReceiptsResponse clone() =>
+      ListSessionDeletionReceiptsResponse()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListSessionDeletionReceiptsResponse copyWith(
+          void Function(ListSessionDeletionReceiptsResponse) updates) =>
+      super.copyWith((message) =>
+              updates(message as ListSessionDeletionReceiptsResponse))
+          as ListSessionDeletionReceiptsResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ListSessionDeletionReceiptsResponse create() =>
+      ListSessionDeletionReceiptsResponse._();
+  @$core.override
+  ListSessionDeletionReceiptsResponse createEmptyInstance() => create();
+  static $pb.PbList<ListSessionDeletionReceiptsResponse> createRepeated() =>
+      $pb.PbList<ListSessionDeletionReceiptsResponse>();
+  @$core.pragma('dart2js:noInline')
+  static ListSessionDeletionReceiptsResponse getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<
+          ListSessionDeletionReceiptsResponse>(create);
+  static ListSessionDeletionReceiptsResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $pb.PbList<SessionDeletionReceipt> get deletions => $_getList(0);
+}
+
+class DeleteSessionResponse extends $pb.GeneratedMessage {
+  factory DeleteSessionResponse({
+    $core.String? sessionId,
+    SessionDeletionReceipt? deletion,
+  }) {
+    final result = create();
+    if (sessionId != null) result.sessionId = sessionId;
+    if (deletion != null) result.deletion = deletion;
     return result;
   }
 
@@ -538,6 +806,8 @@ class DeleteSessionResponse extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'sessionId')
+    ..aOM<SessionDeletionReceipt>(2, _omitFieldNames ? '' : 'deletion',
+        subBuilder: SessionDeletionReceipt.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -571,6 +841,17 @@ class DeleteSessionResponse extends $pb.GeneratedMessage {
   $core.bool hasSessionId() => $_has(0);
   @$pb.TagNumber(1)
   void clearSessionId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  SessionDeletionReceipt get deletion => $_getN(1);
+  @$pb.TagNumber(2)
+  set deletion(SessionDeletionReceipt value) => $_setField(2, value);
+  @$pb.TagNumber(2)
+  $core.bool hasDeletion() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearDeletion() => $_clearField(2);
+  @$pb.TagNumber(2)
+  SessionDeletionReceipt ensureDeletion() => $_ensure(1);
 }
 
 class RenameSessionRequest extends $pb.GeneratedMessage {

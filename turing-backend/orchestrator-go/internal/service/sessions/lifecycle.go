@@ -83,6 +83,8 @@ func lifecycleError(err error, internalMessage string) error {
 	switch {
 	case errors.Is(err, repository.ErrSessionNotFound):
 		return status.Error(codes.NotFound, "session not found")
+	case errors.Is(err, repository.ErrSessionDeleting):
+		return status.Error(codes.FailedPrecondition, "session deletion is in progress")
 	case errors.Is(err, repository.ErrInvalidSessionTitle):
 		return status.Error(codes.InvalidArgument, "title is invalid")
 	default:

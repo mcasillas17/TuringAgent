@@ -380,6 +380,9 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 	}
 	defer func() { _ = tx.Rollback() }()
 	input = normalizeEnqueueUserMessageInput(input)
+	if err := requireActiveSessionTx(ctx, tx, input.SessionID); err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
 	fingerprint := ""
 	if input.IdempotencyKey != "" {
 		fingerprint, err = enqueueRequestFingerprint(input)
@@ -484,6 +487,9 @@ func resolveEnqueueRouteTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMes
 // lose a run or fire the same one twice.
 func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMessageInput) (EnqueueUserMessageResult, error) {
 	input = normalizeEnqueueUserMessageInput(input)
+	if err := requireActiveSessionTx(ctx, tx, input.SessionID); err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
 	// Resolve the effective destination before writing anything. A conversation
 	// routed to an external agent overrides request provider/model fields, and
 	// routing validation must evaluate that same frozen destination.

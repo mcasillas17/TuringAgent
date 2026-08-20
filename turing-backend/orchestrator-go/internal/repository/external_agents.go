@@ -322,6 +322,9 @@ func (r *Repository) SetSessionAgent(ctx context.Context, sessionID string, agen
 		return ExternalAgent{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := requireActiveSessionTx(ctx, tx, sessionID); err != nil {
+		return ExternalAgent{}, err
+	}
 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO session_external_agent (session_id, agent_id, routed_at) VALUES (?, ?, ?)
@@ -411,6 +414,9 @@ func (r *Repository) ClearSessionAgent(ctx context.Context, sessionID string) er
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := requireActiveSessionTx(ctx, tx, sessionID); err != nil {
+		return err
+	}
 
 	result, err := tx.ExecContext(ctx, `DELETE FROM session_external_agent WHERE session_id = ?`, sessionID)
 	if err != nil {
@@ -459,12 +465,18 @@ const sessionAgentQuery = `
 const sessionExistsQuery = `SELECT 1 FROM sessions WHERE id = ?`
 
 func (r *Repository) requireSession(ctx context.Context, sessionID string) error {
-	var exists int
-	err := r.db.QueryRowContext(ctx, sessionExistsQuery, sessionID).Scan(&exists)
+	var deletionState string
+	err := r.db.QueryRowContext(ctx, `SELECT deletion_state FROM sessions WHERE id = ?`, sessionID).Scan(&deletionState)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrSessionNotFound
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if deletionState != "active" {
+		return ErrSessionDeleting
+	}
+	return nil
 }
 
 // sessionExternalAgentTx reads the destination to freeze into a job payload.

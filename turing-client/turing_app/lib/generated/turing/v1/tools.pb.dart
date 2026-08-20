@@ -314,6 +314,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
     $core.String? reason,
     $core.bool? terminalRun,
     ToolCallPhase? phase,
+    $core.String? provenanceToken,
   }) {
     final result = create();
     if (decision != null) result.decision = decision;
@@ -322,6 +323,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
     if (reason != null) result.reason = reason;
     if (terminalRun != null) result.terminalRun = terminalRun;
     if (phase != null) result.phase = phase;
+    if (provenanceToken != null) result.provenanceToken = provenanceToken;
     return result;
   }
 
@@ -351,6 +353,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
         defaultOrMaker: ToolCallPhase.TOOL_CALL_PHASE_UNSPECIFIED,
         valueOf: ToolCallPhase.valueOf,
         enumValues: ToolCallPhase.values)
+    ..aOS(7, _omitFieldNames ? '' : 'provenanceToken')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -427,6 +430,18 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
   $core.bool hasPhase() => $_has(5);
   @$pb.TagNumber(6)
   void clearPhase() => $_clearField(6);
+
+  /// Server-issued, server-signed capability binding this tool call to its
+  /// session, run, deletion generation, tool, arguments and path scope. The
+  /// runtime forwards it verbatim; it never mints or edits one.
+  @$pb.TagNumber(7)
+  $core.String get provenanceToken => $_getSZ(6);
+  @$pb.TagNumber(7)
+  set provenanceToken($core.String value) => $_setString(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasProvenanceToken() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearProvenanceToken() => $_clearField(7);
 }
 
 const $core.bool _omitFieldNames =

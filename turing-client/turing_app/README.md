@@ -21,6 +21,9 @@ Implemented in the client:
 - Inline notices when a live agent run reaches its tool-iteration limit.
 - Approval cards for `approval.requested` events, cleared by approval terminal events.
 - Model provider selector for `ollama` or `openai_compatible` per sent message.
+- Typed session-withdrawal receipts and terminal `session.deleted` events. The
+  shell removes a conversation only after a completed receipt or its terminal
+  event; an in-progress or failed-external receipt remains visible for retry.
 
 Provisional until the full local stack is running:
 
@@ -108,6 +111,10 @@ older status-less event.
 Historical tool cards and run notices are suppressed during event replay because persisted messages do not carry event sequence values that could place those artifacts back into the transcript correctly. Live events committed after the screen's startup watermark still render normally.
 
 Approval cards appear from `approval.requested` and are removed on `approval.approved`, `approval.denied`, `approval.expired`, or `approval.consumed`.
+
+`session.deleted` is terminal. `ChatScreen` closes its source, ignores stale
+events, and tells `ResponsiveShell` to remove the session. A reconnect or
+event replay for a deleted session is `NotFound`, not an empty history.
 
 ## Important Files
 

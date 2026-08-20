@@ -171,7 +171,12 @@ func (r *Repository) RecordAuditForExistingRun(ctx context.Context, correlationI
 			id, correlation_id, actor_type, actor_id, action, target, payload_json, created_at
 		)
 		SELECT ?, ?, ?, ?, ?, ?, ?, ?
-		WHERE EXISTS (SELECT 1 FROM agent_runs WHERE id = ?)
+		WHERE EXISTS (
+			SELECT 1
+			FROM agent_runs
+			JOIN sessions ON sessions.id = agent_runs.session_id
+			WHERE agent_runs.id = ? AND sessions.deletion_state = 'active'
+		)
 	`,
 		ids.New("audit"),
 		correlationID,

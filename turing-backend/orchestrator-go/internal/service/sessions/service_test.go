@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -32,9 +33,10 @@ type sessionHarness struct {
 }
 
 type sessionCapabilitySource struct {
-	providers map[turingv1.ModelProvider][]*turingv1.ModelCapability
-	agents    map[turingv1.AgentId]bool
-	tools     []string
+	providers         map[turingv1.ModelProvider][]*turingv1.ModelCapability
+	agents            map[turingv1.AgentId]bool
+	tools             []string
+	cancelledSessions []string
 }
 
 func (s *sessionCapabilitySource) ProviderCapabilities() map[turingv1.ModelProvider][]*turingv1.ModelCapability {
@@ -63,6 +65,10 @@ func (s *sessionCapabilitySource) RoutableDefaultModel(provider string, configur
 
 func (s *sessionCapabilitySource) LiveToolNames() []string {
 	return append([]string(nil), s.tools...)
+}
+
+func (s *sessionCapabilitySource) CancelSessionRuns(_ context.Context, sessionID string, _ string) {
+	s.cancelledSessions = append(s.cancelledSessions, sessionID)
 }
 
 func newSessionHarness(t *testing.T) *sessionHarness {
@@ -399,6 +405,65 @@ func TestSessionLifecycleRPCsValidatePublishAndReconcileVisibility(t *testing.T)
 	}
 }
 
+func TestSessionLifecycleRPCsHonorDeletionPrecedence(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	session, err := h.repo.CreateSession(ctx, "Withdrawing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.BeginSessionDeletion(ctx, session.SessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, filter := range []turingv1.SessionListFilter{
+		turingv1.SessionListFilter_SESSION_LIST_FILTER_ACTIVE,
+		turingv1.SessionListFilter_SESSION_LIST_FILTER_ARCHIVED,
+		turingv1.SessionListFilter_SESSION_LIST_FILTER_ALL,
+	} {
+		page, err := client.ListSessions(ctx, &turingv1.ListSessionsRequest{Filter: filter})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, listed := range page.Sessions {
+			if listed.SessionId == session.SessionID {
+				t.Fatalf("filter %v returned deleting session", filter)
+			}
+		}
+	}
+	if _, err := client.GetSession(ctx, &turingv1.GetSessionRequest{
+		SessionId: session.SessionID,
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetSession error = %v, want NotFound", err)
+	}
+	for name, operation := range map[string]func() error{
+		"rename": func() error {
+			_, err := client.RenameSession(ctx, &turingv1.RenameSessionRequest{
+				SessionId: session.SessionID,
+				Title:     "Withdrawing",
+			})
+			return err
+		},
+		"archive": func() error {
+			_, err := client.ArchiveSession(ctx, &turingv1.ArchiveSessionRequest{
+				SessionId: session.SessionID,
+			})
+			return err
+		},
+		"restore": func() error {
+			_, err := client.RestoreSession(ctx, &turingv1.RestoreSessionRequest{
+				SessionId: session.SessionID,
+			})
+			return err
+		},
+	} {
+		if err := operation(); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("%s error = %v, want FailedPrecondition", name, err)
+		}
+	}
+}
+
 func TestSessionLifecycleRPCsValidateIDsAndUnknownSessions(t *testing.T) {
 	h := newSessionHarness(t)
 	ctx := context.Background()
@@ -645,6 +710,255 @@ func TestListToolsExcludesPersistedToolsThatNoLiveWorkerAdvertises(t *testing.T)
 	}
 }
 
+func TestDeleteSessionStartsWithdrawalForLiveRun(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	session, err := h.repo.CreateSession(ctx, "Delete live run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "cancel before deletion", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.ClaimNextJob(ctx, "general_assistant", "worker-delete-live"); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := client.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if response.SessionId != session.SessionID {
+		t.Fatalf("DeleteSession response = %+v, want session id %q", response, session.SessionID)
+	}
+	if response.Deletion == nil || response.Deletion.State != turingv1.SessionDeletionState_SESSION_DELETION_STATE_IN_PROGRESS {
+		t.Fatalf("DeleteSession receipt = %+v, want in-progress receipt", response.Deletion)
+	}
+	if got := h.capabilities.cancelledSessions; len(got) != 1 || got[0] != session.SessionID {
+		t.Fatalf("runtime cancellation sessions = %v, want [%s]", got, session.SessionID)
+	}
+}
+
+func TestDeleteSessionPublishesTerminalEventAfterCompletedWithdrawal(t *testing.T) {
+	database := openSessionTestDB(t)
+	repo := repository.New(database)
+	bus := eventsvc.NewBus(1)
+	server := New(repo, config.Config{}, &sessionCapabilitySource{}, bus)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Delete terminal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, unsubscribe := bus.Subscribe(session.SessionID)
+	defer unsubscribe()
+
+	response, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if response.Deletion.GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_COMPLETED {
+		t.Fatalf("DeleteSession receipt = %+v, want completed", response.Deletion)
+	}
+	select {
+	case event, ok := <-events:
+		if !ok {
+			t.Fatal("terminal event channel closed before delivery")
+		}
+		if event.Type != "session.deleted" || event.Sequence != response.Deletion.TerminalSequence {
+			t.Fatalf("terminal event = %+v, receipt = %+v", event, response.Deletion)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for terminal deletion event")
+	}
+	if _, ok := <-events; ok {
+		t.Fatal("terminal deletion event stream remained open")
+	}
+}
+
+func TestDeleteSessionCompletesAfterArtifactCleanerRemovesOwnedNamespace(t *testing.T) {
+	database := openSessionTestDB(t)
+	repo := repository.New(database)
+	server := New(repo, config.Config{}, &sessionCapabilitySource{})
+	cleaner := &recordingArtifactCleaner{}
+	server.SetArtifactCleaner(cleaner)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Delete owned artifact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "write then withdraw", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO sandbox_artifacts (
+			id, session_id, run_id, logical_path_hash, physical_path, state, policy,
+			deletion_generation, created_at
+		) VALUES (?, ?, ?, ?, ?, 'ready', 'delete_on_session_delete', 0, ?)
+	`,
+		"artifact_service_cleanup",
+		session.SessionID,
+		enqueued.RunID,
+		"sha256:service",
+		"sessions/"+session.SessionID+"/runs/"+enqueued.RunID+"/files/note.txt",
+		repository.FormatTimestamp(time.Now()),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if response.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_COMPLETED {
+		t.Fatalf("deletion receipt = %+v, want completed", response.GetDeletion())
+	}
+	if response.GetDeletion().GetErrorCode() != "" {
+		t.Fatalf("completed receipt error code = %q, want empty", response.GetDeletion().GetErrorCode())
+	}
+	if cleaner.sessionID != session.SessionID || cleaner.calls != 1 {
+		t.Fatalf("cleaner calls = %+v, want one call for %q", cleaner, session.SessionID)
+	}
+}
+
+func TestDeleteSessionCountsRetainedLegacyArtifactWithoutDeletingIt(t *testing.T) {
+	database := openSessionTestDB(t)
+	repo := repository.New(database)
+	server := New(repo, config.Config{}, &sessionCapabilitySource{})
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Retain legacy artifact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "touch legacy", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO sandbox_artifacts (
+			id, session_id, run_id, logical_path_hash, physical_path, state, policy,
+			deletion_generation, created_at
+		) VALUES (?, ?, ?, ?, ?, 'ready', 'retain_legacy_unowned', 0, ?)
+	`,
+		"artifact_legacy_retained",
+		session.SessionID,
+		enqueued.RunID,
+		"sha256:legacy",
+		"legacy.txt",
+		repository.FormatTimestamp(time.Now()),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if response.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_COMPLETED {
+		t.Fatalf("deletion receipt = %+v, want completed", response.GetDeletion())
+	}
+	if got := response.GetDeletion().GetRetainedLegacyArtifactCount(); got != 1 {
+		t.Fatalf("retained legacy artifact count = %d, want 1", got)
+	}
+}
+
+func TestDeleteSessionRetainsFailedExternalReceiptWhenArtifactCleanerFails(t *testing.T) {
+	database := openSessionTestDB(t)
+	repo := repository.New(database)
+	server := New(repo, config.Config{}, &sessionCapabilitySource{})
+	cleaner := &flakyArtifactCleaner{err: errors.New("cleanup transport unavailable")}
+	server.SetArtifactCleaner(cleaner)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Fail artifact cleanup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "write then fail", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO sandbox_artifacts (
+			id, session_id, run_id, logical_path_hash, physical_path, state, policy,
+			deletion_generation, created_at
+		) VALUES (?, ?, ?, ?, ?, 'ready', 'delete_on_session_delete', 0, ?)
+	`,
+		"artifact_cleanup_failure",
+		session.SessionID,
+		enqueued.RunID,
+		"sha256:failure",
+		"sessions/"+session.SessionID+"/runs/"+enqueued.RunID+"/files/note.txt",
+		repository.FormatTimestamp(time.Now()),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if response.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_FAILED_EXTERNAL ||
+		response.GetDeletion().GetErrorCode() != "artifact_cleanup_failed" ||
+		!response.GetDeletion().GetRetryable() {
+		t.Fatalf("failed cleanup receipt = %+v", response.GetDeletion())
+	}
+	var auditPayload string
+	if err := database.QueryRowContext(ctx, `
+		SELECT payload_json
+		FROM audit_logs
+		WHERE action = 'session.artifact.cleanup.failed'
+			AND target = 'artifact_cleanup_failure'
+	`).Scan(&auditPayload); err != nil {
+		t.Fatalf("cleanup failure audit record: %v", err)
+	}
+	if strings.Contains(auditPayload, "note.txt") || strings.Contains(auditPayload, "sessions/") {
+		t.Fatalf("cleanup failure audit leaked a path: %q", auditPayload)
+	}
+	cleaner.err = nil
+	retry, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatalf("retry DeleteSession: %v", err)
+	}
+	if retry.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_COMPLETED ||
+		cleaner.calls != 2 {
+		t.Fatalf("retry receipt = %+v cleaner calls=%d", retry.GetDeletion(), cleaner.calls)
+	}
+}
+
+type recordingArtifactCleaner struct {
+	sessionID string
+	calls     int
+}
+
+type flakyArtifactCleaner struct {
+	calls int
+	err   error
+}
+
+func (c *flakyArtifactCleaner) CleanupSessionArtifacts(context.Context, string, int64) error {
+	c.calls++
+	return c.err
+}
+
+func (c *recordingArtifactCleaner) CleanupSessionArtifacts(_ context.Context, sessionID string, _ int64) error {
+	c.calls++
+	c.sessionID = sessionID
+	return nil
+}
+
 func TestSessionServiceSearchMessagesValidatesQuery(t *testing.T) {
 	h := newSessionHarness(t)
 	client := turingv1.NewSessionServiceClient(h.conn)
@@ -867,8 +1181,9 @@ func insertServiceSearchMessage(t *testing.T, ctx context.Context, database *db.
 }
 
 // Deletion is the only way a user can withdraw what they have said, so its
-// failure modes must be distinguishable over the wire: a client has to be able
-// to say "already gone" and "still running" rather than "something broke".
+// states must be distinguishable over the wire: a client has to be able to say
+// "already gone", "still reconciling", or "completed" rather than "something
+// broke".
 func TestDeleteSessionReportsDistinctStatusCodes(t *testing.T) {
 	h := newSessionHarness(t)
 	ctx := context.Background()
@@ -881,7 +1196,8 @@ func TestDeleteSessionReportsDistinctStatusCodes(t *testing.T) {
 		t.Fatalf("unknown session = %v, want NotFound", status.Code(err))
 	}
 
-	// A session whose run is still in flight must refuse rather than orphan it.
+	// A queued run is cancelled and completed in the same non-blocking
+	// withdrawal call; it is not rejected or orphaned.
 	session, err := h.repo.CreateSession(ctx, "Busy")
 	if err != nil {
 		t.Fatal(err)
@@ -892,8 +1208,12 @@ func TestDeleteSessionReportsDistinctStatusCodes(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID}); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("live run = %v, want FailedPrecondition", status.Code(err))
+	busyResponse, err := client.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatalf("queued-session deletion: %v", err)
+	}
+	if busyResponse.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_COMPLETED {
+		t.Fatalf("queued-session receipt = %+v, want completed", busyResponse.GetDeletion())
 	}
 
 	// And the happy path actually removes it.

@@ -19,7 +19,7 @@ var afterLegacySkillsExportHook func()
 // regression, immediately after the export's final root-path verification.
 var afterRecoverySkillsExportHook func()
 
-const sessionLifecycleMigrationVersion = "0014_session_lifecycle"
+const sessionLifecycleMigrationVersion = "0015_session_lifecycle"
 
 func ApplyMigrations(ctx context.Context, database *DB) error {
 	return ApplyMigrationsWithSkillsRoot(ctx, database, "")

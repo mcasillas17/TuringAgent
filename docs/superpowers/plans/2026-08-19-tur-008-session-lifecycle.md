@@ -17,7 +17,7 @@
 - `turing-backend/orchestrator-go/internal/persisttime/timestamps.go` — canonical and legacy persisted timestamp parsing/formatting.
 - `turing-backend/orchestrator-go/internal/persisttime/timestamps_test.go` — fixed-width and rejection coverage.
 - `turing-backend/orchestrator-go/internal/db/session_timestamp_migration.go` — bounded in-transaction session timestamp normalization hook.
-- `turing-backend/orchestrator-go/internal/db/schema/0014_session_lifecycle.sql` — session ordering indexes; rename to the next available migration number if TUR-004 lands first.
+- `turing-backend/orchestrator-go/internal/db/schema/0015_session_lifecycle.sql` — session ordering indexes, numbered after TUR-004's landed migration.
 - `turing-backend/orchestrator-go/internal/service/sessions/cursor.go` — canonical binary session-list cursor codec.
 - `turing-backend/orchestrator-go/internal/service/sessions/cursor_test.go` — cursor structure, authentication, and malformed-input coverage.
 - `turing-backend/orchestrator-go/internal/repository/session_lifecycle.go` — rename/archive/restore transactions and durable snapshots.
@@ -49,7 +49,7 @@
 - Create: `turing-backend/orchestrator-go/internal/persisttime/timestamps.go`
 - Create: `turing-backend/orchestrator-go/internal/persisttime/timestamps_test.go`
 - Create: `turing-backend/orchestrator-go/internal/db/session_timestamp_migration.go`
-- Create: `turing-backend/orchestrator-go/internal/db/schema/0014_session_lifecycle.sql`
+- Create: `turing-backend/orchestrator-go/internal/db/schema/0015_session_lifecycle.sql`
 - Modify: `turing-backend/orchestrator-go/internal/repository/timestamps.go`
 - Modify: `turing-backend/orchestrator-go/internal/config/config.go`
 - Modify: `turing-backend/orchestrator-go/internal/config/config_test.go`
@@ -152,7 +152,7 @@ if err := ApplyMigrations(ctx, database); err == nil {
 	t.Fatal("ApplyMigrations accepted malformed session timestamp")
 }
 assertSessionTimestamp(t, database, "valid-before-bad", originalLegacyValue)
-assertMigrationMissing(t, database, "0014_session_lifecycle")
+assertMigrationMissing(t, database, "0015_session_lifecycle")
 assertIndexMissing(t, database, "idx_sessions_status_updated")
 assertIndexMissing(t, database, "idx_sessions_updated")
 ```

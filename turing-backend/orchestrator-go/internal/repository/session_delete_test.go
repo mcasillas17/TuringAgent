@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -71,6 +72,353 @@ func countRows(t *testing.T, repo *Repository, query string, args ...any) int {
 		t.Fatal(err)
 	}
 	return count
+}
+
+func TestBeginSessionDeletionMakesSessionUnreadable(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Withdraw immediately")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.BeginSessionDeletion(ctx, session.SessionID); err != nil {
+		t.Fatalf("BeginSessionDeletion: %v", err)
+	}
+	if _, err := repo.GetSession(ctx, session.SessionID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetSession after deletion begins = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestBeginSessionDeletionExcludesMessagesFromSearch(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Withdraw search")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "withdrawal search sentinel", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.BeginSessionDeletion(ctx, session.SessionID); err != nil {
+		t.Fatalf("BeginSessionDeletion: %v", err)
+	}
+	found, err := repo.SearchMessages(ctx, "", "", "withdrawal", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 0 {
+		t.Fatalf("search returned deleting-session content: %+v", found)
+	}
+}
+
+func TestBeginSessionDeletionRejectsNewAndIdempotentEnqueue(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Reject enqueue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "first withdrawal turn", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2", IdempotencyKey: "delete-idempotency-key",
+	}
+	if _, err := repo.EnqueueUserMessage(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.BeginSessionDeletion(ctx, session.SessionID); err != nil {
+		t.Fatalf("BeginSessionDeletion: %v", err)
+	}
+
+	if _, err := repo.EnqueueUserMessage(ctx, input); !errors.Is(err, ErrSessionDeleting) {
+		t.Fatalf("idempotent enqueue after deletion begins = %v, want ErrSessionDeleting", err)
+	}
+	input.IdempotencyKey = ""
+	input.Content = "new withdrawal turn"
+	if _, err := repo.EnqueueUserMessage(ctx, input); !errors.Is(err, ErrSessionDeleting) {
+		t.Fatalf("new enqueue after deletion begins = %v, want ErrSessionDeleting", err)
+	}
+}
+
+func TestBeginSessionDeletionHidesListsMessagesAndEventReplay(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	enqueued := seedDeletableSession(t, repo, "Hide every read", "withdraw read sentinel")
+
+	if _, err := repo.BeginSessionDeletion(ctx, enqueued.SessionID); err != nil {
+		t.Fatalf("BeginSessionDeletion: %v", err)
+	}
+	sessions, err := repo.ListSessions(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("ListSessions returned deleting session: %+v", sessions)
+	}
+	if _, err := repo.ListMessages(ctx, enqueued.SessionID, 10); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("ListMessages after deletion begins = %v, want sql.ErrNoRows", err)
+	}
+	if _, err := repo.ListMessagesBefore(ctx, enqueued.SessionID, "msg_missing", 10); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("ListMessagesBefore after deletion begins = %v, want sql.ErrNoRows", err)
+	}
+	if _, _, err := repo.ReplayEvents(ctx, enqueued.SessionID, 0, 10); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("ReplayEvents after deletion begins = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestBeginSessionDeletionExcludesGlobalSessionUpdateSnapshot(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Derived title must hide")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "title disclosure sentinel", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.BeginSessionDeletion(ctx, session.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	updates, err := repo.ListLatestSessionUpdatedEvents(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 0 {
+		t.Fatalf("global update snapshot includes deleting session: %+v", updates)
+	}
+}
+
+func TestBeginSessionDeletionCancelsSessionWorkAndRevokesApprovals(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	enqueued := seedDeletableSession(t, repo, "Fence work", "withdraw active work")
+
+	if _, err := repo.BeginSessionDeletion(ctx, enqueued.SessionID); err != nil {
+		t.Fatalf("BeginSessionDeletion: %v", err)
+	}
+
+	var runStatus, jobStatus, approvalStatus, toolStatus string
+	if err := repo.db.QueryRowContext(ctx, `SELECT status FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&runStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.db.QueryRowContext(ctx, `SELECT status FROM jobs WHERE run_id = ?`, enqueued.RunID).Scan(&jobStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.db.QueryRowContext(ctx, `SELECT status FROM approvals WHERE run_id = ?`, enqueued.RunID).Scan(&approvalStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.db.QueryRowContext(ctx, `SELECT status FROM tool_calls WHERE run_id = ?`, enqueued.RunID).Scan(&toolStatus); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus != "cancelled" || jobStatus != "cancelled" || approvalStatus == "pending" || approvalStatus == "approved" || toolStatus == "approval_required" {
+		t.Fatalf("deletion left active work: run=%q job=%q approval=%q tool=%q", runStatus, jobStatus, approvalStatus, toolStatus)
+	}
+}
+
+func TestBeginSessionDeletionRejectsSessionRoutingReadsAndWrites(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Delete routing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := mustCreateAgent(t, ctx, repo, anthropicAgent())
+	if _, err := repo.SetSessionAgent(ctx, session.SessionID, agent.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.BeginSessionDeletion(ctx, session.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetSessionAgent(ctx, session.SessionID, agent.AgentID); !errors.Is(err, ErrSessionDeleting) {
+		t.Fatalf("SetSessionAgent = %v, want ErrSessionDeleting", err)
+	}
+	if err := repo.ClearSessionAgent(ctx, session.SessionID); !errors.Is(err, ErrSessionDeleting) {
+		t.Fatalf("ClearSessionAgent = %v, want ErrSessionDeleting", err)
+	}
+	if _, _, err := repo.GetSessionAgent(ctx, session.SessionID); !errors.Is(err, ErrSessionDeleting) {
+		t.Fatalf("GetSessionAgent = %v, want ErrSessionDeleting", err)
+	}
+}
+
+func TestBeginSessionDeletionImmediatelyScrubsAuditPayloads(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	enqueued := seedDeletableSession(t, repo, "Scrub before finalization", "withdraw audit sentinel")
+
+	if _, err := repo.BeginSessionDeletion(ctx, enqueued.SessionID); err != nil {
+		t.Fatalf("BeginSessionDeletion: %v", err)
+	}
+	var payload string
+	if err := repo.db.QueryRowContext(ctx, `
+		SELECT payload_json
+		FROM audit_logs
+		WHERE correlation_id = ? AND action = 'tool.call.before'
+	`, enqueued.RunID).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload != scrubbedAuditPayload {
+		t.Fatalf("audit payload after deletion begins = %q, want %q", payload, scrubbedAuditPayload)
+	}
+}
+
+func TestBeginSessionDeletionPreventsLateAuditPayload(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	enqueued := seedDeletableSession(t, repo, "Block late audit", "withdraw late audit")
+
+	if _, err := repo.BeginSessionDeletion(ctx, enqueued.SessionID); err != nil {
+		t.Fatalf("BeginSessionDeletion: %v", err)
+	}
+	inserted, err := repo.RecordAuditForExistingRun(
+		ctx,
+		enqueued.RunID,
+		"runtime",
+		"",
+		"tool.call.after",
+		"call_late",
+		`{"resultSummary":"late secret"}`,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted {
+		t.Fatal("late audit payload was inserted for a deleting session")
+	}
+}
+
+func TestAdvanceSessionDeletionWaitsForExecutionExitThenWithdrawsRows(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	enqueued := seedDeletableSession(t, repo, "Wait for exit", "withdraw after acknowledgement")
+
+	if _, err := repo.BeginSessionDeletion(ctx, enqueued.SessionID); err != nil {
+		t.Fatalf("BeginSessionDeletion: %v", err)
+	}
+	receipt, err := repo.AdvanceSessionDeletion(ctx, enqueued.SessionID)
+	if err != nil {
+		t.Fatalf("AdvanceSessionDeletion while active: %v", err)
+	}
+	if receipt.State != "quiescing" || !receipt.Retryable {
+		t.Fatalf("active execution receipt = %+v, want retryable quiescing", receipt)
+	}
+	if err := repo.AcknowledgeExecutionExit(ctx, enqueued.RunID); err != nil {
+		t.Fatalf("AcknowledgeExecutionExit: %v", err)
+	}
+
+	receipt, err = repo.AdvanceSessionDeletion(ctx, enqueued.SessionID)
+	if err != nil {
+		t.Fatalf("AdvanceSessionDeletion after acknowledgement: %v", err)
+	}
+	if receipt.State != "completed" || receipt.Retryable {
+		t.Fatalf("completed receipt = %+v", receipt)
+	}
+	if got := countRows(t, repo, `SELECT COUNT(*) FROM sessions WHERE id = ?`, enqueued.SessionID); got != 0 {
+		t.Fatalf("session rows after completed withdrawal = %d, want 0", got)
+	}
+	if got := countRows(t, repo, `SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH ?`, "acknowledgement"); got != 0 {
+		t.Fatalf("withdrawn content remains in FTS: %d rows", got)
+	}
+}
+
+func TestAdvanceSessionDeletionRetainsRetryableFailureForOwnedArtifact(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	enqueued := seedDeletableSession(t, repo, "Artifact failure", "withdraw artifact")
+	if _, err := repo.BeginSessionDeletion(ctx, enqueued.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AcknowledgeExecutionExit(ctx, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.db.ExecContext(ctx, `
+		INSERT INTO sandbox_artifacts (
+			id, session_id, run_id, logical_path_hash, physical_path, state, policy,
+			deletion_generation, created_at
+		) VALUES (?, ?, ?, ?, ?, 'ready', 'delete_on_session_delete', 1, ?)
+	`,
+		"artifact_pending",
+		enqueued.SessionID,
+		enqueued.RunID,
+		"sha256:artifact",
+		"sessions/test/runs/test/files/secret.txt",
+		now(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	receipt, err := repo.AdvanceSessionDeletion(ctx, enqueued.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.State != "failed_external" || !receipt.Retryable || receipt.ErrorCode != "artifact_cleanup_pending" {
+		t.Fatalf("artifact cleanup receipt = %+v", receipt)
+	}
+	if got := countRows(t, repo, `SELECT COUNT(*) FROM sessions WHERE id = ?`, enqueued.SessionID); got != 1 {
+		t.Fatalf("artifact cleanup failure deleted session rows = %d, want 1", got)
+	}
+}
+
+func TestAdvanceSessionDeletionFailsClosedAfterExecutionDrainLeaseExpires(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	enqueued := seedDeletableSession(t, repo, "Lease expiry", "withdraw after lease")
+	if _, err := repo.BeginSessionDeletion(ctx, enqueued.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.db.ExecContext(ctx, `
+		UPDATE session_deletions
+		SET quiesce_deadline_at = '2000-01-01T00:00:00.000000000Z'
+		WHERE session_id = ?
+	`, enqueued.SessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	receipt, err := repo.AdvanceSessionDeletion(ctx, enqueued.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.State != "failed_external" || !receipt.Retryable || receipt.ErrorCode != "execution_unreconciled" {
+		t.Fatalf("expired execution receipt = %+v", receipt)
+	}
+	if got := countRows(t, repo, `SELECT COUNT(*) FROM sessions WHERE id = ?`, enqueued.SessionID); got != 1 {
+		t.Fatalf("expired execution lease deleted session rows = %d, want 1", got)
+	}
+}
+
+func TestPendingSessionDeletionIDsExcludeCompletedReceipts(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Resume deletion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.BeginSessionDeletion(ctx, session.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := repo.PendingSessionDeletionIDs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != session.SessionID {
+		t.Fatalf("pending deletion ids = %v, want [%s]", ids, session.SessionID)
+	}
+	if _, err := repo.AdvanceSessionDeletion(ctx, session.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	ids, err = repo.PendingSessionDeletionIDs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("completed deletion ids = %v, want none", ids)
+	}
 }
 
 func TestDeleteSessionRemovesEverythingItProduced(t *testing.T) {

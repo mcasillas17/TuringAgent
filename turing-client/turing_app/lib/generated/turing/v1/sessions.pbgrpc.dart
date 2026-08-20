@@ -60,6 +60,15 @@ class SessionServiceClient extends $grpc.Client {
     return $createUnaryCall(_$deleteSession, request, options: options);
   }
 
+  $grpc.ResponseFuture<$0.ListSessionDeletionReceiptsResponse>
+      listSessionDeletionReceipts(
+    $0.ListSessionDeletionReceiptsRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$listSessionDeletionReceipts, request,
+        options: options);
+  }
+
   $grpc.ResponseFuture<$0.ListMessagesResponse> listMessages(
     $0.ListMessagesRequest request, {
     $grpc.CallOptions? options,
@@ -138,6 +147,12 @@ class SessionServiceClient extends $grpc.Client {
           '/turing.v1.SessionService/DeleteSession',
           ($0.DeleteSessionRequest value) => value.writeToBuffer(),
           $0.DeleteSessionResponse.fromBuffer);
+  static final _$listSessionDeletionReceipts = $grpc.ClientMethod<
+          $0.ListSessionDeletionReceiptsRequest,
+          $0.ListSessionDeletionReceiptsResponse>(
+      '/turing.v1.SessionService/ListSessionDeletionReceipts',
+      ($0.ListSessionDeletionReceiptsRequest value) => value.writeToBuffer(),
+      $0.ListSessionDeletionReceiptsResponse.fromBuffer);
   static final _$listMessages =
       $grpc.ClientMethod<$0.ListMessagesRequest, $0.ListMessagesResponse>(
           '/turing.v1.SessionService/ListMessages',
@@ -219,6 +234,16 @@ abstract class SessionServiceBase extends $grpc.Service {
             ($core.List<$core.int> value) =>
                 $0.DeleteSessionRequest.fromBuffer(value),
             ($0.DeleteSessionResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.ListSessionDeletionReceiptsRequest,
+            $0.ListSessionDeletionReceiptsResponse>(
+        'ListSessionDeletionReceipts',
+        listSessionDeletionReceipts_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.ListSessionDeletionReceiptsRequest.fromBuffer(value),
+        ($0.ListSessionDeletionReceiptsResponse value) =>
+            value.writeToBuffer()));
     $addMethod(
         $grpc.ServiceMethod<$0.ListMessagesRequest, $0.ListMessagesResponse>(
             'ListMessages',
@@ -321,6 +346,16 @@ abstract class SessionServiceBase extends $grpc.Service {
 
   $async.Future<$0.DeleteSessionResponse> deleteSession(
       $grpc.ServiceCall call, $0.DeleteSessionRequest request);
+
+  $async.Future<$0.ListSessionDeletionReceiptsResponse>
+      listSessionDeletionReceipts_Pre($grpc.ServiceCall $call,
+          $async.Future<$0.ListSessionDeletionReceiptsRequest> $request) async {
+    return listSessionDeletionReceipts($call, await $request);
+  }
+
+  $async.Future<$0.ListSessionDeletionReceiptsResponse>
+      listSessionDeletionReceipts($grpc.ServiceCall call,
+          $0.ListSessionDeletionReceiptsRequest request);
 
   $async.Future<$0.ListMessagesResponse> listMessages_Pre(
       $grpc.ServiceCall $call,

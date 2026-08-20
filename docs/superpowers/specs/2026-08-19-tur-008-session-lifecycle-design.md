@@ -95,7 +95,10 @@ explicit.
 If TUR-004 has landed, deleting or deleted lifecycle state dominates active and
 archived visibility. Such rows remain hidden, and rename, archive, restore, and
 activity use TUR-004's centralized deletion gates and public errors. TUR-008
-must not duplicate or weaken those gates.
+must not duplicate or weaken those gates. If a scheduled automation's previous
+conversation is withdrawing, its next fire creates a fresh conversation rather
+than mutating the withdrawing row or wedging the scheduler behind a permanently
+due item.
 
 `ALL` means the union of publicly visible active and archived rows after those
 same centralized deletion predicates. It is not a bypass around lifecycle

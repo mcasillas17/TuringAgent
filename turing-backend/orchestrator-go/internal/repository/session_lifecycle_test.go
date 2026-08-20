@@ -193,6 +193,38 @@ func TestSessionLifecycleMutationsRejectMissingSession(t *testing.T) {
 	}
 }
 
+func TestSessionLifecycleMutationsRejectDeletingSession(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Withdrawing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.BeginSessionDeletion(ctx, session.SessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	operations := []func() error{
+		func() error {
+			_, err := repo.RenameSession(ctx, session.SessionID, "Withdrawing")
+			return err
+		},
+		func() error {
+			_, err := repo.ArchiveSession(ctx, session.SessionID)
+			return err
+		},
+		func() error {
+			_, err := repo.RestoreSession(ctx, session.SessionID)
+			return err
+		},
+	}
+	for _, operation := range operations {
+		if err := operation(); !errors.Is(err, ErrSessionDeleting) {
+			t.Fatalf("lifecycle error = %v, want ErrSessionDeleting", err)
+		}
+	}
+}
+
 func TestConcurrentSessionLifecycleMutationsSerializeSnapshots(t *testing.T) {
 	repo := New(openTestDB(t))
 	ctx := context.Background()

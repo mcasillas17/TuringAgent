@@ -30,6 +30,7 @@ import (
 
 const maxGRPCMessageSize = 4 * 1024 * 1024
 const gracefulStopTimeout = 5 * time.Second
+const defaultDeletionReconcileInterval = time.Minute
 
 type App struct {
 	PublicServer   *grpc.Server
@@ -61,9 +62,11 @@ type App struct {
 	// reaper's: they stop independently, and a shutdown that waited on one
 	// while the other was still firing runs would be a shutdown that queues
 	// work on its way out.
-	schedulerCancel context.CancelFunc
-	schedulerDone   chan struct{}
-	authFailures    *auth.AsyncFailureRecorder
+	schedulerCancel         context.CancelFunc
+	schedulerDone           chan struct{}
+	deletionReconcileCancel context.CancelFunc
+	deletionReconcileDone   chan struct{}
+	authFailures            *auth.AsyncFailureRecorder
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -135,6 +138,15 @@ func New(cfg config.Config) (*App, error) {
 		},
 	}, approvalService)
 	sessionService := sessionsvc.New(repo, cfg, runtimeService, eventBus)
+	sessionService.SetArtifactCleaner(sessionsvc.NewMCPArtifactCleaner(
+		cfg.MCPFilesBaseURL,
+		cfg.MCPFilesCleanupToken,
+		nil,
+	))
+	if err := sessionService.ResumePendingDeletions(context.Background()); err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("resume pending session deletions: %w", err)
+	}
 	skillService := skillsvc.New(repo)
 	agentService := agentsvc.New(repo, cfg.AgentCredentialNames)
 	automationService := automationsvc.New(repo)
@@ -178,7 +190,8 @@ func New(cfg config.Config) (*App, error) {
 	// Two least-privilege internal identities share the internal gRPC port:
 	// the runtime claims jobs and reads session history for context and
 	// recall; the approval consumer (mcp-files, and any future MCP server
-	// that consumes approvals) may only call ConsumeApproval. Neither token
+	// that consumes approvals) may call ConsumeApproval,
+	// FinalizeSandboxArtifact, and CheckSessionCapability. Neither token
 	// grants the other's methods, so a compromised mcp-files cannot claim a
 	// job or read conversation history, and a compromised runtime cannot be
 	// swapped in as the approval consumer for a different tool server.
@@ -192,6 +205,8 @@ func New(cfg config.Config) (*App, error) {
 		),
 		auth.NewServiceIdentity("approval-consumer", cfg.ApprovalConsumerToken,
 			turingv1.ApprovalService_ConsumeApproval_FullMethodName,
+			turingv1.ApprovalService_FinalizeSandboxArtifact_FullMethodName,
+			turingv1.ApprovalService_CheckSessionCapability_FullMethodName,
 		),
 	})
 	if err != nil {
@@ -268,6 +283,7 @@ func New(cfg config.Config) (*App, error) {
 		authFailures:          authFailures,
 		reaperDone:            make(chan struct{}),
 		schedulerDone:         make(chan struct{}),
+		deletionReconcileDone: make(chan struct{}),
 	}
 	reaperCtx, reaperCancel := context.WithCancel(context.Background())
 	application.reaperCancel = reaperCancel
@@ -297,6 +313,29 @@ func New(cfg config.Config) (*App, error) {
 		schedulerCancel()
 		close(application.schedulerDone)
 	}
+	deletionReconcileCtx, deletionReconcileCancel := context.WithCancel(context.Background())
+	application.deletionReconcileCancel = deletionReconcileCancel
+	deletionReconcileInterval := defaultDeletionReconcileInterval
+	if cfg.JobReaperIntervalMS > 0 {
+		deletionReconcileInterval = time.Duration(cfg.JobReaperIntervalMS) * time.Millisecond
+	}
+	go func() {
+		defer close(application.deletionReconcileDone)
+		ticker := time.NewTicker(deletionReconcileInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-deletionReconcileCtx.Done():
+				return
+			case <-ticker.C:
+				if err := sessionService.ResumePendingDeletions(deletionReconcileCtx); err != nil {
+					// A durable receipt remains retryable; this loop must not
+					// die because one external cleanup endpoint is offline.
+					fmt.Printf("resume pending session deletions: %v\n", err)
+				}
+			}
+		}
+	}()
 	return application, nil
 }
 
@@ -316,6 +355,12 @@ func (a *App) Stop() {
 		}
 		if a.schedulerDone != nil {
 			<-a.schedulerDone
+		}
+		if a.deletionReconcileCancel != nil {
+			a.deletionReconcileCancel()
+		}
+		if a.deletionReconcileDone != nil {
+			<-a.deletionReconcileDone
 		}
 		var wg sync.WaitGroup
 		if a.PublicServer != nil {

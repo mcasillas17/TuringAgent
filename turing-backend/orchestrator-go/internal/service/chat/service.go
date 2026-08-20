@@ -86,8 +86,12 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 			executionModel = s.runtime.RoutableDefaultModel(modelProvider, configured)
 		}
 	}
-	if _, err := s.repo.GetSession(ctx, req.SessionId); err != nil {
+	withdrawalState, err := s.repo.SessionWithdrawalState(ctx, req.SessionId)
+	if err != nil {
 		return mapSessionError(ctx, err)
+	}
+	if !withdrawalState.Active {
+		return mapSessionError(ctx, repository.ErrSessionDeleting)
 	}
 	ch, unsubscribe := s.bus.Subscribe(req.SessionId)
 	defer unsubscribe()
@@ -320,7 +324,11 @@ func mapSessionError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return status.Error(codes.Canceled, "client cancelled stream")
 	}
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, repository.ErrSessionDeleting) {
+		return status.Error(codes.FailedPrecondition, "session deletion is in progress")
+	}
+	if errors.Is(err, sql.ErrNoRows) ||
+		errors.Is(err, repository.ErrSessionNotFound) {
 		return status.Error(codes.NotFound, "session not found")
 	}
 	return status.Error(codes.Internal, "get session failed")
@@ -332,6 +340,9 @@ func mapEnqueueError(ctx context.Context, err error) error {
 	}
 	if errors.Is(err, repository.ErrIdempotencyConflict) {
 		return status.Error(codes.AlreadyExists, "idempotency key was already used for a different request")
+	}
+	if errors.Is(err, repository.ErrSessionDeleting) {
+		return status.Error(codes.FailedPrecondition, "session deletion is in progress")
 	}
 	if status.Code(err) == codes.FailedPrecondition {
 		return err

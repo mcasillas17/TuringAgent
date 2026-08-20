@@ -42,5 +42,34 @@ class SessionListFilter extends $pb.ProtobufEnum {
   const SessionListFilter._(super.value, super.name);
 }
 
+class SessionDeletionState extends $pb.ProtobufEnum {
+  static const SessionDeletionState SESSION_DELETION_STATE_UNSPECIFIED =
+      SessionDeletionState._(
+          0, _omitEnumNames ? '' : 'SESSION_DELETION_STATE_UNSPECIFIED');
+  static const SessionDeletionState SESSION_DELETION_STATE_IN_PROGRESS =
+      SessionDeletionState._(
+          1, _omitEnumNames ? '' : 'SESSION_DELETION_STATE_IN_PROGRESS');
+  static const SessionDeletionState SESSION_DELETION_STATE_FAILED_EXTERNAL =
+      SessionDeletionState._(
+          2, _omitEnumNames ? '' : 'SESSION_DELETION_STATE_FAILED_EXTERNAL');
+  static const SessionDeletionState SESSION_DELETION_STATE_COMPLETED =
+      SessionDeletionState._(
+          3, _omitEnumNames ? '' : 'SESSION_DELETION_STATE_COMPLETED');
+
+  static const $core.List<SessionDeletionState> values = <SessionDeletionState>[
+    SESSION_DELETION_STATE_UNSPECIFIED,
+    SESSION_DELETION_STATE_IN_PROGRESS,
+    SESSION_DELETION_STATE_FAILED_EXTERNAL,
+    SESSION_DELETION_STATE_COMPLETED,
+  ];
+
+  static final $core.List<SessionDeletionState?> _byValue =
+      $pb.ProtobufEnum.$_initByValueList(values, 3);
+  static SessionDeletionState? valueOf($core.int value) =>
+      value < 0 || value >= _byValue.length ? null : _byValue[value];
+
+  const SessionDeletionState._(super.value, super.name);
+}
+
 const $core.bool _omitEnumNames =
     $core.bool.fromEnvironment('protobuf.omit_enum_names');
