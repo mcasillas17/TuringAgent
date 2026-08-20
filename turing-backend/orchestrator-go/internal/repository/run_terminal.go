@@ -27,7 +27,6 @@ type CompleteRunInput struct {
 	Usage                *RunTokenUsage
 
 	resolveVersionInTx bool
-	raw                *rawTerminalReport
 }
 
 // FailRunInput is a normalized terminal failure. The failure is a typed value
@@ -64,8 +63,6 @@ type FailRunInput struct {
 	// same reason raw is: no caller outside this package can skip carrying an
 	// expected version.
 	resolveVersionInTx bool
-
-	raw *rawTerminalReport
 }
 
 // CancelRunInput is a normalized terminal cancellation.
@@ -76,34 +73,10 @@ type CancelRunInput struct {
 	Cancellation         runoutcome.Cancellation
 
 	resolveVersionInTx bool
-	raw                *rawTerminalReport
-}
-
-// rawTerminalReport is the temporary raw ingestion the seven compatibility
-// adapters carry, and the only way to reach a transition without an expected
-// version.
-//
-// Its fields are unexported, so it can only be built inside this package: no
-// caller outside the repository can construct one, and no new caller inside it
-// should. It exists so ChatService, RuntimeService, and their tests keep
-// compiling across this commit while their typed-ingestion tests are still
-// waiting to be written. It is removed with the adapters.
-type rawTerminalReport struct {
-	code        string
-	message     string
-	payloadJSON string
-	// appendEvent distinguishes the bare methods, which historically wrote no
-	// terminal event, from the WithEvent variants that returned one. Both now
-	// append exactly one terminal event, because a lifecycle change with no
-	// projection is the bug this task exists to remove; the flag only decides
-	// whether the caller is handed the events back.
-	returnEvents bool
 }
 
 // terminalExpectation resolves how a terminal command names the version it
-// expects. A raw adapter has none to give, so it resolves the row's own
-// version inside the guarded transaction rather than reading it first and
-// racing itself.
+// expects.
 //
 // transactionLocal comes from the unexported input fields only, never from the
 // expectation itself: a public caller supplying zero is refused here rather
@@ -133,7 +106,10 @@ func terminalContentIdentity(row runRow, assistantMessageID string, content stri
 		identity.hasDisplayable = runoutcome.HasDisplayableContent(content)
 		return identity
 	}
-	identity.sha256 = row.contentSHA256
+	// Both halves of the identity are read from the same bytes. Taking the hash
+	// from the stored column while computing displayability from the message
+	// would let a terminal outcome describe content the message does not hold.
+	identity.sha256 = runoutcome.ContentSHA256(row.messageContent)
 	identity.hasDisplayable = runoutcome.HasDisplayableContent(row.messageContent)
 	return identity
 }
@@ -156,7 +132,7 @@ func (r *Repository) CompleteRunCanonical(ctx context.Context, input CompleteRun
 }
 
 func completeRunTx(ctx context.Context, tx *sql.Tx, input CompleteRunInput) (RunTransitionResult, error) {
-	transactionLocal := input.raw != nil || input.resolveVersionInTx
+	transactionLocal := input.resolveVersionInTx
 	expected, err := terminalExpectation(input.ExpectedStateVersion, transactionLocal)
 	if err != nil {
 		return RunTransitionResult{}, err
@@ -178,15 +154,6 @@ func completeRunTx(ctx context.Context, tx *sql.Tx, input CompleteRunInput) (Run
 	payload := map[string]any{"runId": input.RunID}
 	if input.AssistantMessageID != "" {
 		payload["assistantMessageId"] = input.AssistantMessageID
-	}
-	if input.raw != nil {
-		// A caller that has not been converted yet owns its own payload, and
-		// that untyped shape is exactly what the next task's tests have to be
-		// able to observe. The canonical state is merged into it either way.
-		payload, err = rawPayloadMap(input.raw.payloadJSON)
-		if err != nil {
-			return RunTransitionResult{}, err
-		}
 	}
 	transition := runTransition{
 		runID:            input.RunID,
@@ -231,7 +198,7 @@ func completeRunTx(ctx context.Context, tx *sql.Tx, input CompleteRunInput) (Run
 	if err != nil {
 		return RunTransitionResult{}, err
 	}
-	return applyRawTerminalCompatibility(ctx, tx, input.raw, input.RunID, result)
+	return result, nil
 }
 
 func appendRunMessageCompletedTx(ctx context.Context, tx *sql.Tx, row runRow, assistantMessageID string, content string, at string) (Event, error) {
@@ -263,7 +230,7 @@ func (r *Repository) FailRunCanonical(ctx context.Context, input FailRunInput) (
 }
 
 func failRunTx(ctx context.Context, tx *sql.Tx, input FailRunInput) (RunTransitionResult, error) {
-	transactionLocal := input.raw != nil || input.resolveVersionInTx
+	transactionLocal := input.resolveVersionInTx
 	expected, err := terminalExpectation(input.ExpectedStateVersion, transactionLocal)
 	if err != nil {
 		return RunTransitionResult{}, err
@@ -273,10 +240,10 @@ func failRunTx(ctx context.Context, tx *sql.Tx, input FailRunInput) (RunTransiti
 		return RunTransitionResult{}, err
 	}
 	content := terminalContentIdentity(row, input.AssistantMessageID, "", false)
-	code, message := input.Failure.Code(), ""
-	if input.raw != nil {
-		code, message = input.raw.code, input.raw.message
-	}
+	// The normalized code is the only diagnostic that survives. error_message
+	// stays NULL for every failure this package writes: it was the column a
+	// provider's or a tool's sentence used to reach a client through.
+	code := input.Failure.Code()
 	extraSet := `error_code = ?,
 			error_message = ?,
 			execution_active = 0,
@@ -284,10 +251,10 @@ func failRunTx(ctx context.Context, tx *sql.Tx, input FailRunInput) (RunTransiti
 			execution_state = 'exited',
 			execution_lease_expires_at = NULL,
 			execution_lease_expires_at_ns = NULL`
-	extraArgs := []any{code, nullableText(message), transitionTime}
+	extraArgs := []any{code, nullableText(""), transitionTime}
 	if input.leaveExecutionUntouched {
 		extraSet = `error_code = ?, error_message = ?`
-		extraArgs = []any{code, nullableText(message)}
+		extraArgs = []any{code, nullableText("")}
 	} else if input.PreserveExecution {
 		extraSet = `error_code = ?,
 			error_message = ?,
@@ -298,10 +265,6 @@ func failRunTx(ctx context.Context, tx *sql.Tx, input FailRunInput) (RunTransiti
 			execution_state = CASE WHEN execution_active = 1 THEN 'uncertain' ELSE 'exited' END,
 			execution_lease_expires_at = CASE WHEN execution_active = 1 THEN execution_lease_expires_at ELSE NULL END,
 			execution_lease_expires_at_ns = CASE WHEN execution_active = 1 THEN execution_lease_expires_at_ns ELSE NULL END`
-	}
-	failurePayload, err := terminalFailurePayload(input.RunID, input.Failure, input.raw)
-	if err != nil {
-		return RunTransitionResult{}, err
 	}
 	allowedFrom := input.allowedFrom
 	if len(allowedFrom) == 0 {
@@ -319,13 +282,13 @@ func failRunTx(ctx context.Context, tx *sql.Tx, input FailRunInput) (RunTransiti
 		extraSet:         extraSet,
 		extraArgs:        extraArgs,
 		eventType:        "agent.run.failed",
-		eventPayload:     failurePayload,
+		eventPayload:     terminalFailurePayload(input.RunID, input.Failure),
 	}, func(ctx context.Context, state RunState, at string) ([]Event, error) {
 		events, err := failPendingApprovalLifecycleTx(ctx, tx, input.RunID, input.Failure.Reason(), code, at)
 		if err != nil {
 			return nil, err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'failed', finished_at = ?, error_code = ?, error_message = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, at, code, nullableText(message), input.RunID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'failed', finished_at = ?, error_code = ?, error_message = NULL, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, at, code, input.RunID); err != nil {
 			return nil, err
 		}
 		return events, nil
@@ -333,24 +296,20 @@ func failRunTx(ctx context.Context, tx *sql.Tx, input FailRunInput) (RunTransiti
 	if err != nil {
 		return RunTransitionResult{}, err
 	}
-	return applyRawTerminalCompatibility(ctx, tx, input.raw, input.RunID, result)
+	return result, nil
 }
 
-// terminalFailurePayload builds the public failure projection. The canonical
-// path publishes the normalized code and the run state; the raw adapters
-// publish exactly the payload their caller passed, because their untyped
-// ingestion is what the next task's tests have to be able to see.
-func terminalFailurePayload(runID string, failure runoutcome.Failure, raw *rawTerminalReport) (map[string]any, error) {
-	if raw != nil {
-		return rawPayloadMap(raw.payloadJSON)
-	}
+// terminalFailurePayload builds the public failure projection: the normalized
+// code and the run state the repository merges into every lifecycle event.
+// There is no message key, because there is no message to put in it.
+func terminalFailurePayload(runID string, failure runoutcome.Failure) map[string]any {
 	return map[string]any{
 		"runId": runID,
 		"code":  failure.Code(),
 		// Deprecated and always false: whether the system retries is internal
 		// dispatch policy, never a promise to the user that repeating is safe.
 		"retryable": false,
-	}, nil
+	}
 }
 
 // CancelRunCanonical commits a normalized terminal cancellation.
@@ -375,7 +334,7 @@ func (r *Repository) CancelRunCanonical(ctx context.Context, input CancelRunInpu
 }
 
 func cancelRunTx(ctx context.Context, tx *sql.Tx, input CancelRunInput) (RunTransitionResult, error) {
-	transactionLocal := input.raw != nil || input.resolveVersionInTx
+	transactionLocal := input.resolveVersionInTx
 	expected, err := terminalExpectation(input.ExpectedStateVersion, transactionLocal)
 	if err != nil {
 		return RunTransitionResult{}, err
@@ -387,13 +346,6 @@ func cancelRunTx(ctx context.Context, tx *sql.Tx, input CancelRunInput) (RunTran
 	content := terminalContentIdentity(row, input.AssistantMessageID, "", false)
 	storedReason := input.Cancellation.Code()
 	payload := map[string]any{"runId": input.RunID, "reason": string(input.Cancellation.Reason())}
-	if input.raw != nil {
-		storedReason = input.raw.message
-		payload, err = rawPayloadMap(input.raw.payloadJSON)
-		if err != nil {
-			return RunTransitionResult{}, err
-		}
-	}
 	result, err := applyRunTransitionTx(ctx, tx, runTransition{
 		runID:            input.RunID,
 		expectedVersion:  expected,
@@ -420,146 +372,5 @@ func cancelRunTx(ctx context.Context, tx *sql.Tx, input CancelRunInput) (RunTran
 	if err != nil {
 		return RunTransitionResult{}, err
 	}
-	return applyRawTerminalCompatibility(ctx, tx, input.raw, input.RunID, result)
-}
-
-// applyRawTerminalCompatibility hands a raw adapter's caller the event list it
-// used to get. A bare method historically returned none, and its caller
-// therefore publishes none; the event is still durable, so a reopened session
-// sees the terminal state either way.
-func applyRawTerminalCompatibility(
-	ctx context.Context,
-	tx *sql.Tx,
-	raw *rawTerminalReport,
-	runID string,
-	result RunTransitionResult,
-) (RunTransitionResult, error) {
-	if raw == nil || raw.returnEvents {
-		return result, nil
-	}
-	result.Events = nil
 	return result, nil
-}
-
-// ---------------------------------------------------------------------------
-// Temporary raw-signature adapters. All seven are removed in the task that
-// converts ChatService and RuntimeService to typed reports; no new caller may
-// use them. Each one delegates the terminal mutation to the canonical writer
-// above, and none of them carries an expected version, so each resolves the
-// row's own version inside the canonical writer's transaction.
-// ---------------------------------------------------------------------------
-
-// CompleteRun is a temporary raw adapter. Use CompleteRunCanonical.
-func (r *Repository) CompleteRun(ctx context.Context, runID string, assistantMessageID string, content string) error {
-	_, err := r.CompleteRunCanonical(ctx, CompleteRunInput{
-		RunID:              runID,
-		AssistantMessageID: assistantMessageID,
-		Content:            content,
-		raw:                &rawTerminalReport{},
-	})
-	return err
-}
-
-// CompleteRunWithEvent is a temporary raw adapter. Use CompleteRunCanonical.
-func (r *Repository) CompleteRunWithEvent(ctx context.Context, runID string, assistantMessageID string, content string, payloadJSON string, usage *RunTokenUsage) ([]Event, error) {
-	result, err := r.CompleteRunCanonical(ctx, CompleteRunInput{
-		RunID:              runID,
-		AssistantMessageID: assistantMessageID,
-		Content:            content,
-		Usage:              usage,
-		raw:                &rawTerminalReport{payloadJSON: payloadJSON, returnEvents: true},
-	})
-	if err != nil {
-		return nil, err
-	}
-	return result.Events, nil
-}
-
-// FailRun is a temporary raw adapter. Use FailRunCanonical.
-func (r *Repository) FailRun(ctx context.Context, runID string, code string, message string) error {
-	_, err := r.FailRunCanonical(ctx, FailRunInput{
-		RunID:   runID,
-		Failure: rawReportedFailure(code),
-		raw:     &rawTerminalReport{code: code, message: message},
-	})
-	return err
-}
-
-// FailRunWithEvent is a temporary raw adapter. Use FailRunCanonical.
-func (r *Repository) FailRunWithEvent(ctx context.Context, runID string, code string, message string, payloadJSON string) ([]Event, error) {
-	return r.failRunRaw(ctx, runID, code, message, payloadJSON, false)
-}
-
-// FailRunWithEventPreservingExecution is a temporary raw adapter. Use
-// FailRunCanonical with PreserveExecution.
-func (r *Repository) FailRunWithEventPreservingExecution(ctx context.Context, runID string, code string, message string, payloadJSON string) ([]Event, error) {
-	return r.failRunRaw(ctx, runID, code, message, payloadJSON, true)
-}
-
-func (r *Repository) failRunRaw(ctx context.Context, runID string, code string, message string, payloadJSON string, preserveExecution bool) ([]Event, error) {
-	result, err := r.FailRunCanonical(ctx, FailRunInput{
-		RunID:             runID,
-		Failure:           rawReportedFailure(code),
-		PreserveExecution: preserveExecution,
-		raw:               &rawTerminalReport{code: code, message: message, payloadJSON: payloadJSON, returnEvents: true},
-	})
-	if err != nil {
-		return nil, err
-	}
-	return result.Events, nil
-}
-
-// CancelRun is a temporary raw adapter. Use CancelRunCanonical.
-func (r *Repository) CancelRun(ctx context.Context, runID string, reason string) error {
-	_, err := r.CancelRunCanonical(ctx, CancelRunInput{
-		RunID:        runID,
-		Cancellation: runoutcome.AbandonedCancellation(),
-		raw:          &rawTerminalReport{message: reason},
-	})
-	return err
-}
-
-// CancelRunWithEvent is a temporary raw adapter. Use CancelRunCanonical.
-func (r *Repository) CancelRunWithEvent(ctx context.Context, runID string, reason string, payloadJSON string) ([]Event, error) {
-	result, err := r.CancelRunCanonical(ctx, CancelRunInput{
-		RunID:        runID,
-		Cancellation: runoutcome.AbandonedCancellation(),
-		raw:          &rawTerminalReport{message: reason, payloadJSON: payloadJSON, returnEvents: true},
-	})
-	if err != nil {
-		return nil, err
-	}
-	return result.Events, nil
-}
-
-// rawReportedFailure normalizes a bare code from a caller that has not been
-// converted yet. It has no origin to offer, so it reports the orchestrator
-// itself and lets the normalizer decide; an unrecognized pair fails closed to
-// an internal failure rather than guessing a provider or tool story.
-func rawReportedFailure(code string) runoutcome.Failure {
-	for _, origin := range []runoutcome.Origin{
-		runoutcome.OriginDispatch,
-		runoutcome.OriginRecovery,
-		runoutcome.OriginProviderTransport,
-		runoutcome.OriginProviderProtocol,
-		runoutcome.OriginProviderConfiguration,
-		runoutcome.OriginProviderOutputGuard,
-		runoutcome.OriginExternalProvider,
-		runoutcome.OriginToolExecution,
-		runoutcome.OriginToolGuard,
-		runoutcome.OriginToolInfrastructure,
-		runoutcome.OriginToolPolicy,
-		runoutcome.OriginApprovalTransport,
-		runoutcome.OriginApprovalExpiry,
-		runoutcome.OriginAutomationPolicy,
-		runoutcome.OriginContextAssembly,
-		runoutcome.OriginWorkerRuntime,
-		runoutcome.OriginClientLifecycle,
-	} {
-		failure := runoutcome.NormalizeFailure(origin, code, runoutcome.RetryClassNever)
-		if failure.Code() == code && failure.Reason() != runoutcome.ReasonNone && failure.Reason() != runoutcome.ReasonAbandoned {
-			return failure
-		}
-	}
-	return runoutcome.NormalizeFailure(runoutcome.OriginOrchestratorInternal, "", runoutcome.RetryClassNever)
 }

@@ -54,9 +54,7 @@ func TestCancelRunFencesUnownedUncertainExecutionUntilRecovery(t *testing.T) {
 	if err := h.repo.MarkAssignmentDeliveryUncertain(context.Background(), assignment); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.repo.CancelRunWithEvent(context.Background(), first.RunID, "client_cancelled", `{"reason":"client_cancelled"}`); err != nil {
-		t.Fatal(err)
-	}
+	cancelRunFixture(t, h, first.RunID)
 
 	h.service.CancelRun(context.Background(), first.RunID, "client_cancelled")
 

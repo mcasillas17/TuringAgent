@@ -32,7 +32,10 @@ func TestExecuteRejectsNilJob(t *testing.T) {
 	}
 }
 
-func TestExecuteAddsFallbackWhenIterationCapHasNoVisibleContent(t *testing.T) {
+// The tool iteration cap is explained by its own step notice. The completion
+// reports the empty answer the model actually produced, rather than putting the
+// cap's explanation in the assistant's mouth.
+func TestExecuteReportsIterationCapEmptyAnswerWithoutSynthesizedText(t *testing.T) {
 	provider := &silentLoopingToolProvider{}
 	client := &assistantTestToolLister{
 		definitions: []map[string]any{{"name": "system.repeat"}},
@@ -46,29 +49,26 @@ func TestExecuteAddsFallbackWhenIterationCapHasNoVisibleContent(t *testing.T) {
 
 	updates := collectUpdates(t, assistant, testJob())
 
-	const fallback = "Tool iteration limit reached before a final response."
 	if got := provider.calls; got != maxToolIterations {
 		t.Fatalf("provider calls = %d, want %d", got, maxToolIterations)
 	}
 	if got := eventTypes(updates); fmt.Sprint(got) != fmt.Sprint([]turingv1.TuringEventType{
 		turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_STARTED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP,
-		turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_COMPLETED,
 	}) {
-		t.Fatalf("event types = %v, want started, cap step, fallback delta, completed", got)
-	}
-	delta := updates[len(updates)-3].GetEvent()
-	if delta == nil || delta.Payload.AsMap()["delta"] != fallback {
-		t.Fatalf("fallback delta = %+v, want %q", delta, fallback)
+		t.Fatalf("event types = %v, want started, cap step, completed", got)
 	}
 	completed := updates[len(updates)-1].GetRunCompleted()
-	if completed == nil || completed.Content != fallback {
-		t.Fatalf("run completion = %+v, want fallback content", completed)
+	if completed == nil || completed.Content != "" {
+		t.Fatalf("run completion = %+v, want the empty answer the model produced", completed)
 	}
 }
 
-func TestExecuteReplacesWhitespaceOnlyIterationCapContentWithFallback(t *testing.T) {
+// Whitespace-only output at the iteration cap is preserved byte-for-byte: it is
+// non-displayable, which the completion records, but it is still what the model
+// said.
+func TestExecutePreservesWhitespaceOnlyIterationCapContent(t *testing.T) {
 	provider := &whitespaceLoopingToolProvider{}
 	client := &assistantTestToolLister{
 		definitions: []map[string]any{{"name": "system.repeat"}},
@@ -83,16 +83,15 @@ func TestExecuteReplacesWhitespaceOnlyIterationCapContentWithFallback(t *testing
 	updates := collectUpdates(t, assistant, testJob())
 
 	completed := updates[len(updates)-1].GetRunCompleted()
-	if completed == nil || completed.Content != toolIterationFallback {
-		t.Fatalf("run completion = %+v, want fallback %q", completed, toolIterationFallback)
-	}
-	fallbackDelta := updates[len(updates)-3].GetEvent()
-	if fallbackDelta == nil || fallbackDelta.GetPayload().AsMap()["delta"] != toolIterationFallback {
-		t.Fatalf("fallback delta = %+v, want %q", fallbackDelta, toolIterationFallback)
+	if completed == nil || strings.TrimSpace(completed.GetContent()) != "" {
+		t.Fatalf("run completion = %+v, want the whitespace the model produced", completed)
 	}
 }
 
-func TestExecuteAddsFallbackWhenFinalModelTurnHasNoVisibleContent(t *testing.T) {
+// A model turn that finished with nothing to say is a success with no content,
+// and it is reported as exactly that: no synthesized delta, and a completion
+// carrying the empty answer.
+func TestExecuteReportsEmptyFinalModelTurnAsAnEmptySuccess(t *testing.T) {
 	assistant := NewGeneralAssistant(
 		map[turingv1.ModelProvider]llm.Provider{
 			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: &completionProvider{},
@@ -103,23 +102,18 @@ func TestExecuteAddsFallbackWhenFinalModelTurnHasNoVisibleContent(t *testing.T) 
 
 	updates := collectUpdates(t, assistant, testJob())
 
-	const fallback = "The model returned an empty response."
 	if got := eventTypes(updates); fmt.Sprint(got) != fmt.Sprint([]turingv1.TuringEventType{
 		turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_STARTED,
-		turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_COMPLETED,
 	}) {
-		t.Fatalf("event types = %v, want started, fallback delta, completed", got)
+		t.Fatalf("event types = %v, want started and completed with no synthesized delta", got)
 	}
-	if got := updates[1].GetEvent().GetPayload().AsMap()["delta"]; got != fallback {
-		t.Fatalf("fallback delta = %#v, want %q", got, fallback)
-	}
-	if completed := updates[len(updates)-1].GetRunCompleted(); completed == nil || completed.Content != fallback {
-		t.Fatalf("run completion = %+v, want fallback content", completed)
+	if completed := updates[len(updates)-1].GetRunCompleted(); completed == nil || completed.Content != "" {
+		t.Fatalf("run completion = %+v, want an empty success", completed)
 	}
 }
 
-func TestExecuteReplacesWhitespaceOnlyFinalModelContentWithFallback(t *testing.T) {
+func TestExecutePreservesWhitespaceOnlyFinalModelContent(t *testing.T) {
 	provider := &queuedProvider{responses: [][]llm.StreamEvent{{
 		{Type: "delta", Text: " \n\t"},
 		{Type: "completed", FinishReason: "stop"},
@@ -134,12 +128,9 @@ func TestExecuteReplacesWhitespaceOnlyFinalModelContentWithFallback(t *testing.T
 
 	updates := collectUpdates(t, assistant, testJob())
 
-	if completed := updates[len(updates)-1].GetRunCompleted(); completed == nil || completed.Content != emptyFinalFallback {
-		t.Fatalf("run completion = %+v, want fallback %q", completed, emptyFinalFallback)
-	}
-	fallbackDelta := updates[len(updates)-3].GetEvent()
-	if fallbackDelta == nil || fallbackDelta.GetPayload().AsMap()["delta"] != emptyFinalFallback {
-		t.Fatalf("fallback delta = %+v, want %q", fallbackDelta, emptyFinalFallback)
+	completed := updates[len(updates)-1].GetRunCompleted()
+	if completed == nil || completed.GetContent() != " \n\t" {
+		t.Fatalf("run completion = %+v, want the exact whitespace the model produced", completed)
 	}
 }
 
@@ -159,7 +150,7 @@ func TestExecuteRejectsModelOutputBeyondAggregateByteLimit(t *testing.T) {
 	updates := collectUpdates(t, assistant, testJob())
 
 	failed := updates[len(updates)-1].GetRunFailed()
-	if failed == nil || failed.Code != "model_output_limit_exceeded" || failed.Retryable {
+	if failed == nil || failed.Code != "model_output_limit_exceeded" || retryableFailure(failed) {
 		t.Fatalf("terminal update = %+v, want non-retryable model_output_limit_exceeded", updates[len(updates)-1])
 	}
 	if got := eventTypes(updates); !reflect.DeepEqual(got, []turingv1.TuringEventType{
@@ -244,7 +235,7 @@ func TestExecuteEnforcesAggregateSuccessfulToolResultLimit(t *testing.T) {
 
 			if test.wantFailed {
 				failed := updates[len(updates)-1].GetRunFailed()
-				if failed == nil || failed.Code != "tool_result_limit_exceeded" || failed.Retryable {
+				if failed == nil || failed.Code != "tool_result_limit_exceeded" || retryableFailure(failed) {
 					t.Fatalf("terminal update = %+v, want non-retryable tool_result_limit_exceeded", updates[len(updates)-1])
 				}
 				if len(provider.requests) != 1 {
@@ -295,7 +286,7 @@ func TestExecuteCountsAggregateErrorToolResultsAcrossCalls(t *testing.T) {
 	updates := collectUpdates(t, assistant, testJob())
 
 	failed := updates[len(updates)-1].GetRunFailed()
-	if failed == nil || failed.Code != "tool_result_limit_exceeded" || failed.Retryable {
+	if failed == nil || failed.Code != "tool_result_limit_exceeded" || retryableFailure(failed) {
 		t.Fatalf("terminal update = %+v, want aggregate error-result limit failure", updates[len(updates)-1])
 	}
 	if len(client.calls) != 2 || len(provider.requests) != 1 {
@@ -358,7 +349,7 @@ func TestExecuteRetriesFailedToolDiscovery(t *testing.T) {
 
 	first := collectUpdates(t, assistant, testJob())
 	failed := first[len(first)-1].GetRunFailed()
-	if failed == nil || failed.Code != "tool_discovery_failed" || !failed.Retryable {
+	if failed == nil || failed.Code != "tool_discovery_failed" || !retryableFailure(failed) {
 		t.Fatalf("first terminal update = %+v, want retryable tool_discovery_failed", first[len(first)-1])
 	}
 	second := collectUpdates(t, assistant, testJob())
@@ -390,7 +381,7 @@ func TestExecuteRetriesToolDiscoveryAfterTimeoutWithoutCachingFailure(t *testing
 
 	first := collectUpdates(t, assistant, testJob())
 	failed := first[len(first)-1].GetRunFailed()
-	if failed == nil || failed.Code != "tool_discovery_failed" || !failed.Retryable {
+	if failed == nil || failed.Code != "tool_discovery_failed" || !retryableFailure(failed) {
 		t.Fatalf("first terminal update = %+v, want retryable tool_discovery_failed", first[len(first)-1])
 	}
 	second := collectUpdates(t, assistant, testJob())
@@ -420,7 +411,7 @@ func TestExecuteMakesToolDiscoveryValidationFailureNonRetryable(t *testing.T) {
 	updates := collectUpdates(t, assistant, testJob())
 
 	failed := updates[len(updates)-1].GetRunFailed()
-	if failed == nil || failed.Code != "tool_discovery_failed" || failed.Retryable {
+	if failed == nil || failed.Code != "tool_discovery_failed" || retryableFailure(failed) {
 		t.Fatalf("terminal update = %+v, want non-retryable tool_discovery_failed", updates[len(updates)-1])
 	}
 }
@@ -463,7 +454,7 @@ func TestExecuteUsesListToolsRetryClassification(t *testing.T) {
 			updates := collectUpdates(t, assistant, testJob())
 
 			failed := updates[len(updates)-1].GetRunFailed()
-			if failed == nil || failed.Code != "tool_discovery_failed" || failed.Retryable != test.retryable {
+			if failed == nil || failed.Code != "tool_discovery_failed" || retryableFailure(failed) != test.retryable {
 				t.Fatalf("terminal update = %+v, want retryable=%t tool_discovery_failed", updates[len(updates)-1], test.retryable)
 			}
 			if got := provider.calls.Load(); got != 0 {
@@ -1290,7 +1281,7 @@ func TestExecuteRejectsEntireToolBatchThatExceedsRunLimit(t *testing.T) {
 				t.Fatalf("provider requests = %d, want no follow-up model request", len(provider.requests))
 			}
 			failed := updates[len(updates)-1].GetRunFailed()
-			if failed == nil || failed.Code != "tool_call_limit_exceeded" || failed.Retryable {
+			if failed == nil || failed.Code != "tool_call_limit_exceeded" || retryableFailure(failed) {
 				t.Fatalf("terminal update = %+v, want non-retryable tool_call_limit_exceeded", updates[len(updates)-1])
 			}
 		})
@@ -1330,7 +1321,7 @@ func TestExecuteCountsToolCallsCumulativelyIncludingUnknownCalls(t *testing.T) {
 		t.Fatalf("provider requests = %d, want two model rounds", len(provider.requests))
 	}
 	failed := updates[len(updates)-1].GetRunFailed()
-	if failed == nil || failed.Code != "tool_call_limit_exceeded" || failed.Retryable {
+	if failed == nil || failed.Code != "tool_call_limit_exceeded" || retryableFailure(failed) {
 		t.Fatalf("terminal update = %+v, want non-retryable tool_call_limit_exceeded", updates[len(updates)-1])
 	}
 }
@@ -2310,7 +2301,7 @@ func TestExecuteEmitsRunFailedWhenMessageFetchFails(t *testing.T) {
 	updates := collectUpdates(t, assistant, testJob())
 
 	failed := updates[len(updates)-1].GetRunFailed()
-	if failed == nil || failed.Code != "message_fetch_failed" || failed.Message != fetchErr.Error() || !failed.Retryable {
+	if failed == nil || failed.Code != "message_fetch_failed" || !retryableFailure(failed) {
 		t.Fatalf("terminal update = %+v, want retryable message_fetch_failed", updates[len(updates)-1])
 	}
 }
@@ -2359,7 +2350,7 @@ func TestExecuteClassifiesTypedMessageFetchFailures(t *testing.T) {
 			updates := collectUpdates(t, assistant, testJob())
 
 			failed := updates[len(updates)-1].GetRunFailed()
-			if failed == nil || failed.Code != "message_fetch_failed" || failed.Retryable != test.retryable {
+			if failed == nil || failed.Code != "message_fetch_failed" || retryableFailure(failed) != test.retryable {
 				t.Fatalf("terminal update = %+v, want retryable=%t message_fetch_failed", updates[len(updates)-1], test.retryable)
 			}
 		})
@@ -2379,7 +2370,7 @@ func TestExecuteEmitsRunFailedWhenProviderStreamStartFails(t *testing.T) {
 	updates := collectUpdates(t, assistant, testJob())
 
 	failed := updates[len(updates)-1].GetRunFailed()
-	if failed == nil || failed.Code != "model_stream_failed" || failed.Message != streamErr.Error() || !failed.Retryable {
+	if failed == nil || failed.Code != "model_stream_failed" || !retryableFailure(failed) {
 		t.Fatalf("terminal update = %+v, want retryable model_stream_failed", updates[len(updates)-1])
 	}
 }
@@ -2434,7 +2425,7 @@ func TestExecuteClassifiesTypedProviderStreamStartFailures(t *testing.T) {
 			updates := collectUpdates(t, assistant, testJob())
 
 			failed := updates[len(updates)-1].GetRunFailed()
-			if failed == nil || failed.Code != "model_stream_failed" || failed.Retryable != test.retryable {
+			if failed == nil || failed.Code != "model_stream_failed" || retryableFailure(failed) != test.retryable {
 				t.Fatalf("terminal update = %+v, want retryable=%t model_stream_failed", updates[len(updates)-1], test.retryable)
 			}
 		})
@@ -2481,7 +2472,7 @@ func TestExecuteMakesTypedTransientProviderFailureNonRetryableAfterSideEffect(t 
 	updates := collectUpdates(t, assistant, testJob())
 
 	failed := updates[len(updates)-1].GetRunFailed()
-	if failed == nil || failed.Code != "model_stream_failed" || failed.Retryable {
+	if failed == nil || failed.Code != "model_stream_failed" || retryableFailure(failed) {
 		t.Fatalf("terminal update = %+v, want side-effect override retryable=false", updates[len(updates)-1])
 	}
 }
@@ -2546,7 +2537,7 @@ func TestExecuteMakesLaterModelFailuresNonRetryableOnlyAfterApprovalGatedSuccess
 			updates := collectUpdates(t, assistant, testJob())
 
 			failed := updates[len(updates)-1].GetRunFailed()
-			if failed == nil || failed.Code != test.wantCode || failed.Retryable != test.retryable || !strings.Contains(failed.Message, test.wantMessagePart) {
+			if failed == nil || failed.Code != test.wantCode || retryableFailure(failed) != test.retryable {
 				t.Fatalf("terminal update = %+v, want retryable=%t %s", updates[len(updates)-1], test.retryable, test.wantCode)
 			}
 			if len(client.calls) != 1 {
@@ -2567,7 +2558,7 @@ func TestExecuteTimesOutProviderThatNeverClosesAndCancelsModelContext(t *testing
 	updates := collectUpdates(t, assistant, testJob())
 
 	failed := updates[len(updates)-1].GetRunFailed()
-	if failed == nil || failed.Code != "model_timeout" || !failed.Retryable {
+	if failed == nil || failed.Code != "model_timeout" || !retryableFailure(failed) {
 		t.Fatalf("terminal update = %+v, want retryable model_timeout", updates[len(updates)-1])
 	}
 	modelCtx := <-provider.contextSeen
@@ -2603,7 +2594,7 @@ func TestExecuteModelTimeoutIsNonRetryableAfterApprovalGatedSuccess(t *testing.T
 	updates := collectUpdates(t, assistant, testJob())
 
 	failed := updates[len(updates)-1].GetRunFailed()
-	if failed == nil || failed.Code != "model_timeout" || failed.Retryable {
+	if failed == nil || failed.Code != "model_timeout" || retryableFailure(failed) {
 		t.Fatalf("terminal update = %+v, want non-retryable model_timeout", updates[len(updates)-1])
 	}
 }
@@ -2711,7 +2702,7 @@ func TestExecuteDebugToolRejectsTypedNilMCPClient(t *testing.T) {
 			updates := collectUpdates(t, assistant, job)
 
 			failed := updates[len(updates)-1].GetRunFailed()
-			if failed == nil || failed.Code != "tool_call_failed" || failed.Retryable {
+			if failed == nil || failed.Code != "tool_call_failed" || retryableFailure(failed) {
 				t.Fatalf("terminal update = %+v, want non-retryable tool_call_failed", updates[len(updates)-1])
 			}
 		})
@@ -2799,7 +2790,7 @@ func TestGeneralAssistantClassifiesStreamedProviderErrors(t *testing.T) {
 			if wantCode == "" {
 				wantCode = "model_error"
 			}
-			if failed == nil || failed.Code != wantCode || failed.Message != "provider error" || failed.Retryable != test.retryable {
+			if failed == nil || failed.Code != wantCode || retryableFailure(failed) != test.retryable {
 				t.Fatalf("last update = %+v, want code %q retryable=%t", updates[len(updates)-1], wantCode, test.retryable)
 			}
 		})
@@ -3545,5 +3536,289 @@ func TestExecutePropagatesRecallNoticeEmitErrors(t *testing.T) {
 	}
 	if len(provider.seen) != 0 {
 		t.Fatalf("model was called despite a broken stream: %+v", provider.seen)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Typed failure origins.
+//
+// Every run failure this agent reports names where it came from. The
+// orchestrator turns that typed origin into a public outcome; it must never
+// have to read a provider's or a tool's sentence to work one out.
+// ---------------------------------------------------------------------------
+
+func TestGeneralAssistantTypedFailureOriginAtEveryReportingSite(t *testing.T) {
+	oversizeResult := strings.Repeat("r", maxToolResultBytes+1)
+
+	tests := []struct {
+		name       string
+		assistant  func(t *testing.T) *GeneralAssistant
+		job        func() *turingv1.AgentJob
+		wantCode   string
+		wantOrigin turingv1.FailureOrigin
+		wantRetry  turingv1.AutomaticRetryClass
+	}{
+		{
+			name: "message_fetch_failed_is_context_assembly",
+			assistant: func(*testing.T) *GeneralAssistant {
+				return NewGeneralAssistant(nil, fakeMessageClient{err: status.Error(codes.Unavailable, "gone")}, nil)
+			},
+			wantCode:   "message_fetch_failed",
+			wantOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_CONTEXT_ASSEMBLY,
+			wantRetry:  turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT,
+		},
+		{
+			name: "model_provider_unavailable_is_provider_configuration",
+			assistant: func(*testing.T) *GeneralAssistant {
+				return NewGeneralAssistant(nil, fakeMessageClient{}, nil)
+			},
+			wantCode:   "model_provider_unavailable",
+			wantOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_CONFIGURATION,
+			wantRetry:  turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_NEVER,
+		},
+		{
+			name: "external_agent_unavailable_is_external_provider",
+			assistant: func(*testing.T) *GeneralAssistant {
+				return NewGeneralAssistant(nil, fakeMessageClient{}, nil)
+			},
+			job: func() *turingv1.AgentJob {
+				job := testJob()
+				job.ExternalAgent = &turingv1.ExternalAgentTarget{
+					DisplayName: "Claude", BaseUrl: "https://example.invalid", CredentialRef: "MISSING_KEY",
+				}
+				return job
+			},
+			wantCode:   "external_agent_unavailable",
+			wantOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_EXTERNAL_PROVIDER,
+			wantRetry:  turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_NEVER,
+		},
+		{
+			name: "model_output_limit_exceeded_is_provider_output_guard",
+			assistant: func(*testing.T) *GeneralAssistant {
+				provider := &scriptedProvider{events: []llm.StreamEvent{
+					{Type: "delta", Text: strings.Repeat("a", maxModelOutputBytes)},
+					{Type: "delta", Text: "b"},
+				}}
+				return NewGeneralAssistant(
+					map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+					fakeMessageClient{}, nil,
+				)
+			},
+			wantCode:   "model_output_limit_exceeded",
+			wantOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_OUTPUT_GUARD,
+			wantRetry:  turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_NEVER,
+		},
+		{
+			name: "tool_result_limit_exceeded_is_tool_guard",
+			assistant: func(*testing.T) *GeneralAssistant {
+				provider := &queuedProvider{responses: [][]llm.StreamEvent{
+					{{Type: "tool_call", ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "system.time"}}}},
+					{{Type: "delta", Text: "must not continue"}},
+				}}
+				client := &assistantTestToolLister{
+					definitions: []map[string]any{{"name": "system.time"}},
+					callFunc: func(context.Context, string, map[string]any) (map[string]any, error) {
+						return nil, errors.New(oversizeResult)
+					},
+				}
+				return NewGeneralAssistant(
+					map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+					fakeMessageClient{},
+					&GeneralAssistantTools{SystemMCP: client, Runner: &tools.Runner{PostBeacon: allowToolCall}},
+				)
+			},
+			wantCode:   "tool_result_limit_exceeded",
+			wantOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_GUARD,
+			wantRetry:  turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_NEVER,
+		},
+		{
+			name: "provider_reported_origin_is_carried_through_untouched",
+			assistant: func(*testing.T) *GeneralAssistant {
+				provider := &scriptedProvider{events: []llm.StreamEvent{{
+					Type: "error", Code: "model_stream_error", Message: "context_budget_exceeded",
+					Origin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
+				}}}
+				return NewGeneralAssistant(
+					map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+					fakeMessageClient{}, nil,
+				)
+			},
+			wantCode:   "model_stream_error",
+			wantOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
+			wantRetry:  turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			job := testJob()
+			if test.job != nil {
+				job = test.job()
+			}
+			updates := collectUpdates(t, test.assistant(t), job)
+			failed := updates[len(updates)-1].GetRunFailed()
+			if failed == nil || failed.GetCode() != test.wantCode {
+				t.Fatalf("terminal update = %+v, want %q", updates[len(updates)-1], test.wantCode)
+			}
+			if failed.GetFailureOrigin() != test.wantOrigin {
+				t.Fatalf("origin = %v, want %v", failed.GetFailureOrigin(), test.wantOrigin)
+			}
+			if failed.GetAutomaticRetryClass() != test.wantRetry {
+				t.Fatalf("retry class = %v, want %v", failed.GetAutomaticRetryClass(), test.wantRetry)
+			}
+			if failed.GetMessage() != "" {
+				t.Fatalf("failure carried message %q, want none", failed.GetMessage())
+			}
+			if failed.GetRetryable() {
+				t.Fatal("failure set the superseded retryable bool")
+			}
+		})
+	}
+}
+
+// The provider owns its own prose and can put anything in it, including the
+// exact spelling of another origin's code. Nothing downstream may read it.
+func TestProviderControlledTextCannotChangePublicOutcome(t *testing.T) {
+	provider := &scriptedProvider{events: []llm.StreamEvent{{
+		Type:    "error",
+		Code:    "model_stream_error",
+		Message: "tool_call_failed: context_budget_exceeded, approval_expired, automation_approval_failed",
+		Origin:  turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
+	}}}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{}, nil,
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	failed := updates[len(updates)-1].GetRunFailed()
+	if failed == nil {
+		t.Fatalf("terminal update = %+v, want a run failure", updates[len(updates)-1])
+	}
+	if failed.GetCode() != "model_stream_error" {
+		t.Fatalf("code = %q, want the provider's typed code", failed.GetCode())
+	}
+	if failed.GetFailureOrigin() != turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT {
+		t.Fatalf("origin = %v, want provider transport", failed.GetFailureOrigin())
+	}
+	if failed.GetMessage() != "" {
+		t.Fatalf("provider text crossed the runtime boundary as %q", failed.GetMessage())
+	}
+}
+
+// retryableFailure reads the typed retry class the runtime now reports. The
+// superseded bool is deliberately not set by any producer, so a test asserting
+// on it would be asserting on absence rather than on policy.
+func retryableFailure(failed *turingv1.RuntimeRunFailed) bool {
+	return failed.GetAutomaticRetryClass() == turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT
+}
+
+// ---------------------------------------------------------------------------
+// Explicit success, and what is not one.
+//
+// Only a report that says the run succeeded may complete it. An empty answer is
+// a legitimate success and is reported as one; a stream that simply stopped is
+// not a success at all, and must not be dressed up as one with filler text.
+// ---------------------------------------------------------------------------
+
+func TestExplicitEmptySuccessCompletesWithoutSynthesizedText(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		content string
+	}{
+		{name: "empty", content: ""},
+		{name: "whitespace_only", content: "  \n\t"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			provider := &scriptedProvider{events: []llm.StreamEvent{
+				{Type: "delta", Text: test.content},
+				{Type: "completed", FinishReason: "stop"},
+			}}
+			assistant := NewGeneralAssistant(
+				map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+				fakeMessageClient{}, nil,
+			)
+
+			updates := collectUpdates(t, assistant, testJob())
+
+			completed := updates[len(updates)-1].GetRunCompleted()
+			if completed == nil {
+				t.Fatalf("terminal update = %+v, want an explicit completion", updates[len(updates)-1])
+			}
+			if completed.GetContent() != test.content {
+				t.Fatalf("content = %q, want the exact reported %q", completed.GetContent(), test.content)
+			}
+			for _, update := range updates {
+				event := update.GetEvent()
+				if event == nil || event.GetType() != turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA {
+					continue
+				}
+				delta, _ := event.GetPayload().AsMap()["delta"].(string)
+				if strings.TrimSpace(delta) != "" {
+					t.Fatalf("empty success synthesized the delta %q", delta)
+				}
+			}
+		})
+	}
+}
+
+func TestToolIterationLimitEmptySuccessDoesNotSynthesizeText(t *testing.T) {
+	responses := make([][]llm.StreamEvent, 0, maxToolIterations)
+	for i := 0; i < maxToolIterations; i++ {
+		responses = append(responses, []llm.StreamEvent{
+			{Type: "tool_call", ToolCalls: []llm.ToolCall{{ID: fmt.Sprintf("call_%d", i), Name: "system.time"}}},
+		})
+	}
+	provider := &queuedProvider{responses: responses}
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{"name": "system.time"}},
+		result:      map[string]any{"ok": true},
+	}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{},
+		&GeneralAssistantTools{SystemMCP: client, Runner: &tools.Runner{PostBeacon: allowToolCall}},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	completed := updates[len(updates)-1].GetRunCompleted()
+	if completed == nil {
+		t.Fatalf("terminal update = %+v, want an explicit completion", updates[len(updates)-1])
+	}
+	if completed.GetContent() != "" {
+		t.Fatalf("content = %q, want the empty answer the model actually produced", completed.GetContent())
+	}
+}
+
+func TestProviderEOFWithoutExplicitFinishNeverCompletes(t *testing.T) {
+	// A provider whose stream ends with no terminal chunk has told the runtime
+	// nothing about whether the answer finished, so this is the transport
+	// failure the provider reports rather than an empty success.
+	provider := &scriptedProvider{events: []llm.StreamEvent{
+		{Type: "delta", Text: "partial"},
+		{
+			Type: "error", Code: "model_stream_error", Message: "stream ended before a terminal event",
+			Origin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
+		},
+	}}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
+		fakeMessageClient{}, nil,
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+
+	for _, update := range updates {
+		if update.GetRunCompleted() != nil {
+			t.Fatalf("a stream that never finished was completed: %+v", update)
+		}
+	}
+	failed := updates[len(updates)-1].GetRunFailed()
+	if failed == nil || failed.GetCode() != "model_stream_error" {
+		t.Fatalf("terminal update = %+v, want a stream failure", updates[len(updates)-1])
+	}
+	if failed.GetFailureOrigin() != turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT {
+		t.Fatalf("origin = %v, want provider transport", failed.GetFailureOrigin())
 	}
 }

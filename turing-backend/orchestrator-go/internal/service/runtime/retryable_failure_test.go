@@ -35,10 +35,10 @@ func TestWorkerBusyRejectionRequeuesWithoutImmediateRedispatch(t *testing.T) {
 	}).GetRunAssigned()
 
 	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
-		RunId:     assigned.RunId,
-		Code:      "worker_busy",
-		Message:   "worker cannot accept the run",
-		Retryable: true,
+		RunId:               assigned.RunId,
+		Code:                "worker_busy",
+		FailureOrigin:       turingv1.FailureOrigin_FAILURE_ORIGIN_DISPATCH,
+		AutomaticRetryClass: turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT,
 	}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -119,10 +119,10 @@ func TestIdleWorkerRetryableFailureIsRedispatched(t *testing.T) {
 	// The run failed partway through; the worker is now idle and will send
 	// nothing further on its own.
 	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
-		RunId:     assigned.RunId,
-		Code:      "tool_discovery_failed",
-		Message:   "MCP server unreachable",
-		Retryable: true,
+		RunId:               assigned.RunId,
+		Code:                "tool_discovery_failed",
+		FailureOrigin:       turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_INFRASTRUCTURE,
+		AutomaticRetryClass: turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT,
 	}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -205,10 +205,10 @@ func TestWorkerBusyRequeuePublishesRetryNotice(t *testing.T) {
 	}).GetRunAssigned()
 
 	if err := workerStream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
-		RunId:     assigned.RunId,
-		Code:      "worker_busy",
-		Message:   "worker cannot accept the run",
-		Retryable: true,
+		RunId:               assigned.RunId,
+		Code:                "worker_busy",
+		FailureOrigin:       turingv1.FailureOrigin_FAILURE_ORIGIN_DISPATCH,
+		AutomaticRetryClass: turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT,
 	}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,9 @@ func TestRetryExhaustionPublishesGiveUpNotice(t *testing.T) {
 
 	// MaxAttempts=1 means the first rejection exhausts the budget outright.
 	if err := workerStream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
-		RunId: assigned.RunId, Code: "worker_busy", Message: "busy", Retryable: true,
+		RunId: assigned.RunId, Code: "worker_busy",
+		FailureOrigin:       turingv1.FailureOrigin_FAILURE_ORIGIN_DISPATCH,
+		AutomaticRetryClass: turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT,
 	}}}); err != nil {
 		t.Fatal(err)
 	}

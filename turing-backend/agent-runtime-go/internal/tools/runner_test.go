@@ -1052,3 +1052,127 @@ func (f mcpClientFunc) CallTool(
 func (c failingMCPClient) CallTool(context.Context, string, map[string]any, ...string) (map[string]any, error) {
 	return nil, c.err
 }
+
+// The runner is the reporting site for tool infrastructure, execution, policy,
+// and approval-transport failures. Each one it reports has to name a code the
+// orchestrator's allowlist knows, because the code plus the orchestrator's own
+// typed origin is what selects the public outcome — never the wrapped error's
+// sentence.
+func TestToolRunnerTypedFailureCodesAtEveryReportingSite(t *testing.T) {
+	tests := []struct {
+		name     string
+		runner   func(reported *[]*turingv1.ToolCallBeacon) *Runner
+		client   MCPClient
+		wantCode string
+	}{
+		{
+			name: "undeliverable_before_decision_is_tool_policy_decision_failed",
+			runner: func(reported *[]*turingv1.ToolCallBeacon) *Runner {
+				return &Runner{PostBeacon: recordingBeaconPoster(reported, func(beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+					if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+						return nil, sentBeaconTestError{err: errors.New("stream lost")}
+					}
+					return allowDecision(beacon), nil
+				})}
+			},
+			wantCode: "tool_policy_decision_failed",
+		},
+		{
+			name: "mismatched_before_decision_is_tool_policy_decision_invalid",
+			runner: func(reported *[]*turingv1.ToolCallBeacon) *Runner {
+				return &Runner{PostBeacon: recordingBeaconPoster(reported, func(beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+					if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+						return &turingv1.ToolPolicyDecision{
+							Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: "call_somebody_else",
+						}, nil
+					}
+					return allowDecision(beacon), nil
+				})}
+			},
+			wantCode: "tool_policy_decision_invalid",
+		},
+		{
+			name: "missing_approval_waiter_is_approval_wait_failed",
+			runner: func(reported *[]*turingv1.ToolCallBeacon) *Runner {
+				return &Runner{PostBeacon: recordingBeaconPoster(reported, func(beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+					if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+						return &turingv1.ToolPolicyDecision{
+							Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+							ToolCallId: beacon.GetToolCallId(), ApprovalId: "appr_1",
+						}, nil
+					}
+					return allowDecision(beacon), nil
+				})}
+			},
+			wantCode: "approval_wait_failed",
+		},
+		{
+			name: "failing_tool_call_is_mcp_call_failed",
+			runner: func(reported *[]*turingv1.ToolCallBeacon) *Runner {
+				return &Runner{PostBeacon: recordingBeaconPoster(reported, func(beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+					return allowDecision(beacon), nil
+				})}
+			},
+			client:   failingToolClient{err: errors.New("model_provider_unavailable")},
+			wantCode: "mcp_call_failed",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var reported []*turingv1.ToolCallBeacon
+			client := test.client
+			if client == nil {
+				client = stubMCPClient{result: map[string]any{"ok": true}}
+			}
+			if _, err := test.runner(&reported).Run(context.Background(), RunInput{
+				AgentID: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, RunID: "run_1", TraceID: "trace_1",
+				ServerName: "system", ToolName: "system.time", MCPClient: client,
+			}); err == nil {
+				t.Fatal("Run reported success")
+			}
+			var after *turingv1.ToolCallBeacon
+			for _, beacon := range reported {
+				if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
+					after = beacon
+				}
+			}
+			if after == nil {
+				t.Fatal("no after beacon was reported")
+			}
+			if after.GetError().GetCode() != test.wantCode {
+				t.Fatalf("reported code = %q, want %q", after.GetError().GetCode(), test.wantCode)
+			}
+			if after.GetError().GetMessage() != "" {
+				t.Fatalf("reported message %q, want none", after.GetError().GetMessage())
+			}
+		})
+	}
+}
+
+func recordingBeaconPoster(
+	reported *[]*turingv1.ToolCallBeacon,
+	respond func(*turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error),
+) func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+	return func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+		*reported = append(*reported, beacon)
+		return respond(beacon)
+	}
+}
+
+type sentBeaconTestError struct{ err error }
+
+func (e sentBeaconTestError) Error() string      { return e.err.Error() }
+func (e sentBeaconTestError) Unwrap() error      { return e.err }
+func (e sentBeaconTestError) BeaconPosted() bool { return true }
+
+type failingToolClient struct{ err error }
+
+func (c failingToolClient) CallTool(context.Context, string, map[string]any, ...string) (map[string]any, error) {
+	return nil, c.err
+}
+
+type stubMCPClient struct{ result map[string]any }
+
+func (c stubMCPClient) CallTool(context.Context, string, map[string]any, ...string) (map[string]any, error) {
+	return c.result, nil
+}

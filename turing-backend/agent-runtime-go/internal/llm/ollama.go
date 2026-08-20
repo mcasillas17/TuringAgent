@@ -138,7 +138,7 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 		defer close(out)
 		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: providerHTTPErrorCode(resp.StatusCode), Message: fmt.Sprintf("Ollama returned %d", resp.StatusCode)})
+			sendStreamEvent(ctx, out, providerError(providerHTTPErrorCode(resp.StatusCode), fmt.Sprintf("Ollama returned %d", resp.StatusCode)))
 			return
 		}
 		scanner := bufio.NewScanner(resp.Body)
@@ -151,23 +151,23 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 			}
 			obj, err := decodeObjectLine(line)
 			if err != nil {
-				sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: err.Error()})
+				sendStreamEvent(ctx, out, providerError("model_bad_chunk", err.Error()))
 				return
 			}
 			if rawProviderError, present := obj["error"]; present {
-				providerError, ok := rawProviderError.(string)
-				if !ok || strings.TrimSpace(providerError) == "" || len(obj) != 1 {
-					sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: "invalid Ollama provider error"})
+				reported, ok := rawProviderError.(string)
+				if !ok || strings.TrimSpace(reported) == "" || len(obj) != 1 {
+					sendStreamEvent(ctx, out, providerError("model_bad_chunk", "invalid Ollama provider error"))
 					return
 				}
-				sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_unavailable", Message: "Ollama provider error: " + providerError})
+				sendStreamEvent(ctx, out, providerError("model_unavailable", "Ollama provider error: "+reported))
 				return
 			}
 
 			rawDone, present := obj["done"]
 			done, ok := rawDone.(bool)
 			if !present || !ok {
-				sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: "done must be a boolean"})
+				sendStreamEvent(ctx, out, providerError("model_bad_chunk", "done must be a boolean"))
 				return
 			}
 			reason := ""
@@ -175,11 +175,11 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 				var ok bool
 				reason, ok = rawReason.(string)
 				if !ok {
-					sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: "done_reason must be a string"})
+					sendStreamEvent(ctx, out, providerError("model_bad_chunk", "done_reason must be a string"))
 					return
 				}
 				if !done {
-					sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: "done_reason is only valid on a terminal chunk"})
+					sendStreamEvent(ctx, out, providerError("model_bad_chunk", "done_reason is only valid on a terminal chunk"))
 					return
 				}
 			}
@@ -188,12 +188,12 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 			if rawMessage, present := obj["message"]; present {
 				message, ok := rawMessage.(map[string]any)
 				if !ok {
-					sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: "message must be an object"})
+					sendStreamEvent(ctx, out, providerError("model_bad_chunk", "message must be an object"))
 					return
 				}
 				if rawRole, present := message["role"]; present {
 					if _, ok := rawRole.(string); !ok {
-						sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: "message role must be a string"})
+						sendStreamEvent(ctx, out, providerError("model_bad_chunk", "message role must be a string"))
 						return
 					}
 				}
@@ -201,13 +201,13 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 					var ok bool
 					content, ok = rawContent.(string)
 					if !ok {
-						sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: "message content must be a string"})
+						sendStreamEvent(ctx, out, providerError("model_bad_chunk", "message content must be a string"))
 						return
 					}
 				}
 				if rawToolCalls, present := message["tool_calls"]; present {
 					if err := state.appendToolCallFragments(rawToolCalls); err != nil {
-						sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: err.Error()})
+						sendStreamEvent(ctx, out, providerError("model_bad_chunk", err.Error()))
 						return
 					}
 				}
@@ -223,7 +223,7 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 			if state.hasToolCalls() {
 				toolCalls, err := state.finalizeToolCalls()
 				if err != nil {
-					sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: err.Error()})
+					sendStreamEvent(ctx, out, providerError("model_bad_chunk", err.Error()))
 					return
 				}
 				if !sendStreamEvent(ctx, out, StreamEvent{Type: "tool_call", ToolCalls: toolCalls}) {
@@ -239,12 +239,12 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 				if strings.Contains(err.Error(), "token too long") {
 					code = "model_bad_chunk"
 				}
-				sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: code, Message: err.Error()})
+				sendStreamEvent(ctx, out, providerError(code, err.Error()))
 			}
 			return
 		}
 		if ctx.Err() == nil {
-			sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_stream_error", Message: "Ollama stream ended before a terminal event"})
+			sendStreamEvent(ctx, out, providerError("model_stream_error", "Ollama stream ended before a terminal event"))
 		}
 	}()
 	return out, nil

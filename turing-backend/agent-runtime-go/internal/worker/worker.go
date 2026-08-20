@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"sync"
 	"time"
@@ -82,10 +83,21 @@ type decisionWaiter struct {
 }
 
 type activeRun struct {
-	cancel                context.CancelCauseFunc
-	done                  chan struct{}
-	mu                    sync.Mutex
-	stop                  bool
+	cancel context.CancelCauseFunc
+	done   chan struct{}
+	mu     sync.Mutex
+	stop   bool
+	// attemptID is the assignment this run belongs to. It is what tells a
+	// same-attempt refresh from a fenced predecessor's command: only the
+	// attempt that still owns the run may move its version.
+	attemptID string
+	// version is the highest state version the orchestrator has committed for
+	// this assignment. It is echoed on terminal reports so the orchestrator can
+	// refuse anything computed against a state it has already left.
+	version int64
+	// paused withholds this run's narration after an update failed to reach the
+	// orchestrator.
+	paused                bool
 	terminalReportClaimed bool
 }
 
@@ -580,6 +592,12 @@ func (w *Worker) handleCommand(ctx context.Context, stream RuntimeStream, cmd *t
 		}
 	case *turingv1.RuntimeCommand_RunCancelled:
 		if value.RunCancelled != nil {
+			if !w.acceptCommandVersion(value.RunCancelled.GetRunId(), value.RunCancelled.GetStateVersion()) {
+				// Computed against a state this worker has already been told to
+				// leave. Acting on it would cancel a run the orchestrator has
+				// since moved forward.
+				return nil
+			}
 			return w.cancelRun(ctx, stream, value.RunCancelled.GetRunId())
 		}
 	case *turingv1.RuntimeCommand_ShutdownRequested:
@@ -587,8 +605,11 @@ func (w *Worker) handleCommand(ctx context.Context, stream RuntimeStream, cmd *t
 	case *turingv1.RuntimeCommand_ToolPolicyDecision:
 		w.deliverDecision(value.ToolPolicyDecision)
 	case *turingv1.RuntimeCommand_ApprovalUpdated:
-		if value.ApprovalUpdated != nil && (value.ApprovalUpdated.Status == "denied" || value.ApprovalUpdated.Status == "expired") {
-			return w.cancelApprovalRun(ctx, stream, value.ApprovalUpdated.ApprovalId, value.ApprovalUpdated.Status)
+		if value.ApprovalUpdated != nil {
+			w.acceptCommandVersion(w.runForApproval(value.ApprovalUpdated.GetApprovalId()), value.ApprovalUpdated.GetStateVersion())
+			if value.ApprovalUpdated.Status == "denied" || value.ApprovalUpdated.Status == "expired" {
+				return w.cancelApprovalRun(ctx, stream, value.ApprovalUpdated.ApprovalId, value.ApprovalUpdated.Status)
+			}
 		}
 	}
 	return nil
@@ -596,15 +617,26 @@ func (w *Worker) handleCommand(ctx context.Context, stream RuntimeStream, cmd *t
 
 func (w *Worker) startRun(parent context.Context, stream RuntimeStream, job *turingv1.AgentJob) {
 	runCtx, cancel := context.WithCancelCause(parent)
-	entry := &activeRun{cancel: cancel, done: make(chan struct{})}
+	entry := &activeRun{
+		cancel:    cancel,
+		done:      make(chan struct{}),
+		attemptID: job.GetAssignmentAttemptId(),
+		version:   job.GetExpectedStateVersion(),
+	}
 	w.mu.Lock()
-	if _, exists := w.active[job.GetRunId()]; exists {
-		// Already running it. A redelivered RunAssigned is a duplicate, and
-		// silence is the correct idempotent answer: acking would terminally fail
-		// a healthy in-flight run, which then keeps executing and reports a
-		// completion the orchestrator rejects.
+	if existing, exists := w.active[job.GetRunId()]; exists {
+		// Already running it. A redelivered RunAssigned is never a second
+		// executor: acking would terminally fail a healthy in-flight run, which
+		// then keeps executing and reports a completion the orchestrator
+		// rejects.
+		//
+		// The same shape also carries a same-attempt refresh, which is how the
+		// orchestrator hands back the version it committed while this run's
+		// ownership was in doubt. That one is applied — to this exact attempt
+		// only — and releases any updates held since the loss.
 		w.mu.Unlock()
 		cancel(context.Canceled)
+		existing.refreshAssignment(job.GetAssignmentAttemptId(), job.GetExpectedStateVersion())
 		return
 	}
 	if len(w.active) >= w.options.MaxConcurrentRuns {
@@ -620,10 +652,11 @@ func (w *Worker) startRun(parent context.Context, stream RuntimeStream, job *tur
 		defer sendCancel()
 		_ = w.send(sendCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{
 			RunFailed: &turingv1.RuntimeRunFailed{
-				RunId:     job.GetRunId(),
-				Code:      "worker_busy",
-				Message:   "worker cannot accept the run",
-				Retryable: true,
+				RunId:                job.GetRunId(),
+				Code:                 "worker_busy",
+				FailureOrigin:        turingv1.FailureOrigin_FAILURE_ORIGIN_DISPATCH,
+				AutomaticRetryClass:  turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT,
+				ExpectedStateVersion: job.GetExpectedStateVersion(),
 			},
 		}})
 		return
@@ -643,7 +676,7 @@ func (w *Worker) startRun(parent context.Context, stream RuntimeStream, job *tur
 			}
 			sendCtx, cancel := context.WithTimeout(runCtx, w.options.UpdateSendTimeout)
 			defer cancel()
-			return w.send(sendCtx, stream, update)
+			return w.sendRunUpdate(sendCtx, entry, stream, update)
 		})
 		if entry.isStopping() {
 			return
@@ -653,12 +686,26 @@ func (w *Worker) startRun(parent context.Context, stream RuntimeStream, job *tur
 			w.sendTerminalOnce(entry, runCtx, stream, terminal)
 			return
 		}
+
 		if runWasTerminalized(err) {
 			w.sendTerminalOnce(entry, runCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: job.GetRunId()}}})
 			return
 		}
+
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(runCtx.Err(), context.Canceled) {
-			w.sendTerminalOnce(entry, runCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{RunId: job.GetRunId(), Code: "runtime_error", Message: err.Error(), Retryable: false}}})
+			// The executor's error text stays here. It names Go types, provider
+			// prose, and tool output, none of which the orchestrator may
+			// persist or return; what it needs is that this failure came from
+			// the worker's own runtime and must not be retried.
+			log.Printf("run %s executor failed: %v", job.GetRunId(), err)
+			w.sendTerminalOnce(entry, runCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{
+				RunFailed: &turingv1.RuntimeRunFailed{
+					RunId:               job.GetRunId(),
+					Code:                "runtime_error",
+					FailureOrigin:       turingv1.FailureOrigin_FAILURE_ORIGIN_WORKER_RUNTIME,
+					AutomaticRetryClass: turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_NEVER,
+				},
+			}})
 		}
 	}()
 }
@@ -703,7 +750,9 @@ func (w *Worker) cancelRunWithCause(ctx context.Context, stream RuntimeStream, r
 		<-entry.done
 		w.deleteActive(runID)
 		if ownsTerminalReport {
-			w.sendTerminalOrReport(context.Background(), stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: runID}}})
+			ack := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: runID}}}
+			stampObservedVersion(entry, ack)
+			w.sendTerminalOrReport(context.Background(), stream, ack)
 		}
 	}()
 	return nil
@@ -713,6 +762,32 @@ func (w *Worker) activeRun(runID string) *activeRun {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.active[runID]
+}
+
+func (w *Worker) runForApproval(approvalID string) string {
+	if approvalID == "" {
+		return ""
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.approvals[approvalID]
+}
+
+// acceptCommandVersion records the state version an orchestrator command
+// carries, and reports whether the command is current.
+//
+// A command with no version is from an orchestrator that does not send one and
+// is obeyed as before; a command naming an older version lost to something this
+// worker has already been told about, and is refused.
+func (w *Worker) acceptCommandVersion(runID string, version int64) bool {
+	if runID == "" || version <= 0 {
+		return true
+	}
+	entry := w.activeRun(runID)
+	if entry == nil {
+		return true
+	}
+	return entry.acceptVersion(version)
 }
 
 func (w *Worker) cancelApprovalRun(ctx context.Context, stream RuntimeStream, approvalID string, approvalStatus string) error {
@@ -802,7 +877,57 @@ func (w *Worker) sendTerminalOnce(entry *activeRun, ctx context.Context, stream 
 	if entry == nil || !entry.claimTerminalReport() {
 		return
 	}
+	stampObservedVersion(entry, update)
 	w.sendTerminalOrReport(ctx, stream, update)
+}
+
+// sendRunUpdate sends one update on behalf of a run, and stops that run
+// narrating itself once an update fails to arrive.
+//
+// A failed send is the worker's only evidence that the orchestrator stopped
+// hearing it, and the orchestrator fences a run it cannot hear from. Anything
+// this run says afterwards describes a state nobody committed, so it is
+// withheld until a same-attempt refresh says what the current state is.
+//
+// Withheld updates are dropped rather than queued, and that is deliberate: they
+// were computed against a state the orchestrator has by then already left, so
+// replaying them after the refresh would publish a story about a version that
+// no longer exists. Nothing durable is lost — narration is advisory, and the
+// run's outcome travels on the terminal report, which is still sent and is
+// fenced by the version this assignment last accepted.
+func (w *Worker) sendRunUpdate(ctx context.Context, entry *activeRun, stream RuntimeStream, update *turingv1.RuntimeUpdate) error {
+	if entry == nil {
+		return w.send(ctx, stream, update)
+	}
+	if entry.outboundPaused() {
+		return nil
+	}
+	if err := w.send(ctx, stream, update); err != nil {
+		entry.pauseOutbound()
+		return err
+	}
+	return nil
+}
+
+// stampObservedVersion writes the version this assignment last accepted onto a
+// terminal report.
+//
+// The worker is authoritative here rather than the executor: the executor knows
+// what it produced, and only the worker knows which committed state that work
+// was computed against.
+func stampObservedVersion(entry *activeRun, update *turingv1.RuntimeUpdate) {
+	version := entry.expectedVersion()
+	if version <= 0 || update == nil {
+		return
+	}
+	switch {
+	case update.GetRunCompleted() != nil:
+		update.GetRunCompleted().ExpectedStateVersion = version
+	case update.GetRunFailed() != nil:
+		update.GetRunFailed().ExpectedStateVersion = version
+	case update.GetRunCancelledAck() != nil:
+		update.GetRunCancelledAck().ObservedStateVersion = version
+	}
 }
 
 func (w *Worker) setFatalChannel(ch chan error) {
@@ -852,7 +977,7 @@ func (w *Worker) postToolBeacon(ctx context.Context, stream RuntimeStream, beaco
 	w.mu.Lock()
 	w.toolCalls[beacon.ToolCallId] = beacon.RunId
 	w.mu.Unlock()
-	if err := w.send(ctx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: beacon}}); err != nil {
+	if err := w.sendRunUpdate(ctx, w.activeRun(beacon.GetRunId()), stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: beacon}}); err != nil {
 		if outboundSendStarted(err) {
 			sent = true
 			return nil, sentBeaconError{err: err}
@@ -862,6 +987,9 @@ func (w *Worker) postToolBeacon(ctx context.Context, stream RuntimeStream, beaco
 	sent = true
 	select {
 	case decision := <-waiter.decision:
+		// The decision is the orchestrator's reply to this exact beacon, so any
+		// version it carries is the state tool and model work continues from.
+		w.acceptCommandVersion(beacon.GetRunId(), decision.GetRunStateVersion())
 		if decision.GetDecision() == turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED && decision.GetApprovalId() != "" && beacon.GetRunId() != "" {
 			w.mu.Lock()
 			w.approvals[decision.GetApprovalId()] = beacon.GetRunId()
@@ -1022,4 +1150,61 @@ func (r *activeRun) claimTerminalReport() bool {
 	}
 	r.terminalReportClaimed = true
 	return true
+}
+
+// expectedVersion is the highest state version this assignment has been told
+// about.
+func (r *activeRun) expectedVersion() int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.version
+}
+
+// acceptVersion moves this assignment forward to a version the orchestrator
+// committed. It only ever moves forward: a command carrying an older version
+// was computed against a state this worker has already been told to leave, and
+// following it back would make the next report stale.
+func (r *activeRun) acceptVersion(version int64) bool {
+	if version <= 0 {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if version < r.version {
+		return false
+	}
+	r.version = version
+	return true
+}
+
+// pauseOutbound stops this run narrating itself after an update failed to reach
+// the orchestrator.
+func (r *activeRun) pauseOutbound() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.paused = true
+}
+
+// refreshAssignment applies a same-attempt assignment refresh: it carries the
+// committed version forward and releases any held updates. A refresh naming a
+// different attempt is a fenced predecessor's command and changes nothing.
+func (r *activeRun) refreshAssignment(attemptID string, version int64) bool {
+	r.mu.Lock()
+	if attemptID == "" || r.attemptID == "" || attemptID != r.attemptID {
+		r.mu.Unlock()
+		return false
+	}
+	if version > 0 && version >= r.version {
+		r.version = version
+	}
+	r.paused = false
+	r.mu.Unlock()
+	return true
+}
+
+// outboundPaused reports whether this run's narration is currently withheld.
+func (r *activeRun) outboundPaused() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.paused
 }

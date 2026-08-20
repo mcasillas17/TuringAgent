@@ -29,7 +29,7 @@ func TestLateFailedAfterForTerminalSafeCallIsIdempotent(t *testing.T) {
 	}, "general_assistant", "system", "system.time", `{"timezone":"UTC"}`, "sha256:late-safe"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.CancelRunWithEvent(ctx, enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`); err != nil {
+	if _, err := cancelRunEvents(t, repo, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -91,7 +91,7 @@ func TestLateCompletedAfterCorrectsConsumedApprovalTerminalCleanup(t *testing.T)
 	if _, err := repo.ConsumeApprovalWithEvent(ctx, approval.ApprovalID, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.CancelRunWithEvent(ctx, enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`); err != nil {
+	if _, err := cancelRunEvents(t, repo, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
 

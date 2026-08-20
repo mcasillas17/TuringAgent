@@ -85,7 +85,7 @@ func TestRequeueOrFailRetryableRunRequeuesWhileAttemptsRemain(t *testing.T) {
 	ctx := context.Background()
 	enqueued, claimed := claimRetryRun(t, repo, "worker-busy")
 
-	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, "worker_busy", "worker cannot accept the run", 3)
+	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, dispatchCondition("worker_busy"), 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestRequeueOrFailRetryableRunFailsAfterAttemptCap(t *testing.T) {
 	// Attempts 1 and 2 requeue; the run is re-claimed each time so it is running
 	// again for the next rejection.
 	for i := 0; i < maxAttempts-1; i++ {
-		decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, "worker_busy", "busy", maxAttempts)
+		decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, dispatchCondition("worker_busy"), maxAttempts)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -155,7 +155,7 @@ func TestRequeueOrFailRetryableRunFailsAfterAttemptCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, "worker_busy", "busy", maxAttempts)
+	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, dispatchCondition("worker_busy"), maxAttempts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestRequeueOrFailRetryableRunEmitsNoNoticeWhenNotRequeueable(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, "worker_busy", "busy", 3)
+	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, dispatchCondition("worker_busy"), 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestRequeueOrFailRetryableRunEmitsNoGiveUpForUnclaimableExhaustedJob(t *tes
 		t.Fatal(err)
 	}
 
-	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, "worker_busy", "busy", 3)
+	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, dispatchCondition("worker_busy"), 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +325,7 @@ func TestRetryRequeueCommitsBothTransitionsWithoutARunningToQueuedShortcut(t *te
 		t.Fatal(err)
 	}
 
-	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, "worker_busy", "worker cannot accept the run", 3)
+	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, dispatchCondition("worker_busy"), 3)
 	if err != nil {
 		t.Fatal(err)
 	}

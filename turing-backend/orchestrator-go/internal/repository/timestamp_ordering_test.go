@@ -295,7 +295,7 @@ func TestTerminalRunOrdersLegacyDependentTimestampsChronologically(t *testing.T)
 		}
 	}
 
-	events, err := repo.CancelRunWithEvent(ctx, enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`)
+	events, err := cancelRunEvents(t, repo, enqueued.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}

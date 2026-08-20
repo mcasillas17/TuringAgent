@@ -116,7 +116,12 @@ type Job struct {
 	MinimumWorkerMaxConcurrentRuns int
 	Attempt                        int
 	AssignmentAttemptID            string
-	Skills                         []SkillSnapshot
+	// ExpectedStateVersion is the run's version at the moment this claim
+	// committed queued -> running. The worker echoes it on later reports, so a
+	// report computed against a state the run has already left is refused
+	// rather than applied.
+	ExpectedStateVersion int64
+	Skills               []SkillSnapshot
 	// ExternalAgent is nil for the local assistant, which is the default and
 	// the common case.
 	ExternalAgent *ExternalAgentTarget
@@ -260,15 +265,14 @@ type RetryDecision struct {
 // budget is spent — or the run is no longer in a requeueable state — the run is
 // terminally failed with a distinguishable code so the message does not bounce
 // forever. maxAttempts caps the total number of attempts.
-func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, runID string, code string, message string, maxAttempts int) (RetryDecision, error) {
+func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, runID string, reported runoutcome.Failure, maxAttempts int) (RetryDecision, error) {
 	if maxAttempts <= 0 {
 		maxAttempts = defaultAssignmentMaxAttempts
 	}
-	// The reported code decides only whether this is a nonterminal dispatch
-	// condition; nothing here reads the message. worker_busy and
-	// worker_unavailable normalize to outcome none, which is what keeps a
-	// requeue from terminalizing a run that is going to run.
-	reported := runoutcome.NormalizeFailure(runoutcome.OriginDispatch, code, runoutcome.RetryClassSameRunTransient)
+	// The caller normalizes before it gets here, so the only thing this reads
+	// is the outcome that normalization produced. worker_busy and
+	// worker_unavailable carry outcome none, which is what keeps a requeue from
+	// terminalizing a run that is going to run.
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return RetryDecision{}, err
@@ -977,6 +981,7 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 		return Job{}, errors.New("run is not queued")
 	}
 	job.AssignmentAttemptID = assignmentAttemptID
+	job.ExpectedStateVersion = started.State.StateVersion
 	job.StartedEvent = started.Events[0]
 	if err := tx.Commit(); err != nil {
 		return Job{}, err

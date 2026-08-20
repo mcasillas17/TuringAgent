@@ -56,8 +56,6 @@ const (
 	runtimeUpdateHeadroom     = 64 * 1024
 	maxModelOutputBytes       = maxRuntimeMessageBytes - runtimeUpdateHeadroom
 	maxToolResultBytes        = 4 * 1024 * 1024
-	toolIterationFallback     = "Tool iteration limit reached before a final response."
-	emptyFinalFallback        = "The model returned an empty response."
 	// maxUnknownToolListing caps how many tool names an unknown-tool error echoes
 	// back to the model. A small model only needs a handful of candidates to
 	// correct itself, and the registry could grow large; an unbounded list would
@@ -196,7 +194,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return emitRunFailed(emit, job, "message_fetch_failed", err.Error(), retryableMessageFetchError(err))
+		return emitRunFailed(emit, job, "message_fetch_failed", turingv1.FailureOrigin_FAILURE_ORIGIN_CONTEXT_ASSEMBLY, retryClass(retryableMessageFetchError(err)))
 	}
 	if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_STARTED, map[string]any{"messageId": job.GetAssistantMessageId(), "role": "assistant"})); err != nil {
 		return err
@@ -209,17 +207,17 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	if err != nil {
 		// Not retryable: a missing key or an unconfigured runtime is fixed by
 		// a person editing .env, not by another attempt in thirty seconds.
-		return emitRunFailed(emit, job, "external_agent_unavailable", err.Error(), false)
+		return emitRunFailed(emit, job, "external_agent_unavailable", turingv1.FailureOrigin_FAILURE_ORIGIN_EXTERNAL_PROVIDER, retryClass(false))
 	}
 	if llm.ProviderIsNil(provider) {
-		return emitRunFailed(emit, job, "model_provider_unavailable", fmt.Sprintf("Provider %s is not configured", job.GetModelProvider().String()), false)
+		return emitRunFailed(emit, job, "model_provider_unavailable", turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_CONFIGURATION, retryClass(false))
 	}
 	registry, err := a.discoverTools(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return emitRunFailed(emit, job, "tool_discovery_failed", err.Error(), ToolDiscoveryRetryable(err))
+		return emitRunFailed(emit, job, "tool_discovery_failed", turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_INFRASTRUCTURE, retryClass(ToolDiscoveryRetryable(err)))
 	}
 	historyMessages := append([]llm.ChatMessage{}, messages...)
 	liveMessages := []llm.ChatMessage{{
@@ -254,7 +252,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			toolDefinitions,
 		)
 		if err != nil {
-			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
+			return emitRunFailed(emit, job, "context_budget_exceeded", turingv1.FailureOrigin_FAILURE_ORIGIN_CONTEXT_ASSEMBLY, retryClass(false))
 		}
 		requiredToolNames := requiredSkillToolNames(skillIndexIncluded)
 		budgeted, recallMessage, err := a.buildBudgetedContextWithRecall(
@@ -277,7 +275,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return err
 			}
-			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
+			return emitRunFailed(emit, job, "context_budget_exceeded", turingv1.FailureOrigin_FAILURE_ORIGIN_CONTEXT_ASSEMBLY, retryClass(false))
 		}
 		if notice := budgeted.Omissions.Notice(); notice != "" &&
 			(!omissionNoticeEmitted || budgeted.Omissions != lastOmissions) {
@@ -316,12 +314,12 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				return ctx.Err()
 			}
 			if errors.Is(modelErr, context.DeadlineExceeded) {
-				return emitRunFailed(emit, job, "model_timeout", modelErr.Error(), !successfulToolSideEffect)
+				return emitRunFailed(emit, job, "model_timeout", turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT, retryClass(!successfulToolSideEffect))
 			}
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return err
 			}
-			return emitRunFailed(emit, job, "model_stream_failed", err.Error(), retryableProviderStartError(err) && !successfulToolSideEffect)
+			return emitRunFailed(emit, job, "model_stream_failed", turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT, retryClass(retryableProviderStartError(err) && !successfulToolSideEffect))
 		}
 		var turnText strings.Builder
 		var calls []llm.ToolCall
@@ -332,12 +330,11 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			var ok bool
 			select {
 			case <-modelCtx.Done():
-				modelErr := modelCtx.Err()
 				cancelModel()
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				return emitRunFailed(emit, job, "model_timeout", modelErr.Error(), !successfulToolSideEffect)
+				return emitRunFailed(emit, job, "model_timeout", turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT, retryClass(!successfulToolSideEffect))
 			case event, ok = <-events:
 				if !ok {
 					break stream
@@ -347,13 +344,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			case "delta":
 				if len(event.Text) > maxModelOutputBytes-content.Len() {
 					cancelModel()
-					return emitRunFailed(
-						emit,
-						job,
-						"model_output_limit_exceeded",
-						fmt.Sprintf("model output exceeds %d bytes", maxModelOutputBytes),
-						false,
-					)
+					return emitRunFailed(emit, job, "model_output_limit_exceeded", turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_OUTPUT_GUARD, retryClass(false))
 				}
 				turnText.WriteString(event.Text)
 				content.WriteString(event.Text)
@@ -371,16 +362,9 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				// point sees every turn.
 				tokens.add(event.Usage)
 			case "error":
-				code := event.Code
-				if code == "" {
-					code = "model_error"
-				}
-				message := event.Message
-				if message == "" {
-					message = code
-				}
+				code, origin := streamErrorFailure(event)
 				cancelModel()
-				return emitRunFailed(emit, job, code, message, retryableModelError(code) && !successfulToolSideEffect)
+				return emitRunFailed(emit, job, code, origin, retryClass(retryableModelError(code) && !successfulToolSideEffect))
 			}
 		}
 		modelErr := modelCtx.Err()
@@ -389,7 +373,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			return ctx.Err()
 		}
 		if errors.Is(modelErr, context.DeadlineExceeded) {
-			return emitRunFailed(emit, job, "model_timeout", modelErr.Error(), !successfulToolSideEffect)
+			return emitRunFailed(emit, job, "model_timeout", turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT, retryClass(!successfulToolSideEffect))
 		}
 		if finishReason == "length" {
 			setting := maxOutputTokensSetting(provider)
@@ -407,27 +391,15 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			}
 		}
 		if len(calls) == 0 {
-			if strings.TrimSpace(content.String()) == "" {
-				if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA, map[string]any{
-					"messageId": job.GetAssistantMessageId(),
-					"delta":     emptyFinalFallback,
-				})); err != nil {
-					return err
-				}
-
-				content.Reset()
-				content.WriteString(emptyFinalFallback)
-			}
+			// An empty answer is still an answer the model explicitly finished,
+			// so it is reported as the empty success it is. Replacing it with
+			// apologetic filler used to make a completion that produced nothing
+			// indistinguishable from one that produced a sentence, and the
+			// filler was then persisted as the assistant's own words.
 			return completeRun(emit, job, content.String(), tokens.reported())
 		}
 		if toolCallCount+len(calls) > a.maxToolCallsPerRun {
-			return emitRunFailed(
-				emit,
-				job,
-				"tool_call_limit_exceeded",
-				fmt.Sprintf("model requested more than %d tool calls", a.maxToolCallsPerRun),
-				false,
-			)
+			return emitRunFailed(emit, job, "tool_call_limit_exceeded", turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_GUARD, retryClass(false))
 		}
 		toolCallCount += len(calls)
 		normalizeToolCallIDs(calls, job.GetRunId(), toolIteration, usedModelToolCallIDs)
@@ -458,7 +430,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				toolDefinitions,
 			)
 		if err != nil {
-			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
+			return emitRunFailed(emit, job, "context_budget_exceeded", turingv1.FailureOrigin_FAILURE_ORIGIN_CONTEXT_ASSEMBLY, retryClass(false))
 		}
 		if _, err := buildBudgetedContext(provider, job.GetModel(), contextInput{
 			skills:            prospectiveSkillMessages,
@@ -473,7 +445,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			skillIndexOmitted:  prospectiveSkillIndexOmitted,
 			minimalToolResults: minimalToolResults,
 		}, toolDefinitions); err != nil {
-			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
+			return emitRunFailed(emit, job, "context_budget_exceeded", turingv1.FailureOrigin_FAILURE_ORIGIN_CONTEXT_ASSEMBLY, retryClass(false))
 		}
 		for _, call := range calls {
 			outcome, err := a.executeToolCall(ctx, job, emit, registry, call)
@@ -486,13 +458,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			}
 			if outcome.ResultMessage != nil {
 				if outcome.AppendedBytes > maxToolResultBytes-toolResultBytes {
-					return emitRunFailed(
-						emit,
-						job,
-						"tool_result_limit_exceeded",
-						fmt.Sprintf("serialized tool results exceed %d bytes", maxToolResultBytes),
-						false,
-					)
+					return emitRunFailed(emit, job, "tool_result_limit_exceeded", turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_GUARD, retryClass(false))
 				}
 				liveMessages = append(liveMessages, *outcome.ResultMessage)
 				toolResultBytes += outcome.AppendedBytes
@@ -506,16 +472,11 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			})); err != nil {
 				return err
 			}
-			if strings.TrimSpace(content.String()) == "" {
-				if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA, map[string]any{
-					"messageId": job.GetAssistantMessageId(),
-					"delta":     toolIterationFallback,
-				})); err != nil {
-					return err
-				}
-				content.Reset()
-				content.WriteString(toolIterationFallback)
-			}
+			// The step notice above already says the run stopped at the tool
+			// iteration limit. Whatever text the model produced before that is
+			// the answer; if it produced none, the completion says so honestly
+			// rather than putting the limit's explanation in the assistant's
+			// mouth.
 			return completeRun(emit, job, content.String(), tokens.reported())
 		}
 	}
@@ -1116,7 +1077,7 @@ func (a *GeneralAssistant) tryDebugTool(ctx context.Context, job *turingv1.Agent
 		return false, nil
 	}
 	if isNilToolLister(client) {
-		return true, emitRunFailed(emit, job, "tool_call_failed", "MCP client is not configured", false)
+		return true, emitRunFailed(emit, job, "tool_call_failed", turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_INFRASTRUCTURE, retryClass(false))
 	}
 	result, err := a.tools.Runner.Run(ctx, tools.RunInput{
 		AgentID:      turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
@@ -1137,7 +1098,7 @@ func (a *GeneralAssistant) tryDebugTool(ctx context.Context, job *turingv1.Agent
 			tools.ApprovalWaitFailed(err) || tools.ReportingFailed(err) {
 			return true, err
 		}
-		return true, emitRunFailed(emit, job, "tool_call_failed", err.Error(), false)
+		return true, emitRunFailed(emit, job, "tool_call_failed", turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_EXECUTION, retryClass(false))
 	}
 	data, err := json.Marshal(result)
 	if err != nil {
@@ -1161,8 +1122,51 @@ func messageEvent(job *turingv1.AgentJob, eventType turingv1.TuringEventType, pa
 	return &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{SessionId: job.GetSessionId(), RunId: job.GetRunId(), TraceId: job.GetTraceId(), Type: eventType, Payload: structPayload}}}
 }
 
-func emitRunFailed(emit func(*turingv1.RuntimeUpdate) error, job *turingv1.AgentJob, code string, message string, retryable bool) error {
-	return emit(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{RunId: job.GetRunId(), Code: code, Message: message, Retryable: retryable}}})
+// emitRunFailed reports a run failure as the orchestrator can actually use it:
+// an allowlisted code, the typed origin this call site knows first-hand, and
+// the retry class internal dispatch policy needs.
+//
+// It carries no message. Whatever the provider, the tool, or Go said about the
+// failure stays here, in the runtime's own logs and errors, because anything
+// this function puts on the wire can end up persisted on the run and returned
+// to a client.
+func emitRunFailed(
+	emit func(*turingv1.RuntimeUpdate) error,
+	job *turingv1.AgentJob,
+	code string,
+	origin turingv1.FailureOrigin,
+	retry turingv1.AutomaticRetryClass,
+) error {
+	return emit(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
+		RunId:                job.GetRunId(),
+		Code:                 code,
+		FailureOrigin:        origin,
+		AutomaticRetryClass:  retry,
+		ExpectedStateVersion: job.GetExpectedStateVersion(),
+	}}})
+}
+
+// retryClass turns an existing retryability judgement into the typed class the
+// orchestrator reads. The judgements themselves are unchanged; only the way
+// they are reported is.
+func retryClass(retryable bool) turingv1.AutomaticRetryClass {
+	if retryable {
+		return turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT
+	}
+	return turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_NEVER
+}
+
+// streamErrorFailure reads a provider's error event as the typed report it is.
+// The code and the origin both come from the provider's own classification of
+// protocol facts; the provider's sentence is never consulted.
+func streamErrorFailure(event llm.StreamEvent) (string, turingv1.FailureOrigin) {
+	if event.Code == "" {
+		return "model_error", turingv1.FailureOrigin_FAILURE_ORIGIN_EXTERNAL_PROVIDER
+	}
+	if event.Origin == turingv1.FailureOrigin_FAILURE_ORIGIN_UNSPECIFIED {
+		return event.Code, turingv1.FailureOrigin_FAILURE_ORIGIN_UNKNOWN
+	}
+	return event.Code, event.Origin
 }
 
 func retryableModelError(code string) bool {

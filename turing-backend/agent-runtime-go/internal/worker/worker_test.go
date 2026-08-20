@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1090,7 +1091,7 @@ func TestWorkerRejectsAssignmentItCannotRun(t *testing.T) {
 	if failed.RunId != "run_2" {
 		t.Fatalf("rejected run_id = %q, want run_2", failed.RunId)
 	}
-	if !failed.Retryable {
+	if !retryableFailure(failed) {
 		t.Fatal("rejection must be retryable: the worker was busy, the run is not broken")
 	}
 	cancel()
@@ -1405,4 +1406,362 @@ func TestModernWorkerWithoutDiscoveryReportsAuthoritativeEmptyTools(t *testing.T
 	}
 	cancel()
 	<-done
+}
+
+// ---------------------------------------------------------------------------
+// Assignment version identity.
+//
+// The worker is the only thing that knows which state its report was computed
+// against, so it retains the highest version the orchestrator has committed for
+// the assignment it owns and echoes it back on every terminal report.
+// ---------------------------------------------------------------------------
+
+// scriptedExecutor runs whatever the test hands it, so version behaviour can be
+// driven step by step instead of inferred from a real agent's timing.
+type scriptedExecutor struct {
+	started chan *turingv1.AgentJob
+	release chan struct{}
+	emitted chan func(*turingv1.RuntimeUpdate) error
+	posters chan func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error)
+	run     func(job *turingv1.AgentJob, emit func(*turingv1.RuntimeUpdate) error) error
+}
+
+func (e *scriptedExecutor) SetToolBeaconPoster(post func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error)) {
+	e.posters <- post
+}
+
+func newScriptedExecutor(run func(job *turingv1.AgentJob, emit func(*turingv1.RuntimeUpdate) error) error) *scriptedExecutor {
+	return &scriptedExecutor{
+		started: make(chan *turingv1.AgentJob, 4),
+		release: make(chan struct{}),
+		emitted: make(chan func(*turingv1.RuntimeUpdate) error, 4),
+		posters: make(chan func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error), 4),
+		run:     run,
+	}
+}
+
+func (e *scriptedExecutor) Execute(ctx context.Context, job *turingv1.AgentJob, emit func(*turingv1.RuntimeUpdate) error) error {
+	e.started <- job
+	if e.run != nil {
+		return e.run(job, emit)
+	}
+	e.emitted <- emit
+	select {
+	case <-e.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func startScriptedWorker(t *testing.T, executor Executor, stream *fakeStream, adjust ...func(*Options)) (*Worker, func()) {
+	t.Helper()
+	options := Options{
+		WorkerID:                 "worker-version",
+		MaxConcurrentRuns:        1,
+		UpdateSendTimeout:        time.Second,
+		DisconnectCleanupTimeout: 50 * time.Millisecond,
+	}
+	for _, apply := range adjust {
+		apply(&options)
+	}
+	worker := New(options, &fakeRuntimeClient{stream: stream}, executor)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+	// The worker_ready registration is the first thing on the wire; drain it so
+	// tests read only the updates they are about.
+	_ = nextSent(t, stream)
+	return worker, func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for worker Run to return")
+		}
+		waitForOutboundWriterExit(t, worker)
+	}
+}
+
+func assignJob(t *testing.T, stream *fakeStream, runID string, attemptID string, version int64) {
+	t.Helper()
+	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{
+		RunAssigned: &turingv1.AgentJob{
+			JobId:                "job_" + runID,
+			RunId:                runID,
+			AssistantMessageId:   "msg_" + runID,
+			AssignmentAttemptId:  attemptID,
+			ExpectedStateVersion: version,
+		},
+	}}
+}
+
+func TestWorkerEchoesExpectedVersionOnCompletionAndFailure(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		terminal func(runID string) *turingv1.RuntimeUpdate
+		observed func(*turingv1.RuntimeUpdate) int64
+	}{
+		{
+			name: "completion",
+			terminal: func(runID string) *turingv1.RuntimeUpdate {
+				return &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{
+					RunCompleted: &turingv1.RuntimeRunCompleted{
+						RunId: runID, AssistantMessageId: "msg_" + runID, Content: "done",
+					},
+				}}
+			},
+			observed: func(update *turingv1.RuntimeUpdate) int64 {
+				return update.GetRunCompleted().GetExpectedStateVersion()
+			},
+		},
+		{
+			name: "failure",
+			terminal: func(runID string) *turingv1.RuntimeUpdate {
+				return &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{
+					RunFailed: &turingv1.RuntimeRunFailed{RunId: runID, Code: "runtime_error"},
+				}}
+			},
+			observed: func(update *turingv1.RuntimeUpdate) int64 {
+				return update.GetRunFailed().GetExpectedStateVersion()
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const runID = "run_echo_version"
+			const assignedVersion = int64(7)
+			stream := newFakeStream()
+			executor := newScriptedExecutor(func(job *turingv1.AgentJob, emit func(*turingv1.RuntimeUpdate) error) error {
+				return emit(test.terminal(job.GetRunId()))
+			})
+			_, stop := startScriptedWorker(t, executor, stream)
+			defer stop()
+
+			assignJob(t, stream, runID, "attempt-echo", assignedVersion)
+			update := nextSent(t, stream)
+			if got := test.observed(update); got != assignedVersion {
+				t.Fatalf("terminal report carried version %d, want the assigned %d", got, assignedVersion)
+			}
+		})
+	}
+}
+
+func TestWorkerKeepsHighestAcceptedVersionPerAssignment(t *testing.T) {
+	const runID = "run_highest_version"
+	const attemptID = "attempt-highest"
+	stream := newFakeStream()
+	executor := newScriptedExecutor(nil)
+	worker, stop := startScriptedWorker(t, executor, stream)
+	defer stop()
+
+	post := <-executor.posters
+	assignJob(t, stream, runID, attemptID, 3)
+	emit := <-executor.emitted
+
+	// A same-attempt refresh at a newer version is the orchestrator committing
+	// forward, and the worker follows it.
+	assignJob(t, stream, runID, attemptID, 5)
+	waitForWorkerVersion(t, worker, runID, 5)
+
+	// A refresh computed against an older state cannot roll the worker back,
+	// and one naming a different attempt is a fenced predecessor's command.
+	assignJob(t, stream, runID, attemptID, 4)
+	assignJob(t, stream, runID, "attempt-other", 9)
+	// Both rejected commands are observed through a later accepted one, so the
+	// assertion never races the receive loop.
+	assignJob(t, stream, runID, attemptID, 5)
+	waitForWorkerVersion(t, worker, runID, 5)
+
+	// A beacon's own decision is the one reply that carries a committed version
+	// back before tool work continues, so it moves the assignment forward.
+	decided := make(chan *turingv1.ToolPolicyDecision, 1)
+	go func() {
+		decision, err := post(context.Background(), &turingv1.ToolCallBeacon{
+			Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, ToolCallId: "call_current",
+			RunId: runID, ToolName: "system.time",
+		})
+		if err != nil {
+			decided <- nil
+			return
+		}
+		decided <- decision
+	}()
+	if beacon := nextSent(t, stream); beacon.GetToolBeacon() == nil {
+		t.Fatalf("worker sent %+v, want the tool beacon", beacon)
+	}
+	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_ToolPolicyDecision{
+		ToolPolicyDecision: &turingv1.ToolPolicyDecision{
+			Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: "call_current",
+			Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, RunStateVersion: 6,
+		},
+	}}
+	select {
+	case decision := <-decided:
+		if decision == nil {
+			t.Fatal("tool beacon returned no decision")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the tool policy decision")
+	}
+	waitForWorkerVersion(t, worker, runID, 6)
+
+	if err := emit(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{
+		RunCompleted: &turingv1.RuntimeRunCompleted{RunId: runID, AssistantMessageId: "msg_" + runID, Content: "done"},
+	}}); err != nil {
+		t.Fatalf("emit terminal: %v", err)
+	}
+	close(executor.release)
+	terminal := nextSent(t, stream)
+	if got := terminal.GetRunCompleted().GetExpectedStateVersion(); got != 6 {
+		t.Fatalf("terminal report carried version %d, want the highest accepted 6", got)
+	}
+}
+
+func TestWorkerPausesOutboundRunUpdatesUntilSameAttemptRefresh(t *testing.T) {
+	const runID = "run_paused_outbound"
+	const attemptID = "attempt-paused"
+	stream := newFakeStream()
+	// A stalled send is the honest shape of stream loss here: the update may or
+	// may not have arrived, so the run's ownership is exactly as uncertain as
+	// the orchestrator's fence assumes. The stall is released rather than
+	// failed, because a failed send stops the outbound writer for good and
+	// there would be no stream left to resume onto.
+	stall := make(chan struct{})
+	stalled := make(chan struct{})
+	var stallOnce sync.Once
+	stream.sendFn = func(update *turingv1.RuntimeUpdate) error {
+		if update.GetEvent().GetType() == turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
+			stallOnce.Do(func() { close(stalled) })
+			<-stall
+			return nil
+		}
+		stream.sent <- update
+		return nil
+	}
+	executor := newScriptedExecutor(nil)
+	worker, stop := startScriptedWorker(t, executor, stream, func(options *Options) {
+		options.UpdateSendTimeout = 50 * time.Millisecond
+	})
+	defer stop()
+
+	assignJob(t, stream, runID, attemptID, 3)
+	emit := <-executor.emitted
+
+	lost := make(chan error, 1)
+	go func() {
+		lost <- emit(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
+			RunId: runID, Type: turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP,
+		}}})
+	}()
+	<-stalled
+	select {
+	case err := <-lost:
+		if err == nil {
+			t.Fatal("stalled send reported success")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the stalled send to give up")
+	}
+	close(stall)
+
+	delta := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
+		RunId: runID, Type: turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA,
+	}}}
+	if err := emit(delta); err != nil {
+		t.Fatalf("withheld update reported an error to the executor: %v", err)
+	}
+	select {
+	case update := <-stream.sent:
+		t.Fatalf("paused run still narrated itself: %+v", update)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	assignJob(t, stream, runID, attemptID, 5)
+	waitForWorkerVersion(t, worker, runID, 5)
+	if err := emit(delta); err != nil {
+		t.Fatalf("resumed update failed: %v", err)
+	}
+	if update := nextSent(t, stream); update.GetEvent().GetType() != turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA {
+		t.Fatalf("resumed update = %+v, want the message delta", update)
+	}
+}
+
+func waitForWorkerVersion(t *testing.T, worker *Worker, runID string, want int64) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		entry := worker.activeRun(runID)
+		if entry != nil && entry.expectedVersion() == want {
+			return
+		}
+		select {
+		case <-deadline:
+			got := int64(-1)
+			if entry != nil {
+				got = entry.expectedVersion()
+			}
+			t.Fatalf("worker version for %s = %d, want %d", runID, got, want)
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+// The worker itself reports two failures: a run it cannot accept, and a run
+// whose executor died. Both name a typed origin, so the orchestrator never has
+// to read a Go error string to decide whether to requeue.
+func TestWorkerTypedFailureOriginsForRuntimeAndDispatch(t *testing.T) {
+	t.Run("busy_rejection_is_dispatch_and_transient", func(t *testing.T) {
+		stream := newFakeStream()
+		executor := newScriptedExecutor(nil)
+		_, stop := startScriptedWorker(t, executor, stream)
+		defer stop()
+
+		assignJob(t, stream, "run_first", "attempt-first", 1)
+		<-executor.emitted
+		assignJob(t, stream, "run_second", "attempt-second", 1)
+
+		failed := nextSent(t, stream).GetRunFailed()
+		if failed == nil || failed.GetCode() != "worker_busy" {
+			t.Fatalf("update = %+v, want worker_busy", failed)
+		}
+		if failed.GetFailureOrigin() != turingv1.FailureOrigin_FAILURE_ORIGIN_DISPATCH {
+			t.Fatalf("origin = %v, want dispatch", failed.GetFailureOrigin())
+		}
+		if failed.GetAutomaticRetryClass() != turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT {
+			t.Fatalf("retry class = %v, want same-run transient", failed.GetAutomaticRetryClass())
+		}
+		if failed.GetMessage() != "" {
+			t.Fatalf("busy rejection carried message %q, want none", failed.GetMessage())
+		}
+	})
+
+	t.Run("executor_failure_is_worker_runtime_and_never", func(t *testing.T) {
+		stream := newFakeStream()
+		executor := newScriptedExecutor(func(*turingv1.AgentJob, func(*turingv1.RuntimeUpdate) error) error {
+			return errors.New("model_quota_exceeded: tool_call_failed")
+		})
+		_, stop := startScriptedWorker(t, executor, stream)
+		defer stop()
+
+		assignJob(t, stream, "run_broken", "attempt-broken", 4)
+
+		failed := nextSent(t, stream).GetRunFailed()
+		if failed == nil || failed.GetCode() != "runtime_error" {
+			t.Fatalf("update = %+v, want runtime_error", failed)
+		}
+		if failed.GetFailureOrigin() != turingv1.FailureOrigin_FAILURE_ORIGIN_WORKER_RUNTIME {
+			t.Fatalf("origin = %v, want worker runtime", failed.GetFailureOrigin())
+		}
+		if failed.GetAutomaticRetryClass() != turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_NEVER {
+			t.Fatalf("retry class = %v, want never", failed.GetAutomaticRetryClass())
+		}
+		if failed.GetMessage() != "" {
+			t.Fatalf("executor error text crossed the boundary as %q", failed.GetMessage())
+		}
+	})
+}
+
+// retryableFailure reads the typed retry class the worker now reports.
+func retryableFailure(failed *turingv1.RuntimeRunFailed) bool {
+	return failed.GetAutomaticRetryClass() == turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT
 }

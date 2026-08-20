@@ -409,29 +409,6 @@ func marshalEventPayload(payload map[string]any) (string, error) {
 	return string(encoded), nil
 }
 
-// ErrRawEventPayload rejects a payload a not-yet-converted caller passed in a
-// shape the canonical writer cannot merge run state into. It names the class of
-// problem and never the payload, which may hold provider or tool text.
-var ErrRawEventPayload = errors.New("raw event payload is not a JSON object")
-
-// rawPayloadMap decodes a payload a not-yet-converted caller passed as JSON so
-// the canonical writer can merge the run state into it.
-//
-// It fails rather than returning nil for an undecodable payload: silently
-// dropping the caller's own keys would publish a terminal event missing the
-// code and message its reader expects, and the caller would never learn. It
-// exists only for the temporary raw adapters and disappears with them.
-func rawPayloadMap(payloadJSON string) (map[string]any, error) {
-	if payloadJSON == "" {
-		return nil, nil
-	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
-		return nil, ErrRawEventPayload
-	}
-	return payload, nil
-}
-
 func isOpenToolCallStatus(status string) bool {
 	switch status {
 	case "requested", "allowed", "approval_required":

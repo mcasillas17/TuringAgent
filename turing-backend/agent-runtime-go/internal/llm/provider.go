@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+
+	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 )
 
 const (
@@ -78,7 +80,13 @@ type StreamEvent struct {
 	FinishReason string
 	Code         string
 	Message      string
-	ToolCalls    []ToolCall
+	// Origin is where an error event came from, as the provider knows it from
+	// protocol facts. It travels with the event because the provider is the
+	// only layer that can see those facts, and because the alternative —
+	// deciding downstream from Message — is the untrusted-text channel this
+	// whole design closes. It is meaningful only on an "error" event.
+	Origin    turingv1.FailureOrigin
+	ToolCalls []ToolCall
 	// Usage is set only on a "completed" event, and only when the provider
 	// reported counts. nil means unknown.
 	Usage *TokenUsage
@@ -156,6 +164,39 @@ func marshalProviderRequest(
 		return nil, providerRequestSizeError{provider: provider, encodedBytes: len(body)}
 	}
 	return body, nil
+}
+
+// providerError builds an error event from a code this package chose.
+//
+// The origin comes from the code rather than from the message, and the mapping
+// lives in one place so two providers reporting the same protocol fact cannot
+// disagree about where it came from. Message stays for local logging and
+// provider-level tests; nothing downstream may classify on it.
+func providerError(code string, message string) StreamEvent {
+	return StreamEvent{Type: "error", Code: code, Message: message, Origin: providerFailureOrigin(code)}
+}
+
+// providerFailureOrigin maps a provider's own typed error code onto the origin
+// that code always describes.
+//
+// Protocol codes — a status the server returned, a chunk that did not parse,
+// an error object the API sent — are provider-protocol. A stream that stopped
+// early or timed out is provider-transport: nothing was wrong with the
+// exchange, it simply did not finish. Anything else this package has not
+// classified is left to the orchestrator's fail-closed default rather than
+// guessed at here.
+func providerFailureOrigin(code string) turingv1.FailureOrigin {
+	switch code {
+	case "model_unavailable", "model_auth_failed", "model_request_failed",
+		"model_quota_exceeded", "model_bad_chunk":
+		return turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL
+	case "model_stream_error", "model_timeout":
+		return turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT
+	case "model_error":
+		return turingv1.FailureOrigin_FAILURE_ORIGIN_EXTERNAL_PROVIDER
+	default:
+		return turingv1.FailureOrigin_FAILURE_ORIGIN_UNKNOWN
+	}
 }
 
 func providerHTTPErrorCode(status int) string {

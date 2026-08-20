@@ -1355,8 +1355,10 @@ func (e passiveExecutor) Execute(ctx context.Context, job *turingv1.AgentJob, _ 
 	return ctx.Err()
 }
 
-func TestEmptyFinalModelResponsePersistsFallback(t *testing.T) {
-	const fallback = "The model returned an empty response."
+// A model that finished with nothing to say produced an empty answer, and the
+// run says so end to end: no synthesized delta, an empty persisted message, and
+// a completion whose outcome records that there was no content to show.
+func TestEmptyFinalModelResponseCompletesWithoutSynthesizedContent(t *testing.T) {
 	harness := newGRPCHarness(t)
 	defer harness.close()
 	harness.fakeModel.enableEmptyFinalResponse()
@@ -1365,12 +1367,17 @@ func TestEmptyFinalModelResponsePersistsFallback(t *testing.T) {
 	events := harness.sendMessageToCompletion(t, sessionID, "answer without content")
 
 	assertNoFakeHandlerErrors(t, harness.fakeModel, harness.systemMCP, harness.filesMCP)
-	assertTokenDeltas(t, events, []string{fallback})
-	if got := messageCompletedContent(t, events); got != fallback {
-		t.Fatalf("message.completed content = %q, want %q", got, fallback)
+	assertTokenDeltas(t, events, nil)
+	if got := runCompletedPersistedContent(t, harness, sessionID, events); got != "" {
+		t.Fatalf("persisted completion content = %q, want the empty answer", got)
 	}
-	if got := runCompletedPersistedContent(t, harness, sessionID, events); got != fallback {
-		t.Fatalf("persisted completion content = %q, want %q", got, fallback)
+	// There is no assistant bubble to publish, so no message.completed is
+	// emitted for it either: an empty answer must not arrive as a blank one.
+	for _, event := range events {
+		persisted := event.GetPersistedEvent()
+		if persisted != nil && persisted.Type == turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_COMPLETED {
+			t.Fatalf("an empty success published a message completion: %+v", persisted)
+		}
 	}
 }
 

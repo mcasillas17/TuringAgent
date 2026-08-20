@@ -39,7 +39,7 @@ func TestSendCommandDropsAnAssignmentTheWorkerNoLongerHolds(t *testing.T) {
 	server := &Server{}
 	stream := &stubWorkerStream{ctx: context.Background()}
 	connectedWorker := &worker{
-		commands:    make(chan *turingv1.RuntimeCommand, 1),
+		commands:    make(chan workerCommand, 1),
 		done:        make(chan struct{}),
 		assignments: map[string]assignment{}, // deliberately empty: already released
 	}
@@ -49,7 +49,7 @@ func TestSendCommandDropsAnAssignmentTheWorkerNoLongerHolds(t *testing.T) {
 		},
 	}
 
-	err := server.sendCommand(context.Background(), stream, command, connectedWorker, "worker-1")
+	err := server.sendCommand(context.Background(), stream, workerCommand{command: command}, connectedWorker, "worker-1")
 
 	if err != nil {
 		t.Fatalf("sendCommand = %v, want nil so the stream survives a stale command", err)
@@ -66,7 +66,7 @@ func TestSendCommandStillDeliversNonAssignmentCommands(t *testing.T) {
 	server := &Server{}
 	stream := &stubWorkerStream{ctx: context.Background()}
 	connectedWorker := &worker{
-		commands:    make(chan *turingv1.RuntimeCommand, 1),
+		commands:    make(chan workerCommand, 1),
 		done:        make(chan struct{}),
 		assignments: map[string]assignment{},
 	}
@@ -76,7 +76,7 @@ func TestSendCommandStillDeliversNonAssignmentCommands(t *testing.T) {
 		},
 	}
 
-	if err := server.sendCommand(context.Background(), stream, command, connectedWorker, "worker-1"); err != nil {
+	if err := server.sendCommand(context.Background(), stream, workerCommand{command: command}, connectedWorker, "worker-1"); err != nil {
 		t.Fatalf("sendCommand = %v, want nil", err)
 	}
 	if len(stream.sent) != 1 {

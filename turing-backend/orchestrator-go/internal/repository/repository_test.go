@@ -199,7 +199,7 @@ func TestCancelRunUpdatesRunAndJob(t *testing.T) {
 	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.CancelRun(ctx, enqueued.RunID, "client_cancelled"); err != nil {
+	if _, err := cancelRunAtCurrentVersion(t, repo, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
 	run, err := repo.GetRun(ctx, enqueued.RunID)
@@ -249,7 +249,7 @@ func TestCancelRunWithEventRollsBackWhenEventAppendFails(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	_, err = repo.CancelRunWithEvent(ctx, enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`)
+	_, err = cancelRunEvents(t, repo, enqueued.RunID)
 	if err == nil {
 		t.Fatal("CancelRunWithEvent succeeded, want trigger failure")
 	}
@@ -286,7 +286,7 @@ func TestCancelRunFailsForTerminalRun(t *testing.T) {
 	if _, err := database.ExecContext(ctx, `UPDATE agent_runs SET status = 'completed' WHERE id = ?`, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.CancelRun(ctx, enqueued.RunID, "client_cancelled"); err == nil {
+	if _, err := cancelRunAtCurrentVersion(t, repo, enqueued.RunID); err == nil {
 		t.Fatal("expected cancel run to fail for completed run")
 	}
 	run, err := repo.GetRun(ctx, enqueued.RunID)
@@ -366,7 +366,7 @@ func TestFailRunWithEventPreservingExecutionHoldsGlobalCapacityUntilExitAck(t *t
 	if claimed.RunID != first.RunID {
 		t.Fatalf("claimed run = %q, want %q", claimed.RunID, first.RunID)
 	}
-	if _, err := repo.FailRunWithEventPreservingExecution(ctx, first.RunID, "approval_delivery_failed", "approval event failed", `{"code":"approval_delivery_failed"}`); err != nil {
+	if _, err := failRunPreservingExecutionAtCurrentVersion(t, repo, first.RunID, testFailure("approval_delivery_failed")); err != nil {
 		t.Fatalf("FailRunWithEventPreservingExecution: %v", err)
 	}
 	run, err := repo.GetRun(ctx, first.RunID)
@@ -412,7 +412,7 @@ func TestFailRunWithEventPreservingExecutionFinalizesInactiveRun(t *testing.T) {
 	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.FailRunWithEventPreservingExecution(ctx, enqueued.RunID, "approval_delivery_failed", "approval event failed", `{"code":"approval_delivery_failed"}`); err != nil {
+	if _, err := failRunPreservingExecutionAtCurrentVersion(t, repo, enqueued.RunID, testFailure("approval_delivery_failed")); err != nil {
 		t.Fatal(err)
 	}
 	run, err := repo.GetRun(ctx, enqueued.RunID)
@@ -526,7 +526,7 @@ func TestClaimNextJobWaitsForEarlierSessionRunToTerminalize(t *testing.T) {
 		t.Fatalf("claimed later same-session job while earlier run was active: %+v", blocked)
 	}
 
-	if err := repo.CompleteRun(ctx, first.RunID, first.AssistantMessageID, "first done"); err != nil {
+	if _, err := completeRunAtCurrentVersion(t, repo, first.RunID, first.AssistantMessageID, "first done", nil); err != nil {
 		t.Fatal(err)
 	}
 	claimedSecond, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-2")
@@ -638,7 +638,7 @@ func TestCompleteRunUpdatesRunJobAndAssistantMessage(t *testing.T) {
 	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.CompleteRun(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done"); err != nil {
+	if _, err := completeRunAtCurrentVersion(t, repo, enqueued.RunID, enqueued.AssistantMessageID, "done", nil); err != nil {
 		t.Fatal(err)
 	}
 	run, err := repo.GetRun(ctx, enqueued.RunID)
@@ -687,7 +687,7 @@ func TestCompleteRunWithEventRollsBackWhenEventAppendFails(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	_, err = repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done", `{"assistantMessageId":"`+enqueued.AssistantMessageID+`"}`, nil)
+	_, err = completeRunEvents(t, repo, enqueued.RunID, enqueued.AssistantMessageID, "done", nil)
 	if err == nil {
 		t.Fatal("CompleteRunWithEvent succeeded, want trigger failure")
 	}
@@ -727,7 +727,7 @@ func TestCompleteRunWithEventAppendsMessageCompletedBeforeRunCompleted(t *testin
 	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	completedEvents, err := repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done", `{"assistantMessageId":"`+enqueued.AssistantMessageID+`"}`, nil)
+	completedEvents, err := completeRunEvents(t, repo, enqueued.RunID, enqueued.AssistantMessageID, "done", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -795,7 +795,7 @@ func TestCompleteRunWithEventAppendsAuthoritativeMessageCompleted(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	completedEvents, err := repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "authoritative", `{"assistantMessageId":"`+enqueued.AssistantMessageID+`"}`, nil)
+	completedEvents, err := completeRunEvents(t, repo, enqueued.RunID, enqueued.AssistantMessageID, "authoritative", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -828,7 +828,7 @@ func TestAppendRuntimeEventRejectsNonActiveRun(t *testing.T) {
 	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.CancelRunWithEvent(ctx, enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`); err != nil {
+	if _, err := cancelRunEvents(t, repo, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
 	payload, err := structpb.NewStruct(map[string]any{"delta": "late"})
@@ -861,7 +861,7 @@ func TestFailRunUpdatesRunAndJobError(t *testing.T) {
 	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.FailRun(ctx, enqueued.RunID, "model_error", "model failed"); err != nil {
+	if _, err := failRunAtCurrentVersion(t, repo, enqueued.RunID, testFailure("model_error")); err != nil {
 		t.Fatal(err)
 	}
 	run, err := repo.GetRun(ctx, enqueued.RunID)
@@ -871,15 +871,22 @@ func TestFailRunUpdatesRunAndJobError(t *testing.T) {
 	if run.Status != "failed" {
 		t.Fatalf("run status = %q, want failed", run.Status)
 	}
-	var jobStatus, runCode, runMessage, jobCode, jobMessage string
+	var jobStatus, runCode, jobCode string
+	var runMessage, jobMessage sql.NullString
 	if err := database.QueryRowContext(ctx, `SELECT error_code, error_message FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&runCode, &runMessage); err != nil {
 		t.Fatalf("query failed run: %v", err)
 	}
 	if err := database.QueryRowContext(ctx, `SELECT status, error_code, error_message FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus, &jobCode, &jobMessage); err != nil {
 		t.Fatalf("query failed job: %v", err)
 	}
-	if jobStatus != "failed" || runCode != "model_error" || runMessage != "model failed" || jobCode != "model_error" || jobMessage != "model failed" {
-		t.Fatalf("bad failure state: job_status=%q run=%q/%q job=%q/%q", jobStatus, runCode, runMessage, jobCode, jobMessage)
+	if jobStatus != "failed" || runCode != "model_error" || jobCode != "model_error" {
+		t.Fatalf("bad failure state: job_status=%q run=%q job=%q", jobStatus, runCode, jobCode)
+	}
+	// The normalized code is the whole diagnostic. Both message columns stay
+	// NULL, because they were the channel a provider's sentence used to reach a
+	// client through.
+	if runMessage.Valid || jobMessage.Valid {
+		t.Fatalf("failure persisted messages: run=%q job=%q", runMessage.String, jobMessage.String)
 	}
 }
 
@@ -1435,7 +1442,7 @@ func TestRuntimeFailureTerminalizesPendingApprovalBeforeLateResolution(t *testin
 			}, "tool.call.failed", `{"code":"approval_wait_failed"}`); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := repo.FailRunWithEvent(ctx, enqueued.RunID, "runtime_error", "approval transport failed", `{"code":"runtime_error"}`); err != nil {
+			if _, err := failRunAtCurrentVersion(t, repo, enqueued.RunID, testFailure("runtime_error")); err != nil {
 				t.Fatal(err)
 			}
 

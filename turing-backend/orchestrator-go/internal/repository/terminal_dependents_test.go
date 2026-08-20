@@ -39,7 +39,7 @@ func TestTerminalRunRevokesApprovedToolLifecycle(t *testing.T) {
 	if _, err := repo.ApproveApproval(ctx, approval.ApprovalID, "issued-token", sql.NullString{}, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.CancelRunWithEvent(ctx, enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`); err != nil {
+	if _, err := cancelRunEvents(t, repo, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -129,7 +129,7 @@ func TestTerminalRunEmitsFailureEventForActiveSafeToolCall(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, err := repo.CancelRunWithEvent(ctx, enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`)
+	events, err := cancelRunEvents(t, repo, enqueued.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}

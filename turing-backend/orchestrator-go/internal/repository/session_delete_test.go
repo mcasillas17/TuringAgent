@@ -680,7 +680,7 @@ func TestDeleteSessionRefusesAfterCancelLeavesExecutionActive(t *testing.T) {
 	ctx := context.Background()
 	enqueued := seedDeletableSession(t, repo, "Cancelled", "cancel me")
 
-	if err := repo.CancelRun(ctx, enqueued.RunID, "user cancelled"); err != nil {
+	if _, err := cancelRunAtCurrentVersion(t, repo, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
 	var status string

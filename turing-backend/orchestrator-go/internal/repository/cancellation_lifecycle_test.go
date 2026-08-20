@@ -30,7 +30,7 @@ func TestCancelRunTerminalizesPendingApprovalAndToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.CancelRunWithEvent(ctx, enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`); err != nil {
+	if _, err := cancelRunEvents(t, repo, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -59,14 +59,15 @@ func TestCancelRunTerminalizesPendingApprovalAndToolCall(t *testing.T) {
 }
 
 func TestCancelRunFencesPendingAssignmentBeforeDelivery(t *testing.T) {
-	tests := map[string]func(context.Context, *Repository, string) error{
-		"without event": func(ctx context.Context, repo *Repository, runID string) error {
-			return repo.CancelRun(ctx, runID, "client_cancelled")
+	tests := map[string]func(*testing.T, *Repository, string) error{
+		"at the run's current version": func(t *testing.T, repo *Repository, runID string) error {
+			_, err := cancelRunAtCurrentVersion(t, repo, runID)
+			return err
 		},
-		"with event": func(ctx context.Context, repo *Repository, runID string) error {
-			_, err := repo.CancelRunWithEvent(
-				ctx, runID, "client_cancelled", `{"reason":"client_cancelled"}`,
-			)
+		// The same transition read through the events its caller publishes, so
+		// a fence that skipped the projection would fail here too.
+		"through the events it appended": func(t *testing.T, repo *Repository, runID string) error {
+			_, err := cancelRunEvents(t, repo, runID)
 			return err
 		},
 	}
@@ -94,7 +95,7 @@ func TestCancelRunFencesPendingAssignmentBeforeDelivery(t *testing.T) {
 				JobID: claimed.JobID, RunID: claimed.RunID,
 				WorkerID: "worker-cancel-pending", AttemptID: claimed.AssignmentAttemptID,
 			}
-			if err := cancel(ctx, repo, enqueued.RunID); err != nil {
+			if err := cancel(t, repo, enqueued.RunID); err != nil {
 				t.Fatal(err)
 			}
 			if err := repo.BeginAssignmentSend(ctx, assignment); !errors.Is(err, ErrAssignmentFenced) {

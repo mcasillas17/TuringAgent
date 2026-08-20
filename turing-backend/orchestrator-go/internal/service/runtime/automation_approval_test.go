@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
 	"time"
@@ -271,19 +272,40 @@ func TestAToolOutsideTheAllowlistFailsTheRunInsteadOfWaiting(t *testing.T) {
 	if run.Status != "failed" {
 		t.Fatalf("run status = %q, want failed", run.Status)
 	}
-	var errorCode, errorMessage string
+	var errorCode string
+	var errorMessage sql.NullString
 	if err := h.database.QueryRowContext(context.Background(),
-		`SELECT COALESCE(error_code, ''), COALESCE(error_message, '') FROM agent_runs WHERE id = ?`,
+		`SELECT COALESCE(error_code, ''), error_message FROM agent_runs WHERE id = ?`,
 		fire.RunID).Scan(&errorCode, &errorMessage); err != nil {
 		t.Fatal(err)
 	}
 	if errorCode != AutomationNotAllowlistedCode {
 		t.Fatalf("run error code = %q, want %q", errorCode, AutomationNotAllowlistedCode)
 	}
-	// The message is what the user reads, so it has to name both the
-	// automation and the tool it was stopped on.
-	if !strings.Contains(errorMessage, "Nightly note") || !strings.Contains(errorMessage, "files.update") {
-		t.Fatalf("run error message = %q, want it to name the automation and the tool", errorMessage)
+	// What the user reads is derived from the typed outcome, not from a
+	// sentence the backend stored. error_message is a public diagnostic column,
+	// so naming the automation and the tool there would put governed detail
+	// into every client that reads a failure.
+	if errorMessage.Valid {
+		t.Fatalf("run error message = %q, want NULL", errorMessage.String)
+	}
+	state, err := h.repo.GetRunState(context.Background(), fire.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.OutcomeReason != "policy_denied" {
+		t.Fatalf("outcome reason = %q, want policy_denied", state.OutcomeReason)
+	}
+	// The automation and tool identities remain where they were always
+	// governed: the audit record for the blocked call.
+	var auditPayload string
+	if err := h.database.QueryRowContext(context.Background(),
+		`SELECT payload_json FROM audit_logs WHERE correlation_id = ? AND action = 'automation.tool.blocked'`,
+		fire.RunID).Scan(&auditPayload); err != nil {
+		t.Fatalf("read blocked-tool audit: %v", err)
+	}
+	if !strings.Contains(auditPayload, "Nightly note") || !strings.Contains(auditPayload, "files.update") {
+		t.Fatalf("audit payload = %q, want it to name the automation and the tool", auditPayload)
 	}
 }
 

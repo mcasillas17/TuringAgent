@@ -514,7 +514,7 @@ func TestCompleteRunWithEventStoresReportedTokensAndNothingElse(t *testing.T) {
 			if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 				t.Fatalf("mark running: %v", err)
 			}
-			if _, err := repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done", `{"runId":"x"}`, tt.usage); err != nil {
+			if _, err := completeRunAtCurrentVersion(t, repo, enqueued.RunID, enqueued.AssistantMessageID, "done", tt.usage); err != nil {
 				t.Fatalf("complete run: %v", err)
 			}
 
@@ -611,7 +611,7 @@ func TestOnlyCompletionWritesTokenColumns(t *testing.T) {
 	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatalf("mark running: %v", err)
 	}
-	if err := repo.FailRun(ctx, enqueued.RunID, "model_error", "the model fell over"); err != nil {
+	if _, err := failRunAtCurrentVersion(t, repo, enqueued.RunID, testFailure("model_error")); err != nil {
 		t.Fatalf("fail run: %v", err)
 	}
 

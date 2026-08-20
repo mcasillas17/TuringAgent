@@ -404,9 +404,7 @@ func TestDelayedIdenticalAfterDoesNotCloseWorkerStream(t *testing.T) {
 	recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
 		return command.GetToolPolicyDecision() != nil && command.GetToolPolicyDecision().GetToolCallId() == beacon.ToolCallId
 	})
-	if _, err := h.repo.CancelRunWithEvent(context.Background(), first.RunID, "client_cancelled", `{"reason":"client_cancelled"}`); err != nil {
-		t.Fatal(err)
-	}
+	cancelRunFixture(t, h, first.RunID)
 	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: first.RunID}}}); err != nil {
 		t.Fatal(err)
 	}

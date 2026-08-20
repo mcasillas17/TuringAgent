@@ -6,24 +6,175 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-func TestMatchingTerminalUpdateRequiresPersistedIdentity(t *testing.T) {
-	run := repository.Run{Status: "completed", AssistantMessageID: "message_1"}
-	update := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{RunCompleted: &turingv1.RuntimeRunCompleted{
-		RunId: "run_1", AssistantMessageId: run.AssistantMessageID,
-	}}}
-	update.GetRunCompleted().Content = "complete"
-	if isMatchingTerminalUpdate(run, update) {
-		t.Fatal("completion without persisted content matched a terminal run")
+// A late terminal update is only a duplicate when every part of the canonical
+// identity matches. Each row here changes exactly one of them, so a comparison
+// that quietly stopped checking that part fails on its own terms.
+func TestMatchingTerminalUpdateRequiresCompleteCanonicalIdentity(t *testing.T) {
+	const content = "the persisted answer"
+	completedRun := repository.Run{
+		RunID: "run_1", Status: "completed", TerminalEventType: "agent.run.completed",
+		AssistantMessageID: "message_1", AssistantContent: content,
+		ContentSHA256: runoutcome.ContentSHA256(content), StateVersion: 4,
+		OutcomeReason: string(runoutcome.ReasonNone),
 	}
-	if isMatchingTerminalUpdate(repository.Run{Status: "failed"}, &turingv1.RuntimeUpdate{
-		Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
-			RunId: "run_1", Code: "runtime_error", Message: "failed", Retryable: false,
-		}},
+	matchingCompletion := func() *turingv1.RuntimeRunCompleted {
+		return &turingv1.RuntimeRunCompleted{
+			RunId: "run_1", AssistantMessageId: "message_1", Content: content, ExpectedStateVersion: 3,
+		}
+	}
+	if !isMatchingTerminalUpdate(completedRun, &turingv1.RuntimeUpdate{
+		Update: &turingv1.RuntimeUpdate_RunCompleted{RunCompleted: matchingCompletion()},
 	}) {
-		t.Fatal("failure without persisted payload matched a terminal run")
+		t.Fatal("the exact persisted completion was not recognized as a duplicate")
+	}
+
+	completionTests := map[string]func(*turingv1.RuntimeRunCompleted){
+		"different bytes":            func(c *turingv1.RuntimeRunCompleted) { c.Content = content + " " },
+		"different assistant":        func(c *turingv1.RuntimeRunCompleted) { c.AssistantMessageId = "message_2" },
+		"stale expected version":     func(c *turingv1.RuntimeRunCompleted) { c.ExpectedStateVersion = 2 },
+		"resulting version expected": func(c *turingv1.RuntimeRunCompleted) { c.ExpectedStateVersion = 4 },
+		"empty content":              func(c *turingv1.RuntimeRunCompleted) { c.Content = "" },
+	}
+	for name, mutate := range completionTests {
+		t.Run(name, func(t *testing.T) {
+			completed := matchingCompletion()
+			mutate(completed)
+			if isMatchingTerminalUpdate(completedRun, &turingv1.RuntimeUpdate{
+				Update: &turingv1.RuntimeUpdate_RunCompleted{RunCompleted: completed},
+			}) {
+				t.Fatalf("a completion differing in %s matched: %+v", name, completed)
+			}
+		})
+	}
+
+	t.Run("hash disagreeing with the persisted bytes", func(t *testing.T) {
+		run := completedRun
+		run.ContentSHA256 = runoutcome.ContentSHA256("something else entirely")
+		if isMatchingTerminalUpdate(run, &turingv1.RuntimeUpdate{
+			Update: &turingv1.RuntimeUpdate_RunCompleted{RunCompleted: matchingCompletion()},
+		}) {
+			t.Fatal("a completion matched a run whose hash describes other bytes")
+		}
+	})
+
+	t.Run("empty success outcome", func(t *testing.T) {
+		run := repository.Run{
+			RunID: "run_1", Status: "completed", TerminalEventType: "agent.run.completed",
+			AssistantMessageID: "message_1", ContentSHA256: runoutcome.ContentSHA256(""),
+			StateVersion: 4, OutcomeReason: string(runoutcome.ReasonCompletedNoContent),
+		}
+		empty := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{
+			RunCompleted: &turingv1.RuntimeRunCompleted{
+				RunId: "run_1", AssistantMessageId: "message_1", Content: "", ExpectedStateVersion: 3,
+			},
+		}}
+		if !isMatchingTerminalUpdate(run, empty) {
+			t.Fatal("an explicit empty success was not recognized as its own duplicate")
+		}
+		run.OutcomeReason = string(runoutcome.ReasonNone)
+		if isMatchingTerminalUpdate(run, empty) {
+			t.Fatal("an empty completion matched a run claiming it produced content")
+		}
+	})
+
+	failedRun := repository.Run{
+		RunID: "run_1", Status: "failed", TerminalEventType: "agent.run.failed", StateVersion: 4,
+		OutcomeReason:        string(runoutcome.ReasonProviderFailure),
+		TerminalEventPayload: `{"runId":"run_1","code":"model_stream_failed","retryable":false}`,
+	}
+	matchingFailure := func() *turingv1.RuntimeRunFailed {
+		return &turingv1.RuntimeRunFailed{
+			RunId: "run_1", Code: "model_stream_failed", ExpectedStateVersion: 3,
+			FailureOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
+		}
+	}
+	if !isMatchingTerminalUpdate(failedRun, &turingv1.RuntimeUpdate{
+		Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: matchingFailure()},
+	}) {
+		t.Fatal("the exact persisted failure was not recognized as a duplicate")
+	}
+	failureTests := map[string]func(*turingv1.RuntimeRunFailed){
+		"different code":         func(f *turingv1.RuntimeRunFailed) { f.Code = "model_timeout" },
+		"stale expected version": func(f *turingv1.RuntimeRunFailed) { f.ExpectedStateVersion = 2 },
+		"different origin": func(f *turingv1.RuntimeRunFailed) {
+			f.FailureOrigin = turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_EXECUTION
+		},
+	}
+	for name, mutate := range failureTests {
+		t.Run(name, func(t *testing.T) {
+			failed := matchingFailure()
+			mutate(failed)
+			if isMatchingTerminalUpdate(failedRun, &turingv1.RuntimeUpdate{
+				Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: failed},
+			}) {
+				t.Fatalf("a failure differing in %s matched: %+v", name, failed)
+			}
+		})
+	}
+	t.Run("reason disagreeing with the persisted outcome", func(t *testing.T) {
+		run := failedRun
+		run.OutcomeReason = string(runoutcome.ReasonToolFailure)
+		if isMatchingTerminalUpdate(run, &turingv1.RuntimeUpdate{
+			Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: matchingFailure()},
+		}) {
+			t.Fatal("a provider failure matched a run that ended on a tool failure")
+		}
+	})
+}
+
+// A late terminal update releases the execution fence only when the worker
+// reporting it still owns the exact attempt the run is executing.
+func TestLateTerminalAcknowledgementRequiresTheOwnedAttempt(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "owned attempt acknowledgement")
+	_, assigned := h.connectAssignedWorker(t, "worker-owned-ack", enqueued.RunID)
+	owner := h.service.registeredWorker("worker-owned-ack")
+	if owner == nil {
+		t.Fatal("connected worker was not registered")
+	}
+	failRunFixture(t, h, enqueued.RunID, toolExecutionFailure())
+	late := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
+		RunId: enqueued.RunID, Code: "tool_call_failed",
+		FailureOrigin:        turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_EXECUTION,
+		ExpectedStateVersion: h.runState(t, enqueued.RunID).StateVersion - 1,
+	}}}
+
+	// A worker holding some other attempt for the same run cannot acknowledge
+	// an exit it was not executing.
+	owner.mu.Lock()
+	owner.assignments[enqueued.RunID] = assignment{
+		jobID: assigned.GetJobId(), runID: enqueued.RunID, attemptID: "some-other-attempt",
+	}
+	owner.mu.Unlock()
+	if _, err := h.service.reconcileLateAssignedUpdate(context.Background(), owner, "worker-owned-ack", late); err != nil {
+		t.Fatalf("reconcileLateAssignedUpdate: %v", err)
+	}
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if !run.ExecutionActive {
+		t.Fatal("an unowned attempt released the execution fence")
+	}
+
+	owner.mu.Lock()
+	owner.assignments[enqueued.RunID] = assignment{
+		jobID: assigned.GetJobId(), runID: enqueued.RunID, attemptID: assigned.GetAssignmentAttemptId(),
+	}
+	owner.mu.Unlock()
+	if _, err := h.service.reconcileLateAssignedUpdate(context.Background(), owner, "worker-owned-ack", late); err != nil {
+		t.Fatalf("reconcileLateAssignedUpdate: %v", err)
+	}
+	run, err = h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.ExecutionActive || run.ExecutionState != "exited" {
+		t.Fatalf("the owning attempt's report did not acknowledge the exit: %+v", run)
 	}
 }
 
@@ -44,9 +195,7 @@ func TestTerminalizedAssignedRunUsesLateTerminalUpdateAsExitAcknowledgement(t *t
 		return command.GetRunAssigned() != nil && command.GetRunAssigned().GetRunId() == first.RunID
 	})
 
-	if _, err := h.repo.CancelRunWithEvent(context.Background(), first.RunID, "client_cancelled", `{"reason":"client_cancelled"}`); err != nil {
-		t.Fatal(err)
-	}
+	cancelRunFixture(t, h, first.RunID)
 	payload, err := structpb.NewStruct(map[string]any{"delta": "late"})
 	if err != nil {
 		t.Fatal(err)
@@ -96,17 +245,13 @@ func TestTerminalizedAssignedRunReconcilesMatchingLateTerminalUpdate(t *testing.
 		return command.GetRunAssigned() != nil && command.GetRunAssigned().GetRunId() == first.RunID
 	})
 
-	payload, err := encodePayload(map[string]any{
-		"runId": first.RunID, "code": "persisted_failure", "message": "terminalized elsewhere", "retryable": false,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.repo.FailRunWithEventPreservingExecution(context.Background(), first.RunID, "persisted_failure", "terminalized elsewhere", payload); err != nil {
-		t.Fatal(err)
-	}
+	failRunFixture(t, h, first.RunID, toolExecutionFailure())
+	// The worker's own report normalizes to the same failure the run already
+	// committed, which is what makes this a late acknowledgement rather than a
+	// conflicting second outcome.
 	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
-		RunId: first.RunID, Code: "persisted_failure", Message: "terminalized elsewhere", Retryable: false,
+		RunId: first.RunID, Code: "tool_call_failed",
+		FailureOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_EXECUTION,
 	}}}); err != nil {
 		t.Fatalf("send matching late failure: %v", err)
 	}
@@ -168,9 +313,7 @@ func TestLateTerminalUpdatesForReleasedRunKeepWorkerStreamUsable(t *testing.T) {
 				RunId: first.RunID,
 			}}}
 			if test.cancelFirst {
-				if _, err := h.repo.CancelRunWithEvent(context.Background(), first.RunID, "client_cancelled", `{"reason":"client_cancelled"}`); err != nil {
-					t.Fatal(err)
-				}
+				cancelRunFixture(t, h, first.RunID)
 				if err := stream.Send(ackFirst); err != nil {
 					t.Fatal(err)
 				}

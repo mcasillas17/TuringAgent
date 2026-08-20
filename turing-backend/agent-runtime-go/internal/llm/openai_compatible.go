@@ -150,7 +150,7 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 					code = "model_quota_exceeded"
 				}
 			}
-			sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: code, Message: fmt.Sprintf("OpenAI-compatible provider returned %d", resp.StatusCode)})
+			sendStreamEvent(ctx, out, providerError(code, fmt.Sprintf("OpenAI-compatible provider returned %d", resp.StatusCode)))
 			return
 		}
 		scanner := bufio.NewScanner(resp.Body)
@@ -210,11 +210,8 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 					return true
 				}
 				if len(state.toolCalls) > 0 {
-					sendStreamEvent(ctx, out, StreamEvent{
-						Type:    "error",
-						Code:    "model_bad_chunk",
-						Message: fmt.Sprintf("[DONE] received with %d unfinished tool call(s)", len(state.toolCalls)),
-					})
+					sendStreamEvent(ctx, out, providerError("model_bad_chunk",
+						fmt.Sprintf("[DONE] received with %d unfinished tool call(s)", len(state.toolCalls))))
 				} else {
 					sendCompleted(StreamEvent{Type: "completed", FinishReason: "stop"})
 				}
@@ -230,7 +227,7 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 			}
 			events, done, err := parseOpenAIData([]byte(data), state)
 			if err != nil {
-				sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_bad_chunk", Message: err.Error()})
+				sendStreamEvent(ctx, out, providerError("model_bad_chunk", err.Error()))
 				return true
 			}
 			for _, event := range events {
@@ -294,11 +291,8 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 					sendCompleted(*pendingCompleted)
 					return
 				}
-				sendStreamEvent(ctx, out, StreamEvent{
-					Type:    "error",
-					Code:    "model_bad_chunk",
-					Message: fmt.Sprintf("SSE event data exceeds %d bytes", maxOpenAIEventDataBytes),
-				})
+				sendStreamEvent(ctx, out, providerError("model_bad_chunk",
+					fmt.Sprintf("SSE event data exceeds %d bytes", maxOpenAIEventDataBytes)))
 				return
 			}
 			dataLines = append(dataLines, value)
@@ -317,7 +311,7 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 				if errors.Is(err, errOpenAIPhysicalSSELineTooLong) {
 					code = "model_bad_chunk"
 				}
-				sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: code, Message: err.Error()})
+				sendStreamEvent(ctx, out, providerError(code, err.Error()))
 			}
 			return
 		}
@@ -334,7 +328,7 @@ func (p *OpenAICompatible) StreamChat(ctx context.Context, req ChatRequest) (<-c
 		if len(state.toolCalls) > 0 {
 			message += fmt.Sprintf(" with %d unfinished tool call(s)", len(state.toolCalls))
 		}
-		sendStreamEvent(ctx, out, StreamEvent{Type: "error", Code: "model_stream_error", Message: message})
+		sendStreamEvent(ctx, out, providerError("model_stream_error", message))
 	}()
 	return out, nil
 }
@@ -982,19 +976,19 @@ func decodeOpenAIDelta(data []byte) (openAIDelta, error) {
 }
 
 func parseOpenAIErrorEnvelope(data []byte) (StreamEvent, error) {
-	var providerError openAIErrorEnvelope
-	if err := json.Unmarshal(data, &providerError); err != nil {
+	var envelope openAIErrorEnvelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
 		return StreamEvent{}, fmt.Errorf("malformed error envelope: %w", err)
 	}
-	if strings.TrimSpace(providerError.Message) == "" {
+	if strings.TrimSpace(envelope.Message) == "" {
 		return StreamEvent{}, fmt.Errorf("malformed error envelope: missing message")
 	}
 
-	providerCode, err := openAIErrorString(providerError.Code, "code")
+	providerCode, err := openAIErrorString(envelope.Code, "code")
 	if err != nil {
 		return StreamEvent{}, err
 	}
-	providerType, err := openAIErrorString(providerError.Type, "type")
+	providerType, err := openAIErrorString(envelope.Type, "type")
 	if err != nil {
 		return StreamEvent{}, err
 	}
@@ -1002,12 +996,8 @@ func parseOpenAIErrorEnvelope(data []byte) (StreamEvent, error) {
 	if providerCode != "" {
 		message += fmt.Sprintf(" (%s)", providerCode)
 	}
-	message += ": " + providerError.Message
-	return StreamEvent{
-		Type:    "error",
-		Code:    classifyOpenAIError(providerType, providerCode, providerError.Message),
-		Message: message,
-	}, nil
+	message += ": " + envelope.Message
+	return providerError(classifyOpenAIError(providerType, providerCode, envelope.Message), message), nil
 }
 
 func openAIErrorString(raw json.RawMessage, field string) (string, error) {

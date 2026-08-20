@@ -57,7 +57,7 @@ func TestDispatchRetryNoticeCarriesTheRequeuedStateVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, "worker_busy", "busy", 3)
+	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, dispatchCondition("worker_busy"), 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestDispatchGiveUpNoticeCarriesTheStateVersionItWasWrittenAt(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, "worker_busy", "busy", 3)
+	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, dispatchCondition("worker_busy"), 3)
 	if err != nil {
 		t.Fatal(err)
 	}

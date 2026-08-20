@@ -17,6 +17,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/auth"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	approvalsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/approvals"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	"google.golang.org/grpc"
@@ -1722,9 +1723,7 @@ func TestRunCancelledAckRequiresPersistedCancellation(t *testing.T) {
 func TestRuntimeRejectsEventsAfterCancelledRun(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.createRunningRunResult(t, "cancelled event")
-	if _, err := h.repo.CancelRunWithEvent(context.Background(), enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`); err != nil {
-		t.Fatal(err)
-	}
+	cancelRunFixture(t, h, enqueued.RunID)
 	payload, err := structpb.NewStruct(map[string]any{"delta": "late"})
 	if err != nil {
 		t.Fatal(err)
@@ -1842,31 +1841,41 @@ func TestRunCompletedRejectsMismatchedAssistantMessageID(t *testing.T) {
 	}
 }
 
-func TestRunCompletedRejectsEmptyContent(t *testing.T) {
+// An explicit completion carrying no content is a success, not a malformed
+// report. It commits completed with the outcome that says there was nothing to
+// show, and the empty content is persisted exactly as reported.
+func TestRunCompletedAcceptsExplicitEmptyContent(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.createRunningRunResult(t, "empty completion")
-	err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{RunCompleted: &turingv1.RuntimeRunCompleted{
+	if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{RunCompleted: &turingv1.RuntimeRunCompleted{
 		RunId:              enqueued.RunID,
 		AssistantMessageId: enqueued.AssistantMessageID,
-	}}})
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("empty completion error = %v, want InvalidArgument", err)
+	}}}); err != nil {
+		t.Fatalf("explicit empty completion was refused: %v", err)
+	}
+	state := h.runState(t, enqueued.RunID)
+	if state.Lifecycle != "completed" || state.OutcomeReason != "completed_no_content" {
+		t.Fatalf("run = %s/%s, want completed/completed_no_content", state.Lifecycle, state.OutcomeReason)
+	}
+	if state.HasDisplayableContent {
+		t.Fatal("an empty completion was marked displayable")
 	}
 	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != "running" {
-		t.Fatalf("run status = %q, want running", run.Status)
+	if run.AssistantContent != "" {
+		t.Fatalf("assistant content = %q, want the empty answer", run.AssistantContent)
+	}
+	if got := countRunEvents(t, h, enqueued.RunID, "message.completed"); got != 0 {
+		t.Fatalf("message.completed events = %d, want none for an empty answer", got)
 	}
 }
 
 func TestRunCompletedMapsStateConflictToFailedPrecondition(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.createRunningRunResult(t, "already cancelled")
-	if _, err := h.repo.CancelRunWithEvent(context.Background(), enqueued.RunID, "user_cancelled", `{"reason":"user_cancelled"}`); err != nil {
-		t.Fatal(err)
-	}
+	cancelRunFixture(t, h, enqueued.RunID)
 
 	err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{RunCompleted: &turingv1.RuntimeRunCompleted{
 		RunId:              enqueued.RunID,
@@ -1900,9 +1909,7 @@ func TestRunCompletedOnARequeuedRunMapsToFailedPrecondition(t *testing.T) {
 func TestRunFailedMapsStateConflictToFailedPrecondition(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.createRunningRunResult(t, "already cancelled")
-	if _, err := h.repo.CancelRunWithEvent(context.Background(), enqueued.RunID, "user_cancelled", `{"reason":"user_cancelled"}`); err != nil {
-		t.Fatal(err)
-	}
+	cancelRunFixture(t, h, enqueued.RunID)
 
 	err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
 		RunId:   enqueued.RunID,
@@ -1980,9 +1987,7 @@ func TestToolBeaconRejectsInvalidFields(t *testing.T) {
 func TestToolBeaconRejectsTerminalRun(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.createRunningRunResult(t, "terminal beacon")
-	if _, err := h.repo.CancelRunWithEvent(context.Background(), enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`); err != nil {
-		t.Fatal(err)
-	}
+	cancelRunFixture(t, h, enqueued.RunID)
 	err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
 		RunId:      enqueued.RunID,
 		TraceId:    enqueued.TraceID,
@@ -3023,9 +3028,7 @@ func TestToolBeaconAfterRequiresImmutableIdentityAndSingleTerminalTransition(t *
 		if err := h.service.applyUpdate(context.Background(), update); err != nil {
 			t.Fatal(err)
 		}
-		if err := h.repo.CompleteRun(context.Background(), enqueued.RunID, "", ""); err != nil {
-			t.Fatal(err)
-		}
+		completeRunFixture(t, h, enqueued.RunID, "", "")
 		if err := h.service.applyUpdate(context.Background(), update); err != nil {
 			t.Fatalf("identical after retry after completion: %v", err)
 		}
@@ -3152,7 +3155,7 @@ func TestToolBeaconAfterAcceptsFailedCleanupForTerminalApproval(t *testing.T) {
 
 func TestNotifyApprovalUpdatedSendsTokenToAssignedWorker(t *testing.T) {
 	h := newHarness(t)
-	commands := make(chan *turingv1.RuntimeCommand, 1)
+	commands := make(chan workerCommand, 1)
 	h.service.mu.Lock()
 	h.service.workers["worker-approval-update"] = &worker{commands: commands, maxConcurrent: 1, assignments: map[string]assignment{"run_approval": {runID: "run_approval", jobID: "job_approval"}}}
 	h.service.mu.Unlock()
@@ -3163,7 +3166,7 @@ func TestNotifyApprovalUpdatedSendsTokenToAssignedWorker(t *testing.T) {
 
 	select {
 	case cmd := <-commands:
-		update := cmd.GetApprovalUpdated()
+		update := cmd.command.GetApprovalUpdated()
 		if update.GetApprovalId() != "appr_1" || update.GetStatus() != "approved" || update.GetApprovalToken() != "header.payload.signature" {
 			t.Fatalf("approval_updated = %+v", update)
 		}
@@ -3173,7 +3176,7 @@ func TestNotifyApprovalUpdatedSendsTokenToAssignedWorker(t *testing.T) {
 }
 
 func TestWorkerCloseWaitsForInFlightUpdate(t *testing.T) {
-	connectedWorker := &worker{commands: make(chan *turingv1.RuntimeCommand), assignments: map[string]assignment{"run_1": {runID: "run_1", jobID: "job_1"}}}
+	connectedWorker := &worker{commands: make(chan workerCommand), assignments: map[string]assignment{"run_1": {runID: "run_1", jobID: "job_1"}}}
 	release, err := connectedWorker.beginUpdate(&turingv1.RuntimeUpdate{
 		Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: "run_1"}},
 	})
@@ -3202,8 +3205,8 @@ func TestWorkerCloseWaitsForInFlightUpdate(t *testing.T) {
 
 func TestCancelRunWaitsForCommandBufferSpace(t *testing.T) {
 	h := newHarness(t)
-	commands := make(chan *turingv1.RuntimeCommand, 1)
-	commands <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_WorkerAccepted{WorkerAccepted: &turingv1.RuntimeWorkerAccepted{WorkerId: "worker-buffered"}}}
+	commands := make(chan workerCommand, 1)
+	commands <- workerCommand{command: &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_WorkerAccepted{WorkerAccepted: &turingv1.RuntimeWorkerAccepted{WorkerId: "worker-buffered"}}}}
 	h.service.mu.Lock()
 	h.service.workers["worker-buffered"] = &worker{commands: commands, maxConcurrent: 1, assignments: map[string]assignment{"run_buffered": {runID: "run_buffered", jobID: "job_buffered"}}}
 	h.service.mu.Unlock()
@@ -3223,7 +3226,7 @@ func TestCancelRunWaitsForCommandBufferSpace(t *testing.T) {
 	}
 	select {
 	case cmd := <-commands:
-		cancel := cmd.GetRunCancelled()
+		cancel := cmd.command.GetRunCancelled()
 		if cancel == nil || cancel.RunId != "run_buffered" {
 			t.Fatalf("command = %+v, want run_cancelled", cmd)
 		}
@@ -3393,9 +3396,15 @@ func TestRunCompletedPublishesTerminalEvent(t *testing.T) {
 	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
 		t.Fatalf("decode payload: %v", err)
 	}
-	usage, ok := payload["usage"].(map[string]any)
-	if payload["runId"] != enqueued.RunID || payload["assistantMessageId"] != enqueued.AssistantMessageID || !ok || usage["prompt_tokens"] != float64(3) || usage["completion_tokens"] != float64(4) {
+	if payload["runId"] != enqueued.RunID || payload["assistantMessageId"] != enqueued.AssistantMessageID {
 		t.Fatalf("payload = %+v", payload)
+	}
+	// The provider's free-form usage object is not republished here. It is
+	// provider-controlled content, and a completion event carries the run's
+	// identity and canonical state; the counts the product actually uses are
+	// the typed ones stored on the run and read through telemetry.
+	if _, exists := payload["usage"]; exists {
+		t.Fatalf("completion payload republished provider usage: %+v", payload)
 	}
 }
 
@@ -3406,9 +3415,10 @@ func TestRunFailedPublishesTerminalEvent(t *testing.T) {
 	defer unsubscribe()
 
 	err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
-		RunId:   enqueued.RunID,
-		Code:    "model_error",
-		Message: "model failed",
+		RunId:         enqueued.RunID,
+		Code:          "model_error",
+		Message:       "model failed",
+		FailureOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_EXTERNAL_PROVIDER,
 	}}})
 	if err != nil {
 		t.Fatal(err)
@@ -3426,8 +3436,11 @@ func TestRunFailedPublishesTerminalEvent(t *testing.T) {
 	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
 		t.Fatalf("decode payload: %v", err)
 	}
-	if payload.RunID != enqueued.RunID || payload.Code != "model_error" || payload.Message != "model failed" || payload.Retryable {
+	if payload.RunID != enqueued.RunID || payload.Code != "model_error" || payload.Retryable {
 		t.Fatalf("payload = %+v", payload)
+	}
+	if payload.Message != "" {
+		t.Fatalf("failure payload republished the worker's message %q", payload.Message)
 	}
 }
 
@@ -3556,4 +3569,946 @@ func recvUntilEither(t *testing.T, first turingv1.RuntimeService_ConnectWorkerCl
 	}
 	t.Fatal("received no matching runtime command")
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Assignment, version, and ownership-proof identity.
+//
+// Every lifecycle change a worker can cause has to name the state it was
+// computed against, or a fenced predecessor can keep writing the run's story
+// from a state the orchestrator has already moved past.
+// ---------------------------------------------------------------------------
+
+// connectAssignedWorker connects one worker and returns the assignment it was
+// handed, so the version tests below start from a real dispatch rather than a
+// hand-built row.
+func (h *harness) connectAssignedWorker(
+	t *testing.T,
+	workerID string,
+	runID string,
+) (turingv1.RuntimeService_ConnectWorkerClient, *turingv1.AgentJob) {
+	t.Helper()
+	stream, err := h.runtimeClient(t).ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatalf("ConnectWorker: %v", err)
+	}
+	t.Cleanup(func() { _ = stream.CloseSend() })
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{
+		WorkerReady: &turingv1.RuntimeWorkerReady{
+			WorkerId: workerID, AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+		},
+	}}); err != nil {
+		t.Fatalf("send worker_ready: %v", err)
+	}
+	assigned := recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+		job := cmd.GetRunAssigned()
+		return job != nil && (runID == "" || job.GetRunId() == runID)
+	}).GetRunAssigned()
+	return stream, assigned
+}
+
+func (h *harness) runState(t *testing.T, runID string) repository.RunState {
+	t.Helper()
+	state, err := h.repo.GetRunState(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("GetRunState: %v", err)
+	}
+	return state
+}
+
+// fenceOwnership drives the run into recovering the way a lost worker does, so
+// the proof tests below start from real fenced truth rather than a status the
+// test wrote by hand.
+func (h *harness) fenceOwnership(t *testing.T, runID string, workerID string, attemptID string) repository.RunState {
+	t.Helper()
+	before := h.runState(t, runID)
+	result, err := h.repo.FenceRunOwnership(context.Background(), repository.FenceRunOwnershipInput{
+		RunID:                runID,
+		ExpectedStateVersion: before.StateVersion,
+		WorkerID:             workerID,
+		AssignmentAttemptID:  attemptID,
+	})
+	if err != nil {
+		t.Fatalf("FenceRunOwnership: %v", err)
+	}
+	if result.State.Lifecycle != "recovering" {
+		t.Fatalf("fenced lifecycle = %q, want recovering", result.State.Lifecycle)
+	}
+	return result.State
+}
+
+func TestAssignedJobCarriesExpectedStateVersionAndDurableAttemptID(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "version me")
+	_, assigned := h.connectAssignedWorker(t, "worker-assignment-identity", enqueued.RunID)
+
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	state := h.runState(t, enqueued.RunID)
+	if state.StateVersion < 1 {
+		t.Fatalf("run state version = %d, want at least 1", state.StateVersion)
+	}
+	if assigned.GetExpectedStateVersion() != state.StateVersion {
+		t.Fatalf("assignment expected_state_version = %d, want %d",
+			assigned.GetExpectedStateVersion(), state.StateVersion)
+	}
+	if run.ExecutionAttemptID == "" {
+		t.Fatal("run has no durable execution attempt ID")
+	}
+	if assigned.GetAssignmentAttemptId() != run.ExecutionAttemptID {
+		t.Fatalf("assignment attempt = %q, want the durable %q",
+			assigned.GetAssignmentAttemptId(), run.ExecutionAttemptID)
+	}
+}
+
+func TestTerminalReportWithWrongExpectedVersionIsFenced(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "stale terminal")
+	stream, assigned := h.connectAssignedWorker(t, "worker-stale-terminal", enqueued.RunID)
+	before := h.runState(t, enqueued.RunID)
+
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{
+		RunCompleted: &turingv1.RuntimeRunCompleted{
+			RunId:                enqueued.RunID,
+			AssistantMessageId:   assigned.GetAssistantMessageId(),
+			Content:              "answered against a state that moved",
+			ExpectedStateVersion: before.StateVersion + 5,
+		},
+	}}); err != nil {
+		t.Fatalf("send run_completed: %v", err)
+	}
+	expectStreamRejection(t, stream, "stale terminal report")
+
+	// Refusing the report tears the stream down, and the ordinary
+	// reconciliation fence then moves the run to recovering — the run's
+	// ownership really is in doubt. What must not happen is the report landing:
+	// no terminal outcome, and no completion event.
+	after := h.runState(t, enqueued.RunID)
+	if isTerminalRunStatus(after.Lifecycle) {
+		t.Fatalf("stale terminal report terminalized the run as %s", after.Lifecycle)
+	}
+	if got := countRunEvents(t, h, enqueued.RunID, "agent.run.completed"); got != 0 {
+		t.Fatalf("agent.run.completed events = %d, want none", got)
+	}
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.AssistantContent != "" {
+		t.Fatalf("stale terminal report persisted content %q", run.AssistantContent)
+	}
+	if after.StateVersion < before.StateVersion {
+		t.Fatalf("run version went backwards to %d from %d", after.StateVersion, before.StateVersion)
+	}
+}
+
+func TestGenericRuntimeEventCannotResumeRecoveringWithoutVersionReply(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "generic narration")
+	stream, assigned := h.connectAssignedWorker(t, "worker-generic-event", enqueued.RunID)
+	fenced := h.fenceOwnership(t, enqueued.RunID, "worker-generic-event", assigned.GetAssignmentAttemptId())
+
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Event{
+		Event: &turingv1.TuringEvent{
+			RunId: enqueued.RunID,
+			Type:  turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP,
+		},
+	}}); err != nil {
+		t.Fatalf("send runtime event: %v", err)
+	}
+	expectStreamRejection(t, stream, "generic runtime event under recovering")
+
+	after := h.runState(t, enqueued.RunID)
+	if after.Lifecycle != "recovering" || after.StateVersion != fenced.StateVersion {
+		t.Fatalf("run = %s at version %d, want recovering at %d",
+			after.Lifecycle, after.StateVersion, fenced.StateVersion)
+	}
+}
+
+func TestSameAttemptAssignmentRefreshResumesRecoveringAndUpdatesWorkerVersion(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "prove ownership")
+	stream, assigned := h.connectAssignedWorker(t, "worker-reconnect-proof", enqueued.RunID)
+	fenced := h.fenceOwnership(t, enqueued.RunID, "worker-reconnect-proof", assigned.GetAssignmentAttemptId())
+
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Heartbeat{
+		Heartbeat: &turingv1.RuntimeHeartbeat{WorkerId: "worker-reconnect-proof"},
+	}}); err != nil {
+		t.Fatalf("send heartbeat: %v", err)
+	}
+	refresh := recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+		job := cmd.GetRunAssigned()
+		return job != nil && job.GetRunId() == enqueued.RunID
+	}).GetRunAssigned()
+
+	after := h.runState(t, enqueued.RunID)
+	if after.Lifecycle != "running" {
+		t.Fatalf("run lifecycle = %q, want running after the ownership proof", after.Lifecycle)
+	}
+	if after.StateVersion != fenced.StateVersion+1 {
+		t.Fatalf("resumed version = %d, want %d", after.StateVersion, fenced.StateVersion+1)
+	}
+	if refresh.GetAssignmentAttemptId() != assigned.GetAssignmentAttemptId() {
+		t.Fatalf("refresh attempt = %q, want the unchanged %q",
+			refresh.GetAssignmentAttemptId(), assigned.GetAssignmentAttemptId())
+	}
+	if refresh.GetExpectedStateVersion() != after.StateVersion {
+		t.Fatalf("refresh expected_state_version = %d, want the committed %d",
+			refresh.GetExpectedStateVersion(), after.StateVersion)
+	}
+}
+
+func TestToolBeaconProofReturnsResultingVersionBeforeContinuation(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "beacon proof")
+	stream, assigned := h.connectAssignedWorker(t, "worker-beacon-proof", enqueued.RunID)
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	fenced := h.fenceOwnership(t, enqueued.RunID, "worker-beacon-proof", assigned.GetAssignmentAttemptId())
+
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{
+		ToolBeacon: &turingv1.ToolCallBeacon{
+			Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+			ToolCallId: "call_beacon_proof",
+			AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+			ServerName: "system",
+			ToolName:   "system.time",
+			RunId:      enqueued.RunID,
+			TraceId:    run.TraceID,
+		},
+	}}); err != nil {
+		t.Fatalf("send tool beacon: %v", err)
+	}
+	decision := recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetToolPolicyDecision() != nil
+	}).GetToolPolicyDecision()
+
+	after := h.runState(t, enqueued.RunID)
+	if after.Lifecycle != "running" {
+		t.Fatalf("run lifecycle = %q, want running after the beacon proof", after.Lifecycle)
+	}
+	if after.StateVersion != fenced.StateVersion+1 {
+		t.Fatalf("resumed version = %d, want %d", after.StateVersion, fenced.StateVersion+1)
+	}
+	if decision.GetRunStateVersion() != after.StateVersion {
+		t.Fatalf("decision run_state_version = %d, want the committed %d",
+			decision.GetRunStateVersion(), after.StateVersion)
+	}
+	if decision.GetDecision() != turingv1.ToolPolicyDecision_DECISION_ALLOW {
+		t.Fatalf("decision = %s, want ALLOW for a safe tool", decision.GetDecision())
+	}
+}
+
+func TestUnownedUpdateCannotBypassRecoveringFence(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "unowned proof")
+	_, assigned := h.connectAssignedWorker(t, "worker-unowned-owner", enqueued.RunID)
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	fenced := h.fenceOwnership(t, enqueued.RunID, "worker-unowned-owner", assigned.GetAssignmentAttemptId())
+
+	// A second worker holds no assignment for this run, so nothing it says can
+	// prove which attempt owns it — which is the whole doubt recovering names.
+	bystander, err := h.runtimeClient(t).ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatalf("ConnectWorker: %v", err)
+	}
+	defer func() { _ = bystander.CloseSend() }()
+	if err := bystander.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{
+		WorkerReady: &turingv1.RuntimeWorkerReady{
+			WorkerId: "worker-unowned-bystander", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+		},
+	}}); err != nil {
+		t.Fatalf("send worker_ready: %v", err)
+	}
+	recvUntil(t, bystander, func(cmd *turingv1.RuntimeCommand) bool { return cmd.GetWorkerAccepted() != nil })
+
+	if err := bystander.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{
+		ToolBeacon: &turingv1.ToolCallBeacon{
+			Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+			ToolCallId: "call_unowned_proof",
+			AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+			ServerName: "system",
+			ToolName:   "system.time",
+			RunId:      enqueued.RunID,
+			TraceId:    run.TraceID,
+		},
+	}}); err != nil {
+		t.Fatalf("send tool beacon: %v", err)
+	}
+	decision := recvUntil(t, bystander, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetToolPolicyDecision() != nil
+	}).GetToolPolicyDecision()
+	if decision.GetDecision() == turingv1.ToolPolicyDecision_DECISION_ALLOW {
+		t.Fatalf("unowned beacon was allowed: %+v", decision)
+	}
+	if decision.GetRunStateVersion() != 0 {
+		t.Fatalf("unowned beacon was answered with version %d, want none",
+			decision.GetRunStateVersion())
+	}
+
+	after := h.runState(t, enqueued.RunID)
+	if after.Lifecycle != "recovering" || after.StateVersion != fenced.StateVersion {
+		t.Fatalf("run = %s at version %d, want recovering at %d",
+			after.Lifecycle, after.StateVersion, fenced.StateVersion)
+	}
+}
+
+func TestTerminalAfterFenceAndVersionedProofCommitsExactlyOnce(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "terminal after proof")
+	stream, assigned := h.connectAssignedWorker(t, "worker-terminal-proof", enqueued.RunID)
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	h.fenceOwnership(t, enqueued.RunID, "worker-terminal-proof", assigned.GetAssignmentAttemptId())
+
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{
+		ToolBeacon: &turingv1.ToolCallBeacon{
+			Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+			ToolCallId: "call_terminal_proof",
+			AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+			ServerName: "system",
+			ToolName:   "system.time",
+			RunId:      enqueued.RunID,
+			TraceId:    run.TraceID,
+		},
+	}}); err != nil {
+		t.Fatalf("send tool beacon: %v", err)
+	}
+	decision := recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetToolPolicyDecision() != nil
+	}).GetToolPolicyDecision()
+	proven := decision.GetRunStateVersion()
+	if proven == 0 {
+		t.Fatal("beacon proof returned no resulting version")
+	}
+
+	terminal := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{
+		RunCompleted: &turingv1.RuntimeRunCompleted{
+			RunId:                enqueued.RunID,
+			AssistantMessageId:   assigned.GetAssistantMessageId(),
+			Content:              "answered after proving ownership",
+			ExpectedStateVersion: proven,
+		},
+	}}
+	if err := stream.Send(terminal); err != nil {
+		t.Fatalf("send run_completed: %v", err)
+	}
+	waitForRunStatus(t, h, enqueued.RunID, "completed")
+	committed := h.runState(t, enqueued.RunID)
+	if committed.StateVersion != proven+1 {
+		t.Fatalf("terminal version = %d, want %d", committed.StateVersion, proven+1)
+	}
+
+	// The same report again is the worker's retry, not a second outcome.
+	if err := stream.Send(terminal); err != nil {
+		t.Fatalf("resend run_completed: %v", err)
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Heartbeat{
+		Heartbeat: &turingv1.RuntimeHeartbeat{WorkerId: "worker-terminal-proof"},
+	}}); err != nil {
+		t.Fatalf("send heartbeat: %v", err)
+	}
+	replayed := h.runState(t, enqueued.RunID)
+	if replayed.StateVersion != committed.StateVersion {
+		t.Fatalf("duplicate terminal moved the version to %d, want %d",
+			replayed.StateVersion, committed.StateVersion)
+	}
+	if got := countRunEvents(t, h, enqueued.RunID, "agent.run.completed"); got != 1 {
+		t.Fatalf("agent.run.completed events = %d, want exactly 1", got)
+	}
+}
+
+func TestIsActiveRunStatusRejectsUnprovenRecoveringOwnership(t *testing.T) {
+	for _, test := range []struct {
+		runStatus string
+		want      bool
+	}{
+		{runStatus: "running", want: true},
+		{runStatus: "waiting_approval", want: true},
+		{runStatus: "recovering", want: false},
+		{runStatus: "queued", want: false},
+		{runStatus: "completed", want: false},
+		{runStatus: "failed", want: false},
+		{runStatus: "cancelled", want: false},
+		{runStatus: "", want: false},
+	} {
+		t.Run(test.runStatus, func(t *testing.T) {
+			if got := isActiveRunStatus(test.runStatus); got != test.want {
+				t.Fatalf("isActiveRunStatus(%q) = %v, want %v", test.runStatus, got, test.want)
+			}
+		})
+	}
+}
+
+// expectStreamRejection waits for the orchestrator to refuse an update by
+// failing the stream. A rejection that never arrives is the failure this
+// asserts, so the wait is bounded rather than blocking on Recv forever.
+func expectStreamRejection(t *testing.T, stream turingv1.RuntimeService_ConnectWorkerClient, what string) {
+	t.Helper()
+	received := make(chan error, 1)
+	go func() {
+		_, err := stream.Recv()
+		received <- err
+	}()
+	select {
+	case err := <-received:
+		if err == nil {
+			t.Fatalf("%s was accepted", what)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("%s was not rejected", what)
+	}
+}
+
+func waitForRunStatus(t *testing.T, h *harness, runID string, want string) {
+	deadline := time.After(2 * time.Second)
+	for {
+		state := h.runState(t, runID)
+		if state.Lifecycle == want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("run %s is %q, want %q", runID, state.Lifecycle, want)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+func countRunEvents(t *testing.T, h *harness, runID string, eventType string) int {
+	t.Helper()
+	var count int
+	if err := h.database.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM events WHERE run_id = ? AND type = ?`, runID, eventType,
+	).Scan(&count); err != nil {
+		t.Fatalf("count %s events: %v", eventType, err)
+	}
+	return count
+}
+
+// ---------------------------------------------------------------------------
+// Typed failure ingestion.
+//
+// The orchestrator is the last place a worker's or a provider's words could
+// become durable public truth, so every failure it writes is normalized from a
+// typed origin and an allowlisted code before it reaches storage.
+// ---------------------------------------------------------------------------
+
+func (h *harness) runDiagnostics(t *testing.T, runID string) (string, sql.NullString) {
+	t.Helper()
+	var code string
+	var message sql.NullString
+	if err := h.database.QueryRowContext(context.Background(),
+		`SELECT COALESCE(error_code, ''), error_message FROM agent_runs WHERE id = ?`, runID,
+	).Scan(&code, &message); err != nil {
+		t.Fatalf("read run diagnostics: %v", err)
+	}
+	return code, message
+}
+
+func (h *harness) terminalPayload(t *testing.T, runID string, eventType string) map[string]any {
+	t.Helper()
+	var payload string
+	if err := h.database.QueryRowContext(context.Background(),
+		`SELECT payload_json FROM events WHERE run_id = ? AND type = ? ORDER BY sequence DESC LIMIT 1`,
+		runID, eventType,
+	).Scan(&payload); err != nil {
+		t.Fatalf("read %s payload: %v", eventType, err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		t.Fatalf("decode %s payload: %v", eventType, err)
+	}
+	return decoded
+}
+
+func TestOrchestratorTypedFailureIngestionNormalizesEveryRuntimeOrigin(t *testing.T) {
+	tests := []struct {
+		name          string
+		origin        turingv1.FailureOrigin
+		code          string
+		retry         turingv1.AutomaticRetryClass
+		wantLifecycle string
+		wantCode      string
+		wantReason    string
+	}{
+		{
+			name: "context_assembly", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_CONTEXT_ASSEMBLY,
+			code: "message_fetch_failed", wantCode: "message_fetch_failed", wantReason: "internal_failure",
+		},
+		{
+			name: "context_assembly_budget", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_CONTEXT_ASSEMBLY,
+			code: "context_budget_exceeded", wantCode: "context_budget_exceeded", wantReason: "context_limit",
+		},
+		{
+			name: "external_provider", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_EXTERNAL_PROVIDER,
+			code: "external_agent_unavailable", wantCode: "external_agent_unavailable", wantReason: "provider_failure",
+		},
+		{
+			name: "provider_configuration", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_CONFIGURATION,
+			code: "model_provider_unavailable", wantCode: "model_provider_unavailable", wantReason: "provider_failure",
+		},
+		{
+			name: "provider_protocol_auth", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL,
+			code: "model_auth_failed", wantCode: "model_auth_failed", wantReason: "provider_failure",
+		},
+		{
+			name: "provider_protocol_quota", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL,
+			code: "model_quota_exceeded", wantCode: "model_quota_exceeded", wantReason: "provider_failure",
+		},
+		{
+			name: "provider_protocol_status", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL,
+			code: "model_request_failed", wantCode: "model_request_failed", wantReason: "provider_failure",
+		},
+		{
+			name: "provider_protocol_malformed_chunk", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL,
+			code: "model_bad_chunk", wantCode: "model_bad_chunk", wantReason: "provider_failure",
+		},
+		{
+			name: "provider_transport", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
+			code: "model_stream_failed", wantCode: "model_stream_failed", wantReason: "provider_failure",
+		},
+		{
+			name: "provider_output_guard", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_OUTPUT_GUARD,
+			code: "model_output_limit_exceeded", wantCode: "model_output_limit_exceeded", wantReason: "provider_failure",
+		},
+		{
+			name: "tool_infrastructure", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_INFRASTRUCTURE,
+			code: "tool_discovery_failed", wantCode: "tool_discovery_failed", wantReason: "tool_failure",
+		},
+		{
+			name: "tool_execution", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_EXECUTION,
+			code: "tool_call_failed", wantCode: "tool_call_failed", wantReason: "tool_failure",
+		},
+		{
+			name: "tool_guard", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_GUARD,
+			code: "tool_call_limit_exceeded", wantCode: "tool_call_limit_exceeded", wantReason: "tool_failure",
+		},
+		{
+			name: "tool_policy", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_POLICY,
+			code: "tool_policy_decision_failed", wantCode: "tool_policy_decision_failed", wantReason: "policy_denied",
+		},
+		{
+			name: "approval_transport", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_APPROVAL_TRANSPORT,
+			code: "approval_delivery_failed", wantCode: "approval_delivery_failed", wantReason: "approval_delivery_failed",
+		},
+		{
+			name: "approval_expiry", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_APPROVAL_EXPIRY,
+			code: "approval_expired", wantCode: "approval_expired", wantReason: "expired",
+		},
+		{
+			name: "automation_policy", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_AUTOMATION_POLICY,
+			code: "automation_tool_not_allowlisted", wantCode: "automation_tool_not_allowlisted", wantReason: "policy_denied",
+		},
+		{
+			name: "worker_runtime", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_WORKER_RUNTIME,
+			code: "runtime_error", wantCode: "runtime_error", wantReason: "internal_failure",
+		},
+		{
+			name: "dispatch", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_DISPATCH,
+			code: "retries_exhausted", wantCode: "retries_exhausted", wantReason: "retries_exhausted",
+		},
+		{
+			name: "recovery", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_RECOVERY,
+			code: "side_effect_uncertain", wantCode: "side_effect_uncertain", wantReason: "side_effect_uncertain",
+		},
+		{
+			// No code is allowlisted under the orchestrator's own origin today,
+			// so its family fallback is what must hold: the origin survives and
+			// the reported spelling does not.
+			name: "orchestrator_internal", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_ORCHESTRATOR_INTERNAL,
+			code: "runtime_error", wantCode: "unknown", wantReason: "internal_failure",
+		},
+		{
+			// An abandoned outcome belongs on a cancellation: it reports that
+			// the client went away, not that the run failed.
+			name: "client_lifecycle", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_CLIENT_LIFECYCLE,
+			code: "client_cancelled", wantLifecycle: "cancelled", wantCode: "", wantReason: "abandoned",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newHarness(t)
+			enqueued := h.createRunningRunResult(t, test.name)
+			state, err := h.repo.GetRunState(context.Background(), enqueued.RunID)
+			if err != nil {
+				t.Fatalf("GetRunState: %v", err)
+			}
+
+			if _, err := h.service.handleRunFailed(context.Background(), &turingv1.RuntimeRunFailed{
+				RunId:                enqueued.RunID,
+				Code:                 test.code,
+				Message:              "provider prose that must not survive",
+				FailureOrigin:        test.origin,
+				AutomaticRetryClass:  test.retry,
+				ExpectedStateVersion: state.StateVersion,
+			}); err != nil {
+				t.Fatalf("handleRunFailed: %v", err)
+			}
+
+			after := h.runState(t, enqueued.RunID)
+			wantLifecycle := test.wantLifecycle
+			if wantLifecycle == "" {
+				wantLifecycle = "failed"
+			}
+			if after.Lifecycle != wantLifecycle {
+				t.Fatalf("lifecycle = %q, want %q", after.Lifecycle, wantLifecycle)
+			}
+			if after.OutcomeReason != test.wantReason {
+				t.Fatalf("outcome reason = %q, want %q", after.OutcomeReason, test.wantReason)
+			}
+			code, message := h.runDiagnostics(t, enqueued.RunID)
+			if code != test.wantCode {
+				t.Fatalf("error_code = %q, want %q", code, test.wantCode)
+			}
+			if message.Valid {
+				t.Fatalf("error_message persisted %q, want NULL", message.String)
+			}
+		})
+	}
+}
+
+func TestRuntimeFailureMessageIsNeverPersisted(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "no message")
+	state, err := h.repo.GetRunState(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatalf("GetRunState: %v", err)
+	}
+
+	if _, err := h.service.handleRunFailed(context.Background(), &turingv1.RuntimeRunFailed{
+		RunId:                enqueued.RunID,
+		Code:                 "model_stream_failed",
+		Message:              "SECRET-PROVIDER-DIAGNOSTIC",
+		FailureOrigin:        turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
+		ExpectedStateVersion: state.StateVersion,
+	}); err != nil {
+		t.Fatalf("handleRunFailed: %v", err)
+	}
+
+	_, message := h.runDiagnostics(t, enqueued.RunID)
+	if message.Valid {
+		t.Fatalf("error_message persisted %q, want NULL", message.String)
+	}
+	var jobMessage sql.NullString
+	if err := h.database.QueryRowContext(context.Background(),
+		`SELECT error_message FROM jobs WHERE run_id = ?`, enqueued.RunID,
+	).Scan(&jobMessage); err != nil {
+		t.Fatalf("read job diagnostics: %v", err)
+	}
+	if jobMessage.Valid {
+		t.Fatalf("job error_message persisted %q, want NULL", jobMessage.String)
+	}
+	payload := h.terminalPayload(t, enqueued.RunID, "agent.run.failed")
+	if _, exists := payload["message"]; exists {
+		t.Fatalf("failure payload carries a message: %#v", payload)
+	}
+	if payload["code"] != "model_stream_failed" {
+		t.Fatalf("failure payload code = %#v, want the normalized code", payload["code"])
+	}
+	if payload["retryable"] != false {
+		t.Fatalf("failure payload retryable = %#v, want false", payload["retryable"])
+	}
+	var found int
+	if err := h.database.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM events WHERE run_id = ? AND payload_json LIKE '%SECRET-PROVIDER-DIAGNOSTIC%'`,
+		enqueued.RunID,
+	).Scan(&found); err != nil {
+		t.Fatalf("scan events: %v", err)
+	}
+	if found != 0 {
+		t.Fatalf("%d events carry the provider diagnostic", found)
+	}
+}
+
+func TestUnknownOriginAndRetryClassFailClosed(t *testing.T) {
+	tests := []struct {
+		name       string
+		origin     turingv1.FailureOrigin
+		code       string
+		retry      turingv1.AutomaticRetryClass
+		wantCode   string
+		wantReason string
+	}{
+		{
+			name: "absent_origin", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_UNSPECIFIED,
+			code: "model_stream_failed", wantCode: "unknown", wantReason: "internal_failure",
+		},
+		{
+			name: "unknown_origin", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_UNKNOWN,
+			code: "model_stream_failed", wantCode: "unknown", wantReason: "internal_failure",
+		},
+		{
+			name: "unrecognized_numeric_origin", origin: turingv1.FailureOrigin(4242),
+			code: "model_stream_failed", wantCode: "unknown", wantReason: "internal_failure",
+		},
+		{
+			name: "unknown_code_keeps_provider_family", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL,
+			code: "model_invented_by_a_newer_worker", wantCode: "unknown", wantReason: "provider_failure",
+		},
+		{
+			name: "unknown_code_keeps_tool_family", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_EXECUTION,
+			code: "tool_invented_by_a_newer_worker", wantCode: "unknown", wantReason: "tool_failure",
+		},
+		{
+			// An unrecognized pair may not buy itself a retry, whatever class
+			// the reporter asked for.
+			name: "unknown_pair_cannot_request_a_retry", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_UNKNOWN,
+			code: "worker_busy", retry: turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT,
+			wantCode: "unknown", wantReason: "internal_failure",
+		},
+		{
+			name: "unrecognized_retry_numeric_fails_closed", origin: turingv1.FailureOrigin_FAILURE_ORIGIN_WORKER_RUNTIME,
+			code: "runtime_error", retry: turingv1.AutomaticRetryClass(777),
+			wantCode: "runtime_error", wantReason: "internal_failure",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newHarness(t)
+			enqueued := h.createRunningRunResult(t, test.name)
+			state, err := h.repo.GetRunState(context.Background(), enqueued.RunID)
+			if err != nil {
+				t.Fatalf("GetRunState: %v", err)
+			}
+
+			if _, err := h.service.handleRunFailed(context.Background(), &turingv1.RuntimeRunFailed{
+				RunId:                enqueued.RunID,
+				Code:                 test.code,
+				Message:              "unrecognized",
+				FailureOrigin:        test.origin,
+				AutomaticRetryClass:  test.retry,
+				Retryable:            true,
+				ExpectedStateVersion: state.StateVersion,
+			}); err != nil {
+				t.Fatalf("handleRunFailed: %v", err)
+			}
+
+			after := h.runState(t, enqueued.RunID)
+			if !isTerminalRunStatus(after.Lifecycle) {
+				t.Fatalf("lifecycle = %q, want a terminal outcome rather than a retry", after.Lifecycle)
+			}
+			if after.OutcomeReason != test.wantReason {
+				t.Fatalf("outcome reason = %q, want %q", after.OutcomeReason, test.wantReason)
+			}
+			code, message := h.runDiagnostics(t, enqueued.RunID)
+			if code != test.wantCode {
+				t.Fatalf("error_code = %q, want %q", code, test.wantCode)
+			}
+			if message.Valid {
+				t.Fatalf("error_message persisted %q, want NULL", message.String)
+			}
+		})
+	}
+}
+
+func TestApprovalAndToolCallersSupplyTypedOriginBeforePersistence(t *testing.T) {
+	t.Run("automation_policy_block_is_policy_denied", func(t *testing.T) {
+		h := newHarness(t)
+		enqueued := h.createRunningRunResult(t, "automation block")
+
+		if _, err := h.service.failUnattendedRun(context.Background(), &turingv1.ToolCallBeacon{
+			RunId: enqueued.RunID, ToolCallId: "call_automation", ToolName: "files.create",
+		}, runoutcome.NormalizeFailure(
+			runoutcome.OriginAutomationPolicy, AutomationNotAllowlistedCode, runoutcome.RetryClassNever,
+		)); err != nil {
+			t.Fatalf("failUnattendedRun: %v", err)
+		}
+
+		after := h.runState(t, enqueued.RunID)
+		if after.OutcomeReason != "policy_denied" {
+			t.Fatalf("outcome reason = %q, want policy_denied", after.OutcomeReason)
+		}
+		code, message := h.runDiagnostics(t, enqueued.RunID)
+		if code != AutomationNotAllowlistedCode {
+			t.Fatalf("error_code = %q, want %q", code, AutomationNotAllowlistedCode)
+		}
+		if message.Valid {
+			t.Fatalf("automation block persisted an error message %q", message.String)
+		}
+	})
+
+	t.Run("approval_transport_failure_is_approval_delivery_failed", func(t *testing.T) {
+		h := newHarness(t)
+		enqueued := h.createRunningRunResult(t, "approval transport")
+
+		if err := h.service.terminalizePostCommitApprovalFailure(
+			context.Background(), enqueued.RunID, "call_missing_approval",
+		); err != nil {
+			t.Fatalf("terminalizePostCommitApprovalFailure: %v", err)
+		}
+
+		after := h.runState(t, enqueued.RunID)
+		if after.OutcomeReason != "approval_delivery_failed" {
+			t.Fatalf("outcome reason = %q, want approval_delivery_failed", after.OutcomeReason)
+		}
+		code, message := h.runDiagnostics(t, enqueued.RunID)
+		if code != "approval_delivery_failed" {
+			t.Fatalf("error_code = %q, want approval_delivery_failed", code)
+		}
+		if message.Valid {
+			t.Fatalf("approval transport failure persisted an error message %q", message.String)
+		}
+		payload := h.terminalPayload(t, enqueued.RunID, "agent.run.failed")
+		if _, exists := payload["message"]; exists {
+			t.Fatalf("approval failure payload carries a message: %#v", payload)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Terminal fixtures.
+//
+// A production caller names the version its report was computed against. A test
+// that is setting up an already-terminal run has no such report, so it reads
+// the run's current version here rather than restating it at every fixture.
+// ---------------------------------------------------------------------------
+
+func completeRunFixture(t *testing.T, h *harness, runID string, assistantMessageID string, content string) []repository.Event {
+	t.Helper()
+	result, err := h.repo.CompleteRunCanonical(context.Background(), repository.CompleteRunInput{
+		RunID:                runID,
+		AssistantMessageID:   assistantMessageID,
+		Content:              content,
+		ExpectedStateVersion: h.runState(t, runID).StateVersion,
+	})
+	if err != nil {
+		t.Fatalf("CompleteRunCanonical: %v", err)
+	}
+	return result.Events
+}
+
+func failRunFixture(t *testing.T, h *harness, runID string, failure runoutcome.Failure) []repository.Event {
+	t.Helper()
+	result, err := h.repo.FailRunCanonical(context.Background(), repository.FailRunInput{
+		RunID:                runID,
+		ExpectedStateVersion: h.runState(t, runID).StateVersion,
+		Failure:              failure,
+		PreserveExecution:    true,
+	})
+	if err != nil {
+		t.Fatalf("FailRunCanonical: %v", err)
+	}
+	return result.Events
+}
+
+func cancelRunFixture(t *testing.T, h *harness, runID string) []repository.Event {
+	t.Helper()
+	result, err := h.repo.CancelRunCanonical(context.Background(), repository.CancelRunInput{
+		RunID:                runID,
+		ExpectedStateVersion: h.runState(t, runID).StateVersion,
+		Cancellation:         runoutcome.AbandonedCancellation(),
+	})
+	if err != nil {
+		t.Fatalf("CancelRunCanonical: %v", err)
+	}
+	return result.Events
+}
+
+// toolExecutionFailure is the normalized failure these fixtures terminalize
+// with. It goes through the real constructor, so a fixture cannot express an
+// outcome production code could not.
+func toolExecutionFailure() runoutcome.Failure {
+	return runoutcome.NormalizeFailure(runoutcome.OriginToolExecution, "tool_call_failed", runoutcome.RetryClassNever)
+}
+
+// A disconnect is not a terminal report. The run's ownership becomes uncertain,
+// which is what recovering means, and it terminalizes only when the recovery
+// path decides it — never as a completion nobody reported.
+func TestDisconnectWithoutTerminalReportMovesThroughRecovery(t *testing.T) {
+	h := newHarnessWithDispatch(t, DispatchConfig{LeaseDuration: time.Hour, MaxAttempts: 3})
+	enqueued := h.enqueueRun(t, "disconnect me")
+	ctx, cancel := context.WithCancel(h.internalContext())
+	stream, err := h.runtimeClient(t).ConnectWorker(ctx)
+	if err != nil {
+		t.Fatalf("ConnectWorker: %v", err)
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{
+		WorkerReady: &turingv1.RuntimeWorkerReady{
+			WorkerId: "worker-disconnect", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
+		},
+	}}); err != nil {
+		t.Fatalf("send worker_ready: %v", err)
+	}
+	recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+		job := cmd.GetRunAssigned()
+		return job != nil && job.GetRunId() == enqueued.RunID
+	})
+
+	cancel()
+	_ = stream.CloseSend()
+	h.service.WaitForWorkerStreams()
+
+	after := h.runState(t, enqueued.RunID)
+	if after.Lifecycle == "completed" {
+		t.Fatal("a disconnect completed the run")
+	}
+	if after.Lifecycle != "recovering" && after.Lifecycle != "queued" {
+		t.Fatalf("lifecycle = %q, want recovering or the requeue it leads to", after.Lifecycle)
+	}
+	if got := countRunEvents(t, h, enqueued.RunID, "agent.run.completed"); got != 0 {
+		t.Fatalf("agent.run.completed events = %d, want none", got)
+	}
+}
+
+// Content that was already durable when a run failed stays exactly as it was.
+// Live deltas are event rows and do not update the canonical message, so this
+// asserts what actually survives rather than promising that partial output does.
+func TestDurablePartialContentSurvivesFailureButLiveDeltaIsNotPromised(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "partial content")
+	if _, err := h.database.ExecContext(context.Background(),
+		`UPDATE messages SET content = ? WHERE id = ?`, "durable partial answer", enqueued.AssistantMessageID,
+	); err != nil {
+		t.Fatalf("seed durable partial content: %v", err)
+	}
+
+	if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Event{
+		Event: &turingv1.TuringEvent{
+			RunId: enqueued.RunID,
+			Type:  turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA,
+			Payload: mustStruct(t, map[string]any{
+				"messageId": enqueued.AssistantMessageID, "delta": " and a live delta nobody promised",
+			}),
+		},
+	}}); err != nil {
+		t.Fatalf("apply live delta: %v", err)
+	}
+
+	state := h.runState(t, enqueued.RunID)
+	if _, err := h.service.handleRunFailed(context.Background(), &turingv1.RuntimeRunFailed{
+		RunId:                enqueued.RunID,
+		Code:                 "model_stream_failed",
+		FailureOrigin:        turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
+		ExpectedStateVersion: state.StateVersion,
+	}); err != nil {
+		t.Fatalf("handleRunFailed: %v", err)
+	}
+
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.AssistantContent != "durable partial answer" {
+		t.Fatalf("assistant content = %q, want the durable bytes byte-for-byte", run.AssistantContent)
+	}
+	after := h.runState(t, enqueued.RunID)
+	if after.Lifecycle != "failed" || after.OutcomeReason != "provider_failure" {
+		t.Fatalf("run = %s/%s, want failed/provider_failure", after.Lifecycle, after.OutcomeReason)
+	}
+	if !after.HasDisplayableContent {
+		t.Fatal("preserved content was not marked displayable")
+	}
+	if after.ContentSHA256 != runoutcome.ContentSHA256("durable partial answer") {
+		t.Fatalf("content hash = %q, want the hash of the preserved bytes", after.ContentSHA256)
+	}
 }

@@ -1311,7 +1311,7 @@ func TestSendMessageCancellationCancelsRun(t *testing.T) {
 			if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
 				t.Fatal(err)
 			}
-			if payload["runId"] != runID || payload["reason"] != "client_cancelled" {
+			if payload["runId"] != runID || payload["reason"] != "abandoned" {
 				t.Fatalf("cancel payload = %+v", payload)
 			}
 			return
@@ -1836,5 +1836,70 @@ func TestMapChatEventReturnsRunFailedWhenPayloadIsInvalid(t *testing.T) {
 	}
 	if failed.RunId != "run_1" || failed.Code == "" || failed.Message == "" {
 		t.Fatalf("run_failed = %+v", failed)
+	}
+}
+
+// The one cancellation signal this product has covers both a deliberate stop
+// and an unkeyed transport loss, and the client offers no cancel affordance. So
+// a disconnect is abandonment, and it must say so in the closed vocabulary
+// rather than storing the transport's own word for it.
+func TestChatDisconnectNormalizesToAbandonedWithoutRawReason(t *testing.T) {
+	h := newHarness(t)
+	session, err := h.repo.CreateSession(context.Background(), "Disconnect")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	enqueued, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+		SessionID:     session.SessionID,
+		Content:       "abandon me",
+		AgentID:       "general_assistant",
+		ModelProvider: "ollama",
+		Model:         "llama3.2",
+	})
+	if err != nil {
+		t.Fatalf("EnqueueUserMessage: %v", err)
+	}
+
+	h.service.cancelRun(enqueued.RunID)
+
+	state, err := h.repo.GetRunState(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatalf("GetRunState: %v", err)
+	}
+	if state.Lifecycle != "cancelled" {
+		t.Fatalf("lifecycle = %q, want cancelled", state.Lifecycle)
+	}
+	if state.OutcomeReason != "abandoned" {
+		t.Fatalf("outcome reason = %q, want abandoned", state.OutcomeReason)
+	}
+
+	var cancellationReason, errorMessage sql.NullString
+	if err := h.database.QueryRowContext(context.Background(),
+		`SELECT cancellation_reason, error_message FROM agent_runs WHERE id = ?`, enqueued.RunID,
+	).Scan(&cancellationReason, &errorMessage); err != nil {
+		t.Fatalf("read run diagnostics: %v", err)
+	}
+	if errorMessage.Valid {
+		t.Fatalf("cancellation persisted an error message %q", errorMessage.String)
+	}
+	if cancellationReason.Valid && cancellationReason.String != "client_cancelled" {
+		t.Fatalf("cancellation_reason = %q, want the allowlisted client_cancelled", cancellationReason.String)
+	}
+
+	var payload string
+	if err := h.database.QueryRowContext(context.Background(),
+		`SELECT payload_json FROM events WHERE run_id = ? AND type = 'agent.run.cancelled'`, enqueued.RunID,
+	).Scan(&payload); err != nil {
+		t.Fatalf("read cancellation event: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		t.Fatalf("decode cancellation payload: %v", err)
+	}
+	if decoded["reason"] != "abandoned" {
+		t.Fatalf("cancellation payload reason = %#v, want abandoned", decoded["reason"])
+	}
+	if _, exists := decoded["message"]; exists {
+		t.Fatalf("cancellation payload carries a message: %#v", decoded)
 	}
 }

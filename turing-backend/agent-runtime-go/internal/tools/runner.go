@@ -23,6 +23,12 @@ type Runner struct {
 	MetadataFetchers []func(context.Context) error
 }
 
+// The after-beacon carries a code from this package's own allowlisted
+// vocabulary and no message. The wrapped error still travels back to the caller
+// as a Go error — that is where a developer reads it — but it does not cross
+// the beacon boundary, because everything on a beacon can become a durable
+// public payload.
+
 type RunInput struct {
 	AgentID         turingv1.AgentId
 	RunID           string
@@ -74,14 +80,14 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 		if !beaconWasPosted(err) {
 			return RunOutcome{}, operationErr
 		}
-		if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "tool_policy_decision_failed", Message: err.Error()}, started); reportErr != nil {
+		if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "tool_policy_decision_failed"}, started); reportErr != nil {
 			return RunOutcome{}, ReportingFailureError{operationErr: operationErr, reportErr: reportErr}
 		}
 		return RunOutcome{}, operationErr
 	}
 	if err := validatePolicyDecision(decision, toolCallID); err != nil {
 		operationErr := beaconReportingError{err: markBeaconPosted(err)}
-		if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "tool_policy_decision_invalid", Message: err.Error()}, started); reportErr != nil {
+		if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "tool_policy_decision_invalid"}, started); reportErr != nil {
 			return RunOutcome{}, ReportingFailureError{operationErr: operationErr, reportErr: reportErr}
 		}
 		return RunOutcome{}, operationErr
@@ -107,7 +113,7 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 		sideEffecting = true
 		if r.WaitApproval == nil {
 			err = ApprovalWaitError{err: errors.New("approval waiter is not configured")}
-			if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "approval_wait_failed", Message: err.Error()}, started); reportErr != nil {
+			if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "approval_wait_failed"}, started); reportErr != nil {
 				return RunOutcome{}, ReportingFailureError{operationErr: err, reportErr: reportErr}
 			}
 			return RunOutcome{}, err
@@ -121,14 +127,14 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 				return RunOutcome{}, terminalRunError{err: err}
 			}
 			operationErr := ApprovalWaitError{err: err}
-			if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "approval_wait_failed", Message: err.Error()}, started); reportErr != nil {
+			if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "approval_wait_failed"}, started); reportErr != nil {
 				return RunOutcome{}, ReportingFailureError{operationErr: operationErr, reportErr: reportErr}
 			}
 			return RunOutcome{}, operationErr
 		}
 	default:
 		err = errors.New("unsupported tool policy decision")
-		if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "tool_policy_decision_invalid", Message: err.Error()}, started); reportErr != nil {
+		if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "tool_policy_decision_invalid"}, started); reportErr != nil {
 			return RunOutcome{}, ReportingFailureError{operationErr: err, reportErr: reportErr}
 		}
 		return RunOutcome{}, markBeaconPosted(err)
@@ -141,7 +147,7 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 		if sideEffecting {
 			operationErr = SideEffectUnknownError{err: err}
 		}
-		if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "mcp_call_failed", Message: err.Error()}, started); reportErr != nil {
+		if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "mcp_call_failed"}, started); reportErr != nil {
 			return RunOutcome{}, ReportingFailureError{operationErr: operationErr, reportErr: reportErr}
 		}
 		return RunOutcome{}, operationErr

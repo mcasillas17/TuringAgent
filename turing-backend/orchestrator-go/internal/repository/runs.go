@@ -37,6 +37,20 @@ type Run struct {
 	WorkerID             string
 	ExecutionAttemptID   string
 	ExecutionState       string
+	// StateVersion, OutcomeReason, and ContentSHA256 are the canonical durable
+	// state this run holds right now. They are read here rather than through a
+	// second query because every caller that has to decide whether a report is
+	// current already reads the run.
+	StateVersion  int64
+	OutcomeReason string
+	ContentSHA256 string
+}
+
+// HasDisplayableContent reports whether this run's assistant message would
+// render anything. It is computed from the message rather than stored, on the
+// same shared table the rest of the product uses.
+func (r Run) HasDisplayableContent() bool {
+	return runoutcome.HasDisplayableContent(r.AssistantContent)
 }
 
 // MarkRunRunning starts a run without going through job claiming. It is the
@@ -138,7 +152,8 @@ func (r *Repository) GetRun(ctx context.Context, runID string) (Run, error) {
 				ORDER BY e.sequence DESC
 				LIMIT 1
 			), ''),
-			r.execution_active, COALESCE(r.worker_id, ''), COALESCE(r.execution_attempt_id, ''), r.execution_state
+			r.execution_active, COALESCE(r.worker_id, ''), COALESCE(r.execution_attempt_id, ''), r.execution_state,
+			r.state_version, r.outcome_reason, r.assistant_content_sha256
 		FROM agent_runs r
 		LEFT JOIN messages m ON m.id = r.assistant_message_id
 		WHERE r.id = ?
@@ -155,6 +170,9 @@ func (r *Repository) GetRun(ctx context.Context, runID string) (Run, error) {
 		&run.WorkerID,
 		&run.ExecutionAttemptID,
 		&run.ExecutionState,
+		&run.StateVersion,
+		&run.OutcomeReason,
+		&run.ContentSHA256,
 	)
 	return run, err
 }

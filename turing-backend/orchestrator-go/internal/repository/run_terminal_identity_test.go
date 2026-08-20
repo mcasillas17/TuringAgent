@@ -210,6 +210,28 @@ func TestExactDuplicateTerminalReportIsAWriteFreeSuccess(t *testing.T) {
 	if second.State != first.State {
 		t.Fatalf("duplicate report state = %+v, want the original %+v", second.State, first.State)
 	}
+	// Spelled out rather than left to the struct comparison above: these are
+	// the parts of the canonical identity a duplicate has to reproduce, and a
+	// field quietly dropped from the projection would still compare equal to
+	// itself.
+	if first.State.StateVersion != report.ExpectedStateVersion+1 {
+		t.Fatalf("resulting version = %d, want one past the expected %d",
+			first.State.StateVersion, report.ExpectedStateVersion)
+	}
+	if first.State.Lifecycle != lifecycleCompleted || first.State.OutcomeReason != string(runoutcome.ReasonNone) {
+		t.Fatalf("terminal state = %s/%s, want completed with no outcome to report",
+			first.State.Lifecycle, first.State.OutcomeReason)
+	}
+	if first.State.AssistantMessageID != enqueued.AssistantMessageID {
+		t.Fatalf("assistant message = %q, want %q", first.State.AssistantMessageID, enqueued.AssistantMessageID)
+	}
+	if first.State.ContentSHA256 != runoutcome.ContentSHA256(report.Content) || !first.State.HasDisplayableContent {
+		t.Fatalf("content identity = %q/%v, want the hash of %q and displayable",
+			first.State.ContentSHA256, first.State.HasDisplayableContent, report.Content)
+	}
+	if got := assistantContent(t, repo, enqueued.AssistantMessageID); got != report.Content {
+		t.Fatalf("persisted bytes = %q, want the reported %q", got, report.Content)
+	}
 	if after := countRunEvents(t, repo, enqueued.RunID); after != events {
 		t.Fatalf("duplicate report appended %d events", after-events)
 	}
@@ -486,243 +508,6 @@ func TestTerminalTransitionAppendsExactlyOneTerminalEvent(t *testing.T) {
 // still has its old signature, carries no expected version, and must still
 // produce a canonical versioned terminal state — resolved inside the guarded
 // transaction, never by reading the version first.
-func TestAllSevenTemporaryRawTerminalAdaptersDelegateToCanonicalWriters(t *testing.T) {
-	adapters := map[string]struct {
-		call          func(context.Context, *Repository, EnqueueUserMessageResult) error
-		wantLifecycle string
-		wantReason    string
-	}{
-		"CompleteRun": {
-			call: func(ctx context.Context, repo *Repository, run EnqueueUserMessageResult) error {
-				return repo.CompleteRun(ctx, run.RunID, run.AssistantMessageID, "done")
-			},
-			wantLifecycle: lifecycleCompleted, wantReason: "none",
-		},
-		"CompleteRunWithEvent": {
-			call: func(ctx context.Context, repo *Repository, run EnqueueUserMessageResult) error {
-				_, err := repo.CompleteRunWithEvent(ctx, run.RunID, run.AssistantMessageID, "done", `{"runId":"x"}`, nil)
-				return err
-			},
-			wantLifecycle: lifecycleCompleted, wantReason: "none",
-		},
-		"FailRun": {
-			call: func(ctx context.Context, repo *Repository, run EnqueueUserMessageResult) error {
-				return repo.FailRun(ctx, run.RunID, "model_stream_failed", "the stream died")
-			},
-			wantLifecycle: lifecycleFailed, wantReason: "provider_failure",
-		},
-		"FailRunWithEvent": {
-			call: func(ctx context.Context, repo *Repository, run EnqueueUserMessageResult) error {
-				_, err := repo.FailRunWithEvent(ctx, run.RunID, "model_stream_failed", "the stream died", `{"runId":"x"}`)
-				return err
-			},
-			wantLifecycle: lifecycleFailed, wantReason: "provider_failure",
-		},
-		"FailRunWithEventPreservingExecution": {
-			call: func(ctx context.Context, repo *Repository, run EnqueueUserMessageResult) error {
-				_, err := repo.FailRunWithEventPreservingExecution(ctx, run.RunID, "runtime_error", "worker blew up", `{"runId":"x"}`)
-				return err
-			},
-			wantLifecycle: lifecycleFailed, wantReason: "internal_failure",
-		},
-		"CancelRun": {
-			call: func(ctx context.Context, repo *Repository, run EnqueueUserMessageResult) error {
-				return repo.CancelRun(ctx, run.RunID, "client_cancelled")
-			},
-			wantLifecycle: lifecycleCancelled, wantReason: "abandoned",
-		},
-		"CancelRunWithEvent": {
-			call: func(ctx context.Context, repo *Repository, run EnqueueUserMessageResult) error {
-				_, err := repo.CancelRunWithEvent(ctx, run.RunID, "client_cancelled", `{"reason":"client_cancelled"}`)
-				return err
-			},
-			wantLifecycle: lifecycleCancelled, wantReason: "abandoned",
-		},
-	}
-	if len(adapters) != 7 {
-		t.Fatalf("covering %d raw adapters, want all 7", len(adapters))
-	}
-
-	for name, adapter := range adapters {
-		t.Run(name, func(t *testing.T) {
-			repo := New(openTestDB(t))
-			ctx := context.Background()
-			enqueued, _, running := runningRun(t, repo, "worker-adapter")
-
-			if err := adapter.call(ctx, repo, enqueued); err != nil {
-				t.Fatalf("%s: %v", name, err)
-			}
-			state, err := repo.GetRunState(ctx, enqueued.RunID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if state.Lifecycle != adapter.wantLifecycle || state.OutcomeReason != adapter.wantReason {
-				t.Fatalf("%s produced %s/%s, want %s/%s",
-					name, state.Lifecycle, state.OutcomeReason, adapter.wantLifecycle, adapter.wantReason)
-			}
-			if state.StateVersion != running.StateVersion+1 {
-				t.Fatalf("%s produced version %d, want %d — the adapter must resolve the expectation, not skip it",
-					name, state.StateVersion, running.StateVersion+1)
-			}
-			if !state.FinishedAt.Valid {
-				t.Fatalf("%s left finished_at unset", name)
-			}
-			// Every adapter appends exactly one terminal event, whether or not
-			// its signature hands it back: a lifecycle change nobody can
-			// observe is the defect this task removes.
-			var terminalEvents int
-			if err := repo.db.QueryRowContext(ctx, `
-				SELECT COUNT(*) FROM events
-				WHERE run_id = ? AND type IN ('agent.run.completed','agent.run.failed','agent.run.cancelled')
-			`, enqueued.RunID).Scan(&terminalEvents); err != nil {
-				t.Fatal(err)
-			}
-			if terminalEvents != 1 {
-				t.Fatalf("%s appended %d terminal events, want exactly 1", name, terminalEvents)
-			}
-		})
-	}
-
-	// The adapters carry no expected version, so the guarded update inside their
-	// transaction is the only thing that can fence them. Both writers are
-	// released together from a barrier.
-	t.Run("concurrent raw adapters fence", func(t *testing.T) {
-		repo := New(openTestDB(t))
-		ctx := context.Background()
-		enqueued, _, running := runningRun(t, repo, "worker-adapter-race")
-
-		var release sync.WaitGroup
-		release.Add(1)
-		var finished sync.WaitGroup
-		finished.Add(2)
-		var completeErr, cancelErr error
-		go func() {
-			defer finished.Done()
-			release.Wait()
-			completeErr = repo.CompleteRun(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done")
-		}()
-		go func() {
-			defer finished.Done()
-			release.Wait()
-			cancelErr = repo.CancelRun(ctx, enqueued.RunID, "client_cancelled")
-		}()
-		release.Done()
-		finished.Wait()
-
-		if (completeErr == nil) == (cancelErr == nil) {
-			t.Fatalf("competing raw adapters both %s (complete=%v cancel=%v)",
-				map[bool]string{true: "won", false: "lost"}[completeErr == nil], completeErr, cancelErr)
-		}
-		state, err := repo.GetRunState(ctx, enqueued.RunID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if state.StateVersion != running.StateVersion+1 {
-			t.Fatalf("version = %d, want exactly one increment past %d", state.StateVersion, running.StateVersion)
-		}
-		if completeErr == nil && state.Lifecycle != lifecycleCompleted {
-			t.Fatalf("completion won but lifecycle = %q", state.Lifecycle)
-		}
-		if cancelErr == nil && state.Lifecycle != lifecycleCancelled {
-			t.Fatalf("cancellation won but lifecycle = %q", state.Lifecycle)
-		}
-	})
-
-	// An adapter racing a versioned fence is the other shape: completing a
-	// recovering run is legal, so both may commit — but only in sequence, each
-	// against the version it actually observed, and never by losing one of the
-	// two updates.
-	t.Run("concurrent transitions never lose an update", func(t *testing.T) {
-		repo := New(openTestDB(t))
-		ctx := context.Background()
-		enqueued, claimed, running := runningRun(t, repo, "worker-adapter-fence")
-
-		var release sync.WaitGroup
-		release.Add(1)
-		var finished sync.WaitGroup
-		finished.Add(2)
-		var adapterErr, fenceErr error
-		go func() {
-			defer finished.Done()
-			release.Wait()
-			adapterErr = repo.CompleteRun(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done")
-		}()
-		go func() {
-			defer finished.Done()
-			release.Wait()
-			_, fenceErr = repo.FenceRunOwnership(ctx, FenceRunOwnershipInput{
-				RunID: enqueued.RunID, ExpectedStateVersion: running.StateVersion,
-				WorkerID: "worker-adapter-fence", AssignmentAttemptID: claimed.AssignmentAttemptID,
-			})
-		}()
-		release.Done()
-		finished.Wait()
-
-		committed := 0
-		for _, err := range []error{adapterErr, fenceErr} {
-			if err == nil {
-				committed++
-			}
-		}
-		if committed == 0 {
-			t.Fatalf("neither writer committed (adapter=%v fence=%v)", adapterErr, fenceErr)
-		}
-		state, err := repo.GetRunState(ctx, enqueued.RunID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if state.StateVersion != running.StateVersion+int64(committed) {
-			t.Fatalf("version = %d after %d committed transitions, want %d — an update was lost or duplicated",
-				state.StateVersion, committed, running.StateVersion+int64(committed))
-		}
-		if adapterErr == nil && state.Lifecycle != lifecycleCompleted {
-			t.Fatalf("the adapter committed but lifecycle = %q", state.Lifecycle)
-		}
-		if adapterErr != nil {
-			// It lost, so it must have lost on the guard rather than by
-			// silently overwriting a row it never observed.
-			if !errors.Is(adapterErr, ErrRunNotCompletable) && !errors.Is(adapterErr, ErrRunTransitionConflict) {
-				t.Fatalf("losing adapter = %v, want a fenced terminal error", adapterErr)
-			}
-		}
-		if fenceErr != nil && !errors.Is(fenceErr, ErrRunTransitionConflict) {
-			t.Fatalf("losing fence = %v, want ErrRunTransitionConflict", fenceErr)
-		}
-	})
-}
-
-// TestRawEventPayloadThatIsNotAnObjectFailsLoud covers the temporary adapters'
-// one decoding assumption.
-//
-// Returning an empty payload for an undecodable one would publish a terminal
-// event missing the code its reader expects, and the caller would never learn
-// that its own keys had been dropped on the floor.
-func TestRawEventPayloadThatIsNotAnObjectFailsLoud(t *testing.T) {
-	repo := New(openTestDB(t))
-	ctx := context.Background()
-	enqueued, _, running := runningRun(t, repo, "worker-bad-payload")
-
-	if _, err := repo.FailRunWithEvent(ctx, enqueued.RunID, "model_stream_failed", "died", `"just a string"`); !errors.Is(err, ErrRawEventPayload) {
-		t.Fatalf("failure with a non-object payload = %v, want ErrRawEventPayload", err)
-	}
-	state, err := repo.GetRunState(ctx, enqueued.RunID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state != running {
-		t.Fatalf("a rejected payload changed the run: %+v, want %+v", state, running)
-	}
-	// An empty payload is not the same thing as an undecodable one, and stays
-	// accepted: several callers legitimately have nothing to add.
-	if err := repo.CompleteRun(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done"); err != nil {
-		t.Fatalf("completion with no caller payload: %v", err)
-	}
-}
-
-// TestClaimingAJobForANonQueuedRunFailsInsteadOfPanicking pins the guard on the
-// claim transition's projection. The claim query and the job update make this
-// unreachable today; the point is that if that stops being true, the result is
-// a refused claim rather than an index out of range.
 func TestClaimingAJobForANonQueuedRunFailsInsteadOfPanicking(t *testing.T) {
 	repo := New(openTestDB(t))
 	ctx := context.Background()
@@ -893,4 +678,107 @@ func assertUnchangedTerminalIdentity(
 			t.Fatalf("fenced %s error %q leaks a message identity", name, err)
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Terminal helpers for tests that are exercising something other than version
+// identity.
+//
+// Every production caller names the version its report was computed against,
+// because that is what fences a report built from a state the run has left. A
+// test setting up a terminalized run has no such report; it reads the run's
+// current version here rather than restating it at forty call sites.
+// ---------------------------------------------------------------------------
+
+func completeRunAtCurrentVersion(t *testing.T, repo *Repository, runID string, assistantMessageID string, content string, usage *RunTokenUsage) (RunTransitionResult, error) {
+	t.Helper()
+	return repo.CompleteRunCanonical(context.Background(), CompleteRunInput{
+		RunID:                runID,
+		AssistantMessageID:   assistantMessageID,
+		Content:              content,
+		ExpectedStateVersion: currentVersion(t, repo, runID),
+		Usage:                usage,
+	})
+}
+
+func failRunAtCurrentVersion(t *testing.T, repo *Repository, runID string, failure runoutcome.Failure) (RunTransitionResult, error) {
+	t.Helper()
+	return repo.FailRunCanonical(context.Background(), FailRunInput{
+		RunID:                runID,
+		ExpectedStateVersion: currentVersion(t, repo, runID),
+		Failure:              failure,
+	})
+}
+
+func failRunPreservingExecutionAtCurrentVersion(t *testing.T, repo *Repository, runID string, failure runoutcome.Failure) (RunTransitionResult, error) {
+	t.Helper()
+	return repo.FailRunCanonical(context.Background(), FailRunInput{
+		RunID:                runID,
+		ExpectedStateVersion: currentVersion(t, repo, runID),
+		Failure:              failure,
+		PreserveExecution:    true,
+	})
+}
+
+func cancelRunAtCurrentVersion(t *testing.T, repo *Repository, runID string) (RunTransitionResult, error) {
+	t.Helper()
+	return repo.CancelRunCanonical(context.Background(), CancelRunInput{
+		RunID:                runID,
+		ExpectedStateVersion: currentVersion(t, repo, runID),
+		Cancellation:         runoutcome.AbandonedCancellation(),
+	})
+}
+
+// currentVersion reads a run's version without failing the test when the run is
+// missing: some callers deliberately terminalize a run that is already gone and
+// expect the writer's own sentinel, not a helper's.
+func currentVersion(t *testing.T, repo *Repository, runID string) int64 {
+	t.Helper()
+	state, err := repo.GetRunState(context.Background(), runID)
+	if err != nil {
+		return 1
+	}
+	return state.StateVersion
+}
+
+// testFailure builds the normalized failure a fixture wants from the code it
+// already names, pairing it with the origin that code actually comes from.
+//
+// It goes through the real constructor rather than assembling a value directly,
+// so a fixture cannot express an origin/code pair production code could not,
+// and an unpaired code fails closed here exactly as it would in production.
+func testFailure(code string) runoutcome.Failure {
+	origins := map[string]runoutcome.Origin{
+		"tool_call_failed":         runoutcome.OriginToolExecution,
+		"model_stream_failed":      runoutcome.OriginProviderTransport,
+		"model_error":              runoutcome.OriginExternalProvider,
+		"runtime_error":            runoutcome.OriginWorkerRuntime,
+		"approval_delivery_failed": runoutcome.OriginApprovalTransport,
+	}
+	origin, known := origins[code]
+	if !known {
+		origin = runoutcome.OriginOrchestratorInternal
+	}
+	return runoutcome.NormalizeFailure(origin, code, runoutcome.RetryClassNever)
+}
+
+// dispatchCondition is the nonterminal dispatch report a requeue is about. It
+// carries the transient retry class, because a condition that cannot be retried
+// is not what these fixtures are exercising.
+func dispatchCondition(code string) runoutcome.Failure {
+	return runoutcome.NormalizeFailure(runoutcome.OriginDispatch, code, runoutcome.RetryClassSameRunTransient)
+}
+
+// completeRunEvents and cancelRunEvents keep the shape callers had before the
+// terminal writers required a version: the events the transition appended.
+func completeRunEvents(t *testing.T, repo *Repository, runID string, assistantMessageID string, content string, usage *RunTokenUsage) ([]Event, error) {
+	t.Helper()
+	result, err := completeRunAtCurrentVersion(t, repo, runID, assistantMessageID, content, usage)
+	return result.Events, err
+}
+
+func cancelRunEvents(t *testing.T, repo *Repository, runID string) ([]Event, error) {
+	t.Helper()
+	result, err := cancelRunAtCurrentVersion(t, repo, runID)
+	return result.Events, err
 }

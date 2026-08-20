@@ -12,6 +12,7 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/safejson"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	"google.golang.org/grpc/codes"
@@ -339,16 +340,27 @@ func mapEnqueueError(ctx context.Context, err error) error {
 	return status.Error(codes.Internal, "enqueue user message failed")
 }
 
+// cancelRun terminalizes a run whose client went away.
+//
+// The one stream-cancellation signal this product has covers a deliberate stop
+// and an unkeyed transport loss alike, and the client offers no cancel
+// affordance, so this cannot claim the user meant it. It reports abandonment,
+// which is the strongest thing that is actually true. Nothing about the
+// transport's own wording is persisted.
 func (s *Server) cancelRun(runID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	payload, err := json.Marshal(map[string]string{"runId": runID, "reason": "client_cancelled"})
+	state, err := s.repo.GetRunState(ctx, runID)
 	if err != nil {
 		return
 	}
-	events, err := s.repo.CancelRunWithEvent(ctx, runID, "client_cancelled", string(payload))
+	result, err := s.repo.CancelRunCanonical(ctx, repository.CancelRunInput{
+		RunID:                runID,
+		ExpectedStateVersion: state.StateVersion,
+		Cancellation:         runoutcome.AbandonedCancellation(),
+	})
 	if err == nil {
-		for _, event := range events {
+		for _, event := range result.Events {
 			s.bus.Publish(busEventFromRepository(event))
 		}
 	}

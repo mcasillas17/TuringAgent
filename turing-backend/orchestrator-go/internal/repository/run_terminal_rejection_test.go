@@ -5,8 +5,6 @@ import (
 	"errors"
 	"slices"
 	"testing"
-
-	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
 
 // A refused terminal command has to say which terminal command was refused.
@@ -100,11 +98,6 @@ type terminalCommand struct {
 func terminalCommands() []terminalCommand {
 	completionFrom := []string{lifecycleRunning, lifecycleWaitingApproval, lifecycleRecovering}
 	terminalizeFrom := []string{lifecycleQueued, lifecycleRunning, lifecycleWaitingApproval, lifecycleRecovering}
-	// A failure whose reason differs from the one the failed source committed,
-	// so a refusal is never confused with an exact duplicate replay.
-	toolFailure := func() runoutcome.Failure {
-		return runoutcome.NormalizeFailure(runoutcome.OriginToolExecution, "tool_call_failed", runoutcome.RetryClassNever)
-	}
 	return []terminalCommand{
 		{
 			name: "CompleteRunCanonical", to: lifecycleCompleted, allowedFrom: completionFrom, rejection: ErrRunNotCompletable,
@@ -117,45 +110,12 @@ func terminalCommands() []terminalCommand {
 			},
 		},
 		{
-			name: "CompleteRun", to: lifecycleCompleted, allowedFrom: completionFrom, rejection: ErrRunNotCompletable,
-			call: func(ctx context.Context, repo *Repository, enqueued EnqueueUserMessageResult, _ RunState) error {
-				return repo.CompleteRun(ctx, enqueued.RunID, enqueued.AssistantMessageID, "a later answer")
-			},
-		},
-		{
-			name: "CompleteRunWithEvent", to: lifecycleCompleted, allowedFrom: completionFrom, rejection: ErrRunNotCompletable,
-			call: func(ctx context.Context, repo *Repository, enqueued EnqueueUserMessageResult, _ RunState) error {
-				_, err := repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "a later answer", `{"runId":"raw"}`, nil)
-				return err
-			},
-		},
-		{
 			name: "FailRunCanonical", to: lifecycleFailed, allowedFrom: terminalizeFrom, rejection: ErrRunNotFailable,
 			call: func(ctx context.Context, repo *Repository, enqueued EnqueueUserMessageResult, state RunState) error {
 				_, err := repo.FailRunCanonical(ctx, FailRunInput{
 					RunID: enqueued.RunID, AssistantMessageID: enqueued.AssistantMessageID,
-					ExpectedStateVersion: state.StateVersion, Failure: toolFailure(),
+					ExpectedStateVersion: state.StateVersion, Failure: testFailure("tool_call_failed"),
 				})
-				return err
-			},
-		},
-		{
-			name: "FailRun", to: lifecycleFailed, allowedFrom: terminalizeFrom, rejection: ErrRunNotFailable,
-			call: func(ctx context.Context, repo *Repository, enqueued EnqueueUserMessageResult, _ RunState) error {
-				return repo.FailRun(ctx, enqueued.RunID, "tool_call_failed", "a later failure")
-			},
-		},
-		{
-			name: "FailRunWithEvent", to: lifecycleFailed, allowedFrom: terminalizeFrom, rejection: ErrRunNotFailable,
-			call: func(ctx context.Context, repo *Repository, enqueued EnqueueUserMessageResult, _ RunState) error {
-				_, err := repo.FailRunWithEvent(ctx, enqueued.RunID, "tool_call_failed", "a later failure", `{"runId":"raw"}`)
-				return err
-			},
-		},
-		{
-			name: "FailRunWithEventPreservingExecution", to: lifecycleFailed, allowedFrom: terminalizeFrom, rejection: ErrRunNotFailable,
-			call: func(ctx context.Context, repo *Repository, enqueued EnqueueUserMessageResult, _ RunState) error {
-				_, err := repo.FailRunWithEventPreservingExecution(ctx, enqueued.RunID, "tool_call_failed", "a later failure", `{"runId":"raw"}`)
 				return err
 			},
 		},
@@ -166,19 +126,6 @@ func terminalCommands() []terminalCommand {
 					RunID: enqueued.RunID, AssistantMessageID: enqueued.AssistantMessageID,
 					ExpectedStateVersion: state.StateVersion, Cancellation: abandonedCancellationForTest(),
 				})
-				return err
-			},
-		},
-		{
-			name: "CancelRun", to: lifecycleCancelled, allowedFrom: terminalizeFrom, rejection: ErrRunNotCancellable, replaysExactly: true,
-			call: func(ctx context.Context, repo *Repository, enqueued EnqueueUserMessageResult, _ RunState) error {
-				return repo.CancelRun(ctx, enqueued.RunID, "client_cancelled")
-			},
-		},
-		{
-			name: "CancelRunWithEvent", to: lifecycleCancelled, allowedFrom: terminalizeFrom, rejection: ErrRunNotCancellable, replaysExactly: true,
-			call: func(ctx context.Context, repo *Repository, enqueued EnqueueUserMessageResult, _ RunState) error {
-				_, err := repo.CancelRunWithEvent(ctx, enqueued.RunID, "client_cancelled", `{"runId":"raw"}`)
 				return err
 			},
 		},
