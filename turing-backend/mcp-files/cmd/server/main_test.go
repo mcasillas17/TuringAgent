@@ -61,11 +61,11 @@ func TestHTTPServerConfiguresConnectionTimeouts(t *testing.T) {
 
 func TestMcpHandlerRejectsUnauthorizedRequests(t *testing.T) {
 	handler := newHandler(serverConfig{
-		filesToken:           "files-token",
-		approvalJwtSecret:    "jwt-secret",
-		orchestratorGRPCAddr: "orchestrator:3001",
-		internalToken:        "internal-token",
-		sandboxRoot:          t.TempDir(),
+		filesToken:            "files-token",
+		approvalJwtSecret:     "jwt-secret",
+		orchestratorGRPCAddr:  "orchestrator:3001",
+		approvalConsumerToken: "internal-token",
+		sandboxRoot:           t.TempDir(),
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
@@ -80,11 +80,11 @@ func TestMcpHandlerRejectsUnauthorizedRequests(t *testing.T) {
 
 func TestHealthEndpointIsAvailableWithoutBearerToken(t *testing.T) {
 	handler := newHandler(serverConfig{
-		filesToken:           "files-token",
-		approvalJwtSecret:    "jwt-secret",
-		orchestratorGRPCAddr: "orchestrator:3001",
-		internalToken:        "internal-token",
-		sandboxRoot:          t.TempDir(),
+		filesToken:            "files-token",
+		approvalJwtSecret:     "jwt-secret",
+		orchestratorGRPCAddr:  "orchestrator:3001",
+		approvalConsumerToken: "internal-token",
+		sandboxRoot:           t.TempDir(),
 	})
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	res := httptest.NewRecorder()
@@ -98,11 +98,11 @@ func TestHealthEndpointIsAvailableWithoutBearerToken(t *testing.T) {
 
 func TestHealthcheckProbeAcceptsReadyEndpoint(t *testing.T) {
 	handler := newHandler(serverConfig{
-		filesToken:           "files-token",
-		approvalJwtSecret:    "jwt-secret",
-		orchestratorGRPCAddr: "orchestrator:3001",
-		internalToken:        "internal-token",
-		sandboxRoot:          t.TempDir(),
+		filesToken:            "files-token",
+		approvalJwtSecret:     "jwt-secret",
+		orchestratorGRPCAddr:  "orchestrator:3001",
+		approvalConsumerToken: "internal-token",
+		sandboxRoot:           t.TempDir(),
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -114,11 +114,11 @@ func TestHealthcheckProbeAcceptsReadyEndpoint(t *testing.T) {
 
 func TestMcpHandlerListsFilesTools(t *testing.T) {
 	handler := newHandler(serverConfig{
-		filesToken:           "files-token",
-		approvalJwtSecret:    "jwt-secret",
-		orchestratorGRPCAddr: "orchestrator:3001",
-		internalToken:        "internal-token",
-		sandboxRoot:          t.TempDir(),
+		filesToken:            "files-token",
+		approvalJwtSecret:     "jwt-secret",
+		orchestratorGRPCAddr:  "orchestrator:3001",
+		approvalConsumerToken: "internal-token",
+		sandboxRoot:           t.TempDir(),
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
@@ -141,11 +141,11 @@ func TestMcpHandlerCallsFilesReadTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := newHandler(serverConfig{
-		filesToken:           "files-token",
-		approvalJwtSecret:    "jwt-secret",
-		orchestratorGRPCAddr: "orchestrator:3001",
-		internalToken:        "internal-token",
-		sandboxRoot:          sandbox,
+		filesToken:            "files-token",
+		approvalJwtSecret:     "jwt-secret",
+		orchestratorGRPCAddr:  "orchestrator:3001",
+		approvalConsumerToken: "internal-token",
+		sandboxRoot:           sandbox,
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files.read","arguments":{"path":"note.txt"}}}`))

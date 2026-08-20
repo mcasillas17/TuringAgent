@@ -76,14 +76,17 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 	requireNoEnvFile(t, "turing-orchestrator", orchestrator)
 	requireContainsAll(t, "turing-orchestrator", orchestrator,
 		"TURING_CLIENT_API_KEY:",
-		"TURING_INTERNAL_TOKEN:",
-		"MCP_SYSTEM_TOKEN_GENERAL:",
-		"MCP_FILES_TOKEN_GENERAL:",
+		"TURING_RUNTIME_TOKEN:",
+		"TURING_APPROVAL_CONSUMER_TOKEN:",
 		"TURING_APPROVAL_JWT_SECRET:",
 		"DATABASE_PATH:",
 		"SKILLS_ROOT:",
 		"OLLAMA_BASE_URL:",
-		"OPENAI_API_KEY:",
+		// The orchestrator never calls OpenAI or mcp-files: it only reports
+		// through GetConfig whether each is configured, so it holds a
+		// Compose-derived boolean instead of the actual secret value.
+		"MCP_FILES_ENABLED:",
+		"OPENAI_ENABLED:",
 		"TURING_AGENT_API_KEYS:",
 	)
 	requireContainsNone(t, "turing-orchestrator", orchestrator,
@@ -91,12 +94,22 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"MCP_SYSTEM_BASE_URL:",
 		"MCP_FILES_BASE_URL:",
 		"FILES_SANDBOX_ROOT:",
+		// A single shared internal token let a compromised approval consumer
+		// present the runtime's own credential; this must never come back.
+		"TURING_INTERNAL_TOKEN:",
+		// Dead here even before the split: the orchestrator never calls
+		// mcp-system and never used the token's value, only its presence.
+		"MCP_SYSTEM_TOKEN_GENERAL:",
+		// The orchestrator never calls mcp-files or OpenAI itself, so it must
+		// never hold the bearer token or API key those calls would need.
+		"MCP_FILES_TOKEN_GENERAL:",
+		"OPENAI_API_KEY:",
 	)
 
 	agent := composeServiceBlock(t, compose, "turing-agent-runtime-general")
 	requireNoEnvFile(t, "turing-agent-runtime-general", agent)
 	requireContainsAll(t, "turing-agent-runtime-general", agent,
-		"TURING_INTERNAL_TOKEN:",
+		"TURING_RUNTIME_TOKEN:",
 		"ORCHESTRATOR_GRPC_ADDR:",
 		"MCP_SYSTEM_BASE_URL:",
 		"MCP_FILES_BASE_URL:",
@@ -113,6 +126,10 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 	requireContainsNone(t, "turing-agent-runtime-general", agent,
 		"TURING_CLIENT_API_KEY:",
 		"TURING_APPROVAL_JWT_SECRET:",
+		// The runtime identity may claim jobs and read session history; it
+		// must never hold the approval consumer's credential, or a
+		// compromised runtime could impersonate mcp-files.
+		"TURING_APPROVAL_CONSUMER_TOKEN:",
 	)
 
 	system := composeServiceBlock(t, compose, "turing-mcp-system")
@@ -120,7 +137,8 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 	requireContainsAll(t, "turing-mcp-system", system, "MCP_SYSTEM_TOKEN_GENERAL:")
 	requireContainsNone(t, "turing-mcp-system", system,
 		"TURING_CLIENT_API_KEY:",
-		"TURING_INTERNAL_TOKEN:",
+		"TURING_RUNTIME_TOKEN:",
+		"TURING_APPROVAL_CONSUMER_TOKEN:",
 		"TURING_APPROVAL_JWT_SECRET:",
 		"OPENAI_API_KEY:",
 		"OLLAMA_CONTEXT_WINDOW_TOKENS:",
@@ -140,7 +158,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"dockerfile: turing-backend/mcp-files/Dockerfile",
 		"MCP_FILES_TOKEN_GENERAL:",
 		"TURING_APPROVAL_JWT_SECRET:",
-		"TURING_INTERNAL_TOKEN:",
+		"TURING_APPROVAL_CONSUMER_TOKEN:",
 		"ORCHESTRATOR_GRPC_ADDR:",
 		"FILES_SANDBOX_ROOT: /sandbox",
 	)
@@ -154,14 +172,19 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"TURING_AGENT_API_KEYS:",
 		"ORCHESTRATOR_INTERNAL_BASE_URL:",
 		"${FILES_SANDBOX_ROOT",
+		// mcp-files may only consume approvals; it must never hold the
+		// runtime's credential, or a compromised mcp-files could claim jobs
+		// and read conversation history through RuntimeService/SessionService.
+		"TURING_RUNTIME_TOKEN:",
 	)
 
 	allowedEnvironment := map[string][]string{
 		"turing-orchestrator": {
 			"TURING_CLIENT_API_KEY",
-			"TURING_INTERNAL_TOKEN",
-			"MCP_SYSTEM_TOKEN_GENERAL",
-			"MCP_FILES_TOKEN_GENERAL",
+			"TURING_RUNTIME_TOKEN",
+			"TURING_APPROVAL_CONSUMER_TOKEN",
+			"MCP_FILES_ENABLED",
+			"OPENAI_ENABLED",
 			"TURING_APPROVAL_JWT_SECRET",
 			"TURING_INTEGRATION_KEY",
 			"ORCHESTRATOR_PUBLIC_PORT",
@@ -172,7 +195,6 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"OLLAMA_MODEL",
 			"OLLAMA_CONTEXT_WINDOW_TOKENS",
 			"OPENAI_BASE_URL",
-			"OPENAI_API_KEY",
 			"OPENAI_MODEL",
 			"OPENAI_CONTEXT_WINDOW_TOKENS",
 			"TURING_AGENT_API_KEYS",
@@ -188,7 +210,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"LOG_LEVEL",
 		},
 		"turing-agent-runtime-general": {
-			"TURING_INTERNAL_TOKEN",
+			"TURING_RUNTIME_TOKEN",
 			"ORCHESTRATOR_GRPC_ADDR",
 			"TURING_WORKER_ID",
 			"TURING_JOB_TIMEOUT_MS",
@@ -224,7 +246,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"turing-mcp-files": {
 			"MCP_FILES_TOKEN_GENERAL",
 			"TURING_APPROVAL_JWT_SECRET",
-			"TURING_INTERNAL_TOKEN",
+			"TURING_APPROVAL_CONSUMER_TOKEN",
 			"ORCHESTRATOR_GRPC_ADDR",
 			"FILES_SANDBOX_ROOT",
 			"LOG_LEVEL",
@@ -1179,6 +1201,38 @@ func equalStrings(got, want []string) bool {
 	return true
 }
 
+// requireContainsNone must flag a secret used as a real environment key, but
+// must not flag the same name appearing only inside a different key's
+// Compose interpolation expression (the mechanism the orchestrator uses to
+// receive a derived boolean instead of the actual OpenAI/mcp-files secret).
+func TestRequireContainsNoneDistinguishesEnvironmentKeysFromInterpolationValues(t *testing.T) {
+	leaked := &recordingTB{}
+	requireContainsNone(leaked, "svc", "  OPENAI_API_KEY: ${OPENAI_API_KEY}", "OPENAI_API_KEY:")
+	if !leaked.failed {
+		t.Fatal("requireContainsNone did not flag OPENAI_API_KEY used as a real environment key")
+	}
+
+	notLeaked := &recordingTB{}
+	requireContainsNone(notLeaked, "svc", "  OPENAI_ENABLED: ${OPENAI_API_KEY:+true}", "OPENAI_API_KEY:")
+	if notLeaked.failed {
+		t.Fatal("requireContainsNone false-positived on OPENAI_API_KEY inside a different key's interpolation value")
+	}
+}
+
+// recordingTB is a minimal testing.TB stand-in that records whether Fatalf
+// was called instead of aborting the goroutine, so a helper's failure path
+// can be asserted on without the check itself failing this test.
+type recordingTB struct {
+	testing.TB
+	failed bool
+}
+
+func (r *recordingTB) Helper() {}
+
+func (r *recordingTB) Fatalf(string, ...any) {
+	r.failed = true
+}
+
 func requireNoEnvFile(t *testing.T, serviceName string, block string) {
 	t.Helper()
 	if strings.Contains(block, "env_file:") {
@@ -1195,11 +1249,27 @@ func requireContainsAll(t *testing.T, serviceName string, block string, snippets
 	}
 }
 
-func requireContainsNone(t *testing.T, serviceName string, block string, snippets ...string) {
+// requireContainsNone asserts a service's Compose block never uses a snippet.
+// A snippet ending in ":" is treated as a YAML mapping key and matched only
+// at the start of a line (ignoring leading whitespace): that distinguishes a
+// forbidden environment key (e.g. "OPENAI_API_KEY: ${OPENAI_API_KEY}") from
+// the same name appearing only inside a different key's interpolation
+// expression (e.g. "OPENAI_ENABLED: ${OPENAI_API_KEY:+true}", which never
+// hands the container the secret itself). Snippets not ending in ":" keep
+// plain substring matching, for checks about a value rather than a key.
+func requireContainsNone(t testing.TB, serviceName string, block string, snippets ...string) {
 	t.Helper()
 	for _, snippet := range snippets {
-		if strings.Contains(block, snippet) {
-			t.Fatalf("%s exposes unnecessary secret/config %q", serviceName, snippet)
+		if !strings.HasSuffix(snippet, ":") {
+			if strings.Contains(block, snippet) {
+				t.Fatalf("%s exposes unnecessary secret/config %q", serviceName, snippet)
+			}
+			continue
+		}
+		for _, line := range strings.Split(block, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), snippet) {
+				t.Fatalf("%s exposes unnecessary secret/config %q", serviceName, snippet)
+			}
 		}
 	}
 }

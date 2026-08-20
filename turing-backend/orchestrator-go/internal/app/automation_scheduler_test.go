@@ -17,7 +17,7 @@ import (
 // is worth a test of its own.
 func TestAppSchedulerFiresADueAutomationAndStops(t *testing.T) {
 	cfg := config.Config{
-		ClientAPIKey: "client", InternalToken: "internal", ApprovalJWTSecret: "approval-secret",
+		ClientAPIKey: "client", RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer", ApprovalJWTSecret: "approval-secret",
 		DatabasePath: t.TempDir() + "/turing.db", AutomationTickMS: 5, OllamaModel: "qwen2.5:7b",
 	}
 	application, err := New(cfg)
@@ -105,7 +105,7 @@ func TestAppSchedulerFiresADueAutomationAndStops(t *testing.T) {
 // say "create no work on this machine". Stop must still return.
 func TestAppWithNoAutomationTickNeverFiresAndStillStops(t *testing.T) {
 	cfg := config.Config{
-		ClientAPIKey: "client", InternalToken: "internal", ApprovalJWTSecret: "approval-secret",
+		ClientAPIKey: "client", RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer", ApprovalJWTSecret: "approval-secret",
 		DatabasePath: t.TempDir() + "/turing.db", AutomationTickMS: 0, OllamaModel: "qwen2.5:7b",
 	}
 	application, err := New(cfg)

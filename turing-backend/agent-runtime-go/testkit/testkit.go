@@ -17,7 +17,7 @@ import (
 
 type WorkerConfig struct {
 	Conn                *grpc.ClientConn
-	InternalToken       string
+	RuntimeToken        string
 	WorkerID            string
 	MaxConcurrentRuns   int
 	MaxToolCallsPerRun  int
@@ -42,7 +42,7 @@ type WorkerExecutor interface {
 }
 
 func RunWorker(ctx context.Context, cfg WorkerConfig) error {
-	client := orchestrator.New(cfg.Conn, cfg.InternalToken)
+	client := orchestrator.New(cfg.Conn, cfg.RuntimeToken)
 	openAIProvider, err := llm.NewOpenAICompatibleWithLimits(
 		cfg.OpenAIBaseURL,
 		cfg.OpenAIAPIKey,
@@ -96,7 +96,7 @@ func (cfg WorkerConfig) maxOutputTokens() int {
 }
 
 func RunWorkerWithExecutor(ctx context.Context, cfg WorkerConfig, executor WorkerExecutor) error {
-	client := orchestrator.New(cfg.Conn, cfg.InternalToken)
+	client := orchestrator.New(cfg.Conn, cfg.RuntimeToken)
 	var discoverTools func(context.Context) ([]*turingv1.DiscoveredTool, error)
 	if cfg.DiscoveredTools != nil {
 		discoverTools = func(context.Context) ([]*turingv1.DiscoveredTool, error) {
