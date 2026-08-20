@@ -234,9 +234,9 @@ The public lifecycle transitions are:
 | absent | queued | atomic enqueue |
 | queued | running | assignment starts |
 | running | waiting approval | approval becomes required |
-| waiting approval | running | the owned runtime attempt durably acknowledges that it resumed after the decision |
+| waiting approval | running | the owned runtime attempt reports ready after the decision and receives durable resume acceptance |
 | running or waiting approval | recovering | worker ownership becomes uncertain or fenced |
-| recovering | running | the same fenced attempt proves ownership and resumes |
+| recovering | running | the same still-owned attempt proves ownership and resumes |
 | recovering | queued | lease recovery requeues the job |
 | queued, running, waiting approval, or recovering | failed | canonical failure or exhausted recovery |
 | queued, running, waiting approval, or recovering | cancelled | typed cancellation or abandonment terminalization |
