@@ -10,6 +10,7 @@ import (
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/runstate"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -245,7 +246,7 @@ func mapSession(session repository.Session) *turingv1.Session {
 }
 
 func mapMessage(sessionID string, message repository.Message) *turingv1.Message {
-	return &turingv1.Message{
+	mapped := &turingv1.Message{
 		MessageId:   message.MessageID,
 		SessionId:   sessionID,
 		RunId:       message.RunID,
@@ -255,6 +256,14 @@ func mapMessage(sessionID string, message repository.Message) *turingv1.Message 
 		Sequence:    message.Sequence,
 		CreatedAt:   parseTimestamp(message.CreatedAt),
 	}
+	// Absent state stays absent. The repository returns state only for a
+	// message whose run correlation it could prove, and the projection returns
+	// none for a row it cannot vouch for; either way the client renders the
+	// neutral card rather than an outcome nobody stands behind.
+	if message.RunState != nil {
+		mapped.RunState = runstate.Project(*message.RunState)
+	}
+	return mapped
 }
 
 func mapRole(role string) turingv1.MessageRole {
