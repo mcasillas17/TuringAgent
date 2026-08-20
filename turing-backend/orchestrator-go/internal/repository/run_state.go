@@ -175,7 +175,8 @@ type runTransition struct {
 	// carried against the row, because the row no longer has one; it requires
 	// the absence the transition itself produced instead.
 	clearsOwnership bool
-	// rejection is returned when the row is terminal and therefore immutable.
+	// rejection is the sentinel this writer owes a caller when the row is not in
+	// a lifecycle it accepts — already terminal, or simply not there yet.
 	// Terminal writers keep their existing sentinels because callers outside
 	// this package already map them onto gRPC status codes.
 	rejection error
@@ -242,6 +243,13 @@ type runStateQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
+// runRowQuery reads a run with the assistant message it owns.
+//
+// The join cannot fan out: schema 0016 carries a partial unique index on
+// messages(run_id) where run_id is not null and role is 'assistant', which is
+// exactly this join's predicate, so a run matches at most one assistant row.
+// Without that index the guarded transitions below would be reading one row of
+// several and deciding content identity from whichever the planner returned.
 const runRowQuery = `
 	SELECT r.id, r.session_id, r.trace_id, r.user_message_id, COALESCE(r.assistant_message_id, ''),
 		r.status, r.outcome_reason, r.state_version, r.state_updated_at, r.finished_at,
@@ -421,11 +429,30 @@ func applyRunTransitionTx(
 		}
 	}
 
+	// The assistant message a terminal report names is checked here, before the
+	// duplicate and before the lifecycle, for the same reason approval
+	// ownership is. A report about a different run is not a late report and not
+	// a replay: answering it with "already done" or "this run cannot fail"
+	// would tell a caller its own run is finished when that run is still going.
+	// Failure and cancellation write no content, so this is the only place
+	// their identity is ever checked.
+	if content := transition.terminal; content != nil &&
+		content.assistantMessageID != "" && content.assistantMessageID != row.assistantMessageID {
+		return RunTransitionResult{}, ErrRunTransitionConflict
+	}
+
 	if isRunTransitionDuplicate(row, transition, expected) {
 		return RunTransitionResult{State: row.state(), Duplicate: true}, nil
 	}
 	if !slices.Contains(transition.allowedFrom, row.lifecycle) {
-		if isTerminalLifecycle(row.lifecycle) && transition.rejection != nil {
+		// A refused command answers with its own writer's sentinel wherever it
+		// has one, terminal source or not. Callers already branch on those
+		// sentinels and the gRPC boundary maps them onto FailedPrecondition; a
+		// generic conflict in their place turns a precondition a caller can act
+		// on into an unknown internal error. Version and identity conflicts
+		// below keep the conflict sentinel, because those are lost races rather
+		// than refused preconditions.
+		if transition.rejection != nil {
 			return RunTransitionResult{}, transition.rejection
 		}
 		return RunTransitionResult{}, ErrRunTransitionConflict
@@ -544,9 +571,9 @@ func isRunTransitionDuplicate(row runRow, transition runTransition, expected int
 		return false
 	}
 	if content := transition.terminal; content != nil {
-		if content.assistantMessageID != "" && content.assistantMessageID != row.assistantMessageID {
-			return false
-		}
+		// The named assistant message is already proven to be this run's own
+		// by the identity gate above, so what is left to compare is the
+		// content the row committed.
 		if content.sha256 != row.contentSHA256 {
 			return false
 		}

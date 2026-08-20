@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -739,5 +740,157 @@ func TestClaimingAJobForANonQueuedRunFailsInsteadOfPanicking(t *testing.T) {
 	}
 	if claimed.JobID != "" {
 		t.Fatalf("claimed %+v for a run that is not queued", claimed)
+	}
+}
+
+// TestTerminalReportsFenceAForeignAssistantMessage covers the identity a
+// failure and a cancellation still carry even though neither writes content.
+//
+// A terminal report names the assistant message it is finishing. If that name
+// does not match the message this run owns, the report is about some other run
+// — a stale worker holding an old assignment, or a caller that mixed up two
+// runs — and committing it would terminalize the wrong conversation while
+// quietly leaving the named message alone. Completion is fenced by the same
+// rule, so the check does not depend on whether bytes happen to be written.
+func TestTerminalReportsFenceAForeignAssistantMessage(t *testing.T) {
+	const foreignMessageID = "msg_belongs_to_another_run"
+	for name, report := range map[string]func(ctx context.Context, repo *Repository, runID string, assistantMessageID string, version int64) error{
+		"FailRunCanonical": func(ctx context.Context, repo *Repository, runID string, assistantMessageID string, version int64) error {
+			_, err := repo.FailRunCanonical(ctx, FailRunInput{
+				RunID: runID, AssistantMessageID: assistantMessageID,
+				ExpectedStateVersion: version, Failure: providerFailureForTest(),
+			})
+			return err
+		},
+		"CancelRunCanonical": func(ctx context.Context, repo *Repository, runID string, assistantMessageID string, version int64) error {
+			_, err := repo.CancelRunCanonical(ctx, CancelRunInput{
+				RunID: runID, AssistantMessageID: assistantMessageID,
+				ExpectedStateVersion: version, Cancellation: abandonedCancellationForTest(),
+			})
+			return err
+		},
+		"CompleteRunCanonical": func(ctx context.Context, repo *Repository, runID string, assistantMessageID string, version int64) error {
+			_, err := repo.CompleteRunCanonical(ctx, CompleteRunInput{
+				RunID: runID, AssistantMessageID: assistantMessageID,
+				Content: "the answer", ExpectedStateVersion: version,
+			})
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := New(openTestDB(t))
+			ctx := context.Background()
+			enqueued, _, running := runningRun(t, repo, "worker-foreign-message")
+			events := countRunEvents(t, repo, enqueued.RunID)
+
+			err := report(ctx, repo, enqueued.RunID, foreignMessageID, running.StateVersion)
+			if !errors.Is(err, ErrRunTransitionConflict) {
+				t.Fatalf("%s naming another run's assistant message = %v, want %v", name, err, ErrRunTransitionConflict)
+			}
+			// The run is still running, so nothing may read as finished.
+			assertUnchangedTerminalIdentity(t, repo, enqueued, running, events, name, err, foreignMessageID)
+		})
+	}
+}
+
+// TestDuplicateTerminalReplayWithAForeignAssistantMessageIsAConflict is the
+// same rule on the replay path. The run is already terminal, so a refusal here
+// is easy to answer with "this run cannot fail" — but that sentinel tells a
+// caller its report was simply late, when in fact the report was about a
+// different run and its own run is still unfinished.
+func TestDuplicateTerminalReplayWithAForeignAssistantMessageIsAConflict(t *testing.T) {
+	const foreignMessageID = "msg_belongs_to_another_run"
+	for name, replay := range map[string]struct {
+		terminalize func(ctx context.Context, repo *Repository, enqueued EnqueueUserMessageResult, version int64) error
+		repeat      func(ctx context.Context, repo *Repository, runID string, assistantMessageID string, version int64) error
+	}{
+		"failure": {
+			terminalize: func(ctx context.Context, repo *Repository, enqueued EnqueueUserMessageResult, version int64) error {
+				_, err := repo.FailRunCanonical(ctx, FailRunInput{
+					RunID: enqueued.RunID, AssistantMessageID: enqueued.AssistantMessageID,
+					ExpectedStateVersion: version, Failure: providerFailureForTest(),
+				})
+				return err
+			},
+			repeat: func(ctx context.Context, repo *Repository, runID string, assistantMessageID string, version int64) error {
+				_, err := repo.FailRunCanonical(ctx, FailRunInput{
+					RunID: runID, AssistantMessageID: assistantMessageID,
+					ExpectedStateVersion: version, Failure: providerFailureForTest(),
+				})
+				return err
+			},
+		},
+		"cancellation": {
+			terminalize: func(ctx context.Context, repo *Repository, enqueued EnqueueUserMessageResult, version int64) error {
+				_, err := repo.CancelRunCanonical(ctx, CancelRunInput{
+					RunID: enqueued.RunID, AssistantMessageID: enqueued.AssistantMessageID,
+					ExpectedStateVersion: version, Cancellation: abandonedCancellationForTest(),
+				})
+				return err
+			},
+			repeat: func(ctx context.Context, repo *Repository, runID string, assistantMessageID string, version int64) error {
+				_, err := repo.CancelRunCanonical(ctx, CancelRunInput{
+					RunID: runID, AssistantMessageID: assistantMessageID,
+					ExpectedStateVersion: version, Cancellation: abandonedCancellationForTest(),
+				})
+				return err
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := New(openTestDB(t))
+			ctx := context.Background()
+			enqueued, _, running := runningRun(t, repo, "worker-foreign-replay")
+			if err := replay.terminalize(ctx, repo, enqueued, running.StateVersion); err != nil {
+				t.Fatalf("terminalize: %v", err)
+			}
+			committed, err := repo.GetRunState(ctx, enqueued.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			events := countRunEvents(t, repo, enqueued.RunID)
+
+			err = replay.repeat(ctx, repo, enqueued.RunID, foreignMessageID, running.StateVersion)
+			if !errors.Is(err, ErrRunTransitionConflict) {
+				t.Fatalf("%s replay naming another run's assistant message = %v, want %v", name, err, ErrRunTransitionConflict)
+			}
+			assertUnchangedTerminalIdentity(t, repo, enqueued, committed, events, name, err, foreignMessageID)
+		})
+	}
+}
+
+// assertUnchangedTerminalIdentity checks the two things a fenced report owes:
+// it changed nothing, and it said so without naming either message. An error
+// carrying the run's own assistant message ID hands a caller who guessed wrong
+// the identity it failed to guess.
+func assertUnchangedTerminalIdentity(
+	t *testing.T,
+	repo *Repository,
+	enqueued EnqueueUserMessageResult,
+	want RunState,
+	wantEvents int,
+	name string,
+	err error,
+	foreignMessageID string,
+) {
+	t.Helper()
+	ctx := context.Background()
+	state, stateErr := repo.GetRunState(ctx, enqueued.RunID)
+	if stateErr != nil {
+		t.Fatal(stateErr)
+	}
+	if state != want {
+		t.Fatalf("fenced %s changed the run: %+v, want %+v", name, state, want)
+	}
+	if after := countRunEvents(t, repo, enqueued.RunID); after != wantEvents {
+		t.Fatalf("fenced %s appended %d events", name, after-wantEvents)
+	}
+	if got := assistantContent(t, repo, enqueued.AssistantMessageID); got != "" {
+		t.Fatalf("fenced %s wrote assistant content %q", name, got)
+	}
+	for _, secret := range []string{enqueued.AssistantMessageID, foreignMessageID} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("fenced %s error %q leaks a message identity", name, err)
+		}
 	}
 }

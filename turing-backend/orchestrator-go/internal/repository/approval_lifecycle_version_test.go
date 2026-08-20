@@ -160,3 +160,100 @@ func TestApprovalDecisionCommitsOneVersionAndOneProjection(t *testing.T) {
 	assertSnapshotMatchesState(t, decodeRunStateSnapshot(t, decided.ApprovalEvent), resumed)
 	assertDurableSnapshot(t, repo, decided.ApprovalEvent, resumed)
 }
+
+// TestSecondApprovalDecisionOnAResumedRunStillProjectsIt covers the case a run
+// with two pending authorizations creates. The first decision resumes the run,
+// so the second one arrives at a run that is already running: its approval row
+// really does change, but its lifecycle does not.
+//
+// The decision still has to be announced. Without an event the approval stays
+// pending in every client that is watching, and the user is asked to authorize
+// something they already authorized.
+func TestSecondApprovalDecisionOnAResumedRunStillProjectsIt(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	enqueued, _ := approvalPairFixture(t, repo, "worker-two-approvals")
+	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
+		ToolCallID: "call_approval_second", RunID: enqueued.RunID, ModelToolCallID: "model_approval_second",
+	}, "general_assistant", "files", "files.update", `{"path":"second.txt"}`, "sha256:second"); err != nil {
+		t.Fatalf("RecordToolCallBefore: %v", err)
+	}
+	first, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, "call_approval_pair",
+		"general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:pair", "2099-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatalf("CreateApprovalWithEvent: %v", err)
+	}
+	waiting, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, secondRequested, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, "call_approval_second",
+		"general_assistant", "files.update", `{"path":"second.txt"}`, "sha256:second", "2099-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatalf("second CreateApprovalWithEvent: %v", err)
+	}
+	// The run was already waiting, so the second request is the same shape of
+	// event as the second decision below: no lifecycle change, and a projection
+	// of the state as it stands rather than no projection at all.
+	if secondRequested.EventID == "" || secondRequested.Type != "approval.requested" {
+		t.Fatalf("second request event = %+v, want a durable approval.requested", secondRequested)
+	}
+	stillWaiting, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stillWaiting != waiting {
+		t.Fatalf("the second request changed the run: %+v, want %+v", stillWaiting, waiting)
+	}
+	assertSnapshotMatchesState(t, decodeRunStateSnapshot(t, secondRequested), waiting)
+	assertDurableSnapshot(t, repo, secondRequested, waiting)
+	if _, err := repo.ApproveApprovalWithEvent(ctx, first.ApprovalID, "approval-token-1", sql.NullString{}, now()); err != nil {
+		t.Fatalf("first ApproveApprovalWithEvent: %v", err)
+	}
+	resumed, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Lifecycle != lifecycleRunning {
+		t.Fatalf("state after the first decision = %q, want running", resumed.Lifecycle)
+	}
+	events := countRunEvents(t, repo, enqueued.RunID)
+
+	decided, err := repo.ApproveApprovalWithEvent(ctx, second.ApprovalID, "approval-token-2", sql.NullString{}, now())
+	if err != nil {
+		t.Fatalf("second ApproveApprovalWithEvent: %v", err)
+	}
+	if !decided.Changed || decided.Approval.Status != "approved" {
+		t.Fatalf("second decision = %+v, want a committed approval", decided)
+	}
+	// A publisher only publishes what carries an ID, so an empty event is the
+	// same as no event to every subscriber.
+	if decided.ApprovalEvent.EventID == "" || decided.ApprovalEvent.Type != "approval.approved" {
+		t.Fatalf("second decision event = %+v, want a durable approval.approved", decided.ApprovalEvent)
+	}
+	if after := countRunEvents(t, repo, enqueued.RunID); after != events+1 {
+		t.Fatalf("the second decision appended %d events, want exactly 1", after-events)
+	}
+	// The run was already running: the decision changed an approval, not the
+	// lifecycle, so nothing about the run may move.
+	unchanged, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged != resumed {
+		t.Fatalf("the second decision changed the run: %+v, want %+v", unchanged, resumed)
+	}
+	var stateChanged int
+	if err := repo.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM events WHERE run_id = ? AND type = ?`,
+		enqueued.RunID, runStateChangedEventType).Scan(&stateChanged); err != nil {
+		t.Fatal(err)
+	}
+	if stateChanged != 0 {
+		t.Fatalf("the second decision appended %d redundant %s events", stateChanged, runStateChangedEventType)
+	}
+	// The projection is the canonical state as it stands, so a client that
+	// reopens on this event sees the run it is actually looking at.
+	assertSnapshotMatchesState(t, decodeRunStateSnapshot(t, decided.ApprovalEvent), resumed)
+	assertDurableSnapshot(t, repo, decided.ApprovalEvent, resumed)
+}

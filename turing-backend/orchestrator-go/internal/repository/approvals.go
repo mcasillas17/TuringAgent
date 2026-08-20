@@ -164,8 +164,11 @@ func (r *Repository) CreateApprovalWithEvent(ctx context.Context, runID string, 
 		event = transition.Events[0]
 	} else {
 		// The run was already waiting on an earlier approval, so its lifecycle
-		// did not change. The request still has to be announced.
-		event, err = appendApprovalLifecycleEventTx(ctx, tx, record, "approval.requested", createdAt)
+		// did not change. The request still has to be announced, on the same
+		// terms as the decision below: inside this transaction, carrying the
+		// run state as it stands, so a client cannot receive one
+		// approval.requested with a state projection and another without.
+		event, err = appendApprovalRunStateEventTx(ctx, tx, record, "approval.requested", transition.State, createdAt)
 		if err != nil {
 			return ApprovalRecord{}, Event{}, err
 		}
@@ -297,6 +300,19 @@ func (r *Repository) ApproveApprovalWithEvent(ctx context.Context, approvalID st
 	var event Event
 	if len(transition.Events) > 0 {
 		event = transition.Events[0]
+	} else {
+		// The run is already running, because an earlier decision on another
+		// pending approval resumed it. This decision changed an approval and
+		// not the lifecycle, so the guarded transition committed nothing — but
+		// the decision still has to be announced, or the approval stays pending
+		// in every client watching and the user is asked to authorize something
+		// they already authorized. It is appended inside this same transaction,
+		// carrying the run state as it stands, so the projection can never
+		// disagree with the row it describes.
+		event, err = appendApprovalRunStateEventTx(ctx, tx, record, "approval.approved", transition.State, decidedAt)
+		if err != nil {
+			return ApprovalTerminalization{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return ApprovalTerminalization{}, err
@@ -707,6 +723,31 @@ func appendApprovalLifecycleEventTx(ctx context.Context, tx *sql.Tx, approval Ap
 		return Event{}, err
 	}
 	payloadJSON, err := marshalEventPayload(approvalLifecyclePayload(approval, traceID, eventType))
+	if err != nil {
+		return Event{}, err
+	}
+	return appendRunEventTx(ctx, tx, sessionID, approval.RunID, traceID, eventType, payloadJSON, createdAt)
+}
+
+// appendApprovalRunStateEventTx announces an approval lifecycle event on a run
+// whose lifecycle did not change, carrying the state that is actually current.
+//
+// It is the fallback for the two events that normally ARE run transitions:
+// when a run already has a pending approval, a second request does not move it
+// to waiting approval, and when an earlier decision already resumed it, a
+// second decision does not move it to running. The approval row still changed,
+// so the event is owed — and it carries the same snapshot the transition-borne
+// event would have carried, so one event type never arrives sometimes with a
+// run state and sometimes without.
+//
+// The state must be the one the guarded transition just reported, read under
+// the same transaction, rather than a fresh read that could disagree with it.
+func appendApprovalRunStateEventTx(ctx context.Context, tx *sql.Tx, approval ApprovalRecord, eventType string, state RunState, createdAt string) (Event, error) {
+	var sessionID, traceID string
+	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, approval.RunID).Scan(&sessionID, &traceID); err != nil {
+		return Event{}, err
+	}
+	payloadJSON, err := marshalRunStatePayload(approvalLifecyclePayload(approval, traceID, eventType), state)
 	if err != nil {
 		return Event{}, err
 	}

@@ -1331,6 +1331,58 @@ func TestApprovalRationaleSurvivesDatabaseRestart(t *testing.T) {
 	}
 }
 
+// TestEveryApprovalDecisionOnARunIsPublished covers a run that asked for two
+// authorizations before either was answered. The first decision resumes the
+// run; the second one arrives at a run that is already running, so it commits
+// no lifecycle change — but the user did decide, and a decision nobody
+// publishes leaves the request on screen forever.
+func TestEveryApprovalDecisionOnARunIsPublished(t *testing.T) {
+	h := newApprovalHarness(t)
+	enqueued := h.createRunningToolCall(t)
+	if err := h.repo.RecordToolCallBefore(context.Background(), repository.ToolCallRecord{ToolCallID: "call_2", RunID: enqueued.RunID},
+		"general_assistant", "files", "files.update", `{"path":"second.txt"}`, "sha256:second"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := h.service.CreateApprovalForTool(context.Background(), enqueued.RunID, "call_1", "general_assistant", "files.update", map[string]any{"path": "note.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := h.service.CreateApprovalForTool(context.Background(), enqueued.RunID, "call_2", "general_assistant", "files.update", map[string]any{"path": "second.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
+	defer unsubscribe()
+	client := turingv1.NewApprovalServiceClient(h.conn)
+
+	for _, approvalID := range []string{first, second} {
+		if _, err := client.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
+			t.Fatalf("ApproveApproval %s: %v", approvalID, err)
+		}
+	}
+	var approved []string
+	for len(approved) < 2 {
+		select {
+		case event := <-published:
+			if event.Type != "approval.approved" {
+				continue
+			}
+			var payload struct {
+				ApprovalID string `json:"approvalId"`
+			}
+			if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+				t.Fatal(err)
+			}
+			approved = append(approved, payload.ApprovalID)
+		case <-time.After(time.Second):
+			t.Fatalf("published approval decisions = %v, want both %s and %s", approved, first, second)
+		}
+	}
+	if want := []string{first, second}; !reflect.DeepEqual(approved, want) {
+		t.Fatalf("published approval decisions = %v, want %v", approved, want)
+	}
+}
+
 func TestDenyApprovalPublishesCommittedTerminalRunEventOnlyOnce(t *testing.T) {
 	h := newApprovalHarness(t)
 	enqueued := h.createRunningToolCall(t)

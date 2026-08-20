@@ -1878,6 +1878,25 @@ func TestRunCompletedMapsStateConflictToFailedPrecondition(t *testing.T) {
 	}
 }
 
+// TestRunCompletedOnARequeuedRunMapsToFailedPrecondition covers the other
+// refusal shape. A run that was requeued while its old worker was still
+// finishing is nonterminal, not immutable, but reporting completion for it is
+// still a precondition failure the worker can act on — and a worker that gets
+// an unknown internal error instead retries a report that can never succeed.
+func TestRunCompletedOnARequeuedRunMapsToFailedPrecondition(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "still queued")
+
+	err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{RunCompleted: &turingv1.RuntimeRunCompleted{
+		RunId:              enqueued.RunID,
+		AssistantMessageId: enqueued.AssistantMessageID,
+		Content:            "never ran",
+	}}})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("RunCompleted on a queued run = %v (%v), want FailedPrecondition", err, status.Code(err))
+	}
+}
+
 func TestRunFailedMapsStateConflictToFailedPrecondition(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.createRunningRunResult(t, "already cancelled")

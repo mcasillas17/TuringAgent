@@ -1160,6 +1160,13 @@ func (r *Repository) requeueAssignment(
 	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
 		return err
 	}
+	// Both transitions append durable projections, and this signature returns
+	// only an error, so its three callers publish nothing live: a client that
+	// is watching sees the requeue when it replays, not when it happens.
+	// Widening these three signatures is the streaming task's work, and doing
+	// it here would change public shapes that task has to change anyway. What
+	// this boundary owes today is that the events exist, in order, on commit.
+	//
 	// An assignment that was aborted before or during send leaves nobody
 	// owning the run, so it goes back to the queue the same way every other
 	// lost assignment does: through recovering, with both versions committed
