@@ -624,9 +624,19 @@ func deriveRunOutcome(row legacyRunRow) (runOutcomeBackfill, error) {
 // stored as running or waiting-approval while its execution lease is uncertain
 // or fenced has no worker known to be making progress, so it migrates to
 // recovering rather than claiming forward motion.
+//
+// A row stored as failed under the client-cancellation transport code is
+// reclassified for the opposite reason: it was never a failure. Older call
+// sites filed the disconnect signal as a run failure, and migrating it as such
+// would report a system fault to a user whose client simply went away.
 func deriveRunLifecycle(row legacyRunRow) (string, error) {
 	switch row.status {
-	case "queued", "completed", "failed", "cancelled":
+	case "queued", "completed", "cancelled":
+		return row.status, nil
+	case "failed":
+		if isLegacyTransportCancellation(row) {
+			return "cancelled", nil
+		}
 		return row.status, nil
 	case "running", "waiting_approval":
 		if row.executionActive == 1 && (row.executionState == "uncertain" || row.executionState == "fenced") {
@@ -638,10 +648,25 @@ func deriveRunLifecycle(row legacyRunRow) (string, error) {
 	}
 }
 
-// deriveStateUpdatedAt takes the most recent timestamp the row actually has and
-// re-renders it at the canonical fixed width. A present but unparseable value
-// fails the migration: writing a variable-width or offset-bearing string into a
-// text-compared ordering column is the bug this format exists to prevent.
+// isLegacyTransportCancellation recognizes the one signal the transport writes
+// when a client goes away. Only the exact server-chosen code counts. Freeform
+// cancellation prose is never consulted: a human sentence cannot distinguish a
+// deliberate stop from a dropped connection, and reading intent out of it would
+// invent the very fact the abandoned outcome exists to avoid claiming.
+func isLegacyTransportCancellation(row legacyRunRow) bool {
+	return row.errorCode.Valid && row.errorCode.String == runoutcome.CodeClientCancelled
+}
+
+// deriveStateUpdatedAt takes the most authoritative lifecycle timestamp the row
+// actually has — finished_at, else started_at, else created_at — and re-renders
+// it at the canonical fixed width. The order is precedence, not recency: legacy
+// rows were written by several call sites with no shared clock discipline, so a
+// skewed started_at must not outrank the finish that ended the run. An empty
+// string is treated as absent, because SQLite stores it as a non-NULL value a
+// legacy writer left behind rather than as a time. A present but unparseable
+// value fails the migration: writing a variable-width or offset-bearing string
+// into a text-compared ordering column is the bug this format exists to
+// prevent.
 func deriveStateUpdatedAt(row legacyRunRow) (string, error) {
 	source := row.createdAt
 	if row.startedAt.Valid && row.startedAt.String != "" {
@@ -1041,9 +1066,15 @@ func rewriteRunStepNotice(row legacyEventRow) (string, bool, error) {
 	case payloadString(legacy, "reason") == "worker_unavailable":
 		category = runoutcome.NoticeRecoveryRetry
 	}
-	rewritten := map[string]any{
-		"stateVersion": row.state.StateVersion,
-		"category":     string(category),
+	rewritten := map[string]any{"category": string(category)}
+	// The version is published only when a run row actually supplied one. On
+	// the wire stateVersion is an int64 whose zero means absence, so writing
+	// the Go zero value for an event whose run is gone would not read as "no
+	// version known" — it would read as a real version older than every stored
+	// one, and a client reconciling by version would treat the notice as stale
+	// rather than as unattributed.
+	if row.runFound {
+		rewritten["stateVersion"] = row.state.StateVersion
 	}
 	// Counters are published only when they pass the notice constructor's
 	// bounds. A legacy row with an impossible budget keeps its category and

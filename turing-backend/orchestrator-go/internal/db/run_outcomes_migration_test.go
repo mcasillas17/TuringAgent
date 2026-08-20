@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runcorrelation"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
 
@@ -1017,12 +1018,22 @@ func TestRunOutcomeMigrationRestoresForeignKeysAfterSuccessAndRollback(t *testin
 // constraint stands in its way.
 func mutateAtMigrationPhase(t *testing.T, target string, statement string) {
 	t.Helper()
+	mutateAtMigrationPhaseStatements(t, target, statement)
+}
+
+// mutateAtMigrationPhaseStatements is the multi-statement form, for seams that
+// need to disarm a guard before writing the row it would have rejected. The
+// statements run in order inside the live migration transaction.
+func mutateAtMigrationPhaseStatements(t *testing.T, target string, statements ...string) {
+	t.Helper()
 	migrationPhaseHook = func(ctx context.Context, _ string, phase string, tx *sql.Tx) error {
 		if phase != target {
 			return nil
 		}
-		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("seed inconsistency at %s: %w", phase, err)
+		for _, statement := range statements {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("seed inconsistency at %s: %w", phase, err)
+			}
 		}
 		return nil
 	}
@@ -1162,6 +1173,182 @@ func TestRunOutcomeMigrationFailsClosedOnPrecommitForeignKeyViolation(t *testing
 			}
 			assertNoForeignKeyViolations(t, ctx, reopened)
 		})
+	}
+}
+
+// TestRunOutcomeMigrationAfterHookValidatesCanonicalStateWithoutTheSchemaCheck
+// proves the After hook's canonical validation is load-bearing rather than
+// decorative. In normal operation the rebuilt table's CHECK constraints reject
+// the same values first, which is exactly why a reviewer can mistake the Go
+// pass for dead code. Here the CHECKs are switched off for the duration of one
+// injected write — the situation a future ALTER, a relaxed constraint, or a
+// direct table edit would create — and the migration must still refuse to
+// commit state its readers were promised.
+func TestRunOutcomeMigrationAfterHookValidatesCanonicalStateWithoutTheSchemaCheck(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		column string
+		value  string
+	}{
+		{name: "outcome outside the closed vocabulary", column: "outcome_reason", value: `'legacy_unknown'`},
+		{name: "version below the first stored one", column: "state_version", value: `0`},
+		{name: "variable-width state timestamp", column: "state_updated_at", value: `'2026-01-01T00:00:00Z'`},
+		{name: "truncated content digest", column: "assistant_content_sha256", value: `'deadbeef'`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "canonical-gate.db")
+			database := openMigratedThroughLegacy(t, ctx, path)
+			seedLegacySession(t, ctx, database, "sess_canonical_gate")
+			seedLegacyRun(t, ctx, database, legacyRun{
+				id: "run_canonical_gate", sessionID: "sess_canonical_gate", status: "failed",
+				errorCode: "weird_legacy_code", errorMessage: "provider stack trace",
+				assistantMessageID: "msg_canonical_gate", assistantContent: "partial answer",
+				finishedAt: "2026-01-01T00:00:07.000000000Z",
+			})
+			seedRunOwnedChildren(t, ctx, database, "sess_canonical_gate", "run_canonical_gate", "msg_canonical_gate")
+			mutateAtMigrationPhaseStatements(t, migrationPhaseAfterIndexes,
+				`PRAGMA ignore_check_constraints = ON`,
+				`UPDATE agent_runs SET `+testCase.column+` = `+testCase.value+
+					` WHERE id = 'run_canonical_gate'`,
+				`PRAGMA ignore_check_constraints = OFF`,
+			)
+
+			err := applyRunOutcomesMigration(t, ctx, database)
+			if !errors.Is(err, errRunOutcomeCanonicalFields) {
+				t.Fatalf("ApplyMigrations error = %v, want the canonical state sentinel", err)
+			}
+			if got := err.Error(); got != "run outcome migration produced invalid canonical state" {
+				t.Fatalf("error = %q, want exactly the value-free sentinel", got)
+			}
+			if err := database.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			reopened, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			assertPreMigrationRunShape(t, ctx, reopened, "run_canonical_gate",
+				"weird_legacy_code", "provider stack trace")
+			assertRunOwnedChildrenIntact(t, ctx, reopened, "run_canonical_gate")
+			assertNoForeignKeyViolations(t, ctx, reopened)
+		})
+	}
+}
+
+// TestRunOutcomeMigrationAfterHookValidatesCorrelationWithoutTheUniqueIndex is
+// the same argument for the rebuilt correlation. The partial unique indexes
+// created moments earlier would normally reject a second claimant, so the
+// injected statement drops the one that would have fired and then creates the
+// ambiguity by hand. The After hook is the remaining guard, and it has to fail
+// closed with the same value-free conflict the preflight uses.
+func TestRunOutcomeMigrationAfterHookValidatesCorrelationWithoutTheUniqueIndex(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		index      string
+		statements []string
+	}{
+		{
+			name:  "two runs claim one assistant message",
+			index: "idx_runs_assistant_message_unique",
+			statements: []string{
+				`UPDATE agent_runs SET assistant_message_id = 'msg_correlation_gate'
+					WHERE id = 'run_correlation_second'`,
+			},
+		},
+		{
+			name:  "two assistant messages claim one run",
+			index: "idx_messages_assistant_run_unique",
+			statements: []string{
+				`INSERT INTO messages (id, session_id, run_id, role, content, content_type, sequence, created_at)
+					VALUES ('msg_correlation_extra', 'sess_correlation_gate', 'run_correlation_gate',
+						'assistant', 'second answer', 'text', 99, '2026-01-01T00:00:00.000000000Z')`,
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "correlation-gate.db")
+			database := openMigratedThroughLegacy(t, ctx, path)
+			seedLegacySession(t, ctx, database, "sess_correlation_gate")
+			seedLegacyRun(t, ctx, database, legacyRun{
+				id: "run_correlation_gate", sessionID: "sess_correlation_gate", status: "failed",
+				errorCode: "weird_legacy_code", errorMessage: "provider stack trace",
+				assistantMessageID: "msg_correlation_gate", assistantContent: "partial answer",
+				finishedAt: "2026-01-01T00:00:07.000000000Z",
+			})
+			seedLegacyRun(t, ctx, database, legacyRun{
+				id: "run_correlation_second", sessionID: "sess_correlation_gate", status: "completed",
+			})
+			seedRunOwnedChildren(t, ctx, database, "sess_correlation_gate", "run_correlation_gate",
+				"msg_correlation_gate")
+			mutateAtMigrationPhaseStatements(t, migrationPhaseAfterIndexes,
+				append([]string{`DROP INDEX ` + testCase.index}, testCase.statements...)...)
+
+			err := applyRunOutcomesMigration(t, ctx, database)
+			if !errors.Is(err, runcorrelation.ErrConflict) {
+				t.Fatalf("ApplyMigrations error = %v, want the correlation conflict sentinel", err)
+			}
+			if got := err.Error(); got != "run/message correlation conflict" {
+				t.Fatalf("error = %q, want exactly the value-free sentinel", got)
+			}
+			if err := database.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			reopened, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			assertPreMigrationRunShape(t, ctx, reopened, "run_correlation_gate",
+				"weird_legacy_code", "provider stack trace")
+			assertRunOwnedChildrenIntact(t, ctx, reopened, "run_correlation_gate")
+			assertNoForeignKeyViolations(t, ctx, reopened)
+		})
+	}
+}
+
+// TestMigrationSectionsSkipStatementFreeSlices covers the other half of the
+// marker contract. Rejecting a bad marker sequence is tested above; this is the
+// good sequence with nothing between two markers, which the runner must hand to
+// the phase seam without handing an empty string to the driver.
+func TestMigrationSectionsSkipStatementFreeSlices(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		section string
+		want    bool
+	}{
+		{name: "blank", section: "\n  \n\t\n", want: true},
+		{name: "whole-line comments only", section: "-- rebuilt above\n\n--   trailing note\n", want: true},
+		{name: "empty", section: "", want: true},
+		{name: "a statement", section: "\n-- explains the next line\nUPDATE agent_runs SET error_message = NULL;\n", want: false},
+		{name: "a statement with a trailing comment", section: "SELECT 1; -- not a whole-line comment\n", want: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := sqlSectionIsEmpty(testCase.section); got != testCase.want {
+				t.Fatalf("sqlSectionIsEmpty(%q) = %v, want %v", testCase.section, got, testCase.want)
+			}
+		})
+	}
+
+	// A well-formed file whose middle section carries nothing still produces
+	// all three markers, so every rollback seam stays reachable.
+	sections, err := migrationSections(runOutcomesMigrationVersion,
+		"SELECT 1;\n-- marker: after-rebuild\n-- nothing to scrub here\n-- marker: after-scrub\nSELECT 2;\n-- marker: after-indexes\n")
+	if err != nil {
+		t.Fatalf("migrationSections: %v", err)
+	}
+	if len(sections) != 3 {
+		t.Fatalf("sections = %d, want 3", len(sections))
+	}
+	if !sqlSectionIsEmpty(sections[1].SQL) {
+		t.Fatalf("middle section %q, want it recognized as statement-free", sections[1].SQL)
+	}
+	if sections[1].Marker != migrationPhaseAfterScrub {
+		t.Fatalf("middle marker = %q, want %q", sections[1].Marker, migrationPhaseAfterScrub)
 	}
 }
 
@@ -1400,6 +1587,14 @@ func TestRunOutcomeMigrationBackfillsEveryLifecycleAndOutcome(t *testing.T) {
 			wantLifecycle: "failed", wantReason: "internal_failure",
 		},
 		{
+			// The one legacy shape whose stored status is not its honest
+			// lifecycle: older call sites filed the client-disconnect signal
+			// as a run failure.
+			name:          "failed under the client cancellation transport code",
+			run:           legacyRun{status: "failed", errorCode: "client_cancelled", errorMessage: "stream gone"},
+			wantLifecycle: "cancelled", wantReason: "abandoned",
+		},
+		{
 			name:          "cancelled",
 			run:           legacyRun{status: "cancelled", cancellationReason: "client disconnected"},
 			wantLifecycle: "cancelled", wantReason: "abandoned",
@@ -1516,6 +1711,13 @@ func TestRunOutcomeMigrationBackfillsUncertainOwnershipAsRecovering(t *testing.T
 	}
 }
 
+// TestRunOutcomeMigrationMapsLegacyClientCancelledToAbandoned locks the
+// ambiguous-disconnect mapping in both of the shapes legacy rows recorded it.
+// The current transport writes one client_cancelled signal for a deliberate
+// stop and for an unkeyed transport loss, and older call sites filed that same
+// signal as a failure rather than a cancellation. Neither shape can prove user
+// intent, and neither is honestly an internal failure, so both canonicalize to
+// cancelled/abandoned and USER_CANCELLED stays reserved.
 func TestRunOutcomeMigrationMapsLegacyClientCancelledToAbandoned(t *testing.T) {
 	ctx := context.Background()
 	database := openMigratedThroughLegacy(t, ctx, filepath.Join(t.TempDir(), "abandoned.db"))
@@ -1530,14 +1732,45 @@ func TestRunOutcomeMigrationMapsLegacyClientCancelledToAbandoned(t *testing.T) {
 		seed.sessionID = "sess_cancel"
 		seedLegacyRun(t, ctx, database, seed)
 	}
+	// Rows whose failure is a real failure, and rows whose freeform text merely
+	// sounds like a cancellation. Neither may be dragged into the mapping: the
+	// signal is the server-chosen code, never prose.
+	for _, seed := range []legacyRun{
+		{id: "run_failed_provider", status: "failed", errorCode: "model_error", errorMessage: "client_cancelled"},
+		{id: "run_failed_freeform_cancel", status: "failed", errorMessage: "the user cancelled, I think"},
+	} {
+		seed.sessionID = "sess_cancel"
+		seedLegacyRun(t, ctx, database, seed)
+	}
+	seedLegacyEvent(t, ctx, database, "sess_cancel", "run_failed_client_cancelled", 1, "agent.run.failed",
+		`{"runId":"run_failed_client_cancelled","code":"client_cancelled","message":"stream gone"}`)
 
 	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
 		t.Fatal(err)
 	}
-	for _, runID := range []string{"run_client_cancelled", "run_cancelled_freeform", "run_cancelled_no_reason"} {
+	for _, runID := range []string{
+		"run_client_cancelled", "run_cancelled_freeform", "run_cancelled_no_reason",
+		// Seeded as failed with the transport code. Canonicalizing it as
+		// failed/internal_failure would report a system fault for a client
+		// that simply went away.
+		"run_failed_client_cancelled",
+	} {
 		got := readMigratedRunState(t, ctx, database, runID)
 		if got.Lifecycle != "cancelled" || got.OutcomeReason != "abandoned" {
 			t.Fatalf("%s = %s/%s, want cancelled/abandoned", runID, got.Lifecycle, got.OutcomeReason)
+		}
+	}
+	for _, expectation := range []struct {
+		runID  string
+		reason string
+	}{
+		{runID: "run_failed_provider", reason: "provider_failure"},
+		{runID: "run_failed_freeform_cancel", reason: "internal_failure"},
+	} {
+		got := readMigratedRunState(t, ctx, database, expectation.runID)
+		if got.Lifecycle != "failed" || got.OutcomeReason != expectation.reason {
+			t.Fatalf("%s = %s/%s, want failed/%s", expectation.runID, got.Lifecycle, got.OutcomeReason,
+				expectation.reason)
 		}
 	}
 	var userCancelled int
@@ -1547,6 +1780,20 @@ func TestRunOutcomeMigrationMapsLegacyClientCancelledToAbandoned(t *testing.T) {
 	}
 	if userCancelled != 0 {
 		t.Fatalf("migrated rows claiming user intent = %d, want 0", userCancelled)
+	}
+	// The reclassification has to reach the durable event too. The run row and
+	// the event payload are written by different passes, and a client reading
+	// history sees the payload: leaving a failed/internal_failure projection
+	// there would tell the user the system broke, whichever way the run row
+	// reads.
+	payload := readEventPayload(t, ctx, database, "sess_cancel", 1)
+	state, ok := payload["runState"].(map[string]any)
+	if !ok {
+		t.Fatalf("runState = %#v, want the canonical projection", payload["runState"])
+	}
+	if state["lifecycle"] != "cancelled" || state["outcomeReason"] != "abandoned" {
+		t.Fatalf("event runState = %v/%v, want cancelled/abandoned",
+			state["lifecycle"], state["outcomeReason"])
 	}
 }
 
@@ -1636,6 +1883,88 @@ func TestRunOutcomeMigrationCanonicalizesOffsetAndVariableFractionTimestamps(t *
 		if got := readMigratedRunState(t, ctx, database, runID).StateUpdatedAt; got != want {
 			t.Fatalf("%s state_updated_at = %q, want %q", runID, got, want)
 		}
+	}
+}
+
+// TestRunOutcomeMigrationSelectsStateUpdatedAtByLifecyclePrecedence pins the
+// approved rule as precedence, not recency. The two are indistinguishable on
+// well-ordered rows, so every fixture here is deliberately skewed: the more
+// authoritative field is the older one. Legacy rows were written by several
+// call sites with no shared clock discipline, and "latest wins" would let a
+// skewed started_at outrank the finish that actually ended the run.
+func TestRunOutcomeMigrationSelectsStateUpdatedAtByLifecyclePrecedence(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedThroughLegacy(t, ctx, filepath.Join(t.TempDir(), "precedence.db"))
+	defer database.Close()
+	seedLegacySession(t, ctx, database, "sess_precedence")
+	for _, seed := range []legacyRun{
+		// finished_at outranks a started_at recorded later.
+		{
+			id: "run_finish_before_start", status: "completed",
+			createdAt:  "2026-05-01T00:00:00.000000000Z",
+			startedAt:  "2026-05-01T09:00:00.000000000Z",
+			finishedAt: "2026-05-01T02:00:00.000000000Z",
+		},
+		// started_at outranks a created_at recorded later, with no finish.
+		{
+			id: "run_start_before_create", status: "running",
+			executionActive: 1, executionState: "delivered",
+			createdAt: "2026-05-01T08:00:00.000000000Z",
+			startedAt: "2026-05-01T03:00:00.000000000Z",
+		},
+		// finished_at outranks both of the later timestamps beneath it.
+		{
+			id: "run_finish_before_both", status: "cancelled",
+			createdAt:  "2026-05-01T07:00:00.000000000Z",
+			startedAt:  "2026-05-01T10:00:00.000000000Z",
+			finishedAt: "2026-05-01T01:00:00.000000000Z",
+		},
+	} {
+		seed.sessionID = "sess_precedence"
+		seedLegacyRun(t, ctx, database, seed)
+	}
+
+	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	for runID, want := range map[string]string{
+		"run_finish_before_start": "2026-05-01T02:00:00.000000000Z",
+		"run_start_before_create": "2026-05-01T03:00:00.000000000Z",
+		"run_finish_before_both":  "2026-05-01T01:00:00.000000000Z",
+	} {
+		if got := readMigratedRunState(t, ctx, database, runID).StateUpdatedAt; got != want {
+			t.Fatalf("%s state_updated_at = %q, want %q from lifecycle precedence rather than the latest value",
+				runID, got, want)
+		}
+	}
+}
+
+// TestRunOutcomeMigrationIgnoresEmptyLifecycleTimestamps keeps precedence from
+// being satisfied by a present-but-empty column. SQLite stores the empty string
+// as a non-NULL TEXT value, so a legacy writer that cleared a field left
+// something that is Valid and useless; selecting it would fail the parse
+// instead of falling through to the field that actually holds the time.
+func TestRunOutcomeMigrationIgnoresEmptyLifecycleTimestamps(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedThroughLegacy(t, ctx, filepath.Join(t.TempDir(), "empty-timestamps.db"))
+	defer database.Close()
+	seedLegacySession(t, ctx, database, "sess_empty_time")
+	seedLegacyRun(t, ctx, database, legacyRun{
+		id: "run_empty_time", sessionID: "sess_empty_time", status: "completed",
+		createdAt: "2026-06-07T08:09:10.000000000Z",
+		startedAt: "2026-06-07T08:09:11.000000000Z",
+	})
+	if _, err := database.ExecContext(ctx,
+		`UPDATE agent_runs SET finished_at = '' WHERE id = 'run_empty_time'`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	const want = "2026-06-07T08:09:11.000000000Z"
+	if got := readMigratedRunState(t, ctx, database, "run_empty_time").StateUpdatedAt; got != want {
+		t.Fatalf("state_updated_at = %q, want %q from the next field in precedence", got, want)
 	}
 }
 
@@ -1914,6 +2243,197 @@ func TestRunOutcomeMigrationRewritesThePublicFailureInventory(t *testing.T) {
 				t.Fatalf("runState = %#v, want %#v", state, wantState)
 			}
 		})
+	}
+}
+
+// TestRunOutcomeMigrationOmitsUnprovenAssistantIdentityFromRunState covers the
+// run-terminal events whose whole payload is the canonical projection. The
+// inventory test above only exercises a link that validates, so nothing there
+// notices if the rewrite starts publishing an assistant message ID straight off
+// the run row. These rows are mutually named — each side points at the other,
+// so neither the duplicate preflight nor the partial unique indexes object —
+// but they disagree about role or session, which means ownership was never
+// proven. The safe projection therefore has to drop assistantMessageId while
+// keeping every other canonical field it does know.
+func TestRunOutcomeMigrationOmitsUnprovenAssistantIdentityFromRunState(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedThroughLegacy(t, ctx, filepath.Join(t.TempDir(), "event-correlation.db"))
+	defer database.Close()
+	seedLegacySession(t, ctx, database, "sess_event_link")
+	seedLegacySession(t, ctx, database, "sess_event_elsewhere")
+	// Mutually named, but the message is a tool turn rather than the assistant
+	// turn this run would own.
+	seedLegacyRun(t, ctx, database, legacyRun{
+		id: "run_role_link", sessionID: "sess_event_link", status: "failed",
+		errorCode: "model_error", errorMessage: "provider said something rude",
+		assistantMessageID: "msg_event_role", assistantContent: "tool output",
+		assistantRole: "tool", finishedAt: "2026-01-01T00:00:07.000000000Z",
+	})
+	// Mutually named, but the two rows disagree about the session.
+	seedLegacyRun(t, ctx, database, legacyRun{
+		id: "run_session_link", sessionID: "sess_event_link", status: "cancelled",
+		cancellationReason: "client_cancelled",
+		assistantMessageID: "msg_event_session", assistantContent: "answer filed elsewhere",
+		finishedAt: "2026-01-01T00:00:09.000000000Z",
+	})
+	if _, err := database.ExecContext(ctx,
+		`UPDATE messages SET session_id = 'sess_event_elsewhere' WHERE id = 'msg_event_session'`); err != nil {
+		t.Fatal(err)
+	}
+	seedLegacyEvent(t, ctx, database, "sess_event_link", "run_role_link", 1, "agent.run.failed",
+		`{"runId":"run_role_link","code":"model_error","message":"provider said something rude"}`)
+	seedLegacyEvent(t, ctx, database, "sess_event_link", "run_session_link", 2, "agent.run.cancelled",
+		`{"runId":"run_session_link","reason":"client went away mid-sentence"}`)
+
+	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	for _, expectation := range []struct {
+		sequence  int
+		wantState map[string]any
+	}{
+		{
+			sequence: 1,
+			wantState: map[string]any{
+				"runId":                 "run_role_link",
+				"userMessageId":         "run_role_link_user",
+				"lifecycle":             "failed",
+				"outcomeReason":         "provider_failure",
+				"stateVersion":          float64(1),
+				"stateUpdatedAt":        "2026-01-01T00:00:07.000000000Z",
+				"finishedAt":            "2026-01-01T00:00:07.000000000Z",
+				"hasDisplayableContent": false,
+			},
+		},
+		{
+			sequence: 2,
+			wantState: map[string]any{
+				"runId":                 "run_session_link",
+				"userMessageId":         "run_session_link_user",
+				"lifecycle":             "cancelled",
+				"outcomeReason":         "abandoned",
+				"stateVersion":          float64(1),
+				"stateUpdatedAt":        "2026-01-01T00:00:09.000000000Z",
+				"finishedAt":            "2026-01-01T00:00:09.000000000Z",
+				"hasDisplayableContent": false,
+			},
+		},
+	} {
+		payload := readEventPayload(t, ctx, database, "sess_event_link", expectation.sequence)
+		if got := payloadKeys(payload); !reflect.DeepEqual(got, []string{"runState"}) {
+			t.Fatalf("sequence %d payload keys = %v, want only runState", expectation.sequence, got)
+		}
+		state, ok := payload["runState"].(map[string]any)
+		if !ok {
+			t.Fatalf("sequence %d runState = %#v, want the canonical projection",
+				expectation.sequence, payload["runState"])
+		}
+		// Named separately from the DeepEqual below so a regression that
+		// publishes the unproven ID reports what it actually did.
+		if _, published := state["assistantMessageId"]; published {
+			t.Fatalf("sequence %d published assistantMessageId = %#v from an unproven link",
+				expectation.sequence, state["assistantMessageId"])
+		}
+		if !reflect.DeepEqual(state, expectation.wantState) {
+			t.Fatalf("sequence %d runState = %#v, want %#v", expectation.sequence, state, expectation.wantState)
+		}
+	}
+	// The run rows keep their legacy pointer: refusing to publish an unproven
+	// link is a statement about the projection, not a repair of the data.
+	for _, check := range []struct {
+		runID string
+		want  string
+	}{
+		{runID: "run_role_link", want: "msg_event_role"},
+		{runID: "run_session_link", want: "msg_event_session"},
+	} {
+		var got string
+		if err := database.QueryRowContext(ctx,
+			`SELECT assistant_message_id FROM agent_runs WHERE id = ?`, check.runID).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != check.want {
+			t.Fatalf("%s assistant_message_id = %q, want %q left untouched", check.runID, got, check.want)
+		}
+	}
+}
+
+// TestRunOutcomeMigrationOmitsStateVersionFromOrphanRunStepNotices pins the one
+// number a rewritten notice must never invent. stateVersion is a protobuf
+// int64: zero is absence, not version zero. A failure-like run-step whose run
+// row is gone has no canonical version to cite, so the rewrite has to leave the
+// field out rather than write the Go zero value and let a client read it as a
+// real version older than every stored one.
+func TestRunOutcomeMigrationOmitsStateVersionFromOrphanRunStepNotices(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedThroughLegacy(t, ctx, filepath.Join(t.TempDir(), "orphan-step.db"))
+	defer database.Close()
+	seedLegacySession(t, ctx, database, "sess_orphan_step")
+	// No run row at all: the event outlived its run.
+	seedLegacyEvent(t, ctx, database, "sess_orphan_step", "", 1, "agent.run.step",
+		`{"note":"Retrying (attempt 2 of 3)","attempt":2,"maxAttempts":3,"reason":"model_error"}`)
+	seedLegacyEvent(t, ctx, database, "sess_orphan_step", "", 2, "agent.run.step",
+		`{"note":"Gave up after 3 attempts","attempts":3,"maxAttempts":3,"reason":"worker_unavailable"}`)
+	// Counters an orphan cannot bound either: the category survives alone.
+	seedLegacyEvent(t, ctx, database, "sess_orphan_step", "", 3, "agent.run.step",
+		`{"note":"Retrying","attempt":1000000000000,"maxAttempts":1000000000000,"reason":"worker_unavailable"}`)
+
+	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	for _, expectation := range []struct {
+		sequence int
+		want     map[string]any
+	}{
+		{
+			sequence: 1,
+			want: map[string]any{
+				"category": "dispatch_retry", "attempt": float64(2), "maxAttempts": float64(3),
+			},
+		},
+		{
+			sequence: 2,
+			want: map[string]any{
+				"category": "recovery_exhausted", "attempt": float64(3), "maxAttempts": float64(3),
+			},
+		},
+		{sequence: 3, want: map[string]any{"category": "recovery_retry"}},
+	} {
+		payload := readEventPayload(t, ctx, database, "sess_orphan_step", expectation.sequence)
+		if _, published := payload["stateVersion"]; published {
+			t.Fatalf("sequence %d published stateVersion = %#v with no run to cite",
+				expectation.sequence, payload["stateVersion"])
+		}
+		if !reflect.DeepEqual(payload, expectation.want) {
+			t.Fatalf("sequence %d payload = %#v, want %#v", expectation.sequence, payload, expectation.want)
+		}
+	}
+}
+
+// TestRunOutcomeMigrationKeepsStateVersionOnCorrelatedRunStepNotices is the
+// other half of the pin above: omitting the version is only correct when there
+// is no run, and a notice that does have one must still carry it.
+func TestRunOutcomeMigrationKeepsStateVersionOnCorrelatedRunStepNotices(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedThroughLegacy(t, ctx, filepath.Join(t.TempDir(), "correlated-step.db"))
+	defer database.Close()
+	seedLegacySession(t, ctx, database, "sess_correlated_step")
+	seedLegacyRun(t, ctx, database, legacyRun{
+		id: "run_correlated_step", sessionID: "sess_correlated_step", status: "failed",
+		errorCode: "retries_exhausted", finishedAt: "2026-01-01T00:00:03.000000000Z",
+	})
+	seedLegacyEvent(t, ctx, database, "sess_correlated_step", "run_correlated_step", 1, "agent.run.step",
+		`{"note":"Retrying (attempt 2 of 3)","attempt":2,"maxAttempts":3,"reason":"model_error"}`)
+
+	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"stateVersion": float64(1), "category": "dispatch_retry",
+		"attempt": float64(2), "maxAttempts": float64(3),
+	}
+	if got := readEventPayload(t, ctx, database, "sess_correlated_step", 1); !reflect.DeepEqual(got, want) {
+		t.Fatalf("correlated notice = %#v, want %#v", got, want)
 	}
 }
 

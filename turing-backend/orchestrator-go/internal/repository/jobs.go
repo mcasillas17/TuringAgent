@@ -15,14 +15,19 @@ import (
 	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
-	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
 
-// EmptyAssistantContentSHA256 is the content identity of the empty assistant
+// emptyAssistantContentSHA256 is the content identity of the empty assistant
 // placeholder every enqueue creates. A run starts life with no output, and the
 // digest has to say so exactly rather than be left absent, because a later
 // duplicate terminal report is judged against it.
-var EmptyAssistantContentSHA256 = runoutcome.ContentSHA256("")
+//
+// It is a constant, and an unexported one: this value is the fixed point
+// duplicate detection compares against, so nothing — in this package or any
+// other — may rebind it at runtime. The literal is the lowercase SHA-256 of
+// zero bytes; a test in this package pins it to runoutcome.ContentSHA256("")
+// so the two can never drift apart.
+const emptyAssistantContentSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 type EnqueueUserMessageInput struct {
 	SessionID                      string
@@ -548,7 +553,7 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	//
 	// The host rather than the base URL: a URL can carry a path, a query, and
 	// from a careless paste a credential. Only the recipient is worth keeping.
-	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status, model_provider, model_name, external_agent_name, external_agent_host, created_at, state_version, state_updated_at, outcome_reason, assistant_content_sha256) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, 1, ?, 'none', ?)`, runID, input.SessionID, userMessageID, assistantMessageID, input.AgentID, traceID, modelProvider, model, resolvedRoute.externalAgentName, resolvedRoute.externalAgentHost, createdAt, createdAt, EmptyAssistantContentSHA256); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status, model_provider, model_name, external_agent_name, external_agent_host, created_at, state_version, state_updated_at, outcome_reason, assistant_content_sha256) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, 1, ?, 'none', ?)`, runID, input.SessionID, userMessageID, assistantMessageID, input.AgentID, traceID, modelProvider, model, resolvedRoute.externalAgentName, resolvedRoute.externalAgentHost, createdAt, createdAt, emptyAssistantContentSHA256); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	// Name the conversation after the first thing said in it, and mark the

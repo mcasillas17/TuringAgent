@@ -3,10 +3,38 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
+
+// pinnedEmptyAssistantContentSHA256 fails to compile if the empty-content
+// digest ever becomes a variable again. The value is written into every
+// enqueued run and later compared against a terminal report's content
+// identity, so a package-level var would let any code in this package — or, if
+// exported, in any other — reassign the thing duplicate detection is judged
+// against, at runtime, with no test able to see it.
+const pinnedEmptyAssistantContentSHA256 = emptyAssistantContentSHA256
+
+// TestEmptyAssistantContentDigestMatchesTheSharedHash keeps the literal above
+// from drifting away from the function that computes it everywhere else.
+func TestEmptyAssistantContentDigestMatchesTheSharedHash(t *testing.T) {
+	want := runoutcome.ContentSHA256("")
+	if pinnedEmptyAssistantContentSHA256 != want {
+		t.Fatalf("emptyAssistantContentSHA256 = %q, want the shared empty-content digest %q",
+			pinnedEmptyAssistantContentSHA256, want)
+	}
+	// The schema's length check and the lowercase-hex convention are what make
+	// the stored digest comparable at all, so both are asserted on the literal
+	// rather than inferred from the equality above.
+	if got := len(pinnedEmptyAssistantContentSHA256); got != 64 {
+		t.Fatalf("digest length = %d, want 64", got)
+	}
+	if pinnedEmptyAssistantContentSHA256 != strings.ToLower(pinnedEmptyAssistantContentSHA256) {
+		t.Fatalf("digest %q is not lowercase hex", pinnedEmptyAssistantContentSHA256)
+	}
+}
 
 // TestPostMigrationEnqueueWritesCanonicalVersionOneFields pins the writer side
 // of the canonical schema: once agent_runs requires the state fields, the one

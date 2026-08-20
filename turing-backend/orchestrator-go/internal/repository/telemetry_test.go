@@ -775,7 +775,7 @@ func insertTelemetryRun(t *testing.T, ctx context.Context, repo *Repository, run
 		nonNegativeNullInt64(run.inputTokens), nonNegativeNullInt64(run.outputTokens),
 		externalName, externalHost,
 		FormatTimestamp(run.createdAt), startedAt, finishedAt,
-		FormatTimestamp(run.createdAt), telemetryOutcomeReason(run.status), EmptyAssistantContentSHA256); err != nil {
+		FormatTimestamp(run.createdAt), telemetryOutcomeReason(run.status), emptyAssistantContentSHA256); err != nil {
 		t.Fatalf("insert run: %v", err)
 	}
 }
