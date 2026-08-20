@@ -146,6 +146,7 @@ type RunQueued struct {
 	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	JobId         string                 `protobuf:"bytes,2,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
 	TraceId       string                 `protobuf:"bytes,3,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	RunState      *RunState              `protobuf:"bytes,4,opt,name=run_state,json=runState,proto3" json:"run_state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -201,11 +202,19 @@ func (x *RunQueued) GetTraceId() string {
 	return ""
 }
 
+func (x *RunQueued) GetRunState() *RunState {
+	if x != nil {
+		return x.RunState
+	}
+	return nil
+}
+
 type RunStarted struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	JobId         string                 `protobuf:"bytes,2,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
 	Attempt       int32                  `protobuf:"varint,3,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	RunState      *RunState              `protobuf:"bytes,4,opt,name=run_state,json=runState,proto3" json:"run_state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -259,6 +268,13 @@ func (x *RunStarted) GetAttempt() int32 {
 		return x.Attempt
 	}
 	return 0
+}
+
+func (x *RunStarted) GetRunState() *RunState {
+	if x != nil {
+		return x.RunState
+	}
+	return nil
 }
 
 type MessageStarted struct {
@@ -438,6 +454,7 @@ type ApprovalEvent struct {
 	ApprovalId    string                 `protobuf:"bytes,1,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
 	ToolName      string                 `protobuf:"bytes,2,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
 	ArgsSummary   string                 `protobuf:"bytes,3,opt,name=args_summary,json=argsSummary,proto3" json:"args_summary,omitempty"`
+	RunState      *RunState              `protobuf:"bytes,4,opt,name=run_state,json=runState,proto3" json:"run_state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -491,6 +508,13 @@ func (x *ApprovalEvent) GetArgsSummary() string {
 		return x.ArgsSummary
 	}
 	return ""
+}
+
+func (x *ApprovalEvent) GetRunState() *RunState {
+	if x != nil {
+		return x.RunState
+	}
+	return nil
 }
 
 type MessageCompleted struct {
@@ -549,6 +573,7 @@ type RunCompleted struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	RunId              string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	AssistantMessageId string                 `protobuf:"bytes,2,opt,name=assistant_message_id,json=assistantMessageId,proto3" json:"assistant_message_id,omitempty"`
+	RunState           *RunState              `protobuf:"bytes,3,opt,name=run_state,json=runState,proto3" json:"run_state,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -597,12 +622,21 @@ func (x *RunCompleted) GetAssistantMessageId() string {
 	return ""
 }
 
+func (x *RunCompleted) GetRunState() *RunState {
+	if x != nil {
+		return x.RunState
+	}
+	return nil
+}
+
 type RunFailed struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	Code          string                 `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`
-	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
-	Retryable     bool                   `protobuf:"varint,4,opt,name=retryable,proto3" json:"retryable,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	RunId   string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	Code    string                 `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`
+	Message string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	// Deprecated: Marked as deprecated in turing/v1/chat.proto.
+	Retryable     bool      `protobuf:"varint,4,opt,name=retryable,proto3" json:"retryable,omitempty"`
+	RunState      *RunState `protobuf:"bytes,5,opt,name=run_state,json=runState,proto3" json:"run_state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -658,6 +692,7 @@ func (x *RunFailed) GetMessage() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in turing/v1/chat.proto.
 func (x *RunFailed) GetRetryable() bool {
 	if x != nil {
 		return x.Retryable
@@ -665,10 +700,18 @@ func (x *RunFailed) GetRetryable() bool {
 	return false
 }
 
+func (x *RunFailed) GetRunState() *RunState {
+	if x != nil {
+		return x.RunState
+	}
+	return nil
+}
+
 type RunCancelled struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	RunState      *RunState              `protobuf:"bytes,3,opt,name=run_state,json=runState,proto3" json:"run_state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -717,6 +760,57 @@ func (x *RunCancelled) GetReason() string {
 	return ""
 }
 
+func (x *RunCancelled) GetRunState() *RunState {
+	if x != nil {
+		return x.RunState
+	}
+	return nil
+}
+
+type RunStateChanged struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RunState      *RunState              `protobuf:"bytes,1,opt,name=run_state,json=runState,proto3" json:"run_state,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RunStateChanged) Reset() {
+	*x = RunStateChanged{}
+	mi := &file_turing_v1_chat_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RunStateChanged) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunStateChanged) ProtoMessage() {}
+
+func (x *RunStateChanged) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_chat_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunStateChanged.ProtoReflect.Descriptor instead.
+func (*RunStateChanged) Descriptor() ([]byte, []int) {
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *RunStateChanged) GetRunState() *RunState {
+	if x != nil {
+		return x.RunState
+	}
+	return nil
+}
+
 type ChatStreamEvent struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
@@ -742,6 +836,7 @@ type ChatStreamEvent struct {
 	//	*ChatStreamEvent_RunFailed
 	//	*ChatStreamEvent_RunCancelled
 	//	*ChatStreamEvent_PersistedEvent
+	//	*ChatStreamEvent_RunStateChanged
 	Event         isChatStreamEvent_Event `protobuf_oneof:"event"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -749,7 +844,7 @@ type ChatStreamEvent struct {
 
 func (x *ChatStreamEvent) Reset() {
 	*x = ChatStreamEvent{}
-	mi := &file_turing_v1_chat_proto_msgTypes[11]
+	mi := &file_turing_v1_chat_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -761,7 +856,7 @@ func (x *ChatStreamEvent) String() string {
 func (*ChatStreamEvent) ProtoMessage() {}
 
 func (x *ChatStreamEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_chat_proto_msgTypes[11]
+	mi := &file_turing_v1_chat_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -774,7 +869,7 @@ func (x *ChatStreamEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChatStreamEvent.ProtoReflect.Descriptor instead.
 func (*ChatStreamEvent) Descriptor() ([]byte, []int) {
-	return file_turing_v1_chat_proto_rawDescGZIP(), []int{11}
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ChatStreamEvent) GetSessionId() string {
@@ -965,6 +1060,15 @@ func (x *ChatStreamEvent) GetPersistedEvent() *TuringEvent {
 	return nil
 }
 
+func (x *ChatStreamEvent) GetRunStateChanged() *RunStateChanged {
+	if x != nil {
+		if x, ok := x.Event.(*ChatStreamEvent_RunStateChanged); ok {
+			return x.RunStateChanged
+		}
+	}
+	return nil
+}
+
 type isChatStreamEvent_Event interface {
 	isChatStreamEvent_Event()
 }
@@ -1037,6 +1141,10 @@ type ChatStreamEvent_PersistedEvent struct {
 	PersistedEvent *TuringEvent `protobuf:"bytes,26,opt,name=persisted_event,json=persistedEvent,proto3,oneof"`
 }
 
+type ChatStreamEvent_RunStateChanged struct {
+	RunStateChanged *RunStateChanged `protobuf:"bytes,27,opt,name=run_state_changed,json=runStateChanged,proto3,oneof"`
+}
+
 func (*ChatStreamEvent_RunQueued) isChatStreamEvent_Event() {}
 
 func (*ChatStreamEvent_RunStarted) isChatStreamEvent_Event() {}
@@ -1071,6 +1179,8 @@ func (*ChatStreamEvent_RunCancelled) isChatStreamEvent_Event() {}
 
 func (*ChatStreamEvent_PersistedEvent) isChatStreamEvent_Event() {}
 
+func (*ChatStreamEvent_RunStateChanged) isChatStreamEvent_Event() {}
+
 var File_turing_v1_chat_proto protoreflect.FileDescriptor
 
 const file_turing_v1_chat_proto_rawDesc = "" +
@@ -1088,16 +1198,18 @@ const file_turing_v1_chat_proto_rawDesc = "" +
 	"\x0frequested_tools\x18\b \x03(\tR\x0erequestedTools\x126\n" +
 	"\x17required_context_tokens\x18\t \x01(\x05R\x15requiredContextTokens\x12J\n" +
 	"\"minimum_worker_max_concurrent_runs\x18\n" +
-	" \x01(\x05R\x1eminimumWorkerMaxConcurrentRuns\"T\n" +
+	" \x01(\x05R\x1eminimumWorkerMaxConcurrentRuns\"\x86\x01\n" +
 	"\tRunQueued\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x15\n" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\x19\n" +
-	"\btrace_id\x18\x03 \x01(\tR\atraceId\"T\n" +
+	"\btrace_id\x18\x03 \x01(\tR\atraceId\x120\n" +
+	"\trun_state\x18\x04 \x01(\v2\x13.turing.v1.RunStateR\brunState\"\x86\x01\n" +
 	"\n" +
 	"RunStarted\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x15\n" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\x18\n" +
-	"\aattempt\x18\x03 \x01(\x05R\aattempt\"[\n" +
+	"\aattempt\x18\x03 \x01(\x05R\aattempt\x120\n" +
+	"\trun_state\x18\x04 \x01(\v2\x13.turing.v1.RunStateR\brunState\"[\n" +
 	"\x0eMessageStarted\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12*\n" +
@@ -1113,27 +1225,34 @@ const file_turing_v1_chat_proto_rawDesc = "" +
 	"\vserver_name\x18\x02 \x01(\tR\n" +
 	"serverName\x12\x1b\n" +
 	"\ttool_name\x18\x03 \x01(\tR\btoolName\x121\n" +
-	"\apayload\x18\x04 \x01(\v2\x17.google.protobuf.StructR\apayload\"p\n" +
+	"\apayload\x18\x04 \x01(\v2\x17.google.protobuf.StructR\apayload\"\xa2\x01\n" +
 	"\rApprovalEvent\x12\x1f\n" +
 	"\vapproval_id\x18\x01 \x01(\tR\n" +
 	"approvalId\x12\x1b\n" +
 	"\ttool_name\x18\x02 \x01(\tR\btoolName\x12!\n" +
-	"\fargs_summary\x18\x03 \x01(\tR\vargsSummary\"K\n" +
+	"\fargs_summary\x18\x03 \x01(\tR\vargsSummary\x120\n" +
+	"\trun_state\x18\x04 \x01(\v2\x13.turing.v1.RunStateR\brunState\"K\n" +
 	"\x10MessageCompleted\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x18\n" +
-	"\acontent\x18\x02 \x01(\tR\acontent\"W\n" +
+	"\acontent\x18\x02 \x01(\tR\acontent\"\x89\x01\n" +
 	"\fRunCompleted\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x120\n" +
-	"\x14assistant_message_id\x18\x02 \x01(\tR\x12assistantMessageId\"n\n" +
+	"\x14assistant_message_id\x18\x02 \x01(\tR\x12assistantMessageId\x120\n" +
+	"\trun_state\x18\x03 \x01(\v2\x13.turing.v1.RunStateR\brunState\"\xa4\x01\n" +
 	"\tRunFailed\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x12\n" +
 	"\x04code\x18\x02 \x01(\tR\x04code\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\x12\x1c\n" +
-	"\tretryable\x18\x04 \x01(\bR\tretryable\"=\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\x12 \n" +
+	"\tretryable\x18\x04 \x01(\bB\x02\x18\x01R\tretryable\x120\n" +
+	"\trun_state\x18\x05 \x01(\v2\x13.turing.v1.RunStateR\brunState\"o\n" +
 	"\fRunCancelled\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xf5\t\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x120\n" +
+	"\trun_state\x18\x03 \x01(\v2\x13.turing.v1.RunStateR\brunState\"C\n" +
+	"\x0fRunStateChanged\x120\n" +
+	"\trun_state\x18\x01 \x01(\v2\x13.turing.v1.RunStateR\brunState\"\xbf\n" +
+	"\n" +
 	"\x0fChatStreamEvent\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x15\n" +
@@ -1161,7 +1280,8 @@ const file_turing_v1_chat_proto_rawDesc = "" +
 	"\n" +
 	"run_failed\x18\x18 \x01(\v2\x14.turing.v1.RunFailedH\x00R\trunFailed\x12>\n" +
 	"\rrun_cancelled\x18\x19 \x01(\v2\x17.turing.v1.RunCancelledH\x00R\frunCancelled\x12A\n" +
-	"\x0fpersisted_event\x18\x1a \x01(\v2\x16.turing.v1.TuringEventH\x00R\x0epersistedEventB\a\n" +
+	"\x0fpersisted_event\x18\x1a \x01(\v2\x16.turing.v1.TuringEventH\x00R\x0epersistedEvent\x12H\n" +
+	"\x11run_state_changed\x18\x1b \x01(\v2\x1a.turing.v1.RunStateChangedH\x00R\x0frunStateChangedB\a\n" +
 	"\x05event2Y\n" +
 	"\vChatService\x12J\n" +
 	"\vSendMessage\x12\x1d.turing.v1.SendMessageRequest\x1a\x1a.turing.v1.ChatStreamEvent0\x01B>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
@@ -1178,7 +1298,7 @@ func file_turing_v1_chat_proto_rawDescGZIP() []byte {
 	return file_turing_v1_chat_proto_rawDescData
 }
 
-var file_turing_v1_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_turing_v1_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_turing_v1_chat_proto_goTypes = []any{
 	(*SendMessageRequest)(nil), // 0: turing.v1.SendMessageRequest
 	(*RunQueued)(nil),          // 1: turing.v1.RunQueued
@@ -1191,42 +1311,52 @@ var file_turing_v1_chat_proto_goTypes = []any{
 	(*RunCompleted)(nil),       // 8: turing.v1.RunCompleted
 	(*RunFailed)(nil),          // 9: turing.v1.RunFailed
 	(*RunCancelled)(nil),       // 10: turing.v1.RunCancelled
-	(*ChatStreamEvent)(nil),    // 11: turing.v1.ChatStreamEvent
-	(AgentId)(0),               // 12: turing.v1.AgentId
-	(ModelProvider)(0),         // 13: turing.v1.ModelProvider
-	(MessageRole)(0),           // 14: turing.v1.MessageRole
-	(*structpb.Struct)(nil),    // 15: google.protobuf.Struct
-	(*TuringEvent)(nil),        // 16: turing.v1.TuringEvent
+	(*RunStateChanged)(nil),    // 11: turing.v1.RunStateChanged
+	(*ChatStreamEvent)(nil),    // 12: turing.v1.ChatStreamEvent
+	(AgentId)(0),               // 13: turing.v1.AgentId
+	(ModelProvider)(0),         // 14: turing.v1.ModelProvider
+	(*RunState)(nil),           // 15: turing.v1.RunState
+	(MessageRole)(0),           // 16: turing.v1.MessageRole
+	(*structpb.Struct)(nil),    // 17: google.protobuf.Struct
+	(*TuringEvent)(nil),        // 18: turing.v1.TuringEvent
 }
 var file_turing_v1_chat_proto_depIdxs = []int32{
-	12, // 0: turing.v1.SendMessageRequest.agent_id:type_name -> turing.v1.AgentId
-	13, // 1: turing.v1.SendMessageRequest.model_provider:type_name -> turing.v1.ModelProvider
-	14, // 2: turing.v1.MessageStarted.role:type_name -> turing.v1.MessageRole
-	15, // 3: turing.v1.ToolEvent.payload:type_name -> google.protobuf.Struct
-	1,  // 4: turing.v1.ChatStreamEvent.run_queued:type_name -> turing.v1.RunQueued
-	2,  // 5: turing.v1.ChatStreamEvent.run_started:type_name -> turing.v1.RunStarted
-	3,  // 6: turing.v1.ChatStreamEvent.message_started:type_name -> turing.v1.MessageStarted
-	4,  // 7: turing.v1.ChatStreamEvent.token_delta:type_name -> turing.v1.TokenDelta
-	5,  // 8: turing.v1.ChatStreamEvent.tool_call_started:type_name -> turing.v1.ToolEvent
-	5,  // 9: turing.v1.ChatStreamEvent.tool_call_completed:type_name -> turing.v1.ToolEvent
-	5,  // 10: turing.v1.ChatStreamEvent.tool_call_failed:type_name -> turing.v1.ToolEvent
-	6,  // 11: turing.v1.ChatStreamEvent.approval_requested:type_name -> turing.v1.ApprovalEvent
-	6,  // 12: turing.v1.ChatStreamEvent.approval_approved:type_name -> turing.v1.ApprovalEvent
-	6,  // 13: turing.v1.ChatStreamEvent.approval_denied:type_name -> turing.v1.ApprovalEvent
-	6,  // 14: turing.v1.ChatStreamEvent.approval_expired:type_name -> turing.v1.ApprovalEvent
-	6,  // 15: turing.v1.ChatStreamEvent.approval_consumed:type_name -> turing.v1.ApprovalEvent
-	7,  // 16: turing.v1.ChatStreamEvent.message_completed:type_name -> turing.v1.MessageCompleted
-	8,  // 17: turing.v1.ChatStreamEvent.run_completed:type_name -> turing.v1.RunCompleted
-	9,  // 18: turing.v1.ChatStreamEvent.run_failed:type_name -> turing.v1.RunFailed
-	10, // 19: turing.v1.ChatStreamEvent.run_cancelled:type_name -> turing.v1.RunCancelled
-	16, // 20: turing.v1.ChatStreamEvent.persisted_event:type_name -> turing.v1.TuringEvent
-	0,  // 21: turing.v1.ChatService.SendMessage:input_type -> turing.v1.SendMessageRequest
-	11, // 22: turing.v1.ChatService.SendMessage:output_type -> turing.v1.ChatStreamEvent
-	22, // [22:23] is the sub-list for method output_type
-	21, // [21:22] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	13, // 0: turing.v1.SendMessageRequest.agent_id:type_name -> turing.v1.AgentId
+	14, // 1: turing.v1.SendMessageRequest.model_provider:type_name -> turing.v1.ModelProvider
+	15, // 2: turing.v1.RunQueued.run_state:type_name -> turing.v1.RunState
+	15, // 3: turing.v1.RunStarted.run_state:type_name -> turing.v1.RunState
+	16, // 4: turing.v1.MessageStarted.role:type_name -> turing.v1.MessageRole
+	17, // 5: turing.v1.ToolEvent.payload:type_name -> google.protobuf.Struct
+	15, // 6: turing.v1.ApprovalEvent.run_state:type_name -> turing.v1.RunState
+	15, // 7: turing.v1.RunCompleted.run_state:type_name -> turing.v1.RunState
+	15, // 8: turing.v1.RunFailed.run_state:type_name -> turing.v1.RunState
+	15, // 9: turing.v1.RunCancelled.run_state:type_name -> turing.v1.RunState
+	15, // 10: turing.v1.RunStateChanged.run_state:type_name -> turing.v1.RunState
+	1,  // 11: turing.v1.ChatStreamEvent.run_queued:type_name -> turing.v1.RunQueued
+	2,  // 12: turing.v1.ChatStreamEvent.run_started:type_name -> turing.v1.RunStarted
+	3,  // 13: turing.v1.ChatStreamEvent.message_started:type_name -> turing.v1.MessageStarted
+	4,  // 14: turing.v1.ChatStreamEvent.token_delta:type_name -> turing.v1.TokenDelta
+	5,  // 15: turing.v1.ChatStreamEvent.tool_call_started:type_name -> turing.v1.ToolEvent
+	5,  // 16: turing.v1.ChatStreamEvent.tool_call_completed:type_name -> turing.v1.ToolEvent
+	5,  // 17: turing.v1.ChatStreamEvent.tool_call_failed:type_name -> turing.v1.ToolEvent
+	6,  // 18: turing.v1.ChatStreamEvent.approval_requested:type_name -> turing.v1.ApprovalEvent
+	6,  // 19: turing.v1.ChatStreamEvent.approval_approved:type_name -> turing.v1.ApprovalEvent
+	6,  // 20: turing.v1.ChatStreamEvent.approval_denied:type_name -> turing.v1.ApprovalEvent
+	6,  // 21: turing.v1.ChatStreamEvent.approval_expired:type_name -> turing.v1.ApprovalEvent
+	6,  // 22: turing.v1.ChatStreamEvent.approval_consumed:type_name -> turing.v1.ApprovalEvent
+	7,  // 23: turing.v1.ChatStreamEvent.message_completed:type_name -> turing.v1.MessageCompleted
+	8,  // 24: turing.v1.ChatStreamEvent.run_completed:type_name -> turing.v1.RunCompleted
+	9,  // 25: turing.v1.ChatStreamEvent.run_failed:type_name -> turing.v1.RunFailed
+	10, // 26: turing.v1.ChatStreamEvent.run_cancelled:type_name -> turing.v1.RunCancelled
+	18, // 27: turing.v1.ChatStreamEvent.persisted_event:type_name -> turing.v1.TuringEvent
+	11, // 28: turing.v1.ChatStreamEvent.run_state_changed:type_name -> turing.v1.RunStateChanged
+	0,  // 29: turing.v1.ChatService.SendMessage:input_type -> turing.v1.SendMessageRequest
+	12, // 30: turing.v1.ChatService.SendMessage:output_type -> turing.v1.ChatStreamEvent
+	30, // [30:31] is the sub-list for method output_type
+	29, // [29:30] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_chat_proto_init() }
@@ -1236,7 +1366,7 @@ func file_turing_v1_chat_proto_init() {
 	}
 	file_turing_v1_common_proto_init()
 	file_turing_v1_events_proto_init()
-	file_turing_v1_chat_proto_msgTypes[11].OneofWrappers = []any{
+	file_turing_v1_chat_proto_msgTypes[12].OneofWrappers = []any{
 		(*ChatStreamEvent_RunQueued)(nil),
 		(*ChatStreamEvent_RunStarted)(nil),
 		(*ChatStreamEvent_MessageStarted)(nil),
@@ -1254,6 +1384,7 @@ func file_turing_v1_chat_proto_init() {
 		(*ChatStreamEvent_RunFailed)(nil),
 		(*ChatStreamEvent_RunCancelled)(nil),
 		(*ChatStreamEvent_PersistedEvent)(nil),
+		(*ChatStreamEvent_RunStateChanged)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1261,7 +1392,7 @@ func file_turing_v1_chat_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_chat_proto_rawDesc), len(file_turing_v1_chat_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   12,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -54,6 +54,50 @@ enum RunStatus {
   RUN_STATUS_CANCELLED = 6;
 }
 
+enum RunLifecycle {
+  RUN_LIFECYCLE_UNSPECIFIED = 0;
+  RUN_LIFECYCLE_UNKNOWN = 1;
+  RUN_LIFECYCLE_QUEUED = 2;
+  RUN_LIFECYCLE_RUNNING = 3;
+  RUN_LIFECYCLE_WAITING_APPROVAL = 4;
+  RUN_LIFECYCLE_RECOVERING = 5;
+  RUN_LIFECYCLE_COMPLETED = 6;
+  RUN_LIFECYCLE_FAILED = 7;
+  RUN_LIFECYCLE_CANCELLED = 8;
+}
+
+enum RunOutcomeReason {
+  RUN_OUTCOME_REASON_UNSPECIFIED = 0;
+  RUN_OUTCOME_REASON_UNKNOWN = 1;
+  RUN_OUTCOME_REASON_NONE = 2;
+  RUN_OUTCOME_REASON_COMPLETED_NO_CONTENT = 3;
+  RUN_OUTCOME_REASON_USER_CANCELLED = 4;
+  RUN_OUTCOME_REASON_ABANDONED = 5;
+  RUN_OUTCOME_REASON_EXPIRED = 6;
+  RUN_OUTCOME_REASON_CONTEXT_LIMIT = 7;
+  RUN_OUTCOME_REASON_PROVIDER_FAILURE = 8;
+  RUN_OUTCOME_REASON_TOOL_FAILURE = 9;
+  RUN_OUTCOME_REASON_POLICY_DENIED = 10;
+  RUN_OUTCOME_REASON_RETRIES_EXHAUSTED = 11;
+  RUN_OUTCOME_REASON_RECOVERY_INTERRUPTED = 12;
+  RUN_OUTCOME_REASON_SIDE_EFFECT_UNCERTAIN = 13;
+  RUN_OUTCOME_REASON_APPROVAL_DELIVERY_FAILED = 14;
+  RUN_OUTCOME_REASON_INTERNAL_FAILURE = 15;
+  RUN_OUTCOME_REASON_LEGACY_UNKNOWN = 16;
+}
+
+message RunState {
+  string run_id = 1;
+  string user_message_id = 2;
+  string assistant_message_id = 3;
+  RunLifecycle lifecycle = 4;
+  RunOutcomeReason outcome_reason = 5;
+  int64 state_version = 6;
+  google.protobuf.Timestamp state_updated_at = 7;
+  google.protobuf.Timestamp finished_at = 8;
+  bool has_displayable_content = 9;
+}
+
 message RequestMetadata {
   string request_id = 1;
 }
@@ -110,4 +154,5 @@ message Message {
   string content_type = 6;
   int64 sequence = 7;
   google.protobuf.Timestamp created_at = 8;
+  RunState run_state = 9;
 }

@@ -54,4 +54,5 @@ message ToolPolicyDecision {
   string reason = 4;
   bool terminal_run = 5;
   ToolCallPhase phase = 6;
+  int64 run_state_version = 7;
 }

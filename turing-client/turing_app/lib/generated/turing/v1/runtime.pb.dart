@@ -43,6 +43,8 @@ class AgentJob extends $pb.GeneratedMessage {
     ExternalAgentTarget? externalAgent,
     $core.int? requiredContextTokens,
     $core.int? minimumWorkerMaxConcurrentRuns,
+    $fixnum.Int64? expectedStateVersion,
+    $core.String? assignmentAttemptId,
   }) {
     final result = create();
     if (jobId != null) result.jobId = jobId;
@@ -64,6 +66,10 @@ class AgentJob extends $pb.GeneratedMessage {
       result.requiredContextTokens = requiredContextTokens;
     if (minimumWorkerMaxConcurrentRuns != null)
       result.minimumWorkerMaxConcurrentRuns = minimumWorkerMaxConcurrentRuns;
+    if (expectedStateVersion != null)
+      result.expectedStateVersion = expectedStateVersion;
+    if (assignmentAttemptId != null)
+      result.assignmentAttemptId = assignmentAttemptId;
     return result;
   }
 
@@ -107,6 +113,8 @@ class AgentJob extends $pb.GeneratedMessage {
         15, _omitFieldNames ? '' : 'requiredContextTokens', $pb.PbFieldType.O3)
     ..a<$core.int>(16, _omitFieldNames ? '' : 'minimumWorkerMaxConcurrentRuns',
         $pb.PbFieldType.O3)
+    ..aInt64(17, _omitFieldNames ? '' : 'expectedStateVersion')
+    ..aOS(18, _omitFieldNames ? '' : 'assignmentAttemptId')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -267,6 +275,24 @@ class AgentJob extends $pb.GeneratedMessage {
   $core.bool hasMinimumWorkerMaxConcurrentRuns() => $_has(15);
   @$pb.TagNumber(16)
   void clearMinimumWorkerMaxConcurrentRuns() => $_clearField(16);
+
+  @$pb.TagNumber(17)
+  $fixnum.Int64 get expectedStateVersion => $_getI64(16);
+  @$pb.TagNumber(17)
+  set expectedStateVersion($fixnum.Int64 value) => $_setInt64(16, value);
+  @$pb.TagNumber(17)
+  $core.bool hasExpectedStateVersion() => $_has(16);
+  @$pb.TagNumber(17)
+  void clearExpectedStateVersion() => $_clearField(17);
+
+  @$pb.TagNumber(18)
+  $core.String get assignmentAttemptId => $_getSZ(17);
+  @$pb.TagNumber(18)
+  set assignmentAttemptId($core.String value) => $_setString(17, value);
+  @$pb.TagNumber(18)
+  $core.bool hasAssignmentAttemptId() => $_has(17);
+  @$pb.TagNumber(18)
+  void clearAssignmentAttemptId() => $_clearField(18);
 }
 
 /// Where to send a run that the user routed off this machine.
@@ -1055,6 +1081,7 @@ class RuntimeRunCompleted extends $pb.GeneratedMessage {
     $core.String? content,
     $1.Struct? usage,
     RunTokenUsage? tokenUsage,
+    $fixnum.Int64? expectedStateVersion,
   }) {
     final result = create();
     if (runId != null) result.runId = runId;
@@ -1063,6 +1090,8 @@ class RuntimeRunCompleted extends $pb.GeneratedMessage {
     if (content != null) result.content = content;
     if (usage != null) result.usage = usage;
     if (tokenUsage != null) result.tokenUsage = tokenUsage;
+    if (expectedStateVersion != null)
+      result.expectedStateVersion = expectedStateVersion;
     return result;
   }
 
@@ -1086,6 +1115,7 @@ class RuntimeRunCompleted extends $pb.GeneratedMessage {
         subBuilder: $1.Struct.create)
     ..aOM<RunTokenUsage>(5, _omitFieldNames ? '' : 'tokenUsage',
         subBuilder: RunTokenUsage.create)
+    ..aInt64(6, _omitFieldNames ? '' : 'expectedStateVersion')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1161,6 +1191,15 @@ class RuntimeRunCompleted extends $pb.GeneratedMessage {
   void clearTokenUsage() => $_clearField(5);
   @$pb.TagNumber(5)
   RunTokenUsage ensureTokenUsage() => $_ensure(4);
+
+  @$pb.TagNumber(6)
+  $fixnum.Int64 get expectedStateVersion => $_getI64(5);
+  @$pb.TagNumber(6)
+  set expectedStateVersion($fixnum.Int64 value) => $_setInt64(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasExpectedStateVersion() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearExpectedStateVersion() => $_clearField(6);
 }
 
 class RuntimeRunFailed extends $pb.GeneratedMessage {
@@ -1169,12 +1208,20 @@ class RuntimeRunFailed extends $pb.GeneratedMessage {
     $core.String? code,
     $core.String? message,
     $core.bool? retryable,
+    FailureOrigin? failureOrigin,
+    AutomaticRetryClass? automaticRetryClass,
+    $fixnum.Int64? expectedStateVersion,
   }) {
     final result = create();
     if (runId != null) result.runId = runId;
     if (code != null) result.code = code;
     if (message != null) result.message = message;
     if (retryable != null) result.retryable = retryable;
+    if (failureOrigin != null) result.failureOrigin = failureOrigin;
+    if (automaticRetryClass != null)
+      result.automaticRetryClass = automaticRetryClass;
+    if (expectedStateVersion != null)
+      result.expectedStateVersion = expectedStateVersion;
     return result;
   }
 
@@ -1195,6 +1242,17 @@ class RuntimeRunFailed extends $pb.GeneratedMessage {
     ..aOS(2, _omitFieldNames ? '' : 'code')
     ..aOS(3, _omitFieldNames ? '' : 'message')
     ..aOB(4, _omitFieldNames ? '' : 'retryable')
+    ..e<FailureOrigin>(
+        5, _omitFieldNames ? '' : 'failureOrigin', $pb.PbFieldType.OE,
+        defaultOrMaker: FailureOrigin.FAILURE_ORIGIN_UNSPECIFIED,
+        valueOf: FailureOrigin.valueOf,
+        enumValues: FailureOrigin.values)
+    ..e<AutomaticRetryClass>(
+        6, _omitFieldNames ? '' : 'automaticRetryClass', $pb.PbFieldType.OE,
+        defaultOrMaker: AutomaticRetryClass.AUTOMATIC_RETRY_CLASS_UNSPECIFIED,
+        valueOf: AutomaticRetryClass.valueOf,
+        enumValues: AutomaticRetryClass.values)
+    ..aInt64(7, _omitFieldNames ? '' : 'expectedStateVersion')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1253,14 +1311,44 @@ class RuntimeRunFailed extends $pb.GeneratedMessage {
   $core.bool hasRetryable() => $_has(3);
   @$pb.TagNumber(4)
   void clearRetryable() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  FailureOrigin get failureOrigin => $_getN(4);
+  @$pb.TagNumber(5)
+  set failureOrigin(FailureOrigin value) => $_setField(5, value);
+  @$pb.TagNumber(5)
+  $core.bool hasFailureOrigin() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearFailureOrigin() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  AutomaticRetryClass get automaticRetryClass => $_getN(5);
+  @$pb.TagNumber(6)
+  set automaticRetryClass(AutomaticRetryClass value) => $_setField(6, value);
+  @$pb.TagNumber(6)
+  $core.bool hasAutomaticRetryClass() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearAutomaticRetryClass() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $fixnum.Int64 get expectedStateVersion => $_getI64(6);
+  @$pb.TagNumber(7)
+  set expectedStateVersion($fixnum.Int64 value) => $_setInt64(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasExpectedStateVersion() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearExpectedStateVersion() => $_clearField(7);
 }
 
 class RuntimeCancelledAck extends $pb.GeneratedMessage {
   factory RuntimeCancelledAck({
     $core.String? runId,
+    $fixnum.Int64? observedStateVersion,
   }) {
     final result = create();
     if (runId != null) result.runId = runId;
+    if (observedStateVersion != null)
+      result.observedStateVersion = observedStateVersion;
     return result;
   }
 
@@ -1278,6 +1366,7 @@ class RuntimeCancelledAck extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'runId')
+    ..aInt64(2, _omitFieldNames ? '' : 'observedStateVersion')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1309,6 +1398,112 @@ class RuntimeCancelledAck extends $pb.GeneratedMessage {
   $core.bool hasRunId() => $_has(0);
   @$pb.TagNumber(1)
   void clearRunId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $fixnum.Int64 get observedStateVersion => $_getI64(1);
+  @$pb.TagNumber(2)
+  set observedStateVersion($fixnum.Int64 value) => $_setInt64(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasObservedStateVersion() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearObservedStateVersion() => $_clearField(2);
+}
+
+class RuntimeApprovalResumeReady extends $pb.GeneratedMessage {
+  factory RuntimeApprovalResumeReady({
+    $core.String? runId,
+    $core.String? approvalId,
+    $fixnum.Int64? expectedStateVersion,
+    $core.String? assignmentAttemptId,
+  }) {
+    final result = create();
+    if (runId != null) result.runId = runId;
+    if (approvalId != null) result.approvalId = approvalId;
+    if (expectedStateVersion != null)
+      result.expectedStateVersion = expectedStateVersion;
+    if (assignmentAttemptId != null)
+      result.assignmentAttemptId = assignmentAttemptId;
+    return result;
+  }
+
+  RuntimeApprovalResumeReady._();
+
+  factory RuntimeApprovalResumeReady.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RuntimeApprovalResumeReady.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RuntimeApprovalResumeReady',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'runId')
+    ..aOS(2, _omitFieldNames ? '' : 'approvalId')
+    ..aInt64(3, _omitFieldNames ? '' : 'expectedStateVersion')
+    ..aOS(4, _omitFieldNames ? '' : 'assignmentAttemptId')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RuntimeApprovalResumeReady clone() =>
+      RuntimeApprovalResumeReady()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RuntimeApprovalResumeReady copyWith(
+          void Function(RuntimeApprovalResumeReady) updates) =>
+      super.copyWith(
+              (message) => updates(message as RuntimeApprovalResumeReady))
+          as RuntimeApprovalResumeReady;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RuntimeApprovalResumeReady create() => RuntimeApprovalResumeReady._();
+  @$core.override
+  RuntimeApprovalResumeReady createEmptyInstance() => create();
+  static $pb.PbList<RuntimeApprovalResumeReady> createRepeated() =>
+      $pb.PbList<RuntimeApprovalResumeReady>();
+  @$core.pragma('dart2js:noInline')
+  static RuntimeApprovalResumeReady getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RuntimeApprovalResumeReady>(create);
+  static RuntimeApprovalResumeReady? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get runId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set runId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasRunId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearRunId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get approvalId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set approvalId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasApprovalId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearApprovalId() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $fixnum.Int64 get expectedStateVersion => $_getI64(2);
+  @$pb.TagNumber(3)
+  set expectedStateVersion($fixnum.Int64 value) => $_setInt64(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasExpectedStateVersion() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearExpectedStateVersion() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get assignmentAttemptId => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set assignmentAttemptId($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasAssignmentAttemptId() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearAssignmentAttemptId() => $_clearField(4);
 }
 
 enum RuntimeUpdate_Update {
@@ -1320,6 +1515,7 @@ enum RuntimeUpdate_Update {
   runFailed,
   runCancelledAck,
   workerCapabilitiesUpdated,
+  approvalResumeReady,
   notSet
 }
 
@@ -1333,6 +1529,7 @@ class RuntimeUpdate extends $pb.GeneratedMessage {
     RuntimeRunFailed? runFailed,
     RuntimeCancelledAck? runCancelledAck,
     RuntimeWorkerCapabilitiesUpdated? workerCapabilitiesUpdated,
+    RuntimeApprovalResumeReady? approvalResumeReady,
   }) {
     final result = create();
     if (workerReady != null) result.workerReady = workerReady;
@@ -1344,6 +1541,8 @@ class RuntimeUpdate extends $pb.GeneratedMessage {
     if (runCancelledAck != null) result.runCancelledAck = runCancelledAck;
     if (workerCapabilitiesUpdated != null)
       result.workerCapabilitiesUpdated = workerCapabilitiesUpdated;
+    if (approvalResumeReady != null)
+      result.approvalResumeReady = approvalResumeReady;
     return result;
   }
 
@@ -1366,13 +1565,14 @@ class RuntimeUpdate extends $pb.GeneratedMessage {
     6: RuntimeUpdate_Update.runFailed,
     7: RuntimeUpdate_Update.runCancelledAck,
     8: RuntimeUpdate_Update.workerCapabilitiesUpdated,
+    9: RuntimeUpdate_Update.approvalResumeReady,
     0: RuntimeUpdate_Update.notSet
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeUpdate',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..oo(0, [1, 2, 3, 4, 5, 6, 7, 8])
+    ..oo(0, [1, 2, 3, 4, 5, 6, 7, 8, 9])
     ..aOM<RuntimeWorkerReady>(1, _omitFieldNames ? '' : 'workerReady',
         subBuilder: RuntimeWorkerReady.create)
     ..aOM<RuntimeHeartbeat>(2, _omitFieldNames ? '' : 'heartbeat',
@@ -1390,6 +1590,9 @@ class RuntimeUpdate extends $pb.GeneratedMessage {
     ..aOM<RuntimeWorkerCapabilitiesUpdated>(
         8, _omitFieldNames ? '' : 'workerCapabilitiesUpdated',
         subBuilder: RuntimeWorkerCapabilitiesUpdated.create)
+    ..aOM<RuntimeApprovalResumeReady>(
+        9, _omitFieldNames ? '' : 'approvalResumeReady',
+        subBuilder: RuntimeApprovalResumeReady.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1506,6 +1709,18 @@ class RuntimeUpdate extends $pb.GeneratedMessage {
   @$pb.TagNumber(8)
   RuntimeWorkerCapabilitiesUpdated ensureWorkerCapabilitiesUpdated() =>
       $_ensure(7);
+
+  @$pb.TagNumber(9)
+  RuntimeApprovalResumeReady get approvalResumeReady => $_getN(8);
+  @$pb.TagNumber(9)
+  set approvalResumeReady(RuntimeApprovalResumeReady value) =>
+      $_setField(9, value);
+  @$pb.TagNumber(9)
+  $core.bool hasApprovalResumeReady() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearApprovalResumeReady() => $_clearField(9);
+  @$pb.TagNumber(9)
+  RuntimeApprovalResumeReady ensureApprovalResumeReady() => $_ensure(8);
 }
 
 class RuntimeWorkerAccepted extends $pb.GeneratedMessage {
@@ -1582,10 +1797,12 @@ class RuntimeRunCancelled extends $pb.GeneratedMessage {
   factory RuntimeRunCancelled({
     $core.String? runId,
     $core.String? reason,
+    $fixnum.Int64? stateVersion,
   }) {
     final result = create();
     if (runId != null) result.runId = runId;
     if (reason != null) result.reason = reason;
+    if (stateVersion != null) result.stateVersion = stateVersion;
     return result;
   }
 
@@ -1604,6 +1821,7 @@ class RuntimeRunCancelled extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'reason')
+    ..aInt64(3, _omitFieldNames ? '' : 'stateVersion')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1644,6 +1862,15 @@ class RuntimeRunCancelled extends $pb.GeneratedMessage {
   $core.bool hasReason() => $_has(1);
   @$pb.TagNumber(2)
   void clearReason() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $fixnum.Int64 get stateVersion => $_getI64(2);
+  @$pb.TagNumber(3)
+  set stateVersion($fixnum.Int64 value) => $_setInt64(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasStateVersion() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearStateVersion() => $_clearField(3);
 }
 
 class RuntimeApprovalUpdated extends $pb.GeneratedMessage {
@@ -1651,11 +1878,13 @@ class RuntimeApprovalUpdated extends $pb.GeneratedMessage {
     $core.String? approvalId,
     $core.String? approvalToken,
     $core.String? status,
+    $fixnum.Int64? stateVersion,
   }) {
     final result = create();
     if (approvalId != null) result.approvalId = approvalId;
     if (approvalToken != null) result.approvalToken = approvalToken;
     if (status != null) result.status = status;
+    if (stateVersion != null) result.stateVersion = stateVersion;
     return result;
   }
 
@@ -1675,6 +1904,7 @@ class RuntimeApprovalUpdated extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'approvalId')
     ..aOS(2, _omitFieldNames ? '' : 'approvalToken')
     ..aOS(3, _omitFieldNames ? '' : 'status')
+    ..aInt64(4, _omitFieldNames ? '' : 'stateVersion')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1726,6 +1956,112 @@ class RuntimeApprovalUpdated extends $pb.GeneratedMessage {
   $core.bool hasStatus() => $_has(2);
   @$pb.TagNumber(3)
   void clearStatus() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $fixnum.Int64 get stateVersion => $_getI64(3);
+  @$pb.TagNumber(4)
+  set stateVersion($fixnum.Int64 value) => $_setInt64(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasStateVersion() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearStateVersion() => $_clearField(4);
+}
+
+class RuntimeApprovalResumeAccepted extends $pb.GeneratedMessage {
+  factory RuntimeApprovalResumeAccepted({
+    $core.String? runId,
+    $core.String? approvalId,
+    $fixnum.Int64? stateVersion,
+    $core.String? assignmentAttemptId,
+  }) {
+    final result = create();
+    if (runId != null) result.runId = runId;
+    if (approvalId != null) result.approvalId = approvalId;
+    if (stateVersion != null) result.stateVersion = stateVersion;
+    if (assignmentAttemptId != null)
+      result.assignmentAttemptId = assignmentAttemptId;
+    return result;
+  }
+
+  RuntimeApprovalResumeAccepted._();
+
+  factory RuntimeApprovalResumeAccepted.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RuntimeApprovalResumeAccepted.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RuntimeApprovalResumeAccepted',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'runId')
+    ..aOS(2, _omitFieldNames ? '' : 'approvalId')
+    ..aInt64(3, _omitFieldNames ? '' : 'stateVersion')
+    ..aOS(4, _omitFieldNames ? '' : 'assignmentAttemptId')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RuntimeApprovalResumeAccepted clone() =>
+      RuntimeApprovalResumeAccepted()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RuntimeApprovalResumeAccepted copyWith(
+          void Function(RuntimeApprovalResumeAccepted) updates) =>
+      super.copyWith(
+              (message) => updates(message as RuntimeApprovalResumeAccepted))
+          as RuntimeApprovalResumeAccepted;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RuntimeApprovalResumeAccepted create() =>
+      RuntimeApprovalResumeAccepted._();
+  @$core.override
+  RuntimeApprovalResumeAccepted createEmptyInstance() => create();
+  static $pb.PbList<RuntimeApprovalResumeAccepted> createRepeated() =>
+      $pb.PbList<RuntimeApprovalResumeAccepted>();
+  @$core.pragma('dart2js:noInline')
+  static RuntimeApprovalResumeAccepted getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RuntimeApprovalResumeAccepted>(create);
+  static RuntimeApprovalResumeAccepted? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get runId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set runId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasRunId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearRunId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get approvalId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set approvalId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasApprovalId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearApprovalId() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $fixnum.Int64 get stateVersion => $_getI64(2);
+  @$pb.TagNumber(3)
+  set stateVersion($fixnum.Int64 value) => $_setInt64(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasStateVersion() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearStateVersion() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get assignmentAttemptId => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set assignmentAttemptId($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasAssignmentAttemptId() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearAssignmentAttemptId() => $_clearField(4);
 }
 
 class RuntimeShutdownRequested extends $pb.GeneratedMessage {
@@ -1793,6 +2129,7 @@ enum RuntimeCommand_Command {
   approvalUpdated,
   shutdownRequested,
   toolPolicyDecision,
+  approvalResumeAccepted,
   notSet
 }
 
@@ -1804,6 +2141,7 @@ class RuntimeCommand extends $pb.GeneratedMessage {
     RuntimeApprovalUpdated? approvalUpdated,
     RuntimeShutdownRequested? shutdownRequested,
     $4.ToolPolicyDecision? toolPolicyDecision,
+    RuntimeApprovalResumeAccepted? approvalResumeAccepted,
   }) {
     final result = create();
     if (workerAccepted != null) result.workerAccepted = workerAccepted;
@@ -1813,6 +2151,8 @@ class RuntimeCommand extends $pb.GeneratedMessage {
     if (shutdownRequested != null) result.shutdownRequested = shutdownRequested;
     if (toolPolicyDecision != null)
       result.toolPolicyDecision = toolPolicyDecision;
+    if (approvalResumeAccepted != null)
+      result.approvalResumeAccepted = approvalResumeAccepted;
     return result;
   }
 
@@ -1833,13 +2173,14 @@ class RuntimeCommand extends $pb.GeneratedMessage {
     4: RuntimeCommand_Command.approvalUpdated,
     5: RuntimeCommand_Command.shutdownRequested,
     6: RuntimeCommand_Command.toolPolicyDecision,
+    7: RuntimeCommand_Command.approvalResumeAccepted,
     0: RuntimeCommand_Command.notSet
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeCommand',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..oo(0, [1, 2, 3, 4, 5, 6])
+    ..oo(0, [1, 2, 3, 4, 5, 6, 7])
     ..aOM<RuntimeWorkerAccepted>(1, _omitFieldNames ? '' : 'workerAccepted',
         subBuilder: RuntimeWorkerAccepted.create)
     ..aOM<AgentJob>(2, _omitFieldNames ? '' : 'runAssigned',
@@ -1853,6 +2194,9 @@ class RuntimeCommand extends $pb.GeneratedMessage {
         subBuilder: RuntimeShutdownRequested.create)
     ..aOM<$4.ToolPolicyDecision>(6, _omitFieldNames ? '' : 'toolPolicyDecision',
         subBuilder: $4.ToolPolicyDecision.create)
+    ..aOM<RuntimeApprovalResumeAccepted>(
+        7, _omitFieldNames ? '' : 'approvalResumeAccepted',
+        subBuilder: RuntimeApprovalResumeAccepted.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1945,6 +2289,18 @@ class RuntimeCommand extends $pb.GeneratedMessage {
   void clearToolPolicyDecision() => $_clearField(6);
   @$pb.TagNumber(6)
   $4.ToolPolicyDecision ensureToolPolicyDecision() => $_ensure(5);
+
+  @$pb.TagNumber(7)
+  RuntimeApprovalResumeAccepted get approvalResumeAccepted => $_getN(6);
+  @$pb.TagNumber(7)
+  set approvalResumeAccepted(RuntimeApprovalResumeAccepted value) =>
+      $_setField(7, value);
+  @$pb.TagNumber(7)
+  $core.bool hasApprovalResumeAccepted() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearApprovalResumeAccepted() => $_clearField(7);
+  @$pb.TagNumber(7)
+  RuntimeApprovalResumeAccepted ensureApprovalResumeAccepted() => $_ensure(6);
 }
 
 const $core.bool _omitFieldNames =

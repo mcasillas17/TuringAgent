@@ -6,6 +6,7 @@ option go_package = "github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv
 
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
+import "turing/v1/common.proto";
 
 enum TuringEventType {
   TURING_EVENT_TYPE_UNSPECIFIED = 0;
@@ -30,6 +31,8 @@ enum TuringEventType {
   TURING_EVENT_TYPE_ERROR = 19;
   TURING_EVENT_TYPE_SYSTEM = 20;
   TURING_EVENT_TYPE_SESSION_UPDATED = 21;
+  reserved 22;
+  TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED = 23;
 }
 
 message TuringEvent {
@@ -41,6 +44,7 @@ message TuringEvent {
   TuringEventType type = 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Struct payload = 8;
+  RunState run_state = 9;
 }
 
 message ListEventsRequest {

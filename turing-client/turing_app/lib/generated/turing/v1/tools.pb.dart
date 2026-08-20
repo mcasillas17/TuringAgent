@@ -314,6 +314,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
     $core.String? reason,
     $core.bool? terminalRun,
     ToolCallPhase? phase,
+    $fixnum.Int64? runStateVersion,
   }) {
     final result = create();
     if (decision != null) result.decision = decision;
@@ -322,6 +323,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
     if (reason != null) result.reason = reason;
     if (terminalRun != null) result.terminalRun = terminalRun;
     if (phase != null) result.phase = phase;
+    if (runStateVersion != null) result.runStateVersion = runStateVersion;
     return result;
   }
 
@@ -351,6 +353,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
         defaultOrMaker: ToolCallPhase.TOOL_CALL_PHASE_UNSPECIFIED,
         valueOf: ToolCallPhase.valueOf,
         enumValues: ToolCallPhase.values)
+    ..aInt64(7, _omitFieldNames ? '' : 'runStateVersion')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -427,6 +430,15 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
   $core.bool hasPhase() => $_has(5);
   @$pb.TagNumber(6)
   void clearPhase() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $fixnum.Int64 get runStateVersion => $_getI64(6);
+  @$pb.TagNumber(7)
+  set runStateVersion($fixnum.Int64 value) => $_setInt64(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasRunStateVersion() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearRunStateVersion() => $_clearField(7);
 }
 
 const $core.bool _omitFieldNames =

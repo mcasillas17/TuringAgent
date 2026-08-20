@@ -17,6 +17,7 @@ import 'package:protobuf/protobuf.dart' as $pb;
 
 import '../../google/protobuf/struct.pb.dart' as $2;
 import '../../google/protobuf/timestamp.pb.dart' as $1;
+import 'common.pb.dart' as $3;
 import 'events.pbenum.dart';
 
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
@@ -33,6 +34,7 @@ class TuringEvent extends $pb.GeneratedMessage {
     TuringEventType? type,
     $1.Timestamp? createdAt,
     $2.Struct? payload,
+    $3.RunState? runState,
   }) {
     final result = create();
     if (eventId != null) result.eventId = eventId;
@@ -43,6 +45,7 @@ class TuringEvent extends $pb.GeneratedMessage {
     if (type != null) result.type = type;
     if (createdAt != null) result.createdAt = createdAt;
     if (payload != null) result.payload = payload;
+    if (runState != null) result.runState = runState;
     return result;
   }
 
@@ -72,6 +75,8 @@ class TuringEvent extends $pb.GeneratedMessage {
         subBuilder: $1.Timestamp.create)
     ..aOM<$2.Struct>(8, _omitFieldNames ? '' : 'payload',
         subBuilder: $2.Struct.create)
+    ..aOM<$3.RunState>(9, _omitFieldNames ? '' : 'runState',
+        subBuilder: $3.RunState.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -169,6 +174,17 @@ class TuringEvent extends $pb.GeneratedMessage {
   void clearPayload() => $_clearField(8);
   @$pb.TagNumber(8)
   $2.Struct ensurePayload() => $_ensure(7);
+
+  @$pb.TagNumber(9)
+  $3.RunState get runState => $_getN(8);
+  @$pb.TagNumber(9)
+  set runState($3.RunState value) => $_setField(9, value);
+  @$pb.TagNumber(9)
+  $core.bool hasRunState() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearRunState() => $_clearField(9);
+  @$pb.TagNumber(9)
+  $3.RunState ensureRunState() => $_ensure(8);
 }
 
 class ListEventsRequest extends $pb.GeneratedMessage {

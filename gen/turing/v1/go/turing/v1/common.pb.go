@@ -350,6 +350,272 @@ func (RunStatus) EnumDescriptor() ([]byte, []int) {
 	return file_turing_v1_common_proto_rawDescGZIP(), []int{5}
 }
 
+type RunLifecycle int32
+
+const (
+	RunLifecycle_RUN_LIFECYCLE_UNSPECIFIED      RunLifecycle = 0
+	RunLifecycle_RUN_LIFECYCLE_UNKNOWN          RunLifecycle = 1
+	RunLifecycle_RUN_LIFECYCLE_QUEUED           RunLifecycle = 2
+	RunLifecycle_RUN_LIFECYCLE_RUNNING          RunLifecycle = 3
+	RunLifecycle_RUN_LIFECYCLE_WAITING_APPROVAL RunLifecycle = 4
+	RunLifecycle_RUN_LIFECYCLE_RECOVERING       RunLifecycle = 5
+	RunLifecycle_RUN_LIFECYCLE_COMPLETED        RunLifecycle = 6
+	RunLifecycle_RUN_LIFECYCLE_FAILED           RunLifecycle = 7
+	RunLifecycle_RUN_LIFECYCLE_CANCELLED        RunLifecycle = 8
+)
+
+// Enum value maps for RunLifecycle.
+var (
+	RunLifecycle_name = map[int32]string{
+		0: "RUN_LIFECYCLE_UNSPECIFIED",
+		1: "RUN_LIFECYCLE_UNKNOWN",
+		2: "RUN_LIFECYCLE_QUEUED",
+		3: "RUN_LIFECYCLE_RUNNING",
+		4: "RUN_LIFECYCLE_WAITING_APPROVAL",
+		5: "RUN_LIFECYCLE_RECOVERING",
+		6: "RUN_LIFECYCLE_COMPLETED",
+		7: "RUN_LIFECYCLE_FAILED",
+		8: "RUN_LIFECYCLE_CANCELLED",
+	}
+	RunLifecycle_value = map[string]int32{
+		"RUN_LIFECYCLE_UNSPECIFIED":      0,
+		"RUN_LIFECYCLE_UNKNOWN":          1,
+		"RUN_LIFECYCLE_QUEUED":           2,
+		"RUN_LIFECYCLE_RUNNING":          3,
+		"RUN_LIFECYCLE_WAITING_APPROVAL": 4,
+		"RUN_LIFECYCLE_RECOVERING":       5,
+		"RUN_LIFECYCLE_COMPLETED":        6,
+		"RUN_LIFECYCLE_FAILED":           7,
+		"RUN_LIFECYCLE_CANCELLED":        8,
+	}
+)
+
+func (x RunLifecycle) Enum() *RunLifecycle {
+	p := new(RunLifecycle)
+	*p = x
+	return p
+}
+
+func (x RunLifecycle) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RunLifecycle) Descriptor() protoreflect.EnumDescriptor {
+	return file_turing_v1_common_proto_enumTypes[6].Descriptor()
+}
+
+func (RunLifecycle) Type() protoreflect.EnumType {
+	return &file_turing_v1_common_proto_enumTypes[6]
+}
+
+func (x RunLifecycle) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RunLifecycle.Descriptor instead.
+func (RunLifecycle) EnumDescriptor() ([]byte, []int) {
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{6}
+}
+
+type RunOutcomeReason int32
+
+const (
+	RunOutcomeReason_RUN_OUTCOME_REASON_UNSPECIFIED              RunOutcomeReason = 0
+	RunOutcomeReason_RUN_OUTCOME_REASON_UNKNOWN                  RunOutcomeReason = 1
+	RunOutcomeReason_RUN_OUTCOME_REASON_NONE                     RunOutcomeReason = 2
+	RunOutcomeReason_RUN_OUTCOME_REASON_COMPLETED_NO_CONTENT     RunOutcomeReason = 3
+	RunOutcomeReason_RUN_OUTCOME_REASON_USER_CANCELLED           RunOutcomeReason = 4
+	RunOutcomeReason_RUN_OUTCOME_REASON_ABANDONED                RunOutcomeReason = 5
+	RunOutcomeReason_RUN_OUTCOME_REASON_EXPIRED                  RunOutcomeReason = 6
+	RunOutcomeReason_RUN_OUTCOME_REASON_CONTEXT_LIMIT            RunOutcomeReason = 7
+	RunOutcomeReason_RUN_OUTCOME_REASON_PROVIDER_FAILURE         RunOutcomeReason = 8
+	RunOutcomeReason_RUN_OUTCOME_REASON_TOOL_FAILURE             RunOutcomeReason = 9
+	RunOutcomeReason_RUN_OUTCOME_REASON_POLICY_DENIED            RunOutcomeReason = 10
+	RunOutcomeReason_RUN_OUTCOME_REASON_RETRIES_EXHAUSTED        RunOutcomeReason = 11
+	RunOutcomeReason_RUN_OUTCOME_REASON_RECOVERY_INTERRUPTED     RunOutcomeReason = 12
+	RunOutcomeReason_RUN_OUTCOME_REASON_SIDE_EFFECT_UNCERTAIN    RunOutcomeReason = 13
+	RunOutcomeReason_RUN_OUTCOME_REASON_APPROVAL_DELIVERY_FAILED RunOutcomeReason = 14
+	RunOutcomeReason_RUN_OUTCOME_REASON_INTERNAL_FAILURE         RunOutcomeReason = 15
+	RunOutcomeReason_RUN_OUTCOME_REASON_LEGACY_UNKNOWN           RunOutcomeReason = 16
+)
+
+// Enum value maps for RunOutcomeReason.
+var (
+	RunOutcomeReason_name = map[int32]string{
+		0:  "RUN_OUTCOME_REASON_UNSPECIFIED",
+		1:  "RUN_OUTCOME_REASON_UNKNOWN",
+		2:  "RUN_OUTCOME_REASON_NONE",
+		3:  "RUN_OUTCOME_REASON_COMPLETED_NO_CONTENT",
+		4:  "RUN_OUTCOME_REASON_USER_CANCELLED",
+		5:  "RUN_OUTCOME_REASON_ABANDONED",
+		6:  "RUN_OUTCOME_REASON_EXPIRED",
+		7:  "RUN_OUTCOME_REASON_CONTEXT_LIMIT",
+		8:  "RUN_OUTCOME_REASON_PROVIDER_FAILURE",
+		9:  "RUN_OUTCOME_REASON_TOOL_FAILURE",
+		10: "RUN_OUTCOME_REASON_POLICY_DENIED",
+		11: "RUN_OUTCOME_REASON_RETRIES_EXHAUSTED",
+		12: "RUN_OUTCOME_REASON_RECOVERY_INTERRUPTED",
+		13: "RUN_OUTCOME_REASON_SIDE_EFFECT_UNCERTAIN",
+		14: "RUN_OUTCOME_REASON_APPROVAL_DELIVERY_FAILED",
+		15: "RUN_OUTCOME_REASON_INTERNAL_FAILURE",
+		16: "RUN_OUTCOME_REASON_LEGACY_UNKNOWN",
+	}
+	RunOutcomeReason_value = map[string]int32{
+		"RUN_OUTCOME_REASON_UNSPECIFIED":              0,
+		"RUN_OUTCOME_REASON_UNKNOWN":                  1,
+		"RUN_OUTCOME_REASON_NONE":                     2,
+		"RUN_OUTCOME_REASON_COMPLETED_NO_CONTENT":     3,
+		"RUN_OUTCOME_REASON_USER_CANCELLED":           4,
+		"RUN_OUTCOME_REASON_ABANDONED":                5,
+		"RUN_OUTCOME_REASON_EXPIRED":                  6,
+		"RUN_OUTCOME_REASON_CONTEXT_LIMIT":            7,
+		"RUN_OUTCOME_REASON_PROVIDER_FAILURE":         8,
+		"RUN_OUTCOME_REASON_TOOL_FAILURE":             9,
+		"RUN_OUTCOME_REASON_POLICY_DENIED":            10,
+		"RUN_OUTCOME_REASON_RETRIES_EXHAUSTED":        11,
+		"RUN_OUTCOME_REASON_RECOVERY_INTERRUPTED":     12,
+		"RUN_OUTCOME_REASON_SIDE_EFFECT_UNCERTAIN":    13,
+		"RUN_OUTCOME_REASON_APPROVAL_DELIVERY_FAILED": 14,
+		"RUN_OUTCOME_REASON_INTERNAL_FAILURE":         15,
+		"RUN_OUTCOME_REASON_LEGACY_UNKNOWN":           16,
+	}
+)
+
+func (x RunOutcomeReason) Enum() *RunOutcomeReason {
+	p := new(RunOutcomeReason)
+	*p = x
+	return p
+}
+
+func (x RunOutcomeReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RunOutcomeReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_turing_v1_common_proto_enumTypes[7].Descriptor()
+}
+
+func (RunOutcomeReason) Type() protoreflect.EnumType {
+	return &file_turing_v1_common_proto_enumTypes[7]
+}
+
+func (x RunOutcomeReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RunOutcomeReason.Descriptor instead.
+func (RunOutcomeReason) EnumDescriptor() ([]byte, []int) {
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{7}
+}
+
+type RunState struct {
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	RunId                 string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	UserMessageId         string                 `protobuf:"bytes,2,opt,name=user_message_id,json=userMessageId,proto3" json:"user_message_id,omitempty"`
+	AssistantMessageId    string                 `protobuf:"bytes,3,opt,name=assistant_message_id,json=assistantMessageId,proto3" json:"assistant_message_id,omitempty"`
+	Lifecycle             RunLifecycle           `protobuf:"varint,4,opt,name=lifecycle,proto3,enum=turing.v1.RunLifecycle" json:"lifecycle,omitempty"`
+	OutcomeReason         RunOutcomeReason       `protobuf:"varint,5,opt,name=outcome_reason,json=outcomeReason,proto3,enum=turing.v1.RunOutcomeReason" json:"outcome_reason,omitempty"`
+	StateVersion          int64                  `protobuf:"varint,6,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
+	StateUpdatedAt        *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=state_updated_at,json=stateUpdatedAt,proto3" json:"state_updated_at,omitempty"`
+	FinishedAt            *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
+	HasDisplayableContent bool                   `protobuf:"varint,9,opt,name=has_displayable_content,json=hasDisplayableContent,proto3" json:"has_displayable_content,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *RunState) Reset() {
+	*x = RunState{}
+	mi := &file_turing_v1_common_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RunState) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunState) ProtoMessage() {}
+
+func (x *RunState) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_common_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunState.ProtoReflect.Descriptor instead.
+func (*RunState) Descriptor() ([]byte, []int) {
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *RunState) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *RunState) GetUserMessageId() string {
+	if x != nil {
+		return x.UserMessageId
+	}
+	return ""
+}
+
+func (x *RunState) GetAssistantMessageId() string {
+	if x != nil {
+		return x.AssistantMessageId
+	}
+	return ""
+}
+
+func (x *RunState) GetLifecycle() RunLifecycle {
+	if x != nil {
+		return x.Lifecycle
+	}
+	return RunLifecycle_RUN_LIFECYCLE_UNSPECIFIED
+}
+
+func (x *RunState) GetOutcomeReason() RunOutcomeReason {
+	if x != nil {
+		return x.OutcomeReason
+	}
+	return RunOutcomeReason_RUN_OUTCOME_REASON_UNSPECIFIED
+}
+
+func (x *RunState) GetStateVersion() int64 {
+	if x != nil {
+		return x.StateVersion
+	}
+	return 0
+}
+
+func (x *RunState) GetStateUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.StateUpdatedAt
+	}
+	return nil
+}
+
+func (x *RunState) GetFinishedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.FinishedAt
+	}
+	return nil
+}
+
+func (x *RunState) GetHasDisplayableContent() bool {
+	if x != nil {
+		return x.HasDisplayableContent
+	}
+	return false
+}
+
 type RequestMetadata struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
@@ -359,7 +625,7 @@ type RequestMetadata struct {
 
 func (x *RequestMetadata) Reset() {
 	*x = RequestMetadata{}
-	mi := &file_turing_v1_common_proto_msgTypes[0]
+	mi := &file_turing_v1_common_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -371,7 +637,7 @@ func (x *RequestMetadata) String() string {
 func (*RequestMetadata) ProtoMessage() {}
 
 func (x *RequestMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[0]
+	mi := &file_turing_v1_common_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -384,7 +650,7 @@ func (x *RequestMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestMetadata.ProtoReflect.Descriptor instead.
 func (*RequestMetadata) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{0}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *RequestMetadata) GetRequestId() string {
@@ -404,7 +670,7 @@ type PageRequest struct {
 
 func (x *PageRequest) Reset() {
 	*x = PageRequest{}
-	mi := &file_turing_v1_common_proto_msgTypes[1]
+	mi := &file_turing_v1_common_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -416,7 +682,7 @@ func (x *PageRequest) String() string {
 func (*PageRequest) ProtoMessage() {}
 
 func (x *PageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[1]
+	mi := &file_turing_v1_common_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -429,7 +695,7 @@ func (x *PageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PageRequest.ProtoReflect.Descriptor instead.
 func (*PageRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{1}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *PageRequest) GetLimit() int32 {
@@ -455,7 +721,7 @@ type PageResponse struct {
 
 func (x *PageResponse) Reset() {
 	*x = PageResponse{}
-	mi := &file_turing_v1_common_proto_msgTypes[2]
+	mi := &file_turing_v1_common_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -467,7 +733,7 @@ func (x *PageResponse) String() string {
 func (*PageResponse) ProtoMessage() {}
 
 func (x *PageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[2]
+	mi := &file_turing_v1_common_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -480,7 +746,7 @@ func (x *PageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PageResponse.ProtoReflect.Descriptor instead.
 func (*PageResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{2}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *PageResponse) GetNextCursor() string {
@@ -502,7 +768,7 @@ type ErrorDetail struct {
 
 func (x *ErrorDetail) Reset() {
 	*x = ErrorDetail{}
-	mi := &file_turing_v1_common_proto_msgTypes[3]
+	mi := &file_turing_v1_common_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -514,7 +780,7 @@ func (x *ErrorDetail) String() string {
 func (*ErrorDetail) ProtoMessage() {}
 
 func (x *ErrorDetail) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[3]
+	mi := &file_turing_v1_common_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -527,7 +793,7 @@ func (x *ErrorDetail) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ErrorDetail.ProtoReflect.Descriptor instead.
 func (*ErrorDetail) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{3}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ErrorDetail) GetCode() string {
@@ -569,7 +835,7 @@ type RoutingUnavailableDetail struct {
 
 func (x *RoutingUnavailableDetail) Reset() {
 	*x = RoutingUnavailableDetail{}
-	mi := &file_turing_v1_common_proto_msgTypes[4]
+	mi := &file_turing_v1_common_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -581,7 +847,7 @@ func (x *RoutingUnavailableDetail) String() string {
 func (*RoutingUnavailableDetail) ProtoMessage() {}
 
 func (x *RoutingUnavailableDetail) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[4]
+	mi := &file_turing_v1_common_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -594,7 +860,7 @@ func (x *RoutingUnavailableDetail) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RoutingUnavailableDetail.ProtoReflect.Descriptor instead.
 func (*RoutingUnavailableDetail) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{4}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *RoutingUnavailableDetail) GetKind() RoutingRequirementKind {
@@ -631,7 +897,7 @@ type ModelCapability struct {
 
 func (x *ModelCapability) Reset() {
 	*x = ModelCapability{}
-	mi := &file_turing_v1_common_proto_msgTypes[5]
+	mi := &file_turing_v1_common_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -643,7 +909,7 @@ func (x *ModelCapability) String() string {
 func (*ModelCapability) ProtoMessage() {}
 
 func (x *ModelCapability) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[5]
+	mi := &file_turing_v1_common_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -656,7 +922,7 @@ func (x *ModelCapability) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelCapability.ProtoReflect.Descriptor instead.
 func (*ModelCapability) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{5}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ModelCapability) GetProvider() ModelProvider {
@@ -692,7 +958,7 @@ type ProviderConfig struct {
 
 func (x *ProviderConfig) Reset() {
 	*x = ProviderConfig{}
-	mi := &file_turing_v1_common_proto_msgTypes[6]
+	mi := &file_turing_v1_common_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -704,7 +970,7 @@ func (x *ProviderConfig) String() string {
 func (*ProviderConfig) ProtoMessage() {}
 
 func (x *ProviderConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[6]
+	mi := &file_turing_v1_common_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -717,7 +983,7 @@ func (x *ProviderConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderConfig.ProtoReflect.Descriptor instead.
 func (*ProviderConfig) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{6}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ProviderConfig) GetProvider() ModelProvider {
@@ -759,7 +1025,7 @@ type AgentDescriptor struct {
 
 func (x *AgentDescriptor) Reset() {
 	*x = AgentDescriptor{}
-	mi := &file_turing_v1_common_proto_msgTypes[7]
+	mi := &file_turing_v1_common_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -771,7 +1037,7 @@ func (x *AgentDescriptor) String() string {
 func (*AgentDescriptor) ProtoMessage() {}
 
 func (x *AgentDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[7]
+	mi := &file_turing_v1_common_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -784,7 +1050,7 @@ func (x *AgentDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDescriptor.ProtoReflect.Descriptor instead.
 func (*AgentDescriptor) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{7}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *AgentDescriptor) GetId() AgentId {
@@ -818,13 +1084,14 @@ type Message struct {
 	ContentType   string                 `protobuf:"bytes,6,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
 	Sequence      int64                  `protobuf:"varint,7,opt,name=sequence,proto3" json:"sequence,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	RunState      *RunState              `protobuf:"bytes,9,opt,name=run_state,json=runState,proto3" json:"run_state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Message) Reset() {
 	*x = Message{}
-	mi := &file_turing_v1_common_proto_msgTypes[8]
+	mi := &file_turing_v1_common_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -836,7 +1103,7 @@ func (x *Message) String() string {
 func (*Message) ProtoMessage() {}
 
 func (x *Message) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[8]
+	mi := &file_turing_v1_common_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -849,7 +1116,7 @@ func (x *Message) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Message.ProtoReflect.Descriptor instead.
 func (*Message) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{8}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Message) GetMessageId() string {
@@ -908,11 +1175,29 @@ func (x *Message) GetCreatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *Message) GetRunState() *RunState {
+	if x != nil {
+		return x.RunState
+	}
+	return nil
+}
+
 var File_turing_v1_common_proto protoreflect.FileDescriptor
 
 const file_turing_v1_common_proto_rawDesc = "" +
 	"\n" +
-	"\x16turing/v1/common.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"0\n" +
+	"\x16turing/v1/common.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd6\x03\n" +
+	"\bRunState\x12\x15\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12&\n" +
+	"\x0fuser_message_id\x18\x02 \x01(\tR\ruserMessageId\x120\n" +
+	"\x14assistant_message_id\x18\x03 \x01(\tR\x12assistantMessageId\x125\n" +
+	"\tlifecycle\x18\x04 \x01(\x0e2\x17.turing.v1.RunLifecycleR\tlifecycle\x12B\n" +
+	"\x0eoutcome_reason\x18\x05 \x01(\x0e2\x1b.turing.v1.RunOutcomeReasonR\routcomeReason\x12#\n" +
+	"\rstate_version\x18\x06 \x01(\x03R\fstateVersion\x12D\n" +
+	"\x10state_updated_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\x0estateUpdatedAt\x12;\n" +
+	"\vfinished_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"finishedAt\x126\n" +
+	"\x17has_displayable_content\x18\t \x01(\bR\x15hasDisplayableContent\"0\n" +
 	"\x0fRequestMetadata\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\";\n" +
@@ -944,7 +1229,7 @@ const file_turing_v1_common_proto_rawDesc = "" +
 	"\x0fAgentDescriptor\x12\"\n" +
 	"\x02id\x18\x01 \x01(\x0e2\x12.turing.v1.AgentIdR\x02id\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12\x1c\n" +
-	"\tavailable\x18\x03 \x01(\bR\tavailable\"\x9e\x02\n" +
+	"\tavailable\x18\x03 \x01(\bR\tavailable\"\xd0\x02\n" +
 	"\aMessage\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1d\n" +
@@ -956,7 +1241,8 @@ const file_turing_v1_common_proto_rawDesc = "" +
 	"\fcontent_type\x18\x06 \x01(\tR\vcontentType\x12\x1a\n" +
 	"\bsequence\x18\a \x01(\x03R\bsequence\x129\n" +
 	"\n" +
-	"created_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt*C\n" +
+	"created_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x120\n" +
+	"\trun_state\x18\t \x01(\v2\x13.turing.v1.RunStateR\brunState*C\n" +
 	"\aAgentId\x12\x18\n" +
 	"\x14AGENT_ID_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aAGENT_ID_GENERAL_ASSISTANT\x10\x01*p\n" +
@@ -992,7 +1278,36 @@ const file_turing_v1_common_proto_rawDesc = "" +
 	"\x1bRUN_STATUS_WAITING_APPROVAL\x10\x03\x12\x18\n" +
 	"\x14RUN_STATUS_COMPLETED\x10\x04\x12\x15\n" +
 	"\x11RUN_STATUS_FAILED\x10\x05\x12\x18\n" +
-	"\x14RUN_STATUS_CANCELLED\x10\x06B>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
+	"\x14RUN_STATUS_CANCELLED\x10\x06*\x93\x02\n" +
+	"\fRunLifecycle\x12\x1d\n" +
+	"\x19RUN_LIFECYCLE_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15RUN_LIFECYCLE_UNKNOWN\x10\x01\x12\x18\n" +
+	"\x14RUN_LIFECYCLE_QUEUED\x10\x02\x12\x19\n" +
+	"\x15RUN_LIFECYCLE_RUNNING\x10\x03\x12\"\n" +
+	"\x1eRUN_LIFECYCLE_WAITING_APPROVAL\x10\x04\x12\x1c\n" +
+	"\x18RUN_LIFECYCLE_RECOVERING\x10\x05\x12\x1b\n" +
+	"\x17RUN_LIFECYCLE_COMPLETED\x10\x06\x12\x18\n" +
+	"\x14RUN_LIFECYCLE_FAILED\x10\a\x12\x1b\n" +
+	"\x17RUN_LIFECYCLE_CANCELLED\x10\b*\xa9\x05\n" +
+	"\x10RunOutcomeReason\x12\"\n" +
+	"\x1eRUN_OUTCOME_REASON_UNSPECIFIED\x10\x00\x12\x1e\n" +
+	"\x1aRUN_OUTCOME_REASON_UNKNOWN\x10\x01\x12\x1b\n" +
+	"\x17RUN_OUTCOME_REASON_NONE\x10\x02\x12+\n" +
+	"'RUN_OUTCOME_REASON_COMPLETED_NO_CONTENT\x10\x03\x12%\n" +
+	"!RUN_OUTCOME_REASON_USER_CANCELLED\x10\x04\x12 \n" +
+	"\x1cRUN_OUTCOME_REASON_ABANDONED\x10\x05\x12\x1e\n" +
+	"\x1aRUN_OUTCOME_REASON_EXPIRED\x10\x06\x12$\n" +
+	" RUN_OUTCOME_REASON_CONTEXT_LIMIT\x10\a\x12'\n" +
+	"#RUN_OUTCOME_REASON_PROVIDER_FAILURE\x10\b\x12#\n" +
+	"\x1fRUN_OUTCOME_REASON_TOOL_FAILURE\x10\t\x12$\n" +
+	" RUN_OUTCOME_REASON_POLICY_DENIED\x10\n" +
+	"\x12(\n" +
+	"$RUN_OUTCOME_REASON_RETRIES_EXHAUSTED\x10\v\x12+\n" +
+	"'RUN_OUTCOME_REASON_RECOVERY_INTERRUPTED\x10\f\x12,\n" +
+	"(RUN_OUTCOME_REASON_SIDE_EFFECT_UNCERTAIN\x10\r\x12/\n" +
+	"+RUN_OUTCOME_REASON_APPROVAL_DELIVERY_FAILED\x10\x0e\x12'\n" +
+	"#RUN_OUTCOME_REASON_INTERNAL_FAILURE\x10\x0f\x12%\n" +
+	"!RUN_OUTCOME_REASON_LEGACY_UNKNOWN\x10\x10B>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
 
 var (
 	file_turing_v1_common_proto_rawDescOnce sync.Once
@@ -1006,8 +1321,8 @@ func file_turing_v1_common_proto_rawDescGZIP() []byte {
 	return file_turing_v1_common_proto_rawDescData
 }
 
-var file_turing_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_turing_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_turing_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
+var file_turing_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_turing_v1_common_proto_goTypes = []any{
 	(AgentId)(0),                     // 0: turing.v1.AgentId
 	(ModelProvider)(0),               // 1: turing.v1.ModelProvider
@@ -1015,32 +1330,40 @@ var file_turing_v1_common_proto_goTypes = []any{
 	(MessageRole)(0),                 // 3: turing.v1.MessageRole
 	(ToolPolicy)(0),                  // 4: turing.v1.ToolPolicy
 	(RunStatus)(0),                   // 5: turing.v1.RunStatus
-	(*RequestMetadata)(nil),          // 6: turing.v1.RequestMetadata
-	(*PageRequest)(nil),              // 7: turing.v1.PageRequest
-	(*PageResponse)(nil),             // 8: turing.v1.PageResponse
-	(*ErrorDetail)(nil),              // 9: turing.v1.ErrorDetail
-	(*RoutingUnavailableDetail)(nil), // 10: turing.v1.RoutingUnavailableDetail
-	(*ModelCapability)(nil),          // 11: turing.v1.ModelCapability
-	(*ProviderConfig)(nil),           // 12: turing.v1.ProviderConfig
-	(*AgentDescriptor)(nil),          // 13: turing.v1.AgentDescriptor
-	(*Message)(nil),                  // 14: turing.v1.Message
-	(*structpb.Struct)(nil),          // 15: google.protobuf.Struct
-	(*timestamppb.Timestamp)(nil),    // 16: google.protobuf.Timestamp
+	(RunLifecycle)(0),                // 6: turing.v1.RunLifecycle
+	(RunOutcomeReason)(0),            // 7: turing.v1.RunOutcomeReason
+	(*RunState)(nil),                 // 8: turing.v1.RunState
+	(*RequestMetadata)(nil),          // 9: turing.v1.RequestMetadata
+	(*PageRequest)(nil),              // 10: turing.v1.PageRequest
+	(*PageResponse)(nil),             // 11: turing.v1.PageResponse
+	(*ErrorDetail)(nil),              // 12: turing.v1.ErrorDetail
+	(*RoutingUnavailableDetail)(nil), // 13: turing.v1.RoutingUnavailableDetail
+	(*ModelCapability)(nil),          // 14: turing.v1.ModelCapability
+	(*ProviderConfig)(nil),           // 15: turing.v1.ProviderConfig
+	(*AgentDescriptor)(nil),          // 16: turing.v1.AgentDescriptor
+	(*Message)(nil),                  // 17: turing.v1.Message
+	(*timestamppb.Timestamp)(nil),    // 18: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),          // 19: google.protobuf.Struct
 }
 var file_turing_v1_common_proto_depIdxs = []int32{
-	15, // 0: turing.v1.ErrorDetail.details:type_name -> google.protobuf.Struct
-	2,  // 1: turing.v1.RoutingUnavailableDetail.kind:type_name -> turing.v1.RoutingRequirementKind
-	1,  // 2: turing.v1.ModelCapability.provider:type_name -> turing.v1.ModelProvider
-	1,  // 3: turing.v1.ProviderConfig.provider:type_name -> turing.v1.ModelProvider
-	11, // 4: turing.v1.ProviderConfig.models:type_name -> turing.v1.ModelCapability
-	0,  // 5: turing.v1.AgentDescriptor.id:type_name -> turing.v1.AgentId
-	3,  // 6: turing.v1.Message.role:type_name -> turing.v1.MessageRole
-	16, // 7: turing.v1.Message.created_at:type_name -> google.protobuf.Timestamp
-	8,  // [8:8] is the sub-list for method output_type
-	8,  // [8:8] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	6,  // 0: turing.v1.RunState.lifecycle:type_name -> turing.v1.RunLifecycle
+	7,  // 1: turing.v1.RunState.outcome_reason:type_name -> turing.v1.RunOutcomeReason
+	18, // 2: turing.v1.RunState.state_updated_at:type_name -> google.protobuf.Timestamp
+	18, // 3: turing.v1.RunState.finished_at:type_name -> google.protobuf.Timestamp
+	19, // 4: turing.v1.ErrorDetail.details:type_name -> google.protobuf.Struct
+	2,  // 5: turing.v1.RoutingUnavailableDetail.kind:type_name -> turing.v1.RoutingRequirementKind
+	1,  // 6: turing.v1.ModelCapability.provider:type_name -> turing.v1.ModelProvider
+	1,  // 7: turing.v1.ProviderConfig.provider:type_name -> turing.v1.ModelProvider
+	14, // 8: turing.v1.ProviderConfig.models:type_name -> turing.v1.ModelCapability
+	0,  // 9: turing.v1.AgentDescriptor.id:type_name -> turing.v1.AgentId
+	3,  // 10: turing.v1.Message.role:type_name -> turing.v1.MessageRole
+	18, // 11: turing.v1.Message.created_at:type_name -> google.protobuf.Timestamp
+	8,  // 12: turing.v1.Message.run_state:type_name -> turing.v1.RunState
+	13, // [13:13] is the sub-list for method output_type
+	13, // [13:13] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_common_proto_init() }
@@ -1053,8 +1376,8 @@ func file_turing_v1_common_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_common_proto_rawDesc), len(file_turing_v1_common_proto_rawDesc)),
-			NumEnums:      6,
-			NumMessages:   9,
+			NumEnums:      8,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

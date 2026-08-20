@@ -28,12 +28,14 @@ message RunQueued {
   string run_id = 1;
   string job_id = 2;
   string trace_id = 3;
+  RunState run_state = 4;
 }
 
 message RunStarted {
   string run_id = 1;
   string job_id = 2;
   int32 attempt = 3;
+  RunState run_state = 4;
 }
 
 message MessageStarted {
@@ -57,6 +59,7 @@ message ApprovalEvent {
   string approval_id = 1;
   string tool_name = 2;
   string args_summary = 3;
+  RunState run_state = 4;
 }
 
 message MessageCompleted {
@@ -67,18 +70,25 @@ message MessageCompleted {
 message RunCompleted {
   string run_id = 1;
   string assistant_message_id = 2;
+  RunState run_state = 3;
 }
 
 message RunFailed {
   string run_id = 1;
   string code = 2;
   string message = 3;
-  bool retryable = 4;
+  bool retryable = 4 [deprecated = true];
+  RunState run_state = 5;
 }
 
 message RunCancelled {
   string run_id = 1;
   string reason = 2;
+  RunState run_state = 3;
+}
+
+message RunStateChanged {
+  RunState run_state = 1;
 }
 
 message ChatStreamEvent {
@@ -104,6 +114,7 @@ message ChatStreamEvent {
     RunFailed run_failed = 24;
     RunCancelled run_cancelled = 25;
     TuringEvent persisted_event = 26;
+    RunStateChanged run_state_changed = 27;
   }
 }
 

@@ -9,6 +9,36 @@ import "turing/v1/common.proto";
 import "turing/v1/events.proto";
 import "turing/v1/tools.proto";
 
+enum FailureOrigin {
+  FAILURE_ORIGIN_UNSPECIFIED = 0;
+  FAILURE_ORIGIN_UNKNOWN = 1;
+  FAILURE_ORIGIN_CONTEXT_ASSEMBLY = 2;
+  FAILURE_ORIGIN_EXTERNAL_PROVIDER = 3;
+  FAILURE_ORIGIN_PROVIDER_CONFIGURATION = 4;
+  FAILURE_ORIGIN_PROVIDER_PROTOCOL = 5;
+  FAILURE_ORIGIN_PROVIDER_TRANSPORT = 6;
+  FAILURE_ORIGIN_PROVIDER_OUTPUT_GUARD = 7;
+  FAILURE_ORIGIN_TOOL_INFRASTRUCTURE = 8;
+  FAILURE_ORIGIN_TOOL_EXECUTION = 9;
+  FAILURE_ORIGIN_TOOL_GUARD = 10;
+  FAILURE_ORIGIN_TOOL_POLICY = 11;
+  FAILURE_ORIGIN_APPROVAL_TRANSPORT = 12;
+  FAILURE_ORIGIN_APPROVAL_EXPIRY = 13;
+  FAILURE_ORIGIN_AUTOMATION_POLICY = 14;
+  FAILURE_ORIGIN_WORKER_RUNTIME = 15;
+  FAILURE_ORIGIN_DISPATCH = 16;
+  FAILURE_ORIGIN_RECOVERY = 17;
+  FAILURE_ORIGIN_ORCHESTRATOR_INTERNAL = 18;
+  FAILURE_ORIGIN_CLIENT_LIFECYCLE = 19;
+}
+
+enum AutomaticRetryClass {
+  AUTOMATIC_RETRY_CLASS_UNSPECIFIED = 0;
+  AUTOMATIC_RETRY_CLASS_UNKNOWN = 1;
+  AUTOMATIC_RETRY_CLASS_NEVER = 2;
+  AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT = 3;
+}
+
 message AgentJob {
   string job_id = 1;
   string run_id = 2;
@@ -31,6 +61,8 @@ message AgentJob {
   ExternalAgentTarget external_agent = 14;
   int32 required_context_tokens = 15;
   int32 minimum_worker_max_concurrent_runs = 16;
+  int64 expected_state_version = 17;
+  string assignment_attempt_id = 18;
 }
 
 // Where to send a run that the user routed off this machine.
@@ -143,6 +175,7 @@ message RuntimeRunCompleted {
   // means zero, so they travel in their own typed field below.
   google.protobuf.Struct usage = 4;
   RunTokenUsage token_usage = 5;
+  int64 expected_state_version = 6;
 }
 
 message RuntimeRunFailed {
@@ -150,10 +183,21 @@ message RuntimeRunFailed {
   string code = 2;
   string message = 3;
   bool retryable = 4;
+  FailureOrigin failure_origin = 5;
+  AutomaticRetryClass automatic_retry_class = 6;
+  int64 expected_state_version = 7;
 }
 
 message RuntimeCancelledAck {
   string run_id = 1;
+  int64 observed_state_version = 2;
+}
+
+message RuntimeApprovalResumeReady {
+  string run_id = 1;
+  string approval_id = 2;
+  int64 expected_state_version = 3;
+  string assignment_attempt_id = 4;
 }
 
 message RuntimeUpdate {
@@ -166,6 +210,7 @@ message RuntimeUpdate {
     RuntimeRunFailed run_failed = 6;
     RuntimeCancelledAck run_cancelled_ack = 7;
     RuntimeWorkerCapabilitiesUpdated worker_capabilities_updated = 8;
+    RuntimeApprovalResumeReady approval_resume_ready = 9;
   }
 }
 
@@ -177,12 +222,21 @@ message RuntimeWorkerAccepted {
 message RuntimeRunCancelled {
   string run_id = 1;
   string reason = 2;
+  int64 state_version = 3;
 }
 
 message RuntimeApprovalUpdated {
   string approval_id = 1;
   string approval_token = 2;
   string status = 3;
+  int64 state_version = 4;
+}
+
+message RuntimeApprovalResumeAccepted {
+  string run_id = 1;
+  string approval_id = 2;
+  int64 state_version = 3;
+  string assignment_attempt_id = 4;
 }
 
 message RuntimeShutdownRequested {
@@ -197,6 +251,7 @@ message RuntimeCommand {
     RuntimeApprovalUpdated approval_updated = 4;
     RuntimeShutdownRequested shutdown_requested = 5;
     ToolPolicyDecision tool_policy_decision = 6;
+    RuntimeApprovalResumeAccepted approval_resume_accepted = 7;
   }
 }
 

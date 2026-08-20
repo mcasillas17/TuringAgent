@@ -125,6 +125,138 @@ final $typed_data.Uint8List runStatusDescriptor = $convert.base64Decode(
     'UFJPVkFMEAMSGAoUUlVOX1NUQVRVU19DT01QTEVURUQQBBIVChFSVU5fU1RBVFVTX0ZBSUxFRB'
     'AFEhgKFFJVTl9TVEFUVVNfQ0FOQ0VMTEVEEAY=');
 
+@$core.Deprecated('Use runLifecycleDescriptor instead')
+const RunLifecycle$json = {
+  '1': 'RunLifecycle',
+  '2': [
+    {'1': 'RUN_LIFECYCLE_UNSPECIFIED', '2': 0},
+    {'1': 'RUN_LIFECYCLE_UNKNOWN', '2': 1},
+    {'1': 'RUN_LIFECYCLE_QUEUED', '2': 2},
+    {'1': 'RUN_LIFECYCLE_RUNNING', '2': 3},
+    {'1': 'RUN_LIFECYCLE_WAITING_APPROVAL', '2': 4},
+    {'1': 'RUN_LIFECYCLE_RECOVERING', '2': 5},
+    {'1': 'RUN_LIFECYCLE_COMPLETED', '2': 6},
+    {'1': 'RUN_LIFECYCLE_FAILED', '2': 7},
+    {'1': 'RUN_LIFECYCLE_CANCELLED', '2': 8},
+  ],
+};
+
+/// Descriptor for `RunLifecycle`. Decode as a `google.protobuf.EnumDescriptorProto`.
+final $typed_data.Uint8List runLifecycleDescriptor = $convert.base64Decode(
+    'CgxSdW5MaWZlY3ljbGUSHQoZUlVOX0xJRkVDWUNMRV9VTlNQRUNJRklFRBAAEhkKFVJVTl9MSU'
+    'ZFQ1lDTEVfVU5LTk9XThABEhgKFFJVTl9MSUZFQ1lDTEVfUVVFVUVEEAISGQoVUlVOX0xJRkVD'
+    'WUNMRV9SVU5OSU5HEAMSIgoeUlVOX0xJRkVDWUNMRV9XQUlUSU5HX0FQUFJPVkFMEAQSHAoYUl'
+    'VOX0xJRkVDWUNMRV9SRUNPVkVSSU5HEAUSGwoXUlVOX0xJRkVDWUNMRV9DT01QTEVURUQQBhIY'
+    'ChRSVU5fTElGRUNZQ0xFX0ZBSUxFRBAHEhsKF1JVTl9MSUZFQ1lDTEVfQ0FOQ0VMTEVEEAg=');
+
+@$core.Deprecated('Use runOutcomeReasonDescriptor instead')
+const RunOutcomeReason$json = {
+  '1': 'RunOutcomeReason',
+  '2': [
+    {'1': 'RUN_OUTCOME_REASON_UNSPECIFIED', '2': 0},
+    {'1': 'RUN_OUTCOME_REASON_UNKNOWN', '2': 1},
+    {'1': 'RUN_OUTCOME_REASON_NONE', '2': 2},
+    {'1': 'RUN_OUTCOME_REASON_COMPLETED_NO_CONTENT', '2': 3},
+    {'1': 'RUN_OUTCOME_REASON_USER_CANCELLED', '2': 4},
+    {'1': 'RUN_OUTCOME_REASON_ABANDONED', '2': 5},
+    {'1': 'RUN_OUTCOME_REASON_EXPIRED', '2': 6},
+    {'1': 'RUN_OUTCOME_REASON_CONTEXT_LIMIT', '2': 7},
+    {'1': 'RUN_OUTCOME_REASON_PROVIDER_FAILURE', '2': 8},
+    {'1': 'RUN_OUTCOME_REASON_TOOL_FAILURE', '2': 9},
+    {'1': 'RUN_OUTCOME_REASON_POLICY_DENIED', '2': 10},
+    {'1': 'RUN_OUTCOME_REASON_RETRIES_EXHAUSTED', '2': 11},
+    {'1': 'RUN_OUTCOME_REASON_RECOVERY_INTERRUPTED', '2': 12},
+    {'1': 'RUN_OUTCOME_REASON_SIDE_EFFECT_UNCERTAIN', '2': 13},
+    {'1': 'RUN_OUTCOME_REASON_APPROVAL_DELIVERY_FAILED', '2': 14},
+    {'1': 'RUN_OUTCOME_REASON_INTERNAL_FAILURE', '2': 15},
+    {'1': 'RUN_OUTCOME_REASON_LEGACY_UNKNOWN', '2': 16},
+  ],
+};
+
+/// Descriptor for `RunOutcomeReason`. Decode as a `google.protobuf.EnumDescriptorProto`.
+final $typed_data.Uint8List runOutcomeReasonDescriptor = $convert.base64Decode(
+    'ChBSdW5PdXRjb21lUmVhc29uEiIKHlJVTl9PVVRDT01FX1JFQVNPTl9VTlNQRUNJRklFRBAAEh'
+    '4KGlJVTl9PVVRDT01FX1JFQVNPTl9VTktOT1dOEAESGwoXUlVOX09VVENPTUVfUkVBU09OX05P'
+    'TkUQAhIrCidSVU5fT1VUQ09NRV9SRUFTT05fQ09NUExFVEVEX05PX0NPTlRFTlQQAxIlCiFSVU'
+    '5fT1VUQ09NRV9SRUFTT05fVVNFUl9DQU5DRUxMRUQQBBIgChxSVU5fT1VUQ09NRV9SRUFTT05f'
+    'QUJBTkRPTkVEEAUSHgoaUlVOX09VVENPTUVfUkVBU09OX0VYUElSRUQQBhIkCiBSVU5fT1VUQ0'
+    '9NRV9SRUFTT05fQ09OVEVYVF9MSU1JVBAHEicKI1JVTl9PVVRDT01FX1JFQVNPTl9QUk9WSURF'
+    'Ul9GQUlMVVJFEAgSIwofUlVOX09VVENPTUVfUkVBU09OX1RPT0xfRkFJTFVSRRAJEiQKIFJVTl'
+    '9PVVRDT01FX1JFQVNPTl9QT0xJQ1lfREVOSUVEEAoSKAokUlVOX09VVENPTUVfUkVBU09OX1JF'
+    'VFJJRVNfRVhIQVVTVEVEEAsSKwonUlVOX09VVENPTUVfUkVBU09OX1JFQ09WRVJZX0lOVEVSUl'
+    'VQVEVEEAwSLAooUlVOX09VVENPTUVfUkVBU09OX1NJREVfRUZGRUNUX1VOQ0VSVEFJThANEi8K'
+    'K1JVTl9PVVRDT01FX1JFQVNPTl9BUFBST1ZBTF9ERUxJVkVSWV9GQUlMRUQQDhInCiNSVU5fT1'
+    'VUQ09NRV9SRUFTT05fSU5URVJOQUxfRkFJTFVSRRAPEiUKIVJVTl9PVVRDT01FX1JFQVNPTl9M'
+    'RUdBQ1lfVU5LTk9XThAQ');
+
+@$core.Deprecated('Use runStateDescriptor instead')
+const RunState$json = {
+  '1': 'RunState',
+  '2': [
+    {'1': 'run_id', '3': 1, '4': 1, '5': 9, '10': 'runId'},
+    {'1': 'user_message_id', '3': 2, '4': 1, '5': 9, '10': 'userMessageId'},
+    {
+      '1': 'assistant_message_id',
+      '3': 3,
+      '4': 1,
+      '5': 9,
+      '10': 'assistantMessageId'
+    },
+    {
+      '1': 'lifecycle',
+      '3': 4,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.RunLifecycle',
+      '10': 'lifecycle'
+    },
+    {
+      '1': 'outcome_reason',
+      '3': 5,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.RunOutcomeReason',
+      '10': 'outcomeReason'
+    },
+    {'1': 'state_version', '3': 6, '4': 1, '5': 3, '10': 'stateVersion'},
+    {
+      '1': 'state_updated_at',
+      '3': 7,
+      '4': 1,
+      '5': 11,
+      '6': '.google.protobuf.Timestamp',
+      '10': 'stateUpdatedAt'
+    },
+    {
+      '1': 'finished_at',
+      '3': 8,
+      '4': 1,
+      '5': 11,
+      '6': '.google.protobuf.Timestamp',
+      '10': 'finishedAt'
+    },
+    {
+      '1': 'has_displayable_content',
+      '3': 9,
+      '4': 1,
+      '5': 8,
+      '10': 'hasDisplayableContent'
+    },
+  ],
+};
+
+/// Descriptor for `RunState`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List runStateDescriptor = $convert.base64Decode(
+    'CghSdW5TdGF0ZRIVCgZydW5faWQYASABKAlSBXJ1bklkEiYKD3VzZXJfbWVzc2FnZV9pZBgCIA'
+    'EoCVINdXNlck1lc3NhZ2VJZBIwChRhc3Npc3RhbnRfbWVzc2FnZV9pZBgDIAEoCVISYXNzaXN0'
+    'YW50TWVzc2FnZUlkEjUKCWxpZmVjeWNsZRgEIAEoDjIXLnR1cmluZy52MS5SdW5MaWZlY3ljbG'
+    'VSCWxpZmVjeWNsZRJCCg5vdXRjb21lX3JlYXNvbhgFIAEoDjIbLnR1cmluZy52MS5SdW5PdXRj'
+    'b21lUmVhc29uUg1vdXRjb21lUmVhc29uEiMKDXN0YXRlX3ZlcnNpb24YBiABKANSDHN0YXRlVm'
+    'Vyc2lvbhJEChBzdGF0ZV91cGRhdGVkX2F0GAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVz'
+    'dGFtcFIOc3RhdGVVcGRhdGVkQXQSOwoLZmluaXNoZWRfYXQYCCABKAsyGi5nb29nbGUucHJvdG'
+    '9idWYuVGltZXN0YW1wUgpmaW5pc2hlZEF0EjYKF2hhc19kaXNwbGF5YWJsZV9jb250ZW50GAkg'
+    'ASgIUhVoYXNEaXNwbGF5YWJsZUNvbnRlbnQ=');
+
 @$core.Deprecated('Use requestMetadataDescriptor instead')
 const RequestMetadata$json = {
   '1': 'RequestMetadata',
@@ -313,6 +445,14 @@ const Message$json = {
       '6': '.google.protobuf.Timestamp',
       '10': 'createdAt'
     },
+    {
+      '1': 'run_state',
+      '3': 9,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.RunState',
+      '10': 'runState'
+    },
   ],
 };
 
@@ -323,4 +463,5 @@ final $typed_data.Uint8List messageDescriptor = $convert.base64Decode(
     'dHVyaW5nLnYxLk1lc3NhZ2VSb2xlUgRyb2xlEhgKB2NvbnRlbnQYBSABKAlSB2NvbnRlbnQSIQ'
     'oMY29udGVudF90eXBlGAYgASgJUgtjb250ZW50VHlwZRIaCghzZXF1ZW5jZRgHIAEoA1IIc2Vx'
     'dWVuY2USOQoKY3JlYXRlZF9hdBgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBSCW'
-    'NyZWF0ZWRBdA==');
+    'NyZWF0ZWRBdBIwCglydW5fc3RhdGUYCSABKAsyEy50dXJpbmcudjEuUnVuU3RhdGVSCHJ1blN0'
+    'YXRl');

@@ -125,6 +125,103 @@ void main() {
     expect(mapped.payload['serverName'], 'system');
   });
 
+  test('maps run state changed chat event type and structural payload', () {
+    final mapped = GrpcMappers.chatStreamEventToTuringEvent(
+      ChatStreamEvent(
+        sessionId: 'sess_1',
+        runId: 'run_1',
+        sequence: Int64(44),
+        runStateChanged: RunStateChanged(
+          runState: commonpb.RunState(runId: 'run_1', stateVersion: Int64(7)),
+        ),
+      ),
+    );
+
+    expect(mapped.type, 'agent.run.state_changed');
+    expect(mapped.payload, {'runId': 'run_1', 'stateVersion': 7});
+  });
+
+  test('maps persisted event type twenty three to agent run state changed', () {
+    final mapped = GrpcMappers.turingEventToTuringEvent(
+      eventpb.TuringEvent(
+        type: eventpb.TuringEventType.TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED,
+        runState: commonpb.RunState(runId: 'run_1', stateVersion: Int64(7)),
+        payload: structpb.Struct(
+          fields: <String, structpb.Value>{
+            'outcomeReason': structpb.Value(stringValue: 'provider_failure'),
+          }.entries,
+        ),
+      ),
+    );
+
+    expect(mapped.type, 'agent.run.state_changed');
+    expect(mapped.payload, {'runId': 'run_1', 'stateVersion': 7});
+  });
+
+  test('generated chat event oneof remains exhaustively mapped', () {
+    final cases = <ChatStreamEvent_Event, ChatStreamEvent>{
+      ChatStreamEvent_Event.runQueued: ChatStreamEvent(runQueued: RunQueued()),
+      ChatStreamEvent_Event.runStarted: ChatStreamEvent(
+        runStarted: RunStarted(),
+      ),
+      ChatStreamEvent_Event.messageStarted: ChatStreamEvent(
+        messageStarted: MessageStarted(),
+      ),
+      ChatStreamEvent_Event.tokenDelta: ChatStreamEvent(
+        tokenDelta: TokenDelta(),
+      ),
+      ChatStreamEvent_Event.toolCallStarted: ChatStreamEvent(
+        toolCallStarted: ToolEvent(),
+      ),
+      ChatStreamEvent_Event.toolCallCompleted: ChatStreamEvent(
+        toolCallCompleted: ToolEvent(),
+      ),
+      ChatStreamEvent_Event.toolCallFailed: ChatStreamEvent(
+        toolCallFailed: ToolEvent(),
+      ),
+      ChatStreamEvent_Event.approvalRequested: ChatStreamEvent(
+        approvalRequested: ApprovalEvent(),
+      ),
+      ChatStreamEvent_Event.approvalApproved: ChatStreamEvent(
+        approvalApproved: ApprovalEvent(),
+      ),
+      ChatStreamEvent_Event.approvalDenied: ChatStreamEvent(
+        approvalDenied: ApprovalEvent(),
+      ),
+      ChatStreamEvent_Event.approvalExpired: ChatStreamEvent(
+        approvalExpired: ApprovalEvent(),
+      ),
+      ChatStreamEvent_Event.approvalConsumed: ChatStreamEvent(
+        approvalConsumed: ApprovalEvent(),
+      ),
+      ChatStreamEvent_Event.messageCompleted: ChatStreamEvent(
+        messageCompleted: MessageCompleted(),
+      ),
+      ChatStreamEvent_Event.runCompleted: ChatStreamEvent(
+        runCompleted: RunCompleted(),
+      ),
+      ChatStreamEvent_Event.runFailed: ChatStreamEvent(runFailed: RunFailed()),
+      ChatStreamEvent_Event.runCancelled: ChatStreamEvent(
+        runCancelled: RunCancelled(),
+      ),
+      ChatStreamEvent_Event.persistedEvent: ChatStreamEvent(
+        persistedEvent: eventpb.TuringEvent(),
+      ),
+      ChatStreamEvent_Event.runStateChanged: ChatStreamEvent(
+        runStateChanged: RunStateChanged(),
+      ),
+      ChatStreamEvent_Event.notSet: ChatStreamEvent(),
+    };
+
+    expect(cases.keys.toSet(), ChatStreamEvent_Event.values.toSet());
+    for (final streamEvent in cases.values) {
+      expect(
+        () => GrpcMappers.chatStreamEventToTuringEvent(streamEvent),
+        returnsNormally,
+      );
+    }
+  });
+
   test('maps a message run id for history correlation', () {
     final mapped = GrpcMappers.messageToModel(
       commonpb.Message(

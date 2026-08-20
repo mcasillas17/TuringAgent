@@ -372,6 +372,9 @@ class GrpcMappers {
   static model_event.TuringEvent turingEventToTuringEvent(
     eventpb.TuringEvent event,
   ) {
+    final isRunStateChanged =
+        event.type ==
+        eventpb.TuringEventType.TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED;
     return model_event.TuringEvent(
       eventId: event.eventId,
       sessionId: event.sessionId,
@@ -380,7 +383,9 @@ class GrpcMappers {
       sequence: event.sequence.toInt(),
       type: eventTypeToString(event.type),
       createdAt: _timestampToDateTime(event.createdAt),
-      payload: structToMap(event.payload),
+      payload: isRunStateChanged
+          ? _runStatePayload(event.runState)
+          : structToMap(event.payload),
     );
   }
 
@@ -485,6 +490,8 @@ class GrpcMappers {
         return 'system';
       case eventpb.TuringEventType.TURING_EVENT_TYPE_SESSION_UPDATED:
         return 'session.updated';
+      case eventpb.TuringEventType.TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED:
+        return 'agent.run.state_changed';
       case eventpb.TuringEventType.TURING_EVENT_TYPE_UNSPECIFIED:
       default:
         return 'system';
@@ -558,6 +565,8 @@ class GrpcMappers {
         return 'agent.run.cancelled';
       case chatpb.ChatStreamEvent_Event.persistedEvent:
         return eventTypeToString(event.persistedEvent.type);
+      case chatpb.ChatStreamEvent_Event.runStateChanged:
+        return 'agent.run.state_changed';
       case chatpb.ChatStreamEvent_Event.notSet:
         return 'system';
     }
@@ -619,6 +628,8 @@ class GrpcMappers {
           'runId': event.runFailed.runId,
           'code': event.runFailed.code,
           'message': event.runFailed.message,
+          // Deprecated on the wire but retained while older servers emit it.
+          // ignore: deprecated_member_use_from_same_package
           'retryable': event.runFailed.retryable,
         };
       case chatpb.ChatStreamEvent_Event.runCancelled:
@@ -628,6 +639,8 @@ class GrpcMappers {
         };
       case chatpb.ChatStreamEvent_Event.persistedEvent:
         return structToMap(event.persistedEvent.payload);
+      case chatpb.ChatStreamEvent_Event.runStateChanged:
+        return _runStatePayload(event.runStateChanged.runState);
       case chatpb.ChatStreamEvent_Event.notSet:
         return const {};
     }
@@ -647,6 +660,13 @@ class GrpcMappers {
       'approvalId': event.approvalId,
       'toolName': event.toolName,
       'argsSummary': event.argsSummary,
+    };
+  }
+
+  static Map<String, dynamic> _runStatePayload(commonpb.RunState runState) {
+    return {
+      'runId': runState.runId,
+      'stateVersion': runState.stateVersion.toInt(),
     };
   }
 
