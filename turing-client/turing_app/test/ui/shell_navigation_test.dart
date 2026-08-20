@@ -533,6 +533,37 @@ void main() {
       );
     });
 
+    testWidgets(
+      'a refresh retains a former first-page row shifted into the loaded tail',
+      (tester) async {
+        final api = _FakeApi()
+          ..activePageSize = 2
+          ..addCreatedSessionToList = true
+          ..sessions = [
+            for (var i = 0; i < 3; i++)
+              Session(
+                sessionId: 'sess_$i',
+                title: 'Session $i',
+                updatedAt: DateTime.utc(
+                  2026,
+                  5,
+                  10,
+                ).subtract(Duration(seconds: i)),
+              ),
+          ];
+        await _pumpShell(tester, api: api, size: _desktop);
+        await tester.tap(find.widgetWithText(TextButton, 'Load more'));
+        await tester.pumpAndSettle();
+        expect(find.text('Session 2'), findsOneWidget);
+
+        await tester.tap(find.text('New chat').first);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Session 1'), findsOneWidget);
+        expect(find.text('Session 2'), findsOneWidget);
+      },
+    );
+
     testWidgets('rename uses the authoritative returned session snapshot', (
       tester,
     ) async {
@@ -1765,6 +1796,7 @@ class _FakeApi
   final List<String> sentMessages = [];
   Completer<List<Session>>? nextListSessions;
   bool addCreatedSessionToList = false;
+  int? activePageSize;
   bool removeDeletedSessionFromList = false;
   String createdSessionId = 'sess_new';
   String createdSessionTimestamp = '2026-05-10T00:00:00.000Z';
@@ -1811,6 +1843,21 @@ class _FakeApi
       );
     }
     sessionPageCursors.add(cursor);
+    final configuredPageSize = activePageSize;
+    if (configuredPageSize != null) {
+      final offset = cursor == null
+          ? 0
+          : int.parse(cursor.substring('offset:'.length));
+      final pageSessions = sessions
+          .skip(offset)
+          .take(configuredPageSize)
+          .toList();
+      final nextOffset = offset + pageSessions.length;
+      return SessionPage(
+        sessions: pageSessions,
+        nextCursor: nextOffset < sessions.length ? 'offset:$nextOffset' : null,
+      );
+    }
     if (cursor != null) {
       return sessionPages[cursor] ?? const SessionPage(sessions: []);
     }

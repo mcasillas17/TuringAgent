@@ -104,8 +104,8 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   bool _sessionsLoadingMore = false;
   bool _sessionsFailed = false;
   String? _nextSessionsCursor;
-  bool _hasLoadedTailPages = false;
-  Set<String> _firstPageSessionIds = const {};
+  int _loadedSessionPageCount = 1;
+  Set<String> _listedSessionIds = const {};
   final Set<String> _eventOnlySessionIds = {};
   ShellDestination _destination = ShellDestination.chats;
   String? _activeSessionId;
@@ -195,17 +195,27 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   Future<void> _refreshSessions() async {
     final request = ++_sessionRefreshRequest;
     final startingRevision = _sessionStateRevision;
+    final pagesToRefresh = _loadedSessionPageCount;
     try {
-      final page = await widget.apiClient.listSessionPage();
-      if (!mounted || request != _sessionRefreshRequest) return;
-      setState(() {
-        _sessions = _reconcileSessionRefresh(page.sessions, startingRevision);
-        _firstPageSessionIds = page.sessions
-            .map((session) => session.sessionId)
-            .toSet();
-        if (!_hasLoadedTailPages) {
-          _nextSessionsCursor = page.nextCursor;
+      final refreshed = <String, Session>{};
+      String? cursor;
+      for (var pageIndex = 0; pageIndex < pagesToRefresh; pageIndex++) {
+        final page = await widget.apiClient.listSessionPage(cursor: cursor);
+        if (!mounted || request != _sessionRefreshRequest) return;
+        for (final session in page.sessions) {
+          refreshed[session.sessionId] = session;
         }
+        cursor = page.nextCursor;
+        if (cursor == null) break;
+      }
+
+      setState(() {
+        _sessions = _reconcileSessionRefresh(
+          refreshed.values,
+          startingRevision,
+        );
+        _listedSessionIds = refreshed.keys.toSet();
+        _nextSessionsCursor = cursor;
         _sessionsLoading = false;
         _sessionsFailed = false;
       });
@@ -245,8 +255,12 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
         }
         _removeArchivedSessions(merged);
         _sessions = merged;
+        _listedSessionIds = {
+          ..._listedSessionIds,
+          ...page.sessions.map((session) => session.sessionId),
+        };
         _nextSessionsCursor = page.nextCursor;
-        _hasLoadedTailPages = true;
+        _loadedSessionPageCount++;
         _sessionsFailed = false;
       });
     } on Exception {
@@ -359,7 +373,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     final merged = _sessions
         .where(
           (session) =>
-              !_firstPageSessionIds.contains(session.sessionId) &&
+              !_listedSessionIds.contains(session.sessionId) &&
               !_eventOnlySessionIds.contains(session.sessionId) &&
               !_locallyDeletedSessionIds.contains(session.sessionId),
         )
