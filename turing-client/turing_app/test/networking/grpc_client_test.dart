@@ -18,6 +18,8 @@ import 'package:turing_flutter_app/generated/turing/v1/sessions.pb.dart'
 import 'package:turing_flutter_app/generated/turing/v1/sessions.pbgrpc.dart'
     as sessiongrpc;
 import 'package:turing_flutter_app/models/audit.dart';
+import 'package:turing_flutter_app/models/session.dart';
+import 'package:turing_flutter_app/models/session_page.dart';
 import 'package:turing_flutter_app/networking/grpc_client.dart';
 
 void main() {
@@ -102,7 +104,85 @@ void main() {
     );
     expect(session.sessionId, 'session-42');
     expect(session.title, 'Search target');
+    expect(session.status, SessionStatus.active);
     expect(session.updatedAt, DateTime.utc(2026, 8, 13, 12, 34, 56));
+  });
+
+  test(
+    'listSessionPage preserves filter, cursor, page, and nanoseconds',
+    () async {
+      final service = _CapturingSessionService();
+      final server = grpc.Server.create(services: [service]);
+      await server.serve(address: '127.0.0.1', port: 0);
+      final channel = grpc.ClientChannel(
+        '127.0.0.1',
+        port: server.port!,
+        options: const grpc.ChannelOptions(
+          credentials: grpc.ChannelCredentials.insecure(),
+        ),
+      );
+      addTearDown(() async {
+        await channel.shutdown();
+        await server.shutdown();
+      });
+      final api = TuringGrpcApi(
+        baseUrl: 'http://127.0.0.1:${server.port}',
+        apiKey: 'client-key',
+        channel: channel,
+      );
+
+      final page = await api.listSessionPage(
+        filter: SessionListFilter.archived,
+        limit: 25,
+        cursor: 'cursor-before',
+      );
+
+      expect(service.listSessionsRequest?.page.limit, 25);
+      expect(service.listSessionsRequest?.page.cursor, 'cursor-before');
+      expect(
+        service.listSessionsRequest?.filter,
+        sessionpb.SessionListFilter.SESSION_LIST_FILTER_ARCHIVED,
+      );
+      expect(page.sessions.single.status, SessionStatus.archived);
+      expect(page.sessions.single.updatedAtNanoseconds, 1000000900);
+      expect(page.nextCursor, 'cursor-next');
+    },
+  );
+
+  test('session lifecycle methods return authoritative snapshots', () async {
+    final service = _CapturingSessionService();
+    final server = grpc.Server.create(services: [service]);
+    await server.serve(address: '127.0.0.1', port: 0);
+    final channel = grpc.ClientChannel(
+      '127.0.0.1',
+      port: server.port!,
+      options: const grpc.ChannelOptions(
+        credentials: grpc.ChannelCredentials.insecure(),
+      ),
+    );
+    addTearDown(() async {
+      await channel.shutdown();
+      await server.shutdown();
+    });
+    final api = TuringGrpcApi(
+      baseUrl: 'http://127.0.0.1:${server.port}',
+      apiKey: 'client-key',
+      channel: channel,
+    );
+
+    final renamed = await api.renameSession(
+      sessionId: 'session-42',
+      title: 'Renamed',
+    );
+    final archived = await api.archiveSession(sessionId: 'session-42');
+    final restored = await api.restoreSession(sessionId: 'session-42');
+
+    expect(service.renameSessionRequest?.title, 'Renamed');
+    expect(service.archiveSessionRequest?.sessionId, 'session-42');
+    expect(service.restoreSessionRequest?.sessionId, 'session-42');
+    expect(renamed.title, 'Renamed');
+    expect(archived.status, SessionStatus.archived);
+    expect(restored.status, SessionStatus.active);
   });
 
   test('createSession preserves timestamp nanoseconds for ordering', () async {
@@ -659,6 +739,10 @@ void main() {
 class _CapturingSessionService extends sessiongrpc.SessionServiceBase {
   sessionpb.GetSessionRequest? getSessionRequest;
   DateTime? getSessionDeadline;
+  sessionpb.ListSessionsRequest? listSessionsRequest;
+  sessionpb.RenameSessionRequest? renameSessionRequest;
+  sessionpb.ArchiveSessionRequest? archiveSessionRequest;
+  sessionpb.RestoreSessionRequest? restoreSessionRequest;
 
   @override
   Future<sessionpb.CreateSessionResponse> createSession(
@@ -686,8 +770,76 @@ class _CapturingSessionService extends sessiongrpc.SessionServiceBase {
     return sessionpb.Session(
       sessionId: 'session-42',
       title: 'Search target',
+      status: 'active',
       updatedAt: timestamppb.Timestamp.fromDateTime(
         DateTime.utc(2026, 8, 13, 12, 34, 56),
+      ),
+    );
+  }
+
+  @override
+  Future<sessionpb.ListSessionsResponse> listSessions(
+    grpc.ServiceCall call,
+    sessionpb.ListSessionsRequest request,
+  ) async {
+    listSessionsRequest = request;
+    return sessionpb.ListSessionsResponse(
+      sessions: [
+        sessionpb.Session(
+          sessionId: 'session-archived',
+          title: 'Archived',
+          status: 'archived',
+          updatedAt: timestamppb.Timestamp(seconds: Int64(1), nanos: 900),
+        ),
+      ],
+      page: commonpb.PageResponse(nextCursor: 'cursor-next'),
+    );
+  }
+
+  @override
+  Future<sessionpb.RenameSessionResponse> renameSession(
+    grpc.ServiceCall call,
+    sessionpb.RenameSessionRequest request,
+  ) async {
+    renameSessionRequest = request;
+    return sessionpb.RenameSessionResponse(
+      session: sessionpb.Session(
+        sessionId: request.sessionId,
+        title: request.title,
+        status: 'active',
+        updatedAt: timestamppb.Timestamp(seconds: Int64(2)),
+      ),
+    );
+  }
+
+  @override
+  Future<sessionpb.ArchiveSessionResponse> archiveSession(
+    grpc.ServiceCall call,
+    sessionpb.ArchiveSessionRequest request,
+  ) async {
+    archiveSessionRequest = request;
+    return sessionpb.ArchiveSessionResponse(
+      session: sessionpb.Session(
+        sessionId: request.sessionId,
+        title: 'Renamed',
+        status: 'archived',
+        updatedAt: timestamppb.Timestamp(seconds: Int64(3)),
+      ),
+    );
+  }
+
+  @override
+  Future<sessionpb.RestoreSessionResponse> restoreSession(
+    grpc.ServiceCall call,
+    sessionpb.RestoreSessionRequest request,
+  ) async {
+    restoreSessionRequest = request;
+    return sessionpb.RestoreSessionResponse(
+      session: sessionpb.Session(
+        sessionId: request.sessionId,
+        title: 'Renamed',
+        status: 'active',
+        updatedAt: timestamppb.Timestamp(seconds: Int64(4)),
       ),
     );
   }

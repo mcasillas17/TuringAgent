@@ -8,6 +8,7 @@ import '../models/automation.dart';
 import '../models/message.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
+import '../models/session_page.dart';
 import '../models/skill.dart';
 import '../models/telemetry.dart';
 import '../models/tool_descriptor.dart';
@@ -20,7 +21,22 @@ abstract class TuringApi {
 
   Future<List<Session>> listSessions({int limit = 50, String? after});
 
+  Future<SessionPage> listSessionPage({
+    int limit = 50,
+    String? cursor,
+    SessionListFilter filter = SessionListFilter.active,
+  });
+
   Future<Session> getSession({required String sessionId});
+
+  Future<Session> renameSession({
+    required String sessionId,
+    required String title,
+  });
+
+  Future<Session> archiveSession({required String sessionId});
+
+  Future<Session> restoreSession({required String sessionId});
 
   /// Removes a session, its messages and its run history. Permanent: there is
   /// no undo, and the content also leaves the search index. Note this does NOT
