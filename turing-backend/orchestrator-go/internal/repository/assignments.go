@@ -218,6 +218,15 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 				return reconciliation, nil
 			}
 		}
+		if executionState == "pending_send" {
+			if err := requeueAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, false); err != nil {
+				return AssignmentReconciliation{}, err
+			}
+			if err := tx.Commit(); err != nil {
+				return AssignmentReconciliation{}, err
+			}
+			return AssignmentReconciliation{Requeued: true}, nil
+		}
 		reconciliation, terminalized, attempt, err := terminalizeExhaustedAssignmentTx(
 			ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, sessionID, traceID, maxAttempts,
 		)
@@ -230,7 +239,7 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 			}
 			return reconciliation, nil
 		}
-		if err := requeueAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID); err != nil {
+		if err := requeueAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, true); err != nil {
 			return AssignmentReconciliation{}, err
 		}
 		// attempt is the one that just lost its worker, and requeueAssignmentTx has
@@ -567,11 +576,15 @@ func fenceExecutionTx(ctx context.Context, tx *sql.Tx, runID string) error {
 	return expectOneRowErr(result, ErrAssignmentFenced)
 }
 
-func requeueAssignmentTx(ctx context.Context, tx *sql.Tx, runID, jobID, attemptID string) error {
+func requeueAssignmentTx(ctx context.Context, tx *sql.Tx, runID, jobID, attemptID string, incrementAttempt bool) error {
 	if jobID == "" {
 		if err := tx.QueryRowContext(ctx, `SELECT id FROM jobs WHERE run_id = ? AND status = 'in_progress'`, runID).Scan(&jobID); err != nil {
 			return err
 		}
+	}
+	attemptIncrement := 0
+	if incrementAttempt {
+		attemptIncrement = 1
 	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE jobs
@@ -581,12 +594,12 @@ func requeueAssignmentTx(ctx context.Context, tx *sql.Tx, runID, jobID, attemptI
 			lease_expires_at_ns = NULL,
 			picked_up_at = NULL,
 			assignment_attempt_id = NULL,
-			attempt = attempt + 1
+			attempt = attempt + ?
 		WHERE id = ?
 			AND run_id = ?
 			AND status = 'in_progress'
 			AND (? = '' OR COALESCE(assignment_attempt_id, '') = ?)
-	`, jobID, runID, attemptID, attemptID)
+	`, attemptIncrement, jobID, runID, attemptID, attemptID)
 	if err != nil {
 		return err
 	}

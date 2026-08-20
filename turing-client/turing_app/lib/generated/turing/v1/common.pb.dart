@@ -296,16 +296,185 @@ class ErrorDetail extends $pb.GeneratedMessage {
   $0.Struct ensureDetails() => $_ensure(3);
 }
 
+class RoutingUnavailableDetail extends $pb.GeneratedMessage {
+  factory RoutingUnavailableDetail({
+    RoutingRequirementKind? kind,
+    $core.String? requested,
+    $core.Iterable<$core.String>? available,
+  }) {
+    final result = create();
+    if (kind != null) result.kind = kind;
+    if (requested != null) result.requested = requested;
+    if (available != null) result.available.addAll(available);
+    return result;
+  }
+
+  RoutingUnavailableDetail._();
+
+  factory RoutingUnavailableDetail.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RoutingUnavailableDetail.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RoutingUnavailableDetail',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..e<RoutingRequirementKind>(
+        1, _omitFieldNames ? '' : 'kind', $pb.PbFieldType.OE,
+        defaultOrMaker:
+            RoutingRequirementKind.ROUTING_REQUIREMENT_KIND_UNSPECIFIED,
+        valueOf: RoutingRequirementKind.valueOf,
+        enumValues: RoutingRequirementKind.values)
+    ..aOS(2, _omitFieldNames ? '' : 'requested')
+    ..pPS(3, _omitFieldNames ? '' : 'available')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RoutingUnavailableDetail clone() =>
+      RoutingUnavailableDetail()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RoutingUnavailableDetail copyWith(
+          void Function(RoutingUnavailableDetail) updates) =>
+      super.copyWith((message) => updates(message as RoutingUnavailableDetail))
+          as RoutingUnavailableDetail;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RoutingUnavailableDetail create() => RoutingUnavailableDetail._();
+  @$core.override
+  RoutingUnavailableDetail createEmptyInstance() => create();
+  static $pb.PbList<RoutingUnavailableDetail> createRepeated() =>
+      $pb.PbList<RoutingUnavailableDetail>();
+  @$core.pragma('dart2js:noInline')
+  static RoutingUnavailableDetail getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RoutingUnavailableDetail>(create);
+  static RoutingUnavailableDetail? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  RoutingRequirementKind get kind => $_getN(0);
+  @$pb.TagNumber(1)
+  set kind(RoutingRequirementKind value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasKind() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearKind() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get requested => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set requested($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasRequested() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearRequested() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $pb.PbList<$core.String> get available => $_getList(2);
+}
+
+class ModelCapability extends $pb.GeneratedMessage {
+  factory ModelCapability({
+    ModelProvider? provider,
+    $core.String? model,
+    $core.int? maxContextTokens,
+  }) {
+    final result = create();
+    if (provider != null) result.provider = provider;
+    if (model != null) result.model = model;
+    if (maxContextTokens != null) result.maxContextTokens = maxContextTokens;
+    return result;
+  }
+
+  ModelCapability._();
+
+  factory ModelCapability.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ModelCapability.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ModelCapability',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..e<ModelProvider>(1, _omitFieldNames ? '' : 'provider', $pb.PbFieldType.OE,
+        defaultOrMaker: ModelProvider.MODEL_PROVIDER_UNSPECIFIED,
+        valueOf: ModelProvider.valueOf,
+        enumValues: ModelProvider.values)
+    ..aOS(2, _omitFieldNames ? '' : 'model')
+    ..a<$core.int>(
+        3, _omitFieldNames ? '' : 'maxContextTokens', $pb.PbFieldType.O3)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ModelCapability clone() => ModelCapability()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ModelCapability copyWith(void Function(ModelCapability) updates) =>
+      super.copyWith((message) => updates(message as ModelCapability))
+          as ModelCapability;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ModelCapability create() => ModelCapability._();
+  @$core.override
+  ModelCapability createEmptyInstance() => create();
+  static $pb.PbList<ModelCapability> createRepeated() =>
+      $pb.PbList<ModelCapability>();
+  @$core.pragma('dart2js:noInline')
+  static ModelCapability getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ModelCapability>(create);
+  static ModelCapability? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  ModelProvider get provider => $_getN(0);
+  @$pb.TagNumber(1)
+  set provider(ModelProvider value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasProvider() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearProvider() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get model => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set model($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasModel() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearModel() => $_clearField(2);
+
+  /// An operator-configured routing guarantee, not a value inferred from a
+  /// provider label or model name.
+  @$pb.TagNumber(3)
+  $core.int get maxContextTokens => $_getIZ(2);
+  @$pb.TagNumber(3)
+  set maxContextTokens($core.int value) => $_setSignedInt32(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasMaxContextTokens() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearMaxContextTokens() => $_clearField(3);
+}
+
 class ProviderConfig extends $pb.GeneratedMessage {
   factory ProviderConfig({
     ModelProvider? provider,
     $core.bool? enabled,
     $core.String? defaultModel,
+    $core.Iterable<ModelCapability>? models,
   }) {
     final result = create();
     if (provider != null) result.provider = provider;
     if (enabled != null) result.enabled = enabled;
     if (defaultModel != null) result.defaultModel = defaultModel;
+    if (models != null) result.models.addAll(models);
     return result;
   }
 
@@ -328,6 +497,9 @@ class ProviderConfig extends $pb.GeneratedMessage {
         enumValues: ModelProvider.values)
     ..aOB(2, _omitFieldNames ? '' : 'enabled')
     ..aOS(3, _omitFieldNames ? '' : 'defaultModel')
+    ..pc<ModelCapability>(
+        4, _omitFieldNames ? '' : 'models', $pb.PbFieldType.PM,
+        subBuilder: ModelCapability.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -377,16 +549,21 @@ class ProviderConfig extends $pb.GeneratedMessage {
   $core.bool hasDefaultModel() => $_has(2);
   @$pb.TagNumber(3)
   void clearDefaultModel() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $pb.PbList<ModelCapability> get models => $_getList(3);
 }
 
 class AgentDescriptor extends $pb.GeneratedMessage {
   factory AgentDescriptor({
     AgentId? id,
     $core.String? displayName,
+    $core.bool? available,
   }) {
     final result = create();
     if (id != null) result.id = id;
     if (displayName != null) result.displayName = displayName;
+    if (available != null) result.available = available;
     return result;
   }
 
@@ -408,6 +585,7 @@ class AgentDescriptor extends $pb.GeneratedMessage {
         valueOf: AgentId.valueOf,
         enumValues: AgentId.values)
     ..aOS(2, _omitFieldNames ? '' : 'displayName')
+    ..aOB(3, _omitFieldNames ? '' : 'available')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -448,6 +626,15 @@ class AgentDescriptor extends $pb.GeneratedMessage {
   $core.bool hasDisplayName() => $_has(1);
   @$pb.TagNumber(2)
   void clearDisplayName() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.bool get available => $_getBF(2);
+  @$pb.TagNumber(3)
+  set available($core.bool value) => $_setBool(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasAvailable() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearAvailable() => $_clearField(3);
 }
 
 class Message extends $pb.GeneratedMessage {

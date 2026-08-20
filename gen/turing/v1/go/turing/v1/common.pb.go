@@ -118,6 +118,70 @@ func (ModelProvider) EnumDescriptor() ([]byte, []int) {
 	return file_turing_v1_common_proto_rawDescGZIP(), []int{1}
 }
 
+type RoutingRequirementKind int32
+
+const (
+	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_UNSPECIFIED               RoutingRequirementKind = 0
+	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_PROVIDER                  RoutingRequirementKind = 1
+	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_MODEL                     RoutingRequirementKind = 2
+	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_CONTEXT                   RoutingRequirementKind = 3
+	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_TOOL                      RoutingRequirementKind = 4
+	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_AGENT                     RoutingRequirementKind = 5
+	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_CAPACITY                  RoutingRequirementKind = 6
+	RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_EXTERNAL_AGENT_CREDENTIAL RoutingRequirementKind = 7
+)
+
+// Enum value maps for RoutingRequirementKind.
+var (
+	RoutingRequirementKind_name = map[int32]string{
+		0: "ROUTING_REQUIREMENT_KIND_UNSPECIFIED",
+		1: "ROUTING_REQUIREMENT_KIND_PROVIDER",
+		2: "ROUTING_REQUIREMENT_KIND_MODEL",
+		3: "ROUTING_REQUIREMENT_KIND_CONTEXT",
+		4: "ROUTING_REQUIREMENT_KIND_TOOL",
+		5: "ROUTING_REQUIREMENT_KIND_AGENT",
+		6: "ROUTING_REQUIREMENT_KIND_CAPACITY",
+		7: "ROUTING_REQUIREMENT_KIND_EXTERNAL_AGENT_CREDENTIAL",
+	}
+	RoutingRequirementKind_value = map[string]int32{
+		"ROUTING_REQUIREMENT_KIND_UNSPECIFIED":               0,
+		"ROUTING_REQUIREMENT_KIND_PROVIDER":                  1,
+		"ROUTING_REQUIREMENT_KIND_MODEL":                     2,
+		"ROUTING_REQUIREMENT_KIND_CONTEXT":                   3,
+		"ROUTING_REQUIREMENT_KIND_TOOL":                      4,
+		"ROUTING_REQUIREMENT_KIND_AGENT":                     5,
+		"ROUTING_REQUIREMENT_KIND_CAPACITY":                  6,
+		"ROUTING_REQUIREMENT_KIND_EXTERNAL_AGENT_CREDENTIAL": 7,
+	}
+)
+
+func (x RoutingRequirementKind) Enum() *RoutingRequirementKind {
+	p := new(RoutingRequirementKind)
+	*p = x
+	return p
+}
+
+func (x RoutingRequirementKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RoutingRequirementKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_turing_v1_common_proto_enumTypes[2].Descriptor()
+}
+
+func (RoutingRequirementKind) Type() protoreflect.EnumType {
+	return &file_turing_v1_common_proto_enumTypes[2]
+}
+
+func (x RoutingRequirementKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RoutingRequirementKind.Descriptor instead.
+func (RoutingRequirementKind) EnumDescriptor() ([]byte, []int) {
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{2}
+}
+
 type MessageRole int32
 
 const (
@@ -157,11 +221,11 @@ func (x MessageRole) String() string {
 }
 
 func (MessageRole) Descriptor() protoreflect.EnumDescriptor {
-	return file_turing_v1_common_proto_enumTypes[2].Descriptor()
+	return file_turing_v1_common_proto_enumTypes[3].Descriptor()
 }
 
 func (MessageRole) Type() protoreflect.EnumType {
-	return &file_turing_v1_common_proto_enumTypes[2]
+	return &file_turing_v1_common_proto_enumTypes[3]
 }
 
 func (x MessageRole) Number() protoreflect.EnumNumber {
@@ -170,7 +234,7 @@ func (x MessageRole) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use MessageRole.Descriptor instead.
 func (MessageRole) EnumDescriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{2}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{3}
 }
 
 type ToolPolicy int32
@@ -209,11 +273,11 @@ func (x ToolPolicy) String() string {
 }
 
 func (ToolPolicy) Descriptor() protoreflect.EnumDescriptor {
-	return file_turing_v1_common_proto_enumTypes[3].Descriptor()
+	return file_turing_v1_common_proto_enumTypes[4].Descriptor()
 }
 
 func (ToolPolicy) Type() protoreflect.EnumType {
-	return &file_turing_v1_common_proto_enumTypes[3]
+	return &file_turing_v1_common_proto_enumTypes[4]
 }
 
 func (x ToolPolicy) Number() protoreflect.EnumNumber {
@@ -222,7 +286,7 @@ func (x ToolPolicy) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ToolPolicy.Descriptor instead.
 func (ToolPolicy) EnumDescriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{3}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{4}
 }
 
 type RunStatus int32
@@ -270,11 +334,11 @@ func (x RunStatus) String() string {
 }
 
 func (RunStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_turing_v1_common_proto_enumTypes[4].Descriptor()
+	return file_turing_v1_common_proto_enumTypes[5].Descriptor()
 }
 
 func (RunStatus) Type() protoreflect.EnumType {
-	return &file_turing_v1_common_proto_enumTypes[4]
+	return &file_turing_v1_common_proto_enumTypes[5]
 }
 
 func (x RunStatus) Number() protoreflect.EnumNumber {
@@ -283,7 +347,7 @@ func (x RunStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RunStatus.Descriptor instead.
 func (RunStatus) EnumDescriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{4}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{5}
 }
 
 type RequestMetadata struct {
@@ -494,18 +558,141 @@ func (x *ErrorDetail) GetDetails() *structpb.Struct {
 	return nil
 }
 
+type RoutingUnavailableDetail struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Kind          RoutingRequirementKind `protobuf:"varint,1,opt,name=kind,proto3,enum=turing.v1.RoutingRequirementKind" json:"kind,omitempty"`
+	Requested     string                 `protobuf:"bytes,2,opt,name=requested,proto3" json:"requested,omitempty"`
+	Available     []string               `protobuf:"bytes,3,rep,name=available,proto3" json:"available,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RoutingUnavailableDetail) Reset() {
+	*x = RoutingUnavailableDetail{}
+	mi := &file_turing_v1_common_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RoutingUnavailableDetail) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RoutingUnavailableDetail) ProtoMessage() {}
+
+func (x *RoutingUnavailableDetail) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_common_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RoutingUnavailableDetail.ProtoReflect.Descriptor instead.
+func (*RoutingUnavailableDetail) Descriptor() ([]byte, []int) {
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *RoutingUnavailableDetail) GetKind() RoutingRequirementKind {
+	if x != nil {
+		return x.Kind
+	}
+	return RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_UNSPECIFIED
+}
+
+func (x *RoutingUnavailableDetail) GetRequested() string {
+	if x != nil {
+		return x.Requested
+	}
+	return ""
+}
+
+func (x *RoutingUnavailableDetail) GetAvailable() []string {
+	if x != nil {
+		return x.Available
+	}
+	return nil
+}
+
+type ModelCapability struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Provider ModelProvider          `protobuf:"varint,1,opt,name=provider,proto3,enum=turing.v1.ModelProvider" json:"provider,omitempty"`
+	Model    string                 `protobuf:"bytes,2,opt,name=model,proto3" json:"model,omitempty"`
+	// An operator-configured routing guarantee, not a value inferred from a
+	// provider label or model name.
+	MaxContextTokens int32 `protobuf:"varint,3,opt,name=max_context_tokens,json=maxContextTokens,proto3" json:"max_context_tokens,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ModelCapability) Reset() {
+	*x = ModelCapability{}
+	mi := &file_turing_v1_common_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelCapability) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelCapability) ProtoMessage() {}
+
+func (x *ModelCapability) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_common_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelCapability.ProtoReflect.Descriptor instead.
+func (*ModelCapability) Descriptor() ([]byte, []int) {
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ModelCapability) GetProvider() ModelProvider {
+	if x != nil {
+		return x.Provider
+	}
+	return ModelProvider_MODEL_PROVIDER_UNSPECIFIED
+}
+
+func (x *ModelCapability) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *ModelCapability) GetMaxContextTokens() int32 {
+	if x != nil {
+		return x.MaxContextTokens
+	}
+	return 0
+}
+
 type ProviderConfig struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Provider      ModelProvider          `protobuf:"varint,1,opt,name=provider,proto3,enum=turing.v1.ModelProvider" json:"provider,omitempty"`
 	Enabled       bool                   `protobuf:"varint,2,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	DefaultModel  string                 `protobuf:"bytes,3,opt,name=default_model,json=defaultModel,proto3" json:"default_model,omitempty"`
+	Models        []*ModelCapability     `protobuf:"bytes,4,rep,name=models,proto3" json:"models,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ProviderConfig) Reset() {
 	*x = ProviderConfig{}
-	mi := &file_turing_v1_common_proto_msgTypes[4]
+	mi := &file_turing_v1_common_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -517,7 +704,7 @@ func (x *ProviderConfig) String() string {
 func (*ProviderConfig) ProtoMessage() {}
 
 func (x *ProviderConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[4]
+	mi := &file_turing_v1_common_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -530,7 +717,7 @@ func (x *ProviderConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderConfig.ProtoReflect.Descriptor instead.
 func (*ProviderConfig) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{4}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ProviderConfig) GetProvider() ModelProvider {
@@ -554,17 +741,25 @@ func (x *ProviderConfig) GetDefaultModel() string {
 	return ""
 }
 
+func (x *ProviderConfig) GetModels() []*ModelCapability {
+	if x != nil {
+		return x.Models
+	}
+	return nil
+}
+
 type AgentDescriptor struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            AgentId                `protobuf:"varint,1,opt,name=id,proto3,enum=turing.v1.AgentId" json:"id,omitempty"`
 	DisplayName   string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	Available     bool                   `protobuf:"varint,3,opt,name=available,proto3" json:"available,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AgentDescriptor) Reset() {
 	*x = AgentDescriptor{}
-	mi := &file_turing_v1_common_proto_msgTypes[5]
+	mi := &file_turing_v1_common_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -576,7 +771,7 @@ func (x *AgentDescriptor) String() string {
 func (*AgentDescriptor) ProtoMessage() {}
 
 func (x *AgentDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[5]
+	mi := &file_turing_v1_common_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -589,7 +784,7 @@ func (x *AgentDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDescriptor.ProtoReflect.Descriptor instead.
 func (*AgentDescriptor) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{5}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *AgentDescriptor) GetId() AgentId {
@@ -604,6 +799,13 @@ func (x *AgentDescriptor) GetDisplayName() string {
 		return x.DisplayName
 	}
 	return ""
+}
+
+func (x *AgentDescriptor) GetAvailable() bool {
+	if x != nil {
+		return x.Available
+	}
+	return false
 }
 
 type Message struct {
@@ -622,7 +824,7 @@ type Message struct {
 
 func (x *Message) Reset() {
 	*x = Message{}
-	mi := &file_turing_v1_common_proto_msgTypes[6]
+	mi := &file_turing_v1_common_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -634,7 +836,7 @@ func (x *Message) String() string {
 func (*Message) ProtoMessage() {}
 
 func (x *Message) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[6]
+	mi := &file_turing_v1_common_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -647,7 +849,7 @@ func (x *Message) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Message.ProtoReflect.Descriptor instead.
 func (*Message) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{6}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Message) GetMessageId() string {
@@ -725,14 +927,24 @@ const file_turing_v1_common_proto_rawDesc = "" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x03 \x01(\tR\trequestId\x121\n" +
-	"\adetails\x18\x04 \x01(\v2\x17.google.protobuf.StructR\adetails\"\x85\x01\n" +
+	"\adetails\x18\x04 \x01(\v2\x17.google.protobuf.StructR\adetails\"\x8d\x01\n" +
+	"\x18RoutingUnavailableDetail\x125\n" +
+	"\x04kind\x18\x01 \x01(\x0e2!.turing.v1.RoutingRequirementKindR\x04kind\x12\x1c\n" +
+	"\trequested\x18\x02 \x01(\tR\trequested\x12\x1c\n" +
+	"\tavailable\x18\x03 \x03(\tR\tavailable\"\x8b\x01\n" +
+	"\x0fModelCapability\x124\n" +
+	"\bprovider\x18\x01 \x01(\x0e2\x18.turing.v1.ModelProviderR\bprovider\x12\x14\n" +
+	"\x05model\x18\x02 \x01(\tR\x05model\x12,\n" +
+	"\x12max_context_tokens\x18\x03 \x01(\x05R\x10maxContextTokens\"\xb9\x01\n" +
 	"\x0eProviderConfig\x124\n" +
 	"\bprovider\x18\x01 \x01(\x0e2\x18.turing.v1.ModelProviderR\bprovider\x12\x18\n" +
 	"\aenabled\x18\x02 \x01(\bR\aenabled\x12#\n" +
-	"\rdefault_model\x18\x03 \x01(\tR\fdefaultModel\"X\n" +
+	"\rdefault_model\x18\x03 \x01(\tR\fdefaultModel\x122\n" +
+	"\x06models\x18\x04 \x03(\v2\x1a.turing.v1.ModelCapabilityR\x06models\"v\n" +
 	"\x0fAgentDescriptor\x12\"\n" +
 	"\x02id\x18\x01 \x01(\x0e2\x12.turing.v1.AgentIdR\x02id\x12!\n" +
-	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\"\x9e\x02\n" +
+	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12\x1c\n" +
+	"\tavailable\x18\x03 \x01(\bR\tavailable\"\x9e\x02\n" +
 	"\aMessage\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1d\n" +
@@ -751,7 +963,16 @@ const file_turing_v1_common_proto_rawDesc = "" +
 	"\rModelProvider\x12\x1e\n" +
 	"\x1aMODEL_PROVIDER_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15MODEL_PROVIDER_OLLAMA\x10\x01\x12$\n" +
-	" MODEL_PROVIDER_OPENAI_COMPATIBLE\x10\x02*\x8e\x01\n" +
+	" MODEL_PROVIDER_OPENAI_COMPATIBLE\x10\x02*\xd9\x02\n" +
+	"\x16RoutingRequirementKind\x12(\n" +
+	"$ROUTING_REQUIREMENT_KIND_UNSPECIFIED\x10\x00\x12%\n" +
+	"!ROUTING_REQUIREMENT_KIND_PROVIDER\x10\x01\x12\"\n" +
+	"\x1eROUTING_REQUIREMENT_KIND_MODEL\x10\x02\x12$\n" +
+	" ROUTING_REQUIREMENT_KIND_CONTEXT\x10\x03\x12!\n" +
+	"\x1dROUTING_REQUIREMENT_KIND_TOOL\x10\x04\x12\"\n" +
+	"\x1eROUTING_REQUIREMENT_KIND_AGENT\x10\x05\x12%\n" +
+	"!ROUTING_REQUIREMENT_KIND_CAPACITY\x10\x06\x126\n" +
+	"2ROUTING_REQUIREMENT_KIND_EXTERNAL_AGENT_CREDENTIAL\x10\a*\x8e\x01\n" +
 	"\vMessageRole\x12\x1c\n" +
 	"\x18MESSAGE_ROLE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13MESSAGE_ROLE_SYSTEM\x10\x01\x12\x15\n" +
@@ -785,35 +1006,41 @@ func file_turing_v1_common_proto_rawDescGZIP() []byte {
 	return file_turing_v1_common_proto_rawDescData
 }
 
-var file_turing_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_turing_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_turing_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
+var file_turing_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_turing_v1_common_proto_goTypes = []any{
-	(AgentId)(0),                  // 0: turing.v1.AgentId
-	(ModelProvider)(0),            // 1: turing.v1.ModelProvider
-	(MessageRole)(0),              // 2: turing.v1.MessageRole
-	(ToolPolicy)(0),               // 3: turing.v1.ToolPolicy
-	(RunStatus)(0),                // 4: turing.v1.RunStatus
-	(*RequestMetadata)(nil),       // 5: turing.v1.RequestMetadata
-	(*PageRequest)(nil),           // 6: turing.v1.PageRequest
-	(*PageResponse)(nil),          // 7: turing.v1.PageResponse
-	(*ErrorDetail)(nil),           // 8: turing.v1.ErrorDetail
-	(*ProviderConfig)(nil),        // 9: turing.v1.ProviderConfig
-	(*AgentDescriptor)(nil),       // 10: turing.v1.AgentDescriptor
-	(*Message)(nil),               // 11: turing.v1.Message
-	(*structpb.Struct)(nil),       // 12: google.protobuf.Struct
-	(*timestamppb.Timestamp)(nil), // 13: google.protobuf.Timestamp
+	(AgentId)(0),                     // 0: turing.v1.AgentId
+	(ModelProvider)(0),               // 1: turing.v1.ModelProvider
+	(RoutingRequirementKind)(0),      // 2: turing.v1.RoutingRequirementKind
+	(MessageRole)(0),                 // 3: turing.v1.MessageRole
+	(ToolPolicy)(0),                  // 4: turing.v1.ToolPolicy
+	(RunStatus)(0),                   // 5: turing.v1.RunStatus
+	(*RequestMetadata)(nil),          // 6: turing.v1.RequestMetadata
+	(*PageRequest)(nil),              // 7: turing.v1.PageRequest
+	(*PageResponse)(nil),             // 8: turing.v1.PageResponse
+	(*ErrorDetail)(nil),              // 9: turing.v1.ErrorDetail
+	(*RoutingUnavailableDetail)(nil), // 10: turing.v1.RoutingUnavailableDetail
+	(*ModelCapability)(nil),          // 11: turing.v1.ModelCapability
+	(*ProviderConfig)(nil),           // 12: turing.v1.ProviderConfig
+	(*AgentDescriptor)(nil),          // 13: turing.v1.AgentDescriptor
+	(*Message)(nil),                  // 14: turing.v1.Message
+	(*structpb.Struct)(nil),          // 15: google.protobuf.Struct
+	(*timestamppb.Timestamp)(nil),    // 16: google.protobuf.Timestamp
 }
 var file_turing_v1_common_proto_depIdxs = []int32{
-	12, // 0: turing.v1.ErrorDetail.details:type_name -> google.protobuf.Struct
-	1,  // 1: turing.v1.ProviderConfig.provider:type_name -> turing.v1.ModelProvider
-	0,  // 2: turing.v1.AgentDescriptor.id:type_name -> turing.v1.AgentId
-	2,  // 3: turing.v1.Message.role:type_name -> turing.v1.MessageRole
-	13, // 4: turing.v1.Message.created_at:type_name -> google.protobuf.Timestamp
-	5,  // [5:5] is the sub-list for method output_type
-	5,  // [5:5] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	15, // 0: turing.v1.ErrorDetail.details:type_name -> google.protobuf.Struct
+	2,  // 1: turing.v1.RoutingUnavailableDetail.kind:type_name -> turing.v1.RoutingRequirementKind
+	1,  // 2: turing.v1.ModelCapability.provider:type_name -> turing.v1.ModelProvider
+	1,  // 3: turing.v1.ProviderConfig.provider:type_name -> turing.v1.ModelProvider
+	11, // 4: turing.v1.ProviderConfig.models:type_name -> turing.v1.ModelCapability
+	0,  // 5: turing.v1.AgentDescriptor.id:type_name -> turing.v1.AgentId
+	3,  // 6: turing.v1.Message.role:type_name -> turing.v1.MessageRole
+	16, // 7: turing.v1.Message.created_at:type_name -> google.protobuf.Timestamp
+	8,  // [8:8] is the sub-list for method output_type
+	8,  // [8:8] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_common_proto_init() }
@@ -826,8 +1053,8 @@ func file_turing_v1_common_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_common_proto_rawDesc), len(file_turing_v1_common_proto_rawDesc)),
-			NumEnums:      5,
-			NumMessages:   7,
+			NumEnums:      6,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

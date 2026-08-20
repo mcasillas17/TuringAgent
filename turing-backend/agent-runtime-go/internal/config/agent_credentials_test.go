@@ -53,6 +53,20 @@ func TestParseAgentAPIKeysRejectsBlankEntries(t *testing.T) {
 	}
 }
 
+func TestParseAgentAPIKeysRejectsInvalidCredentialNames(t *testing.T) {
+	for _, raw := range []string{
+		`{" claude":"sk-1"}`,
+		`{"claude ":"sk-1"}`,
+		"{\"\\t\":\"sk-1\"}",
+		`{"claude/key":"sk-1"}`,
+		`{"` + strings.Repeat("a", 65) + `":"sk-1"}`,
+	} {
+		if _, err := parseAgentAPIKeys(raw); err == nil {
+			t.Fatalf("invalid credential name in %q was accepted", raw)
+		}
+	}
+}
+
 func TestLoadFromEnvCarriesTheAgentKeys(t *testing.T) {
 	cfg, err := LoadFromEnv(func(name string) string {
 		switch name {

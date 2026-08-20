@@ -95,9 +95,10 @@ func (g AutomationRunGrant) Allows(serverName string, toolName string) bool {
 // scheduler has no user in front of it to pick a provider, so the process
 // defaults stand in.
 type AutomationRunDefaults struct {
-	AgentID       string
-	ModelProvider string
-	Model         string
+	AgentID         string
+	ModelProvider   string
+	Model           string
+	ValidateRouting func(context.Context, RoutingRequirements) error
 }
 
 // AutomationFire describes what one claim did. A claim either queues a run or
@@ -113,6 +114,7 @@ type AutomationFire struct {
 	TraceID             string
 	SessionUpdatedEvent Event
 	QueuedEvent         Event
+	RoutingEvents       []Event
 
 	// Set when the occurrence was passed over rather than run. The schedule
 	// still moved on, so the automation is not stuck; SkippedReason says why.
@@ -132,6 +134,7 @@ const (
 	// re-selected by every future tick, which would block every automation
 	// behind it forever.
 	SkippedScheduleUnreadable = "schedule_unreadable"
+	SkippedRoutingUnavailable = "routing_unavailable"
 )
 
 func validateAutomation(input AutomationInput) (AutomationInput, error) {
@@ -488,6 +491,67 @@ func (r *Repository) ClaimDueAutomation(ctx context.Context, at time.Time, defau
 			Skipped: true, SkippedReason: SkippedPreviousRunUnfinished,
 		}, true, nil
 	}
+	if defaults.ValidateRouting != nil {
+		requirements := RoutingRequirements{
+			AgentID: defaults.AgentID, ModelProvider: defaults.ModelProvider, Model: defaults.Model,
+		}
+		if sessionID.Valid {
+			resolved, err := resolveEnqueueRouteTx(ctx, tx, EnqueueUserMessageInput{
+				SessionID: sessionID.String, AgentID: defaults.AgentID,
+				ModelProvider: defaults.ModelProvider, Model: defaults.Model,
+			})
+			if err != nil {
+				return AutomationFire{}, false, err
+			}
+			requirements = resolved.requirements
+		}
+		routingErr := defaults.ValidateRouting(ctx, requirements)
+		if routingErr != nil {
+			result, err := tx.ExecContext(ctx, `
+				UPDATE automations
+				SET next_due_at = ?, updated_at = ?
+				WHERE id = ? AND enabled = 1 AND next_due_at = ?
+			`, FormatTimestamp(nextDue), firedAt, automationID, dueAt)
+			if err != nil {
+				return AutomationFire{}, false, err
+			}
+			skipped, err := result.RowsAffected()
+			if err != nil {
+				return AutomationFire{}, false, err
+			}
+			if skipped != 1 {
+				return AutomationFire{}, false, nil
+			}
+			payload, err := json.Marshal(map[string]any{
+				"error":      routingErr.Error(),
+				"firedDueAt": dueAt,
+				"nextDueAt":  FormatTimestamp(nextDue),
+				"reason":     SkippedRoutingUnavailable,
+			})
+			if err != nil {
+				return AutomationFire{}, false, err
+			}
+			if err := recordAuditTx(
+				ctx,
+				tx,
+				"",
+				"automation",
+				automationID,
+				"automation.routing_unavailable",
+				automationID,
+				string(payload),
+			); err != nil {
+				return AutomationFire{}, false, err
+			}
+			if err := tx.Commit(); err != nil {
+				return AutomationFire{}, false, err
+			}
+			return AutomationFire{
+				AutomationID: automationID, Name: name,
+				Skipped: true, SkippedReason: SkippedRoutingUnavailable,
+			}, true, nil
+		}
+	}
 	// The compare-and-set described above: next_due_at must still be the value
 	// this transaction read.
 	result, err := tx.ExecContext(ctx, `
@@ -553,6 +617,7 @@ func (r *Repository) ClaimDueAutomation(ctx context.Context, at time.Time, defau
 		TraceID:             enqueued.TraceID,
 		SessionUpdatedEvent: enqueued.SessionUpdatedEvent,
 		QueuedEvent:         enqueued.QueuedEvent,
+		RoutingEvents:       enqueued.RoutingEvents,
 	}, true, nil
 }
 

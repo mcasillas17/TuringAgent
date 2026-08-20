@@ -56,3 +56,80 @@ func TestAppendRunNoticeKeepsNoteAndMergesExtras(t *testing.T) {
 		t.Fatalf("event type = %q, want agent.run.step", event.Type)
 	}
 }
+
+func TestAppendPendingRunNoticeSkipsClaimedWork(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Conditional notice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "claim before notice", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-conditional-notice"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, appended, err := repo.AppendPendingRunNotice(
+		ctx,
+		enqueued.RunID,
+		"stale queue notice",
+		map[string]any{"reason": "routing_capability_unavailable"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if appended {
+		t.Fatal("notice appended after the pending job was claimed")
+	}
+	var count int
+	if err := database.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM events
+		WHERE run_id = ? AND type = 'agent.run.step'
+		  AND json_extract(payload_json, '$.reason') = 'routing_capability_unavailable'
+	`, enqueued.RunID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("conditional notices = %d, want 0", count)
+	}
+}
+
+func TestAppendPendingRunNoticeAppendsWhileQueued(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Pending notice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "still waiting", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	event, appended, err := repo.AppendPendingRunNotice(
+		ctx,
+		enqueued.RunID,
+		"queue notice",
+		map[string]any{"reason": "routing_capability_unavailable"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !appended {
+		t.Fatal("notice was not appended for queued pending work")
+	}
+	if event.RunID.String != enqueued.RunID || event.Type != "agent.run.step" {
+		t.Fatalf("event = %+v, want agent.run.step for %s", event, enqueued.RunID)
+	}
+}

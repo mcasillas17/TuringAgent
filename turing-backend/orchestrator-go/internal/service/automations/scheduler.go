@@ -18,6 +18,8 @@ const maxFiresPerTick = 20
 // needs from it: telling a worker there is work.
 type Dispatcher interface {
 	DispatchPending(context.Context) error
+	RefreshPendingRoutingState(context.Context, string) error
+	RoutableDefaultModel(string, string) string
 }
 
 // Scheduler creates the runs nobody asked for.
@@ -77,7 +79,11 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		fire, found, err := s.repo.ClaimDueAutomation(ctx, s.now(), s.defaults)
+		defaults := s.defaults
+		if s.dispatcher != nil {
+			defaults.Model = s.dispatcher.RoutableDefaultModel(defaults.ModelProvider, defaults.Model)
+		}
+		fire, found, err := s.repo.ClaimDueAutomation(ctx, s.now(), defaults)
 		if err != nil {
 			return err
 		}
@@ -99,6 +105,9 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 			if fire.QueuedEvent.EventID != "" {
 				s.bus.Publish(busEvent(fire.QueuedEvent))
 			}
+			for _, event := range fire.RoutingEvents {
+				s.bus.Publish(busEvent(event))
+			}
 		}
 		if s.dispatcher != nil {
 			if err := s.dispatcher.DispatchPending(ctx); err != nil {
@@ -106,6 +115,9 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 				// the next dispatch either way. Reported, not fatal, so one
 				// failing dispatch does not stop the remaining automations.
 				log.Printf("dispatch automation run %s: %v", fire.RunID, err)
+			}
+			if err := s.dispatcher.RefreshPendingRoutingState(ctx, "automation enqueued"); err != nil {
+				log.Printf("refresh automation routing state for run %s: %v", fire.RunID, err)
 			}
 		}
 	}

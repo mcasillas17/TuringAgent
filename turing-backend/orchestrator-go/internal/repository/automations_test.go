@@ -621,6 +621,144 @@ func TestAnUnfinishedPreviousRunSkipsTheOccurrenceInsteadOfQueueingAnother(t *te
 	}
 }
 
+func TestUnavailableAutomationRouteAdvancesWithoutPersistingWork(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	automation := mustCreateDueAutomation(t, repo, ctx, "Unavailable", everyFiveMinutes())
+	due := mustParse(t, automation.NextDueAt)
+	defaults := automationDefaults
+	defaults.ValidateRouting = func(context.Context, RoutingRequirements) error {
+		return errors.New("no compatible worker")
+	}
+
+	fire, found, err := repo.ClaimDueAutomation(ctx, due, defaults)
+	if err != nil || !found {
+		t.Fatalf("claim unavailable route = found %v err %v", found, err)
+	}
+	if !fire.Skipped || fire.SkippedReason != SkippedRoutingUnavailable || fire.RunID != "" {
+		t.Fatalf("fire = %+v, want routing-unavailable skip", fire)
+	}
+	for _, table := range []string{"sessions", "messages", "agent_runs", "jobs"} {
+		var count int
+		if err := repo.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("%s count = %d, want no persisted work", table, count)
+		}
+	}
+	var actorType, actorID, action, target, payload string
+	if err := repo.db.QueryRowContext(ctx, `
+		SELECT actor_type, COALESCE(actor_id, ''), action, COALESCE(target, ''), COALESCE(payload_json, '')
+		FROM audit_logs
+		WHERE action = 'automation.routing_unavailable' AND target = ?
+	`, automation.AutomationID).Scan(&actorType, &actorID, &action, &target, &payload); err != nil {
+		t.Fatalf("read durable routing-unavailable occurrence: %v", err)
+	}
+	if actorType != "automation" || actorID != automation.AutomationID ||
+		action != "automation.routing_unavailable" || target != automation.AutomationID ||
+		!strings.Contains(payload, `"reason":"routing_unavailable"`) {
+		t.Fatalf("routing-unavailable audit = %q/%q/%q/%q %s", actorType, actorID, action, target, payload)
+	}
+	reloaded, err := repo.GetAutomation(ctx, automation.AutomationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mustParse(t, reloaded.NextDueAt).After(due) {
+		t.Fatalf("next due = %s, want after %s", reloaded.NextDueAt, due)
+	}
+}
+
+func TestAutomationValidatesItsExistingExternalAgentRoute(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	automation := mustCreateDueAutomation(t, repo, ctx, "External route", everyFiveMinutes())
+	firstDue := mustParse(t, automation.NextDueAt)
+	first, found, err := repo.ClaimDueAutomation(ctx, firstDue, automationDefaults)
+	if err != nil || !found || first.Skipped {
+		t.Fatalf("first claim = %+v, found %v, err %v", first, found, err)
+	}
+	finishRun(t, repo, first.RunID)
+	reloaded, err := repo.GetAutomation(ctx, automation.AutomationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, err := repo.CreateExternalAgent(ctx, ExternalAgentInput{
+		DisplayName: "External", Provider: "anthropic", BaseURL: "https://example.com",
+		Model: "external-model", CredentialRef: "external",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetSessionAgent(ctx, reloaded.SessionID, agent.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	countsBefore := map[string]int{}
+	for _, table := range []string{"sessions", "messages", "agent_runs", "jobs"} {
+		var count int
+		if err := repo.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		countsBefore[table] = count
+	}
+	defaults := automationDefaults
+	defaults.ValidateRouting = func(_ context.Context, route RoutingRequirements) error {
+		if !route.ExternalAgent || route.ModelProvider != "openai_compatible" || route.Model != "external-model" {
+			t.Fatalf("validated route = %+v, want frozen external-agent destination", route)
+		}
+		return errors.New("external agents unavailable")
+	}
+
+	fire, found, err := repo.ClaimDueAutomation(ctx, mustParse(t, reloaded.NextDueAt), defaults)
+	if err != nil || !found {
+		t.Fatalf("external route claim = found %v err %v", found, err)
+	}
+	if !fire.Skipped || fire.SkippedReason != SkippedRoutingUnavailable || fire.RunID != "" {
+		t.Fatalf("fire = %+v, want routing-unavailable skip", fire)
+	}
+	for table, before := range countsBefore {
+		var after int
+		if err := repo.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&after); err != nil {
+			t.Fatal(err)
+		}
+		if after != before {
+			t.Fatalf("%s count = %d, want unchanged %d", table, after, before)
+		}
+	}
+}
+
+func TestClaimDueAutomationCarriesExternalRoutingEvents(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	automation := mustCreateDueAutomation(t, repo, ctx, "External event", everyFiveMinutes())
+	session, err := repo.CreateSession(ctx, automation.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.db.ExecContext(ctx,
+		`UPDATE automations SET session_id = ? WHERE id = ?`,
+		session.SessionID, automation.AutomationID); err != nil {
+		t.Fatal(err)
+	}
+	agent, err := repo.CreateExternalAgent(ctx, ExternalAgentInput{
+		DisplayName: "External", Provider: "anthropic", BaseURL: "https://example.com",
+		Model: "external-model", CredentialRef: "external",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetSessionAgent(ctx, session.SessionID, agent.AgentID); err != nil {
+		t.Fatal(err)
+	}
+
+	fire, found, err := repo.ClaimDueAutomation(ctx, mustParse(t, automation.NextDueAt), automationDefaults)
+	if err != nil || !found || fire.Skipped {
+		t.Fatalf("claim = %+v, found %v, err %v", fire, found, err)
+	}
+	if len(fire.RoutingEvents) != 1 ||
+		fire.RoutingEvents[0].Type != "agent.run.step" ||
+		fire.RoutingEvents[0].Sequence <= fire.QueuedEvent.Sequence {
+		t.Fatalf("routing events = %+v, queued sequence = %d", fire.RoutingEvents, fire.QueuedEvent.Sequence)
+	}
+}
+
 // A row whose schedule cannot be read has no next due time to advance to, so
 // leaving it enabled would re-select it on every tick and starve every
 // automation behind it.

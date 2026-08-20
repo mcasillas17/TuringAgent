@@ -15,6 +15,7 @@ import (
 const (
 	maxConcurrentRunsLimit = 128
 	maxApprovalTTLMS       = 24 * 60 * 60 * 1000
+	maxContextWindowTokens = 16 * 1024 * 1024
 )
 
 type Config struct {
@@ -31,24 +32,29 @@ type Config struct {
 	// IntegrationKey seals third-party credentials before they are stored.
 	// Optional: when it is empty, connecting an account is refused with a
 	// reason rather than the credential being stored in the clear.
-	IntegrationKey string
-	PublicPort     int
-	InternalPort   int
-	DatabasePath   string
-	SkillsRoot     string
-	OllamaBaseURL  string
-	OllamaModel    string
-	OpenAIBaseURL  string
-	// OpenAIEnabled and FilesMCPEnabled are presence flags, sourced from
-	// OPENAI_ENABLED and MCP_FILES_ENABLED, which Compose derives from
-	// whether OPENAI_API_KEY / MCP_FILES_TOKEN_GENERAL are set without ever
-	// handing this process the actual secret value. The orchestrator never
-	// calls OpenAI or mcp-files itself — GetConfig only reports whether each
-	// is configured — so those secrets live only in the processes that
-	// actually use them (the agent runtime, and mcp-files itself).
-	OpenAIEnabled   bool
-	FilesMCPEnabled bool
-	OpenAIModel     string
+	IntegrationKey            string
+	PublicPort                int
+	InternalPort              int
+	DatabasePath              string
+	SkillsRoot                string
+	OllamaBaseURL             string
+	OllamaModel               string
+	OllamaContextWindowTokens int
+	OpenAIBaseURL             string
+	// FilesMCPEnabled and OpenAIEnabled are presence flags sourced from
+	// MCP_FILES_ENABLED and OPENAI_ENABLED, which Compose derives from
+	// whether MCP_FILES_TOKEN_GENERAL / OPENAI_API_KEY are set without ever
+	// handing this process either actual secret value. The orchestrator
+	// never calls mcp-files or OpenAI itself: FilesMCPEnabled only feeds
+	// GetConfig's static "is mcp-files configured" flag, and OpenAIEnabled
+	// only decides whether the legacy per-run capability fallback advertises
+	// OpenAI for a runtime that has not yet reported its own capabilities —
+	// GetConfig itself reports OpenAI as enabled from those live advertised
+	// capabilities, not from this flag.
+	FilesMCPEnabled           bool
+	OpenAIEnabled             bool
+	OpenAIModel               string
+	OpenAIContextWindowTokens int
 	// AgentCredentialNames is the set of credential names an external agent may
 	// refer to — names only. The keys themselves are decoded, counted and
 	// dropped: the orchestrator never calls a third-party API, so holding the
@@ -170,9 +176,9 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		return Config{}, err
 	}
 	// OpenAIEnabled mirrors OPENAI_API_KEY's prior optionality: unset means
-	// disabled, matching the earlier `OpenAIAPIKey != ""` check. The actual
-	// key lives only in the agent runtime, which is the only process that
-	// ever calls OpenAI.
+	// disabled, matching the earlier `OpenAIAPIKey != ""` check the legacy
+	// capability fallback used. The actual key lives only in the agent
+	// runtime, which is the only process that ever calls OpenAI.
 	openAIEnabled, err := boolValue("OPENAI_ENABLED", false)
 	if err != nil {
 		return Config{}, err
@@ -224,6 +230,20 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if maxRuns < 1 || maxRuns > maxConcurrentRunsLimit {
 		return Config{}, fmt.Errorf("TURING_MAX_CONCURRENT_RUNS_GENERAL must be between 1 and %d", maxConcurrentRunsLimit)
 	}
+	ollamaContextWindowTokens, err := positiveIntValue("OLLAMA_CONTEXT_WINDOW_TOKENS", 32768)
+	if err != nil {
+		return Config{}, err
+	}
+	if ollamaContextWindowTokens > maxContextWindowTokens {
+		return Config{}, fmt.Errorf("OLLAMA_CONTEXT_WINDOW_TOKENS must be between 1 and %d", maxContextWindowTokens)
+	}
+	openAIContextWindowTokens, err := positiveIntValue("OPENAI_CONTEXT_WINDOW_TOKENS", 32768)
+	if err != nil {
+		return Config{}, err
+	}
+	if openAIContextWindowTokens > maxContextWindowTokens {
+		return Config{}, fmt.Errorf("OPENAI_CONTEXT_WINDOW_TOKENS must be between 1 and %d", maxContextWindowTokens)
+	}
 	maxTools, err := positiveIntValue("TURING_MAX_TOOL_CALLS_PER_RUN", 10)
 	if err != nil {
 		return Config{}, err
@@ -253,31 +273,33 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		return Config{}, fmt.Errorf("SKILLS_ROOT must be a clean absolute path")
 	}
 	return Config{
-		ClientAPIKey:             clientKey,
-		RuntimeToken:             runtimeToken,
-		ApprovalConsumerToken:    approvalConsumerToken,
-		ApprovalJWTSecret:        approvalSecret,
-		IntegrationKey:           integrationKey,
-		PublicPort:               publicPort,
-		InternalPort:             internalPort,
-		DatabasePath:             stringValue("DATABASE_PATH", "/app/data/turing.db"),
-		SkillsRoot:               skillsRoot,
-		OllamaBaseURL:            stringValue("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
-		OllamaModel:              stringValue("OLLAMA_MODEL", "qwen2.5:7b"),
-		OpenAIBaseURL:            stringValue("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-		OpenAIEnabled:            openAIEnabled,
-		FilesMCPEnabled:          filesMCPEnabled,
-		OpenAIModel:              stringValue("OPENAI_MODEL", "gpt-4o-mini"),
-		AgentCredentialNames:     AgentCredentialNames(agentAPIKeys),
-		JobTimeoutMS:             jobTimeout,
-		JobReaperIntervalMS:      reaperInterval,
-		AutomationTickMS:         automationTick,
-		JobMaxAttempts:           maxAttempts,
-		MaxConcurrentRunsGeneral: maxRuns,
-		MaxToolCallsPerRun:       maxTools,
-		ModelTimeoutMS:           modelTimeout,
-		ToolTimeoutMS:            toolTimeout,
-		ApprovalTTLMS:            approvalTTL,
-		LogLevel:                 stringValue("LOG_LEVEL", "info"),
+		ClientAPIKey:              clientKey,
+		RuntimeToken:              runtimeToken,
+		ApprovalConsumerToken:     approvalConsumerToken,
+		ApprovalJWTSecret:         approvalSecret,
+		IntegrationKey:            integrationKey,
+		PublicPort:                publicPort,
+		InternalPort:              internalPort,
+		DatabasePath:              stringValue("DATABASE_PATH", "/app/data/turing.db"),
+		SkillsRoot:                skillsRoot,
+		OllamaBaseURL:             stringValue("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
+		OllamaModel:               stringValue("OLLAMA_MODEL", "qwen2.5:7b"),
+		OllamaContextWindowTokens: ollamaContextWindowTokens,
+		OpenAIBaseURL:             stringValue("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+		FilesMCPEnabled:           filesMCPEnabled,
+		OpenAIEnabled:             openAIEnabled,
+		OpenAIModel:               stringValue("OPENAI_MODEL", "gpt-4o-mini"),
+		OpenAIContextWindowTokens: openAIContextWindowTokens,
+		AgentCredentialNames:      AgentCredentialNames(agentAPIKeys),
+		JobTimeoutMS:              jobTimeout,
+		JobReaperIntervalMS:       reaperInterval,
+		AutomationTickMS:          automationTick,
+		JobMaxAttempts:            maxAttempts,
+		MaxConcurrentRunsGeneral:  maxRuns,
+		MaxToolCallsPerRun:        maxTools,
+		ModelTimeoutMS:            modelTimeout,
+		ToolTimeoutMS:             toolTimeout,
+		ApprovalTTLMS:             approvalTTL,
+		LogLevel:                  stringValue("LOG_LEVEL", "info"),
 	}, nil
 }

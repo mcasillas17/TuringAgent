@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -54,5 +55,58 @@ func TestCancelRunTerminalizesPendingApprovalAndToolCall(t *testing.T) {
 		Status: "failed", ErrorCode: "cancelled", ErrorMessage: "client_cancelled",
 	}); err != nil {
 		t.Fatalf("late cancellation cleanup AFTER: %v", err)
+	}
+}
+
+func TestCancelRunFencesPendingAssignmentBeforeDelivery(t *testing.T) {
+	tests := map[string]func(context.Context, *Repository, string) error{
+		"without event": func(ctx context.Context, repo *Repository, runID string) error {
+			return repo.CancelRun(ctx, runID, "client_cancelled")
+		},
+		"with event": func(ctx context.Context, repo *Repository, runID string) error {
+			_, err := repo.CancelRunWithEvent(
+				ctx, runID, "client_cancelled", `{"reason":"client_cancelled"}`,
+			)
+			return err
+		},
+	}
+	for name, cancel := range tests {
+		t.Run(name, func(t *testing.T) {
+			database := openTestDB(t)
+			repo := New(database)
+			ctx := context.Background()
+			session, err := repo.CreateSession(ctx, "Cancel pending assignment")
+			if err != nil {
+				t.Fatal(err)
+			}
+			enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+				SessionID: session.SessionID, Content: "cancel before send", AgentID: "general_assistant",
+				ModelProvider: "ollama", Model: "llama3.2",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-cancel-pending")
+			if err != nil {
+				t.Fatal(err)
+			}
+			assignment := Assignment{
+				JobID: claimed.JobID, RunID: claimed.RunID,
+				WorkerID: "worker-cancel-pending", AttemptID: claimed.AssignmentAttemptID,
+			}
+			if err := cancel(ctx, repo, enqueued.RunID); err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.BeginAssignmentSend(ctx, assignment); !errors.Is(err, ErrAssignmentFenced) {
+				t.Fatalf("BeginAssignmentSend after cancellation = %v, want ErrAssignmentFenced", err)
+			}
+			run, err := repo.GetRun(ctx, enqueued.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if run.Status != "cancelled" || !run.ExecutionActive || run.ExecutionState != "pending_send" {
+				t.Fatalf("cancelled pending assignment = %+v, want retained pending-send containment", run)
+			}
+		})
 	}
 }

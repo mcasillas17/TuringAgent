@@ -68,6 +68,67 @@ func TestRecoverStaleUncertainAssignmentFencesAndRequeuesAtInjectedCutoff(t *tes
 	}
 }
 
+func TestPendingSendRecoveryDoesNotConsumeExecutionAttempt(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		reconcile func(*Repository, context.Context, Assignment) (AssignmentReconciliation, error)
+	}{
+		{
+			name: "connected stream teardown",
+			reconcile: func(repo *Repository, ctx context.Context, assignment Assignment) (AssignmentReconciliation, error) {
+				return repo.ReconcileAssignmentWithLimit(ctx, assignment, 1)
+			},
+		},
+		{
+			name: "stale lease recovery",
+			reconcile: func(repo *Repository, ctx context.Context, assignment Assignment) (AssignmentReconciliation, error) {
+				return repo.RecoverAssignmentWithLimit(ctx, assignment, 1)
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			database := openTestDB(t)
+			repo := New(database)
+			ctx := context.Background()
+			session, err := repo.CreateSession(ctx, testCase.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+				SessionID: session.SessionID, Content: "not delivered", AgentID: "general_assistant",
+				ModelProvider: "ollama", Model: "llama3.2",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-pending-send")
+			if err != nil {
+				t.Fatal(err)
+			}
+			reconciliation, err := testCase.reconcile(repo, ctx, Assignment{
+				JobID: claimed.JobID, RunID: claimed.RunID,
+				WorkerID: "worker-pending-send", AttemptID: claimed.AssignmentAttemptID,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reconciliation.Requeued || reconciliation.Cleared || len(reconciliation.Events) != 0 {
+				t.Fatalf("pending-send reconciliation = %+v, want silent requeue", reconciliation)
+			}
+			var status string
+			var attempt int
+			if err := database.QueryRowContext(ctx,
+				`SELECT status, attempt FROM jobs WHERE id = ?`, enqueued.JobID,
+			).Scan(&status, &attempt); err != nil {
+				t.Fatal(err)
+			}
+			if status != "pending" || attempt != 1 {
+				t.Fatalf("pending-send job = status %q attempt %d, want pending attempt 1", status, attempt)
+			}
+		})
+	}
+}
+
 func TestRecoverAssignmentAtCutoffDoesNotRequeueRenewedLease(t *testing.T) {
 	database := openTestDB(t)
 	repo := New(database)

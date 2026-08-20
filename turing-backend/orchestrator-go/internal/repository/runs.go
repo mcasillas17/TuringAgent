@@ -590,6 +590,14 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 // reading of the terminal event it accompanies — otherwise the explanation is
 // stamped after the failure it explains.
 func appendRunNoticeTx(ctx context.Context, tx *sql.Tx, sessionID string, runID string, traceID string, note string, extras map[string]any, createdAt string) (Event, error) {
+	payloadJSON, err := marshalRunNoticePayload(note, extras)
+	if err != nil {
+		return Event{}, err
+	}
+	return appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.step", payloadJSON, createdAt)
+}
+
+func marshalRunNoticePayload(note string, extras map[string]any) (string, error) {
 	payload := make(map[string]any, len(extras)+1)
 	for key, value := range extras {
 		payload[key] = value
@@ -597,9 +605,9 @@ func appendRunNoticeTx(ctx context.Context, tx *sql.Tx, sessionID string, runID 
 	payload["note"] = note
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
-		return Event{}, err
+		return "", err
 	}
-	return appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.step", string(payloadJSON), createdAt)
+	return string(payloadJSON), nil
 }
 
 func appendSessionEventTx(ctx context.Context, tx *sql.Tx, sessionID string, traceID string, eventType string, payloadJSON string, createdAt string) (Event, error) {
@@ -706,4 +714,74 @@ func (r *Repository) AppendRunNotice(ctx context.Context, runID string, note str
 		return Event{}, err
 	}
 	return event, nil
+}
+
+// AppendPendingRunNotice appends a queue notice only if the run is still
+// queued and its job is still pending at the write boundary.
+func (r *Repository) AppendPendingRunNotice(ctx context.Context, runID string, note string, extras map[string]any) (Event, bool, error) {
+	payloadJSON, err := marshalRunNoticePayload(note, extras)
+	if err != nil {
+		return Event{}, false, err
+	}
+	eventID := ids.New("evt")
+	createdAt := now()
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Event{}, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO events (id, session_id, run_id, trace_id, sequence, type, payload_json, created_at)
+		SELECT
+			?,
+			runs.session_id,
+			runs.id,
+			runs.trace_id,
+			(SELECT COALESCE(MAX(events.sequence), 0) + 1
+			 FROM events
+			 WHERE events.session_id = runs.session_id),
+			'agent.run.step',
+			?,
+			?
+		FROM agent_runs AS runs
+		WHERE runs.id = ?
+		  AND runs.status = 'queued'
+		  AND EXISTS (
+			SELECT 1
+			FROM jobs
+			WHERE jobs.run_id = runs.id
+			  AND jobs.status = 'pending'
+		  )
+	`, eventID, payloadJSON, createdAt, runID)
+	if err != nil {
+		return Event{}, false, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return Event{}, false, err
+	}
+	if rowsAffected == 0 {
+		return Event{}, false, nil
+	}
+	var event Event
+	if err := tx.QueryRowContext(ctx, `
+		SELECT id, session_id, run_id, trace_id, sequence, type, payload_json, created_at
+		FROM events
+		WHERE id = ?
+	`, eventID).Scan(
+		&event.EventID,
+		&event.SessionID,
+		&event.RunID,
+		&event.TraceID,
+		&event.Sequence,
+		&event.Type,
+		&event.PayloadJSON,
+		&event.CreatedAt,
+	); err != nil {
+		return Event{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Event{}, false, err
+	}
+	return event, true, nil
 }

@@ -86,6 +86,23 @@ func TestLoadFromMapValidatesMaxConcurrentRunsWithinRuntimeBound(t *testing.T) {
 	}
 }
 
+func TestLoadFromMapLoadsBoundedAdvertisedContextLimits(t *testing.T) {
+	env := requiredEnv()
+	env["OLLAMA_CONTEXT_WINDOW_TOKENS"] = "32768"
+	env["OPENAI_CONTEXT_WINDOW_TOKENS"] = "128000"
+	cfg, err := LoadFromMap(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OllamaContextWindowTokens != 32768 || cfg.OpenAIContextWindowTokens != 128000 {
+		t.Fatalf("context limits = %d/%d", cfg.OllamaContextWindowTokens, cfg.OpenAIContextWindowTokens)
+	}
+	env["OLLAMA_CONTEXT_WINDOW_TOKENS"] = "16777217"
+	if _, err := LoadFromMap(env); err == nil || !strings.Contains(err.Error(), "OLLAMA_CONTEXT_WINDOW_TOKENS") {
+		t.Fatalf("oversized context limit error = %v", err)
+	}
+}
+
 func TestLoadFromMapRejectsZeroSharedRuntimeSettings(t *testing.T) {
 	base := requiredEnv()
 	for _, name := range []string{
