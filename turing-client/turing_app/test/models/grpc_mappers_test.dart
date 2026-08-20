@@ -179,6 +179,31 @@ void main() {
     expect(mapped.payload, {'runId': 'run_1', 'note': 'legacy projection'});
   });
 
+  // The RunState allowlist is scoped to state-changed events by type, not just
+  // by presence. A failure event may carry a RunState alongside its own
+  // persisted Struct; collapsing it to {runId, stateVersion} would erase the
+  // error detail the failure view renders.
+  test('preserves the persisted payload for a non state-changed event', () {
+    final mapped = GrpcMappers.turingEventToTuringEvent(
+      eventpb.TuringEvent(
+        type: eventpb.TuringEventType.TURING_EVENT_TYPE_AGENT_RUN_FAILED,
+        runState: commonpb.RunState(runId: 'run_1', stateVersion: Int64(7)),
+        payload: structpb.Struct(
+          fields: <String, structpb.Value>{
+            'errorCode': structpb.Value(stringValue: 'provider_failure'),
+            'message': structpb.Value(stringValue: 'upstream timeout'),
+          }.entries,
+        ),
+      ),
+    );
+
+    expect(mapped.type, 'agent.run.failed');
+    expect(mapped.payload, {
+      'errorCode': 'provider_failure',
+      'message': 'upstream timeout',
+    });
+  });
+
   test('maps a run state changed chat event with no run state to empty', () {
     final mapped = GrpcMappers.chatStreamEventToTuringEvent(
       ChatStreamEvent(
