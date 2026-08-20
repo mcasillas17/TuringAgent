@@ -322,7 +322,7 @@ func parseCursorHMACKey(value string) ([32]byte, error) {
 	}
 	for i := range value {
 		c := value[i]
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return key, fmt.Errorf("invalid TURING_CURSOR_HMAC_SECRET")
 		}
 	}
