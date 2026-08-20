@@ -158,6 +158,10 @@ class ToolPolicy extends $pb.ProtobufEnum {
   const ToolPolicy._(super.value, super.name);
 }
 
+/// Legacy run status. Superseded for durable public outcome snapshots by
+/// RunLifecycle, which adds recovering plus explicit unspecified/unknown
+/// handling. Retained and unrenumbered: existing clients and stored payloads
+/// still read these numbers.
 class RunStatus extends $pb.ProtobufEnum {
   static const RunStatus RUN_STATUS_UNSPECIFIED =
       RunStatus._(0, _omitEnumNames ? '' : 'RUN_STATUS_UNSPECIFIED');
@@ -192,6 +196,13 @@ class RunStatus extends $pb.ProtobufEnum {
   const RunStatus._(super.value, super.name);
 }
 
+/// The authoritative public phase of a run. UNSPECIFIED means the field was
+/// absent on the wire and UNKNOWN stands for a phase a newer server introduced
+/// that this reader cannot name, so neither is ever treated as a real phase;
+/// TUR-009 itself never persists or emits UNKNOWN. Terminal phases (completed,
+/// failed, cancelled) are immutable. Recovering is durable and observable: while
+/// worker ownership is uncertain, both reopen and live streaming show recovering
+/// rather than running.
 class RunLifecycle extends $pb.ProtobufEnum {
   static const RunLifecycle RUN_LIFECYCLE_UNSPECIFIED =
       RunLifecycle._(0, _omitEnumNames ? '' : 'RUN_LIFECYCLE_UNSPECIFIED');
@@ -232,6 +243,14 @@ class RunLifecycle extends $pb.ProtobufEnum {
   const RunLifecycle._(super.value, super.name);
 }
 
+/// Why a run reached its terminal lifecycle, as a closed vocabulary a client can
+/// localize instead of rendering server prose. NONE is the reason every
+/// nonterminal phase carries, and also a completed run that produced displayable
+/// content; COMPLETED_NO_CONTENT is a success that produced none. Which reasons
+/// are legal for which lifecycle is fixed by the normative matrix in the design:
+/// cancelled allows only USER_CANCELLED or ABANDONED, failed allows the failure
+/// reasons, and LEGACY_UNKNOWN marks a pre-migration row whose real reason was
+/// never recorded.
 class RunOutcomeReason extends $pb.ProtobufEnum {
   static const RunOutcomeReason RUN_OUTCOME_REASON_UNSPECIFIED =
       RunOutcomeReason._(

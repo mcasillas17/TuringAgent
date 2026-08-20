@@ -368,14 +368,18 @@ func (x *ToolCallBeacon) GetModelToolCallId() string {
 }
 
 type ToolPolicyDecision struct {
-	state           protoimpl.MessageState      `protogen:"open.v1"`
-	Decision        ToolPolicyDecision_Decision `protobuf:"varint,1,opt,name=decision,proto3,enum=turing.v1.ToolPolicyDecision_Decision" json:"decision,omitempty"`
-	ToolCallId      string                      `protobuf:"bytes,2,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
-	ApprovalId      string                      `protobuf:"bytes,3,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
-	Reason          string                      `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
-	TerminalRun     bool                        `protobuf:"varint,5,opt,name=terminal_run,json=terminalRun,proto3" json:"terminal_run,omitempty"`
-	Phase           ToolCallPhase               `protobuf:"varint,6,opt,name=phase,proto3,enum=turing.v1.ToolCallPhase" json:"phase,omitempty"`
-	RunStateVersion int64                       `protobuf:"varint,7,opt,name=run_state_version,json=runStateVersion,proto3" json:"run_state_version,omitempty"`
+	state       protoimpl.MessageState      `protogen:"open.v1"`
+	Decision    ToolPolicyDecision_Decision `protobuf:"varint,1,opt,name=decision,proto3,enum=turing.v1.ToolPolicyDecision_Decision" json:"decision,omitempty"`
+	ToolCallId  string                      `protobuf:"bytes,2,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	ApprovalId  string                      `protobuf:"bytes,3,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
+	Reason      string                      `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
+	TerminalRun bool                        `protobuf:"varint,5,opt,name=terminal_run,json=terminalRun,proto3" json:"terminal_run,omitempty"`
+	Phase       ToolCallPhase               `protobuf:"varint,6,opt,name=phase,proto3,enum=turing.v1.ToolCallPhase" json:"phase,omitempty"`
+	// The run's committed state version at the moment of this decision. A
+	// matching tool beacon can therefore prove ownership: the response carries
+	// the version forward before tool or model work continues, so a worker never
+	// advances past the state the orchestrator has committed.
+	RunStateVersion int64 `protobuf:"varint,7,opt,name=run_state_version,json=runStateVersion,proto3" json:"run_state_version,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }

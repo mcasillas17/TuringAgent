@@ -23,6 +23,12 @@ export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
 
 export 'common.pbenum.dart';
 
+/// The durable, self-contained answer to "what happened to this run", carried on
+/// history and on every lifecycle event so a reopened session and a live stream
+/// agree without replaying the timeline.
+///
+/// There is deliberately no retryable field: whether the system retries is an
+/// internal dispatch decision, not a promise that repeating the request is safe.
 class RunState extends $pb.GeneratedMessage {
   factory RunState({
     $core.String? runId,
@@ -147,6 +153,11 @@ class RunState extends $pb.GeneratedMessage {
   @$pb.TagNumber(5)
   void clearOutcomeReason() => $_clearField(5);
 
+  /// Per-run monotonic version, starting at 1, incremented exactly once per real
+  /// public transition. Semantic no-ops do not increment it. It is the only
+  /// ordering authority for reconciliation: a client keeps the higher version
+  /// and drops anything older, so out-of-order or duplicate delivery cannot
+  /// resurrect a stale phase. Zero means absent, never "version zero".
   @$pb.TagNumber(6)
   $fixnum.Int64 get stateVersion => $_getI64(5);
   @$pb.TagNumber(6)
@@ -167,6 +178,7 @@ class RunState extends $pb.GeneratedMessage {
   @$pb.TagNumber(7)
   $0.Timestamp ensureStateUpdatedAt() => $_ensure(6);
 
+  /// Set only for terminal lifecycles.
   @$pb.TagNumber(8)
   $0.Timestamp get finishedAt => $_getN(7);
   @$pb.TagNumber(8)
@@ -178,6 +190,9 @@ class RunState extends $pb.GeneratedMessage {
   @$pb.TagNumber(8)
   $0.Timestamp ensureFinishedAt() => $_ensure(7);
 
+  /// Whether the canonical assistant message has content worth rendering, so a
+  /// client can distinguish a silent success from a lost one without inspecting
+  /// message bodies.
   @$pb.TagNumber(9)
   $core.bool get hasDisplayableContent => $_getBF(8);
   @$pb.TagNumber(9)
@@ -949,6 +964,9 @@ class Message extends $pb.GeneratedMessage {
   @$pb.TagNumber(8)
   $0.Timestamp ensureCreatedAt() => $_ensure(7);
 
+  /// The authoritative state of the run that produced this message, so reopened
+  /// history needs no separate query to know the outcome. Absent when the
+  /// message has no run correlation, or when legacy correlation is inconsistent.
   @$pb.TagNumber(9)
   RunState get runState => $_getN(8);
   @$pb.TagNumber(9)

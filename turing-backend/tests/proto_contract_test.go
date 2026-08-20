@@ -215,6 +215,7 @@ func TestRunOutcomeProtoContractUsesApprovedAllocations(t *testing.T) {
 	assertProtoField(t, chat.Messages().ByName("RunCancelled"), "run_state", 3, protoreflect.MessageKind, false, "turing.v1.RunState")
 	assertProtoField(t, chat.Messages().ByName("RunStateChanged"), "run_state", 1, protoreflect.MessageKind, false, "turing.v1.RunState")
 	assertProtoField(t, chat.Messages().ByName("ChatStreamEvent"), "run_state_changed", 27, protoreflect.MessageKind, false, "turing.v1.RunStateChanged")
+	assertProtoOneofMember(t, chat.Messages().ByName("ChatStreamEvent"), "run_state_changed", "event")
 	for messageName, fields := range map[protoreflect.Name]map[protoreflect.Name]protoreflect.FieldNumber{
 		"RunQueued":       {"run_id": 1, "job_id": 2, "trace_id": 3, "run_state": 4},
 		"RunStarted":      {"run_id": 1, "job_id": 2, "attempt": 3, "run_state": 4},
@@ -354,6 +355,7 @@ func TestRuntimeApprovalResumeProtoContractUsesApprovedAllocations(t *testing.T)
 	assertProtoField(t, resumeReady, "expected_state_version", 3, protoreflect.Int64Kind, false, "")
 	assertProtoField(t, resumeReady, "assignment_attempt_id", 4, protoreflect.StringKind, false, "")
 	assertProtoField(t, runtime.Messages().ByName("RuntimeUpdate"), "approval_resume_ready", 9, protoreflect.MessageKind, false, "turing.v1.RuntimeApprovalResumeReady")
+	assertProtoOneofMember(t, runtime.Messages().ByName("RuntimeUpdate"), "approval_resume_ready", "update")
 	assertProtoFieldMembers(t, resumeReady, map[protoreflect.Name]protoreflect.FieldNumber{
 		"run_id": 1, "approval_id": 2, "expected_state_version": 3, "assignment_attempt_id": 4,
 	})
@@ -368,6 +370,7 @@ func TestRuntimeApprovalResumeProtoContractUsesApprovedAllocations(t *testing.T)
 	assertProtoField(t, resumeAccepted, "state_version", 3, protoreflect.Int64Kind, false, "")
 	assertProtoField(t, resumeAccepted, "assignment_attempt_id", 4, protoreflect.StringKind, false, "")
 	assertProtoField(t, runtime.Messages().ByName("RuntimeCommand"), "approval_resume_accepted", 7, protoreflect.MessageKind, false, "turing.v1.RuntimeApprovalResumeAccepted")
+	assertProtoOneofMember(t, runtime.Messages().ByName("RuntimeCommand"), "approval_resume_accepted", "command")
 	assertProtoField(t, runtime.Messages().ByName("RuntimeRunCancelled"), "state_version", 3, protoreflect.Int64Kind, false, "")
 	assertProtoField(t, runtime.Messages().ByName("RuntimeApprovalUpdated"), "state_version", 4, protoreflect.Int64Kind, false, "")
 	assertProtoFieldMembers(t, resumeAccepted, map[protoreflect.Name]protoreflect.FieldNumber{
@@ -423,24 +426,30 @@ func TestRunStateChangedReservesEventTypeTwentyThree(t *testing.T) {
 		}
 	}
 
+	// TUR-009 allocates 23 only. Value 22 belongs to TUR-004 and must stay
+	// reserved until that work lands, whichever order the two features merge in.
+	// TUR-004 is expected to name it TURING_EVENT_TYPE_SESSION_DELETED; if that
+	// allocation changes, update this expected name rather than freeing 22.
+	const tur004Value22 = protoreflect.Name("TURING_EVENT_TYPE_SESSION_DELETED")
+
 	value22 := enum.Values().ByNumber(22)
 	switch {
 	case value22 == nil:
 		if !enum.ReservedRanges().Has(22) {
-			t.Fatal("TuringEventType must either reserve 22 or assign it to TURING_EVENT_TYPE_SESSION_DELETED")
+			t.Fatalf("TuringEventType value 22 is neither reserved nor allocated; TUR-009 does not allocate 22, so it must stay reserved until TUR-004 (expected %s) uses it", tur004Value22)
 		}
 		if enum.Values().Len() != len(required) {
-			t.Fatalf("TuringEventType has %d values, want %d when 22 is reserved", enum.Values().Len(), len(required))
+			t.Fatalf("TuringEventType has %d values, want %d while 22 is reserved", enum.Values().Len(), len(required))
 		}
-	case value22.Name() == "TURING_EVENT_TYPE_SESSION_DELETED":
+	case value22.Name() == tur004Value22:
 		if enum.ReservedRanges().Has(22) {
-			t.Fatal("TuringEventType must not reserve 22 once TURING_EVENT_TYPE_SESSION_DELETED uses it")
+			t.Fatalf("TuringEventType reserves 22 while %s also allocates it; drop the reservation now that TUR-004 has landed", value22.Name())
 		}
 		if enum.Values().Len() != len(required)+1 {
-			t.Fatalf("TuringEventType has %d values, want %d when TURING_EVENT_TYPE_SESSION_DELETED=22 is present", enum.Values().Len(), len(required)+1)
+			t.Fatalf("TuringEventType has %d values, want %d once TUR-004 allocates 22 as %s", enum.Values().Len(), len(required)+1, value22.Name())
 		}
 	default:
-		t.Fatalf("TuringEventType value 22 = %s, want TURING_EVENT_TYPE_SESSION_DELETED or reserved", value22.Name())
+		t.Fatalf("TuringEventType value 22 = %s, which TUR-009 does not allocate; if TUR-004 changed its value 22, update this guard's expected name (currently %s)", value22.Name(), tur004Value22)
 	}
 }
 
@@ -467,6 +476,28 @@ func assertProtoField(t *testing.T, message protoreflect.MessageDescriptor, name
 	}
 	if messageType != "" && field.Message().FullName() != messageType {
 		t.Fatalf("%s.%s message type = %q, want %q", message.Name(), name, field.Message().FullName(), messageType)
+	}
+}
+
+func assertProtoOneofMember(t *testing.T, message protoreflect.MessageDescriptor, name protoreflect.Name, oneof protoreflect.Name) {
+	t.Helper()
+	if message == nil {
+		t.Fatal("message descriptor is missing")
+	}
+
+	field := message.Fields().ByName(name)
+	if field == nil {
+		t.Fatalf("%s.%s is missing", message.Name(), name)
+	}
+	containing := field.ContainingOneof()
+	if containing == nil {
+		t.Fatalf("%s.%s is not in a oneof, want oneof %s", message.Name(), name, oneof)
+	}
+	if containing.IsSynthetic() {
+		t.Fatalf("%s.%s is in synthetic oneof %s, want declared oneof %s", message.Name(), name, containing.Name(), oneof)
+	}
+	if containing.Name() != oneof {
+		t.Fatalf("%s.%s is in oneof %s, want %s", message.Name(), name, containing.Name(), oneof)
 	}
 }
 

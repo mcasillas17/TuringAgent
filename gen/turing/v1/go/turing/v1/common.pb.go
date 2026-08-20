@@ -289,6 +289,10 @@ func (ToolPolicy) EnumDescriptor() ([]byte, []int) {
 	return file_turing_v1_common_proto_rawDescGZIP(), []int{4}
 }
 
+// Legacy run status. Superseded for durable public outcome snapshots by
+// RunLifecycle, which adds recovering plus explicit unspecified/unknown
+// handling. Retained and unrenumbered: existing clients and stored payloads
+// still read these numbers.
 type RunStatus int32
 
 const (
@@ -350,6 +354,13 @@ func (RunStatus) EnumDescriptor() ([]byte, []int) {
 	return file_turing_v1_common_proto_rawDescGZIP(), []int{5}
 }
 
+// The authoritative public phase of a run. UNSPECIFIED means the field was
+// absent on the wire and UNKNOWN stands for a phase a newer server introduced
+// that this reader cannot name, so neither is ever treated as a real phase;
+// TUR-009 itself never persists or emits UNKNOWN. Terminal phases (completed,
+// failed, cancelled) are immutable. Recovering is durable and observable: while
+// worker ownership is uncertain, both reopen and live streaming show recovering
+// rather than running.
 type RunLifecycle int32
 
 const (
@@ -417,6 +428,14 @@ func (RunLifecycle) EnumDescriptor() ([]byte, []int) {
 	return file_turing_v1_common_proto_rawDescGZIP(), []int{6}
 }
 
+// Why a run reached its terminal lifecycle, as a closed vocabulary a client can
+// localize instead of rendering server prose. NONE is the reason every
+// nonterminal phase carries, and also a completed run that produced displayable
+// content; COMPLETED_NO_CONTENT is a success that produced none. Which reasons
+// are legal for which lifecycle is fixed by the normative matrix in the design:
+// cancelled allows only USER_CANCELLED or ABANDONED, failed allows the failure
+// reasons, and LEGACY_UNKNOWN marks a pre-migration row whose real reason was
+// never recorded.
 type RunOutcomeReason int32
 
 const (
@@ -508,17 +527,32 @@ func (RunOutcomeReason) EnumDescriptor() ([]byte, []int) {
 	return file_turing_v1_common_proto_rawDescGZIP(), []int{7}
 }
 
+// The durable, self-contained answer to "what happened to this run", carried on
+// history and on every lifecycle event so a reopened session and a live stream
+// agree without replaying the timeline.
+//
+// There is deliberately no retryable field: whether the system retries is an
+// internal dispatch decision, not a promise that repeating the request is safe.
 type RunState struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	RunId                 string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	UserMessageId         string                 `protobuf:"bytes,2,opt,name=user_message_id,json=userMessageId,proto3" json:"user_message_id,omitempty"`
-	AssistantMessageId    string                 `protobuf:"bytes,3,opt,name=assistant_message_id,json=assistantMessageId,proto3" json:"assistant_message_id,omitempty"`
-	Lifecycle             RunLifecycle           `protobuf:"varint,4,opt,name=lifecycle,proto3,enum=turing.v1.RunLifecycle" json:"lifecycle,omitempty"`
-	OutcomeReason         RunOutcomeReason       `protobuf:"varint,5,opt,name=outcome_reason,json=outcomeReason,proto3,enum=turing.v1.RunOutcomeReason" json:"outcome_reason,omitempty"`
-	StateVersion          int64                  `protobuf:"varint,6,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
-	StateUpdatedAt        *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=state_updated_at,json=stateUpdatedAt,proto3" json:"state_updated_at,omitempty"`
-	FinishedAt            *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
-	HasDisplayableContent bool                   `protobuf:"varint,9,opt,name=has_displayable_content,json=hasDisplayableContent,proto3" json:"has_displayable_content,omitempty"`
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	RunId              string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	UserMessageId      string                 `protobuf:"bytes,2,opt,name=user_message_id,json=userMessageId,proto3" json:"user_message_id,omitempty"`
+	AssistantMessageId string                 `protobuf:"bytes,3,opt,name=assistant_message_id,json=assistantMessageId,proto3" json:"assistant_message_id,omitempty"`
+	Lifecycle          RunLifecycle           `protobuf:"varint,4,opt,name=lifecycle,proto3,enum=turing.v1.RunLifecycle" json:"lifecycle,omitempty"`
+	OutcomeReason      RunOutcomeReason       `protobuf:"varint,5,opt,name=outcome_reason,json=outcomeReason,proto3,enum=turing.v1.RunOutcomeReason" json:"outcome_reason,omitempty"`
+	// Per-run monotonic version, starting at 1, incremented exactly once per real
+	// public transition. Semantic no-ops do not increment it. It is the only
+	// ordering authority for reconciliation: a client keeps the higher version
+	// and drops anything older, so out-of-order or duplicate delivery cannot
+	// resurrect a stale phase. Zero means absent, never "version zero".
+	StateVersion   int64                  `protobuf:"varint,6,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
+	StateUpdatedAt *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=state_updated_at,json=stateUpdatedAt,proto3" json:"state_updated_at,omitempty"`
+	// Set only for terminal lifecycles.
+	FinishedAt *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
+	// Whether the canonical assistant message has content worth rendering, so a
+	// client can distinguish a silent success from a lost one without inspecting
+	// message bodies.
+	HasDisplayableContent bool `protobuf:"varint,9,opt,name=has_displayable_content,json=hasDisplayableContent,proto3" json:"has_displayable_content,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -1075,16 +1109,19 @@ func (x *AgentDescriptor) GetAvailable() bool {
 }
 
 type Message struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	MessageId     string                 `protobuf:"bytes,1,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
-	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	RunId         string                 `protobuf:"bytes,3,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	Role          MessageRole            `protobuf:"varint,4,opt,name=role,proto3,enum=turing.v1.MessageRole" json:"role,omitempty"`
-	Content       string                 `protobuf:"bytes,5,opt,name=content,proto3" json:"content,omitempty"`
-	ContentType   string                 `protobuf:"bytes,6,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
-	Sequence      int64                  `protobuf:"varint,7,opt,name=sequence,proto3" json:"sequence,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	RunState      *RunState              `protobuf:"bytes,9,opt,name=run_state,json=runState,proto3" json:"run_state,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	MessageId   string                 `protobuf:"bytes,1,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	SessionId   string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	RunId       string                 `protobuf:"bytes,3,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	Role        MessageRole            `protobuf:"varint,4,opt,name=role,proto3,enum=turing.v1.MessageRole" json:"role,omitempty"`
+	Content     string                 `protobuf:"bytes,5,opt,name=content,proto3" json:"content,omitempty"`
+	ContentType string                 `protobuf:"bytes,6,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	Sequence    int64                  `protobuf:"varint,7,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	CreatedAt   *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// The authoritative state of the run that produced this message, so reopened
+	// history needs no separate query to know the outcome. Absent when the
+	// message has no run correlation, or when legacy correlation is inconsistent.
+	RunState      *RunState `protobuf:"bytes,9,opt,name=run_state,json=runState,proto3" json:"run_state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

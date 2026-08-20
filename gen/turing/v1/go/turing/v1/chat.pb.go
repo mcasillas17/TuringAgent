@@ -450,11 +450,14 @@ func (x *ToolEvent) GetPayload() *structpb.Struct {
 }
 
 type ApprovalEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ApprovalId    string                 `protobuf:"bytes,1,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
-	ToolName      string                 `protobuf:"bytes,2,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
-	ArgsSummary   string                 `protobuf:"bytes,3,opt,name=args_summary,json=argsSummary,proto3" json:"args_summary,omitempty"`
-	RunState      *RunState              `protobuf:"bytes,4,opt,name=run_state,json=runState,proto3" json:"run_state,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	ApprovalId  string                 `protobuf:"bytes,1,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
+	ToolName    string                 `protobuf:"bytes,2,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	ArgsSummary string                 `protobuf:"bytes,3,opt,name=args_summary,json=argsSummary,proto3" json:"args_summary,omitempty"`
+	// Present when this approval event is the one that moved the run's
+	// lifecycle, so the client learns waiting-approval or resumed-running from
+	// the same event that reports the approval.
+	RunState      *RunState `protobuf:"bytes,4,opt,name=run_state,json=runState,proto3" json:"run_state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -634,6 +637,10 @@ type RunFailed struct {
 	RunId   string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	Code    string                 `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`
 	Message string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	// Automatic retry is an internal dispatch decision, not a promise that
+	// repeating the request is safe. Always serialized as false for new events
+	// and ignored by new clients; kept at field 4 for wire compatibility.
+	//
 	// Deprecated: Marked as deprecated in turing/v1/chat.proto.
 	Retryable     bool      `protobuf:"varint,4,opt,name=retryable,proto3" json:"retryable,omitempty"`
 	RunState      *RunState `protobuf:"bytes,5,opt,name=run_state,json=runState,proto3" json:"run_state,omitempty"`
@@ -767,6 +774,10 @@ func (x *RunCancelled) GetRunState() *RunState {
 	return nil
 }
 
+// A lifecycle transition that has no existing lifecycle event of its own, such
+// as entering recovering or returning to running. Terminal transitions keep
+// using their existing completed/failed/cancelled events and never also emit
+// this one, so a transition is never reported twice.
 type RunStateChanged struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RunState      *RunState              `protobuf:"bytes,1,opt,name=run_state,json=runState,proto3" json:"run_state,omitempty"`

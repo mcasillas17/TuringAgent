@@ -158,6 +158,41 @@ void main() {
     expect(mapped.payload, {'runId': 'run_1', 'stateVersion': 7});
   });
 
+  // A server that types an event as state-changed without filling the typed
+  // RunState still carries meaning in its persisted Struct. Fabricating
+  // {'runId': '', 'stateVersion': 0} would invent an authoritative-looking run
+  // identity and version that nobody reported, and discard the real payload.
+  test('preserves the persisted payload when run state is absent', () {
+    final mapped = GrpcMappers.turingEventToTuringEvent(
+      eventpb.TuringEvent(
+        type: eventpb.TuringEventType.TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED,
+        payload: structpb.Struct(
+          fields: <String, structpb.Value>{
+            'runId': structpb.Value(stringValue: 'run_1'),
+            'note': structpb.Value(stringValue: 'legacy projection'),
+          }.entries,
+        ),
+      ),
+    );
+
+    expect(mapped.type, 'agent.run.state_changed');
+    expect(mapped.payload, {'runId': 'run_1', 'note': 'legacy projection'});
+  });
+
+  test('maps a run state changed chat event with no run state to empty', () {
+    final mapped = GrpcMappers.chatStreamEventToTuringEvent(
+      ChatStreamEvent(
+        sessionId: 'sess_1',
+        runId: 'run_1',
+        sequence: Int64(45),
+        runStateChanged: RunStateChanged(),
+      ),
+    );
+
+    expect(mapped.type, 'agent.run.state_changed');
+    expect(mapped.payload, isEmpty);
+  });
+
   test('generated chat event oneof remains exhaustively mapped', () {
     final cases = <ChatStreamEvent_Event, ChatStreamEvent>{
       ChatStreamEvent_Event.runQueued: ChatStreamEvent(runQueued: RunQueued()),
@@ -214,12 +249,19 @@ void main() {
     };
 
     expect(cases.keys.toSet(), ChatStreamEvent_Event.values.toSet());
-    for (final streamEvent in cases.values) {
+    cases.forEach((expectedCase, streamEvent) {
+      expect(streamEvent.whichEvent(), expectedCase);
       expect(
-        () => GrpcMappers.chatStreamEventToTuringEvent(streamEvent),
-        returnsNormally,
+        GrpcMappers.chatStreamEventToTuringEvent(streamEvent).type,
+        isNotEmpty,
       );
-    }
+    });
+    expect(
+      GrpcMappers.chatStreamEventToTuringEvent(
+        cases[ChatStreamEvent_Event.runStateChanged]!,
+      ).type,
+      'agent.run.state_changed',
+    );
   });
 
   test('maps a message run id for history correlation', () {

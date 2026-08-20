@@ -276,6 +276,9 @@ class AgentJob extends $pb.GeneratedMessage {
   @$pb.TagNumber(16)
   void clearMinimumWorkerMaxConcurrentRuns() => $_clearField(16);
 
+  /// The run's state version at assignment. The worker echoes it on later
+  /// reports so the orchestrator can reject anything computed against a state it
+  /// has already moved past.
   @$pb.TagNumber(17)
   $fixnum.Int64 get expectedStateVersion => $_getI64(16);
   @$pb.TagNumber(17)
@@ -285,6 +288,9 @@ class AgentJob extends $pb.GeneratedMessage {
   @$pb.TagNumber(17)
   void clearExpectedStateVersion() => $_clearField(17);
 
+  /// Durable identity of this assignment attempt. It is what proves a later
+  /// report or resume came from the attempt that still owns the run, rather than
+  /// from a fenced predecessor; the worker must echo it unchanged.
   @$pb.TagNumber(18)
   $core.String get assignmentAttemptId => $_getSZ(17);
   @$pb.TagNumber(18)
@@ -1192,6 +1198,8 @@ class RuntimeRunCompleted extends $pb.GeneratedMessage {
   @$pb.TagNumber(5)
   RunTokenUsage ensureTokenUsage() => $_ensure(4);
 
+  /// The state version this report was computed against; the terminal
+  /// transition commits only from that exact version.
   @$pb.TagNumber(6)
   $fixnum.Int64 get expectedStateVersion => $_getI64(5);
   @$pb.TagNumber(6)
@@ -1303,6 +1311,8 @@ class RuntimeRunFailed extends $pb.GeneratedMessage {
   @$pb.TagNumber(3)
   void clearMessage() => $_clearField(3);
 
+  /// Superseded by automatic_retry_class and ignored by the failure normalizer.
+  /// Retained at field 4 for wire compatibility with older workers.
   @$pb.TagNumber(4)
   $core.bool get retryable => $_getBF(3);
   @$pb.TagNumber(4)
@@ -1312,6 +1322,8 @@ class RuntimeRunFailed extends $pb.GeneratedMessage {
   @$pb.TagNumber(4)
   void clearRetryable() => $_clearField(4);
 
+  /// Where the failure came from, used to normalize a public outcome reason
+  /// instead of leaking worker-authored text to clients.
   @$pb.TagNumber(5)
   FailureOrigin get failureOrigin => $_getN(4);
   @$pb.TagNumber(5)
@@ -1321,6 +1333,7 @@ class RuntimeRunFailed extends $pb.GeneratedMessage {
   @$pb.TagNumber(5)
   void clearFailureOrigin() => $_clearField(5);
 
+  /// Whether the orchestrator may retry inside this run. Internal policy only.
   @$pb.TagNumber(6)
   AutomaticRetryClass get automaticRetryClass => $_getN(5);
   @$pb.TagNumber(6)
@@ -1330,6 +1343,8 @@ class RuntimeRunFailed extends $pb.GeneratedMessage {
   @$pb.TagNumber(6)
   void clearAutomaticRetryClass() => $_clearField(6);
 
+  /// The state version this report was computed against; the terminal
+  /// transition commits only from that exact version.
   @$pb.TagNumber(7)
   $fixnum.Int64 get expectedStateVersion => $_getI64(6);
   @$pb.TagNumber(7)
@@ -1399,6 +1414,8 @@ class RuntimeCancelledAck extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   void clearRunId() => $_clearField(1);
 
+  /// The version the worker had actually observed when it acknowledged, which
+  /// lets the orchestrator tell a current acknowledgement from a stale one.
   @$pb.TagNumber(2)
   $fixnum.Int64 get observedStateVersion => $_getI64(1);
   @$pb.TagNumber(2)
@@ -1409,6 +1426,11 @@ class RuntimeCancelledAck extends $pb.GeneratedMessage {
   void clearObservedStateVersion() => $_clearField(2);
 }
 
+/// Sent only after the worker accepted an approval decision and restored the
+/// matching owned attempt to a ready-but-paused boundary. Run, approval, worker,
+/// assignment attempt, and expected version together are the fencing identity:
+/// a repeat of the exact same identity on the same live stream replays the same
+/// acceptance, and anything else is fenced.
 class RuntimeApprovalResumeReady extends $pb.GeneratedMessage {
   factory RuntimeApprovalResumeReady({
     $core.String? runId,
@@ -1487,6 +1509,8 @@ class RuntimeApprovalResumeReady extends $pb.GeneratedMessage {
   @$pb.TagNumber(2)
   void clearApprovalId() => $_clearField(2);
 
+  /// The pre-transition version the worker expects; waiting-approval commits to
+  /// running at expected_state_version + 1.
   @$pb.TagNumber(3)
   $fixnum.Int64 get expectedStateVersion => $_getI64(2);
   @$pb.TagNumber(3)
@@ -1863,6 +1887,8 @@ class RuntimeRunCancelled extends $pb.GeneratedMessage {
   @$pb.TagNumber(2)
   void clearReason() => $_clearField(2);
 
+  /// The version this cancellation committed at, so the worker never rolls its
+  /// view back to an older state.
   @$pb.TagNumber(3)
   $fixnum.Int64 get stateVersion => $_getI64(2);
   @$pb.TagNumber(3)
@@ -1957,6 +1983,8 @@ class RuntimeApprovalUpdated extends $pb.GeneratedMessage {
   @$pb.TagNumber(3)
   void clearStatus() => $_clearField(3);
 
+  /// The run version at the time of this decision. Delivering a decision does
+  /// not by itself resume the run; only a matching Ready/Accepted exchange does.
   @$pb.TagNumber(4)
   $fixnum.Int64 get stateVersion => $_getI64(3);
   @$pb.TagNumber(4)
@@ -1967,6 +1995,11 @@ class RuntimeApprovalUpdated extends $pb.GeneratedMessage {
   void clearStateVersion() => $_clearField(4);
 }
 
+/// The orchestrator's durable acceptance of a resume: waiting-approval has
+/// committed to running at state_version. It names the commit, not proof that
+/// the worker received it, and the worker must not execute the approved tool or
+/// continue model work until it arrives. If delivery fails after the commit, the
+/// run is fenced to recovering rather than reverted.
 class RuntimeApprovalResumeAccepted extends $pb.GeneratedMessage {
   factory RuntimeApprovalResumeAccepted({
     $core.String? runId,

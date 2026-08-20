@@ -9,6 +9,12 @@ import "turing/v1/common.proto";
 import "turing/v1/events.proto";
 import "turing/v1/tools.proto";
 
+// Where a run failure actually came from, supplied by the reporting call site
+// so the orchestrator can normalize it into a public RunOutcomeReason without
+// classifying on provider-controlled message text. UNSPECIFIED means the field
+// was absent and UNKNOWN covers an origin a newer reporter introduced; both
+// fail closed to an internal-failure outcome. Internal to the runtime protocol,
+// never surfaced to clients.
 enum FailureOrigin {
   FAILURE_ORIGIN_UNSPECIFIED = 0;
   FAILURE_ORIGIN_UNKNOWN = 1;
@@ -32,6 +38,10 @@ enum FailureOrigin {
   FAILURE_ORIGIN_CLIENT_LIFECYCLE = 19;
 }
 
+// Whether the orchestrator may retry this failure inside the same run. Internal
+// dispatch policy only: it is not a user-facing retry promise and never becomes
+// public outcome text. Unspecified and unknown are both treated as never, so an
+// unrecognized class can never widen automatic retrying.
 enum AutomaticRetryClass {
   AUTOMATIC_RETRY_CLASS_UNSPECIFIED = 0;
   AUTOMATIC_RETRY_CLASS_UNKNOWN = 1;
@@ -61,7 +71,13 @@ message AgentJob {
   ExternalAgentTarget external_agent = 14;
   int32 required_context_tokens = 15;
   int32 minimum_worker_max_concurrent_runs = 16;
+  // The run's state version at assignment. The worker echoes it on later
+  // reports so the orchestrator can reject anything computed against a state it
+  // has already moved past.
   int64 expected_state_version = 17;
+  // Durable identity of this assignment attempt. It is what proves a later
+  // report or resume came from the attempt that still owns the run, rather than
+  // from a fenced predecessor; the worker must echo it unchanged.
   string assignment_attempt_id = 18;
 }
 
@@ -175,6 +191,8 @@ message RuntimeRunCompleted {
   // means zero, so they travel in their own typed field below.
   google.protobuf.Struct usage = 4;
   RunTokenUsage token_usage = 5;
+  // The state version this report was computed against; the terminal
+  // transition commits only from that exact version.
   int64 expected_state_version = 6;
 }
 
@@ -182,20 +200,36 @@ message RuntimeRunFailed {
   string run_id = 1;
   string code = 2;
   string message = 3;
+  // Superseded by automatic_retry_class and ignored by the failure normalizer.
+  // Retained at field 4 for wire compatibility with older workers.
   bool retryable = 4;
+  // Where the failure came from, used to normalize a public outcome reason
+  // instead of leaking worker-authored text to clients.
   FailureOrigin failure_origin = 5;
+  // Whether the orchestrator may retry inside this run. Internal policy only.
   AutomaticRetryClass automatic_retry_class = 6;
+  // The state version this report was computed against; the terminal
+  // transition commits only from that exact version.
   int64 expected_state_version = 7;
 }
 
 message RuntimeCancelledAck {
   string run_id = 1;
+  // The version the worker had actually observed when it acknowledged, which
+  // lets the orchestrator tell a current acknowledgement from a stale one.
   int64 observed_state_version = 2;
 }
 
+// Sent only after the worker accepted an approval decision and restored the
+// matching owned attempt to a ready-but-paused boundary. Run, approval, worker,
+// assignment attempt, and expected version together are the fencing identity:
+// a repeat of the exact same identity on the same live stream replays the same
+// acceptance, and anything else is fenced.
 message RuntimeApprovalResumeReady {
   string run_id = 1;
   string approval_id = 2;
+  // The pre-transition version the worker expects; waiting-approval commits to
+  // running at expected_state_version + 1.
   int64 expected_state_version = 3;
   string assignment_attempt_id = 4;
 }
@@ -222,6 +256,8 @@ message RuntimeWorkerAccepted {
 message RuntimeRunCancelled {
   string run_id = 1;
   string reason = 2;
+  // The version this cancellation committed at, so the worker never rolls its
+  // view back to an older state.
   int64 state_version = 3;
 }
 
@@ -229,9 +265,16 @@ message RuntimeApprovalUpdated {
   string approval_id = 1;
   string approval_token = 2;
   string status = 3;
+  // The run version at the time of this decision. Delivering a decision does
+  // not by itself resume the run; only a matching Ready/Accepted exchange does.
   int64 state_version = 4;
 }
 
+// The orchestrator's durable acceptance of a resume: waiting-approval has
+// committed to running at state_version. It names the commit, not proof that
+// the worker received it, and the worker must not execute the approved tool or
+// continue model work until it arrives. If delivery fails after the commit, the
+// run is fenced to recovering rather than reverted.
 message RuntimeApprovalResumeAccepted {
   string run_id = 1;
   string approval_id = 2;

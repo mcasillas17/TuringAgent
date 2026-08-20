@@ -175,6 +175,9 @@ class TuringEvent extends $pb.GeneratedMessage {
   @$pb.TagNumber(8)
   $2.Struct ensurePayload() => $_ensure(7);
 
+  /// The resulting run state for lifecycle events, so replayed history carries
+  /// the same authoritative outcome the live stream did. Absent for events that
+  /// are not run lifecycle transitions.
   @$pb.TagNumber(9)
   $3.RunState get runState => $_getN(8);
   @$pb.TagNumber(9)

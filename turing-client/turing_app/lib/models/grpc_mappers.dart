@@ -372,9 +372,13 @@ class GrpcMappers {
   static model_event.TuringEvent turingEventToTuringEvent(
     eventpb.TuringEvent event,
   ) {
-    final isRunStateChanged =
+    // Only a present typed RunState may replace the persisted payload. A
+    // state-changed event without one keeps whatever the server actually
+    // stored instead of inventing a zero run identity and version.
+    final hasRunState =
         event.type ==
-        eventpb.TuringEventType.TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED;
+            eventpb.TuringEventType.TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED &&
+        event.hasRunState();
     return model_event.TuringEvent(
       eventId: event.eventId,
       sessionId: event.sessionId,
@@ -383,7 +387,7 @@ class GrpcMappers {
       sequence: event.sequence.toInt(),
       type: eventTypeToString(event.type),
       createdAt: _timestampToDateTime(event.createdAt),
-      payload: isRunStateChanged
+      payload: hasRunState
           ? _runStatePayload(event.runState)
           : structToMap(event.payload),
     );
@@ -640,7 +644,9 @@ class GrpcMappers {
       case chatpb.ChatStreamEvent_Event.persistedEvent:
         return structToMap(event.persistedEvent.payload);
       case chatpb.ChatStreamEvent_Event.runStateChanged:
-        return _runStatePayload(event.runStateChanged.runState);
+        return event.runStateChanged.hasRunState()
+            ? _runStatePayload(event.runStateChanged.runState)
+            : const {};
       case chatpb.ChatStreamEvent_Event.notSet:
         return const {};
     }
@@ -663,6 +669,9 @@ class GrpcMappers {
     };
   }
 
+  // Structural allowlist: only the run identity and the version that orders
+  // state changes. Enum names, numbers, and diagnostics are never exposed as
+  // user-facing text from here.
   static Map<String, dynamic> _runStatePayload(commonpb.RunState runState) {
     return {
       'runId': runState.runId,

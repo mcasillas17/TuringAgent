@@ -431,6 +431,10 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
   @$pb.TagNumber(6)
   void clearPhase() => $_clearField(6);
 
+  /// The run's committed state version at the moment of this decision. A
+  /// matching tool beacon can therefore prove ownership: the response carries
+  /// the version forward before tool or model work continues, so a worker never
+  /// advances past the state the orchestrator has committed.
   @$pb.TagNumber(7)
   $fixnum.Int64 get runStateVersion => $_getI64(6);
   @$pb.TagNumber(7)

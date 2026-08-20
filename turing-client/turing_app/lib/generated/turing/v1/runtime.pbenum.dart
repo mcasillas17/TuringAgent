@@ -14,6 +14,12 @@ import 'dart:core' as $core;
 
 import 'package:protobuf/protobuf.dart' as $pb;
 
+/// Where a run failure actually came from, supplied by the reporting call site
+/// so the orchestrator can normalize it into a public RunOutcomeReason without
+/// classifying on provider-controlled message text. UNSPECIFIED means the field
+/// was absent and UNKNOWN covers an origin a newer reporter introduced; both
+/// fail closed to an internal-failure outcome. Internal to the runtime protocol,
+/// never surfaced to clients.
 class FailureOrigin extends $pb.ProtobufEnum {
   static const FailureOrigin FAILURE_ORIGIN_UNSPECIFIED =
       FailureOrigin._(0, _omitEnumNames ? '' : 'FAILURE_ORIGIN_UNSPECIFIED');
@@ -93,6 +99,10 @@ class FailureOrigin extends $pb.ProtobufEnum {
   const FailureOrigin._(super.value, super.name);
 }
 
+/// Whether the orchestrator may retry this failure inside the same run. Internal
+/// dispatch policy only: it is not a user-facing retry promise and never becomes
+/// public outcome text. Unspecified and unknown are both treated as never, so an
+/// unrecognized class can never widen automatic retrying.
 class AutomaticRetryClass extends $pb.ProtobufEnum {
   static const AutomaticRetryClass AUTOMATIC_RETRY_CLASS_UNSPECIFIED =
       AutomaticRetryClass._(

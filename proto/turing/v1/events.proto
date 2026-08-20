@@ -31,6 +31,8 @@ enum TuringEventType {
   TURING_EVENT_TYPE_ERROR = 19;
   TURING_EVENT_TYPE_SYSTEM = 20;
   TURING_EVENT_TYPE_SESSION_UPDATED = 21;
+  // Held for TUR-004's session-deleted event so the two features can land in
+  // either order without colliding; TUR-009 does not allocate it.
   reserved 22;
   TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED = 23;
 }
@@ -44,6 +46,9 @@ message TuringEvent {
   TuringEventType type = 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Struct payload = 8;
+  // The resulting run state for lifecycle events, so replayed history carries
+  // the same authoritative outcome the live stream did. Absent for events that
+  // are not run lifecycle transitions.
   RunState run_state = 9;
 }
 

@@ -22,6 +22,12 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Where a run failure actually came from, supplied by the reporting call site
+// so the orchestrator can normalize it into a public RunOutcomeReason without
+// classifying on provider-controlled message text. UNSPECIFIED means the field
+// was absent and UNKNOWN covers an origin a newer reporter introduced; both
+// fail closed to an internal-failure outcome. Internal to the runtime protocol,
+// never surfaced to clients.
 type FailureOrigin int32
 
 const (
@@ -122,6 +128,10 @@ func (FailureOrigin) EnumDescriptor() ([]byte, []int) {
 	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{0}
 }
 
+// Whether the orchestrator may retry this failure inside the same run. Internal
+// dispatch policy only: it is not a user-facing retry promise and never becomes
+// public outcome text. Unspecified and unknown are both treated as never, so an
+// unrecognized class can never widen automatic retrying.
 type AutomaticRetryClass int32
 
 const (
@@ -249,10 +259,16 @@ type AgentJob struct {
 	ExternalAgent                  *ExternalAgentTarget `protobuf:"bytes,14,opt,name=external_agent,json=externalAgent,proto3" json:"external_agent,omitempty"`
 	RequiredContextTokens          int32                `protobuf:"varint,15,opt,name=required_context_tokens,json=requiredContextTokens,proto3" json:"required_context_tokens,omitempty"`
 	MinimumWorkerMaxConcurrentRuns int32                `protobuf:"varint,16,opt,name=minimum_worker_max_concurrent_runs,json=minimumWorkerMaxConcurrentRuns,proto3" json:"minimum_worker_max_concurrent_runs,omitempty"`
-	ExpectedStateVersion           int64                `protobuf:"varint,17,opt,name=expected_state_version,json=expectedStateVersion,proto3" json:"expected_state_version,omitempty"`
-	AssignmentAttemptId            string               `protobuf:"bytes,18,opt,name=assignment_attempt_id,json=assignmentAttemptId,proto3" json:"assignment_attempt_id,omitempty"`
-	unknownFields                  protoimpl.UnknownFields
-	sizeCache                      protoimpl.SizeCache
+	// The run's state version at assignment. The worker echoes it on later
+	// reports so the orchestrator can reject anything computed against a state it
+	// has already moved past.
+	ExpectedStateVersion int64 `protobuf:"varint,17,opt,name=expected_state_version,json=expectedStateVersion,proto3" json:"expected_state_version,omitempty"`
+	// Durable identity of this assignment attempt. It is what proves a later
+	// report or resume came from the attempt that still owns the run, rather than
+	// from a fenced predecessor; the worker must echo it unchanged.
+	AssignmentAttemptId string `protobuf:"bytes,18,opt,name=assignment_attempt_id,json=assignmentAttemptId,proto3" json:"assignment_attempt_id,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *AgentJob) Reset() {
@@ -1006,9 +1022,11 @@ type RuntimeRunCompleted struct {
 	// it was rather than repurposed: token counts need presence semantics a
 	// Struct cannot express without the reader guessing whether a missing key
 	// means zero, so they travel in their own typed field below.
-	Usage                *structpb.Struct `protobuf:"bytes,4,opt,name=usage,proto3" json:"usage,omitempty"`
-	TokenUsage           *RunTokenUsage   `protobuf:"bytes,5,opt,name=token_usage,json=tokenUsage,proto3" json:"token_usage,omitempty"`
-	ExpectedStateVersion int64            `protobuf:"varint,6,opt,name=expected_state_version,json=expectedStateVersion,proto3" json:"expected_state_version,omitempty"`
+	Usage      *structpb.Struct `protobuf:"bytes,4,opt,name=usage,proto3" json:"usage,omitempty"`
+	TokenUsage *RunTokenUsage   `protobuf:"bytes,5,opt,name=token_usage,json=tokenUsage,proto3" json:"token_usage,omitempty"`
+	// The state version this report was computed against; the terminal
+	// transition commits only from that exact version.
+	ExpectedStateVersion int64 `protobuf:"varint,6,opt,name=expected_state_version,json=expectedStateVersion,proto3" json:"expected_state_version,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -1086,14 +1104,21 @@ func (x *RuntimeRunCompleted) GetExpectedStateVersion() int64 {
 }
 
 type RuntimeRunFailed struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	RunId                string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	Code                 string                 `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`
-	Message              string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
-	Retryable            bool                   `protobuf:"varint,4,opt,name=retryable,proto3" json:"retryable,omitempty"`
-	FailureOrigin        FailureOrigin          `protobuf:"varint,5,opt,name=failure_origin,json=failureOrigin,proto3,enum=turing.v1.FailureOrigin" json:"failure_origin,omitempty"`
-	AutomaticRetryClass  AutomaticRetryClass    `protobuf:"varint,6,opt,name=automatic_retry_class,json=automaticRetryClass,proto3,enum=turing.v1.AutomaticRetryClass" json:"automatic_retry_class,omitempty"`
-	ExpectedStateVersion int64                  `protobuf:"varint,7,opt,name=expected_state_version,json=expectedStateVersion,proto3" json:"expected_state_version,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	RunId   string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	Code    string                 `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`
+	Message string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	// Superseded by automatic_retry_class and ignored by the failure normalizer.
+	// Retained at field 4 for wire compatibility with older workers.
+	Retryable bool `protobuf:"varint,4,opt,name=retryable,proto3" json:"retryable,omitempty"`
+	// Where the failure came from, used to normalize a public outcome reason
+	// instead of leaking worker-authored text to clients.
+	FailureOrigin FailureOrigin `protobuf:"varint,5,opt,name=failure_origin,json=failureOrigin,proto3,enum=turing.v1.FailureOrigin" json:"failure_origin,omitempty"`
+	// Whether the orchestrator may retry inside this run. Internal policy only.
+	AutomaticRetryClass AutomaticRetryClass `protobuf:"varint,6,opt,name=automatic_retry_class,json=automaticRetryClass,proto3,enum=turing.v1.AutomaticRetryClass" json:"automatic_retry_class,omitempty"`
+	// The state version this report was computed against; the terminal
+	// transition commits only from that exact version.
+	ExpectedStateVersion int64 `protobuf:"varint,7,opt,name=expected_state_version,json=expectedStateVersion,proto3" json:"expected_state_version,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -1178,9 +1203,11 @@ func (x *RuntimeRunFailed) GetExpectedStateVersion() int64 {
 }
 
 type RuntimeCancelledAck struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	RunId                string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	ObservedStateVersion int64                  `protobuf:"varint,2,opt,name=observed_state_version,json=observedStateVersion,proto3" json:"observed_state_version,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	RunId string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	// The version the worker had actually observed when it acknowledged, which
+	// lets the orchestrator tell a current acknowledgement from a stale one.
+	ObservedStateVersion int64 `protobuf:"varint,2,opt,name=observed_state_version,json=observedStateVersion,proto3" json:"observed_state_version,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -1229,12 +1256,19 @@ func (x *RuntimeCancelledAck) GetObservedStateVersion() int64 {
 	return 0
 }
 
+// Sent only after the worker accepted an approval decision and restored the
+// matching owned attempt to a ready-but-paused boundary. Run, approval, worker,
+// assignment attempt, and expected version together are the fencing identity:
+// a repeat of the exact same identity on the same live stream replays the same
+// acceptance, and anything else is fenced.
 type RuntimeApprovalResumeReady struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	RunId                string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	ApprovalId           string                 `protobuf:"bytes,2,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
-	ExpectedStateVersion int64                  `protobuf:"varint,3,opt,name=expected_state_version,json=expectedStateVersion,proto3" json:"expected_state_version,omitempty"`
-	AssignmentAttemptId  string                 `protobuf:"bytes,4,opt,name=assignment_attempt_id,json=assignmentAttemptId,proto3" json:"assignment_attempt_id,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	RunId      string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	ApprovalId string                 `protobuf:"bytes,2,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
+	// The pre-transition version the worker expects; waiting-approval commits to
+	// running at expected_state_version + 1.
+	ExpectedStateVersion int64  `protobuf:"varint,3,opt,name=expected_state_version,json=expectedStateVersion,proto3" json:"expected_state_version,omitempty"`
+	AssignmentAttemptId  string `protobuf:"bytes,4,opt,name=assignment_attempt_id,json=assignmentAttemptId,proto3" json:"assignment_attempt_id,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -1544,10 +1578,12 @@ func (x *RuntimeWorkerAccepted) GetRegistrationId() string {
 }
 
 type RuntimeRunCancelled struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
-	StateVersion  int64                  `protobuf:"varint,3,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	RunId  string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	Reason string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	// The version this cancellation committed at, so the worker never rolls its
+	// view back to an older state.
+	StateVersion  int64 `protobuf:"varint,3,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1608,7 +1644,9 @@ type RuntimeApprovalUpdated struct {
 	ApprovalId    string                 `protobuf:"bytes,1,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
 	ApprovalToken string                 `protobuf:"bytes,2,opt,name=approval_token,json=approvalToken,proto3" json:"approval_token,omitempty"`
 	Status        string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`
-	StateVersion  int64                  `protobuf:"varint,4,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
+	// The run version at the time of this decision. Delivering a decision does
+	// not by itself resume the run; only a matching Ready/Accepted exchange does.
+	StateVersion  int64 `protobuf:"varint,4,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1671,6 +1709,11 @@ func (x *RuntimeApprovalUpdated) GetStateVersion() int64 {
 	return 0
 }
 
+// The orchestrator's durable acceptance of a resume: waiting-approval has
+// committed to running at state_version. It names the commit, not proof that
+// the worker received it, and the worker must not execute the approved tool or
+// continue model work until it arrives. If delivery fails after the commit, the
+// run is fenced to recovering rather than reverted.
 type RuntimeApprovalResumeAccepted struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	RunId               string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`

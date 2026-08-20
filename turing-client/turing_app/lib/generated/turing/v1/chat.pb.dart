@@ -693,6 +693,9 @@ class ApprovalEvent extends $pb.GeneratedMessage {
   @$pb.TagNumber(3)
   void clearArgsSummary() => $_clearField(3);
 
+  /// Present when this approval event is the one that moved the run's
+  /// lifecycle, so the client learns waiting-approval or resumed-running from
+  /// the same event that reports the approval.
   @$pb.TagNumber(4)
   $1.RunState get runState => $_getN(3);
   @$pb.TagNumber(4)
@@ -941,6 +944,9 @@ class RunFailed extends $pb.GeneratedMessage {
   @$pb.TagNumber(3)
   void clearMessage() => $_clearField(3);
 
+  /// Automatic retry is an internal dispatch decision, not a promise that
+  /// repeating the request is safe. Always serialized as false for new events
+  /// and ignored by new clients; kept at field 4 for wire compatibility.
   @$core.Deprecated('This field is deprecated.')
   @$pb.TagNumber(4)
   $core.bool get retryable => $_getBF(3);
@@ -1049,6 +1055,10 @@ class RunCancelled extends $pb.GeneratedMessage {
   $1.RunState ensureRunState() => $_ensure(2);
 }
 
+/// A lifecycle transition that has no existing lifecycle event of its own, such
+/// as entering recovering or returning to running. Terminal transitions keep
+/// using their existing completed/failed/cancelled events and never also emit
+/// this one, so a transition is never reported twice.
 class RunStateChanged extends $pb.GeneratedMessage {
   factory RunStateChanged({
     $1.RunState? runState,
