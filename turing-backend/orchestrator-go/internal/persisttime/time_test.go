@@ -135,6 +135,94 @@ func TestParseLegacyRejectsVariableOrInvalidShapesValueFree(t *testing.T) {
 	}
 }
 
+// The offset is two numeric fields, not four free digits. RFC 3339 bounds them
+// at 00-23 hours and 00-59 minutes, and time.Parse does not: it happily reads
+// +24:00 and +00:60 and silently renormalizes them into a neighbouring day or
+// hour. A legacy row carrying one of those is a corrupt row, and accepting it
+// writes a real-looking instant that no writer ever meant, so the shape check
+// has to bound both fields before the calendar is consulted.
+func TestParseLegacyRejectsOutOfRangeOffsetFieldsValueFree(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "offset_hour_twenty_four_positive", value: "2030-01-02T03:04:05.000000000+24:00"},
+		{name: "offset_hour_twenty_four_negative", value: "2030-01-02T03:04:05.000000000-24:00"},
+		{name: "offset_minute_sixty_positive", value: "2030-01-02T03:04:05.000000000+00:60"},
+		{name: "offset_minute_sixty_negative", value: "2030-01-02T03:04:05.000000000-00:60"},
+		{name: "offset_hour_twenty_four_whole_second", value: "2030-01-02T03:04:05+24:00"},
+		{name: "offset_minute_sixty_whole_second", value: "2030-01-02T03:04:05-00:60"},
+		{name: "offset_both_fields_out_of_range", value: "2030-01-02T03:04:05+24:60"},
+		{name: "offset_hour_ninety_nine", value: "2030-01-02T03:04:05+99:00"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := ParseLegacy(test.value)
+			if err == nil {
+				t.Fatalf("ParseLegacy(%q) = %s, want an out-of-range offset error", test.value, got)
+			}
+			if !errors.Is(err, ErrInvalidTimestamp) {
+				t.Fatalf("ParseLegacy(%q) = %v, want ErrInvalidTimestamp", test.value, err)
+			}
+			if err.Error() != ErrInvalidTimestamp.Error() {
+				t.Fatalf("error = %q, want exactly the sentinel %q", err, ErrInvalidTimestamp)
+			}
+			if strings.Contains(err.Error(), test.value) {
+				t.Fatalf("error %q leaked the parsed value", err)
+			}
+			if !got.IsZero() {
+				t.Fatalf("ParseLegacy(%q) returned %s with an error, want the zero time", test.value, got)
+			}
+		})
+	}
+}
+
+// Bounding the offset fields must not narrow the contract to Zulu-only. The
+// extreme legal offsets are the ones a tightening is most likely to take out by
+// accident, so both are pinned with the exact UTC instant they normalize to.
+func TestParseLegacyKeepsTheExtremeLegalOffsets(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  time.Time
+	}{
+		{
+			name:  "maximum_positive_offset",
+			value: "2030-01-02T03:04:05.000000000+23:59",
+			want:  time.Date(2030, 1, 1, 3, 5, 5, 0, time.UTC),
+		},
+		{
+			name:  "maximum_negative_offset",
+			value: "2030-01-02T03:04:05.000000000-23:59",
+			want:  time.Date(2030, 1, 3, 3, 3, 5, 0, time.UTC),
+		},
+		{
+			name:  "maximum_offset_hour_with_zero_minutes",
+			value: "2030-01-02T03:04:05-23:00",
+			want:  time.Date(2030, 1, 3, 2, 4, 5, 0, time.UTC),
+		},
+		{
+			name:  "maximum_offset_minute_with_zero_hours",
+			value: "2030-01-02T03:04:05+00:59",
+			want:  time.Date(2030, 1, 2, 2, 5, 5, 0, time.UTC),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := ParseLegacy(test.value)
+			if err != nil {
+				t.Fatalf("ParseLegacy(%q) error: %v", test.value, err)
+			}
+			if !got.Equal(test.want) {
+				t.Fatalf("ParseLegacy(%q) = %s, want %s", test.value, got, test.want)
+			}
+			if got.Location() != time.UTC {
+				t.Fatalf("ParseLegacy(%q) location = %s, want UTC", test.value, got.Location())
+			}
+		})
+	}
+}
+
 // An approved shape is not automatically an approved instant. A legacy offset
 // value can sit inside the shape and still normalize outside the inclusive UTC
 // range the contract allows, and the row it would produce is unusable: year

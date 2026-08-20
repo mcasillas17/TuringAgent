@@ -36,9 +36,12 @@ var (
 
 // approvedShape admits only the RFC 3339 forms the approved contract accepts
 // from legacy rows: `YYYY-MM-DDTHH:MM:SS[.1-9 digits]Z` and
-// `YYYY-MM-DDTHH:MM:SS[.1-9 digits](+|-)HH:MM`. time.Parse alone is looser than
-// that, so the shape is checked before the calendar.
-var approvedShape = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$`)
+// `YYYY-MM-DDTHH:MM:SS[.1-9 digits](+|-)HH:MM`, where the offset fields are
+// bounded at 00-23 hours and 00-59 minutes. time.Parse alone is looser than
+// that — it reads `+24:00` and `+00:60` and silently renormalizes them into a
+// neighbouring day or hour, turning a corrupt row into a plausible instant — so
+// the shape is checked before the calendar.
+var approvedShape = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$`)
 
 // ParseLegacy reads a persisted timestamp in any approved shape and normalizes
 // it to UTC.
