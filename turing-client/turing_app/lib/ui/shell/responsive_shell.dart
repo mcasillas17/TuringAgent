@@ -104,6 +104,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   bool _sessionsLoadingMore = false;
   bool _sessionsFailed = false;
   String? _nextSessionsCursor;
+  bool _hasLoadedTailPages = false;
   Set<String> _firstPageSessionIds = const {};
   final Set<String> _eventOnlySessionIds = {};
   ShellDestination _destination = ShellDestination.chats;
@@ -202,7 +203,9 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
         _firstPageSessionIds = page.sessions
             .map((session) => session.sessionId)
             .toSet();
-        _nextSessionsCursor = page.nextCursor;
+        if (!_hasLoadedTailPages) {
+          _nextSessionsCursor = page.nextCursor;
+        }
         _sessionsLoading = false;
         _sessionsFailed = false;
       });
@@ -243,6 +246,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
         _removeArchivedSessions(merged);
         _sessions = merged;
         _nextSessionsCursor = page.nextCursor;
+        _hasLoadedTailPages = true;
         _sessionsFailed = false;
       });
     } on Exception {
@@ -1414,7 +1418,7 @@ class _ArchivedSessionsListState extends State<_ArchivedSessionsList> {
       if (!mounted) return;
       setState(() {
         if (cursor == null) {
-          _sessions = page.sessions;
+          _sessions = List<Session>.of(page.sessions);
         } else {
           final merged = <String, Session>{
             for (final session in _sessions) session.sessionId: session,

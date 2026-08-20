@@ -526,6 +526,11 @@ void main() {
 
       expect(find.text('Older loaded chat'), findsOneWidget);
       expect(find.text('Existing chat'), findsNothing);
+      expect(
+        find.widgetWithText(TextButton, 'Load more'),
+        findsNothing,
+        reason: 'refresh keeps the deepest cursor with the retained tail',
+      );
     });
 
     testWidgets('rename uses the authoritative returned session snapshot', (
@@ -702,6 +707,34 @@ void main() {
       expect(find.text('Server archived title'), findsOneWidget);
       expect(find.text('Archived original'), findsNothing);
     });
+
+    testWidgets(
+      'an authoritative restore removes an archived row from a fixed page',
+      (tester) async {
+        final api = _FakeApi()
+          ..archivedRenameStatus = SessionStatus.active
+          ..archivedSessions = List<Session>.unmodifiable([
+            Session(
+              sessionId: 'sess_archived',
+              title: 'Remotely restored',
+              updatedAt: DateTime.utc(2026, 5, 9),
+              status: SessionStatus.archived,
+            ),
+          ]);
+        await _pumpShell(tester, api: api, size: _desktop);
+        await tester.tap(find.byTooltip('Archived conversations'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byTooltip('Rename archived chat'));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byType(TextFormField).last, 'Renamed');
+        await tester.tap(find.widgetWithText(FilledButton, 'Rename'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Remotely restored'), findsNothing);
+        expect(find.textContaining('Could not rename this chat'), findsNothing);
+      },
+    );
 
     testWidgets('an archived conversation can be permanently deleted', (
       tester,
@@ -1740,6 +1773,7 @@ class _FakeApi
   final List<String?> sessionPageCursors = [];
   final List<String> renamedTitles = [];
   List<Session> archivedSessions = [];
+  SessionStatus archivedRenameStatus = SessionStatus.archived;
   String? nextArchivedCursor;
   final Map<String, SessionPage> archivedPages = {};
   final List<String?> archivedPageCursors = [];
@@ -1953,9 +1987,16 @@ class _FakeApi
         sessionId: sessionId,
         title: 'Server archived title',
         updatedAt: DateTime.utc(2026, 5, 11),
-        status: SessionStatus.archived,
+        status: archivedRenameStatus,
       );
-      archivedSessions[archivedIndex] = renamed;
+      archivedSessions = archivedRenameStatus == SessionStatus.archived
+          ? [
+              for (final session in archivedSessions)
+                if (session.sessionId == sessionId) renamed else session,
+            ]
+          : archivedSessions
+                .where((session) => session.sessionId != sessionId)
+                .toList();
       return renamed;
     }
     final renamed = Session(
