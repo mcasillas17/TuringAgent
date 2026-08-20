@@ -349,16 +349,25 @@ func currentRunStateVersionTx(ctx context.Context, tx *sql.Tx, runID string) (in
 // The content digest and every execution detail are deliberately absent: the
 // digest is internal duplicate identity, and a worker ID is not a client's
 // business.
+//
+// assistantMessageId is present only when the run actually owns one. A run
+// migrated from legacy history, or one whose message did not survive, has no
+// assistant identity to give, and publishing an empty string would hand a
+// client something that reads as an ID and names nothing. The run-outcomes
+// migration already omits the key in exactly that case; this is the same rule
+// on the live writer, so a client cannot tell the two origins apart.
 func runStateSnapshot(state RunState) map[string]any {
 	snapshot := map[string]any{
 		"runId":                 state.RunID,
 		"userMessageId":         state.UserMessageID,
-		"assistantMessageId":    state.AssistantMessageID,
 		"lifecycle":             state.Lifecycle,
 		"outcomeReason":         state.OutcomeReason,
 		"stateVersion":          state.StateVersion,
 		"stateUpdatedAt":        state.StateUpdatedAt,
 		"hasDisplayableContent": state.HasDisplayableContent,
+	}
+	if state.AssistantMessageID != "" {
+		snapshot["assistantMessageId"] = state.AssistantMessageID
 	}
 	if state.FinishedAt.Valid && state.FinishedAt.String != "" {
 		snapshot["finishedAt"] = state.FinishedAt.String

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -76,6 +77,23 @@ func decodeRunStateSnapshot(t *testing.T, event Event) eventSnapshot {
 		}
 	}
 	return *payload.RunState
+}
+
+// decodeRunStateMap returns the snapshot as it was actually encoded, so a test
+// can tell an absent key apart from a key carrying the empty string. The typed
+// decode above cannot: both produce the zero value.
+func decodeRunStateMap(t *testing.T, payloadJSON string) map[string]any {
+	t.Helper()
+	var payload struct {
+		RunState map[string]any `json:"runState"`
+	}
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		t.Fatalf("decode payload %q: %v", payloadJSON, err)
+	}
+	if payload.RunState == nil {
+		t.Fatalf("payload %q carries no runState snapshot", payloadJSON)
+	}
+	return payload.RunState
 }
 
 func assertSnapshotMatchesState(t *testing.T, snapshot eventSnapshot, state RunState) {
@@ -937,4 +955,137 @@ func TestApprovalOwnershipIsCheckedBeforeAWriteFreeReplay(t *testing.T) {
 	if after := countRunEvents(t, repo, enqueued.RunID); after != events {
 		t.Fatalf("replayed resume appended %d events", after-events)
 	}
+}
+
+// TestCanonicalEventOmitsAbsentAssistantIdentityFromRunState carries the rule
+// the run-outcomes migration already follows into the live writer. The
+// migration refuses to publish an assistant message ID it could not prove, and
+// drops the key rather than publishing an empty one, because a client that
+// reads assistantMessageId as present-but-empty would treat "" as an identity
+// and look for a message nobody has.
+//
+// The live repository can reach the same shape: a run whose assistant link is
+// absent — a migrated legacy run, or one whose message did not survive — still
+// terminalizes, because the guarded transition only demands correlation of a
+// run that claims a link at all. Everything else the projection knows is still
+// canonical and must survive.
+func TestCanonicalEventOmitsAbsentAssistantIdentityFromRunState(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	unlinked := enqueueRun(t, repo, "Absent assistant link")
+	// Strip the link the way legacy history arrives: neither side names the
+	// other, so there is nothing to prove rather than something that disagrees.
+	if _, err := database.ExecContext(ctx,
+		`UPDATE agent_runs SET assistant_message_id = NULL WHERE id = ?`, unlinked.RunID); err != nil {
+		t.Fatalf("clear the run's assistant pointer: %v", err)
+	}
+	if _, err := database.ExecContext(ctx,
+		`DELETE FROM messages WHERE id = ?`, unlinked.AssistantMessageID); err != nil {
+		t.Fatalf("delete the assistant message: %v", err)
+	}
+	queued, err := repo.GetRunState(ctx, unlinked.RunID)
+	if err != nil {
+		t.Fatalf("GetRunState: %v", err)
+	}
+	if queued.AssistantMessageID != "" {
+		t.Fatalf("unlinked run still names assistant message %q", queued.AssistantMessageID)
+	}
+
+	cancelled, err := repo.CancelRunCanonical(ctx, CancelRunInput{
+		RunID:                unlinked.RunID,
+		ExpectedStateVersion: queued.StateVersion,
+		Cancellation:         abandonedCancellationForTest(),
+	})
+	if err != nil {
+		t.Fatalf("CancelRunCanonical: %v", err)
+	}
+	// The durable payload is asserted alongside the returned one: a client that
+	// reopens the session reads the stored bytes, not the returned struct.
+	terminal := onlyCancelledEvent(t, cancelled.Events)
+	storedPayload := storedEventPayload(t, database, terminal.EventID)
+	wantState := map[string]any{
+		"runId":                 unlinked.RunID,
+		"userMessageId":         unlinked.UserMessageID,
+		"lifecycle":             "cancelled",
+		"outcomeReason":         string(runoutcome.ReasonAbandoned),
+		"stateVersion":          float64(cancelled.State.StateVersion),
+		"stateUpdatedAt":        cancelled.State.StateUpdatedAt,
+		"finishedAt":            cancelled.State.FinishedAt.String,
+		"hasDisplayableContent": false,
+	}
+	for name, payloadJSON := range map[string]string{
+		"returned": terminal.PayloadJSON,
+		"durable":  storedPayload,
+	} {
+		t.Run(name, func(t *testing.T) {
+			state := decodeRunStateMap(t, payloadJSON)
+			// Named separately from the comparison below so a regression that
+			// publishes the empty identity reports what it actually did.
+			if published, present := state["assistantMessageId"]; present {
+				t.Fatalf("%s snapshot published assistantMessageId = %#v for a run with no assistant message",
+					name, published)
+			}
+			if !reflect.DeepEqual(state, wantState) {
+				t.Fatalf("%s snapshot = %#v, want %#v", name, state, wantState)
+			}
+		})
+	}
+
+	// The omission is absence, not a blanket removal: a run that does own an
+	// assistant message still publishes its identity, because that is the ID a
+	// client needs to attach the answer to.
+	linked := enqueueRun(t, repo, "Present assistant link")
+	linkedState, err := repo.GetRunState(ctx, linked.RunID)
+	if err != nil {
+		t.Fatalf("GetRunState: %v", err)
+	}
+	linkedCancelled, err := repo.CancelRunCanonical(ctx, CancelRunInput{
+		RunID:                linked.RunID,
+		ExpectedStateVersion: linkedState.StateVersion,
+		Cancellation:         abandonedCancellationForTest(),
+	})
+	if err != nil {
+		t.Fatalf("CancelRunCanonical: %v", err)
+	}
+	linkedTerminal := onlyCancelledEvent(t, linkedCancelled.Events)
+	for name, payloadJSON := range map[string]string{
+		"returned": linkedTerminal.PayloadJSON,
+		"durable":  storedEventPayload(t, database, linkedTerminal.EventID),
+	} {
+		t.Run("linked "+name, func(t *testing.T) {
+			if got := decodeRunStateMap(t, payloadJSON)["assistantMessageId"]; got != linked.AssistantMessageID {
+				t.Fatalf("linked %s snapshot assistantMessageId = %#v, want %q",
+					name, got, linked.AssistantMessageID)
+			}
+		})
+	}
+}
+
+// onlyCancelledEvent returns the single cancellation projection a terminal
+// transition appended. It fails rather than returning a zero Event, so an
+// assertion about the projection cannot pass by never running.
+func onlyCancelledEvent(t *testing.T, events []Event) Event {
+	t.Helper()
+	var found []Event
+	for _, event := range events {
+		if event.Type == "agent.run.cancelled" {
+			found = append(found, event)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("cancellation appended %d agent.run.cancelled projections in %+v, want exactly 1",
+			len(found), events)
+	}
+	return found[0]
+}
+
+func storedEventPayload(t *testing.T, database *db.DB, eventID string) string {
+	t.Helper()
+	var payloadJSON string
+	if err := database.QueryRowContext(context.Background(),
+		`SELECT payload_json FROM events WHERE id = ?`, eventID).Scan(&payloadJSON); err != nil {
+		t.Fatalf("read stored event %q: %v", eventID, err)
+	}
+	return payloadJSON
 }
