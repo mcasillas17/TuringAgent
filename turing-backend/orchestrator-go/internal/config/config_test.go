@@ -15,6 +15,7 @@ func TestLoadFromEnvRequiresSecretsAndDefaultsPorts(t *testing.T) {
 		"TURING_APPROVAL_CONSUMER_TOKEN": "approval-consumer-token",
 		"MCP_FILES_ENABLED":              "true",
 		"TURING_APPROVAL_JWT_SECRET":     "approval-secret",
+		"TURING_EGRESS_SIGNING_SECRET":   "egress-secret",
 	}
 	cfg, err := LoadFromMap(env)
 	if err != nil {
@@ -35,6 +36,7 @@ func TestLoadFromEnvRejectsInvalidInteger(t *testing.T) {
 		"TURING_APPROVAL_CONSUMER_TOKEN": "approval-consumer-token",
 		"MCP_FILES_ENABLED":              "true",
 		"TURING_APPROVAL_JWT_SECRET":     "approval-secret",
+		"TURING_EGRESS_SIGNING_SECRET":   "egress-secret",
 		"ORCHESTRATOR_PUBLIC_PORT":       "abc",
 	}
 
@@ -51,6 +53,7 @@ func TestLoadFromEnvUsesApprovalTTL(t *testing.T) {
 		"TURING_APPROVAL_CONSUMER_TOKEN": "approval-consumer-token",
 		"MCP_FILES_ENABLED":              "true",
 		"TURING_APPROVAL_JWT_SECRET":     "approval-secret",
+		"TURING_EGRESS_SIGNING_SECRET":   "egress-secret",
 		"TURING_APPROVAL_TIMEOUT_MS":     "75000",
 	}
 
@@ -63,6 +66,59 @@ func TestLoadFromEnvUsesApprovalTTL(t *testing.T) {
 	}
 }
 
+func TestLoadFromMapRejectsPlaintextKeyedRemoteEndpoint(t *testing.T) {
+	env := requiredEnv()
+	env["OPENAI_ENABLED"] = "true"
+	env["OPENAI_BASE_URL"] = "http://host.docker.internal:8080/v1"
+
+	_, err := LoadFromMap(env)
+	if err == nil || !strings.Contains(err.Error(), "OPENAI_BASE_URL") {
+		t.Fatalf("LoadFromMap error = %v, want keyed endpoint rejection", err)
+	}
+}
+
+func TestLoadFromMapRequiresRemoteEgressSigningSecret(t *testing.T) {
+	env := requiredEnv()
+	delete(env, "TURING_EGRESS_SIGNING_SECRET")
+	_, err := LoadFromMap(env)
+	if err == nil || !strings.Contains(err.Error(), "TURING_EGRESS_SIGNING_SECRET") {
+		t.Fatalf("LoadFromMap error = %v, want signing secret requirement", err)
+	}
+}
+
+func TestLoadFromMapCanonicalizesKeyedEndpoint(t *testing.T) {
+	env := requiredEnv()
+	env["OPENAI_ENABLED"] = "true"
+	env["OPENAI_BASE_URL"] = "HTTPS://Example.COM:443/v1/"
+
+	cfg, err := LoadFromMap(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OpenAIBaseURL != "https://example.com/v1" {
+		t.Fatalf("OpenAIBaseURL = %q", cfg.OpenAIBaseURL)
+	}
+}
+
+func TestLoadFromMapRejectsCredentialBearingDisabledEndpoint(t *testing.T) {
+	env := requiredEnv()
+	env["OPENAI_BASE_URL"] = "https://user:secret@example.com/v1"
+	_, err := LoadFromMap(env)
+	if err == nil || !strings.Contains(err.Error(), "OPENAI_BASE_URL") {
+		t.Fatalf("LoadFromMap error = %v, want credential-bearing endpoint rejection", err)
+	}
+
+}
+
+func TestLoadFromMapRejectsRemoteOllamaEndpoint(t *testing.T) {
+	env := requiredEnv()
+	env["OLLAMA_BASE_URL"] = "https://ollama.example.com"
+	_, err := LoadFromMap(env)
+	if err == nil || !strings.Contains(err.Error(), "OLLAMA_BASE_URL") {
+		t.Fatalf("LoadFromMap error = %v, want local Ollama endpoint rejection", err)
+	}
+}
+
 func TestLoadFromMapValidatesMaxConcurrentRunsWithinRuntimeBound(t *testing.T) {
 	base := map[string]string{
 		"TURING_CLIENT_API_KEY":          "client-key",
@@ -70,6 +126,7 @@ func TestLoadFromMapValidatesMaxConcurrentRunsWithinRuntimeBound(t *testing.T) {
 		"TURING_APPROVAL_CONSUMER_TOKEN": "approval-consumer-token",
 		"MCP_FILES_ENABLED":              "true",
 		"TURING_APPROVAL_JWT_SECRET":     "approval-secret",
+		"TURING_EGRESS_SIGNING_SECRET":   "egress-secret",
 	}
 	for _, value := range []string{"0", "129", "2147483648"} {
 		t.Run(value, func(t *testing.T) {
@@ -148,6 +205,7 @@ func requiredEnv() map[string]string {
 		"TURING_APPROVAL_CONSUMER_TOKEN": "approval-consumer-token",
 		"MCP_FILES_ENABLED":              "true",
 		"TURING_APPROVAL_JWT_SECRET":     "approval-secret",
+		"TURING_EGRESS_SIGNING_SECRET":   "egress-secret",
 	}
 }
 
@@ -336,6 +394,7 @@ func baseIntegrationEnv(extra map[string]string) map[string]string {
 		"TURING_APPROVAL_CONSUMER_TOKEN": "approval-consumer-token",
 		"MCP_FILES_ENABLED":              "true",
 		"TURING_APPROVAL_JWT_SECRET":     "approval-secret",
+		"TURING_EGRESS_SIGNING_SECRET":   "egress-secret",
 	}
 	for key, value := range extra {
 		env[key] = value

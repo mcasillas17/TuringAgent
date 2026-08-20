@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 )
 
 func TestOpenAICompatibleStreamChatAcceptsRequiredFixtureWithoutChoiceIndex(t *testing.T) {
@@ -30,6 +32,56 @@ func TestOpenAICompatibleStreamChatAcceptsRequiredFixtureWithoutChoiceIndex(t *t
 	got := collectEvents(events)
 	if len(got) != 2 || got[0].Text != "Hi" || got[1].Type != "completed" {
 		t.Fatalf("events = %+v", got)
+	}
+}
+
+func TestOpenAICompatibleRejectsRedirectWithoutFollowingIt(t *testing.T) {
+	var targetCalled bool
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		targetCalled = true
+	}))
+	t.Cleanup(target.Close)
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(redirect.Close)
+
+	provider := NewOpenAICompatible(redirect.URL, "test-key", redirect.Client())
+	_, err := provider.StreamChat(context.Background(), ChatRequest{
+		Model:    "gpt-4o-mini",
+		Messages: []ChatMessage{{Role: "user", Content: "do not redirect"}},
+	})
+	if err == nil {
+		t.Fatal("StreamChat followed redirect")
+	}
+	var blocked *egress.RedirectBlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("StreamChat error = %T %v, want RedirectBlockedError", err, err)
+	}
+	if targetCalled {
+		t.Fatal("redirect target received request")
+	}
+}
+
+func TestOpenAICompatibleRedactsRedirectTargetSecrets(t *testing.T) {
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://user:secret@example.com/path?token=sensitive#fragment", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(redirect.Close)
+	provider := NewOpenAICompatible(redirect.URL, "test-key", redirect.Client())
+	_, err := provider.StreamChat(context.Background(), ChatRequest{
+		Model: "gpt-4o-mini", Messages: []ChatMessage{{Role: "user", Content: "redirect"}},
+	})
+	if err == nil {
+		t.Fatal("StreamChat followed redirect")
+	}
+	for _, secret := range []string{"user", "secret", "token", "sensitive", "fragment", "/path"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("redirect error leaked %q: %v", secret, err)
+		}
+	}
+	if !strings.Contains(err.Error(), "example.com") {
+		t.Fatalf("redirect error omitted destination host: %v", err)
 	}
 }
 

@@ -721,14 +721,13 @@ Future<void> _pumpAutomations(
 /// A working in-memory automation library, so the UI is tested against
 /// something that behaves like the backend rather than a stub that always says
 /// yes.
-class _FakeApi
+class _FakeApi extends TuringApi
     with
         NoAuditApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
-        NoTelemetryApi
-    implements TuringApi {
+        NoTelemetryApi {
   final List<Automation> automations = [];
   final List<Skill> skills = [];
   final List<String> deleted = [];

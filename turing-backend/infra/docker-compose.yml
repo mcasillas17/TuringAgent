@@ -21,6 +21,8 @@ services:
       TURING_RUNTIME_TOKEN: ${TURING_RUNTIME_TOKEN}
       TURING_APPROVAL_CONSUMER_TOKEN: ${TURING_APPROVAL_CONSUMER_TOKEN}
       TURING_APPROVAL_JWT_SECRET: ${TURING_APPROVAL_JWT_SECRET}
+      # Signs one-time disclosure challenges and never leaves the orchestrator.
+      TURING_EGRESS_SIGNING_SECRET: ${TURING_EGRESS_SIGNING_SECRET}
       # Seals third-party credentials before they reach the database. The
       # orchestrator is the only service that stores or opens one.
       TURING_INTEGRATION_KEY: ${TURING_INTEGRATION_KEY}

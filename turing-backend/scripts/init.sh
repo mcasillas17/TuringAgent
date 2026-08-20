@@ -311,6 +311,7 @@ ensure_var TURING_APPROVAL_CONSUMER_TOKEN "$(generate_secret)"
 ensure_var MCP_SYSTEM_TOKEN_GENERAL "$(generate_secret)"
 ensure_var MCP_FILES_TOKEN_GENERAL "$(generate_secret)"
 ensure_var TURING_APPROVAL_JWT_SECRET "$(generate_secret)"
+ensure_var TURING_EGRESS_SIGNING_SECRET "$(generate_secret)"
 ensure_var TURING_INTEGRATION_KEY "$(generate_secret)"
 configure_host_identity "$current_uid" "$current_gid"
 provision_data

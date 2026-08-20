@@ -14,8 +14,10 @@ type Config struct {
 	RuntimeToken             string
 	ApprovalConsumerToken    string
 	ApprovalJWTSecret        string
+	EgressSigningSecret      string
 	DatabasePath             string
 	OllamaModel              string
+	OpenAIBaseURL            string
 	OpenAIModel              string
 	OpenAIEnabled            bool
 	FilesMCPEnabled          bool
@@ -44,8 +46,10 @@ func NewApp(cfg Config) (*App, error) {
 		RuntimeToken:             cfg.RuntimeToken,
 		ApprovalConsumerToken:    cfg.ApprovalConsumerToken,
 		ApprovalJWTSecret:        cfg.ApprovalJWTSecret,
+		EgressSigningSecret:      cfg.EgressSigningSecret,
 		DatabasePath:             cfg.DatabasePath,
 		OllamaModel:              cfg.OllamaModel,
+		OpenAIBaseURL:            cfg.OpenAIBaseURL,
 		OpenAIModel:              cfg.OpenAIModel,
 		OpenAIEnabled:            cfg.OpenAIEnabled,
 		FilesMCPEnabled:          cfg.FilesMCPEnabled,

@@ -2453,15 +2453,14 @@ class _SessionCall {
   final Completer<Session> completer;
 }
 
-class _FakeSearchApi
+class _FakeSearchApi extends TuringApi
     with
         NoAuditApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
         NoAutomationsApi,
-        NoTelemetryApi
-    implements TuringApi {
+        NoTelemetryApi {
   final List<_SearchCall> searchCalls = [];
   final List<_SessionCall> sessionCalls = [];
   final List<String> sessionRequests = [];

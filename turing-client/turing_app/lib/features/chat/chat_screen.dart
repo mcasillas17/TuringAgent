@@ -7,6 +7,7 @@ import 'package:grpc/grpc.dart' show GrpcError, StatusCode;
 
 import '../../constants/app_colors.dart';
 import '../../models/message.dart';
+import '../../models/remote_egress.dart';
 import '../../models/turing_event.dart';
 import '../../networking/api_client.dart';
 import '../../networking/event_source.dart';
@@ -16,6 +17,7 @@ import 'message_send_unconfirmed_card.dart';
 import 'run_cancelled_card.dart';
 import 'run_failure_card.dart';
 import 'run_notice_card.dart';
+import 'remote_egress_dialog.dart';
 import 'tool_call_card.dart';
 
 final Random _sendIdempotencyRandom = Random.secure();
@@ -219,6 +221,23 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     _controller.addListener(_discardRetryForEditedText);
     unawaited(_start());
+  }
+
+  @override
+  void didUpdateWidget(ChatScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.modelProvider != widget.modelProvider) {
+      final retry = _retryableSend;
+      if (retry != null) {
+        _retryableSend = _RetryableSend(
+          retry.content,
+          retry.modelProvider,
+          retry.idempotencyKey,
+          retry.attempt,
+          null,
+        );
+      }
+    }
   }
 
   /// History is seeded BEFORE the subscription opens, never concurrently with
@@ -429,6 +448,8 @@ class _ChatScreenState extends State<ChatScreen> {
   ///     No other call site in the handler returns it.
   ///   * [StatusCode.alreadyExists] — an idempotency-key conflict is detected
   ///     before the enqueue transaction creates anything for this request.
+  ///   * [StatusCode.failedPrecondition] — remote-egress and routing validation
+  ///     either finishes before enqueue or rolls its enqueue transaction back.
   ///
   /// Deliberately excludes `StatusCode.canceled` and `StatusCode.internal`:
   /// the very same handler ALSO returns both from several points AFTER
@@ -439,6 +460,7 @@ class _ChatScreenState extends State<ChatScreen> {
     StatusCode.invalidArgument,
     StatusCode.notFound,
     StatusCode.alreadyExists,
+    StatusCode.failedPrecondition,
   };
 
   /// Whether [error] — whatever `sendMessage` rejected with, in
@@ -447,7 +469,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// `EnqueueUserMessage`, i.e. before the message or its run could exist
   /// server-side at all. Only a `GrpcError` whose `code` is in
   /// [_confirmedPreEnqueueSendFailureCodes] qualifies — see that constant
-  /// for exactly which three codes and why each one does.
+  /// for the exact allowlist and why each code belongs there.
   ///
   /// Everything else returns `false`, the safe default whenever this proof
   /// cannot be made: any OTHER `GrpcError` code (including
@@ -945,6 +967,46 @@ class _ChatScreenState extends State<ChatScreen> {
     final idempotencyKey = isMatchingRetry
         ? retry.idempotencyKey
         : _newSendIdempotencyKey();
+    RemoteEgressConsent? remoteEgressConsent = isMatchingRetry
+        ? retry.remoteEgressConsent
+        : null;
+    final remoteEgressApi = widget.apiClient;
+    if (remoteEgressConsent == null) {
+      setState(() => _sending = true);
+      try {
+        final disclosure = await remoteEgressApi.prepareRemoteEgress(
+          sessionId: widget.sessionId,
+          content: text,
+          modelProvider: modelProvider,
+          idempotencyKey: idempotencyKey,
+        );
+        if (!mounted) return;
+        if (disclosure != null) {
+          final confirmed = await showRemoteEgressDialog(context, disclosure);
+          if (!mounted) return;
+          if (!confirmed) {
+            setState(() => _sending = false);
+            return;
+          }
+          remoteEgressConsent = RemoteEgressConsent(
+            challenge: disclosure.challenge,
+            acknowledgedDataCategories: disclosure.dataCategories,
+          );
+        }
+      } on Exception {
+        if (!mounted) return;
+        if (modelProvider != 'ollama') {
+          setState(() => _sending = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not prepare remote send')),
+          );
+          return;
+        }
+        // A local Ollama send must not depend on the disclosure preflight.
+        // If this session is actually routed away, SendMessage still rejects
+        // it server-side because no consent accompanies the request.
+      }
+    }
     _retryableSend = null;
     // Captured by reference (not looked up again later): `_messages` may
     // grow while this RPC is in flight (an unrelated run's own stream
@@ -976,12 +1038,22 @@ class _ChatScreenState extends State<ChatScreen> {
     // in this method. Left unguarded, this `await` rejecting becomes an
     // unhandled Future rejection — the bubble above is added, then silence.
     try {
-      await widget.apiClient.sendMessage(
-        sessionId: widget.sessionId,
-        content: text,
-        modelProvider: modelProvider,
-        idempotencyKey: idempotencyKey,
-      );
+      if (remoteEgressConsent == null) {
+        await widget.apiClient.sendMessage(
+          sessionId: widget.sessionId,
+          content: text,
+          modelProvider: modelProvider,
+          idempotencyKey: idempotencyKey,
+        );
+      } else {
+        await remoteEgressApi.sendMessageWithRemoteEgressConsent(
+          sessionId: widget.sessionId,
+          content: text,
+          modelProvider: modelProvider,
+          idempotencyKey: idempotencyKey,
+          consent: remoteEgressConsent,
+        );
+      }
       if (!mounted) return;
       setState(() => _sending = false);
     } on Exception catch (error) {
@@ -1001,7 +1073,7 @@ class _ChatScreenState extends State<ChatScreen> {
         // else about recovering from this rejection (draft restoration,
         // anchoring, the mounted guard above) is identical for both.
         _controller.text = text;
-        if (error is GrpcError && error.code == StatusCode.alreadyExists) {
+        if (_isConfirmedPreEnqueueSendFailure(error)) {
           _retryableSend = null;
         } else {
           _retryableSend = _RetryableSend(
@@ -1009,6 +1081,7 @@ class _ChatScreenState extends State<ChatScreen> {
             modelProvider,
             idempotencyKey,
             attempt,
+            remoteEgressConsent,
           );
         }
         // Anchored immediately after `attempt`, never appended to the
@@ -1336,12 +1409,14 @@ class _RetryableSend {
     this.modelProvider,
     this.idempotencyKey,
     this.attempt,
+    this.remoteEgressConsent,
   );
 
   final String content;
   final String modelProvider;
   final String idempotencyKey;
   final _MessageEntry attempt;
+  final RemoteEgressConsent? remoteEgressConsent;
 }
 
 class _ChatMessageTile extends StatelessWidget {

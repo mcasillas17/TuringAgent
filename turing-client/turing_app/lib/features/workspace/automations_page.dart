@@ -111,6 +111,17 @@ String formatWhen(DateTime? when) {
   return '$date $time';
 }
 
+String describeOccurrenceFailure(String code) {
+  switch (code) {
+    case 'remote_egress_requires_interactive_consent':
+      return 'Remote runs require interactive consent.';
+    case 'remote_egress_configuration_invalid':
+      return 'The remote destination configuration is invalid.';
+    default:
+      return code.replaceAll('_', ' ');
+  }
+}
+
 /// Work that runs without you starting it.
 class AutomationsPage extends StatefulWidget {
   const AutomationsPage({
@@ -446,6 +457,19 @@ class _AutomationCard extends StatelessWidget {
                       ),
                     ),
                   ],
+                ),
+              ),
+            ),
+          if (automation.lastOccurrenceFailureCode.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(
+                'Scheduled attempt blocked ${formatWhen(automation.lastOccurrenceFailedAt)}. '
+                '${describeOccurrenceFailure(automation.lastOccurrenceFailureCode)}',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  height: 1.5,
+                  color: AppColors.danger,
                 ),
               ),
             ),

@@ -1,8 +1,10 @@
 package runtime
 
 import (
+	"reflect"
 	"testing"
 
+	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 )
 
@@ -18,10 +20,26 @@ func TestMapJobCarriesTheRoutedAgentToTheWorker(t *testing.T) {
 		SessionID: "sess_1",
 		UserText:  "hello",
 		ExternalAgent: &repository.ExternalAgentTarget{
+			AgentID:       "agent_claude",
 			DisplayName:   "Claude",
 			BaseURL:       "https://api.anthropic.com/v1",
 			CredentialRef: "claude",
 		},
+		EgressDecision: &repository.RunEgressDecision{
+			DecisionID: "egress_1", Version: 1, Provider: "openai_compatible",
+			Model: "claude-sonnet-4", Endpoint: "https://api.anthropic.com/v1",
+			EndpointHost: "api.anthropic.com",
+			DataCategories: []string{
+				"EGRESS_DATA_CATEGORY_CURRENT_MESSAGE",
+				"EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY",
+			},
+			SelectedTools:             []string{"system/system.time"},
+			ConsentGrantedAt:          "2026-08-20T01:02:03.000000000Z",
+			ChallengeFingerprint:      "fingerprint_1",
+			RequestDigest:             "request_digest_1",
+			ExternalCredentialRefHash: "credential-ref-hash",
+		},
+		SelectedTools: []string{"system/system.time"},
 	})
 
 	target := job.GetExternalAgent()
@@ -29,9 +47,17 @@ func TestMapJobCarriesTheRoutedAgentToTheWorker(t *testing.T) {
 		t.Fatal("external agent = nil, want the routed destination")
 	}
 	if target.GetDisplayName() != "Claude" ||
+		target.GetAgentId() != "agent_claude" ||
 		target.GetBaseUrl() != "https://api.anthropic.com/v1" ||
 		target.GetCredentialRef() != "claude" {
 		t.Fatalf("target = %+v, want the routed agent verbatim", target)
+	}
+	decision := job.GetEgressDecision()
+	if decision.GetDecisionId() != "egress_1" ||
+		decision.GetProvider() != turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE ||
+		decision.GetEndpoint() != "https://api.anthropic.com/v1" ||
+		!reflect.DeepEqual(job.GetSelectedTools(), []string{"system/system.time"}) {
+		t.Fatalf("egress mapping = decision %+v tools %v", decision, job.GetSelectedTools())
 	}
 }
 

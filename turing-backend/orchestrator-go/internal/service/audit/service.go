@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -760,9 +761,56 @@ func applyAuditActionPolicy(payload *turingv1.AuditPayload, action string, objec
 	case "session.deleted":
 		payload.DeletedRuns = auditInt64(object, "runs")
 		payload.DeletedMessages = auditInt64(object, "messages")
+	case "egress.consent.recorded":
+		payload.Provider = auditString(object, "provider", maxAuditProviderBytes)
+		payload.EndpointHost = auditString(object, "endpointHost", maxAuditTargetMetadataBytes)
+		payload.EgressDataCategories = auditEgressCategories(object)
+		if version := auditInt64(object, "decisionVersion"); version != nil &&
+			*version > 0 && *version <= math.MaxInt32 {
+			converted := int32(*version)
+			payload.EgressDecisionVersion = &converted
+		}
+		if raw := auditString(object, "consentGrantedAt", maxAuditTargetMetadataBytes); raw != nil {
+			if parsed, err := time.Parse(time.RFC3339Nano, *raw); err == nil {
+				payload.EgressConsentGrantedAt = timestamppb.New(parsed.UTC())
+			}
+		}
+	case "automation.remote_egress_blocked":
+		payload.ErrorCode = auditString(object, "code", maxAuditErrorCodeBytes)
+		payload.Provider = auditString(object, "provider", maxAuditProviderBytes)
 	default:
 		// Unknown / future action: metadata only, no payload fields.
 	}
+
+}
+
+func auditEgressCategories(object map[string]any) []turingv1.EgressDataCategory {
+	raw, ok := object["dataCategories"].([]any)
+	if !ok || len(raw) > 16 {
+		return nil
+	}
+	categories := make([]turingv1.EgressDataCategory, 0, len(raw))
+	seen := make(map[turingv1.EgressDataCategory]struct{}, len(raw))
+	for _, item := range raw {
+		name, ok := item.(string)
+		if !ok {
+			return nil
+		}
+		value, ok := turingv1.EgressDataCategory_value[name]
+		if !ok {
+			return nil
+		}
+		category := turingv1.EgressDataCategory(value)
+		if category == turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_UNSPECIFIED {
+			return nil
+		}
+		if _, duplicate := seen[category]; duplicate {
+			return nil
+		}
+		seen[category] = struct{}{}
+		categories = append(categories, category)
+	}
+	return categories
 }
 
 // applyApprovalCommonPayload copies the fields every approval.* action may

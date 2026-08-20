@@ -210,6 +210,18 @@ func presentPayloadFields(p *turingv1.AuditPayload) map[string]bool {
 	if p.DenialReasonTruncated != nil {
 		set["denial_reason_truncated"] = true
 	}
+	if p.EndpointHost != nil {
+		set["endpoint_host"] = true
+	}
+	if len(p.EgressDataCategories) > 0 {
+		set["egress_data_categories"] = true
+	}
+	if p.EgressDecisionVersion != nil {
+		set["egress_decision_version"] = true
+	}
+	if p.EgressConsentGrantedAt != nil {
+		set["egress_consent_granted_at"] = true
+	}
 	return set
 }
 
@@ -246,6 +258,8 @@ func TestListAuditEntriesReturnsEveryCurrentActionUnderExplicitPolicy(t *testing
 		{"a_id", "integration.deleted", `{"provider":"github","displayName":"GitHub"}`},
 		{"a_auth", "auth.failed", `{"method":"bearer","requestId":"req1","userAgent":"curl/8","peer":"1.2.3.4:5555"}`},
 		{"a_sd", "session.deleted", `{"runs":3,"messages":42}`},
+		{"a_ec", "egress.consent.recorded", `{"provider":"openai_compatible","endpointHost":"api.example.com","dataCategories":["EGRESS_DATA_CATEGORY_CURRENT_MESSAGE","EGRESS_DATA_CATEGORY_TOOL_SCHEMAS"],"decisionVersion":1,"consentGrantedAt":"2026-08-20T01:02:03.000000000Z","challenge":"SENTINEL_CHALLENGE","nonce":"SENTINEL_NONCE","requestFingerprint":"SENTINEL_FINGERPRINT","credentialRef":"SENTINEL_CREDENTIAL","content":"SENTINEL_CONTENT"}`},
+		{"a_erb", "automation.remote_egress_blocked", `{"code":"remote_egress_requires_interactive_consent","provider":"openai_compatible","endpointHost":"SENTINEL_ENDPOINT","prompt":"SENTINEL_CONTENT"}`},
 		// session.routed / session.unrouted are direct recordAuditTx writes with
 		// no reviewed field rule, so they are default-deny: retrievable, PRESENT,
 		// but every payload field (agentId/agent/endpoint/model) must be dropped.
@@ -325,6 +339,25 @@ func TestListAuditEntriesReturnsEveryCurrentActionUnderExplicitPolicy(t *testing
 			t.Fatalf("session.deleted values wrong: %+v", p)
 		}
 	})
+	check("egress.consent.recorded", []string{
+		"provider", "endpoint_host", "egress_data_categories",
+		"egress_decision_version", "egress_consent_granted_at",
+	}, func(p *turingv1.AuditPayload) {
+		if p.GetProvider() != "openai_compatible" || p.GetEndpointHost() != "api.example.com" ||
+			p.GetEgressDecisionVersion() != 1 ||
+			len(p.GetEgressDataCategories()) != 2 ||
+			p.GetEgressConsentGrantedAt().AsTime().Format(time.RFC3339Nano) != "2026-08-20T01:02:03Z" {
+			t.Fatalf("egress payload values wrong: %+v", p)
+		}
+	})
+	check("automation.remote_egress_blocked", []string{
+		"error_code", "provider",
+	}, func(p *turingv1.AuditPayload) {
+		if p.GetErrorCode() != "remote_egress_requires_interactive_consent" ||
+			p.GetProvider() != "openai_compatible" {
+			t.Fatalf("blocked automation payload values wrong: %+v", p)
+		}
+	})
 	// Direct-write routing actions have no reviewed field rule: PRESENT with no
 	// projected fields at all.
 	for _, action := range []string{"session.routed", "session.unrouted"} {
@@ -338,7 +371,11 @@ func TestListAuditEntriesReturnsEveryCurrentActionUnderExplicitPolicy(t *testing
 	if err != nil {
 		t.Fatalf("protojson.Marshal: %v", err)
 	}
-	for _, sentinel := range []string{"SENTINEL_AGENTID", "SENTINEL_AGENT", "SENTINEL_ENDPOINT", "SENTINEL_MODEL"} {
+	for _, sentinel := range []string{
+		"SENTINEL_AGENTID", "SENTINEL_AGENT", "SENTINEL_ENDPOINT", "SENTINEL_MODEL",
+		"SENTINEL_CHALLENGE", "SENTINEL_NONCE", "SENTINEL_FINGERPRINT",
+		"SENTINEL_CREDENTIAL", "SENTINEL_CONTENT",
+	} {
 		if strings.Contains(string(raw), sentinel) {
 			t.Fatalf("routing payload leaked sentinel %q into the response: %s", sentinel, raw)
 		}

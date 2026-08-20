@@ -5,10 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/url"
 	"strings"
 
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 )
 
@@ -102,6 +102,7 @@ type ExternalAgentInput struct {
 // queued job's target to empty strings, which would route a run that was meant
 // for a cloud agent at an empty base URL.
 type ExternalAgentTarget struct {
+	AgentID       string `json:"agentId"`
 	DisplayName   string `json:"displayName"`
 	BaseURL       string `json:"baseUrl"`
 	CredentialRef string `json:"credentialRef"`
@@ -128,9 +129,11 @@ func validateExternalAgent(input ExternalAgentInput) (ExternalAgentInput, error)
 	if _, ok := externalAgentProviders[cleaned.Provider]; !ok {
 		return ExternalAgentInput{}, ErrExternalAgentProviderInvalid
 	}
-	if err := validateExternalAgentBaseURL(cleaned.BaseURL); err != nil {
+	canonicalBaseURL, err := validateExternalAgentBaseURL(cleaned.BaseURL)
+	if err != nil {
 		return ExternalAgentInput{}, err
 	}
+	cleaned.BaseURL = canonicalBaseURL
 	if err := validateCredentialRef(cleaned.CredentialRef); err != nil {
 		return ExternalAgentInput{}, err
 	}
@@ -143,21 +146,25 @@ func validateExternalAgent(input ExternalAgentInput) (ExternalAgentInput, error)
 // The https rule is not pedantry. Everything routed to one of these carries
 // the whole conversation, and an http endpoint on someone else's network would
 // carry it in the clear — a privacy hole no wording in the client could
-// honestly warn about. Loopback and the Docker host alias stay allowed so a
-// local OpenAI-compatible gateway is still usable, since traffic there has not
-// left the machine.
-func validateExternalAgentBaseURL(baseURL string) error {
+// honestly warn about. Exact localhost and loopback IP literals stay allowed
+// for local development. The Docker host alias is not a loopback identity and
+// therefore requires HTTPS when keyed.
+func validateExternalAgentBaseURL(baseURL string) (string, error) {
 	if baseURL == "" {
-		return ErrExternalAgentBaseURLEmpty
+		return "", ErrExternalAgentBaseURLEmpty
 	}
 	if len([]rune(baseURL)) > maxExternalAgentBaseURLRunes {
-		return ErrExternalAgentBaseURLTooLong
+		return "", ErrExternalAgentBaseURLTooLong
 	}
 	parsed, err := url.Parse(baseURL)
-	if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" ||
-		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
+	if err != nil {
+		return "", ErrExternalAgentBaseURLInvalid
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if !parsed.IsAbs() || parsed.Hostname() == "" ||
+		(scheme != "http" && scheme != "https") ||
 		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
-		return ErrExternalAgentBaseURLInvalid
+		return "", ErrExternalAgentBaseURLInvalid
 	}
 	// https://user:sk-secret@host/v1 passes every check above — it is absolute,
 	// https, has a hostname, and carries no query or fragment — and Go's HTTP
@@ -168,23 +175,16 @@ func validateExternalAgentBaseURL(baseURL string) error {
 	// handed back to any client that lists agents. Refused here, at the only
 	// door into that column.
 	if parsed.User != nil {
-		return ErrExternalAgentBaseURLCredentials
+		return "", ErrExternalAgentBaseURLCredentials
 	}
-	if parsed.Scheme == "http" && !isLocalHostname(parsed.Hostname()) {
-		return ErrExternalAgentBaseURLInsecure
+	endpoint, err := egress.ParseKeyedEndpoint(baseURL)
+	if err != nil {
+		if scheme == "http" {
+			return "", ErrExternalAgentBaseURLInsecure
+		}
+		return "", ErrExternalAgentBaseURLInvalid
 	}
-	return nil
-}
-
-func isLocalHostname(hostname string) bool {
-	switch strings.ToLower(hostname) {
-	case "localhost", "host.docker.internal":
-		return true
-	}
-	if ip := net.ParseIP(hostname); ip != nil {
-		return ip.IsLoopback()
-	}
-	return false
+	return endpoint.Canonical, nil
 }
 
 // validateCredentialRef bounds the one string that crosses into an

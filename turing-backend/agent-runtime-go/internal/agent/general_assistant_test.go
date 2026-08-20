@@ -2835,9 +2835,17 @@ func testJob() *turingv1.AgentJob {
 type scriptedProvider struct {
 	events   []llm.StreamEvent
 	requests []llm.ChatRequest
+	endpoint string
 }
 
-func (p *scriptedProvider) ID() string { return "ollama" }
+func (p *scriptedProvider) ID() string {
+	if p.endpoint != "" {
+		return "openai_compatible"
+	}
+	return "ollama"
+}
+
+func (p *scriptedProvider) EgressEndpoint() string { return p.endpoint }
 
 func (p *scriptedProvider) ContextWindowTokens() int { return llm.DefaultContextWindowTokens }
 func (p *scriptedProvider) MaxOutputTokens() int     { return llm.DefaultMaxOutputTokens }
@@ -2874,9 +2882,17 @@ type queuedProvider struct {
 	responses     [][]llm.StreamEvent
 	requests      []llm.ChatRequest
 	contextWindow int
+	endpoint      string
 }
 
-func (p *queuedProvider) ID() string { return "queued" }
+func (p *queuedProvider) ID() string {
+	if p.endpoint != "" {
+		return "openai_compatible"
+	}
+	return "queued"
+}
+
+func (p *queuedProvider) EgressEndpoint() string { return p.endpoint }
 
 func (p *queuedProvider) ContextWindowTokens() int {
 	if p.contextWindow > 0 {

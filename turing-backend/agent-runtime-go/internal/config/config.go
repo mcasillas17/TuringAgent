@@ -7,9 +7,11 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 )
 
 const (
@@ -147,9 +149,22 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	ollamaEndpoint, err := egress.ParseLocalEndpoint(ollamaBaseURL)
+	if err != nil {
+		return Config{}, fmt.Errorf("OLLAMA_BASE_URL: %w", err)
+	}
+	ollamaBaseURL = ollamaEndpoint.Canonical
 	openAIBaseURL, err := endpointURLValue(getenv, "OPENAI_BASE_URL", "https://api.openai.com/v1")
 	if err != nil {
 		return Config{}, err
+	}
+	openAIAPIKey := getenv("OPENAI_API_KEY")
+	if openAIAPIKey != "" {
+		endpoint, parseErr := egress.ParseKeyedEndpoint(openAIBaseURL)
+		if parseErr != nil {
+			return Config{}, fmt.Errorf("OPENAI_BASE_URL: %w", parseErr)
+		}
+		openAIBaseURL = endpoint.Canonical
 	}
 	mcpSystemBaseURL, err := endpointURLValue(getenv, "MCP_SYSTEM_BASE_URL", "http://turing-mcp-system:7100/mcp")
 	if err != nil {
@@ -173,7 +188,7 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 		OllamaContextWindowTokens: ollamaContextWindowTokens,
 		OllamaMaxOutputTokens:     ollamaMaxOutputTokens,
 		OpenAIBaseURL:             openAIBaseURL,
-		OpenAIAPIKey:              getenv("OPENAI_API_KEY"),
+		OpenAIAPIKey:              openAIAPIKey,
 		OpenAIModel:               defaultString(getenv("OPENAI_MODEL"), "gpt-4o-mini"),
 		OpenAIContextWindowTokens: openAIContextWindowTokens,
 		OpenAIMaxOutputTokens:     openAIMaxOutputTokens,
@@ -215,8 +230,12 @@ func providerContextLimits(
 func endpointURLValue(getenv func(string) string, name string, defaultValue string) (string, error) {
 	value := defaultString(getenv(name), defaultValue)
 	parsed, err := url.Parse(value)
-	if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" ||
-		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
+	if err != nil {
+		return "", fmt.Errorf("%s must be an absolute http or https URL with a non-empty host and no query or fragment", name)
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if !parsed.IsAbs() || parsed.Hostname() == "" ||
+		(scheme != "http" && scheme != "https") ||
 		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
 		return "", fmt.Errorf("%s must be an absolute http or https URL with a non-empty host and no query or fragment", name)
 	}

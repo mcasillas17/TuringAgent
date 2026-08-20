@@ -236,6 +236,7 @@ func TestMultiWorkerDispatchClaimsOnlyCompatibleJobs(t *testing.T) {
 	openAIJob, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
 		SessionID: openAISession.SessionID, Content: "openai", AgentID: "general_assistant",
 		ModelProvider: "openai_compatible", Model: "gpt-4o-mini",
+		EgressDecision: runtimeRemoteDecision("gpt-4o-mini"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1074,8 +1075,9 @@ func modelCapabilities(
 		Models: []*turingv1.ModelCapability{{
 			Provider: provider, Model: model, MaxContextTokens: maxContextTokens,
 		}},
-		AgentIds:          []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
-		MaxConcurrentRuns: maxConcurrentRuns,
+		AgentIds:                    []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+		MaxConcurrentRuns:           maxConcurrentRuns,
+		RemoteEgressDecisionVersion: 1,
 	}
 }
 

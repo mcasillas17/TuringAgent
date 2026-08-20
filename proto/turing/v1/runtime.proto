@@ -31,6 +31,10 @@ message AgentJob {
   ExternalAgentTarget external_agent = 14;
   int32 required_context_tokens = 15;
   int32 minimum_worker_max_concurrent_runs = 16;
+  RunEgressDecision egress_decision = 17;
+  // Exact tool names frozen by the orchestrator for this run. The runtime may
+  // expose a subset after context budgeting, never tools outside this set.
+  repeated string selected_tools = 18;
 }
 
 // Where to send a run that the user routed off this machine.
@@ -49,6 +53,7 @@ message ExternalAgentTarget {
   string display_name = 1;
   string base_url = 2;
   string credential_ref = 3;
+  string agent_id = 4;
 }
 
 // A frozen skill snapshot as the runtime sees it. instructions retains field 2
@@ -86,6 +91,9 @@ message WorkerCapabilities {
   // Credential names only, never API keys. This complete set authorizes which
   // frozen external-agent destinations this worker can execute.
   repeated string external_agent_credential_refs = 6;
+  // Highest run-egress decision version this worker enforces before provider
+  // I/O. Zero means it predates explicit remote-egress enforcement.
+  int32 remote_egress_decision_version = 7;
 }
 
 enum ToolDiscoveryStatus {

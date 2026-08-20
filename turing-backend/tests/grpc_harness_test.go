@@ -32,6 +32,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -66,6 +67,51 @@ type grpcHarness struct {
 	workerCancel     context.CancelFunc
 	workerDone       chan error
 	closeOnce        sync.Once
+}
+
+type consentingChatClient struct {
+	inner turingv1.ChatServiceClient
+}
+
+func (c *consentingChatClient) PrepareRemoteEgress(
+	ctx context.Context,
+	request *turingv1.PrepareRemoteEgressRequest,
+	options ...grpc.CallOption,
+) (*turingv1.PrepareRemoteEgressResponse, error) {
+	return c.inner.PrepareRemoteEgress(ctx, request, options...)
+}
+
+func (c *consentingChatClient) SendMessage(
+	ctx context.Context,
+	request *turingv1.SendMessageRequest,
+	options ...grpc.CallOption,
+) (grpc.ServerStreamingClient[turingv1.ChatStreamEvent], error) {
+	if request.GetModelProvider() != turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE ||
+		request.GetRemoteEgressConsent() != nil {
+		return c.inner.SendMessage(ctx, request, options...)
+	}
+	prepared, err := c.inner.PrepareRemoteEgress(ctx, &turingv1.PrepareRemoteEgressRequest{
+		SessionId: request.GetSessionId(), Content: request.GetContent(),
+		ContentType: request.GetContentType(), AgentId: request.GetAgentId(),
+		ModelProvider: request.GetModelProvider(), Model: request.GetModel(),
+		IdempotencyKey:                 request.GetIdempotencyKey(),
+		RequestedTools:                 request.GetRequestedTools(),
+		RequiredContextTokens:          request.GetRequiredContextTokens(),
+		MinimumWorkerMaxConcurrentRuns: request.GetMinimumWorkerMaxConcurrentRuns(),
+	}, options...)
+	if err != nil {
+		return nil, err
+	}
+	disclosure := prepared.GetDisclosure()
+	if disclosure == nil {
+		return nil, status.Error(codes.FailedPrecondition, "remote provider returned no egress disclosure")
+	}
+	consented := proto.Clone(request).(*turingv1.SendMessageRequest)
+	consented.RemoteEgressConsent = &turingv1.RemoteEgressConsent{
+		Challenge: disclosure.GetChallenge(), Acknowledged: true,
+		AcknowledgedDataCategories: disclosure.GetDataCategories(),
+	}
+	return c.inner.SendMessage(ctx, consented, options...)
 }
 
 type fakeModelServer struct {
@@ -171,9 +217,12 @@ func newGRPCHarness(t *testing.T, opts ...harnessOption) *grpcHarness {
 		ApprovalConsumerToken:    integrationApprovalConsumerToken,
 		FilesMCPEnabled:          true,
 		ApprovalJWTSecret:        integrationApprovalKey,
+		EgressSigningSecret:      "integration-egress-signing-key",
 		DatabasePath:             dbPath,
 		OllamaModel:              "fake-ollama",
+		OpenAIBaseURL:            fakeModel.server.URL,
 		OpenAIModel:              "fake-model",
+		OpenAIEnabled:            true,
 		MaxConcurrentRunsGeneral: 1,
 		MaxToolCallsPerRun:       10,
 		ApprovalTTLMS:            int(cfg.approvalTTL / time.Millisecond),
@@ -200,7 +249,7 @@ func newGRPCHarness(t *testing.T, opts ...harnessOption) *grpcHarness {
 
 	h.publicConn = dialBufconn(t, publicLis)
 	h.internalConn = dialBufconn(t, internalLis)
-	h.chat = turingv1.NewChatServiceClient(h.publicConn)
+	h.chat = &consentingChatClient{inner: turingv1.NewChatServiceClient(h.publicConn)}
 	h.sessions = turingv1.NewSessionServiceClient(h.publicConn)
 	h.events = turingv1.NewEventServiceClient(h.publicConn)
 	h.approvals = turingv1.NewApprovalServiceClient(h.publicConn)
@@ -1181,14 +1230,15 @@ func TestApprovalPersistenceFailureFencesRealWorkerUntilExecutorExit(t *testing.
 		done := make(chan error, 1)
 		go func() {
 			done <- runtimetestkit.RunWorkerWithExecutor(ctx, runtimetestkit.WorkerConfig{
-				Conn:               conn,
-				RuntimeToken:       integrationRuntimeToken,
-				WorkerID:           workerID,
-				MaxConcurrentRuns:  1,
-				TotalToolTimeout:   time.Second,
-				MaxToolCallsPerRun: 1,
-				OpenAIModel:        "fake-model",
-				DiscoveredTools:    discoveredTools,
+				Conn:                        conn,
+				RuntimeToken:                integrationRuntimeToken,
+				WorkerID:                    workerID,
+				MaxConcurrentRuns:           1,
+				TotalToolTimeout:            time.Second,
+				MaxToolCallsPerRun:          1,
+				OpenAIModel:                 "fake-model",
+				RemoteEgressDecisionVersion: 1,
+				DiscoveredTools:             discoveredTools,
 			}, executor)
 		}()
 		harness.waitForRuntimeWorker(t)

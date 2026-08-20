@@ -326,6 +326,8 @@ else in the JSON object is silently ignored, whatever the action:
 | `integration.connected`, `integration.revoked`, `integration.deleted` | provider, display name |
 | `auth.failed` | method, request id |
 | `session.deleted` | deleted run count, deleted message count |
+| `egress.consent.recorded` | provider, endpoint host, typed data categories, decision version, consent timestamp |
+| `automation.remote_egress_blocked` | error code, provider |
 | `session.routed`, `session.unrouted`, and any unknown or future action | metadata only — no payload fields at all |
 
 ### Approval decision rationale
@@ -433,6 +435,9 @@ truncated or coerced:
   an exact, non-negative integer that parses cleanly as `int64` — decoded via
   `encoding/json`'s `UseNumber()` so `1.5`, `1e3`, and `" 1"` are all rejected
   rather than coerced into a number.
+- `egress_decision_version` must be a positive `int32`, data categories must
+  be unique known `EgressDataCategory` enum names, and the consent timestamp
+  must parse as RFC3339Nano. A malformed field is omitted rather than repaired.
 
 ## Never returned
 

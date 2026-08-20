@@ -79,6 +79,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"TURING_RUNTIME_TOKEN:",
 		"TURING_APPROVAL_CONSUMER_TOKEN:",
 		"TURING_APPROVAL_JWT_SECRET:",
+		"TURING_EGRESS_SIGNING_SECRET:",
 		"DATABASE_PATH:",
 		"SKILLS_ROOT:",
 		"OLLAMA_BASE_URL:",
@@ -130,6 +131,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		// must never hold the approval consumer's credential, or a
 		// compromised runtime could impersonate mcp-files.
 		"TURING_APPROVAL_CONSUMER_TOKEN:",
+		"TURING_EGRESS_SIGNING_SECRET:",
 	)
 
 	system := composeServiceBlock(t, compose, "turing-mcp-system")
@@ -140,6 +142,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"TURING_RUNTIME_TOKEN:",
 		"TURING_APPROVAL_CONSUMER_TOKEN:",
 		"TURING_APPROVAL_JWT_SECRET:",
+		"TURING_EGRESS_SIGNING_SECRET:",
 		"OPENAI_API_KEY:",
 		"OLLAMA_CONTEXT_WINDOW_TOKENS:",
 		"OLLAMA_MAX_OUTPUT_TOKENS:",
@@ -164,6 +167,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 	)
 	requireContainsNone(t, "turing-mcp-files", files,
 		"TURING_CLIENT_API_KEY:",
+		"TURING_EGRESS_SIGNING_SECRET:",
 		"OPENAI_API_KEY:",
 		"OLLAMA_CONTEXT_WINDOW_TOKENS:",
 		"OLLAMA_MAX_OUTPUT_TOKENS:",
@@ -186,6 +190,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"MCP_FILES_ENABLED",
 			"OPENAI_ENABLED",
 			"TURING_APPROVAL_JWT_SECRET",
+			"TURING_EGRESS_SIGNING_SECRET",
 			"TURING_INTEGRATION_KEY",
 			"ORCHESTRATOR_PUBLIC_PORT",
 			"ORCHESTRATOR_INTERNAL_PORT",

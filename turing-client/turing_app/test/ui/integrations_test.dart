@@ -597,14 +597,13 @@ class _ConnectCall {
 
 /// A working in-memory backend, so the UI is tested against something that
 /// behaves like the real one rather than a stub that always says yes.
-class _IntegrationsApi
+class _IntegrationsApi extends TuringApi
     with
         NoAuditApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoAutomationsApi,
-        NoTelemetryApi
-    implements TuringApi {
+        NoTelemetryApi {
   final List<IntegrationConnection> connections = [];
   final List<_ConnectCall> connectCalls = [];
   final List<String> revoked = [];

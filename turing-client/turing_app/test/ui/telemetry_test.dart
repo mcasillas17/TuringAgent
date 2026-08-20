@@ -601,14 +601,13 @@ TelemetrySummary _busySummary() => _summary(
   ],
 );
 
-class _FakeApi
+class _FakeApi extends TuringApi
     with
         NoAuditApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
-        NoAutomationsApi
-    implements TuringApi {
+        NoAutomationsApi {
   TelemetrySummary? summary;
   Object? error;
   final List<int> requestedWindows = [];

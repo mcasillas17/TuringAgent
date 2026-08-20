@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/secretbox"
 )
 
@@ -29,6 +30,7 @@ type Config struct {
 	RuntimeToken          string
 	ApprovalConsumerToken string
 	ApprovalJWTSecret     string
+	EgressSigningSecret   string
 	// IntegrationKey seals third-party credentials before they are stored.
 	// Optional: when it is empty, connecting an account is refused with a
 	// reason rather than the credential being stored in the clear.
@@ -187,6 +189,10 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	egressSigningSecret, err := required("TURING_EGRESS_SIGNING_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
 	// Validated at startup rather than at the first connect attempt: a key
 	// that is present but malformed is a misconfiguration, and finding out
 	// about it while pasting a token is finding out too late.
@@ -267,6 +273,26 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	openAIBaseURL := stringValue("OPENAI_BASE_URL", "https://api.openai.com/v1")
+	if openAIEnabled {
+		endpoint, parseErr := egress.ParseKeyedEndpoint(openAIBaseURL)
+		if parseErr != nil {
+			return Config{}, fmt.Errorf("OPENAI_BASE_URL: %w", parseErr)
+		}
+		openAIBaseURL = endpoint.Canonical
+	} else {
+		endpoint, parseErr := egress.ParseUnkeyedEndpoint(openAIBaseURL)
+		if parseErr != nil {
+			return Config{}, fmt.Errorf("OPENAI_BASE_URL: %w", parseErr)
+		}
+		openAIBaseURL = endpoint.Canonical
+	}
+	ollamaEndpoint, err := egress.ParseLocalEndpoint(
+		stringValue("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
+	)
+	if err != nil {
+		return Config{}, fmt.Errorf("OLLAMA_BASE_URL: %w", err)
+	}
 
 	skillsRoot := stringValue("SKILLS_ROOT", "/skills")
 	if !filepath.IsAbs(skillsRoot) || filepath.Clean(skillsRoot) != skillsRoot {
@@ -277,15 +303,16 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		RuntimeToken:              runtimeToken,
 		ApprovalConsumerToken:     approvalConsumerToken,
 		ApprovalJWTSecret:         approvalSecret,
+		EgressSigningSecret:       egressSigningSecret,
 		IntegrationKey:            integrationKey,
 		PublicPort:                publicPort,
 		InternalPort:              internalPort,
 		DatabasePath:              stringValue("DATABASE_PATH", "/app/data/turing.db"),
 		SkillsRoot:                skillsRoot,
-		OllamaBaseURL:             stringValue("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
+		OllamaBaseURL:             ollamaEndpoint.Canonical,
 		OllamaModel:               stringValue("OLLAMA_MODEL", "qwen2.5:7b"),
 		OllamaContextWindowTokens: ollamaContextWindowTokens,
-		OpenAIBaseURL:             stringValue("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+		OpenAIBaseURL:             openAIBaseURL,
 		FilesMCPEnabled:           filesMCPEnabled,
 		OpenAIEnabled:             openAIEnabled,
 		OpenAIModel:               stringValue("OPENAI_MODEL", "gpt-4o-mini"),

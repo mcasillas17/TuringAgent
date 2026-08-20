@@ -21,6 +21,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/orchestrator"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/worker"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 )
 
 func main() {
@@ -102,6 +103,7 @@ func run() error {
 		Models:                      advertisedModels(cfg),
 		ExternalAgentCredentialRefs: agentCredentialRefs(cfg.AgentAPIKeys),
 		SupportsExternalAgents:      len(cfg.AgentAPIKeys) > 0,
+		RemoteEgressDecisionVersion: int32(backendegress.DecisionVersion),
 		DiscoverTools:               executor.AdvertisedTools,
 	}, runtimeClientAdapter{client: client}, executor)
 	return serve(ctx, runtimeWorker)

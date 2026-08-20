@@ -197,9 +197,97 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 		"0012_worker_capability_routing",
 		"0013_internal_service_identities",
 		"0013_send_message_idempotency",
+		"0014_run_egress_decisions",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("applied migrations = %v, want %v", got, want)
+	}
+}
+
+func TestRunEgressMigrationFailsQueuedRemoteWorkWithoutConsent(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	names, err := migrationNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if name == "0014_run_egress_decisions.sql" {
+			break
+		}
+		applyMigration(t, ctx, database, name)
+	}
+	const createdAt = "2026-08-20T01:02:03.000000000Z"
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO sessions (id, title, status, created_at, updated_at)
+		VALUES ('sess_remote_legacy', 'Legacy remote', 'active', ?, ?);
+		INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at)
+		VALUES
+			('msg_remote_user', 'sess_remote_legacy', 'user', 'legacy remote', 'text', 1, ?),
+			('msg_remote_assistant', 'sess_remote_legacy', 'assistant', '', 'text', 2, ?);
+		INSERT INTO agent_runs (
+			id, session_id, user_message_id, assistant_message_id, agent_id,
+			trace_id, status, model_provider, model_name, created_at
+		) VALUES (
+			'run_remote_legacy', 'sess_remote_legacy', 'msg_remote_user',
+			'msg_remote_assistant', 'general_assistant', 'trace_remote_legacy',
+			'queued', 'openai_compatible', 'legacy-model', ?
+		);
+		INSERT INTO jobs (
+			id, run_id, agent_id, status, payload_json, created_at, created_at_ns
+		) VALUES (
+			'job_remote_legacy', 'run_remote_legacy', 'general_assistant',
+			'pending', '{}', ?, 1
+		);
+		INSERT INTO send_message_idempotency (
+			idempotency_key, session_id, request_fingerprint, user_message_id,
+			assistant_message_id, run_id, job_id, trace_id,
+			queued_event_sequence, created_at
+		) VALUES (
+			'legacy-remote-key', 'sess_remote_legacy', 'legacy-fingerprint',
+			'msg_remote_user', 'msg_remote_assistant', 'run_remote_legacy',
+			'job_remote_legacy', 'trace_remote_legacy', 1, ?
+		)
+	`, createdAt, createdAt, createdAt, createdAt, createdAt, createdAt, createdAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	var runStatus, runCode, jobStatus, jobCode string
+	if err := database.QueryRowContext(ctx, `
+		SELECT r.status, r.error_code, j.status, j.error_code
+		FROM agent_runs r JOIN jobs j ON j.run_id = r.id
+		WHERE r.id = 'run_remote_legacy'
+	`).Scan(&runStatus, &runCode, &jobStatus, &jobCode); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus != "failed" || jobStatus != "failed" ||
+		runCode != "egress_decision_required" || jobCode != "egress_decision_required" {
+		t.Fatalf("legacy remote statuses = run %s/%s job %s/%s", runStatus, runCode, jobStatus, jobCode)
+	}
+	var eventType, payload string
+	if err := database.QueryRowContext(ctx, `
+		SELECT type, payload_json FROM events WHERE run_id = 'run_remote_legacy'
+	`).Scan(&eventType, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if eventType != "agent.run.failed" ||
+		!strings.Contains(payload, `"code":"egress_decision_required"`) {
+		t.Fatalf("legacy remote failure event = %s %s", eventType, payload)
+	}
+	var idempotencyRows int
+	if err := database.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM send_message_idempotency WHERE run_id = 'run_remote_legacy'`).
+		Scan(&idempotencyRows); err != nil {
+		t.Fatal(err)
+	}
+	if idempotencyRows != 0 {
+		t.Fatalf("legacy remote idempotency rows = %d, want 0", idempotencyRows)
 	}
 }
 
@@ -375,8 +463,8 @@ func TestCurrentSchemaVersionUsesLatestEmbeddedMigrationPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "0013" {
-		t.Fatalf("CurrentSchemaVersion = %q, want 0013", got)
+	if got != "0014" {
+		t.Fatalf("CurrentSchemaVersion = %q, want 0014", got)
 	}
 }
 

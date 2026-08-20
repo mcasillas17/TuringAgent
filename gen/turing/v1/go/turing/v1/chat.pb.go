@@ -34,9 +34,10 @@ type SendMessageRequest struct {
 	// with a different normalized request returns ALREADY_EXISTS.
 	IdempotencyKey string `protobuf:"bytes,7,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
 	// Exact server/tool names that a compatible worker must advertise.
-	RequestedTools                 []string `protobuf:"bytes,8,rep,name=requested_tools,json=requestedTools,proto3" json:"requested_tools,omitempty"`
-	RequiredContextTokens          int32    `protobuf:"varint,9,opt,name=required_context_tokens,json=requiredContextTokens,proto3" json:"required_context_tokens,omitempty"`
-	MinimumWorkerMaxConcurrentRuns int32    `protobuf:"varint,10,opt,name=minimum_worker_max_concurrent_runs,json=minimumWorkerMaxConcurrentRuns,proto3" json:"minimum_worker_max_concurrent_runs,omitempty"`
+	RequestedTools                 []string             `protobuf:"bytes,8,rep,name=requested_tools,json=requestedTools,proto3" json:"requested_tools,omitempty"`
+	RequiredContextTokens          int32                `protobuf:"varint,9,opt,name=required_context_tokens,json=requiredContextTokens,proto3" json:"required_context_tokens,omitempty"`
+	MinimumWorkerMaxConcurrentRuns int32                `protobuf:"varint,10,opt,name=minimum_worker_max_concurrent_runs,json=minimumWorkerMaxConcurrentRuns,proto3" json:"minimum_worker_max_concurrent_runs,omitempty"`
+	RemoteEgressConsent            *RemoteEgressConsent `protobuf:"bytes,11,opt,name=remote_egress_consent,json=remoteEgressConsent,proto3" json:"remote_egress_consent,omitempty"`
 	unknownFields                  protoimpl.UnknownFields
 	sizeCache                      protoimpl.SizeCache
 }
@@ -141,6 +142,176 @@ func (x *SendMessageRequest) GetMinimumWorkerMaxConcurrentRuns() int32 {
 	return 0
 }
 
+func (x *SendMessageRequest) GetRemoteEgressConsent() *RemoteEgressConsent {
+	if x != nil {
+		return x.RemoteEgressConsent
+	}
+	return nil
+}
+
+// Side-effect-free preflight for the exact SendMessage payload that may leave
+// the machine. The exact idempotency_key value is bound, including empty.
+type PrepareRemoteEgressRequest struct {
+	state                          protoimpl.MessageState `protogen:"open.v1"`
+	SessionId                      string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Content                        string                 `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
+	ContentType                    string                 `protobuf:"bytes,3,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	AgentId                        AgentId                `protobuf:"varint,4,opt,name=agent_id,json=agentId,proto3,enum=turing.v1.AgentId" json:"agent_id,omitempty"`
+	ModelProvider                  ModelProvider          `protobuf:"varint,5,opt,name=model_provider,json=modelProvider,proto3,enum=turing.v1.ModelProvider" json:"model_provider,omitempty"`
+	Model                          string                 `protobuf:"bytes,6,opt,name=model,proto3" json:"model,omitempty"`
+	IdempotencyKey                 string                 `protobuf:"bytes,7,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	RequestedTools                 []string               `protobuf:"bytes,8,rep,name=requested_tools,json=requestedTools,proto3" json:"requested_tools,omitempty"`
+	RequiredContextTokens          int32                  `protobuf:"varint,9,opt,name=required_context_tokens,json=requiredContextTokens,proto3" json:"required_context_tokens,omitempty"`
+	MinimumWorkerMaxConcurrentRuns int32                  `protobuf:"varint,10,opt,name=minimum_worker_max_concurrent_runs,json=minimumWorkerMaxConcurrentRuns,proto3" json:"minimum_worker_max_concurrent_runs,omitempty"`
+	unknownFields                  protoimpl.UnknownFields
+	sizeCache                      protoimpl.SizeCache
+}
+
+func (x *PrepareRemoteEgressRequest) Reset() {
+	*x = PrepareRemoteEgressRequest{}
+	mi := &file_turing_v1_chat_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrepareRemoteEgressRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrepareRemoteEgressRequest) ProtoMessage() {}
+
+func (x *PrepareRemoteEgressRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_chat_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrepareRemoteEgressRequest.ProtoReflect.Descriptor instead.
+func (*PrepareRemoteEgressRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *PrepareRemoteEgressRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *PrepareRemoteEgressRequest) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *PrepareRemoteEgressRequest) GetContentType() string {
+	if x != nil {
+		return x.ContentType
+	}
+	return ""
+}
+
+func (x *PrepareRemoteEgressRequest) GetAgentId() AgentId {
+	if x != nil {
+		return x.AgentId
+	}
+	return AgentId_AGENT_ID_UNSPECIFIED
+}
+
+func (x *PrepareRemoteEgressRequest) GetModelProvider() ModelProvider {
+	if x != nil {
+		return x.ModelProvider
+	}
+	return ModelProvider_MODEL_PROVIDER_UNSPECIFIED
+}
+
+func (x *PrepareRemoteEgressRequest) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *PrepareRemoteEgressRequest) GetIdempotencyKey() string {
+	if x != nil {
+		return x.IdempotencyKey
+	}
+	return ""
+}
+
+func (x *PrepareRemoteEgressRequest) GetRequestedTools() []string {
+	if x != nil {
+		return x.RequestedTools
+	}
+	return nil
+}
+
+func (x *PrepareRemoteEgressRequest) GetRequiredContextTokens() int32 {
+	if x != nil {
+		return x.RequiredContextTokens
+	}
+	return 0
+}
+
+func (x *PrepareRemoteEgressRequest) GetMinimumWorkerMaxConcurrentRuns() int32 {
+	if x != nil {
+		return x.MinimumWorkerMaxConcurrentRuns
+	}
+	return 0
+}
+
+type PrepareRemoteEgressResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Absent for a request whose effective route is local.
+	Disclosure    *RemoteEgressDisclosure `protobuf:"bytes,1,opt,name=disclosure,proto3" json:"disclosure,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrepareRemoteEgressResponse) Reset() {
+	*x = PrepareRemoteEgressResponse{}
+	mi := &file_turing_v1_chat_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrepareRemoteEgressResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrepareRemoteEgressResponse) ProtoMessage() {}
+
+func (x *PrepareRemoteEgressResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_chat_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrepareRemoteEgressResponse.ProtoReflect.Descriptor instead.
+func (*PrepareRemoteEgressResponse) Descriptor() ([]byte, []int) {
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *PrepareRemoteEgressResponse) GetDisclosure() *RemoteEgressDisclosure {
+	if x != nil {
+		return x.Disclosure
+	}
+	return nil
+}
+
 type RunQueued struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
@@ -152,7 +323,7 @@ type RunQueued struct {
 
 func (x *RunQueued) Reset() {
 	*x = RunQueued{}
-	mi := &file_turing_v1_chat_proto_msgTypes[1]
+	mi := &file_turing_v1_chat_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -164,7 +335,7 @@ func (x *RunQueued) String() string {
 func (*RunQueued) ProtoMessage() {}
 
 func (x *RunQueued) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_chat_proto_msgTypes[1]
+	mi := &file_turing_v1_chat_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -177,7 +348,7 @@ func (x *RunQueued) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunQueued.ProtoReflect.Descriptor instead.
 func (*RunQueued) Descriptor() ([]byte, []int) {
-	return file_turing_v1_chat_proto_rawDescGZIP(), []int{1}
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *RunQueued) GetRunId() string {
@@ -212,7 +383,7 @@ type RunStarted struct {
 
 func (x *RunStarted) Reset() {
 	*x = RunStarted{}
-	mi := &file_turing_v1_chat_proto_msgTypes[2]
+	mi := &file_turing_v1_chat_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -224,7 +395,7 @@ func (x *RunStarted) String() string {
 func (*RunStarted) ProtoMessage() {}
 
 func (x *RunStarted) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_chat_proto_msgTypes[2]
+	mi := &file_turing_v1_chat_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -237,7 +408,7 @@ func (x *RunStarted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunStarted.ProtoReflect.Descriptor instead.
 func (*RunStarted) Descriptor() ([]byte, []int) {
-	return file_turing_v1_chat_proto_rawDescGZIP(), []int{2}
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *RunStarted) GetRunId() string {
@@ -271,7 +442,7 @@ type MessageStarted struct {
 
 func (x *MessageStarted) Reset() {
 	*x = MessageStarted{}
-	mi := &file_turing_v1_chat_proto_msgTypes[3]
+	mi := &file_turing_v1_chat_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -283,7 +454,7 @@ func (x *MessageStarted) String() string {
 func (*MessageStarted) ProtoMessage() {}
 
 func (x *MessageStarted) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_chat_proto_msgTypes[3]
+	mi := &file_turing_v1_chat_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -296,7 +467,7 @@ func (x *MessageStarted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MessageStarted.ProtoReflect.Descriptor instead.
 func (*MessageStarted) Descriptor() ([]byte, []int) {
-	return file_turing_v1_chat_proto_rawDescGZIP(), []int{3}
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *MessageStarted) GetMessageId() string {
@@ -323,7 +494,7 @@ type TokenDelta struct {
 
 func (x *TokenDelta) Reset() {
 	*x = TokenDelta{}
-	mi := &file_turing_v1_chat_proto_msgTypes[4]
+	mi := &file_turing_v1_chat_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -335,7 +506,7 @@ func (x *TokenDelta) String() string {
 func (*TokenDelta) ProtoMessage() {}
 
 func (x *TokenDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_chat_proto_msgTypes[4]
+	mi := &file_turing_v1_chat_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -348,7 +519,7 @@ func (x *TokenDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TokenDelta.ProtoReflect.Descriptor instead.
 func (*TokenDelta) Descriptor() ([]byte, []int) {
-	return file_turing_v1_chat_proto_rawDescGZIP(), []int{4}
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *TokenDelta) GetMessageId() string {
@@ -377,7 +548,7 @@ type ToolEvent struct {
 
 func (x *ToolEvent) Reset() {
 	*x = ToolEvent{}
-	mi := &file_turing_v1_chat_proto_msgTypes[5]
+	mi := &file_turing_v1_chat_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -389,7 +560,7 @@ func (x *ToolEvent) String() string {
 func (*ToolEvent) ProtoMessage() {}
 
 func (x *ToolEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_chat_proto_msgTypes[5]
+	mi := &file_turing_v1_chat_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -402,7 +573,7 @@ func (x *ToolEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolEvent.ProtoReflect.Descriptor instead.
 func (*ToolEvent) Descriptor() ([]byte, []int) {
-	return file_turing_v1_chat_proto_rawDescGZIP(), []int{5}
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ToolEvent) GetToolCallId() string {
@@ -444,7 +615,7 @@ type ApprovalEvent struct {
 
 func (x *ApprovalEvent) Reset() {
 	*x = ApprovalEvent{}
-	mi := &file_turing_v1_chat_proto_msgTypes[6]
+	mi := &file_turing_v1_chat_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -456,7 +627,7 @@ func (x *ApprovalEvent) String() string {
 func (*ApprovalEvent) ProtoMessage() {}
 
 func (x *ApprovalEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_chat_proto_msgTypes[6]
+	mi := &file_turing_v1_chat_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -469,7 +640,7 @@ func (x *ApprovalEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApprovalEvent.ProtoReflect.Descriptor instead.
 func (*ApprovalEvent) Descriptor() ([]byte, []int) {
-	return file_turing_v1_chat_proto_rawDescGZIP(), []int{6}
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ApprovalEvent) GetApprovalId() string {
@@ -503,7 +674,7 @@ type MessageCompleted struct {
 
 func (x *MessageCompleted) Reset() {
 	*x = MessageCompleted{}
-	mi := &file_turing_v1_chat_proto_msgTypes[7]
+	mi := &file_turing_v1_chat_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -515,7 +686,7 @@ func (x *MessageCompleted) String() string {
 func (*MessageCompleted) ProtoMessage() {}
 
 func (x *MessageCompleted) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_chat_proto_msgTypes[7]
+	mi := &file_turing_v1_chat_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -528,7 +699,7 @@ func (x *MessageCompleted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MessageCompleted.ProtoReflect.Descriptor instead.
 func (*MessageCompleted) Descriptor() ([]byte, []int) {
-	return file_turing_v1_chat_proto_rawDescGZIP(), []int{7}
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *MessageCompleted) GetMessageId() string {
@@ -555,7 +726,7 @@ type RunCompleted struct {
 
 func (x *RunCompleted) Reset() {
 	*x = RunCompleted{}
-	mi := &file_turing_v1_chat_proto_msgTypes[8]
+	mi := &file_turing_v1_chat_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -567,7 +738,7 @@ func (x *RunCompleted) String() string {
 func (*RunCompleted) ProtoMessage() {}
 
 func (x *RunCompleted) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_chat_proto_msgTypes[8]
+	mi := &file_turing_v1_chat_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -580,7 +751,7 @@ func (x *RunCompleted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunCompleted.ProtoReflect.Descriptor instead.
 func (*RunCompleted) Descriptor() ([]byte, []int) {
-	return file_turing_v1_chat_proto_rawDescGZIP(), []int{8}
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *RunCompleted) GetRunId() string {
@@ -609,7 +780,7 @@ type RunFailed struct {
 
 func (x *RunFailed) Reset() {
 	*x = RunFailed{}
-	mi := &file_turing_v1_chat_proto_msgTypes[9]
+	mi := &file_turing_v1_chat_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -621,7 +792,7 @@ func (x *RunFailed) String() string {
 func (*RunFailed) ProtoMessage() {}
 
 func (x *RunFailed) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_chat_proto_msgTypes[9]
+	mi := &file_turing_v1_chat_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -634,7 +805,7 @@ func (x *RunFailed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunFailed.ProtoReflect.Descriptor instead.
 func (*RunFailed) Descriptor() ([]byte, []int) {
-	return file_turing_v1_chat_proto_rawDescGZIP(), []int{9}
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *RunFailed) GetRunId() string {
@@ -675,7 +846,7 @@ type RunCancelled struct {
 
 func (x *RunCancelled) Reset() {
 	*x = RunCancelled{}
-	mi := &file_turing_v1_chat_proto_msgTypes[10]
+	mi := &file_turing_v1_chat_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -687,7 +858,7 @@ func (x *RunCancelled) String() string {
 func (*RunCancelled) ProtoMessage() {}
 
 func (x *RunCancelled) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_chat_proto_msgTypes[10]
+	mi := &file_turing_v1_chat_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -700,7 +871,7 @@ func (x *RunCancelled) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunCancelled.ProtoReflect.Descriptor instead.
 func (*RunCancelled) Descriptor() ([]byte, []int) {
-	return file_turing_v1_chat_proto_rawDescGZIP(), []int{10}
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *RunCancelled) GetRunId() string {
@@ -749,7 +920,7 @@ type ChatStreamEvent struct {
 
 func (x *ChatStreamEvent) Reset() {
 	*x = ChatStreamEvent{}
-	mi := &file_turing_v1_chat_proto_msgTypes[11]
+	mi := &file_turing_v1_chat_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -761,7 +932,7 @@ func (x *ChatStreamEvent) String() string {
 func (*ChatStreamEvent) ProtoMessage() {}
 
 func (x *ChatStreamEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_chat_proto_msgTypes[11]
+	mi := &file_turing_v1_chat_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -774,7 +945,7 @@ func (x *ChatStreamEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChatStreamEvent.ProtoReflect.Descriptor instead.
 func (*ChatStreamEvent) Descriptor() ([]byte, []int) {
-	return file_turing_v1_chat_proto_rawDescGZIP(), []int{11}
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ChatStreamEvent) GetSessionId() string {
@@ -1075,7 +1246,7 @@ var File_turing_v1_chat_proto protoreflect.FileDescriptor
 
 const file_turing_v1_chat_proto_rawDesc = "" +
 	"\n" +
-	"\x14turing/v1/chat.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16turing/v1/common.proto\x1a\x16turing/v1/events.proto\"\xcc\x03\n" +
+	"\x14turing/v1/chat.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16turing/v1/common.proto\x1a\x16turing/v1/events.proto\"\xa0\x04\n" +
 	"\x12SendMessageRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x18\n" +
@@ -1088,7 +1259,25 @@ const file_turing_v1_chat_proto_rawDesc = "" +
 	"\x0frequested_tools\x18\b \x03(\tR\x0erequestedTools\x126\n" +
 	"\x17required_context_tokens\x18\t \x01(\x05R\x15requiredContextTokens\x12J\n" +
 	"\"minimum_worker_max_concurrent_runs\x18\n" +
-	" \x01(\x05R\x1eminimumWorkerMaxConcurrentRuns\"T\n" +
+	" \x01(\x05R\x1eminimumWorkerMaxConcurrentRuns\x12R\n" +
+	"\x15remote_egress_consent\x18\v \x01(\v2\x1e.turing.v1.RemoteEgressConsentR\x13remoteEgressConsent\"\xd4\x03\n" +
+	"\x1aPrepareRemoteEgressRequest\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x18\n" +
+	"\acontent\x18\x02 \x01(\tR\acontent\x12!\n" +
+	"\fcontent_type\x18\x03 \x01(\tR\vcontentType\x12-\n" +
+	"\bagent_id\x18\x04 \x01(\x0e2\x12.turing.v1.AgentIdR\aagentId\x12?\n" +
+	"\x0emodel_provider\x18\x05 \x01(\x0e2\x18.turing.v1.ModelProviderR\rmodelProvider\x12\x14\n" +
+	"\x05model\x18\x06 \x01(\tR\x05model\x12'\n" +
+	"\x0fidempotency_key\x18\a \x01(\tR\x0eidempotencyKey\x12'\n" +
+	"\x0frequested_tools\x18\b \x03(\tR\x0erequestedTools\x126\n" +
+	"\x17required_context_tokens\x18\t \x01(\x05R\x15requiredContextTokens\x12J\n" +
+	"\"minimum_worker_max_concurrent_runs\x18\n" +
+	" \x01(\x05R\x1eminimumWorkerMaxConcurrentRuns\"`\n" +
+	"\x1bPrepareRemoteEgressResponse\x12A\n" +
+	"\n" +
+	"disclosure\x18\x01 \x01(\v2!.turing.v1.RemoteEgressDisclosureR\n" +
+	"disclosure\"T\n" +
 	"\tRunQueued\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x15\n" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\x19\n" +
@@ -1162,8 +1351,9 @@ const file_turing_v1_chat_proto_rawDesc = "" +
 	"run_failed\x18\x18 \x01(\v2\x14.turing.v1.RunFailedH\x00R\trunFailed\x12>\n" +
 	"\rrun_cancelled\x18\x19 \x01(\v2\x17.turing.v1.RunCancelledH\x00R\frunCancelled\x12A\n" +
 	"\x0fpersisted_event\x18\x1a \x01(\v2\x16.turing.v1.TuringEventH\x00R\x0epersistedEventB\a\n" +
-	"\x05event2Y\n" +
-	"\vChatService\x12J\n" +
+	"\x05event2\xbf\x01\n" +
+	"\vChatService\x12d\n" +
+	"\x13PrepareRemoteEgress\x12%.turing.v1.PrepareRemoteEgressRequest\x1a&.turing.v1.PrepareRemoteEgressResponse\x12J\n" +
 	"\vSendMessage\x12\x1d.turing.v1.SendMessageRequest\x1a\x1a.turing.v1.ChatStreamEvent0\x01B>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
 
 var (
@@ -1178,55 +1368,65 @@ func file_turing_v1_chat_proto_rawDescGZIP() []byte {
 	return file_turing_v1_chat_proto_rawDescData
 }
 
-var file_turing_v1_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_turing_v1_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_turing_v1_chat_proto_goTypes = []any{
-	(*SendMessageRequest)(nil), // 0: turing.v1.SendMessageRequest
-	(*RunQueued)(nil),          // 1: turing.v1.RunQueued
-	(*RunStarted)(nil),         // 2: turing.v1.RunStarted
-	(*MessageStarted)(nil),     // 3: turing.v1.MessageStarted
-	(*TokenDelta)(nil),         // 4: turing.v1.TokenDelta
-	(*ToolEvent)(nil),          // 5: turing.v1.ToolEvent
-	(*ApprovalEvent)(nil),      // 6: turing.v1.ApprovalEvent
-	(*MessageCompleted)(nil),   // 7: turing.v1.MessageCompleted
-	(*RunCompleted)(nil),       // 8: turing.v1.RunCompleted
-	(*RunFailed)(nil),          // 9: turing.v1.RunFailed
-	(*RunCancelled)(nil),       // 10: turing.v1.RunCancelled
-	(*ChatStreamEvent)(nil),    // 11: turing.v1.ChatStreamEvent
-	(AgentId)(0),               // 12: turing.v1.AgentId
-	(ModelProvider)(0),         // 13: turing.v1.ModelProvider
-	(MessageRole)(0),           // 14: turing.v1.MessageRole
-	(*structpb.Struct)(nil),    // 15: google.protobuf.Struct
-	(*TuringEvent)(nil),        // 16: turing.v1.TuringEvent
+	(*SendMessageRequest)(nil),          // 0: turing.v1.SendMessageRequest
+	(*PrepareRemoteEgressRequest)(nil),  // 1: turing.v1.PrepareRemoteEgressRequest
+	(*PrepareRemoteEgressResponse)(nil), // 2: turing.v1.PrepareRemoteEgressResponse
+	(*RunQueued)(nil),                   // 3: turing.v1.RunQueued
+	(*RunStarted)(nil),                  // 4: turing.v1.RunStarted
+	(*MessageStarted)(nil),              // 5: turing.v1.MessageStarted
+	(*TokenDelta)(nil),                  // 6: turing.v1.TokenDelta
+	(*ToolEvent)(nil),                   // 7: turing.v1.ToolEvent
+	(*ApprovalEvent)(nil),               // 8: turing.v1.ApprovalEvent
+	(*MessageCompleted)(nil),            // 9: turing.v1.MessageCompleted
+	(*RunCompleted)(nil),                // 10: turing.v1.RunCompleted
+	(*RunFailed)(nil),                   // 11: turing.v1.RunFailed
+	(*RunCancelled)(nil),                // 12: turing.v1.RunCancelled
+	(*ChatStreamEvent)(nil),             // 13: turing.v1.ChatStreamEvent
+	(AgentId)(0),                        // 14: turing.v1.AgentId
+	(ModelProvider)(0),                  // 15: turing.v1.ModelProvider
+	(*RemoteEgressConsent)(nil),         // 16: turing.v1.RemoteEgressConsent
+	(*RemoteEgressDisclosure)(nil),      // 17: turing.v1.RemoteEgressDisclosure
+	(MessageRole)(0),                    // 18: turing.v1.MessageRole
+	(*structpb.Struct)(nil),             // 19: google.protobuf.Struct
+	(*TuringEvent)(nil),                 // 20: turing.v1.TuringEvent
 }
 var file_turing_v1_chat_proto_depIdxs = []int32{
-	12, // 0: turing.v1.SendMessageRequest.agent_id:type_name -> turing.v1.AgentId
-	13, // 1: turing.v1.SendMessageRequest.model_provider:type_name -> turing.v1.ModelProvider
-	14, // 2: turing.v1.MessageStarted.role:type_name -> turing.v1.MessageRole
-	15, // 3: turing.v1.ToolEvent.payload:type_name -> google.protobuf.Struct
-	1,  // 4: turing.v1.ChatStreamEvent.run_queued:type_name -> turing.v1.RunQueued
-	2,  // 5: turing.v1.ChatStreamEvent.run_started:type_name -> turing.v1.RunStarted
-	3,  // 6: turing.v1.ChatStreamEvent.message_started:type_name -> turing.v1.MessageStarted
-	4,  // 7: turing.v1.ChatStreamEvent.token_delta:type_name -> turing.v1.TokenDelta
-	5,  // 8: turing.v1.ChatStreamEvent.tool_call_started:type_name -> turing.v1.ToolEvent
-	5,  // 9: turing.v1.ChatStreamEvent.tool_call_completed:type_name -> turing.v1.ToolEvent
-	5,  // 10: turing.v1.ChatStreamEvent.tool_call_failed:type_name -> turing.v1.ToolEvent
-	6,  // 11: turing.v1.ChatStreamEvent.approval_requested:type_name -> turing.v1.ApprovalEvent
-	6,  // 12: turing.v1.ChatStreamEvent.approval_approved:type_name -> turing.v1.ApprovalEvent
-	6,  // 13: turing.v1.ChatStreamEvent.approval_denied:type_name -> turing.v1.ApprovalEvent
-	6,  // 14: turing.v1.ChatStreamEvent.approval_expired:type_name -> turing.v1.ApprovalEvent
-	6,  // 15: turing.v1.ChatStreamEvent.approval_consumed:type_name -> turing.v1.ApprovalEvent
-	7,  // 16: turing.v1.ChatStreamEvent.message_completed:type_name -> turing.v1.MessageCompleted
-	8,  // 17: turing.v1.ChatStreamEvent.run_completed:type_name -> turing.v1.RunCompleted
-	9,  // 18: turing.v1.ChatStreamEvent.run_failed:type_name -> turing.v1.RunFailed
-	10, // 19: turing.v1.ChatStreamEvent.run_cancelled:type_name -> turing.v1.RunCancelled
-	16, // 20: turing.v1.ChatStreamEvent.persisted_event:type_name -> turing.v1.TuringEvent
-	0,  // 21: turing.v1.ChatService.SendMessage:input_type -> turing.v1.SendMessageRequest
-	11, // 22: turing.v1.ChatService.SendMessage:output_type -> turing.v1.ChatStreamEvent
-	22, // [22:23] is the sub-list for method output_type
-	21, // [21:22] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	14, // 0: turing.v1.SendMessageRequest.agent_id:type_name -> turing.v1.AgentId
+	15, // 1: turing.v1.SendMessageRequest.model_provider:type_name -> turing.v1.ModelProvider
+	16, // 2: turing.v1.SendMessageRequest.remote_egress_consent:type_name -> turing.v1.RemoteEgressConsent
+	14, // 3: turing.v1.PrepareRemoteEgressRequest.agent_id:type_name -> turing.v1.AgentId
+	15, // 4: turing.v1.PrepareRemoteEgressRequest.model_provider:type_name -> turing.v1.ModelProvider
+	17, // 5: turing.v1.PrepareRemoteEgressResponse.disclosure:type_name -> turing.v1.RemoteEgressDisclosure
+	18, // 6: turing.v1.MessageStarted.role:type_name -> turing.v1.MessageRole
+	19, // 7: turing.v1.ToolEvent.payload:type_name -> google.protobuf.Struct
+	3,  // 8: turing.v1.ChatStreamEvent.run_queued:type_name -> turing.v1.RunQueued
+	4,  // 9: turing.v1.ChatStreamEvent.run_started:type_name -> turing.v1.RunStarted
+	5,  // 10: turing.v1.ChatStreamEvent.message_started:type_name -> turing.v1.MessageStarted
+	6,  // 11: turing.v1.ChatStreamEvent.token_delta:type_name -> turing.v1.TokenDelta
+	7,  // 12: turing.v1.ChatStreamEvent.tool_call_started:type_name -> turing.v1.ToolEvent
+	7,  // 13: turing.v1.ChatStreamEvent.tool_call_completed:type_name -> turing.v1.ToolEvent
+	7,  // 14: turing.v1.ChatStreamEvent.tool_call_failed:type_name -> turing.v1.ToolEvent
+	8,  // 15: turing.v1.ChatStreamEvent.approval_requested:type_name -> turing.v1.ApprovalEvent
+	8,  // 16: turing.v1.ChatStreamEvent.approval_approved:type_name -> turing.v1.ApprovalEvent
+	8,  // 17: turing.v1.ChatStreamEvent.approval_denied:type_name -> turing.v1.ApprovalEvent
+	8,  // 18: turing.v1.ChatStreamEvent.approval_expired:type_name -> turing.v1.ApprovalEvent
+	8,  // 19: turing.v1.ChatStreamEvent.approval_consumed:type_name -> turing.v1.ApprovalEvent
+	9,  // 20: turing.v1.ChatStreamEvent.message_completed:type_name -> turing.v1.MessageCompleted
+	10, // 21: turing.v1.ChatStreamEvent.run_completed:type_name -> turing.v1.RunCompleted
+	11, // 22: turing.v1.ChatStreamEvent.run_failed:type_name -> turing.v1.RunFailed
+	12, // 23: turing.v1.ChatStreamEvent.run_cancelled:type_name -> turing.v1.RunCancelled
+	20, // 24: turing.v1.ChatStreamEvent.persisted_event:type_name -> turing.v1.TuringEvent
+	1,  // 25: turing.v1.ChatService.PrepareRemoteEgress:input_type -> turing.v1.PrepareRemoteEgressRequest
+	0,  // 26: turing.v1.ChatService.SendMessage:input_type -> turing.v1.SendMessageRequest
+	2,  // 27: turing.v1.ChatService.PrepareRemoteEgress:output_type -> turing.v1.PrepareRemoteEgressResponse
+	13, // 28: turing.v1.ChatService.SendMessage:output_type -> turing.v1.ChatStreamEvent
+	27, // [27:29] is the sub-list for method output_type
+	25, // [25:27] is the sub-list for method input_type
+	25, // [25:25] is the sub-list for extension type_name
+	25, // [25:25] is the sub-list for extension extendee
+	0,  // [0:25] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_chat_proto_init() }
@@ -1236,7 +1436,7 @@ func file_turing_v1_chat_proto_init() {
 	}
 	file_turing_v1_common_proto_init()
 	file_turing_v1_events_proto_init()
-	file_turing_v1_chat_proto_msgTypes[11].OneofWrappers = []any{
+	file_turing_v1_chat_proto_msgTypes[13].OneofWrappers = []any{
 		(*ChatStreamEvent_RunQueued)(nil),
 		(*ChatStreamEvent_RunStarted)(nil),
 		(*ChatStreamEvent_MessageStarted)(nil),
@@ -1261,7 +1461,7 @@ func file_turing_v1_chat_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_chat_proto_rawDesc), len(file_turing_v1_chat_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   12,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

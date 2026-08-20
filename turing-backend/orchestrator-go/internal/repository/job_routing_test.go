@@ -94,6 +94,49 @@ func TestClaimNextCompatibleJobSkipsUnsupportedPendingWork(t *testing.T) {
 	}
 }
 
+func TestIncompatibleRemoteJobDoesNotStarveLaterLocalJob(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	remoteSession, err := repo.CreateSession(ctx, "Remote first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := remoteDecision()
+	if _, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: remoteSession.SessionID, Content: "remote", AgentID: "general_assistant",
+		ModelProvider: "openai_compatible", Model: decision.Model,
+		EgressDecision: decision, SelectedTools: decision.SelectedTools,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	localSession, err := repo.CreateSession(ctx, "Local second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: localSession.SessionID, Content: "local", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(
+		ctx, "general_assistant", "local-worker", 0, time.Hour,
+		&WorkerRoutingCapabilities{
+			Models: []RoutingModelCapability{{
+				Provider: "ollama", Model: "llama3.2", MaxContextTokens: 8192,
+			}},
+			MaxConcurrentRuns: 1,
+		},
+		func(route RoutingRequirements) bool { return route.ModelProvider == "ollama" },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.JobID != local.JobID {
+		t.Fatalf("claimed job = %q, want later compatible local job %q", claimed.JobID, local.JobID)
+	}
+}
+
 func TestListPendingRoutingWorkPageUsesStableKeyset(t *testing.T) {
 	repo := New(openTestDB(t))
 	ctx := context.Background()
@@ -144,6 +187,7 @@ func TestClaimExternalAgentJobRejectsPositiveContextWithoutGuarantee(t *testing.
 	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
 		SessionID: session.SessionID, Content: "external", AgentID: "general_assistant",
 		ModelProvider: "ollama", Model: "ignored", RequiredContextTokens: 1,
+		EgressDecision: testRemoteEgressDecision(t, agent.Model, agent.BaseURL, agent.AgentID, agent.CredentialRef),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +199,10 @@ func TestClaimExternalAgentJobRejectsPositiveContextWithoutGuarantee(t *testing.
 		"worker-external",
 		0,
 		time.Hour,
-		&WorkerRoutingCapabilities{ExternalAgentCredentialRefs: []string{"claude"}, MaxConcurrentRuns: 1},
+		&WorkerRoutingCapabilities{
+			ExternalAgentCredentialRefs: []string{"claude"}, MaxConcurrentRuns: 1,
+			RemoteEgressDecisionVersion: 1,
+		},
 		func(RoutingRequirements) bool { return true },
 	)
 	if err != nil {
@@ -179,6 +226,7 @@ func TestClaimExternalAgentJobRequiresExactCredentialRef(t *testing.T) {
 	unsupported, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
 		SessionID: unsupportedSession.SessionID, Content: "claude", AgentID: "general_assistant",
 		ModelProvider: "ollama", Model: "ignored",
+		EgressDecision: testRemoteEgressDecision(t, claude.Model, claude.BaseURL, claude.AgentID, claude.CredentialRef),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -199,6 +247,7 @@ func TestClaimExternalAgentJobRequiresExactCredentialRef(t *testing.T) {
 	supported, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
 		SessionID: supportedSession.SessionID, Content: "openai", AgentID: "general_assistant",
 		ModelProvider: "ollama", Model: "ignored",
+		EgressDecision: testRemoteEgressDecision(t, openAI.Model, openAI.BaseURL, openAI.AgentID, openAI.CredentialRef),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -211,7 +260,11 @@ func TestClaimExternalAgentJobRequiresExactCredentialRef(t *testing.T) {
 		"worker-openai",
 		0,
 		time.Hour,
-		&WorkerRoutingCapabilities{ExternalAgentCredentialRefs: []string{"openai"}, MaxConcurrentRuns: 1},
+		&WorkerRoutingCapabilities{
+			ExternalAgentCredentialRefs: []string{"openai"}, MaxConcurrentRuns: 1,
+			RemoteEgressDecisionVersion: 1,
+			Tools:                       []string{"files/files.read", "system/system.time"},
+		},
 		func(route RoutingRequirements) bool {
 			compatibilityChecks++
 			return route.ExternalAgent && route.ExternalAgentCredentialRef == "openai"

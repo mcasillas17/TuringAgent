@@ -68,7 +68,10 @@ func newHarnessWithDatabase(t *testing.T, database *db.DB) *harness {
 			SupportsExternalAgents:      true,
 		},
 	})
-	chatServer := New(repo, bus, runtimeServer, "llama3.2", "gpt-4o-mini")
+	chatServer := NewWithEgressConfig(repo, bus, runtimeServer, "llama3.2", "gpt-4o-mini", EgressConfig{
+		OpenAIBaseURL: "https://api.openai.com/v1",
+		SigningSecret: "test-egress-signing-secret",
+	})
 	lis := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
 	turingv1.RegisterChatServiceServer(grpcServer, chatServer)
@@ -958,10 +961,11 @@ func defaultChatWorkerCapabilities(supportsExternalAgents bool) *turingv1.Worker
 				MaxContextTokens: 8192,
 			},
 		},
-		AgentIds:               []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
-		Tools:                  []*turingv1.DiscoveredTool{{ServerName: "system", ToolName: "system.time", Schema: &structpb.Struct{}}},
-		MaxConcurrentRuns:      2,
-		SupportsExternalAgents: supportsExternalAgents,
+		AgentIds:                    []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+		Tools:                       []*turingv1.DiscoveredTool{{ServerName: "system", ToolName: "system.time", Schema: &structpb.Struct{}}},
+		MaxConcurrentRuns:           2,
+		SupportsExternalAgents:      supportsExternalAgents,
+		RemoteEgressDecisionVersion: 1,
 	}
 	if supportsExternalAgents {
 		capabilities.ExternalAgentCredentialRefs = []string{"claude", "external"}

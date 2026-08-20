@@ -87,15 +87,14 @@ class _FakeAuthStorage implements ClientAuthStorage {
   }) async {}
 }
 
-class _ClosableFakeApiClient
+class _ClosableFakeApiClient extends ClosableTuringApi
     with
         NoAuditApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
         NoAutomationsApi,
-        NoTelemetryApi
-    implements ClosableTuringApi {
+        NoTelemetryApi {
   bool closed = false;
 
   @override

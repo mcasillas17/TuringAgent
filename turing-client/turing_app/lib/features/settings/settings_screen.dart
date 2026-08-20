@@ -74,7 +74,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: 6),
         Text(
           'Ollama runs entirely on this machine. An OpenAI-compatible provider '
-          'sends your conversation off it.',
+          'requires a destination and data-category confirmation for every send.',
           style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 20),

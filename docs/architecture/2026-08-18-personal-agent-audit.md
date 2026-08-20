@@ -301,6 +301,14 @@ preview/diff UX, and no approval viewer UI ships here.
 **Likely files:** session/provider schema and proto, chat validation, runtime provider configuration, Flutter provider selection.  
 **Acceptance:** Each remote run records consent and disclosed data categories; local failure never silently falls back remotely; no background feature inherits consent from an interactive request.  
 **Dependencies:** None.
+**Pending-merge artifact:** [Remote-provider egress policy](remote-egress-policy.md).
+**Pending-merge coverage:** One-time signed disclosure challenges are bound to
+the exact request, effective destination, selected tools/skills, context flags,
+categories, nonce, and expiry; run-owned decisions survive exact idempotent
+replay and assignment retry. Keyed remote endpoints require HTTPS except exact
+loopback, redirects are refused, runtime destination/category checks fail
+closed, and automations record a typed durable failure instead of inheriting
+interactive consent.
 
 #### TUR-004 — Close session-deletion withdrawal gaps
 

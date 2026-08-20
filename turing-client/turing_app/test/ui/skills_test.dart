@@ -163,14 +163,13 @@ Future<void> _pumpSkills(
   await tester.pumpAndSettle();
 }
 
-class _SkillApi
+class _SkillApi extends TuringApi
     with
         NoAuditApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
         NoAutomationsApi,
-        NoTelemetryApi
-    implements TuringApi {
+        NoTelemetryApi {
   final List<Skill> skills = [];
   final List<(String, bool)> enableCalls = [];
   final List<(String, String, bool)> grantCalls = [];

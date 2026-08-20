@@ -172,15 +172,14 @@ void main() {
   });
 }
 
-class _FakeApiClient
+class _FakeApiClient extends TuringApi
     with
         NoAuditApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
         NoAutomationsApi,
-        NoTelemetryApi
-    implements TuringApi {
+        NoTelemetryApi {
   @override
   Future<Map<String, dynamic>> approveApproval(
     String approvalId, {

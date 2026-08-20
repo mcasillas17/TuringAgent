@@ -625,6 +625,21 @@ func TestInitKeepsAnExistingIntegrationKey(t *testing.T) {
 	assertEnvValue(t, result.env, "TURING_INTEGRATION_KEY", existing)
 }
 
+func TestInitGeneratesAndPreservesEgressSigningSecret(t *testing.T) {
+	generated := runInit(t, "501", "20", "")
+	value := envValue(t, generated.env, "TURING_EGRESS_SIGNING_SECRET")
+	if len(value) != 64 {
+		t.Fatalf("TURING_EGRESS_SIGNING_SECRET has %d chars, want 64", len(value))
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		t.Fatalf("TURING_EGRESS_SIGNING_SECRET is not hex: %v", err)
+	}
+
+	existing := strings.Repeat("cd", 32)
+	restarted := runInit(t, "501", "20", "TURING_EGRESS_SIGNING_SECRET="+existing+"\n")
+	assertEnvValue(t, restarted.env, "TURING_EGRESS_SIGNING_SECRET", existing)
+}
+
 // The runtime and approval-consumer identities must never collide: a shared
 // secret would let a compromised approval consumer (mcp-files) present the
 // runtime's own credential and reach RuntimeService/SessionService, which is

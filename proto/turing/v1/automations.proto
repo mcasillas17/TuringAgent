@@ -45,6 +45,11 @@ message Automation {
 
   google.protobuf.Timestamp created_at = 13;
   google.protobuf.Timestamp updated_at = 14;
+
+  // Most recent scheduled occurrence that failed before a run could be
+  // created, kept separate so it never rewrites the outcome of last_run_id.
+  string last_occurrence_failure_code = 15;
+  google.protobuf.Timestamp last_occurrence_failed_at = 16;
 }
 
 // A tool named by the pair the orchestrator's policy lookup uses, so an

@@ -44,6 +44,34 @@ final $typed_data.Uint8List modelProviderDescriptor = $convert.base64Decode(
     'xfUFJPVklERVJfT0xMQU1BEAESJAogTU9ERUxfUFJPVklERVJfT1BFTkFJX0NPTVBBVElCTEUQ'
     'Ag==');
 
+@$core.Deprecated('Use egressDataCategoryDescriptor instead')
+const EgressDataCategory$json = {
+  '1': 'EgressDataCategory',
+  '2': [
+    {'1': 'EGRESS_DATA_CATEGORY_UNSPECIFIED', '2': 0},
+    {'1': 'EGRESS_DATA_CATEGORY_CURRENT_MESSAGE', '2': 1},
+    {'1': 'EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY', '2': 2},
+    {'1': 'EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL', '2': 3},
+    {'1': 'EGRESS_DATA_CATEGORY_MEMORY_PROFILE', '2': 4},
+    {'1': 'EGRESS_DATA_CATEGORY_SKILL_CONTENT', '2': 5},
+    {'1': 'EGRESS_DATA_CATEGORY_TOOL_SCHEMAS', '2': 6},
+    {'1': 'EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS', '2': 7},
+    {'1': 'EGRESS_DATA_CATEGORY_TOOL_RESULTS', '2': 8},
+    {'1': 'EGRESS_DATA_CATEGORY_ATTACHMENTS', '2': 9},
+  ],
+};
+
+/// Descriptor for `EgressDataCategory`. Decode as a `google.protobuf.EnumDescriptorProto`.
+final $typed_data.Uint8List egressDataCategoryDescriptor = $convert.base64Decode(
+    'ChJFZ3Jlc3NEYXRhQ2F0ZWdvcnkSJAogRUdSRVNTX0RBVEFfQ0FURUdPUllfVU5TUEVDSUZJRU'
+    'QQABIoCiRFR1JFU1NfREFUQV9DQVRFR09SWV9DVVJSRU5UX01FU1NBR0UQARItCilFR1JFU1Nf'
+    'REFUQV9DQVRFR09SWV9DT05WRVJTQVRJT05fSElTVE9SWRACEi0KKUVHUkVTU19EQVRBX0NBVE'
+    'VHT1JZX0NST1NTX1NFU1NJT05fUkVDQUxMEAMSJwojRUdSRVNTX0RBVEFfQ0FURUdPUllfTUVN'
+    'T1JZX1BST0ZJTEUQBBImCiJFR1JFU1NfREFUQV9DQVRFR09SWV9TS0lMTF9DT05URU5UEAUSJQ'
+    'ohRUdSRVNTX0RBVEFfQ0FURUdPUllfVE9PTF9TQ0hFTUFTEAYSJwojRUdSRVNTX0RBVEFfQ0FU'
+    'RUdPUllfVE9PTF9BUkdVTUVOVFMQBxIlCiFFR1JFU1NfREFUQV9DQVRFR09SWV9UT09MX1JFU1'
+    'VMVFMQCBIkCiBFR1JFU1NfREFUQV9DQVRFR09SWV9BVFRBQ0hNRU5UUxAJ');
+
 @$core.Deprecated('Use routingRequirementKindDescriptor instead')
 const RoutingRequirementKind$json = {
   '1': 'RoutingRequirementKind',
@@ -261,6 +289,14 @@ const ProviderConfig$json = {
       '6': '.turing.v1.ModelCapability',
       '10': 'models'
     },
+    {'1': 'remote_endpoint', '3': 5, '4': 1, '5': 9, '10': 'remoteEndpoint'},
+    {
+      '1': 'requires_per_run_consent',
+      '3': 6,
+      '4': 1,
+      '5': 8,
+      '10': 'requiresPerRunConsent'
+    },
   ],
 };
 
@@ -269,7 +305,170 @@ final $typed_data.Uint8List providerConfigDescriptor = $convert.base64Decode(
     'Cg5Qcm92aWRlckNvbmZpZxI0Cghwcm92aWRlchgBIAEoDjIYLnR1cmluZy52MS5Nb2RlbFByb3'
     'ZpZGVyUghwcm92aWRlchIYCgdlbmFibGVkGAIgASgIUgdlbmFibGVkEiMKDWRlZmF1bHRfbW9k'
     'ZWwYAyABKAlSDGRlZmF1bHRNb2RlbBIyCgZtb2RlbHMYBCADKAsyGi50dXJpbmcudjEuTW9kZW'
-    'xDYXBhYmlsaXR5UgZtb2RlbHM=');
+    'xDYXBhYmlsaXR5UgZtb2RlbHMSJwoPcmVtb3RlX2VuZHBvaW50GAUgASgJUg5yZW1vdGVFbmRw'
+    'b2ludBI3ChhyZXF1aXJlc19wZXJfcnVuX2NvbnNlbnQYBiABKAhSFXJlcXVpcmVzUGVyUnVuQ2'
+    '9uc2VudA==');
+
+@$core.Deprecated('Use remoteEgressDisclosureDescriptor instead')
+const RemoteEgressDisclosure$json = {
+  '1': 'RemoteEgressDisclosure',
+  '2': [
+    {'1': 'challenge', '3': 1, '4': 1, '5': 9, '10': 'challenge'},
+    {
+      '1': 'provider',
+      '3': 2,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.ModelProvider',
+      '10': 'provider'
+    },
+    {'1': 'model', '3': 3, '4': 1, '5': 9, '10': 'model'},
+    {'1': 'endpoint', '3': 4, '4': 1, '5': 9, '10': 'endpoint'},
+    {'1': 'endpoint_host', '3': 5, '4': 1, '5': 9, '10': 'endpointHost'},
+    {'1': 'external_agent_id', '3': 6, '4': 1, '5': 9, '10': 'externalAgentId'},
+    {
+      '1': 'data_categories',
+      '3': 7,
+      '4': 3,
+      '5': 14,
+      '6': '.turing.v1.EgressDataCategory',
+      '10': 'dataCategories'
+    },
+    {
+      '1': 'expires_at',
+      '3': 8,
+      '4': 1,
+      '5': 11,
+      '6': '.google.protobuf.Timestamp',
+      '10': 'expiresAt'
+    },
+  ],
+};
+
+/// Descriptor for `RemoteEgressDisclosure`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List remoteEgressDisclosureDescriptor = $convert.base64Decode(
+    'ChZSZW1vdGVFZ3Jlc3NEaXNjbG9zdXJlEhwKCWNoYWxsZW5nZRgBIAEoCVIJY2hhbGxlbmdlEj'
+    'QKCHByb3ZpZGVyGAIgASgOMhgudHVyaW5nLnYxLk1vZGVsUHJvdmlkZXJSCHByb3ZpZGVyEhQK'
+    'BW1vZGVsGAMgASgJUgVtb2RlbBIaCghlbmRwb2ludBgEIAEoCVIIZW5kcG9pbnQSIwoNZW5kcG'
+    '9pbnRfaG9zdBgFIAEoCVIMZW5kcG9pbnRIb3N0EioKEWV4dGVybmFsX2FnZW50X2lkGAYgASgJ'
+    'Ug9leHRlcm5hbEFnZW50SWQSRgoPZGF0YV9jYXRlZ29yaWVzGAcgAygOMh0udHVyaW5nLnYxLk'
+    'VncmVzc0RhdGFDYXRlZ29yeVIOZGF0YUNhdGVnb3JpZXMSOQoKZXhwaXJlc19hdBgIIAEoCzIa'
+    'Lmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBSCWV4cGlyZXNBdA==');
+
+@$core.Deprecated('Use remoteEgressConsentDescriptor instead')
+const RemoteEgressConsent$json = {
+  '1': 'RemoteEgressConsent',
+  '2': [
+    {'1': 'challenge', '3': 1, '4': 1, '5': 9, '10': 'challenge'},
+    {
+      '1': 'acknowledged_data_categories',
+      '3': 2,
+      '4': 3,
+      '5': 14,
+      '6': '.turing.v1.EgressDataCategory',
+      '10': 'acknowledgedDataCategories'
+    },
+    {'1': 'acknowledged', '3': 3, '4': 1, '5': 8, '10': 'acknowledged'},
+  ],
+};
+
+/// Descriptor for `RemoteEgressConsent`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List remoteEgressConsentDescriptor = $convert.base64Decode(
+    'ChNSZW1vdGVFZ3Jlc3NDb25zZW50EhwKCWNoYWxsZW5nZRgBIAEoCVIJY2hhbGxlbmdlEl8KHG'
+    'Fja25vd2xlZGdlZF9kYXRhX2NhdGVnb3JpZXMYAiADKA4yHS50dXJpbmcudjEuRWdyZXNzRGF0'
+    'YUNhdGVnb3J5UhphY2tub3dsZWRnZWREYXRhQ2F0ZWdvcmllcxIiCgxhY2tub3dsZWRnZWQYAy'
+    'ABKAhSDGFja25vd2xlZGdlZA==');
+
+@$core.Deprecated('Use runEgressDecisionDescriptor instead')
+const RunEgressDecision$json = {
+  '1': 'RunEgressDecision',
+  '2': [
+    {'1': 'decision_id', '3': 1, '4': 1, '5': 9, '10': 'decisionId'},
+    {'1': 'version', '3': 2, '4': 1, '5': 5, '10': 'version'},
+    {
+      '1': 'provider',
+      '3': 3,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.ModelProvider',
+      '10': 'provider'
+    },
+    {'1': 'model', '3': 4, '4': 1, '5': 9, '10': 'model'},
+    {'1': 'endpoint', '3': 5, '4': 1, '5': 9, '10': 'endpoint'},
+    {'1': 'endpoint_host', '3': 6, '4': 1, '5': 9, '10': 'endpointHost'},
+    {'1': 'external_agent_id', '3': 7, '4': 1, '5': 9, '10': 'externalAgentId'},
+    {
+      '1': 'data_categories',
+      '3': 8,
+      '4': 3,
+      '5': 14,
+      '6': '.turing.v1.EgressDataCategory',
+      '10': 'dataCategories'
+    },
+    {
+      '1': 'consent_granted_at',
+      '3': 9,
+      '4': 1,
+      '5': 11,
+      '6': '.google.protobuf.Timestamp',
+      '10': 'consentGrantedAt'
+    },
+    {
+      '1': 'challenge_fingerprint',
+      '3': 10,
+      '4': 1,
+      '5': 9,
+      '10': 'challengeFingerprint'
+    },
+    {'1': 'selected_tools', '3': 11, '4': 3, '5': 9, '10': 'selectedTools'},
+    {
+      '1': 'skill_snapshot_fingerprint',
+      '3': 12,
+      '4': 1,
+      '5': 9,
+      '10': 'skillSnapshotFingerprint'
+    },
+    {
+      '1': 'recall_applicable',
+      '3': 13,
+      '4': 1,
+      '5': 8,
+      '10': 'recallApplicable'
+    },
+    {
+      '1': 'memory_profile_applicable',
+      '3': 14,
+      '4': 1,
+      '5': 8,
+      '10': 'memoryProfileApplicable'
+    },
+    {
+      '1': 'external_credential_ref_hash',
+      '3': 15,
+      '4': 1,
+      '5': 9,
+      '10': 'externalCredentialRefHash'
+    },
+    {'1': 'request_digest', '3': 16, '4': 1, '5': 9, '10': 'requestDigest'},
+  ],
+};
+
+/// Descriptor for `RunEgressDecision`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List runEgressDecisionDescriptor = $convert.base64Decode(
+    'ChFSdW5FZ3Jlc3NEZWNpc2lvbhIfCgtkZWNpc2lvbl9pZBgBIAEoCVIKZGVjaXNpb25JZBIYCg'
+    'd2ZXJzaW9uGAIgASgFUgd2ZXJzaW9uEjQKCHByb3ZpZGVyGAMgASgOMhgudHVyaW5nLnYxLk1v'
+    'ZGVsUHJvdmlkZXJSCHByb3ZpZGVyEhQKBW1vZGVsGAQgASgJUgVtb2RlbBIaCghlbmRwb2ludB'
+    'gFIAEoCVIIZW5kcG9pbnQSIwoNZW5kcG9pbnRfaG9zdBgGIAEoCVIMZW5kcG9pbnRIb3N0EioK'
+    'EWV4dGVybmFsX2FnZW50X2lkGAcgASgJUg9leHRlcm5hbEFnZW50SWQSRgoPZGF0YV9jYXRlZ2'
+    '9yaWVzGAggAygOMh0udHVyaW5nLnYxLkVncmVzc0RhdGFDYXRlZ29yeVIOZGF0YUNhdGVnb3Jp'
+    'ZXMSSAoSY29uc2VudF9ncmFudGVkX2F0GAkgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdG'
+    'FtcFIQY29uc2VudEdyYW50ZWRBdBIzChVjaGFsbGVuZ2VfZmluZ2VycHJpbnQYCiABKAlSFGNo'
+    'YWxsZW5nZUZpbmdlcnByaW50EiUKDnNlbGVjdGVkX3Rvb2xzGAsgAygJUg1zZWxlY3RlZFRvb2'
+    'xzEjwKGnNraWxsX3NuYXBzaG90X2ZpbmdlcnByaW50GAwgASgJUhhza2lsbFNuYXBzaG90Rmlu'
+    'Z2VycHJpbnQSKwoRcmVjYWxsX2FwcGxpY2FibGUYDSABKAhSEHJlY2FsbEFwcGxpY2FibGUSOg'
+    'oZbWVtb3J5X3Byb2ZpbGVfYXBwbGljYWJsZRgOIAEoCFIXbWVtb3J5UHJvZmlsZUFwcGxpY2Fi'
+    'bGUSPwocZXh0ZXJuYWxfY3JlZGVudGlhbF9yZWZfaGFzaBgPIAEoCVIZZXh0ZXJuYWxDcmVkZW'
+    '50aWFsUmVmSGFzaBIlCg5yZXF1ZXN0X2RpZ2VzdBgQIAEoCVINcmVxdWVzdERpZ2VzdA==');
 
 @$core.Deprecated('Use agentDescriptorDescriptor instead')
 const AgentDescriptor$json = {
