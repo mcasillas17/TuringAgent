@@ -1,7 +1,8 @@
 # MEM-002 Scored Search Hits Design
 
-**Status:** Awaiting coordinator approval. Implementation is also blocked until
-PR #68 (`TUR-008`, reviewed at head
+**Status:** Approved by the coordinator on 2026-08-20 at design commit
+`6f46448efb846fef26a7951e44238504b3f51179`. Implementation remains blocked
+until PR #68 (`TUR-008`, reviewed at head
 `18669085f642bf81614438b48a65ffb1bf9a439e`) lands on `main`.
 
 ## Goal
