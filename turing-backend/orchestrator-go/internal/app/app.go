@@ -44,12 +44,14 @@ type App struct {
 	ApprovalService *approvalsvc.Server
 	AuditService    *auditsvc.Server
 	HealthService   *HealthServer
-	// InternalIdentities is the exact set of least-privilege identities wired
-	// into InternalServer's authorization interceptors. Exposed so tests can
-	// assert against the real configuration — e.g. that every identity name
-	// here is a value the audit_logs.actor_type CHECK constraint accepts —
-	// rather than a hardcoded copy that can silently drift from it.
-	InternalIdentities []auth.ServiceIdentity
+	// InternalIdentityNames is the exact set of least-privilege identity
+	// names wired into InternalServer's authorization interceptors — names
+	// only, never the bearer tokens or the live, mutable allowlists those
+	// identities carry. Exposed so tests can assert against the real
+	// configuration — e.g. that every identity name here is a value the
+	// audit_logs.actor_type CHECK constraint accepts — rather than a
+	// hardcoded copy that can silently drift from it.
+	InternalIdentityNames []string
 
 	database     *db.DB
 	stopOnce     sync.Once
@@ -196,6 +198,10 @@ func New(cfg config.Config) (*App, error) {
 		_ = database.Close()
 		return nil, err
 	}
+	internalIdentityNames := make([]string, len(internalIdentities))
+	for i, identity := range internalIdentities {
+		internalIdentityNames[i] = identity.Name
+	}
 	for _, event := range recoveredEvents {
 		eventBus.Publish(eventsvc.Event{
 			EventID: event.EventID, SessionID: event.SessionID, RunID: event.RunID.String,
@@ -246,22 +252,22 @@ func New(cfg config.Config) (*App, error) {
 	turingv1.RegisterRuntimeServiceServer(internalServer, runtimeService)
 
 	application := &App{
-		PublicServer:       publicServer,
-		InternalServer:     internalServer,
-		Repository:         repo,
-		EventBus:           eventBus,
-		RuntimeService:     runtimeService,
-		SessionService:     sessionService,
-		EventService:       eventService,
-		ChatService:        chatService,
-		ApprovalService:    approvalService,
-		AuditService:       auditService,
-		HealthService:      healthService,
-		InternalIdentities: internalIdentities,
-		database:           database,
-		authFailures:       authFailures,
-		reaperDone:         make(chan struct{}),
-		schedulerDone:      make(chan struct{}),
+		PublicServer:          publicServer,
+		InternalServer:        internalServer,
+		Repository:            repo,
+		EventBus:              eventBus,
+		RuntimeService:        runtimeService,
+		SessionService:        sessionService,
+		EventService:          eventService,
+		ChatService:           chatService,
+		ApprovalService:       approvalService,
+		AuditService:          auditService,
+		HealthService:         healthService,
+		InternalIdentityNames: internalIdentityNames,
+		database:              database,
+		authFailures:          authFailures,
+		reaperDone:            make(chan struct{}),
+		schedulerDone:         make(chan struct{}),
 	}
 	reaperCtx, reaperCancel := context.WithCancel(context.Background())
 	application.reaperCancel = reaperCancel

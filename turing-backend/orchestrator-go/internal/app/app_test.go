@@ -569,16 +569,13 @@ func TestInternalAuthorizationFailuresAreAudited(t *testing.T) {
 // the audit_logs.actor_type CHECK constraint that accepts them — the gap
 // TestInternalAuthorizationFailuresAreAudited was written to catch was found
 // precisely because the two are independent. This test reads the real
-// configured identities (app.InternalIdentities, not a hardcoded copy) so
-// adding a future identity — for example a connector credential — without
-// widening the CHECK fails here immediately, rather than as a silently
-// dropped audit write discovered later.
+// configured identity names (app.InternalIdentityNames, not a hardcoded
+// copy) so adding a future identity — for example a connector credential —
+// without widening the CHECK fails here immediately, rather than as a
+// silently dropped audit write discovered later.
 func TestInternalIdentityActorTypesAreAcceptedByAuditSchema(t *testing.T) {
 	app := newTestApp(t)
-	actorTypes := []string{auth.UnknownIdentityActorType}
-	for _, identity := range app.InternalIdentities {
-		actorTypes = append(actorTypes, identity.Name)
-	}
+	actorTypes := append([]string{auth.UnknownIdentityActorType}, app.InternalIdentityNames...)
 	for _, actorType := range actorTypes {
 		t.Run(actorType, func(t *testing.T) {
 			if err := app.AuditService.Record(context.Background(), "", actorType, "", "schema.probe", "", nil); err != nil {
