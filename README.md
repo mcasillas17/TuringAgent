@@ -10,7 +10,8 @@ The project is designed for local development first: secrets stay in your local 
 - Runs a Go agent runtime that connects to local or OpenAI-compatible models.
 - Exposes MCP tool servers for safe system tools and approval-gated sandboxed file tools.
 - Provides a Flutter client with settings, conversation search, automatically
-  named session lists, chat, streamed responses, and approval cards.
+  named and paginated session lists, rename/archive/restore actions, chat,
+  streamed responses, and approval cards.
 - Exposes a redacted, paginated audit read API (`AuditService.ListAuditEntries`), including the approval comment or denial reason a person typed; audit inspection is exposed programmatically through the authenticated API and a thin client, with no built-in viewer yet.
 - Ships a Docker Compose local stack and an end-to-end gRPC smoke test.
 
@@ -132,6 +133,7 @@ Common values:
 | `TURING_CLIENT_API_KEY` | Bearer token for Flutter and other public gRPC clients |
 | `TURING_INTERNAL_TOKEN` | Bearer token for internal runtime and approval gRPC calls |
 | `TURING_APPROVAL_JWT_SECRET` | HS256 secret used for approval tokens |
+| `TURING_CURSOR_HMAC_SECRET` | Orchestrator-only 32-byte hex key authenticating opaque session cursors; rotation invalidates outstanding cursors |
 | `TURING_APPROVAL_TIMEOUT_MS` / `TURING_APPROVAL_WAIT_TIMEOUT_MS` | Approval lifetime and the longer runtime observation bound (defaults: 65s / 71s) |
 | `TURING_TOOL_TIMEOUT_MS` / `TURING_TOOL_TOTAL_TIMEOUT_MS` | Per-request MCP timeout and whole-tool lifecycle timeout (defaults: 30s / 180s) |
 | `HOST_IDENTITY_MODE` | Managed compatibility marker; `init.sh` always resets it to `auto` |
@@ -196,6 +198,7 @@ orchestrator remains stopped, use a SQLite client to run
 
 - [Tech stack and architecture](docs/architecture/tech-stack.md)
 - [Stable session title lifecycle](docs/architecture/session-titles.md)
+- [Session lifecycle and pagination](docs/architecture/session-lifecycle.md)
 - [Audit read API](docs/architecture/audit-read-api.md)
 - [MCP security and approval flow](docs/mcp-security-and-integration.md)
 - [Flutter client guide](turing-client/turing_app/README.md)
