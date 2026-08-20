@@ -348,9 +348,22 @@ whether each was configured and never called mcp-files or OpenAI itself.
 Existing atomic approval consumption is unchanged — the interceptor sits above
 `ApprovalService.ConsumeApproval`'s existing transaction, not inside it — and
 no new network listener is introduced; both identities continue to share the
-existing internal port. The pull request must record full verification
-evidence (root/mcp-files/mcp-system tests, race, build, Flutter analyze/test,
-proto check, lint) before merge.
+existing internal port. Migration `0013_internal_service_identities.sql`
+widens `audit_logs.actor_type`'s CHECK constraint to accept the two new
+identity-attributed failure values; without it, an unauthorized internal call
+would authorize correctly but silently fail to persist to the audit trail.
+`App.InternalIdentityNames` exposes the real configured identity names (never
+tokens or the live authorization maps) so a self-enforcing test fails if a
+future identity is added without widening that CHECK. Two independent
+full-diff reviews (Claude Opus 5 and GPT-5.6 Luna, both at xhigh reasoning)
+were run to convergence, each finding and confirming the fix for real issues
+across several rounds — including the CHECK-constraint gap above, a missing
+test for the real identity-to-allowlist wiring, a missing atomicity-under-
+concurrency test, a reproducible race in a new stream test, and the
+tokens-on-a-public-struct-field exposure — before both reported no further
+findings. The pull request must record full verification evidence
+(root/mcp-files/mcp-system tests, race, build, Flutter analyze/test, proto
+check, lint) before merge.
 
 ### Phase 1: Make the existing product honest and operable
 
