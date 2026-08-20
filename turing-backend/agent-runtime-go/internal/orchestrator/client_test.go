@@ -336,7 +336,7 @@ func TestWaitForApprovalTokenReturnsLazyExpiryBeforeWaitTimeout(t *testing.T) {
 func TestApprovalWaitConfigurationObservesLazyExpiryBeforeDeadline(t *testing.T) {
 	cfg, err := config.LoadFromEnv(func(name string) string {
 		return map[string]string{
-			"TURING_INTERNAL_TOKEN":        "internal",
+			"TURING_RUNTIME_TOKEN":         "internal",
 			"TURING_TOOL_TIMEOUT_MS":       "1000",
 			"TURING_APPROVAL_TIMEOUT_MS":   "1000",
 			"TURING_TOOL_TOTAL_TIMEOUT_MS": "12000",

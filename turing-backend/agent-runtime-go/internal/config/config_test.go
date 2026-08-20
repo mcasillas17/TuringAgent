@@ -10,7 +10,7 @@ import (
 
 func TestLoadFromEnvDoesNotUseLegacyHTTPOrchestratorBaseURL(t *testing.T) {
 	cfg, err := LoadFromEnv(mapEnv(map[string]string{
-		"TURING_INTERNAL_TOKEN":          "internal",
+		"TURING_RUNTIME_TOKEN":           "internal",
 		"ORCHESTRATOR_INTERNAL_BASE_URL": "http://legacy-orchestrator:3001/internal",
 	}))
 	if err != nil {
@@ -23,7 +23,7 @@ func TestLoadFromEnvDoesNotUseLegacyHTTPOrchestratorBaseURL(t *testing.T) {
 
 func TestLoadFromEnvUsesExplicitOrchestratorGRPCAddress(t *testing.T) {
 	cfg, err := LoadFromEnv(mapEnv(map[string]string{
-		"TURING_INTERNAL_TOKEN":  "internal",
+		"TURING_RUNTIME_TOKEN":   "internal",
 		"ORCHESTRATOR_GRPC_ADDR": "orchestrator.internal:3001",
 	}))
 	if err != nil {
@@ -36,7 +36,7 @@ func TestLoadFromEnvUsesExplicitOrchestratorGRPCAddress(t *testing.T) {
 
 func TestLoadFromEnvDefaultsEmptyMaxToolCallsPerRun(t *testing.T) {
 	cfg, err := LoadFromEnv(mapEnv(map[string]string{
-		"TURING_INTERNAL_TOKEN": "internal",
+		"TURING_RUNTIME_TOKEN": "internal",
 	}))
 	if err != nil {
 		t.Fatalf("LoadFromEnv failed: %v", err)
@@ -48,7 +48,7 @@ func TestLoadFromEnvDefaultsEmptyMaxToolCallsPerRun(t *testing.T) {
 
 func TestLoadFromEnvValidatesMaxConcurrentRunsWithinServerAndProtobufBounds(t *testing.T) {
 	cfg, err := LoadFromEnv(mapEnv(map[string]string{
-		"TURING_INTERNAL_TOKEN":              "internal",
+		"TURING_RUNTIME_TOKEN":               "internal",
 		"TURING_MAX_CONCURRENT_RUNS_GENERAL": "128",
 	}))
 	if err != nil {
@@ -60,7 +60,7 @@ func TestLoadFromEnvValidatesMaxConcurrentRunsWithinServerAndProtobufBounds(t *t
 	for _, value := range []string{"0", "-1", "129", "2147483648"} {
 		t.Run(value, func(t *testing.T) {
 			_, err := LoadFromEnv(mapEnv(map[string]string{
-				"TURING_INTERNAL_TOKEN":              "internal",
+				"TURING_RUNTIME_TOKEN":               "internal",
 				"TURING_MAX_CONCURRENT_RUNS_GENERAL": value,
 			}))
 			if err == nil || !strings.Contains(err.Error(), "between 1 and 128") {
@@ -74,7 +74,7 @@ func TestLoadFromEnvRejectsNonPositiveMaxToolCallsPerRun(t *testing.T) {
 	for _, value := range []string{"0", "-1"} {
 		t.Run(value, func(t *testing.T) {
 			_, err := LoadFromEnv(mapEnv(map[string]string{
-				"TURING_INTERNAL_TOKEN":         "internal",
+				"TURING_RUNTIME_TOKEN":          "internal",
 				"TURING_MAX_TOOL_CALLS_PER_RUN": value,
 			}))
 
@@ -88,7 +88,7 @@ func TestLoadFromEnvRejectsNonPositiveMaxToolCallsPerRun(t *testing.T) {
 
 func TestLoadFromEnvDefaultsTimeouts(t *testing.T) {
 	cfg, err := LoadFromEnv(mapEnv(map[string]string{
-		"TURING_INTERNAL_TOKEN": "internal",
+		"TURING_RUNTIME_TOKEN": "internal",
 	}))
 	if err != nil {
 		t.Fatalf("LoadFromEnv failed: %v", err)
@@ -112,7 +112,7 @@ func TestLoadFromEnvDefaultsTimeouts(t *testing.T) {
 
 func TestLoadFromEnvDerivesHeartbeatBelowConfiguredJobLease(t *testing.T) {
 	cfg, err := LoadFromEnv(mapEnv(map[string]string{
-		"TURING_INTERNAL_TOKEN": "internal",
+		"TURING_RUNTIME_TOKEN":  "internal",
 		"TURING_JOB_TIMEOUT_MS": "30",
 	}))
 	if err != nil {
@@ -125,7 +125,7 @@ func TestLoadFromEnvDerivesHeartbeatBelowConfiguredJobLease(t *testing.T) {
 
 func TestLoadFromEnvKeepsApprovalWaitBeyondEffectiveApprovalExpiry(t *testing.T) {
 	baseEnv := map[string]string{
-		"TURING_INTERNAL_TOKEN":           "internal",
+		"TURING_RUNTIME_TOKEN":            "internal",
 		"TURING_TOOL_TIMEOUT_MS":          "1000",
 		"TURING_APPROVAL_TIMEOUT_MS":      "1000",
 		"TURING_TOOL_TOTAL_TIMEOUT_MS":    "12000",
@@ -148,7 +148,7 @@ func TestLoadFromEnvKeepsApprovalWaitBeyondEffectiveApprovalExpiry(t *testing.T)
 
 func TestLoadFromEnvRequiresTotalToolTimeoutBeyondApprovalWait(t *testing.T) {
 	_, err := LoadFromEnv(mapEnv(map[string]string{
-		"TURING_INTERNAL_TOKEN":        "internal",
+		"TURING_RUNTIME_TOKEN":         "internal",
 		"TURING_APPROVAL_TIMEOUT_MS":   "1000",
 		"TURING_TOOL_TOTAL_TIMEOUT_MS": "1000",
 	}))
@@ -159,7 +159,7 @@ func TestLoadFromEnvRequiresTotalToolTimeoutBeyondApprovalWait(t *testing.T) {
 
 func TestLoadFromEnvRequiresTotalToolBudgetForApprovalLifecycle(t *testing.T) {
 	_, err := LoadFromEnv(mapEnv(map[string]string{
-		"TURING_INTERNAL_TOKEN":        "internal",
+		"TURING_RUNTIME_TOKEN":         "internal",
 		"TURING_TOOL_TIMEOUT_MS":       "30000",
 		"TURING_APPROVAL_TIMEOUT_MS":   "65000",
 		"TURING_TOOL_TOTAL_TIMEOUT_MS": "70000",
@@ -182,8 +182,8 @@ func TestLoadFromEnvRejectsNonPositiveTimeouts(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			for _, value := range []string{"0", "-1"} {
 				_, err := LoadFromEnv(mapEnv(map[string]string{
-					"TURING_INTERNAL_TOKEN": "internal",
-					test.env:                value,
+					"TURING_RUNTIME_TOKEN": "internal",
+					test.env:               value,
 				}))
 				if err == nil || !strings.Contains(err.Error(), test.env) ||
 					!strings.Contains(err.Error(), "greater than 0") {
@@ -203,8 +203,8 @@ func TestLoadFromEnvAcceptsLargestRepresentableTimeoutMilliseconds(t *testing.T)
 	} {
 		t.Run(env, func(t *testing.T) {
 			cfg, err := LoadFromEnv(mapEnv(map[string]string{
-				"TURING_INTERNAL_TOKEN": "internal",
-				env:                     value,
+				"TURING_RUNTIME_TOKEN": "internal",
+				env:                    value,
 			}))
 			if err != nil {
 				t.Fatalf("LoadFromEnv(%s=%s) failed: %v", env, value, err)
@@ -238,8 +238,8 @@ func TestLoadFromEnvRejectsTimeoutMillisecondsThatOverflowDuration(t *testing.T)
 		} {
 			t.Run(env+"/"+value, func(t *testing.T) {
 				_, err := LoadFromEnv(mapEnv(map[string]string{
-					"TURING_INTERNAL_TOKEN": "internal",
-					env:                     value,
+					"TURING_RUNTIME_TOKEN": "internal",
+					env:                    value,
 				}))
 				if err == nil || !strings.Contains(err.Error(), env) ||
 					!strings.Contains(err.Error(), "maximum") {
@@ -267,8 +267,8 @@ func TestLoadFromEnvRejectsInvalidEndpointURLs(t *testing.T) {
 		} {
 			t.Run(env+"/"+value, func(t *testing.T) {
 				_, err := LoadFromEnv(mapEnv(map[string]string{
-					"TURING_INTERNAL_TOKEN": "internal",
-					env:                     value,
+					"TURING_RUNTIME_TOKEN": "internal",
+					env:                    value,
 				}))
 
 				if err == nil || !strings.Contains(err.Error(), env) ||
@@ -294,8 +294,8 @@ func TestLoadFromEnvAcceptsHTTPAndHTTPSEndpointURLs(t *testing.T) {
 		} {
 			t.Run(env+"/"+value, func(t *testing.T) {
 				_, err := LoadFromEnv(mapEnv(map[string]string{
-					"TURING_INTERNAL_TOKEN": "internal",
-					env:                     value,
+					"TURING_RUNTIME_TOKEN": "internal",
+					env:                    value,
 				}))
 				if err != nil {
 					t.Fatalf("LoadFromEnv(%s=%q) failed: %v", env, value, err)
@@ -318,7 +318,7 @@ func mapEnv(values map[string]string) func(string) string {
 // silent mismatch rather than a loud failure.
 func TestLoadFromEnvDefaultsTheLocalModelAndKeepAlive(t *testing.T) {
 	cfg, err := LoadFromEnv(mapEnv(map[string]string{
-		"TURING_INTERNAL_TOKEN": "internal",
+		"TURING_RUNTIME_TOKEN": "internal",
 	}))
 	if err != nil {
 		t.Fatalf("LoadFromEnv failed: %v", err)
@@ -347,14 +347,14 @@ func TestLoadFromEnvDefaultsTheLocalModelAndKeepAlive(t *testing.T) {
 // also its own server env var, so it must be accepted, not rejected.
 func TestLoadFromEnvValidatesKeepAlive(t *testing.T) {
 	if _, err := LoadFromEnv(mapEnv(map[string]string{
-		"TURING_INTERNAL_TOKEN": "internal",
-		"OLLAMA_KEEP_ALIVE":     "forever",
+		"TURING_RUNTIME_TOKEN": "internal",
+		"OLLAMA_KEEP_ALIVE":    "forever",
 	})); err == nil {
 		t.Fatal("an unparseable keep-alive was accepted; it would 400 every request instead")
 	}
 	cfg, err := LoadFromEnv(mapEnv(map[string]string{
-		"TURING_INTERNAL_TOKEN": "internal",
-		"OLLAMA_KEEP_ALIVE":     "-1",
+		"TURING_RUNTIME_TOKEN": "internal",
+		"OLLAMA_KEEP_ALIVE":    "-1",
 	}))
 	if err != nil {
 		t.Fatalf("-1 (Ollama's documented \"forever\") was rejected: %v", err)
@@ -366,9 +366,9 @@ func TestLoadFromEnvValidatesKeepAlive(t *testing.T) {
 
 func TestLoadFromEnvHonoursExplicitModelAndKeepAlive(t *testing.T) {
 	cfg, err := LoadFromEnv(mapEnv(map[string]string{
-		"TURING_INTERNAL_TOKEN": "internal",
-		"OLLAMA_MODEL":          "llama3.2",
-		"OLLAMA_KEEP_ALIVE":     "5m",
+		"TURING_RUNTIME_TOKEN": "internal",
+		"OLLAMA_MODEL":         "llama3.2",
+		"OLLAMA_KEEP_ALIVE":    "5m",
 	}))
 	if err != nil {
 		t.Fatalf("LoadFromEnv failed: %v", err)
@@ -380,7 +380,7 @@ func TestLoadFromEnvHonoursExplicitModelAndKeepAlive(t *testing.T) {
 
 func TestLoadFromEnvDefaultsProviderContextWindows(t *testing.T) {
 	cfg, err := LoadFromEnv(mapEnv(map[string]string{
-		"TURING_INTERNAL_TOKEN": "internal",
+		"TURING_RUNTIME_TOKEN": "internal",
 	}))
 	if err != nil {
 		t.Fatalf("LoadFromEnv failed: %v", err)
@@ -401,7 +401,7 @@ func TestLoadFromEnvDefaultsProviderContextWindows(t *testing.T) {
 
 func TestLoadFromEnvHonoursProviderContextWindowOverrides(t *testing.T) {
 	cfg, err := LoadFromEnv(mapEnv(map[string]string{
-		"TURING_INTERNAL_TOKEN":        "internal",
+		"TURING_RUNTIME_TOKEN":         "internal",
 		"OLLAMA_CONTEXT_WINDOW_TOKENS": "4096",
 		"OPENAI_CONTEXT_WINDOW_TOKENS": "65536",
 		"OLLAMA_MAX_OUTPUT_TOKENS":     "512",
@@ -429,8 +429,8 @@ func TestLoadFromEnvValidatesProviderContextWindows(t *testing.T) {
 		for _, value := range []string{"0", "-1", "not-a-number", "16777217"} {
 			t.Run(name+"/"+value, func(t *testing.T) {
 				_, err := LoadFromEnv(mapEnv(map[string]string{
-					"TURING_INTERNAL_TOKEN": "internal",
-					name:                    value,
+					"TURING_RUNTIME_TOKEN": "internal",
+					name:                   value,
 				}))
 				if err == nil || !strings.Contains(err.Error(), name) {
 					t.Fatalf("LoadFromEnv error = %v, want %s validation", err, name)
@@ -473,7 +473,7 @@ func TestLoadFromEnvValidatesProviderOutputReservations(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			test.values["TURING_INTERNAL_TOKEN"] = "internal"
+			test.values["TURING_RUNTIME_TOKEN"] = "internal"
 			_, err := LoadFromEnv(mapEnv(test.values))
 			if err == nil || !strings.Contains(err.Error(), "OUTPUT_TOKENS") {
 				t.Fatalf("LoadFromEnv error = %v, want output reservation validation", err)

@@ -328,6 +328,29 @@ model-loop, and persistence evidence before merge.
 **Likely files:** auth interceptors, app registration, internal clients, Compose/init scripts.  
 **Acceptance:** Each service can call only required methods; existing approval consumption remains atomic; no new network listener is introduced.  
 **Dependencies:** None.
+**Status:** Pending merge. Branch `mcasillas17-tur-006-service-identities`
+splits the single shared `TURING_INTERNAL_TOKEN` into `TURING_RUNTIME_TOKEN`
+and `TURING_APPROVAL_CONSUMER_TOKEN`, both required and rejected if equal. A
+new `auth.ServiceIdentity`/`UnaryIdentityInterceptor`/`StreamIdentityInterceptor`
+layer on the existing internal gRPC port resolves the caller's identity from
+which registered token matches — never from a caller-supplied claim — and
+authorizes only the methods on that identity's allowlist: the runtime may call
+`RuntimeService.ConnectWorker`, `SessionService.ListMessages`/
+`SearchMessages`, and `ApprovalService.GetApprovalForRuntime`/
+`ConsumeApproval`; the approval consumer (`mcp-files`, and any future MCP
+server that consumes approvals) may call only `ApprovalService.ConsumeApproval`.
+A wrong-service call fails `PermissionDenied` before reaching a handler; an
+unknown or malformed bearer fails `Unauthenticated`. The orchestrator also
+drops the now-dead `MCP_SYSTEM_TOKEN_GENERAL` entirely and replaces
+`MCP_FILES_TOKEN_GENERAL`/`OPENAI_API_KEY` with Compose-derived
+`MCP_FILES_ENABLED`/`OPENAI_ENABLED` booleans, since it only ever reported
+whether each was configured and never called mcp-files or OpenAI itself.
+Existing atomic approval consumption is unchanged — the interceptor sits above
+`ApprovalService.ConsumeApproval`'s existing transaction, not inside it — and
+no new network listener is introduced; both identities continue to share the
+existing internal port. The pull request must record full verification
+evidence (root/mcp-files/mcp-system tests, race, build, Flutter analyze/test,
+proto check, lint) before merge.
 
 ### Phase 1: Make the existing product honest and operable
 

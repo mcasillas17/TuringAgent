@@ -11,13 +11,14 @@ import (
 
 type Config struct {
 	ClientAPIKey             string
-	InternalToken            string
-	MCPSystemTokenGeneral    string
-	MCPFilesTokenGeneral     string
+	RuntimeToken             string
+	ApprovalConsumerToken    string
 	ApprovalJWTSecret        string
 	DatabasePath             string
 	OllamaModel              string
 	OpenAIModel              string
+	OpenAIEnabled            bool
+	FilesMCPEnabled          bool
 	MaxConcurrentRunsGeneral int
 	MaxToolCallsPerRun       int
 	ApprovalTTLMS            int
@@ -40,13 +41,14 @@ type Run struct {
 func NewApp(cfg Config) (*App, error) {
 	inner, err := app.New(config.Config{
 		ClientAPIKey:             cfg.ClientAPIKey,
-		InternalToken:            cfg.InternalToken,
-		MCPSystemTokenGeneral:    cfg.MCPSystemTokenGeneral,
-		MCPFilesTokenGeneral:     cfg.MCPFilesTokenGeneral,
+		RuntimeToken:             cfg.RuntimeToken,
+		ApprovalConsumerToken:    cfg.ApprovalConsumerToken,
 		ApprovalJWTSecret:        cfg.ApprovalJWTSecret,
 		DatabasePath:             cfg.DatabasePath,
 		OllamaModel:              cfg.OllamaModel,
 		OpenAIModel:              cfg.OpenAIModel,
+		OpenAIEnabled:            cfg.OpenAIEnabled,
+		FilesMCPEnabled:          cfg.FilesMCPEnabled,
 		MaxConcurrentRunsGeneral: cfg.MaxConcurrentRunsGeneral,
 		MaxToolCallsPerRun:       cfg.MaxToolCallsPerRun,
 		ApprovalTTLMS:            cfg.ApprovalTTLMS,

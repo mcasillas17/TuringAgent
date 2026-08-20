@@ -36,7 +36,7 @@ const defaultOllamaKeepAlive = "2m"
 
 type Config struct {
 	OrchestratorGRPCAddr      string
-	InternalToken             string
+	RuntimeToken              string
 	WorkerID                  string
 	OllamaBaseURL             string
 	OllamaModel               string
@@ -72,9 +72,9 @@ func Load() (Config, error) {
 }
 
 func LoadFromEnv(getenv func(string) string) (Config, error) {
-	internalToken := getenv("TURING_INTERNAL_TOKEN")
-	if internalToken == "" {
-		return Config{}, errors.New("missing required env var TURING_INTERNAL_TOKEN")
+	runtimeToken := getenv("TURING_RUNTIME_TOKEN")
+	if runtimeToken == "" {
+		return Config{}, errors.New("missing required env var TURING_RUNTIME_TOKEN")
 	}
 	keepAlive := defaultString(getenv("OLLAMA_KEEP_ALIVE"), defaultOllamaKeepAlive)
 	// Validated here so a bad value is a startup failure with a readable message
@@ -165,7 +165,7 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 	}
 	return Config{
 		OrchestratorGRPCAddr:      grpcAddr(getenv),
-		InternalToken:             internalToken,
+		RuntimeToken:              runtimeToken,
 		WorkerID:                  defaultString(getenv("TURING_WORKER_ID"), "worker-general-go"),
 		OllamaBaseURL:             ollamaBaseURL,
 		OllamaModel:               defaultString(getenv("OLLAMA_MODEL"), defaultOllamaModel),

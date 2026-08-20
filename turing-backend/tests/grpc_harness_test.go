@@ -36,12 +36,13 @@ import (
 )
 
 const (
-	integrationClientKey     = "client-key"
-	integrationInternalToken = "internal-token"
-	integrationSystemToken   = "system-token"
-	integrationFilesToken    = "files-token"
-	integrationApprovalKey   = "approval-secret"
-	integrationOpenAIKey     = "fake-key"
+	integrationClientKey             = "client-key"
+	integrationRuntimeToken          = "runtime-token"
+	integrationApprovalConsumerToken = "approval-consumer-token"
+	integrationSystemToken           = "system-token"
+	integrationFilesToken            = "files-token"
+	integrationApprovalKey           = "approval-secret"
+	integrationOpenAIKey             = "fake-key"
 )
 
 var integrationArtifacts string
@@ -150,9 +151,9 @@ func newGRPCHarness(t *testing.T, opts ...harnessOption) *grpcHarness {
 	filesMCP := newFakeMCPServer("files", integrationFilesToken)
 	app, err := orchestratortestkit.NewApp(orchestratortestkit.Config{
 		ClientAPIKey:             integrationClientKey,
-		InternalToken:            integrationInternalToken,
-		MCPSystemTokenGeneral:    integrationSystemToken,
-		MCPFilesTokenGeneral:     integrationFilesToken,
+		RuntimeToken:             integrationRuntimeToken,
+		ApprovalConsumerToken:    integrationApprovalConsumerToken,
+		FilesMCPEnabled:          true,
 		ApprovalJWTSecret:        integrationApprovalKey,
 		DatabasePath:             dbPath,
 		OllamaModel:              "fake-ollama",
@@ -209,7 +210,7 @@ func (h *grpcHarness) startRuntimeWorker() {
 	go func() {
 		err := runtimetestkit.RunWorker(ctx, runtimetestkit.WorkerConfig{
 			Conn:               h.internalConn,
-			InternalToken:      integrationInternalToken,
+			RuntimeToken:       integrationRuntimeToken,
 			WorkerID:           "worker-grpc-integration",
 			MaxConcurrentRuns:  1,
 			MaxToolCallsPerRun: 10,
@@ -271,8 +272,10 @@ func (h *grpcHarness) clientContext() context.Context {
 	return metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+integrationClientKey)
 }
 
+// internalContext authenticates as the runtime identity: it is used only for
+// runtime-only internal RPCs such as ApprovalService.GetApprovalForRuntime.
 func (h *grpcHarness) internalContext() context.Context {
-	return metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+integrationInternalToken)
+	return metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+integrationRuntimeToken)
 }
 
 func (h *grpcHarness) close() {
@@ -769,7 +772,7 @@ func (f *fakeMCPServer) handle(w http.ResponseWriter, r *http.Request) {
 				f.reject(w, http.StatusBadRequest, fmt.Errorf("files MCP approval token: %w", err))
 				return
 			}
-			ctx := metadata.AppendToOutgoingContext(r.Context(), "authorization", "Bearer "+integrationInternalToken)
+			ctx := metadata.AppendToOutgoingContext(r.Context(), "authorization", "Bearer "+integrationApprovalConsumerToken)
 			consumed, err := f.approvalClient.ConsumeApproval(ctx, &turingv1.ConsumeApprovalRequest{ApprovalId: approvalID})
 			if err != nil || consumed.GetStatus() != turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED {
 				f.reject(w, http.StatusBadRequest, fmt.Errorf("files MCP consume approval %q: response=%v error=%v", approvalID, consumed, err))
@@ -945,7 +948,7 @@ func TestDiscoveredToolsAppearInListTools(t *testing.T) {
 	defer harness.close()
 
 	internalCtx, cancelInternal := context.WithTimeout(
-		metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+integrationInternalToken),
+		metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+integrationRuntimeToken),
 		5*time.Second,
 	)
 	defer cancelInternal()
@@ -1161,7 +1164,7 @@ func TestApprovalPersistenceFailureFencesRealWorkerUntilExecutorExit(t *testing.
 		go func() {
 			done <- runtimetestkit.RunWorkerWithExecutor(ctx, runtimetestkit.WorkerConfig{
 				Conn:               conn,
-				InternalToken:      integrationInternalToken,
+				RuntimeToken:       integrationRuntimeToken,
 				WorkerID:           workerID,
 				MaxConcurrentRuns:  1,
 				TotalToolTimeout:   time.Second,

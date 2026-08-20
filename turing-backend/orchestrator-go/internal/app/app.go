@@ -147,7 +147,30 @@ func New(cfg config.Config) (*App, error) {
 	}
 	authFailures := auth.NewAsyncFailureRecorder(persistAuthFailure)
 	publicAuth := auth.InterceptorOptions{ActorType: "client", FailureRecorder: authFailures.Record}
-	internalAuth := auth.InterceptorOptions{ActorType: "runtime", FailureRecorder: authFailures.Record}
+	internalAuth := auth.InterceptorOptions{FailureRecorder: authFailures.Record}
+	// Two least-privilege internal identities share the internal gRPC port:
+	// the runtime claims jobs and reads session history for context and
+	// recall; the approval consumer (mcp-files, and any future MCP server
+	// that consumes approvals) may only call ConsumeApproval. Neither token
+	// grants the other's methods, so a compromised mcp-files cannot claim a
+	// job or read conversation history, and a compromised runtime cannot be
+	// swapped in as the approval consumer for a different tool server.
+	internalIdentities, err := auth.NewInternalIdentities([]auth.ServiceIdentity{
+		auth.NewServiceIdentity("runtime", cfg.RuntimeToken,
+			turingv1.RuntimeService_ConnectWorker_FullMethodName,
+			turingv1.SessionService_ListMessages_FullMethodName,
+			turingv1.SessionService_SearchMessages_FullMethodName,
+			turingv1.ApprovalService_GetApprovalForRuntime_FullMethodName,
+			turingv1.ApprovalService_ConsumeApproval_FullMethodName,
+		),
+		auth.NewServiceIdentity("approval-consumer", cfg.ApprovalConsumerToken,
+			turingv1.ApprovalService_ConsumeApproval_FullMethodName,
+		),
+	})
+	if err != nil {
+		_ = database.Close()
+		return nil, err
+	}
 	for _, event := range recoveredEvents {
 		eventBus.Publish(eventsvc.Event{
 			EventID: event.EventID, SessionID: event.SessionID, RunID: event.RunID.String,
@@ -162,8 +185,8 @@ func New(cfg config.Config) (*App, error) {
 		grpc.MaxSendMsgSize(maxGRPCMessageSize),
 	)
 	internalServer := grpc.NewServer(
-		grpc.UnaryInterceptor(auth.UnaryInterceptor(cfg.InternalToken, internalAuth)),
-		grpc.StreamInterceptor(auth.StreamInterceptor(cfg.InternalToken, internalAuth)),
+		grpc.UnaryInterceptor(auth.UnaryIdentityInterceptor(internalIdentities, internalAuth)),
+		grpc.StreamInterceptor(auth.StreamIdentityInterceptor(internalIdentities, internalAuth)),
 		grpc.MaxRecvMsgSize(maxGRPCMessageSize),
 		grpc.MaxSendMsgSize(maxGRPCMessageSize),
 	)

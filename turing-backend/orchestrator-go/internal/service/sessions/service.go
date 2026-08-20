@@ -143,12 +143,12 @@ func (s *Server) SearchMessages(ctx context.Context, req *turingv1.SearchMessage
 func (s *Server) GetConfig(context.Context, *turingv1.GetConfigRequest) (*turingv1.GetConfigResponse, error) {
 	providers := []*turingv1.ProviderConfig{
 		{Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Enabled: s.cfg.OllamaModel != "", DefaultModel: s.cfg.OllamaModel},
-		{Provider: turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, Enabled: s.cfg.OpenAIAPIKey != "", DefaultModel: s.cfg.OpenAIModel},
+		{Provider: turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, Enabled: s.cfg.OpenAIEnabled, DefaultModel: s.cfg.OpenAIModel},
 	}
 	return &turingv1.GetConfigResponse{
 		Providers:        providers,
 		ApprovalsEnabled: s.cfg.ApprovalJWTSecret != "",
-		FilesMcpEnabled:  s.cfg.MCPFilesTokenGeneral != "",
+		FilesMcpEnabled:  s.cfg.FilesMCPEnabled,
 	}, nil
 }
 

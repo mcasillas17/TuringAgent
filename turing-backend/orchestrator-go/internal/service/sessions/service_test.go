@@ -32,12 +32,11 @@ func newSessionHarness(t *testing.T) *sessionHarness {
 	lis := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
 	turingv1.RegisterSessionServiceServer(grpcServer, New(repo, config.Config{
-		MCPSystemTokenGeneral: "system-token",
-		MCPFilesTokenGeneral:  "files-token",
-		ApprovalJWTSecret:     "approval-secret",
-		OllamaModel:           "llama3.2",
-		OpenAIAPIKey:          "openai-key",
-		OpenAIModel:           "gpt-4o-mini",
+		FilesMCPEnabled:   true,
+		ApprovalJWTSecret: "approval-secret",
+		OllamaModel:       "llama3.2",
+		OpenAIEnabled:     true,
+		OpenAIModel:       "gpt-4o-mini",
 	}))
 	go func() {
 		_ = grpcServer.Serve(lis)

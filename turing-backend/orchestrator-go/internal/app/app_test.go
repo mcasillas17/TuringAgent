@@ -25,8 +25,8 @@ import (
 func newTestApp(t *testing.T) *App {
 	t.Helper()
 	cfg := config.Config{
-		ClientAPIKey:      "client",
-		InternalToken:     "internal",
+		ClientAPIKey: "client",
+		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
 		ApprovalJWTSecret: "approval-secret",
 		DatabasePath:      t.TempDir() + "/turing.db",
 		OllamaModel:       "llama3.2",
@@ -42,8 +42,8 @@ func newTestApp(t *testing.T) *App {
 
 func TestAppPassesConfiguredApprovalTTLToApprovalService(t *testing.T) {
 	app, err := New(config.Config{
-		ClientAPIKey:      "client",
-		InternalToken:     "internal",
+		ClientAPIKey: "client",
+		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
 		ApprovalJWTSecret: "approval-secret",
 		ApprovalTTLMS:     2000,
 		DatabasePath:      t.TempDir() + "/turing.db",
@@ -142,8 +142,8 @@ func TestPublicServerReportsVersion(t *testing.T) {
 
 func TestAppEnforcesConfiguredGlobalGeneralRunCapacity(t *testing.T) {
 	application, err := New(config.Config{
-		ClientAPIKey:             "client",
-		InternalToken:            "internal",
+		ClientAPIKey: "client",
+		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
 		ApprovalJWTSecret:        "approval-secret",
 		DatabasePath:             t.TempDir() + "/turing.db",
 		MaxConcurrentRunsGeneral: 1,
@@ -218,7 +218,7 @@ func TestAppEnforcesConfiguredGlobalGeneralRunCapacity(t *testing.T) {
 func TestAppRestartRecoversStaleRunningAssignment(t *testing.T) {
 	dbPath := t.TempDir() + "/turing.db"
 	cfg := config.Config{
-		ClientAPIKey: "client", InternalToken: "internal", ApprovalJWTSecret: "approval-secret", DatabasePath: dbPath,
+		ClientAPIKey: "client", RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer", ApprovalJWTSecret: "approval-secret", DatabasePath: dbPath,
 	}
 	first, err := New(cfg)
 	if err != nil {
@@ -407,8 +407,10 @@ func TestAppRegistersPublicAndInternalServices(t *testing.T) {
 		t.Fatal("internal server should not register public health service")
 	}
 	// Third-party connections are the user's business, not the runtime's.
-	// Registering them internally would put them behind the runtime token,
-	// which every tool server already holds.
+	// Registering them internally would put them behind the internal
+	// server's per-identity authorization instead of removing them from it
+	// entirely — belt and suspenders, since every internal identity's
+	// allowlist is scoped to specific methods on specific services already.
 	// Nothing outside the orchestrator schedules a run, and the runtime has no
 	// reason to read the automation library — including the tool allowlists
 	// that decide what it may do unattended.
@@ -419,8 +421,9 @@ func TestAppRegistersPublicAndInternalServices(t *testing.T) {
 		t.Fatal("internal server should not expose the integration service to the runtime")
 	}
 	// A usage report is for the person, not for the machinery. Registering it
-	// internally would let anything holding the runtime token read what this
-	// installation has been doing.
+	// internally would put it behind per-identity authorization instead of
+	// removing it entirely, and no internal identity's allowlist should ever
+	// need to grow to include it.
 	if _, ok := internalServices["turing.v1.TelemetryService"]; ok {
 		t.Fatal("internal server should not expose telemetry to the runtime")
 	}
@@ -429,7 +432,8 @@ func TestAppRegistersPublicAndInternalServices(t *testing.T) {
 // AuditService is the one place a client can read what the orchestrator has
 // recorded about it, so it must sit behind the same public bearer token as
 // every other client-facing RPC and must never be reachable from the runtime
-// side, which already holds the internal token every tool server shares.
+// side — neither the runtime nor the approval-consumer identity's allowlist
+// includes it, and it is not even registered on the internal server.
 func TestAuditServiceIsAuthenticatedAndPublicOnly(t *testing.T) {
 	app := newTestApp(t)
 
@@ -683,7 +687,7 @@ func TestAuditCursorIsBoundToApprovalSecretNotClientKey(t *testing.T) {
 	const clientKey = "cursor-restart-client-key"
 	const approvalSecret = "cursor-restart-approval-secret"
 	const marker = "cursor.restart.marker"
-	baseCfg := config.Config{ClientAPIKey: clientKey, InternalToken: "internal", ApprovalJWTSecret: approvalSecret, DatabasePath: dbPath}
+	baseCfg := config.Config{ClientAPIKey: clientKey, RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer", ApprovalJWTSecret: approvalSecret, DatabasePath: dbPath}
 
 	appA, err := New(baseCfg)
 	if err != nil {
@@ -806,8 +810,8 @@ func TestAppStartsWithAndWithoutAnIntegrationKey(t *testing.T) {
 	}
 
 	withKey, err := New(config.Config{
-		ClientAPIKey:      "client",
-		InternalToken:     "internal",
+		ClientAPIKey: "client",
+		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
 		ApprovalJWTSecret: "approval-secret",
 		IntegrationKey:    strings.Repeat("ab", 32),
 		DatabasePath:      t.TempDir() + "/turing.db",
@@ -823,8 +827,8 @@ func TestAppStartsWithAndWithoutAnIntegrationKey(t *testing.T) {
 	// A key of the wrong shape is a misconfiguration, not something to
 	// discover while somebody is pasting a token.
 	if _, err := New(config.Config{
-		ClientAPIKey:      "client",
-		InternalToken:     "internal",
+		ClientAPIKey: "client",
+		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
 		ApprovalJWTSecret: "approval-secret",
 		IntegrationKey:    "not-a-key",
 		DatabasePath:      t.TempDir() + "/turing.db",

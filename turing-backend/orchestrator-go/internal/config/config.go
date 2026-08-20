@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -17,10 +18,15 @@ const (
 )
 
 type Config struct {
-	ClientAPIKey          string
-	InternalToken         string
-	MCPSystemTokenGeneral string
-	MCPFilesTokenGeneral  string
+	ClientAPIKey string
+	// RuntimeToken and ApprovalConsumerToken are separate least-privilege
+	// internal identities on the same internal gRPC server: the runtime may
+	// claim jobs and read session history, the approval consumer (mcp-files)
+	// may only consume approvals. They must never be equal — see
+	// auth.NewInternalIdentities, which app.New calls at startup — or a
+	// compromised approval consumer would gain the runtime's privileges.
+	RuntimeToken          string
+	ApprovalConsumerToken string
 	ApprovalJWTSecret     string
 	// IntegrationKey seals third-party credentials before they are stored.
 	// Optional: when it is empty, connecting an account is refused with a
@@ -33,8 +39,16 @@ type Config struct {
 	OllamaBaseURL  string
 	OllamaModel    string
 	OpenAIBaseURL  string
-	OpenAIAPIKey   string
-	OpenAIModel    string
+	// OpenAIEnabled and FilesMCPEnabled are presence flags, sourced from
+	// OPENAI_ENABLED and MCP_FILES_ENABLED, which Compose derives from
+	// whether OPENAI_API_KEY / MCP_FILES_TOKEN_GENERAL are set without ever
+	// handing this process the actual secret value. The orchestrator never
+	// calls OpenAI or mcp-files itself — GetConfig only reports whether each
+	// is configured — so those secrets live only in the processes that
+	// actually use them (the agent runtime, and mcp-files itself).
+	OpenAIEnabled   bool
+	FilesMCPEnabled bool
+	OpenAIModel     string
 	// AgentCredentialNames is the set of credential names an external agent may
 	// refer to — names only. The keys themselves are decoded, counted and
 	// dropped: the orchestrator never calls a third-party API, so holding the
@@ -110,20 +124,56 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		}
 		return fallback
 	}
+	// boolValue parses an explicit "true"/"false" rather than treating any
+	// non-empty string as truthy: a typo in MCP_FILES_ENABLED should fail
+	// startup, not silently disable (or enable) the capability it gates.
+	boolValue := func(name string, fallback bool) (bool, error) {
+		raw := env[name]
+		if raw == "" {
+			return fallback, nil
+		}
+		switch raw {
+		case "true":
+			return true, nil
+		case "false":
+			return false, nil
+		default:
+			return false, fmt.Errorf("%s must be \"true\" or \"false\"", name)
+		}
+	}
 
 	clientKey, err := required("TURING_CLIENT_API_KEY")
 	if err != nil {
 		return Config{}, err
 	}
-	internalToken, err := required("TURING_INTERNAL_TOKEN")
+	runtimeToken, err := required("TURING_RUNTIME_TOKEN")
 	if err != nil {
 		return Config{}, err
 	}
-	systemToken, err := required("MCP_SYSTEM_TOKEN_GENERAL")
+	approvalConsumerToken, err := required("TURING_APPROVAL_CONSUMER_TOKEN")
 	if err != nil {
 		return Config{}, err
 	}
-	filesToken, err := required("MCP_FILES_TOKEN_GENERAL")
+	if runtimeToken == approvalConsumerToken {
+		return Config{}, errors.New("TURING_RUNTIME_TOKEN and TURING_APPROVAL_CONSUMER_TOKEN must differ")
+	}
+	// FilesMCPEnabled has no default: this install must say explicitly
+	// whether mcp-files is provisioned, mirroring the previous requirement
+	// that MCP_FILES_TOKEN_GENERAL be set. Only mcp-files and the agent
+	// runtime hold the actual bearer token; the orchestrator only needs to
+	// know whether it is configured, to answer GetConfig honestly.
+	if _, err := required("MCP_FILES_ENABLED"); err != nil {
+		return Config{}, err
+	}
+	filesMCPEnabled, err := boolValue("MCP_FILES_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	// OpenAIEnabled mirrors OPENAI_API_KEY's prior optionality: unset means
+	// disabled, matching the earlier `OpenAIAPIKey != ""` check. The actual
+	// key lives only in the agent runtime, which is the only process that
+	// ever calls OpenAI.
+	openAIEnabled, err := boolValue("OPENAI_ENABLED", false)
 	if err != nil {
 		return Config{}, err
 	}
@@ -204,9 +254,8 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	}
 	return Config{
 		ClientAPIKey:             clientKey,
-		InternalToken:            internalToken,
-		MCPSystemTokenGeneral:    systemToken,
-		MCPFilesTokenGeneral:     filesToken,
+		RuntimeToken:             runtimeToken,
+		ApprovalConsumerToken:    approvalConsumerToken,
 		ApprovalJWTSecret:        approvalSecret,
 		IntegrationKey:           integrationKey,
 		PublicPort:               publicPort,
@@ -216,7 +265,8 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		OllamaBaseURL:            stringValue("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
 		OllamaModel:              stringValue("OLLAMA_MODEL", "qwen2.5:7b"),
 		OpenAIBaseURL:            stringValue("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-		OpenAIAPIKey:             env["OPENAI_API_KEY"],
+		OpenAIEnabled:            openAIEnabled,
+		FilesMCPEnabled:          filesMCPEnabled,
 		OpenAIModel:              stringValue("OPENAI_MODEL", "gpt-4o-mini"),
 		AgentCredentialNames:     AgentCredentialNames(agentAPIKeys),
 		JobTimeoutMS:             jobTimeout,

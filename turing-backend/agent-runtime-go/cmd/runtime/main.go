@@ -36,7 +36,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	client, err := orchestrator.Dial(ctx, cfg.OrchestratorGRPCAddr, cfg.InternalToken)
+	client, err := orchestrator.Dial(ctx, cfg.OrchestratorGRPCAddr, cfg.RuntimeToken)
 	if err != nil {
 		return err
 	}

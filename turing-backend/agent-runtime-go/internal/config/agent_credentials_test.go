@@ -56,7 +56,7 @@ func TestParseAgentAPIKeysRejectsBlankEntries(t *testing.T) {
 func TestLoadFromEnvCarriesTheAgentKeys(t *testing.T) {
 	cfg, err := LoadFromEnv(func(name string) string {
 		switch name {
-		case "TURING_INTERNAL_TOKEN":
+		case "TURING_RUNTIME_TOKEN":
 			return "internal"
 		case agentAPIKeysVar:
 			return `{"claude":"sk-ant-1"}`
@@ -75,7 +75,7 @@ func TestLoadFromEnvCarriesTheAgentKeys(t *testing.T) {
 func TestLoadFromEnvRefusesMalformedAgentKeys(t *testing.T) {
 	_, err := LoadFromEnv(func(name string) string {
 		switch name {
-		case "TURING_INTERNAL_TOKEN":
+		case "TURING_RUNTIME_TOKEN":
 			return "internal"
 		case agentAPIKeysVar:
 			return "not json"
