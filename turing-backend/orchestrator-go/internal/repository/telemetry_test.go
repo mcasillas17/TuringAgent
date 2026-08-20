@@ -780,9 +780,12 @@ func insertTelemetryRun(t *testing.T, ctx context.Context, repo *Repository, run
 	}
 }
 
-// telemetryOutcomeReason keeps these direct fixtures inside the canonical
-// lifecycle/outcome matrix the schema now enforces. Telemetry itself does not
-// read the outcome; the fixtures only have to be legal rows.
+// telemetryOutcomeReason gives these direct fixtures an outcome that reads
+// sensibly next to their status. What the schema actually enforces is the
+// closed outcome_reason vocabulary, not the pairing of an outcome with a
+// lifecycle: that cross-column rule belongs to the versioned transitions, and
+// no constraint here would reject a mismatched pair today. Telemetry does not
+// read the outcome at all; the fixtures only have to be legal rows.
 func telemetryOutcomeReason(status string) string {
 	switch status {
 	case "completed":

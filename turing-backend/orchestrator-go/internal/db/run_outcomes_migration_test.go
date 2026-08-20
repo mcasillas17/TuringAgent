@@ -413,11 +413,19 @@ func TestRunOutcomeMigrationRejectsDuplicateMessageRunCorrelationValueFree(t *te
 	}
 }
 
+// TestRunOutcomeMigrationAllowsNullAndSingleMismatchedLegacyCorrelation pins the
+// approved fallback for a link that cannot prove ownership: it is neutral, not
+// fatal. Only a duplicate is unknowable enough to abort, because only a
+// duplicate leaves two candidate claimants and no defensible way to choose. A
+// single mismatch — including a mutual pair that disagrees about role or
+// session — has exactly one claimant and one honest reading: the link is
+// unusable, so nothing is adopted from it and nothing is rewritten.
 func TestRunOutcomeMigrationAllowsNullAndSingleMismatchedLegacyCorrelation(t *testing.T) {
 	ctx := context.Background()
 	database := openMigratedThroughLegacy(t, ctx, filepath.Join(t.TempDir(), "legacy-correlation.db"))
 	defer database.Close()
 	seedLegacySession(t, ctx, database, "sess_legacy_link")
+	seedLegacySession(t, ctx, database, "sess_other_half")
 	// No assistant message at all.
 	seedLegacyRun(t, ctx, database, legacyRun{
 		id: "run_null_link", sessionID: "sess_legacy_link", status: "failed",
@@ -430,20 +438,72 @@ func TestRunOutcomeMigrationAllowsNullAndSingleMismatchedLegacyCorrelation(t *te
 		assistantMessageID: "msg_mismatched", assistantContent: "orphan answer",
 		assistantRunID: "run_somewhere_else",
 	})
+	// Mutually named, but the message is a tool turn rather than the assistant
+	// turn. Nothing else claims either row, so this is unusable, not contested.
+	seedLegacyRun(t, ctx, database, legacyRun{
+		id: "run_tool_role_link", sessionID: "sess_legacy_link", status: "completed",
+		assistantMessageID: "msg_tool_role", assistantContent: "tool output",
+		assistantRole: "tool",
+	})
+	// Mutually named, but the two rows disagree about which session the turn
+	// belongs to. Again exactly one claimant on each side.
+	seedLegacyRun(t, ctx, database, legacyRun{
+		id: "run_cross_session_link", sessionID: "sess_legacy_link", status: "completed",
+		assistantMessageID: "msg_cross_session", assistantContent: "answer filed elsewhere",
+	})
+	if _, err := database.ExecContext(ctx,
+		`UPDATE messages SET session_id = 'sess_other_half' WHERE id = 'msg_cross_session'`); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
 		t.Fatalf("ApplyMigrations rejected neutral legacy correlation: %v", err)
 	}
 	emptyDigest := runoutcome.ContentSHA256("")
-	for _, runID := range []string{"run_null_link", "run_mismatched_link"} {
-		got := readMigratedRunState(t, ctx, database, runID)
+	for _, want := range []struct {
+		runID     string
+		lifecycle string
+		reason    string
+	}{
+		{runID: "run_null_link", lifecycle: "failed", reason: "provider_failure"},
+		// completed_no_content rather than none is the load-bearing half of
+		// this assertion: the stored message has content, and the run only
+		// reads as contentless because the unusable link was not followed.
+		{runID: "run_mismatched_link", lifecycle: "completed", reason: "completed_no_content"},
+		{runID: "run_tool_role_link", lifecycle: "completed", reason: "completed_no_content"},
+		{runID: "run_cross_session_link", lifecycle: "completed", reason: "completed_no_content"},
+	} {
+		got := readMigratedRunState(t, ctx, database, want.runID)
 		if got.StateVersion != 1 {
-			t.Fatalf("%s state_version = %d, want 1", runID, got.StateVersion)
+			t.Fatalf("%s state_version = %d, want 1", want.runID, got.StateVersion)
+		}
+		if got.Lifecycle != want.lifecycle || got.OutcomeReason != want.reason {
+			t.Fatalf("%s = %s/%s, want %s/%s", want.runID, got.Lifecycle, got.OutcomeReason,
+				want.lifecycle, want.reason)
 		}
 		// An unusable link proves nothing about ownership, so no content is
 		// adopted from it: the identity stays the empty-content digest.
 		if got.ContentSHA256 != emptyDigest {
-			t.Fatalf("%s adopted content from an unusable legacy link", runID)
+			t.Fatalf("%s adopted content from an unusable legacy link", want.runID)
+		}
+	}
+	// The rows themselves are left exactly as they were found. A migration that
+	// "repaired" a legacy half-link would be inventing the ownership fact it
+	// just refused to infer.
+	for _, check := range []struct {
+		query string
+		want  string
+	}{
+		{query: `SELECT run_id FROM messages WHERE id = 'msg_mismatched'`, want: "run_somewhere_else"},
+		{query: `SELECT role FROM messages WHERE id = 'msg_tool_role'`, want: "tool"},
+		{query: `SELECT session_id FROM messages WHERE id = 'msg_cross_session'`, want: "sess_other_half"},
+	} {
+		var got string
+		if err := database.QueryRowContext(ctx, check.query).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != check.want {
+			t.Fatalf("%s = %q, want %q left untouched", check.query, got, check.want)
 		}
 	}
 }
@@ -950,6 +1010,279 @@ func TestRunOutcomeMigrationRestoresForeignKeysAfterSuccessAndRollback(t *testin
 	}
 }
 
+// mutateAtMigrationPhase installs a phase observer that runs one statement in
+// the migration's own transaction at the named seam. Foreign keys are off on
+// that pinned connection, which is exactly why the statement can create the
+// parent/child inconsistency the precommit check exists to catch: no immediate
+// constraint stands in its way.
+func mutateAtMigrationPhase(t *testing.T, target string, statement string) {
+	t.Helper()
+	migrationPhaseHook = func(ctx context.Context, _ string, phase string, tx *sql.Tx) error {
+		if phase != target {
+			return nil
+		}
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("seed inconsistency at %s: %w", phase, err)
+		}
+		return nil
+	}
+	t.Cleanup(func() { migrationPhaseHook = nil })
+}
+
+// assertPreMigrationRunShape proves the database still has exactly its
+// pre-migration shape: not the rebuilt table, not the widened status set, not
+// the scrub, not the indexes, not the scratch table, and not the migration
+// record. Callers pass either a reopened database, after proving a rollback
+// survived a restart, or a live one that the migration refused before writing
+// anything.
+func assertPreMigrationRunShape(
+	t *testing.T,
+	ctx context.Context,
+	database *DB,
+	runID string,
+	wantErrorCode string,
+	wantErrorMessage string,
+) {
+	t.Helper()
+	for _, column := range []string{"state_version", "state_updated_at", "outcome_reason", "assistant_content_sha256"} {
+		if hasColumn(t, ctx, database, "agent_runs", column) {
+			t.Fatalf("agent_runs.%s survived a rolled-back migration", column)
+		}
+	}
+	if _, err := database.ExecContext(ctx,
+		`UPDATE agent_runs SET status = 'recovering' WHERE id = ?`, runID); err == nil {
+		t.Fatal("the widened status CHECK survived a rolled-back migration")
+	}
+	var errorCode, errorMessage string
+	if err := database.QueryRowContext(ctx,
+		`SELECT error_code, error_message FROM agent_runs WHERE id = ?`, runID).
+		Scan(&errorCode, &errorMessage); err != nil {
+		t.Fatal(err)
+	}
+	if errorCode != wantErrorCode || errorMessage != wantErrorMessage {
+		t.Fatalf("run diagnostics = %q/%q, want the pre-migration values %q/%q",
+			errorCode, errorMessage, wantErrorCode, wantErrorMessage)
+	}
+	var jobMessage, toolMessage string
+	if err := database.QueryRowContext(ctx,
+		`SELECT error_message FROM jobs WHERE id = 'job_child'`).Scan(&jobMessage); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx,
+		`SELECT error_message FROM tool_calls WHERE id = 'call_child'`).Scan(&toolMessage); err != nil {
+		t.Fatal(err)
+	}
+	if jobMessage != "provider text" || toolMessage != "tool text" {
+		t.Fatalf("child diagnostics = %q/%q, want the pre-migration values", jobMessage, toolMessage)
+	}
+	for _, name := range []string{"idx_runs_assistant_message_unique", "idx_messages_assistant_run_unique"} {
+		if sqliteObjectExists(t, ctx, database, "index", name) {
+			t.Fatalf("index %q survived a rolled-back migration", name)
+		}
+	}
+	if sqliteObjectExists(t, ctx, database, "table", runOutcomesBackfillTable) {
+		t.Fatalf("%s survived a rolled-back migration", runOutcomesBackfillTable)
+	}
+	var recorded int
+	if err := database.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`,
+		runOutcomesMigrationVersion).Scan(&recorded); err != nil {
+		t.Fatal(err)
+	}
+	if recorded != 0 {
+		t.Fatalf("migration record count = %d, want 0", recorded)
+	}
+}
+
+// TestRunOutcomeMigrationFailsClosedOnPrecommitForeignKeyViolation exercises the
+// last gate before commit. The rebuild deliberately runs with foreign keys off,
+// so nothing refuses a statement that separates a child row from its parent;
+// PRAGMA foreign_key_check, run with the rebuilt parent and every child already
+// in place, is the only thing that can still catch it.
+func TestRunOutcomeMigrationFailsClosedOnPrecommitForeignKeyViolation(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		statement string
+	}{
+		{
+			name:      "the parent is gone and its children are orphans",
+			statement: `DELETE FROM agent_runs WHERE id = 'run_fk_gate'`,
+		},
+		{
+			name: "a child names a parent that never existed",
+			statement: `INSERT INTO agent_run_steps (id, run_id, step_index, kind, status, summary, created_at)
+				VALUES ('step_orphan', 'run_never_existed', 2, 'model', 'completed', 'orphan', '2026-01-01T00:00:00.000000000Z')`,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "foreign-key-gate.db")
+			database := openMigratedThroughLegacy(t, ctx, path)
+			seedLegacySession(t, ctx, database, "sess_fk_gate")
+			seedLegacyRun(t, ctx, database, legacyRun{
+				id: "run_fk_gate", sessionID: "sess_fk_gate", status: "failed",
+				errorCode: "weird_legacy_code", errorMessage: "provider stack trace",
+				assistantMessageID: "msg_fk_gate", assistantContent: "partial answer",
+				finishedAt: "2026-01-01T00:00:07.000000000Z",
+			})
+			seedRunOwnedChildren(t, ctx, database, "sess_fk_gate", "run_fk_gate", "msg_fk_gate")
+			mutateAtMigrationPhase(t, migrationPhaseAfterIndexes, testCase.statement)
+
+			err := applyRunOutcomesMigration(t, ctx, database)
+			if !errors.Is(err, errForeignKeyViolation) {
+				t.Fatalf("ApplyMigrations error = %v, want the foreign key violation sentinel", err)
+			}
+			// The check counts violations rather than returning them: a table,
+			// a row ID, or a path has no place in a migration error.
+			if got := err.Error(); got != "run outcome migration foreign key violation" {
+				t.Fatalf("error = %q, want exactly the value-free sentinel", got)
+			}
+			if err := database.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			reopened, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			assertPreMigrationRunShape(t, ctx, reopened, "run_fk_gate", "weird_legacy_code", "provider stack trace")
+			assertRunOwnedChildrenIntact(t, ctx, reopened, "run_fk_gate")
+			// Nothing the injected statement wrote survived either, and the
+			// connection the migration weakened left referential integrity on.
+			if sqliteObjectExists(t, ctx, reopened, "table", "agent_run_steps") {
+				var orphan int
+				if err := reopened.QueryRowContext(ctx,
+					`SELECT COUNT(*) FROM agent_run_steps WHERE id = 'step_orphan'`).Scan(&orphan); err != nil {
+					t.Fatal(err)
+				}
+				if orphan != 0 {
+					t.Fatalf("orphan step rows = %d, want 0", orphan)
+				}
+			}
+			assertNoForeignKeyViolations(t, ctx, reopened)
+		})
+	}
+}
+
+// TestRunOutcomeMigrationRefusesAConnectionThatNeverEnforcedForeignKeys pins the
+// entry gate. The migration turns foreign keys off and promises to put them
+// back; starting from a connection that never had them on would make that
+// promise a claim about a state the migration never observed. The pool is
+// opened without the enforcement pragma, so every connection it hands out is
+// unenforced — no reliance on which connection gets reused.
+func TestRunOutcomeMigrationRefusesAConnectionThatNeverEnforcedForeignKeys(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "foreign-keys-off.db")
+	legacy := openMigratedThroughLegacy(t, ctx, path)
+	seedLegacySession(t, ctx, legacy, "sess_fk_off")
+	seedLegacyRun(t, ctx, legacy, legacyRun{
+		id: "run_fk_off", sessionID: "sess_fk_off", status: "failed",
+		errorCode: "weird_legacy_code", errorMessage: "provider stack trace",
+		assistantMessageID: "msg_fk_off", assistantContent: "partial answer",
+		finishedAt: "2026-01-01T00:00:07.000000000Z",
+	})
+	seedRunOwnedChildren(t, ctx, legacy, "sess_fk_off", "run_fk_off", "msg_fk_off")
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	unenforced, err := sql.Open(sqliteDriverName, "file:"+path+"?_journal_mode=WAL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unenforced.SetMaxOpenConns(1)
+	database := &DB{DB: unenforced}
+	defer database.Close()
+	var enabled int
+	if err := database.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&enabled); err != nil {
+		t.Fatal(err)
+	}
+	if enabled != 0 {
+		t.Fatalf("PRAGMA foreign_keys = %d, want 0 for this fixture", enabled)
+	}
+
+	err = applyRunOutcomesMigration(t, ctx, database)
+	if !errors.Is(err, errForeignKeysNotEnforced) {
+		t.Fatalf("ApplyMigrations error = %v, want the unenforced foreign keys sentinel", err)
+	}
+	if got := err.Error(); got != "run outcome migration requires enforced foreign keys" {
+		t.Fatalf("error = %q, want exactly the value-free sentinel", got)
+	}
+	// This is a refusal, not the fatal restoration path: nothing was weakened,
+	// so the database is left open and unchanged.
+	assertPreMigrationRunShape(t, ctx, database, "run_fk_off", "weird_legacy_code", "provider stack trace")
+	assertRunOwnedChildrenIntact(t, ctx, database, "run_fk_off")
+}
+
+// TestRunOutcomeMigrationClosesTheDatabaseWhenForeignKeysCannotBeProvenRestored
+// covers the fatal path. The pinned connection goes back to the pool after this
+// migration, so a connection left with cascades disarmed would silently weaken
+// every later statement in the process. Both cases below are real ways the
+// proof fails rather than simulated ones: a connection that has gone away, and
+// a restoration that SQLite accepts and then ignores.
+func TestRunOutcomeMigrationClosesTheDatabaseWhenForeignKeysCannotBeProvenRestored(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		disturb func(t *testing.T, ctx context.Context, conn *sql.Conn)
+	}{
+		{
+			name: "the connection is gone before the pragma runs",
+			disturb: func(t *testing.T, _ context.Context, conn *sql.Conn) {
+				if err := conn.Close(); err != nil {
+					t.Errorf("close pinned connection: %v", err)
+				}
+			},
+		},
+		{
+			name: "the pragma is accepted inside a transaction and does nothing",
+			disturb: func(t *testing.T, ctx context.Context, conn *sql.Conn) {
+				// PRAGMA foreign_keys is a documented no-op while a
+				// transaction is open, so the restoration silently does not
+				// take and only the re-read can notice.
+				if _, err := conn.ExecContext(ctx, `BEGIN`); err != nil {
+					t.Errorf("begin on pinned connection: %v", err)
+				}
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "foreign-keys-unrestorable.db")
+			database := openMigratedThroughLegacy(t, ctx, path)
+			defer database.Close()
+			seedLegacySession(t, ctx, database, "sess_fk_fatal")
+			seedLegacyRun(t, ctx, database, legacyRun{
+				id: "run_fk_fatal", sessionID: "sess_fk_fatal", status: "completed",
+				assistantMessageID: "msg_fk_fatal", assistantContent: "answer",
+			})
+			seedRunOwnedChildren(t, ctx, database, "sess_fk_fatal", "run_fk_fatal", "msg_fk_fatal")
+			disturb := testCase.disturb
+			migrationPinnedConnectionHook = func(ctx context.Context, conn *sql.Conn) {
+				disturb(t, ctx, conn)
+			}
+			t.Cleanup(func() { migrationPinnedConnectionHook = nil })
+
+			err := applyRunOutcomesMigration(t, ctx, database)
+			if !errors.Is(err, errForeignKeysUnrestorable) {
+				t.Fatalf("ApplyMigrations error = %v, want the unrestorable foreign keys sentinel", err)
+			}
+			if got := err.Error(); got != "run outcome migration could not restore foreign keys" {
+				t.Fatalf("error = %q, want exactly the value-free sentinel", got)
+			}
+			// Startup fails and the pool is gone: a cascade-disabled
+			// connection is never handed back out.
+			pingErr := database.PingContext(ctx)
+			if pingErr == nil {
+				t.Fatal("the database is still usable after an unprovable foreign key restoration")
+			}
+			if !strings.Contains(pingErr.Error(), "database is closed") {
+				t.Fatalf("ping error = %v, want a closed database", pingErr)
+			}
+		})
+	}
+}
+
 type migratedRunState struct {
 	Lifecycle      string
 	OutcomeReason  string
@@ -1105,6 +1438,45 @@ func TestRunOutcomeMigrationBackfillsEveryLifecycleAndOutcome(t *testing.T) {
 				t.Fatalf("%s state_updated_at = %q, want the fixed-width canonical layout", runID, got.StateUpdatedAt)
 			}
 		})
+	}
+}
+
+// TestRunOutcomeSchemaEnforcesTheOutcomeVocabularyAndNotThePairing pins exactly
+// what the rebuilt table promises, because a reader who believes in a check
+// that does not exist will stop writing the one that does. The closed
+// outcome_reason vocabulary is a real column constraint. The lifecycle/outcome
+// pairing is not: existing writers still terminalize a run without touching
+// outcome_reason, so a cross-column check added here would reject writes this
+// change does not own. When the versioned transitions take ownership of the
+// pair, this test is the thing that changes with them.
+func TestRunOutcomeSchemaEnforcesTheOutcomeVocabularyAndNotThePairing(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedThroughLegacy(t, ctx, filepath.Join(t.TempDir(), "outcome-vocabulary.db"))
+	defer database.Close()
+	seedLegacySession(t, ctx, database, "sess_vocabulary")
+	seedLegacyRun(t, ctx, database, legacyRun{
+		id: "run_vocabulary", sessionID: "sess_vocabulary", status: "completed",
+		assistantMessageID: "msg_vocabulary", assistantContent: "answer",
+	})
+	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := database.ExecContext(ctx,
+		`UPDATE agent_runs SET outcome_reason = 'provider_said_something' WHERE id = 'run_vocabulary'`); err == nil {
+		t.Fatal("the schema accepted an outcome_reason outside the closed vocabulary")
+	}
+	// In the vocabulary, but paired with a lifecycle the approved matrix would
+	// never produce. The schema takes it, and saying so plainly is better than
+	// a comment that implies a guarantee nothing is providing.
+	if _, err := database.ExecContext(ctx,
+		`UPDATE agent_runs SET outcome_reason = 'provider_failure' WHERE id = 'run_vocabulary'`); err != nil {
+		t.Fatalf("the schema rejected a lifecycle/outcome pair it does not constrain: %v", err)
+	}
+	state := readMigratedRunState(t, ctx, database, "run_vocabulary")
+	if state.Lifecycle != "completed" || state.OutcomeReason != "provider_failure" {
+		t.Fatalf("run = %s/%s, want completed/provider_failure to persist unconstrained",
+			state.Lifecycle, state.OutcomeReason)
 	}
 }
 
@@ -1816,38 +2188,9 @@ func TestRunOutcomeMigrationRollsBackEveryPhase(t *testing.T) {
 			}
 			defer reopened.Close()
 
-			// Old table shape.
-			for _, column := range []string{"state_version", "state_updated_at", "outcome_reason", "assistant_content_sha256"} {
-				if hasColumn(t, ctx, reopened, "agent_runs", column) {
-					t.Fatalf("agent_runs.%s survived a rolled-back migration", column)
-				}
-			}
-			if _, err := reopened.ExecContext(ctx,
-				`UPDATE agent_runs SET status = 'recovering' WHERE id = 'run_rollback'`); err == nil {
-				t.Fatal("the widened status CHECK survived a rolled-back migration")
-			}
-			// Old data.
-			var errorCode, errorMessage string
-			if err := reopened.QueryRowContext(ctx,
-				`SELECT error_code, error_message FROM agent_runs WHERE id = 'run_rollback'`).
-				Scan(&errorCode, &errorMessage); err != nil {
-				t.Fatal(err)
-			}
-			if errorCode != "weird_legacy_code" || errorMessage != "provider stack trace" {
-				t.Fatalf("run diagnostics = %q/%q, want the pre-migration values", errorCode, errorMessage)
-			}
-			var jobMessage, toolMessage string
-			if err := reopened.QueryRowContext(ctx,
-				`SELECT error_message FROM jobs WHERE id = 'job_child'`).Scan(&jobMessage); err != nil {
-				t.Fatal(err)
-			}
-			if err := reopened.QueryRowContext(ctx,
-				`SELECT error_message FROM tool_calls WHERE id = 'call_child'`).Scan(&toolMessage); err != nil {
-				t.Fatal(err)
-			}
-			if jobMessage != "provider text" || toolMessage != "tool text" {
-				t.Fatalf("child diagnostics = %q/%q, want the pre-migration values", jobMessage, toolMessage)
-			}
+			// Old table shape, old diagnostics, absent indexes, absent scratch
+			// table, absent migration record.
+			assertPreMigrationRunShape(t, ctx, reopened, "run_rollback", "weird_legacy_code", "provider stack trace")
 			// Old event JSON.
 			var payload string
 			if err := reopened.QueryRowContext(ctx,
@@ -1857,24 +2200,6 @@ func TestRunOutcomeMigrationRollsBackEveryPhase(t *testing.T) {
 			}
 			if payload != legacyFailedPayload {
 				t.Fatalf("event payload = %q, want the pre-migration payload", payload)
-			}
-			// Absent indexes, absent migration row, absent scratch table.
-			for _, name := range []string{"idx_runs_assistant_message_unique", "idx_messages_assistant_run_unique"} {
-				if sqliteObjectExists(t, ctx, reopened, "index", name) {
-					t.Fatalf("index %q survived a rolled-back migration", name)
-				}
-			}
-			if sqliteObjectExists(t, ctx, reopened, "table", runOutcomesBackfillTable) {
-				t.Fatalf("%s survived a rolled-back migration", runOutcomesBackfillTable)
-			}
-			var recorded int
-			if err := reopened.QueryRowContext(ctx,
-				`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`,
-				runOutcomesMigrationVersion).Scan(&recorded); err != nil {
-				t.Fatal(err)
-			}
-			if recorded != 0 {
-				t.Fatalf("migration record count = %d, want 0", recorded)
 			}
 			// Children, rationale, and referential integrity.
 			assertRunOwnedChildrenIntact(t, ctx, reopened, "run_rollback")

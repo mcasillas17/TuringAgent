@@ -51,6 +51,15 @@ var migrationHooks = map[string]migrationHook{
 // and to inject a failure at one exact seam. Production leaves it nil.
 var migrationPhaseHook func(context.Context, string, string, *sql.Tx) error
 
+// migrationPinnedConnectionHook is set only by migration tests, to disturb the
+// pinned connection between the transaction and the foreign-key restoration
+// proof. Nothing else can reach that connection — this function holds it and
+// the pool has no second one — so without this seam the fatal
+// cannot-prove-restoration path could not be exercised at all. It cannot
+// fabricate an outcome: it returns nothing, and the restoration proof below is
+// still the only thing that decides. Production leaves it nil.
+var migrationPinnedConnectionHook func(context.Context, *sql.Conn)
+
 var (
 	// errForeignKeysNotEnforced refuses to start the rebuild from a connection
 	// that never had referential integrity on: turning foreign keys "back on"
@@ -162,7 +171,11 @@ func applyHookedMigration(ctx context.Context, database *DB, version string, sql
 	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
 		return restoreForeignKeys(ctx, database, conn, err)
 	}
-	return restoreForeignKeys(ctx, database, conn, runHookedMigrationTx(ctx, conn, version, sections, hook))
+	pending := runHookedMigrationTx(ctx, conn, version, sections, hook)
+	if migrationPinnedConnectionHook != nil {
+		migrationPinnedConnectionHook(ctx, conn)
+	}
+	return restoreForeignKeys(ctx, database, conn, pending)
 }
 
 func runHookedMigrationTx(
@@ -1101,21 +1114,12 @@ func requireCanonicalRunState(ctx context.Context, tx *sql.Tx) error {
 	if invalid != 0 {
 		return errRunOutcomeCanonicalFields
 	}
-	// A link both rows agree on must also agree on session and role. Legacy
-	// half-links stay untouched; a mutually named pair that disagrees would
-	// make the joined history read ambiguous.
-	var inconsistent int
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		FROM agent_runs r
-		JOIN messages m ON m.id = r.assistant_message_id
-		WHERE m.run_id = r.id
-			AND (m.session_id <> r.session_id OR m.role <> 'assistant')
-	`).Scan(&inconsistent); err != nil {
-		return err
-	}
-	if inconsistent != 0 {
-		return runcorrelation.ErrConflict
-	}
+	// Correlation is deliberately not re-judged here beyond the duplicate
+	// preflight above. A mutually named pair that disagrees about session or
+	// role still has exactly one claimant on each side, so it has one honest
+	// reading: the link is unusable. deriveRunOutcome already refused to adopt
+	// its content, and the two partial unique indexes still prevent a second
+	// claimant from appearing. Aborting a whole migration over a row the
+	// fallback handles neutrally would contradict the fallback.
 	return nil
 }
