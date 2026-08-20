@@ -299,7 +299,8 @@ func requireEmptyForeignKeyCheck(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-// sqlSectionIsEmpty reports whether a section carries no statement, so a// comment-only or blank slice between markers is skipped rather than handed to
+// sqlSectionIsEmpty reports whether a section carries no statement, so a
+// comment-only or blank slice between markers is skipped rather than handed to
 // the driver. It only inspects whole-line comments, which is all a section
 // boundary can produce.
 func sqlSectionIsEmpty(section string) bool {
