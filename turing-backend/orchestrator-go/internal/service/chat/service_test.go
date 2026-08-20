@@ -1286,7 +1286,11 @@ func TestSendMessageCancellationCancelsRun(t *testing.T) {
 	}
 	runID := first.GetRunQueued().RunId
 	cancel()
-	_, err = stream.Recv()
+	// A run-started event may already be buffered when cancellation wins on
+	// the server. Drain in-flight events until the cancelled stream closes.
+	for err == nil {
+		_, err = stream.Recv()
+	}
 	if status.Code(err) != codes.Canceled && err != io.EOF {
 		t.Fatalf("Recv after cancel = %v", err)
 	}
