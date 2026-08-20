@@ -15,6 +15,7 @@ func TestLoadFromEnvRequiresSecretsAndDefaultsPorts(t *testing.T) {
 		"MCP_SYSTEM_TOKEN_GENERAL":   "system-token",
 		"MCP_FILES_TOKEN_GENERAL":    "files-token",
 		"TURING_APPROVAL_JWT_SECRET": "approval-secret",
+		"TURING_CURSOR_HMAC_SECRET":  strings.Repeat("ab", 32),
 	}
 	cfg, err := LoadFromMap(env)
 	if err != nil {
@@ -35,6 +36,7 @@ func TestLoadFromEnvRejectsInvalidInteger(t *testing.T) {
 		"MCP_SYSTEM_TOKEN_GENERAL":   "system-token",
 		"MCP_FILES_TOKEN_GENERAL":    "files-token",
 		"TURING_APPROVAL_JWT_SECRET": "approval-secret",
+		"TURING_CURSOR_HMAC_SECRET":  strings.Repeat("ab", 32),
 		"ORCHESTRATOR_PUBLIC_PORT":   "abc",
 	}
 
@@ -51,6 +53,7 @@ func TestLoadFromEnvUsesApprovalTTL(t *testing.T) {
 		"MCP_SYSTEM_TOKEN_GENERAL":   "system-token",
 		"MCP_FILES_TOKEN_GENERAL":    "files-token",
 		"TURING_APPROVAL_JWT_SECRET": "approval-secret",
+		"TURING_CURSOR_HMAC_SECRET":  strings.Repeat("ab", 32),
 		"TURING_APPROVAL_TIMEOUT_MS": "75000",
 	}
 
@@ -70,6 +73,7 @@ func TestLoadFromMapValidatesMaxConcurrentRunsWithinRuntimeBound(t *testing.T) {
 		"MCP_SYSTEM_TOKEN_GENERAL":   "system-token",
 		"MCP_FILES_TOKEN_GENERAL":    "files-token",
 		"TURING_APPROVAL_JWT_SECRET": "approval-secret",
+		"TURING_CURSOR_HMAC_SECRET":  strings.Repeat("ab", 32),
 	}
 	for _, value := range []string{"0", "129", "2147483648"} {
 		t.Run(value, func(t *testing.T) {
@@ -148,6 +152,49 @@ func requiredEnv() map[string]string {
 		"MCP_SYSTEM_TOKEN_GENERAL":   "system-token",
 		"MCP_FILES_TOKEN_GENERAL":    "files-token",
 		"TURING_APPROVAL_JWT_SECRET": "approval-secret",
+		"TURING_CURSOR_HMAC_SECRET":  strings.Repeat("ab", 32),
+	}
+}
+
+func TestLoadFromMapRequiresCursorHMACSecret(t *testing.T) {
+	env := requiredEnv()
+	delete(env, "TURING_CURSOR_HMAC_SECRET")
+
+	_, err := LoadFromMap(env)
+	if err == nil || !strings.Contains(err.Error(), "TURING_CURSOR_HMAC_SECRET") {
+		t.Fatalf("LoadFromMap error = %v, want missing cursor secret", err)
+	}
+}
+
+func TestLoadFromMapValidatesCursorHMACSecret(t *testing.T) {
+	for _, value := range []string{
+		"not-hex",
+		strings.Repeat("a", 63),
+		strings.Repeat("A", 64),
+		strings.Repeat("ab", 33),
+	} {
+		t.Run(value, func(t *testing.T) {
+			env := requiredEnv()
+			env["TURING_CURSOR_HMAC_SECRET"] = value
+			_, err := LoadFromMap(env)
+			if err == nil || !strings.Contains(err.Error(), "TURING_CURSOR_HMAC_SECRET") {
+				t.Fatalf("LoadFromMap cursor secret %q error = %v", value, err)
+			}
+		})
+	}
+
+	env := requiredEnv()
+	env["TURING_CURSOR_HMAC_SECRET"] = strings.Repeat("ab", 32)
+	cfg, err := LoadFromMap(env)
+	if err != nil {
+		t.Fatalf("LoadFromMap valid cursor secret: %v", err)
+	}
+	var want [32]byte
+	for i := range want {
+		want[i] = 0xab
+	}
+	if cfg.CursorHMACKey != want {
+		t.Fatalf("CursorHMACKey = %x, want %x", cfg.CursorHMACKey, want)
 	}
 }
 
@@ -225,6 +272,7 @@ func baseIntegrationEnv(extra map[string]string) map[string]string {
 		"MCP_SYSTEM_TOKEN_GENERAL":   "system-token",
 		"MCP_FILES_TOKEN_GENERAL":    "files-token",
 		"TURING_APPROVAL_JWT_SECRET": "approval-secret",
+		"TURING_CURSOR_HMAC_SECRET":  strings.Repeat("ab", 32),
 	}
 	for key, value := range extra {
 		env[key] = value

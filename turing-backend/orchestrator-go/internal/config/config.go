@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"fmt"
 	"math"
 	"os"
@@ -23,6 +24,7 @@ type Config struct {
 	MCPSystemTokenGeneral string
 	MCPFilesTokenGeneral  string
 	ApprovalJWTSecret     string
+	CursorHMACKey         [32]byte
 	// IntegrationKey seals third-party credentials before they are stored.
 	// Optional: when it is empty, connecting an account is refused with a
 	// reason rather than the credential being stored in the clear.
@@ -134,6 +136,14 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	cursorSecret, err := required("TURING_CURSOR_HMAC_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
+	cursorHMACKey, err := parseCursorHMACKey(cursorSecret)
+	if err != nil {
+		return Config{}, err
+	}
 	// Validated at startup rather than at the first connect attempt: a key
 	// that is present but malformed is a misconfiguration, and finding out
 	// about it while pasting a token is finding out too late.
@@ -225,6 +235,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		MCPSystemTokenGeneral:     systemToken,
 		MCPFilesTokenGeneral:      filesToken,
 		ApprovalJWTSecret:         approvalSecret,
+		CursorHMACKey:             cursorHMACKey,
 		IntegrationKey:            integrationKey,
 		PublicPort:                publicPort,
 		InternalPort:              internalPort,
@@ -249,4 +260,23 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		ApprovalTTLMS:             approvalTTL,
 		LogLevel:                  stringValue("LOG_LEVEL", "info"),
 	}, nil
+}
+
+func parseCursorHMACKey(value string) ([32]byte, error) {
+	var key [32]byte
+	if len(value) != hex.EncodedLen(len(key)) {
+		return key, fmt.Errorf("invalid TURING_CURSOR_HMAC_SECRET")
+	}
+	for i := range value {
+		c := value[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return key, fmt.Errorf("invalid TURING_CURSOR_HMAC_SECRET")
+		}
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		return key, fmt.Errorf("invalid TURING_CURSOR_HMAC_SECRET")
+	}
+	copy(key[:], decoded)
+	return key, nil
 }

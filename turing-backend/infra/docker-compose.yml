@@ -22,6 +22,7 @@ services:
       MCP_SYSTEM_TOKEN_GENERAL: ${MCP_SYSTEM_TOKEN_GENERAL}
       MCP_FILES_TOKEN_GENERAL: ${MCP_FILES_TOKEN_GENERAL}
       TURING_APPROVAL_JWT_SECRET: ${TURING_APPROVAL_JWT_SECRET}
+      TURING_CURSOR_HMAC_SECRET: ${TURING_CURSOR_HMAC_SECRET}
       # Seals third-party credentials before they reach the database. The
       # orchestrator is the only service that stores or opens one.
       TURING_INTEGRATION_KEY: ${TURING_INTEGRATION_KEY}

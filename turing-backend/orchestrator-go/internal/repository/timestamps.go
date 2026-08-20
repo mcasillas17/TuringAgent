@@ -3,12 +3,12 @@ package repository
 import (
 	"strings"
 	"time"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/persisttime"
 )
 
-const persistedTimestampLayout = "2006-01-02T15:04:05.000000000Z"
-
 func FormatTimestamp(value time.Time) string {
-	return value.UTC().Format(persistedTimestampLayout)
+	return persisttime.Format(value)
 }
 
 func sqliteTimestampNanos(column string) string {

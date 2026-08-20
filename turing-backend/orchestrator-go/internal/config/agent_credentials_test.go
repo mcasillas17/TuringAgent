@@ -63,6 +63,7 @@ func TestLoadFromMapKeepsOnlyCredentialNames(t *testing.T) {
 		"MCP_SYSTEM_TOKEN_GENERAL":   "system",
 		"MCP_FILES_TOKEN_GENERAL":    "files",
 		"TURING_APPROVAL_JWT_SECRET": "secret",
+		"TURING_CURSOR_HMAC_SECRET":  strings.Repeat("ab", 32),
 		AgentAPIKeysVar:              `{"claude":"sk-ant-1"}`,
 	})
 	if err != nil {
@@ -85,6 +86,7 @@ func TestLoadFromMapRefusesMalformedAgentKeys(t *testing.T) {
 		"MCP_SYSTEM_TOKEN_GENERAL":   "system",
 		"MCP_FILES_TOKEN_GENERAL":    "files",
 		"TURING_APPROVAL_JWT_SECRET": "secret",
+		"TURING_CURSOR_HMAC_SECRET":  strings.Repeat("ab", 32),
 		AgentAPIKeysVar:              "not json",
 	})
 	if err == nil {
