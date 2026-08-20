@@ -494,7 +494,7 @@ After the four claim checks pass, the verifier calls the orchestrator's gRPC
 
 - Address: `${ORCHESTRATOR_GRPC_ADDR}`. The default is
   `turing-orchestrator:3001`.
-- Metadata: `authorization: Bearer ${TURING_INTERNAL_TOKEN}`.
+- Metadata: `authorization: Bearer ${TURING_APPROVAL_CONSUMER_TOKEN}`.
 - Response handling:
   - `APPROVAL_STATUS_CONSUMED` — the JWT was unused; the verifier returns
     success and the write proceeds.
@@ -508,6 +508,19 @@ The write happens **only after consume returns consumed**. In other words, a
 successful consume is the act of marking the JWT used, and any failure path
 after that point (write error, etc.) does not roll consume back. This is
 intentional: a partially completed write is still a "used" approval.
+
+The internal gRPC server authorizes each caller by which of two registered
+tokens its bearer matches, not by anything the caller claims about itself.
+`TURING_APPROVAL_CONSUMER_TOKEN` (held by `mcp-files`, and by any future MCP
+server that consumes approvals) is authorized only for
+`ApprovalService.ConsumeApproval`. `TURING_RUNTIME_TOKEN` (held by
+`agent-runtime-go`) is authorized for that method plus
+`ApprovalService.GetApprovalForRuntime`, `RuntimeService.ConnectWorker`, and
+`SessionService.ListMessages`/`SearchMessages`. The two tokens must differ —
+the orchestrator refuses to start otherwise — so a compromised `mcp-files`
+cannot present the runtime's token to claim a job or read conversation
+history, and a compromised runtime cannot pose as a different service's
+approval consumer.
 
 `TestValidateRejectsConsumeReplayConflict` asserts the `FailedPrecondition`
 path.
@@ -659,7 +672,7 @@ Consume method requirements:
 
 - RPC: `ApprovalService.ConsumeApproval`.
 - Request: `approval_id` is the JWT `jti`.
-- Auth: gRPC metadata `authorization: Bearer ${TURING_INTERNAL_TOKEN}`. The
+- Auth: gRPC metadata `authorization: Bearer ${TURING_APPROVAL_CONSUMER_TOKEN}`. The
   service must stay on the internal gRPC port (not published to the host).
 - Semantics:
   - First call for a given `jti` that corresponds to an approved request

@@ -123,7 +123,7 @@ Approval-gated file writes use a two-step flow:
 4. `mcp-files` requires its approval secret at startup and verifies the JWT
    type, orchestrator issuer, audience, subject, tool name, argument hash,
    signature, and expiration (including rejecting `exp == now`).
-5. `mcp-files` calls `ApprovalService.ConsumeApproval` over internal gRPC using `authorization: Bearer ${TURING_INTERNAL_TOKEN}`.
+5. `mcp-files` calls `ApprovalService.ConsumeApproval` over internal gRPC using `authorization: Bearer ${TURING_APPROVAL_CONSUMER_TOKEN}`.
 6. The file write proceeds only if the consume response is `APPROVAL_STATUS_CONSUMED`.
 
 Human approve comments and deny reasons are stored with the decision in

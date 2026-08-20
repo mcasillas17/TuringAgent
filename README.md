@@ -131,7 +131,8 @@ Common values:
 | Variable | Purpose |
 |---|---|
 | `TURING_CLIENT_API_KEY` | Bearer token for Flutter and other public gRPC clients |
-| `TURING_INTERNAL_TOKEN` | Bearer token for internal runtime and approval gRPC calls |
+| `TURING_RUNTIME_TOKEN` | Bearer token for the agent runtime's internal gRPC calls (claim jobs, read session history, poll/consume approvals) |
+| `TURING_APPROVAL_CONSUMER_TOKEN` | Bearer token for mcp-files' internal gRPC calls; authorized only for `ApprovalService.ConsumeApproval`, never the runtime's methods |
 | `TURING_APPROVAL_JWT_SECRET` | HS256 secret used for approval tokens |
 | `TURING_CURSOR_HMAC_SECRET` | Orchestrator-only 32-byte hex key authenticating opaque session cursors; rotation invalidates outstanding cursors |
 | `TURING_APPROVAL_TIMEOUT_MS` / `TURING_APPROVAL_WAIT_TIMEOUT_MS` | Approval lifetime and the longer runtime observation bound (defaults: 65s / 71s) |

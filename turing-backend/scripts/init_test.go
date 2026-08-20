@@ -517,7 +517,6 @@ func executeInitWithSetup(t *testing.T, uid, gid, identityConfig string, chownEx
 		t.Fatal(err)
 	}
 	env := "TURING_CLIENT_API_KEY=client\n" +
-		"TURING_INTERNAL_TOKEN=internal\n" +
 		"MCP_SYSTEM_TOKEN_GENERAL=system\n" +
 		"MCP_FILES_TOKEN_GENERAL=files\n" +
 		"TURING_APPROVAL_JWT_SECRET=approval\n" +
@@ -647,6 +646,46 @@ func TestInitKeepsAnExistingCursorHMACSecret(t *testing.T) {
 	result := runInit(t, "501", "20", "TURING_CURSOR_HMAC_SECRET="+existing+"\n")
 
 	assertEnvValue(t, result.env, "TURING_CURSOR_HMAC_SECRET", existing)
+}
+
+// The runtime and approval-consumer identities must never collide: a shared
+// secret would let a compromised approval consumer (mcp-files) present the
+// runtime's own credential and reach RuntimeService/SessionService, which is
+// exactly the privilege escalation TUR-006 removes.
+func TestInitGeneratesDistinctRuntimeAndApprovalConsumerTokens(t *testing.T) {
+	result := runInit(t, "501", "20", "")
+
+	runtimeToken := envValue(t, result.env, "TURING_RUNTIME_TOKEN")
+	approvalConsumerToken := envValue(t, result.env, "TURING_APPROVAL_CONSUMER_TOKEN")
+	for name, value := range map[string]string{
+		"TURING_RUNTIME_TOKEN":           runtimeToken,
+		"TURING_APPROVAL_CONSUMER_TOKEN": approvalConsumerToken,
+	} {
+		if len(value) != 64 {
+			t.Fatalf("%s has %d chars, want 64 hex characters", name, len(value))
+		}
+		if _, err := hex.DecodeString(value); err != nil {
+			t.Fatalf("%s is not hex", name)
+		}
+	}
+	if runtimeToken == approvalConsumerToken {
+		t.Fatal("TURING_RUNTIME_TOKEN and TURING_APPROVAL_CONSUMER_TOKEN were generated equal")
+	}
+}
+
+// Restarting the stack (re-running init.sh) must not rotate either identity's
+// token out from under services that already hold it: rotation is a distinct,
+// deliberate action, not a side effect of an ordinary restart.
+func TestInitKeepsExistingRuntimeAndApprovalConsumerTokensAcrossRestart(t *testing.T) {
+	existingRuntime := strings.Repeat("11", 32)
+	existingApprovalConsumer := strings.Repeat("22", 32)
+
+	result := runInit(t, "501", "20",
+		"TURING_RUNTIME_TOKEN="+existingRuntime+"\n"+
+			"TURING_APPROVAL_CONSUMER_TOKEN="+existingApprovalConsumer+"\n")
+
+	assertEnvValue(t, result.env, "TURING_RUNTIME_TOKEN", existingRuntime)
+	assertEnvValue(t, result.env, "TURING_APPROVAL_CONSUMER_TOKEN", existingApprovalConsumer)
 }
 
 func envValue(t *testing.T, env, name string) string {

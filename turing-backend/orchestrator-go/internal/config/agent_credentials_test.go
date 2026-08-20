@@ -58,13 +58,13 @@ func TestAgentCredentialNamesDropsTheKeys(t *testing.T) {
 // names and not the values.
 func TestLoadFromMapKeepsOnlyCredentialNames(t *testing.T) {
 	cfg, err := LoadFromMap(map[string]string{
-		"TURING_CLIENT_API_KEY":      "client",
-		"TURING_INTERNAL_TOKEN":      "internal",
-		"MCP_SYSTEM_TOKEN_GENERAL":   "system",
-		"MCP_FILES_TOKEN_GENERAL":    "files",
-		"TURING_APPROVAL_JWT_SECRET": "secret",
-		"TURING_CURSOR_HMAC_SECRET":  strings.Repeat("ab", 32),
-		AgentAPIKeysVar:              `{"claude":"sk-ant-1"}`,
+		"TURING_CLIENT_API_KEY":          "client",
+		"TURING_RUNTIME_TOKEN":           "runtime",
+		"TURING_APPROVAL_CONSUMER_TOKEN": "approval-consumer",
+		"MCP_FILES_ENABLED":              "true",
+		"TURING_APPROVAL_JWT_SECRET":     "secret",
+		"TURING_CURSOR_HMAC_SECRET":      strings.Repeat("ab", 32),
+		AgentAPIKeysVar:                  `{"claude":"sk-ant-1"}`,
 	})
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -81,13 +81,13 @@ func TestLoadFromMapKeepsOnlyCredentialNames(t *testing.T) {
 
 func TestLoadFromMapRefusesMalformedAgentKeys(t *testing.T) {
 	_, err := LoadFromMap(map[string]string{
-		"TURING_CLIENT_API_KEY":      "client",
-		"TURING_INTERNAL_TOKEN":      "internal",
-		"MCP_SYSTEM_TOKEN_GENERAL":   "system",
-		"MCP_FILES_TOKEN_GENERAL":    "files",
-		"TURING_APPROVAL_JWT_SECRET": "secret",
-		"TURING_CURSOR_HMAC_SECRET":  strings.Repeat("ab", 32),
-		AgentAPIKeysVar:              "not json",
+		"TURING_CLIENT_API_KEY":          "client",
+		"TURING_RUNTIME_TOKEN":           "runtime",
+		"TURING_APPROVAL_CONSUMER_TOKEN": "approval-consumer",
+		"MCP_FILES_ENABLED":              "true",
+		"TURING_APPROVAL_JWT_SECRET":     "secret",
+		"TURING_CURSOR_HMAC_SECRET":      strings.Repeat("ab", 32),
+		AgentAPIKeysVar:                  "not json",
 	})
 	if err == nil {
 		t.Fatal("malformed agent keys did not fail startup")

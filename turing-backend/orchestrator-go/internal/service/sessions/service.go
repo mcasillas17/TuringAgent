@@ -237,7 +237,7 @@ func (s *Server) GetConfig(context.Context, *turingv1.GetConfigRequest) (*turing
 	return &turingv1.GetConfigResponse{
 		Providers:        providers,
 		ApprovalsEnabled: s.cfg.ApprovalJWTSecret != "",
-		FilesMcpEnabled:  s.cfg.MCPFilesTokenGeneral != "",
+		FilesMcpEnabled:  s.cfg.FilesMCPEnabled,
 	}, nil
 }
 

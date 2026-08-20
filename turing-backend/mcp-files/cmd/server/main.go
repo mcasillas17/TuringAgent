@@ -23,11 +23,11 @@ const maxMCPResponseBytes = 1024 * 1024
 const healthcheckTimeout = time.Second
 
 type serverConfig struct {
-	filesToken           string
-	approvalJwtSecret    string
-	orchestratorGRPCAddr string
-	internalToken        string
-	sandboxRoot          string
+	filesToken            string
+	approvalJwtSecret     string
+	orchestratorGRPCAddr  string
+	approvalConsumerToken string
+	sandboxRoot           string
 }
 
 func main() {
@@ -72,11 +72,11 @@ func loadConfig() (serverConfig, error) {
 		return serverConfig{}, errors.New("TURING_APPROVAL_JWT_SECRET is required")
 	}
 	return serverConfig{
-		filesToken:           os.Getenv("MCP_FILES_TOKEN_GENERAL"),
-		approvalJwtSecret:    approvalJWTSecret,
-		orchestratorGRPCAddr: envOrDefault("ORCHESTRATOR_GRPC_ADDR", "turing-orchestrator:3001"),
-		internalToken:        os.Getenv("TURING_INTERNAL_TOKEN"),
-		sandboxRoot:          envOrDefault("FILES_SANDBOX_ROOT", "/sandbox"),
+		filesToken:            os.Getenv("MCP_FILES_TOKEN_GENERAL"),
+		approvalJwtSecret:     approvalJWTSecret,
+		orchestratorGRPCAddr:  envOrDefault("ORCHESTRATOR_GRPC_ADDR", "turing-orchestrator:3001"),
+		approvalConsumerToken: os.Getenv("TURING_APPROVAL_CONSUMER_TOKEN"),
+		sandboxRoot:           envOrDefault("FILES_SANDBOX_ROOT", "/sandbox"),
 	}, nil
 }
 
@@ -90,9 +90,9 @@ func newHandler(cfg serverConfig) http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	filesTools := tools.NewFilesTools(cfg.sandboxRoot).WithApprovalValidator(approval.Consumer{
-		OrchestratorGRPCAddr: cfg.orchestratorGRPCAddr,
-		InternalToken:        cfg.internalToken,
-		JWTSecret:            cfg.approvalJwtSecret,
+		OrchestratorGRPCAddr:  cfg.orchestratorGRPCAddr,
+		ApprovalConsumerToken: cfg.approvalConsumerToken,
+		JWTSecret:             cfg.approvalJwtSecret,
 	})
 	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		agentID, err := auth.AgentFromBearer(r, cfg.filesToken)

@@ -18,9 +18,8 @@ services:
       - no-new-privileges:true
     environment:
       TURING_CLIENT_API_KEY: ${TURING_CLIENT_API_KEY}
-      TURING_INTERNAL_TOKEN: ${TURING_INTERNAL_TOKEN}
-      MCP_SYSTEM_TOKEN_GENERAL: ${MCP_SYSTEM_TOKEN_GENERAL}
-      MCP_FILES_TOKEN_GENERAL: ${MCP_FILES_TOKEN_GENERAL}
+      TURING_RUNTIME_TOKEN: ${TURING_RUNTIME_TOKEN}
+      TURING_APPROVAL_CONSUMER_TOKEN: ${TURING_APPROVAL_CONSUMER_TOKEN}
       TURING_APPROVAL_JWT_SECRET: ${TURING_APPROVAL_JWT_SECRET}
       TURING_CURSOR_HMAC_SECRET: ${TURING_CURSOR_HMAC_SECRET}
       # Seals third-party credentials before they reach the database. The
@@ -34,9 +33,13 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
       OLLAMA_CONTEXT_WINDOW_TOKENS: ${OLLAMA_CONTEXT_WINDOW_TOKENS:-32768}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      # The orchestrator never calls OpenAI or mcp-files itself; GetConfig
+      # only reports whether each is configured, so it receives a derived
+      # boolean rather than the actual secret those calls would need.
+      OPENAI_ENABLED: ${OPENAI_API_KEY:+true}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       OPENAI_CONTEXT_WINDOW_TOKENS: ${OPENAI_CONTEXT_WINDOW_TOKENS:-32768}
+      MCP_FILES_ENABLED: ${MCP_FILES_TOKEN_GENERAL:+true}
       # Parsed here for the names only: the orchestrator answers "can this
       # agent actually run?" for the client and never calls a vendor, so it
       # keeps the credential names and drops the keys.
@@ -78,7 +81,7 @@ services:
     security_opt:
       - no-new-privileges:true
     environment:
-      TURING_INTERNAL_TOKEN: ${TURING_INTERNAL_TOKEN}
+      TURING_RUNTIME_TOKEN: ${TURING_RUNTIME_TOKEN}
       ORCHESTRATOR_GRPC_ADDR: ${ORCHESTRATOR_GRPC_ADDR:-turing-orchestrator:3001}
       TURING_WORKER_ID: ${TURING_WORKER_ID:-worker-general-go}
       TURING_JOB_TIMEOUT_MS: ${TURING_JOB_TIMEOUT_MS:-300000}
@@ -166,7 +169,7 @@ services:
     environment:
       MCP_FILES_TOKEN_GENERAL: ${MCP_FILES_TOKEN_GENERAL}
       TURING_APPROVAL_JWT_SECRET: ${TURING_APPROVAL_JWT_SECRET}
-      TURING_INTERNAL_TOKEN: ${TURING_INTERNAL_TOKEN}
+      TURING_APPROVAL_CONSUMER_TOKEN: ${TURING_APPROVAL_CONSUMER_TOKEN}
       ORCHESTRATOR_GRPC_ADDR: ${ORCHESTRATOR_GRPC_ADDR:-turing-orchestrator:3001}
       FILES_SANDBOX_ROOT: /sandbox
       LOG_LEVEL: ${LOG_LEVEL:-info}

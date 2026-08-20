@@ -26,9 +26,9 @@ func TestValidateChecksClaimsAndConsumesApprovalOverGRPC(t *testing.T) {
 	server := &recordingApprovalService{status: turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED}
 	addr, dialer := startApprovalServer(t, server)
 	consumer := Consumer{
-		OrchestratorGRPCAddr: addr,
-		InternalToken:        "internal",
-		JWTSecret:            "secret",
+		OrchestratorGRPCAddr:  addr,
+		ApprovalConsumerToken: "internal",
+		JWTSecret:             "secret",
 		DialOptions: []grpc.DialOption{
 			grpc.WithContextDialer(dialer),
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -65,7 +65,7 @@ func TestValidateRejectsMismatchedApprovalBinding(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			consumer := Consumer{InternalToken: "internal", JWTSecret: "secret"}
+			consumer := Consumer{ApprovalConsumerToken: "internal", JWTSecret: "secret"}
 			if err := consumer.Validate(signTestToken(t, "secret", tc.claims), tc.tool, tc.args, tc.agent); err == nil {
 				t.Fatalf("expected validation failure")
 			}
@@ -116,9 +116,9 @@ func TestValidateRejectsConsumeReplayConflict(t *testing.T) {
 	server := &recordingApprovalService{oneShot: true}
 	_, dialer := startApprovalServer(t, server)
 	consumer := Consumer{
-		OrchestratorGRPCAddr: "bufnet",
-		InternalToken:        "internal",
-		JWTSecret:            "secret",
+		OrchestratorGRPCAddr:  "bufnet",
+		ApprovalConsumerToken: "internal",
+		JWTSecret:             "secret",
 		DialOptions: []grpc.DialOption{
 			grpc.WithContextDialer(dialer),
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -141,9 +141,9 @@ func TestValidateDoesNotRetryConsumeTransportFailureWithOneShotToken(t *testing.
 	server := &recordingApprovalService{err: status.Error(codes.Unavailable, "transport interrupted")}
 	_, dialer := startApprovalServer(t, server)
 	consumer := Consumer{
-		OrchestratorGRPCAddr: "bufnet",
-		InternalToken:        "internal",
-		JWTSecret:            "secret",
+		OrchestratorGRPCAddr:  "bufnet",
+		ApprovalConsumerToken: "internal",
+		JWTSecret:             "secret",
 		DialOptions: []grpc.DialOption{
 			grpc.WithContextDialer(dialer),
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -165,9 +165,9 @@ func TestValidateContextDerivesConsumeCancellationFromCaller(t *testing.T) {
 		started: make(chan struct{}),
 	}
 	consumer := Consumer{
-		InternalToken:  "internal",
-		JWTSecret:      "secret",
-		ApprovalClient: client,
+		ApprovalConsumerToken: "internal",
+		JWTSecret:             "secret",
+		ApprovalClient:        client,
 	}
 	token := signTestToken(t, "secret", Claims{
 		Iss:      "turing.orchestrator",
@@ -209,9 +209,9 @@ func TestValidateContextDoesNotStartConsumeWhenAlreadyCanceled(t *testing.T) {
 	args := map[string]any{"content": "hello", "path": "note.txt"}
 	client := &blockingApprovalClient{started: make(chan struct{})}
 	consumer := Consumer{
-		InternalToken:  "internal",
-		JWTSecret:      "secret",
-		ApprovalClient: client,
+		ApprovalConsumerToken: "internal",
+		JWTSecret:             "secret",
+		ApprovalClient:        client,
 	}
 	token := signTestToken(t, "secret", Claims{
 		Iss:      "turing.orchestrator",

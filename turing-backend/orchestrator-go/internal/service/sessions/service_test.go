@@ -86,13 +86,12 @@ func newSessionHarness(t *testing.T) *sessionHarness {
 	grpcServer := grpc.NewServer()
 	bus := eventsvc.NewBus(16)
 	service := New(repo, config.Config{
-		MCPSystemTokenGeneral: "system-token",
-		MCPFilesTokenGeneral:  "files-token",
-		ApprovalJWTSecret:     "approval-secret",
-		CursorHMACKey:         [32]byte{1},
-		OllamaModel:           "llama3.2",
-		OpenAIAPIKey:          "openai-key",
-		OpenAIModel:           "gpt-4o-mini",
+		FilesMCPEnabled:   true,
+		ApprovalJWTSecret: "approval-secret",
+		CursorHMACKey:     [32]byte{1},
+		OllamaModel:       "llama3.2",
+		OpenAIEnabled:     true,
+		OpenAIModel:       "gpt-4o-mini",
 	}, capabilities, bus)
 	turingv1.RegisterSessionServiceServer(grpcServer, service)
 	go func() {

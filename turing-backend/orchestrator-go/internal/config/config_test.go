@@ -9,14 +9,7 @@ import (
 )
 
 func TestLoadFromEnvRequiresSecretsAndDefaultsPorts(t *testing.T) {
-	env := map[string]string{
-		"TURING_CLIENT_API_KEY":      "client-key",
-		"TURING_INTERNAL_TOKEN":      "internal-token",
-		"MCP_SYSTEM_TOKEN_GENERAL":   "system-token",
-		"MCP_FILES_TOKEN_GENERAL":    "files-token",
-		"TURING_APPROVAL_JWT_SECRET": "approval-secret",
-		"TURING_CURSOR_HMAC_SECRET":  strings.Repeat("ab", 32),
-	}
+	env := requiredEnv()
 	cfg, err := LoadFromMap(env)
 	if err != nil {
 		t.Fatalf("LoadFromMap returned error: %v", err)
@@ -30,15 +23,8 @@ func TestLoadFromEnvRequiresSecretsAndDefaultsPorts(t *testing.T) {
 }
 
 func TestLoadFromEnvRejectsInvalidInteger(t *testing.T) {
-	env := map[string]string{
-		"TURING_CLIENT_API_KEY":      "client-key",
-		"TURING_INTERNAL_TOKEN":      "internal-token",
-		"MCP_SYSTEM_TOKEN_GENERAL":   "system-token",
-		"MCP_FILES_TOKEN_GENERAL":    "files-token",
-		"TURING_APPROVAL_JWT_SECRET": "approval-secret",
-		"TURING_CURSOR_HMAC_SECRET":  strings.Repeat("ab", 32),
-		"ORCHESTRATOR_PUBLIC_PORT":   "abc",
-	}
+	env := requiredEnv()
+	env["ORCHESTRATOR_PUBLIC_PORT"] = "abc"
 
 	_, err := LoadFromMap(env)
 	if err == nil {
@@ -47,15 +33,8 @@ func TestLoadFromEnvRejectsInvalidInteger(t *testing.T) {
 }
 
 func TestLoadFromEnvUsesApprovalTTL(t *testing.T) {
-	env := map[string]string{
-		"TURING_CLIENT_API_KEY":      "client-key",
-		"TURING_INTERNAL_TOKEN":      "internal-token",
-		"MCP_SYSTEM_TOKEN_GENERAL":   "system-token",
-		"MCP_FILES_TOKEN_GENERAL":    "files-token",
-		"TURING_APPROVAL_JWT_SECRET": "approval-secret",
-		"TURING_CURSOR_HMAC_SECRET":  strings.Repeat("ab", 32),
-		"TURING_APPROVAL_TIMEOUT_MS": "75000",
-	}
+	env := requiredEnv()
+	env["TURING_APPROVAL_TIMEOUT_MS"] = "75000"
 
 	cfg, err := LoadFromMap(env)
 	if err != nil {
@@ -67,14 +46,7 @@ func TestLoadFromEnvUsesApprovalTTL(t *testing.T) {
 }
 
 func TestLoadFromMapValidatesMaxConcurrentRunsWithinRuntimeBound(t *testing.T) {
-	base := map[string]string{
-		"TURING_CLIENT_API_KEY":      "client-key",
-		"TURING_INTERNAL_TOKEN":      "internal-token",
-		"MCP_SYSTEM_TOKEN_GENERAL":   "system-token",
-		"MCP_FILES_TOKEN_GENERAL":    "files-token",
-		"TURING_APPROVAL_JWT_SECRET": "approval-secret",
-		"TURING_CURSOR_HMAC_SECRET":  strings.Repeat("ab", 32),
-	}
+	base := requiredEnv()
 	for _, value := range []string{"0", "129", "2147483648"} {
 		t.Run(value, func(t *testing.T) {
 			env := make(map[string]string, len(base)+1)
@@ -147,12 +119,12 @@ func TestLoadFromMapRejectsSharedRuntimeDurationsOutsideTimeRange(t *testing.T) 
 
 func requiredEnv() map[string]string {
 	return map[string]string{
-		"TURING_CLIENT_API_KEY":      "client-key",
-		"TURING_INTERNAL_TOKEN":      "internal-token",
-		"MCP_SYSTEM_TOKEN_GENERAL":   "system-token",
-		"MCP_FILES_TOKEN_GENERAL":    "files-token",
-		"TURING_APPROVAL_JWT_SECRET": "approval-secret",
-		"TURING_CURSOR_HMAC_SECRET":  strings.Repeat("ab", 32),
+		"TURING_CLIENT_API_KEY":          "client-key",
+		"TURING_RUNTIME_TOKEN":           "runtime-token",
+		"TURING_APPROVAL_CONSUMER_TOKEN": "approval-consumer-token",
+		"MCP_FILES_ENABLED":              "true",
+		"TURING_APPROVAL_JWT_SECRET":     "approval-secret",
+		"TURING_CURSOR_HMAC_SECRET":      strings.Repeat("ab", 32),
 	}
 }
 
@@ -204,6 +176,117 @@ func cloneEnv(source map[string]string) map[string]string {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+// A shared token would let a compromised approval consumer (mcp-files)
+// present the runtime's own token and reach RuntimeService/SessionService —
+// exactly the privilege escalation TUR-006 removes. This must fail at
+// startup, not be discovered as an authorization bug later.
+func TestLoadFromMapRejectsEqualRuntimeAndApprovalConsumerTokens(t *testing.T) {
+	env := requiredEnv()
+	env["TURING_APPROVAL_CONSUMER_TOKEN"] = env["TURING_RUNTIME_TOKEN"]
+	_, err := LoadFromMap(env)
+	if err == nil {
+		t.Fatal("LoadFromMap accepted equal runtime and approval-consumer tokens")
+	}
+	if !strings.Contains(err.Error(), "TURING_RUNTIME_TOKEN") || !strings.Contains(err.Error(), "TURING_APPROVAL_CONSUMER_TOKEN") {
+		t.Fatalf("error = %v, want it to name both variables", err)
+	}
+}
+
+func TestLoadFromMapRequiresRuntimeAndApprovalConsumerTokens(t *testing.T) {
+	for _, name := range []string{"TURING_RUNTIME_TOKEN", "TURING_APPROVAL_CONSUMER_TOKEN"} {
+		t.Run(name, func(t *testing.T) {
+			env := requiredEnv()
+			delete(env, name)
+			_, err := LoadFromMap(env)
+			if err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("LoadFromMap without %s error = %v, want it named", name, err)
+			}
+		})
+	}
+}
+
+// MCP_FILES_ENABLED replaces MCP_FILES_TOKEN_GENERAL as the orchestrator's
+// only signal for whether mcp-files is provisioned: the orchestrator never
+// calls mcp-files itself, so it must never hold that bearer token, only
+// whether Compose considers it configured.
+func TestLoadFromMapRequiresExplicitFilesMCPEnabled(t *testing.T) {
+	env := requiredEnv()
+	delete(env, "MCP_FILES_ENABLED")
+	if _, err := LoadFromMap(env); err == nil || !strings.Contains(err.Error(), "MCP_FILES_ENABLED") {
+		t.Fatalf("LoadFromMap without MCP_FILES_ENABLED error = %v, want it named", err)
+	}
+
+	env = requiredEnv()
+	env["MCP_FILES_ENABLED"] = "yes"
+	if _, err := LoadFromMap(env); err == nil {
+		t.Fatal("LoadFromMap accepted a non-boolean MCP_FILES_ENABLED")
+	}
+
+	env = requiredEnv()
+	env["MCP_FILES_ENABLED"] = "false"
+	cfg, err := LoadFromMap(env)
+	if err != nil {
+		t.Fatalf("LoadFromMap rejected MCP_FILES_ENABLED=false: %v", err)
+	}
+	if cfg.FilesMCPEnabled {
+		t.Fatal("FilesMCPEnabled = true, want false")
+	}
+}
+
+// OPENAI_ENABLED is optional (default false, matching the previous optional
+// OPENAI_API_KEY), but any set value must be an explicit boolean.
+func TestLoadFromMapParsesOptionalOpenAIEnabled(t *testing.T) {
+	cfg, err := LoadFromMap(requiredEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OpenAIEnabled {
+		t.Fatal("OpenAIEnabled defaulted to true with OPENAI_ENABLED unset")
+	}
+
+	env := requiredEnv()
+	env["OPENAI_ENABLED"] = "true"
+	cfg, err = LoadFromMap(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.OpenAIEnabled {
+		t.Fatal("OpenAIEnabled = false, want true")
+	}
+
+	env = requiredEnv()
+	env["OPENAI_ENABLED"] = "1"
+	if _, err := LoadFromMap(env); err == nil {
+		t.Fatal("LoadFromMap accepted a non-boolean OPENAI_ENABLED")
+	}
+}
+
+// The orchestrator's Config type must never carry OPENAI_API_KEY or
+// MCP_SYSTEM_TOKEN_GENERAL/MCP_FILES_TOKEN_GENERAL: those secrets belong only
+// to the processes that actually call OpenAI or the MCP servers. Setting them
+// here must have no effect and must not be required.
+func TestLoadFromMapNeverRequiresOrCarriesRemovedProviderSecrets(t *testing.T) {
+	cfg, err := LoadFromMap(requiredEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OpenAIEnabled {
+		t.Fatal("OpenAIEnabled = true without OPENAI_ENABLED or OPENAI_API_KEY set")
+	}
+
+	env := requiredEnv()
+	env["OPENAI_API_KEY"] = "sk-should-not-be-read"
+	env["MCP_SYSTEM_TOKEN_GENERAL"] = "system-token-should-not-be-read"
+	env["MCP_FILES_TOKEN_GENERAL"] = "files-token-should-not-be-read"
+	cfg, err = LoadFromMap(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OpenAIEnabled {
+		t.Fatal("setting OPENAI_API_KEY alone must not enable OpenAI; only OPENAI_ENABLED may")
+	}
 }
 
 // The integration key is optional: an existing install that has never run the
@@ -267,12 +350,12 @@ func TestLoadFromMapRejectsAMalformedIntegrationKey(t *testing.T) {
 
 func baseIntegrationEnv(extra map[string]string) map[string]string {
 	env := map[string]string{
-		"TURING_CLIENT_API_KEY":      "client-key",
-		"TURING_INTERNAL_TOKEN":      "internal-token",
-		"MCP_SYSTEM_TOKEN_GENERAL":   "system-token",
-		"MCP_FILES_TOKEN_GENERAL":    "files-token",
-		"TURING_APPROVAL_JWT_SECRET": "approval-secret",
-		"TURING_CURSOR_HMAC_SECRET":  strings.Repeat("ab", 32),
+		"TURING_CLIENT_API_KEY":          "client-key",
+		"TURING_RUNTIME_TOKEN":           "runtime-token",
+		"TURING_APPROVAL_CONSUMER_TOKEN": "approval-consumer-token",
+		"MCP_FILES_ENABLED":              "true",
+		"TURING_APPROVAL_JWT_SECRET":     "approval-secret",
+		"TURING_CURSOR_HMAC_SECRET":      strings.Repeat("ab", 32),
 	}
 	for key, value := range extra {
 		env[key] = value

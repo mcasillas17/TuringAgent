@@ -12,7 +12,7 @@ import (
 func TestAppRestartRecoversUnexpiredDeliveredAssignment(t *testing.T) {
 	dbPath := t.TempDir() + "/turing.db"
 	cfg := config.Config{
-		ClientAPIKey: "client", InternalToken: "internal", ApprovalJWTSecret: "approval-secret", DatabasePath: dbPath,
+		ClientAPIKey: "client", RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer", ApprovalJWTSecret: "approval-secret", DatabasePath: dbPath,
 	}
 	first, err := New(cfg)
 	if err != nil {
@@ -66,7 +66,7 @@ func TestAppRestartRecoversUnexpiredDeliveredAssignment(t *testing.T) {
 
 func TestAppReaperRecoversUnownedExpiredAssignmentAndStops(t *testing.T) {
 	cfg := config.Config{
-		ClientAPIKey: "client", InternalToken: "internal", ApprovalJWTSecret: "approval-secret",
+		ClientAPIKey: "client", RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer", ApprovalJWTSecret: "approval-secret",
 		DatabasePath: t.TempDir() + "/turing.db", JobReaperIntervalMS: 5,
 	}
 	application, err := New(cfg)
