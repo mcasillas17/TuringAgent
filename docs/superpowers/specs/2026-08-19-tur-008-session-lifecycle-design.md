@@ -1,6 +1,6 @@
 # TUR-008 session lifecycle and pagination design
 
-**Status:** Approved for implementation planning on 2026-08-19
+**Status:** Proposed — awaiting coordinator spec approval
 
 ## Purpose
 
@@ -97,6 +97,12 @@ archived visibility. Such rows remain hidden, and rename, archive, restore, and
 activity use TUR-004's centralized deletion gates and public errors. TUR-008
 must not duplicate or weaken those gates.
 
+`ALL` means the union of publicly visible active and archived rows after those
+same centralized deletion predicates. It is not a bypass around lifecycle
+visibility and does not expose deleting, deleted, unknown, or future internal
+states. A stored status other than the supported public `active` or `archived`
+values fails repository/service mapping with a value-free `Internal` error.
+
 ### Limits and normalization
 
 The server is authoritative for every limit:
@@ -110,10 +116,15 @@ The server is authoritative for every limit:
 | rename title | `TrimSpace`; nonempty; at most 120 Unicode scalar values |
 
 The title limit is counted after trimming and counts Go runes, matching Unicode
-scalar values rather than UTF-8 bytes. Session IDs are not trimmed or rewritten:
-structurally invalid values are rejected, while valid unknown IDs reach the
-repository and return `NotFound`. Flutter provides the same user-facing title
-bound, but the backend remains authoritative.
+scalar values rather than UTF-8 bytes. A nonempty normalized create title is
+stored with `title_origin = 'explicit'`; an empty normalized create title keeps
+`title_origin = 'unset'` and remains eligible for derived naming.
+
+Session IDs are not trimmed or rewritten. Validation first requires valid UTF-8
+and the byte bound, then rejects any decoded rune for which Go
+`unicode.IsControl` returns true. Structurally invalid values are rejected,
+while valid unknown IDs reach the repository and return `NotFound`. Flutter
+provides the same user-facing title bound, but the backend remains authoritative.
 
 Negative or excessive page limits, excessive IDs, and invalid titles return
 `InvalidArgument`. Unknown valid IDs return `NotFound`. Internal storage and
@@ -135,28 +146,53 @@ All session timestamps use exactly:
 2006-01-02T15:04:05.000000000Z
 ```
 
-Repository timestamp code owns one formatter and one strict parser for this
-layout. Every session write or read path changed by TUR-008 uses them. Service
-mapping returns an error for malformed stored timestamps instead of silently
-returning a protobuf message with a missing timestamp.
+A new lower-level `internal/persisttime` package owns the layout, canonical
+formatter, strict canonical parser, and migration-only legacy parser. Both the
+`db` migration runner and repository import it, avoiding the import cycle that
+would result if `db` called repository helpers. Existing repository timestamp
+helpers delegate to this package so unrelated callers keep one representation.
+Every session write or read path changed by TUR-008 uses these functions.
+Service mapping returns an error for malformed stored timestamps instead of
+silently returning a protobuf message with a missing timestamp.
 
 ### Migration
 
-The session-lifecycle migration:
+The current migration runner already has version-specific behavior around
+`0011_file_skills`, but ordinary migrations execute only an embedded SQL file.
+TUR-008 adds a second, database-only hook at the existing transaction boundary:
+after `ApplyMigrationsWithSkillsRoot` opens the migration's `*sql.Tx` and before
+it executes that migration's index DDL, a version switch calls
+`normalizeSessionTimestamps(ctx, tx)`. The SQL file contains only the two index
+changes. Timestamp rewrites, index DDL, and the `schema_migrations` insert
+therefore share the same transaction and commit.
 
-1. validates every existing `sessions.created_at` and `sessions.updated_at`
-   against the accepted legacy UTC RFC3339/RFC3339Nano forms;
-2. aborts the migration transaction with a fixed, value-free error if any row is
-   malformed;
-3. rewrites valid values deterministically into the fixed nine-digit UTC form;
-4. keeps or creates
-   `(status, updated_at DESC, id DESC)` for active/archived pages; and
-5. keeps or creates `(updated_at DESC, id DESC)` for `ALL` pages.
+`normalizeSessionTimestamps` uses `internal/persisttime`'s migration-only legacy
+parser and canonical formatter rather than SQLite date functions:
 
-Validation happens before rewriting. The migration must not use a coercion that
-turns malformed persisted text into a plausible timestamp. Migration tests
-cover whole-second, trimmed fractional, and canonical legacy forms plus
-malformed date, zone, suffix, and fraction cases.
+1. read sessions in stable ID order in fixed-size batches;
+2. parse both timestamps with Go's RFC3339Nano parser, rejecting malformed
+   values and unsupported forms with one fixed, value-free migration error;
+3. format both parsed instants through the canonical nine-digit UTC formatter;
+4. update each row with an old-value guard inside the same transaction; and
+5. finish all timestamp batches before the migration runner executes either
+   index statement.
+
+Batching bounds memory and closes each read cursor before updates on SQLite's
+single connection. There are no network calls, filesystem effects, or waits in
+the transaction. Its duration is necessarily proportional to the existing
+session count because all rows must be made safe before either ordering index
+can be trusted.
+
+Any parse, guarded-update, or DDL error rolls back timestamp rewrites, both index
+changes, and the migration record. A crash before commit has the same result.
+After a successful commit, the migration record prevents a rerun. After a
+rollback, a retry is idempotent because the parser accepts both supported legacy
+forms and already-canonical output.
+
+Migration tests cover whole-second, trimmed fractional, offset-to-UTC, and
+canonical legacy forms plus malformed date, zone, suffix, and fraction cases.
+They also prove that one malformed row rolls back earlier row rewrites, index
+DDL, and the migration record.
 
 TUR-004 currently proposes migration number `0014`. If it lands first, this
 migration uses the next available number instead of reusing `0014`.
@@ -228,7 +264,8 @@ or waiting on a client.
 ### Query
 
 The repository accepts a resolved filter, optional validated anchor, and a
-validated limit. It fetches `limit + 1` rows:
+validated limit. It fetches `limit + 1` publicly visible rows. The simplified
+active shape is:
 
 ```sql
 WHERE status = ?
@@ -240,9 +277,11 @@ ORDER BY updated_at DESC, id DESC
 LIMIT ?
 ```
 
-The first page omits the anchor predicate. `ALL` omits the status predicate and
-uses its dedicated ordering index. Active and archived pages use the composite
-status index.
+The first page omits the anchor predicate. The real query also includes the
+centralized TUR-004 visibility predicate when that lifecycle exists. `ALL`
+selects only public active/archived values, applies the same deletion predicate,
+and uses its dedicated ordering index. Active and archived pages use the
+composite status index.
 
 The extra row only proves that another page exists. It is never returned. When
 there is another page, `next_cursor` anchors the last emitted row, not the
@@ -268,14 +307,17 @@ the anchor values, not row existence.
 
 ### Index verification
 
-Repository tests seed realistic cardinality and run `EXPLAIN QUERY PLAN` for:
+Repository tests seed realistic cardinality and run `EXPLAIN QUERY PLAN` for
+the actual deletion-gated query builders used in production:
 
 - active/archived filtered pages; and
 - `ALL` pages.
 
-The assertions require the intended index and reject a session table scan. Data
-tests separately cover ordering, equal-timestamp tie-breaking, overfetch, filter
-isolation, and inserts between pages.
+The assertions require the intended index and reject a session table scan. They
+are updated with TUR-004's real predicate rather than testing a simplified
+query. Data tests separately cover ordering, strict public-status mapping,
+equal-timestamp tie-breaking, overfetch, filter isolation, and inserts between
+pages.
 
 ## Authenticated cursor format
 
@@ -313,8 +355,18 @@ The cursor is raw, unpadded base64url over one canonical binary representation:
 | session ID | exact validated UTF-8 bytes |
 | MAC | 32-byte HMAC-SHA256 |
 
-The MAC authenticates every preceding byte under the cursor-only key and a
-fixed session-cursor domain. The page limit is intentionally absent.
+The MAC is exactly:
+
+```text
+HMAC-SHA256(
+  cursor_secret,
+  "turing.session-list.cursor.v1\x00" || body_without_mac
+)
+```
+
+The quoted ASCII bytes plus the terminating zero byte are the immutable domain
+prefix. `body_without_mac` contains every binary field through the session ID.
+The page limit is intentionally absent.
 
 Fixed binary encoding prevents duplicate JSON keys, field reordering, alternate
 number spellings, and trailing JSON tokens from creating alternate accepted
@@ -323,11 +375,13 @@ encodings. The decoder:
 1. rejects encoded input over 2,048 bytes;
 2. decodes with strict raw unpadded base64url only, then requires re-encoding
    the decoded bytes to reproduce the input exactly;
-3. validates the exact minimum and length-derived total size;
-4. verifies magic, version, filter byte, fixed timestamp shape, and ID length;
-5. compares the 32-byte MAC in constant time;
-6. requires the cursor filter to equal the current resolved request filter; and
-7. rejects trailing bytes and every noncanonical value.
+3. performs only the bounded envelope reads needed to obtain the declared ID
+   length, prove the exact total size, and locate the final 32-byte tag;
+4. computes and compares the MAC in constant time before trusting any semantic
+   field; and
+5. only after MAC success validates magic, version, filter byte, canonical
+   timestamp, UTF-8/control-free ID, and equality with the request's resolved
+   filter.
 
 All failures return exactly `InvalidArgument("page.cursor is invalid")`. No
 branch echoes the cursor, its anchor, a session ID, or a MAC. A cursor from
@@ -401,10 +455,13 @@ newer timestamp, so an older list response, RPC response, replayed event, or
 accepted-message event cannot replace a newer rename/archive/restore snapshot.
 
 An archived snapshot removes the session from the active list and remains as a
-local reconciliation guard until a refresh observes the omission or a newer
-active restore snapshot arrives. A stale active page cannot resurrect it.
-Historical `session.updated` payloads without status resolve to active only
-when no newer status-aware snapshot exists.
+process-lifetime authoritative reconciliation guard. Omission from an active
+page proves nothing about archive state and never evicts that guard. Only a
+strictly newer status-aware active restore snapshot or a stronger deletion
+tombstone replaces it. A stale active page cannot resurrect it. Historical
+`session.updated` payloads without status resolve to active only when no
+status-aware guard exists; once an archived guard exists, a status-less event
+cannot restore that session.
 
 Deletion tombstones remain stronger and longer-lived than archive guards.
 TUR-004 terminal deletion events and local tombstones, if present, always win
@@ -454,6 +511,7 @@ Strict TDD applies: every item below starts as a failing test.
 - active `Load more` ordering and duplicate suppression;
 - rename success, validation, no-op, and failure state;
 - archive success/failure and stale-page/event suppression;
+- delayed legacy status-less event after an active refresh omission;
 - archived pagination, rename, restore, and delete;
 - newer restore accepted after an archive guard;
 - existing deletion tombstone behavior remains unchanged.
