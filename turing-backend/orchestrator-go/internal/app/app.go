@@ -44,6 +44,12 @@ type App struct {
 	ApprovalService *approvalsvc.Server
 	AuditService    *auditsvc.Server
 	HealthService   *HealthServer
+	// InternalIdentities is the exact set of least-privilege identities wired
+	// into InternalServer's authorization interceptors. Exposed so tests can
+	// assert against the real configuration — e.g. that every identity name
+	// here is a value the audit_logs.actor_type CHECK constraint accepts —
+	// rather than a hardcoded copy that can silently drift from it.
+	InternalIdentities []auth.ServiceIdentity
 
 	database     *db.DB
 	stopOnce     sync.Once
@@ -240,21 +246,22 @@ func New(cfg config.Config) (*App, error) {
 	turingv1.RegisterRuntimeServiceServer(internalServer, runtimeService)
 
 	application := &App{
-		PublicServer:    publicServer,
-		InternalServer:  internalServer,
-		Repository:      repo,
-		EventBus:        eventBus,
-		RuntimeService:  runtimeService,
-		SessionService:  sessionService,
-		EventService:    eventService,
-		ChatService:     chatService,
-		ApprovalService: approvalService,
-		AuditService:    auditService,
-		HealthService:   healthService,
-		database:        database,
-		authFailures:    authFailures,
-		reaperDone:      make(chan struct{}),
-		schedulerDone:   make(chan struct{}),
+		PublicServer:       publicServer,
+		InternalServer:     internalServer,
+		Repository:         repo,
+		EventBus:           eventBus,
+		RuntimeService:     runtimeService,
+		SessionService:     sessionService,
+		EventService:       eventService,
+		ChatService:        chatService,
+		ApprovalService:    approvalService,
+		AuditService:       auditService,
+		HealthService:      healthService,
+		InternalIdentities: internalIdentities,
+		database:           database,
+		authFailures:       authFailures,
+		reaperDone:         make(chan struct{}),
+		schedulerDone:      make(chan struct{}),
 	}
 	reaperCtx, reaperCancel := context.WithCancel(context.Background())
 	application.reaperCancel = reaperCancel

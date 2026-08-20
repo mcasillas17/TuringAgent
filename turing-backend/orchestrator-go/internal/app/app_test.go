@@ -12,6 +12,7 @@ import (
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/auth"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"google.golang.org/grpc"
@@ -363,14 +364,15 @@ func TestApprovalConsumerIdentityCannotReachRuntimeOnlyMethods(t *testing.T) {
 	}
 
 	runtimeClient := turingv1.NewRuntimeServiceClient(conn)
+	// Do not Send before checking: the stream interceptor denies the call
+	// before any handler runs, so the client can observe that only through
+	// Recv — a Send raced against the server already closing the stream can
+	// return io.EOF instead of ever reaching this assertion.
 	stream, err := runtimeClient.ConnectWorker(approvalConsumerCtx)
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		_, err = stream.Recv()
 	}
-	if err := stream.Send(&turingv1.RuntimeUpdate{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := stream.Recv(); status.Code(err) != codes.PermissionDenied {
+	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("approval-consumer ConnectWorker error = %v, want PermissionDenied", err)
 	}
 
@@ -557,10 +559,33 @@ func TestInternalAuthorizationFailuresAreAudited(t *testing.T) {
 			t.Fatalf("ListMessages error = %v, want Unauthenticated", err)
 		}
 		actorType := queryActorType(t, requestID)
-		if actorType != "internal-unknown" {
-			t.Fatalf("actor_type = %q, want %q", actorType, "internal-unknown")
+		if actorType != auth.UnknownIdentityActorType {
+			t.Fatalf("actor_type = %q, want %q", actorType, auth.UnknownIdentityActorType)
 		}
 	})
+}
+
+// Nothing statically couples the internal identity names app.New wires up to
+// the audit_logs.actor_type CHECK constraint that accepts them — the gap
+// TestInternalAuthorizationFailuresAreAudited was written to catch was found
+// precisely because the two are independent. This test reads the real
+// configured identities (app.InternalIdentities, not a hardcoded copy) so
+// adding a future identity — for example a connector credential — without
+// widening the CHECK fails here immediately, rather than as a silently
+// dropped audit write discovered later.
+func TestInternalIdentityActorTypesAreAcceptedByAuditSchema(t *testing.T) {
+	app := newTestApp(t)
+	actorTypes := []string{auth.UnknownIdentityActorType}
+	for _, identity := range app.InternalIdentities {
+		actorTypes = append(actorTypes, identity.Name)
+	}
+	for _, actorType := range actorTypes {
+		t.Run(actorType, func(t *testing.T) {
+			if err := app.AuditService.Record(context.Background(), "", actorType, "", "schema.probe", "", nil); err != nil {
+				t.Fatalf("actor_type %q rejected by audit_logs schema: %v", actorType, err)
+			}
+		})
+	}
 }
 
 func TestAppRegistersPublicAndInternalServices(t *testing.T) {

@@ -52,11 +52,11 @@ func NewInternalIdentities(identities []ServiceIdentity) ([]ServiceIdentity, err
 	return identities, nil
 }
 
-// unknownIdentityActorType is recorded for a failure attributed to no
+// UnknownIdentityActorType is recorded for a failure attributed to no
 // registered identity — either no bearer was presented or it matched no
 // configured token — so audit rows never confuse an unauthenticated caller
 // with a legitimate but overreaching one.
-const unknownIdentityActorType = "internal-unknown"
+const UnknownIdentityActorType = "internal-unknown"
 
 // UnaryIdentityInterceptor authenticates the bearer token against a fixed set
 // of internal identities and authorizes the call only if the resolved
@@ -86,17 +86,17 @@ func StreamIdentityInterceptor(identities []ServiceIdentity, options Interceptor
 // authorizeIdentity resolves the caller's identity and checks its allowlist.
 // It returns the matched identity (zero value if none matched) and whether
 // the call is authorized; on any denial it records an audit failure
-// attributed to the resolved identity name, or unknownIdentityActorType when
+// attributed to the resolved identity name, or UnknownIdentityActorType when
 // no token matched at all.
 func authorizeIdentity(ctx context.Context, identities []ServiceIdentity, fullMethod string, options InterceptorOptions) (ServiceIdentity, bool) {
 	token, ok := TokenFromMetadata(ctx)
 	if !ok {
-		recordIdentityFailure(ctx, unknownIdentityActorType, fullMethod, options)
+		recordIdentityFailure(ctx, UnknownIdentityActorType, fullMethod, options)
 		return ServiceIdentity{}, false
 	}
 	identity, matched := matchIdentity(identities, token)
 	if !matched {
-		recordIdentityFailure(ctx, unknownIdentityActorType, fullMethod, options)
+		recordIdentityFailure(ctx, UnknownIdentityActorType, fullMethod, options)
 		return ServiceIdentity{}, false
 	}
 	if _, allowed := identity.Methods[fullMethod]; !allowed {
