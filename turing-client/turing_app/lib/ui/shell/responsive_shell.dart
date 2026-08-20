@@ -104,6 +104,8 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   bool _sessionsLoadingMore = false;
   bool _sessionsFailed = false;
   String? _nextSessionsCursor;
+  Set<String> _firstPageSessionIds = const {};
+  final Set<String> _eventOnlySessionIds = {};
   ShellDestination _destination = ShellDestination.chats;
   String? _activeSessionId;
   String _modelProvider = 'ollama';
@@ -197,6 +199,9 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       if (!mounted || request != _sessionRefreshRequest) return;
       setState(() {
         _sessions = _reconcileSessionRefresh(page.sessions, startingRevision);
+        _firstPageSessionIds = page.sessions
+            .map((session) => session.sessionId)
+            .toSet();
         _nextSessionsCursor = page.nextCursor;
         _sessionsLoading = false;
         _sessionsFailed = false;
@@ -226,6 +231,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
             session,
             observedByList: true,
           );
+          _eventOnlySessionIds.remove(authoritative.sessionId);
           merged.removeWhere(
             (candidate) => candidate.sessionId == authoritative.sessionId,
           );
@@ -289,13 +295,16 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       updatedAtNanoseconds: updatedAtNanoseconds,
       status: status,
     );
+    if (updated.status == SessionStatus.archived &&
+        _activeSessionId == updated.sessionId) {
+      _releaseChatEventSource();
+    }
     setState(() {
       final next = List<Session>.of(_sessions);
       if (index >= 0) {
         final previous = next.removeAt(index);
         if (updated.status == SessionStatus.archived) {
           if (_activeSessionId == updated.sessionId) {
-            _releaseChatEventSource();
             _activeSessionId = null;
           }
         } else if (previous.updatedAtNanoseconds ==
@@ -306,6 +315,11 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
         }
       } else if (updated.status == SessionStatus.active) {
         _insertSessionByRecency(next, updated);
+        _eventOnlySessionIds.add(updated.sessionId);
+      }
+      if (updated.status == SessionStatus.archived &&
+          _activeSessionId == updated.sessionId) {
+        _activeSessionId = null;
       }
       _sessions = next;
       _recordSessionSnapshot(
@@ -338,11 +352,22 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     int startingRevision,
   ) {
     final refreshedSessions = refreshed.toList();
-    final merged = <Session>[];
+    final merged = _sessions
+        .where(
+          (session) =>
+              !_firstPageSessionIds.contains(session.sessionId) &&
+              !_eventOnlySessionIds.contains(session.sessionId) &&
+              !_locallyDeletedSessionIds.contains(session.sessionId),
+        )
+        .toList();
     for (final session in refreshedSessions) {
       final authoritative = _resolveSessionSnapshot(
         session,
         observedByList: true,
+      );
+      _eventOnlySessionIds.remove(authoritative.sessionId);
+      merged.removeWhere(
+        (candidate) => candidate.sessionId == authoritative.sessionId,
       );
       if (authoritative.status == SessionStatus.active &&
           !_locallyDeletedSessionIds.contains(authoritative.sessionId)) {
@@ -558,39 +583,8 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
 
   Future<void> _renameConversation(Session session) async {
     if (!_lifecycleMutating.add(session.sessionId)) return;
-    var pendingTitle = session.title ?? '';
     try {
-      final title = await showDialog<String>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Rename chat'),
-          content: TextFormField(
-            autofocus: true,
-            initialValue: pendingTitle,
-            decoration: const InputDecoration(labelText: 'Title'),
-            onChanged: (value) => pendingTitle = value,
-            onFieldSubmitted: (value) {
-              if (value.trim().isNotEmpty) {
-                Navigator.of(dialogContext).pop(value);
-              }
-            },
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                if (pendingTitle.trim().isNotEmpty) {
-                  Navigator.of(dialogContext).pop(pendingTitle);
-                }
-              },
-              child: const Text('Rename'),
-            ),
-          ],
-        ),
-      );
+      final title = await _showRenameSessionDialog(context, session);
       if (title == null) return;
       final updated = await widget.apiClient.renameSession(
         sessionId: session.sessionId,
@@ -1322,6 +1316,62 @@ class _SessionTileState extends State<_SessionTile> {
   }
 }
 
+String? _validateSessionTitle(String value) {
+  final normalized = value.trim();
+  if (normalized.isEmpty) return 'Enter a title.';
+  if (normalized.runes.length > 120) {
+    return 'Use 120 characters or fewer.';
+  }
+  return null;
+}
+
+Future<String?> _showRenameSessionDialog(
+  BuildContext context,
+  Session session,
+) {
+  var pendingTitle = session.title ?? '';
+  var validation = _validateSessionTitle(pendingTitle);
+  return showDialog<String>(
+    context: context,
+    builder: (dialogContext) => StatefulBuilder(
+      builder: (context, setDialogState) => AlertDialog(
+        title: const Text('Rename chat'),
+        content: TextFormField(
+          autofocus: true,
+          initialValue: pendingTitle,
+          decoration: InputDecoration(
+            labelText: 'Title',
+            errorText: validation,
+          ),
+          onChanged: (value) {
+            setDialogState(() {
+              pendingTitle = value;
+              validation = _validateSessionTitle(value);
+            });
+          },
+          onFieldSubmitted: (value) {
+            if (_validateSessionTitle(value) == null) {
+              Navigator.of(dialogContext).pop(value.trim());
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: validation == null
+                ? () => Navigator.of(dialogContext).pop(pendingTitle.trim())
+                : null,
+            child: const Text('Rename'),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 class _ArchivedSessionsList extends StatefulWidget {
   const _ArchivedSessionsList({
     required this.apiClient,
@@ -1410,6 +1460,38 @@ class _ArchivedSessionsListState extends State<_ArchivedSessionsList> {
     }
   }
 
+  Future<void> _rename(Session session) async {
+    if (!_mutating.add(session.sessionId)) return;
+    setState(() {});
+    try {
+      final title = await _showRenameSessionDialog(context, session);
+      if (title == null) return;
+      final renamed = await widget.apiClient.renameSession(
+        sessionId: session.sessionId,
+        title: title,
+      );
+      if (!mounted) return;
+      setState(() {
+        final index = _sessions.indexWhere(
+          (candidate) => candidate.sessionId == session.sessionId,
+        );
+        if (index >= 0) {
+          if (renamed.status == SessionStatus.archived) {
+            _sessions[index] = renamed;
+          } else {
+            _sessions.removeAt(index);
+          }
+        }
+        _sessions.sort(_ResponsiveShellState._compareSessionsByRecency);
+      });
+    } catch (error) {
+      if (mounted) _showError('Could not rename this chat: $error');
+    } finally {
+      _mutating.remove(session.sessionId);
+      if (mounted) setState(() {});
+    }
+  }
+
   Future<void> _delete(Session session) async {
     if (!_mutating.add(session.sessionId)) return;
     setState(() {});
@@ -1479,6 +1561,13 @@ class _ArchivedSessionsListState extends State<_ArchivedSessionsList> {
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                IconButton(
+                  tooltip: 'Rename archived chat',
+                  onPressed: _mutating.contains(session.sessionId)
+                      ? null
+                      : () => _rename(session),
+                  icon: const Icon(Icons.edit_outlined),
+                ),
                 IconButton(
                   tooltip: 'Restore chat',
                   onPressed: _mutating.contains(session.sessionId)

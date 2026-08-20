@@ -27,6 +27,14 @@ func nextSessionActivityTimeTx(
 	).Scan(&currentText); err != nil {
 		return time.Time{}, err
 	}
+	return nextSessionActivityTime(currentText, candidate, additionalAnchors...)
+}
+
+func nextSessionActivityTime(
+	currentText string,
+	candidate time.Time,
+	additionalAnchors ...time.Time,
+) (time.Time, error) {
 	current, err := persisttime.ParseCanonical(currentText)
 	if err != nil {
 		return time.Time{}, ErrInvalidSessionTimestamp

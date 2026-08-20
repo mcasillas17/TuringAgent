@@ -71,7 +71,8 @@ rules.
 The Flutter sidebar loads the active list a page at a time and preserves the
 server cursor for **Load more**. Selected rows expose rename, archive, and
 permanent delete actions. **Archived conversations** opens an independently
-paginated view with restore and permanent delete actions.
+paginated view with rename, restore, and permanent delete actions. Refreshing
+the first active page preserves rows already loaded from later cursor pages.
 
 The client preserves protobuf timestamp nanoseconds and orders rows by the same
 backend key. RPC results, list pages, and status-aware events are reconciled by

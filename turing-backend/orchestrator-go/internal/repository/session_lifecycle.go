@@ -83,7 +83,7 @@ func (r *Repository) mutateSession(
 		return SessionMutationResult{Session: current}, nil
 	}
 
-	activityTime, err := nextSessionActivityTimeTx(ctx, tx, sessionID, time.Now().UTC())
+	activityTime, err := nextSessionActivityTime(current.UpdatedAt, time.Now().UTC())
 	if err != nil {
 		return SessionMutationResult{}, err
 	}
@@ -105,14 +105,10 @@ func (r *Repository) mutateSession(
 		return SessionMutationResult{}, err
 	}
 
-	authoritative, err := getSessionTx(ctx, tx, sessionID)
-	if err != nil {
-		return SessionMutationResult{}, err
-	}
 	payload, err := json.Marshal(map[string]string{
-		"title":     authoritative.Title.String,
-		"status":    authoritative.Status,
-		"updatedAt": authoritative.UpdatedAt,
+		"title":     next.Title.String,
+		"status":    next.Status,
+		"updatedAt": next.UpdatedAt,
 	})
 	if err != nil {
 		return SessionMutationResult{}, err
@@ -124,7 +120,7 @@ func (r *Repository) mutateSession(
 		ids.New("trace"),
 		"session.updated",
 		string(payload),
-		authoritative.UpdatedAt,
+		next.UpdatedAt,
 	)
 	if err != nil {
 		return SessionMutationResult{}, err
@@ -133,7 +129,7 @@ func (r *Repository) mutateSession(
 		return SessionMutationResult{}, err
 	}
 	return SessionMutationResult{
-		Session: authoritative,
+		Session: next,
 		Event:   event,
 		Changed: true,
 	}, nil

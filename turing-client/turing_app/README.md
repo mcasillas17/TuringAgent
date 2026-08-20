@@ -14,7 +14,7 @@ Implemented in the client:
 - Chat tab wired to backend sessions and streamed message deltas.
 - Active conversations are cursor-paginated and expose rename, archive, and
   permanent delete actions; an archived-conversations dialog paginates,
-  restores, or permanently deletes archived rows.
+  renames, restores, or permanently deletes archived rows.
 - Exact-phrase conversation search across all sessions, grouped by conversation
   and linked back to the matching chat.
 - Inline tool-call status cards for live `tool.call.*` events.

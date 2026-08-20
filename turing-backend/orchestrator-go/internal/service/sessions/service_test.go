@@ -403,9 +403,46 @@ func TestSessionLifecycleRPCsValidatePublishAndReconcileVisibility(t *testing.T)
 func TestSessionLifecycleRPCsValidateIDsAndUnknownSessions(t *testing.T) {
 	h := newSessionHarness(t)
 	ctx := context.Background()
-	for _, sessionID := range []string{"", "line\nbreak", strings.Repeat("x", 257), string([]byte{0xff})} {
+	invalidSessionIDs := []string{"", "line\nbreak", strings.Repeat("x", 257), string([]byte{0xff})}
+	for _, sessionID := range invalidSessionIDs {
 		if _, err := h.service.GetSession(ctx, &turingv1.GetSessionRequest{SessionId: sessionID}); status.Code(err) != codes.InvalidArgument {
 			t.Fatalf("GetSession(%q) error = %v, want InvalidArgument", sessionID, err)
+		}
+		for name, operation := range map[string]func() error{
+			"rename": func() error {
+				_, err := h.service.RenameSession(ctx, &turingv1.RenameSessionRequest{SessionId: sessionID, Title: "Title"})
+				return err
+			},
+			"archive": func() error {
+				_, err := h.service.ArchiveSession(ctx, &turingv1.ArchiveSessionRequest{SessionId: sessionID})
+				return err
+			},
+			"restore": func() error {
+				_, err := h.service.RestoreSession(ctx, &turingv1.RestoreSessionRequest{SessionId: sessionID})
+				return err
+			},
+		} {
+			if err := operation(); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("%s(%q) error = %v, want InvalidArgument", name, sessionID, err)
+			}
+		}
+	}
+	for name, operation := range map[string]func() error{
+		"rename": func() error {
+			_, err := h.service.RenameSession(ctx, nil)
+			return err
+		},
+		"archive": func() error {
+			_, err := h.service.ArchiveSession(ctx, nil)
+			return err
+		},
+		"restore": func() error {
+			_, err := h.service.RestoreSession(ctx, nil)
+			return err
+		},
+	} {
+		if err := operation(); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("%s(nil) error = %v, want InvalidArgument", name, err)
 		}
 	}
 	for _, operation := range []func() error{
@@ -427,6 +464,45 @@ func TestSessionLifecycleRPCsValidateIDsAndUnknownSessions(t *testing.T) {
 		}
 	}
 }
+
+func TestRenameSessionRPCEnforcesUnicodeScalarTitleLimit(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	created, err := client.CreateSession(ctx, &turingv1.CreateSessionRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	maxTitle := strings.Repeat("😀", repository.MaxSessionTitleRunes)
+	renamed, err := client.RenameSession(ctx, &turingv1.RenameSessionRequest{
+		SessionId: created.SessionId,
+		Title:     maxTitle,
+	})
+	if err != nil {
+		t.Fatalf("rename with maximum title length: %v", err)
+	}
+	if renamed.GetSession().GetTitle() != maxTitle {
+		t.Fatalf("rename title = %q, want %q", renamed.GetSession().GetTitle(), maxTitle)
+	}
+
+	for name, title := range map[string]string{
+		"empty":          "",
+		"whitespace":     " \n\t ",
+		"too many runes": maxTitle + "x",
+		"invalid UTF-8":  string([]byte{0xff}),
+	} {
+		_, err := h.service.RenameSession(ctx, &turingv1.RenameSessionRequest{
+			SessionId: created.SessionId,
+			Title:     title,
+		})
+		if status.Code(err) != codes.InvalidArgument ||
+			status.Convert(err).Message() != "title is invalid" {
+			t.Fatalf("%s rename error = %v, want value-free InvalidArgument", name, err)
+		}
+	}
+}
+
 func TestSessionServiceServesPublicReadEndpoints(t *testing.T) {
 	h := newSessionHarness(t)
 	client := turingv1.NewSessionServiceClient(h.conn)

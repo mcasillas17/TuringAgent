@@ -192,11 +192,12 @@ func TestSessionQueryPlansUseLifecycleIndexes(t *testing.T) {
 				t.Fatal(err)
 			}
 			plan := strings.Join(details, "\n")
-			if !strings.Contains(plan, testCase.wantIndex) {
-				t.Fatalf("query plan = %q, want index %q", plan, testCase.wantIndex)
+			wantSearch := "SEARCH sessions USING INDEX " + testCase.wantIndex
+			if !strings.Contains(plan, wantSearch) {
+				t.Fatalf("query plan = %q, want keyset search %q", plan, wantSearch)
 			}
-			if strings.Contains(plan, "SCAN sessions") && !strings.Contains(plan, "USING INDEX "+testCase.wantIndex) {
-				t.Fatalf("query plan performs an unindexed sessions scan: %q", plan)
+			if strings.Contains(plan, "SCAN sessions") {
+				t.Fatalf("query plan performs a sessions scan: %q", plan)
 			}
 		})
 	}

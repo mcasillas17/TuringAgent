@@ -501,6 +501,33 @@ void main() {
       expect(find.widgetWithText(TextButton, 'Load more'), findsNothing);
     });
 
+    testWidgets('a lifecycle refresh keeps rows from loaded tail pages', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..nextSessionCursor = 'cursor-2'
+        ..sessionPages['cursor-2'] = SessionPage(
+          sessions: [
+            Session(
+              sessionId: 'sess_older',
+              title: 'Older loaded chat',
+              updatedAt: DateTime.utc(2026, 5, 9),
+            ),
+          ],
+        );
+      await _pumpShell(tester, api: api, size: _desktop);
+      await tester.tap(find.widgetWithText(TextButton, 'Load more'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Existing chat'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Archive chat'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Older loaded chat'), findsOneWidget);
+      expect(find.text('Existing chat'), findsNothing);
+    });
+
     testWidgets('rename uses the authoritative returned session snapshot', (
       tester,
     ) async {
@@ -518,9 +545,35 @@ void main() {
       await tester.tap(find.widgetWithText(FilledButton, 'Rename'));
       await tester.pumpAndSettle();
 
-      expect(api.renamedTitles, ['  Renamed chat  ']);
+      expect(api.renamedTitles, ['Renamed chat']);
       expect(find.text('Server normalized title'), findsOneWidget);
       expect(find.text('Existing chat'), findsNothing);
+    });
+
+    testWidgets('rename rejects more than 120 Unicode scalar values locally', (
+      tester,
+    ) async {
+      final api = _FakeApi();
+      await _pumpShell(tester, api: api, size: _desktop);
+      await tester.tap(find.text('Existing chat'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Rename chat'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byType(TextFormField).last,
+        List.filled(121, '😀').join(),
+      );
+      await tester.pump();
+
+      expect(find.text('Use 120 characters or fewer.'), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Rename'))
+            .onPressed,
+        isNull,
+      );
+      expect(api.renamedTitles, isEmpty);
     });
 
     testWidgets(
@@ -618,6 +671,36 @@ void main() {
 
       expect(find.text('Restored chat'), findsOneWidget);
       expect(find.text('Archived one'), findsNothing);
+    });
+
+    testWidgets('an archived conversation can be renamed in place', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..archivedSessions = [
+          Session(
+            sessionId: 'sess_archived',
+            title: 'Archived original',
+            updatedAt: DateTime.utc(2026, 5, 9),
+            status: SessionStatus.archived,
+          ),
+        ];
+      await _pumpShell(tester, api: api, size: _desktop);
+      await tester.tap(find.byTooltip('Archived conversations'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Rename archived chat'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byType(TextFormField).last,
+        ' Archived renamed ',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Rename'));
+      await tester.pumpAndSettle();
+
+      expect(api.renamedTitles, ['Archived renamed']);
+      expect(find.text('Server archived title'), findsOneWidget);
+      expect(find.text('Archived original'), findsNothing);
     });
 
     testWidgets('an archived conversation can be permanently deleted', (
@@ -842,6 +925,50 @@ void main() {
         reason:
             'an observed session snapshot expires when a later page omits it',
       );
+    });
+
+    testWidgets('a remote archive closes an active chat omitted by refresh', (
+      tester,
+    ) async {
+      final sources = <_FakeSessionUpdateSource>[];
+      final api = _FakeApi();
+      await _pumpShell(
+        tester,
+        api: api,
+        size: _desktop,
+        sessionUpdateSourceFactory: () {
+          final source = _FakeSessionUpdateSource();
+          sources.add(source);
+          return source;
+        },
+      );
+      await tester.tap(find.text('Existing chat'));
+      await tester.pumpAndSettle();
+
+      api.sessions = [];
+      sources.single.addError(StateError('refresh'));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(find.text('Existing chat'), findsNothing);
+
+      sources.last.add(
+        TuringEvent(
+          eventId: 'evt_remote_archive',
+          sessionId: 'sess_existing',
+          traceId: 'trace_remote_archive',
+          sequence: 1,
+          type: 'session.updated',
+          createdAt: DateTime.utc(2026, 5, 12),
+          payload: const {
+            'title': 'Existing chat',
+            'status': 'archived',
+            'updatedAt': '2026-05-12T00:00:00.000000000Z',
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Ask Turing anything'), findsOneWidget);
     });
 
     testWidgets('a global update adds a non-active session without polling', (
@@ -1818,6 +1945,19 @@ class _FakeApi
     required String title,
   }) async {
     renamedTitles.add(title);
+    final archivedIndex = archivedSessions.indexWhere(
+      (session) => session.sessionId == sessionId,
+    );
+    if (archivedIndex >= 0) {
+      final renamed = Session(
+        sessionId: sessionId,
+        title: 'Server archived title',
+        updatedAt: DateTime.utc(2026, 5, 11),
+        status: SessionStatus.archived,
+      );
+      archivedSessions[archivedIndex] = renamed;
+      return renamed;
+    }
     final renamed = Session(
       sessionId: sessionId,
       title: 'Server normalized title',
