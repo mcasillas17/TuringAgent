@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -16,6 +17,16 @@ import 'run_cancelled_card.dart';
 import 'run_failure_card.dart';
 import 'run_notice_card.dart';
 import 'tool_call_card.dart';
+
+final Random _sendIdempotencyRandom = Random.secure();
+
+String _newSendIdempotencyKey() {
+  final bytes = List<int>.generate(
+    16,
+    (_) => _sendIdempotencyRandom.nextInt(256),
+  );
+  return 'send-${bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join()}';
+}
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -191,6 +202,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// attempt does not depend on how the last one ended, only on whether one
   /// is still outstanding.
   bool _sending = false;
+  _RetryableSend? _retryableSend;
 
   /// True whenever a send could never reach the user — still starting up,
   /// terminally failed to start, a live subscription that has since dropped
@@ -205,6 +217,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    _controller.addListener(_discardRetryForEditedText);
     unawaited(_start());
   }
 
@@ -414,6 +427,8 @@ class _ChatScreenState extends State<ChatScreen> {
   ///     translation of `sql.ErrNoRows` ("session not found"); its only
   ///     call site, the `GetSession` check, precedes `EnqueueUserMessage`.
   ///     No other call site in the handler returns it.
+  ///   * [StatusCode.alreadyExists] — an idempotency-key conflict is detected
+  ///     before the enqueue transaction creates anything for this request.
   ///
   /// Deliberately excludes `StatusCode.canceled` and `StatusCode.internal`:
   /// the very same handler ALSO returns both from several points AFTER
@@ -423,6 +438,7 @@ class _ChatScreenState extends State<ChatScreen> {
     StatusCode.unauthenticated,
     StatusCode.invalidArgument,
     StatusCode.notFound,
+    StatusCode.alreadyExists,
   };
 
   /// Whether [error] — whatever `sendMessage` rejected with, in
@@ -920,16 +936,32 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_composerDisabled) return;
     final text = _controller.text.trim();
     if (text.isEmpty) return;
+    final modelProvider = _modelProvider;
+    final retry = _retryableSend;
+    final isMatchingRetry =
+        retry != null &&
+        retry.content == text &&
+        retry.modelProvider == modelProvider;
+    final idempotencyKey = isMatchingRetry
+        ? retry.idempotencyKey
+        : _newSendIdempotencyKey();
+    _retryableSend = null;
     // Captured by reference (not looked up again later): `_messages` may
     // grow while this RPC is in flight (an unrelated run's own stream
     // events), so finding "this attempt's bubble" later means finding THIS
     // object, not re-deriving it from state that has since moved on.
-    final attempt = _MessageEntry.user(
-      messageId: 'local_${DateTime.now().microsecondsSinceEpoch}',
-      content: text,
-    );
+    final attempt = isMatchingRetry
+        ? retry.attempt
+        : _MessageEntry.user(
+            messageId: 'local_${DateTime.now().microsecondsSinceEpoch}',
+            content: text,
+          );
     setState(() {
-      _messages.add(attempt);
+      if (isMatchingRetry) {
+        _removeSendOutcomeAfter(attempt);
+      } else {
+        _messages.add(attempt);
+      }
       _sending = true;
     });
     _controller.clear();
@@ -947,7 +979,8 @@ class _ChatScreenState extends State<ChatScreen> {
       await widget.apiClient.sendMessage(
         sessionId: widget.sessionId,
         content: text,
-        modelProvider: _modelProvider,
+        modelProvider: modelProvider,
+        idempotencyKey: idempotencyKey,
       );
       if (!mounted) return;
       setState(() => _sending = false);
@@ -968,6 +1001,16 @@ class _ChatScreenState extends State<ChatScreen> {
         // else about recovering from this rejection (draft restoration,
         // anchoring, the mounted guard above) is identical for both.
         _controller.text = text;
+        if (error is GrpcError && error.code == StatusCode.alreadyExists) {
+          _retryableSend = null;
+        } else {
+          _retryableSend = _RetryableSend(
+            text,
+            modelProvider,
+            idempotencyKey,
+            attempt,
+          );
+        }
         // Anchored immediately after `attempt`, never appended to the
         // list's end: an unrelated stream event for another in-flight run
         // may have already been appended while this RPC was pending, and
@@ -981,6 +1024,23 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       });
       _scrollToBottom();
+    }
+  }
+
+  void _discardRetryForEditedText() {
+    final retry = _retryableSend;
+    if (retry != null && _controller.text.trim() != retry.content) {
+      _retryableSend = null;
+    }
+  }
+
+  void _removeSendOutcomeAfter(_MessageEntry attempt) {
+    final index = _messages.indexOf(attempt);
+    if (index == -1 || index + 1 >= _messages.length) return;
+    final outcome = _messages[index + 1];
+    if (outcome is _MessageSendUnconfirmedEntry ||
+        outcome is _MessageSendFailureEntry) {
+      _messages.removeAt(index + 1).dispose();
     }
   }
 
@@ -1263,10 +1323,25 @@ class _ChatScreenState extends State<ChatScreen> {
     for (final entry in _messages) {
       entry.dispose();
     }
+    _controller.removeListener(_discardRetryForEditedText);
     _controller.dispose();
     _scrollController.dispose();
     super.dispose();
   }
+}
+
+class _RetryableSend {
+  const _RetryableSend(
+    this.content,
+    this.modelProvider,
+    this.idempotencyKey,
+    this.attempt,
+  );
+
+  final String content;
+  final String modelProvider;
+  final String idempotencyKey;
+  final _MessageEntry attempt;
 }
 
 class _ChatMessageTile extends StatelessWidget {

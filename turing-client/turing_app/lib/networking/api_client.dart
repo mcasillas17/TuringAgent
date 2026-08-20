@@ -49,6 +49,7 @@ abstract class TuringApi {
     required String sessionId,
     required String content,
     String modelProvider = 'ollama',
+    String? idempotencyKey,
   });
 
   Future<Map<String, dynamic>> approveApproval(

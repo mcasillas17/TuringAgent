@@ -115,6 +115,7 @@ var currentSchemaTablePolicies = []schemaTablePolicy{
 	},
 	{table: "automation_allowed_tools", kind: schemaTableCascadeOwned, sourceTable: "automations"},
 	{table: "automation_runs", kind: schemaTableCascadeOwned, sourceTable: "agent_runs"},
+	{table: "send_message_idempotency", kind: schemaTableCascadeOwned, sourceTable: "sessions"},
 }
 
 func TestDerivedStateSchemaPoliciesCoverCurrentSchema(t *testing.T) {
