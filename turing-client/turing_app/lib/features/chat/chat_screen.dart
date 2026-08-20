@@ -39,6 +39,7 @@ class ChatScreen extends StatefulWidget {
     this.embedded = false,
     this.modelProvider = 'ollama',
     this.onSessionUpdated,
+    this.onSessionDeleted,
   });
 
   final String sessionId;
@@ -57,6 +58,7 @@ class ChatScreen extends StatefulWidget {
   /// conversation list. The event payload is authoritative, so the shell does
   /// not need to poll after a send.
   final ValueChanged<TuringEvent>? onSessionUpdated;
+  final ValueChanged<String>? onSessionDeleted;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -133,6 +135,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// user, whether or not the drop turns out to be recoverable.
   bool _streamEnded = false;
   bool _historyLoadFailed = false;
+  bool _sessionDeleted = false;
 
   /// True while startup is still IN PROGRESS — not yet ready, but also not
   /// yet known to have failed. The composer stays disabled, with a spinner
@@ -659,6 +662,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // `setState`. Guard once at the entry point — it covers all four of them,
     // and mirrors [_handleStreamEnded].
     if (!mounted) return;
+    if (_sessionDeleted) return;
     // Events are arriving, so any earlier drop notice is stale: an error does
     // not cancel the subscription (`cancelOnError` defaults to false), and the
     // stream can keep delivering after one.
@@ -670,6 +674,12 @@ class _ChatScreenState extends State<ChatScreen> {
       case 'session.updated':
         widget.onSessionUpdated?.call(event);
         break;
+      case 'session.deleted':
+        _sessionDeleted = true;
+        widget.onSessionDeleted?.call(event.sessionId);
+        unawaited(_subscription?.cancel());
+        _eventSource.close();
+        return;
       case 'agent.run.step':
         _applyRunStep(event);
         break;

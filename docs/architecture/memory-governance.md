@@ -184,6 +184,14 @@ Product language must therefore distinguish:
 Encryption-at-rest and backup lifecycle work require separate designs; this
 contract does not imply that either has shipped.
 
+Whole-database encryption plus destruction of every database-key wrapper and
+encrypted backup is the credible strategy to evaluate for retiring an entire
+database without promising SSD overwrite. A single database key cannot
+selectively erase one session, however: per-session byte withdrawal would need
+separate encrypted storage/key boundaries and its own restore, key-loss, WAL,
+and backup lifecycle design. TUR-004 therefore documents this limit and does
+not add SQLCipher, key management, or an encryption migration.
+
 ## Enforcement and tests
 
 The DB schema-invariant test maintains an exhaustive policy manifest for

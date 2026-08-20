@@ -405,10 +405,10 @@ func TestConcurrentConsumeApprovalOverInternalServerConsumesExactlyOnce(t *testi
 	if err := app.Repository.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.Repository.RecordToolCallBefore(ctx, repository.ToolCallRecord{ToolCallID: "call_concurrent", RunID: enqueued.RunID}, "general_assistant", "files", "files.update", `{}`, "sha256:concurrent"); err != nil {
+	if err := app.Repository.RecordToolCallBefore(ctx, repository.ToolCallRecord{ToolCallID: "call_concurrent", RunID: enqueued.RunID}, "general_assistant", "custom", "custom.write", `{}`, "sha256:concurrent"); err != nil {
 		t.Fatal(err)
 	}
-	approvalID, err := app.ApprovalService.CreateApprovalForTool(ctx, enqueued.RunID, "call_concurrent", "general_assistant", "files.update", map[string]any{})
+	approvalID, err := app.ApprovalService.CreateApprovalForTool(ctx, enqueued.RunID, "call_concurrent", "general_assistant", "custom.write", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}

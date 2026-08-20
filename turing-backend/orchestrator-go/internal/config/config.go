@@ -29,8 +29,13 @@ type Config struct {
 	// compromised approval consumer would gain the runtime's privileges.
 	RuntimeToken          string
 	ApprovalConsumerToken string
-	ApprovalJWTSecret     string
-	EgressSigningSecret   string
+	MCPFilesCleanupToken  string
+	// MCPFilesBaseURL is a non-secret internal endpoint used only for
+	// signed session-namespace cleanup; the orchestrator never receives the
+	// normal mcp-files bearer token.
+	MCPFilesBaseURL     string
+	ApprovalJWTSecret   string
+	EgressSigningSecret string
 	// IntegrationKey seals third-party credentials before they are stored.
 	// Optional: when it is empty, connecting an account is refused with a
 	// reason rather than the credential being stored in the clear.
@@ -47,7 +52,8 @@ type Config struct {
 	// MCP_FILES_ENABLED and OPENAI_ENABLED, which Compose derives from
 	// whether MCP_FILES_TOKEN_GENERAL / OPENAI_API_KEY are set without ever
 	// handing this process either actual secret value. The orchestrator
-	// never calls mcp-files or OpenAI itself: FilesMCPEnabled only feeds
+	// never calls mcp-files through its normal bearer or OpenAI itself:
+	// FilesMCPEnabled only feeds
 	// GetConfig's static "is mcp-files configured" flag, and OpenAIEnabled
 	// only decides whether the legacy per-run capability fallback advertises
 	// OpenAI for a runtime that has not yet reported its own capabilities —
@@ -164,6 +170,11 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	}
 	if runtimeToken == approvalConsumerToken {
 		return Config{}, errors.New("TURING_RUNTIME_TOKEN and TURING_APPROVAL_CONSUMER_TOKEN must differ")
+	}
+	mcpFilesCleanupToken := env["TURING_MCP_FILES_CLEANUP_TOKEN"]
+	if mcpFilesCleanupToken != "" &&
+		(mcpFilesCleanupToken == runtimeToken || mcpFilesCleanupToken == approvalConsumerToken) {
+		return Config{}, errors.New("TURING_MCP_FILES_CLEANUP_TOKEN must differ from internal service tokens")
 	}
 	// FilesMCPEnabled has no default: this install must say explicitly
 	// whether mcp-files is provisioned, mirroring the previous requirement
@@ -302,6 +313,8 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		ClientAPIKey:              clientKey,
 		RuntimeToken:              runtimeToken,
 		ApprovalConsumerToken:     approvalConsumerToken,
+		MCPFilesCleanupToken:      mcpFilesCleanupToken,
+		MCPFilesBaseURL:           stringValue("MCP_FILES_BASE_URL", "http://turing-mcp-files:7110/mcp"),
 		ApprovalJWTSecret:         approvalSecret,
 		EgressSigningSecret:       egressSigningSecret,
 		IntegrationKey:            integrationKey,

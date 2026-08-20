@@ -368,15 +368,19 @@ func (x *ToolCallBeacon) GetModelToolCallId() string {
 }
 
 type ToolPolicyDecision struct {
-	state         protoimpl.MessageState      `protogen:"open.v1"`
-	Decision      ToolPolicyDecision_Decision `protobuf:"varint,1,opt,name=decision,proto3,enum=turing.v1.ToolPolicyDecision_Decision" json:"decision,omitempty"`
-	ToolCallId    string                      `protobuf:"bytes,2,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
-	ApprovalId    string                      `protobuf:"bytes,3,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
-	Reason        string                      `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
-	TerminalRun   bool                        `protobuf:"varint,5,opt,name=terminal_run,json=terminalRun,proto3" json:"terminal_run,omitempty"`
-	Phase         ToolCallPhase               `protobuf:"varint,6,opt,name=phase,proto3,enum=turing.v1.ToolCallPhase" json:"phase,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState      `protogen:"open.v1"`
+	Decision    ToolPolicyDecision_Decision `protobuf:"varint,1,opt,name=decision,proto3,enum=turing.v1.ToolPolicyDecision_Decision" json:"decision,omitempty"`
+	ToolCallId  string                      `protobuf:"bytes,2,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	ApprovalId  string                      `protobuf:"bytes,3,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
+	Reason      string                      `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
+	TerminalRun bool                        `protobuf:"varint,5,opt,name=terminal_run,json=terminalRun,proto3" json:"terminal_run,omitempty"`
+	Phase       ToolCallPhase               `protobuf:"varint,6,opt,name=phase,proto3,enum=turing.v1.ToolCallPhase" json:"phase,omitempty"`
+	// Server-issued, server-signed capability binding this tool call to its
+	// session, run, deletion generation, tool, arguments and path scope. The
+	// runtime forwards it verbatim; it never mints or edits one.
+	ProvenanceToken string `protobuf:"bytes,7,opt,name=provenance_token,json=provenanceToken,proto3" json:"provenance_token,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ToolPolicyDecision) Reset() {
@@ -451,6 +455,13 @@ func (x *ToolPolicyDecision) GetPhase() ToolCallPhase {
 	return ToolCallPhase_TOOL_CALL_PHASE_UNSPECIFIED
 }
 
+func (x *ToolPolicyDecision) GetProvenanceToken() string {
+	if x != nil {
+		return x.ProvenanceToken
+	}
+	return ""
+}
+
 var File_turing_v1_tools_proto protoreflect.FileDescriptor
 
 const file_turing_v1_tools_proto_rawDesc = "" +
@@ -476,7 +487,7 @@ const file_turing_v1_tools_proto_rawDesc = "" +
 	" \x01(\v2\x18.turing.v1.ToolCallErrorR\x05error\x12\x15\n" +
 	"\x06run_id\x18\v \x01(\tR\x05runId\x12\x19\n" +
 	"\btrace_id\x18\f \x01(\tR\atraceId\x12+\n" +
-	"\x12model_tool_call_id\x18\r \x01(\tR\x0fmodelToolCallId\"\xf3\x02\n" +
+	"\x12model_tool_call_id\x18\r \x01(\tR\x0fmodelToolCallId\"\x9e\x03\n" +
 	"\x12ToolPolicyDecision\x12B\n" +
 	"\bdecision\x18\x01 \x01(\x0e2&.turing.v1.ToolPolicyDecision.DecisionR\bdecision\x12 \n" +
 	"\ftool_call_id\x18\x02 \x01(\tR\n" +
@@ -485,7 +496,8 @@ const file_turing_v1_tools_proto_rawDesc = "" +
 	"approvalId\x12\x16\n" +
 	"\x06reason\x18\x04 \x01(\tR\x06reason\x12!\n" +
 	"\fterminal_run\x18\x05 \x01(\bR\vterminalRun\x12.\n" +
-	"\x05phase\x18\x06 \x01(\x0e2\x18.turing.v1.ToolCallPhaseR\x05phase\"k\n" +
+	"\x05phase\x18\x06 \x01(\x0e2\x18.turing.v1.ToolCallPhaseR\x05phase\x12)\n" +
+	"\x10provenance_token\x18\a \x01(\tR\x0fprovenanceToken\"k\n" +
 	"\bDecision\x12\x18\n" +
 	"\x14DECISION_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eDECISION_ALLOW\x10\x01\x12\x11\n" +

@@ -35,7 +35,17 @@ Three commitments, in priority order when they conflict:
 A north star that cannot be falsified is decoration. These are the checks:
 
 - A privacy claim is falsified the moment any default path sends data off the machine, or any port beyond `:3000` is published.
-- Commitment 1 is also falsified by anything the user cannot withdraw. Whole-session deletion now exists and removes the conversation from the search index; the check fails again the moment something the user said survives a delete somewhere they cannot see. **Three places it currently does:** files written into the sandbox by `files.*` tools are not session-scoped (`mcp-files` has no notion of a session), so they outlive the conversation; SQLite runs with `secure_delete` off and WAL on, so deleted text stays in freed pages until overwritten or `VACUUM`ed — deletion is row-level, not byte-level; and a client already subscribed to a deleted session is told nothing, since no event is published on deletion.
+- Commitment 1 is also falsified by anything the user cannot withdraw.
+  Whole-session withdrawal removes application-owned content from supported
+  reads/search/recall, fences work and provenance capabilities when deletion
+  begins, removes session-owned sandbox artifacts on successful finalization,
+  and tells existing subscribers with one terminal event. A deliberate
+  migration exception remains: files that predate session provenance at the
+  sandbox root are classified `retain_legacy_unowned`, counted in the receipt,
+  and never silently claimed or deleted. SQLite runs with `secure_delete` off
+  and WAL on, so logical withdrawal is not byte-level forensic erasure: freed
+  pages, WAL/shm files, snapshots, device remapping, and backups can retain
+  bytes outside Turing's control.
 - Commitment 2 is falsified by any state where the user waits with no indication why, or any mutation that happened without a matching approval record.
 - Commitment 3 is falsified when the honest answer to "why did that fail?" is "use a bigger model."
 
@@ -79,7 +89,15 @@ Context admission is conservative rather than tokenizer-exact: built-in provider
 
 Known gaps, honestly: a live `agent.run.failed` or `agent.run.cancelled` now renders as an inline failure or cancellation card, but — like tool cards and run notices — that entry is suppressed on session reopen by the replay watermark, so a past failed or cancelled run can still surface as an unexplained empty turn; a requeued run with no worker waits indefinitely; startup-recovery notices are published before the gRPC servers exist and so reach no subscriber; there is no curated user memory, only a governance contract and keyword recall over raw messages; audit is now readable through a redacted public API and a thin Flutter client call, but there is no large audit viewer, and this API surfaces only the actions already recorded today — it does not make memory decisions or run retries inspectable beyond what `tool.call.*`'s `reason` field already says.
 
-Commitment #1's sharpest gap is now partly closed: **whole-session deletion works.** `SessionService.DeleteSession` removes a session and cascades to its messages, runs, jobs, events, tool calls and approvals; the content leaves the FTS index too, so recall cannot resurface it. Audit rows survive with their content scrubbed, so the record still evidences that something happened without retaining what was withdrawn. Deleting a session with a run in flight is refused rather than orphaning the worker.
+Commitment #1's sharpest gap is now materially closed: **whole-session
+withdrawal is a durable state machine.** `SessionService.DeleteSession` starts
+or advances a typed receipt; an active or externally blocked operation remains
+visible and retryable rather than claiming success. Once deletion begins,
+session reads, FTS search, recall, event replay, new messages, approvals and
+tool calls fail closed. Existing subscribers receive exactly one terminal,
+non-replayed deletion event only after artifact cleanup, audit scrub and the
+database cascade commit. Audit keeps only a scrubbed tombstone. The client
+removes a session only after a completed receipt or terminal event.
 
 Still missing: **message-level deletion**, and any way to forget one fact without deleting the conversation around it. Those need curated memory, which does not exist yet.
 

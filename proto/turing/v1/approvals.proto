@@ -30,6 +30,20 @@ message DenyApprovalRequest {
 message ApprovalResponse {
   string approval_id = 1;
   ApprovalStatus status = 2;
+  // Present only for a consume that reserved a sandbox artifact, which is the
+  // manifest row the write is allowed to land in.
+  SandboxArtifactReservation reservation = 3;
+}
+
+// SandboxArtifactReservation is the orchestrator's durable promise that one
+// file write is accounted for before any bytes exist.
+message SandboxArtifactReservation {
+  string artifact_id = 1;
+  // Server-derived location the write must land in; mcp-files computes the same
+  // path independently and refuses to proceed if the two disagree.
+  string physical_path = 2;
+  string policy = 3;
+  int64 deletion_generation = 4;
 }
 
 message GetApprovalForRuntimeRequest {
@@ -44,6 +58,46 @@ message RuntimeApprovalState {
 
 message ConsumeApprovalRequest {
   string approval_id = 1;
+  // The server-issued provenance capability for the same tool call. It is what
+  // ties the consume to a session, run and path, so the reservation cannot be
+  // taken for work nobody authorised.
+  string provenance_token = 2;
+  // Where the caller resolved the write to. It must equal either the run-scoped
+  // location the server derives or the legacy root path the capability already
+  // names; anything else is refused.
+  string physical_path = 3;
+}
+
+// FinalizeSandboxArtifactRequest reports the outcome of a reserved write over
+// the same authenticated internal channel that consumed the approval.
+message FinalizeSandboxArtifactRequest {
+  string artifact_id = 1;
+  string provenance_token = 2;
+  // True once the bytes are durably on the file system. False withdraws a
+  // reservation whose write never happened; it never removes a finalized
+  // artifact.
+  bool committed = 3;
+}
+
+message FinalizeSandboxArtifactResponse {
+  string artifact_id = 1;
+  // "ready" when the artifact is recorded, "released" when an unwritten
+  // reservation was withdrawn.
+  string state = 2;
+}
+
+// CheckSessionCapabilityRequest asks whether a capability's session is still
+// accepting work. It is how a read-only tool gets a server-side answer, since
+// nothing about a read touches the artifact manifest.
+message CheckSessionCapabilityRequest {
+  string provenance_token = 1;
+}
+
+message SessionCapabilityState {
+  // True only when the session exists, is not being withdrawn, and is still on
+  // the withdrawal generation the capability was issued against.
+  bool active = 1;
+  int64 deletion_generation = 2;
 }
 
 service ApprovalService {
@@ -51,4 +105,6 @@ service ApprovalService {
   rpc DenyApproval(DenyApprovalRequest) returns (ApprovalResponse);
   rpc GetApprovalForRuntime(GetApprovalForRuntimeRequest) returns (RuntimeApprovalState);
   rpc ConsumeApproval(ConsumeApprovalRequest) returns (ApprovalResponse);
+  rpc FinalizeSandboxArtifact(FinalizeSandboxArtifactRequest) returns (FinalizeSandboxArtifactResponse);
+  rpc CheckSessionCapability(CheckSessionCapabilityRequest) returns (SessionCapabilityState);
 }

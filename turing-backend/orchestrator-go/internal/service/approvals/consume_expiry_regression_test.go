@@ -24,7 +24,7 @@ func TestConsumeApprovalAfterExpiryRejectsAndTerminalizes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = h.service.ConsumeApproval(context.Background(), &turingv1.ConsumeApprovalRequest{ApprovalId: approvalID})
+	_, err = h.service.ConsumeApproval(context.Background(), h.consumeRequest(t, enqueued, approvalID, "note.txt"))
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("ConsumeApproval error = %v, want FailedPrecondition", err)
 	}

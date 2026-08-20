@@ -317,6 +317,19 @@ interactive consent.
 **Likely files:** session deletion repository/service, events service, MCP file metadata, client session state, architecture docs.  
 **Acceptance:** Subscribers are notified; session-owned artifacts are listed and deleted or explicitly retained by policy; no search or memory path returns deleted content.  
 **Dependencies:** MEM-001.
+**Implementation pending merge:** `SessionService.DeleteSession` now returns a
+typed durable receipt instead of waiting indefinitely. It immediately hides a
+deleting session from every supported read/mutation path, cancels active work
+through the existing runtime stream, delivers one non-replayed
+`SESSION_DELETED` event to existing subscribers after successful finalization,
+and rejects replay/reconnect with `NotFound`. New sandbox writes carry
+server-issued session/run/generation provenance, reserve a durable manifest
+row before I/O, and default to `delete_on_session_delete`; pre-existing root
+files are the sole `retain_legacy_unowned` exception. External cleanup failure
+stays retryable and never reports completion. The accompanying documentation
+distinguishes logical withdrawal from physical erasure and evaluates
+whole-database encryption/key destruction without adding SQLCipher or an
+encryption migration.
 
 #### TUR-005 — Harden runtime and orchestrator containers
 
@@ -348,7 +361,9 @@ authorizes only the methods on that identity's allowlist: the runtime may call
 `RuntimeService.ConnectWorker`, `SessionService.ListMessages`/
 `SearchMessages`, and `ApprovalService.GetApprovalForRuntime`/
 `ConsumeApproval`; the approval consumer (`mcp-files`, and any future MCP
-server that consumes approvals) may call only `ApprovalService.ConsumeApproval`.
+server that consumes approvals) may call `ApprovalService.ConsumeApproval`,
+`FinalizeSandboxArtifact`, and `CheckSessionCapability`; the latter two support
+the provenance-bound reservation, finalization, and post-I/O state checks.
 A wrong-service call fails `PermissionDenied` before reaching a handler; an
 unknown or malformed bearer fails `Unauthenticated`. The orchestrator also
 drops the now-dead `MCP_SYSTEM_TOKEN_GENERAL` entirely and replaces

@@ -20,6 +20,8 @@ services:
       TURING_CLIENT_API_KEY: ${TURING_CLIENT_API_KEY}
       TURING_RUNTIME_TOKEN: ${TURING_RUNTIME_TOKEN}
       TURING_APPROVAL_CONSUMER_TOKEN: ${TURING_APPROVAL_CONSUMER_TOKEN}
+      TURING_MCP_FILES_CLEANUP_TOKEN: ${TURING_MCP_FILES_CLEANUP_TOKEN}
+      MCP_FILES_BASE_URL: ${MCP_FILES_BASE_URL:-http://turing-mcp-files:7110/mcp}
       TURING_APPROVAL_JWT_SECRET: ${TURING_APPROVAL_JWT_SECRET}
       # Signs one-time disclosure challenges and never leaves the orchestrator.
       TURING_EGRESS_SIGNING_SECRET: ${TURING_EGRESS_SIGNING_SECRET}
@@ -34,9 +36,9 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
       OLLAMA_CONTEXT_WINDOW_TOKENS: ${OLLAMA_CONTEXT_WINDOW_TOKENS:-32768}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      # The orchestrator never calls OpenAI or mcp-files itself; GetConfig
-      # only reports whether each is configured, so it receives a derived
-      # boolean rather than the actual secret those calls would need.
+      # The orchestrator never calls OpenAI and holds no normal mcp-files
+      # bearer token. It only calls the dedicated, cleanup-token-authenticated
+      # mcp-files endpoint while reconciling session withdrawal.
       OPENAI_ENABLED: ${OPENAI_API_KEY:+true}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       OPENAI_CONTEXT_WINDOW_TOKENS: ${OPENAI_CONTEXT_WINDOW_TOKENS:-32768}
@@ -171,6 +173,7 @@ services:
       MCP_FILES_TOKEN_GENERAL: ${MCP_FILES_TOKEN_GENERAL}
       TURING_APPROVAL_JWT_SECRET: ${TURING_APPROVAL_JWT_SECRET}
       TURING_APPROVAL_CONSUMER_TOKEN: ${TURING_APPROVAL_CONSUMER_TOKEN}
+      TURING_MCP_FILES_CLEANUP_TOKEN: ${TURING_MCP_FILES_CLEANUP_TOKEN}
       ORCHESTRATOR_GRPC_ADDR: ${ORCHESTRATOR_GRPC_ADDR:-turing-orchestrator:3001}
       FILES_SANDBOX_ROOT: /sandbox
       LOG_LEVEL: ${LOG_LEVEL:-info}

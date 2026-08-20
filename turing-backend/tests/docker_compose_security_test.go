@@ -78,12 +78,19 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"TURING_CLIENT_API_KEY:",
 		"TURING_RUNTIME_TOKEN:",
 		"TURING_APPROVAL_CONSUMER_TOKEN:",
+		"TURING_MCP_FILES_CLEANUP_TOKEN:",
+		"TURING_MCP_FILES_CLEANUP_TOKEN:",
+		"MCP_FILES_BASE_URL:",
+		// The orchestrator uses this internal-only URL only to reconcile
+		// session-owned sandbox namespaces after deletion.
+		"MCP_FILES_BASE_URL:",
 		"TURING_APPROVAL_JWT_SECRET:",
 		"TURING_EGRESS_SIGNING_SECRET:",
 		"DATABASE_PATH:",
 		"SKILLS_ROOT:",
 		"OLLAMA_BASE_URL:",
-		// The orchestrator never calls OpenAI or mcp-files: it only reports
+		// The orchestrator never calls OpenAI or mcp-files through its normal
+		// bearer: it only reports
 		// through GetConfig whether each is configured, so it holds a
 		// Compose-derived boolean instead of the actual secret value.
 		"MCP_FILES_ENABLED:",
@@ -93,7 +100,6 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 	requireContainsNone(t, "turing-orchestrator", orchestrator,
 		"ORCHESTRATOR_GRPC_ADDR:",
 		"MCP_SYSTEM_BASE_URL:",
-		"MCP_FILES_BASE_URL:",
 		"FILES_SANDBOX_ROOT:",
 		// A single shared internal token let a compromised approval consumer
 		// present the runtime's own credential; this must never come back.
@@ -101,7 +107,8 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		// Dead here even before the split: the orchestrator never calls
 		// mcp-system and never used the token's value, only its presence.
 		"MCP_SYSTEM_TOKEN_GENERAL:",
-		// The orchestrator never calls mcp-files or OpenAI itself, so it must
+		// The orchestrator never calls mcp-files through its normal bearer or
+		// OpenAI itself, so it must
 		// never hold the bearer token or API key those calls would need.
 		"MCP_FILES_TOKEN_GENERAL:",
 		"OPENAI_API_KEY:",
@@ -132,6 +139,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		// compromised runtime could impersonate mcp-files.
 		"TURING_APPROVAL_CONSUMER_TOKEN:",
 		"TURING_EGRESS_SIGNING_SECRET:",
+		"TURING_MCP_FILES_CLEANUP_TOKEN:",
 	)
 
 	system := composeServiceBlock(t, compose, "turing-mcp-system")
@@ -187,6 +195,8 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"TURING_CLIENT_API_KEY",
 			"TURING_RUNTIME_TOKEN",
 			"TURING_APPROVAL_CONSUMER_TOKEN",
+			"TURING_MCP_FILES_CLEANUP_TOKEN",
+			"MCP_FILES_BASE_URL",
 			"MCP_FILES_ENABLED",
 			"OPENAI_ENABLED",
 			"TURING_APPROVAL_JWT_SECRET",
@@ -252,6 +262,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"MCP_FILES_TOKEN_GENERAL",
 			"TURING_APPROVAL_JWT_SECRET",
 			"TURING_APPROVAL_CONSUMER_TOKEN",
+			"TURING_MCP_FILES_CLEANUP_TOKEN",
 			"ORCHESTRATOR_GRPC_ADDR",
 			"FILES_SANDBOX_ROOT",
 			"LOG_LEVEL",

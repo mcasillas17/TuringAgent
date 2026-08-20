@@ -9,6 +9,7 @@ import 'package:turing_flutter_app/models/external_agent.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
+import 'package:turing_flutter_app/models/session_deletion.dart';
 import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
@@ -731,7 +732,13 @@ class _AgentApi extends TuringApi
   );
 
   @override
-  Future<void> deleteSession({required String sessionId}) async {}
+  Future<SessionDeletionReceipt> deleteSession({
+    required String sessionId,
+  }) async => const SessionDeletionReceipt.completed();
+
+  @override
+  Future<List<SessionDeletionReceipt>> listSessionDeletionReceipts() async =>
+      const [];
 
   @override
   Future<List<Message>> listMessages({

@@ -778,6 +778,10 @@ func applyAuditActionPolicy(payload *turingv1.AuditPayload, action string, objec
 	case "automation.remote_egress_blocked":
 		payload.ErrorCode = auditString(object, "code", maxAuditErrorCodeBytes)
 		payload.Provider = auditString(object, "provider", maxAuditProviderBytes)
+	case "session.artifact.cleanup.failed":
+		payload.Status = auditString(object, "state", maxAuditStatusBytes)
+		payload.Reason = auditString(object, "policy", maxAuditReasonBytes)
+		payload.ErrorCode = auditString(object, "errorCode", maxAuditErrorCodeBytes)
 	default:
 		// Unknown / future action: metadata only, no payload fields.
 	}

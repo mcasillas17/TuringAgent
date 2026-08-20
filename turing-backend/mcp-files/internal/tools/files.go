@@ -49,6 +49,7 @@ type ApprovalValidator interface {
 type FilesTools struct {
 	root          string
 	validator     ApprovalValidator
+	provenance    ProvenanceGuard
 	locks         *pathLockTable
 	syncFile      func(*os.File) error
 	syncDirectory func(*os.File) error
@@ -83,6 +84,10 @@ func (f FilesTools) Read(args map[string]any) (map[string]any, error) {
 }
 
 func (f FilesTools) ReadContext(ctx context.Context, args map[string]any) (map[string]any, error) {
+	return f.readContext(ctx, args, callScope{})
+}
+
+func (f FilesTools) readContext(ctx context.Context, args map[string]any, scope callScope) (map[string]any, error) {
 	pathValue, limit, err := validateReadArgs(args)
 	if err != nil {
 		return nil, err
@@ -91,6 +96,16 @@ func (f FilesTools) ReadContext(ctx context.Context, args map[string]any) (map[s
 		return nil, err
 	}
 	clean, _, err := normalizeSandboxPath(pathValue)
+	if err != nil {
+		return nil, err
+	}
+	if err := scope.requirePathScope(clean); err != nil {
+		return nil, err
+	}
+	if err := scope.checkSessionActive(ctx); err != nil {
+		return nil, err
+	}
+	clean, err = f.resolveRead(ctx, scope, clean)
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +136,11 @@ func (f FilesTools) ReadContext(ctx context.Context, args map[string]any) (map[s
 	if !utf8.Valid(content) {
 		return nil, errors.New("unsupported media type")
 	}
+	// Asked again with the content already in hand: a withdrawal that started
+	// while this read was in flight means the content must not leave here.
+	if err := scope.checkSessionActive(ctx); err != nil {
+		return nil, err
+	}
 	return map[string]any{"path": pathValue, "content": string(content), "truncated": truncated, "bytesRead": stat.Size}, nil
 }
 
@@ -129,6 +149,10 @@ func (f FilesTools) List(args map[string]any) (map[string]any, error) {
 }
 
 func (f FilesTools) ListContext(ctx context.Context, args map[string]any) (map[string]any, error) {
+	return f.listContext(ctx, args, callScope{})
+}
+
+func (f FilesTools) listContext(ctx context.Context, args map[string]any, scope callScope) (map[string]any, error) {
 	pathValue, limit, err := validateListArgs(args)
 	if err != nil {
 		return nil, err
@@ -136,7 +160,25 @@ func (f FilesTools) ListContext(ctx context.Context, args map[string]any) (map[s
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	directory, _, err := f.openDirectoryPathContext(ctx, pathValue, false)
+	clean, _, err := normalizeSandboxPath(pathValue)
+	if err != nil {
+		return nil, err
+	}
+	if err := scope.requirePathScope(clean); err != nil {
+		return nil, err
+	}
+	if err := scope.checkSessionActive(ctx); err != nil {
+		return nil, err
+	}
+	listPath, err := f.resolveRead(ctx, scope, clean)
+	if err != nil {
+		return nil, err
+	}
+	// Only reached when the session has no storage of its own yet, so the
+	// listing falls back to the sandbox root. The session subtree there belongs
+	// to other sessions and is reachable only through their capabilities.
+	hideSessionsRoot := scope.active && listPath == "."
+	directory, _, err := f.openDirectoryPathContext(ctx, listPath, false)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +200,7 @@ func (f FilesTools) ListContext(ctx context.Context, args map[string]any) (map[s
 			if entry.err != nil {
 				return nil, fmt.Errorf("inspect directory entry %q: %w", entry.name, entry.err)
 			}
-			if !isInternalStagingName(entry.name) {
+			if !isInternalStagingName(entry.name) && (!hideSessionsRoot || entry.name != sessionsRoot) {
 				entries = append(entries, entry)
 			}
 			if len(entries) > limit {
@@ -191,6 +233,9 @@ func (f FilesTools) ListContext(ctx context.Context, args map[string]any) (map[s
 		}
 		items = append(items, item)
 	}
+	if err := scope.checkSessionActive(ctx); err != nil {
+		return nil, err
+	}
 	return map[string]any{"items": items, "truncated": truncated}, nil
 }
 
@@ -199,6 +244,10 @@ func (f FilesTools) Search(args map[string]any) (map[string]any, error) {
 }
 
 func (f FilesTools) SearchContext(ctx context.Context, args map[string]any) (map[string]any, error) {
+	return f.searchContext(ctx, args, callScope{})
+}
+
+func (f FilesTools) searchContext(ctx context.Context, args map[string]any, scope callScope) (map[string]any, error) {
 	pathValue, query, limit, err := validateSearchArgs(args)
 	if err != nil {
 		return nil, err
@@ -210,6 +259,20 @@ func (f FilesTools) SearchContext(ctx context.Context, args map[string]any) (map
 	if err != nil {
 		return nil, err
 	}
+	if err := scope.requirePathScope(clean); err != nil {
+		return nil, err
+	}
+	if err := scope.checkSessionActive(ctx); err != nil {
+		return nil, err
+	}
+	clean, err = f.resolveRead(ctx, scope, clean)
+	if err != nil {
+		return nil, err
+	}
+	// Reached only when the session has no storage of its own yet and the
+	// search falls back to the sandbox root. Descending into the session
+	// subtree there would read other sessions' files.
+	hideSessionsRoot := scope.active && clean == "."
 	type directoryTask struct {
 		path      string
 		directory *os.File
@@ -375,6 +438,9 @@ func (f FilesTools) SearchContext(ctx context.Context, args map[string]any) (map
 				if isInternalStagingName(entry.name) {
 					continue
 				}
+				if hideSessionsRoot && task.path == "." && entry.name == sessionsRoot {
+					continue
+				}
 				rel := entry.name
 				if task.path != "." {
 					rel = filepath.Join(task.path, entry.name)
@@ -415,6 +481,11 @@ func (f FilesTools) SearchContext(ctx context.Context, args map[string]any) (map
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// The matches carry file paths and snippets, so the same after-I/O check the
+	// read path runs applies here with more at stake.
+	if err := scope.checkSessionActive(ctx); err != nil {
+		return nil, err
+	}
 	return map[string]any{
 		"matches":               matches,
 		"truncated":             truncated,
@@ -436,6 +507,10 @@ func (f FilesTools) Create(args map[string]any, approvalToken string, agentID st
 }
 
 func (f FilesTools) CreateContext(ctx context.Context, args map[string]any, approvalToken string, agentID string) (map[string]any, error) {
+	return f.createContext(ctx, args, approvalToken, agentID, callScope{})
+}
+
+func (f FilesTools) createContext(ctx context.Context, args map[string]any, approvalToken string, agentID string, scope callScope) (result map[string]any, err error) {
 	pathValue, content, err := validateCreateArgs(args)
 	if err != nil {
 		return nil, err
@@ -444,6 +519,13 @@ func (f FilesTools) CreateContext(ctx context.Context, args map[string]any, appr
 		return nil, err
 	}
 	clean, _, err := normalizeSandboxPath(pathValue)
+	if err != nil {
+		return nil, err
+	}
+	if err := scope.requirePathScope(clean); err != nil {
+		return nil, err
+	}
+	clean, err = f.resolveWrite(ctx, scope, clean, true)
 	if err != nil {
 		return nil, err
 	}
@@ -458,7 +540,26 @@ func (f FilesTools) CreateContext(ctx context.Context, args map[string]any, appr
 	if err := f.checkCreatePreconditions(ctx, clean); err != nil {
 		return nil, err
 	}
-	if err := f.validateApproval(ctx, "files.create", args, approvalToken, agentID); err != nil {
+	var reservation Reservation
+	// Flipped the instant the new file is linked into place. After that the
+	// reservation must never be withdrawn, however the call ends: the bytes are
+	// on disk, and a manifest that forgot them would let the session's
+	// withdrawal complete over a file nothing accounts for.
+	installed := false
+	if scope.active {
+		// The reservation is durable before a single byte exists, so a crash
+		// after this point leaves a record that a file may be on disk rather
+		// than an artifact nothing knows about.
+		reservation, err = f.authorizeWrite(ctx, scope, approvalToken, clean)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err != nil && !installed {
+				err = f.releaseWrite(ctx, scope, reservation, err)
+			}
+		}()
+	} else if err := f.validateApproval(ctx, "files.create", args, approvalToken, agentID); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -498,6 +599,7 @@ func (f FilesTools) CreateContext(ctx context.Context, args map[string]any, appr
 		}
 		return nil, fmt.Errorf("install create target %q: %w", pathValue, err)
 	}
+	installed = true
 	if err := unix.Unlinkat(int(parent.Fd()), temporaryName, 0); err != nil {
 		return nil, fmt.Errorf("remove create staging file: %w", err)
 	}
@@ -510,6 +612,14 @@ func (f FilesTools) CreateContext(ctx context.Context, args map[string]any, appr
 	}
 	if err := f.syncCreateAncestorsContext(ctx, clean); err != nil {
 		return nil, fmt.Errorf("sync directory hierarchy after create %q: %w", pathValue, err)
+	}
+	if scope.active {
+		if err := f.commitWrite(ctx, scope, reservation, clean); err != nil {
+			// The bytes are already durable, so this is reported instead of
+			// being retried away: the reservation stays unfinished and the
+			// caller learns the manifest does not yet know about the file.
+			return nil, err
+		}
 	}
 	return map[string]any{"path": pathValue, "sha256": contentHash(content)}, nil
 }
@@ -552,6 +662,10 @@ func (f FilesTools) Update(args map[string]any, approvalToken string, agentID st
 }
 
 func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, approvalToken string, agentID string) (map[string]any, error) {
+	return f.updateContext(ctx, args, approvalToken, agentID, callScope{})
+}
+
+func (f FilesTools) updateContext(ctx context.Context, args map[string]any, approvalToken string, agentID string, scope callScope) (result map[string]any, err error) {
 	pathValue, content, expectedHash, err := validateUpdateArgs(args)
 	if err != nil {
 		return nil, err
@@ -560,6 +674,13 @@ func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, appr
 		return nil, err
 	}
 	clean, _, err := normalizeSandboxPath(pathValue)
+	if err != nil {
+		return nil, err
+	}
+	if err := scope.requirePathScope(clean); err != nil {
+		return nil, err
+	}
+	clean, err = f.resolveWrite(ctx, scope, clean, false)
 	if err != nil {
 		return nil, err
 	}
@@ -617,7 +738,23 @@ func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, appr
 			return nil, errors.New("expectedHash mismatch")
 		}
 	}
-	if err := f.validateApproval(ctx, "files.update", args, approvalToken, agentID); err != nil {
+	var reservation Reservation
+	// Same point of no return as create: once the replacement is renamed over
+	// the target, the reservation stands regardless of what happens next.
+	installed := false
+	if scope.active {
+		// Taken after the target is known and before it is touched, so the
+		// manifest records the file that is actually about to change.
+		reservation, err = f.authorizeWrite(ctx, scope, approvalToken, clean)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err != nil && !installed {
+				err = f.releaseWrite(ctx, scope, reservation, err)
+			}
+		}()
+	} else if err := f.validateApproval(ctx, "files.update", args, approvalToken, agentID); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -676,12 +813,18 @@ func (f FilesTools) UpdateContext(ctx context.Context, args map[string]any, appr
 	if err := unix.Renameat(int(parent.Fd()), temporaryName, int(parent.Fd()), leaf); err != nil {
 		return nil, fmt.Errorf("replace update target: %w", err)
 	}
+	installed = true
 	removeTemporary = false
 	if err := f.syncDirectory(parent); err != nil {
 		return nil, fmt.Errorf("sync directory after update %q: %w", pathValue, err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if scope.active {
+		if err := f.commitWrite(ctx, scope, reservation, clean); err != nil {
+			return nil, err
+		}
 	}
 	return map[string]any{"path": pathValue, "sha256": contentHash(content)}, nil
 }
@@ -698,22 +841,41 @@ func (f FilesTools) Call(name string, args map[string]any, approvalToken string,
 }
 
 func (f FilesTools) CallContext(ctx context.Context, name string, args map[string]any, approvalToken string, agentID string) (map[string]any, error) {
+	return f.CallRequestContext(ctx, CallRequest{Name: name, Args: args, ApprovalToken: approvalToken, AgentID: agentID})
+}
+
+// CallRequestContext runs one tool call with the capabilities issued for it.
+// The provenance capability is verified before any path is resolved, so a call
+// without one never reaches the file system.
+func (f FilesTools) CallRequestContext(ctx context.Context, req CallRequest) (map[string]any, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	switch name {
+	if req.Args == nil {
+		req.Args = map[string]any{}
+	}
+	scope, err := f.newCallScope(req)
+	if err != nil {
+		return nil, err
+	}
+	switch req.Name {
 	case "files.list":
-		return f.ListContext(ctx, args)
+		return f.listContext(ctx, req.Args, scope)
 	case "files.search":
-		return f.SearchContext(ctx, args)
+		return f.searchContext(ctx, req.Args, scope)
 	case "files.read":
-		return f.ReadContext(ctx, args)
+		return f.readContext(ctx, req.Args, scope)
 	case "files.create":
-		return f.CreateContext(ctx, args, approvalToken, agentID)
+		return f.createContext(ctx, req.Args, req.ApprovalToken, req.AgentID, scope)
 	case "files.update":
-		return f.UpdateContext(ctx, args, approvalToken, agentID)
+		return f.updateContext(ctx, req.Args, req.ApprovalToken, req.AgentID, scope)
 	case "files.delete", "files.move":
 		return nil, errors.New("tool disabled")
+	case SessionCleanupTool:
+		// Never reachable from an agent, whatever capability it holds: session
+		// cleanup is an internal operation authenticated by the internal token
+		// on its own path, not a tool the model may ask for.
+		return nil, invalidParams("unknown tool")
 	default:
 		return nil, invalidParams("unknown tool")
 	}

@@ -373,6 +373,9 @@ func mapEnqueueError(ctx context.Context, err error) error {
 		errors.Is(err, repository.ErrExternalAgentBaseURLInvalid) {
 		return status.Error(codes.FailedPrecondition, "remote egress decision is invalid for this request")
 	}
+	if errors.Is(err, repository.ErrSessionDeleting) {
+		return status.Error(codes.FailedPrecondition, "session deletion is in progress")
+	}
 	if status.Code(err) == codes.FailedPrecondition {
 		return err
 	}
