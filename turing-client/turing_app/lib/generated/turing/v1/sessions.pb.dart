@@ -16,8 +16,11 @@ import 'package:protobuf/protobuf.dart' as $pb;
 
 import '../../google/protobuf/timestamp.pb.dart' as $1;
 import 'common.pb.dart' as $2;
+import 'sessions.pbenum.dart';
 
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
+
+export 'sessions.pbenum.dart';
 
 class Session extends $pb.GeneratedMessage {
   factory Session({
@@ -260,9 +263,11 @@ class CreateSessionResponse extends $pb.GeneratedMessage {
 class ListSessionsRequest extends $pb.GeneratedMessage {
   factory ListSessionsRequest({
     $2.PageRequest? page,
+    SessionListFilter? filter,
   }) {
     final result = create();
     if (page != null) result.page = page;
+    if (filter != null) result.filter = filter;
     return result;
   }
 
@@ -281,6 +286,11 @@ class ListSessionsRequest extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOM<$2.PageRequest>(1, _omitFieldNames ? '' : 'page',
         subBuilder: $2.PageRequest.create)
+    ..e<SessionListFilter>(
+        2, _omitFieldNames ? '' : 'filter', $pb.PbFieldType.OE,
+        defaultOrMaker: SessionListFilter.SESSION_LIST_FILTER_UNSPECIFIED,
+        valueOf: SessionListFilter.valueOf,
+        enumValues: SessionListFilter.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -314,6 +324,15 @@ class ListSessionsRequest extends $pb.GeneratedMessage {
   void clearPage() => $_clearField(1);
   @$pb.TagNumber(1)
   $2.PageRequest ensurePage() => $_ensure(0);
+
+  @$pb.TagNumber(2)
+  SessionListFilter get filter => $_getN(1);
+  @$pb.TagNumber(2)
+  set filter(SessionListFilter value) => $_setField(2, value);
+  @$pb.TagNumber(2)
+  $core.bool hasFilter() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearFilter() => $_clearField(2);
 }
 
 class ListSessionsResponse extends $pb.GeneratedMessage {
@@ -552,6 +571,374 @@ class DeleteSessionResponse extends $pb.GeneratedMessage {
   $core.bool hasSessionId() => $_has(0);
   @$pb.TagNumber(1)
   void clearSessionId() => $_clearField(1);
+}
+
+class RenameSessionRequest extends $pb.GeneratedMessage {
+  factory RenameSessionRequest({
+    $core.String? sessionId,
+    $core.String? title,
+  }) {
+    final result = create();
+    if (sessionId != null) result.sessionId = sessionId;
+    if (title != null) result.title = title;
+    return result;
+  }
+
+  RenameSessionRequest._();
+
+  factory RenameSessionRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RenameSessionRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RenameSessionRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'sessionId')
+    ..aOS(2, _omitFieldNames ? '' : 'title')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RenameSessionRequest clone() =>
+      RenameSessionRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RenameSessionRequest copyWith(void Function(RenameSessionRequest) updates) =>
+      super.copyWith((message) => updates(message as RenameSessionRequest))
+          as RenameSessionRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RenameSessionRequest create() => RenameSessionRequest._();
+  @$core.override
+  RenameSessionRequest createEmptyInstance() => create();
+  static $pb.PbList<RenameSessionRequest> createRepeated() =>
+      $pb.PbList<RenameSessionRequest>();
+  @$core.pragma('dart2js:noInline')
+  static RenameSessionRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RenameSessionRequest>(create);
+  static RenameSessionRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get sessionId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set sessionId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasSessionId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearSessionId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get title => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set title($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasTitle() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearTitle() => $_clearField(2);
+}
+
+class RenameSessionResponse extends $pb.GeneratedMessage {
+  factory RenameSessionResponse({
+    Session? session,
+  }) {
+    final result = create();
+    if (session != null) result.session = session;
+    return result;
+  }
+
+  RenameSessionResponse._();
+
+  factory RenameSessionResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RenameSessionResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RenameSessionResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOM<Session>(1, _omitFieldNames ? '' : 'session',
+        subBuilder: Session.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RenameSessionResponse clone() =>
+      RenameSessionResponse()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RenameSessionResponse copyWith(
+          void Function(RenameSessionResponse) updates) =>
+      super.copyWith((message) => updates(message as RenameSessionResponse))
+          as RenameSessionResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RenameSessionResponse create() => RenameSessionResponse._();
+  @$core.override
+  RenameSessionResponse createEmptyInstance() => create();
+  static $pb.PbList<RenameSessionResponse> createRepeated() =>
+      $pb.PbList<RenameSessionResponse>();
+  @$core.pragma('dart2js:noInline')
+  static RenameSessionResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RenameSessionResponse>(create);
+  static RenameSessionResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  Session get session => $_getN(0);
+  @$pb.TagNumber(1)
+  set session(Session value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasSession() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearSession() => $_clearField(1);
+  @$pb.TagNumber(1)
+  Session ensureSession() => $_ensure(0);
+}
+
+class ArchiveSessionRequest extends $pb.GeneratedMessage {
+  factory ArchiveSessionRequest({
+    $core.String? sessionId,
+  }) {
+    final result = create();
+    if (sessionId != null) result.sessionId = sessionId;
+    return result;
+  }
+
+  ArchiveSessionRequest._();
+
+  factory ArchiveSessionRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ArchiveSessionRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ArchiveSessionRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'sessionId')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ArchiveSessionRequest clone() =>
+      ArchiveSessionRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ArchiveSessionRequest copyWith(
+          void Function(ArchiveSessionRequest) updates) =>
+      super.copyWith((message) => updates(message as ArchiveSessionRequest))
+          as ArchiveSessionRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ArchiveSessionRequest create() => ArchiveSessionRequest._();
+  @$core.override
+  ArchiveSessionRequest createEmptyInstance() => create();
+  static $pb.PbList<ArchiveSessionRequest> createRepeated() =>
+      $pb.PbList<ArchiveSessionRequest>();
+  @$core.pragma('dart2js:noInline')
+  static ArchiveSessionRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ArchiveSessionRequest>(create);
+  static ArchiveSessionRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get sessionId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set sessionId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasSessionId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearSessionId() => $_clearField(1);
+}
+
+class ArchiveSessionResponse extends $pb.GeneratedMessage {
+  factory ArchiveSessionResponse({
+    Session? session,
+  }) {
+    final result = create();
+    if (session != null) result.session = session;
+    return result;
+  }
+
+  ArchiveSessionResponse._();
+
+  factory ArchiveSessionResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ArchiveSessionResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ArchiveSessionResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOM<Session>(1, _omitFieldNames ? '' : 'session',
+        subBuilder: Session.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ArchiveSessionResponse clone() =>
+      ArchiveSessionResponse()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ArchiveSessionResponse copyWith(
+          void Function(ArchiveSessionResponse) updates) =>
+      super.copyWith((message) => updates(message as ArchiveSessionResponse))
+          as ArchiveSessionResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ArchiveSessionResponse create() => ArchiveSessionResponse._();
+  @$core.override
+  ArchiveSessionResponse createEmptyInstance() => create();
+  static $pb.PbList<ArchiveSessionResponse> createRepeated() =>
+      $pb.PbList<ArchiveSessionResponse>();
+  @$core.pragma('dart2js:noInline')
+  static ArchiveSessionResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ArchiveSessionResponse>(create);
+  static ArchiveSessionResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  Session get session => $_getN(0);
+  @$pb.TagNumber(1)
+  set session(Session value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasSession() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearSession() => $_clearField(1);
+  @$pb.TagNumber(1)
+  Session ensureSession() => $_ensure(0);
+}
+
+class RestoreSessionRequest extends $pb.GeneratedMessage {
+  factory RestoreSessionRequest({
+    $core.String? sessionId,
+  }) {
+    final result = create();
+    if (sessionId != null) result.sessionId = sessionId;
+    return result;
+  }
+
+  RestoreSessionRequest._();
+
+  factory RestoreSessionRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RestoreSessionRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RestoreSessionRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'sessionId')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RestoreSessionRequest clone() =>
+      RestoreSessionRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RestoreSessionRequest copyWith(
+          void Function(RestoreSessionRequest) updates) =>
+      super.copyWith((message) => updates(message as RestoreSessionRequest))
+          as RestoreSessionRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RestoreSessionRequest create() => RestoreSessionRequest._();
+  @$core.override
+  RestoreSessionRequest createEmptyInstance() => create();
+  static $pb.PbList<RestoreSessionRequest> createRepeated() =>
+      $pb.PbList<RestoreSessionRequest>();
+  @$core.pragma('dart2js:noInline')
+  static RestoreSessionRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RestoreSessionRequest>(create);
+  static RestoreSessionRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get sessionId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set sessionId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasSessionId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearSessionId() => $_clearField(1);
+}
+
+class RestoreSessionResponse extends $pb.GeneratedMessage {
+  factory RestoreSessionResponse({
+    Session? session,
+  }) {
+    final result = create();
+    if (session != null) result.session = session;
+    return result;
+  }
+
+  RestoreSessionResponse._();
+
+  factory RestoreSessionResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RestoreSessionResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RestoreSessionResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOM<Session>(1, _omitFieldNames ? '' : 'session',
+        subBuilder: Session.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RestoreSessionResponse clone() =>
+      RestoreSessionResponse()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RestoreSessionResponse copyWith(
+          void Function(RestoreSessionResponse) updates) =>
+      super.copyWith((message) => updates(message as RestoreSessionResponse))
+          as RestoreSessionResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RestoreSessionResponse create() => RestoreSessionResponse._();
+  @$core.override
+  RestoreSessionResponse createEmptyInstance() => create();
+  static $pb.PbList<RestoreSessionResponse> createRepeated() =>
+      $pb.PbList<RestoreSessionResponse>();
+  @$core.pragma('dart2js:noInline')
+  static RestoreSessionResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RestoreSessionResponse>(create);
+  static RestoreSessionResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  Session get session => $_getN(0);
+  @$pb.TagNumber(1)
+  set session(Session value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasSession() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearSession() => $_clearField(1);
+  @$pb.TagNumber(1)
+  Session ensureSession() => $_ensure(0);
 }
 
 class ListMessagesRequest extends $pb.GeneratedMessage {

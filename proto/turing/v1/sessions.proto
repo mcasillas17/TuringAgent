@@ -24,8 +24,16 @@ message CreateSessionResponse {
   google.protobuf.Timestamp created_at = 2;
 }
 
+enum SessionListFilter {
+  SESSION_LIST_FILTER_UNSPECIFIED = 0;
+  SESSION_LIST_FILTER_ACTIVE = 1;
+  SESSION_LIST_FILTER_ARCHIVED = 2;
+  SESSION_LIST_FILTER_ALL = 3;
+}
+
 message ListSessionsRequest {
   PageRequest page = 1;
+  SessionListFilter filter = 2;
 }
 
 message ListSessionsResponse {
@@ -43,6 +51,31 @@ message DeleteSessionRequest {
 
 message DeleteSessionResponse {
   string session_id = 1;
+}
+
+message RenameSessionRequest {
+  string session_id = 1;
+  string title = 2;
+}
+
+message RenameSessionResponse {
+  Session session = 1;
+}
+
+message ArchiveSessionRequest {
+  string session_id = 1;
+}
+
+message ArchiveSessionResponse {
+  Session session = 1;
+}
+
+message RestoreSessionRequest {
+  string session_id = 1;
+}
+
+message RestoreSessionResponse {
+  Session session = 1;
 }
 
 message ListMessagesRequest {
@@ -102,4 +135,7 @@ service SessionService {
   rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
   rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
   rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+  rpc RenameSession(RenameSessionRequest) returns (RenameSessionResponse);
+  rpc ArchiveSession(ArchiveSessionRequest) returns (ArchiveSessionResponse);
+  rpc RestoreSession(RestoreSessionRequest) returns (RestoreSessionResponse);
 }
