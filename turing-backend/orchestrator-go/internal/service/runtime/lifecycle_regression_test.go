@@ -476,3 +476,85 @@ func (s *deliveredThenFailedAssignmentStream) Send(command *turingv1.RuntimeComm
 	}
 	return nil
 }
+
+// TestFencedRunRefusesGenericOwnershipClaims guards the ingest predicate that
+// must NOT learn about recovering.
+//
+// Recovering says nobody can currently prove which worker owns the run. A
+// generic runtime event or a before-phase tool beacon is a worker asserting the
+// opposite — narrating the run, or asking to act in its name — so admitting one
+// would let an unproven owner keep writing the run's story and reopen the
+// window fencing exists to close. The specific recovery, terminal, and
+// approval-closing paths are how a fenced run moves on; they are guarded
+// transitions that prove their own identity, not this predicate.
+func TestFencedRunRefusesGenericOwnershipClaims(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	enqueued := h.enqueueRun(t, "fenced narration")
+	claimed, err := h.repo.ClaimNextJob(ctx, "general_assistant", "worker-fenced")
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, err := h.repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.FenceRunOwnership(ctx, repository.FenceRunOwnershipInput{
+		RunID: enqueued.RunID, ExpectedStateVersion: running.StateVersion,
+		WorkerID: "worker-fenced", AssignmentAttemptID: claimed.AssignmentAttemptID,
+	}); err != nil {
+		t.Fatalf("FenceRunOwnership: %v", err)
+	}
+
+	if !isActiveRunStatus("running") || !isActiveRunStatus("waiting_approval") {
+		t.Fatal("a proven-owned run was not treated as active")
+	}
+	if isActiveRunStatus("recovering") {
+		t.Fatal("recovering counted as proven ownership")
+	}
+
+	var before int
+	if err := h.database.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM events WHERE run_id = ?`, enqueued.RunID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+
+	eventErr := h.service.applyUpdate(ctx, &turingv1.RuntimeUpdate{
+		Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
+			RunId: enqueued.RunID,
+			Type:  turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA,
+		}},
+	})
+	if status.Code(eventErr) != codes.FailedPrecondition {
+		t.Fatalf("runtime event on a fenced run = %v, want FailedPrecondition", eventErr)
+	}
+	if _, err := h.service.handleToolBeacon(ctx, &turingv1.ToolCallBeacon{
+		RunId:      enqueued.RunID,
+		TraceId:    enqueued.TraceID,
+		ToolCallId: "call_fenced",
+		AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName: "files",
+		ToolName:   "files.update",
+		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		Args:       mustStruct(t, map[string]any{"path": "note.txt", "content": "hello"}),
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("before-phase tool beacon on a fenced run = %v, want FailedPrecondition", err)
+	}
+
+	var after int
+	if err := h.database.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM events WHERE run_id = ?`, enqueued.RunID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("refused claims appended %d events to a fenced run", after-before)
+	}
+	var toolCalls int
+	if err := h.database.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tool_calls WHERE run_id = ?`, enqueued.RunID).Scan(&toolCalls); err != nil {
+		t.Fatal(err)
+	}
+	if toolCalls != 0 {
+		t.Fatalf("a refused beacon recorded %d tool calls on a fenced run", toolCalls)
+	}
+}

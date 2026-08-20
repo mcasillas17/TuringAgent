@@ -390,11 +390,12 @@ func (r *Repository) AppendRuntimeEvent(ctx context.Context, event *turingv1.Tur
 		return Event{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	// Recovering is accepted: a worker whose ownership became uncertain may
-	// still be streaming, and its events are exactly the evidence recovery
-	// reasons about. Discarding them would throw away the record of what the
-	// run did during the interval nobody could vouch for.
-	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = status WHERE id = ? AND status IN ('running','waiting_approval','recovering')`, event.RunId)
+	// Recovering is deliberately absent: the generic ingest path is a worker
+	// narrating a run it claims to own, and recovering is precisely the state
+	// where that claim cannot be proven. Whatever a fenced run still has to
+	// record travels through the guarded recovery, terminal, and approval
+	// paths, which establish their own identity before they write.
+	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = status WHERE id = ? AND status IN ('running','waiting_approval')`, event.RunId)
 	if err != nil {
 		return Event{}, err
 	}

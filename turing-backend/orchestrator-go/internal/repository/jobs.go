@@ -426,13 +426,13 @@ func requeueRunLifecycleTx(
 ) ([]Event, error) {
 	var events []Event
 	fenced, err := applyRunTransitionTx(ctx, tx,
-		fenceOwnershipTransition(runID, unresolvedStateVersion, identity, fenceExecutionState), nil)
+		fenceOwnershipTransitionInTx(runID, identity, fenceExecutionState), nil)
 	if err != nil {
 		return nil, err
 	}
 	events = append(events, fenced.Events...)
 	requeued, err := applyRunTransitionTx(ctx, tx,
-		requeueRecoveringTransition(runID, unresolvedStateVersion, identity), nil)
+		requeueRecoveringTransitionInTx(runID, identity), nil)
 	if err != nil {
 		return nil, err
 	}

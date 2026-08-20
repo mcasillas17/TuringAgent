@@ -15,14 +15,15 @@ import (
 // tests exist to say where that is right and where it is exactly wrong.
 //
 // It is right wherever the question is "does this run still need attention":
-// recovery scans, terminalization, cancellation, execution-exit gating,
+// recovery scans, terminalization, cancellation, the execution-exit gate,
 // stale-assignment cleanup, and the session-deletion guard.
 //
 // It is wrong wherever the question is "is this run proven to be owned by a
-// live worker": lease renewal and approval creation. Recovering means precisely
-// that nobody can answer that question yet, and answering it "yes" would let a
-// fenced worker keep a lease alive or open a second approval nobody is waiting
-// on.
+// live worker": lease renewal, approval creation, and the generic runtime
+// ingest predicate. Recovering means precisely that nobody can answer that
+// question yet, and answering it "yes" would let a fenced worker keep a lease
+// alive, open a second approval nobody is waiting on, or keep narrating a run
+// it can no longer prove it owns.
 
 // recoveringApprovalRun leaves a run recovering with a pending approval under
 // it, which is the shape a worker loss during an approval wait produces.
@@ -242,19 +243,28 @@ func TestRecoveringRunCannotCreateASecondApproval(t *testing.T) {
 }
 
 // TestRecoveringRunPreservesExecutionExitGating covers both halves of the exit
-// gate. A worker whose ownership became uncertain may still be streaming, and
-// its events are the evidence recovery reasons about — so they are still
-// accepted. The exit acknowledgement is the opposite: it may only be claimed
-// for a run that actually reached a terminal lifecycle.
+// gate, which are gated on opposite facts.
+//
+// The exit acknowledgement may only be claimed for a run that actually reached
+// a terminal lifecycle, so a recovering run cannot claim it. A generic runtime
+// event is refused for the opposite reason: it is narration from a worker whose
+// ownership of the run is exactly what nobody can currently prove, and
+// admitting it would let a fenced worker keep writing the run's story. Which
+// evidence a recovering run may still contribute is decided by the specific
+// recovery, terminal, and approval gates — never by the generic ingest path.
 func TestRecoveringRunPreservesExecutionExitGating(t *testing.T) {
 	repo := New(openTestDB(t))
 	ctx := context.Background()
 	enqueued, _, _ := recoveringRun(t, repo, "worker-exit")
+	events := countRunEvents(t, repo, enqueued.RunID)
 
 	if _, err := repo.AppendRuntimeEvent(ctx, &turingv1.TuringEvent{
 		RunId: enqueued.RunID, Type: turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA,
-	}); err != nil {
-		t.Fatalf("AppendRuntimeEvent for a recovering run = %v, want it recorded", err)
+	}); !errors.Is(err, ErrRunNotActive) {
+		t.Fatalf("AppendRuntimeEvent for a recovering run = %v, want ErrRunNotActive", err)
+	}
+	if after := countRunEvents(t, repo, enqueued.RunID); after != events {
+		t.Fatalf("a refused runtime event appended %d events", after-events)
 	}
 	if err := repo.AcknowledgeExecutionExit(ctx, enqueued.RunID); !errors.Is(err, ErrRunNotActive) {
 		t.Fatalf("AcknowledgeExecutionExit for a recovering run = %v, want ErrRunNotActive", err)

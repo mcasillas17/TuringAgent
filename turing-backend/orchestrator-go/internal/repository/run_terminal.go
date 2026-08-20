@@ -104,6 +104,10 @@ type rawTerminalReport struct {
 // expects. A raw adapter has none to give, so it resolves the row's own
 // version inside the guarded transaction rather than reading it first and
 // racing itself.
+//
+// transactionLocal comes from the unexported input fields only, never from the
+// expectation itself: a public caller supplying zero is refused here rather
+// than being promoted onto the resolve-in-transaction path.
 func terminalExpectation(expected int64, transactionLocal bool) (int64, error) {
 	if transactionLocal {
 		return unresolvedStateVersion, nil
@@ -152,7 +156,8 @@ func (r *Repository) CompleteRunCanonical(ctx context.Context, input CompleteRun
 }
 
 func completeRunTx(ctx context.Context, tx *sql.Tx, input CompleteRunInput) (RunTransitionResult, error) {
-	expected, err := terminalExpectation(input.ExpectedStateVersion, input.raw != nil || input.resolveVersionInTx)
+	transactionLocal := input.raw != nil || input.resolveVersionInTx
+	expected, err := terminalExpectation(input.ExpectedStateVersion, transactionLocal)
 	if err != nil {
 		return RunTransitionResult{}, err
 	}
@@ -186,7 +191,7 @@ func completeRunTx(ctx context.Context, tx *sql.Tx, input CompleteRunInput) (Run
 	transition := runTransition{
 		runID:            input.RunID,
 		expectedVersion:  expected,
-		transactionLocal: expected == unresolvedStateVersion,
+		transactionLocal: transactionLocal,
 		allowedFrom:      []string{lifecycleRunning, lifecycleWaitingApproval, lifecycleRecovering},
 		to:               lifecycleCompleted,
 		reason:           reason,
@@ -258,7 +263,8 @@ func (r *Repository) FailRunCanonical(ctx context.Context, input FailRunInput) (
 }
 
 func failRunTx(ctx context.Context, tx *sql.Tx, input FailRunInput) (RunTransitionResult, error) {
-	expected, err := terminalExpectation(input.ExpectedStateVersion, input.raw != nil || input.resolveVersionInTx)
+	transactionLocal := input.raw != nil || input.resolveVersionInTx
+	expected, err := terminalExpectation(input.ExpectedStateVersion, transactionLocal)
 	if err != nil {
 		return RunTransitionResult{}, err
 	}
@@ -304,7 +310,7 @@ func failRunTx(ctx context.Context, tx *sql.Tx, input FailRunInput) (RunTransiti
 	result, err := applyRunTransitionTx(ctx, tx, runTransition{
 		runID:            input.RunID,
 		expectedVersion:  expected,
-		transactionLocal: expected == unresolvedStateVersion,
+		transactionLocal: transactionLocal,
 		allowedFrom:      allowedFrom,
 		to:               lifecycleFailed,
 		reason:           input.Failure.Reason(),
@@ -369,7 +375,8 @@ func (r *Repository) CancelRunCanonical(ctx context.Context, input CancelRunInpu
 }
 
 func cancelRunTx(ctx context.Context, tx *sql.Tx, input CancelRunInput) (RunTransitionResult, error) {
-	expected, err := terminalExpectation(input.ExpectedStateVersion, input.raw != nil || input.resolveVersionInTx)
+	transactionLocal := input.raw != nil || input.resolveVersionInTx
+	expected, err := terminalExpectation(input.ExpectedStateVersion, transactionLocal)
 	if err != nil {
 		return RunTransitionResult{}, err
 	}
@@ -390,7 +397,7 @@ func cancelRunTx(ctx context.Context, tx *sql.Tx, input CancelRunInput) (RunTran
 	result, err := applyRunTransitionTx(ctx, tx, runTransition{
 		runID:            input.RunID,
 		expectedVersion:  expected,
-		transactionLocal: expected == unresolvedStateVersion,
+		transactionLocal: transactionLocal,
 		allowedFrom:      []string{lifecycleQueued, lifecycleRunning, lifecycleWaitingApproval, lifecycleRecovering},
 		to:               lifecycleCancelled,
 		reason:           input.Cancellation.Reason(),

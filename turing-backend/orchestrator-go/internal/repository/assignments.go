@@ -222,8 +222,8 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 			if active != 1 {
 				return AssignmentReconciliation{}, ErrAssignmentFenced
 			}
-			fenced, err := applyRunTransitionTx(ctx, tx, fenceOwnershipTransition(
-				assignment.RunID, unresolvedStateVersion, assignmentIdentity(assignment), "uncertain"), nil)
+			fenced, err := applyRunTransitionTx(ctx, tx, fenceOwnershipTransitionInTx(
+				assignment.RunID, assignmentIdentity(assignment), "uncertain"), nil)
 			if err != nil {
 				return AssignmentReconciliation{}, err
 			}

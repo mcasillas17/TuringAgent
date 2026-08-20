@@ -345,8 +345,11 @@ func TestRetryRequeueCommitsBothTransitionsWithoutARunningToQueuedShortcut(t *te
 	if state.StateVersion != running.StateVersion+2 {
 		t.Fatalf("version = %d, want two increments past %d", state.StateVersion, running.StateVersion)
 	}
-	if !state.FinishedAt.Valid && state.FinishedAt.String != "" {
-		t.Fatal("a requeued run carries a finish time")
+	// A nonterminal requeue leaves no finish time behind, in either half of the
+	// column: NULL and the empty string both have to be absent, because a
+	// client that reads either one would show the run as over.
+	if state.FinishedAt.Valid || state.FinishedAt.String != "" {
+		t.Fatalf("a requeued run carries a finish time: %+v", state.FinishedAt)
 	}
 	// The projections must be ordered in the durable log, not just in the slice.
 	for index := 1; index < len(decision.Events); index++ {

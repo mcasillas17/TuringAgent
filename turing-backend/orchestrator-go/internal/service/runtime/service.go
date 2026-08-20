@@ -1519,16 +1519,18 @@ func isKnownRuntimeEventType(eventType turingv1.TuringEventType) bool {
 	}
 }
 
-// isActiveRunStatus reports whether a run is still in flight.
+// isActiveRunStatus reports whether a run is proven to be owned by a live
+// worker and therefore allowed to narrate itself.
 //
-// Recovering counts. It means nobody can currently prove which worker owns the
-// run — not that the run ended — so a worker that is still streaming events or
-// reporting tool calls is producing exactly the evidence recovery needs.
-// Refusing those reports would discard the record of what happened during the
-// interval nobody could vouch for, which is the opposite of what fencing the
-// run was for.
+// Recovering deliberately does not count. It means nobody can currently prove
+// which worker owns the run, so a generic event or a before-phase tool beacon
+// arriving under it is an assertion of exactly the thing that is in doubt.
+// Accepting it would let a fenced worker keep writing the run's story and
+// reopen the window the fence exists to close. A recovering run moves on
+// through the specific guarded paths instead — recovery, terminal reports, and
+// approval closure — each of which proves its own identity.
 func isActiveRunStatus(runStatus string) bool {
-	return runStatus == "running" || runStatus == "waiting_approval" || runStatus == "recovering"
+	return runStatus == "running" || runStatus == "waiting_approval"
 }
 
 func isGenericTerminalEvent(event *turingv1.TuringEvent) bool {

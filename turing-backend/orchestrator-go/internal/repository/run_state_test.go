@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
@@ -528,51 +529,98 @@ func TestTerminalRowsRejectEveryLaterTransition(t *testing.T) {
 	}
 }
 
-// TestTransitionRejectsZeroNegativeAndMaxInt64Version pins the stored range.
+// TestTransitionRejectsZeroNegativeAndMaxInt64Version pins the stored range for
+// every exported transition that takes an expectation.
+//
 // Zero is protobuf absence and must never be accepted as a version, a negative
 // version cannot be produced by any real transition, and the signed maximum has
-// no successor to write.
+// no successor to write. Each command is aimed at a run whose lifecycle would
+// otherwise have accepted it, so a rejection here is the version guard rather
+// than an unrelated lifecycle conflict: absence must not be readable as
+// "whatever the row happens to say".
 func TestTransitionRejectsZeroNegativeAndMaxInt64Version(t *testing.T) {
-	repo := New(openTestDB(t))
-	ctx := context.Background()
-	enqueued, claimed, recovering := recoveringRun(t, repo, "worker-range")
-	events := countRunEvents(t, repo, enqueued.RunID)
-
-	for name, version := range map[string]int64{
-		"absent (zero)": 0,
-		"negative":      -1,
-		"minimum int64": math.MinInt64,
-	} {
-		t.Run(name, func(t *testing.T) {
+	// Each command is paired with the fixture that makes it legal, so nothing
+	// but the version can be the reason it is refused.
+	for command, invoke := range map[string]func(*testing.T, *Repository, int64) (RunState, error){
+		"fence": func(t *testing.T, repo *Repository, version int64) (RunState, error) {
+			t.Helper()
+			ctx := context.Background()
+			enqueued := enqueueRun(t, repo, "Fence version range")
+			claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-range")
+			if err != nil {
+				t.Fatalf("ClaimNextJob: %v", err)
+			}
+			running, err := repo.GetRunState(ctx, enqueued.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if running.Lifecycle != lifecycleRunning {
+				t.Fatalf("fixture lifecycle = %q, want running", running.Lifecycle)
+			}
+			_, err = repo.FenceRunOwnership(ctx, FenceRunOwnershipInput{
+				RunID: enqueued.RunID, ExpectedStateVersion: version,
+				WorkerID: "worker-range", AssignmentAttemptID: claimed.AssignmentAttemptID,
+			})
+			return running, err
+		},
+		"requeue": func(t *testing.T, repo *Repository, version int64) (RunState, error) {
+			t.Helper()
+			ctx := context.Background()
+			enqueued, claimed, recovering := recoveringRun(t, repo, "worker-range")
+			_, err := repo.RequeueRecoveringRun(ctx, RequeueRecoveringRunInput{
+				RunID: enqueued.RunID, ExpectedStateVersion: version,
+				AssignmentAttemptID: claimed.AssignmentAttemptID,
+			})
+			return recovering, err
+		},
+		"resume": func(t *testing.T, repo *Repository, version int64) (RunState, error) {
+			t.Helper()
+			ctx := context.Background()
+			enqueued, claimed, recovering := recoveringRun(t, repo, "worker-range")
 			_, err := repo.ResumeRecoveringRun(ctx, ResumeRecoveringRunInput{
 				RunID: enqueued.RunID, ExpectedStateVersion: version,
 				WorkerID: "worker-range", AssignmentAttemptID: claimed.AssignmentAttemptID,
 			})
-			if !errors.Is(err, ErrRunStateVersionInvalid) {
-				t.Fatalf("resume at version %d = %v, want ErrRunStateVersionInvalid", version, err)
-			}
-			state, err := repo.GetRunState(ctx, enqueued.RunID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if state != recovering {
-				t.Fatalf("rejected version changed the row: %+v", state)
-			}
-			if after := countRunEvents(t, repo, enqueued.RunID); after != events {
-				t.Fatalf("rejected version appended %d events", after-events)
+			return recovering, err
+		},
+	} {
+		t.Run(command, func(t *testing.T) {
+			for name, version := range map[string]int64{
+				"absent (zero)": 0,
+				"negative":      -1,
+				"minimum int64": math.MinInt64,
+			} {
+				t.Run(name, func(t *testing.T) {
+					repo := New(openTestDB(t))
+					ctx := context.Background()
+					before, err := invoke(t, repo, version)
+					if !errors.Is(err, ErrRunStateVersionInvalid) {
+						t.Fatalf("%s at version %d = %v, want ErrRunStateVersionInvalid", command, version, err)
+					}
+					state, err := repo.GetRunState(ctx, before.RunID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if state != before {
+						t.Fatalf("rejected version changed the row: %+v, want %+v", state, before)
+					}
+				})
 			}
 		})
 	}
 
 	// The maximum is a legal stored value but not a legal source for another
 	// transition, so it is rejected here too.
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	enqueued, claimed, _ := recoveringRun(t, repo, "worker-range-max")
 	if _, err := repo.db.ExecContext(ctx,
 		`UPDATE agent_runs SET state_version = ? WHERE id = ?`, int64(math.MaxInt64), enqueued.RunID); err != nil {
 		t.Fatalf("seed maximum version: %v", err)
 	}
 	if _, err := repo.ResumeRecoveringRun(ctx, ResumeRecoveringRunInput{
 		RunID: enqueued.RunID, ExpectedStateVersion: math.MaxInt64,
-		WorkerID: "worker-range", AssignmentAttemptID: claimed.AssignmentAttemptID,
+		WorkerID: "worker-range-max", AssignmentAttemptID: claimed.AssignmentAttemptID,
 	}); err == nil {
 		t.Fatal("a transition at the signed maximum succeeded")
 	}
@@ -769,5 +817,124 @@ func TestApprovalResumeRequiresAnApprovalThisRunOwns(t *testing.T) {
 	}
 	if state != recovering {
 		t.Fatalf("a rejected resume changed the run: %+v, want %+v", state, recovering)
+	}
+}
+
+// TestApprovalOwnershipIsCheckedBeforeAWriteFreeReplay covers the replay window
+// the ownership check would otherwise never see.
+//
+// A duplicate is recognized from the row alone: the run is already exactly
+// where the command wanted it, one version on. That test passes just as well
+// for a command naming an approval this run never owned, so unless ownership is
+// established FIRST, a decision about somebody else's approval is answered with
+// this run's state and reported as a successful replay — the strongest possible
+// "yes" to a command that had no authority at all. Ownership therefore gates
+// the duplicate rather than following it, and a genuine repeat of the same
+// approval stays write-free.
+func TestApprovalOwnershipIsCheckedBeforeAWriteFreeReplay(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	enqueued, claimed, owned := recoveringApprovalRun(t, repo, "worker-replay-identity")
+	recovering, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resume := ResumeRecoveringRunInput{
+		RunID: enqueued.RunID, ExpectedStateVersion: recovering.StateVersion,
+		WorkerID: "worker-replay-identity", AssignmentAttemptID: claimed.AssignmentAttemptID,
+		ApprovalID: owned.ApprovalID,
+	}
+	first, err := repo.ResumeRecoveringRun(ctx, resume)
+	if err != nil {
+		t.Fatalf("ResumeRecoveringRun: %v", err)
+	}
+	if first.Duplicate || first.State.Lifecycle != lifecycleRunning ||
+		first.State.StateVersion != recovering.StateVersion+1 {
+		t.Fatalf("first resume = %+v, want a committed running state at version %d",
+			first, recovering.StateVersion+1)
+	}
+	committed, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := countRunEvents(t, repo, enqueued.RunID)
+
+	// Two real approvals this run does not own: one in another session, one in
+	// its own session. Sharing a session is not ownership.
+	otherSession := enqueueRun(t, repo, "Another session")
+	if err := repo.MarkRunRunning(ctx, otherSession.RunID); err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := repo.CreateApproval(ctx, otherSession.RunID, "", "general_assistant",
+		"files.update", `{}`, "sha256:foreign", "2099-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sibling, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: enqueued.SessionID, Content: "sibling", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkRunRunning(ctx, sibling.RunID); err != nil {
+		t.Fatal(err)
+	}
+	siblingApproval, err := repo.CreateApproval(ctx, sibling.RunID, "", "general_assistant",
+		"files.update", `{}`, "sha256:sibling", "2099-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Every one of these repeats the committed transition exactly — same run,
+	// same expectation, same worker and attempt — and differs only in the
+	// approval it claims as its authority.
+	for name, approvalID := range map[string]string{
+		"an approval that never existed":       "appr_never_existed",
+		"an approval owned by another session": foreign.ApprovalID,
+		"an approval owned by a sibling run":   siblingApproval.ApprovalID,
+	} {
+		t.Run(name, func(t *testing.T) {
+			replay := resume
+			replay.ApprovalID = approvalID
+			result, err := repo.ResumeRecoveringRun(ctx, replay)
+			if !errors.Is(err, ErrRunTransitionConflict) {
+				t.Fatalf("replayed resume naming %s = (%+v, %v), want ErrRunTransitionConflict",
+					name, result, err)
+			}
+			// The conflict is reported without quoting the approval or the run:
+			// an identifier in an error string is row content leaving the row.
+			for _, secret := range []string{approvalID, enqueued.RunID, owned.ApprovalID} {
+				if secret != "" && strings.Contains(err.Error(), secret) {
+					t.Fatalf("conflict error %q leaked the identifier %q", err.Error(), secret)
+				}
+			}
+			state, err := repo.GetRunState(ctx, enqueued.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state != committed {
+				t.Fatalf("a fenced replay changed the row: %+v, want %+v", state, committed)
+			}
+			if after := countRunEvents(t, repo, enqueued.RunID); after != events {
+				t.Fatalf("a fenced replay appended %d events", after-events)
+			}
+		})
+	}
+
+	// The genuine repeat still costs nothing: same approval, same everything.
+	replayed, err := repo.ResumeRecoveringRun(ctx, resume)
+	if err != nil {
+		t.Fatalf("replayed resume naming the run's own approval: %v", err)
+	}
+	if !replayed.Duplicate || len(replayed.Events) != 0 {
+		t.Fatalf("replayed resume = %+v, want a write-free duplicate", replayed)
+	}
+	if replayed.State != committed {
+		t.Fatalf("replayed resume state = %+v, want %+v", replayed.State, committed)
+	}
+	if after := countRunEvents(t, repo, enqueued.RunID); after != events {
+		t.Fatalf("replayed resume appended %d events", after-events)
 	}
 }

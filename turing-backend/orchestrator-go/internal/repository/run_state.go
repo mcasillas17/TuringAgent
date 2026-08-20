@@ -36,9 +36,11 @@ const runStateChangedEventType = "agent.run.state_changed"
 
 // unresolvedStateVersion marks a transaction-local transition whose caller
 // carries no expected version. It is never a stored or public value — zero is
-// protobuf absence — and it is only reachable from unexported paths inside this
-// package, which resolve the real expectation from the row they are about to
-// guard, inside the same transaction as the guarded update.
+// protobuf absence — and it is only reachable through the ...InTx constructors
+// below, which resolve the real expectation from the row they are about to
+// guard, inside the same transaction as the guarded update. No exported input
+// reaches it, so a public caller that omits a version is refused rather than
+// silently promoted to an unguarded write.
 const unresolvedStateVersion int64 = 0
 
 var (
@@ -158,6 +160,10 @@ type runTransition struct {
 	// Without it, an absent expected version is an error rather than a silent
 	// "whatever the row says": zero is protobuf absence, and a public caller
 	// that forgot to carry a version must not be handed an unguarded write.
+	//
+	// It is set only by the ...InTx constructors in this file, never derived
+	// from a version a caller supplied. Deriving it would mean the one input a
+	// public caller fully controls could switch off the guard.
 	transactionLocal bool
 	allowedFrom      []string
 	to               string
@@ -399,6 +405,22 @@ func applyRunTransitionTx(
 		}
 	}
 
+	// Ownership of a named approval is established BEFORE anything else can
+	// answer this command, including the write-free duplicate below. A
+	// duplicate is recognized from the row alone, so a command naming an
+	// approval this run never owned would otherwise be told "yes, that is
+	// already done" and handed this run's state — the strongest possible answer
+	// to a decision about something else entirely.
+	if transition.identity.approvalID != "" {
+		owned, err := runOwnsApprovalTx(ctx, tx, transition.runID, transition.identity.approvalID)
+		if err != nil {
+			return RunTransitionResult{}, err
+		}
+		if !owned {
+			return RunTransitionResult{}, ErrRunTransitionConflict
+		}
+	}
+
 	if isRunTransitionDuplicate(row, transition, expected) {
 		return RunTransitionResult{State: row.state(), Duplicate: true}, nil
 	}
@@ -416,15 +438,6 @@ func applyRunTransitionTx(
 	}
 	if !matchesTransitionIdentity(row, transition.identity) {
 		return RunTransitionResult{}, ErrRunTransitionConflict
-	}
-	if transition.identity.approvalID != "" {
-		owned, err := runOwnsApprovalTx(ctx, tx, transition.runID, transition.identity.approvalID)
-		if err != nil {
-			return RunTransitionResult{}, err
-		}
-		if !owned {
-			return RunTransitionResult{}, ErrRunTransitionConflict
-		}
 	}
 	if row.stateVersion == math.MaxInt64 {
 		return RunTransitionResult{}, ErrRunStateVersionExhausted
@@ -620,16 +633,25 @@ func (r *Repository) FenceRunOwnership(ctx context.Context, input FenceRunOwners
 
 func fenceOwnershipTransition(runID string, expectedVersion int64, identity runTransitionIdentity, executionState string) runTransition {
 	return runTransition{
-		runID:            runID,
-		expectedVersion:  expectedVersion,
-		transactionLocal: expectedVersion == unresolvedStateVersion,
-		allowedFrom:      []string{lifecycleRunning, lifecycleWaitingApproval},
-		to:               lifecycleRecovering,
-		reason:           runoutcome.ReasonNone,
-		identity:         identity,
-		extraSet:         `execution_state = ?`,
-		extraArgs:        []any{executionState},
+		runID:           runID,
+		expectedVersion: expectedVersion,
+		allowedFrom:     []string{lifecycleRunning, lifecycleWaitingApproval},
+		to:              lifecycleRecovering,
+		reason:          runoutcome.ReasonNone,
+		identity:        identity,
+		extraSet:        `execution_state = ?`,
+		extraArgs:       []any{executionState},
 	}
+}
+
+// fenceOwnershipTransitionInTx is the same fence for a writer that is already
+// inside the transaction it is guarding. It takes no version at all: the
+// expectation is resolved from the row under the guard, and there is no
+// argument a caller could pass to reach this path from outside the package.
+func fenceOwnershipTransitionInTx(runID string, identity runTransitionIdentity, executionState string) runTransition {
+	transition := fenceOwnershipTransition(runID, unresolvedStateVersion, identity, executionState)
+	transition.transactionLocal = true
+	return transition
 }
 
 // ResumeRecoveringRunInput proves that the same still-owned attempt is alive
@@ -685,14 +707,13 @@ func (r *Repository) RequeueRecoveringRun(ctx context.Context, input RequeueReco
 
 func requeueRecoveringTransition(runID string, expectedVersion int64, identity runTransitionIdentity) runTransition {
 	return runTransition{
-		runID:            runID,
-		expectedVersion:  expectedVersion,
-		transactionLocal: expectedVersion == unresolvedStateVersion,
-		allowedFrom:      []string{lifecycleRecovering},
-		to:               lifecycleQueued,
-		reason:           runoutcome.ReasonNone,
-		identity:         identity,
-		clearsOwnership:  true,
+		runID:           runID,
+		expectedVersion: expectedVersion,
+		allowedFrom:     []string{lifecycleRecovering},
+		to:              lifecycleQueued,
+		reason:          runoutcome.ReasonNone,
+		identity:        identity,
+		clearsOwnership: true,
 		extraSet: `started_at = NULL,
 			worker_id = NULL,
 			execution_active = 0,
@@ -702,4 +723,12 @@ func requeueRecoveringTransition(runID string, expectedVersion int64, identity r
 			execution_lease_expires_at = NULL,
 			execution_lease_expires_at_ns = NULL`,
 	}
+}
+
+// requeueRecoveringTransitionInTx is the requeue for a writer already inside
+// the transaction it is guarding, on the same terms as the fence above.
+func requeueRecoveringTransitionInTx(runID string, identity runTransitionIdentity) runTransition {
+	transition := requeueRecoveringTransition(runID, unresolvedStateVersion, identity)
+	transition.transactionLocal = true
+	return transition
 }
