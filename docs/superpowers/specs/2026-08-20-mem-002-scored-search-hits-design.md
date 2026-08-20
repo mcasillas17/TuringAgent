@@ -123,9 +123,9 @@ The response format is explicit:
 
 For the same trigger-consistent stable database and request filters, successful
 legacy- and hit-format calls return messages that are protobuf-equal in count,
-value, order, and effective limit. Empty and tokenless searches leave both
-response arrays empty. A canonical hit always has its message, finite score, and
-snippet.
+value, order, and effective limit. No-match and tokenless non-whitespace
+searches leave both response arrays empty. A canonical hit always has its
+message, finite score, and snippet.
 
 The server intentionally does **not** duplicate full messages inside one
 response. The gRPC server has a 4 MiB send ceiling, message content is
@@ -304,18 +304,53 @@ parameter is a token count from 1 through 64. MEM-002 chooses 32 tokens. See
 [SQLite FTS5, the `snippet()`
 function](https://sqlite.org/fts5.html#the_snippet_function).
 
-Before the hit query, the repository creates two distinct internal markers from
-128 bits of `crypto/rand` entropy, hex-encoded between C0 separators. They are
-bound SQL values, never query text. A random-source failure fails the request
-before opening a reader.
+Before the hit query, the repository reads exactly 16 bytes (128 bits) from
+`crypto/rand` and encodes them as exactly 32 lowercase ASCII hexadecimal
+characters (`[0-9a-f]{32}`). The same nonce is placed into these two exact,
+domain-separated marker grammars:
+
+```text
+start-marker = "[[TURING-FTS5-SNIPPET-START:v1:" nonce "]]"
+end-marker   = "[[TURING-FTS5-SNIPPET-END:v1:" nonce "]]"
+```
+
+Every framing character is the displayed single-byte ASCII code point:
+`[`/`]` are U+005B/U+005D, `:` is U+003A, the labels and `v` use U+0041-U+005A
+or U+0061-U+007A, all literal and nonce digits use U+0030-U+0039, and `-` is
+U+002D. With the 32-character nonce, the start marker is exactly 65 bytes and
+the end marker exactly 63 bytes. The grammar contains no U+0000, C0/C1 control,
+non-ASCII code point, or locale-dependent transformation. UTF-8 therefore
+encodes every marker code point as the same one byte. `START` versus `END` makes
+the two values distinct for every nonce and prevents either complete marker
+from being accepted in the other parser state.
+
+The complete start and end strings are bound SQL TEXT values, never query text.
+The linked `go-sqlite3` driver must return each bound value byte-for-byte when
+selected as TEXT and must preserve those exact byte sequences when FTS5 inserts
+them into `snippet()` output. Any driver conversion, replacement, truncation, or
+NUL introduction is an invariant failure. A random-source failure fails the
+request before opening a reader.
 
 FTS5 inserts those markers around each matched phrase. For every row, the
-repository first verifies that neither complete marker occurs in the source
-`message.content`; a collision fails the query instead of guessing which bytes
-FTS5 inserted. It then parses balanced marker pairs from `marked_snippet` into
-text plus match spans. Missing, nested, reversed, or unbalanced markers are an
-internal failure. The markers are stripped before UTF-8 repair and never cross
-the repository boundary.
+repository first compares raw Go string bytes and verifies that neither complete
+marker occurs in source `message.content`; a collision fails the query instead
+of guessing which bytes FTS5 inserted.
+
+The parser then operates on raw `marked_snippet` bytes before rune decoding or
+UTF-8 repair. Its two states are `text` and `match`: only the exact start marker
+may transition `text -> match`, and only the exact end marker may transition
+`match -> text`. An end marker in `text`, a start marker in `match`, nested or
+reversed markers, a missing partner, trailing `match` state, or zero complete
+pairs is an internal failure. Sequential complete pairs are valid. The parser
+removes both complete marker byte strings and records each enclosed byte range
+as a match span. Every remaining non-marker byte, including matched text and
+surrounding context, is snippet payload.
+
+All snippet payload bytes are then repaired and sanitized. Because marker
+recognition and stripping finish first and the marker grammar is valid
+single-byte ASCII, invalid source UTF-8 cannot be repaired into a marker, cannot
+turn a start into an end, and cannot leave marker bytes in public output.
+Markers never cross the repository boundary.
 
 The public snippet has no matched-term emphasis representation: no markup, ANSI
 sequence, Markdown delimiter, private-use sentinel, or embedded HTML. Internal
@@ -369,9 +404,13 @@ distinguished from valid FTS output without reimplementing the tokenizer and are
 outside MEM-002's guarantee. The snippet still contains text only from the same
 returned message, never an adjacent or unauthorized row.
 
-A linked-driver canary exercises start, middle, and end matches through the real
-external-content schema and requires balanced markers around the queried phrase.
-It catches an SQLite upgrade that changes the marker behavior before production.
+A linked-driver canary binds both exact marker values, selects them back as
+TEXT, and requires byte-for-byte equality, distinctness, and absence of NUL.
+The same canary exercises start, middle, and end matches through the real
+external-content schema, requires the exact marker bytes around the queried
+phrase, and proves that parsing strips all marker bytes before public output.
+It catches a driver or SQLite upgrade that changes TEXT or marker behavior
+before production.
 
 Legacy-format responses preserve unbounded source messages exactly as today.
 Hit-format responses carry each source message once and add the bounded snippet
@@ -575,13 +614,22 @@ contract.
   raw values rather than clamping or emitting a partial result.
 - A majority-document-frequency canary pins the linked FTS5 implementation's
   finite non-positive result.
-- A linked-driver snippet canary uses the real external-content schema and
-  requires balanced match markers for start, middle, and end positions.
+- Marker construction produces the exact versioned ASCII START/END grammar from
+  16 fixed entropy bytes: one shared 32-character lowercase-hex nonce, no NUL or
+  control byte, exact 65/63-byte lengths, and distinct domain-separated values.
+- A linked-driver canary selects both bound markers back as TEXT and requires
+  byte-for-byte equality, then uses the real external-content schema to require
+  those exact bytes around start, middle, and end matches.
 - Match near the beginning, middle, and end yields a fragment containing the
   matched phrase with SQLite edge ellipses where applicable.
-- Source text containing fixed marker-like controls cannot forge the
-  per-query random markers; a forced marker collision and malformed marker
-  balance fail closed.
+- Source text containing fixed marker-like ASCII cannot forge the per-query
+  nonce-bearing markers; forced complete start/end collisions fail closed.
+- Raw-byte parser tests cover valid sequential pairs, zero pairs, missing
+  partners, nesting, reversed order, a start marker inside `match`, and an end
+  marker inside `text`.
+- Invalid UTF-8 immediately adjacent to markers is repaired only after parsing;
+  tests prove it cannot confuse START with END and that neither complete
+  generated marker survives in the public snippet.
 - A neighboring message containing a sentinel secret never contributes text to
   the hit snippet.
 - HTML/Markdown/ANSI-looking source remains inert plain text; no match markers
