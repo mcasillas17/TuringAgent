@@ -3,12 +3,14 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/persisttime"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/skillfiles"
 )
 
@@ -31,6 +33,32 @@ type Session struct {
 	Status    string
 	CreatedAt string
 	UpdatedAt string
+}
+
+type SessionListFilter string
+
+const (
+	SessionListActive   SessionListFilter = "active"
+	SessionListArchived SessionListFilter = "archived"
+	SessionListAll      SessionListFilter = "all"
+)
+
+var (
+	ErrInvalidSessionStatus    = errors.New("invalid persisted session status")
+	ErrInvalidSessionTimestamp = errors.New("invalid persisted session timestamp")
+	ErrInvalidSessionFilter    = errors.New("invalid session list filter")
+	ErrInvalidSessionPage      = errors.New("invalid session page")
+)
+
+type SessionCursor struct {
+	UpdatedAt string
+	SessionID string
+}
+
+type ListSessionsInput struct {
+	Filter SessionListFilter
+	After  *SessionCursor
+	Limit  int
 }
 
 type Message struct {
@@ -64,8 +92,18 @@ func (r *Repository) ListSessions(ctx context.Context, limit int) ([]Session, er
 	if limit <= 0 {
 		limit = 50
 	}
-	query := `SELECT id, title, status, created_at, updated_at FROM sessions ORDER BY ` + sqliteTimestampNanos("updated_at") + ` DESC, id DESC LIMIT ?`
-	rows, err := r.db.QueryContext(ctx, query, limit)
+	return r.ListSessionsPage(ctx, ListSessionsInput{
+		Filter: SessionListActive,
+		Limit:  limit,
+	})
+}
+
+func (r *Repository) ListSessionsPage(ctx context.Context, input ListSessionsInput) ([]Session, error) {
+	query, args, err := listSessionsQuery(input)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -76,15 +114,73 @@ func (r *Repository) ListSessions(ctx context.Context, limit int) ([]Session, er
 		if err := rows.Scan(&session.SessionID, &session.Title, &session.Status, &session.CreatedAt, &session.UpdatedAt); err != nil {
 			return nil, err
 		}
+		if err := validateSession(session); err != nil {
+			return nil, err
+		}
 		sessions = append(sessions, session)
 	}
 	return sessions, rows.Err()
 }
 
+func listSessionsQuery(input ListSessionsInput) (string, []any, error) {
+	if input.Limit <= 0 {
+		return "", nil, ErrInvalidSessionPage
+	}
+
+	var query string
+	var args []any
+	switch input.Filter {
+	case SessionListActive, SessionListArchived:
+		query = `
+			SELECT id, title, status, created_at, updated_at
+			FROM sessions INDEXED BY idx_sessions_status_updated
+			WHERE status = ?`
+		args = append(args, string(input.Filter))
+	case SessionListAll:
+		query = `
+			SELECT id, title, status, created_at, updated_at
+			FROM sessions INDEXED BY idx_sessions_updated
+			WHERE 1 = 1`
+	default:
+		return "", nil, ErrInvalidSessionFilter
+	}
+	if input.After != nil {
+		if input.After.SessionID == "" {
+			return "", nil, ErrInvalidSessionPage
+		}
+		if _, err := persisttime.ParseCanonical(input.After.UpdatedAt); err != nil {
+			return "", nil, ErrInvalidSessionPage
+		}
+		query += ` AND (updated_at, id) < (?, ?)`
+		args = append(args, input.After.UpdatedAt, input.After.SessionID)
+	}
+	query += ` ORDER BY updated_at DESC, id DESC LIMIT ?`
+	args = append(args, input.Limit)
+	return query, args, nil
+}
+
 func (r *Repository) GetSession(ctx context.Context, sessionID string) (Session, error) {
 	var session Session
 	err := r.db.QueryRowContext(ctx, `SELECT id, title, status, created_at, updated_at FROM sessions WHERE id = ?`, sessionID).Scan(&session.SessionID, &session.Title, &session.Status, &session.CreatedAt, &session.UpdatedAt)
+	if err == nil {
+		err = validateSession(session)
+	}
 	return session, err
+}
+
+func validateSession(session Session) error {
+	switch session.Status {
+	case string(SessionListActive), string(SessionListArchived):
+	default:
+		return ErrInvalidSessionStatus
+	}
+	if _, err := persisttime.ParseCanonical(session.CreatedAt); err != nil {
+		return ErrInvalidSessionTimestamp
+	}
+	if _, err := persisttime.ParseCanonical(session.UpdatedAt); err != nil {
+		return ErrInvalidSessionTimestamp
+	}
+	return nil
 }
 
 func (r *Repository) ListMessages(ctx context.Context, sessionID string, limit int) ([]Message, error) {
