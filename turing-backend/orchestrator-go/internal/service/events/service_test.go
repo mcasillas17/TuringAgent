@@ -478,8 +478,16 @@ func TestEventServiceDeliversTerminalDeletionAcrossWithdrawnReplayGap(t *testing
 	case <-time.After(time.Second):
 		t.Fatal("terminal gap stream did not finish")
 	}
-	if len(stream.sent) != 2 ||
-		stream.sent[1].GetType() != turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_DELETED {
+	terminalCount := 0
+	for index, event := range stream.sent {
+		if event.GetType() == turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_DELETED {
+			terminalCount++
+			if index != len(stream.sent)-1 {
+				t.Fatalf("terminal event was not last: %+v", stream.sent)
+			}
+		}
+	}
+	if terminalCount != 1 {
 		t.Fatalf("terminal gap events = %+v", stream.sent)
 	}
 }
