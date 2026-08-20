@@ -28,11 +28,12 @@ func (r *Repository) SetSkillStore(store *skillfiles.Store) {
 }
 
 type Session struct {
-	SessionID string
-	Title     sql.NullString
-	Status    string
-	CreatedAt string
-	UpdatedAt string
+	SessionID   string
+	Title       sql.NullString
+	TitleOrigin string
+	Status      string
+	CreatedAt   string
+	UpdatedAt   string
 }
 
 type SessionListFilter string
@@ -44,10 +45,11 @@ const (
 )
 
 var (
-	ErrInvalidSessionStatus    = errors.New("invalid persisted session status")
-	ErrInvalidSessionTimestamp = errors.New("invalid persisted session timestamp")
-	ErrInvalidSessionFilter    = errors.New("invalid session list filter")
-	ErrInvalidSessionPage      = errors.New("invalid session page")
+	ErrInvalidSessionStatus      = errors.New("invalid persisted session status")
+	ErrInvalidSessionTimestamp   = errors.New("invalid persisted session timestamp")
+	ErrInvalidSessionTitleOrigin = errors.New("invalid persisted session title origin")
+	ErrInvalidSessionFilter      = errors.New("invalid session list filter")
+	ErrInvalidSessionPage        = errors.New("invalid session page")
 )
 
 type SessionCursor struct {
@@ -84,6 +86,7 @@ func (r *Repository) CreateSession(ctx context.Context, title string) (Session, 
 		session.Title = sql.NullString{String: title, Valid: true}
 		titleOrigin = "explicit"
 	}
+	session.TitleOrigin = titleOrigin
 	_, err := r.db.ExecContext(ctx, `INSERT INTO sessions (id, title, title_origin, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`, session.SessionID, nullableString(session.Title), titleOrigin, createdAt, createdAt)
 	return session, err
 }
@@ -111,7 +114,7 @@ func (r *Repository) ListSessionsPage(ctx context.Context, input ListSessionsInp
 	var sessions []Session
 	for rows.Next() {
 		var session Session
-		if err := rows.Scan(&session.SessionID, &session.Title, &session.Status, &session.CreatedAt, &session.UpdatedAt); err != nil {
+		if err := rows.Scan(&session.SessionID, &session.Title, &session.TitleOrigin, &session.Status, &session.CreatedAt, &session.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if err := validateSession(session); err != nil {
@@ -132,13 +135,13 @@ func listSessionsQuery(input ListSessionsInput) (string, []any, error) {
 	switch input.Filter {
 	case SessionListActive, SessionListArchived:
 		query = `
-			SELECT id, title, status, created_at, updated_at
+			SELECT id, title, title_origin, status, created_at, updated_at
 			FROM sessions INDEXED BY idx_sessions_status_updated
 			WHERE status = ?`
 		args = append(args, string(input.Filter))
 	case SessionListAll:
 		query = `
-			SELECT id, title, status, created_at, updated_at
+			SELECT id, title, title_origin, status, created_at, updated_at
 			FROM sessions INDEXED BY idx_sessions_updated
 			WHERE 1 = 1`
 	default:
@@ -161,7 +164,18 @@ func listSessionsQuery(input ListSessionsInput) (string, []any, error) {
 
 func (r *Repository) GetSession(ctx context.Context, sessionID string) (Session, error) {
 	var session Session
-	err := r.db.QueryRowContext(ctx, `SELECT id, title, status, created_at, updated_at FROM sessions WHERE id = ?`, sessionID).Scan(&session.SessionID, &session.Title, &session.Status, &session.CreatedAt, &session.UpdatedAt)
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, title, title_origin, status, created_at, updated_at
+		FROM sessions WHERE id = ?`,
+		sessionID,
+	).Scan(
+		&session.SessionID,
+		&session.Title,
+		&session.TitleOrigin,
+		&session.Status,
+		&session.CreatedAt,
+		&session.UpdatedAt,
+	)
 	if err == nil {
 		err = validateSession(session)
 	}
@@ -169,6 +183,11 @@ func (r *Repository) GetSession(ctx context.Context, sessionID string) (Session,
 }
 
 func validateSession(session Session) error {
+	switch session.TitleOrigin {
+	case "unset", "explicit", "derived":
+	default:
+		return ErrInvalidSessionTitleOrigin
+	}
 	switch session.Status {
 	case string(SessionListActive), string(SessionListArchived):
 	default:
