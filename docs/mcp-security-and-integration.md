@@ -515,11 +515,12 @@ tokens its bearer matches, not by anything the caller claims about itself.
 server that consumes approvals) is authorized only for
 `ApprovalService.ConsumeApproval`. `TURING_RUNTIME_TOKEN` (held by
 `agent-runtime-go`) is authorized for that method plus
-`RuntimeService.ConnectWorker` and `SessionService.ListMessages`/
-`SearchMessages`. The two tokens must differ — the orchestrator refuses to
-start otherwise — so a compromised `mcp-files` cannot present the runtime's
-token to claim a job or read conversation history, and a compromised runtime
-cannot pose as a different service's approval consumer.
+`ApprovalService.GetApprovalForRuntime`, `RuntimeService.ConnectWorker`, and
+`SessionService.ListMessages`/`SearchMessages`. The two tokens must differ —
+the orchestrator refuses to start otherwise — so a compromised `mcp-files`
+cannot present the runtime's token to claim a job or read conversation
+history, and a compromised runtime cannot pose as a different service's
+approval consumer.
 
 `TestValidateRejectsConsumeReplayConflict` asserts the `FailedPrecondition`
 path.
