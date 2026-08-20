@@ -200,6 +200,7 @@ The exact additive allocations are:
 | `TuringEventType` | `TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED = 23`; value `22` is reserved for TUR-004's `SESSION_DELETED` whether or not that PR has landed when generation runs |
 
 Internal runtime allocations are `AgentJob.expected_state_version = 17`,
+`AgentJob.assignment_attempt_id = 18`,
 `RuntimeRunCompleted.expected_state_version = 6`,
 `RuntimeRunFailed.failure_origin = 5`,
 `RuntimeRunFailed.automatic_retry_class = 6`,
@@ -208,10 +209,12 @@ Internal runtime allocations are `AgentJob.expected_state_version = 17`,
 `RuntimeApprovalResumeReady.run_id = 1`,
 `RuntimeApprovalResumeReady.approval_id = 2`,
 `RuntimeApprovalResumeReady.expected_state_version = 3`,
+`RuntimeApprovalResumeReady.assignment_attempt_id = 4`,
 `RuntimeUpdate.approval_resume_ready = 9`,
 `RuntimeApprovalResumeAccepted.run_id = 1`,
 `RuntimeApprovalResumeAccepted.approval_id = 2`,
 `RuntimeApprovalResumeAccepted.state_version = 3`,
+`RuntimeApprovalResumeAccepted.assignment_attempt_id = 4`,
 `RuntimeCommand.approval_resume_accepted = 7`,
 `RuntimeRunCancelled.state_version = 3`,
 `RuntimeApprovalUpdated.state_version = 4`, and
@@ -234,7 +237,7 @@ The public lifecycle transitions are:
 | absent | queued | atomic enqueue |
 | queued | running | assignment starts |
 | running | waiting approval | approval becomes required |
-| waiting approval | running | the owned runtime attempt reports ready after the decision and receives durable resume acceptance |
+| waiting approval | running | matching Ready from the owned runtime attempt commits the versioned transition |
 | running or waiting approval | recovering | worker ownership becomes uncertain or fenced |
 | recovering | running | the same still-owned attempt proves ownership and resumes |
 | recovering | queued | lease recovery requeues the job |
@@ -251,13 +254,22 @@ terminal event (`agent.run.completed`, `agent.run.failed`, or
 `agent.run.cancelled`) and do not append an additional state-changed event.
 
 For every nonterminal lifecycle command, the canonical transition identity is
-the run ID, expected version, target lifecycle, outcome `none`, and correlated
-message IDs. If the row is already at `expected_version + 1` with that exact
-identity, a repeated assignment-start, approval wait/resume, recovery fence,
-requeue, or resume command returns the current state without a write or event.
-A different target, outcome, correlation, or version is a conflict. Advisory
-attempt counts and notices are projections and cannot turn an otherwise equal
-canonical transition into a second state change.
+the run ID, expected version, target lifecycle, outcome `none`, correlated
+message IDs, and the trigger identity needed to fence its owner. Approval resume
+adds approval ID, server-authenticated worker ID, and durable
+`assignment_attempt_id` to that identity. The orchestrator puts the durable
+attempt ID on the outbound `AgentJob`; Ready must echo it.
+
+If the row is already at `expected_version + 1` with that exact identity, a
+repeated assignment-start, approval wait/resume, recovery fence, requeue, or
+resume command returns the current state without a write or event. For approval
+resume specifically, a repeated Ready on the same live worker stream with the
+same run ID, approval ID, worker ID, assignment attempt ID, and expected
+pre-transition version returns the exact same
+`RuntimeApprovalResumeAccepted` identity and version. A different approval,
+worker, assignment attempt, target, outcome, correlation, or version is fenced.
+Advisory attempt counts and notices are projections and cannot turn an
+otherwise equal canonical transition into a second state change.
 
 Entering recovery is therefore durable and observable:
 
@@ -275,16 +287,29 @@ fenced remain execution details. They affect the public lifecycle only at the
 transitions above.
 
 Approval persistence, token consumption, or queuing `RuntimeApprovalUpdated`
-does not move the run back to running. An approved worker sends the new
-`RuntimeApprovalResumeReady` update only after it has accepted the decision and
-restored the matching owned attempt to a ready-but-paused boundary. The
-orchestrator validates run, approval, worker, attempt, and expected version,
-then commits waiting-approval to running with its state event and returns
-`RuntimeApprovalResumeAccepted` carrying the approval identity and new version.
-The worker does not execute the approved tool or continue model work until it
-receives that acceptance. A delivery failure or restart leaves the run
-waiting-approval while ownership is still known, or moves it to recovering when
-ownership is lost. Denial and expiry follow their existing terminal paths.
+does not move the run back to running. Failure to deliver that original decision
+before a matching Ready leaves the run waiting-approval while ownership remains
+proven; the normal worker-loss fence moves it to recovering when ownership
+becomes uncertain.
+
+An approved worker sends `RuntimeApprovalResumeReady` only after accepting the
+decision and restoring the matching owned attempt to a ready-but-paused
+boundary. The orchestrator validates run, approval, worker, assignment attempt,
+and expected version, then atomically commits waiting-approval to running at
+`expected_version + 1` with its state event. It returns
+`RuntimeApprovalResumeAccepted` carrying the approval identity, assignment
+attempt ID, and new version. Accepted names the orchestrator's durable
+acceptance, not proof of worker receipt. The worker does not execute the
+approved tool or continue model work until it receives that acceptance.
+
+If delivery of Accepted fails after that commit, the row cannot revert to or
+claim waiting-approval. The orchestrator immediately applies the same ownership-
+loss fencing transaction: running moves to recovering, increments the version,
+and appends its state event before the stream closes. If delivery returned
+success but the worker did not observe Accepted and ownership is still proven,
+the same-attempt Ready retry uses the semantic replay above. A later ownership
+loss moves running to recovering through the same fence. Denial and expiry
+follow their existing terminal paths.
 
 ## Correlation and Query Invariants
 
@@ -547,8 +572,13 @@ the runner performs:
 
 The `before` hook performs the value-free correlation preflight, creates a
 temporary backfill table inside the transaction, and scans existing runs by
-stable keyset in batches of at most 128. Each `Rows` cursor is read into a
-bounded Go slice and closed before any insert or update on SQLite's single
+stable `rowid` keyset. A batch is capped at both 128 rows and 16 MiB of selected
+variable-width data; fixed Go per-row overhead is therefore also bounded by the
+row cap. A length-only cursor first accounts for the byte length of every TEXT
+or BLOB column the hook will select. A single row over 16 MiB fails with only
+the sentinel class `run outcome migration row exceeds byte limit`. Otherwise
+the hook reads rows only until adding the next row would exceed the byte budget,
+closes the `Rows` cursor, and then performs inserts or updates on SQLite's single
 connection. The hook parses legacy `finished_at`, `started_at`, and `created_at`
 only in the accepted RFC3339Nano shapes
 `YYYY-MM-DDTHH:MM:SS[.1-9 digits]Z` and
@@ -566,11 +596,11 @@ cursors are closed it swaps the rebuilt table, creates the correlation indexes,
 and scrubs run/job/tool-call raw diagnostic columns. SQLite transactional DDL
 keeps the rebuild and indexes inside the migration transaction.
 
-The `after` hook scans selected events by `rowid` in batches of at most 128,
-closes each cursor before writes, rewrites safe canonical JSON using Go's JSON
-encoder, validates the rebuilt correlations and canonical fields, and drops the
-temporary backfill table. It makes no filesystem, model, tool, or network
-calls.
+The `after` hook applies the same 128-row and 16 MiB selected-data limits while
+scanning events by `rowid`, closes each cursor before writes, rewrites safe
+canonical JSON using Go's JSON encoder, validates the rebuilt correlations and
+canonical fields, and drops the temporary backfill table. It makes no
+filesystem, model, tool, or network calls.
 
 Within that mechanism, the migration:
 
@@ -722,8 +752,9 @@ Strict test-driven development covers:
   including event type 23 and the occupied runtime-update value 8;
 - migration canonical timestamp parsing/formatting, outcome backfill, version
   bounds, value-free duplicate-correlation failure, indexes, raw-field
-  scrubbing, safe event rewriting, approval-rationale preservation, and
-  injected rollback before SQL, after rebuild, after scrub, after event
+  scrubbing, safe event rewriting, and approval-rationale preservation;
+- exact/over-limit 16 MiB migration byte-budget behavior with value-free failure;
+- injected migration rollback before SQL, after rebuild, after scrub, after event
   rewrite, after index creation, before the migration record, and after its
   insert but before commit;
 - repository lifecycle/version transactions, monotonic update time under a
@@ -740,9 +771,15 @@ Strict test-driven development covers:
   legacy events;
 - raw-wire unknown numeric lifecycle/outcome/origin mapping to semantic unknown
   behavior in Go and Dart without panic or numeric copy;
-- approval decision delivery failure and restart preserving waiting/recovering,
-  plus waiting-to-running only after the owned runtime resume update and its
-  durable acceptance before tool/model continuation;
+- decision-delivery failure before Ready preserving waiting/recovering;
+- Ready commit followed by a send-successful but unobserved Accepted and the same
+  worker/attempt retry replaying the exact Accepted/version without a write or
+  second event;
+- Ready retries with a conflicting approval, worker, attempt, or version fencing;
+- detected Accepted delivery failure moving the committed running state to
+  recovering before any tool/model continuation;
+- send-successful but unobserved Accepted followed by ownership loss moving the
+  committed running state to recovering;
 - exact duplicate terminal reports and conflicting content/reason/version
   reports;
 - completion/cancellation/recovery races;
