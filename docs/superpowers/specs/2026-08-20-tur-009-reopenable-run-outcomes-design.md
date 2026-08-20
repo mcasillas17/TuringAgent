@@ -29,8 +29,8 @@ startup watermark. That suppression prevents duplicate live entries, but it
 also drops the only failure or cancellation explanation during reopen.
 
 Provider, runtime, and tool failure strings currently enter run, job, tool-call,
-approval, and event rows. Some then reach public ChatService and EventService
-responses. Flutter also renders several backend strings directly.
+and approval-related event rows. Some then reach public ChatService and
+EventService responses. Flutter also renders several backend strings directly.
 
 Worker loss is stored as `status='running'` with an uncertain or fenced
 execution state while the lease policy decides whether to requeue or
@@ -91,10 +91,13 @@ negative values are rejected. Version zero remains the protobuf
 absence/default value.
 
 `state_updated_at` uses the repository's fixed-width UTC nanosecond format,
-`2006-01-02T15:04:05.000000000Z`. A real transition writes the orchestrator's
-current UTC time; a semantic no-op preserves the prior timestamp. Clock
-regression can make this informational timestamp lower than its predecessor,
-so ordering and reconciliation use only `state_version`.
+`2006-01-02T15:04:05.000000000Z`. A real transition writes
+`max(now_utc, prior_state_updated_at + 1ns)` in the guarded transaction; a
+semantic no-op preserves the prior timestamp. If parsing fails or adding one
+nanosecond would exceed the inclusive UTC range
+`0001-01-01T00:00:00.000000000Z` through
+`9999-12-31T23:59:59.999999999Z`, the transition fails closed without changing
+the row or appending an event. Reconciliation still uses only `state_version`.
 
 `outcome_reason` is `none` for every nonterminal lifecycle. Terminal lifecycle
 and reason combinations are validated by this normative matrix:
@@ -194,7 +197,7 @@ The exact additive allocations are:
 | `RunStateChanged` | `RunState run_state = 1` |
 | `ChatStreamEvent.oneof` | `RunStateChanged run_state_changed = 27` |
 | `TuringEvent` | `RunState run_state = 9` |
-| `TuringEventType` | `TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED = 22` |
+| `TuringEventType` | `TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED = 23`; value `22` is reserved for TUR-004's `SESSION_DELETED` whether or not that PR has landed when generation runs |
 
 Internal runtime allocations are `AgentJob.expected_state_version = 17`,
 `RuntimeRunCompleted.expected_state_version = 6`,
@@ -202,11 +205,20 @@ Internal runtime allocations are `AgentJob.expected_state_version = 17`,
 `RuntimeRunFailed.automatic_retry_class = 6`,
 `RuntimeRunFailed.expected_state_version = 7`,
 `RuntimeCancelledAck.observed_state_version = 2`,
+`RuntimeApprovalResumeReady.run_id = 1`,
+`RuntimeApprovalResumeReady.approval_id = 2`,
+`RuntimeApprovalResumeReady.expected_state_version = 3`,
+`RuntimeUpdate.approval_resume_ready = 9`,
+`RuntimeApprovalResumeAccepted.run_id = 1`,
+`RuntimeApprovalResumeAccepted.approval_id = 2`,
+`RuntimeApprovalResumeAccepted.state_version = 3`,
+`RuntimeCommand.approval_resume_accepted = 7`,
 `RuntimeRunCancelled.state_version = 3`,
 `RuntimeApprovalUpdated.state_version = 4`, and
 `ToolPolicyDecision.run_state_version = 7`. Existing internal field numbers are
-unchanged; existing runtime retryable field `4` is deprecated and ignored by
-the new normalizer.
+unchanged; `RuntimeUpdate` value `8` remains
+`worker_capabilities_updated`. Existing runtime retryable field `4` is
+deprecated and ignored by the new normalizer.
 
 `FailureOrigin` assigns unspecified `0`, unknown `1`, then the exhaustive
 origins below. `AutomaticRetryClass` assigns unspecified `0`, unknown `1`,
@@ -222,12 +234,12 @@ The public lifecycle transitions are:
 | absent | queued | atomic enqueue |
 | queued | running | assignment starts |
 | running | waiting approval | approval becomes required |
-| waiting approval | running | approval is consumed and the owned attempt resumes |
+| waiting approval | running | the owned runtime attempt durably acknowledges that it resumed after the decision |
 | running or waiting approval | recovering | worker ownership becomes uncertain or fenced |
 | recovering | running | the same fenced attempt proves ownership and resumes |
 | recovering | queued | lease recovery requeues the job |
 | queued, running, waiting approval, or recovering | failed | canonical failure or exhausted recovery |
-| queued, running, waiting approval, or recovering | cancelled | user cancellation |
+| queued, running, waiting approval, or recovering | cancelled | typed cancellation or abandonment terminalization |
 | running, waiting approval, or recovering | completed | explicit successful terminal report |
 
 Terminal states are immutable.
@@ -262,6 +274,18 @@ Internal send states such as pending-send, sending, delivered, uncertain, and
 fenced remain execution details. They affect the public lifecycle only at the
 transitions above.
 
+Approval persistence, token consumption, or queuing `RuntimeApprovalUpdated`
+does not move the run back to running. An approved worker sends the new
+`RuntimeApprovalResumeReady` update only after it has accepted the decision and
+restored the matching owned attempt to a ready-but-paused boundary. The
+orchestrator validates run, approval, worker, attempt, and expected version,
+then commits waiting-approval to running with its state event and returns
+`RuntimeApprovalResumeAccepted` carrying the approval identity and new version.
+The worker does not execute the approved tool or continue model work until it
+receives that acceptance. A delivery failure or restart leaves the run
+waiting-approval while ownership is still known, or moves it to recovering when
+ownership is lost. Denial and expiry follow their existing terminal paths.
+
 ## Correlation and Query Invariants
 
 One run owns at most one assistant message, and one assistant message belongs
@@ -291,6 +315,14 @@ Null or mismatched legacy correlation is not rewritten speculatively.
 requires the mirrored assistant message ID, role, and session to match before
 returning `RunState`. That join is zero-or-one and cannot fan out a message row.
 
+A duplicate in either correlation direction is different from a nullable or
+single mismatched legacy row: it makes ownership ambiguous and intentionally
+aborts startup. Migration surfaces only the sentinel remediation class
+`run/message correlation conflict`; errors and logs contain no row IDs, message
+content, or database paths. The operator must restore a consistent database
+from a backup before retrying. Null or single mismatches retain the neutral
+legacy fallback below.
+
 If correlation is absent or inconsistent, the service omits `RunState`.
 Flutter renders a neutral "No assistant response was recorded" card for a
 non-displayable assistant message without usable state. It does not fabricate a
@@ -302,17 +334,27 @@ The existing message page boundary and limit are applied to message rows with a
 zero-or-one primary-key join, so an embedded state cannot change page
 cardinality. A state card is created only with its assistant row and remains
 adjacent to it. Overlapping page loads deduplicate messages by message ID and
-run states by run ID plus state version. An event for an assistant message not
-yet loaded is held as pending run state and anchored only when that message's
-page arrives.
+run states by run ID plus state version.
+
+Flutter has one initial-load race buffer keyed by run ID, capped at 64 states
+and retaining only the highest version for each run. It exists only until the
+initial newest message page is committed. Historical/replayed events for
+unloaded messages are discarded because the later message page carries the
+authoritative snapshot. If more than 64 distinct live run states arrive before
+the page commits, the buffer is cleared, one resync-required flag is set, and
+one newest-page reload runs after initial load; further events are not retained.
+After initial load, an event for an unloaded message is discarded and
+coalesces into at most one newest-page resync request. No arbitrary event or
+run-state collection waits for older pages.
 
 When TUR-008 lands, its cursor, archive, and status-aware reconciliation remain
 authoritative. TUR-009 does not create a second paging cursor or session status.
 
 ## Typed Failure Normalization
 
-Failure normalization happens before any durable run, job, tool-call, approval,
-or event write.
+Failure normalization happens before any durable run, job, tool-call,
+machine-generated approval failure, or event write. Human approval comments and
+denial rationale remain governed audit input, not failure-normalizer input.
 
 Runtime failure reports add a typed `FailureOrigin` supplied by the call site.
 That internal protobuf enum also has `UNSPECIFIED = 0` and explicit `UNKNOWN`
@@ -370,6 +412,19 @@ canonical `RunState` or normalized subsidiary categories only.
 - orchestrator internal;
 - client lifecycle.
 
+Unrecognized protobuf enum numerics are handled at every Go and Dart mapping
+boundary with a default branch that returns semantic unknown behavior. Go
+mapping functions switch on the generated enum value and map `default` to the
+domain unknown. Dart mapping functions accept the generated value or null and
+map any value outside the accepted set, including an unspecified/default value
+on a present `RunState`, to the domain unknown. An absent `RunState` still uses
+the neutral legacy fallback. Neither mapper calls a generated name accessor
+without a default, renders the raw integer, or panics. An unknown lifecycle
+renders a neutral "Run status unavailable" state; an unknown outcome renders
+generic outcome-unavailable copy; an unknown failure origin normalizes to
+internal failure. Raw-wire compatibility tests inject numeric values absent
+from the generated enum in both Go and Dart.
+
 ### Existing Run-Terminal Code Mapping
 
 | Existing code or condition | Typed origin | Public outcome |
@@ -401,8 +456,8 @@ canonical `RunState` or normalized subsidiary categories only.
 | `automation_approval_failed` | automation policy | policy denied |
 | `automation_tool_not_allowlisted` | automation policy | policy denied |
 | explicit successful report with no displayable content | not a failure | completed with no content |
-| current `client_cancelled` transport path | client lifecycle | user cancelled |
-| a future typed abandonment signal | client lifecycle | abandoned |
+| current `client_cancelled` transport path | client lifecycle | abandoned |
+| a future explicit typed cancel-intent RPC | client lifecycle | user cancelled |
 | unknown code with typed external-provider/protocol/transport origin | matching provider origin | provider failure |
 | unknown code with typed tool origin | tool | tool failure |
 | unknown or unspecified origin | unknown | internal failure |
@@ -414,10 +469,12 @@ is retries exhausted or recovery interrupted according to the existing
 terminal path.
 
 The current ChatService uses the same stream-cancellation signal for an
-intentional stop and an unkeyed transport loss, so TUR-009 does not guess
-between user-cancelled and abandoned. Existing `client_cancelled` rows map to
-user-cancelled. Abandoned is emitted only when a future call site supplies a
-typed abandonment signal.
+intentional stop and an unkeyed transport loss, and Flutter exposes no explicit
+cancel affordance. TUR-009 does not add a cancel-intent RPC. Current and legacy
+`client_cancelled` rows therefore map to abandoned, never user-cancelled.
+`USER_CANCELLED` remains reserved until a future explicit typed intent path can
+prove it. Tests lock the ambiguous disconnect mapping so it cannot silently
+regress to a claim about user intent.
 
 ### Subsidiary Failure Code Mapping
 
@@ -434,7 +491,7 @@ public event payloads are normalized before write:
 | `unknown_tool` | tool policy | policy denied |
 | `tool_runner_unavailable` | tool infrastructure | tool failure |
 | `worker_unavailable` notice | recovery | recovery interrupted |
-| `cancelled` tool cleanup | user cancellation | user cancelled |
+| `cancelled` tool cleanup from the current transport path | client lifecycle | abandoned |
 | unknown typed tool code | tool | tool failure |
 | unknown or unspecified subsidiary origin | internal | internal failure |
 
@@ -459,6 +516,13 @@ Nonfailure `agent.run.step` projections, including redacted egress and model
 limit notices, are preserved; only retry, give-up, and recovery failure payloads
 are rewritten by this migration.
 
+TUR-002's human approval rationale is not a generic failure diagnostic.
+Migration never changes `approvals.approval_comment`,
+`approvals.denial_reason`, or the governed bounded rationale projection in
+`audit_logs`. Sanitizing `approval.denied` event payloads removes only generic
+machine message/reason fields; the rationale remains in its approval and audit
+storage and is never copied into `RunState` or a failure event.
+
 ChatService and EventService sanitize malformed or unmigrated legacy rows again
 at the public read boundary. Malformed payloads map to the enum unknown/internal
 fallback and never return parser text. Flutter derives all user-visible copy
@@ -470,7 +534,45 @@ run-state cards. It does not migrate unrelated existing UI copy.
 
 ## Migration and Legacy Scrubbing
 
-The selected post-merge migration executes in one SQLite transaction:
+The migration runner gains a version-keyed Go hook with `Before` and `After`
+phases that execute inside the same `*sql.Tx` as the migration SQL. For ordinary
+migrations behavior is unchanged. For the selected post-merge TUR-009 version
+the runner performs:
+
+1. `before` hook;
+2. the version's SQL file;
+3. `after` hook;
+4. `schema_migrations` insert;
+5. transaction commit.
+
+The `before` hook performs the value-free correlation preflight, creates a
+temporary backfill table inside the transaction, and scans existing runs by
+stable keyset in batches of at most 128. Each `Rows` cursor is read into a
+bounded Go slice and closed before any insert or update on SQLite's single
+connection. The hook parses legacy `finished_at`, `started_at`, and `created_at`
+only in the accepted RFC3339Nano shapes
+`YYYY-MM-DDTHH:MM:SS[.1-9 digits]Z` and
+`YYYY-MM-DDTHH:MM:SS[.1-9 digits](+|-)HH:MM`, using TUR-008's lower-level
+`persisttime.ParseLegacy` when PR #68 has landed, or introducing that exact
+shared lower-level parser if it has not. It formats every derived timestamp with
+`persisttime.Format` and the fixed-width canonical UTC layout, hashes exact
+assistant content, and writes only normalized lifecycle/outcome values to the
+backfill table. Invalid timestamps fail with a value-free migration error;
+variable-width or offset source text is never copied into `state_updated_at`.
+
+The SQL file rebuilds `agent_runs` with the recovering status and canonical
+constraints, copying derived values from the backfill table. After all read
+cursors are closed it swaps the rebuilt table, creates the correlation indexes,
+and scrubs run/job/tool-call raw diagnostic columns. SQLite transactional DDL
+keeps the rebuild and indexes inside the migration transaction.
+
+The `after` hook scans selected events by `rowid` in batches of at most 128,
+closes each cursor before writes, rewrites safe canonical JSON using Go's JSON
+encoder, validates the rebuilt correlations and canonical fields, and drops the
+temporary backfill table. It makes no filesystem, model, tool, or network
+calls.
+
+Within that mechanism, the migration:
 
 1. Validates the correlation uniqueness preconditions without returning row
    values.
@@ -491,6 +593,12 @@ The selected post-merge migration executes in one SQLite transaction:
 It never copies arbitrary error text into canonical state or safe event
 payloads. Public read sanitization remains defense in depth for malformed rows
 that cannot be normalized.
+
+Any hook, SQL, validation, JSON, timestamp, or injected test error rolls back
+the shadow-table work, table swap, raw-field scrub, event rewrites, indexes, and
+`schema_migrations` row together. Tests inject failures after each phase and
+after the migration-record insert but before commit, then reopen the database
+to prove the pre-migration schema and data remain intact.
 
 Approval rows have no error-message column. Their argument JSON and tokens,
 plus tool-call argument JSON and result summaries, remain internal operational
@@ -610,16 +718,31 @@ existing presentation difference remains, but terminal truth is identical.
 Strict test-driven development covers:
 
 - migration number selection after merging main;
-- migration backfill, version bounds, correlation preflight/indexes, raw-field
-  scrubbing, safe event rewriting, and rollback;
-- repository lifecycle/version transactions and one-event-per-transition;
+- exact protobuf field and enum allocation revalidation after merging main,
+  including event type 23 and the occupied runtime-update value 8;
+- migration canonical timestamp parsing/formatting, outcome backfill, version
+  bounds, value-free duplicate-correlation failure, indexes, raw-field
+  scrubbing, safe event rewriting, approval-rationale preservation, and
+  injected rollback before SQL, after rebuild, after scrub, after event
+  rewrite, after index creation, before the migration record, and after its
+  insert but before commit;
+- repository lifecycle/version transactions, monotonic update time under a
+  regressing clock, timestamp/version overflow rollback, and
+  one-event-per-transition;
 - one-query message/run projection without pagination fan-out;
 - public gRPC restart round trips for every lifecycle and terminal reason;
 - completed-with-content and completed-with-whitespace-only content;
 - provider EOF/disconnect never becoming completion;
+- ambiguous `client_cancelled` and tool cleanup mapping to abandoned, with no
+  user-cancelled claim in migration, live events, or reopen;
 - typed ingestion normalization for every mapping row and unknown fallback;
 - defense-in-depth ChatService and EventService sanitization for malformed
   legacy events;
+- raw-wire unknown numeric lifecycle/outcome/origin mapping to semantic unknown
+  behavior in Go and Dart without panic or numeric copy;
+- approval decision delivery failure and restart preserving waiting/recovering,
+  plus waiting-to-running only after the owned runtime resume update and its
+  durable acceptance before tool/model continuation;
 - exact duplicate terminal reports and conflicting content/reason/version
   reports;
 - completion/cancellation/recovery races;
@@ -627,6 +750,11 @@ Strict test-driven development covers:
 - Flutter adjacent ordering and blank-bubble suppression;
 - run ID plus version stale/equal/newer reconciliation;
 - history/live parity and overlapping page boundaries;
+- 10,000 unloaded historical/live run events retaining at most the 64-entry
+  initial buffer, deterministically evicting to one coalesced resync, and never
+  creating detached cards;
+- TUR-002 denial rationale surviving migration in approval/audit storage while
+  remaining absent from `RunState` and public failure events;
 - neutral legacy fallback;
 - exhaustive enum-to-client-copy switches.
 
@@ -641,10 +769,17 @@ preserved. If TUR-008 lands, pagination, archive, and status-aware
 reconciliation are preserved. If TUR-003 lands, run-owned egress decisions and
 redacted notices remain authoritative.
 
+After that merge, every proposed field and enum number is checked against the
+merged descriptors before generation. TUR-009 never renumbers an existing
+field; `TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED` remains 23 because 22 belongs
+to TUR-004 even if the merge timing differs.
+
 Retained limitations are:
 
 - no no-worker or queue-timeout policy (TUR-010);
 - no historical tool-card reconstruction;
+- no explicit user-cancel intent API; current transport cancellation is shown
+  as abandonment;
 - no guarantee that partial live deltas survive reopen;
 - live tool-separated text segments collapse into one persisted assistant
   message after reopen;
