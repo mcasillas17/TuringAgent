@@ -259,6 +259,7 @@ class TuringGrpcApi implements ClosableTuringApi {
     required String sessionId,
     required String content,
     String modelProvider = 'ollama',
+    String? idempotencyKey,
   }) {
     final stream = _chat.sendMessage(
       chatpb.SendMessageRequest(
@@ -267,6 +268,7 @@ class TuringGrpcApi implements ClosableTuringApi {
         contentType: 'text',
         agentId: commonpb.AgentId.AGENT_ID_GENERAL_ASSISTANT,
         modelProvider: GrpcMappers.modelProviderFromString(modelProvider),
+        idempotencyKey: idempotencyKey ?? '',
       ),
     );
     final queued = Completer<Map<String, dynamic>>();

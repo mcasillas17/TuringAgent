@@ -759,6 +759,7 @@ class _AgentApi
     required String sessionId,
     required String content,
     String modelProvider = 'ollama',
+    String? idempotencyKey,
   }) async => {'runId': 'run_1'};
 
   @override

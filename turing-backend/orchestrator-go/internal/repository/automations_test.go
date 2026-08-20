@@ -261,6 +261,17 @@ func TestClaimDueAutomationFiresWhenDueAndNotBefore(t *testing.T) {
 	if len(messages) == 0 || messages[0].Content != "Summarise the sandbox." {
 		t.Fatalf("automation sent %+v, want the saved prompt", messages)
 	}
+	var nonTextMessages int
+	if err := repo.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM messages
+		WHERE session_id = ? AND content_type <> 'text'
+	`, fire.SessionID).Scan(&nonTextMessages); err != nil {
+		t.Fatal(err)
+	}
+	if nonTextMessages != 0 {
+		t.Fatalf("automation created %d messages with a non-text content type", nonTextMessages)
+	}
 }
 
 // The whole anti-duplication argument, tested at the level it is made: a

@@ -15,6 +15,8 @@ message SendMessageRequest {
   AgentId agent_id = 4;
   ModelProvider model_provider = 5;
   string model = 6;
+  // Opaque key retained for retries of this exact operation. Reusing a key
+  // with a different normalized request returns ALREADY_EXISTS.
   string idempotency_key = 7;
   // Exact server/tool names that a compatible worker must advertise.
   repeated string requested_tools = 8;
