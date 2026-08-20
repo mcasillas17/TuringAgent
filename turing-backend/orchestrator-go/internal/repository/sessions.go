@@ -51,17 +51,13 @@ type Message struct {
 	RunState *RunState
 }
 
-// assistantMessageRole is the only role a run may own. It mirrors the predicate
-// of idx_messages_assistant_run_unique, which is what makes a second claimant
-// below a corruption report rather than an ordinary shape of history.
-const assistantMessageRole = "assistant"
-
 // historyPageColumns is the message projection a bounded page selects. The
 // session ID is read rather than assumed from the request, because the
 // correlation rule compares the run's session against the message's own row.
 const historyPageColumns = `id, session_id, run_id, role, content, content_type, sequence, created_at`
 
-// historyJoinQuery wraps a bounded message page in the zero-or-one run join.
+// historyJoinQuery wraps a bounded message page in the zero-or-one run join and
+// the two claimant counts that decide whether the link is ambiguous.
 //
 // The page subquery is where the session predicate, any anchor boundary, and
 // the limit are applied, so the page is decided entirely by message rows. Only
@@ -69,6 +65,18 @@ const historyPageColumns = `id, session_id, run_id, role, content, content_type,
 // most once — so an embedded outcome cannot add, drop, or duplicate a turn. The
 // outer ORDER BY is restated because a join does not inherit the subquery's
 // order.
+//
+// The two scalar subqueries count the claimants on each side of the circular
+// link: how many assistant turns name this row's run, and how many runs name
+// this row as their answer. They are row-local, so they see the whole database
+// rather than the page — which is the point. Whether ownership is ambiguous is
+// a fact about the stored rows, and a page-scoped check would report it only
+// when a client happened to ask for a window wide enough to contain both
+// claimants, so the same corrupt database would fail one request and answer the
+// next. Counting in this statement also keeps the cost flat: no round trip is
+// added per message, and each count is a covering-index probe
+// (idx_messages_assistant_run_unique and idx_runs_assistant_message_unique)
+// rather than the scan a follow-up lookup per row would have cost.
 //
 // assistant_content_sha256 is deliberately absent from the projection. It is
 // internal identity for duplicate terminal reports; a reader that never selects
@@ -80,12 +88,49 @@ func historyJoinQuery(page string, order string) string {
 			p.sequence, p.created_at,
 			COALESCE(r.id, ''), COALESCE(r.session_id, ''), COALESCE(r.user_message_id, ''),
 			COALESCE(r.assistant_message_id, ''), COALESCE(r.status, ''), COALESCE(r.outcome_reason, ''),
-			COALESCE(r.state_version, 0), COALESCE(r.state_updated_at, ''), r.finished_at
+			COALESCE(r.state_version, 0), COALESCE(r.state_updated_at, ''), r.finished_at,
+			(SELECT COUNT(*) FROM messages claimant
+				WHERE claimant.run_id = p.run_id AND claimant.role = ?),
+			(SELECT COUNT(*) FROM agent_runs owner
+				WHERE owner.assistant_message_id = p.id)
 		FROM page p
 		LEFT JOIN agent_runs r ON r.id = p.run_id
 		ORDER BY ` + order + `
 	`
 }
+
+// historyJoinArgs appends the one argument historyJoinQuery adds of its own.
+//
+// The page's placeholders come first because the page is a leading CTE, so the
+// role binds last. It is bound rather than spliced into the SQL because a
+// literal is a second place the predicate could be edited; SQLite still reaches
+// the partial index through it, since it chooses that index against the value
+// actually bound and re-prepares when the value changes.
+func historyJoinArgs(pageArgs ...any) []any {
+	return append(pageArgs, runcorrelation.AssistantRole)
+}
+
+// The two shipped history statements, built once. They are package-level so a
+// test can EXPLAIN exactly the text production sends rather than a
+// reconstruction of it that could drift from it.
+var (
+	newestHistoryQuery = historyJoinQuery(`
+		SELECT `+historyPageColumns+`
+		FROM messages
+		WHERE session_id = ?
+		ORDER BY sequence DESC
+		LIMIT ?
+	`, `p.sequence DESC`)
+
+	olderHistoryQuery = historyJoinQuery(`
+		SELECT `+historyPageColumns+`
+		FROM messages
+		WHERE session_id = ?
+			AND sequence < ?
+		ORDER BY sequence DESC, id DESC
+		LIMIT ?
+	`, `p.sequence DESC, p.id DESC`)
+)
 
 // scanHistoryPage reads a joined page newest-first and returns it in causal
 // order.
@@ -95,7 +140,6 @@ func historyJoinQuery(page string, order string) string {
 // with yields the message with no state rather than somebody else's outcome.
 func scanHistoryPage(rows *sql.Rows) ([]Message, error) {
 	var reversed []Message
-	claimedRuns := make(map[string]struct{})
 	for rows.Next() {
 		var (
 			message               Message
@@ -109,26 +153,27 @@ func scanHistoryPage(rows *sql.Rows) ([]Message, error) {
 			stateVersion          int64
 			stateUpdatedAt        string
 			finishedAt            sql.NullString
+			runClaimants          int64
+			messageOwners         int64
 		)
 		if err := rows.Scan(
 			&message.MessageID, &messageSessionID, &message.RunID, &message.Role, &message.Content,
 			&message.ContentType, &message.Sequence, &message.CreatedAt,
 			&runID, &runSessionID, &runUserMessageID, &runAssistantMessageID, &lifecycle,
 			&outcomeReason, &stateVersion, &stateUpdatedAt, &finishedAt,
+			&runClaimants, &messageOwners,
 		); err != nil {
 			return nil, err
 		}
-		// Two assistant turns claiming one run is ambiguous ownership rather
-		// than a mismatch: nothing here can say which of them the outcome
-		// belongs to. The unique index forbids it, so reaching this means the
-		// database predates the index or was restored from a corrupt backup —
-		// and the report says only that, because a row value in an operator's
-		// log is a leak nothing downstream can take back.
-		if message.Role == assistantMessageRole && message.RunID != "" {
-			if _, duplicate := claimedRuns[message.RunID]; duplicate {
-				return nil, runcorrelation.ErrConflict
-			}
-			claimedRuns[message.RunID] = struct{}{}
+		// Two assistant turns claiming one run, or two runs claiming one turn,
+		// is ambiguous ownership rather than a mismatch: nothing here can say
+		// which of them the outcome belongs to. Both directions are forbidden
+		// by a unique index, so reaching this means the database predates the
+		// indexes or was restored from a corrupt backup — and the report says
+		// only that, because a row value in an operator's log is a leak nothing
+		// downstream can take back.
+		if runClaimants > 1 || messageOwners > 1 {
+			return nil, runcorrelation.ErrConflict
 		}
 		if runID != "" {
 			link := runcorrelation.Link{
@@ -215,14 +260,7 @@ func (r *Repository) ListMessages(ctx context.Context, sessionID string, limit i
 	if limit <= 0 {
 		limit = 50
 	}
-	query := historyJoinQuery(`
-		SELECT `+historyPageColumns+`
-		FROM messages
-		WHERE session_id = ?
-		ORDER BY sequence DESC
-		LIMIT ?
-	`, `p.sequence DESC`)
-	rows, err := r.db.QueryContext(ctx, query, sessionID, limit)
+	rows, err := r.db.QueryContext(ctx, newestHistoryQuery, historyJoinArgs(sessionID, limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -245,15 +283,7 @@ func (r *Repository) ListMessagesBefore(ctx context.Context, sessionID, beforeMe
 	`, sessionID, beforeMessageID).Scan(&boundarySequence); err != nil {
 		return nil, err
 	}
-	query := historyJoinQuery(`
-		SELECT `+historyPageColumns+`
-		FROM messages
-		WHERE session_id = ?
-			AND sequence < ?
-		ORDER BY sequence DESC, id DESC
-		LIMIT ?
-	`, `p.sequence DESC, p.id DESC`)
-	rows, err := r.db.QueryContext(ctx, query, sessionID, boundarySequence, limit)
+	rows, err := r.db.QueryContext(ctx, olderHistoryQuery, historyJoinArgs(sessionID, boundarySequence, limit)...)
 	if err != nil {
 		return nil, err
 	}

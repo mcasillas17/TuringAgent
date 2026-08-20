@@ -130,6 +130,13 @@ func TestListMessagesBeforeAppliesBoundaryBeforeRunProjection(t *testing.T) {
 // client does with two pages that overlap: it deduplicates messages by ID and
 // run states by run ID plus version. That only converges if both pages report
 // the same identity and the same version for the same row.
+//
+// Agreement is asserted per overlapping row rather than per run, because a page
+// that dropped every state would agree with the other page vacuously — the
+// deduplicated set would still hold one state per run, contributed entirely by
+// the page that kept them. So the older page is also checked on its own, and
+// both pages are checked for causal order, which is the other thing a client
+// cannot repair after the fact.
 func TestOverlappingMessagePagesKeepOneMessageAndOneRunVersion(t *testing.T) {
 	repo := New(openTestDB(t))
 	ctx := context.Background()
@@ -138,6 +145,10 @@ func TestOverlappingMessagePagesKeepOneMessageAndOneRunVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	var anchor string
+	// The committed state of each run, keyed by the assistant turn that owns
+	// it. The internal content digest is never selected by the history reader,
+	// so it is cleared here rather than tolerated in the comparison.
+	committed := map[string]RunState{}
 	for index := 0; index < 3; index++ {
 		enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
 			SessionID: session.SessionID, Content: "ask", AgentID: "general_assistant",
@@ -153,14 +164,18 @@ func TestOverlappingMessagePagesKeepOneMessageAndOneRunVersion(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := repo.CompleteRunCanonical(ctx, CompleteRunInput{
+		completed, err := repo.CompleteRunCanonical(ctx, CompleteRunInput{
 			RunID:                enqueued.RunID,
 			AssistantMessageID:   enqueued.AssistantMessageID,
 			Content:              "answer",
 			ExpectedStateVersion: running.StateVersion,
-		}); err != nil {
+		})
+		if err != nil {
 			t.Fatal(err)
 		}
+		want := completed.State
+		want.ContentSHA256 = ""
+		committed[enqueued.AssistantMessageID] = want
 		if index == 2 {
 			anchor = enqueued.AssistantMessageID
 		}
@@ -177,6 +192,35 @@ func TestOverlappingMessagePagesKeepOneMessageAndOneRunVersion(t *testing.T) {
 	if len(older) == 0 {
 		t.Fatal("older page is empty, so the pages do not overlap")
 	}
+	assertCausalOrder(t, "newest page", newest)
+	assertCausalOrder(t, "older page", older)
+
+	// The older page is asserted on its own terms first. A client that scrolls
+	// back reads it without the newest page in hand, so whatever it omits is
+	// simply missing from the conversation as that client sees it.
+	olderStates := 0
+	for _, message := range older {
+		want, owned := committed[message.MessageID]
+		if !owned {
+			if message.RunState != nil {
+				t.Fatalf("older page attached run state %+v to %q, which owns none", message.RunState, message.MessageID)
+			}
+			continue
+		}
+		if message.RunState == nil {
+			t.Fatalf("older page dropped the outcome of assistant turn %q", message.MessageID)
+		}
+		if *message.RunState != want {
+			t.Fatalf("older page state for %q = %+v, want the committed %+v", message.MessageID, *message.RunState, want)
+		}
+		if !message.RunState.HasDisplayableContent {
+			t.Fatalf("older page reports no displayable content for %q, which has an answer", message.MessageID)
+		}
+		olderStates++
+	}
+	if olderStates != 2 {
+		t.Fatalf("older page carried %d run states, want one per completed turn it contains", olderStates)
+	}
 
 	messages := map[string]Message{}
 	states := map[string]RunState{}
@@ -186,8 +230,21 @@ func TestOverlappingMessagePagesKeepOneMessageAndOneRunVersion(t *testing.T) {
 			if previous, seen := messages[message.MessageID]; seen {
 				overlapping++
 				if previous.MessageID != message.MessageID || previous.RunID != message.RunID ||
-					previous.Sequence != message.Sequence {
+					previous.Sequence != message.Sequence || previous.Role != message.Role ||
+					previous.Content != message.Content || previous.CreatedAt != message.CreatedAt {
 					t.Fatalf("overlapping message identity = %+v and %+v", previous, message)
+				}
+				// Presence is compared before value: one page saying an outcome
+				// exists while the other says none was recorded is the exact
+				// disagreement a client cannot reconcile, and comparing only
+				// the states that happen to be present would never see it.
+				if (previous.RunState == nil) != (message.RunState == nil) {
+					t.Fatalf("overlapping message %q carries state %+v in one page and %+v in the other",
+						message.MessageID, previous.RunState, message.RunState)
+				}
+				if previous.RunState != nil && *previous.RunState != *message.RunState {
+					t.Fatalf("overlapping state for %q = %+v and %+v",
+						message.MessageID, *previous.RunState, *message.RunState)
 				}
 			}
 			messages[message.MessageID] = message
@@ -200,13 +257,26 @@ func TestOverlappingMessagePagesKeepOneMessageAndOneRunVersion(t *testing.T) {
 			states[message.RunState.RunID] = *message.RunState
 		}
 	}
-	if overlapping == 0 {
-		t.Fatal("no message appeared in both pages, so deduplication was never exercised")
+	if overlapping != len(older) {
+		t.Fatalf("overlapping messages = %d, want the %d rows the older page repeats", overlapping, len(older))
 	}
 	if len(messages) != 6 {
 		t.Fatalf("deduplicated messages = %d, want six", len(messages))
 	}
 	if len(states) != 3 {
 		t.Fatalf("deduplicated run states = %d, want one per run", len(states))
+	}
+}
+
+// assertCausalOrder proves a page reads oldest first. History is rendered in
+// the order it is returned, so a reversed page is a conversation whose answers
+// precede the questions that caused them.
+func assertCausalOrder(t *testing.T, page string, messages []Message) {
+	t.Helper()
+	for index := 1; index < len(messages); index++ {
+		if messages[index].Sequence <= messages[index-1].Sequence {
+			t.Fatalf("%s is not in causal order at index %d: sequences %d then %d",
+				page, index, messages[index-1].Sequence, messages[index].Sequence)
+		}
 	}
 }

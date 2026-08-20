@@ -11,9 +11,13 @@ package runcorrelation
 
 import "errors"
 
-// assistantRole is the only message role a run may own. Roles are stored
-// lowercase by the writer, so this comparison is exact rather than folded.
-const assistantRole = "assistant"
+// AssistantRole is the only message role a run may own. It is exported because
+// the readers that detect a duplicate claimant have to spell the same predicate
+// as idx_messages_assistant_run_unique, and a role literal retyped in a SQL
+// string is exactly the second opinion this package exists to prevent. Roles
+// are stored lowercase by the writer, so comparisons against it are exact
+// rather than folded.
+const AssistantRole = "assistant"
 
 // ErrConflict is the only error this package returns. Correlation problems are
 // reported to operators and surfaced at the public read boundary, so the error
@@ -46,7 +50,7 @@ func Validate(link Link) error {
 	if link.MessageSessionID != link.RunSessionID {
 		return ErrConflict
 	}
-	if link.MessageRole != assistantRole {
+	if link.MessageRole != AssistantRole {
 		return ErrConflict
 	}
 	return nil

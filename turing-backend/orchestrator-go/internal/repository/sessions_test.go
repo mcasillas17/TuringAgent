@@ -439,28 +439,36 @@ func TestListMessagesRejectsValueFreeDuplicateCorrelation(t *testing.T) {
 	if !errors.Is(err, runcorrelation.ErrConflict) {
 		t.Fatalf("ListMessages error = %v, want the correlation conflict sentinel", err)
 	}
-	assertValueFreeCorrelationError(t, err, enqueued)
+	assertValueFreeCorrelationError(t, err, enqueued, "msg_second_claimant", "second claimant", "the answer")
 
 	_, err = repo.ListMessagesBefore(ctx, enqueued.SessionID, "msg_anchor", 50)
 	if !errors.Is(err, runcorrelation.ErrConflict) {
 		t.Fatalf("ListMessagesBefore error = %v, want the correlation conflict sentinel", err)
 	}
-	assertValueFreeCorrelationError(t, err, enqueued)
+	assertValueFreeCorrelationError(t, err, enqueued, "msg_second_claimant", "second claimant", "the answer")
 }
 
 // assertValueFreeCorrelationError proves the failure names a remediation class
 // and nothing else. An operator reads this in a log; a row value read there is
 // a leak that no amount of care downstream can take back.
-func assertValueFreeCorrelationError(t *testing.T, err error, enqueued EnqueueUserMessageResult) {
+//
+// The rendered text is pinned to the bare sentinel rather than merely searched,
+// because the cheapest way to leak a row is to wrap the sentinel in a message
+// that explains which one — and every secret this test knows to look for is a
+// value some future writer might think is safe to name.
+func assertValueFreeCorrelationError(t *testing.T, err error, enqueued EnqueueUserMessageResult, extra ...string) {
 	t.Helper()
 	message := err.Error()
-	for _, secret := range []string{
+	secrets := append([]string{
 		enqueued.RunID, enqueued.SessionID, enqueued.AssistantMessageID, enqueued.UserMessageID,
-		"msg_second_claimant", "second claimant", "the answer",
-	} {
+	}, extra...)
+	for _, secret := range secrets {
 		if strings.Contains(message, secret) {
 			t.Fatalf("correlation error %q leaked %q", message, secret)
 		}
+	}
+	if message != runcorrelation.ErrConflict.Error() {
+		t.Fatalf("correlation error = %q, want only the sentinel %q", message, runcorrelation.ErrConflict.Error())
 	}
 }
 

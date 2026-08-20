@@ -246,12 +246,8 @@ func TestRunStateProjectionOmitsContentHashAndInternalExecution(t *testing.T) {
 		t.Fatalf("finished at = %q, want %q", got, state.FinishedAt.String)
 	}
 
-	// A nonterminal run has not finished, and an unreadable timestamp is not a
-	// time. Neither may become an instant a client would render.
-	nonterminal := canonicalState("running", "none")
-	if finished := Project(nonterminal).GetFinishedAt(); finished != nil {
-		t.Fatalf("nonterminal state carries finished at %v", finished)
-	}
+	// An unreadable timestamp is not a time, and must not become an instant a
+	// client would render.
 	corrupt := canonicalState("completed", "none")
 	corrupt.StateUpdatedAt = "not a timestamp"
 	corrupt.FinishedAt = sql.NullString{String: "also not a timestamp", Valid: true}
@@ -261,5 +257,83 @@ func TestRunStateProjectionOmitsContentHashAndInternalExecution(t *testing.T) {
 	}
 	if projectedCorrupt.GetStateUpdatedAt() != nil || projectedCorrupt.GetFinishedAt() != nil {
 		t.Fatalf("unreadable timestamps became instants: %+v", projectedCorrupt)
+	}
+}
+
+// TestRunStateProjectionPublishesFinishedAtOnlyForTerminalLifecycles is the
+// guard against a stray column becoming a fact. finished_at is written by the
+// terminal writers, but a restored, downgraded, or hand-edited row can carry
+// one beside a phase that never finished — and a client shown a finish time
+// reads the run as over.
+//
+// Every case supplies a genuine, readable, non-NULL finished_at, so the only
+// thing deciding the outcome is the phase beside it. A test that left the
+// column NULL would pass with the phase check deleted.
+func TestRunStateProjectionPublishesFinishedAtOnlyForTerminalLifecycles(t *testing.T) {
+	const finishedAt = "2026-08-20T10:11:12.000000014Z"
+	for _, test := range []struct {
+		lifecycle string
+		reason    string
+	}{
+		{lifecycle: "completed", reason: "none"},
+		{lifecycle: "completed", reason: "completed_no_content"},
+		{lifecycle: "failed", reason: "internal_failure"},
+		{lifecycle: "failed", reason: "expired"},
+		{lifecycle: "cancelled", reason: "user_cancelled"},
+		{lifecycle: "cancelled", reason: "abandoned"},
+	} {
+		t.Run("terminal_"+test.lifecycle+"_"+test.reason, func(t *testing.T) {
+			state := canonicalState(test.lifecycle, test.reason)
+			state.FinishedAt = sql.NullString{String: finishedAt, Valid: true}
+			projected := Project(state)
+			if projected == nil {
+				t.Fatalf("terminal pair %q/%q projected no state", test.lifecycle, test.reason)
+			}
+			if projected.GetFinishedAt() == nil {
+				t.Fatalf("terminal lifecycle %q dropped the finish time it actually has", test.lifecycle)
+			}
+			if got := projected.GetFinishedAt().AsTime().Format("2006-01-02T15:04:05.000000000Z"); got != finishedAt {
+				t.Fatalf("finished at = %q, want %q", got, finishedAt)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		lifecycle string
+		reason    string
+	}{
+		{lifecycle: "queued", reason: "none"},
+		{lifecycle: "running", reason: "none"},
+		{lifecycle: "waiting_approval", reason: "none"},
+		{lifecycle: "recovering", reason: "none"},
+		// A phase this build cannot name is not a phase it can call terminal.
+		{lifecycle: "unknown", reason: "unknown"},
+		{lifecycle: "unknown", reason: "legacy_unknown"},
+		{lifecycle: "quiescing", reason: "quota_reclaimed"},
+	} {
+		t.Run("nonterminal_"+test.lifecycle+"_"+test.reason, func(t *testing.T) {
+			state := canonicalState(test.lifecycle, test.reason)
+			state.FinishedAt = sql.NullString{String: finishedAt, Valid: true}
+			projected := Project(state)
+			if projected == nil {
+				t.Fatalf("nonterminal pair %q/%q projected no state at all", test.lifecycle, test.reason)
+			}
+			if finished := projected.GetFinishedAt(); finished != nil {
+				t.Fatalf("nonterminal lifecycle %q published finish time %v", test.lifecycle, finished)
+			}
+		})
+	}
+
+	// A NULL column is not a time either, whatever string is sitting beside the
+	// invalid flag. The flag is what the database said; the string is only what
+	// the struct happens to hold.
+	nullColumn := canonicalState("completed", "none")
+	nullColumn.FinishedAt = sql.NullString{String: finishedAt, Valid: false}
+	projected := Project(nullColumn)
+	if projected == nil {
+		t.Fatal("a terminal state with no finish time projected nothing")
+	}
+	if finished := projected.GetFinishedAt(); finished != nil {
+		t.Fatalf("a NULL finished_at column published %v", finished)
 	}
 }
