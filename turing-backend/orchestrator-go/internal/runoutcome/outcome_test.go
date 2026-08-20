@@ -22,19 +22,27 @@ import (
 // holds is eligible to be persisted and returned to clients.
 const poison = "provider said: sk-live-SECRET at /Users/someone/private"
 
-// The two approved mapping tables are normative: the call site supplies a typed
-// origin and the normalizer decides the public reason. Keying on (origin, code)
-// rather than the code alone is what lets unknown_tool mean "tool failure" from
-// the tool-infrastructure path and "policy denied" from the policy path.
-func TestNormalizeFailureMapsEveryExistingCode(t *testing.T) {
-	tests := []struct {
-		name       string
-		origin     Origin
-		code       string
-		wantOrigin Origin
-		wantCode   string
-		wantReason Reason
-	}{
+// failureMappingCase is one row of the approved mapping table: the typed report
+// a call site makes, and the normalized value clients may see. wantOrigin and
+// wantCode are only spelled out when normalization is expected to replace them.
+type failureMappingCase struct {
+	name       string
+	origin     Origin
+	code       string
+	wantOrigin Origin
+	wantCode   string
+	wantReason Reason
+}
+
+// approvedFailureMappings is the normative statement of every (origin, code)
+// pair this codebase is allowed to map onto a public reason, one row per
+// failureReasons entry. It is written out by hand rather than derived from
+// failureReasons, because deriving it would make the production map its own
+// approval: a pair added there would arrive already "expected" here. The
+// forward test below reads it as behavior to assert, and the reverse pin reads
+// it as the allowlist failureReasons may not exceed.
+func approvedFailureMappings() []failureMappingCase {
+	return []failureMappingCase{
 		// Existing run-terminal code mapping.
 		{name: "message_fetch_failed", origin: OriginContextAssembly, code: "message_fetch_failed", wantReason: ReasonInternalFailure},
 		{name: "external_agent_unavailable", origin: OriginExternalProvider, code: "external_agent_unavailable", wantReason: ReasonProviderFailure},
@@ -81,7 +89,15 @@ func TestNormalizeFailureMapsEveryExistingCode(t *testing.T) {
 		{name: "tool_runner_unavailable", origin: OriginToolInfrastructure, code: "tool_runner_unavailable", wantReason: ReasonToolFailure},
 		{name: "worker_unavailable_recovery_notice", origin: OriginRecovery, code: "worker_unavailable", wantReason: ReasonRecoveryInterrupted},
 		{name: "tool_cleanup_cancelled", origin: OriginClientLifecycle, code: "cancelled", wantReason: ReasonAbandoned},
+	}
+}
 
+// The two approved mapping tables are normative: the call site supplies a typed
+// origin and the normalizer decides the public reason. Keying on (origin, code)
+// rather than the code alone is what lets unknown_tool mean "tool failure" from
+// the tool-infrastructure path and "policy denied" from the policy path.
+func TestNormalizeFailureMapsEveryExistingCode(t *testing.T) {
+	tests := append(approvedFailureMappings(), []failureMappingCase{
 		// Typed provider unknown-code fallbacks.
 		{name: "unknown_code_external_provider", origin: OriginExternalProvider, code: poison, wantCode: CodeUnknown, wantReason: ReasonProviderFailure},
 		{name: "unknown_code_provider_configuration", origin: OriginProviderConfiguration, code: poison, wantCode: CodeUnknown, wantReason: ReasonProviderFailure},
@@ -102,7 +118,7 @@ func TestNormalizeFailureMapsEveryExistingCode(t *testing.T) {
 		{name: "unknown_code_recovery", origin: OriginRecovery, code: poison, wantCode: CodeUnknown, wantReason: ReasonInternalFailure},
 		{name: "unknown_code_client_lifecycle", origin: OriginClientLifecycle, code: poison, wantCode: CodeUnknown, wantReason: ReasonInternalFailure},
 		{name: "empty_code_context_assembly", origin: OriginContextAssembly, code: "", wantCode: CodeUnknown, wantReason: ReasonInternalFailure},
-	}
+	}...)
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -153,6 +169,105 @@ func TestNormalizeFailureMapsEveryExistingCode(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The forward table only asserts that the pairs someone listed still normalize
+// the way they were approved. It is blind in the other direction: an entry added
+// to failureReasons and never listed is simply never exercised, so a new pair —
+// or a quiet reason change on an existing one — could start writing a public
+// outcome with every test still green. This pin requires the production map and
+// the approved table to be the same set of pairs carrying the same reasons, so
+// widening the mapping is an edit a reviewer has to see.
+func TestFailureReasonsHoldsExactlyTheApprovedMappings(t *testing.T) {
+	cases := approvedFailureMappings()
+	approved := make(map[failureKey]Reason, len(cases))
+	for _, test := range cases {
+		if test.wantOrigin != OriginUnspecified || test.wantCode != "" {
+			t.Fatalf("approved mapping %q expects a rewritten origin or code; an allowlisted pair is reported as-is, so it belongs with the fallback cases", test.name)
+		}
+		key := failureKey{origin: test.origin, code: test.code}
+		if previous, duplicate := approved[key]; duplicate {
+			t.Fatalf("approved table lists (%v, %q) twice, as %q and %q", key.origin, key.code, previous, test.wantReason)
+		}
+		approved[key] = test.wantReason
+	}
+
+	for key, reason := range failureReasons {
+		want, listed := approved[key]
+		if !listed {
+			t.Errorf("failureReasons maps (%v, %q) to %q, which no approved mapping case covers; list the pair in approvedFailureMappings or drop the entry",
+				key.origin, key.code, reason)
+			continue
+		}
+		if want != reason {
+			t.Errorf("failureReasons maps (%v, %q) to %q, want the approved %q", key.origin, key.code, reason, want)
+		}
+	}
+	for key, want := range approved {
+		if _, present := failureReasons[key]; !present {
+			t.Errorf("approved mapping case (%v, %q) -> %q has no failureReasons entry", key.origin, key.code, want)
+		}
+	}
+}
+
+// ReasonNone is the one reason that does not terminalize a run: a failure
+// carrying it explains a requeue and leaves the run's lifecycle moving. A third
+// pair acquiring it — by a new map entry, an edited reason, or a fallback that
+// returned it — would strand a genuinely failed run in a nonterminal state with
+// no public outcome, so the producing pairs are pinned to exactly the two
+// dispatch conditions that were approved.
+func TestReasonNoneComesFromExactlyTheApprovedDispatchPairs(t *testing.T) {
+	nonterminal := map[failureKey]struct{}{
+		{origin: OriginDispatch, code: "worker_busy"}:        {},
+		{origin: OriginDispatch, code: "worker_unavailable"}: {},
+	}
+
+	mapped := map[failureKey]struct{}{}
+	for key, reason := range failureReasons {
+		if reason == ReasonNone {
+			mapped[key] = struct{}{}
+		}
+	}
+	if !reflect.DeepEqual(mapped, nonterminal) {
+		t.Fatalf("failureReasons entries producing %q = %v, want exactly %v", ReasonNone, sortedKeys(mapped), sortedKeys(nonterminal))
+	}
+
+	// The map check alone would miss a fallback arm that answered ReasonNone,
+	// so every origin this package accepts — plus the ones it rejects — is run
+	// against every code it knows and some it does not.
+	codes := map[string]struct{}{CodeUnknown: {}, CodeClientCancelled: {}, poison: {}, "": {}}
+	for key := range failureReasons {
+		codes[key.code] = struct{}{}
+	}
+	origins := []Origin{Origin(200)}
+	for origin := OriginUnspecified; origin <= OriginClientLifecycle; origin++ {
+		origins = append(origins, origin)
+	}
+
+	for _, origin := range origins {
+		for code := range codes {
+			reason := NormalizeFailure(origin, code, RetryClassSameRunTransient).Reason()
+			_, approved := nonterminal[failureKey{origin: origin, code: code}]
+			if reason == ReasonNone && !approved {
+				t.Errorf("NormalizeFailure(%v, %q) produced %q; only the approved dispatch pairs may leave a run unterminalized",
+					origin, code, ReasonNone)
+			}
+			if approved && reason != ReasonNone {
+				t.Errorf("NormalizeFailure(%v, %q) produced %q, want the nonterminal %q", origin, code, reason, ReasonNone)
+			}
+		}
+	}
+}
+
+// sortedKeys renders a pair set deterministically, so a failure names the pairs
+// that differ instead of printing a map in random order.
+func sortedKeys(keys map[failureKey]struct{}) []string {
+	rendered := make([]string, 0, len(keys))
+	for key := range keys {
+		rendered = append(rendered, fmt.Sprintf("(%v, %q)", key.origin, key.code))
+	}
+	sort.Strings(rendered)
+	return rendered
 }
 
 // The product has no explicit cancel affordance, so nothing in this package may
