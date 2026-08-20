@@ -45,6 +45,14 @@ type App struct {
 	ApprovalService *approvalsvc.Server
 	AuditService    *auditsvc.Server
 	HealthService   *HealthServer
+	// InternalIdentityNames is the exact set of least-privilege identity
+	// names wired into InternalServer's authorization interceptors — names
+	// only, never the bearer tokens or the live, mutable allowlists those
+	// identities carry. Exposed so tests can assert against the real
+	// configuration — e.g. that every identity name here is a value the
+	// audit_logs.actor_type CHECK constraint accepts — rather than a
+	// hardcoded copy that can silently drift from it.
+	InternalIdentityNames []string
 
 	database     *db.DB
 	stopOnce     sync.Once
@@ -110,7 +118,7 @@ func New(cfg config.Config) (*App, error) {
 		Model:            cfg.OllamaModel,
 		MaxContextTokens: int32(cfg.OllamaContextWindowTokens),
 	}}
-	if cfg.OpenAIAPIKey != "" {
+	if cfg.OpenAIEnabled {
 		legacyModels = append(legacyModels, &turingv1.ModelCapability{
 			Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
 			Model:            cfg.OpenAIModel,
@@ -132,8 +140,7 @@ func New(cfg config.Config) (*App, error) {
 	sessionService := sessionsvc.New(repo, cfg, runtimeService, eventBus)
 	sessionService.SetArtifactCleaner(sessionsvc.NewMCPArtifactCleaner(
 		cfg.MCPFilesBaseURL,
-		cfg.MCPFilesTokenGeneral,
-		cfg.InternalToken,
+		cfg.MCPFilesCleanupToken,
 		nil,
 	))
 	if err := sessionService.ResumePendingDeletions(context.Background()); err != nil {
@@ -179,7 +186,37 @@ func New(cfg config.Config) (*App, error) {
 	}
 	authFailures := auth.NewAsyncFailureRecorder(persistAuthFailure)
 	publicAuth := auth.InterceptorOptions{ActorType: "client", FailureRecorder: authFailures.Record}
-	internalAuth := auth.InterceptorOptions{ActorType: "runtime", FailureRecorder: authFailures.Record}
+	internalAuth := auth.InterceptorOptions{FailureRecorder: authFailures.Record}
+	// Two least-privilege internal identities share the internal gRPC port:
+	// the runtime claims jobs and reads session history for context and
+	// recall; the approval consumer (mcp-files, and any future MCP server
+	// that consumes approvals) may call ConsumeApproval,
+	// FinalizeSandboxArtifact, and CheckSessionCapability. Neither token
+	// grants the other's methods, so a compromised mcp-files cannot claim a
+	// job or read conversation history, and a compromised runtime cannot be
+	// swapped in as the approval consumer for a different tool server.
+	internalIdentities, err := auth.NewInternalIdentities([]auth.ServiceIdentity{
+		auth.NewServiceIdentity("runtime", cfg.RuntimeToken,
+			turingv1.RuntimeService_ConnectWorker_FullMethodName,
+			turingv1.SessionService_ListMessages_FullMethodName,
+			turingv1.SessionService_SearchMessages_FullMethodName,
+			turingv1.ApprovalService_GetApprovalForRuntime_FullMethodName,
+			turingv1.ApprovalService_ConsumeApproval_FullMethodName,
+		),
+		auth.NewServiceIdentity("approval-consumer", cfg.ApprovalConsumerToken,
+			turingv1.ApprovalService_ConsumeApproval_FullMethodName,
+			turingv1.ApprovalService_FinalizeSandboxArtifact_FullMethodName,
+			turingv1.ApprovalService_CheckSessionCapability_FullMethodName,
+		),
+	})
+	if err != nil {
+		_ = database.Close()
+		return nil, err
+	}
+	internalIdentityNames := make([]string, len(internalIdentities))
+	for i, identity := range internalIdentities {
+		internalIdentityNames[i] = identity.Name
+	}
 	for _, event := range recoveredEvents {
 		eventBus.Publish(eventsvc.Event{
 			EventID: event.EventID, SessionID: event.SessionID, RunID: event.RunID.String,
@@ -194,8 +231,8 @@ func New(cfg config.Config) (*App, error) {
 		grpc.MaxSendMsgSize(maxGRPCMessageSize),
 	)
 	internalServer := grpc.NewServer(
-		grpc.UnaryInterceptor(auth.UnaryInterceptor(cfg.InternalToken, internalAuth)),
-		grpc.StreamInterceptor(auth.StreamInterceptor(cfg.InternalToken, internalAuth)),
+		grpc.UnaryInterceptor(auth.UnaryIdentityInterceptor(internalIdentities, internalAuth)),
+		grpc.StreamInterceptor(auth.StreamIdentityInterceptor(internalIdentities, internalAuth)),
 		grpc.MaxRecvMsgSize(maxGRPCMessageSize),
 		grpc.MaxSendMsgSize(maxGRPCMessageSize),
 	)
@@ -241,6 +278,7 @@ func New(cfg config.Config) (*App, error) {
 		ApprovalService:       approvalService,
 		AuditService:          auditService,
 		HealthService:         healthService,
+		InternalIdentityNames: internalIdentityNames,
 		database:              database,
 		authFailures:          authFailures,
 		reaperDone:            make(chan struct{}),

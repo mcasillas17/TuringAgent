@@ -195,6 +195,7 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 		"0012_audit_read",
 		"0012_derived_state_provenance",
 		"0012_worker_capability_routing",
+		"0013_internal_service_identities",
 		"0013_send_message_idempotency",
 		"0014_session_deletion_withdrawal",
 	}

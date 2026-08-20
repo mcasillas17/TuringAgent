@@ -273,10 +273,10 @@ func (c Consumer) CheckSession(ctx context.Context, provenanceToken string) erro
 }
 
 func (c Consumer) withInternalCredentials(ctx context.Context) context.Context {
-	if c.InternalToken == "" {
+	if c.ApprovalConsumerToken == "" {
 		return ctx
 	}
-	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.InternalToken)
+	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.ApprovalConsumerToken)
 }
 
 func parseSignedPayload(token string, secret string) ([]byte, error) {

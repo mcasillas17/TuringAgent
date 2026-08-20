@@ -227,6 +227,10 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   }
 
   void _applyGlobalSessionUpdated(TuringEvent event) {
+    if (event.type == 'session.deleted') {
+      _applySessionDeleted(event.sessionId);
+      return;
+    }
     _applySessionUpdated(event);
   }
 

@@ -513,15 +513,16 @@ func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeAppro
 	if err != nil {
 		return nil, mapApprovalError(err)
 	}
-	// Reserved before the approval is spent, because the reservation is the only
-	// step that can still refuse: after the consume commits, the caller is
-	// entitled to write and a refusal here would leave a file nothing accounts
-	// for. A crash between the two leaves an unwritten "writing" row, which
-	// keeps the session's withdrawal retryable rather than completing over a
-	// file that might exist.
-	artifact, reservedHere, err := s.reserveArtifactForConsume(ctx, approval, req.GetProvenanceToken(), req.GetPhysicalPath())
-	if err != nil {
-		return nil, err
+	var artifact repository.SandboxArtifact
+	reservedHere := false
+	if strings.HasPrefix(approval.ToolName, "files.") {
+		// Reserved before a file approval is spent, because the reservation is
+		// the only step that can still refuse. Other approval-gated tools have
+		// no sandbox artifact to reserve.
+		artifact, reservedHere, err = s.reserveArtifactForConsume(ctx, approval, req.GetProvenanceToken(), req.GetPhysicalPath())
+		if err != nil {
+			return nil, err
+		}
 	}
 	transition, err := s.repo.ConsumeApprovalWithEvent(ctx, req.ApprovalId, "")
 	if errors.Is(err, repository.ErrApprovalExpired) {
@@ -540,6 +541,20 @@ func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeAppro
 		return nil, status.Error(codes.FailedPrecondition, "approval expired")
 	}
 	if err != nil {
+		if errors.Is(err, repository.ErrApprovalAlreadyConsumed) &&
+			artifact.ArtifactID != "" &&
+			!reservedHere {
+			return &turingv1.ApprovalResponse{
+				ApprovalId: approval.ApprovalID,
+				Status:     turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED,
+				Reservation: &turingv1.SandboxArtifactReservation{
+					ArtifactId:         artifact.ArtifactID,
+					PhysicalPath:       artifact.PhysicalPath,
+					Policy:             artifact.Policy,
+					DeletionGeneration: artifact.DeletionGeneration,
+				},
+			}, nil
+		}
 		s.releaseReservationAfterFailedConsume(ctx, artifact, reservedHere)
 		return nil, mapApprovalError(err)
 	}

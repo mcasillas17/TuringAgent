@@ -95,11 +95,11 @@ func verifyHS256At(token string, secret string, now time.Time) (Claims, error) {
 }
 
 type Consumer struct {
-	OrchestratorGRPCAddr string
-	InternalToken        string
-	JWTSecret            string
-	ApprovalClient       ApprovalClient
-	DialOptions          []grpc.DialOption
+	OrchestratorGRPCAddr  string
+	ApprovalConsumerToken string
+	JWTSecret             string
+	ApprovalClient        ApprovalClient
+	DialOptions           []grpc.DialOption
 }
 
 type ApprovalClient interface {
@@ -173,8 +173,8 @@ func (c Consumer) consume(parent context.Context, jti string) error {
 		// determined by the time it closes, so a close error is not actionable.
 		defer func() { _ = closeClient() }()
 	}
-	if c.InternalToken != "" {
-		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.InternalToken)
+	if c.ApprovalConsumerToken != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.ApprovalConsumerToken)
 	}
 	resp, err := client.ConsumeApproval(ctx, &turingv1.ConsumeApprovalRequest{ApprovalId: jti})
 	if err != nil {

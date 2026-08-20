@@ -269,12 +269,18 @@ func TestConsumeApprovalReleasesReservationWhenApprovalCannotBeSpent(t *testing.
 		t.Fatalf("artifacts after first consume = %+v", first)
 	}
 
-	// A replayed consume must not leave a second reservation behind for a write
-	// that will never be authorised.
-	if _, err := h.service.ConsumeApproval(context.Background(), &turingv1.ConsumeApprovalRequest{
+	// A replayed consume returns the original reservation so a lost response
+	// does not strand an already-consumed approval. It must not create a
+	// second manifest row.
+	replayed, err := h.service.ConsumeApproval(context.Background(), &turingv1.ConsumeApprovalRequest{
 		ApprovalId: approvalID, ProvenanceToken: token, PhysicalPath: owned,
-	}); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("replayed consume error = %v, want FailedPrecondition", err)
+	})
+	if err != nil {
+		t.Fatalf("replayed consume: %v", err)
+	}
+	if replayed.GetStatus() != turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED ||
+		replayed.GetReservation().GetArtifactId() != first[0].ArtifactID {
+		t.Fatalf("replayed consume = %+v, want original consumed reservation", replayed)
 	}
 	second := h.sessionArtifacts(t, enqueued.SessionID)
 	if len(second) != 1 || second[0].ArtifactID != first[0].ArtifactID {

@@ -3,64 +3,45 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/project-turing/mcp-files/internal/approval"
-	"github.com/project-turing/mcp-files/internal/jsonrpc"
 	"github.com/project-turing/mcp-files/internal/tools"
 )
 
-// handleSessionCleanup serves the one tool that is not a tool: removing a
-// withdrawn session's namespace.
-//
-// It is deliberately its own path rather than a case inside the ordinary
-// dispatch. Nothing about a runtime call — not the agent bearer, not an
-// approval, not a provenance capability — can reach it; the only thing that
-// does is the internal token the orchestrator and this server share, which no
-// agent holds. It never touches the provenance guard, so there is no capability
-// shape that could stand in for the token.
-func handleSessionCleanup(
-	w http.ResponseWriter,
-	r *http.Request,
-	req jsonrpc.Request,
-	call tools.CallRequest,
-	filesTools tools.FilesTools,
-	internalToken string,
-) {
-	if !authorizedForInternalCleanup(call.InternalCleanupToken, internalToken) {
-		// Answered exactly like an unknown tool. A caller without the token
-		// learns nothing about whether this server can clean up sessions.
-		writeJSONRPCForRequest(w, req, jsonrpc.Response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Error:   map[string]any{"code": -32602, "message": "unknown tool"},
-		})
+func handleInternalSessionCleanup(w http.ResponseWriter, r *http.Request, filesTools tools.FilesTools, approvalConsumerToken string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if call.ApprovalToken != "" || call.ProvenanceToken != "" {
-		// Cleanup is not an agent action, so a call that also carries agent
-		// credentials is a confused caller at best.
-		writeJSONRPCForRequest(w, req, jsonrpc.Response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Error:   map[string]any{"code": -32602, "message": "session cleanup does not accept agent tokens"},
-		})
+	const bearer = "Bearer "
+	presented := strings.TrimPrefix(r.Header.Get("authorization"), bearer)
+	if !strings.HasPrefix(r.Header.Get("authorization"), bearer) ||
+		!authorizedForInternalCleanup(presented, approvalConsumerToken) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	result, err := filesTools.SessionCleanupContext(r.Context(), call.Args)
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+	var args map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&args); err != nil {
+		http.Error(w, "invalid cleanup request", http.StatusBadRequest)
+		return
+	}
+	result, err := filesTools.SessionCleanupContext(r.Context(), args)
 	if err != nil {
-		code := -32000
+		status := http.StatusInternalServerError
 		if tools.IsInvalidParams(err) {
-			code = -32602
+			status = http.StatusBadRequest
 		}
-		writeJSONRPCForRequest(w, req, jsonrpc.Response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Error:   map[string]any{"code": code, "message": err.Error()},
-		})
+		http.Error(w, "session cleanup failed", status)
 		return
 	}
-	writeJSONRPCForRequest(w, req, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: result})
+	w.Header().Set("content-type", "application/json")
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		http.Error(w, "encode cleanup response", http.StatusInternalServerError)
+	}
 }
 
 // authorizedForInternalCleanup fails closed on an unset token: a deploy that

@@ -102,8 +102,10 @@ I/O or records it for cleanup and returns failure rather than success.
 `retain_legacy_unowned` is the only retention exception: an existing
 pre-provenance sandbox-root file that a session updates is recorded but never
 deleted with that session. It is not session content and no new retained/shared
-policy is implied. Cleanup uses the existing internally authenticated MCP
-endpoint; it is not advertised to models or clients and accepts only a
+policy is implied. Cleanup uses the existing mcp-files listener's dedicated
+`/internal/session-cleanup` route, authenticated by
+`TURING_MCP_FILES_CLEANUP_TOKEN`; it is not advertised to models or clients
+and accepts only a
 strictly scoped session namespace request. Public audit records opaque artifact
 identity, policy, state, and error class, never path or content.
 
@@ -519,7 +521,7 @@ After the four claim checks pass, the verifier calls the orchestrator's gRPC
 
 - Address: `${ORCHESTRATOR_GRPC_ADDR}`. The default is
   `turing-orchestrator:3001`.
-- Metadata: `authorization: Bearer ${TURING_INTERNAL_TOKEN}`.
+- Metadata: `authorization: Bearer ${TURING_APPROVAL_CONSUMER_TOKEN}`.
 - Response handling:
   - `APPROVAL_STATUS_CONSUMED` — the JWT was unused; the verifier returns
     success and the write proceeds.
@@ -529,10 +531,26 @@ After the four claim checks pass, the verifier calls the orchestrator's gRPC
   - Any other gRPC error — generic failure: `approval consume failed: <error>`.
     The write is aborted.
 
-The write happens **only after consume returns consumed**. In other words, a
+The write happens only after consume returns `consumed` and its reservation
+identifies the server-derived artifact path. mcp-files finalizes that reservation
+after I/O and rechecks the session capability. In other words, a
 successful consume is the act of marking the JWT used, and any failure path
 after that point (write error, etc.) does not roll consume back. This is
 intentional: a partially completed write is still a "used" approval.
+
+The internal gRPC server authorizes each caller by which of two registered
+tokens its bearer matches, not by anything the caller claims about itself.
+`TURING_APPROVAL_CONSUMER_TOKEN` (held by `mcp-files`, and by any future MCP
+server that consumes approvals) is authorized for
+`ApprovalService.ConsumeApproval`, `FinalizeSandboxArtifact`, and
+`CheckSessionCapability`. `TURING_RUNTIME_TOKEN` (held by
+`agent-runtime-go`) is authorized for that method plus
+`ApprovalService.GetApprovalForRuntime`, `RuntimeService.ConnectWorker`, and
+`SessionService.ListMessages`/`SearchMessages`. The two tokens must differ —
+the orchestrator refuses to start otherwise — so a compromised `mcp-files`
+cannot present the runtime's token to claim a job or read conversation
+history, and a compromised runtime cannot pose as a different service's
+approval consumer.
 
 `TestValidateRejectsConsumeReplayConflict` asserts the `FailedPrecondition`
 path.
@@ -684,7 +702,7 @@ Consume method requirements:
 
 - RPC: `ApprovalService.ConsumeApproval`.
 - Request: `approval_id` is the JWT `jti`.
-- Auth: gRPC metadata `authorization: Bearer ${TURING_INTERNAL_TOKEN}`. The
+- Auth: gRPC metadata `authorization: Bearer ${TURING_APPROVAL_CONSUMER_TOKEN}`. The
   service must stay on the internal gRPC port (not published to the host).
 - Semantics:
   - First call for a given `jti` that corresponds to an approved request

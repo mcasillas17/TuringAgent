@@ -134,8 +134,10 @@ Common values:
 | Variable | Purpose |
 |---|---|
 | `TURING_CLIENT_API_KEY` | Bearer token for Flutter and other public gRPC clients |
-| `TURING_INTERNAL_TOKEN` | Bearer token for internal runtime and approval gRPC calls |
+| `TURING_RUNTIME_TOKEN` | Bearer token for the agent runtime's internal gRPC calls (claim jobs, read session history, poll/consume approvals) |
+| `TURING_APPROVAL_CONSUMER_TOKEN` | Bearer token for mcp-files' internal gRPC calls; authorized for `ApprovalService.ConsumeApproval`, `FinalizeSandboxArtifact`, and `CheckSessionCapability`, never the runtime's methods |
 | `TURING_APPROVAL_JWT_SECRET` | HS256 secret used for approval tokens |
+| Approval-consumer scope | `ApprovalService.ConsumeApproval`, `FinalizeSandboxArtifact`, and `CheckSessionCapability`; never runtime-only methods |
 | `TURING_APPROVAL_TIMEOUT_MS` / `TURING_APPROVAL_WAIT_TIMEOUT_MS` | Approval lifetime and the longer runtime observation bound (defaults: 65s / 71s) |
 | `TURING_TOOL_TIMEOUT_MS` / `TURING_TOOL_TOTAL_TIMEOUT_MS` | Per-request MCP timeout and whole-tool lifecycle timeout (defaults: 30s / 180s) |
 | `HOST_IDENTITY_MODE` | Managed compatibility marker; `init.sh` always resets it to `auto` |

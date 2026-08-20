@@ -104,6 +104,7 @@ func (s *Server) IssueToolProvenance(ctx context.Context, req ProvenanceRequest)
 	}
 	generation := state.DeletionGeneration
 	now := time.Now()
+	ttl := max(defaultProvenanceTTL, s.approvalTTL)
 	payload := provenancePayload{
 		Iss:      "turing.orchestrator",
 		Sub:      req.AgentID,
@@ -117,7 +118,7 @@ func (s *Server) IssueToolProvenance(ctx context.Context, req ProvenanceRequest)
 		ArgsHash: req.ArgsHash,
 		Path:     normalizeProvenancePath(req.LogicalPath),
 		Iat:      now.Unix(),
-		Exp:      now.Add(defaultProvenanceTTL).Unix(),
+		Exp:      now.Add(ttl).Unix(),
 	}
 	return signHS256(payload, s.jwtSecret)
 }

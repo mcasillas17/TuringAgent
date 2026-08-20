@@ -61,18 +61,13 @@ type ProvenanceGuard interface {
 	CheckSession(ctx context.Context, provenanceToken string) error
 }
 
-// CallRequest is one tool call with the capabilities issued for it.
-//
-// InternalCleanupToken is not a capability an agent can hold: it is the shared
-// internal token, carried only by the orchestrator's own session cleanup call,
-// and it is never consulted by the tool dispatch below.
+// CallRequest is one agent-facing tool call with the capabilities issued for it.
 type CallRequest struct {
-	Name                 string
-	Args                 map[string]any
-	ApprovalToken        string
-	ProvenanceToken      string
-	InternalCleanupToken string
-	AgentID              string
+	Name            string
+	Args            map[string]any
+	ApprovalToken   string
+	ProvenanceToken string
+	AgentID         string
 }
 
 // callScope carries the verified capability through a single call. An inactive

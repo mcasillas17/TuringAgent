@@ -23,11 +23,12 @@ const maxMCPResponseBytes = 1024 * 1024
 const healthcheckTimeout = time.Second
 
 type serverConfig struct {
-	filesToken           string
-	approvalJwtSecret    string
-	orchestratorGRPCAddr string
-	internalToken        string
-	sandboxRoot          string
+	filesToken            string
+	approvalJwtSecret     string
+	orchestratorGRPCAddr  string
+	approvalConsumerToken string
+	cleanupToken          string
+	sandboxRoot           string
 }
 
 func main() {
@@ -71,12 +72,20 @@ func loadConfig() (serverConfig, error) {
 	if approvalJWTSecret == "" {
 		return serverConfig{}, errors.New("TURING_APPROVAL_JWT_SECRET is required")
 	}
+	cleanupToken := os.Getenv("TURING_MCP_FILES_CLEANUP_TOKEN")
+	if cleanupToken == "" {
+		return serverConfig{}, errors.New("TURING_MCP_FILES_CLEANUP_TOKEN is required")
+	}
+	if cleanupToken == os.Getenv("MCP_FILES_TOKEN_GENERAL") || cleanupToken == os.Getenv("TURING_APPROVAL_CONSUMER_TOKEN") {
+		return serverConfig{}, errors.New("TURING_MCP_FILES_CLEANUP_TOKEN must differ from mcp and approval-consumer tokens")
+	}
 	return serverConfig{
-		filesToken:           os.Getenv("MCP_FILES_TOKEN_GENERAL"),
-		approvalJwtSecret:    approvalJWTSecret,
-		orchestratorGRPCAddr: envOrDefault("ORCHESTRATOR_GRPC_ADDR", "turing-orchestrator:3001"),
-		internalToken:        os.Getenv("TURING_INTERNAL_TOKEN"),
-		sandboxRoot:          envOrDefault("FILES_SANDBOX_ROOT", "/sandbox"),
+		filesToken:            os.Getenv("MCP_FILES_TOKEN_GENERAL"),
+		approvalJwtSecret:     approvalJWTSecret,
+		orchestratorGRPCAddr:  envOrDefault("ORCHESTRATOR_GRPC_ADDR", "turing-orchestrator:3001"),
+		approvalConsumerToken: os.Getenv("TURING_APPROVAL_CONSUMER_TOKEN"),
+		cleanupToken:          cleanupToken,
+		sandboxRoot:           envOrDefault("FILES_SANDBOX_ROOT", "/sandbox"),
 	}, nil
 }
 
@@ -90,9 +99,9 @@ func newHandler(cfg serverConfig) http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	consumer := approval.Consumer{
-		OrchestratorGRPCAddr: cfg.orchestratorGRPCAddr,
-		InternalToken:        cfg.internalToken,
-		JWTSecret:            cfg.approvalJwtSecret,
+		OrchestratorGRPCAddr:  cfg.orchestratorGRPCAddr,
+		ApprovalConsumerToken: cfg.approvalConsumerToken,
+		JWTSecret:             cfg.approvalJwtSecret,
 	}
 	// Both are configured: the guard makes a server-issued capability mandatory
 	// for every file tool call, and the approval validator remains the decision
@@ -100,13 +109,16 @@ func newHandler(cfg serverConfig) http.Handler {
 	filesTools := tools.NewFilesTools(cfg.sandboxRoot).
 		WithApprovalValidator(consumer).
 		WithProvenanceGuard(provenanceGuard{consumer: consumer})
+	mux.Handle("/internal/session-cleanup", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleInternalSessionCleanup(w, r, filesTools, cfg.cleanupToken)
+	}))
 	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		agentID, err := auth.AgentFromBearer(r, cfg.filesToken)
 		if err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		handleMCP(w, r, filesTools, agentID, cfg.internalToken)
+		handleMCP(w, r, filesTools, agentID)
 	}))
 	return mux
 }
@@ -127,7 +139,7 @@ func checkHealth(ctx context.Context, endpoint string) error {
 	return nil
 }
 
-func handleMCP(w http.ResponseWriter, r *http.Request, filesTools tools.FilesTools, agentID string, internalToken string) {
+func handleMCP(w http.ResponseWriter, r *http.Request, filesTools tools.FilesTools, agentID string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -183,17 +195,10 @@ func handleMCP(w http.ResponseWriter, r *http.Request, filesTools tools.FilesToo
 		}
 		call.AgentID = agentID
 		if call.Name == tools.SessionCleanupTool {
-			handleSessionCleanup(w, r, req, call, filesTools, internalToken)
-			return
-		}
-		if call.InternalCleanupToken != "" {
-			// An ordinary tool call has no business carrying the internal
-			// token, and accepting one here would make every agent call a place
-			// the token could be probed.
 			writeJSONRPCForRequest(w, req, jsonrpc.Response{
 				JSONRPC: "2.0",
 				ID:      req.ID,
-				Error:   map[string]any{"code": -32602, "message": "unknown _meta key"},
+				Error:   map[string]any{"code": -32602, "message": "unknown tool"},
 			})
 			return
 		}
@@ -366,7 +371,7 @@ func parseToolCallParams(req jsonrpc.Request) (tools.CallRequest, *jsonrpc.Reque
 			return tools.CallRequest{}, jsonrpc.InvalidParams(req.ID, "_meta must be an object")
 		}
 		for key := range meta {
-			if key != "approvalToken" && key != "provenanceToken" && key != "internalCleanupToken" {
+			if key != "approvalToken" && key != "provenanceToken" {
 				return tools.CallRequest{}, jsonrpc.InvalidParams(req.ID, "unknown _meta key")
 			}
 		}
@@ -380,11 +385,6 @@ func parseToolCallParams(req jsonrpc.Request) (tools.CallRequest, *jsonrpc.Reque
 			return tools.CallRequest{}, paramsErr
 		}
 		call.ProvenanceToken = token
-		token, paramsErr = metaString(req, meta, "internalCleanupToken")
-		if paramsErr != nil {
-			return tools.CallRequest{}, paramsErr
-		}
-		call.InternalCleanupToken = token
 	}
 	return call, nil
 }

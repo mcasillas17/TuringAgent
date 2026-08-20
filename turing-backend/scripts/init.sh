@@ -301,7 +301,14 @@ chmod 600 .env
 validate_env_file
 
 ensure_var TURING_CLIENT_API_KEY "$(generate_client_key)"
-ensure_var TURING_INTERNAL_TOKEN "$(generate_secret)"
+# Separate least-privilege identities: the runtime (agent-runtime-go) may
+# claim jobs and read session history; the approval consumer (mcp-files) may
+# only consume approvals. A shared secret here would let a compromised
+# approval consumer present the runtime's own credential and reach methods it
+# has no business calling.
+ensure_var TURING_RUNTIME_TOKEN "$(generate_secret)"
+ensure_var TURING_APPROVAL_CONSUMER_TOKEN "$(generate_secret)"
+ensure_var TURING_MCP_FILES_CLEANUP_TOKEN "$(generate_secret)"
 ensure_var MCP_SYSTEM_TOKEN_GENERAL "$(generate_secret)"
 ensure_var MCP_FILES_TOKEN_GENERAL "$(generate_secret)"
 ensure_var TURING_APPROVAL_JWT_SECRET "$(generate_secret)"

@@ -127,6 +127,10 @@ func (b *Bus) TerminateSession(event Event) {
 		b.terminatedOrder = b.terminatedOrder[1:]
 	}
 	for _, sub := range b.subs {
+		if sub.updates != nil {
+			sub.updates.publish(event)
+			continue
+		}
 		if sub.stream != nil && sub.sessionID == event.SessionID {
 			sub.stream.terminate(event)
 		}
@@ -247,7 +251,7 @@ func newSessionUpdateSubscription() *sessionUpdateSubscription {
 }
 
 func (s *sessionUpdateSubscription) publish(event Event) {
-	if event.Type != "session.updated" {
+	if event.Type != "session.updated" && event.Type != "session.deleted" {
 		return
 	}
 	s.mu.Lock()

@@ -156,6 +156,27 @@ func TestBusTerminatesSessionThroughDedicatedTerminalPath(t *testing.T) {
 	}
 }
 
+func TestBusPublishesTerminalDeletionToGlobalSubscribers(t *testing.T) {
+	bus := NewBus(1)
+	updates, unsubscribe := bus.SubscribeSessionUpdates()
+	defer unsubscribe()
+
+	bus.TerminateSession(Event{
+		SessionID: "sess_deleted",
+		Sequence:  1,
+		Type:      "session.deleted",
+	})
+
+	select {
+	case event := <-updates:
+		if event.SessionID != "sess_deleted" || event.Type != "session.deleted" {
+			t.Fatalf("global terminal event = %+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("global subscriber did not receive terminal deletion")
+	}
+}
+
 func TestBusBoundsTerminalSessionFences(t *testing.T) {
 	bus := NewBus(1)
 	for index := 0; index <= maxTerminatedSessionFences; index++ {

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -18,12 +19,21 @@ const (
 )
 
 type Config struct {
-	ClientAPIKey          string
-	InternalToken         string
-	MCPSystemTokenGeneral string
-	MCPFilesTokenGeneral  string
-	MCPFilesBaseURL       string
-	ApprovalJWTSecret     string
+	ClientAPIKey string
+	// RuntimeToken and ApprovalConsumerToken are separate least-privilege
+	// internal identities on the same internal gRPC server: the runtime may
+	// claim jobs and read session history, the approval consumer (mcp-files)
+	// may only consume approvals. They must never be equal — see
+	// auth.NewInternalIdentities, which app.New calls at startup — or a
+	// compromised approval consumer would gain the runtime's privileges.
+	RuntimeToken          string
+	ApprovalConsumerToken string
+	MCPFilesCleanupToken  string
+	// MCPFilesBaseURL is a non-secret internal endpoint used only for
+	// signed session-namespace cleanup; the orchestrator never receives the
+	// normal mcp-files bearer token.
+	MCPFilesBaseURL   string
+	ApprovalJWTSecret string
 	// IntegrationKey seals third-party credentials before they are stored.
 	// Optional: when it is empty, connecting an account is refused with a
 	// reason rather than the credential being stored in the clear.
@@ -36,7 +46,19 @@ type Config struct {
 	OllamaModel               string
 	OllamaContextWindowTokens int
 	OpenAIBaseURL             string
-	OpenAIAPIKey              string
+	// FilesMCPEnabled and OpenAIEnabled are presence flags sourced from
+	// MCP_FILES_ENABLED and OPENAI_ENABLED, which Compose derives from
+	// whether MCP_FILES_TOKEN_GENERAL / OPENAI_API_KEY are set without ever
+	// handing this process either actual secret value. The orchestrator
+	// never calls mcp-files through its normal bearer or OpenAI itself:
+	// FilesMCPEnabled only feeds
+	// GetConfig's static "is mcp-files configured" flag, and OpenAIEnabled
+	// only decides whether the legacy per-run capability fallback advertises
+	// OpenAI for a runtime that has not yet reported its own capabilities —
+	// GetConfig itself reports OpenAI as enabled from those live advertised
+	// capabilities, not from this flag.
+	FilesMCPEnabled           bool
+	OpenAIEnabled             bool
 	OpenAIModel               string
 	OpenAIContextWindowTokens int
 	// AgentCredentialNames is the set of credential names an external agent may
@@ -114,20 +136,61 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		}
 		return fallback
 	}
+	// boolValue parses an explicit "true"/"false" rather than treating any
+	// non-empty string as truthy: a typo in MCP_FILES_ENABLED should fail
+	// startup, not silently disable (or enable) the capability it gates.
+	boolValue := func(name string, fallback bool) (bool, error) {
+		raw := env[name]
+		if raw == "" {
+			return fallback, nil
+		}
+		switch raw {
+		case "true":
+			return true, nil
+		case "false":
+			return false, nil
+		default:
+			return false, fmt.Errorf("%s must be \"true\" or \"false\"", name)
+		}
+	}
 
 	clientKey, err := required("TURING_CLIENT_API_KEY")
 	if err != nil {
 		return Config{}, err
 	}
-	internalToken, err := required("TURING_INTERNAL_TOKEN")
+	runtimeToken, err := required("TURING_RUNTIME_TOKEN")
 	if err != nil {
 		return Config{}, err
 	}
-	systemToken, err := required("MCP_SYSTEM_TOKEN_GENERAL")
+	approvalConsumerToken, err := required("TURING_APPROVAL_CONSUMER_TOKEN")
 	if err != nil {
 		return Config{}, err
 	}
-	filesToken, err := required("MCP_FILES_TOKEN_GENERAL")
+	if runtimeToken == approvalConsumerToken {
+		return Config{}, errors.New("TURING_RUNTIME_TOKEN and TURING_APPROVAL_CONSUMER_TOKEN must differ")
+	}
+	mcpFilesCleanupToken := env["TURING_MCP_FILES_CLEANUP_TOKEN"]
+	if mcpFilesCleanupToken != "" &&
+		(mcpFilesCleanupToken == runtimeToken || mcpFilesCleanupToken == approvalConsumerToken) {
+		return Config{}, errors.New("TURING_MCP_FILES_CLEANUP_TOKEN must differ from internal service tokens")
+	}
+	// FilesMCPEnabled has no default: this install must say explicitly
+	// whether mcp-files is provisioned, mirroring the previous requirement
+	// that MCP_FILES_TOKEN_GENERAL be set. Only mcp-files and the agent
+	// runtime hold the actual bearer token; the orchestrator only needs to
+	// know whether it is configured, to answer GetConfig honestly.
+	if _, err := required("MCP_FILES_ENABLED"); err != nil {
+		return Config{}, err
+	}
+	filesMCPEnabled, err := boolValue("MCP_FILES_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	// OpenAIEnabled mirrors OPENAI_API_KEY's prior optionality: unset means
+	// disabled, matching the earlier `OpenAIAPIKey != ""` check the legacy
+	// capability fallback used. The actual key lives only in the agent
+	// runtime, which is the only process that ever calls OpenAI.
+	openAIEnabled, err := boolValue("OPENAI_ENABLED", false)
 	if err != nil {
 		return Config{}, err
 	}
@@ -222,9 +285,9 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	}
 	return Config{
 		ClientAPIKey:              clientKey,
-		InternalToken:             internalToken,
-		MCPSystemTokenGeneral:     systemToken,
-		MCPFilesTokenGeneral:      filesToken,
+		RuntimeToken:              runtimeToken,
+		ApprovalConsumerToken:     approvalConsumerToken,
+		MCPFilesCleanupToken:      mcpFilesCleanupToken,
 		MCPFilesBaseURL:           stringValue("MCP_FILES_BASE_URL", "http://turing-mcp-files:7110/mcp"),
 		ApprovalJWTSecret:         approvalSecret,
 		IntegrationKey:            integrationKey,
@@ -236,7 +299,8 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		OllamaModel:               stringValue("OLLAMA_MODEL", "qwen2.5:7b"),
 		OllamaContextWindowTokens: ollamaContextWindowTokens,
 		OpenAIBaseURL:             stringValue("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-		OpenAIAPIKey:              env["OPENAI_API_KEY"],
+		FilesMCPEnabled:           filesMCPEnabled,
+		OpenAIEnabled:             openAIEnabled,
 		OpenAIModel:               stringValue("OPENAI_MODEL", "gpt-4o-mini"),
 		OpenAIContextWindowTokens: openAIContextWindowTokens,
 		AgentCredentialNames:      AgentCredentialNames(agentAPIKeys),

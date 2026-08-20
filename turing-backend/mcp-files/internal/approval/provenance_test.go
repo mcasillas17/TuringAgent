@@ -118,7 +118,7 @@ func TestAuthorizeWriteConsumesApprovalAndReturnsReservation(t *testing.T) {
 			},
 		},
 	}
-	consumer := Consumer{JWTSecret: "secret", InternalToken: "internal", ApprovalClient: client}
+	consumer := Consumer{JWTSecret: "secret", ApprovalConsumerToken: "internal", ApprovalClient: client}
 	approvalToken := signTestToken(t, "secret", Claims{
 		Iss: "turing.orchestrator", Sub: "general_assistant", Aud: "mcp-files", JTI: "appr_1",
 		Tool: "files.create", ArgsHash: hashArgs(t, args), Exp: time.Now().Add(time.Minute).Unix(), Iat: time.Now().Unix(),
@@ -207,7 +207,7 @@ func TestAuthorizeWriteRequiresAReservation(t *testing.T) {
 func TestFinalizeWriteReportsOutcomeOverTheInternalChannel(t *testing.T) {
 	args := map[string]any{"content": "hello", "path": "notes/todo.txt"}
 	client := &recordingApprovalClient{finalizeResponse: &turingv1.FinalizeSandboxArtifactResponse{ArtifactId: "sbxa_1", State: "ready"}}
-	consumer := Consumer{JWTSecret: "secret", InternalToken: "internal", ApprovalClient: client}
+	consumer := Consumer{JWTSecret: "secret", ApprovalConsumerToken: "internal", ApprovalClient: client}
 	token := signProvenance(t, "secret", provenanceClaims(t, args))
 
 	if err := consumer.FinalizeWrite(context.Background(), "sbxa_1", token, true); err != nil {
@@ -240,9 +240,9 @@ func TestFinalizeWriteOverGRPCUsesTheApprovalChannel(t *testing.T) {
 	service := &recordingApprovalService{status: turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED}
 	addr, dialer := startApprovalServer(t, service)
 	consumer := Consumer{
-		OrchestratorGRPCAddr: addr,
-		InternalToken:        "internal",
-		JWTSecret:            "secret",
+		OrchestratorGRPCAddr:  addr,
+		ApprovalConsumerToken: "internal",
+		JWTSecret:             "secret",
 		DialOptions: []grpc.DialOption{
 			grpc.WithContextDialer(dialer),
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -319,7 +319,7 @@ func outgoingAuthorization(ctx context.Context) string {
 
 func TestCheckSessionAcceptsAnActiveSession(t *testing.T) {
 	client := &recordingApprovalClient{capabilityState: &turingv1.SessionCapabilityState{Active: true}}
-	consumer := Consumer{JWTSecret: "secret", InternalToken: "internal", ApprovalClient: client}
+	consumer := Consumer{JWTSecret: "secret", ApprovalConsumerToken: "internal", ApprovalClient: client}
 
 	if err := consumer.CheckSession(context.Background(), "capability"); err != nil {
 		t.Fatalf("CheckSession: %v", err)
@@ -367,9 +367,9 @@ func TestCheckSessionOverGRPCUsesTheApprovalChannel(t *testing.T) {
 	service := &recordingApprovalService{status: turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED, capabilityActive: true}
 	addr, dialer := startApprovalServer(t, service)
 	consumer := Consumer{
-		OrchestratorGRPCAddr: addr,
-		InternalToken:        "internal",
-		JWTSecret:            "secret",
+		OrchestratorGRPCAddr:  addr,
+		ApprovalConsumerToken: "internal",
+		JWTSecret:             "secret",
 		DialOptions: []grpc.DialOption{
 			grpc.WithContextDialer(dialer),
 			grpc.WithTransportCredentials(insecure.NewCredentials()),

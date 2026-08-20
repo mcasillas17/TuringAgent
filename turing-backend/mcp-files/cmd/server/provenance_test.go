@@ -179,11 +179,11 @@ func TestSafeToolIsRefusedWhileTheSessionIsBeingWithdrawn(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := newHandler(serverConfig{
-		filesToken:           "files-token",
-		approvalJwtSecret:    "jwt-secret",
-		internalToken:        "internal-token",
-		orchestratorGRPCAddr: startFakeOrchestrator(t, false),
-		sandboxRoot:          sandbox,
+		filesToken:            "files-token",
+		approvalJwtSecret:     "jwt-secret",
+		approvalConsumerToken: "internal-token",
+		orchestratorGRPCAddr:  startFakeOrchestrator(t, false),
+		sandboxRoot:           sandbox,
 	})
 
 	_, response := callFilesMCP(t, handler, provenanceCallBody(t, "files.read", map[string]any{"path": "note.txt"}, "note.txt"))
@@ -202,11 +202,11 @@ func TestSafeToolIsRefusedWhenTheSessionSubtreeIsNamedDirectly(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := newHandler(serverConfig{
-		filesToken:           "files-token",
-		approvalJwtSecret:    "jwt-secret",
-		internalToken:        "internal-token",
-		orchestratorGRPCAddr: startFakeOrchestrator(t, true),
-		sandboxRoot:          sandbox,
+		filesToken:            "files-token",
+		approvalJwtSecret:     "jwt-secret",
+		approvalConsumerToken: "internal-token",
+		orchestratorGRPCAddr:  startFakeOrchestrator(t, true),
+		sandboxRoot:           sandbox,
 	})
 
 	_, response := callFilesMCP(t, handler, provenanceCallBody(t, "files.list", map[string]any{"path": "sessions"}, "sessions"))
