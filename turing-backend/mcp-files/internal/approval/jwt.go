@@ -35,6 +35,10 @@ type Claims struct {
 	ArgsHash string `json:"args_hash"`
 	Exp      int64  `json:"exp"`
 	Iat      int64  `json:"iat"`
+	// Kind is empty on an approval token and set on a provenance capability.
+	// It is read here so a capability cannot be presented where a decision is
+	// required — the two are otherwise indistinguishable to a verifier.
+	Kind string `json:"kind"`
 }
 
 func VerifyHS256(token string, secret string) (Claims, error) {
@@ -84,6 +88,9 @@ func verifyHS256At(token string, secret string, now time.Time) (Claims, error) {
 	if claims.Exp <= now.Unix() {
 		return Claims{}, errors.New("token expired")
 	}
+	if claims.Kind != "" {
+		return Claims{}, fmt.Errorf("token is a %s capability, not an approval", claims.Kind)
+	}
 	return claims, nil
 }
 
@@ -99,6 +106,20 @@ type ApprovalClient interface {
 	ConsumeApproval(ctx context.Context, in *turingv1.ConsumeApprovalRequest, opts ...grpc.CallOption) (*turingv1.ApprovalResponse, error)
 }
 
+// ArtifactFinalizer is the second half of the same internal channel: the report
+// of what a reserved write actually did. It is a separate interface so a client
+// that cannot finalize is a refusal at the call site rather than a compile-time
+// requirement on every fake.
+type ArtifactFinalizer interface {
+	FinalizeSandboxArtifact(ctx context.Context, in *turingv1.FinalizeSandboxArtifactRequest, opts ...grpc.CallOption) (*turingv1.FinalizeSandboxArtifactResponse, error)
+}
+
+// SessionCapabilityChecker is the read-side half of the same channel: the one
+// question a read has to ask storage rather than its own token.
+type SessionCapabilityChecker interface {
+	CheckSessionCapability(ctx context.Context, in *turingv1.CheckSessionCapabilityRequest, opts ...grpc.CallOption) (*turingv1.SessionCapabilityState, error)
+}
+
 func (c Consumer) Validate(token string, tool string, args map[string]any, agentID string) error {
 	return c.ValidateContext(context.Background(), token, tool, args, agentID)
 }
@@ -111,6 +132,16 @@ func (c Consumer) ValidateContext(ctx context.Context, token string, tool string
 	if err != nil {
 		return err
 	}
+	if err := checkApprovalBinding(claims, tool, args, agentID); err != nil {
+		return err
+	}
+	return c.consume(ctx, claims.JTI)
+}
+
+// checkApprovalBinding compares every claim against the call being made. A
+// validly signed approval for another agent, tool or set of arguments is not an
+// approval for this one.
+func checkApprovalBinding(claims Claims, tool string, args map[string]any, agentID string) error {
 	if claims.Aud != "mcp-files" {
 		return errors.New("invalid approval audience")
 	}
@@ -127,7 +158,7 @@ func (c Consumer) ValidateContext(ctx context.Context, token string, tool string
 	if claims.ArgsHash != argsHash {
 		return errors.New("approval args_hash does not match call")
 	}
-	return c.consume(ctx, claims.JTI)
+	return nil
 }
 
 func (c Consumer) consume(parent context.Context, jti string) error {
@@ -147,10 +178,7 @@ func (c Consumer) consume(parent context.Context, jti string) error {
 	}
 	resp, err := client.ConsumeApproval(ctx, &turingv1.ConsumeApprovalRequest{ApprovalId: jti})
 	if err != nil {
-		if status.Code(err) == codes.FailedPrecondition {
-			return errors.New("approval already consumed or not approved")
-		}
-		return fmt.Errorf("approval consume failed: %w", err)
+		return mapConsumeError(err)
 	}
 	if resp.GetStatus() != turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED {
 		return fmt.Errorf("approval consume returned unexpected status: %s", resp.GetStatus())
@@ -181,6 +209,13 @@ func (c Consumer) approvalClient() (ApprovalClient, func() error, error) {
 	// handshake inside its 10s budget.
 	conn.Connect()
 	return turingv1.NewApprovalServiceClient(conn), conn.Close, nil
+}
+
+func mapConsumeError(err error) error {
+	if status.Code(err) == codes.FailedPrecondition {
+		return fmt.Errorf("approval consume refused: %w", err)
+	}
+	return fmt.Errorf("approval consume failed: %w", err)
 }
 
 func canonicalArgsHash(args map[string]any) (string, error) {

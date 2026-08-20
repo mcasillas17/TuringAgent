@@ -143,12 +143,12 @@ func TestMcpHandlerCallsFilesReadTool(t *testing.T) {
 	handler := newHandler(serverConfig{
 		filesToken:           "files-token",
 		approvalJwtSecret:    "jwt-secret",
-		orchestratorGRPCAddr: "orchestrator:3001",
+		orchestratorGRPCAddr: startFakeOrchestrator(t, true),
 		internalToken:        "internal-token",
 		sandboxRoot:          sandbox,
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files.read","arguments":{"path":"note.txt"}}}`))
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(provenanceCallBody(t, "files.read", map[string]any{"path": "note.txt"}, "note.txt")))
 	req.Header.Set("Authorization", "Bearer files-token")
 	res := httptest.NewRecorder()
 
@@ -190,7 +190,13 @@ func TestMcpHandlerAllowsWorstCaseEscapedMaximumFileContent(t *testing.T) {
 				"path":    "note.txt",
 				"content": strings.Repeat("\x01", filetools.MaxMutationContentBytes),
 			},
-			"_meta": map[string]any{"approvalToken": "invalid"},
+			"_meta": map[string]any{
+				"approvalToken": "invalid",
+				"provenanceToken": testProvenanceToken(t, "files.create", map[string]any{
+					"path":    "note.txt",
+					"content": strings.Repeat("\x01", filetools.MaxMutationContentBytes),
+				}, "note.txt"),
+			},
 		},
 	}
 	body, err := json.Marshal(request)
@@ -396,7 +402,7 @@ func TestMcpHandlerMapsToolArgumentErrorsToInvalidParams(t *testing.T) {
 func TestMcpHandlerKeepsOperationalToolErrorsAsServerErrors(t *testing.T) {
 	handler := testFilesHandler(t)
 
-	status, response := callFilesMCP(t, handler, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files.read","arguments":{"path":"missing.txt"}}}`)
+	status, response := callFilesMCP(t, handler, provenanceCallBody(t, "files.read", map[string]any{"path": "missing.txt"}, "missing.txt"))
 
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want 200; response=%s", status, response)
@@ -425,7 +431,17 @@ func TestMcpHandlerRejectsMalformedToolsListParams(t *testing.T) {
 func TestMcpHandlerAllowsOmittedToolArguments(t *testing.T) {
 	handler := testFilesHandler(t)
 
-	status, response := callFilesMCP(t, handler, `{"jsonrpc":"2.0","id":"request-1","method":"tools/call","params":{"name":"files.list"}}`)
+	body, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0", "id": "request-1", "method": "tools/call",
+		"params": map[string]any{
+			"name":  "files.list",
+			"_meta": map[string]any{"provenanceToken": testProvenanceToken(t, "files.list", map[string]any{}, "")},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, response := callFilesMCP(t, handler, string(body))
 
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want 200; response=%s", status, response)
@@ -566,10 +582,13 @@ func toolPropertySchema(t *testing.T, advertised []map[string]any, toolName, pro
 
 func testFilesHandler(t *testing.T) http.Handler {
 	t.Helper()
+	// Wired to an orchestrator that reports the session active, because every
+	// safe tool call now asks it before and after touching the file system.
 	return newHandler(serverConfig{
-		filesToken:        "files-token",
-		approvalJwtSecret: "jwt-secret",
-		sandboxRoot:       t.TempDir(),
+		filesToken:           "files-token",
+		approvalJwtSecret:    "jwt-secret",
+		orchestratorGRPCAddr: startFakeOrchestrator(t, true),
+		sandboxRoot:          t.TempDir(),
 	})
 }
 

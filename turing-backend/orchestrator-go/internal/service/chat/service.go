@@ -333,6 +333,9 @@ func mapEnqueueError(ctx context.Context, err error) error {
 	if errors.Is(err, repository.ErrIdempotencyConflict) {
 		return status.Error(codes.AlreadyExists, "idempotency key was already used for a different request")
 	}
+	if errors.Is(err, repository.ErrSessionDeleting) {
+		return status.Error(codes.FailedPrecondition, "session deletion is in progress")
+	}
 	if status.Code(err) == codes.FailedPrecondition {
 		return err
 	}

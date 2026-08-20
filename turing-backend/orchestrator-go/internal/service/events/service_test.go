@@ -144,6 +144,12 @@ func TestEventServiceMapsSessionUpdated(t *testing.T) {
 	}
 }
 
+func TestEventServiceMapsSessionDeleted(t *testing.T) {
+	if got := mapEventType("session.deleted"); got != turingv1.TuringEventType(22) {
+		t.Fatalf("session.deleted type = %v, want event enum value 22", got)
+	}
+}
+
 func TestEventServiceListEventsRequiresResyncWhenClientSequenceIsAhead(t *testing.T) {
 	h := newEventHarness(t)
 	client := turingv1.NewEventServiceClient(h.conn)
@@ -332,6 +338,149 @@ func TestEventServiceCatchesEventsPublishedBetweenReplayAndSubscribe(t *testing.
 	}
 	if stream.sent[1].Sequence != 2 || stream.sent[1].Payload.GetFields()["delta"].GetStringValue() != "gap" {
 		t.Fatalf("bad gap catch-up event: %+v", stream.sent[1])
+	}
+}
+
+func TestEventServiceDeliversSessionDeletedThenClosesNotFound(t *testing.T) {
+	h := newEventHarness(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	session, err := h.repo.CreateSession(ctx, "Terminal deletion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &fakeEventStream{ctx: ctx}
+	done := make(chan error, 1)
+	go func() {
+		done <- NewServer(h.repo, h.bus).SubscribeSessionEvents(
+			&turingv1.SubscribeSessionEventsRequest{SessionId: session.SessionID},
+			stream,
+		)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		h.bus.mu.Lock()
+		subscribers := len(h.bus.subs)
+		h.bus.mu.Unlock()
+		if subscribers == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("event service did not subscribe before terminal deletion")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	h.bus.TerminateSession(Event{
+		EventID:   "evt_deleted",
+		SessionID: session.SessionID,
+		Sequence:  1,
+		Type:      "session.deleted",
+	})
+
+	select {
+	case err := <-done:
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("terminal stream error = %v, want NotFound", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("terminal stream did not close")
+	}
+	if len(stream.sent) != 1 {
+		t.Fatalf("terminal stream sent %d events, want 1", len(stream.sent))
+	}
+	if got := stream.sent[0].GetType(); got != turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_DELETED {
+		t.Fatalf("terminal event type = %v, want SESSION_DELETED", got)
+	}
+}
+
+func TestEventServiceRejectsDeletingSessionReplayAndSubscription(t *testing.T) {
+	h := newEventHarness(t)
+	client := turingv1.NewEventServiceClient(h.conn)
+	ctx := context.Background()
+	session, err := h.repo.CreateSession(ctx, "Deleting events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.BeginSessionDeletion(ctx, session.SessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := client.ListEvents(ctx, &turingv1.ListEventsRequest{SessionId: session.SessionID}); status.Code(err) != codes.NotFound {
+		t.Fatalf("ListEvents error = %v, want NotFound", err)
+	}
+	stream, err := client.SubscribeSessionEvents(ctx, &turingv1.SubscribeSessionEventsRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Recv(); status.Code(err) != codes.NotFound {
+		t.Fatalf("SubscribeSessionEvents error = %v, want NotFound", err)
+	}
+}
+
+func TestEventServiceDeliversTerminalDeletionAcrossWithdrawnReplayGap(t *testing.T) {
+	h := newEventHarness(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	session, err := h.repo.CreateSession(ctx, "Terminal replay gap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.AppendEvent(ctx, repository.AppendEventInput{
+		SessionID: session.SessionID, TraceID: "trace_gap", Type: "system", PayloadJSON: `{}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stream := &fakeEventStream{ctx: ctx}
+	done := make(chan error, 1)
+	go func() {
+		done <- NewServer(h.repo, h.bus).SubscribeSessionEvents(
+			&turingv1.SubscribeSessionEventsRequest{SessionId: session.SessionID},
+			stream,
+		)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		h.bus.mu.Lock()
+		subscribers := len(h.bus.subs)
+		h.bus.mu.Unlock()
+		if subscribers == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("event service did not subscribe")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, err := h.repo.AppendEvent(ctx, repository.AppendEventInput{
+		SessionID: session.SessionID, TraceID: "trace_gap", Type: "message.delta", PayloadJSON: `{"delta":"withdrawn"}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.BeginSessionDeletion(ctx, session.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := h.repo.AdvanceSessionDeletion(ctx, session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.bus.TerminateSession(Event{
+		EventID: "evt_deleted_gap", SessionID: session.SessionID,
+		Sequence: receipt.TerminalSequence, Type: "session.deleted",
+	})
+
+	select {
+	case err := <-done:
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("terminal gap stream error = %v, want NotFound", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("terminal gap stream did not finish")
+	}
+	if len(stream.sent) != 2 ||
+		stream.sent[1].GetType() != turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_DELETED {
+		t.Fatalf("terminal gap events = %+v", stream.sent)
 	}
 }
 

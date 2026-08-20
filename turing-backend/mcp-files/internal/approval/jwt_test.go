@@ -249,6 +249,16 @@ type blockingApprovalClient struct {
 	consumed bool
 }
 
+func (c *blockingApprovalClient) FinalizeSandboxArtifact(ctx context.Context, _ *turingv1.FinalizeSandboxArtifactRequest, _ ...grpc.CallOption) (*turingv1.FinalizeSandboxArtifactResponse, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (c *blockingApprovalClient) CheckSessionCapability(ctx context.Context, _ *turingv1.CheckSessionCapabilityRequest, _ ...grpc.CallOption) (*turingv1.SessionCapabilityState, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
 func (c *blockingApprovalClient) ConsumeApproval(ctx context.Context, _ *turingv1.ConsumeApprovalRequest, _ ...grpc.CallOption) (*turingv1.ApprovalResponse, error) {
 	close(c.started)
 	<-ctx.Done()
@@ -257,12 +267,25 @@ func (c *blockingApprovalClient) ConsumeApproval(ctx context.Context, _ *turingv
 
 type recordingApprovalService struct {
 	turingv1.UnimplementedApprovalServiceServer
-	approvalID    string
-	authorization string
-	status        turingv1.ApprovalStatus
-	err           error
-	consumeCalls  int
-	oneShot       bool
+	approvalID          string
+	authorization       string
+	status              turingv1.ApprovalStatus
+	err                 error
+	consumeCalls        int
+	oneShot             bool
+	finalizedArtifactID string
+	capabilityActive    bool
+	checkedCapability   string
+}
+
+func (s *recordingApprovalService) CheckSessionCapability(_ context.Context, req *turingv1.CheckSessionCapabilityRequest) (*turingv1.SessionCapabilityState, error) {
+	s.checkedCapability = req.GetProvenanceToken()
+	return &turingv1.SessionCapabilityState{Active: s.capabilityActive}, nil
+}
+
+func (s *recordingApprovalService) FinalizeSandboxArtifact(_ context.Context, req *turingv1.FinalizeSandboxArtifactRequest) (*turingv1.FinalizeSandboxArtifactResponse, error) {
+	s.finalizedArtifactID = req.GetArtifactId()
+	return &turingv1.FinalizeSandboxArtifactResponse{ArtifactId: req.GetArtifactId(), State: "ready"}, nil
 }
 
 func (s *recordingApprovalService) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeApprovalRequest) (*turingv1.ApprovalResponse, error) {

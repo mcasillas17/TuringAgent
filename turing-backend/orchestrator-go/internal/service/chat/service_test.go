@@ -1282,7 +1282,12 @@ func TestSendMessageCancellationCancelsRun(t *testing.T) {
 	}
 	runID := first.GetRunQueued().RunId
 	cancel()
-	_, err = stream.Recv()
+	for {
+		_, err = stream.Recv()
+		if err != nil {
+			break
+		}
+	}
 	if status.Code(err) != codes.Canceled && err != io.EOF {
 		t.Fatalf("Recv after cancel = %v", err)
 	}

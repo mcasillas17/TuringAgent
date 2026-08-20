@@ -1198,6 +1198,20 @@ func (s *Server) CancelRun(ctx context.Context, runID string, reason string) {
 	_ = owner.send(sendCtx, command)
 }
 
+// CancelSessionRuns sends the existing cancellation command to every still
+// executing run owned by a deleting session. The repository has already fenced
+// its durable state; this command asks the worker to acknowledge execution
+// exit so finalization can proceed.
+func (s *Server) CancelSessionRuns(ctx context.Context, sessionID string, reason string) {
+	runIDs, err := s.repo.SessionExecutionRunIDs(ctx, sessionID)
+	if err != nil {
+		return
+	}
+	for _, runID := range runIDs {
+		s.CancelRun(ctx, runID, reason)
+	}
+}
+
 func (s *Server) releaseUnownedTerminalRun(ctx context.Context, runID string) {
 	run, err := s.repo.GetRun(ctx, runID)
 	if err != nil || !isTerminalRunStatus(run.Status) {
@@ -1870,7 +1884,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 		}
 		if !recorded.Inserted {
 			if decision, handled := existingToolBeforeDecision(recorded.Record, "tool_denied"); handled {
-				return decision, nil
+				return s.withToolProvenance(ctx, decision, beacon, run, argsHash), nil
 			}
 		}
 		if s.approvals == nil {
@@ -1893,7 +1907,12 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 					"This automation could not be granted the approval it was pre-authorised for, so the run stopped rather than waiting for someone to answer.")
 			}
 		}
-		return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED, ToolCallId: beacon.ToolCallId, ApprovalId: approvalID}, nil
+		return &turingv1.ToolPolicyDecision{
+			Decision:        turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+			ToolCallId:      beacon.ToolCallId,
+			ApprovalId:      approvalID,
+			ProvenanceToken: s.issueToolProvenance(ctx, beacon, run, argsHash),
+		}, nil
 	}
 	statusValue := "requested"
 	if policy == tools.PolicySafe {
@@ -1912,7 +1931,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 	}
 	if !recorded.Inserted {
 		if decision, handled := existingToolBeforeDecision(recorded.Record, "tool_denied"); handled {
-			return decision, nil
+			return s.withToolProvenance(ctx, decision, beacon, run, argsHash), nil
 		}
 	}
 	if recorded.Inserted {
@@ -1922,7 +1941,11 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 	}
 	switch policy {
 	case tools.PolicySafe:
-		return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: beacon.ToolCallId}, nil
+		return &turingv1.ToolPolicyDecision{
+			Decision:        turingv1.ToolPolicyDecision_DECISION_ALLOW,
+			ToolCallId:      beacon.ToolCallId,
+			ProvenanceToken: s.issueToolProvenance(ctx, beacon, run, argsHash),
+		}, nil
 	default:
 		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "unknown_policy")
 	}

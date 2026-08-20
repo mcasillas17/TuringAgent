@@ -14,6 +14,7 @@ import 'package:turing_flutter_app/features/chat/tool_call_card.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
+import 'package:turing_flutter_app/models/session_deletion.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 import 'package:turing_flutter_app/networking/event_source.dart';
@@ -100,6 +101,41 @@ void main() {
     await tester.pump();
 
     expect(find.text('Hello'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('session.deleted notifies the owner and ignores stale events', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    String? deletedSessionId;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+          onSessionDeleted: (sessionId) => deletedSessionId = sessionId,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(_event(type: 'session.deleted', sequence: 1, payload: const {}));
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 2,
+        payload: {'messageId': 'stale', 'delta': 'must not render'},
+      ),
+    );
+    await tester.pump();
+
+    expect(deletedSessionId, 'sess_1');
+    expect(find.text('must not render'), findsNothing);
+
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());
   });
@@ -7542,7 +7578,13 @@ class _FakeApiClient
   }
 
   @override
-  Future<void> deleteSession({required String sessionId}) async {}
+  Future<SessionDeletionReceipt> deleteSession({
+    required String sessionId,
+  }) async => const SessionDeletionReceipt.completed();
+
+  @override
+  Future<List<SessionDeletionReceipt>> listSessionDeletionReceipts() async =>
+      const [];
 
   @override
   Future<Session> getSession({required String sessionId}) async {

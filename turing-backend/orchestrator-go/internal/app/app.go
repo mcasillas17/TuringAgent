@@ -30,6 +30,7 @@ import (
 
 const maxGRPCMessageSize = 4 * 1024 * 1024
 const gracefulStopTimeout = 5 * time.Second
+const defaultDeletionReconcileInterval = time.Minute
 
 type App struct {
 	PublicServer   *grpc.Server
@@ -53,9 +54,11 @@ type App struct {
 	// reaper's: they stop independently, and a shutdown that waited on one
 	// while the other was still firing runs would be a shutdown that queues
 	// work on its way out.
-	schedulerCancel context.CancelFunc
-	schedulerDone   chan struct{}
-	authFailures    *auth.AsyncFailureRecorder
+	schedulerCancel         context.CancelFunc
+	schedulerDone           chan struct{}
+	deletionReconcileCancel context.CancelFunc
+	deletionReconcileDone   chan struct{}
+	authFailures            *auth.AsyncFailureRecorder
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -126,7 +129,17 @@ func New(cfg config.Config) (*App, error) {
 			SupportsExternalAgents:      len(cfg.AgentCredentialNames) > 0,
 		},
 	}, approvalService)
-	sessionService := sessionsvc.New(repo, cfg, runtimeService)
+	sessionService := sessionsvc.New(repo, cfg, runtimeService, eventBus)
+	sessionService.SetArtifactCleaner(sessionsvc.NewMCPArtifactCleaner(
+		cfg.MCPFilesBaseURL,
+		cfg.MCPFilesTokenGeneral,
+		cfg.InternalToken,
+		nil,
+	))
+	if err := sessionService.ResumePendingDeletions(context.Background()); err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("resume pending session deletions: %w", err)
+	}
 	skillService := skillsvc.New(repo)
 	agentService := agentsvc.New(repo, cfg.AgentCredentialNames)
 	automationService := automationsvc.New(repo)
@@ -217,21 +230,22 @@ func New(cfg config.Config) (*App, error) {
 	turingv1.RegisterRuntimeServiceServer(internalServer, runtimeService)
 
 	application := &App{
-		PublicServer:    publicServer,
-		InternalServer:  internalServer,
-		Repository:      repo,
-		EventBus:        eventBus,
-		RuntimeService:  runtimeService,
-		SessionService:  sessionService,
-		EventService:    eventService,
-		ChatService:     chatService,
-		ApprovalService: approvalService,
-		AuditService:    auditService,
-		HealthService:   healthService,
-		database:        database,
-		authFailures:    authFailures,
-		reaperDone:      make(chan struct{}),
-		schedulerDone:   make(chan struct{}),
+		PublicServer:          publicServer,
+		InternalServer:        internalServer,
+		Repository:            repo,
+		EventBus:              eventBus,
+		RuntimeService:        runtimeService,
+		SessionService:        sessionService,
+		EventService:          eventService,
+		ChatService:           chatService,
+		ApprovalService:       approvalService,
+		AuditService:          auditService,
+		HealthService:         healthService,
+		database:              database,
+		authFailures:          authFailures,
+		reaperDone:            make(chan struct{}),
+		schedulerDone:         make(chan struct{}),
+		deletionReconcileDone: make(chan struct{}),
 	}
 	reaperCtx, reaperCancel := context.WithCancel(context.Background())
 	application.reaperCancel = reaperCancel
@@ -261,6 +275,29 @@ func New(cfg config.Config) (*App, error) {
 		schedulerCancel()
 		close(application.schedulerDone)
 	}
+	deletionReconcileCtx, deletionReconcileCancel := context.WithCancel(context.Background())
+	application.deletionReconcileCancel = deletionReconcileCancel
+	deletionReconcileInterval := defaultDeletionReconcileInterval
+	if cfg.JobReaperIntervalMS > 0 {
+		deletionReconcileInterval = time.Duration(cfg.JobReaperIntervalMS) * time.Millisecond
+	}
+	go func() {
+		defer close(application.deletionReconcileDone)
+		ticker := time.NewTicker(deletionReconcileInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-deletionReconcileCtx.Done():
+				return
+			case <-ticker.C:
+				if err := sessionService.ResumePendingDeletions(deletionReconcileCtx); err != nil {
+					// A durable receipt remains retryable; this loop must not
+					// die because one external cleanup endpoint is offline.
+					fmt.Printf("resume pending session deletions: %v\n", err)
+				}
+			}
+		}
+	}()
 	return application, nil
 }
 
@@ -280,6 +317,12 @@ func (a *App) Stop() {
 		}
 		if a.schedulerDone != nil {
 			<-a.schedulerDone
+		}
+		if a.deletionReconcileCancel != nil {
+			a.deletionReconcileCancel()
+		}
+		if a.deletionReconcileDone != nil {
+			<-a.deletionReconcileDone
 		}
 		var wg sync.WaitGroup
 		if a.PublicServer != nil {

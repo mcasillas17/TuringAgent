@@ -14,6 +14,24 @@ import 'dart:convert' as $convert;
 import 'dart:core' as $core;
 import 'dart:typed_data' as $typed_data;
 
+@$core.Deprecated('Use sessionDeletionStateDescriptor instead')
+const SessionDeletionState$json = {
+  '1': 'SessionDeletionState',
+  '2': [
+    {'1': 'SESSION_DELETION_STATE_UNSPECIFIED', '2': 0},
+    {'1': 'SESSION_DELETION_STATE_IN_PROGRESS', '2': 1},
+    {'1': 'SESSION_DELETION_STATE_FAILED_EXTERNAL', '2': 2},
+    {'1': 'SESSION_DELETION_STATE_COMPLETED', '2': 3},
+  ],
+};
+
+/// Descriptor for `SessionDeletionState`. Decode as a `google.protobuf.EnumDescriptorProto`.
+final $typed_data.Uint8List sessionDeletionStateDescriptor = $convert.base64Decode(
+    'ChRTZXNzaW9uRGVsZXRpb25TdGF0ZRImCiJTRVNTSU9OX0RFTEVUSU9OX1NUQVRFX1VOU1BFQ0'
+    'lGSUVEEAASJgoiU0VTU0lPTl9ERUxFVElPTl9TVEFURV9JTl9QUk9HUkVTUxABEioKJlNFU1NJ'
+    'T05fREVMRVRJT05fU1RBVEVfRkFJTEVEX0VYVEVSTkFMEAISJAogU0VTU0lPTl9ERUxFVElPTl'
+    '9TVEFURV9DT01QTEVURUQQAw==');
+
 @$core.Deprecated('Use sessionDescriptor instead')
 const Session$json = {
   '1': 'Session',
@@ -155,17 +173,109 @@ const DeleteSessionRequest$json = {
 final $typed_data.Uint8List deleteSessionRequestDescriptor = $convert.base64Decode(
     'ChREZWxldGVTZXNzaW9uUmVxdWVzdBIdCgpzZXNzaW9uX2lkGAEgASgJUglzZXNzaW9uSWQ=');
 
+@$core.Deprecated('Use sessionDeletionReceiptDescriptor instead')
+const SessionDeletionReceipt$json = {
+  '1': 'SessionDeletionReceipt',
+  '2': [
+    {'1': 'session_id', '3': 1, '4': 1, '5': 9, '10': 'sessionId'},
+    {
+      '1': 'state',
+      '3': 2,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.SessionDeletionState',
+      '10': 'state'
+    },
+    {
+      '1': 'lifecycle_version',
+      '3': 3,
+      '4': 1,
+      '5': 3,
+      '10': 'lifecycleVersion'
+    },
+    {'1': 'retryable', '3': 4, '4': 1, '5': 8, '10': 'retryable'},
+    {'1': 'error_code', '3': 5, '4': 1, '5': 9, '10': 'errorCode'},
+    {
+      '1': 'terminal_sequence',
+      '3': 6,
+      '4': 1,
+      '5': 3,
+      '10': 'terminalSequence'
+    },
+    {'1': 'run_count', '3': 7, '4': 1, '5': 5, '10': 'runCount'},
+    {'1': 'message_count', '3': 8, '4': 1, '5': 5, '10': 'messageCount'},
+    {
+      '1': 'retained_legacy_artifact_count',
+      '3': 9,
+      '4': 1,
+      '5': 5,
+      '10': 'retainedLegacyArtifactCount'
+    },
+  ],
+};
+
+/// Descriptor for `SessionDeletionReceipt`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List sessionDeletionReceiptDescriptor = $convert.base64Decode(
+    'ChZTZXNzaW9uRGVsZXRpb25SZWNlaXB0Eh0KCnNlc3Npb25faWQYASABKAlSCXNlc3Npb25JZB'
+    'I1CgVzdGF0ZRgCIAEoDjIfLnR1cmluZy52MS5TZXNzaW9uRGVsZXRpb25TdGF0ZVIFc3RhdGUS'
+    'KwoRbGlmZWN5Y2xlX3ZlcnNpb24YAyABKANSEGxpZmVjeWNsZVZlcnNpb24SHAoJcmV0cnlhYm'
+    'xlGAQgASgIUglyZXRyeWFibGUSHQoKZXJyb3JfY29kZRgFIAEoCVIJZXJyb3JDb2RlEisKEXRl'
+    'cm1pbmFsX3NlcXVlbmNlGAYgASgDUhB0ZXJtaW5hbFNlcXVlbmNlEhsKCXJ1bl9jb3VudBgHIA'
+    'EoBVIIcnVuQ291bnQSIwoNbWVzc2FnZV9jb3VudBgIIAEoBVIMbWVzc2FnZUNvdW50EkMKHnJl'
+    'dGFpbmVkX2xlZ2FjeV9hcnRpZmFjdF9jb3VudBgJIAEoBVIbcmV0YWluZWRMZWdhY3lBcnRpZm'
+    'FjdENvdW50');
+
+@$core.Deprecated('Use listSessionDeletionReceiptsRequestDescriptor instead')
+const ListSessionDeletionReceiptsRequest$json = {
+  '1': 'ListSessionDeletionReceiptsRequest',
+};
+
+/// Descriptor for `ListSessionDeletionReceiptsRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List listSessionDeletionReceiptsRequestDescriptor =
+    $convert.base64Decode('CiJMaXN0U2Vzc2lvbkRlbGV0aW9uUmVjZWlwdHNSZXF1ZXN0');
+
+@$core.Deprecated('Use listSessionDeletionReceiptsResponseDescriptor instead')
+const ListSessionDeletionReceiptsResponse$json = {
+  '1': 'ListSessionDeletionReceiptsResponse',
+  '2': [
+    {
+      '1': 'deletions',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.SessionDeletionReceipt',
+      '10': 'deletions'
+    },
+  ],
+};
+
+/// Descriptor for `ListSessionDeletionReceiptsResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List listSessionDeletionReceiptsResponseDescriptor =
+    $convert.base64Decode(
+        'CiNMaXN0U2Vzc2lvbkRlbGV0aW9uUmVjZWlwdHNSZXNwb25zZRI/CglkZWxldGlvbnMYASADKA'
+        'syIS50dXJpbmcudjEuU2Vzc2lvbkRlbGV0aW9uUmVjZWlwdFIJZGVsZXRpb25z');
+
 @$core.Deprecated('Use deleteSessionResponseDescriptor instead')
 const DeleteSessionResponse$json = {
   '1': 'DeleteSessionResponse',
   '2': [
     {'1': 'session_id', '3': 1, '4': 1, '5': 9, '10': 'sessionId'},
+    {
+      '1': 'deletion',
+      '3': 2,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.SessionDeletionReceipt',
+      '10': 'deletion'
+    },
   ],
 };
 
 /// Descriptor for `DeleteSessionResponse`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List deleteSessionResponseDescriptor = $convert.base64Decode(
-    'ChVEZWxldGVTZXNzaW9uUmVzcG9uc2USHQoKc2Vzc2lvbl9pZBgBIAEoCVIJc2Vzc2lvbklk');
+    'ChVEZWxldGVTZXNzaW9uUmVzcG9uc2USHQoKc2Vzc2lvbl9pZBgBIAEoCVIJc2Vzc2lvbklkEj'
+    '0KCGRlbGV0aW9uGAIgASgLMiEudHVyaW5nLnYxLlNlc3Npb25EZWxldGlvblJlY2VpcHRSCGRl'
+    'bGV0aW9u');
 
 @$core.Deprecated('Use listMessagesRequestDescriptor instead')
 const ListMessagesRequest$json = {

@@ -177,6 +177,11 @@ func receiveApprovalRequest(stream turingv1.ChatService_SendMessageClient) (stri
 		event, err := stream.Recv()
 		if err != nil {
 			if contextErr := stream.Context().Err(); contextErr != nil {
+				if errors.Is(contextErr, context.Canceled) {
+					if deadline, ok := stream.Context().Deadline(); ok && !time.Now().Before(deadline) {
+						return "", "", context.DeadlineExceeded
+					}
+				}
 				return "", "", contextErr
 			}
 			return "", "", err

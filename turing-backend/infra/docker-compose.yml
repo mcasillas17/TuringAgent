@@ -21,6 +21,7 @@ services:
       TURING_INTERNAL_TOKEN: ${TURING_INTERNAL_TOKEN}
       MCP_SYSTEM_TOKEN_GENERAL: ${MCP_SYSTEM_TOKEN_GENERAL}
       MCP_FILES_TOKEN_GENERAL: ${MCP_FILES_TOKEN_GENERAL}
+      MCP_FILES_BASE_URL: ${MCP_FILES_BASE_URL:-http://turing-mcp-files:7110/mcp}
       TURING_APPROVAL_JWT_SECRET: ${TURING_APPROVAL_JWT_SECRET}
       # Seals third-party credentials before they reach the database. The
       # orchestrator is the only service that stores or opens one.

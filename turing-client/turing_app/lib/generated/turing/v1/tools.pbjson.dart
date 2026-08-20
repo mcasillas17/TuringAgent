@@ -158,6 +158,7 @@ const ToolPolicyDecision$json = {
       '6': '.turing.v1.ToolCallPhase',
       '10': 'phase'
     },
+    {'1': 'provenance_token', '3': 7, '4': 1, '5': 9, '10': 'provenanceToken'},
   ],
   '4': [ToolPolicyDecision_Decision$json],
 };
@@ -179,6 +180,7 @@ final $typed_data.Uint8List toolPolicyDecisionDescriptor = $convert.base64Decode
     'BvbGljeURlY2lzaW9uLkRlY2lzaW9uUghkZWNpc2lvbhIgCgx0b29sX2NhbGxfaWQYAiABKAlS'
     'CnRvb2xDYWxsSWQSHwoLYXBwcm92YWxfaWQYAyABKAlSCmFwcHJvdmFsSWQSFgoGcmVhc29uGA'
     'QgASgJUgZyZWFzb24SIQoMdGVybWluYWxfcnVuGAUgASgIUgt0ZXJtaW5hbFJ1bhIuCgVwaGFz'
-    'ZRgGIAEoDjIYLnR1cmluZy52MS5Ub29sQ2FsbFBoYXNlUgVwaGFzZSJrCghEZWNpc2lvbhIYCh'
-    'RERUNJU0lPTl9VTlNQRUNJRklFRBAAEhIKDkRFQ0lTSU9OX0FMTE9XEAESEQoNREVDSVNJT05f'
-    'REVOWRACEh4KGkRFQ0lTSU9OX0FQUFJPVkFMX1JFUVVJUkVEEAM=');
+    'ZRgGIAEoDjIYLnR1cmluZy52MS5Ub29sQ2FsbFBoYXNlUgVwaGFzZRIpChBwcm92ZW5hbmNlX3'
+    'Rva2VuGAcgASgJUg9wcm92ZW5hbmNlVG9rZW4iawoIRGVjaXNpb24SGAoUREVDSVNJT05fVU5T'
+    'UEVDSUZJRUQQABISCg5ERUNJU0lPTl9BTExPVxABEhEKDURFQ0lTSU9OX0RFTlkQAhIeChpERU'
+    'NJU0lPTl9BUFBST1ZBTF9SRVFVSVJFRBAD');

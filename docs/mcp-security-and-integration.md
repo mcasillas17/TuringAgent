@@ -82,6 +82,31 @@ responses.
 `files.delete` and `files.move` are not advertised. Their dispatcher cases
 remain defensive and return `tool disabled` if called directly.
 
+## Session provenance and withdrawal
+
+Every `files.*` call carries a server-issued provenance capability in
+`params._meta.provenanceToken`, outside model-controlled `arguments`. The
+capability is short-lived and binds the agent, session, run, deletion
+generation, tool, canonical argument hash, and logical path. `mcp-files`
+verifies it before and after filesystem I/O. Approval-gated writes also carry
+the existing single-use approval token.
+
+Before a mutation reaches the filesystem, the internal approval-consumption
+RPC reserves an orchestrator-owned `sandbox_artifacts` row. New files are
+written beneath `sessions/<session>/runs/<run>/files/` and default to
+`delete_on_session_delete`; a crash between reservation and finalization still
+leaves an enumerable record. A post-write internal finalizer marks the manifest
+ready. A session deletion that races this flow either rejects the write before
+I/O or records it for cleanup and returns failure rather than success.
+
+`retain_legacy_unowned` is the only retention exception: an existing
+pre-provenance sandbox-root file that a session updates is recorded but never
+deleted with that session. It is not session content and no new retained/shared
+policy is implied. Cleanup uses the existing internally authenticated MCP
+endpoint; it is not advertised to models or clients and accepts only a
+strictly scoped session namespace request. Public audit records opaque artifact
+identity, policy, state, and error class, never path or content.
+
 The runtime follows paginated `tools/list` responses in order, with limits of
 100 pages, 10,000 tools, and 4 MiB of aggregate encoded descriptors. It
 validates names, descriptions, object-rooted input schemas, and duplicate

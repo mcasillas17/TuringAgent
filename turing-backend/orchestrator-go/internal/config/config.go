@@ -22,6 +22,7 @@ type Config struct {
 	InternalToken         string
 	MCPSystemTokenGeneral string
 	MCPFilesTokenGeneral  string
+	MCPFilesBaseURL       string
 	ApprovalJWTSecret     string
 	// IntegrationKey seals third-party credentials before they are stored.
 	// Optional: when it is empty, connecting an account is refused with a
@@ -224,6 +225,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		InternalToken:             internalToken,
 		MCPSystemTokenGeneral:     systemToken,
 		MCPFilesTokenGeneral:      filesToken,
+		MCPFilesBaseURL:           stringValue("MCP_FILES_BASE_URL", "http://turing-mcp-files:7110/mcp"),
 		ApprovalJWTSecret:         approvalSecret,
 		IntegrationKey:            integrationKey,
 		PublicPort:                publicPort,

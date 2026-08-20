@@ -1,6 +1,7 @@
 package events
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -89,18 +90,18 @@ func TestBusOverflowRetainsLatestTerminalNotification(t *testing.T) {
 		bus.Publish(Event{SessionID: "sess_slow", Sequence: sequence, Type: eventType})
 	}
 
-	var terminal Event
+	deadline := time.After(time.Second)
 	for {
 		select {
 		case event := <-ch:
 			if event.Type == "agent.run.completed" {
-				terminal = event
+				if event.Sequence != 140 {
+					t.Fatalf("terminal notification = %+v, want sequence 140", event)
+				}
+				return
 			}
-		default:
-			if terminal.Sequence != 140 {
-				t.Fatalf("terminal notification = %+v, want retained sequence 140 after overflow", terminal)
-			}
-			return
+		case <-deadline:
+			t.Fatal("timed out waiting for retained terminal notification")
 		}
 	}
 }
@@ -120,5 +121,49 @@ func TestBusOverflowDoesNotLetDelayedEventEvictNewerTerminal(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for retained terminal notification")
+	}
+}
+
+func TestBusTerminatesSessionThroughDedicatedTerminalPath(t *testing.T) {
+	bus := NewBus(1)
+	ch, unsubscribe := bus.Subscribe("sess_deleted")
+	defer unsubscribe()
+
+	bus.Publish(Event{SessionID: "sess_deleted", Sequence: 1, Type: "message.delta"})
+	bus.Publish(Event{SessionID: "sess_deleted", Sequence: 2, Type: "message.delta"})
+	bus.TerminateSession(Event{SessionID: "sess_deleted", Sequence: 3, Type: "session.deleted"})
+	bus.Publish(Event{SessionID: "sess_deleted", Sequence: 4, Type: "message.delta"})
+
+	var terminalCount int
+	for {
+		select {
+		case event, ok := <-ch:
+			if !ok {
+				if terminalCount != 1 {
+					t.Fatalf("terminal event count = %d, want exactly one", terminalCount)
+				}
+				return
+			}
+			if event.Sequence == 4 {
+				t.Fatalf("received event after terminal fence: %+v", event)
+			}
+			if event.Type == "session.deleted" {
+				terminalCount++
+			}
+		case <-time.After(time.Second):
+			t.Fatal("terminal subscription did not close")
+		}
+	}
+}
+
+func TestBusBoundsTerminalSessionFences(t *testing.T) {
+	bus := NewBus(1)
+	for index := 0; index <= maxTerminatedSessionFences; index++ {
+		bus.TerminateSession(Event{SessionID: fmt.Sprintf("sess_%d", index), Type: "session.deleted"})
+	}
+	bus.mu.Lock()
+	defer bus.mu.Unlock()
+	if got := len(bus.terminatedSessions); got != maxTerminatedSessionFences {
+		t.Fatalf("terminal session fences = %d, want %d", got, maxTerminatedSessionFences)
 	}
 }

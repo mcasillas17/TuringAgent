@@ -86,6 +86,14 @@ func (*PublicServer) ConsumeApproval(context.Context, *turingv1.ConsumeApprovalR
 	return nil, status.Error(codes.PermissionDenied, "runtime approval method is internal")
 }
 
+func (*PublicServer) FinalizeSandboxArtifact(context.Context, *turingv1.FinalizeSandboxArtifactRequest) (*turingv1.FinalizeSandboxArtifactResponse, error) {
+	return nil, status.Error(codes.PermissionDenied, "sandbox artifact finalization is internal")
+}
+
+func (*PublicServer) CheckSessionCapability(context.Context, *turingv1.CheckSessionCapabilityRequest) (*turingv1.SessionCapabilityState, error) {
+	return nil, status.Error(codes.PermissionDenied, "session capability checks are internal")
+}
+
 func (*InternalServer) ApproveApproval(context.Context, *turingv1.ApproveApprovalRequest) (*turingv1.ApprovalResponse, error) {
 	return nil, status.Error(codes.PermissionDenied, "human approval method is public")
 }
@@ -100,6 +108,14 @@ func (s *InternalServer) GetApprovalForRuntime(ctx context.Context, req *turingv
 
 func (s *InternalServer) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeApprovalRequest) (*turingv1.ApprovalResponse, error) {
 	return s.service.ConsumeApproval(ctx, req)
+}
+
+func (s *InternalServer) FinalizeSandboxArtifact(ctx context.Context, req *turingv1.FinalizeSandboxArtifactRequest) (*turingv1.FinalizeSandboxArtifactResponse, error) {
+	return s.service.FinalizeSandboxArtifact(ctx, req)
+}
+
+func (s *InternalServer) CheckSessionCapability(ctx context.Context, req *turingv1.CheckSessionCapabilityRequest) (*turingv1.SessionCapabilityState, error) {
+	return s.service.CheckSessionCapability(ctx, req)
 }
 
 func (s *Server) SetNotifier(notifier Notifier) {
@@ -493,8 +509,23 @@ func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeAppro
 	if req == nil || req.ApprovalId == "" {
 		return nil, status.Error(codes.InvalidArgument, "approval_id is required")
 	}
+	approval, err := s.repo.GetApproval(ctx, req.ApprovalId)
+	if err != nil {
+		return nil, mapApprovalError(err)
+	}
+	// Reserved before the approval is spent, because the reservation is the only
+	// step that can still refuse: after the consume commits, the caller is
+	// entitled to write and a refusal here would leave a file nothing accounts
+	// for. A crash between the two leaves an unwritten "writing" row, which
+	// keeps the session's withdrawal retryable rather than completing over a
+	// file that might exist.
+	artifact, reservedHere, err := s.reserveArtifactForConsume(ctx, approval, req.GetProvenanceToken(), req.GetPhysicalPath())
+	if err != nil {
+		return nil, err
+	}
 	transition, err := s.repo.ConsumeApprovalWithEvent(ctx, req.ApprovalId, "")
 	if errors.Is(err, repository.ErrApprovalExpired) {
+		s.releaseReservationAfterFailedConsume(ctx, artifact, reservedHere)
 		expiredApproval := transition.Approval
 		if transition.ApprovalEvent.EventID != "" {
 			s.publishEvent(transition.ApprovalEvent)
@@ -509,6 +540,7 @@ func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeAppro
 		return nil, status.Error(codes.FailedPrecondition, "approval expired")
 	}
 	if err != nil {
+		s.releaseReservationAfterFailedConsume(ctx, artifact, reservedHere)
 		return nil, mapApprovalError(err)
 	}
 	consumed := transition.Approval
@@ -516,7 +548,16 @@ func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeAppro
 		s.publishEvent(transition.ApprovalEvent)
 	}
 	_, _ = s.audit.RecordForExistingRun(ctx, consumed.RunID, "mcp", "", "approval.consumed", consumed.ApprovalID, map[string]any{"toolName": consumed.ToolName})
-	return &turingv1.ApprovalResponse{ApprovalId: consumed.ApprovalID, Status: turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED}, nil
+	return &turingv1.ApprovalResponse{
+		ApprovalId: consumed.ApprovalID,
+		Status:     turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED,
+		Reservation: &turingv1.SandboxArtifactReservation{
+			ArtifactId:         artifact.ArtifactID,
+			PhysicalPath:       artifact.PhysicalPath,
+			Policy:             artifact.Policy,
+			DeletionGeneration: artifact.DeletionGeneration,
+		},
+	}, nil
 }
 
 func canonicalArgs(args map[string]any) (string, string, error) {

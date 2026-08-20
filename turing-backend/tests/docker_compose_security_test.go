@@ -79,6 +79,9 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"TURING_INTERNAL_TOKEN:",
 		"MCP_SYSTEM_TOKEN_GENERAL:",
 		"MCP_FILES_TOKEN_GENERAL:",
+		// The orchestrator uses this internal-only URL only to reconcile
+		// session-owned sandbox namespaces after deletion.
+		"MCP_FILES_BASE_URL:",
 		"TURING_APPROVAL_JWT_SECRET:",
 		"DATABASE_PATH:",
 		"SKILLS_ROOT:",
@@ -89,7 +92,6 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 	requireContainsNone(t, "turing-orchestrator", orchestrator,
 		"ORCHESTRATOR_GRPC_ADDR:",
 		"MCP_SYSTEM_BASE_URL:",
-		"MCP_FILES_BASE_URL:",
 		"FILES_SANDBOX_ROOT:",
 	)
 
@@ -162,6 +164,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"TURING_INTERNAL_TOKEN",
 			"MCP_SYSTEM_TOKEN_GENERAL",
 			"MCP_FILES_TOKEN_GENERAL",
+			"MCP_FILES_BASE_URL",
 			"TURING_APPROVAL_JWT_SECRET",
 			"TURING_INTEGRATION_KEY",
 			"ORCHESTRATOR_PUBLIC_PORT",

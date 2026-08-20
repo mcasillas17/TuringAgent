@@ -12,6 +12,10 @@ The project is designed for local development first: secrets stay in your local 
 - Provides a Flutter client with settings, conversation search, automatically
   named session lists, chat, streamed responses, and approval cards.
 - Exposes a redacted, paginated audit read API (`AuditService.ListAuditEntries`), including the approval comment or denial reason a person typed; audit inspection is exposed programmatically through the authenticated API and a thin client, with no built-in viewer yet.
+- Withdraws a deleted session through a durable lifecycle: reads/search/replay
+  fail closed once withdrawal starts, active work is cancelled and reconciled,
+  existing subscribers receive one terminal deletion event, and newly
+  session-owned sandbox artifacts are removed by policy.
 - Ships a Docker Compose local stack and an end-to-end gRPC smoke test.
 
 ## Requirements
@@ -191,6 +195,24 @@ orchestrator remains stopped, use a SQLite client to run
 - **Initialization refuses root:** run it from the non-root host account that owns the checkout and sandbox; do not use `sudo`.
 - **Initialization reports legacy sandbox content:** restore ownership and owner read/write access (plus directory traversal) outside the script, or move the content aside, then rerun `scripts/init.sh`. The script deliberately does not recurse with `chmod` or `chown`.
 - **File tools fail:** confirm `turing-backend/sandbox/` is a real directory, rerun `scripts/init.sh`, and confirm approval-required writes were approved. Rootless Docker, `userns-remap`, and SELinux may require daemon-specific ownership/mapping or labeling; see the MCP security guide.
+
+## Session withdrawal and physical erasure
+
+`DeleteSession` returns a typed receipt. Only `completed` means all
+session-owned database state and delete-on-session-delete sandbox artifacts
+were withdrawn; `in_progress` and `failed_external` are retryable, non-success
+states that keep the conversation hidden. The only retained artifact policy is
+`retain_legacy_unowned` for sandbox-root files created before provenance was
+available; its count is recorded without claiming those bytes were withdrawn.
+
+This is **logical withdrawal**, not a forensic storage-erasure promise.
+SQLite WAL, freed pages, filesystem snapshots, SSD wear leveling and separately
+copied backups can retain historical bytes. Checkpointing, `VACUUM`, or
+`secure_delete` do not change that product boundary. Whole-database encryption
+with destruction of every database-key wrapper and encrypted backup is a
+credible future database-retirement strategy, but one database key cannot
+selectively erase a single session; TUR-004 does not add an encryption library
+or migration.
 
 ## Documentation
 

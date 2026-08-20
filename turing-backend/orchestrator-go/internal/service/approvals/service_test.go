@@ -301,7 +301,7 @@ func TestApprovalLifecycleEventsIncludePersistedCorrelationIDs(t *testing.T) {
 		if _, err := h.service.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := h.service.ConsumeApproval(context.Background(), &turingv1.ConsumeApprovalRequest{ApprovalId: approvalID}); err != nil {
+		if _, err := h.service.ConsumeApproval(context.Background(), h.consumeRequest(t, enqueued, approvalID, "note.txt")); err != nil {
 			t.Fatal(err)
 		}
 		assertCorrelation(t, h, enqueued, "approval.consumed", approvalID)
@@ -444,14 +444,14 @@ func TestGetApprovalForRuntimeReturnsApprovedTokenAndConsumeConsumesOnce(t *test
 	if runtimeState.Status != turingv1.ApprovalStatus_APPROVAL_STATUS_APPROVED || !strings.Contains(runtimeState.ApprovalToken, ".") {
 		t.Fatalf("runtime approval state = %+v", runtimeState)
 	}
-	consumed, err := client.ConsumeApproval(context.Background(), &turingv1.ConsumeApprovalRequest{ApprovalId: approvalID})
+	consumed, err := client.ConsumeApproval(context.Background(), h.consumeRequest(t, enqueued, approvalID, "note.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if consumed.Status != turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED {
 		t.Fatalf("consume status = %s", consumed.Status)
 	}
-	again, err := client.ConsumeApproval(context.Background(), &turingv1.ConsumeApprovalRequest{ApprovalId: approvalID})
+	again, err := client.ConsumeApproval(context.Background(), h.consumeRequest(t, enqueued, approvalID, "note.txt"))
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("second ConsumeApproval error = %v, want FailedPrecondition", err)
 	}
@@ -477,7 +477,7 @@ func TestConsumeExpiredApprovalPublishesToolFailureBeforeRunFailure(t *testing.T
 	published, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
 	defer unsubscribe()
 
-	if response, err := client.ConsumeApproval(context.Background(), &turingv1.ConsumeApprovalRequest{ApprovalId: approvalID}); status.Code(err) != codes.FailedPrecondition || response != nil {
+	if response, err := client.ConsumeApproval(context.Background(), h.consumeRequest(t, enqueued, approvalID, "note.txt")); status.Code(err) != codes.FailedPrecondition || response != nil {
 		t.Fatalf("ConsumeApproval response/error = %+v/%v, want nil/FailedPrecondition", response, err)
 	}
 	var publishedTypes []string

@@ -89,18 +89,24 @@ func newHandler(cfg serverConfig) http.Handler {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
-	filesTools := tools.NewFilesTools(cfg.sandboxRoot).WithApprovalValidator(approval.Consumer{
+	consumer := approval.Consumer{
 		OrchestratorGRPCAddr: cfg.orchestratorGRPCAddr,
 		InternalToken:        cfg.internalToken,
 		JWTSecret:            cfg.approvalJwtSecret,
-	})
+	}
+	// Both are configured: the guard makes a server-issued capability mandatory
+	// for every file tool call, and the approval validator remains the decision
+	// gate for mutations inside it.
+	filesTools := tools.NewFilesTools(cfg.sandboxRoot).
+		WithApprovalValidator(consumer).
+		WithProvenanceGuard(provenanceGuard{consumer: consumer})
 	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		agentID, err := auth.AgentFromBearer(r, cfg.filesToken)
 		if err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		handleMCP(w, r, filesTools, agentID)
+		handleMCP(w, r, filesTools, agentID, cfg.internalToken)
 	}))
 	return mux
 }
@@ -121,7 +127,7 @@ func checkHealth(ctx context.Context, endpoint string) error {
 	return nil
 }
 
-func handleMCP(w http.ResponseWriter, r *http.Request, filesTools tools.FilesTools, agentID string) {
+func handleMCP(w http.ResponseWriter, r *http.Request, filesTools tools.FilesTools, agentID string, internalToken string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -166,7 +172,7 @@ func handleMCP(w http.ResponseWriter, r *http.Request, filesTools tools.FilesToo
 		}
 		writeJSONRPCForRequest(w, req, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": listTools()}})
 	case "tools/call":
-		name, args, approvalToken, paramsErr := parseToolCallParams(req)
+		call, paramsErr := parseToolCallParams(req)
 		if paramsErr != nil {
 			writeJSONRPCForRequest(w, req, jsonrpc.Response{
 				JSONRPC: "2.0",
@@ -175,7 +181,23 @@ func handleMCP(w http.ResponseWriter, r *http.Request, filesTools tools.FilesToo
 			})
 			return
 		}
-		result, err := filesTools.CallContext(r.Context(), name, args, approvalToken, agentID)
+		call.AgentID = agentID
+		if call.Name == tools.SessionCleanupTool {
+			handleSessionCleanup(w, r, req, call, filesTools, internalToken)
+			return
+		}
+		if call.InternalCleanupToken != "" {
+			// An ordinary tool call has no business carrying the internal
+			// token, and accepting one here would make every agent call a place
+			// the token could be probed.
+			writeJSONRPCForRequest(w, req, jsonrpc.Response{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error:   map[string]any{"code": -32602, "message": "unknown _meta key"},
+			})
+			return
+		}
+		result, err := filesTools.CallRequestContext(r.Context(), call)
 		if err != nil {
 			code := -32000
 			if tools.IsInvalidParams(err) {
@@ -321,42 +343,62 @@ func writeJSONRPCStatus(w http.ResponseWriter, statusCode int, res jsonrpc.Respo
 	_, _ = w.Write(payload.Bytes())
 }
 
-func parseToolCallParams(req jsonrpc.Request) (string, map[string]any, string, *jsonrpc.RequestError) {
+func parseToolCallParams(req jsonrpc.Request) (tools.CallRequest, *jsonrpc.RequestError) {
 	if paramsErr := rejectUnknownParams(req, "name", "arguments", "_meta"); paramsErr != nil {
-		return "", nil, "", paramsErr
+		return tools.CallRequest{}, paramsErr
 	}
 	name, valid := req.Params["name"].(string)
 	if !valid || strings.TrimSpace(name) == "" {
-		return "", nil, "", jsonrpc.InvalidParams(req.ID, "name must be a non-empty string")
+		return tools.CallRequest{}, jsonrpc.InvalidParams(req.ID, "name must be a non-empty string")
 	}
 	args := map[string]any{}
 	if value, present := req.Params["arguments"]; present {
 		var object bool
 		args, object = value.(map[string]any)
 		if !object || args == nil {
-			return "", nil, "", jsonrpc.InvalidParams(req.ID, "arguments must be an object")
+			return tools.CallRequest{}, jsonrpc.InvalidParams(req.ID, "arguments must be an object")
 		}
 	}
-	approvalToken := ""
+	call := tools.CallRequest{Name: name, Args: args}
 	if value, present := req.Params["_meta"]; present {
 		meta, object := value.(map[string]any)
 		if !object || meta == nil {
-			return "", nil, "", jsonrpc.InvalidParams(req.ID, "_meta must be an object")
+			return tools.CallRequest{}, jsonrpc.InvalidParams(req.ID, "_meta must be an object")
 		}
 		for key := range meta {
-			if key != "approvalToken" {
-				return "", nil, "", jsonrpc.InvalidParams(req.ID, "unknown _meta key")
+			if key != "approvalToken" && key != "provenanceToken" && key != "internalCleanupToken" {
+				return tools.CallRequest{}, jsonrpc.InvalidParams(req.ID, "unknown _meta key")
 			}
 		}
-		if value, present := meta["approvalToken"]; present {
-			var tokenString bool
-			approvalToken, tokenString = value.(string)
-			if !tokenString {
-				return "", nil, "", jsonrpc.InvalidParams(req.ID, "_meta.approvalToken must be a string")
-			}
+		token, paramsErr := metaString(req, meta, "approvalToken")
+		if paramsErr != nil {
+			return tools.CallRequest{}, paramsErr
 		}
+		call.ApprovalToken = token
+		token, paramsErr = metaString(req, meta, "provenanceToken")
+		if paramsErr != nil {
+			return tools.CallRequest{}, paramsErr
+		}
+		call.ProvenanceToken = token
+		token, paramsErr = metaString(req, meta, "internalCleanupToken")
+		if paramsErr != nil {
+			return tools.CallRequest{}, paramsErr
+		}
+		call.InternalCleanupToken = token
 	}
-	return name, args, approvalToken, nil
+	return call, nil
+}
+
+func metaString(req jsonrpc.Request, meta map[string]any, key string) (string, *jsonrpc.RequestError) {
+	value, present := meta[key]
+	if !present {
+		return "", nil
+	}
+	text, isString := value.(string)
+	if !isString {
+		return "", jsonrpc.InvalidParams(req.ID, "_meta."+key+" must be a string")
+	}
+	return text, nil
 }
 
 func validateToolsListParams(req jsonrpc.Request) *jsonrpc.RequestError {

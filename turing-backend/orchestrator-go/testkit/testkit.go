@@ -2,6 +2,7 @@ package testkit
 
 import (
 	"context"
+	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/app"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
@@ -60,6 +61,21 @@ func NewApp(cfg Config) (*App, error) {
 func (a *App) Stop() {
 	if a != nil && a.inner != nil {
 		a.inner.Stop()
+	}
+}
+
+func (a *App) WaitForSessionEventSubscriber(ctx context.Context, sessionID string) error {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if a != nil && a.inner != nil && a.inner.EventBus.SessionSubscriberCount(sessionID) > 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
 	}
 }
 

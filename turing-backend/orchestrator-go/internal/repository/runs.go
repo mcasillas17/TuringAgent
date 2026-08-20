@@ -276,6 +276,24 @@ func failRunWithEventTx(ctx context.Context, tx *sql.Tx, runID string, code stri
 	if preserveExecution {
 		result, err = tx.ExecContext(ctx, `
 			UPDATE agent_runs
+			SET execution_state = 'uncertain'
+			WHERE id = ? AND status = 'failed' AND execution_active = 1
+		`, runID)
+		if err != nil {
+			return nil, err
+		}
+		alreadyFailed, err := result.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if alreadyFailed == 1 {
+			// Another terminal path already recorded the run failure, but its
+			// command-delivery outcome is now uncertain. Fence the live
+			// execution without appending a duplicate terminal event.
+			return nil, nil
+		}
+		result, err = tx.ExecContext(ctx, `
+			UPDATE agent_runs
 			SET status = 'failed',
 				error_code = ?,
 				error_message = ?,
@@ -289,6 +307,9 @@ func failRunWithEventTx(ctx context.Context, tx *sql.Tx, runID string, code stri
 				execution_lease_expires_at_ns = CASE WHEN execution_active = 1 THEN execution_lease_expires_at_ns ELSE NULL END
 			WHERE id = ? AND status IN ('queued','running','waiting_approval')
 		`, code, message, finishedAt, finishedAt, runID)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		result, err = tx.ExecContext(ctx, `
 			UPDATE agent_runs
