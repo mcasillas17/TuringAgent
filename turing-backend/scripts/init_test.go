@@ -639,10 +639,10 @@ func TestInitGeneratesDistinctRuntimeAndApprovalConsumerTokens(t *testing.T) {
 		"TURING_APPROVAL_CONSUMER_TOKEN": approvalConsumerToken,
 	} {
 		if len(value) != 64 {
-			t.Fatalf("%s = %q (%d chars), want 64 hex characters", name, value, len(value))
+			t.Fatalf("%s has %d chars, want 64 hex characters", name, len(value))
 		}
 		if _, err := hex.DecodeString(value); err != nil {
-			t.Fatalf("%s is not hex: %v", name, err)
+			t.Fatalf("%s is not hex", name)
 		}
 	}
 	if runtimeToken == approvalConsumerToken {

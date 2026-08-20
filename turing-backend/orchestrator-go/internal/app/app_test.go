@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -337,6 +338,127 @@ func TestApprovalRPCsAreSeparatedAcrossPublicAndInternalServers(t *testing.T) {
 	}
 }
 
+// This is the real wiring in app.New — the exact allowlists a compromised
+// mcp-files would face — not the standalone fixtures in the auth package's
+// own unit tests. It must independently prove the escalation TUR-006 removes:
+// the approval-consumer identity reaches ConsumeApproval (past authorization,
+// into the handler) but is denied PermissionDenied for every runtime-only
+// method, on both the unary and streaming internal interceptors.
+func TestApprovalConsumerIdentityCannotReachRuntimeOnlyMethods(t *testing.T) {
+	app := newTestApp(t)
+	conn := newBufconnClient(t, app.InternalServer)
+	approvalConsumerCtx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+"internal-approval-consumer"))
+
+	sessionClient := turingv1.NewSessionServiceClient(conn)
+	if _, err := sessionClient.ListMessages(approvalConsumerCtx, &turingv1.ListMessagesRequest{SessionId: "missing"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("approval-consumer ListMessages error = %v, want PermissionDenied", err)
+	}
+	if _, err := sessionClient.SearchMessages(approvalConsumerCtx, &turingv1.SearchMessagesRequest{Query: "x"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("approval-consumer SearchMessages error = %v, want PermissionDenied", err)
+	}
+
+	approvalClient := turingv1.NewApprovalServiceClient(conn)
+	if _, err := approvalClient.GetApprovalForRuntime(approvalConsumerCtx, &turingv1.GetApprovalForRuntimeRequest{ApprovalId: "missing"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("approval-consumer GetApprovalForRuntime error = %v, want PermissionDenied", err)
+	}
+
+	runtimeClient := turingv1.NewRuntimeServiceClient(conn)
+	stream, err := runtimeClient.ConnectWorker(approvalConsumerCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Recv(); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("approval-consumer ConnectWorker error = %v, want PermissionDenied", err)
+	}
+
+	// ConsumeApproval must still be reachable: a NotFound for a nonexistent
+	// approval id proves authorization passed and the handler itself ran,
+	// distinguishing "denied before the handler" from "denied inside it".
+	if _, err := approvalClient.ConsumeApproval(approvalConsumerCtx, &turingv1.ConsumeApprovalRequest{ApprovalId: "missing"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("approval-consumer ConsumeApproval error = %v, want NotFound (reached the handler)", err)
+	}
+}
+
+// Concurrent ConsumeApproval calls over the real internal gRPC server, behind
+// the actual identity interceptor, must still consume an approval exactly
+// once. The interceptor is a pre-handler authorization check and must not
+// introduce — or hide — a double-consumption race in the transaction beneath
+// it.
+func TestConcurrentConsumeApprovalOverInternalServerConsumesExactlyOnce(t *testing.T) {
+	app := newTestApp(t)
+	ctx := context.Background()
+	session, err := app.Repository.CreateSession(ctx, "concurrent consume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := app.Repository.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "needs approval", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Repository.MarkRunRunning(ctx, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Repository.RecordToolCallBefore(ctx, repository.ToolCallRecord{ToolCallID: "call_concurrent", RunID: enqueued.RunID}, "general_assistant", "files", "files.update", `{}`, "sha256:concurrent"); err != nil {
+		t.Fatal(err)
+	}
+	approvalID, err := app.ApprovalService.CreateApprovalForTool(ctx, enqueued.RunID, "call_concurrent", "general_assistant", "files.update", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.ApprovalService.ApproveApproval(ctx, &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
+		t.Fatal(err)
+	}
+
+	approvalClient := turingv1.NewApprovalServiceClient(newBufconnClient(t, app.InternalServer))
+	approvalConsumerCtx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+"internal-approval-consumer"))
+
+	const attempts = 10
+	responses := make(chan *turingv1.ApprovalResponse, attempts)
+	errs := make(chan error, attempts)
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, err := approvalClient.ConsumeApproval(approvalConsumerCtx, &turingv1.ConsumeApprovalRequest{ApprovalId: approvalID})
+			if err != nil {
+				errs <- err
+				return
+			}
+			responses <- resp
+		}()
+	}
+	wg.Wait()
+	close(responses)
+	close(errs)
+
+	consumed := 0
+	for resp := range responses {
+		if resp.GetStatus() != turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED {
+			t.Fatalf("unexpected non-error status: %v", resp.GetStatus())
+		}
+		consumed++
+	}
+	failedPrecondition := 0
+	for err := range errs {
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("unexpected consume error = %v, want FailedPrecondition", err)
+		}
+		failedPrecondition++
+	}
+	if consumed != 1 {
+		t.Fatalf("consumed count = %d, want exactly 1", consumed)
+	}
+	if failedPrecondition != attempts-1 {
+		t.Fatalf("FailedPrecondition count = %d, want %d", failedPrecondition, attempts-1)
+	}
+}
+
 func TestAuthenticationFailuresAreAuditedWithoutCredentials(t *testing.T) {
 	app := newTestApp(t)
 	const requestID = "request-public-invalid"
@@ -380,6 +502,65 @@ func TestAuthenticationFailuresAreAuditedWithoutCredentials(t *testing.T) {
 	if payload["requestId"] != requestID || payload["userAgent"] == "" {
 		t.Fatalf("auth audit payload = %#v", payload)
 	}
+}
+
+// A wrong-service call and an unrecognized bearer are exactly the two events
+// TUR-006 most needs preserved in the audit trail: proof that a specific
+// identity over-reached, and proof that something presented no valid
+// internal credential at all. Both must actually persist, not merely avoid
+// crashing the request — a silently dropped audit write would defeat the
+// point of recording it.
+func TestInternalAuthorizationFailuresAreAudited(t *testing.T) {
+	app := newTestApp(t)
+	conn := newBufconnClient(t, app.InternalServer)
+
+	queryActorType := func(t *testing.T, requestID string) string {
+		t.Helper()
+		var actorType string
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			err := app.database.QueryRowContext(context.Background(), `
+				SELECT actor_type FROM audit_logs WHERE action = 'auth.failed' AND correlation_id = ?
+			`, requestID).Scan(&actorType)
+			if err == nil {
+				return actorType
+			}
+			if !errors.Is(err, sql.ErrNoRows) || !time.Now().Before(deadline) {
+				t.Fatalf("query auth audit for request %q: %v", requestID, err)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	t.Run("wrong-service call from a real identity", func(t *testing.T) {
+		const requestID = "request-approval-consumer-overreach"
+		approvalConsumerCtx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(
+			"authorization", "Bearer "+"internal-approval-consumer",
+			"x-request-id", requestID,
+		))
+		if _, err := turingv1.NewSessionServiceClient(conn).ListMessages(approvalConsumerCtx, &turingv1.ListMessagesRequest{SessionId: "missing"}); status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("ListMessages error = %v, want PermissionDenied", err)
+		}
+		actorType := queryActorType(t, requestID)
+		if actorType != "approval-consumer" {
+			t.Fatalf("actor_type = %q, want %q", actorType, "approval-consumer")
+		}
+	})
+
+	t.Run("unrecognized bearer", func(t *testing.T) {
+		const requestID = "request-internal-unrecognized-bearer"
+		unknownCtx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(
+			"authorization", "Bearer "+"not-a-registered-token",
+			"x-request-id", requestID,
+		))
+		if _, err := turingv1.NewSessionServiceClient(conn).ListMessages(unknownCtx, &turingv1.ListMessagesRequest{SessionId: "missing"}); status.Code(err) != codes.Unauthenticated {
+			t.Fatalf("ListMessages error = %v, want Unauthenticated", err)
+		}
+		actorType := queryActorType(t, requestID)
+		if actorType != "internal-unknown" {
+			t.Fatalf("actor_type = %q, want %q", actorType, "internal-unknown")
+		}
+	})
 }
 
 func TestAppRegistersPublicAndInternalServices(t *testing.T) {
