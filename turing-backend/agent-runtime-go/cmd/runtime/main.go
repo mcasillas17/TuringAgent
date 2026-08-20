@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os/signal"
+	"sort"
 	"syscall"
 	"time"
 
@@ -20,7 +21,6 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/orchestrator"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/worker"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func main() {
@@ -94,14 +94,42 @@ func run() error {
 		http.DefaultClient,
 	))
 	runtimeWorker := worker.New(worker.Options{
-		WorkerID:                 cfg.WorkerID,
-		AgentID:                  turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
-		MaxConcurrentRuns:        cfg.MaxConcurrentRuns,
-		HeartbeatInterval:        cfg.HeartbeatInterval,
-		DisconnectCleanupTimeout: cfg.TotalToolTimeout,
-		DiscoverTools:            discoverToolsFor(executor),
+		WorkerID:                    cfg.WorkerID,
+		AgentID:                     turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		MaxConcurrentRuns:           cfg.MaxConcurrentRuns,
+		HeartbeatInterval:           cfg.HeartbeatInterval,
+		DisconnectCleanupTimeout:    cfg.TotalToolTimeout,
+		Models:                      advertisedModels(cfg),
+		ExternalAgentCredentialRefs: agentCredentialRefs(cfg.AgentAPIKeys),
+		SupportsExternalAgents:      len(cfg.AgentAPIKeys) > 0,
+		DiscoverTools:               executor.AdvertisedTools,
 	}, runtimeClientAdapter{client: client}, executor)
 	return serve(ctx, runtimeWorker)
+}
+
+func agentCredentialRefs(keys map[string]string) []string {
+	refs := make([]string, 0, len(keys))
+	for ref := range keys {
+		refs = append(refs, ref)
+	}
+	sort.Strings(refs)
+	return refs
+}
+
+func advertisedModels(cfg config.Config) []*turingv1.ModelCapability {
+	models := []*turingv1.ModelCapability{{
+		Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:            cfg.OllamaModel,
+		MaxContextTokens: int32(cfg.OllamaContextWindowTokens),
+	}}
+	if cfg.OpenAIAPIKey != "" {
+		models = append(models, &turingv1.ModelCapability{
+			Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
+			Model:            cfg.OpenAIModel,
+			MaxContextTokens: int32(cfg.OpenAIContextWindowTokens),
+		})
+	}
+	return models
 }
 
 const (
@@ -202,31 +230,6 @@ func jitter(d time.Duration) time.Duration {
 // discoverToolsFor adapts the agent's tool snapshot to the handshake. The
 // orchestrator persists it as its registry and derives policy from it, so it
 // must come from the same discovery the agent executes against.
-func discoverToolsFor(executor *agent.GeneralAssistant) func(context.Context) ([]*turingv1.DiscoveredTool, error) {
-	return func(ctx context.Context) ([]*turingv1.DiscoveredTool, error) {
-		discovered, err := executor.DiscoveredTools(ctx)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]*turingv1.DiscoveredTool, 0, len(discovered))
-		for _, tool := range discovered {
-			schema, err := structpb.NewStruct(tool.Schema)
-			if err != nil {
-				// A schema we cannot represent would register a tool the
-				// orchestrator cannot store faithfully; fail the snapshot rather
-				// than report a partial one it would treat as authoritative.
-				return nil, fmt.Errorf("encode schema for %s/%s: %w", tool.ServerName, tool.ToolName, err)
-			}
-			out = append(out, &turingv1.DiscoveredTool{
-				ServerName: tool.ServerName,
-				ToolName:   tool.ToolName,
-				Schema:     schema,
-			})
-		}
-		return out, nil
-	}
-}
-
 type runtimeClientAdapter struct{ client *orchestrator.Client }
 
 func (a runtimeClientAdapter) ConnectWorker(ctx context.Context) (worker.RuntimeStream, error) {

@@ -82,6 +82,20 @@ const AgentJob$json = {
       '6': '.turing.v1.ExternalAgentTarget',
       '10': 'externalAgent'
     },
+    {
+      '1': 'required_context_tokens',
+      '3': 15,
+      '4': 1,
+      '5': 5,
+      '10': 'requiredContextTokens'
+    },
+    {
+      '1': 'minimum_worker_max_concurrent_runs',
+      '3': 16,
+      '4': 1,
+      '5': 5,
+      '10': 'minimumWorkerMaxConcurrentRuns'
+    },
   ],
 };
 
@@ -96,7 +110,10 @@ final $typed_data.Uint8List agentJobDescriptor = $convert.base64Decode(
     'bW9kZWwSGwoJdXNlcl90ZXh0GAogASgJUgh1c2VyVGV4dBInCg9yZXF1ZXN0ZWRfdG9vbHMYCy'
     'ADKAlSDnJlcXVlc3RlZFRvb2xzEhgKB2F0dGVtcHQYDCABKAVSB2F0dGVtcHQSMAoGc2tpbGxz'
     'GA0gAygLMhgudHVyaW5nLnYxLlNraWxsU25hcHNob3RSBnNraWxscxJFCg5leHRlcm5hbF9hZ2'
-    'VudBgOIAEoCzIeLnR1cmluZy52MS5FeHRlcm5hbEFnZW50VGFyZ2V0Ug1leHRlcm5hbEFnZW50');
+    'VudBgOIAEoCzIeLnR1cmluZy52MS5FeHRlcm5hbEFnZW50VGFyZ2V0Ug1leHRlcm5hbEFnZW50'
+    'EjYKF3JlcXVpcmVkX2NvbnRleHRfdG9rZW5zGA8gASgFUhVyZXF1aXJlZENvbnRleHRUb2tlbn'
+    'MSSgoibWluaW11bV93b3JrZXJfbWF4X2NvbmN1cnJlbnRfcnVucxgQIAEoBVIebWluaW11bVdv'
+    'cmtlck1heENvbmN1cnJlbnRSdW5z');
 
 @$core.Deprecated('Use externalAgentTargetDescriptor instead')
 const ExternalAgentTarget$json = {
@@ -186,6 +203,68 @@ final $typed_data.Uint8List discoveredToolDescriptor = $convert.base64Decode(
     '9sX25hbWUYAiABKAlSCHRvb2xOYW1lEi8KBnNjaGVtYRgDIAEoCzIXLmdvb2dsZS5wcm90b2J1'
     'Zi5TdHJ1Y3RSBnNjaGVtYQ==');
 
+@$core.Deprecated('Use workerCapabilitiesDescriptor instead')
+const WorkerCapabilities$json = {
+  '1': 'WorkerCapabilities',
+  '2': [
+    {
+      '1': 'models',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.ModelCapability',
+      '10': 'models'
+    },
+    {
+      '1': 'agent_ids',
+      '3': 2,
+      '4': 3,
+      '5': 14,
+      '6': '.turing.v1.AgentId',
+      '10': 'agentIds'
+    },
+    {
+      '1': 'tools',
+      '3': 3,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.DiscoveredTool',
+      '10': 'tools'
+    },
+    {
+      '1': 'max_concurrent_runs',
+      '3': 4,
+      '4': 1,
+      '5': 5,
+      '10': 'maxConcurrentRuns'
+    },
+    {
+      '1': 'supports_external_agents',
+      '3': 5,
+      '4': 1,
+      '5': 8,
+      '10': 'supportsExternalAgents'
+    },
+    {
+      '1': 'external_agent_credential_refs',
+      '3': 6,
+      '4': 3,
+      '5': 9,
+      '10': 'externalAgentCredentialRefs'
+    },
+  ],
+};
+
+/// Descriptor for `WorkerCapabilities`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List workerCapabilitiesDescriptor = $convert.base64Decode(
+    'ChJXb3JrZXJDYXBhYmlsaXRpZXMSMgoGbW9kZWxzGAEgAygLMhoudHVyaW5nLnYxLk1vZGVsQ2'
+    'FwYWJpbGl0eVIGbW9kZWxzEi8KCWFnZW50X2lkcxgCIAMoDjISLnR1cmluZy52MS5BZ2VudElk'
+    'UghhZ2VudElkcxIvCgV0b29scxgDIAMoCzIZLnR1cmluZy52MS5EaXNjb3ZlcmVkVG9vbFIFdG'
+    '9vbHMSLgoTbWF4X2NvbmN1cnJlbnRfcnVucxgEIAEoBVIRbWF4Q29uY3VycmVudFJ1bnMSOAoY'
+    'c3VwcG9ydHNfZXh0ZXJuYWxfYWdlbnRzGAUgASgIUhZzdXBwb3J0c0V4dGVybmFsQWdlbnRzEk'
+    'MKHmV4dGVybmFsX2FnZW50X2NyZWRlbnRpYWxfcmVmcxgGIAMoCVIbZXh0ZXJuYWxBZ2VudENy'
+    'ZWRlbnRpYWxSZWZz');
+
 @$core.Deprecated('Use runtimeWorkerReadyDescriptor instead')
 const RuntimeWorkerReady$json = {
   '1': 'RuntimeWorkerReady',
@@ -222,6 +301,15 @@ const RuntimeWorkerReady$json = {
       '6': '.turing.v1.ToolDiscoveryStatus',
       '10': 'toolDiscoveryStatus'
     },
+    {'1': 'registration_id', '3': 6, '4': 1, '5': 9, '10': 'registrationId'},
+    {
+      '1': 'capabilities',
+      '3': 7,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.WorkerCapabilities',
+      '10': 'capabilities'
+    },
   ],
 };
 
@@ -231,8 +319,34 @@ final $typed_data.Uint8List runtimeWorkerReadyDescriptor = $convert.base64Decode
     'VudF9pZBgCIAEoDjISLnR1cmluZy52MS5BZ2VudElkUgdhZ2VudElkEi4KE21heF9jb25jdXJy'
     'ZW50X3J1bnMYAyABKAVSEW1heENvbmN1cnJlbnRSdW5zEi8KBXRvb2xzGAQgAygLMhkudHVyaW'
     '5nLnYxLkRpc2NvdmVyZWRUb29sUgV0b29scxJSChV0b29sX2Rpc2NvdmVyeV9zdGF0dXMYBSAB'
-    'KA4yHi50dXJpbmcudjEuVG9vbERpc2NvdmVyeVN0YXR1c1ITdG9vbERpc2NvdmVyeVN0YXR1cw'
-    '==');
+    'KA4yHi50dXJpbmcudjEuVG9vbERpc2NvdmVyeVN0YXR1c1ITdG9vbERpc2NvdmVyeVN0YXR1cx'
+    'InCg9yZWdpc3RyYXRpb25faWQYBiABKAlSDnJlZ2lzdHJhdGlvbklkEkEKDGNhcGFiaWxpdGll'
+    'cxgHIAEoCzIdLnR1cmluZy52MS5Xb3JrZXJDYXBhYmlsaXRpZXNSDGNhcGFiaWxpdGllcw==');
+
+@$core.Deprecated('Use runtimeWorkerCapabilitiesUpdatedDescriptor instead')
+const RuntimeWorkerCapabilitiesUpdated$json = {
+  '1': 'RuntimeWorkerCapabilitiesUpdated',
+  '2': [
+    {'1': 'worker_id', '3': 1, '4': 1, '5': 9, '10': 'workerId'},
+    {'1': 'registration_id', '3': 2, '4': 1, '5': 9, '10': 'registrationId'},
+    {
+      '1': 'capabilities',
+      '3': 3,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.WorkerCapabilities',
+      '10': 'capabilities'
+    },
+  ],
+};
+
+/// Descriptor for `RuntimeWorkerCapabilitiesUpdated`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List runtimeWorkerCapabilitiesUpdatedDescriptor =
+    $convert.base64Decode(
+        'CiBSdW50aW1lV29ya2VyQ2FwYWJpbGl0aWVzVXBkYXRlZBIbCgl3b3JrZXJfaWQYASABKAlSCH'
+        'dvcmtlcklkEicKD3JlZ2lzdHJhdGlvbl9pZBgCIAEoCVIOcmVnaXN0cmF0aW9uSWQSQQoMY2Fw'
+        'YWJpbGl0aWVzGAMgASgLMh0udHVyaW5nLnYxLldvcmtlckNhcGFiaWxpdGllc1IMY2FwYWJpbG'
+        'l0aWVz');
 
 @$core.Deprecated('Use runtimeHeartbeatDescriptor instead')
 const RuntimeHeartbeat$json = {
@@ -418,6 +532,15 @@ const RuntimeUpdate$json = {
       '9': 0,
       '10': 'runCancelledAck'
     },
+    {
+      '1': 'worker_capabilities_updated',
+      '3': 8,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.RuntimeWorkerCapabilitiesUpdated',
+      '9': 0,
+      '10': 'workerCapabilitiesUpdated'
+    },
   ],
   '8': [
     {'1': 'update'},
@@ -434,19 +557,23 @@ final $typed_data.Uint8List runtimeUpdateDescriptor = $convert.base64Decode(
     'IeLnR1cmluZy52MS5SdW50aW1lUnVuQ29tcGxldGVkSABSDHJ1bkNvbXBsZXRlZBI8CgpydW5f'
     'ZmFpbGVkGAYgASgLMhsudHVyaW5nLnYxLlJ1bnRpbWVSdW5GYWlsZWRIAFIJcnVuRmFpbGVkEk'
     'wKEXJ1bl9jYW5jZWxsZWRfYWNrGAcgASgLMh4udHVyaW5nLnYxLlJ1bnRpbWVDYW5jZWxsZWRB'
-    'Y2tIAFIPcnVuQ2FuY2VsbGVkQWNrQggKBnVwZGF0ZQ==');
+    'Y2tIAFIPcnVuQ2FuY2VsbGVkQWNrEm0KG3dvcmtlcl9jYXBhYmlsaXRpZXNfdXBkYXRlZBgIIA'
+    'EoCzIrLnR1cmluZy52MS5SdW50aW1lV29ya2VyQ2FwYWJpbGl0aWVzVXBkYXRlZEgAUhl3b3Jr'
+    'ZXJDYXBhYmlsaXRpZXNVcGRhdGVkQggKBnVwZGF0ZQ==');
 
 @$core.Deprecated('Use runtimeWorkerAcceptedDescriptor instead')
 const RuntimeWorkerAccepted$json = {
   '1': 'RuntimeWorkerAccepted',
   '2': [
     {'1': 'worker_id', '3': 1, '4': 1, '5': 9, '10': 'workerId'},
+    {'1': 'registration_id', '3': 2, '4': 1, '5': 9, '10': 'registrationId'},
   ],
 };
 
 /// Descriptor for `RuntimeWorkerAccepted`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List runtimeWorkerAcceptedDescriptor = $convert.base64Decode(
-    'ChVSdW50aW1lV29ya2VyQWNjZXB0ZWQSGwoJd29ya2VyX2lkGAEgASgJUgh3b3JrZXJJZA==');
+    'ChVSdW50aW1lV29ya2VyQWNjZXB0ZWQSGwoJd29ya2VyX2lkGAEgASgJUgh3b3JrZXJJZBInCg'
+    '9yZWdpc3RyYXRpb25faWQYAiABKAlSDnJlZ2lzdHJhdGlvbklk');
 
 @$core.Deprecated('Use runtimeRunCancelledDescriptor instead')
 const RuntimeRunCancelled$json = {

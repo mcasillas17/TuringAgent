@@ -129,3 +129,44 @@ func TestRecoveryDoesNotRequeueExpiredAttemptOwnedByConnectedWorker(t *testing.T
 		t.Fatalf("live delivered assignment was recovered: %+v", run)
 	}
 }
+
+func TestRecoveryDispatchesRequeuedWorkAfterRoutingNoticeFailure(t *testing.T) {
+	h := newHarness(t)
+	recoverable := h.enqueueRun(t, "recover despite notice failure")
+	claimed, err := h.repo.ClaimNextJobWithLimit(
+		context.Background(), "general_assistant", "worker-gone", 1, time.Millisecond,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.RunID != recoverable.RunID {
+		t.Fatalf("claimed run = %q, want %q", claimed.RunID, recoverable.RunID)
+	}
+
+	stream := connectWorkerCapabilities(t, h, "worker-recovery-notice", "registration-recovery-notice", modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+	))
+	defer func() { _ = stream.CloseSend() }()
+	session, err := h.repo.CreateSession(context.Background(), "Unavailable during recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "needs OpenAI", AgentID: "general_assistant",
+		ModelProvider: "openai_compatible", Model: "gpt-4o-mini",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	failRoutingNoticeInserts(t, h)
+	time.Sleep(5 * time.Millisecond)
+
+	if err := h.service.RecoverOrphanedAssignments(context.Background()); err != nil {
+		t.Fatalf("recovery reported advisory notice failure: %v", err)
+	}
+	assigned := recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetRunAssigned() != nil
+	}).GetRunAssigned()
+	if assigned.GetRunId() != recoverable.RunID {
+		t.Fatalf("recovery assignment = %+v, want run %q", assigned, recoverable.RunID)
+	}
+}

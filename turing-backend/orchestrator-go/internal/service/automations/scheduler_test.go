@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -20,22 +21,46 @@ var schedulerDefaults = repository.AutomationRunDefaults{
 }
 
 type countingDispatcher struct {
-	mu    sync.Mutex
-	calls int
-	err   error
+	mu              sync.Mutex
+	calls           int
+	err             error
+	refreshErr      error
+	routableDefault string
+	callOrder       []string
 }
 
 func (d *countingDispatcher) DispatchPending(context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.calls++
+	d.callOrder = append(d.callOrder, "dispatch")
 	return d.err
+}
+
+func (d *countingDispatcher) RefreshPendingRoutingState(context.Context, string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.callOrder = append(d.callOrder, "refresh")
+	return d.refreshErr
+}
+
+func (d *countingDispatcher) RoutableDefaultModel(_ string, configured string) string {
+	if d.routableDefault != "" {
+		return d.routableDefault
+	}
+	return configured
 }
 
 func (d *countingDispatcher) count() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.calls
+}
+
+func (d *countingDispatcher) order() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.callOrder...)
 }
 
 type schedulerHarness struct {
@@ -139,6 +164,7 @@ func TestTickFiresOnceWhenDueAndAgainOnlyAfterTheNextInterval(t *testing.T) {
 	if err := h.scheduler.Tick(h.ctx); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
+
 	fired, err := h.repo.GetAutomation(h.ctx, automation.AutomationID)
 	if err != nil {
 		t.Fatal(err)
@@ -173,6 +199,35 @@ func TestTickFiresOnceWhenDueAndAgainOnlyAfterTheNextInterval(t *testing.T) {
 	}
 }
 
+func TestTickUsesLiveRoutableDefaultAndDispatchesAfterNoticeRefreshFailure(t *testing.T) {
+	h := newSchedulerHarness(t)
+	h.dispatcher.routableDefault = "live-ollama"
+	h.dispatcher.refreshErr = errors.New("refresh failed")
+	automation := createEnabled(t, h.repo, h.ctx, "Live default", repository.Schedule{Kind: repository.ScheduleInterval, Interval: 5 * time.Minute})
+	h.scheduler.now = func() time.Time { return parseTime(t, automation.NextDueAt) }
+
+	if err := h.scheduler.Tick(h.ctx); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if h.dispatcher.count() != 1 {
+		t.Fatalf("dispatched %d times, want 1 despite notice refresh failure", h.dispatcher.count())
+	}
+	if !slices.Equal(h.dispatcher.order(), []string{"dispatch", "refresh"}) {
+		t.Fatalf("routing calls = %v, want dispatch before advisory refresh", h.dispatcher.order())
+	}
+	fired, err := h.repo.GetAutomation(h.ctx, automation.AutomationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var model string
+	if err := h.database.QueryRowContext(h.ctx, `SELECT model_name FROM agent_runs WHERE id = ?`, fired.LastRunID).Scan(&model); err != nil {
+		t.Fatal(err)
+	}
+	if model != "live-ollama" {
+		t.Fatalf("run model = %q, want live-ollama", model)
+	}
+}
+
 func TestTickPublishesSessionUpdatedBeforeQueued(t *testing.T) {
 	h := newSchedulerHarness(t)
 	automation := createEnabled(t, h.repo, h.ctx, "Digest", repository.Schedule{Kind: repository.ScheduleInterval, Interval: 5 * time.Minute})
@@ -200,6 +255,48 @@ func TestTickPublishesSessionUpdatedBeforeQueued(t *testing.T) {
 	second := <-published
 	if second.Type != "agent.run.queued" {
 		t.Fatalf("second published event = %q, want agent.run.queued", second.Type)
+	}
+}
+
+func TestTickPublishesExternalRoutingEventAfterQueued(t *testing.T) {
+	h := newSchedulerHarness(t)
+	automation := createEnabled(t, h.repo, h.ctx, "External digest", repository.Schedule{Kind: repository.ScheduleInterval, Interval: 5 * time.Minute})
+	session, err := h.repo.CreateSession(h.ctx, automation.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.database.ExecContext(h.ctx,
+		`UPDATE automations SET session_id = ? WHERE id = ?`,
+		session.SessionID, automation.AutomationID); err != nil {
+		t.Fatal(err)
+	}
+	agent, err := h.repo.CreateExternalAgent(h.ctx, repository.ExternalAgentInput{
+		DisplayName: "External", Provider: "anthropic", BaseURL: "https://example.com",
+		Model: "external-model", CredentialRef: "external",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.SetSessionAgent(h.ctx, session.SessionID, agent.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	published, unsubscribe := h.bus.Subscribe(session.SessionID)
+	defer unsubscribe()
+	h.scheduler.now = func() time.Time { return parseTime(t, automation.NextDueAt) }
+
+	if err := h.scheduler.Tick(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"session.updated", "agent.run.queued", "agent.run.step"}
+	for index, wantType := range want {
+		select {
+		case event := <-published:
+			if event.Type != wantType {
+				t.Fatalf("published event %d = %q, want %q", index, event.Type, wantType)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for published event %d (%s)", index, wantType)
+		}
 	}
 }
 

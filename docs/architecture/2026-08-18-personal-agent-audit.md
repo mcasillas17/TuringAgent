@@ -585,6 +585,12 @@ remains blocked until the commit containing the contract is on `main`.
 **Likely files:** runtime proto, worker registration, dispatcher, session config APIs.  
 **Acceptance:** Unsupported selections fail before enqueue; capability loss updates queue notices; reconnect restores the registry.  
 **Dependencies:** None.
+**Pending-merge artifact:** [Worker capability routing](worker-capabilities.md).
+**Pending-merge coverage:** Exact external credential refs are validated before
+enqueue and dispatch; capability fencing preserves execution retry budget; automation
+routing notices remain live and routing-unavailable occurrences are auditable; modern
+empty tool snapshots, populated schema upgrades, and reconnect restoration are covered
+by regression tests.
 
 ### Phase 6: Connectors and multiple agents
 

@@ -2,8 +2,11 @@ package worker
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -29,13 +32,19 @@ type BeaconPosterSetter interface {
 }
 
 type Options struct {
-	WorkerID                 string
-	AgentID                  turingv1.AgentId
-	MaxConcurrentRuns        int
-	HeartbeatInterval        time.Duration
-	DisconnectCleanupTimeout time.Duration
-	DecisionTombstoneTTL     time.Duration
-	UpdateSendTimeout        time.Duration
+	WorkerID                    string
+	AgentID                     turingv1.AgentId
+	MaxConcurrentRuns           int
+	HeartbeatInterval           time.Duration
+	DisconnectCleanupTimeout    time.Duration
+	DecisionTombstoneTTL        time.Duration
+	UpdateSendTimeout           time.Duration
+	Models                      []*turingv1.ModelCapability
+	ExternalAgentCredentialRefs []string
+	// SupportsExternalAgents mirrors the coarse legacy wire field. Exact
+	// routing authorization comes only from ExternalAgentCredentialRefs.
+	SupportsExternalAgents bool
+	NewRegistrationID      func() (string, error)
 
 	// DiscoverTools enumerates the tools this worker can execute, reported to the
 	// orchestrator on every connect. The orchestrator persists the snapshot as
@@ -300,11 +309,46 @@ func New(options Options, client RuntimeClient, executor Executor) *Worker {
 	if options.UpdateSendTimeout <= 0 {
 		options.UpdateSendTimeout = defaultUpdateSendTimeout
 	}
+	if options.NewRegistrationID == nil {
+		options.NewRegistrationID = newRegistrationID
+	}
+	options.Models = cloneModelCapabilities(options.Models)
+	options.ExternalAgentCredentialRefs = cloneCredentialRefs(options.ExternalAgentCredentialRefs)
 	return &Worker{
 		options: options, client: client, executor: executor, active: map[string]*activeRun{},
 		approvals: map[string]string{}, toolCalls: map[string]string{}, decisions: map[string][]*decisionWaiter{},
 		generations: map[string]uint64{},
 	}
+}
+
+func newRegistrationID() (string, error) {
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return "", err
+	}
+	return "registration_" + hex.EncodeToString(random[:]), nil
+}
+
+func cloneModelCapabilities(models []*turingv1.ModelCapability) []*turingv1.ModelCapability {
+	cloned := make([]*turingv1.ModelCapability, 0, len(models))
+	for _, model := range models {
+		if model == nil {
+			cloned = append(cloned, nil)
+			continue
+		}
+		cloned = append(cloned, &turingv1.ModelCapability{
+			Provider:         model.GetProvider(),
+			Model:            model.GetModel(),
+			MaxContextTokens: model.GetMaxContextTokens(),
+		})
+	}
+	return cloned
+}
+
+func cloneCredentialRefs(refs []string) []string {
+	cloned := append([]string(nil), refs...)
+	sort.Strings(cloned)
+	return cloned
 }
 
 func (w *Worker) Run(ctx context.Context) error {
@@ -319,6 +363,23 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := w.waitForPriorRuns(ctx); err != nil {
+		return fmt.Errorf("wait for prior active runs: %w", err)
+	}
+	modernRegistration := len(w.options.Models) > 0 ||
+		len(w.options.ExternalAgentCredentialRefs) > 0 ||
+		w.options.SupportsExternalAgents
+	registrationID := ""
+	if modernRegistration {
+		var err error
+		registrationID, err = w.options.NewRegistrationID()
+		if err != nil {
+			return fmt.Errorf("create worker registration identity: %w", err)
+		}
+		if registrationID == "" {
+			return fmt.Errorf("%w: registration ID is required", ErrInvalidConfig)
+		}
 	}
 	streamCtx, cancelStream := context.WithCancelCause(ctx)
 	runCtx, cancelRuns := context.WithCancelCause(context.WithoutCancel(ctx))
@@ -348,6 +409,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		WorkerId:          w.options.WorkerID,
 		AgentId:           w.options.AgentID,
 		MaxConcurrentRuns: int32(w.options.MaxConcurrentRuns),
+		RegistrationId:    registrationID,
 	}
 	if w.options.DiscoverTools != nil {
 		discovered, err := w.options.DiscoverTools(streamCtx)
@@ -361,6 +423,21 @@ func (w *Worker) Run(ctx context.Context) error {
 		} else {
 			ready.Tools = discovered
 			ready.ToolDiscoveryStatus = turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_COMPLETE
+		}
+	} else if modernRegistration {
+		// A modern capability snapshot is authoritative. Mark an absent discovery
+		// callback as a known-empty tool set so older orchestrators do not apply
+		// their legacy compatibility tools to this worker.
+		ready.ToolDiscoveryStatus = turingv1.ToolDiscoveryStatus_TOOL_DISCOVERY_STATUS_COMPLETE
+	}
+	if modernRegistration {
+		ready.Capabilities = &turingv1.WorkerCapabilities{
+			Models:                      cloneModelCapabilities(w.options.Models),
+			AgentIds:                    []turingv1.AgentId{w.options.AgentID},
+			Tools:                       ready.GetTools(),
+			MaxConcurrentRuns:           int32(w.options.MaxConcurrentRuns),
+			SupportsExternalAgents:      w.options.SupportsExternalAgents || len(w.options.ExternalAgentCredentialRefs) > 0,
+			ExternalAgentCredentialRefs: cloneCredentialRefs(w.options.ExternalAgentCredentialRefs),
 		}
 	}
 	if err := w.send(streamCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: ready}}); err != nil {
@@ -458,6 +535,29 @@ func (w *Worker) waitForActiveRuns(entries map[string]*activeRun, timeout time.D
 			delete(entries, runID)
 		case <-timer.C:
 			return
+		}
+	}
+}
+
+func (w *Worker) waitForPriorRuns(ctx context.Context) error {
+	for {
+		var (
+			runID string
+			entry *activeRun
+		)
+		w.mu.Lock()
+		for runID, entry = range w.active {
+			break
+		}
+		w.mu.Unlock()
+		if entry == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-entry.done:
+			w.deleteActiveEntry(runID, entry)
 		}
 	}
 }

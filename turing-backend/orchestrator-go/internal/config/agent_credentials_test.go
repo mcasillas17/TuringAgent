@@ -27,6 +27,18 @@ func TestParseAgentAPIKeysErrorDoesNotEchoTheValue(t *testing.T) {
 	}
 }
 
+func TestParseAgentAPIKeysRejectsInvalidCredentialNames(t *testing.T) {
+	for _, raw := range []string{
+		`{" claude":"sk-1"}`,
+		`{"claude/key":"sk-1"}`,
+		`{"` + strings.Repeat("a", 65) + `":"sk-1"}`,
+	} {
+		if _, err := ParseAgentAPIKeys(raw); err == nil {
+			t.Fatalf("invalid credential name in %q was accepted", raw)
+		}
+	}
+}
+
 func TestAgentCredentialNamesDropsTheKeys(t *testing.T) {
 	names := AgentCredentialNames(map[string]string{"openai": "sk-2", "claude": "sk-1"})
 

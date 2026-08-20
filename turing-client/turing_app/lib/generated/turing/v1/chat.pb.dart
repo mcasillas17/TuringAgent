@@ -30,6 +30,9 @@ class SendMessageRequest extends $pb.GeneratedMessage {
     $3.ModelProvider? modelProvider,
     $core.String? model,
     $core.String? idempotencyKey,
+    $core.Iterable<$core.String>? requestedTools,
+    $core.int? requiredContextTokens,
+    $core.int? minimumWorkerMaxConcurrentRuns,
   }) {
     final result = create();
     if (sessionId != null) result.sessionId = sessionId;
@@ -39,6 +42,11 @@ class SendMessageRequest extends $pb.GeneratedMessage {
     if (modelProvider != null) result.modelProvider = modelProvider;
     if (model != null) result.model = model;
     if (idempotencyKey != null) result.idempotencyKey = idempotencyKey;
+    if (requestedTools != null) result.requestedTools.addAll(requestedTools);
+    if (requiredContextTokens != null)
+      result.requiredContextTokens = requiredContextTokens;
+    if (minimumWorkerMaxConcurrentRuns != null)
+      result.minimumWorkerMaxConcurrentRuns = minimumWorkerMaxConcurrentRuns;
     return result;
   }
 
@@ -69,6 +77,11 @@ class SendMessageRequest extends $pb.GeneratedMessage {
         enumValues: $3.ModelProvider.values)
     ..aOS(6, _omitFieldNames ? '' : 'model')
     ..aOS(7, _omitFieldNames ? '' : 'idempotencyKey')
+    ..pPS(8, _omitFieldNames ? '' : 'requestedTools')
+    ..a<$core.int>(
+        9, _omitFieldNames ? '' : 'requiredContextTokens', $pb.PbFieldType.O3)
+    ..a<$core.int>(10, _omitFieldNames ? '' : 'minimumWorkerMaxConcurrentRuns',
+        $pb.PbFieldType.O3)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -156,6 +169,29 @@ class SendMessageRequest extends $pb.GeneratedMessage {
   $core.bool hasIdempotencyKey() => $_has(6);
   @$pb.TagNumber(7)
   void clearIdempotencyKey() => $_clearField(7);
+
+  /// Exact server/tool names that a compatible worker must advertise.
+  @$pb.TagNumber(8)
+  $pb.PbList<$core.String> get requestedTools => $_getList(7);
+
+  @$pb.TagNumber(9)
+  $core.int get requiredContextTokens => $_getIZ(8);
+  @$pb.TagNumber(9)
+  set requiredContextTokens($core.int value) => $_setSignedInt32(8, value);
+  @$pb.TagNumber(9)
+  $core.bool hasRequiredContextTokens() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearRequiredContextTokens() => $_clearField(9);
+
+  @$pb.TagNumber(10)
+  $core.int get minimumWorkerMaxConcurrentRuns => $_getIZ(9);
+  @$pb.TagNumber(10)
+  set minimumWorkerMaxConcurrentRuns($core.int value) =>
+      $_setSignedInt32(9, value);
+  @$pb.TagNumber(10)
+  $core.bool hasMinimumWorkerMaxConcurrentRuns() => $_has(9);
+  @$pb.TagNumber(10)
+  void clearMinimumWorkerMaxConcurrentRuns() => $_clearField(10);
 }
 
 class RunQueued extends $pb.GeneratedMessage {

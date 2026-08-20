@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -48,7 +49,25 @@ func newHarnessWithDatabase(t *testing.T, database *db.DB) *harness {
 	t.Helper()
 	repo := repository.New(database)
 	bus := events.NewBus(8)
-	runtimeServer := runtimesvc.New(repo, bus)
+	runtimeServer := runtimesvc.NewWithConfig(repo, bus, runtimesvc.DispatchConfig{
+		LegacyCapabilities: &runtimesvc.LegacyCapabilityProfile{
+			Models: []*turingv1.ModelCapability{
+				{
+					Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+					Model:            "llama3.2",
+					MaxContextTokens: 8192,
+				},
+				{
+					Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
+					Model:            "gpt-4o-mini",
+					MaxContextTokens: 8192,
+				},
+			},
+			AgentIds:                    []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+			ExternalAgentCredentialRefs: []string{"claude", "external"},
+			SupportsExternalAgents:      true,
+		},
+	})
 	chatServer := New(repo, bus, runtimeServer, "llama3.2", "gpt-4o-mini")
 	lis := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
@@ -74,6 +93,7 @@ func newHarnessWithDatabase(t *testing.T, database *db.DB) *harness {
 	t.Cleanup(func() {
 		cancel()
 		grpcServer.Stop()
+		runtimeServer.WaitForWorkerStreams()
 		_ = conn.Close()
 	})
 	return &harness{repo: repo, database: database, bus: bus, runtime: runtimeServer, service: chatServer, chatClient: turingv1.NewChatServiceClient(conn), conn: conn, ctx: ctx}
@@ -118,6 +138,7 @@ func TestSendMessageDispatchContextSurvivesClientCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	streamCtx, cancel := context.WithCancel(context.Background())
 	stream := &cancellingChatStream{ctx: streamCtx, cancel: cancel}
 
@@ -135,19 +156,96 @@ func TestSendMessageDispatchContextSurvivesClientCancellation(t *testing.T) {
 	}
 }
 
+func TestSendMessageDispatchesDurableRunAfterRoutingRefreshFailure(t *testing.T) {
+	database := openChatTestDB(t)
+	repo := repository.New(database)
+	bus := events.NewBus(8)
+	dispatcher := &dispatchContextRecorder{refreshErr: errors.New("refresh failed")}
+	service := New(repo, bus, dispatcher, "llama3.2", "gpt-4o-mini")
+	session, err := repo.CreateSession(context.Background(), "Refresh failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamCtx, cancel := context.WithCancel(context.Background())
+	stream := &cancellingChatStream{ctx: streamCtx, cancel: cancel}
+
+	err = service.SendMessage(&turingv1.SendMessageRequest{
+		SessionId: session.SessionID, Content: "keep queued work",
+		ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "llama3.2",
+	}, stream)
+	if status.Code(err) != codes.Canceled {
+		t.Fatalf("SendMessage error = %v, want client cancellation after dispatch", err)
+	}
+	if dispatcher.dispatchCalls != 1 {
+		t.Fatalf("DispatchPending calls = %d, want 1 after refresh failure", dispatcher.dispatchCalls)
+	}
+	if !slices.Equal(dispatcher.callOrder, []string{"dispatch", "refresh"}) {
+		t.Fatalf("routing calls = %v, want dispatch before advisory refresh", dispatcher.callOrder)
+	}
+}
+
+func TestSendMessageUsesLiveRoutableDefaultWhenModelIsOmitted(t *testing.T) {
+	h := newHarness(t)
+	capabilities := defaultChatWorkerCapabilities(false)
+	capabilities.Models = []*turingv1.ModelCapability{{
+		Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:            "live-ollama",
+		MaxContextTokens: 8192,
+	}}
+	worker := connectChatTestWorker(t, h, capabilities)
+
+	stream, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
+		SessionId:     h.createSession(t),
+		Content:       "use the live fallback",
+		ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("receive queued event: %v", err)
+	}
+	assigned := recvRuntimeCommand(t, worker, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetRunAssigned() != nil
+	}).GetRunAssigned()
+	if assigned.GetModel() != "live-ollama" {
+		t.Fatalf("assigned model = %q, want live-ollama", assigned.GetModel())
+	}
+}
+
 type dispatchContextRecorder struct {
-	contextErr error
-	calls      int
-	err        error
+	contextErr           error
+	err                  error
+	refreshErr           error
+	routableDefaultModel string
+	dispatchCalls        int
+	callOrder            []string
 }
 
 func (d *dispatchContextRecorder) DispatchPending(ctx context.Context) error {
-	d.calls++
 	d.contextErr = ctx.Err()
+	d.dispatchCalls++
+	d.callOrder = append(d.callOrder, "dispatch")
 	return d.err
 }
 
 func (d *dispatchContextRecorder) CancelRun(context.Context, string, string) {}
+
+func (d *dispatchContextRecorder) ValidateRouting(context.Context, repository.RoutingRequirements) error {
+	return nil
+}
+
+func (d *dispatchContextRecorder) RefreshPendingRoutingState(context.Context, string) error {
+	d.callOrder = append(d.callOrder, "refresh")
+	return d.refreshErr
+}
+
+func (d *dispatchContextRecorder) RoutableDefaultModel(_ string, configured string) string {
+	if d.routableDefaultModel != "" {
+		return d.routableDefaultModel
+	}
+	return configured
+}
 
 type cancellingChatStream struct {
 	grpc.ServerStream
@@ -220,8 +318,8 @@ func TestSendMessageWithIdempotencyKeyDispatchesAfterQueuedSendFails(t *testing.
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("SendMessage error = %v, want Unavailable", err)
 	}
-	if dispatcher.calls != 1 || dispatcher.contextErr != nil {
-		t.Fatalf("DispatchPending calls=%d context error=%v, want one uncancelled dispatch", dispatcher.calls, dispatcher.contextErr)
+	if dispatcher.dispatchCalls != 1 || dispatcher.contextErr != nil {
+		t.Fatalf("DispatchPending calls=%d context error=%v, want one uncancelled dispatch", dispatcher.dispatchCalls, dispatcher.contextErr)
 	}
 	var runID, runStatus string
 	if err := database.QueryRowContext(context.Background(), `SELECT id, status FROM agent_runs WHERE session_id = ?`, session.SessionID).Scan(&runID, &runStatus); err != nil {
@@ -254,8 +352,8 @@ func TestSendMessageWithIdempotencyKeyKeepsQueuedRunOnDispatchFailure(t *testing
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("SendMessage error = %v, want Internal", err)
 	}
-	if dispatcher.calls != 1 {
-		t.Fatalf("DispatchPending calls = %d, want 1", dispatcher.calls)
+	if dispatcher.dispatchCalls != 1 {
+		t.Fatalf("DispatchPending calls = %d, want 1", dispatcher.dispatchCalls)
 	}
 	var runID, runStatus string
 	if err := database.QueryRowContext(context.Background(), `SELECT id, status FROM agent_runs WHERE session_id = ?`, session.SessionID).Scan(&runID, &runStatus); err != nil {
@@ -292,8 +390,8 @@ func TestSendMessageReplayDispatchesPendingRunAfterPriorFailure(t *testing.T) {
 	if err := service.SendMessage(request, replay); status.Code(err) != codes.Canceled {
 		t.Fatalf("replay SendMessage error = %v, want Canceled", err)
 	}
-	if dispatcher.calls != 2 {
-		t.Fatalf("DispatchPending calls = %d, want retry on replay", dispatcher.calls)
+	if dispatcher.dispatchCalls != 2 {
+		t.Fatalf("DispatchPending calls = %d, want retry on replay", dispatcher.dispatchCalls)
 	}
 }
 
@@ -323,8 +421,8 @@ func TestSendMessageReplayDispatchesPendingRunWhenQueuedAckIsLost(t *testing.T) 
 	if err := service.SendMessage(request, replay); status.Code(err) != codes.Unavailable {
 		t.Fatalf("replay SendMessage error = %v, want Unavailable", err)
 	}
-	if dispatcher.calls != 2 {
-		t.Fatalf("DispatchPending calls = %d, want retry after lost acknowledgement", dispatcher.calls)
+	if dispatcher.dispatchCalls != 2 {
+		t.Fatalf("DispatchPending calls = %d, want retry after lost acknowledgement", dispatcher.dispatchCalls)
 	}
 }
 
@@ -373,6 +471,8 @@ func TestSendMessageCancellingReplayDoesNotCancelOriginalRun(t *testing.T) {
 
 func TestSendMessageStreamsQueuedEvent(t *testing.T) {
 	h := newHarness(t)
+	worker := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(false))
+	defer func() { _ = worker.CloseSend() }()
 	sessionID := h.createSession(t)
 	stream, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
 		SessionId:     sessionID,
@@ -394,6 +494,8 @@ func TestSendMessageStreamsQueuedEvent(t *testing.T) {
 
 func TestSendMessageIdempotentReplayReturnsOriginalRunAndResumesEventStream(t *testing.T) {
 	h := newHarness(t)
+	worker := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(false))
+	defer func() { _ = worker.CloseSend() }()
 	sessionID := h.createSession(t)
 	key := "send-replay-key"
 	first, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
@@ -442,9 +544,15 @@ func TestSendMessageIdempotentReplayReturnsOriginalRunAndResumesEventStream(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	replayedTerminal, err := replay.Recv()
-	if err != nil {
-		t.Fatal(err)
+	var replayedTerminal *turingv1.ChatStreamEvent
+	for replayedTerminal == nil {
+		event, err := replay.Recv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.GetRunCompleted() != nil {
+			replayedTerminal = event
+		}
 	}
 	if replayedTerminal.GetRunCompleted().GetRunId() != firstQueued.GetRunQueued().GetRunId() ||
 		replayedTerminal.Sequence != completed.Sequence {
@@ -454,6 +562,8 @@ func TestSendMessageIdempotentReplayReturnsOriginalRunAndResumesEventStream(t *t
 
 func TestSendMessageConcurrentIdempotentRequestsQueueOneOperation(t *testing.T) {
 	h := newHarness(t)
+	worker := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(false))
+	defer func() { _ = worker.CloseSend() }()
 	sessionID := h.createSession(t)
 	start := make(chan struct{})
 	queued := make(chan *turingv1.RunQueued, 2)
@@ -505,6 +615,8 @@ func TestSendMessageConcurrentIdempotentRequestsQueueOneOperation(t *testing.T) 
 
 func TestSendMessageRejectsConflictingIdempotencyKeyReuse(t *testing.T) {
 	h := newHarness(t)
+	worker := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(false))
+	defer func() { _ = worker.CloseSend() }()
 	sessionID := h.createSession(t)
 	key := "conflicting-send-key"
 	first, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
@@ -537,6 +649,79 @@ func TestSendMessageRejectsConflictingIdempotencyKeyReuse(t *testing.T) {
 	assertSingleEnqueuedOperation(t, h.database, sessionID)
 }
 
+func TestSendMessageRejectsIdempotencyKeyReuseWithDifferentRoutingRequirements(t *testing.T) {
+	h := newHarness(t)
+	worker := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(false))
+	defer func() { _ = worker.CloseSend() }()
+	sessionID := h.createSession(t)
+	const key = "conflicting-routing-requirements"
+	first, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
+		SessionId:             sessionID,
+		Content:               "route this once",
+		ModelProvider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:                 "llama3.2",
+		IdempotencyKey:        key,
+		RequiredContextTokens: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Recv(); err != nil {
+		t.Fatal(err)
+	}
+
+	conflict, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
+		SessionId:             sessionID,
+		Content:               "route this once",
+		ModelProvider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:                 "llama3.2",
+		IdempotencyKey:        key,
+		RequiredContextTokens: 2048,
+	})
+	if err == nil {
+		_, err = conflict.Recv()
+	}
+	if status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("conflicting idempotency key error = %v, want AlreadyExists", err)
+	}
+	assertSingleEnqueuedOperation(t, h.database, sessionID)
+}
+
+func TestSendMessageReplayIgnoresLiveDefaultModelChanges(t *testing.T) {
+	database := openChatTestDB(t)
+	repo := repository.New(database)
+	bus := events.NewBus(8)
+	dispatcher := &dispatchContextRecorder{routableDefaultModel: "live-model-a"}
+	service := New(repo, bus, dispatcher, "configured-model", "gpt-4o-mini")
+	session, err := repo.CreateSession(context.Background(), "Live default changed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &turingv1.SendMessageRequest{
+		SessionId:      session.SessionID,
+		Content:        "retry the same omitted model",
+		IdempotencyKey: "stable-default-model",
+	}
+	firstContext, cancelFirst := context.WithCancel(context.Background())
+	if err := service.SendMessage(request, &cancellingChatStream{ctx: firstContext, cancel: cancelFirst}); status.Code(err) != codes.Canceled {
+		t.Fatalf("first SendMessage error = %v, want Canceled", err)
+	}
+
+	dispatcher.routableDefaultModel = "live-model-b"
+	replayContext, cancelReplay := context.WithCancel(context.Background())
+	if err := service.SendMessage(request, &cancellingChatStream{ctx: replayContext, cancel: cancelReplay}); status.Code(err) != codes.Canceled {
+		t.Fatalf("replayed SendMessage error = %v, want Canceled", err)
+	}
+	assertSingleEnqueuedOperation(t, database, session.SessionID)
+	var persistedModel string
+	if err := database.QueryRowContext(context.Background(), `SELECT model_name FROM agent_runs WHERE session_id = ?`, session.SessionID).Scan(&persistedModel); err != nil {
+		t.Fatal(err)
+	}
+	if persistedModel != "live-model-a" {
+		t.Fatalf("persisted model = %q, want original live-model-a", persistedModel)
+	}
+}
+
 func TestSendMessageIdempotencySurvivesDatabaseRestart(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "turing.db")
 	const key = "restart-send-key"
@@ -552,6 +737,8 @@ func TestSendMessageIdempotencySurvivesDatabaseRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 		h := newHarnessWithDatabase(t, database)
+		worker := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(false))
+		defer func() { _ = worker.CloseSend() }()
 		sessionID = h.createSession(t)
 		stream, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
 			SessionId:      sessionID,
@@ -579,6 +766,8 @@ func TestSendMessageIdempotencySurvivesDatabaseRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 		h := newHarnessWithDatabase(t, database)
+		worker := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(false))
+		defer func() { _ = worker.CloseSend() }()
 		stream, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
 			SessionId:      sessionID,
 			Content:        "survive restart",
@@ -618,8 +807,192 @@ func assertSingleEnqueuedOperation(t *testing.T, database *db.DB, sessionID stri
 	}
 }
 
+func TestSendMessageRejectsUnavailableRoutingBeforePersistence(t *testing.T) {
+	tests := []struct {
+		name    string
+		request func(sessionID string) *turingv1.SendMessageRequest
+		kind    turingv1.RoutingRequirementKind
+		code    codes.Code
+	}{
+		{
+			name: "provider",
+			request: func(sessionID string) *turingv1.SendMessageRequest {
+				return &turingv1.SendMessageRequest{
+					SessionId: sessionID, Content: "hello",
+					ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, Model: "gpt-4o-mini",
+				}
+			},
+			kind: turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_PROVIDER,
+		},
+		{
+			name: "model",
+			request: func(sessionID string) *turingv1.SendMessageRequest {
+				return &turingv1.SendMessageRequest{
+					SessionId: sessionID, Content: "hello",
+					ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "other-model",
+				}
+			},
+			kind: turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_MODEL,
+		},
+		{
+			name: "tool",
+			request: func(sessionID string) *turingv1.SendMessageRequest {
+				return &turingv1.SendMessageRequest{
+					SessionId: sessionID, Content: "hello",
+					ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "llama3.2",
+					RequestedTools: []string{"files/files.read"},
+				}
+			},
+			kind: turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_TOOL,
+		},
+		{
+			name: "agent",
+			request: func(sessionID string) *turingv1.SendMessageRequest {
+				return &turingv1.SendMessageRequest{
+					SessionId: sessionID, Content: "hello",
+					AgentId: turingv1.AgentId(99), ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "llama3.2",
+				}
+			},
+			kind: turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_AGENT,
+			code: codes.InvalidArgument,
+		},
+		{
+			name: "context",
+			request: func(sessionID string) *turingv1.SendMessageRequest {
+				return &turingv1.SendMessageRequest{
+					SessionId: sessionID, Content: "hello",
+					ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "llama3.2",
+					RequiredContextTokens: 8193,
+				}
+			},
+			kind: turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_CONTEXT,
+		},
+		{
+			name: "capacity",
+			request: func(sessionID string) *turingv1.SendMessageRequest {
+				return &turingv1.SendMessageRequest{
+					SessionId: sessionID, Content: "hello",
+					ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "llama3.2",
+					MinimumWorkerMaxConcurrentRuns: 3,
+				}
+			},
+			kind: turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_CAPACITY,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newHarness(t)
+			worker := connectChatTestWorker(t, h, &turingv1.WorkerCapabilities{
+				Models: []*turingv1.ModelCapability{{
+					Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+					Model:            "llama3.2",
+					MaxContextTokens: 8192,
+				}},
+				AgentIds:          []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+				Tools:             []*turingv1.DiscoveredTool{{ServerName: "system", ToolName: "system.time", Schema: &structpb.Struct{}}},
+				MaxConcurrentRuns: 2,
+			})
+			defer func() { _ = worker.CloseSend() }()
+			sessionID := h.createSession(t)
+
+			err := sendMessageError(h, test.request(sessionID))
+			wantCode := test.code
+			if wantCode == codes.OK {
+				wantCode = codes.FailedPrecondition
+			}
+			if status.Code(err) != wantCode {
+				t.Fatalf("SendMessage error = %v, want %v", err, wantCode)
+			}
+			if wantCode == codes.FailedPrecondition {
+				detail := chatRoutingUnavailableDetail(t, err)
+				if detail.GetKind() != test.kind || detail.GetRequested() == "" {
+					t.Fatalf("routing detail = %+v, want kind %v with requested value", detail, test.kind)
+				}
+			}
+			for _, table := range []string{"messages", "agent_runs", "jobs"} {
+				var count int
+				if err := h.database.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil {
+					t.Fatalf("count %s: %v", table, err)
+				}
+				if count != 0 {
+					t.Fatalf("%s rows = %d, want no persistence before routing validation", table, count)
+				}
+			}
+		})
+	}
+}
+
+func connectChatTestWorker(t *testing.T, h *harness, capabilities *turingv1.WorkerCapabilities) turingv1.RuntimeService_ConnectWorkerClient {
+	t.Helper()
+	stream, err := turingv1.NewRuntimeServiceClient(h.conn).ConnectWorker(h.clientContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{
+		WorkerReady: &turingv1.RuntimeWorkerReady{
+			WorkerId: "worker-chat-capabilities", RegistrationId: "registration-chat-capabilities", Capabilities: capabilities,
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	accepted := recvRuntimeCommand(t, stream, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetWorkerAccepted() != nil
+	}).GetWorkerAccepted()
+	if accepted.GetRegistrationId() != "registration-chat-capabilities" {
+		t.Fatalf("accepted registration = %q", accepted.GetRegistrationId())
+	}
+	return stream
+}
+
+func defaultChatWorkerCapabilities(supportsExternalAgents bool) *turingv1.WorkerCapabilities {
+	capabilities := &turingv1.WorkerCapabilities{
+		Models: []*turingv1.ModelCapability{
+			{
+				Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+				Model:            "llama3.2",
+				MaxContextTokens: 8192,
+			},
+			{
+				Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
+				Model:            "gpt-4o-mini",
+				MaxContextTokens: 8192,
+			},
+		},
+		AgentIds:               []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+		Tools:                  []*turingv1.DiscoveredTool{{ServerName: "system", ToolName: "system.time", Schema: &structpb.Struct{}}},
+		MaxConcurrentRuns:      2,
+		SupportsExternalAgents: supportsExternalAgents,
+	}
+	if supportsExternalAgents {
+		capabilities.ExternalAgentCredentialRefs = []string{"claude", "external"}
+	}
+	return capabilities
+}
+
+func sendMessageError(h *harness, request *turingv1.SendMessageRequest) error {
+	stream, err := h.chatClient.SendMessage(h.clientContext(), request)
+	if err != nil {
+		return err
+	}
+	_, err = stream.Recv()
+	return err
+}
+
+func chatRoutingUnavailableDetail(t *testing.T, err error) *turingv1.RoutingUnavailableDetail {
+	t.Helper()
+	for _, detail := range status.Convert(err).Details() {
+		if unavailable, ok := detail.(*turingv1.RoutingUnavailableDetail); ok {
+			return unavailable
+		}
+	}
+	t.Fatalf("error %v has no RoutingUnavailableDetail", err)
+	return nil
+}
+
 func TestSendMessagePublishesSessionUpdatedBeforeQueued(t *testing.T) {
 	h := newHarness(t)
+	worker := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(false))
+	defer func() { _ = worker.CloseSend() }()
 	session, err := h.repo.CreateSession(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
@@ -679,6 +1052,8 @@ func TestSendMessageRejectsUnknownModelProvider(t *testing.T) {
 
 func TestSendMessageRejectsUnsupportedAgent(t *testing.T) {
 	h := newHarness(t)
+	worker := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(false))
+	defer func() { _ = worker.CloseSend() }()
 	sessionID := h.createSession(t)
 	stream, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
 		SessionId:     sessionID,
@@ -888,6 +1263,8 @@ func TestSendMessageMissingSessionReturnsNotFound(t *testing.T) {
 
 func TestSendMessageCancellationCancelsRun(t *testing.T) {
 	h := newHarness(t)
+	worker := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(false))
+	defer func() { _ = worker.CloseSend() }()
 	sessionID := h.createSession(t)
 	ctx, cancel := context.WithCancel(h.clientContext())
 	stream, err := h.chatClient.SendMessage(ctx, &turingv1.SendMessageRequest{
@@ -1024,6 +1401,8 @@ func TestSendMessageStreamsRuntimeEvents(t *testing.T) {
 	sessionID := h.createSession(t)
 	ctx, cancel := context.WithTimeout(h.clientContext(), 2*time.Second)
 	defer cancel()
+	workerStream := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(false))
+	defer func() { _ = workerStream.CloseSend() }()
 	chatStream, err := h.chatClient.SendMessage(ctx, &turingv1.SendMessageRequest{
 		SessionId:     sessionID,
 		Content:       "stream this",
@@ -1040,15 +1419,6 @@ func TestSendMessageStreamsRuntimeEvents(t *testing.T) {
 	runID := queued.GetRunQueued().RunId
 	traceID := queued.GetRunQueued().TraceId
 
-	runtimeClient := turingv1.NewRuntimeServiceClient(h.conn)
-	workerStream, err := runtimeClient.ConnectWorker(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = workerStream.CloseSend() }()
-	if err := workerStream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{WorkerId: "worker-chat-stream", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1}}}); err != nil {
-		t.Fatal(err)
-	}
 	recvRuntimeCommand(t, workerStream, func(cmd *turingv1.RuntimeCommand) bool {
 		assigned := cmd.GetRunAssigned()
 		return assigned != nil && assigned.RunId == runID
@@ -1081,6 +1451,8 @@ func TestSendMessageStreamsRuntimeRunCompleted(t *testing.T) {
 	sessionID := h.createSession(t)
 	ctx, cancel := context.WithTimeout(h.clientContext(), 2*time.Second)
 	defer cancel()
+	workerStream := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(false))
+	defer func() { _ = workerStream.CloseSend() }()
 	chatStream, err := h.chatClient.SendMessage(ctx, &turingv1.SendMessageRequest{
 		SessionId:     sessionID,
 		Content:       "complete this",
@@ -1096,15 +1468,6 @@ func TestSendMessageStreamsRuntimeRunCompleted(t *testing.T) {
 	}
 	runID := queued.GetRunQueued().RunId
 
-	runtimeClient := turingv1.NewRuntimeServiceClient(h.conn)
-	workerStream, err := runtimeClient.ConnectWorker(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = workerStream.CloseSend() }()
-	if err := workerStream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{WorkerId: "worker-chat-complete", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1}}}); err != nil {
-		t.Fatal(err)
-	}
 	assigned := recvRuntimeCommand(t, workerStream, func(cmd *turingv1.RuntimeCommand) bool {
 		assigned := cmd.GetRunAssigned()
 		return assigned != nil && assigned.RunId == runID
@@ -1139,6 +1502,8 @@ func TestSendMessageWaitsForRunCompletedAfterTokenDelta(t *testing.T) {
 	sessionID := h.createSession(t)
 	ctx, cancel := context.WithTimeout(h.clientContext(), 2*time.Second)
 	defer cancel()
+	workerStream := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(false))
+	defer func() { _ = workerStream.CloseSend() }()
 	chatStream, err := h.chatClient.SendMessage(ctx, &turingv1.SendMessageRequest{
 		SessionId:     sessionID,
 		Content:       "complete after message",
@@ -1155,15 +1520,6 @@ func TestSendMessageWaitsForRunCompletedAfterTokenDelta(t *testing.T) {
 	runID := queued.GetRunQueued().RunId
 	traceID := queued.GetRunQueued().TraceId
 
-	runtimeClient := turingv1.NewRuntimeServiceClient(h.conn)
-	workerStream, err := runtimeClient.ConnectWorker(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = workerStream.CloseSend() }()
-	if err := workerStream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{WorkerId: "worker-chat-message-complete", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1}}}); err != nil {
-		t.Fatal(err)
-	}
 	assigned := recvRuntimeCommand(t, workerStream, func(cmd *turingv1.RuntimeCommand) bool {
 		assigned := cmd.GetRunAssigned()
 		return assigned != nil && assigned.RunId == runID
@@ -1214,6 +1570,8 @@ func TestSendMessageWaitsForRunCompletedAfterTokenDelta(t *testing.T) {
 
 func TestSendMessageReplaysPersistedTerminalEventWithoutBusWake(t *testing.T) {
 	h := newHarness(t)
+	worker := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(false))
+	defer func() { _ = worker.CloseSend() }()
 	sessionID := h.createSession(t)
 	ctx, cancel := context.WithTimeout(h.clientContext(), 2*time.Second)
 	defer cancel()
@@ -1230,6 +1588,7 @@ func TestSendMessageReplaysPersistedTerminalEventWithoutBusWake(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	recvChatRunStarted(t, chatStream, queued.GetRunQueued().GetRunId())
 	appended, err := h.repo.AppendEvent(ctx, repository.AppendEventInput{
 		SessionID:   sessionID,
 		RunID:       queued.GetRunQueued().RunId,

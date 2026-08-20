@@ -304,6 +304,7 @@ func TestRecoveryReclaimsAssignmentAfterSameIDWorkerReconnects(t *testing.T) {
 	reconnected := &worker{
 		commands:      make(chan *turingv1.RuntimeCommand, 1),
 		done:          make(chan struct{}),
+		capabilities:  testWorkerCapabilities(1),
 		maxConcurrent: 1,
 		assignments:   map[string]assignment{},
 		lastHeartbeat: time.Now().UTC(),
@@ -351,6 +352,7 @@ func TestHeartbeatRevivalDispatchesQueuedWorkToIdleWorker(t *testing.T) {
 	connected := &worker{
 		commands:      make(chan *turingv1.RuntimeCommand, 1),
 		done:          make(chan struct{}),
+		capabilities:  testWorkerCapabilities(1),
 		maxConcurrent: 1,
 		assignments:   map[string]assignment{},
 		lastHeartbeat: time.Now().Add(-time.Minute),
@@ -427,6 +429,48 @@ func TestHeartbeatReconcilesAssignmentThatDatabaseCannotRenew(t *testing.T) {
 	}
 	if run.ExecutionActive {
 		t.Fatalf("terminalized run remained execution-active after heartbeat reconciliation: %+v", run)
+	}
+}
+
+func TestHeartbeatRecoveryWaitsForAssignmentDeliveryFence(t *testing.T) {
+	h := newHarness(t)
+	connected := &worker{
+		commands:      make(chan *turingv1.RuntimeCommand, 1),
+		capabilities:  testWorkerCapabilities(1),
+		maxConcurrent: 1,
+		assignments:   map[string]assignment{},
+		lastHeartbeat: time.Now().UTC(),
+	}
+	connected.updateMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			connected.updateMu.Unlock()
+		}
+	}()
+	done := make(chan error, 1)
+	go func() {
+		done <- h.service.renewWorkerLeases(
+			context.Background(),
+			"worker-heartbeat-delivery-fence",
+			connected,
+			&turingv1.RuntimeHeartbeat{WorkerId: "worker-heartbeat-delivery-fence"},
+		)
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("heartbeat recovery crossed the delivery fence: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	connected.updateMu.Unlock()
+	locked = false
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat recovery did not resume after the delivery fence")
 	}
 }
 
@@ -512,10 +556,14 @@ func TestConnectWorkerReportsCancellationBeforeReachingCommandLoop(t *testing.T)
 // round would make a cancelled stream the only report of a lost assignment.
 func TestConnectWorkerKeepsTeardownFailuresAlongsideCancellation(t *testing.T) {
 	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "teardown persistence failure")
 	const workerID = "worker-teardown-failure"
 	streamCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stream := &reconnectAcceptanceStream{ctx: streamCtx, ready: workerReady(workerID), accepted: make(chan struct{})}
+	stream := &reconnectAcceptanceStream{
+		ctx: streamCtx, ready: workerReady(workerID), accepted: make(chan struct{}),
+		assigned: make(chan struct{}), receiving: make(chan struct{}),
+	}
 	done := make(chan error, 1)
 	go func() { done <- h.service.ConnectWorker(stream) }()
 
@@ -526,17 +574,26 @@ func TestConnectWorkerKeepsTeardownFailuresAlongsideCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("worker was not accepted")
 	}
-	// Hand the registration an assignment so teardown has something to
-	// reconcile, then take the database away so reconciling it fails.
+	select {
+	case <-stream.assigned:
+	case <-time.After(time.Second):
+		t.Fatal("initial dispatch did not finish before database teardown")
+	}
 	h.service.mu.Lock()
 	connected := h.service.workers[workerID]
 	h.service.mu.Unlock()
 	if connected == nil {
 		t.Fatal("worker was accepted but not registered")
 	}
-	connected.mu.Lock()
-	connected.assignments["run_teardown"] = assignment{jobID: "job_teardown", runID: "run_teardown"}
-	connected.mu.Unlock()
+	select {
+	case <-stream.receiving:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not enter its receive loop after initial dispatch")
+	}
+	eventually(t, time.Second, func() bool {
+		run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+		return err == nil && run.ExecutionState == "delivered" && connected.hasAssignment(enqueued.RunID)
+	})
 	if err := h.database.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -547,11 +604,507 @@ func TestConnectWorkerKeepsTeardownFailuresAlongsideCancellation(t *testing.T) {
 		if !errors.Is(err, errWorkerStreamCancelled) {
 			t.Fatalf("exit = %v, want it to report %v", err, errWorkerStreamCancelled)
 		}
-		if !strings.Contains(err.Error(), "reconcile run run_teardown") {
+		if !strings.Contains(err.Error(), "reconcile run "+enqueued.RunID) {
 			t.Fatalf("exit = %v, want it to also report the failed reconciliation", err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("worker did not exit")
+	}
+}
+
+func TestConnectWorkerRequeuesAssignmentsWhenCapabilityPersistenceFailsBeforeAcceptance(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "handshake persistence failure")
+	if err := h.repo.UpsertTools(context.Background(), []repository.DiscoveredTool{{
+		ServerName: "system", ToolName: "system.time", SchemaJSON: `{}`, Policy: "safe",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.database.ExecContext(context.Background(), `
+		CREATE TRIGGER fail_handshake_tool_persist
+		BEFORE UPDATE ON tools
+		BEGIN
+			SELECT RAISE(FAIL, 'tool persistence blocked');
+		END`); err != nil {
+		t.Fatal(err)
+	}
+
+	h.service.toolsMu.Lock()
+	toolsLocked := true
+	defer func() {
+		if toolsLocked {
+			h.service.toolsMu.Unlock()
+		}
+	}()
+	streamCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	const workerID = "worker-handshake-persist-failure"
+	stream := &reconnectAcceptanceStream{
+		ctx: streamCtx, ready: workerReady(workerID), accepted: make(chan struct{}),
+	}
+	done := make(chan error, 1)
+	go func() { done <- h.service.ConnectWorker(stream) }()
+	eventually(t, time.Second, func() bool {
+		return h.service.registeredWorker(workerID) != nil
+	})
+	if err := h.service.DispatchPending(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	connected := h.service.registeredWorker(workerID)
+	if connected == nil || !connected.hasAssignment(enqueued.RunID) {
+		t.Fatal("worker did not claim the run during the registration window")
+	}
+	h.service.toolsMu.Unlock()
+	toolsLocked = false
+
+	select {
+	case err := <-done:
+		if status.Code(err) != codes.Internal {
+			t.Fatalf("ConnectWorker error = %v, want Internal", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConnectWorker did not return after persistence failure")
+	}
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "queued" || run.ExecutionActive {
+		t.Fatalf("run after failed handshake = %+v, want queued and inactive", run)
+	}
+	var attempt int
+	if err := h.database.QueryRowContext(
+		context.Background(), `SELECT attempt FROM jobs WHERE id = ?`, enqueued.JobID,
+	).Scan(&attempt); err != nil {
+		t.Fatal(err)
+	}
+	if attempt != 1 {
+		t.Fatalf("job attempt after failed handshake = %d, want 1 before executor delivery", attempt)
+	}
+}
+
+func TestSendCommandRevalidatesCapabilitiesBeforeAssignmentDelivery(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "delivery capability fence")
+	job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-delivery-fence")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.RunID != enqueued.RunID {
+		t.Fatalf("claimed run = %q, want %q", job.RunID, enqueued.RunID)
+	}
+	incompatible, _, err := decodeWorkerCapabilities(modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, "gpt-4o-mini", 8192, 1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	connected := &worker{
+		commands:      make(chan *turingv1.RuntimeCommand, 1),
+		done:          make(chan struct{}),
+		capabilities:  incompatible,
+		maxConcurrent: 1,
+		lastHeartbeat: time.Now().UTC(),
+		assignments: map[string]assignment{
+			job.RunID: {jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID},
+		},
+	}
+	stream := &reconnectAcceptanceStream{
+		ctx: context.Background(), assigned: make(chan struct{}),
+	}
+	command := &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: mapJob(job)}}
+	if err := h.service.sendCommand(context.Background(), stream, command, connected, "worker-delivery-fence"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-stream.assigned:
+		t.Fatal("incompatible assignment was delivered")
+	default:
+	}
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "queued" || run.ExecutionActive {
+		t.Fatalf("run after delivery fence = %+v, want queued and inactive", run)
+	}
+	var attempt int
+	if err := h.database.QueryRowContext(context.Background(), `SELECT attempt FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&attempt); err != nil {
+		t.Fatal(err)
+	}
+	if attempt != 1 {
+		t.Fatalf("job attempt = %d, want 1 because capability fencing is not an execution failure", attempt)
+	}
+}
+
+func TestSendCommandCapabilityFenceDispatchesAfterRoutingNoticeFailure(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "delivery notice failure")
+	job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-delivery-notice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	incompatible, _, err := decodeWorkerCapabilities(modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, "gpt-4o-mini", 8192, 1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compatible, _, err := decodeWorkerCapabilities(modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	connected := &worker{
+		commands:       make(chan *turingv1.RuntimeCommand, 1),
+		done:           make(chan struct{}),
+		registrationID: "registration-delivery-notice",
+		capabilities:   incompatible,
+		maxConcurrent:  1,
+		lastHeartbeat:  time.Now().UTC(),
+		assignments: map[string]assignment{
+			job.RunID: {jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID},
+		},
+	}
+	replacement := &worker{
+		commands:       make(chan *turingv1.RuntimeCommand, 1),
+		done:           make(chan struct{}),
+		registrationID: "registration-delivery-replacement",
+		capabilities:   compatible,
+		maxConcurrent:  1,
+		lastHeartbeat:  time.Now().UTC(),
+		assignments:    map[string]assignment{},
+	}
+	h.service.mu.Lock()
+	h.service.workers["worker-delivery-notice"] = connected
+	h.service.workers["worker-delivery-replacement"] = replacement
+	h.service.mu.Unlock()
+	session, err := h.repo.CreateSession(context.Background(), "Other unavailable route")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "needs unavailable OpenAI", AgentID: "general_assistant",
+		ModelProvider: "openai_compatible", Model: "gpt-4o-mini",
+		RequestedTools: []string{"system/nonexistent"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	failRoutingNoticeInserts(t, h)
+
+	stream := &reconnectAcceptanceStream{ctx: context.Background(), assigned: make(chan struct{})}
+	command := &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: mapJob(job)}}
+	if err := h.service.sendCommand(context.Background(), stream, command, connected, "worker-delivery-notice"); err != nil {
+		t.Fatalf("delivery fence reported advisory notice failure: %v", err)
+	}
+	select {
+	case <-stream.assigned:
+		t.Fatal("incompatible assignment was delivered")
+	default:
+	}
+	select {
+	case reassigned := <-replacement.commands:
+		if reassigned.GetRunAssigned().GetRunId() != enqueued.RunID {
+			t.Fatalf("replacement assignment = %+v, want run %q", reassigned, enqueued.RunID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fenced assignment was not dispatched to the compatible worker")
+	}
+}
+
+func TestSendCommandRevalidatesWorkerLeaseBeforeAssignmentDelivery(t *testing.T) {
+	h := newHarnessWithDispatch(t, DispatchConfig{LeaseDuration: 20 * time.Millisecond})
+	enqueued := h.enqueueRun(t, "delivery lease fence")
+	job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-delivery-lease")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compatible, _, err := decodeWorkerCapabilities(modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	connected := &worker{
+		commands:       make(chan *turingv1.RuntimeCommand, 1),
+		done:           make(chan struct{}),
+		registrationID: "registration-delivery-lease",
+		capabilities:   compatible,
+		maxConcurrent:  1,
+		lastHeartbeat:  time.Now().UTC().Add(-time.Second),
+		assignments: map[string]assignment{
+			job.RunID: {jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID},
+		},
+	}
+	h.service.mu.Lock()
+	h.service.workers["worker-delivery-lease"] = connected
+	h.service.mu.Unlock()
+	stream := &reconnectAcceptanceStream{ctx: context.Background(), assigned: make(chan struct{})}
+	command := &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: mapJob(job)}}
+	if err := h.service.sendCommand(context.Background(), stream, command, connected, "worker-delivery-lease"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-stream.assigned:
+		t.Fatal("assignment was delivered after the worker heartbeat lease expired")
+	default:
+	}
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "queued" || run.ExecutionActive {
+		t.Fatalf("run after lease fence = %+v, want queued and inactive", run)
+	}
+	var attempt int
+	if err := h.database.QueryRowContext(context.Background(), `SELECT attempt FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&attempt); err != nil {
+		t.Fatal(err)
+	}
+	if attempt != 1 {
+		t.Fatalf("job attempt = %d, want 1 because lease fencing is not an execution failure", attempt)
+	}
+}
+
+func TestSendCommandDropsRepositoryFencedAssignmentWithoutDisconnectingWorker(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "repository delivery fence")
+	job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-repository-fence")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compatible, _, err := decodeWorkerCapabilities(modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	connected := &worker{
+		commands:       make(chan *turingv1.RuntimeCommand, 1),
+		done:           make(chan struct{}),
+		registrationID: "registration-repository-fence",
+		capabilities:   compatible,
+		maxConcurrent:  1,
+		lastHeartbeat:  time.Now().UTC(),
+		assignments: map[string]assignment{
+			job.RunID: {jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID},
+		},
+	}
+	h.service.mu.Lock()
+	h.service.workers["worker-repository-fence"] = connected
+	h.service.mu.Unlock()
+	repositoryAssignment := repository.Assignment{
+		JobID: job.JobID, RunID: job.RunID,
+		WorkerID: "worker-repository-fence", AttemptID: job.AssignmentAttemptID,
+	}
+	if err := h.repo.AbortPendingAssignment(context.Background(), repositoryAssignment); err != nil {
+		t.Fatal(err)
+	}
+	stream := &reconnectAcceptanceStream{ctx: context.Background(), assigned: make(chan struct{})}
+	command := &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: mapJob(job)}}
+	if err := h.service.sendCommand(
+		context.Background(), stream, command, connected, "worker-repository-fence",
+	); err != nil {
+		t.Fatalf("repository-fenced command disconnected worker: %v", err)
+	}
+	select {
+	case <-stream.assigned:
+		t.Fatal("repository-fenced assignment was delivered")
+	default:
+	}
+	reassigned, ok := connected.assignmentForRun(enqueued.RunID)
+	if !ok || reassigned.attemptID == job.AssignmentAttemptID {
+		t.Fatalf("assignment after repository fence = %+v/%v, want a fresh dispatch attempt", reassigned, ok)
+	}
+	select {
+	case next := <-connected.commands:
+		if next.GetRunAssigned().GetRunId() != enqueued.RunID {
+			t.Fatalf("fresh command = %+v, want run %q", next, enqueued.RunID)
+		}
+	default:
+		t.Fatal("repository-fenced command did not trigger a fresh dispatch")
+	}
+}
+
+func TestSendCommandRequeuesConfirmedUnsentAssignmentWithoutChargingAttempt(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "confirmed unsent assignment")
+	job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-unsent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compatible, _, err := decodeWorkerCapabilities(modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	connected := &worker{
+		commands:       make(chan *turingv1.RuntimeCommand, 1),
+		done:           make(chan struct{}),
+		registrationID: "registration-unsent",
+		capabilities:   compatible,
+		maxConcurrent:  1,
+		lastHeartbeat:  time.Now().UTC(),
+		assignments: map[string]assignment{
+			job.RunID: {jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID},
+		},
+	}
+	h.service.mu.Lock()
+	h.service.workers["worker-unsent"] = connected
+	h.service.mu.Unlock()
+	stream := &reconnectAcceptanceStream{ctx: context.Background(), assigned: make(chan struct{})}
+	connected.commandSender(stream).close()
+	command := &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: mapJob(job)}}
+	if err := h.service.sendCommand(context.Background(), stream, command, connected, "worker-unsent"); err == nil {
+		t.Fatal("confirmed pre-send failure returned nil")
+	}
+	select {
+	case <-stream.assigned:
+		t.Fatal("closed sender reached stream.Send")
+	default:
+	}
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "queued" || run.ExecutionActive || run.ExecutionState != "none" {
+		t.Fatalf("confirmed unsent run = %+v, want queued and inactive", run)
+	}
+	var attempt int
+	if err := h.database.QueryRowContext(
+		context.Background(), `SELECT attempt FROM jobs WHERE id = ?`, enqueued.JobID,
+	).Scan(&attempt); err != nil {
+		t.Fatal(err)
+	}
+	if attempt != 1 {
+		t.Fatalf("confirmed unsent job attempt = %d, want 1", attempt)
+	}
+}
+
+func TestSendCommandIgnoresConcurrentAbortFence(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "concurrent capability abort")
+	job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-concurrent-abort")
+	if err != nil {
+		t.Fatal(err)
+	}
+	incompatible, _, err := decodeWorkerCapabilities(modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, "gpt-4o-mini", 8192, 1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	connected := &worker{
+		commands:       make(chan *turingv1.RuntimeCommand, 1),
+		done:           make(chan struct{}),
+		registrationID: "registration-concurrent-abort",
+		capabilities:   incompatible,
+		maxConcurrent:  1,
+		lastHeartbeat:  time.Now().UTC(),
+		assignments: map[string]assignment{
+			job.RunID: {jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID},
+		},
+	}
+	h.service.mu.Lock()
+	h.service.workers["worker-concurrent-abort"] = connected
+	h.service.mu.Unlock()
+	if err := h.repo.AbortPendingAssignment(context.Background(), repository.Assignment{
+		JobID: job.JobID, RunID: job.RunID,
+		WorkerID: "worker-concurrent-abort", AttemptID: job.AssignmentAttemptID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stream := &reconnectAcceptanceStream{ctx: context.Background(), assigned: make(chan struct{})}
+	command := &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: mapJob(job)}}
+	if err := h.service.sendCommand(
+		context.Background(), stream, command, connected, "worker-concurrent-abort",
+	); err != nil {
+		t.Fatalf("concurrent abort fence disconnected healthy worker: %v", err)
+	}
+	select {
+	case <-stream.assigned:
+		t.Fatal("concurrently aborted assignment was delivered")
+	default:
+	}
+	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "queued" || run.ExecutionActive {
+		t.Fatalf("concurrently aborted run = %+v, want queued and inactive", run)
+	}
+}
+
+func TestSendCommandIgnoresConcurrentCancellationFence(t *testing.T) {
+	tests := []struct {
+		name         string
+		capabilities *turingv1.WorkerCapabilities
+	}{
+		{
+			name: "before send transition",
+			capabilities: modelCapabilities(
+				turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+			),
+		},
+		{
+			name: "before capability requeue",
+			capabilities: modelCapabilities(
+				turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, "gpt-4o-mini", 8192, 1,
+			),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newHarness(t)
+			enqueued := h.enqueueRun(t, "concurrent cancellation fence")
+			job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-cancel-fence")
+			if err != nil {
+				t.Fatal(err)
+			}
+			capabilities, _, err := decodeWorkerCapabilities(test.capabilities)
+			if err != nil {
+				t.Fatal(err)
+			}
+			connected := &worker{
+				commands:       make(chan *turingv1.RuntimeCommand, 1),
+				done:           make(chan struct{}),
+				registrationID: "registration-cancel-fence",
+				capabilities:   capabilities,
+				maxConcurrent:  1,
+				lastHeartbeat:  time.Now().UTC(),
+				assignments: map[string]assignment{
+					job.RunID: {jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID},
+				},
+			}
+			h.service.mu.Lock()
+			h.service.workers["worker-cancel-fence"] = connected
+			h.service.mu.Unlock()
+			if _, err := h.repo.CancelRunWithEvent(
+				context.Background(), enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`,
+			); err != nil {
+				t.Fatal(err)
+			}
+			stream := &reconnectAcceptanceStream{ctx: context.Background(), assigned: make(chan struct{})}
+			command := &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: mapJob(job)}}
+			if err := h.service.sendCommand(
+				context.Background(), stream, command, connected, "worker-cancel-fence",
+			); err != nil {
+				t.Fatalf("concurrent cancellation disconnected healthy worker: %v", err)
+			}
+			select {
+			case <-stream.assigned:
+				t.Fatal("cancelled assignment was delivered")
+			default:
+			}
+			run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if run.Status != "cancelled" || run.ExecutionActive || run.ExecutionState != "exited" {
+				t.Fatalf("released cancelled assignment = %+v, want inactive exited execution", run)
+			}
+		})
 	}
 }
 
@@ -695,16 +1248,23 @@ func (s *serialBlockingCommandStream) Context() context.Context { return s.ctx }
 
 type reconnectAcceptanceStream struct {
 	grpc.ServerStream
-	ctx       context.Context
-	ready     *turingv1.RuntimeUpdate
-	readySent bool
-	accepted  chan struct{}
-	once      sync.Once
+	ctx        context.Context
+	ready      *turingv1.RuntimeUpdate
+	readySent  bool
+	accepted   chan struct{}
+	assigned   chan struct{}
+	receiving  chan struct{}
+	once       sync.Once
+	assignOnce sync.Once
+	recvOnce   sync.Once
 }
 
 func (s *reconnectAcceptanceStream) Send(command *turingv1.RuntimeCommand) error {
 	if command.GetWorkerAccepted() != nil {
 		s.once.Do(func() { close(s.accepted) })
+	}
+	if command.GetRunAssigned() != nil && s.assigned != nil {
+		s.assignOnce.Do(func() { close(s.assigned) })
 	}
 	return nil
 }
@@ -713,6 +1273,9 @@ func (s *reconnectAcceptanceStream) Recv() (*turingv1.RuntimeUpdate, error) {
 	if !s.readySent {
 		s.readySent = true
 		return s.ready, nil
+	}
+	if s.receiving != nil {
+		s.recvOnce.Do(func() { close(s.receiving) })
 	}
 	<-s.ctx.Done()
 	return nil, s.ctx.Err()

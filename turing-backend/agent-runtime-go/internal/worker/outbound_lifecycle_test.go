@@ -223,6 +223,79 @@ func TestWorkerDisconnectBoundsUncooperativeExecutorCleanup(t *testing.T) {
 	waitForInactiveRun(t, worker, "run_disconnect_timeout")
 }
 
+func TestWorkerReconnectWaitsForPriorExecutorsToDrain(t *testing.T) {
+	first, second := newFakeStream(), newFakeStream()
+	executor := &reconnectDrainExecutor{
+		firstStarted:   make(chan struct{}),
+		firstCancelled: make(chan struct{}),
+		firstRelease:   make(chan struct{}),
+		secondStarted:  make(chan struct{}),
+	}
+	worker := New(Options{
+		WorkerID:                 "worker-reconnect-drain",
+		MaxConcurrentRuns:        1,
+		DisconnectCleanupTimeout: 20 * time.Millisecond,
+	}, &fakeRuntimeClient{stream: second, queued: []*fakeStream{first}}, executor)
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- worker.Run(firstCtx) }()
+	<-first.sent
+	first.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{
+		RunAssigned: &turingv1.AgentJob{RunId: "run-reconnect-drain", Attempt: 1},
+	}}
+	select {
+	case <-executor.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first executor did not start")
+	}
+	cancelFirst()
+	select {
+	case <-executor.firstCancelled:
+	case <-time.After(time.Second):
+		t.Fatal("first executor was not cancelled")
+	}
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first Run did not respect the cleanup timeout")
+	}
+
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	defer cancelSecond()
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- worker.Run(secondCtx) }()
+	select {
+	case update := <-second.sent:
+		t.Fatalf("reconnected worker advertised capacity before draining prior executor: %+v", update)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(executor.firstRelease)
+	select {
+	case ready := <-second.sent:
+		if ready.GetWorkerReady() == nil {
+			t.Fatalf("first update after drain = %+v, want worker_ready", ready)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not reconnect after prior executor drained")
+	}
+	second.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{
+		RunAssigned: &turingv1.AgentJob{RunId: "run-reconnect-drain", Attempt: 2},
+	}}
+	select {
+	case <-executor.secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("reconnected worker did not accept the requeued run")
+	}
+	cancelSecond()
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("second Run did not stop")
+	}
+}
+
 func TestWorkerRunTerminationNeverClosesSendDuringBlockedOutboundSend(t *testing.T) {
 	stream := &closeRaceStream{
 		sent:               make(chan *turingv1.RuntimeUpdate, 1),
@@ -409,6 +482,27 @@ func (e *disconnectBlockingExecutor) Execute(ctx context.Context, _ *turingv1.Ag
 	e.cancelled <- context.Cause(ctx)
 	<-e.release
 	close(e.exited)
+	return ctx.Err()
+}
+
+type reconnectDrainExecutor struct {
+	calls          atomic.Int32
+	firstStarted   chan struct{}
+	firstCancelled chan struct{}
+	firstRelease   chan struct{}
+	secondStarted  chan struct{}
+}
+
+func (e *reconnectDrainExecutor) Execute(ctx context.Context, _ *turingv1.AgentJob, _ func(*turingv1.RuntimeUpdate) error) error {
+	if e.calls.Add(1) == 1 {
+		close(e.firstStarted)
+		<-ctx.Done()
+		close(e.firstCancelled)
+		<-e.firstRelease
+		return ctx.Err()
+	}
+	close(e.secondStarted)
+	<-ctx.Done()
 	return ctx.Err()
 }
 

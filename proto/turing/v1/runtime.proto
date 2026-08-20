@@ -29,6 +29,8 @@ message AgentJob {
   // Set only when the conversation was deliberately routed away from the
   // local assistant. Absent is the default and means "run this here".
   ExternalAgentTarget external_agent = 14;
+  int32 required_context_tokens = 15;
+  int32 minimum_worker_max_concurrent_runs = 16;
 }
 
 // Where to send a run that the user routed off this machine.
@@ -72,6 +74,20 @@ message DiscoveredTool {
   google.protobuf.Struct schema = 3;
 }
 
+// A complete, authoritative snapshot for one runtime registration.
+message WorkerCapabilities {
+  repeated ModelCapability models = 1;
+  repeated AgentId agent_ids = 2;
+  repeated DiscoveredTool tools = 3;
+  int32 max_concurrent_runs = 4;
+  // Kept for older orchestrators. New routing decisions use the exact refs
+  // below and never treat this coarse bit as authorization.
+  bool supports_external_agents = 5;
+  // Credential names only, never API keys. This complete set authorizes which
+  // frozen external-agent destinations this worker can execute.
+  repeated string external_agent_credential_refs = 6;
+}
+
 enum ToolDiscoveryStatus {
   // Legacy runtime that cannot report an authoritative capability snapshot.
   TOOL_DISCOVERY_STATUS_UNSPECIFIED = 0;
@@ -88,6 +104,16 @@ message RuntimeWorkerReady {
   // Complete snapshot of tools discovered by this worker.
   repeated DiscoveredTool tools = 4;
   ToolDiscoveryStatus tool_discovery_status = 5;
+  // Unique to this stream. A reconnect for the same worker_id uses a fresh ID.
+  string registration_id = 6;
+  WorkerCapabilities capabilities = 7;
+}
+
+message RuntimeWorkerCapabilitiesUpdated {
+  string worker_id = 1;
+  string registration_id = 2;
+  // Replaces the previous snapshot rather than patching it.
+  WorkerCapabilities capabilities = 3;
 }
 
 message RuntimeHeartbeat {
@@ -139,11 +165,13 @@ message RuntimeUpdate {
     RuntimeRunCompleted run_completed = 5;
     RuntimeRunFailed run_failed = 6;
     RuntimeCancelledAck run_cancelled_ack = 7;
+    RuntimeWorkerCapabilitiesUpdated worker_capabilities_updated = 8;
   }
 }
 
 message RuntimeWorkerAccepted {
   string worker_id = 1;
+  string registration_id = 2;
 }
 
 message RuntimeRunCancelled {

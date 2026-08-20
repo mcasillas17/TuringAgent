@@ -70,6 +70,31 @@ func TestLoadFromEnvValidatesMaxConcurrentRunsWithinServerAndProtobufBounds(t *t
 	}
 }
 
+func TestLoadFromEnvLoadsBoundedAdvertisedContextLimits(t *testing.T) {
+	cfg, err := LoadFromEnv(mapEnv(map[string]string{
+		"TURING_INTERNAL_TOKEN":        "internal",
+		"OLLAMA_CONTEXT_WINDOW_TOKENS": "32768",
+		"OPENAI_CONTEXT_WINDOW_TOKENS": "128000",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OllamaContextWindowTokens != 32768 || cfg.OpenAIContextWindowTokens != 128000 {
+		t.Fatalf("context limits = %d/%d", cfg.OllamaContextWindowTokens, cfg.OpenAIContextWindowTokens)
+	}
+	for _, value := range []string{"-1", "2147483648"} {
+		t.Run(value, func(t *testing.T) {
+			_, err := LoadFromEnv(mapEnv(map[string]string{
+				"TURING_INTERNAL_TOKEN":        "internal",
+				"OLLAMA_CONTEXT_WINDOW_TOKENS": value,
+			}))
+			if err == nil || !strings.Contains(err.Error(), "OLLAMA_CONTEXT_WINDOW_TOKENS") {
+				t.Fatalf("context limit %s error = %v", value, err)
+			}
+		})
+	}
+}
+
 func TestLoadFromEnvRejectsNonPositiveMaxToolCallsPerRun(t *testing.T) {
 	for _, value := range []string{"0", "-1"} {
 		t.Run(value, func(t *testing.T) {

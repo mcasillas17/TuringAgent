@@ -57,9 +57,8 @@ func TestClientCancellationStopsRuntimeAndModel(t *testing.T) {
 }
 
 func TestClientCancellationTerminalizesApprovalAndKeepsWorkerUsable(t *testing.T) {
-	harness := newGRPCHarness(t)
+	harness := newGRPCHarness(t, withFilesCreateTool())
 	defer harness.close()
-	harness.filesMCP.enableCreateToolWithApprovalValidation()
 	harness.fakeModel.enableModelDrivenFilesCreate()
 
 	sessionID := harness.createSession(t, "cancel while awaiting approval")
@@ -90,9 +89,8 @@ func TestClientCancellationTerminalizesApprovalAndKeepsWorkerUsable(t *testing.T
 }
 
 func TestClientCancellationStopsMCPExecutionAndKeepsWorkerUsable(t *testing.T) {
-	harness := newGRPCHarness(t)
+	harness := newGRPCHarness(t, withFilesCreateTool())
 	defer harness.close()
-	harness.filesMCP.enableCreateToolWithApprovalValidation()
 	harness.filesMCP.blockCreateCallUntilCancelled()
 	harness.fakeModel.enableModelDrivenFilesCreate()
 

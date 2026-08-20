@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMessagesFTSStaysInSync(t *testing.T) {
@@ -193,10 +194,86 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 		"0011_file_skills",
 		"0012_audit_read",
 		"0012_derived_state_provenance",
+		"0012_worker_capability_routing",
 		"0013_send_message_idempotency",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("applied migrations = %v, want %v", got, want)
+	}
+}
+
+func TestWorkerCapabilityMigrationBackfillsPopulatedJobsForKeysetOrdering(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	names, err := migrationNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if name == "0012_worker_capability_routing.sql" {
+			break
+		}
+		applyMigration(t, ctx, database, name)
+	}
+	insertTestSession(t, ctx, database, "routing-upgrade")
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at)
+		VALUES ('routing-message', 'routing-upgrade', 'user', 'route these jobs', 'text', 1, '2026-01-01T00:00:00Z');
+		INSERT INTO agent_runs (
+			id, session_id, user_message_id, agent_id, trace_id, status,
+			model_provider, model_name, created_at
+		) VALUES (
+			'routing-run', 'routing-upgrade', 'routing-message', 'general_assistant',
+			'routing-trace', 'queued', 'ollama', 'qwen2.5:7b', '2026-01-01T00:00:00Z'
+		);
+		INSERT INTO jobs (id, run_id, agent_id, status, payload_json, created_at)
+		VALUES
+			('job-no-fraction', 'routing-run', 'general_assistant', 'pending', '{}', '2026-01-01T00:00:00Z'),
+			('job-one-digit', 'routing-run', 'general_assistant', 'pending', '{}', '2026-01-01T00:00:00.1Z'),
+			('job-nine-digits', 'routing-run', 'general_assistant', 'pending', '{}', '2026-01-01T00:00:00.100000002Z')`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+
+	base := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC).UnixNano()
+	rows, err := database.QueryContext(ctx, `
+		SELECT id, created_at_ns
+		FROM jobs
+		WHERE status = 'pending'
+		  AND (created_at_ns > ? OR (created_at_ns = ? AND id > ?))
+		ORDER BY created_at_ns, id
+		LIMIT 2
+	`, base, base, "job-no-fraction")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var gotIDs []string
+	var gotTimestamps []int64
+	for rows.Next() {
+		var id string
+		var createdAtNS int64
+		if err := rows.Scan(&id, &createdAtNS); err != nil {
+			t.Fatal(err)
+		}
+		gotIDs = append(gotIDs, id)
+		gotTimestamps = append(gotTimestamps, createdAtNS)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"job-one-digit", "job-nine-digits"}; !reflect.DeepEqual(gotIDs, want) {
+		t.Fatalf("keyset page IDs = %v, want %v", gotIDs, want)
+	}
+	if want := []int64{base + 100_000_000, base + 100_000_002}; !reflect.DeepEqual(gotTimestamps, want) {
+		t.Fatalf("backfilled created_at_ns = %v, want %v", gotTimestamps, want)
 	}
 }
 

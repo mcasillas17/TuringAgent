@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -29,6 +31,9 @@ type Server struct {
 type runtimeDispatcher interface {
 	DispatchPending(context.Context) error
 	CancelRun(context.Context, string, string)
+	ValidateRouting(context.Context, repository.RoutingRequirements) error
+	RefreshPendingRoutingState(context.Context, string) error
+	RoutableDefaultModel(string, string) string
 }
 
 func New(repo *repository.Repository, bus *events.Bus, runtimeServer runtimeDispatcher, ollamaModel string, openAIModel string) *Server {
@@ -50,6 +55,16 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 	if err := requestContentType(req.ContentType); err != nil {
 		return err
 	}
+	requestedTools, err := requestTools(req.GetRequestedTools())
+	if err != nil {
+		return err
+	}
+	if req.GetRequiredContextTokens() < 0 {
+		return status.Error(codes.InvalidArgument, "required_context_tokens must be non-negative")
+	}
+	if req.GetMinimumWorkerMaxConcurrentRuns() < 0 {
+		return status.Error(codes.InvalidArgument, "minimum_worker_max_concurrent_runs must be non-negative")
+	}
 	agentID, err := requestAgentID(req.AgentId)
 	if err != nil {
 		return err
@@ -59,26 +74,40 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 		return err
 	}
 	model := req.Model
-	if model == "" && modelProvider == "ollama" {
-		model = s.ollamaModel
-	}
-	if model == "" && modelProvider == "openai_compatible" {
-		model = s.openAIModel
+	executionModel := model
+	if executionModel == "" {
+		configured := s.ollamaModel
+		if modelProvider == "openai_compatible" {
+			configured = s.openAIModel
+		}
+		model = configured
+		executionModel = configured
+		if s.runtime != nil {
+			executionModel = s.runtime.RoutableDefaultModel(modelProvider, configured)
+		}
 	}
 	if _, err := s.repo.GetSession(ctx, req.SessionId); err != nil {
 		return mapSessionError(ctx, err)
 	}
 	ch, unsubscribe := s.bus.Subscribe(req.SessionId)
 	defer unsubscribe()
-	enqueued, err := s.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
-		SessionID:      req.SessionId,
-		Content:        req.Content,
-		ContentType:    "text",
-		AgentID:        agentID,
-		ModelProvider:  modelProvider,
-		Model:          model,
-		IdempotencyKey: req.IdempotencyKey,
-	})
+	input := repository.EnqueueUserMessageInput{
+		SessionID:                      req.SessionId,
+		Content:                        req.Content,
+		ContentType:                    "text",
+		AgentID:                        agentID,
+		ModelProvider:                  modelProvider,
+		Model:                          model,
+		ExecutionModel:                 executionModel,
+		IdempotencyKey:                 req.IdempotencyKey,
+		RequestedTools:                 requestedTools,
+		RequiredContextTokens:          int(req.GetRequiredContextTokens()),
+		MinimumWorkerMaxConcurrentRuns: int(req.GetMinimumWorkerMaxConcurrentRuns()),
+	}
+	if s.runtime != nil {
+		input.ValidateRouting = s.runtime.ValidateRouting
+	}
+	enqueued, err := s.repo.EnqueueUserMessage(ctx, input)
 	if err != nil {
 		return mapEnqueueError(ctx, err)
 	}
@@ -188,6 +217,9 @@ func (s *Server) dispatchPending(ctx context.Context, runID string, cancelRunOnF
 		}
 		return status.Error(codes.Internal, "dispatch pending job failed")
 	}
+	if err := s.runtime.RefreshPendingRoutingState(context.WithoutCancel(ctx), "message enqueued"); err != nil {
+		log.Printf("refresh pending routing state for run %s: %v", runID, err)
+	}
 	return nil
 }
 
@@ -235,8 +267,26 @@ func requestAgentID(agentID turingv1.AgentId) (string, error) {
 	case turingv1.AgentId_AGENT_ID_UNSPECIFIED, turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT:
 		return "general_assistant", nil
 	default:
-		return "", status.Error(codes.InvalidArgument, "agent_id is unsupported")
+		return "", status.Errorf(codes.InvalidArgument, "agent_id %d is unsupported", agentID)
 	}
+}
+
+func requestTools(requested []string) ([]string, error) {
+	unique := make(map[string]struct{}, len(requested))
+	for _, value := range requested {
+		value = strings.TrimSpace(value)
+		parts := strings.Split(value, "/")
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+			return nil, status.Error(codes.InvalidArgument, "requested_tools entries must use server/tool")
+		}
+		unique[strings.TrimSpace(parts[0])+"/"+strings.TrimSpace(parts[1])] = struct{}{}
+	}
+	tools := make([]string, 0, len(unique))
+	for tool := range unique {
+		tools = append(tools, tool)
+	}
+	sort.Strings(tools)
+	return tools, nil
 }
 
 func requestModelProvider(provider turingv1.ModelProvider) (string, error) {
@@ -282,6 +332,9 @@ func mapEnqueueError(ctx context.Context, err error) error {
 	}
 	if errors.Is(err, repository.ErrIdempotencyConflict) {
 		return status.Error(codes.AlreadyExists, "idempotency key was already used for a different request")
+	}
+	if status.Code(err) == codes.FailedPrecondition {
+		return err
 	}
 	return status.Error(codes.Internal, "enqueue user message failed")
 }

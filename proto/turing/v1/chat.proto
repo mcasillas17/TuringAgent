@@ -18,6 +18,10 @@ message SendMessageRequest {
   // Opaque key retained for retries of this exact operation. Reusing a key
   // with a different normalized request returns ALREADY_EXISTS.
   string idempotency_key = 7;
+  // Exact server/tool names that a compatible worker must advertise.
+  repeated string requested_tools = 8;
+  int32 required_context_tokens = 9;
+  int32 minimum_worker_max_concurrent_runs = 10;
 }
 
 message RunQueued {

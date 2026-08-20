@@ -16,10 +16,10 @@ import 'package:fixnum/fixnum.dart' as $fixnum;
 import 'package:protobuf/protobuf.dart' as $pb;
 
 import '../../google/protobuf/struct.pb.dart' as $1;
-import 'common.pbenum.dart' as $4;
-import 'events.pb.dart' as $2;
+import 'common.pb.dart' as $2;
+import 'events.pb.dart' as $3;
 import 'runtime.pbenum.dart';
-import 'tools.pb.dart' as $3;
+import 'tools.pb.dart' as $4;
 
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
 
@@ -32,15 +32,17 @@ class AgentJob extends $pb.GeneratedMessage {
     $core.String? sessionId,
     $core.String? userMessageId,
     $core.String? assistantMessageId,
-    $4.AgentId? agentId,
+    $2.AgentId? agentId,
     $core.String? traceId,
-    $4.ModelProvider? modelProvider,
+    $2.ModelProvider? modelProvider,
     $core.String? model,
     $core.String? userText,
     $core.Iterable<$core.String>? requestedTools,
     $core.int? attempt,
     $core.Iterable<SkillSnapshot>? skills,
     ExternalAgentTarget? externalAgent,
+    $core.int? requiredContextTokens,
+    $core.int? minimumWorkerMaxConcurrentRuns,
   }) {
     final result = create();
     if (jobId != null) result.jobId = jobId;
@@ -58,6 +60,10 @@ class AgentJob extends $pb.GeneratedMessage {
     if (attempt != null) result.attempt = attempt;
     if (skills != null) result.skills.addAll(skills);
     if (externalAgent != null) result.externalAgent = externalAgent;
+    if (requiredContextTokens != null)
+      result.requiredContextTokens = requiredContextTokens;
+    if (minimumWorkerMaxConcurrentRuns != null)
+      result.minimumWorkerMaxConcurrentRuns = minimumWorkerMaxConcurrentRuns;
     return result;
   }
 
@@ -79,16 +85,16 @@ class AgentJob extends $pb.GeneratedMessage {
     ..aOS(3, _omitFieldNames ? '' : 'sessionId')
     ..aOS(4, _omitFieldNames ? '' : 'userMessageId')
     ..aOS(5, _omitFieldNames ? '' : 'assistantMessageId')
-    ..e<$4.AgentId>(6, _omitFieldNames ? '' : 'agentId', $pb.PbFieldType.OE,
-        defaultOrMaker: $4.AgentId.AGENT_ID_UNSPECIFIED,
-        valueOf: $4.AgentId.valueOf,
-        enumValues: $4.AgentId.values)
+    ..e<$2.AgentId>(6, _omitFieldNames ? '' : 'agentId', $pb.PbFieldType.OE,
+        defaultOrMaker: $2.AgentId.AGENT_ID_UNSPECIFIED,
+        valueOf: $2.AgentId.valueOf,
+        enumValues: $2.AgentId.values)
     ..aOS(7, _omitFieldNames ? '' : 'traceId')
-    ..e<$4.ModelProvider>(
+    ..e<$2.ModelProvider>(
         8, _omitFieldNames ? '' : 'modelProvider', $pb.PbFieldType.OE,
-        defaultOrMaker: $4.ModelProvider.MODEL_PROVIDER_UNSPECIFIED,
-        valueOf: $4.ModelProvider.valueOf,
-        enumValues: $4.ModelProvider.values)
+        defaultOrMaker: $2.ModelProvider.MODEL_PROVIDER_UNSPECIFIED,
+        valueOf: $2.ModelProvider.valueOf,
+        enumValues: $2.ModelProvider.values)
     ..aOS(9, _omitFieldNames ? '' : 'model')
     ..aOS(10, _omitFieldNames ? '' : 'userText')
     ..pPS(11, _omitFieldNames ? '' : 'requestedTools')
@@ -97,6 +103,10 @@ class AgentJob extends $pb.GeneratedMessage {
         subBuilder: SkillSnapshot.create)
     ..aOM<ExternalAgentTarget>(14, _omitFieldNames ? '' : 'externalAgent',
         subBuilder: ExternalAgentTarget.create)
+    ..a<$core.int>(
+        15, _omitFieldNames ? '' : 'requiredContextTokens', $pb.PbFieldType.O3)
+    ..a<$core.int>(16, _omitFieldNames ? '' : 'minimumWorkerMaxConcurrentRuns',
+        $pb.PbFieldType.O3)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -164,9 +174,9 @@ class AgentJob extends $pb.GeneratedMessage {
   void clearAssistantMessageId() => $_clearField(5);
 
   @$pb.TagNumber(6)
-  $4.AgentId get agentId => $_getN(5);
+  $2.AgentId get agentId => $_getN(5);
   @$pb.TagNumber(6)
-  set agentId($4.AgentId value) => $_setField(6, value);
+  set agentId($2.AgentId value) => $_setField(6, value);
   @$pb.TagNumber(6)
   $core.bool hasAgentId() => $_has(5);
   @$pb.TagNumber(6)
@@ -182,9 +192,9 @@ class AgentJob extends $pb.GeneratedMessage {
   void clearTraceId() => $_clearField(7);
 
   @$pb.TagNumber(8)
-  $4.ModelProvider get modelProvider => $_getN(7);
+  $2.ModelProvider get modelProvider => $_getN(7);
   @$pb.TagNumber(8)
-  set modelProvider($4.ModelProvider value) => $_setField(8, value);
+  set modelProvider($2.ModelProvider value) => $_setField(8, value);
   @$pb.TagNumber(8)
   $core.bool hasModelProvider() => $_has(7);
   @$pb.TagNumber(8)
@@ -238,6 +248,25 @@ class AgentJob extends $pb.GeneratedMessage {
   void clearExternalAgent() => $_clearField(14);
   @$pb.TagNumber(14)
   ExternalAgentTarget ensureExternalAgent() => $_ensure(13);
+
+  @$pb.TagNumber(15)
+  $core.int get requiredContextTokens => $_getIZ(14);
+  @$pb.TagNumber(15)
+  set requiredContextTokens($core.int value) => $_setSignedInt32(14, value);
+  @$pb.TagNumber(15)
+  $core.bool hasRequiredContextTokens() => $_has(14);
+  @$pb.TagNumber(15)
+  void clearRequiredContextTokens() => $_clearField(15);
+
+  @$pb.TagNumber(16)
+  $core.int get minimumWorkerMaxConcurrentRuns => $_getIZ(15);
+  @$pb.TagNumber(16)
+  set minimumWorkerMaxConcurrentRuns($core.int value) =>
+      $_setSignedInt32(15, value);
+  @$pb.TagNumber(16)
+  $core.bool hasMinimumWorkerMaxConcurrentRuns() => $_has(15);
+  @$pb.TagNumber(16)
+  void clearMinimumWorkerMaxConcurrentRuns() => $_clearField(16);
 }
 
 /// Where to send a run that the user routed off this machine.
@@ -554,13 +583,121 @@ class DiscoveredTool extends $pb.GeneratedMessage {
   $1.Struct ensureSchema() => $_ensure(2);
 }
 
+/// A complete, authoritative snapshot for one runtime registration.
+class WorkerCapabilities extends $pb.GeneratedMessage {
+  factory WorkerCapabilities({
+    $core.Iterable<$2.ModelCapability>? models,
+    $core.Iterable<$2.AgentId>? agentIds,
+    $core.Iterable<DiscoveredTool>? tools,
+    $core.int? maxConcurrentRuns,
+    $core.bool? supportsExternalAgents,
+    $core.Iterable<$core.String>? externalAgentCredentialRefs,
+  }) {
+    final result = create();
+    if (models != null) result.models.addAll(models);
+    if (agentIds != null) result.agentIds.addAll(agentIds);
+    if (tools != null) result.tools.addAll(tools);
+    if (maxConcurrentRuns != null) result.maxConcurrentRuns = maxConcurrentRuns;
+    if (supportsExternalAgents != null)
+      result.supportsExternalAgents = supportsExternalAgents;
+    if (externalAgentCredentialRefs != null)
+      result.externalAgentCredentialRefs.addAll(externalAgentCredentialRefs);
+    return result;
+  }
+
+  WorkerCapabilities._();
+
+  factory WorkerCapabilities.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory WorkerCapabilities.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'WorkerCapabilities',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..pc<$2.ModelCapability>(
+        1, _omitFieldNames ? '' : 'models', $pb.PbFieldType.PM,
+        subBuilder: $2.ModelCapability.create)
+    ..pc<$2.AgentId>(2, _omitFieldNames ? '' : 'agentIds', $pb.PbFieldType.KE,
+        valueOf: $2.AgentId.valueOf,
+        enumValues: $2.AgentId.values,
+        defaultEnumValue: $2.AgentId.AGENT_ID_UNSPECIFIED)
+    ..pc<DiscoveredTool>(3, _omitFieldNames ? '' : 'tools', $pb.PbFieldType.PM,
+        subBuilder: DiscoveredTool.create)
+    ..a<$core.int>(
+        4, _omitFieldNames ? '' : 'maxConcurrentRuns', $pb.PbFieldType.O3)
+    ..aOB(5, _omitFieldNames ? '' : 'supportsExternalAgents')
+    ..pPS(6, _omitFieldNames ? '' : 'externalAgentCredentialRefs')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  WorkerCapabilities clone() => WorkerCapabilities()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  WorkerCapabilities copyWith(void Function(WorkerCapabilities) updates) =>
+      super.copyWith((message) => updates(message as WorkerCapabilities))
+          as WorkerCapabilities;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static WorkerCapabilities create() => WorkerCapabilities._();
+  @$core.override
+  WorkerCapabilities createEmptyInstance() => create();
+  static $pb.PbList<WorkerCapabilities> createRepeated() =>
+      $pb.PbList<WorkerCapabilities>();
+  @$core.pragma('dart2js:noInline')
+  static WorkerCapabilities getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<WorkerCapabilities>(create);
+  static WorkerCapabilities? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $pb.PbList<$2.ModelCapability> get models => $_getList(0);
+
+  @$pb.TagNumber(2)
+  $pb.PbList<$2.AgentId> get agentIds => $_getList(1);
+
+  @$pb.TagNumber(3)
+  $pb.PbList<DiscoveredTool> get tools => $_getList(2);
+
+  @$pb.TagNumber(4)
+  $core.int get maxConcurrentRuns => $_getIZ(3);
+  @$pb.TagNumber(4)
+  set maxConcurrentRuns($core.int value) => $_setSignedInt32(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasMaxConcurrentRuns() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearMaxConcurrentRuns() => $_clearField(4);
+
+  /// Kept for older orchestrators. New routing decisions use the exact refs
+  /// below and never treat this coarse bit as authorization.
+  @$pb.TagNumber(5)
+  $core.bool get supportsExternalAgents => $_getBF(4);
+  @$pb.TagNumber(5)
+  set supportsExternalAgents($core.bool value) => $_setBool(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasSupportsExternalAgents() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearSupportsExternalAgents() => $_clearField(5);
+
+  /// Credential names only, never API keys. This complete set authorizes which
+  /// frozen external-agent destinations this worker can execute.
+  @$pb.TagNumber(6)
+  $pb.PbList<$core.String> get externalAgentCredentialRefs => $_getList(5);
+}
+
 class RuntimeWorkerReady extends $pb.GeneratedMessage {
   factory RuntimeWorkerReady({
     $core.String? workerId,
-    $4.AgentId? agentId,
+    $2.AgentId? agentId,
     $core.int? maxConcurrentRuns,
     $core.Iterable<DiscoveredTool>? tools,
     ToolDiscoveryStatus? toolDiscoveryStatus,
+    $core.String? registrationId,
+    WorkerCapabilities? capabilities,
   }) {
     final result = create();
     if (workerId != null) result.workerId = workerId;
@@ -569,6 +706,8 @@ class RuntimeWorkerReady extends $pb.GeneratedMessage {
     if (tools != null) result.tools.addAll(tools);
     if (toolDiscoveryStatus != null)
       result.toolDiscoveryStatus = toolDiscoveryStatus;
+    if (registrationId != null) result.registrationId = registrationId;
+    if (capabilities != null) result.capabilities = capabilities;
     return result;
   }
 
@@ -586,10 +725,10 @@ class RuntimeWorkerReady extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'workerId')
-    ..e<$4.AgentId>(2, _omitFieldNames ? '' : 'agentId', $pb.PbFieldType.OE,
-        defaultOrMaker: $4.AgentId.AGENT_ID_UNSPECIFIED,
-        valueOf: $4.AgentId.valueOf,
-        enumValues: $4.AgentId.values)
+    ..e<$2.AgentId>(2, _omitFieldNames ? '' : 'agentId', $pb.PbFieldType.OE,
+        defaultOrMaker: $2.AgentId.AGENT_ID_UNSPECIFIED,
+        valueOf: $2.AgentId.valueOf,
+        enumValues: $2.AgentId.values)
     ..a<$core.int>(
         3, _omitFieldNames ? '' : 'maxConcurrentRuns', $pb.PbFieldType.O3)
     ..pc<DiscoveredTool>(4, _omitFieldNames ? '' : 'tools', $pb.PbFieldType.PM,
@@ -599,6 +738,9 @@ class RuntimeWorkerReady extends $pb.GeneratedMessage {
         defaultOrMaker: ToolDiscoveryStatus.TOOL_DISCOVERY_STATUS_UNSPECIFIED,
         valueOf: ToolDiscoveryStatus.valueOf,
         enumValues: ToolDiscoveryStatus.values)
+    ..aOS(6, _omitFieldNames ? '' : 'registrationId')
+    ..aOM<WorkerCapabilities>(7, _omitFieldNames ? '' : 'capabilities',
+        subBuilder: WorkerCapabilities.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -632,9 +774,9 @@ class RuntimeWorkerReady extends $pb.GeneratedMessage {
   void clearWorkerId() => $_clearField(1);
 
   @$pb.TagNumber(2)
-  $4.AgentId get agentId => $_getN(1);
+  $2.AgentId get agentId => $_getN(1);
   @$pb.TagNumber(2)
-  set agentId($4.AgentId value) => $_setField(2, value);
+  set agentId($2.AgentId value) => $_setField(2, value);
   @$pb.TagNumber(2)
   $core.bool hasAgentId() => $_has(1);
   @$pb.TagNumber(2)
@@ -661,6 +803,117 @@ class RuntimeWorkerReady extends $pb.GeneratedMessage {
   $core.bool hasToolDiscoveryStatus() => $_has(4);
   @$pb.TagNumber(5)
   void clearToolDiscoveryStatus() => $_clearField(5);
+
+  /// Unique to this stream. A reconnect for the same worker_id uses a fresh ID.
+  @$pb.TagNumber(6)
+  $core.String get registrationId => $_getSZ(5);
+  @$pb.TagNumber(6)
+  set registrationId($core.String value) => $_setString(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasRegistrationId() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearRegistrationId() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  WorkerCapabilities get capabilities => $_getN(6);
+  @$pb.TagNumber(7)
+  set capabilities(WorkerCapabilities value) => $_setField(7, value);
+  @$pb.TagNumber(7)
+  $core.bool hasCapabilities() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearCapabilities() => $_clearField(7);
+  @$pb.TagNumber(7)
+  WorkerCapabilities ensureCapabilities() => $_ensure(6);
+}
+
+class RuntimeWorkerCapabilitiesUpdated extends $pb.GeneratedMessage {
+  factory RuntimeWorkerCapabilitiesUpdated({
+    $core.String? workerId,
+    $core.String? registrationId,
+    WorkerCapabilities? capabilities,
+  }) {
+    final result = create();
+    if (workerId != null) result.workerId = workerId;
+    if (registrationId != null) result.registrationId = registrationId;
+    if (capabilities != null) result.capabilities = capabilities;
+    return result;
+  }
+
+  RuntimeWorkerCapabilitiesUpdated._();
+
+  factory RuntimeWorkerCapabilitiesUpdated.fromBuffer(
+          $core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RuntimeWorkerCapabilitiesUpdated.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RuntimeWorkerCapabilitiesUpdated',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'workerId')
+    ..aOS(2, _omitFieldNames ? '' : 'registrationId')
+    ..aOM<WorkerCapabilities>(3, _omitFieldNames ? '' : 'capabilities',
+        subBuilder: WorkerCapabilities.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RuntimeWorkerCapabilitiesUpdated clone() =>
+      RuntimeWorkerCapabilitiesUpdated()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RuntimeWorkerCapabilitiesUpdated copyWith(
+          void Function(RuntimeWorkerCapabilitiesUpdated) updates) =>
+      super.copyWith(
+              (message) => updates(message as RuntimeWorkerCapabilitiesUpdated))
+          as RuntimeWorkerCapabilitiesUpdated;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RuntimeWorkerCapabilitiesUpdated create() =>
+      RuntimeWorkerCapabilitiesUpdated._();
+  @$core.override
+  RuntimeWorkerCapabilitiesUpdated createEmptyInstance() => create();
+  static $pb.PbList<RuntimeWorkerCapabilitiesUpdated> createRepeated() =>
+      $pb.PbList<RuntimeWorkerCapabilitiesUpdated>();
+  @$core.pragma('dart2js:noInline')
+  static RuntimeWorkerCapabilitiesUpdated getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RuntimeWorkerCapabilitiesUpdated>(
+          create);
+  static RuntimeWorkerCapabilitiesUpdated? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get workerId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set workerId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasWorkerId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearWorkerId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get registrationId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set registrationId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasRegistrationId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearRegistrationId() => $_clearField(2);
+
+  /// Replaces the previous snapshot rather than patching it.
+  @$pb.TagNumber(3)
+  WorkerCapabilities get capabilities => $_getN(2);
+  @$pb.TagNumber(3)
+  set capabilities(WorkerCapabilities value) => $_setField(3, value);
+  @$pb.TagNumber(3)
+  $core.bool hasCapabilities() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearCapabilities() => $_clearField(3);
+  @$pb.TagNumber(3)
+  WorkerCapabilities ensureCapabilities() => $_ensure(2);
 }
 
 class RuntimeHeartbeat extends $pb.GeneratedMessage {
@@ -1066,6 +1319,7 @@ enum RuntimeUpdate_Update {
   runCompleted,
   runFailed,
   runCancelledAck,
+  workerCapabilitiesUpdated,
   notSet
 }
 
@@ -1073,11 +1327,12 @@ class RuntimeUpdate extends $pb.GeneratedMessage {
   factory RuntimeUpdate({
     RuntimeWorkerReady? workerReady,
     RuntimeHeartbeat? heartbeat,
-    $2.TuringEvent? event,
-    $3.ToolCallBeacon? toolBeacon,
+    $3.TuringEvent? event,
+    $4.ToolCallBeacon? toolBeacon,
     RuntimeRunCompleted? runCompleted,
     RuntimeRunFailed? runFailed,
     RuntimeCancelledAck? runCancelledAck,
+    RuntimeWorkerCapabilitiesUpdated? workerCapabilitiesUpdated,
   }) {
     final result = create();
     if (workerReady != null) result.workerReady = workerReady;
@@ -1087,6 +1342,8 @@ class RuntimeUpdate extends $pb.GeneratedMessage {
     if (runCompleted != null) result.runCompleted = runCompleted;
     if (runFailed != null) result.runFailed = runFailed;
     if (runCancelledAck != null) result.runCancelledAck = runCancelledAck;
+    if (workerCapabilitiesUpdated != null)
+      result.workerCapabilitiesUpdated = workerCapabilitiesUpdated;
     return result;
   }
 
@@ -1108,27 +1365,31 @@ class RuntimeUpdate extends $pb.GeneratedMessage {
     5: RuntimeUpdate_Update.runCompleted,
     6: RuntimeUpdate_Update.runFailed,
     7: RuntimeUpdate_Update.runCancelledAck,
+    8: RuntimeUpdate_Update.workerCapabilitiesUpdated,
     0: RuntimeUpdate_Update.notSet
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeUpdate',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..oo(0, [1, 2, 3, 4, 5, 6, 7])
+    ..oo(0, [1, 2, 3, 4, 5, 6, 7, 8])
     ..aOM<RuntimeWorkerReady>(1, _omitFieldNames ? '' : 'workerReady',
         subBuilder: RuntimeWorkerReady.create)
     ..aOM<RuntimeHeartbeat>(2, _omitFieldNames ? '' : 'heartbeat',
         subBuilder: RuntimeHeartbeat.create)
-    ..aOM<$2.TuringEvent>(3, _omitFieldNames ? '' : 'event',
-        subBuilder: $2.TuringEvent.create)
-    ..aOM<$3.ToolCallBeacon>(4, _omitFieldNames ? '' : 'toolBeacon',
-        subBuilder: $3.ToolCallBeacon.create)
+    ..aOM<$3.TuringEvent>(3, _omitFieldNames ? '' : 'event',
+        subBuilder: $3.TuringEvent.create)
+    ..aOM<$4.ToolCallBeacon>(4, _omitFieldNames ? '' : 'toolBeacon',
+        subBuilder: $4.ToolCallBeacon.create)
     ..aOM<RuntimeRunCompleted>(5, _omitFieldNames ? '' : 'runCompleted',
         subBuilder: RuntimeRunCompleted.create)
     ..aOM<RuntimeRunFailed>(6, _omitFieldNames ? '' : 'runFailed',
         subBuilder: RuntimeRunFailed.create)
     ..aOM<RuntimeCancelledAck>(7, _omitFieldNames ? '' : 'runCancelledAck',
         subBuilder: RuntimeCancelledAck.create)
+    ..aOM<RuntimeWorkerCapabilitiesUpdated>(
+        8, _omitFieldNames ? '' : 'workerCapabilitiesUpdated',
+        subBuilder: RuntimeWorkerCapabilitiesUpdated.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1179,26 +1440,26 @@ class RuntimeUpdate extends $pb.GeneratedMessage {
   RuntimeHeartbeat ensureHeartbeat() => $_ensure(1);
 
   @$pb.TagNumber(3)
-  $2.TuringEvent get event => $_getN(2);
+  $3.TuringEvent get event => $_getN(2);
   @$pb.TagNumber(3)
-  set event($2.TuringEvent value) => $_setField(3, value);
+  set event($3.TuringEvent value) => $_setField(3, value);
   @$pb.TagNumber(3)
   $core.bool hasEvent() => $_has(2);
   @$pb.TagNumber(3)
   void clearEvent() => $_clearField(3);
   @$pb.TagNumber(3)
-  $2.TuringEvent ensureEvent() => $_ensure(2);
+  $3.TuringEvent ensureEvent() => $_ensure(2);
 
   @$pb.TagNumber(4)
-  $3.ToolCallBeacon get toolBeacon => $_getN(3);
+  $4.ToolCallBeacon get toolBeacon => $_getN(3);
   @$pb.TagNumber(4)
-  set toolBeacon($3.ToolCallBeacon value) => $_setField(4, value);
+  set toolBeacon($4.ToolCallBeacon value) => $_setField(4, value);
   @$pb.TagNumber(4)
   $core.bool hasToolBeacon() => $_has(3);
   @$pb.TagNumber(4)
   void clearToolBeacon() => $_clearField(4);
   @$pb.TagNumber(4)
-  $3.ToolCallBeacon ensureToolBeacon() => $_ensure(3);
+  $4.ToolCallBeacon ensureToolBeacon() => $_ensure(3);
 
   @$pb.TagNumber(5)
   RuntimeRunCompleted get runCompleted => $_getN(4);
@@ -1232,14 +1493,29 @@ class RuntimeUpdate extends $pb.GeneratedMessage {
   void clearRunCancelledAck() => $_clearField(7);
   @$pb.TagNumber(7)
   RuntimeCancelledAck ensureRunCancelledAck() => $_ensure(6);
+
+  @$pb.TagNumber(8)
+  RuntimeWorkerCapabilitiesUpdated get workerCapabilitiesUpdated => $_getN(7);
+  @$pb.TagNumber(8)
+  set workerCapabilitiesUpdated(RuntimeWorkerCapabilitiesUpdated value) =>
+      $_setField(8, value);
+  @$pb.TagNumber(8)
+  $core.bool hasWorkerCapabilitiesUpdated() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearWorkerCapabilitiesUpdated() => $_clearField(8);
+  @$pb.TagNumber(8)
+  RuntimeWorkerCapabilitiesUpdated ensureWorkerCapabilitiesUpdated() =>
+      $_ensure(7);
 }
 
 class RuntimeWorkerAccepted extends $pb.GeneratedMessage {
   factory RuntimeWorkerAccepted({
     $core.String? workerId,
+    $core.String? registrationId,
   }) {
     final result = create();
     if (workerId != null) result.workerId = workerId;
+    if (registrationId != null) result.registrationId = registrationId;
     return result;
   }
 
@@ -1257,6 +1533,7 @@ class RuntimeWorkerAccepted extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'workerId')
+    ..aOS(2, _omitFieldNames ? '' : 'registrationId')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1290,6 +1567,15 @@ class RuntimeWorkerAccepted extends $pb.GeneratedMessage {
   $core.bool hasWorkerId() => $_has(0);
   @$pb.TagNumber(1)
   void clearWorkerId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get registrationId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set registrationId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasRegistrationId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearRegistrationId() => $_clearField(2);
 }
 
 class RuntimeRunCancelled extends $pb.GeneratedMessage {
@@ -1517,7 +1803,7 @@ class RuntimeCommand extends $pb.GeneratedMessage {
     RuntimeRunCancelled? runCancelled,
     RuntimeApprovalUpdated? approvalUpdated,
     RuntimeShutdownRequested? shutdownRequested,
-    $3.ToolPolicyDecision? toolPolicyDecision,
+    $4.ToolPolicyDecision? toolPolicyDecision,
   }) {
     final result = create();
     if (workerAccepted != null) result.workerAccepted = workerAccepted;
@@ -1565,8 +1851,8 @@ class RuntimeCommand extends $pb.GeneratedMessage {
     ..aOM<RuntimeShutdownRequested>(
         5, _omitFieldNames ? '' : 'shutdownRequested',
         subBuilder: RuntimeShutdownRequested.create)
-    ..aOM<$3.ToolPolicyDecision>(6, _omitFieldNames ? '' : 'toolPolicyDecision',
-        subBuilder: $3.ToolPolicyDecision.create)
+    ..aOM<$4.ToolPolicyDecision>(6, _omitFieldNames ? '' : 'toolPolicyDecision',
+        subBuilder: $4.ToolPolicyDecision.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1650,15 +1936,15 @@ class RuntimeCommand extends $pb.GeneratedMessage {
   RuntimeShutdownRequested ensureShutdownRequested() => $_ensure(4);
 
   @$pb.TagNumber(6)
-  $3.ToolPolicyDecision get toolPolicyDecision => $_getN(5);
+  $4.ToolPolicyDecision get toolPolicyDecision => $_getN(5);
   @$pb.TagNumber(6)
-  set toolPolicyDecision($3.ToolPolicyDecision value) => $_setField(6, value);
+  set toolPolicyDecision($4.ToolPolicyDecision value) => $_setField(6, value);
   @$pb.TagNumber(6)
   $core.bool hasToolPolicyDecision() => $_has(5);
   @$pb.TagNumber(6)
   void clearToolPolicyDecision() => $_clearField(6);
   @$pb.TagNumber(6)
-  $3.ToolPolicyDecision ensureToolPolicyDecision() => $_ensure(5);
+  $4.ToolPolicyDecision ensureToolPolicyDecision() => $_ensure(5);
 }
 
 const $core.bool _omitFieldNames =

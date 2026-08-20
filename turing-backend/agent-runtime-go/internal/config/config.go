@@ -198,11 +198,11 @@ func providerContextLimits(
 	contextName string,
 	outputName string,
 ) (int, int, error) {
-	contextWindowTokens, err := intValue(getenv, contextName, llm.DefaultContextWindowTokens)
+	contextWindowTokens, err := nonNegativeInt32Value(getenv, contextName, llm.DefaultContextWindowTokens)
 	if err != nil {
 		return 0, 0, err
 	}
-	maxOutputTokens, err := intValue(getenv, outputName, llm.DefaultMaxOutputTokens)
+	maxOutputTokens, err := nonNegativeInt32Value(getenv, outputName, llm.DefaultMaxOutputTokens)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -243,6 +243,17 @@ func intValue(getenv func(string) string, name string, defaultValue int) (int, e
 		return 0, fmt.Errorf("%s must be an integer", name)
 	}
 	return parsed, nil
+}
+
+func nonNegativeInt32Value(getenv func(string) string, name string, defaultValue int) (int, error) {
+	value, err := intValue(getenv, name, defaultValue)
+	if err != nil {
+		return 0, err
+	}
+	if value < 0 || int64(value) > math.MaxInt32 {
+		return 0, fmt.Errorf("%s must be between 0 and %d", name, int64(math.MaxInt32))
+	}
+	return value, nil
 }
 
 func durationMillisecondsValue(getenv func(string) string, name string, defaultValue int64) (time.Duration, error) {

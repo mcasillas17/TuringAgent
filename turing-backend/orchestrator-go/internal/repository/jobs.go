@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,13 +18,52 @@ import (
 )
 
 type EnqueueUserMessageInput struct {
-	SessionID      string
-	Content        string
-	ContentType    string
-	AgentID        string
-	ModelProvider  string
-	Model          string
-	IdempotencyKey string
+	SessionID                      string
+	Content                        string
+	ContentType                    string
+	AgentID                        string
+	ModelProvider                  string
+	Model                          string
+	ExecutionModel                 string
+	IdempotencyKey                 string
+	RequestedTools                 []string
+	RequiredContextTokens          int
+	MinimumWorkerMaxConcurrentRuns int
+	ValidateRouting                func(context.Context, RoutingRequirements) error
+}
+
+type RoutingRequirements struct {
+	AgentID                        string
+	ModelProvider                  string
+	Model                          string
+	RequestedTools                 []string
+	RequiredContextTokens          int
+	MinimumWorkerMaxConcurrentRuns int
+	ExternalAgent                  bool
+	ExternalAgentCredentialRef     string
+}
+
+type RoutingModelCapability struct {
+	Provider         string
+	Model            string
+	MaxContextTokens int
+}
+
+type WorkerRoutingCapabilities struct {
+	Models                      []RoutingModelCapability
+	Tools                       []string
+	MaxConcurrentRuns           int
+	ExternalAgentCredentialRefs []string
+}
+
+type PendingRoutingWork struct {
+	RunID        string
+	Requirements RoutingRequirements
+}
+
+type PendingRoutingCursor struct {
+	CreatedAtNanos int64
+	JobID          string
 }
 
 type EnqueueUserMessageResult struct {
@@ -47,22 +88,35 @@ type EnqueueUserMessageResult struct {
 }
 
 type Job struct {
-	JobID               string
-	RunID               string
-	SessionID           string
-	UserMessageID       string
-	AssistantMessageID  string
-	TraceID             string
-	ModelProvider       string
-	Model               string
-	UserText            string
-	Attempt             int
-	AssignmentAttemptID string
-	Skills              []SkillSnapshot
+	JobID                          string
+	RunID                          string
+	SessionID                      string
+	UserMessageID                  string
+	AssistantMessageID             string
+	AgentID                        string
+	TraceID                        string
+	ModelProvider                  string
+	Model                          string
+	UserText                       string
+	RequestedTools                 []string
+	RequiredContextTokens          int
+	MinimumWorkerMaxConcurrentRuns int
+	Attempt                        int
+	AssignmentAttemptID            string
+	Skills                         []SkillSnapshot
 	// ExternalAgent is nil for the local assistant, which is the default and
 	// the common case.
 	ExternalAgent *ExternalAgentTarget
 	StartedEvent  Event
+}
+
+type queuedJobPayload struct {
+	UserText                       string               `json:"userText"`
+	RequestedTools                 []string             `json:"requestedTools"`
+	RequiredContextTokens          int                  `json:"requiredContextTokens"`
+	MinimumWorkerMaxConcurrentRuns int                  `json:"minimumWorkerMaxConcurrentRuns"`
+	Skills                         []SkillSnapshot      `json:"skills"`
+	ExternalAgent                  *ExternalAgentTarget `json:"externalAgent"`
 }
 
 type Assignment struct {
@@ -110,21 +164,27 @@ func (record sendMessageIdempotencyRecord) result() EnqueueUserMessageResult {
 
 func enqueueRequestFingerprint(input EnqueueUserMessageInput) (string, error) {
 	canonical, err := json.Marshal(struct {
-		Version       int    `json:"version"`
-		SessionID     string `json:"session_id"`
-		Content       string `json:"content"`
-		ContentType   string `json:"content_type"`
-		AgentID       string `json:"agent_id"`
-		ModelProvider string `json:"model_provider"`
-		Model         string `json:"model"`
+		Version                        int      `json:"version"`
+		SessionID                      string   `json:"session_id"`
+		Content                        string   `json:"content"`
+		ContentType                    string   `json:"content_type"`
+		AgentID                        string   `json:"agent_id"`
+		ModelProvider                  string   `json:"model_provider"`
+		Model                          string   `json:"model"`
+		RequestedTools                 []string `json:"requested_tools"`
+		RequiredContextTokens          int      `json:"required_context_tokens"`
+		MinimumWorkerMaxConcurrentRuns int      `json:"minimum_worker_max_concurrent_runs"`
 	}{
-		Version:       1,
-		SessionID:     input.SessionID,
-		Content:       input.Content,
-		ContentType:   input.ContentType,
-		AgentID:       input.AgentID,
-		ModelProvider: input.ModelProvider,
-		Model:         input.Model,
+		Version:                        2,
+		SessionID:                      input.SessionID,
+		Content:                        input.Content,
+		ContentType:                    input.ContentType,
+		AgentID:                        input.AgentID,
+		ModelProvider:                  input.ModelProvider,
+		Model:                          input.Model,
+		RequestedTools:                 input.RequestedTools,
+		RequiredContextTokens:          input.RequiredContextTokens,
+		MinimumWorkerMaxConcurrentRuns: input.MinimumWorkerMaxConcurrentRuns,
 	})
 	if err != nil {
 		return "", err
@@ -372,6 +432,51 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 	return result, nil
 }
 
+type resolvedEnqueueRoute struct {
+	requirements      RoutingRequirements
+	routedAgent       ExternalAgent
+	externalTarget    *ExternalAgentTarget
+	externalAgentName sql.NullString
+	externalAgentHost sql.NullString
+}
+
+func resolveEnqueueRouteTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMessageInput) (resolvedEnqueueRoute, error) {
+	model := input.Model
+	if input.ExecutionModel != "" {
+		model = input.ExecutionModel
+	}
+	resolved := resolvedEnqueueRoute{requirements: RoutingRequirements{
+		AgentID:                        input.AgentID,
+		ModelProvider:                  input.ModelProvider,
+		Model:                          model,
+		RequestedTools:                 append([]string(nil), input.RequestedTools...),
+		RequiredContextTokens:          input.RequiredContextTokens,
+		MinimumWorkerMaxConcurrentRuns: input.MinimumWorkerMaxConcurrentRuns,
+	}}
+	routedAgent, routed, err := sessionExternalAgentTx(ctx, tx, input.SessionID)
+	if err != nil {
+		return resolvedEnqueueRoute{}, err
+	}
+	if !routed {
+		return resolved, nil
+	}
+	resolved.requirements.ModelProvider = "openai_compatible"
+	resolved.requirements.Model = routedAgent.Model
+	resolved.requirements.ExternalAgent = true
+	resolved.requirements.ExternalAgentCredentialRef = routedAgent.CredentialRef
+	resolved.routedAgent = routedAgent
+	resolved.externalTarget = &ExternalAgentTarget{
+		DisplayName:   routedAgent.DisplayName,
+		BaseURL:       routedAgent.BaseURL,
+		CredentialRef: routedAgent.CredentialRef,
+	}
+	resolved.externalAgentName = sql.NullString{String: routedAgent.DisplayName, Valid: true}
+	if parsed, parseErr := url.Parse(routedAgent.BaseURL); parseErr == nil && parsed.Host != "" {
+		resolved.externalAgentHost = sql.NullString{String: parsed.Host, Valid: true}
+	}
+	return resolved, nil
+}
+
 // enqueueUserMessageTx is the whole of "a message arrives and a run is
 // queued", minus the transaction around it. It is separate so the scheduler
 // can claim a due automation and queue its run in ONE transaction: a crash
@@ -379,6 +484,21 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 // lose a run or fire the same one twice.
 func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMessageInput) (EnqueueUserMessageResult, error) {
 	input = normalizeEnqueueUserMessageInput(input)
+	// Resolve the effective destination before writing anything. A conversation
+	// routed to an external agent overrides request provider/model fields, and
+	// routing validation must evaluate that same frozen destination.
+	resolvedRoute, err := resolveEnqueueRouteTx(ctx, tx, input)
+	if err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	if input.ValidateRouting != nil {
+		err := input.ValidateRouting(ctx, resolvedRoute.requirements)
+		if err != nil {
+			return EnqueueUserMessageResult{}, err
+		}
+	}
+	modelProvider, model := resolvedRoute.requirements.ModelProvider, resolvedRoute.requirements.Model
+
 	created := time.Now().UTC()
 	userMessageID := ids.New("msg")
 	assistantMessageID := ids.New("msg")
@@ -391,7 +511,7 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	}
 	var latestCreatedAt string
 	latestQuery := `SELECT created_at FROM messages WHERE session_id = ? ORDER BY ` + sqliteTimestampNanos("created_at") + ` DESC, id DESC LIMIT 1`
-	err := tx.QueryRowContext(ctx, latestQuery, input.SessionID).Scan(&latestCreatedAt)
+	err = tx.QueryRowContext(ctx, latestQuery, input.SessionID).Scan(&latestCreatedAt)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return EnqueueUserMessageResult{}, err
 	}
@@ -413,19 +533,6 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	if _, err := tx.ExecContext(ctx, `INSERT INTO messages (id, session_id, run_id, role, content, content_type, sequence, created_at) VALUES (?, ?, ?, 'assistant', '', ?, ?, ?)`, assistantMessageID, input.SessionID, runID, input.ContentType, next+1, assistantCreatedAt); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
-	// Read inside the transaction that records the run, so the destination
-	// cannot change between deciding it and recording it. A conversation
-	// routed to an external agent overrides whatever provider and model the
-	// client asked for: the destination is a property of the conversation the
-	// user configured, not of the request, and letting a request override it
-	// would mean a message could quietly go somewhere else than the bar above
-	// it says.
-	routedAgent, routed, err := sessionExternalAgentTx(ctx, tx, input.SessionID)
-	if err != nil {
-		return EnqueueUserMessageResult{}, err
-	}
-	modelProvider, model := input.ModelProvider, input.Model
-	var externalTarget *ExternalAgentTarget
 	// Recorded on the run itself, not left to be derived later from
 	// session_external_agent. That table says where the conversation points
 	// NOW; re-pointing or deleting an agent afterwards would silently rewrite
@@ -434,30 +541,7 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	//
 	// The host rather than the base URL: a URL can carry a path, a query, and
 	// from a careless paste a credential. Only the recipient is worth keeping.
-	var externalAgentName, externalAgentHost sql.NullString
-	if routed {
-		// Every supported vendor speaks the OpenAI chat-completions dialect, so
-		// this reuses the existing provider rather than adding one client per
-		// company. What differs per agent is the base URL, the model and which
-		// credential to resolve — configuration, not integrations.
-		modelProvider, model = "openai_compatible", routedAgent.Model
-		externalTarget = &ExternalAgentTarget{
-			DisplayName:   routedAgent.DisplayName,
-			BaseURL:       routedAgent.BaseURL,
-			CredentialRef: routedAgent.CredentialRef,
-		}
-		externalAgentName = sql.NullString{String: routedAgent.DisplayName, Valid: true}
-		// Parsed here rather than through ExternalAgentEndpointHost, which
-		// falls back to returning the URL whole when it cannot find a host.
-		// That fallback is fine for a transcript notice; it is not fine for a
-		// column that is read straight back into a report promising a host and
-		// nothing else. No host recorded beats the wrong thing recorded, and
-		// the client already words the absence.
-		if parsed, parseErr := url.Parse(routedAgent.BaseURL); parseErr == nil && parsed.Host != "" {
-			externalAgentHost = sql.NullString{String: parsed.Host, Valid: true}
-		}
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status, model_provider, model_name, external_agent_name, external_agent_host, created_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`, runID, input.SessionID, userMessageID, assistantMessageID, input.AgentID, traceID, modelProvider, model, externalAgentName, externalAgentHost, createdAt); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status, model_provider, model_name, external_agent_name, external_agent_host, created_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`, runID, input.SessionID, userMessageID, assistantMessageID, input.AgentID, traceID, modelProvider, model, resolvedRoute.externalAgentName, resolvedRoute.externalAgentHost, createdAt); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	// Name the conversation after the first thing said in it, and mark the
@@ -509,23 +593,26 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 		return EnqueueUserMessageResult{}, err
 	}
 	jobPayload, err := json.Marshal(map[string]any{
-		"userText":           input.Content,
-		"sessionId":          input.SessionID,
-		"userMessageId":      userMessageID,
-		"assistantMessageId": assistantMessageID,
-		"traceId":            traceID,
-		"modelProvider":      modelProvider,
-		"model":              model,
-		"skills":             skillSnapshots,
+		"userText":                       input.Content,
+		"sessionId":                      input.SessionID,
+		"userMessageId":                  userMessageID,
+		"assistantMessageId":             assistantMessageID,
+		"traceId":                        traceID,
+		"modelProvider":                  modelProvider,
+		"model":                          model,
+		"requestedTools":                 input.RequestedTools,
+		"requiredContextTokens":          input.RequiredContextTokens,
+		"minimumWorkerMaxConcurrentRuns": input.MinimumWorkerMaxConcurrentRuns,
+		"skills":                         skillSnapshots,
 		// Frozen for the same reason the skills are: re-pointing or deleting
 		// the agent while this job waits must not redirect a message the user
 		// already sent, and must not send it to a company they did not pick.
-		"externalAgent": externalTarget,
+		"externalAgent": resolvedRoute.externalTarget,
 	})
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id, run_id, agent_id, status, payload_json, created_at) VALUES (?, ?, ?, 'pending', ?, ?)`, jobID, runID, input.AgentID, string(jobPayload), createdAt); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id, run_id, agent_id, status, payload_json, created_at, created_at_ns) VALUES (?, ?, ?, 'pending', ?, ?, ?)`, jobID, runID, input.AgentID, string(jobPayload), createdAt, created.UnixNano()); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	queuedPayload, err := json.Marshal(map[string]any{
@@ -557,13 +644,13 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	// of those, which this project ranks as the worst kind of defect. "Sending
 	// … leaves" is true in both outcomes.
 	var routingEvents []Event
-	if routed {
+	if resolvedRoute.requirements.ExternalAgent {
 		notice, err := appendRunNoticeTx(ctx, tx, input.SessionID, runID, traceID,
-			"Sending to "+flattenNoticeText(routedAgent.DisplayName)+" — this message leaves your machine",
+			"Sending to "+flattenNoticeText(resolvedRoute.routedAgent.DisplayName)+" — this message leaves your machine",
 			map[string]any{
-				"externalAgent": routedAgent.DisplayName,
-				"endpoint":      ExternalAgentEndpointHost(routedAgent.BaseURL),
-				"model":         routedAgent.Model,
+				"externalAgent": resolvedRoute.routedAgent.DisplayName,
+				"endpoint":      ExternalAgentEndpointHost(resolvedRoute.routedAgent.BaseURL),
+				"model":         resolvedRoute.routedAgent.Model,
 			}, createdAt)
 		if err != nil {
 			return EnqueueUserMessageResult{}, err
@@ -577,6 +664,9 @@ func normalizeEnqueueUserMessageInput(input EnqueueUserMessageInput) EnqueueUser
 	if input.ContentType == "" {
 		input.ContentType = "text"
 	}
+	input.RequestedTools = append([]string{}, input.RequestedTools...)
+	sort.Strings(input.RequestedTools)
+	input.RequestedTools = slices.Compact(input.RequestedTools)
 	return input
 }
 
@@ -592,6 +682,18 @@ func (r *Repository) ClaimNextJob(ctx context.Context, agentID string, leaseOwne
 }
 
 func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, leaseOwner string, globalLimit int, leaseDuration time.Duration) (Job, error) {
+	return r.ClaimNextCompatibleJobWithLimit(ctx, agentID, leaseOwner, globalLimit, leaseDuration, nil, nil)
+}
+
+func (r *Repository) ClaimNextCompatibleJobWithLimit(
+	ctx context.Context,
+	agentID string,
+	leaseOwner string,
+	globalLimit int,
+	leaseDuration time.Duration,
+	capabilities *WorkerRoutingCapabilities,
+	compatible func(RoutingRequirements) bool,
+) (Job, error) {
 	pickedUpAt := now()
 	if leaseDuration <= 0 {
 		leaseDuration = 5 * time.Minute
@@ -619,8 +721,7 @@ func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, 
 			return Job{}, nil
 		}
 	}
-	var job Job
-	var payloadJSON string
+	routingFilter, routingArgs := claimRoutingFilterSQL(capabilities)
 	claimQuery := `
 		SELECT
 			j.id,
@@ -628,6 +729,7 @@ func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, 
 			r.session_id,
 			r.user_message_id,
 			COALESCE(r.assistant_message_id, ''),
+			j.agent_id,
 			r.trace_id,
 			r.model_provider,
 			r.model_name,
@@ -654,44 +756,80 @@ func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, 
 								AND earlier_job.status NOT IN ('completed', 'failed', 'cancelled')
 						)
 					)
-			)
-		ORDER BY ` + sqliteTimestampNanos("j.created_at") + `, j.id
+			)` + routingFilter + `
+		ORDER BY j.created_at_ns, j.id
 		LIMIT 1
 	`
-	err = tx.QueryRowContext(ctx, claimQuery, agentID).Scan(
-		&job.JobID,
-		&job.RunID,
-		&job.SessionID,
-		&job.UserMessageID,
-		&job.AssistantMessageID,
-		&job.TraceID,
-		&job.ModelProvider,
-		&job.Model,
-		&payloadJSON,
-		&job.Attempt,
-	)
-	if err == sql.ErrNoRows {
-		return Job{}, nil
-	}
+	queryArgs := []any{agentID}
+	queryArgs = append(queryArgs, routingArgs...)
+	rows, err := tx.QueryContext(ctx, claimQuery, queryArgs...)
 	if err != nil {
 		return Job{}, err
 	}
-	var payload struct {
-		UserText      string               `json:"userText"`
-		Skills        []SkillSnapshot      `json:"skills"`
-		ExternalAgent *ExternalAgentTarget `json:"externalAgent"`
+	defer func() { _ = rows.Close() }()
+
+	var job Job
+	for rows.Next() {
+		var candidate Job
+		var payloadJSON string
+		if err := rows.Scan(
+			&candidate.JobID,
+			&candidate.RunID,
+			&candidate.SessionID,
+			&candidate.UserMessageID,
+			&candidate.AssistantMessageID,
+			&candidate.AgentID,
+			&candidate.TraceID,
+			&candidate.ModelProvider,
+			&candidate.Model,
+			&payloadJSON,
+			&candidate.Attempt,
+		); err != nil {
+			return Job{}, err
+		}
+		var payload queuedJobPayload
+		if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+			return Job{}, err
+		}
+		candidate.UserText = payload.UserText
+		candidate.RequestedTools = payload.RequestedTools
+		candidate.RequiredContextTokens = payload.RequiredContextTokens
+		candidate.MinimumWorkerMaxConcurrentRuns = payload.MinimumWorkerMaxConcurrentRuns
+		// Absent for jobs enqueued before skills existed, which decodes to nil —
+		// the same as a conversation with none attached.
+		candidate.Skills = payload.Skills
+		// Absent for every job enqueued before routing existed, and for every
+		// conversation that was never routed away. nil means the local assistant,
+		// which is the only default that keeps the transcript on this machine.
+		candidate.ExternalAgent = payload.ExternalAgent
+		externalAgentCredentialRef := ""
+		if candidate.ExternalAgent != nil {
+			externalAgentCredentialRef = candidate.ExternalAgent.CredentialRef
+		}
+		if compatible != nil && !compatible(RoutingRequirements{
+			AgentID:                        candidate.AgentID,
+			ModelProvider:                  candidate.ModelProvider,
+			Model:                          candidate.Model,
+			RequestedTools:                 candidate.RequestedTools,
+			RequiredContextTokens:          candidate.RequiredContextTokens,
+			MinimumWorkerMaxConcurrentRuns: candidate.MinimumWorkerMaxConcurrentRuns,
+			ExternalAgent:                  candidate.ExternalAgent != nil,
+			ExternalAgentCredentialRef:     externalAgentCredentialRef,
+		}) {
+			continue
+		}
+		job = candidate
+		break
 	}
-	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+	if err := rows.Err(); err != nil {
 		return Job{}, err
 	}
-	job.UserText = payload.UserText
-	// Absent for jobs enqueued before skills existed, which decodes to nil —
-	// the same as a run with no enabled skills.
-	job.Skills = payload.Skills
-	// Absent for every job enqueued before routing existed, and for every
-	// conversation that was never routed away. nil means the local assistant,
-	// which is the only default that keeps the transcript on this machine.
-	job.ExternalAgent = payload.ExternalAgent
+	if err := rows.Close(); err != nil {
+		return Job{}, err
+	}
+	if job.JobID == "" {
+		return Job{}, nil
+	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE jobs
 		SET status = 'in_progress', lease_owner = ?, lease_expires_at = ?, lease_expires_at_ns = ?, picked_up_at = ?, assignment_attempt_id = ?
@@ -745,15 +883,148 @@ func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, 
 	return job, nil
 }
 
+func claimRoutingFilterSQL(capabilities *WorkerRoutingCapabilities) (string, []any) {
+	if capabilities == nil {
+		return "", nil
+	}
+	const externalAgentType = `json_type(j.payload_json, '$.externalAgent')`
+	var destinations []string
+	var args []any
+	if len(capabilities.ExternalAgentCredentialRefs) > 0 {
+		placeholders := make([]string, len(capabilities.ExternalAgentCredentialRefs))
+		for index, credentialRef := range capabilities.ExternalAgentCredentialRefs {
+			placeholders[index] = "?"
+			args = append(args, credentialRef)
+		}
+		destinations = append(destinations, `(
+			`+externalAgentType+` = 'object'
+			AND json_extract(j.payload_json, '$.externalAgent.credentialRef') IN (`+strings.Join(placeholders, ", ")+`)
+			AND COALESCE(CAST(json_extract(j.payload_json, '$.requiredContextTokens') AS INTEGER), 0) <= 0
+		)`)
+	}
+	for _, model := range capabilities.Models {
+		destinations = append(destinations, `(
+			COALESCE(`+externalAgentType+`, 'null') <> 'object'
+			AND r.model_provider = ?
+			AND r.model_name = ?
+			AND COALESCE(CAST(json_extract(j.payload_json, '$.requiredContextTokens') AS INTEGER), 0) <= ?
+		)`)
+		args = append(args, model.Provider, model.Model, model.MaxContextTokens)
+	}
+	if len(destinations) == 0 {
+		destinations = append(destinations, "0")
+	}
+	filter := `
+		AND (` + strings.Join(destinations, " OR ") + `)
+		AND MAX(
+			COALESCE(CAST(json_extract(j.payload_json, '$.minimumWorkerMaxConcurrentRuns') AS INTEGER), 0),
+			1
+		) <= ?`
+	args = append(args, capabilities.MaxConcurrentRuns)
+	if len(capabilities.Tools) == 0 {
+		filter += `
+		AND NOT EXISTS (
+			SELECT 1
+			FROM json_each(COALESCE(json_extract(j.payload_json, '$.requestedTools'), json('[]')))
+		)`
+		return filter, args
+	}
+	placeholders := make([]string, len(capabilities.Tools))
+	for index, tool := range capabilities.Tools {
+		placeholders[index] = "?"
+		args = append(args, tool)
+	}
+	filter += `
+		AND NOT EXISTS (
+			SELECT 1
+			FROM json_each(COALESCE(json_extract(j.payload_json, '$.requestedTools'), json('[]'))) requested_tool
+			WHERE requested_tool.value NOT IN (` + strings.Join(placeholders, ", ") + `)
+		)`
+	return filter, args
+}
+
+func (r *Repository) ListPendingRoutingWorkPage(
+	ctx context.Context,
+	after PendingRoutingCursor,
+	limit int,
+) ([]PendingRoutingWork, PendingRoutingCursor, error) {
+	if limit < 1 {
+		return nil, after, fmt.Errorf("pending routing page limit must be positive")
+	}
+	query := `
+		SELECT j.id, j.created_at_ns, j.run_id, j.agent_id, r.model_provider, r.model_name, j.payload_json
+		FROM jobs j
+		JOIN agent_runs r ON r.id = j.run_id
+		WHERE j.status = 'pending' AND r.status = 'queued'`
+	args := make([]any, 0, 3)
+	if after.JobID != "" {
+		query += `
+			AND (j.created_at_ns > ? OR (j.created_at_ns = ? AND j.id > ?))`
+		args = append(args, after.CreatedAtNanos, after.CreatedAtNanos, after.JobID)
+	}
+	query += `
+		ORDER BY j.created_at_ns, j.id
+		LIMIT ?`
+	args = append(args, limit)
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, after, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var work []PendingRoutingWork
+	next := after
+	for rows.Next() {
+		var item PendingRoutingWork
+		var payloadJSON string
+		if err := rows.Scan(
+			&next.JobID,
+			&next.CreatedAtNanos,
+			&item.RunID,
+			&item.Requirements.AgentID,
+			&item.Requirements.ModelProvider,
+			&item.Requirements.Model,
+			&payloadJSON,
+		); err != nil {
+			return nil, after, err
+		}
+		var payload queuedJobPayload
+		if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+			return nil, after, err
+		}
+		item.Requirements.RequestedTools = append([]string(nil), payload.RequestedTools...)
+		item.Requirements.RequiredContextTokens = payload.RequiredContextTokens
+		item.Requirements.MinimumWorkerMaxConcurrentRuns = payload.MinimumWorkerMaxConcurrentRuns
+		item.Requirements.ExternalAgent = payload.ExternalAgent != nil
+		if payload.ExternalAgent != nil {
+			item.Requirements.ExternalAgentCredentialRef = payload.ExternalAgent.CredentialRef
+		}
+		work = append(work, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, after, err
+	}
+	return work, next, nil
+}
+
 func (r *Repository) RequeueClaimedJob(ctx context.Context, jobID string, runID string) error {
-	return r.requeueAssignment(ctx, Assignment{JobID: jobID, RunID: runID}, false)
+	return r.requeueAssignment(ctx, Assignment{JobID: jobID, RunID: runID}, "", true)
 }
 
 func (r *Repository) AbortPendingAssignment(ctx context.Context, assignment Assignment) error {
-	return r.requeueAssignment(ctx, assignment, true)
+	return r.requeueAssignment(ctx, assignment, "pending_send", false)
 }
 
-func (r *Repository) requeueAssignment(ctx context.Context, assignment Assignment, onlyPendingSend bool) error {
+func (r *Repository) AbortUnsentAssignment(ctx context.Context, assignment Assignment) error {
+	return r.requeueAssignment(ctx, assignment, "sending", false)
+}
+
+func (r *Repository) requeueAssignment(
+	ctx context.Context,
+	assignment Assignment,
+	requiredExecutionState string,
+	incrementAttempt bool,
+) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -775,11 +1046,15 @@ func (r *Repository) requeueAssignment(ctx context.Context, assignment Assignmen
 	if assignment.WorkerID != "" && (!workerID.Valid || workerID.String != assignment.WorkerID) {
 		return ErrAssignmentFenced
 	}
-	if onlyPendingSend && executionState != "pending_send" {
+	if requiredExecutionState != "" && executionState != requiredExecutionState {
 		return ErrAssignmentFenced
 	}
-	if executionState == "sending" || executionState == "uncertain" {
+	if requiredExecutionState == "" && (executionState == "sending" || executionState == "uncertain") {
 		return ErrAssignmentFenced
+	}
+	attemptIncrement := 0
+	if incrementAttempt {
+		attemptIncrement = 1
 	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE jobs
@@ -789,13 +1064,13 @@ func (r *Repository) requeueAssignment(ctx context.Context, assignment Assignmen
 			lease_expires_at_ns = NULL,
 			picked_up_at = NULL,
 			assignment_attempt_id = NULL,
-			attempt = attempt + 1
+			attempt = attempt + ?
 		WHERE id = ? AND run_id = ? AND status = 'in_progress'
-	`, assignment.JobID, assignment.RunID)
+	`, attemptIncrement, assignment.JobID, assignment.RunID)
 	if err != nil {
 		return err
 	}
-	if err := expectOneRow(result, "claimed job not found for requeue"); err != nil {
+	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
 		return err
 	}
 	result, err = tx.ExecContext(ctx, `
@@ -814,7 +1089,7 @@ func (r *Repository) requeueAssignment(ctx context.Context, assignment Assignmen
 	if err != nil {
 		return err
 	}
-	if err := expectOneRow(result, "running run not found for requeue"); err != nil {
+	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -829,7 +1104,17 @@ func (r *Repository) BeginAssignmentSend(ctx context.Context, assignment Assignm
 			AND execution_attempt_id = ?
 			AND execution_active = 1
 			AND execution_state = 'pending_send'
-	`, assignment.RunID, assignment.WorkerID, assignment.AttemptID)
+			AND status = 'running'
+			AND EXISTS (
+				SELECT 1
+				FROM jobs j
+				WHERE j.id = ?
+					AND j.run_id = agent_runs.id
+					AND j.status = 'in_progress'
+					AND j.lease_owner = ?
+					AND j.assignment_attempt_id = ?
+			)
+	`, assignment.RunID, assignment.WorkerID, assignment.AttemptID, assignment.JobID, assignment.WorkerID, assignment.AttemptID)
 	if err != nil {
 		return err
 	}

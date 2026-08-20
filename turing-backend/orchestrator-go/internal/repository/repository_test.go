@@ -86,7 +86,7 @@ func TestSessionMessageRunJobTransaction(t *testing.T) {
 	if jobRunID != result.RunID || jobAgentID != "general_assistant" || jobStatus != "pending" {
 		t.Fatalf("bad job row: run=%q agent=%q status=%q", jobRunID, jobAgentID, jobStatus)
 	}
-	var payload map[string]string
+	var payload map[string]any
 	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
 		t.Fatalf("decode job payload: %v", err)
 	}

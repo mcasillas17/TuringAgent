@@ -33,8 +33,12 @@ type SendMessageRequest struct {
 	// Opaque key retained for retries of this exact operation. Reusing a key
 	// with a different normalized request returns ALREADY_EXISTS.
 	IdempotencyKey string `protobuf:"bytes,7,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Exact server/tool names that a compatible worker must advertise.
+	RequestedTools                 []string `protobuf:"bytes,8,rep,name=requested_tools,json=requestedTools,proto3" json:"requested_tools,omitempty"`
+	RequiredContextTokens          int32    `protobuf:"varint,9,opt,name=required_context_tokens,json=requiredContextTokens,proto3" json:"required_context_tokens,omitempty"`
+	MinimumWorkerMaxConcurrentRuns int32    `protobuf:"varint,10,opt,name=minimum_worker_max_concurrent_runs,json=minimumWorkerMaxConcurrentRuns,proto3" json:"minimum_worker_max_concurrent_runs,omitempty"`
+	unknownFields                  protoimpl.UnknownFields
+	sizeCache                      protoimpl.SizeCache
 }
 
 func (x *SendMessageRequest) Reset() {
@@ -114,6 +118,27 @@ func (x *SendMessageRequest) GetIdempotencyKey() string {
 		return x.IdempotencyKey
 	}
 	return ""
+}
+
+func (x *SendMessageRequest) GetRequestedTools() []string {
+	if x != nil {
+		return x.RequestedTools
+	}
+	return nil
+}
+
+func (x *SendMessageRequest) GetRequiredContextTokens() int32 {
+	if x != nil {
+		return x.RequiredContextTokens
+	}
+	return 0
+}
+
+func (x *SendMessageRequest) GetMinimumWorkerMaxConcurrentRuns() int32 {
+	if x != nil {
+		return x.MinimumWorkerMaxConcurrentRuns
+	}
+	return 0
 }
 
 type RunQueued struct {
@@ -1050,7 +1075,7 @@ var File_turing_v1_chat_proto protoreflect.FileDescriptor
 
 const file_turing_v1_chat_proto_rawDesc = "" +
 	"\n" +
-	"\x14turing/v1/chat.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16turing/v1/common.proto\x1a\x16turing/v1/events.proto\"\x9f\x02\n" +
+	"\x14turing/v1/chat.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16turing/v1/common.proto\x1a\x16turing/v1/events.proto\"\xcc\x03\n" +
 	"\x12SendMessageRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x18\n" +
@@ -1059,7 +1084,11 @@ const file_turing_v1_chat_proto_rawDesc = "" +
 	"\bagent_id\x18\x04 \x01(\x0e2\x12.turing.v1.AgentIdR\aagentId\x12?\n" +
 	"\x0emodel_provider\x18\x05 \x01(\x0e2\x18.turing.v1.ModelProviderR\rmodelProvider\x12\x14\n" +
 	"\x05model\x18\x06 \x01(\tR\x05model\x12'\n" +
-	"\x0fidempotency_key\x18\a \x01(\tR\x0eidempotencyKey\"T\n" +
+	"\x0fidempotency_key\x18\a \x01(\tR\x0eidempotencyKey\x12'\n" +
+	"\x0frequested_tools\x18\b \x03(\tR\x0erequestedTools\x126\n" +
+	"\x17required_context_tokens\x18\t \x01(\x05R\x15requiredContextTokens\x12J\n" +
+	"\"minimum_worker_max_concurrent_runs\x18\n" +
+	" \x01(\x05R\x1eminimumWorkerMaxConcurrentRuns\"T\n" +
 	"\tRunQueued\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x15\n" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\x19\n" +
