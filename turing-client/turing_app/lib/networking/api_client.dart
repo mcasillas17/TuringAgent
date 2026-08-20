@@ -8,6 +8,7 @@ import '../models/automation.dart';
 import '../models/message.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
+import '../models/session_deletion.dart';
 import '../models/skill.dart';
 import '../models/telemetry.dart';
 import '../models/tool_descriptor.dart';
@@ -22,11 +23,16 @@ abstract class TuringApi {
 
   Future<Session> getSession({required String sessionId});
 
-  /// Removes a session, its messages and its run history. Permanent: there is
-  /// no undo, and the content also leaves the search index. Note this does NOT
-  /// remove files the session wrote into the sandbox — mcp-files has no notion
-  /// of a session, so those outlive it.
-  Future<void> deleteSession({required String sessionId});
+  /// Starts or advances an idempotent session withdrawal. The caller removes
+  /// local state only after a completed receipt; an in-progress or
+  /// failed-external receipt remains visible for retry.
+  Future<SessionDeletionReceipt> deleteSession({required String sessionId});
+
+  /// Content-free receipts for withdrawals that have not completed yet. This
+  /// lets the client preserve a retryable placeholder after restart without
+  /// redisclosing the session title or transcript.
+  Future<List<SessionDeletionReceipt>> listSessionDeletionReceipts() async =>
+      const [];
 
   Future<List<Message>> listMessages({
     required String sessionId,

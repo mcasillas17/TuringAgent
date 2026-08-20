@@ -110,3 +110,44 @@ func TestCancelRunFencesPendingAssignmentBeforeDelivery(t *testing.T) {
 		})
 	}
 }
+
+func TestPreservingFailureFencesAlreadyFailedActiveExecution(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Fence failed execution")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "fence this execution", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET status = 'failed', execution_active = 1, execution_state = 'pending_send'
+		WHERE id = ?
+	`, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.FailRunWithEventPreservingExecution(
+		ctx,
+		enqueued.RunID,
+		"decision_delivery_failed",
+		"runtime command outcome is uncertain",
+		`{"code":"decision_delivery_failed"}`,
+	); err != nil {
+		t.Fatalf("FailRunWithEventPreservingExecution: %v", err)
+	}
+	run, err := repo.GetRun(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !run.ExecutionActive || run.ExecutionState != "uncertain" {
+		t.Fatalf("run = %+v, want active uncertain execution fence", run)
+	}
+}

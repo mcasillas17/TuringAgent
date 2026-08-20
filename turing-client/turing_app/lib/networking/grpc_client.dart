@@ -35,6 +35,7 @@ import '../models/integration.dart';
 import '../models/message.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
+import '../models/session_deletion.dart';
 import '../models/skill.dart';
 import '../models/telemetry.dart';
 import '../models/tool_descriptor.dart';
@@ -192,10 +193,58 @@ class TuringGrpcApi implements ClosableTuringApi {
   }
 
   @override
-  Future<void> deleteSession({required String sessionId}) async {
-    await _sessions.deleteSession(
+  Future<SessionDeletionReceipt> deleteSession({
+    required String sessionId,
+  }) async {
+    final response = await _sessions.deleteSession(
       sessionpb.DeleteSessionRequest(sessionId: sessionId),
       options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+    switch (response.deletion.state) {
+      case sessionpb.SessionDeletionState.SESSION_DELETION_STATE_COMPLETED:
+        return _sessionDeletionReceiptToModel(response.deletion);
+      case sessionpb
+          .SessionDeletionState
+          .SESSION_DELETION_STATE_FAILED_EXTERNAL:
+        return _sessionDeletionReceiptToModel(response.deletion);
+      case sessionpb.SessionDeletionState.SESSION_DELETION_STATE_IN_PROGRESS:
+      case sessionpb.SessionDeletionState.SESSION_DELETION_STATE_UNSPECIFIED:
+      default:
+        return _sessionDeletionReceiptToModel(response.deletion);
+    }
+  }
+
+  @override
+  Future<List<SessionDeletionReceipt>> listSessionDeletionReceipts() async {
+    final response = await _sessions.listSessionDeletionReceipts(
+      sessionpb.ListSessionDeletionReceiptsRequest(),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+    return response.deletions
+        .map(_sessionDeletionReceiptToModel)
+        .toList(growable: false);
+  }
+
+  SessionDeletionReceipt _sessionDeletionReceiptToModel(
+    sessionpb.SessionDeletionReceipt receipt,
+  ) {
+    final state = switch (receipt.state) {
+      sessionpb.SessionDeletionState.SESSION_DELETION_STATE_COMPLETED =>
+        SessionDeletionState.completed,
+      sessionpb.SessionDeletionState.SESSION_DELETION_STATE_FAILED_EXTERNAL =>
+        SessionDeletionState.failedExternal,
+      _ => SessionDeletionState.inProgress,
+    };
+    return SessionDeletionReceipt(
+      sessionId: receipt.sessionId,
+      state: state,
+      retryable: receipt.retryable,
+      errorCode: receipt.errorCode.isEmpty ? null : receipt.errorCode,
+      lifecycleVersion: receipt.lifecycleVersion.toInt(),
+      terminalSequence: receipt.terminalSequence.toInt(),
+      runCount: receipt.runCount,
+      messageCount: receipt.messageCount,
+      retainedLegacyArtifactCount: receipt.retainedLegacyArtifactCount,
     );
   }
 

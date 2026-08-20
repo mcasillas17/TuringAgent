@@ -380,6 +380,9 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 	}
 	defer func() { _ = tx.Rollback() }()
 	input = normalizeEnqueueUserMessageInput(input)
+	if err := requireActiveSessionTx(ctx, tx, input.SessionID); err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
 	fingerprint := ""
 	if input.IdempotencyKey != "" {
 		fingerprint, err = enqueueRequestFingerprint(input)

@@ -15,6 +15,7 @@ import '../../features/workspace/telemetry_page.dart';
 import '../../features/workspace/workspace_pages.dart';
 import '../../logic/theme_logic.dart';
 import '../../models/session.dart';
+import '../../models/session_deletion.dart';
 import '../../models/session_title.dart';
 import '../../models/turing_event.dart';
 import '../../networking/api_client.dart';
@@ -189,10 +190,28 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     final request = ++_sessionRefreshRequest;
     final startingRevision = _sessionStateRevision;
     try {
-      final sessions = await widget.apiClient.listSessions();
+      final results = await Future.wait<dynamic>([
+        widget.apiClient.listSessions(),
+        widget.apiClient.listSessionDeletionReceipts(),
+      ]);
+      final sessions = results[0] as List<Session>;
+      final pendingReceipts = results[1] as List<SessionDeletionReceipt>;
+      final pendingSessions = pendingReceipts
+          .where((receipt) => receipt.state != SessionDeletionState.completed)
+          .map(
+            (receipt) => Session(
+              sessionId: receipt.sessionId,
+              title: 'Deletion pending',
+              updatedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+            ),
+          )
+          .toList(growable: false);
       if (!mounted || request != _sessionRefreshRequest) return;
       setState(() {
-        _sessions = _reconcileSessionRefresh(sessions, startingRevision);
+        _sessions = _reconcileSessionRefresh([
+          ...sessions,
+          ...pendingSessions,
+        ], startingRevision);
         _sessionsLoading = false;
         _sessionsFailed = false;
       });
@@ -208,7 +227,28 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   }
 
   void _applyGlobalSessionUpdated(TuringEvent event) {
+    if (event.type == 'session.deleted') {
+      _applySessionDeleted(event.sessionId);
+      return;
+    }
     _applySessionUpdated(event);
+  }
+
+  void _applySessionDeleted(String sessionId) {
+    if (!mounted) return;
+    if (_chatEventSourceSessionId == sessionId) {
+      _releaseChatEventSource();
+    }
+    setState(() {
+      _locallyDeletedSessionIds.add(sessionId);
+      _sessionSnapshots.remove(sessionId);
+      _sessions = _sessions
+          .where((session) => session.sessionId != sessionId)
+          .toList();
+      if (_activeSessionId == sessionId) {
+        _activeSessionId = null;
+      }
+    });
   }
 
   void _applySessionUpdated(TuringEvent event) {
@@ -403,8 +443,9 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
           title: Text('Delete "${sessionDisplayTitle(session)}"?'),
           content: const Text(
             'This permanently removes the conversation, its messages and its '
-            'run history, and it will no longer appear in search. Files '
-            'written into the sandbox are not removed. This cannot be undone.',
+            'run history, and it will no longer appear in search. '
+            'Session-owned sandbox files are removed; legacy sandbox files '
+            'that predate session ownership are retained. This cannot be undone.',
           ),
           actions: [
             TextButton(
@@ -419,7 +460,21 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
         ),
       );
       if (confirmed != true) return;
-      await widget.apiClient.deleteSession(sessionId: session.sessionId);
+      final receipt = await widget.apiClient.deleteSession(
+        sessionId: session.sessionId,
+      );
+      if (!mounted) return;
+      if (receipt.state != SessionDeletionState.completed) {
+        setState(() {
+          _recordSessionSnapshot(session, retainUntilObserved: true);
+        });
+        _toast(
+          receipt.state == SessionDeletionState.failedExternal
+              ? 'This chat could not be fully withdrawn yet. Retry deletion.'
+              : 'This chat is still being withdrawn. Retry deletion shortly.',
+        );
+        return;
+      }
       if (!mounted) return;
       setState(() {
         _locallyDeletedSessionIds.add(session.sessionId);
@@ -659,6 +714,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
             embedded: true,
             modelProvider: _modelProvider,
             onSessionUpdated: (event) => _applySessionUpdated(event),
+            onSessionDeleted: _applySessionDeleted,
           ),
         ),
       ],

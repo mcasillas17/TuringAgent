@@ -54,4 +54,8 @@ message ToolPolicyDecision {
   string reason = 4;
   bool terminal_run = 5;
   ToolCallPhase phase = 6;
+  // Server-issued, server-signed capability binding this tool call to its
+  // session, run, deletion generation, tool, arguments and path scope. The
+  // runtime forwards it verbatim; it never mints or edits one.
+  string provenance_token = 7;
 }

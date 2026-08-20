@@ -19,10 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ApprovalService_ApproveApproval_FullMethodName       = "/turing.v1.ApprovalService/ApproveApproval"
-	ApprovalService_DenyApproval_FullMethodName          = "/turing.v1.ApprovalService/DenyApproval"
-	ApprovalService_GetApprovalForRuntime_FullMethodName = "/turing.v1.ApprovalService/GetApprovalForRuntime"
-	ApprovalService_ConsumeApproval_FullMethodName       = "/turing.v1.ApprovalService/ConsumeApproval"
+	ApprovalService_ApproveApproval_FullMethodName         = "/turing.v1.ApprovalService/ApproveApproval"
+	ApprovalService_DenyApproval_FullMethodName            = "/turing.v1.ApprovalService/DenyApproval"
+	ApprovalService_GetApprovalForRuntime_FullMethodName   = "/turing.v1.ApprovalService/GetApprovalForRuntime"
+	ApprovalService_ConsumeApproval_FullMethodName         = "/turing.v1.ApprovalService/ConsumeApproval"
+	ApprovalService_FinalizeSandboxArtifact_FullMethodName = "/turing.v1.ApprovalService/FinalizeSandboxArtifact"
+	ApprovalService_CheckSessionCapability_FullMethodName  = "/turing.v1.ApprovalService/CheckSessionCapability"
 )
 
 // ApprovalServiceClient is the client API for ApprovalService service.
@@ -33,6 +35,8 @@ type ApprovalServiceClient interface {
 	DenyApproval(ctx context.Context, in *DenyApprovalRequest, opts ...grpc.CallOption) (*ApprovalResponse, error)
 	GetApprovalForRuntime(ctx context.Context, in *GetApprovalForRuntimeRequest, opts ...grpc.CallOption) (*RuntimeApprovalState, error)
 	ConsumeApproval(ctx context.Context, in *ConsumeApprovalRequest, opts ...grpc.CallOption) (*ApprovalResponse, error)
+	FinalizeSandboxArtifact(ctx context.Context, in *FinalizeSandboxArtifactRequest, opts ...grpc.CallOption) (*FinalizeSandboxArtifactResponse, error)
+	CheckSessionCapability(ctx context.Context, in *CheckSessionCapabilityRequest, opts ...grpc.CallOption) (*SessionCapabilityState, error)
 }
 
 type approvalServiceClient struct {
@@ -83,6 +87,26 @@ func (c *approvalServiceClient) ConsumeApproval(ctx context.Context, in *Consume
 	return out, nil
 }
 
+func (c *approvalServiceClient) FinalizeSandboxArtifact(ctx context.Context, in *FinalizeSandboxArtifactRequest, opts ...grpc.CallOption) (*FinalizeSandboxArtifactResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FinalizeSandboxArtifactResponse)
+	err := c.cc.Invoke(ctx, ApprovalService_FinalizeSandboxArtifact_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *approvalServiceClient) CheckSessionCapability(ctx context.Context, in *CheckSessionCapabilityRequest, opts ...grpc.CallOption) (*SessionCapabilityState, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SessionCapabilityState)
+	err := c.cc.Invoke(ctx, ApprovalService_CheckSessionCapability_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ApprovalServiceServer is the server API for ApprovalService service.
 // All implementations must embed UnimplementedApprovalServiceServer
 // for forward compatibility.
@@ -91,6 +115,8 @@ type ApprovalServiceServer interface {
 	DenyApproval(context.Context, *DenyApprovalRequest) (*ApprovalResponse, error)
 	GetApprovalForRuntime(context.Context, *GetApprovalForRuntimeRequest) (*RuntimeApprovalState, error)
 	ConsumeApproval(context.Context, *ConsumeApprovalRequest) (*ApprovalResponse, error)
+	FinalizeSandboxArtifact(context.Context, *FinalizeSandboxArtifactRequest) (*FinalizeSandboxArtifactResponse, error)
+	CheckSessionCapability(context.Context, *CheckSessionCapabilityRequest) (*SessionCapabilityState, error)
 	mustEmbedUnimplementedApprovalServiceServer()
 }
 
@@ -112,6 +138,12 @@ func (UnimplementedApprovalServiceServer) GetApprovalForRuntime(context.Context,
 }
 func (UnimplementedApprovalServiceServer) ConsumeApproval(context.Context, *ConsumeApprovalRequest) (*ApprovalResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ConsumeApproval not implemented")
+}
+func (UnimplementedApprovalServiceServer) FinalizeSandboxArtifact(context.Context, *FinalizeSandboxArtifactRequest) (*FinalizeSandboxArtifactResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method FinalizeSandboxArtifact not implemented")
+}
+func (UnimplementedApprovalServiceServer) CheckSessionCapability(context.Context, *CheckSessionCapabilityRequest) (*SessionCapabilityState, error) {
+	return nil, status.Error(codes.Unimplemented, "method CheckSessionCapability not implemented")
 }
 func (UnimplementedApprovalServiceServer) mustEmbedUnimplementedApprovalServiceServer() {}
 func (UnimplementedApprovalServiceServer) testEmbeddedByValue()                         {}
@@ -206,6 +238,42 @@ func _ApprovalService_ConsumeApproval_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ApprovalService_FinalizeSandboxArtifact_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FinalizeSandboxArtifactRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ApprovalServiceServer).FinalizeSandboxArtifact(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ApprovalService_FinalizeSandboxArtifact_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ApprovalServiceServer).FinalizeSandboxArtifact(ctx, req.(*FinalizeSandboxArtifactRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ApprovalService_CheckSessionCapability_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CheckSessionCapabilityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ApprovalServiceServer).CheckSessionCapability(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ApprovalService_CheckSessionCapability_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ApprovalServiceServer).CheckSessionCapability(ctx, req.(*CheckSessionCapabilityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ApprovalService_ServiceDesc is the grpc.ServiceDesc for ApprovalService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -228,6 +296,14 @@ var ApprovalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ConsumeApproval",
 			Handler:    _ApprovalService_ConsumeApproval_Handler,
+		},
+		{
+			MethodName: "FinalizeSandboxArtifact",
+			Handler:    _ApprovalService_FinalizeSandboxArtifact_Handler,
+		},
+		{
+			MethodName: "CheckSessionCapability",
+			Handler:    _ApprovalService_CheckSessionCapability_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
