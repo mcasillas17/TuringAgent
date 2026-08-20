@@ -1035,9 +1035,14 @@ func rewriteFailureEventPayload(row legacyEventRow) (string, bool, error) {
 // approvalEventCategory and toolCallEventCategory read the category off the
 // event type, which the server chose, rather than off the payload, which a
 // failing provider or tool influenced.
+//
+// approvalEventCategory defers to the same rule the live writers use, so a
+// rewritten approval failure and a freshly written one are indistinguishable.
+// It is total where the shared rule is partial because it is only ever reached
+// for the two approval failure types dispatched above.
 func approvalEventCategory(eventType string) runoutcome.Reason {
-	if eventType == "approval.expired" {
-		return runoutcome.ReasonExpired
+	if category, ok := runoutcome.ApprovalFailureCategory(eventType); ok {
+		return category
 	}
 	return runoutcome.ReasonPolicyDenied
 }

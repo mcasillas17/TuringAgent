@@ -256,6 +256,12 @@ func TestRecoverAssignmentAtCutoffFailsAtConfiguredMaximumAttempt(t *testing.T) 
 		t.Fatal(err)
 	}
 
+	// The give-up notice is appended before the terminal transition, so it is
+	// anchored to the version the run still holds here.
+	beforeGiveUp, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	reconciliation, err := repo.RecoverAssignmentAtCutoffWithLimit(ctx, assignment, cutoff, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -274,7 +280,7 @@ func TestRecoverAssignmentAtCutoffFailsAtConfiguredMaximumAttempt(t *testing.T) 
 	if want := []string{"agent.run.step", "agent.run.failed"}; !reflect.DeepEqual(eventTypes, want) {
 		t.Fatalf("exhausted recovery events = %v, want %v", eventTypes, want)
 	}
-	assertStepNotice(t, reconciliation.Events[0], runoutcome.NoticeRecoveryExhausted, 1, 1)
+	assertStepNotice(t, reconciliation.Events[0], runoutcome.NoticeRecoveryExhausted, 1, 1, beforeGiveUp.StateVersion)
 	run, err := repo.GetRun(ctx, enqueued.RunID)
 	if err != nil {
 		t.Fatal(err)
@@ -344,9 +350,14 @@ func TestReconcileWaitingApprovalReturnsExactLifecycleEventsInOrder(t *testing.T
 	if err := json.Unmarshal([]byte(reconciliation.Events[0].PayloadJSON), &approvalPayload); err != nil {
 		t.Fatal(err)
 	}
+	// The category is read off the event type the server chose. A decision that
+	// could not be delivered still terminalizes the approval under
+	// approval.denied, and that type owes policy_denied — the run's own
+	// approval_delivery_failed outcome belongs to the run's RunState.
 	wantApprovalPayload := map[string]any{
 		"approvalId": approval.ApprovalID, "toolCallId": "call_recovery", "toolName": "files.update",
 		"runId": enqueued.RunID, "traceId": enqueued.TraceID, "modelToolCallId": "model_recovery",
+		"category": "policy_denied",
 	}
 	if !reflect.DeepEqual(approvalPayload, wantApprovalPayload) {
 		t.Fatalf("approval payload = %#v, want %#v", approvalPayload, wantApprovalPayload)

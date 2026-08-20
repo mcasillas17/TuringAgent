@@ -194,6 +194,39 @@ const (
 	NoticeRecoveryExhausted NoticeCategory = "recovery_exhausted"
 )
 
+// ApprovalFailureCategory maps an approval event type to the single category
+// that event is allowed to carry, and reports whether the type is a failure
+// event at all.
+//
+// The category is read off the event type the server chose, never off a failure
+// code that arrived from somewhere else. An approval that ends in denial ended
+// because policy said no; an approval that ends in expiry ended because it was
+// no longer usable. Both facts are fully determined by which event is being
+// written, so deriving the category from anything else can only introduce
+// disagreement — and did: two hand-built expiry payloads once labelled
+// themselves with the run's own failure reason and with side_effect_uncertain,
+// neither of which describes an approval.
+//
+// It lives here, beside the vocabulary itself, because both the live writers
+// and the migration that rewrites historical rows must answer this question
+// identically. If they answered it separately they could drift, and a client
+// would be able to tell a migrated approval.expired from a freshly written one.
+//
+// The non-failure approval events (requested, approved, consumed) get no
+// category: there is no failure to categorize, and inventing one would make a
+// granted approval indistinguishable from a refused one to a reader that
+// filters on the key's presence.
+func ApprovalFailureCategory(eventType string) (Reason, bool) {
+	switch eventType {
+	case "approval.denied":
+		return ReasonPolicyDenied, true
+	case "approval.expired":
+		return ReasonExpired, true
+	default:
+		return "", false
+	}
+}
+
 // StepNotice is a failure-like run-step projection: a category plus bounded
 // counters. It accepts no display string, so the sentence a client shows is
 // derived from the category by the client instead of persisted by the backend.

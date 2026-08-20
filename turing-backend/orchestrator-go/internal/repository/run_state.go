@@ -329,6 +329,22 @@ func (r *Repository) GetRunState(ctx context.Context, runID string) (RunState, e
 	return row.state(), nil
 }
 
+// currentRunStateVersionTx reads the version a run's durable state holds right
+// now, inside the transaction that is about to project it.
+//
+// It exists for the projections that are appended BEFORE the transition they
+// explain — the give-up notices — which have no committed result to name yet.
+// Reading here rather than before the transaction is the whole point: an
+// outside read could be overtaken by another writer, and the notice would name
+// a version the log had already moved past.
+func currentRunStateVersionTx(ctx context.Context, tx *sql.Tx, runID string) (int64, error) {
+	var version int64
+	if err := tx.QueryRowContext(ctx, `SELECT state_version FROM agent_runs WHERE id = ?`, runID).Scan(&version); err != nil {
+		return 0, err
+	}
+	return version, nil
+}
+
 // runStateSnapshot is the public projection carried by every lifecycle event.
 // The content digest and every execution detail are deliberately absent: the
 // digest is internal duplicate identity, and a worker ID is not a client's

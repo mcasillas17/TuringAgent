@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
@@ -696,6 +697,14 @@ func approvalByID(ctx context.Context, q approvalQuerier, approvalID string) (Ap
 	return record, nil
 }
 
+// approvalFailureCategory is the repository's alias for the shared rule that
+// maps an approval event type to the one category it may carry. The rule lives
+// in runoutcome so the live writers here and the migration that rewrites
+// historical rows cannot answer the question differently.
+func approvalFailureCategory(eventType string) (runoutcome.Reason, bool) {
+	return runoutcome.ApprovalFailureCategory(eventType)
+}
+
 // approvalLifecyclePayload is the shared approval projection. It is built
 // separately from the append so an approval event that IS a run lifecycle
 // transition can be emitted by the guarded transition core, carrying the
@@ -703,10 +712,16 @@ func approvalByID(ctx context.Context, q approvalQuerier, approvalID string) (Ap
 func approvalLifecyclePayload(approval ApprovalRecord, traceID string, eventType string) map[string]any {
 	payload := map[string]any{
 		"approvalId": approval.ApprovalID,
-		"toolCallId": approval.ToolCallID,
 		"toolName":   approval.ToolName,
 		"runId":      approval.RunID,
 		"traceId":    traceID,
+	}
+	// tool_call_id is nullable, and the migration drops identity keys that are
+	// empty rather than publishing a blank one. Emitting "" here would make a
+	// freshly written approval failure distinguishable from a rewritten one on
+	// exactly the key a client uses to join the event to its tool call.
+	if approval.ToolCallID != "" {
+		payload["toolCallId"] = approval.ToolCallID
 	}
 	if eventType == "approval.requested" {
 		payload["argsSummary"] = approvalArgsSummary(approval.ArgsJSON)
@@ -714,7 +729,61 @@ func approvalLifecyclePayload(approval ApprovalRecord, traceID string, eventType
 	if approval.ModelToolCallID != "" {
 		payload["modelToolCallId"] = approval.ModelToolCallID
 	}
+	if category, ok := approvalFailureCategory(eventType); ok {
+		payload["category"] = string(category)
+	}
 	return payload
+}
+
+// terminalApproval is the identity of one approval that a run-level cleanup is
+// ending. The two cleanups that revoke approvals in bulk — a run reaching a
+// terminal state, and a recovery discarding an authorization it can no longer
+// trust — read approvals directly rather than through ApprovalRecord, so this
+// carries just the identity the projection is allowed to publish.
+type terminalApproval struct {
+	id, toolCallID, toolName, modelToolCallID string
+}
+
+// appendApprovalTerminalEventTx writes the terminal projection for one approval
+// revoked by a run-level cleanup.
+//
+// Both cleanups used to hand-build this payload and label it with a category
+// borrowed from whatever was failing around them — the run's own failure
+// reason in one case, side_effect_uncertain in the other. Neither described the
+// approval: an approval swept up by a terminal run or a lost lease expired,
+// full stop. Routing both through one helper means the category comes from the
+// event type, exactly as it does for the decided approvals, so a reader cannot
+// tell whether an approval.expired was written by a decision path or a cleanup.
+func appendApprovalTerminalEventTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID string,
+	runID string,
+	traceID string,
+	approval terminalApproval,
+	eventType string,
+	createdAt string,
+) (Event, error) {
+	category, ok := approvalFailureCategory(eventType)
+	if !ok {
+		return Event{}, fmt.Errorf("%q is not an approval failure event", eventType)
+	}
+	payload := map[string]any{
+		"approvalId": approval.id,
+		"toolName":   approval.toolName,
+		"category":   string(category),
+	}
+	if approval.toolCallID != "" {
+		payload["toolCallId"] = approval.toolCallID
+	}
+	if approval.modelToolCallID != "" {
+		payload["modelToolCallId"] = approval.modelToolCallID
+	}
+	payloadJSON, err := marshalEventPayload(payload)
+	if err != nil {
+		return Event{}, err
+	}
+	return appendRunEventTx(ctx, tx, sessionID, runID, traceID, eventType, payloadJSON, createdAt)
 }
 
 func appendApprovalLifecycleEventTx(ctx context.Context, tx *sql.Tx, approval ApprovalRecord, eventType string, createdAt string) (Event, error) {

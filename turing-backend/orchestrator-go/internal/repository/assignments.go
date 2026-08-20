@@ -251,7 +251,7 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 			}
 		}
 		if executionState == "pending_send" {
-			requeueEvents, err := requeueAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, false)
+			_, requeueEvents, err := requeueAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, false)
 			if err != nil {
 				return AssignmentReconciliation{}, err
 			}
@@ -272,7 +272,7 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 			}
 			return reconciliation, nil
 		}
-		requeueEvents, err := requeueAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, true)
+		requeued, requeueEvents, err := requeueAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, true)
 		if err != nil {
 			return AssignmentReconciliation{}, err
 		}
@@ -284,7 +284,9 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 		if err != nil {
 			return AssignmentReconciliation{}, err
 		}
-		notice, err := appendStepNoticeTx(ctx, tx, sessionID, assignment.RunID, traceID, retry, now())
+		// Appended after both requeue projections, so it names the version the
+		// requeue committed rather than the one it left behind.
+		notice, err := appendStepNoticeTx(ctx, tx, sessionID, assignment.RunID, traceID, retry, requeued.StateVersion, now())
 		if err != nil {
 			return AssignmentReconciliation{}, err
 		}
@@ -362,7 +364,14 @@ func terminalizeExhaustedAssignmentTx(
 	if err != nil {
 		return AssignmentReconciliation{}, false, attempt, err
 	}
-	giveUp, err := appendStepNoticeTx(ctx, tx, sessionID, runID, traceID, exhausted, now())
+	// The notice precedes the terminal transition, so it is anchored to the
+	// version durable at this point in the log, read inside the transaction
+	// that is about to move it.
+	currentVersion, err := currentRunStateVersionTx(ctx, tx, runID)
+	if err != nil {
+		return AssignmentReconciliation{}, false, attempt, err
+	}
+	giveUp, err := appendStepNoticeTx(ctx, tx, sessionID, runID, traceID, exhausted, currentVersion, now())
 	if err != nil {
 		return AssignmentReconciliation{}, false, attempt, err
 	}
@@ -390,9 +399,7 @@ func terminalizeStaleApprovedAuthorizationTx(
 	sessionID string,
 	traceID string,
 ) (AssignmentReconciliation, bool, error) {
-	type approvalAuthorization struct {
-		id, toolCallID, toolName, modelToolCallID string
-	}
+	type approvalAuthorization = terminalApproval
 	rows, err := tx.QueryContext(ctx, `
 		SELECT a.id, COALESCE(a.tool_call_id, ''), a.tool_name, COALESCE(tc.model_tool_call_id, '')
 		FROM approvals a
@@ -470,20 +477,10 @@ func terminalizeStaleApprovedAuthorizationTx(
 	}
 	events := make([]Event, 0, len(approvals)+len(toolCalls)+1)
 	for _, approval := range approvals {
-		payload := map[string]any{
-			"approvalId": approval.id,
-			"toolCallId": approval.toolCallID,
-			"toolName":   approval.toolName,
-			"category":   string(category),
-		}
-		if approval.modelToolCallID != "" {
-			payload["modelToolCallId"] = approval.modelToolCallID
-		}
-		payloadJSON, err := marshalEventPayload(payload)
-		if err != nil {
-			return AssignmentReconciliation{}, false, err
-		}
-		event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "approval.expired", payloadJSON, finishedAt)
+		// side_effect_uncertain is the honest verdict on the TOOL CALL, which may
+		// already have run. The authorization itself is not uncertain: it is no
+		// longer usable, and it says so in the only word approvals have for that.
+		event, err := appendApprovalTerminalEventTx(ctx, tx, sessionID, runID, traceID, approval, "approval.expired", finishedAt)
 		if err != nil {
 			return AssignmentReconciliation{}, false, err
 		}
@@ -547,21 +544,21 @@ func hasPendingApprovalTx(ctx context.Context, tx *sql.Tx, runID string) (bool, 
 	return pending > 0, nil
 }
 
-func requeueAssignmentTx(ctx context.Context, tx *sql.Tx, runID, jobID, attemptID string, incrementAttempt bool) ([]Event, error) {
+func requeueAssignmentTx(ctx context.Context, tx *sql.Tx, runID, jobID, attemptID string, incrementAttempt bool) (RunState, []Event, error) {
 	if jobID == "" {
 		if err := tx.QueryRowContext(ctx, `SELECT id FROM jobs WHERE run_id = ? AND status = 'in_progress'`, runID).Scan(&jobID); err != nil {
-			return nil, err
+			return RunState{}, nil, err
 		}
 	}
-	events, err := requeueRunThroughRecoveryTx(ctx, tx, runID, jobID,
+	requeued, events, err := requeueRunThroughRecoveryTx(ctx, tx, runID, jobID,
 		runTransitionIdentity{assignmentAttemptID: attemptID}, incrementAttempt)
 	if err != nil {
 		if errors.Is(err, ErrRunTransitionConflict) {
-			return nil, ErrAssignmentFenced
+			return RunState{}, nil, ErrAssignmentFenced
 		}
-		return nil, err
+		return RunState{}, nil, err
 	}
-	return events, nil
+	return requeued, events, nil
 }
 
 func reconcileWaitingApprovalTx(ctx context.Context, tx *sql.Tx, runID, sessionID, traceID string, preserveExecution bool) (AssignmentReconciliation, error) {

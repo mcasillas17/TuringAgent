@@ -58,7 +58,11 @@ func TestRecoverAssignmentRequeuePublishesNotice(t *testing.T) {
 	}
 
 	notice := onlyRunStepEvent(t, reconciliation.Events)
-	assertStepNotice(t, notice, runoutcome.NoticeRecoveryRetry, 2, 3)
+	requeued, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStepNotice(t, notice, runoutcome.NoticeRecoveryRetry, 2, 3, requeued.StateVersion)
 	if !notice.RunID.Valid || notice.RunID.String != enqueued.RunID {
 		t.Fatalf("notice run_id = %+v, want %q (a client correlates by run)", notice.RunID, enqueued.RunID)
 	}
@@ -135,6 +139,10 @@ func TestExhaustedRecoveryOrdersGiveUpBeforeApprovalCleanup(t *testing.T) {
 	}
 
 	// maxAttempts=1 with the job on attempt 1 exhausts the budget immediately.
+	beforeGiveUp, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	reconciliation, err := repo.RecoverAssignmentWithLimit(ctx, assignment, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +157,7 @@ func TestExhaustedRecoveryOrdersGiveUpBeforeApprovalCleanup(t *testing.T) {
 	if !reflect.DeepEqual(eventTypes, want) {
 		t.Fatalf("exhausted recovery events = %v, want %v", eventTypes, want)
 	}
-	assertStepNotice(t, reconciliation.Events[0], runoutcome.NoticeRecoveryExhausted, 1, 1)
+	assertStepNotice(t, reconciliation.Events[0], runoutcome.NoticeRecoveryExhausted, 1, 1, beforeGiveUp.StateVersion)
 	// Sequence must agree with slice order — the client renders by sequence.
 	for index := 1; index < len(reconciliation.Events); index++ {
 		if reconciliation.Events[index].Sequence <= reconciliation.Events[index-1].Sequence {

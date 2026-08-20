@@ -181,9 +181,7 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 	if err != nil {
 		return nil, err
 	}
-	type approvalToRevoke struct {
-		id, toolCallID, toolName, modelToolCallID string
-	}
+	type approvalToRevoke = terminalApproval
 	var approvals []approvalToRevoke
 	for rows.Next() {
 		var approval approvalToRevoke
@@ -247,22 +245,10 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 	}
 	events := make([]Event, 0, len(approvals)+len(toolCalls))
 	for _, approval := range approvals {
-		payload := map[string]any{
-			"approvalId": approval.id,
-			"toolName":   approval.toolName,
-			"category":   string(category),
-		}
-		if approval.toolCallID != "" {
-			payload["toolCallId"] = approval.toolCallID
-		}
-		if approval.modelToolCallID != "" {
-			payload["modelToolCallId"] = approval.modelToolCallID
-		}
-		payloadJSON, err := marshalEventPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "approval.expired", payloadJSON, finishedAt)
+		// The run's own failure reason does not describe what happened to this
+		// approval: the run ended while the approval was still waiting, so the
+		// approval expired regardless of why the run stopped.
+		event, err := appendApprovalTerminalEventTx(ctx, tx, sessionID, runID, traceID, approval, "approval.expired", finishedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -290,14 +276,27 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 // cannot localize that, an operator cannot filter on it, and the format string
 // was one careless edit away from carrying a provider's words. The category and
 // the two numbers say everything the sentence did.
-func appendStepNoticeTx(ctx context.Context, tx *sql.Tx, sessionID string, runID string, traceID string, notice runoutcome.StepNotice, createdAt string) (Event, error) {
+//
+// stateVersion anchors the notice to the durable run state as of this point in
+// the event order, so a client reconciling by version can place it. It is a
+// required argument rather than something read here: the caller is inside the
+// transaction that owns the surrounding transitions and is the only code that
+// knows whether this notice follows a committed transition or precedes one.
+func appendStepNoticeTx(ctx context.Context, tx *sql.Tx, sessionID string, runID string, traceID string, notice runoutcome.StepNotice, stateVersion int64, createdAt string) (Event, error) {
 	if !notice.Valid() {
 		return Event{}, runoutcome.ErrUnsupportedNotice
 	}
+	// Zero is protobuf absence, so a notice published at version zero would not
+	// read as "no version known" — it would read as older than every state the
+	// run ever had, and a client reconciling by version would discard it.
+	if stateVersion < 1 {
+		return Event{}, ErrRunStateVersionInvalid
+	}
 	payloadJSON, err := marshalEventPayload(map[string]any{
-		"category":    string(notice.Category()),
-		"attempt":     notice.Attempt(),
-		"maxAttempts": notice.MaxAttempts(),
+		"category":     string(notice.Category()),
+		"attempt":      notice.Attempt(),
+		"maxAttempts":  notice.MaxAttempts(),
+		"stateVersion": stateVersion,
 	})
 	if err != nil {
 		return Event{}, err

@@ -289,7 +289,7 @@ func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, runID string
 	requeueable := (runStatus == lifecycleRunning || runStatus == lifecycleRecovering) && jobErr == nil
 
 	if requeueable && attempt < maxAttempts {
-		requeueEvents, err := requeueRunThroughRecoveryTx(ctx, tx, runID, "", runTransitionIdentity{}, true)
+		requeued, requeueEvents, err := requeueRunThroughRecoveryTx(ctx, tx, runID, "", runTransitionIdentity{}, true)
 		if err != nil {
 			return RetryDecision{}, err
 		}
@@ -300,7 +300,10 @@ func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, runID string
 		if err != nil {
 			return RetryDecision{}, err
 		}
-		noticeEvent, err := appendStepNoticeTx(ctx, tx, sessionID, runID, traceID, notice, now())
+		// The notice lands after both requeue projections, so it is anchored to
+		// the version the requeue just committed — the version a client reading
+		// the notice will find on the run.
+		noticeEvent, err := appendStepNoticeTx(ctx, tx, sessionID, runID, traceID, notice, requeued.StateVersion, now())
 		if err != nil {
 			return RetryDecision{}, err
 		}
@@ -324,7 +327,16 @@ func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, runID string
 		if err != nil {
 			return RetryDecision{}, err
 		}
-		noticeEvent, err := appendStepNoticeTx(ctx, tx, sessionID, runID, traceID, notice, now())
+		// This notice precedes the terminal transition, so it is anchored to the
+		// version the run still holds here. Naming the version the failure is
+		// about to commit would claim a state that does not exist yet at this
+		// point in the log, and the read is inside this transaction so no other
+		// writer can move the row between the two.
+		currentVersion, err := currentRunStateVersionTx(ctx, tx, runID)
+		if err != nil {
+			return RetryDecision{}, err
+		}
+		noticeEvent, err := appendStepNoticeTx(ctx, tx, sessionID, runID, traceID, notice, currentVersion, now())
 		if err != nil {
 			return RetryDecision{}, err
 		}
@@ -379,7 +391,7 @@ func requeueRunThroughRecoveryTx(
 	jobID string,
 	identity runTransitionIdentity,
 	incrementAttempt bool,
-) ([]Event, error) {
+) (RunState, []Event, error) {
 	attemptIncrement := 0
 	if incrementAttempt {
 		attemptIncrement = 1
@@ -400,7 +412,7 @@ func requeueRunThroughRecoveryTx(
 			AND (? = '' OR COALESCE(assignment_attempt_id, '') = ?)
 	`, attemptIncrement, runID, jobID, jobID, attemptID, attemptID)
 	if err != nil {
-		return nil, err
+		return RunState{}, nil, err
 	}
 	// A caller that supplied a job or attempt guard is reconciling a specific
 	// assignment, so a row that no longer matches means a newer attempt owns
@@ -410,33 +422,35 @@ func requeueRunThroughRecoveryTx(
 		noMatch = ErrAssignmentFenced
 	}
 	if err := expectOneRowErr(result, noMatch); err != nil {
-		return nil, err
+		return RunState{}, nil, err
 	}
 	return requeueRunLifecycleTx(ctx, tx, runID, identity, "uncertain")
 }
 
 // requeueRunLifecycleTx commits the lifecycle half of a requeue: fence first if
-// the run still claims to be owned, then requeue.
+// the run still claims to be owned, then requeue. It returns the state the
+// requeue committed, so a projection appended after it in this transaction can
+// name the version the run actually holds rather than reading it again.
 func requeueRunLifecycleTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	runID string,
 	identity runTransitionIdentity,
 	fenceExecutionState string,
-) ([]Event, error) {
+) (RunState, []Event, error) {
 	var events []Event
 	fenced, err := applyRunTransitionTx(ctx, tx,
 		fenceOwnershipTransitionInTx(runID, identity, fenceExecutionState), nil)
 	if err != nil {
-		return nil, err
+		return RunState{}, nil, err
 	}
 	events = append(events, fenced.Events...)
 	requeued, err := applyRunTransitionTx(ctx, tx,
 		requeueRecoveringTransitionInTx(runID, identity), nil)
 	if err != nil {
-		return nil, err
+		return RunState{}, nil, err
 	}
-	return append(events, requeued.Events...), nil
+	return requeued.State, append(events, requeued.Events...), nil
 }
 
 func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMessageInput) (EnqueueUserMessageResult, error) {
@@ -1171,7 +1185,7 @@ func (r *Repository) requeueAssignment(
 	// owning the run, so it goes back to the queue the same way every other
 	// lost assignment does: through recovering, with both versions committed
 	// here.
-	if _, err := requeueRunLifecycleTx(ctx, tx, assignment.RunID, assignmentIdentity(assignment), "uncertain"); err != nil {
+	if _, _, err := requeueRunLifecycleTx(ctx, tx, assignment.RunID, assignmentIdentity(assignment), "uncertain"); err != nil {
 		if errors.Is(err, ErrRunTransitionConflict) {
 			return ErrAssignmentFenced
 		}

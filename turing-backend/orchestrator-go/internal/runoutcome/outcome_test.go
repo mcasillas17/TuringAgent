@@ -666,3 +666,33 @@ func resultNames(expression ast.Expr) string {
 	}
 	return ""
 }
+
+// TestApprovalFailureCategoryIsDeterminedByTheEventType pins the rule both the
+// live approval writers and the 0011 rewrite depend on. If these two ever
+// disagree, a client could tell a migrated approval failure from a freshly
+// written one — which is exactly the observable difference the shared rule
+// exists to prevent.
+func TestApprovalFailureCategoryIsDeterminedByTheEventType(t *testing.T) {
+	for _, tc := range []struct {
+		eventType string
+		want      Reason
+		wantOK    bool
+	}{
+		{"approval.denied", ReasonPolicyDenied, true},
+		{"approval.expired", ReasonExpired, true},
+		// The non-failure lifecycle events must not acquire a category: a
+		// granted approval has no failure to categorize, and a reader that
+		// filters on the key's presence would stop being able to tell them
+		// apart from refused ones.
+		{"approval.requested", "", false},
+		{"approval.approved", "", false},
+		{"approval.consumed", "", false},
+		{"agent.run.failed", "", false},
+		{"", "", false},
+	} {
+		got, ok := ApprovalFailureCategory(tc.eventType)
+		if got != tc.want || ok != tc.wantOK {
+			t.Fatalf("ApprovalFailureCategory(%q) = %q, %t, want %q, %t", tc.eventType, got, ok, tc.want, tc.wantOK)
+		}
+	}
+}

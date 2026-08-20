@@ -48,14 +48,18 @@ func onlyRunStepEvent(t *testing.T, events []Event) Event {
 	return found[0]
 }
 
-// assertStepNotice checks a failure-like notice by its allowlisted category and
-// its two bounded numbers.
+// assertStepNotice checks a failure-like notice by its allowlisted category,
+// its two bounded numbers, and the state version it is anchored to.
 //
 // The sentence these notices used to carry is gone deliberately. It could not
 // be localized, it could not be filtered on, and it was assembled by string
 // formatting a few lines away from provider and worker text. A category plus
 // "attempt N of M" says everything the sentence did and nothing it should not.
-func assertStepNotice(t *testing.T, event Event, category runoutcome.NoticeCategory, attempt int, maxAttempts int) {
+//
+// The version is required rather than optional because a notice a client
+// cannot place against a run state is not reconcilable: it either duplicates
+// on replay or is discarded as stale.
+func assertStepNotice(t *testing.T, event Event, category runoutcome.NoticeCategory, attempt int, maxAttempts int, stateVersion int64) {
 	t.Helper()
 	if event.Type != "agent.run.step" {
 		t.Fatalf("event type = %q, want agent.run.step", event.Type)
@@ -65,9 +69,10 @@ func assertStepNotice(t *testing.T, event Event, category runoutcome.NoticeCateg
 		t.Fatalf("run step payload %q: %v", event.PayloadJSON, err)
 	}
 	want := map[string]any{
-		"category":    string(category),
-		"attempt":     float64(attempt),
-		"maxAttempts": float64(maxAttempts),
+		"category":     string(category),
+		"attempt":      float64(attempt),
+		"maxAttempts":  float64(maxAttempts),
+		"stateVersion": float64(stateVersion),
 	}
 	if !reflect.DeepEqual(payload, want) {
 		t.Fatalf("run step payload = %#v, want %#v", payload, want)
@@ -90,7 +95,11 @@ func TestRequeueOrFailRetryableRunRequeuesWhileAttemptsRemain(t *testing.T) {
 	// A requeue used to be silent, which is indistinguishable from a hang to a
 	// watching client. It must now carry exactly one user-visible notice.
 	notice := onlyRunStepEvent(t, decision.Events)
-	assertStepNotice(t, notice, runoutcome.NoticeDispatchRetry, 2, 3)
+	requeued, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStepNotice(t, notice, runoutcome.NoticeDispatchRetry, 2, 3, requeued.StateVersion)
 	if !notice.RunID.Valid || notice.RunID.String != enqueued.RunID {
 		t.Fatalf("requeue notice run_id = %+v, want %q", notice.RunID, enqueued.RunID)
 	}
@@ -132,12 +141,20 @@ func TestRequeueOrFailRetryableRunFailsAfterAttemptCap(t *testing.T) {
 		}
 		// The notice must name the attempt that is about to START, not the one
 		// that just failed: after the first rejection the user is on attempt 2.
-		assertStepNotice(t, onlyRunStepEvent(t, decision.Events), runoutcome.NoticeDispatchRetry, i+2, maxAttempts)
+		requeued, err := repo.GetRunState(ctx, enqueued.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertStepNotice(t, onlyRunStepEvent(t, decision.Events), runoutcome.NoticeDispatchRetry, i+2, maxAttempts, requeued.StateVersion)
 		if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-busy"); err != nil {
 			t.Fatal(err)
 		}
 	}
 
+	beforeGiveUp, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, "worker_busy", "busy", maxAttempts)
 	if err != nil {
 		t.Fatal(err)
@@ -171,7 +188,7 @@ func TestRequeueOrFailRetryableRunFailsAfterAttemptCap(t *testing.T) {
 	// its reason, not the attempt count that led up to it, so this notice is
 	// still needed to tell the user retries stopped and how many were tried.
 	giveUp := onlyRunStepEvent(t, decision.Events)
-	assertStepNotice(t, giveUp, runoutcome.NoticeRecoveryExhausted, 3, 3)
+	assertStepNotice(t, giveUp, runoutcome.NoticeRecoveryExhausted, 3, 3, beforeGiveUp.StateVersion)
 
 	var terminal Event
 	terminalIndex, giveUpIndex := -1, -1
