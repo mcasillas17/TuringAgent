@@ -104,6 +104,13 @@ const MaxNoticeAttempts = 1000
 // condition: it explains a requeue and must not terminalize a run. A Failure
 // whose Reason is ReasonAbandoned describes the ambiguous transport-loss path
 // and belongs on a cancellation transition, not a failed one.
+//
+// The accessors normalize on read so the Go zero value cannot be mistaken for a
+// benign outcome. A zero Failure reaches a reader whenever a map lookup misses,
+// a struct field is never assigned, or a caller keeps the value a rejecting
+// constructor returned; reporting an unspecified origin and an empty reason
+// there would read as "nothing failed" and, worse, as the nonterminal dispatch
+// condition that leaves a run unterminalized.
 type Failure struct {
 	origin Origin
 	code   string
@@ -111,21 +118,62 @@ type Failure struct {
 	retry  RetryClass
 }
 
-func (f Failure) Origin() Origin         { return f.origin }
-func (f Failure) Code() string           { return f.code }
-func (f Failure) Reason() Reason         { return f.reason }
-func (f Failure) RetryClass() RetryClass { return f.retry }
+func (f Failure) Origin() Origin {
+	if f.origin == OriginUnspecified {
+		return OriginUnknown
+	}
+	return f.origin
+}
+
+func (f Failure) Code() string {
+	if f.code == "" {
+		return CodeUnknown
+	}
+	return f.code
+}
+
+func (f Failure) Reason() Reason {
+	if f.reason == "" {
+		return ReasonInternalFailure
+	}
+	return f.reason
+}
+
+func (f Failure) RetryClass() RetryClass { return normalizeRetryClass(f.retry) }
 
 // Cancellation is a normalized run cancellation.
+//
+// Its accessors normalize on read for the same reason Failure's do, but its
+// closed default is the abandonment this transport path can actually justify:
+// the zero value describes a run whose client went away, so it reports the
+// client-lifecycle origin and the abandoned reason rather than an unspecified
+// origin or any claim of user intent.
 type Cancellation struct {
 	origin Origin
 	code   string
 	reason Reason
 }
 
-func (c Cancellation) Origin() Origin { return c.origin }
-func (c Cancellation) Code() string   { return c.code }
-func (c Cancellation) Reason() Reason { return c.reason }
+func (c Cancellation) Origin() Origin {
+	if c.origin == OriginUnspecified {
+		return OriginClientLifecycle
+	}
+	return c.origin
+}
+
+func (c Cancellation) Code() string {
+	if c.code == "" {
+		return CodeClientCancelled
+	}
+	return c.code
+}
+
+func (c Cancellation) Reason() Reason {
+	if c.reason == "" {
+		return ReasonAbandoned
+	}
+	return c.reason
+}
 
 // AbandonedCancellation is the only cancellation this product can honestly
 // report. ChatService uses one stream-cancellation signal for a deliberate stop
@@ -158,6 +206,17 @@ type StepNotice struct {
 func (n StepNotice) Category() NoticeCategory { return n.category }
 func (n StepNotice) Attempt() int32           { return n.attempt }
 func (n StepNotice) MaxAttempts() int32       { return n.maxAttempts }
+
+// Valid reports whether this notice came from NewStepNotice. Unlike a failure or
+// a cancellation, a notice has no honest closed default: its category, attempt,
+// and budget are all load-bearing, and defaulting an uninitialized value to
+// "dispatch retry, attempt 1 of 1" would persist a retry that never happened.
+// So the zero value stays zero and answers false here, and every projection or
+// writer must reject an invalid notice instead of emitting one.
+func (n StepNotice) Valid() bool {
+	_, err := NewStepNotice(n.category, n.attempt, n.maxAttempts)
+	return err == nil
+}
 
 // NewStepNotice builds a notice or fails closed. attempt is the attempt this
 // notice is about and maxAttempts is the configured budget, so a valid notice

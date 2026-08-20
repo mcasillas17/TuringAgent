@@ -34,14 +34,22 @@ var (
 	maxInstant = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
 )
 
-// approvedShape admits only the RFC 3339 forms this system has ever written:
-// four-digit year, uppercase T, seconds, an optional one-to-nine-digit
-// fraction, and either Z or a ±HH:MM offset. time.Parse alone is looser than
+// approvedShape admits only the RFC 3339 forms the approved contract accepts
+// from legacy rows: `YYYY-MM-DDTHH:MM:SS[.1-9 digits]Z` and
+// `YYYY-MM-DDTHH:MM:SS[.1-9 digits](+|-)HH:MM`. time.Parse alone is looser than
 // that, so the shape is checked before the calendar.
 var approvedShape = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$`)
 
 // ParseLegacy reads a persisted timestamp in any approved shape and normalizes
 // it to UTC.
+//
+// An approved shape is not yet an approved instant: an offset can carry a
+// syntactically fine value outside the inclusive range
+// 0001-01-01T00:00:00Z through 9999-12-31T23:59:59.999999999Z, and Format
+// cannot render those at the canonical width — year 10000 takes five digits and
+// would sort ahead of every other row in a text-compared column. So the
+// normalized instant is range-checked here, and the whole class fails with the
+// one value-free sentinel.
 func ParseLegacy(value string) (time.Time, error) {
 	if !approvedShape.MatchString(value) {
 		return time.Time{}, ErrInvalidTimestamp
@@ -50,7 +58,11 @@ func ParseLegacy(value string) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, ErrInvalidTimestamp
 	}
-	return parsed.UTC(), nil
+	normalized := parsed.UTC()
+	if normalized.Before(minInstant) || normalized.After(maxInstant) {
+		return time.Time{}, ErrInvalidTimestamp
+	}
+	return normalized, nil
 }
 
 // Format renders an instant as the canonical fixed-width UTC nanosecond value.

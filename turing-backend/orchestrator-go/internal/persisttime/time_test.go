@@ -58,6 +58,16 @@ func TestParseLegacyAcceptsApprovedRFC3339NanoShapes(t *testing.T) {
 			value: "9999-12-31T23:59:59.999999999Z",
 			want:  time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC),
 		},
+		{
+			name:  "negative_offset_landing_exactly_on_the_upper_bound",
+			value: "9999-12-31T22:59:59.999999999-01:00",
+			want:  time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC),
+		},
+		{
+			name:  "positive_offset_landing_exactly_on_the_lower_bound",
+			value: "0001-01-01T01:00:00+01:00",
+			want:  time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC),
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -125,22 +135,116 @@ func TestParseLegacyRejectsVariableOrInvalidShapesValueFree(t *testing.T) {
 	}
 }
 
+// An approved shape is not automatically an approved instant. A legacy offset
+// value can sit inside the shape and still normalize outside the inclusive UTC
+// range the contract allows, and the row it would produce is unusable: year
+// 10000 renders a five-digit year, which is wider than every other persisted
+// timestamp and therefore sorts wrong in a text-compared column.
+func TestParseLegacyRejectsInstantsOutsideTheApprovedRangeValueFree(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "offset_normalizes_past_the_upper_bound", value: "9999-12-31T23:59:59.999999999-01:00"},
+		{name: "smallest_offset_crossing_the_upper_bound", value: "9999-12-31T23:59:59.999999999-00:01"},
+		{name: "whole_second_offset_crossing_the_upper_bound", value: "9999-12-31T23:00:00-14:00"},
+		{name: "offset_normalizes_before_the_lower_bound", value: "0001-01-01T00:00:00+01:00"},
+		{name: "smallest_offset_crossing_the_lower_bound", value: "0001-01-01T00:00:00.000000000+00:01"},
+		{name: "year_zero_zulu", value: "0000-12-31T23:59:59.999999999Z"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := ParseLegacy(test.value)
+			if err == nil {
+				t.Fatalf("ParseLegacy(%q) = %s, want an out-of-range error", test.value, got)
+			}
+			if !errors.Is(err, ErrInvalidTimestamp) {
+				t.Fatalf("ParseLegacy(%q) = %v, want ErrInvalidTimestamp", test.value, err)
+			}
+			if err.Error() != ErrInvalidTimestamp.Error() || strings.Contains(err.Error(), test.value) {
+				t.Fatalf("error = %q, want exactly the value-free sentinel %q", err, ErrInvalidTimestamp)
+			}
+			if !got.IsZero() {
+				t.Fatalf("ParseLegacy(%q) returned %s with an error, want the zero time", test.value, got)
+			}
+		})
+	}
+}
+
+// The parser and the formatter are one contract: anything ParseLegacy accepts
+// must come back out of Format as a fixed-width canonical string that reparses
+// to the same instant. Offsets are the interesting input here, because they are
+// the only accepted shape that can move an instant across a range bound.
+func TestParseLegacyAcceptedValuesFormatFixedWidthAndRoundTrip(t *testing.T) {
+	values := []string{
+		"2030-01-02T03:04:05Z",
+		"2030-01-02T03:04:05.1Z",
+		"2030-01-02T03:04:05.123456789Z",
+		"2030-01-02T03:04:05.000000001Z",
+		"2030-01-02T03:04:05+00:00",
+		"2030-01-02T03:04:05.5-07:00",
+		"2030-01-02T03:04:05.5+05:30",
+		"0001-01-01T00:00:00.000000000Z",
+		"9999-12-31T23:59:59.999999999Z",
+		"0001-01-01T01:00:00+01:00",
+		"9999-12-31T22:59:59.999999999-01:00",
+		// Rejected below, but listed so an accepting regression has to prove
+		// the canonical rendering still holds instead of silently widening it.
+		"0001-01-01T00:00:00+01:00",
+		"0001-01-01T00:00:00.000000000+00:01",
+		"9999-12-31T23:59:59.999999999-00:01",
+		"9999-12-31T23:59:59.999999999-01:00",
+		"9999-12-31T23:00:00-14:00",
+	}
+	for _, value := range values {
+		t.Run(value, func(t *testing.T) {
+			parsed, err := ParseLegacy(value)
+			if err != nil {
+				if !errors.Is(err, ErrInvalidTimestamp) {
+					t.Fatalf("ParseLegacy(%q) = %v, want ErrInvalidTimestamp", value, err)
+				}
+				return
+			}
+			canonical := Format(parsed)
+			if len(canonical) != len(layout) {
+				t.Fatalf("Format(ParseLegacy(%q)) = %q with width %d, want the canonical width %d",
+					value, canonical, len(canonical), len(layout))
+			}
+			reparsed, err := ParseLegacy(canonical)
+			if err != nil {
+				t.Fatalf("ParseLegacy(Format(ParseLegacy(%q))) = %v, want a round trip", value, err)
+			}
+			if !reparsed.Equal(parsed) {
+				t.Fatalf("round trip of %q = %s, want %s", value, reparsed, parsed)
+			}
+			if Format(reparsed) != canonical {
+				t.Fatalf("round trip of %q reformatted to %q, want %q", value, Format(reparsed), canonical)
+			}
+		})
+	}
+}
+
 // Fixed width is what makes lexical SQLite comparison agree with chronological
 // order, so a shorter or longer rendering is a correctness bug, not cosmetics.
 func TestFormatUsesFixedWidthUTCNanoseconds(t *testing.T) {
 	base := time.Date(2030, 1, 2, 3, 4, 5, 0, time.FixedZone("non-UTC", -7*60*60))
+	// The fixture is in chronological order on purpose: the loop below compares
+	// every consecutive canonical rendering, so the list is what proves lexical
+	// order still agrees with time order across a nanosecond step and across
+	// the era boundaries at both ends of the range.
 	tests := []struct {
 		name string
 		at   time.Time
 		want string
 	}{
+		{name: "lower_range_bound", at: time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), want: "0001-01-01T00:00:00.000000000Z"},
+		{name: "lower_range_bound_plus_one_nanosecond", at: time.Date(1, 1, 1, 0, 0, 0, 1, time.UTC), want: "0001-01-01T00:00:00.000000001Z"},
 		{name: "whole_second_from_a_non_utc_zone", at: base, want: "2030-01-02T10:04:05.000000000Z"},
 		{name: "first_nanosecond", at: base.Add(time.Nanosecond), want: "2030-01-02T10:04:05.000000001Z"},
 		{name: "tenth_of_a_second", at: base.Add(100 * time.Millisecond), want: "2030-01-02T10:04:05.100000000Z"},
-		{name: "lower_range_bound", at: time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), want: "0001-01-01T00:00:00.000000000Z"},
+		{name: "upper_range_bound_minus_one_nanosecond", at: time.Date(9999, 12, 31, 23, 59, 59, 999999998, time.UTC), want: "9999-12-31T23:59:59.999999998Z"},
 		{name: "upper_range_bound", at: time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC), want: "9999-12-31T23:59:59.999999999Z"},
 	}
-	var previous string
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got := Format(test.at)
@@ -159,11 +263,19 @@ func TestFormatUsesFixedWidthUTCNanoseconds(t *testing.T) {
 			}
 		})
 	}
-	for index := 1; index < 3; index++ {
-		if previous != "" && tests[index].want <= previous {
-			t.Fatalf("timestamp order %q then %q is not chronological", previous, tests[index].want)
+
+	// Compare the rendered output rather than the wanted strings, so a layout
+	// that drops or widens the fraction fails here and not only on equality.
+	for index := 1; index < len(tests); index++ {
+		previous, current := tests[index-1], tests[index]
+		if !previous.at.Before(current.at) {
+			t.Fatalf("fixture %s is not before %s; the chronological assertion below proves nothing",
+				previous.name, current.name)
 		}
-		previous = tests[index].want
+		if formatted, wanted := Format(previous.at), Format(current.at); formatted >= wanted {
+			t.Fatalf("timestamp order %q (%s) then %q (%s) is not chronological",
+				formatted, previous.name, wanted, current.name)
+		}
 	}
 }
 

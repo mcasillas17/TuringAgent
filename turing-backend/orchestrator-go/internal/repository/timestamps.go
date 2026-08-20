@@ -9,7 +9,11 @@ import (
 
 // FormatTimestamp renders the canonical persisted timestamp. The layout itself
 // lives in persisttime so repository writes and migration rewrites cannot drift
-// apart; every persisted timestamp in this package goes through here.
+// apart; every timestamp this package persists is rendered here.
+//
+// This is a rule about writes. Reading a legacy row still parses the older
+// variable-width RFC 3339 forms, because those are what earlier code wrote and
+// they are not going to be rewritten by being read.
 func FormatTimestamp(value time.Time) string {
 	return persisttime.Format(value)
 }

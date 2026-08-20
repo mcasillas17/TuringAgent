@@ -21,6 +21,13 @@ import (
 // guarantee drifts apart: repository writes and migration rewrites would still
 // agree in every test that compares them to each other, and disagree the day
 // one of them is edited. So this asserts on the source as well as the output.
+//
+// The rule is about persisted timestamp *writes*. Reading a legacy row with
+// time.Parse(time.RFC3339Nano, …) is correct and stays correct, because the
+// variable-width forms older code wrote still have to be parseable. What may
+// never happen is rendering a value to persist through anything but
+// persisttime.Format, since only its fixed width keeps a text-compared column
+// in chronological order.
 func TestFormatTimestampDelegatesToPersistTime(t *testing.T) {
 	instants := []time.Time{
 		time.Date(2030, 1, 2, 3, 4, 5, 0, time.FixedZone("non-UTC", -7*60*60)),
@@ -35,6 +42,32 @@ func TestFormatTimestampDelegatesToPersistTime(t *testing.T) {
 		}
 	}
 
+	// Output equality alone cannot tell delegation apart from a reimplementation
+	// that happens to agree today, so the body itself is inspected.
+	declaration := functionDeclaration(t, "FormatTimestamp")
+	delegates := false
+	ast.Inspect(declaration.Body, func(node ast.Node) bool {
+		selector, ok := node.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		qualifier, ok := selector.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		switch {
+		case qualifier.Name == "persisttime" && selector.Sel.Name == "Format":
+			delegates = true
+		case qualifier.Name == "time" && strings.HasPrefix(selector.Sel.Name, "RFC"):
+			t.Errorf("FormatTimestamp renders persisted text with time.%s; a persisted write must use persisttime.Format, whose fixed width is what orders the column",
+				selector.Sel.Name)
+		}
+		return true
+	})
+	if !delegates {
+		t.Errorf("FormatTimestamp does not call persisttime.Format; the canonical layout must have exactly one implementation")
+	}
+
 	for _, file := range packageSourceFiles(t) {
 		fileSet := token.NewFileSet()
 		parsed, err := parser.ParseFile(fileSet, file, nil, 0)
@@ -47,9 +80,58 @@ func TestFormatTimestampDelegatesToPersistTime(t *testing.T) {
 				t.Errorf("%s declares its own timestamp layout %s; use persisttime instead",
 					file, literal.Value)
 			}
+			// Parsing a legacy row with an RFC layout is a read and stays legal;
+			// rendering one is a write and must go through persisttime.Format.
+			if call, ok := node.(*ast.CallExpr); ok && isTimeLayoutRender(call) {
+				t.Errorf("%s renders a timestamp with a time package layout; persisted writes go through persisttime.Format",
+					file)
+			}
 			return true
 		})
 	}
+}
+
+// isTimeLayoutRender reports whether call is `something.Format(time.RFC…)`, the
+// write shape. `time.Parse(time.RFC…, value)` is a read and is deliberately not
+// matched.
+func isTimeLayoutRender(call *ast.CallExpr) bool {
+	method, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || method.Sel.Name != "Format" {
+		return false
+	}
+	if qualifier, ok := method.X.(*ast.Ident); ok && qualifier.Name == "persisttime" {
+		return false
+	}
+	for _, argument := range call.Args {
+		layout, ok := argument.(*ast.SelectorExpr)
+		if !ok {
+			continue
+		}
+		if qualifier, ok := layout.X.(*ast.Ident); ok && qualifier.Name == "time" && strings.HasPrefix(layout.Sel.Name, "RFC") {
+			return true
+		}
+	}
+	return false
+}
+
+// functionDeclaration finds a package-level function in this package's own
+// non-test sources.
+func functionDeclaration(t *testing.T, name string) *ast.FuncDecl {
+	t.Helper()
+	for _, file := range packageSourceFiles(t) {
+		parsed, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", file, err)
+		}
+		for _, declaration := range parsed.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if ok && function.Recv == nil && function.Name.Name == name && function.Body != nil {
+				return function
+			}
+		}
+	}
+	t.Fatalf("%s is not declared in this package", name)
+	return nil
 }
 
 func packageSourceFiles(t *testing.T) []string {

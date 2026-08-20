@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -344,6 +345,133 @@ func TestNormalizeFailureRunStepNoticeUsesOnlyAllowlistedCategoryAndAttempts(t *
 	}
 }
 
+// Go hands back a zero value for free: a var declaration, a map miss, a struct
+// field, or a constructor that returned an error alongside it. None of those may
+// read as a benign outcome. A zero Failure that reported an unspecified origin
+// and an empty reason would look like a nonterminal dispatch condition and quietly
+// leave a run unterminalized, and a zero Cancellation would claim that nothing
+// cancelled anything. The accessors are the boundary every reader goes through,
+// so they are where the closed defaults belong.
+func TestZeroValuesReadAsFailClosedDefaults(t *testing.T) {
+	t.Run("failure", func(t *testing.T) {
+		var failure Failure
+		if got := failure.Origin(); got != OriginUnknown {
+			t.Fatalf("zero Failure origin = %v, want %v", got, OriginUnknown)
+		}
+		if got := failure.Code(); got != CodeUnknown {
+			t.Fatalf("zero Failure code = %q, want %q", got, CodeUnknown)
+		}
+		if got := failure.Reason(); got != ReasonInternalFailure {
+			t.Fatalf("zero Failure reason = %q, want %q", got, ReasonInternalFailure)
+		}
+		if got := failure.Reason(); got == ReasonNone {
+			t.Fatalf("zero Failure reason = %q, which reads as a nonterminal dispatch condition", got)
+		}
+		if got := failure.RetryClass(); got != RetryClassNever {
+			t.Fatalf("zero Failure retry class = %v, want %v", got, RetryClassNever)
+		}
+	})
+
+	t.Run("cancellation", func(t *testing.T) {
+		var cancellation Cancellation
+		if got := cancellation.Origin(); got != OriginClientLifecycle {
+			t.Fatalf("zero Cancellation origin = %v, want %v", got, OriginClientLifecycle)
+		}
+		if got := cancellation.Code(); got != CodeClientCancelled {
+			t.Fatalf("zero Cancellation code = %q, want %q", got, CodeClientCancelled)
+		}
+		if got := cancellation.Reason(); got != ReasonAbandoned {
+			t.Fatalf("zero Cancellation reason = %q, want %q", got, ReasonAbandoned)
+		}
+		if got := cancellation.Reason(); got == ReasonUserCancelled {
+			t.Fatalf("zero Cancellation reason = %q, which claims user intent this product cannot prove", got)
+		}
+	})
+
+	// A notice has no honest zero: category, attempt, and budget are all
+	// meaningful, and inventing "dispatch retry, attempt 1 of 1" for an
+	// uninitialized value would persist a retry that never happened. So the zero
+	// value stays zero and reports itself invalid instead.
+	t.Run("step_notice", func(t *testing.T) {
+		var notice StepNotice
+		if notice.Valid() {
+			t.Fatalf("zero StepNotice %+v reported itself valid", notice)
+		}
+		rejected, err := NewStepNotice(NoticeCategory(poison), 1, 1)
+		if err == nil {
+			t.Fatalf("NewStepNotice accepted an unlisted category")
+		}
+		if rejected.Valid() {
+			t.Fatalf("rejected StepNotice %+v reported itself valid", rejected)
+		}
+		for _, category := range []NoticeCategory{NoticeDispatchRetry, NoticeRecoveryRetry, NoticeRecoveryExhausted} {
+			notice, err := NewStepNotice(category, 1, 3)
+			if err != nil {
+				t.Fatalf("NewStepNotice(%q) error: %v", category, err)
+			}
+			if !notice.Valid() {
+				t.Fatalf("constructed StepNotice %+v reported itself invalid", notice)
+			}
+		}
+	})
+}
+
+// The closed defaults must not overwrite a real normalized value, and in
+// particular must not turn the two nonterminal dispatch conditions into
+// terminal internal failures.
+func TestFailClosedDefaultsPreserveConstructedValues(t *testing.T) {
+	nonterminal := NormalizeFailure(OriginDispatch, "worker_busy", RetryClassSameRunTransient)
+	if nonterminal.Reason() != ReasonNone {
+		t.Fatalf("worker_busy reason = %q, want %q", nonterminal.Reason(), ReasonNone)
+	}
+	if nonterminal.Origin() != OriginDispatch || nonterminal.Code() != "worker_busy" {
+		t.Fatalf("worker_busy normalized to origin %v code %q, want dispatch/worker_busy",
+			nonterminal.Origin(), nonterminal.Code())
+	}
+	if nonterminal.RetryClass() != RetryClassSameRunTransient {
+		t.Fatalf("worker_busy retry class = %v, want %v", nonterminal.RetryClass(), RetryClassSameRunTransient)
+	}
+
+	terminal := NormalizeFailure(OriginProviderTransport, "model_timeout", RetryClassNever)
+	if terminal.Origin() != OriginProviderTransport || terminal.Code() != "model_timeout" ||
+		terminal.Reason() != ReasonProviderFailure || terminal.RetryClass() != RetryClassNever {
+		t.Fatalf("model_timeout normalized to %+v, want the provider-transport mapping", terminal)
+	}
+
+	cancellation := AbandonedCancellation()
+	if cancellation.Origin() != OriginClientLifecycle || cancellation.Code() != CodeClientCancelled ||
+		cancellation.Reason() != ReasonAbandoned {
+		t.Fatalf("AbandonedCancellation() = %+v, want the client-lifecycle abandonment", cancellation)
+	}
+}
+
+// The scan is the assertion that survives a future edit, so it has to see a
+// constructor the way an author would actually write one. Returning
+// *Cancellation is at least as likely as returning Cancellation, and an
+// identifier-only scan would quietly report "no user-cancel constructor exists"
+// while one sat in the package. The fixture under testdata is never compiled;
+// it is scanner input pinning exactly the shapes that must be caught and the
+// ones that must not.
+func TestExportedFunctionsReturningSeesPointerAndWrappedConstructors(t *testing.T) {
+	const fixture = "testdata/constructorscan"
+
+	got := exportedFunctionsReturningIn(t, fixture, "Cancellation")
+	want := []string{"PairedCancellations", "UserCancelledCancellation", "ValueCancellation", "WrappedCancellation"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("cancellation constructors in %s = %v, want %v", fixture, got, want)
+	}
+
+	gotNotices := exportedFunctionsReturningIn(t, fixture, "StepNotice")
+	wantNotices := []string{"NoticeConstructor"}
+	if !reflect.DeepEqual(gotNotices, wantNotices) {
+		t.Fatalf("notice constructors in %s = %v, want %v", fixture, gotNotices, wantNotices)
+	}
+
+	if absent := exportedFunctionsReturningIn(t, fixture, "Failure"); len(absent) != 0 {
+		t.Fatalf("failure constructors in %s = %v, want none", fixture, absent)
+	}
+}
+
 // assertNoRawText fails when any field of a normalized value carries text that
 // came from outside the allowlist, including through fmt verbs that read
 // unexported fields.
@@ -370,7 +498,16 @@ func assertNoRawText(t *testing.T, value any, raw string) {
 // assertion covers constructors no test calls.
 func exportedFunctionsReturning(t *testing.T, typeName string) []string {
 	t.Helper()
-	entries, err := os.ReadDir(".")
+	return exportedFunctionsReturningIn(t, ".", typeName)
+}
+
+// exportedFunctionsReturningIn names every exported package-level function in
+// directory that returns typeName, by value or by pointer, in any result
+// position. Taking the directory as a parameter is what lets the scan itself be
+// tested against a fixture instead of only against this package.
+func exportedFunctionsReturningIn(t *testing.T, directory string, typeName string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
 	if err != nil {
 		t.Fatalf("read package directory: %v", err)
 	}
@@ -381,7 +518,7 @@ func exportedFunctionsReturning(t *testing.T, typeName string) []string {
 		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		file, err := parser.ParseFile(fileSet, name, nil, 0)
+		file, err := parser.ParseFile(fileSet, filepath.Join(directory, name), nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
@@ -391,12 +528,26 @@ func exportedFunctionsReturning(t *testing.T, typeName string) []string {
 				continue
 			}
 			for _, result := range function.Type.Results.List {
-				if identifier, ok := result.Type.(*ast.Ident); ok && identifier.Name == typeName {
+				if resultNames(result.Type) == typeName {
 					found = append(found, function.Name.Name)
+					break
 				}
 			}
 		}
 	}
 	sort.Strings(found)
 	return found
+}
+
+// resultNames reports the type name a result expression denotes, unwrapping a
+// pointer. A constructor returning *Cancellation is the same escape hatch as one
+// returning Cancellation, so both must resolve to the same name.
+func resultNames(expression ast.Expr) string {
+	if pointer, ok := expression.(*ast.StarExpr); ok {
+		expression = pointer.X
+	}
+	if identifier, ok := expression.(*ast.Ident); ok {
+		return identifier.Name
+	}
+	return ""
 }
