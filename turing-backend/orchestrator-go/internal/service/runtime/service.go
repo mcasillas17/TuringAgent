@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -1518,8 +1519,16 @@ func isKnownRuntimeEventType(eventType turingv1.TuringEventType) bool {
 	}
 }
 
+// isActiveRunStatus reports whether a run is still in flight.
+//
+// Recovering counts. It means nobody can currently prove which worker owns the
+// run — not that the run ended — so a worker that is still streaming events or
+// reporting tool calls is producing exactly the evidence recovery needs.
+// Refusing those reports would discard the record of what happened during the
+// interval nobody could vouch for, which is the opposite of what fencing the
+// run was for.
 func isActiveRunStatus(runStatus string) bool {
-	return runStatus == "running" || runStatus == "waiting_approval"
+	return runStatus == "running" || runStatus == "waiting_approval" || runStatus == "recovering"
 }
 
 func isGenericTerminalEvent(event *turingv1.TuringEvent) bool {
@@ -1581,18 +1590,47 @@ func isMatchingTerminalUpdate(run repository.Run, update *turingv1.RuntimeUpdate
 			completed.Content == run.AssistantContent
 	case update.GetRunFailed() != nil:
 		failed := update.GetRunFailed()
-		payload, err := encodePayload(map[string]any{
-			"runId": failed.RunId, "code": failed.Code, "message": failed.Message, "retryable": failed.Retryable,
-		})
-		return err == nil &&
-			run.Status == "failed" &&
+		return run.Status == "failed" &&
 			run.TerminalEventType == "agent.run.failed" &&
-			payload == run.TerminalEventPayload
+			matchesReportedTerminalPayload(run.TerminalEventPayload, map[string]any{
+				"runId": failed.RunId, "code": failed.Code, "message": failed.Message, "retryable": failed.Retryable,
+			})
 	case update.GetRunCancelledAck() != nil:
 		return isTerminalRunStatus(run.Status)
 	default:
 		return false
 	}
+}
+
+// matchesReportedTerminalPayload compares a durable terminal payload with what
+// this update would have written.
+//
+// The durable payload also carries the canonical run state the repository
+// merges into every lifecycle projection. That part is derived from the row,
+// not from the report, so it is excluded here: comparing raw bytes would make
+// every late duplicate look like a conflict the moment the state gained a
+// version.
+//
+// This still compares the four raw keys this service writes today through the
+// temporary repository adapter. When this service is converted to the typed
+// canonical writer, that writer publishes a normalized code and no message, so
+// the reported map below has to be narrowed in the SAME change — otherwise
+// every late duplicate failure silently reads as a conflict.
+func matchesReportedTerminalPayload(durablePayload string, reported map[string]any) bool {
+	var durable map[string]any
+	if err := json.Unmarshal([]byte(durablePayload), &durable); err != nil {
+		return false
+	}
+	delete(durable, "runState")
+	rebuilt, err := encodePayload(reported)
+	if err != nil {
+		return false
+	}
+	var expected map[string]any
+	if err := json.Unmarshal([]byte(rebuilt), &expected); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(durable, expected)
 }
 
 func (s *Server) reconcileLateAssignedUpdate(ctx context.Context, connectedWorker *worker, workerID string, update *turingv1.RuntimeUpdate) (bool, error) {

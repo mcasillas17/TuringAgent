@@ -89,20 +89,33 @@ func TestPostMigrationEnqueueWritesCanonicalVersionOneFields(t *testing.T) {
 		t.Fatalf("assistant_content_sha256 = %q, want the empty-content digest %q", contentSHA, want)
 	}
 
-	// Deliberately still absent: the queued event carries no run-state snapshot
-	// until the versioned transition work lands. Asserting its absence keeps
-	// that later step honestly red instead of accidentally satisfied here.
+	// The queued event now projects the version-1 state the row already holds,
+	// so a client that only ever sees the event agrees with a client that
+	// reopens and reads the row.
 	var queuedPayload string
 	if err := database.QueryRowContext(ctx, `
 		SELECT payload_json FROM events WHERE run_id = ? AND type = 'agent.run.queued'
 	`, enqueued.RunID).Scan(&queuedPayload); err != nil {
 		t.Fatalf("read queued event: %v", err)
 	}
-	var payload map[string]any
+	var payload struct {
+		RunState struct {
+			Lifecycle             string `json:"lifecycle"`
+			OutcomeReason         string `json:"outcomeReason"`
+			StateVersion          int64  `json:"stateVersion"`
+			StateUpdatedAt        string `json:"stateUpdatedAt"`
+			HasDisplayableContent bool   `json:"hasDisplayableContent"`
+		} `json:"runState"`
+	}
 	if err := json.Unmarshal([]byte(queuedPayload), &payload); err != nil {
 		t.Fatalf("decode queued payload: %v", err)
 	}
-	if _, present := payload["runState"]; present {
-		t.Fatal("queued event already carries a run-state snapshot; that projection belongs to the transition task")
+	if payload.RunState.Lifecycle != status || payload.RunState.OutcomeReason != outcomeReason ||
+		payload.RunState.StateVersion != stateVersion || payload.RunState.StateUpdatedAt != stateUpdatedAt {
+		t.Fatalf("queued snapshot = %+v, want the row's %s/%s at version %d and %q",
+			payload.RunState, status, outcomeReason, stateVersion, stateUpdatedAt)
+	}
+	if payload.RunState.HasDisplayableContent {
+		t.Fatal("queued snapshot claims displayable assistant content before the run produced any")
 	}
 }

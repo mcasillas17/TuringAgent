@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
 
 var (
@@ -329,7 +331,9 @@ func (r *Repository) RecordToolCallAfterWithEvent(ctx context.Context, record To
 	if record.Status == "completed" && !toolCallCanComplete(currentStatus) {
 		return false, Event{}, ErrToolCallInvalidTransition
 	}
-	if runStatus != "running" && runStatus != "waiting_approval" {
+	// Recovering is included: a tool call reported by a worker whose ownership
+	// became uncertain is the side-effect evidence recovery needs most.
+	if runStatus != lifecycleRunning && runStatus != lifecycleWaitingApproval && runStatus != lifecycleRecovering {
 		return false, Event{}, ErrToolCallInvalidTransition
 	}
 	if currentStatus == "approval_required" && record.Status == "completed" {
@@ -375,7 +379,13 @@ func approvalAllowsCompletion(ctx context.Context, tx *sql.Tx, approvalID sql.Nu
 	return nil
 }
 
-func marshalToolLifecyclePayload(toolCallID string, serverName string, toolName string, errorMessage string) (string, error) {
+// marshalToolLifecyclePayload builds a tool-call lifecycle projection.
+//
+// category is an allowlisted outcome class, not a sentence. The old "error"
+// key carried whatever a provider, a tool server, or a worker said, and that
+// string was published to clients; a closed category says the same useful thing
+// — this failed, or policy refused it — with nothing to smuggle.
+func marshalToolLifecyclePayload(toolCallID string, serverName string, toolName string, category runoutcome.Reason) (string, error) {
 	payload := map[string]any{
 		"toolCallId": toolCallID,
 		"toolName":   toolName,
@@ -383,14 +393,43 @@ func marshalToolLifecyclePayload(toolCallID string, serverName string, toolName 
 	if serverName != "" {
 		payload["serverName"] = serverName
 	}
-	if errorMessage != "" {
-		payload["error"] = errorMessage
+	if category != "" && category != runoutcome.ReasonNone {
+		payload["category"] = string(category)
 	}
-	payloadJSON, err := json.Marshal(payload)
+	return marshalEventPayload(payload)
+}
+
+// marshalEventPayload is the one place a durable event payload is encoded, so
+// no writer has to remember to convert the error.
+func marshalEventPayload(payload map[string]any) (string, error) {
+	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
 	}
-	return string(payloadJSON), nil
+	return string(encoded), nil
+}
+
+// ErrRawEventPayload rejects a payload a not-yet-converted caller passed in a
+// shape the canonical writer cannot merge run state into. It names the class of
+// problem and never the payload, which may hold provider or tool text.
+var ErrRawEventPayload = errors.New("raw event payload is not a JSON object")
+
+// rawPayloadMap decodes a payload a not-yet-converted caller passed as JSON so
+// the canonical writer can merge the run state into it.
+//
+// It fails rather than returning nil for an undecodable payload: silently
+// dropping the caller's own keys would publish a terminal event missing the
+// code and message its reader expects, and the caller would never learn. It
+// exists only for the temporary raw adapters and disappears with them.
+func rawPayloadMap(payloadJSON string) (map[string]any, error) {
+	if payloadJSON == "" {
+		return nil, nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		return nil, ErrRawEventPayload
+	}
+	return payload, nil
 }
 
 func isOpenToolCallStatus(status string) bool {

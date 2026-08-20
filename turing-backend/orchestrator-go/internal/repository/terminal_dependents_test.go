@@ -155,7 +155,10 @@ func TestTerminalRunEmitsFailureEventForActiveSafeToolCall(t *testing.T) {
 		"toolCallId": "call_safe_active",
 		"toolName":   "system.echo",
 		"serverName": "system",
-		"error":      "client_cancelled",
+		// The cancellation's own outcome class. The transport cannot tell a
+		// deliberate stop from a dropped connection, so it says abandoned
+		// rather than claiming the user meant it.
+		"category": "abandoned",
 	}
 	if !reflect.DeepEqual(payload, want) {
 		t.Fatalf("safe tool failure payload = %#v, want %#v", payload, want)

@@ -887,8 +887,8 @@ func TestConnectWorkerFencesJobWhenAssignmentSendFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != "running" || !run.ExecutionActive {
-		t.Fatalf("run = %+v, want running fenced after ambiguous send failure", run)
+	if run.Status != "recovering" || !run.ExecutionActive {
+		t.Fatalf("run = %+v, want recovering fenced after ambiguous send failure", run)
 	}
 	var jobStatus string
 	var leaseOwner sql.NullString
@@ -1808,7 +1808,9 @@ func TestRunCompletedUsesPersistedAssistantMessageID(t *testing.T) {
 		if event.Type != "agent.run.completed" {
 			continue
 		}
-		var payload map[string]string
+		// map[string]any, not map[string]string: the payload now carries the
+		// nested canonical run state beside its scalar fields.
+		var payload map[string]any
 		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
 			t.Fatal(err)
 		}
@@ -3237,7 +3239,7 @@ func TestWorkerDisconnectFencesDeliveredJobUntilRecovery(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
-		if err == nil && run.Status == "running" && run.ExecutionActive && run.ExecutionState == "uncertain" {
+		if err == nil && run.Status == "recovering" && run.ExecutionActive && run.ExecutionState == "uncertain" {
 			var jobStatus string
 			if err := h.database.QueryRowContext(context.Background(), `SELECT status FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus); err != nil {
 				t.Fatal(err)

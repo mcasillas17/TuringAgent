@@ -3,10 +3,11 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
 
 type AssignmentReconciliation struct {
@@ -148,7 +149,7 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 	}
 	if cutoff != nil &&
 		active == 1 &&
-		(runStatus == "running" || runStatus == "waiting_approval") &&
+		(runStatus == lifecycleRunning || runStatus == lifecycleWaitingApproval || runStatus == lifecycleRecovering) &&
 		executionState != "fenced" &&
 		leaseExpiresAtNanos.Valid &&
 		leaseExpiresAtNanos.Int64 > cutoff.UnixNano() {
@@ -156,7 +157,7 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 	}
 
 	switch runStatus {
-	case "completed", "failed", "cancelled":
+	case lifecycleCompleted, lifecycleFailed, lifecycleCancelled:
 		if !staleRecovery && active == 1 {
 			if err := fenceExecutionTx(ctx, tx, assignment.RunID); err != nil {
 				return AssignmentReconciliation{}, err
@@ -181,7 +182,7 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 			return AssignmentReconciliation{}, err
 		}
 		return AssignmentReconciliation{Cleared: true}, nil
-	case "waiting_approval":
+	case lifecycleWaitingApproval:
 		reconciliation, err := reconcileWaitingApprovalTx(ctx, tx, assignment.RunID, sessionID, traceID, !staleRecovery && active == 1)
 		if err != nil {
 			return AssignmentReconciliation{}, err
@@ -190,15 +191,46 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 			return AssignmentReconciliation{}, err
 		}
 		return reconciliation, nil
-	case "running":
+	case lifecycleRunning, lifecycleRecovering:
+		// Recovering shares this branch because it IS this branch's state: a
+		// run whose worker ownership is already uncertain still has to be
+		// terminalized or requeued. What it must not do is get fenced a second
+		// time as though its ownership had just been lost, which is why the
+		// fence below is a guarded transition rather than a blind write — a
+		// repeat of the same fence is recognized and costs nothing.
+		//
+		// A run fenced out of waiting-approval keeps its pending approval, and
+		// its lifecycle no longer says so, so the approval itself is what
+		// decides which reconciliation this is.
+		if runStatus == lifecycleRecovering {
+			waiting, err := hasPendingApprovalTx(ctx, tx, assignment.RunID)
+			if err != nil {
+				return AssignmentReconciliation{}, err
+			}
+			if waiting {
+				reconciliation, err := reconcileWaitingApprovalTx(ctx, tx, assignment.RunID, sessionID, traceID, !staleRecovery && active == 1)
+				if err != nil {
+					return AssignmentReconciliation{}, err
+				}
+				if err := tx.Commit(); err != nil {
+					return AssignmentReconciliation{}, err
+				}
+				return reconciliation, nil
+			}
+		}
 		if !staleRecovery && executionState != "pending_send" {
-			if err := fenceExecutionTx(ctx, tx, assignment.RunID); err != nil {
+			if active != 1 {
+				return AssignmentReconciliation{}, ErrAssignmentFenced
+			}
+			fenced, err := applyRunTransitionTx(ctx, tx, fenceOwnershipTransition(
+				assignment.RunID, unresolvedStateVersion, assignmentIdentity(assignment), "uncertain"), nil)
+			if err != nil {
 				return AssignmentReconciliation{}, err
 			}
 			if err := tx.Commit(); err != nil {
 				return AssignmentReconciliation{}, err
 			}
-			return AssignmentReconciliation{Fenced: true}, nil
+			return AssignmentReconciliation{Fenced: true, Events: fenced.Events}, nil
 		}
 		if active == 0 && !staleRecovery {
 			if err := tx.Commit(); err != nil {
@@ -219,13 +251,14 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 			}
 		}
 		if executionState == "pending_send" {
-			if err := requeueAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, false); err != nil {
+			requeueEvents, err := requeueAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, false)
+			if err != nil {
 				return AssignmentReconciliation{}, err
 			}
 			if err := tx.Commit(); err != nil {
 				return AssignmentReconciliation{}, err
 			}
-			return AssignmentReconciliation{Requeued: true}, nil
+			return AssignmentReconciliation{Requeued: true, Events: requeueEvents}, nil
 		}
 		reconciliation, terminalized, attempt, err := terminalizeExhaustedAssignmentTx(
 			ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, sessionID, traceID, maxAttempts,
@@ -239,24 +272,27 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 			}
 			return reconciliation, nil
 		}
-		if err := requeueAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, true); err != nil {
+		requeueEvents, err := requeueAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, true)
+		if err != nil {
 			return AssignmentReconciliation{}, err
 		}
 		// attempt is the one that just lost its worker, and requeueAssignmentTx has
 		// just incremented the counter, so attempt+1 is the attempt the user is
 		// about to wait through — same arithmetic as RequeueOrFailRetryableRun.
 		// The attempt < maxAttempts guard above makes "attempt 4 of 3" unreachable.
-		notice, err := appendRunNoticeTx(ctx, tx, sessionID, assignment.RunID, traceID,
-			fmt.Sprintf("Retrying (attempt %d of %d) after the worker became unavailable", attempt+1, maxAttempts),
-			map[string]any{"attempt": attempt + 1, "maxAttempts": maxAttempts, "reason": "worker_unavailable"}, now())
+		retry, err := newRetryNotice(runoutcome.NoticeRecoveryRetry, attempt+1, maxAttempts)
+		if err != nil {
+			return AssignmentReconciliation{}, err
+		}
+		notice, err := appendStepNoticeTx(ctx, tx, sessionID, assignment.RunID, traceID, retry, now())
 		if err != nil {
 			return AssignmentReconciliation{}, err
 		}
 		if err := tx.Commit(); err != nil {
 			return AssignmentReconciliation{}, err
 		}
-		return AssignmentReconciliation{Requeued: true, Events: []Event{notice}}, nil
-	case "queued":
+		return AssignmentReconciliation{Requeued: true, Events: append(requeueEvents, notice)}, nil
+	case lifecycleQueued:
 		if active == 1 {
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE agent_runs
@@ -313,78 +349,35 @@ func terminalizeExhaustedAssignmentTx(
 		return AssignmentReconciliation{}, false, attempt, nil
 	}
 
-	const code = "job_timeout"
-	const message = "Job timed out"
-	finishedAt := now()
-	result, err := tx.ExecContext(ctx, `
-		UPDATE agent_runs
-		SET status = 'failed',
-			error_code = ?,
-			error_message = ?,
-			finished_at = ?,
-			execution_active = 0,
-			execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
-			execution_state = 'exited',
-			execution_lease_expires_at = NULL,
-			execution_lease_expires_at_ns = NULL
-		WHERE id = ?
-			AND status = 'running'
-			AND (? = '' OR COALESCE(execution_attempt_id, '') = ?)
-	`, code, message, finishedAt, finishedAt, runID, attemptID, attemptID)
-	if err != nil {
-		return AssignmentReconciliation{}, false, attempt, err
-	}
-	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
-		return AssignmentReconciliation{}, false, attempt, err
-	}
+	// Recovery gave up. The outcome says the recovery was interrupted, not what
+	// the worker's last words were, because by definition there were none.
+	failure := runoutcome.NormalizeFailure(runoutcome.OriginRecovery, "job_timeout", runoutcome.RetryClassNever)
 	// Emitted first, ahead of both the approval cleanup and the terminal event,
 	// so the explanation precedes every consequence of it — and so this path
 	// orders identically to RequeueOrFailRetryableRun, which inserts its notice
-	// before failRunWithEventTx. The client renders a terminal failure card for
-	// agent.run.failed, but that card explains the failure, not that retries
-	// were attempted and exhausted; this notice carries the attempt count.
-	giveUp, err := appendRunNoticeTx(ctx, tx, sessionID, runID, traceID,
-		giveUpNote(attempt),
-		map[string]any{"attempts": attempt, "maxAttempts": maxAttempts, "reason": code}, finishedAt)
+	// before the terminal transition. The client renders a terminal failure card
+	// for agent.run.failed, but that card explains the failure, not that
+	// retries were attempted and exhausted; this notice carries the count.
+	exhausted, err := newRetryNotice(runoutcome.NoticeRecoveryExhausted, attempt, maxAttempts)
 	if err != nil {
 		return AssignmentReconciliation{}, false, attempt, err
 	}
-	lifecycle, err := failPendingApprovalLifecycleTx(ctx, tx, runID, code, message, finishedAt)
+	giveUp, err := appendStepNoticeTx(ctx, tx, sessionID, runID, traceID, exhausted, now())
 	if err != nil {
 		return AssignmentReconciliation{}, false, attempt, err
 	}
-	events := append([]Event{giveUp}, lifecycle...)
-	result, err = tx.ExecContext(ctx, `
-		UPDATE jobs
-		SET status = 'failed',
-			finished_at = ?,
-			error_code = ?,
-			error_message = ?,
-			lease_owner = NULL,
-			lease_expires_at = NULL,
-			lease_expires_at_ns = NULL
-		WHERE id = ?
-			AND run_id = ?
-			AND status = 'in_progress'
-			AND (? = '' OR COALESCE(assignment_attempt_id, '') = ?)
-	`, finishedAt, code, message, jobID, runID, attemptID, attemptID)
-	if err != nil {
-		return AssignmentReconciliation{}, false, attempt, err
-	}
-	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
-		return AssignmentReconciliation{}, false, attempt, err
-	}
-	payloadJSON, err := json.Marshal(map[string]any{
-		"runId": runID, "code": code, "message": message, "retryable": false,
+	terminal, err := failRunTx(ctx, tx, FailRunInput{
+		RunID:              runID,
+		Failure:            failure,
+		resolveVersionInTx: true,
 	})
 	if err != nil {
+		if errors.Is(err, ErrRunNotFailable) || errors.Is(err, ErrRunTransitionConflict) {
+			return AssignmentReconciliation{}, false, attempt, ErrAssignmentFenced
+		}
 		return AssignmentReconciliation{}, false, attempt, err
 	}
-	event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.failed", string(payloadJSON), finishedAt)
-	if err != nil {
-		return AssignmentReconciliation{}, false, attempt, err
-	}
-	events = append(events, event)
+	events := append([]Event{giveUp}, terminal.Events...)
 	return AssignmentReconciliation{Cleared: true, Events: events}, true, attempt, nil
 }
 
@@ -455,8 +448,11 @@ func terminalizeStaleApprovedAuthorizationTx(
 		return AssignmentReconciliation{}, false, err
 	}
 
-	const code = "side_effect_uncertain"
-	const message = "Stale assignment may have executed an approved tool call"
+	// The approved authorization may already have run. Nothing here can prove
+	// it did or did not, and that uncertainty IS the outcome — it is not
+	// downgraded to a generic tool failure.
+	failure := runoutcome.NormalizeFailure(runoutcome.OriginRecovery, "side_effect_uncertain", runoutcome.RetryClassNever)
+	category := failure.Reason()
 	finishedAt := now()
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE approvals
@@ -467,55 +463,9 @@ func terminalizeStaleApprovedAuthorizationTx(
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE tool_calls
-		SET status = 'failed', error_code = ?, error_message = ?, completed_at = COALESCE(completed_at, ?)
+		SET status = 'failed', error_code = ?, error_message = NULL, completed_at = COALESCE(completed_at, ?)
 		WHERE run_id = ? AND status IN ('requested', 'allowed', 'approval_required')
-	`, code, message, finishedAt, runID); err != nil {
-		return AssignmentReconciliation{}, false, err
-	}
-	result, err := tx.ExecContext(ctx, `
-		UPDATE agent_runs
-		SET status = 'failed',
-			error_code = ?,
-			error_message = ?,
-			finished_at = ?,
-			execution_active = 0,
-			execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
-			execution_state = 'exited',
-			execution_lease_expires_at = NULL,
-			execution_lease_expires_at_ns = NULL
-		WHERE id = ?
-			AND status = 'running'
-			AND (? = '' OR COALESCE(execution_attempt_id, '') = ?)
-	`, code, message, finishedAt, finishedAt, runID, attemptID, attemptID)
-	if err != nil {
-		return AssignmentReconciliation{}, false, err
-	}
-	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
-		return AssignmentReconciliation{}, false, err
-	}
-	if jobID == "" {
-		if err := tx.QueryRowContext(ctx, `SELECT id FROM jobs WHERE run_id = ? AND status = 'in_progress'`, runID).Scan(&jobID); err != nil {
-			return AssignmentReconciliation{}, false, err
-		}
-	}
-	result, err = tx.ExecContext(ctx, `
-		UPDATE jobs
-		SET status = 'failed',
-			finished_at = ?,
-			error_code = ?,
-			error_message = ?,
-			lease_owner = NULL,
-			lease_expires_at = NULL,
-			lease_expires_at_ns = NULL
-		WHERE id = ?
-			AND run_id = ?
-			AND status = 'in_progress'
-			AND (? = '' OR COALESCE(assignment_attempt_id, '') = ?)
-	`, finishedAt, code, message, jobID, runID, attemptID, attemptID)
-	if err != nil {
-		return AssignmentReconciliation{}, false, err
-	}
-	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
+	`, failure.Code(), finishedAt, runID); err != nil {
 		return AssignmentReconciliation{}, false, err
 	}
 	events := make([]Event, 0, len(approvals)+len(toolCalls)+1)
@@ -524,23 +474,23 @@ func terminalizeStaleApprovedAuthorizationTx(
 			"approvalId": approval.id,
 			"toolCallId": approval.toolCallID,
 			"toolName":   approval.toolName,
-			"reason":     code,
+			"category":   string(category),
 		}
 		if approval.modelToolCallID != "" {
 			payload["modelToolCallId"] = approval.modelToolCallID
 		}
-		payloadJSON, err := json.Marshal(payload)
+		payloadJSON, err := marshalEventPayload(payload)
 		if err != nil {
 			return AssignmentReconciliation{}, false, err
 		}
-		event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "approval.expired", string(payloadJSON), finishedAt)
+		event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "approval.expired", payloadJSON, finishedAt)
 		if err != nil {
 			return AssignmentReconciliation{}, false, err
 		}
 		events = append(events, event)
 	}
 	for _, toolCall := range toolCalls {
-		payloadJSON, err := marshalToolLifecyclePayload(toolCall.id, toolCall.serverName, toolCall.toolName, message)
+		payloadJSON, err := marshalToolLifecyclePayload(toolCall.id, toolCall.serverName, toolCall.toolName, category)
 		if err != nil {
 			return AssignmentReconciliation{}, false, err
 		}
@@ -550,20 +500,22 @@ func terminalizeStaleApprovedAuthorizationTx(
 		}
 		events = append(events, event)
 	}
-	payloadJSON, err := json.Marshal(map[string]any{
-		"runId": runID, "code": code, "message": message, "retryable": false,
-	})
+	terminal, err := failRunTx(ctx, tx, FailRunInput{RunID: runID, Failure: failure, resolveVersionInTx: true})
 	if err != nil {
+		if errors.Is(err, ErrRunNotFailable) || errors.Is(err, ErrRunTransitionConflict) {
+			return AssignmentReconciliation{}, false, ErrAssignmentFenced
+		}
 		return AssignmentReconciliation{}, false, err
 	}
-	event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.failed", string(payloadJSON), finishedAt)
-	if err != nil {
-		return AssignmentReconciliation{}, false, err
-	}
-	events = append(events, event)
+	events = append(events, terminal.Events...)
 	return AssignmentReconciliation{Cleared: true, Events: events}, true, nil
 }
 
+// fenceExecutionTx marks execution containment uncertain WITHOUT changing the
+// public lifecycle. It is used only on runs that already reached a terminal
+// lifecycle: those rows are immutable, but execution containment is an internal
+// detail, not a public phase, and reconciliation still has to record that the
+// worker never acknowledged its exit.
 func fenceExecutionTx(ctx context.Context, tx *sql.Tx, runID string) error {
 	result, err := tx.ExecContext(ctx, `
 		UPDATE agent_runs
@@ -576,60 +528,48 @@ func fenceExecutionTx(ctx context.Context, tx *sql.Tx, runID string) error {
 	return expectOneRowErr(result, ErrAssignmentFenced)
 }
 
-func requeueAssignmentTx(ctx context.Context, tx *sql.Tx, runID, jobID, attemptID string, incrementAttempt bool) error {
+// assignmentIdentity projects an assignment onto the trigger identity a guarded
+// transition fences on.
+func assignmentIdentity(assignment Assignment) runTransitionIdentity {
+	return runTransitionIdentity{
+		workerID:            assignment.WorkerID,
+		assignmentAttemptID: assignment.AttemptID,
+	}
+}
+
+// hasPendingApprovalTx reports whether a run still holds a pending approval.
+func hasPendingApprovalTx(ctx context.Context, tx *sql.Tx, runID string) (bool, error) {
+	var pending int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM approvals WHERE run_id = ? AND status = 'pending'`, runID).Scan(&pending); err != nil {
+		return false, err
+	}
+	return pending > 0, nil
+}
+
+func requeueAssignmentTx(ctx context.Context, tx *sql.Tx, runID, jobID, attemptID string, incrementAttempt bool) ([]Event, error) {
 	if jobID == "" {
 		if err := tx.QueryRowContext(ctx, `SELECT id FROM jobs WHERE run_id = ? AND status = 'in_progress'`, runID).Scan(&jobID); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	attemptIncrement := 0
-	if incrementAttempt {
-		attemptIncrement = 1
-	}
-	result, err := tx.ExecContext(ctx, `
-		UPDATE jobs
-		SET status = 'pending',
-			lease_owner = NULL,
-			lease_expires_at = NULL,
-			lease_expires_at_ns = NULL,
-			picked_up_at = NULL,
-			assignment_attempt_id = NULL,
-			attempt = attempt + ?
-		WHERE id = ?
-			AND run_id = ?
-			AND status = 'in_progress'
-			AND (? = '' OR COALESCE(assignment_attempt_id, '') = ?)
-	`, attemptIncrement, jobID, runID, attemptID, attemptID)
+	events, err := requeueRunThroughRecoveryTx(ctx, tx, runID, jobID,
+		runTransitionIdentity{assignmentAttemptID: attemptID}, incrementAttempt)
 	if err != nil {
-		return err
+		if errors.Is(err, ErrRunTransitionConflict) {
+			return nil, ErrAssignmentFenced
+		}
+		return nil, err
 	}
-	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
-		return err
-	}
-	result, err = tx.ExecContext(ctx, `
-		UPDATE agent_runs
-		SET status = 'queued',
-			started_at = NULL,
-			worker_id = NULL,
-			execution_active = 0,
-			execution_exit_acknowledged_at = NULL,
-			execution_attempt_id = NULL,
-			execution_state = 'none',
-			execution_lease_expires_at = NULL,
-			execution_lease_expires_at_ns = NULL
-		WHERE id = ?
-			AND status = 'running'
-			AND (? = '' OR COALESCE(execution_attempt_id, '') = ?)
-	`, runID, attemptID, attemptID)
-	if err != nil {
-		return err
-	}
-	return expectOneRowErr(result, ErrAssignmentFenced)
+	return events, nil
 }
 
 func reconcileWaitingApprovalTx(ctx context.Context, tx *sql.Tx, runID, sessionID, traceID string, preserveExecution bool) (AssignmentReconciliation, error) {
-	const code = "approval_delivery_failed"
-	const message = "Worker disconnected while waiting for approval"
+	// Losing the worker while a decision is pending means the decision can
+	// never be delivered. The outcome names that, and nothing about it depends
+	// on what the worker last said.
+	failure := runoutcome.NormalizeFailure(runoutcome.OriginApprovalTransport, "approval_delivery_failed", runoutcome.RetryClassNever)
+	category := failure.Reason()
 	finishedAt := now()
 	var approval ApprovalRecord
 	var approvalID string
@@ -675,51 +615,9 @@ func reconcileWaitingApprovalTx(ctx context.Context, tx *sql.Tx, runID, sessionI
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE tool_calls
-		SET status = 'failed', error_code = ?, error_message = ?, completed_at = COALESCE(completed_at, ?)
+		SET status = 'failed', error_code = ?, error_message = NULL, completed_at = COALESCE(completed_at, ?)
 		WHERE run_id = ? AND status IN ('requested', 'allowed', 'approval_required')
-	`, code, message, finishedAt, runID); err != nil {
-		return AssignmentReconciliation{}, err
-	}
-	runUpdate := `
-		UPDATE agent_runs
-		SET status = 'failed',
-			error_code = ?,
-			error_message = ?,
-			finished_at = ?`
-	args := []any{code, message, finishedAt}
-	if preserveExecution {
-		runUpdate += `,
-			execution_state = 'uncertain'`
-	} else {
-		runUpdate += `,
-			execution_active = 0,
-			execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
-			execution_state = 'exited',
-			execution_lease_expires_at = NULL,
-			execution_lease_expires_at_ns = NULL`
-		args = append(args, finishedAt)
-	}
-	runUpdate += `
-		WHERE id = ? AND status = 'waiting_approval'`
-	args = append(args, runID)
-	result, err := tx.ExecContext(ctx, runUpdate, args...)
-	if err != nil {
-		return AssignmentReconciliation{}, err
-	}
-	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
-		return AssignmentReconciliation{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE jobs
-		SET status = 'failed',
-			finished_at = ?,
-			error_code = ?,
-			error_message = ?,
-			lease_owner = NULL,
-			lease_expires_at = NULL,
-			lease_expires_at_ns = NULL
-		WHERE run_id = ? AND status IN ('pending', 'in_progress')
-	`, finishedAt, code, message, runID); err != nil {
+	`, failure.Code(), finishedAt, runID); err != nil {
 		return AssignmentReconciliation{}, err
 	}
 	events := make([]Event, 0, len(toolCalls)+2)
@@ -732,7 +630,7 @@ func reconcileWaitingApprovalTx(ctx context.Context, tx *sql.Tx, runID, sessionI
 		events = append(events, event)
 	}
 	for _, toolCall := range toolCalls {
-		payloadJSON, err := marshalToolLifecyclePayload(toolCall.id, toolCall.serverName, toolCall.toolName, message)
+		payloadJSON, err := marshalToolLifecyclePayload(toolCall.id, toolCall.serverName, toolCall.toolName, category)
 		if err != nil {
 			return AssignmentReconciliation{}, err
 		}
@@ -742,17 +640,23 @@ func reconcileWaitingApprovalTx(ctx context.Context, tx *sql.Tx, runID, sessionI
 		}
 		events = append(events, event)
 	}
-	payload, err := json.Marshal(map[string]any{
-		"runId": runID, "code": code, "message": message, "retryable": false,
+	// waiting_approval and recovering are both legal sources: the run may have
+	// been fenced into recovering before this reconciliation reached it, and
+	// its pending approval still has to be closed either way.
+	terminal, err := failRunTx(ctx, tx, FailRunInput{
+		RunID:              runID,
+		Failure:            failure,
+		PreserveExecution:  preserveExecution,
+		allowedFrom:        []string{lifecycleWaitingApproval, lifecycleRecovering},
+		resolveVersionInTx: true,
 	})
 	if err != nil {
+		if errors.Is(err, ErrRunNotFailable) || errors.Is(err, ErrRunTransitionConflict) {
+			return AssignmentReconciliation{}, ErrAssignmentFenced
+		}
 		return AssignmentReconciliation{}, err
 	}
-	event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.failed", string(payload), finishedAt)
-	if err != nil {
-		return AssignmentReconciliation{}, err
-	}
-	events = append(events, event)
+	events = append(events, terminal.Events...)
 	return AssignmentReconciliation{Cleared: !preserveExecution, Fenced: preserveExecution, Events: events}, nil
 }
 
@@ -778,10 +682,13 @@ func (r *Repository) RecoverAllActiveAssignmentsWithLimit(ctx context.Context, m
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	// Recovering is included because a restart must re-fence a run that was
+	// already uncertain: skipping it would leave the one lifecycle that exists
+	// to mean "nobody owns this" outside the sweep that rescues it.
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE agent_runs
 		SET execution_state = 'fenced'
-		WHERE status IN ('running', 'waiting_approval')
+		WHERE status IN ('running', 'waiting_approval', 'recovering')
 	`); err != nil {
 		return nil, err
 	}
@@ -815,7 +722,7 @@ func (r *Repository) RecoverableAssignments(ctx context.Context, cutoff time.Tim
 					)
 				)
 				OR (
-					r.status IN ('running', 'waiting_approval')
+					r.status IN ('running', 'waiting_approval', 'recovering')
 					AND (
 						r.execution_state = 'fenced'
 						OR r.execution_lease_expires_at IS NULL
@@ -855,7 +762,7 @@ func (r *Repository) startupRecoveryAssignments(ctx context.Context) ([]Assignme
 		SELECT r.id, COALESCE(j.id, ''), COALESCE(r.worker_id, ''), COALESCE(r.execution_attempt_id, '')
 		FROM agent_runs r
 		LEFT JOIN jobs j ON j.run_id = r.id AND j.status = 'in_progress'
-		WHERE r.execution_active = 1 OR r.status IN ('running', 'waiting_approval')
+		WHERE r.execution_active = 1 OR r.status IN ('running', 'waiting_approval', 'recovering')
 		ORDER BY ` + sqliteTimestampNanos("r.created_at") + `, r.id
 	`
 	rows, err := r.db.QueryContext(ctx, query)

@@ -66,7 +66,7 @@ func TestConnectWorkerBoundsBlockedAssignmentSendAndRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != "running" || !run.ExecutionActive || run.ExecutionState != "uncertain" {
+	if run.Status != "recovering" || !run.ExecutionActive || run.ExecutionState != "uncertain" {
 		t.Fatalf("blocked-send run = %+v, want active uncertain fence", run)
 	}
 	expired := time.Now().Add(-time.Second)

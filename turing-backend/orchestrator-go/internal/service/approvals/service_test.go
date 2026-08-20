@@ -148,13 +148,17 @@ func TestCreateApprovalForToolPersistsEventAndAudit(t *testing.T) {
 	if requested.EventID == "" {
 		t.Fatal("approval.requested event was not persisted")
 	}
-	var payload map[string]string
+	// map[string]any, not map[string]string: approval.requested is the run's
+	// waiting-approval lifecycle event, so it now also carries the nested
+	// canonical run state.
+	var payload map[string]any
 	if err := json.Unmarshal([]byte(requested.PayloadJSON), &payload); err != nil {
 		t.Fatal(err)
 	}
+	argsSummary, _ := payload["argsSummary"].(string)
 	if payload["approvalId"] != approvalID || payload["toolName"] != "files.update" ||
-		payload["argsSummary"] != "Requested change to note.txt" ||
-		strings.Contains(payload["argsSummary"], "hello") {
+		argsSummary != "Requested change to note.txt" ||
+		strings.Contains(argsSummary, "hello") {
 		t.Fatalf("approval.requested payload = %+v", payload)
 	}
 	var auditAction string
@@ -1352,11 +1356,14 @@ func TestDenyApprovalPublishesCommittedTerminalRunEventOnlyOnce(t *testing.T) {
 					if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
 						t.Fatal(err)
 					}
+					// A closed category, not the sentence the backend used to
+					// write: a client localizes "policy denied", and nothing
+					// a tool or provider said can ride along inside it.
 					want := map[string]any{
 						"toolCallId": "call_1",
 						"toolName":   "files.update",
 						"serverName": "files",
-						"error":      "User denied approval",
+						"category":   "policy_denied",
 					}
 					if !reflect.DeepEqual(payload, want) {
 						t.Fatalf("tool.call.denied payload = %#v, want %#v", payload, want)

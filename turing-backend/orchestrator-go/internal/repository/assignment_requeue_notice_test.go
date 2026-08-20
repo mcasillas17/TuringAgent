@@ -4,6 +4,8 @@ import (
 	"context"
 	"reflect"
 	"testing"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
 
 // runningAssignment leaves a run running under worker, with its assignment
@@ -56,10 +58,7 @@ func TestRecoverAssignmentRequeuePublishesNotice(t *testing.T) {
 	}
 
 	notice := onlyRunStepEvent(t, reconciliation.Events)
-	const want = "Retrying (attempt 2 of 3) after the worker became unavailable"
-	if got := runStepNote(t, notice); got != want {
-		t.Fatalf("recovery note = %q, want %q", got, want)
-	}
+	assertStepNotice(t, notice, runoutcome.NoticeRecoveryRetry, 2, 3)
 	if !notice.RunID.Valid || notice.RunID.String != enqueued.RunID {
 		t.Fatalf("notice run_id = %+v, want %q (a client correlates by run)", notice.RunID, enqueued.RunID)
 	}
@@ -150,9 +149,7 @@ func TestExhaustedRecoveryOrdersGiveUpBeforeApprovalCleanup(t *testing.T) {
 	if !reflect.DeepEqual(eventTypes, want) {
 		t.Fatalf("exhausted recovery events = %v, want %v", eventTypes, want)
 	}
-	if got := runStepNote(t, reconciliation.Events[0]); got != "Gave up after 1 attempt" {
-		t.Fatalf("give-up note = %q, want %q", got, "Gave up after 1 attempt")
-	}
+	assertStepNotice(t, reconciliation.Events[0], runoutcome.NoticeRecoveryExhausted, 1, 1)
 	// Sequence must agree with slice order — the client renders by sequence.
 	for index := 1; index < len(reconciliation.Events); index++ {
 		if reconciliation.Events[index].Sequence <= reconciliation.Events[index-1].Sequence {

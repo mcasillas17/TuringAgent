@@ -9,6 +9,7 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -38,70 +39,29 @@ type Run struct {
 	ExecutionState       string
 }
 
+// MarkRunRunning starts a run without going through job claiming. It is the
+// direct queued-to-running transition, and like every other lifecycle change
+// it commits a version and appends its projection: a start nobody can observe
+// is the same defect as a recovery nobody can observe.
 func (r *Repository) MarkRunRunning(ctx context.Context, runID string) error {
-	startedAt := now()
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'running', started_at = ? WHERE id = ? AND status = 'queued'`, startedAt, runID)
-	if err != nil {
-		return err
-	}
-	if err := expectOneRow(result, "run is not queued"); err != nil {
-		return err
-	}
-	result, err = tx.ExecContext(ctx, `UPDATE jobs SET status = 'in_progress', picked_up_at = ? WHERE run_id = ? AND status = 'pending'`, startedAt, runID)
-	if err != nil {
-		return err
-	}
-	if err := expectOneRow(result, "pending job not found for run"); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func (r *Repository) CompleteRun(ctx context.Context, runID string, assistantMessageID string, content string) error {
-	finishedAt := now()
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	result, err := tx.ExecContext(ctx, `
-		UPDATE agent_runs
-		SET status = 'completed',
-			finished_at = ?,
-			execution_active = 0,
-			execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
-			execution_state = 'exited',
-			execution_lease_expires_at = NULL,
-			execution_lease_expires_at_ns = NULL
-		WHERE id = ? AND status IN ('running','waiting_approval')
-	`, finishedAt, finishedAt, runID)
-	if err != nil {
-		return err
-	}
-	if err := expectOneRowErr(result, ErrRunNotCompletable); err != nil {
-		return err
-	}
-	if assistantMessageID != "" {
-		result, err = tx.ExecContext(ctx, `UPDATE messages SET content = ? WHERE id = ? AND run_id = ? AND role = 'assistant'`, content, assistantMessageID, runID)
+	_, err := r.runInTransition(ctx, runTransition{
+		runID:            runID,
+		expectedVersion:  unresolvedStateVersion,
+		transactionLocal: true,
+		allowedFrom:      []string{lifecycleQueued},
+		to:               lifecycleRunning,
+		reason:           runoutcome.ReasonNone,
+		extraSet:         `started_at = COALESCE(started_at, ?)`,
+		extraArgs:        []any{transitionTime},
+	}, func(ctx context.Context, tx *sql.Tx, state RunState, at string) ([]Event, error) {
+		result, err := tx.ExecContext(ctx,
+			`UPDATE jobs SET status = 'in_progress', picked_up_at = ? WHERE run_id = ? AND status = 'pending'`, at, runID)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if err := expectOneRow(result, "assistant message not found"); err != nil {
-			return err
-		}
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'completed', finished_at = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, runID); err != nil {
-		return err
-	}
-	if _, err := failPendingApprovalLifecycleTx(ctx, tx, runID, "run_completed", "Run completed before tool call finished", finishedAt); err != nil {
-		return err
-	}
-	return tx.Commit()
+		return nil, expectOneRow(result, "pending job not found for run")
+	})
+	return err
 }
 
 // RunTokenUsage is what a provider REPORTED for a run. A nil field means it
@@ -120,232 +80,6 @@ func nonNegativeNullInt64(value *int64) sql.NullInt64 {
 		return sql.NullInt64{}
 	}
 	return sql.NullInt64{Int64: *value, Valid: true}
-}
-
-// CompleteRunWithEvent terminalizes a run. usage may be nil, which is the
-// ordinary case for a provider that reports no token counts; it is recorded in
-// the same transaction as the completion so a run can never be marked finished
-// while its measured cost is written separately, or not at all.
-func (r *Repository) CompleteRunWithEvent(ctx context.Context, runID string, assistantMessageID string, content string, payloadJSON string, usage *RunTokenUsage) ([]Event, error) {
-	var inputTokens, outputTokens sql.NullInt64
-	if usage != nil {
-		inputTokens = nonNegativeNullInt64(usage.InputTokens)
-		outputTokens = nonNegativeNullInt64(usage.OutputTokens)
-	}
-	finishedAt := now()
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	var sessionID, traceID string
-	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&sessionID, &traceID); err != nil {
-		return nil, err
-	}
-	result, err := tx.ExecContext(ctx, `
-		UPDATE agent_runs
-		SET status = 'completed',
-			finished_at = ?,
-			input_tokens = ?,
-			output_tokens = ?,
-			execution_active = 0,
-			execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
-			execution_state = 'exited',
-			execution_lease_expires_at = NULL,
-			execution_lease_expires_at_ns = NULL
-		WHERE id = ? AND status IN ('running','waiting_approval')
-	`, finishedAt, inputTokens, outputTokens, finishedAt, runID)
-	if err != nil {
-		return nil, err
-	}
-	if err := expectOneRowErr(result, ErrRunNotCompletable); err != nil {
-		return nil, err
-	}
-	if assistantMessageID != "" {
-		result, err = tx.ExecContext(ctx, `UPDATE messages SET content = ? WHERE id = ? AND run_id = ? AND role = 'assistant'`, content, assistantMessageID, runID)
-		if err != nil {
-			return nil, err
-		}
-		if err := expectOneRow(result, "assistant message not found"); err != nil {
-			return nil, err
-		}
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'completed', finished_at = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, runID); err != nil {
-		return nil, err
-	}
-	events, err := failPendingApprovalLifecycleTx(ctx, tx, runID, "run_completed", "Run completed before tool call finished", finishedAt)
-	if err != nil {
-		return nil, err
-	}
-	if assistantMessageID != "" && content != "" {
-		messagePayload, err := json.Marshal(map[string]any{
-			"messageId": assistantMessageID,
-			"content":   content,
-		})
-		if err != nil {
-			return nil, err
-		}
-		messageEvent, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "message.completed", string(messagePayload), finishedAt)
-		if err != nil {
-			return nil, err
-		}
-		events = append(events, messageEvent)
-	}
-	event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.completed", payloadJSON, finishedAt)
-	if err != nil {
-		return nil, err
-	}
-	events = append(events, event)
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return events, nil
-}
-
-func (r *Repository) FailRun(ctx context.Context, runID string, code string, message string) error {
-	finishedAt := now()
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	result, err := tx.ExecContext(ctx, `
-		UPDATE agent_runs
-		SET status = 'failed',
-			error_code = ?,
-			error_message = ?,
-			finished_at = ?,
-			execution_active = 0,
-			execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
-			execution_state = 'exited',
-			execution_lease_expires_at = NULL,
-			execution_lease_expires_at_ns = NULL
-		WHERE id = ? AND status IN ('queued','running','waiting_approval')
-	`, code, message, finishedAt, finishedAt, runID)
-	if err != nil {
-		return err
-	}
-	if err := expectOneRowErr(result, ErrRunNotFailable); err != nil {
-		return err
-	}
-	if _, err := failPendingApprovalLifecycleTx(ctx, tx, runID, code, message, finishedAt); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'failed', finished_at = ?, error_code = ?, error_message = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, code, message, runID); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func (r *Repository) FailRunWithEvent(ctx context.Context, runID string, code string, message string, payloadJSON string) ([]Event, error) {
-	return r.failRunWithEvent(ctx, runID, code, message, payloadJSON, false)
-}
-
-func (r *Repository) FailRunWithEventPreservingExecution(ctx context.Context, runID string, code string, message string, payloadJSON string) ([]Event, error) {
-	return r.failRunWithEvent(ctx, runID, code, message, payloadJSON, true)
-}
-
-func (r *Repository) failRunWithEvent(ctx context.Context, runID string, code string, message string, payloadJSON string, preserveExecution bool) ([]Event, error) {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	events, err := failRunWithEventTx(ctx, tx, runID, code, message, payloadJSON, preserveExecution)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return events, nil
-}
-
-// failRunWithEventTx fails a run and its job inside an existing transaction,
-// revoking any pending approvals/tool calls and appending the terminal
-// agent.run.failed event. It is shared by the direct failure path and the
-// retry-exhaustion path so both terminalize a run identically.
-func failRunWithEventTx(ctx context.Context, tx *sql.Tx, runID string, code string, message string, payloadJSON string, preserveExecution bool) ([]Event, error) {
-	finishedAt := now()
-	var sessionID, traceID string
-	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&sessionID, &traceID); err != nil {
-		return nil, err
-	}
-	var result sql.Result
-	var err error
-	if preserveExecution {
-		result, err = tx.ExecContext(ctx, `
-			UPDATE agent_runs
-			SET status = 'failed',
-				error_code = ?,
-				error_message = ?,
-				finished_at = ?,
-				execution_exit_acknowledged_at = CASE
-					WHEN execution_active = 1 THEN execution_exit_acknowledged_at
-					ELSE COALESCE(execution_exit_acknowledged_at, ?)
-				END,
-				execution_state = CASE WHEN execution_active = 1 THEN 'uncertain' ELSE 'exited' END,
-				execution_lease_expires_at = CASE WHEN execution_active = 1 THEN execution_lease_expires_at ELSE NULL END,
-				execution_lease_expires_at_ns = CASE WHEN execution_active = 1 THEN execution_lease_expires_at_ns ELSE NULL END
-			WHERE id = ? AND status IN ('queued','running','waiting_approval')
-		`, code, message, finishedAt, finishedAt, runID)
-	} else {
-		result, err = tx.ExecContext(ctx, `
-			UPDATE agent_runs
-			SET status = 'failed',
-				error_code = ?,
-				error_message = ?,
-				finished_at = ?,
-				execution_active = 0,
-				execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
-				execution_state = 'exited',
-				execution_lease_expires_at = NULL,
-				execution_lease_expires_at_ns = NULL
-			WHERE id = ? AND status IN ('queued','running','waiting_approval')
-		`, code, message, finishedAt, finishedAt, runID)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if err := expectOneRowErr(result, ErrRunNotFailable); err != nil {
-		return nil, err
-	}
-	events, err := failPendingApprovalLifecycleTx(ctx, tx, runID, code, message, finishedAt)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'failed', finished_at = ?, error_code = ?, error_message = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, code, message, runID); err != nil {
-		return nil, err
-	}
-	event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.failed", payloadJSON, finishedAt)
-	if err != nil {
-		return nil, err
-	}
-	events = append(events, event)
-	return events, nil
-}
-
-func (r *Repository) CancelRun(ctx context.Context, runID string, reason string) error {
-	finishedAt := now()
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'cancelled', cancellation_reason = ?, finished_at = ? WHERE id = ? AND status IN ('queued','running','waiting_approval')`, reason, finishedAt, runID)
-	if err != nil {
-		return err
-	}
-	if err := expectOneRowErr(result, ErrRunNotCancellable); err != nil {
-		return err
-	}
-	if _, err := failPendingApprovalLifecycleTx(ctx, tx, runID, "run_cancelled", reason, finishedAt); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'cancelled', finished_at = ?, error_code = 'cancelled', error_message = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, reason, runID); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 func (r *Repository) AcknowledgeExecutionExit(ctx context.Context, runID string) error {
@@ -381,42 +115,6 @@ func (r *Repository) AcknowledgeExecutionExit(ctx context.Context, runID string)
 		}
 	}
 	return tx.Commit()
-}
-
-func (r *Repository) CancelRunWithEvent(ctx context.Context, runID string, reason string, payloadJSON string) ([]Event, error) {
-	finishedAt := now()
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	var sessionID, traceID string
-	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&sessionID, &traceID); err != nil {
-		return nil, err
-	}
-	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'cancelled', cancellation_reason = ?, finished_at = ? WHERE id = ? AND status IN ('queued','running','waiting_approval')`, reason, finishedAt, runID)
-	if err != nil {
-		return nil, err
-	}
-	if err := expectOneRowErr(result, ErrRunNotCancellable); err != nil {
-		return nil, err
-	}
-	events, err := failPendingApprovalLifecycleTx(ctx, tx, runID, "run_cancelled", reason, finishedAt)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'cancelled', finished_at = ?, error_code = 'cancelled', error_message = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL WHERE run_id = ? AND status IN ('pending','in_progress')`, finishedAt, reason, runID); err != nil {
-		return nil, err
-	}
-	event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.cancelled", payloadJSON, finishedAt)
-	if err != nil {
-		return nil, err
-	}
-	events = append(events, event)
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return events, nil
 }
 
 func (r *Repository) GetRun(ctx context.Context, runID string) (Run, error) {
@@ -461,7 +159,14 @@ func (r *Repository) GetRun(ctx context.Context, runID string) (Run, error) {
 	return run, err
 }
 
-func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID string, code string, message string, finishedAt string) ([]Event, error) {
+// failPendingApprovalLifecycleTx closes everything a terminalizing run leaves
+// open: its pending approvals and its unfinished tool calls.
+//
+// category is an allowlisted outcome class and code an allowlisted server code.
+// Neither is a sentence, and no diagnostic message is written: the columns this
+// used to fill with provider and tool prose are the ones the migration had to
+// scrub, so refilling them here would undo that in one release.
+func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID string, category runoutcome.Reason, code string, finishedAt string) ([]Event, error) {
 	var sessionID, traceID string
 	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&sessionID, &traceID); err != nil {
 		return nil, err
@@ -533,11 +238,11 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 		UPDATE tool_calls
 		SET status = 'failed',
 			error_code = ?,
-			error_message = ?,
+			error_message = NULL,
 			completed_at = COALESCE(completed_at, ?)
 		WHERE run_id = ?
 			AND status IN ('requested', 'allowed', 'approval_required')
-	`, code, message, finishedAt, runID); err != nil {
+	`, code, finishedAt, runID); err != nil {
 		return nil, err
 	}
 	events := make([]Event, 0, len(approvals)+len(toolCalls))
@@ -545,7 +250,7 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 		payload := map[string]any{
 			"approvalId": approval.id,
 			"toolName":   approval.toolName,
-			"reason":     code,
+			"category":   string(category),
 		}
 		if approval.toolCallID != "" {
 			payload["toolCallId"] = approval.toolCallID
@@ -553,18 +258,18 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 		if approval.modelToolCallID != "" {
 			payload["modelToolCallId"] = approval.modelToolCallID
 		}
-		payloadJSON, err := json.Marshal(payload)
+		payloadJSON, err := marshalEventPayload(payload)
 		if err != nil {
 			return nil, err
 		}
-		event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "approval.expired", string(payloadJSON), finishedAt)
+		event, err := appendRunEventTx(ctx, tx, sessionID, runID, traceID, "approval.expired", payloadJSON, finishedAt)
 		if err != nil {
 			return nil, err
 		}
 		events = append(events, event)
 	}
 	for _, toolCall := range toolCalls {
-		payloadJSON, err := marshalToolLifecyclePayload(toolCall.id, toolCall.serverName, toolCall.toolName, message)
+		payloadJSON, err := marshalToolLifecyclePayload(toolCall.id, toolCall.serverName, toolCall.toolName, category)
 		if err != nil {
 			return nil, err
 		}
@@ -575,6 +280,29 @@ func failPendingApprovalLifecycleTx(ctx context.Context, tx *sql.Tx, runID strin
 		events = append(events, event)
 	}
 	return events, nil
+}
+
+// appendStepNoticeTx appends a failure-like agent.run.step projection.
+//
+// It takes a StepNotice rather than a sentence because these three notices —
+// retrying, retrying after losing a worker, and giving up — used to be English
+// prose built by string formatting and stored in the durable log. A client
+// cannot localize that, an operator cannot filter on it, and the format string
+// was one careless edit away from carrying a provider's words. The category and
+// the two numbers say everything the sentence did.
+func appendStepNoticeTx(ctx context.Context, tx *sql.Tx, sessionID string, runID string, traceID string, notice runoutcome.StepNotice, createdAt string) (Event, error) {
+	if !notice.Valid() {
+		return Event{}, runoutcome.ErrUnsupportedNotice
+	}
+	payloadJSON, err := marshalEventPayload(map[string]any{
+		"category":    string(notice.Category()),
+		"attempt":     notice.Attempt(),
+		"maxAttempts": notice.MaxAttempts(),
+	})
+	if err != nil {
+		return Event{}, err
+	}
+	return appendRunEventTx(ctx, tx, sessionID, runID, traceID, "agent.run.step", payloadJSON, createdAt)
 }
 
 // appendRunNoticeTx appends a user-facing agent.run.step notice. The client
@@ -662,7 +390,11 @@ func (r *Repository) AppendRuntimeEvent(ctx context.Context, event *turingv1.Tur
 		return Event{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = status WHERE id = ? AND status IN ('running','waiting_approval')`, event.RunId)
+	// Recovering is accepted: a worker whose ownership became uncertain may
+	// still be streaming, and its events are exactly the evidence recovery
+	// reasons about. Discarding them would throw away the record of what the
+	// run did during the interval nobody could vouch for.
+	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = status WHERE id = ? AND status IN ('running','waiting_approval','recovering')`, event.RunId)
 	if err != nil {
 		return Event{}, err
 	}

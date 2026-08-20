@@ -206,3 +206,37 @@ func TestLateTerminalUpdatesForReleasedRunKeepWorkerStreamUsable(t *testing.T) {
 		})
 	}
 }
+
+// TestMatchingTerminalPayloadIgnoresTheDerivedRunState pins the one thing the
+// late-duplicate comparison must not compare.
+//
+// The durable payload carries the canonical run state the repository merges
+// into every lifecycle projection. That part is derived from the row, not from
+// the worker's report, so a byte comparison would call every late duplicate a
+// conflict the moment a version changed. The rest of the payload still has to
+// match exactly.
+func TestMatchingTerminalPayloadIgnoresTheDerivedRunState(t *testing.T) {
+	reported := map[string]any{
+		"runId": "run_1", "code": "model_stream_failed", "message": "the stream died", "retryable": false,
+	}
+	durable := `{"runId":"run_1","code":"model_stream_failed","message":"the stream died","retryable":false,` +
+		`"runState":{"runId":"run_1","lifecycle":"failed","outcomeReason":"provider_failure","stateVersion":4}}`
+	if !matchesReportedTerminalPayload(durable, reported) {
+		t.Fatal("a durable payload differing only by its derived run state was treated as a conflict")
+	}
+
+	for name, conflicting := range map[string]string{
+		"a different code": `{"runId":"run_1","code":"model_timeout","message":"the stream died","retryable":false,` +
+			`"runState":{"stateVersion":4}}`,
+		"a different message": `{"runId":"run_1","code":"model_stream_failed","message":"something else","retryable":false,` +
+			`"runState":{"stateVersion":4}}`,
+		"a different run": `{"runId":"run_2","code":"model_stream_failed","message":"the stream died","retryable":false,` +
+			`"runState":{"stateVersion":4}}`,
+		"a missing key": `{"runId":"run_1","code":"model_stream_failed","retryable":false,"runState":{"stateVersion":4}}`,
+		"not an object": `"just a string"`,
+	} {
+		if matchesReportedTerminalPayload(conflicting, reported) {
+			t.Fatalf("a payload with %s was treated as a match", name)
+		}
+	}
+}

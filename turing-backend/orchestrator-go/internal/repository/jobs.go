@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
 
 // emptyAssistantContentSHA256 is the content identity of the empty assistant
@@ -263,6 +264,11 @@ func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, runID string
 	if maxAttempts <= 0 {
 		maxAttempts = defaultAssignmentMaxAttempts
 	}
+	// The reported code decides only whether this is a nonterminal dispatch
+	// condition; nothing here reads the message. worker_busy and
+	// worker_unavailable normalize to outcome none, which is what keeps a
+	// requeue from terminalizing a run that is going to run.
+	reported := runoutcome.NormalizeFailure(runoutcome.OriginDispatch, code, runoutcome.RetryClassSameRunTransient)
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return RetryDecision{}, err
@@ -270,9 +276,6 @@ func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, runID string
 	defer func() { _ = tx.Rollback() }()
 
 	var runStatus, sessionID, traceID string
-	// session_id and trace_id are selected here rather than only in
-	// failRunWithEventTx because both branches below now append a notice event,
-	// and appendRunEventTx needs them.
 	if err := tx.QueryRowContext(ctx, `SELECT status, session_id, trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&runStatus, &sessionID, &traceID); err != nil {
 		return RetryDecision{}, err
 	}
@@ -281,74 +284,107 @@ func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, runID string
 	if jobErr != nil && !errors.Is(jobErr, sql.ErrNoRows) {
 		return RetryDecision{}, jobErr
 	}
-	requeueable := runStatus == "running" && jobErr == nil
+	// A run already fenced into recovering is still requeueable: recovering is
+	// what a lost worker looks like, and it is the state a retry starts from.
+	requeueable := (runStatus == lifecycleRunning || runStatus == lifecycleRecovering) && jobErr == nil
 
 	if requeueable && attempt < maxAttempts {
-		if err := requeueRunForRetryTx(ctx, tx, runID); err != nil {
+		requeueEvents, err := requeueRunThroughRecoveryTx(ctx, tx, runID, "", runTransitionIdentity{}, true)
+		if err != nil {
 			return RetryDecision{}, err
 		}
 		// attempt is the one that just failed, so the attempt the user is about to
-		// wait through is attempt+1 — matching the counter requeueRunForRetryTx
-		// has just incremented.
-		notice, err := appendRunNoticeTx(ctx, tx, sessionID, runID, traceID,
-			fmt.Sprintf("Retrying (attempt %d of %d)", attempt+1, maxAttempts),
-			map[string]any{"attempt": attempt + 1, "maxAttempts": maxAttempts, "reason": code}, now())
+		// wait through is attempt+1 — matching the counter the requeue has just
+		// incremented.
+		notice, err := newRetryNotice(runoutcome.NoticeDispatchRetry, attempt+1, maxAttempts)
+		if err != nil {
+			return RetryDecision{}, err
+		}
+		noticeEvent, err := appendStepNoticeTx(ctx, tx, sessionID, runID, traceID, notice, now())
 		if err != nil {
 			return RetryDecision{}, err
 		}
 		if err := tx.Commit(); err != nil {
 			return RetryDecision{}, err
 		}
-		return RetryDecision{Requeued: true, Events: []Event{notice}}, nil
+		return RetryDecision{Requeued: true, Events: append(requeueEvents, noticeEvent)}, nil
 	}
 
-	failCode, failMessage := code, message
+	failure := reported
 	var events []Event
 	if requeueable && attempt >= maxAttempts {
-		failCode = RetriesExhaustedCode
+		// Giving up is its own outcome, reported under its own normalized code,
+		// rather than the transient condition that triggered the last attempt.
+		failure = runoutcome.NormalizeFailure(runoutcome.OriginDispatch, RetriesExhaustedCode, runoutcome.RetryClassNever)
 		// The client renders a terminal failure card for agent.run.failed, but
 		// that card explains the failure, not that retries were attempted and
 		// exhausted; this notice carries the attempt count. Ordered before the
 		// terminal events so the explanation precedes the failure it explains.
-		notice, err := appendRunNoticeTx(ctx, tx, sessionID, runID, traceID,
-			giveUpNote(attempt),
-			map[string]any{"attempts": attempt, "maxAttempts": maxAttempts, "reason": code}, now())
+		notice, err := newRetryNotice(runoutcome.NoticeRecoveryExhausted, attempt, maxAttempts)
 		if err != nil {
 			return RetryDecision{}, err
 		}
-		events = append(events, notice)
+		noticeEvent, err := appendStepNoticeTx(ctx, tx, sessionID, runID, traceID, notice, now())
+		if err != nil {
+			return RetryDecision{}, err
+		}
+		events = append(events, noticeEvent)
 	}
-	payloadJSON, err := json.Marshal(map[string]any{
-		"runId": runID, "code": failCode, "message": failMessage, "retryable": false,
-	})
+	if failure.Reason() == runoutcome.ReasonNone {
+		// A nonterminal dispatch condition on a run that cannot be requeued has
+		// no honest terminal reason of its own; the run failed for want of a
+		// worker, which is a dispatch failure, not a worker's verdict.
+		failure = runoutcome.NormalizeFailure(runoutcome.OriginRecovery, "worker_unavailable", runoutcome.RetryClassNever)
+	}
+	terminal, err := failRunTx(ctx, tx, FailRunInput{RunID: runID, Failure: failure, resolveVersionInTx: true})
 	if err != nil {
 		return RetryDecision{}, err
 	}
-	terminal, err := failRunWithEventTx(ctx, tx, runID, failCode, failMessage, string(payloadJSON), false)
-	if err != nil {
-		return RetryDecision{}, err
-	}
-	events = append(events, terminal...)
+	events = append(events, terminal.Events...)
 	if err := tx.Commit(); err != nil {
 		return RetryDecision{}, err
 	}
 	return RetryDecision{Events: events}, nil
 }
 
-// giveUpNote words the "we stopped retrying" notice. Shared by both terminal
-// paths — assignment rejection and lease/worker recovery — so a user sees the
-// same sentence whichever way the run ran out of attempts.
-func giveUpNote(attempts int) string {
-	if attempts == 1 {
-		return "Gave up after 1 attempt"
+// newRetryNotice builds a bounded, allowlisted retry projection or fails
+// closed. A notice that cannot be expressed in the closed vocabulary is not
+// downgraded to prose; it is refused.
+func newRetryNotice(category runoutcome.NoticeCategory, attempt int, maxAttempts int) (runoutcome.StepNotice, error) {
+	if attempt < 1 || maxAttempts < 1 || attempt > maxAttempts || maxAttempts > runoutcome.MaxNoticeAttempts {
+		return runoutcome.StepNotice{}, runoutcome.ErrUnsupportedNotice
 	}
-	return fmt.Sprintf("Gave up after %d attempts", attempts)
+	return runoutcome.NewStepNotice(category, int32(attempt), int32(maxAttempts))
 }
 
-// requeueRunForRetryTx returns a running run and its in-progress job to the
-// queue for another attempt, incrementing the job's attempt counter and
-// clearing all execution/lease state so a fresh worker can claim it.
-func requeueRunForRetryTx(ctx context.Context, tx *sql.Tx, runID string) error {
+// requeueRunThroughRecoveryTx returns an active run and its in-progress job to
+// the queue.
+//
+// The run passes through recovering on the way, and that is the point: the
+// interval where nobody owned the run is a real phase of its life, and
+// rewriting running straight back to queued erased it. Both transitions commit
+// here, in this one transaction, each with its own version and its own
+// projection — so a client reconciling on version never sees a number that
+// never existed, and never sees the run claim forward progress it was not
+// making.
+//
+// jobID and identity.assignmentAttemptID are optional guards. Retry after a
+// worker rejection knows neither and requeues whatever in-progress job the run
+// has; assignment reconciliation knows both and must not requeue a job a newer
+// attempt already owns.
+func requeueRunThroughRecoveryTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	runID string,
+	jobID string,
+	identity runTransitionIdentity,
+	incrementAttempt bool,
+) ([]Event, error) {
+	attemptIncrement := 0
+	if incrementAttempt {
+		attemptIncrement = 1
+	}
+	attemptID := identity.assignmentAttemptID
 	result, err := tx.ExecContext(ctx, `
 		UPDATE jobs
 		SET status = 'pending',
@@ -357,32 +393,50 @@ func requeueRunForRetryTx(ctx context.Context, tx *sql.Tx, runID string) error {
 			lease_expires_at_ns = NULL,
 			picked_up_at = NULL,
 			assignment_attempt_id = NULL,
-			attempt = attempt + 1
-		WHERE run_id = ? AND status = 'in_progress'
-	`, runID)
+			attempt = attempt + ?
+		WHERE run_id = ?
+			AND status = 'in_progress'
+			AND (? = '' OR id = ?)
+			AND (? = '' OR COALESCE(assignment_attempt_id, '') = ?)
+	`, attemptIncrement, runID, jobID, jobID, attemptID, attemptID)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if err := expectOneRow(result, "in-progress job not found for retry requeue"); err != nil {
-		return err
+	// A caller that supplied a job or attempt guard is reconciling a specific
+	// assignment, so a row that no longer matches means a newer attempt owns
+	// the run — that is a fence, not a missing job.
+	noMatch := errors.New("in-progress job not found for retry requeue")
+	if jobID != "" || attemptID != "" {
+		noMatch = ErrAssignmentFenced
 	}
-	result, err = tx.ExecContext(ctx, `
-		UPDATE agent_runs
-		SET status = 'queued',
-			started_at = NULL,
-			worker_id = NULL,
-			execution_active = 0,
-			execution_exit_acknowledged_at = NULL,
-			execution_attempt_id = NULL,
-			execution_state = 'none',
-			execution_lease_expires_at = NULL,
-			execution_lease_expires_at_ns = NULL
-		WHERE id = ? AND status = 'running'
-	`, runID)
+	if err := expectOneRowErr(result, noMatch); err != nil {
+		return nil, err
+	}
+	return requeueRunLifecycleTx(ctx, tx, runID, identity, "uncertain")
+}
+
+// requeueRunLifecycleTx commits the lifecycle half of a requeue: fence first if
+// the run still claims to be owned, then requeue.
+func requeueRunLifecycleTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	runID string,
+	identity runTransitionIdentity,
+	fenceExecutionState string,
+) ([]Event, error) {
+	var events []Event
+	fenced, err := applyRunTransitionTx(ctx, tx,
+		fenceOwnershipTransition(runID, unresolvedStateVersion, identity, fenceExecutionState), nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return expectOneRow(result, "running run not found for retry requeue")
+	events = append(events, fenced.Events...)
+	requeued, err := applyRunTransitionTx(ctx, tx,
+		requeueRecoveringTransition(runID, unresolvedStateVersion, identity), nil)
+	if err != nil {
+		return nil, err
+	}
+	return append(events, requeued.Events...), nil
 }
 
 func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMessageInput) (EnqueueUserMessageResult, error) {
@@ -556,6 +610,19 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status, model_provider, model_name, external_agent_name, external_agent_host, created_at, state_version, state_updated_at, outcome_reason, assistant_content_sha256) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, 1, ?, 'none', ?)`, runID, input.SessionID, userMessageID, assistantMessageID, input.AgentID, traceID, modelProvider, model, resolvedRoute.externalAgentName, resolvedRoute.externalAgentHost, createdAt, createdAt, emptyAssistantContentSHA256); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
+	// Enqueue is the only writer that creates the circular run/message link, so
+	// it is the only place that can prove both directions agree. The rows are
+	// read back and validated here — after both exist and before the job and
+	// the queued event depend on them — rather than trusted because this
+	// function wrote them: a half-written link would otherwise become the
+	// history every later reader joins on.
+	queuedRow, err := readRunRow(ctx, tx, runID)
+	if err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	if err := validateRunCorrelationLink(queuedRow.link()); err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
 	// Name the conversation after the first thing said in it, and mark the
 	// session as touched so the client's most-recent-first list actually
 	// reflects activity rather than creation order.
@@ -627,16 +694,16 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id, run_id, agent_id, status, payload_json, created_at, created_at_ns) VALUES (?, ?, ?, 'pending', ?, ?, ?)`, jobID, runID, input.AgentID, string(jobPayload), createdAt, created.UnixNano()); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
-	queuedPayload, err := json.Marshal(map[string]any{
+	queuedPayload, err := marshalRunStatePayload(map[string]any{
 		"runId":   runID,
 		"jobId":   jobID,
 		"status":  "queued",
 		"agentId": input.AgentID,
-	})
+	}, queuedRow.state())
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
-	queuedEvent, err := appendRunEventTx(ctx, tx, input.SessionID, runID, traceID, "agent.run.queued", string(queuedPayload), createdAt)
+	queuedEvent, err := appendRunEventTx(ctx, tx, input.SessionID, runID, traceID, "agent.run.queued", queuedPayload, createdAt)
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
@@ -853,42 +920,50 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 	if err := expectOneRow(result, "pending job not found for claim"); err != nil {
 		return Job{}, err
 	}
-	result, err = tx.ExecContext(ctx, `
-		UPDATE agent_runs
-		SET status = 'running',
-			started_at = COALESCE(started_at, ?),
+	// agent.run.started IS the lifecycle event for queued -> running, so the
+	// claim commits the version and the projection together instead of writing
+	// the status here and announcing it separately.
+	started, err := applyRunTransitionTx(ctx, tx, runTransition{
+		runID:            job.RunID,
+		expectedVersion:  unresolvedStateVersion,
+		transactionLocal: true,
+		allowedFrom:      []string{lifecycleQueued},
+		to:               lifecycleRunning,
+		reason:           runoutcome.ReasonNone,
+		extraSet: `started_at = COALESCE(started_at, ?),
 			worker_id = ?,
 			execution_active = 1,
 			execution_exit_acknowledged_at = NULL,
 			execution_attempt_id = ?,
 			execution_state = 'pending_send',
 			execution_lease_expires_at = ?,
-			execution_lease_expires_at_ns = ?
-		WHERE id = ? AND status = 'queued'
-	`, pickedUpAt, leaseOwner, assignmentAttemptID, leaseExpiresAt, leaseExpiresAtNanos, job.RunID)
+			execution_lease_expires_at_ns = ?`,
+		extraArgs: []any{pickedUpAt, leaseOwner, assignmentAttemptID, leaseExpiresAt, leaseExpiresAtNanos},
+		eventType: "agent.run.started",
+		eventPayload: map[string]any{
+			"runId":               job.RunID,
+			"jobId":               job.JobID,
+			"status":              "running",
+			"agentId":             agentID,
+			"attempt":             job.Attempt,
+			"assignmentAttemptId": assignmentAttemptID,
+		},
+	}, nil)
 	if err != nil {
+		if errors.Is(err, ErrRunTransitionConflict) {
+			return Job{}, errors.New("run is not queued")
+		}
 		return Job{}, err
 	}
-	if err := expectOneRow(result, "run is not queued"); err != nil {
-		return Job{}, err
-	}
-	startedPayload, err := json.Marshal(map[string]any{
-		"runId":               job.RunID,
-		"jobId":               job.JobID,
-		"status":              "running",
-		"agentId":             agentID,
-		"attempt":             job.Attempt,
-		"assignmentAttemptId": assignmentAttemptID,
-	})
-	if err != nil {
-		return Job{}, err
-	}
-	startedEvent, err := appendRunEventTx(ctx, tx, job.SessionID, job.RunID, job.TraceID, "agent.run.started", string(startedPayload), pickedUpAt)
-	if err != nil {
-		return Job{}, err
+	// A duplicate here would mean the run was already running while its job was
+	// still pending. The claim query and the job update rule that out today, so
+	// this is a guard rather than a handled case — but indexing an empty slice
+	// would turn a future inconsistency into a panic instead of a conflict.
+	if started.Duplicate || len(started.Events) != 1 {
+		return Job{}, errors.New("run is not queued")
 	}
 	job.AssignmentAttemptID = assignmentAttemptID
-	job.StartedEvent = startedEvent
+	job.StartedEvent = started.Events[0]
 	if err := tx.Commit(); err != nil {
 		return Job{}, err
 	}
@@ -1085,23 +1160,14 @@ func (r *Repository) requeueAssignment(
 	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
 		return err
 	}
-	result, err = tx.ExecContext(ctx, `
-		UPDATE agent_runs
-		SET status = 'queued',
-			started_at = NULL,
-			worker_id = NULL,
-			execution_active = 0,
-			execution_exit_acknowledged_at = NULL,
-			execution_attempt_id = NULL,
-			execution_state = 'none',
-			execution_lease_expires_at = NULL,
-			execution_lease_expires_at_ns = NULL
-		WHERE id = ? AND status = 'running'
-	`, assignment.RunID)
-	if err != nil {
-		return err
-	}
-	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
+	// An assignment that was aborted before or during send leaves nobody
+	// owning the run, so it goes back to the queue the same way every other
+	// lost assignment does: through recovering, with both versions committed
+	// here.
+	if _, err := requeueRunLifecycleTx(ctx, tx, assignment.RunID, assignmentIdentity(assignment), "uncertain"); err != nil {
+		if errors.Is(err, ErrRunTransitionConflict) {
+			return ErrAssignmentFenced
+		}
 		return err
 	}
 	return tx.Commit()

@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
 
 func TestRecoverStaleUncertainAssignmentFencesAndRequeuesAtInjectedCutoff(t *testing.T) {
@@ -40,7 +42,10 @@ func TestRecoverStaleUncertainAssignmentFencesAndRequeuesAtInjectedCutoff(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != "running" || !run.ExecutionActive {
+	// Recovering, not running: the worker's ownership is uncertain, so the run
+	// says so rather than claiming forward progress. The attempt is still held,
+	// which is what "not released before the cutoff" means.
+	if run.Status != "recovering" || !run.ExecutionActive {
 		t.Fatalf("ambiguous attempt was released before recovery cutoff: %+v", run)
 	}
 
@@ -112,8 +117,26 @@ func TestPendingSendRecoveryDoesNotConsumeExecutionAttempt(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reconciliation.Requeued || reconciliation.Cleared || len(reconciliation.Events) != 0 {
-				t.Fatalf("pending-send reconciliation = %+v, want silent requeue", reconciliation)
+			// The requeue is no longer silent, and that is the point: it
+			// publishes the two real transitions it made — the run stopped
+			// being owned, then it went back to the queue — and nothing else.
+			// What it must still NOT publish is a retry notice, because no
+			// attempt was consumed.
+			if !reconciliation.Requeued || reconciliation.Cleared {
+				t.Fatalf("pending-send reconciliation = %+v, want a requeue", reconciliation)
+			}
+			var lifecycles []string
+			for _, event := range reconciliation.Events {
+				if event.Type == "agent.run.step" {
+					t.Fatalf("pending-send requeue announced a retry: %s", event.PayloadJSON)
+				}
+				if event.Type != runStateChangedEventType {
+					t.Fatalf("pending-send requeue emitted %s, want only state projections", event.Type)
+				}
+				lifecycles = append(lifecycles, decodeRunStateSnapshot(t, event).Lifecycle)
+			}
+			if want := []string{lifecycleRecovering, lifecycleQueued}; !reflect.DeepEqual(lifecycles, want) {
+				t.Fatalf("pending-send requeue projected %v, want %v", lifecycles, want)
 			}
 			var status string
 			var attempt int
@@ -251,9 +274,7 @@ func TestRecoverAssignmentAtCutoffFailsAtConfiguredMaximumAttempt(t *testing.T) 
 	if want := []string{"agent.run.step", "agent.run.failed"}; !reflect.DeepEqual(eventTypes, want) {
 		t.Fatalf("exhausted recovery events = %v, want %v", eventTypes, want)
 	}
-	if got := runStepNote(t, reconciliation.Events[0]); got != "Gave up after 1 attempt" {
-		t.Fatalf("exhausted recovery note = %q, want %q", got, "Gave up after 1 attempt")
-	}
+	assertStepNotice(t, reconciliation.Events[0], runoutcome.NoticeRecoveryExhausted, 1, 1)
 	run, err := repo.GetRun(ctx, enqueued.RunID)
 	if err != nil {
 		t.Fatal(err)
@@ -334,9 +355,11 @@ func TestReconcileWaitingApprovalReturnsExactLifecycleEventsInOrder(t *testing.T
 	if err := json.Unmarshal([]byte(reconciliation.Events[1].PayloadJSON), &toolPayload); err != nil {
 		t.Fatal(err)
 	}
+	// A category, not a sentence: the payload is public, and the sentence it
+	// used to carry was written next to worker and provider text.
 	wantToolPayload := map[string]any{
 		"toolCallId": "call_recovery", "toolName": "files.update", "serverName": "files",
-		"error": "Worker disconnected while waiting for approval",
+		"category": "approval_delivery_failed",
 	}
 	if !reflect.DeepEqual(toolPayload, wantToolPayload) {
 		t.Fatalf("tool payload = %#v, want %#v", toolPayload, wantToolPayload)

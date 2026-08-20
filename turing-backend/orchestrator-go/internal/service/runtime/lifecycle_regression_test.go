@@ -44,8 +44,11 @@ func TestAmbiguousAssignmentSendKeepsAttemptFenced(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != "running" || !run.ExecutionActive {
-		t.Fatalf("ambiguous assignment run = %+v, want active running fence", run)
+	// Recovering, not running: the send was ambiguous, so nobody can say the
+	// worker is making progress. Execution stays contained, which is what keeps
+	// a fresh worker from claiming the attempt below.
+	if run.Status != "recovering" || !run.ExecutionActive {
+		t.Fatalf("ambiguous assignment run = %+v, want active recovering fence", run)
 	}
 	claimed, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-fresh")
 	if err != nil {
@@ -102,7 +105,7 @@ func TestDisconnectFencesDeliveredAssignmentUntilRecovery(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		run, getErr := h.repo.GetRun(context.Background(), enqueued.RunID)
-		if getErr == nil && run.Status == "running" && run.ExecutionActive && run.ExecutionState == "uncertain" {
+		if getErr == nil && run.Status == "recovering" && run.ExecutionActive && run.ExecutionState == "uncertain" {
 			break
 		}
 		time.Sleep(time.Millisecond)
@@ -111,7 +114,7 @@ func TestDisconnectFencesDeliveredAssignmentUntilRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != "running" || !run.ExecutionActive || run.ExecutionState != "uncertain" {
+	if run.Status != "recovering" || !run.ExecutionActive || run.ExecutionState != "uncertain" {
 		t.Fatalf("disconnected delivered run = %+v, want active uncertain fence", run)
 	}
 	select {

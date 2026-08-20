@@ -8,6 +8,7 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 )
 
@@ -213,15 +214,8 @@ func TestWorkerBusyRequeuePublishesRetryNotice(t *testing.T) {
 	}
 
 	notice := recvBusEvent(t, stream, func(event events.Event) bool {
-		return runNoticeHasText(event, "Retrying (attempt 2 of 3)")
+		return runNoticeIsRetry(event, runoutcome.NoticeDispatchRetry, 2, 3)
 	})
-	var payload struct {
-		Note string `json:"note"`
-	}
-	_ = json.Unmarshal([]byte(notice.PayloadJSON), &payload)
-	if payload.Note != "Retrying (attempt 2 of 3)" {
-		t.Fatalf("published notice note = %q, want %q", payload.Note, "Retrying (attempt 2 of 3)")
-	}
 	if notice.RunID != assigned.RunId {
 		t.Fatalf("notice run_id = %q, want %q (a client correlates by run)", notice.RunID, assigned.RunId)
 	}
@@ -276,17 +270,9 @@ func TestOrphanRecoveryPublishesRetryNotice(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const want = "Retrying (attempt 2 of 3) after the worker became unavailable"
 	notice := recvBusEvent(t, stream, func(event events.Event) bool {
-		return runNoticeHasText(event, want)
+		return runNoticeIsRetry(event, runoutcome.NoticeRecoveryRetry, 2, 3)
 	})
-	var payload struct {
-		Note string `json:"note"`
-	}
-	_ = json.Unmarshal([]byte(notice.PayloadJSON), &payload)
-	if payload.Note != want {
-		t.Fatalf("published recovery note = %q, want %q", payload.Note, want)
-	}
 	if notice.RunID != enqueued.RunID {
 		t.Fatalf("notice run_id = %q, want %q", notice.RunID, enqueued.RunID)
 	}
@@ -323,24 +309,28 @@ func TestRetryExhaustionPublishesGiveUpNotice(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	notice := recvBusEvent(t, stream, func(event events.Event) bool {
-		return runNoticeHasText(event, "Gave up after 1 attempt")
-	})
-	var payload struct {
-		Note string `json:"note"`
-	}
-	_ = json.Unmarshal([]byte(notice.PayloadJSON), &payload)
-	if payload.Note != "Gave up after 1 attempt" {
-		t.Fatalf("published give-up note = %q, want %q", payload.Note, "Gave up after 1 attempt")
+	if notice := recvBusEvent(t, stream, func(event events.Event) bool {
+		return runNoticeIsRetry(event, runoutcome.NoticeRecoveryExhausted, 1, 1)
+	}); notice.RunID != assigned.RunId {
+		t.Fatalf("give-up notice run_id = %q, want %q", notice.RunID, assigned.RunId)
 	}
 }
 
-func runNoticeHasText(event events.Event, want string) bool {
+// runNoticeIsRetry matches a failure-like run-step notice by its allowlisted
+// category and its two bounded numbers. The sentence these notices used to
+// carry was assembled by string formatting and stored in the durable log; a
+// client cannot localize that, so the category is what travels now.
+func runNoticeIsRetry(event events.Event, category runoutcome.NoticeCategory, attempt int, maxAttempts int) bool {
 	if event.Type != "agent.run.step" {
 		return false
 	}
 	var payload struct {
-		Note string `json:"note"`
+		Category    string `json:"category"`
+		Attempt     int    `json:"attempt"`
+		MaxAttempts int    `json:"maxAttempts"`
 	}
-	return json.Unmarshal([]byte(event.PayloadJSON), &payload) == nil && payload.Note == want
+	if json.Unmarshal([]byte(event.PayloadJSON), &payload) != nil {
+		return false
+	}
+	return payload.Category == string(category) && payload.Attempt == attempt && payload.MaxAttempts == maxAttempts
 }

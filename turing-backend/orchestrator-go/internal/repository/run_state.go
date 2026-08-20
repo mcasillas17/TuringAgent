@@ -1,0 +1,705 @@
+package repository
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"math"
+	"slices"
+	"time"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/persisttime"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runcorrelation"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
+)
+
+// The durable public lifecycle vocabulary. They are named constants because
+// they appear in guarded SQL predicates, in the allowed-transition tables
+// below, and in event projections; a typo in any one of those places would
+// silently widen or narrow a guard.
+const (
+	lifecycleQueued          = "queued"
+	lifecycleRunning         = "running"
+	lifecycleWaitingApproval = "waiting_approval"
+	lifecycleRecovering      = "recovering"
+	lifecycleCompleted       = "completed"
+	lifecycleFailed          = "failed"
+	lifecycleCancelled       = "cancelled"
+)
+
+// runStateChangedEventType is the projection a transition uses when it has no
+// lifecycle event of its own. Entering recovery is the case that matters: it
+// used to be invisible, so a reopened session showed a run as running while
+// nobody owned it.
+const runStateChangedEventType = "agent.run.state_changed"
+
+// unresolvedStateVersion marks a transaction-local transition whose caller
+// carries no expected version. It is never a stored or public value — zero is
+// protobuf absence — and it is only reachable from unexported paths inside this
+// package, which resolve the real expectation from the row they are about to
+// guard, inside the same transaction as the guarded update.
+const unresolvedStateVersion int64 = 0
+
+var (
+	// ErrRunStateVersionExhausted reports that a run has no representable next
+	// version. The message is value-free on purpose: it is returned to callers
+	// and logged, and a version number is a row value.
+	ErrRunStateVersionExhausted = errors.New("run state version exhausted")
+	// ErrRunStateVersionInvalid rejects a version outside the stored range.
+	// Zero is the protobuf absence value and can never be a real expectation.
+	ErrRunStateVersionInvalid = errors.New("invalid run state version")
+	// ErrRunTransitionConflict reports that a command lost to another writer:
+	// the row is not where the command expected it, or an otherwise-matching
+	// repeat carries a different identity. It never says which, because the
+	// difference is row content.
+	ErrRunTransitionConflict = errors.New("run transition conflict")
+	// ErrRunTransitionUnsupported rejects a transition this state machine does
+	// not define — an unknown target lifecycle, or an outcome reason the
+	// normative matrix does not allow for it.
+	ErrRunTransitionUnsupported = errors.New("unsupported run transition")
+)
+
+// RunState is the canonical durable answer to "what happened to this run".
+//
+// ContentSHA256 is internal identity for duplicate terminal reports. It is
+// never projected into a public payload or protobuf message; the exported
+// field exists so writers in this package can compare it, not so readers can
+// publish it.
+type RunState struct {
+	RunID                 string
+	UserMessageID         string
+	AssistantMessageID    string
+	Lifecycle             string
+	OutcomeReason         string
+	StateVersion          int64
+	StateUpdatedAt        string
+	FinishedAt            sql.NullString
+	HasDisplayableContent bool
+	ContentSHA256         string
+}
+
+// RunTransitionResult is what a guarded transition committed. Duplicate marks
+// the write-free replay path: the state is real and current, but this call did
+// not produce it and appended no events.
+type RunTransitionResult struct {
+	State     RunState
+	Events    []Event
+	Duplicate bool
+}
+
+// allowedOutcomeReasons is the normative lifecycle/reason matrix. A nonterminal
+// lifecycle carries no outcome, a completed run carries either nothing to say
+// or the fact that it produced no displayable content, and each terminal
+// failure reason has to be one this product can actually justify.
+var allowedOutcomeReasons = map[string][]runoutcome.Reason{
+	lifecycleQueued:          {runoutcome.ReasonNone},
+	lifecycleRunning:         {runoutcome.ReasonNone},
+	lifecycleWaitingApproval: {runoutcome.ReasonNone},
+	lifecycleRecovering:      {runoutcome.ReasonNone},
+	lifecycleCompleted:       {runoutcome.ReasonNone, runoutcome.ReasonCompletedNoContent},
+	lifecycleFailed: {
+		runoutcome.ReasonExpired,
+		runoutcome.ReasonContextLimit,
+		runoutcome.ReasonProviderFailure,
+		runoutcome.ReasonToolFailure,
+		runoutcome.ReasonPolicyDenied,
+		runoutcome.ReasonRetriesExhausted,
+		runoutcome.ReasonRecoveryInterrupted,
+		runoutcome.ReasonSideEffectUncertain,
+		runoutcome.ReasonApprovalDeliveryFailed,
+		runoutcome.ReasonInternalFailure,
+	},
+	lifecycleCancelled: {runoutcome.ReasonUserCancelled, runoutcome.ReasonAbandoned},
+}
+
+func isTerminalLifecycle(lifecycle string) bool {
+	switch lifecycle {
+	case lifecycleCompleted, lifecycleFailed, lifecycleCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+// runTransitionIdentity is the trigger identity a command must still match to
+// be the owner of the transition it is asking for. An empty field is not
+// checked, because not every trigger has an owner to prove: lease recovery
+// requeues a run precisely because no worker can vouch for it.
+type runTransitionIdentity struct {
+	workerID            string
+	assignmentAttemptID string
+	// approvalID names the approval a decision belongs to. It is checked
+	// against the approvals this run actually owns, because a decision on
+	// somebody else's approval must not move this run.
+	approvalID string
+}
+
+// runTerminalContent is the content identity a terminal transition commits.
+// write is the difference between a success report, which persists the exact
+// bytes it was given, and a failure or cancellation, which must leave whatever
+// the run already produced exactly as it is.
+type runTerminalContent struct {
+	assistantMessageID string
+	content            string
+	write              bool
+	sha256             string
+	hasDisplayable     bool
+}
+
+// runTransition is one guarded public lifecycle transition expressed as data,
+// so every writer in this package is validated by the same code rather than by
+// its own hand-written UPDATE predicate.
+type runTransition struct {
+	runID           string
+	expectedVersion int64
+	// transactionLocal marks a writer that is already inside the transaction it
+	// is guarding and therefore resolves its own expectation from the row.
+	// Without it, an absent expected version is an error rather than a silent
+	// "whatever the row says": zero is protobuf absence, and a public caller
+	// that forgot to carry a version must not be handed an unguarded write.
+	transactionLocal bool
+	allowedFrom      []string
+	to               string
+	reason           runoutcome.Reason
+	identity         runTransitionIdentity
+	terminal         *runTerminalContent
+	// clearsOwnership marks a transition that releases the run's worker and
+	// attempt. Its duplicate check cannot compare the identity the command
+	// carried against the row, because the row no longer has one; it requires
+	// the absence the transition itself produced instead.
+	clearsOwnership bool
+	// rejection is returned when the row is terminal and therefore immutable.
+	// Terminal writers keep their existing sentinels because callers outside
+	// this package already map them onto gRPC status codes.
+	rejection error
+	// extraSet carries the execution, lease, and diagnostic columns a specific
+	// writer owns. It is appended to the one guarded UPDATE so a transition can
+	// never half-commit its execution state.
+	//
+	// An argument may be transitionTime, which the core replaces with the
+	// canonical timestamp it computed. A writer cannot compute that itself —
+	// the monotonic value is only known once the prior row is read under the
+	// guard — and passing its own clock reading would put a second, slightly
+	// different instant on the same transition.
+	extraSet  string
+	extraArgs []any
+	// eventType is the single canonical projection. Empty means the transition
+	// has no lifecycle event of its own and projects agent.run.state_changed.
+	eventType    string
+	eventPayload map[string]any
+}
+
+// transitionTime is the placeholder a writer puts in extraArgs where the
+// canonical transition timestamp belongs.
+type transitionTimePlaceholder struct{}
+
+var transitionTime = transitionTimePlaceholder{}
+
+func resolveTransitionArgs(args []any, at string) []any {
+	resolved := make([]any, len(args))
+	for index, arg := range args {
+		if _, placeholder := arg.(transitionTimePlaceholder); placeholder {
+			resolved[index] = at
+			continue
+		}
+		resolved[index] = arg
+	}
+	return resolved
+}
+
+// runRow is the pre-transition snapshot every guarded transition reads. It
+// carries the linked assistant message because correlation, content identity,
+// and displayability are all decided from it.
+type runRow struct {
+	runID              string
+	sessionID          string
+	traceID            string
+	userMessageID      string
+	assistantMessageID string
+	lifecycle          string
+	outcomeReason      string
+	stateVersion       int64
+	stateUpdatedAt     string
+	finishedAt         sql.NullString
+	contentSHA256      string
+	workerID           string
+	attemptID          string
+	messageID          string
+	messageSessionID   string
+	messageRunID       string
+	messageRole        string
+	messageContent     string
+}
+
+type runStateQuerier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+const runRowQuery = `
+	SELECT r.id, r.session_id, r.trace_id, r.user_message_id, COALESCE(r.assistant_message_id, ''),
+		r.status, r.outcome_reason, r.state_version, r.state_updated_at, r.finished_at,
+		r.assistant_content_sha256, COALESCE(r.worker_id, ''), COALESCE(r.execution_attempt_id, ''),
+		COALESCE(m.id, ''), COALESCE(m.session_id, ''), COALESCE(m.run_id, ''),
+		COALESCE(m.role, ''), COALESCE(m.content, '')
+	FROM agent_runs r
+	LEFT JOIN messages m ON m.run_id = r.id AND m.role = 'assistant'
+	WHERE r.id = ?
+`
+
+func readRunRow(ctx context.Context, q runStateQuerier, runID string) (runRow, error) {
+	var row runRow
+	err := q.QueryRowContext(ctx, runRowQuery, runID).Scan(
+		&row.runID, &row.sessionID, &row.traceID, &row.userMessageID, &row.assistantMessageID,
+		&row.lifecycle, &row.outcomeReason, &row.stateVersion, &row.stateUpdatedAt, &row.finishedAt,
+		&row.contentSHA256, &row.workerID, &row.attemptID,
+		&row.messageID, &row.messageSessionID, &row.messageRunID, &row.messageRole, &row.messageContent,
+	)
+	return row, err
+}
+
+// runCorrelationLink projects a run row onto the one link shape the shared
+// validator understands. The join is by the message's own run ID, so both
+// directions of the circular link are read rather than assumed.
+func runCorrelationLink(ctx context.Context, q runStateQuerier, runID string) (runcorrelation.Link, error) {
+	row, err := readRunRow(ctx, q, runID)
+	if err != nil {
+		return runcorrelation.Link{}, err
+	}
+	return row.link(), nil
+}
+
+func (row runRow) link() runcorrelation.Link {
+	return runcorrelation.Link{
+		RunID:                 row.runID,
+		RunSessionID:          row.sessionID,
+		RunAssistantMessageID: row.assistantMessageID,
+		MessageID:             row.messageID,
+		MessageSessionID:      row.messageSessionID,
+		MessageRunID:          row.messageRunID,
+		MessageRole:           row.messageRole,
+	}
+}
+
+// validateRunCorrelationLink is the one call site name this package uses for
+// the shared rule, so a future writer cannot quietly introduce a second,
+// slightly different notion of "these belong together".
+func validateRunCorrelationLink(link runcorrelation.Link) error {
+	return runcorrelation.Validate(link)
+}
+
+// state projects a row onto the canonical durable state. Displayability is
+// computed from the linked message rather than stored, because the message is
+// the only authority on what a client will actually render.
+func (row runRow) state() RunState {
+	return RunState{
+		RunID:                 row.runID,
+		UserMessageID:         row.userMessageID,
+		AssistantMessageID:    row.assistantMessageID,
+		Lifecycle:             row.lifecycle,
+		OutcomeReason:         row.outcomeReason,
+		StateVersion:          row.stateVersion,
+		StateUpdatedAt:        row.stateUpdatedAt,
+		FinishedAt:            row.finishedAt,
+		HasDisplayableContent: runoutcome.HasDisplayableContent(row.messageContent),
+		ContentSHA256:         row.contentSHA256,
+	}
+}
+
+// GetRunState reads the canonical state of one run.
+func (r *Repository) GetRunState(ctx context.Context, runID string) (RunState, error) {
+	row, err := readRunRow(ctx, r.db, runID)
+	if err != nil {
+		return RunState{}, err
+	}
+	return row.state(), nil
+}
+
+// runStateSnapshot is the public projection carried by every lifecycle event.
+// The content digest and every execution detail are deliberately absent: the
+// digest is internal duplicate identity, and a worker ID is not a client's
+// business.
+func runStateSnapshot(state RunState) map[string]any {
+	snapshot := map[string]any{
+		"runId":                 state.RunID,
+		"userMessageId":         state.UserMessageID,
+		"assistantMessageId":    state.AssistantMessageID,
+		"lifecycle":             state.Lifecycle,
+		"outcomeReason":         state.OutcomeReason,
+		"stateVersion":          state.StateVersion,
+		"stateUpdatedAt":        state.StateUpdatedAt,
+		"hasDisplayableContent": state.HasDisplayableContent,
+	}
+	if state.FinishedAt.Valid && state.FinishedAt.String != "" {
+		snapshot["finishedAt"] = state.FinishedAt.String
+	}
+	return snapshot
+}
+
+// marshalRunStatePayload merges a writer's own payload with the canonical
+// snapshot. The snapshot is assigned last so no writer key can shadow it.
+func marshalRunStatePayload(payload map[string]any, state RunState) (string, error) {
+	merged := make(map[string]any, len(payload)+1)
+	for key, value := range payload {
+		merged[key] = value
+	}
+	merged["runState"] = runStateSnapshot(state)
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+// applyRunTransitionTx is the single guarded lifecycle transition.
+//
+// Everything a transition has to get right lives here exactly once: the
+// allowed lifecycle/reason matrix, the run/message correlation, the trigger
+// identity that fences a stale owner, the expected version, the write-free
+// duplicate rule, the monotonic timestamp, the guarded UPDATE, and the one
+// canonical event. Writers supply only what is genuinely theirs — their
+// execution columns, their subsidiary rows, and their event payload.
+//
+// subsidiary runs after the row is committed and before the canonical event, so
+// the projection a client reads is appended after everything it describes.
+func applyRunTransitionTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	transition runTransition,
+	subsidiary func(context.Context, RunState, string) ([]Event, error),
+) (RunTransitionResult, error) {
+	allowedReasons, known := allowedOutcomeReasons[transition.to]
+	if !known || !slices.Contains(allowedReasons, transition.reason) {
+		return RunTransitionResult{}, ErrRunTransitionUnsupported
+	}
+	if !transition.transactionLocal && transition.expectedVersion < 1 {
+		return RunTransitionResult{}, ErrRunStateVersionInvalid
+	}
+
+	row, err := readRunRow(ctx, tx, transition.runID)
+	if err != nil {
+		return RunTransitionResult{}, err
+	}
+	// A run whose assistant link is broken cannot be transitioned: its state
+	// would be published against a message that does not claim it.
+	if row.assistantMessageID != "" || row.messageID != "" {
+		if err := validateRunCorrelationLink(row.link()); err != nil {
+			return RunTransitionResult{}, err
+		}
+	}
+
+	expected := transition.expectedVersion
+	if transition.transactionLocal {
+		// The transaction-local path: the version this command would have
+		// carried is derived from the row it is about to guard, inside this
+		// transaction, so there is no read-then-write window to lose.
+		expected = row.stateVersion
+		if !slices.Contains(transition.allowedFrom, row.lifecycle) {
+			expected = row.stateVersion - 1
+		}
+	}
+
+	if isRunTransitionDuplicate(row, transition, expected) {
+		return RunTransitionResult{State: row.state(), Duplicate: true}, nil
+	}
+	if !slices.Contains(transition.allowedFrom, row.lifecycle) {
+		if isTerminalLifecycle(row.lifecycle) && transition.rejection != nil {
+			return RunTransitionResult{}, transition.rejection
+		}
+		return RunTransitionResult{}, ErrRunTransitionConflict
+	}
+	if expected < 1 {
+		return RunTransitionResult{}, ErrRunStateVersionInvalid
+	}
+	if row.stateVersion != expected {
+		return RunTransitionResult{}, ErrRunTransitionConflict
+	}
+	if !matchesTransitionIdentity(row, transition.identity) {
+		return RunTransitionResult{}, ErrRunTransitionConflict
+	}
+	if transition.identity.approvalID != "" {
+		owned, err := runOwnsApprovalTx(ctx, tx, transition.runID, transition.identity.approvalID)
+		if err != nil {
+			return RunTransitionResult{}, err
+		}
+		if !owned {
+			return RunTransitionResult{}, ErrRunTransitionConflict
+		}
+	}
+	if row.stateVersion == math.MaxInt64 {
+		return RunTransitionResult{}, ErrRunStateVersionExhausted
+	}
+	transitionAt, err := persisttime.NextStateTime(time.Now(), row.stateUpdatedAt)
+	if err != nil {
+		return RunTransitionResult{}, err
+	}
+	nextVersion := row.stateVersion + 1
+
+	content := transition.terminal
+	if content != nil && content.write && content.assistantMessageID != "" {
+		result, err := tx.ExecContext(ctx,
+			`UPDATE messages SET content = ? WHERE id = ? AND run_id = ? AND role = 'assistant'`,
+			content.content, content.assistantMessageID, transition.runID)
+		if err != nil {
+			return RunTransitionResult{}, err
+		}
+		if err := expectOneRow(result, "assistant message not found"); err != nil {
+			return RunTransitionResult{}, err
+		}
+	}
+
+	update := `UPDATE agent_runs SET status = ?, outcome_reason = ?, state_version = ?, state_updated_at = ?`
+	args := []any{transition.to, string(transition.reason), nextVersion, transitionAt}
+	if isTerminalLifecycle(transition.to) {
+		update += `, finished_at = ?`
+		args = append(args, transitionAt)
+	}
+	if content != nil {
+		update += `, assistant_content_sha256 = ?`
+		args = append(args, content.sha256)
+	}
+	if transition.extraSet != "" {
+		update += `, ` + transition.extraSet
+		args = append(args, resolveTransitionArgs(transition.extraArgs, transitionAt)...)
+	}
+	update += ` WHERE id = ? AND status = ? AND state_version = ?`
+	args = append(args, transition.runID, row.lifecycle, row.stateVersion)
+	result, err := tx.ExecContext(ctx, update, args...)
+	if err != nil {
+		return RunTransitionResult{}, err
+	}
+	if err := expectOneRowErr(result, ErrRunTransitionConflict); err != nil {
+		return RunTransitionResult{}, err
+	}
+
+	committed := row.state()
+	committed.Lifecycle = transition.to
+	committed.OutcomeReason = string(transition.reason)
+	committed.StateVersion = nextVersion
+	committed.StateUpdatedAt = transitionAt
+	if isTerminalLifecycle(transition.to) {
+		committed.FinishedAt = sql.NullString{String: transitionAt, Valid: true}
+	}
+	if content != nil {
+		committed.ContentSHA256 = content.sha256
+		committed.HasDisplayableContent = content.hasDisplayable
+	}
+
+	var events []Event
+	if subsidiary != nil {
+		events, err = subsidiary(ctx, committed, transitionAt)
+		if err != nil {
+			return RunTransitionResult{}, err
+		}
+	}
+	eventType := transition.eventType
+	if eventType == "" {
+		eventType = runStateChangedEventType
+	}
+	payloadJSON, err := marshalRunStatePayload(transition.eventPayload, committed)
+	if err != nil {
+		return RunTransitionResult{}, err
+	}
+	event, err := appendRunEventTx(ctx, tx, row.sessionID, transition.runID, row.traceID, eventType, payloadJSON, transitionAt)
+	if err != nil {
+		return RunTransitionResult{}, err
+	}
+	return RunTransitionResult{State: committed, Events: append(events, event)}, nil
+}
+
+// isRunTransitionDuplicate recognizes the one repeat that is free: the row is
+// already exactly where this command wanted to put it, one version on from the
+// version it expected, and every identity the command carries still matches.
+//
+// A terminal repeat additionally has to match the content identity, so a second
+// completion carrying different bytes is a conflict rather than a replay.
+func isRunTransitionDuplicate(row runRow, transition runTransition, expected int64) bool {
+	if expected < 1 || expected == math.MaxInt64 {
+		return false
+	}
+	if row.stateVersion != expected+1 {
+		return false
+	}
+	if row.lifecycle != transition.to || row.outcomeReason != string(transition.reason) {
+		return false
+	}
+	if transition.clearsOwnership {
+		if row.workerID != "" || row.attemptID != "" {
+			return false
+		}
+	} else if !matchesTransitionIdentity(row, transition.identity) {
+		return false
+	}
+	if content := transition.terminal; content != nil {
+		if content.assistantMessageID != "" && content.assistantMessageID != row.assistantMessageID {
+			return false
+		}
+		if content.sha256 != row.contentSHA256 {
+			return false
+		}
+		if content.hasDisplayable != runoutcome.HasDisplayableContent(row.messageContent) {
+			return false
+		}
+	}
+	return true
+}
+
+// runOwnsApprovalTx reports whether an approval belongs to this run. A decision
+// carried by a command is only that command's authority to move the run if the
+// run is the one the decision was made about.
+func runOwnsApprovalTx(ctx context.Context, tx *sql.Tx, runID string, approvalID string) (bool, error) {
+	var owned int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM approvals WHERE id = ? AND run_id = ?`, approvalID, runID).Scan(&owned); err != nil {
+		return false, err
+	}
+	return owned == 1, nil
+}
+
+// matchesTransitionIdentity checks the trigger identity against what the row
+// currently records. An identity field the command did not supply is not
+// checked: a lease recovery requeue has no owner to prove, and demanding one
+// would strand exactly the runs recovery exists to rescue.
+func matchesTransitionIdentity(row runRow, identity runTransitionIdentity) bool {
+	if identity.workerID != "" && identity.workerID != row.workerID {
+		return false
+	}
+	if identity.assignmentAttemptID != "" && identity.assignmentAttemptID != row.attemptID {
+		return false
+	}
+	return true
+}
+
+// runInTransition runs one guarded transition in its own short transaction.
+// The subsidiary callback receives the transaction so a writer can commit its
+// own rows inside the same boundary as the state change.
+func (r *Repository) runInTransition(
+	ctx context.Context,
+	transition runTransition,
+	subsidiary func(context.Context, *sql.Tx, RunState, string) ([]Event, error),
+) (RunTransitionResult, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return RunTransitionResult{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := applyRunTransitionTx(ctx, tx, transition, func(ctx context.Context, state RunState, at string) ([]Event, error) {
+		if subsidiary == nil {
+			return nil, nil
+		}
+		return subsidiary(ctx, tx, state, at)
+	})
+	if err != nil {
+		return RunTransitionResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return RunTransitionResult{}, err
+	}
+	return result, nil
+}
+
+// FenceRunOwnershipInput fences a run whose worker ownership became uncertain.
+type FenceRunOwnershipInput struct {
+	RunID                string
+	ExpectedStateVersion int64
+	WorkerID             string
+	AssignmentAttemptID  string
+}
+
+// FenceRunOwnership moves a running or waiting-approval run to recovering.
+//
+// This is the transition the old code did not have. Losing a worker used to
+// leave the row saying running, so a reopened session and a live stream both
+// reported forward progress nobody was making.
+func (r *Repository) FenceRunOwnership(ctx context.Context, input FenceRunOwnershipInput) (RunTransitionResult, error) {
+	return r.runInTransition(ctx, fenceOwnershipTransition(input.RunID, input.ExpectedStateVersion, runTransitionIdentity{
+		workerID:            input.WorkerID,
+		assignmentAttemptID: input.AssignmentAttemptID,
+	}, "uncertain"), nil)
+}
+
+func fenceOwnershipTransition(runID string, expectedVersion int64, identity runTransitionIdentity, executionState string) runTransition {
+	return runTransition{
+		runID:            runID,
+		expectedVersion:  expectedVersion,
+		transactionLocal: expectedVersion == unresolvedStateVersion,
+		allowedFrom:      []string{lifecycleRunning, lifecycleWaitingApproval},
+		to:               lifecycleRecovering,
+		reason:           runoutcome.ReasonNone,
+		identity:         identity,
+		extraSet:         `execution_state = ?`,
+		extraArgs:        []any{executionState},
+	}
+}
+
+// ResumeRecoveringRunInput proves that the same still-owned attempt is alive
+// and returns the run to running.
+type ResumeRecoveringRunInput struct {
+	RunID                string
+	ExpectedStateVersion int64
+	WorkerID             string
+	AssignmentAttemptID  string
+	// ApprovalID is set when the resume follows an approval decision, so a
+	// replay of a different approval cannot be mistaken for this one.
+	ApprovalID string
+}
+
+// ResumeRecoveringRun returns a recovering run to running.
+//
+// Only the attempt that still owns the run may do this, which is why worker and
+// assignment attempt are part of the transition identity rather than advisory
+// arguments.
+func (r *Repository) ResumeRecoveringRun(ctx context.Context, input ResumeRecoveringRunInput) (RunTransitionResult, error) {
+	return r.runInTransition(ctx, runTransition{
+		runID:           input.RunID,
+		expectedVersion: input.ExpectedStateVersion,
+		allowedFrom:     []string{lifecycleRecovering},
+		to:              lifecycleRunning,
+		reason:          runoutcome.ReasonNone,
+		identity: runTransitionIdentity{
+			workerID:            input.WorkerID,
+			assignmentAttemptID: input.AssignmentAttemptID,
+			approvalID:          input.ApprovalID,
+		},
+		extraSet:  `execution_state = 'delivered'`,
+		extraArgs: nil,
+	}, nil)
+}
+
+// RequeueRecoveringRunInput returns a recovering run to the queue.
+type RequeueRecoveringRunInput struct {
+	RunID                string
+	ExpectedStateVersion int64
+	AssignmentAttemptID  string
+}
+
+// RequeueRecoveringRun sends a recovering run back to the queue for another
+// worker. There is deliberately no running-to-queued shortcut: a run whose
+// worker is gone passes through recovering first, so the interval where nobody
+// owned it is durable rather than erased.
+func (r *Repository) RequeueRecoveringRun(ctx context.Context, input RequeueRecoveringRunInput) (RunTransitionResult, error) {
+	return r.runInTransition(ctx, requeueRecoveringTransition(input.RunID, input.ExpectedStateVersion, runTransitionIdentity{
+		assignmentAttemptID: input.AssignmentAttemptID,
+	}), nil)
+}
+
+func requeueRecoveringTransition(runID string, expectedVersion int64, identity runTransitionIdentity) runTransition {
+	return runTransition{
+		runID:            runID,
+		expectedVersion:  expectedVersion,
+		transactionLocal: expectedVersion == unresolvedStateVersion,
+		allowedFrom:      []string{lifecycleRecovering},
+		to:               lifecycleQueued,
+		reason:           runoutcome.ReasonNone,
+		identity:         identity,
+		clearsOwnership:  true,
+		extraSet: `started_at = NULL,
+			worker_id = NULL,
+			execution_active = 0,
+			execution_exit_acknowledged_at = NULL,
+			execution_attempt_id = NULL,
+			execution_state = 'none',
+			execution_lease_expires_at = NULL,
+			execution_lease_expires_at_ns = NULL`,
+	}
+}

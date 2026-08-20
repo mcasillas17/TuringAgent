@@ -1305,7 +1305,9 @@ func TestSendMessageCancellationCancelsRun(t *testing.T) {
 	}
 	for _, event := range replayed {
 		if event.Type == "agent.run.cancelled" && event.RunID.Valid && event.RunID.String == runID {
-			var payload map[string]string
+			// map[string]any: the cancellation payload now carries the
+			// nested canonical run state beside its scalar fields.
+			var payload map[string]any
 			if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
 				t.Fatal(err)
 			}

@@ -3,8 +3,10 @@ package repository
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"reflect"
 	"testing"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
 
 // claimRetryRun enqueues a message and claims its job, leaving the run running
@@ -46,15 +48,30 @@ func onlyRunStepEvent(t *testing.T, events []Event) Event {
 	return found[0]
 }
 
-func runStepNote(t *testing.T, event Event) string {
+// assertStepNotice checks a failure-like notice by its allowlisted category and
+// its two bounded numbers.
+//
+// The sentence these notices used to carry is gone deliberately. It could not
+// be localized, it could not be filtered on, and it was assembled by string
+// formatting a few lines away from provider and worker text. A category plus
+// "attempt N of M" says everything the sentence did and nothing it should not.
+func assertStepNotice(t *testing.T, event Event, category runoutcome.NoticeCategory, attempt int, maxAttempts int) {
 	t.Helper()
-	var payload struct {
-		Note string `json:"note"`
+	if event.Type != "agent.run.step" {
+		t.Fatalf("event type = %q, want agent.run.step", event.Type)
 	}
+	var payload map[string]any
 	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
 		t.Fatalf("run step payload %q: %v", event.PayloadJSON, err)
 	}
-	return payload.Note
+	want := map[string]any{
+		"category":    string(category),
+		"attempt":     float64(attempt),
+		"maxAttempts": float64(maxAttempts),
+	}
+	if !reflect.DeepEqual(payload, want) {
+		t.Fatalf("run step payload = %#v, want %#v", payload, want)
+	}
 }
 
 func TestRequeueOrFailRetryableRunRequeuesWhileAttemptsRemain(t *testing.T) {
@@ -73,9 +90,7 @@ func TestRequeueOrFailRetryableRunRequeuesWhileAttemptsRemain(t *testing.T) {
 	// A requeue used to be silent, which is indistinguishable from a hang to a
 	// watching client. It must now carry exactly one user-visible notice.
 	notice := onlyRunStepEvent(t, decision.Events)
-	if got := runStepNote(t, notice); got != "Retrying (attempt 2 of 3)" {
-		t.Fatalf("requeue note = %q, want %q", got, "Retrying (attempt 2 of 3)")
-	}
+	assertStepNotice(t, notice, runoutcome.NoticeDispatchRetry, 2, 3)
 	if !notice.RunID.Valid || notice.RunID.String != enqueued.RunID {
 		t.Fatalf("requeue notice run_id = %+v, want %q", notice.RunID, enqueued.RunID)
 	}
@@ -117,10 +132,7 @@ func TestRequeueOrFailRetryableRunFailsAfterAttemptCap(t *testing.T) {
 		}
 		// The notice must name the attempt that is about to START, not the one
 		// that just failed: after the first rejection the user is on attempt 2.
-		want := fmt.Sprintf("Retrying (attempt %d of %d)", i+2, maxAttempts)
-		if got := runStepNote(t, onlyRunStepEvent(t, decision.Events)); got != want {
-			t.Fatalf("attempt %d: note = %q, want %q", i+1, got, want)
-		}
+		assertStepNotice(t, onlyRunStepEvent(t, decision.Events), runoutcome.NoticeDispatchRetry, i+2, maxAttempts)
 		if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-busy"); err != nil {
 			t.Fatal(err)
 		}
@@ -159,9 +171,7 @@ func TestRequeueOrFailRetryableRunFailsAfterAttemptCap(t *testing.T) {
 	// its reason, not the attempt count that led up to it, so this notice is
 	// still needed to tell the user retries stopped and how many were tried.
 	giveUp := onlyRunStepEvent(t, decision.Events)
-	if got := runStepNote(t, giveUp); got != "Gave up after 3 attempts" {
-		t.Fatalf("exhaustion note = %q, want %q", got, "Gave up after 3 attempts")
-	}
+	assertStepNotice(t, giveUp, runoutcome.NoticeRecoveryExhausted, 3, 3)
 
 	var terminal Event
 	terminalIndex, giveUpIndex := -1, -1
@@ -229,14 +239,20 @@ func TestRequeueOrFailRetryableRunEmitsNoNoticeWhenNotRequeueable(t *testing.T) 
 		}
 	}
 
-	// It must also fail under the original code, not RetriesExhaustedCode: it
-	// never spent a retry budget.
-	var errorCode string
-	if err := database.QueryRowContext(ctx, `SELECT error_code FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&errorCode); err != nil {
+	// It must not be reported as retries_exhausted: it never spent a retry
+	// budget. worker_busy cannot be the terminal code either — it normalizes to
+	// no outcome at all, because "a worker was busy" describes a dispatch
+	// condition, not a reason a user's request ended.
+	var errorCode, outcomeReason string
+	if err := database.QueryRowContext(ctx,
+		`SELECT error_code, outcome_reason FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&errorCode, &outcomeReason); err != nil {
 		t.Fatal(err)
 	}
-	if errorCode != "worker_busy" {
-		t.Fatalf("run error code = %q, want %q", errorCode, "worker_busy")
+	if errorCode == RetriesExhaustedCode {
+		t.Fatalf("run error code = %q, want anything but the exhausted code", errorCode)
+	}
+	if outcomeReason != "recovery_interrupted" {
+		t.Fatalf("run outcome reason = %q, want recovery_interrupted", outcomeReason)
 	}
 }
 
@@ -270,6 +286,73 @@ func TestRequeueOrFailRetryableRunEmitsNoGiveUpForUnclaimableExhaustedJob(t *tes
 	for _, event := range decision.Events {
 		if event.Type == "agent.run.step" {
 			t.Fatalf("a run that never gave up was announced as giving up: %s", event.PayloadJSON)
+		}
+	}
+}
+
+// TestRetryRequeueCommitsBothTransitionsWithoutARunningToQueuedShortcut pins
+// the shape of a retry.
+//
+// The old code rewrote running straight back to queued, which erased the fact
+// that the run had lost its worker: a client watching versions would have seen
+// the run go from running to queued with nothing in between, and a client
+// reopening mid-retry would have been told the run was simply waiting. Both
+// transitions are real, so both are committed — in one transaction, each with
+// its own version and its own projection.
+func TestRetryRequeueCommitsBothTransitionsWithoutARunningToQueuedShortcut(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	enqueued, _ := claimRetryRun(t, repo, "worker-two-versions")
+	running, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, "worker_busy", "worker cannot accept the run", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decision.Requeued {
+		t.Fatalf("decision = %+v, want requeued", decision)
+	}
+
+	var projected []eventSnapshot
+	for _, event := range decision.Events {
+		if event.Type == runStateChangedEventType {
+			projected = append(projected, decodeRunStateSnapshot(t, event))
+		}
+	}
+	if len(projected) != 2 {
+		t.Fatalf("requeue projected %d state changes, want exactly 2", len(projected))
+	}
+	if projected[0].Lifecycle != lifecycleRecovering || projected[0].StateVersion != running.StateVersion+1 {
+		t.Fatalf("first projection = %s at version %d, want recovering at %d",
+			projected[0].Lifecycle, projected[0].StateVersion, running.StateVersion+1)
+	}
+	if projected[1].Lifecycle != lifecycleQueued || projected[1].StateVersion != running.StateVersion+2 {
+		t.Fatalf("second projection = %s at version %d, want queued at %d",
+			projected[1].Lifecycle, projected[1].StateVersion, running.StateVersion+2)
+	}
+	// A nonterminal dispatch condition leaves no outcome behind. "A worker was
+	// busy" is not a reason a user's request ended, because it did not end.
+	state, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Lifecycle != lifecycleQueued || state.OutcomeReason != "none" {
+		t.Fatalf("requeued state = %s/%s, want queued/none", state.Lifecycle, state.OutcomeReason)
+	}
+	if state.StateVersion != running.StateVersion+2 {
+		t.Fatalf("version = %d, want two increments past %d", state.StateVersion, running.StateVersion)
+	}
+	if !state.FinishedAt.Valid && state.FinishedAt.String != "" {
+		t.Fatal("a requeued run carries a finish time")
+	}
+	// The projections must be ordered in the durable log, not just in the slice.
+	for index := 1; index < len(decision.Events); index++ {
+		if decision.Events[index].Sequence <= decision.Events[index-1].Sequence {
+			t.Fatalf("event %d has sequence %d, not after %d",
+				index, decision.Events[index].Sequence, decision.Events[index-1].Sequence)
 		}
 	}
 }

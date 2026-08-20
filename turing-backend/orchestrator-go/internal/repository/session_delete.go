@@ -65,6 +65,10 @@ func (r *Repository) DeleteSession(ctx context.Context, sessionID string) error 
 
 	// Refuse before mutating anything, so a rejected delete leaves no trace.
 	//
+	// 'recovering' counts as active for the same reason the recovery scan sees
+	// it: nobody has proven the worker is gone, so a worker may still be
+	// holding these rows.
+	//
 	// Status alone is not enough — two paths leave a run terminal-by-status with
 	// execution still live:
 	//   - CancelRun / CancelRunWithEvent set status='cancelled' and never touch
@@ -80,7 +84,7 @@ func (r *Repository) DeleteSession(ctx context.Context, sessionID string) error 
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM agent_runs
 		WHERE session_id = ?
-			AND (status IN ('queued','running','waiting_approval') OR execution_active = 1)
+			AND (status IN ('queued','running','waiting_approval','recovering') OR execution_active = 1)
 	`, sessionID).Scan(&active); err != nil {
 		return err
 	}
