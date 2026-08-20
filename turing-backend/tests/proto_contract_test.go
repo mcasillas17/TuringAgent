@@ -388,7 +388,10 @@ func TestRuntimeApprovalResumeProtoContractUsesApprovedAllocations(t *testing.T)
 func TestRunStateChangedReservesEventTypeTwentyThree(t *testing.T) {
 	events := turingv1.File_turing_v1_events_proto
 	enum := events.Enums().ByName("TuringEventType")
-	assertProtoEnumValues(t, enum, map[protoreflect.Name]protoreflect.EnumNumber{
+	if enum == nil {
+		t.Fatal("enum descriptor is missing")
+	}
+	required := map[protoreflect.Name]protoreflect.EnumNumber{
 		"TURING_EVENT_TYPE_UNSPECIFIED":             0,
 		"TURING_EVENT_TYPE_MESSAGE_STARTED":         1,
 		"TURING_EVENT_TYPE_MESSAGE_DELTA":           2,
@@ -412,9 +415,32 @@ func TestRunStateChangedReservesEventTypeTwentyThree(t *testing.T) {
 		"TURING_EVENT_TYPE_SYSTEM":                  20,
 		"TURING_EVENT_TYPE_SESSION_UPDATED":         21,
 		"TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED": 23,
-	})
-	if enum.ReservedRanges().Has(22) == false {
-		t.Fatal("TuringEventType must reserve 22")
+	}
+	for name, number := range required {
+		value := enum.Values().ByName(name)
+		if value == nil || value.Number() != number {
+			t.Fatalf("TuringEventType.%s = %v, want %d", name, value, number)
+		}
+	}
+
+	value22 := enum.Values().ByNumber(22)
+	switch {
+	case value22 == nil:
+		if !enum.ReservedRanges().Has(22) {
+			t.Fatal("TuringEventType must either reserve 22 or assign it to TURING_EVENT_TYPE_SESSION_DELETED")
+		}
+		if enum.Values().Len() != len(required) {
+			t.Fatalf("TuringEventType has %d values, want %d when 22 is reserved", enum.Values().Len(), len(required))
+		}
+	case value22.Name() == "TURING_EVENT_TYPE_SESSION_DELETED":
+		if enum.ReservedRanges().Has(22) {
+			t.Fatal("TuringEventType must not reserve 22 once TURING_EVENT_TYPE_SESSION_DELETED uses it")
+		}
+		if enum.Values().Len() != len(required)+1 {
+			t.Fatalf("TuringEventType has %d values, want %d when TURING_EVENT_TYPE_SESSION_DELETED=22 is present", enum.Values().Len(), len(required)+1)
+		}
+	default:
+		t.Fatalf("TuringEventType value 22 = %s, want TURING_EVENT_TYPE_SESSION_DELETED or reserved", value22.Name())
 	}
 }
 

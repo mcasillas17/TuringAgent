@@ -1753,7 +1753,11 @@ func TestMapChatEventConvertsKnownEvents(t *testing.T) {
 			assertFn: func(t *testing.T, got *turingv1.ChatStreamEvent) {
 				t.Helper()
 				failed := got.GetRunFailed()
-				if failed.GetCode() != "model_error" || failed.GetMessage() != "boom" || !failed.GetRetryable() {
+				retryableField := failed.ProtoReflect().Descriptor().Fields().ByNumber(4)
+				if retryableField == nil || retryableField.Name() != "retryable" {
+					t.Fatalf("run_failed retryable field descriptor = %v, want field 4 named retryable", retryableField)
+				}
+				if failed.GetCode() != "model_error" || failed.GetMessage() != "boom" || !failed.ProtoReflect().Get(retryableField).Bool() {
 					t.Fatalf("run_failed = %+v", failed)
 				}
 			},
