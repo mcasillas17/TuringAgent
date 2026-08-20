@@ -1,6 +1,6 @@
 # TUR-008 session lifecycle and pagination design
 
-**Status:** Proposed — awaiting coordinator spec approval
+**Status:** Approved on 2026-08-19 at commit `0378f6a`
 
 ## Purpose
 
