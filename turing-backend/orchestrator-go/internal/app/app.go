@@ -126,7 +126,7 @@ func New(cfg config.Config) (*App, error) {
 			SupportsExternalAgents:      len(cfg.AgentCredentialNames) > 0,
 		},
 	}, approvalService)
-	sessionService := sessionsvc.New(repo, cfg, runtimeService)
+	sessionService := sessionsvc.New(repo, cfg, runtimeService, eventBus)
 	skillService := skillsvc.New(repo)
 	agentService := agentsvc.New(repo, cfg.AgentCredentialNames)
 	automationService := automationsvc.New(repo)

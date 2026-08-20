@@ -6,10 +6,13 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/persisttime"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	eventsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -20,6 +23,8 @@ type Server struct {
 	repo         *repository.Repository
 	cfg          config.Config
 	capabilities capabilitySource
+	cursors      sessionCursorCodec
+	bus          *eventsvc.Bus
 }
 
 type capabilitySource interface {
@@ -29,45 +34,98 @@ type capabilitySource interface {
 	LiveToolNames() []string
 }
 
-func New(repo *repository.Repository, cfg config.Config, capabilities capabilitySource) *Server {
-	return &Server{repo: repo, cfg: cfg, capabilities: capabilities}
+func New(repo *repository.Repository, cfg config.Config, capabilities capabilitySource, bus *eventsvc.Bus) *Server {
+	return &Server{
+		repo:         repo,
+		cfg:          cfg,
+		capabilities: capabilities,
+		cursors:      newSessionCursorCodec(cfg.CursorHMACKey),
+		bus:          bus,
+	}
 }
 
 func (s *Server) CreateSession(ctx context.Context, req *turingv1.CreateSessionRequest) (*turingv1.CreateSessionResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "request is required")
 	}
-	session, err := s.repo.CreateSession(ctx, req.Title)
+	title := strings.TrimSpace(req.Title)
+	if !utf8.ValidString(title) || utf8.RuneCountInString(title) > repository.MaxSessionTitleRunes {
+		return nil, status.Error(codes.InvalidArgument, "title is invalid")
+	}
+	session, err := s.repo.CreateSession(ctx, title)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "create session failed")
 	}
-	return &turingv1.CreateSessionResponse{SessionId: session.SessionID, CreatedAt: parseTimestamp(session.CreatedAt)}, nil
+	createdAt, err := parseSessionTimestamp(session.CreatedAt)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "create session failed")
+	}
+	return &turingv1.CreateSessionResponse{SessionId: session.SessionID, CreatedAt: createdAt}, nil
 }
 
 func (s *Server) ListSessions(ctx context.Context, req *turingv1.ListSessionsRequest) (*turingv1.ListSessionsResponse, error) {
+	filter, repositoryFilter, err := sessionListFilter(req.GetFilter())
+	if err != nil {
+		return nil, err
+	}
 	limit := 50
 	if req != nil && req.Page != nil {
-		if req.Page.Limit < 0 {
-			return nil, status.Error(codes.InvalidArgument, "page.limit must be non-negative")
+		if req.Page.Limit < 0 || req.Page.Limit > 100 {
+			return nil, status.Error(codes.InvalidArgument, "page.limit must be between 1 and 100")
 		}
 		if req.Page.Limit > 0 {
 			limit = int(req.Page.Limit)
 		}
 	}
-	sessions, err := s.repo.ListSessions(ctx, limit)
+	var after *repository.SessionCursor
+	if req != nil && req.GetPage().GetCursor() != "" {
+		decoded, err := s.cursors.decode(req.GetPage().GetCursor(), filter)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "page.cursor is invalid")
+		}
+		after = &repository.SessionCursor{
+			UpdatedAt: decoded.UpdatedAt,
+			SessionID: decoded.SessionID,
+		}
+	}
+	sessions, err := s.repo.ListSessionsPage(ctx, repository.ListSessionsInput{
+		Filter: repositoryFilter,
+		After:  after,
+		Limit:  limit + 1,
+	})
 	if err != nil {
 		return nil, status.Error(codes.Internal, "list sessions failed")
 	}
+	hasMore := len(sessions) > limit
+	if hasMore {
+		sessions = sessions[:limit]
+	}
 	out := make([]*turingv1.Session, 0, len(sessions))
 	for _, session := range sessions {
-		out = append(out, mapSession(session))
+		mapped, err := mapSession(session)
+		if err != nil {
+			return nil, status.Error(codes.Internal, "list sessions failed")
+		}
+		out = append(out, mapped)
 	}
-	return &turingv1.ListSessionsResponse{Sessions: out, Page: &turingv1.PageResponse{}}, nil
+	page := &turingv1.PageResponse{}
+	if hasMore {
+		last := sessions[len(sessions)-1]
+		page.NextCursor, err = s.cursors.encode(sessionCursor{
+			Filter:    filter,
+			UpdatedAt: last.UpdatedAt,
+			SessionID: last.SessionID,
+		})
+		if err != nil {
+			return nil, status.Error(codes.Internal, "list sessions failed")
+		}
+	}
+	return &turingv1.ListSessionsResponse{Sessions: out, Page: page}, nil
 }
 
 func (s *Server) GetSession(ctx context.Context, req *turingv1.GetSessionRequest) (*turingv1.Session, error) {
-	if req == nil || req.SessionId == "" {
-		return nil, status.Error(codes.InvalidArgument, "session_id is required")
+	if req == nil || !validSessionID(req.SessionId) {
+		return nil, status.Error(codes.InvalidArgument, "session_id is invalid")
 	}
 	session, err := s.repo.GetSession(ctx, req.SessionId)
 	if err != nil {
@@ -76,7 +134,11 @@ func (s *Server) GetSession(ctx context.Context, req *turingv1.GetSessionRequest
 		}
 		return nil, status.Error(codes.Internal, "get session failed")
 	}
-	return mapSession(session), nil
+	mapped, err := mapSession(session)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "get session failed")
+	}
+	return mapped, nil
 }
 
 // DeleteSession removes a session and everything it produced. It is the only
@@ -85,8 +147,8 @@ func (s *Server) GetSession(ctx context.Context, req *turingv1.GetSessionRequest
 // client can say the session is already gone, and FailedPrecondition so it can
 // explain that work is still in flight rather than implying a bug.
 func (s *Server) DeleteSession(ctx context.Context, req *turingv1.DeleteSessionRequest) (*turingv1.DeleteSessionResponse, error) {
-	if req == nil || req.SessionId == "" {
-		return nil, status.Error(codes.InvalidArgument, "session_id is required")
+	if req == nil || !validSessionID(req.SessionId) {
+		return nil, status.Error(codes.InvalidArgument, "session_id is invalid")
 	}
 	if err := s.repo.DeleteSession(ctx, req.SessionId); err != nil {
 		switch {
@@ -102,8 +164,8 @@ func (s *Server) DeleteSession(ctx context.Context, req *turingv1.DeleteSessionR
 }
 
 func (s *Server) ListMessages(ctx context.Context, req *turingv1.ListMessagesRequest) (*turingv1.ListMessagesResponse, error) {
-	if req == nil || req.SessionId == "" {
-		return nil, status.Error(codes.InvalidArgument, "session_id is required")
+	if req == nil || !validSessionID(req.SessionId) {
+		return nil, status.Error(codes.InvalidArgument, "session_id is invalid")
 	}
 	var (
 		messages []repository.Message
@@ -230,7 +292,19 @@ func toProtoToolPolicy(policy string) turingv1.ToolPolicy {
 	}
 }
 
-func mapSession(session repository.Session) *turingv1.Session {
+func mapSession(session repository.Session) (*turingv1.Session, error) {
+	if session.Status != string(repository.SessionListActive) &&
+		session.Status != string(repository.SessionListArchived) {
+		return nil, repository.ErrInvalidSessionStatus
+	}
+	createdAt, err := parseSessionTimestamp(session.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	updatedAt, err := parseSessionTimestamp(session.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
 	title := ""
 	if session.Title.Valid {
 		title = session.Title.String
@@ -239,9 +313,9 @@ func mapSession(session repository.Session) *turingv1.Session {
 		SessionId: session.SessionID,
 		Title:     title,
 		Status:    session.Status,
-		CreatedAt: parseTimestamp(session.CreatedAt),
-		UpdatedAt: parseTimestamp(session.UpdatedAt),
-	}
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+	}, nil
 }
 
 func mapMessage(sessionID string, message repository.Message) *turingv1.Message {
@@ -278,4 +352,26 @@ func parseTimestamp(value string) *timestamppb.Timestamp {
 		return nil
 	}
 	return timestamppb.New(t)
+}
+
+func parseSessionTimestamp(value string) (*timestamppb.Timestamp, error) {
+	parsed, err := persisttime.ParseCanonical(value)
+	if err != nil {
+		return nil, repository.ErrInvalidSessionTimestamp
+	}
+	return timestamppb.New(parsed), nil
+}
+
+func sessionListFilter(filter turingv1.SessionListFilter) (sessionFilter, repository.SessionListFilter, error) {
+	switch filter {
+	case turingv1.SessionListFilter_SESSION_LIST_FILTER_UNSPECIFIED,
+		turingv1.SessionListFilter_SESSION_LIST_FILTER_ACTIVE:
+		return sessionFilterActive, repository.SessionListActive, nil
+	case turingv1.SessionListFilter_SESSION_LIST_FILTER_ARCHIVED:
+		return sessionFilterArchived, repository.SessionListArchived, nil
+	case turingv1.SessionListFilter_SESSION_LIST_FILTER_ALL:
+		return sessionFilterAll, repository.SessionListAll, nil
+	default:
+		return 0, "", status.Error(codes.InvalidArgument, "filter is invalid")
+	}
 }

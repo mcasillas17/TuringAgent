@@ -3,15 +3,18 @@ package sessions
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	eventsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -24,6 +27,8 @@ type sessionHarness struct {
 	repo         *repository.Repository
 	conn         *grpc.ClientConn
 	capabilities *sessionCapabilitySource
+	bus          *eventsvc.Bus
+	service      *Server
 }
 
 type sessionCapabilitySource struct {
@@ -79,14 +84,17 @@ func newSessionHarness(t *testing.T) *sessionHarness {
 	}
 	lis := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	turingv1.RegisterSessionServiceServer(grpcServer, New(repo, config.Config{
+	bus := eventsvc.NewBus(16)
+	service := New(repo, config.Config{
 		MCPSystemTokenGeneral: "system-token",
 		MCPFilesTokenGeneral:  "files-token",
 		ApprovalJWTSecret:     "approval-secret",
+		CursorHMACKey:         [32]byte{1},
 		OllamaModel:           "llama3.2",
 		OpenAIAPIKey:          "openai-key",
 		OpenAIModel:           "gpt-4o-mini",
-	}, capabilities))
+	}, capabilities, bus)
+	turingv1.RegisterSessionServiceServer(grpcServer, service)
 	go func() {
 		_ = grpcServer.Serve(lis)
 	}()
@@ -107,7 +115,14 @@ func newSessionHarness(t *testing.T) *sessionHarness {
 		grpcServer.Stop()
 		_ = conn.Close()
 	})
-	return &sessionHarness{database: database, repo: repo, conn: conn, capabilities: capabilities}
+	return &sessionHarness{
+		database:     database,
+		repo:         repo,
+		conn:         conn,
+		capabilities: capabilities,
+		bus:          bus,
+		service:      service,
+	}
 }
 
 func openSessionTestDB(t *testing.T) *db.DB {
@@ -126,11 +141,296 @@ func openSessionTestDB(t *testing.T) *db.DB {
 	return database
 }
 
-func TestSessionServiceServesPublicReadEndpoints(t *testing.T) {
+func TestSessionServiceCreatesSession(t *testing.T) {
 	h := newSessionHarness(t)
 	client := turingv1.NewSessionServiceClient(h.conn)
 	ctx := context.Background()
 
+	created, err := client.CreateSession(ctx, &turingv1.CreateSessionRequest{Title: "Test chat"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if created.SessionId == "" || created.CreatedAt == nil {
+		t.Fatalf("bad CreateSession response: %+v", created)
+	}
+}
+
+func TestListSessionsPaginatesStablyAndSupportsPageSizeChanges(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	for index, id := range []string{"older-1", "older-2", "older-3", "older-4"} {
+		if _, err := h.database.ExecContext(ctx, `
+				INSERT INTO sessions (id, title, title_origin, status, created_at, updated_at)
+				VALUES (?, ?, 'explicit', 'active', '2026-08-20T04:00:00.000000000Z', ?)`,
+			id,
+			id,
+			fmt.Sprintf("2026-08-20T04:00:%02d.000000000Z", index+1),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first, err := client.ListSessions(ctx, &turingv1.ListSessionsRequest{
+		Page: &turingv1.PageRequest{Limit: 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertProtoSessionIDs(t, first.Sessions, []string{"older-4", "older-3"})
+	if first.Page == nil || first.Page.NextCursor == "" {
+		t.Fatalf("first page = %+v, want next cursor", first.Page)
+	}
+	if _, err := h.database.ExecContext(ctx, `
+			INSERT INTO sessions (id, title, title_origin, status, created_at, updated_at)
+			VALUES (
+				'inserted-newest', 'inserted-newest', 'explicit', 'active',
+				'2026-08-20T04:00:00.000000000Z', '2026-08-20T04:00:05.000000000Z'
+			)`,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := client.ListSessions(ctx, &turingv1.ListSessionsRequest{
+		Page: &turingv1.PageRequest{Limit: 1, Cursor: first.Page.NextCursor},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertProtoSessionIDs(t, second.Sessions, []string{"older-2"})
+	if second.Page == nil || second.Page.NextCursor == "" {
+		t.Fatalf("second page = %+v, want next cursor", second.Page)
+	}
+
+	finalPage, err := client.ListSessions(ctx, &turingv1.ListSessionsRequest{
+		Page: &turingv1.PageRequest{Limit: 2, Cursor: second.Page.NextCursor},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertProtoSessionIDs(t, finalPage.Sessions, []string{"older-1"})
+	if finalPage.Page == nil || finalPage.Page.NextCursor != "" {
+		t.Fatalf("final page = %+v, want non-nil empty cursor", finalPage.Page)
+	}
+}
+
+func TestListSessionsValidatesLimitsAndCursorsPredictably(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	session, err := h.repo.CreateSession(ctx, "Cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	validPage, err := client.ListSessions(ctx, &turingv1.ListSessionsRequest{
+		Page: &turingv1.PageRequest{Limit: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validCursor := validPage.GetPage().GetNextCursor()
+	if validCursor != "" {
+		t.Fatal("single-row page unexpectedly has a next cursor")
+	}
+	second, err := h.repo.CreateSession(ctx, "Cursor 2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = second
+	validPage, err = client.ListSessions(ctx, &turingv1.ListSessionsRequest{
+		Page: &turingv1.PageRequest{Limit: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validCursor = validPage.GetPage().GetNextCursor()
+	if validCursor == "" {
+		t.Fatal("two-row page has no next cursor")
+	}
+
+	for _, limit := range []int32{-1, 101} {
+		_, err := client.ListSessions(ctx, &turingv1.ListSessionsRequest{
+			Page: &turingv1.PageRequest{Limit: limit},
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("limit %d error = %v, want InvalidArgument", limit, err)
+		}
+	}
+	if _, err := client.ListSessions(ctx, &turingv1.ListSessionsRequest{
+		Page: &turingv1.PageRequest{},
+	}); err != nil {
+		t.Fatalf("default page limit: %v", err)
+	}
+
+	foreign, err := newSessionCursorCodec([32]byte{2}).encode(sessionCursor{
+		Filter:    sessionFilterActive,
+		UpdatedAt: validPage.Sessions[0].UpdatedAt.AsTime().UTC().Format("2006-01-02T15:04:05.000000000Z"),
+		SessionID: validPage.Sessions[0].SessionId,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, request := range map[string]*turingv1.ListSessionsRequest{
+		"malformed": {
+			Page: &turingv1.PageRequest{Limit: 1, Cursor: "not-base64!"},
+		},
+		"padded": {
+			Page: &turingv1.PageRequest{Limit: 1, Cursor: validCursor + "="},
+		},
+		"wrong signing key": {
+			Page: &turingv1.PageRequest{Limit: 1, Cursor: foreign},
+		},
+		"foreign filter": {
+			Page:   &turingv1.PageRequest{Limit: 1, Cursor: validCursor},
+			Filter: turingv1.SessionListFilter_SESSION_LIST_FILTER_ARCHIVED,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := client.ListSessions(ctx, request)
+			if status.Code(err) != codes.InvalidArgument ||
+				status.Convert(err).Message() != "page.cursor is invalid" {
+				t.Fatalf("cursor error = %v", err)
+			}
+		})
+	}
+	_ = session
+}
+
+func TestSessionLifecycleRPCsValidatePublishAndReconcileVisibility(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+
+	created, err := client.CreateSession(ctx, &turingv1.CreateSessionRequest{Title: "  Initial  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := h.repo.GetSession(ctx, created.SessionId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Title.String != "Initial" || stored.TitleOrigin != "explicit" {
+		t.Fatalf("created session = %+v", stored)
+	}
+	empty, err := client.CreateSession(ctx, &turingv1.CreateSessionRequest{Title: " \n "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyStored, err := h.repo.GetSession(ctx, empty.SessionId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if emptyStored.Title.Valid || emptyStored.TitleOrigin != "unset" {
+		t.Fatalf("empty-title session = %+v", emptyStored)
+	}
+	if _, err := client.CreateSession(ctx, &turingv1.CreateSessionRequest{
+		Title: strings.Repeat("x", repository.MaxSessionTitleRunes+1),
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("oversize create title error = %v", err)
+	}
+
+	events, unsubscribe := h.bus.Subscribe(created.SessionId)
+	defer unsubscribe()
+	renamed, err := client.RenameSession(ctx, &turingv1.RenameSessionRequest{
+		SessionId: created.SessionId,
+		Title:     "  Renamed  ",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.GetSession().GetTitle() != "Renamed" {
+		t.Fatalf("rename response = %+v", renamed)
+	}
+	assertLifecycleBusEvent(t, events, "active", "Renamed")
+
+	if _, err := client.RenameSession(ctx, &turingv1.RenameSessionRequest{
+		SessionId: created.SessionId,
+		Title:     "Renamed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertNoLifecycleBusEvent(t, events)
+
+	archived, err := client.ArchiveSession(ctx, &turingv1.ArchiveSessionRequest{SessionId: created.SessionId})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archived.GetSession().GetStatus() != "archived" {
+		t.Fatalf("archive response = %+v", archived)
+	}
+	assertLifecycleBusEvent(t, events, "archived", "Renamed")
+	if _, err := client.GetSession(ctx, &turingv1.GetSessionRequest{SessionId: created.SessionId}); err != nil {
+		t.Fatalf("get archived session: %v", err)
+	}
+	active, err := client.ListSessions(ctx, &turingv1.ListSessionsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range active.Sessions {
+		if session.SessionId == created.SessionId {
+			t.Fatal("archived session remained in default active list")
+		}
+	}
+	archivedPage, err := client.ListSessions(ctx, &turingv1.ListSessionsRequest{
+		Filter: turingv1.SessionListFilter_SESSION_LIST_FILTER_ARCHIVED,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertProtoSessionIDs(t, archivedPage.Sessions, []string{created.SessionId})
+
+	if _, err := client.ArchiveSession(ctx, &turingv1.ArchiveSessionRequest{SessionId: created.SessionId}); err != nil {
+		t.Fatal(err)
+	}
+	assertNoLifecycleBusEvent(t, events)
+	restored, err := client.RestoreSession(ctx, &turingv1.RestoreSessionRequest{SessionId: created.SessionId})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.GetSession().GetStatus() != "active" {
+		t.Fatalf("restore response = %+v", restored)
+	}
+	assertLifecycleBusEvent(t, events, "active", "Renamed")
+
+	if _, err := client.ArchiveSession(ctx, &turingv1.ArchiveSessionRequest{SessionId: empty.SessionId}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: empty.SessionId}); err != nil {
+		t.Fatalf("delete archived session: %v", err)
+	}
+}
+
+func TestSessionLifecycleRPCsValidateIDsAndUnknownSessions(t *testing.T) {
+	h := newSessionHarness(t)
+	ctx := context.Background()
+	for _, sessionID := range []string{"", "line\nbreak", strings.Repeat("x", 257), string([]byte{0xff})} {
+		if _, err := h.service.GetSession(ctx, &turingv1.GetSessionRequest{SessionId: sessionID}); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("GetSession(%q) error = %v, want InvalidArgument", sessionID, err)
+		}
+	}
+	for _, operation := range []func() error{
+		func() error {
+			_, err := h.service.RenameSession(ctx, &turingv1.RenameSessionRequest{SessionId: "missing", Title: "Title"})
+			return err
+		},
+		func() error {
+			_, err := h.service.ArchiveSession(ctx, &turingv1.ArchiveSessionRequest{SessionId: "missing"})
+			return err
+		},
+		func() error {
+			_, err := h.service.RestoreSession(ctx, &turingv1.RestoreSessionRequest{SessionId: "missing"})
+			return err
+		},
+	} {
+		if err := operation(); status.Code(err) != codes.NotFound {
+			t.Fatalf("unknown lifecycle session error = %v, want NotFound", err)
+		}
+	}
+}
+func TestSessionServiceServesPublicReadEndpoints(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
 	created, err := client.CreateSession(ctx, &turingv1.CreateSessionRequest{Title: "Test chat"})
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
@@ -287,7 +587,7 @@ func TestSessionServiceSearchMessagesValidatesQuery(t *testing.T) {
 		})
 	}
 
-	_, err := New(h.repo, config.Config{}, h.capabilities).SearchMessages(ctx, nil)
+	_, err := h.service.SearchMessages(ctx, nil)
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("SearchMessages nil request error = %v, want InvalidArgument", err)
 	}
@@ -535,5 +835,47 @@ func TestDeleteSessionReportsDistinctStatusCodes(t *testing.T) {
 	}
 	if _, err := client.GetSession(ctx, &turingv1.GetSessionRequest{SessionId: idle.SessionID}); status.Code(err) != codes.NotFound {
 		t.Fatalf("deleted session still readable: %v", status.Code(err))
+	}
+}
+
+func assertProtoSessionIDs(t *testing.T, sessions []*turingv1.Session, want []string) {
+	t.Helper()
+	got := make([]string, 0, len(sessions))
+	for _, session := range sessions {
+		got = append(got, session.SessionId)
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("session IDs = %v, want %v", got, want)
+	}
+}
+
+func assertLifecycleBusEvent(t *testing.T, events <-chan eventsvc.Event, wantStatus, wantTitle string) {
+	t.Helper()
+	select {
+	case event := <-events:
+		if event.Type != "session.updated" {
+			t.Fatalf("bus event type = %q, want session.updated", event.Type)
+		}
+		var payload struct {
+			Title  string `json:"title"`
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Title != wantTitle || payload.Status != wantStatus {
+			t.Fatalf("bus payload = %+v, want title %q status %q", payload, wantTitle, wantStatus)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for lifecycle bus event")
+	}
+}
+
+func assertNoLifecycleBusEvent(t *testing.T, events <-chan eventsvc.Event) {
+	t.Helper()
+	select {
+	case event := <-events:
+		t.Fatalf("unexpected lifecycle bus event: %+v", event)
+	default:
 	}
 }
