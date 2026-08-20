@@ -15,6 +15,7 @@ import '../../features/workspace/telemetry_page.dart';
 import '../../features/workspace/workspace_pages.dart';
 import '../../logic/theme_logic.dart';
 import '../../models/session.dart';
+import '../../models/session_page.dart';
 import '../../models/session_title.dart';
 import '../../models/turing_event.dart';
 import '../../networking/api_client.dart';
@@ -100,12 +101,15 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   // which the compact app bar needs and a FutureBuilder cannot be asked.
   List<Session> _sessions = const [];
   bool _sessionsLoading = true;
+  bool _sessionsLoadingMore = false;
   bool _sessionsFailed = false;
+  String? _nextSessionsCursor;
   ShellDestination _destination = ShellDestination.chats;
   String? _activeSessionId;
   String _modelProvider = 'ollama';
   bool _creating = false;
   final Set<String> _deleting = {};
+  final Set<String> _lifecycleMutating = {};
   final Set<String> _locallyDeletedSessionIds = {};
   final Map<String, _SessionSnapshot> _sessionSnapshots = {};
   int _sessionStateRevision = 0;
@@ -189,10 +193,11 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     final request = ++_sessionRefreshRequest;
     final startingRevision = _sessionStateRevision;
     try {
-      final sessions = await widget.apiClient.listSessions();
+      final page = await widget.apiClient.listSessionPage();
       if (!mounted || request != _sessionRefreshRequest) return;
       setState(() {
-        _sessions = _reconcileSessionRefresh(sessions, startingRevision);
+        _sessions = _reconcileSessionRefresh(page.sessions, startingRevision);
+        _nextSessionsCursor = page.nextCursor;
         _sessionsLoading = false;
         _sessionsFailed = false;
       });
@@ -204,6 +209,41 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
         _sessionsLoading = false;
         _sessionsFailed = true;
       });
+    }
+  }
+
+  Future<void> _loadMoreSessions() async {
+    final cursor = _nextSessionsCursor;
+    if (cursor == null || _sessionsLoadingMore) return;
+    setState(() => _sessionsLoadingMore = true);
+    try {
+      final page = await widget.apiClient.listSessionPage(cursor: cursor);
+      if (!mounted || _nextSessionsCursor != cursor) return;
+      setState(() {
+        final merged = List<Session>.of(_sessions);
+        for (final session in page.sessions) {
+          final authoritative = _resolveSessionSnapshot(
+            session,
+            observedByList: true,
+          );
+          merged.removeWhere(
+            (candidate) => candidate.sessionId == authoritative.sessionId,
+          );
+          if (authoritative.status == SessionStatus.active &&
+              !_locallyDeletedSessionIds.contains(authoritative.sessionId)) {
+            _insertSessionByRecency(merged, authoritative);
+          }
+        }
+        _removeArchivedSessions(merged);
+        _sessions = merged;
+        _nextSessionsCursor = page.nextCursor;
+        _sessionsFailed = false;
+      });
+    } on Exception {
+      if (!mounted) return;
+      setState(() => _sessionsFailed = true);
+    } finally {
+      if (mounted) setState(() => _sessionsLoadingMore = false);
     }
   }
 
@@ -220,6 +260,21 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     final updatedAt = DateTime.tryParse(updatedAtValue);
     final updatedAtNanoseconds = _parseTimestampNanoseconds(updatedAtValue);
     if (updatedAt == null || updatedAtNanoseconds == null) return;
+    final previousSnapshot = _sessionSnapshots[event.sessionId];
+    final statusValue = event.payload['status'];
+    final status = switch (statusValue) {
+      'active' => SessionStatus.active,
+      'archived' => SessionStatus.archived,
+      null when previousSnapshot?.session.status == SessionStatus.archived =>
+        null,
+      null => SessionStatus.active,
+      _ => null,
+    };
+    if (status == null) return;
+    if (previousSnapshot != null &&
+        previousSnapshot.session.updatedAtNanoseconds >= updatedAtNanoseconds) {
+      return;
+    }
     final index = _sessions.indexWhere(
       (session) => session.sessionId == event.sessionId,
     );
@@ -232,17 +287,24 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       title: title.isEmpty ? null : title,
       updatedAt: updatedAt.toUtc(),
       updatedAtNanoseconds: updatedAtNanoseconds,
+      status: status,
     );
     setState(() {
       final next = List<Session>.of(_sessions);
       if (index >= 0) {
         final previous = next.removeAt(index);
-        if (previous.updatedAtNanoseconds == updated.updatedAtNanoseconds) {
+        if (updated.status == SessionStatus.archived) {
+          if (_activeSessionId == updated.sessionId) {
+            _releaseChatEventSource();
+            _activeSessionId = null;
+          }
+        } else if (previous.updatedAtNanoseconds ==
+            updated.updatedAtNanoseconds) {
           next.insert(index, updated);
         } else {
           _insertSessionByRecency(next, updated);
         }
-      } else {
+      } else if (updated.status == SessionStatus.active) {
         _insertSessionByRecency(next, updated);
       }
       _sessions = next;
@@ -276,23 +338,29 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     int startingRevision,
   ) {
     final refreshedSessions = refreshed.toList();
-    final merged = refreshedSessions
-        .where(
-          (session) => !_locallyDeletedSessionIds.contains(session.sessionId),
-        )
-        .toList();
+    final merged = <Session>[];
+    for (final session in refreshedSessions) {
+      final authoritative = _resolveSessionSnapshot(
+        session,
+        observedByList: true,
+      );
+      if (authoritative.status == SessionStatus.active &&
+          !_locallyDeletedSessionIds.contains(authoritative.sessionId)) {
+        merged.add(authoritative);
+      }
+    }
     for (final entry in _sessionSnapshots.entries.toList()) {
       final snapshot = entry.value;
       final current = snapshot.session;
+      if (_locallyDeletedSessionIds.contains(current.sessionId)) continue;
       final index = merged.indexWhere(
         (session) => session.sessionId == current.sessionId,
       );
       if (index < 0) {
-        if (snapshot.retainUntilObserved ||
-            snapshot.revision > startingRevision) {
+        if (current.status == SessionStatus.active &&
+            (snapshot.retainUntilObserved ||
+                snapshot.revision > startingRevision)) {
           _insertSessionByRecency(merged, current);
-        } else {
-          _sessionSnapshots.remove(entry.key);
         }
         continue;
       }
@@ -304,9 +372,53 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
           replacement.updatedAtNanoseconds) {
         merged[index] = current;
       }
-      _sessionSnapshots.remove(entry.key);
     }
+    _removeArchivedSessions(merged);
+    merged.sort(_compareSessionsByRecency);
     return merged;
+  }
+
+  Session _resolveSessionSnapshot(
+    Session session, {
+    required bool observedByList,
+  }) {
+    final previous = _sessionSnapshots[session.sessionId];
+    if (previous == null ||
+        session.updatedAtNanoseconds > previous.session.updatedAtNanoseconds) {
+      _recordSessionSnapshot(
+        session,
+        retainUntilObserved: observedByList
+            ? false
+            : previous?.retainUntilObserved ?? false,
+      );
+      return session;
+    }
+    if (observedByList &&
+        session.updatedAtNanoseconds == previous.session.updatedAtNanoseconds &&
+        previous.retainUntilObserved) {
+      _sessionSnapshots[session.sessionId] = _SessionSnapshot(
+        session: previous.session,
+        revision: previous.revision,
+        retainUntilObserved: false,
+      );
+    }
+    return previous.session;
+  }
+
+  void _removeArchivedSessions(List<Session> sessions) {
+    sessions.removeWhere(
+      (session) =>
+          _sessionSnapshots[session.sessionId]?.session.status ==
+          SessionStatus.archived,
+    );
+  }
+
+  static int _compareSessionsByRecency(Session left, Session right) {
+    final timestampOrder = right.updatedAtNanoseconds.compareTo(
+      left.updatedAtNanoseconds,
+    );
+    if (timestampOrder != 0) return timestampOrder;
+    return right.sessionId.compareTo(left.sessionId);
   }
 
   void _recordSessionSnapshot(
@@ -444,6 +556,96 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     }
   }
 
+  Future<void> _renameConversation(Session session) async {
+    if (!_lifecycleMutating.add(session.sessionId)) return;
+    var pendingTitle = session.title ?? '';
+    try {
+      final title = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Rename chat'),
+          content: TextFormField(
+            autofocus: true,
+            initialValue: pendingTitle,
+            decoration: const InputDecoration(labelText: 'Title'),
+            onChanged: (value) => pendingTitle = value,
+            onFieldSubmitted: (value) {
+              if (value.trim().isNotEmpty) {
+                Navigator.of(dialogContext).pop(value);
+              }
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (pendingTitle.trim().isNotEmpty) {
+                  Navigator.of(dialogContext).pop(pendingTitle);
+                }
+              },
+              child: const Text('Rename'),
+            ),
+          ],
+        ),
+      );
+      if (title == null) return;
+      final updated = await widget.apiClient.renameSession(
+        sessionId: session.sessionId,
+        title: title,
+      );
+      _applyAuthoritativeSession(updated);
+      unawaited(_refreshSessions());
+    } catch (error) {
+      if (mounted) _toast('Could not rename this chat: $error');
+    } finally {
+      _lifecycleMutating.remove(session.sessionId);
+    }
+  }
+
+  Future<void> _archiveConversation(Session session) async {
+    if (!_lifecycleMutating.add(session.sessionId)) return;
+    try {
+      final updated = await widget.apiClient.archiveSession(
+        sessionId: session.sessionId,
+      );
+      _applyAuthoritativeSession(updated);
+      unawaited(_refreshSessions());
+    } catch (error) {
+      if (mounted) _toast('Could not archive this chat: $error');
+    } finally {
+      _lifecycleMutating.remove(session.sessionId);
+    }
+  }
+
+  void _applyAuthoritativeSession(Session session) {
+    if (!mounted || _locallyDeletedSessionIds.contains(session.sessionId)) {
+      return;
+    }
+    final previous = _sessionSnapshots[session.sessionId];
+    if (previous != null &&
+        previous.session.updatedAtNanoseconds > session.updatedAtNanoseconds) {
+      return;
+    }
+    if (session.status == SessionStatus.archived &&
+        _activeSessionId == session.sessionId) {
+      _releaseChatEventSource();
+    }
+    setState(() {
+      _recordSessionSnapshot(session, retainUntilObserved: false);
+      final next = List<Session>.of(_sessions)
+        ..removeWhere((candidate) => candidate.sessionId == session.sessionId);
+      if (session.status == SessionStatus.active) {
+        _insertSessionByRecency(next, session);
+      } else if (_activeSessionId == session.sessionId) {
+        _activeSessionId = null;
+      }
+      _sessions = next;
+    });
+  }
+
   static bool _isRunInProgress(Object error) =>
       error.toString().toLowerCase().contains('run in progress');
 
@@ -497,6 +699,40 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     );
   }
 
+  Future<void> _openArchivedSessions() async {
+    _closeDrawerIfOpen();
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Archived conversations'),
+        content: SizedBox(
+          width: 480,
+          height: 440,
+          child: _ArchivedSessionsList(
+            apiClient: widget.apiClient,
+            onRestored: _applyAuthoritativeSession,
+            onDeleted: (sessionId) {
+              if (!mounted) return;
+              setState(() {
+                _locallyDeletedSessionIds.add(sessionId);
+                _sessionSnapshots.remove(sessionId);
+                _sessions = _sessions
+                    .where((session) => session.sessionId != sessionId)
+                    .toList();
+              });
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _openSettings() async {
     final authStorage = widget.authStorage;
     if (authStorage == null) return;
@@ -527,6 +763,8 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
           sessions: _sessions,
           sessionsLoading: _sessionsLoading,
           sessionsFailed: _sessionsFailed,
+          nextCursor: _nextSessionsCursor,
+          loadingMore: _sessionsLoadingMore,
           activeSessionId: _activeSessionId,
           destination: _destination,
           creating: _creating,
@@ -534,7 +772,11 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
           onSelect: _selectSession,
           onSelectDestination: _selectDestination,
           onDelete: _deleteConversation,
+          onRename: _renameConversation,
+          onArchive: _archiveConversation,
+          onLoadMore: _loadMoreSessions,
           onSearch: _openSearch,
+          onArchived: _openArchivedSessions,
           onSettings: widget.authStorage == null ? null : _openSettings,
         );
 
@@ -673,6 +915,8 @@ class _Sidebar extends StatelessWidget {
     required this.sessions,
     required this.sessionsLoading,
     required this.sessionsFailed,
+    required this.nextCursor,
+    required this.loadingMore,
     required this.activeSessionId,
     required this.destination,
     required this.creating,
@@ -680,7 +924,11 @@ class _Sidebar extends StatelessWidget {
     required this.onSelect,
     required this.onSelectDestination,
     required this.onDelete,
+    required this.onRename,
+    required this.onArchive,
+    required this.onLoadMore,
     required this.onSearch,
+    required this.onArchived,
     required this.onSettings,
   });
 
@@ -689,6 +937,8 @@ class _Sidebar extends StatelessWidget {
   final List<Session> sessions;
   final bool sessionsLoading;
   final bool sessionsFailed;
+  final String? nextCursor;
+  final bool loadingMore;
   final String? activeSessionId;
   final ShellDestination destination;
   final bool creating;
@@ -696,7 +946,11 @@ class _Sidebar extends StatelessWidget {
   final ValueChanged<String> onSelect;
   final ValueChanged<ShellDestination> onSelectDestination;
   final ValueChanged<Session> onDelete;
+  final ValueChanged<Session> onRename;
+  final ValueChanged<Session> onArchive;
+  final VoidCallback onLoadMore;
   final VoidCallback onSearch;
+  final VoidCallback onArchived;
   final VoidCallback? onSettings;
 
   /// Below this the sidebar cannot hold the destinations, the conversation
@@ -792,6 +1046,7 @@ class _Sidebar extends StatelessWidget {
                 selected: showingChats,
                 onTap: () => onSelectDestination(ShellDestination.chats),
                 onSearch: onSearch,
+                onArchived: onArchived,
               ),
               if (sessionsLoading)
                 const Padding(
@@ -829,8 +1084,18 @@ class _Sidebar extends StatelessWidget {
                           showingChats && session.sessionId == activeSessionId,
                       onTap: () => onSelect(session.sessionId),
                       onDelete: () => onDelete(session),
+                      onRename: () => onRename(session),
+                      onArchive: () => onArchive(session),
                     ),
                   ),
+              if (nextCursor != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: TextButton(
+                    onPressed: loadingMore ? null : onLoadMore,
+                    child: Text(loadingMore ? 'Loading...' : 'Load more'),
+                  ),
+                ),
             ],
           ),
         ),
@@ -851,12 +1116,14 @@ class _ChatsHeader extends StatelessWidget {
     required this.selected,
     required this.onTap,
     required this.onSearch,
+    required this.onArchived,
   });
 
   final AppPalette palette;
   final bool selected;
   final VoidCallback onTap;
   final VoidCallback onSearch;
+  final VoidCallback onArchived;
 
   @override
   Widget build(BuildContext context) {
@@ -881,6 +1148,13 @@ class _ChatsHeader extends StatelessWidget {
                 ),
               ),
             ),
+          ),
+          _IconAction(
+            icon: Icons.archive_outlined,
+            tooltip: 'Archived conversations',
+            onPressed: onArchived,
+            palette: palette,
+            size: 16,
           ),
           _IconAction(
             icon: Icons.search,
@@ -956,6 +1230,8 @@ class _SessionTile extends StatefulWidget {
     required this.selected,
     required this.onTap,
     required this.onDelete,
+    required this.onRename,
+    required this.onArchive,
   });
 
   final Session session;
@@ -963,6 +1239,8 @@ class _SessionTile extends StatefulWidget {
   final bool selected;
   final VoidCallback onTap;
   final VoidCallback onDelete;
+  final VoidCallback onRename;
+  final VoidCallback onArchive;
 
   @override
   State<_SessionTile> createState() => _SessionTileState();
@@ -1012,6 +1290,22 @@ class _SessionTileState extends State<_SessionTile> {
                   // them; a delete icon on every row invites accidents.
                   if (_hovered || widget.selected)
                     _IconAction(
+                      icon: Icons.edit_outlined,
+                      tooltip: 'Rename chat',
+                      onPressed: widget.onRename,
+                      palette: palette,
+                      size: 16,
+                    ),
+                  if (_hovered || widget.selected)
+                    _IconAction(
+                      icon: Icons.archive_outlined,
+                      tooltip: 'Archive chat',
+                      onPressed: widget.onArchive,
+                      palette: palette,
+                      size: 16,
+                    ),
+                  if (_hovered || widget.selected)
+                    _IconAction(
                       icon: Icons.delete_outline,
                       tooltip: 'Delete chat',
                       onPressed: widget.onDelete,
@@ -1024,6 +1318,190 @@ class _SessionTileState extends State<_SessionTile> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ArchivedSessionsList extends StatefulWidget {
+  const _ArchivedSessionsList({
+    required this.apiClient,
+    required this.onRestored,
+    required this.onDeleted,
+  });
+
+  final TuringApi apiClient;
+  final ValueChanged<Session> onRestored;
+  final ValueChanged<String> onDeleted;
+
+  @override
+  State<_ArchivedSessionsList> createState() => _ArchivedSessionsListState();
+}
+
+class _ArchivedSessionsListState extends State<_ArchivedSessionsList> {
+  List<Session> _sessions = const [];
+  String? _nextCursor;
+  bool _loading = true;
+  bool _loadingMore = false;
+  Object? _error;
+  final Set<String> _mutating = {};
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load({String? cursor}) async {
+    if (cursor != null) {
+      if (_loadingMore) return;
+      setState(() => _loadingMore = true);
+    }
+    try {
+      final page = await widget.apiClient.listSessionPage(
+        cursor: cursor,
+        filter: SessionListFilter.archived,
+      );
+      if (!mounted) return;
+      setState(() {
+        if (cursor == null) {
+          _sessions = page.sessions;
+        } else {
+          final merged = <String, Session>{
+            for (final session in _sessions) session.sessionId: session,
+            for (final session in page.sessions) session.sessionId: session,
+          };
+          _sessions = merged.values.toList()
+            ..sort(_ResponsiveShellState._compareSessionsByRecency);
+        }
+        _nextCursor = page.nextCursor;
+        _loading = false;
+        _error = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error;
+      });
+    } finally {
+      if (mounted) setState(() => _loadingMore = false);
+    }
+  }
+
+  Future<void> _restore(Session session) async {
+    if (!_mutating.add(session.sessionId)) return;
+    setState(() {});
+    try {
+      final restored = await widget.apiClient.restoreSession(
+        sessionId: session.sessionId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _sessions = _sessions
+            .where((candidate) => candidate.sessionId != session.sessionId)
+            .toList();
+      });
+      widget.onRestored(restored);
+    } catch (error) {
+      if (mounted) _showError('Could not restore this chat: $error');
+    } finally {
+      _mutating.remove(session.sessionId);
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _delete(Session session) async {
+    if (!_mutating.add(session.sessionId)) return;
+    setState(() {});
+    try {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text('Delete "${sessionDisplayTitle(session)}"?'),
+          content: const Text(
+            'This permanently removes the conversation, its messages and its '
+            'run history, and it will no longer appear in search. Files '
+            'written into the sandbox are not removed. This cannot be undone.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Delete'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+      await widget.apiClient.deleteSession(sessionId: session.sessionId);
+      if (!mounted) return;
+      setState(() {
+        _sessions = _sessions
+            .where((candidate) => candidate.sessionId != session.sessionId)
+            .toList();
+      });
+      widget.onDeleted(session.sessionId);
+    } catch (error) {
+      if (mounted) _showError('Could not delete this chat: $error');
+    } finally {
+      _mutating.remove(session.sessionId);
+      if (mounted) setState(() {});
+    }
+  }
+
+  void _showError(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null && _sessions.isEmpty) {
+      return Center(
+        child: FilledButton(onPressed: _load, child: const Text('Retry')),
+      );
+    }
+    if (_sessions.isEmpty) {
+      return const Center(child: Text('No archived conversations.'));
+    }
+    return ListView(
+      children: [
+        for (final session in _sessions)
+          ListTile(
+            title: Text(sessionDisplayTitle(session)),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  tooltip: 'Restore chat',
+                  onPressed: _mutating.contains(session.sessionId)
+                      ? null
+                      : () => _restore(session),
+                  icon: const Icon(Icons.unarchive_outlined),
+                ),
+                IconButton(
+                  tooltip: 'Delete archived chat',
+                  onPressed: _mutating.contains(session.sessionId)
+                      ? null
+                      : () => _delete(session),
+                  icon: const Icon(Icons.delete_outline),
+                ),
+              ],
+            ),
+          ),
+        if (_nextCursor != null)
+          TextButton(
+            onPressed: _loadingMore ? null : () => _load(cursor: _nextCursor),
+            child: Text(_loadingMore ? 'Loading...' : 'Load more'),
+          ),
+      ],
     );
   }
 }

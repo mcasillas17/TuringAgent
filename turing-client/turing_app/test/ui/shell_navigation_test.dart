@@ -15,6 +15,7 @@ import 'package:turing_flutter_app/models/automation.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
+import 'package:turing_flutter_app/models/session_page.dart';
 import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
@@ -473,6 +474,176 @@ void main() {
         lessThan(tester.getTopLeft(find.text('Old chat')).dy),
         reason: 'durable activity time, not replay delivery, owns ordering',
       );
+    });
+
+    testWidgets('load more appends the next stable cursor page', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..nextSessionCursor = 'cursor-2'
+        ..sessionPages['cursor-2'] = SessionPage(
+          sessions: [
+            Session(
+              sessionId: 'sess_older',
+              title: 'Older chat',
+              updatedAt: DateTime.utc(2026, 5, 9),
+            ),
+          ],
+        );
+      await _pumpShell(tester, api: api, size: _desktop);
+
+      await tester.tap(find.widgetWithText(TextButton, 'Load more'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Existing chat'), findsOneWidget);
+      expect(find.text('Older chat'), findsOneWidget);
+      expect(api.sessionPageCursors, [null, 'cursor-2']);
+      expect(find.widgetWithText(TextButton, 'Load more'), findsNothing);
+    });
+
+    testWidgets('rename uses the authoritative returned session snapshot', (
+      tester,
+    ) async {
+      final api = _FakeApi();
+      await _pumpShell(tester, api: api, size: _desktop);
+      await tester.tap(find.text('Existing chat'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Rename chat'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byType(TextFormField).last,
+        '  Renamed chat  ',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Rename'));
+      await tester.pumpAndSettle();
+
+      expect(api.renamedTitles, ['  Renamed chat  ']);
+      expect(find.text('Server normalized title'), findsOneWidget);
+      expect(find.text('Existing chat'), findsNothing);
+    });
+
+    testWidgets(
+      'archive guard survives refresh and rejects a delayed status-less event',
+      (tester) async {
+        final globalUpdates = _FakeSessionUpdateSource();
+        final api = _FakeApi();
+        await _pumpShell(
+          tester,
+          api: api,
+          size: _desktop,
+          sessionUpdateSourceFactory: () => globalUpdates,
+        );
+        await tester.tap(find.text('Existing chat'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byTooltip('Archive chat'));
+        await tester.pumpAndSettle();
+        expect(find.text('Existing chat'), findsNothing);
+
+        api
+          ..sessions = [
+            Session(
+              sessionId: 'sess_existing',
+              title: 'Stale active title',
+              updatedAt: DateTime.utc(2026, 5, 10),
+            ),
+          ]
+          ..addCreatedSessionToList = true;
+        await tester.tap(find.text('New chat').first);
+        await tester.pumpAndSettle();
+        expect(find.text('Stale active title'), findsNothing);
+
+        globalUpdates.add(
+          TuringEvent(
+            eventId: 'evt_delayed_legacy',
+            sessionId: 'sess_existing',
+            traceId: 'trace_legacy',
+            sequence: 1,
+            type: 'session.updated',
+            createdAt: DateTime.utc(2026, 8, 20),
+            payload: const {
+              'title': 'Delayed legacy title',
+              'updatedAt': '2026-08-20T00:00:00.000000000Z',
+            },
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Delayed legacy title'), findsNothing);
+      },
+    );
+
+    testWidgets('archived conversations paginate and restore authoritatively', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..archivedSessions = [
+          Session(
+            sessionId: 'sess_archived_1',
+            title: 'Archived one',
+            updatedAt: DateTime.utc(2026, 5, 9),
+            status: SessionStatus.archived,
+          ),
+        ]
+        ..nextArchivedCursor = 'archived-2'
+        ..archivedPages['archived-2'] = SessionPage(
+          sessions: [
+            Session(
+              sessionId: 'sess_archived_2',
+              title: 'Archived two',
+              updatedAt: DateTime.utc(2026, 5, 8),
+              status: SessionStatus.archived,
+            ),
+          ],
+        );
+      await _pumpShell(tester, api: api, size: _desktop);
+
+      await tester.tap(find.byTooltip('Archived conversations'));
+      await tester.pumpAndSettle();
+      expect(find.text('Archived one'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(TextButton, 'Load more'));
+      await tester.pumpAndSettle();
+      expect(find.text('Archived two'), findsOneWidget);
+      expect(api.archivedPageCursors, [null, 'archived-2']);
+
+      await tester.tap(
+        find.descendant(
+          of: find.widgetWithText(ListTile, 'Archived one'),
+          matching: find.byTooltip('Restore chat'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Restored chat'), findsOneWidget);
+      expect(find.text('Archived one'), findsNothing);
+    });
+
+    testWidgets('an archived conversation can be permanently deleted', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..archivedSessions = [
+          Session(
+            sessionId: 'sess_archived',
+            title: 'Archived delete target',
+            updatedAt: DateTime.utc(2026, 5, 9),
+            status: SessionStatus.archived,
+          ),
+        ];
+      await _pumpShell(tester, api: api, size: _desktop);
+
+      await tester.tap(find.byTooltip('Archived conversations'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Delete archived chat'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('cannot be undone'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      expect(api.deletedSessionIds, ['sess_archived']);
+      expect(find.text('Archived delete target'), findsNothing);
     });
 
     testWidgets('a session update survives an older list response', (
@@ -1205,10 +1376,7 @@ void main() {
       expect(find.text('Skills'), findsOneWidget);
 
       // Enough to run the list well past where the nav rows sit.
-      await tester.drag(
-        find.text('Conversation number 0'),
-        const Offset(0, -1200),
-      );
+      await tester.drag(find.byType(ListView).first, const Offset(0, -1200));
       await tester.pumpAndSettle();
 
       // The destinations are this app's primary navigation on desktop; a long
@@ -1440,6 +1608,15 @@ class _FakeApi
   bool removeDeletedSessionFromList = false;
   String createdSessionId = 'sess_new';
   String createdSessionTimestamp = '2026-05-10T00:00:00.000Z';
+  String? nextSessionCursor;
+  final Map<String, SessionPage> sessionPages = {};
+  final List<String?> sessionPageCursors = [];
+  final List<String> renamedTitles = [];
+  List<Session> archivedSessions = [];
+  String? nextArchivedCursor;
+  final Map<String, SessionPage> archivedPages = {};
+  final List<String?> archivedPageCursors = [];
+  final List<String> deletedSessionIds = [];
 
   int listSessionsCalls = 0;
 
@@ -1454,6 +1631,32 @@ class _FakeApi
       return next.future;
     }
     return sessions;
+  }
+
+  @override
+  Future<SessionPage> listSessionPage({
+    int limit = 50,
+    String? cursor,
+    SessionListFilter filter = SessionListFilter.active,
+  }) async {
+    if (filter == SessionListFilter.archived) {
+      archivedPageCursors.add(cursor);
+      if (cursor != null) {
+        return archivedPages[cursor] ?? const SessionPage(sessions: []);
+      }
+      return SessionPage(
+        sessions: archivedSessions,
+        nextCursor: nextArchivedCursor,
+      );
+    }
+    sessionPageCursors.add(cursor);
+    if (cursor != null) {
+      return sessionPages[cursor] ?? const SessionPage(sessions: []);
+    }
+    return SessionPage(
+      sessions: await listSessions(limit: limit),
+      nextCursor: nextSessionCursor,
+    );
   }
 
   @override
@@ -1598,11 +1801,63 @@ class _FakeApi
 
   @override
   Future<void> deleteSession({required String sessionId}) async {
+    deletedSessionIds.add(sessionId);
+    archivedSessions = archivedSessions
+        .where((session) => session.sessionId != sessionId)
+        .toList();
     if (removeDeletedSessionFromList) {
       sessions = sessions
           .where((session) => session.sessionId != sessionId)
           .toList();
     }
+  }
+
+  @override
+  Future<Session> renameSession({
+    required String sessionId,
+    required String title,
+  }) async {
+    renamedTitles.add(title);
+    final renamed = Session(
+      sessionId: sessionId,
+      title: 'Server normalized title',
+      updatedAt: DateTime.utc(2026, 5, 11),
+    );
+    sessions = [
+      renamed,
+      ...sessions.where((session) => session.sessionId != sessionId),
+    ];
+    return renamed;
+  }
+
+  @override
+  Future<Session> archiveSession({required String sessionId}) async {
+    final existing = sessions.firstWhere(
+      (session) => session.sessionId == sessionId,
+    );
+    sessions = sessions
+        .where((session) => session.sessionId != sessionId)
+        .toList();
+    return Session(
+      sessionId: sessionId,
+      title: existing.title,
+      updatedAt: DateTime.utc(2026, 5, 12),
+      status: SessionStatus.archived,
+    );
+  }
+
+  @override
+  Future<Session> restoreSession({required String sessionId}) async {
+    final restored = Session(
+      sessionId: sessionId,
+      title: 'Restored chat',
+      updatedAt: DateTime.utc(2026, 5, 13),
+    );
+    archivedSessions = archivedSessions
+        .where((session) => session.sessionId != sessionId)
+        .toList();
+    sessions = [restored, ...sessions];
+    return restored;
   }
 
   @override
