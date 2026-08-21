@@ -17,6 +17,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -146,9 +147,10 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 		TraceId:   enqueued.TraceID,
 		Sequence:  queuedEvent.Sequence,
 		Event: &turingv1.ChatStreamEvent_RunQueued{RunQueued: &turingv1.RunQueued{
-			RunId:   enqueued.RunID,
-			JobId:   enqueued.JobID,
-			TraceId: enqueued.TraceID,
+			RunId:    enqueued.RunID,
+			JobId:    enqueued.JobID,
+			TraceId:  enqueued.TraceID,
+			RunState: s.queuedRunState(ctx, req.SessionId, enqueued),
 		}},
 	}); err != nil {
 		if req.IdempotencyKey != "" {
@@ -195,6 +197,33 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 			}
 		}
 	}
+}
+
+// queuedRunState is the committed snapshot the queued event carries.
+//
+// This send exists because the initiating client is the one subscriber that
+// never receives the bus copy of its own queued event: the stream starts with
+// that sequence already marked sent. Without the state here, the client that
+// sent the message would be the only one that never learns the run's first
+// version, and its reconciliation would start from whatever moved the run next.
+//
+// A replayed idempotent enqueue carries no payload — the durable event was
+// written by the original call — so the snapshot is read back from the event
+// itself rather than from the run as it stands now. That is the difference
+// between answering a retry with "this is the queued event you are replaying"
+// and answering it with a state that contradicts the message it is attached to.
+func (s *Server) queuedRunState(ctx context.Context, sessionID string, enqueued repository.EnqueueUserMessageResult) *turingv1.RunState {
+	payloadJSON := enqueued.QueuedEvent.PayloadJSON
+	if payloadJSON == "" && enqueued.QueuedEvent.Sequence > 0 {
+		replayed, _, err := s.repo.ReplayEvents(ctx, sessionID, enqueued.QueuedEvent.Sequence-1, 1)
+		if err == nil && len(replayed) == 1 &&
+			replayed[0].Sequence == enqueued.QueuedEvent.Sequence &&
+			replayed[0].Type == enqueued.QueuedEvent.Type &&
+			replayed[0].RunID.Valid && replayed[0].RunID.String == enqueued.RunID {
+			payloadJSON = replayed[0].PayloadJSON
+		}
+	}
+	return events.Decode(enqueued.QueuedEvent.Type, payloadJSON).RunState
 }
 
 func (s *Server) dispatchEnqueued(ctx context.Context, enqueued repository.EnqueueUserMessageResult, cancelRunOnFailure bool) error {
@@ -317,6 +346,12 @@ func requestContentType(contentType string) error {
 	}
 	return status.Error(codes.InvalidArgument, "content_type is unsupported")
 }
+
+// runStateChangedEventType is the durable projection a transition appends when
+// it has no lifecycle event of its own. It is deliberately absent from
+// isTerminalEvent below: entering recovery is news, not an ending, and treating
+// it as terminal would close a stream on a run that is still going.
+const runStateChangedEventType = "agent.run.state_changed"
 
 func isTerminalEvent(eventType string) bool {
 	switch eventType {
@@ -474,78 +509,74 @@ func busEventFromRepository(event repository.Event) events.Event {
 	}
 }
 
+// legacyFailureCode and legacyCancellationReason are the fixed generic values
+// the deprecated ChatStream fields now carry.
+//
+// They are constants rather than anything read off the row. The code field used
+// to hold whatever the writer put there and the message field held a provider's
+// own sentence, which is how a failing model got to write the text a user read.
+// A new client reads RunState, whose vocabulary is closed and localizable;
+// these exist so an older build still receives a well-formed event.
+const (
+	legacyFailureCode         = "run_failed"
+	legacyCancellationReason  = "cancelled"
+	legacyRunFailureMessage   = ""
+	legacyRunFailureRetryable = false
+)
+
 func mapChatEvent(event events.Event) *turingv1.ChatStreamEvent {
-	payload, err := decodePayload(event.PayloadJSON)
-	if err != nil {
-		out := baseChatEvent(event)
-		out.Event = &turingv1.ChatStreamEvent_RunFailed{RunFailed: &turingv1.RunFailed{
-			RunId:   event.RunID,
-			Code:    "invalid_event_payload",
-			Message: err.Error(),
-		}}
-		return out
-	}
+	safe := events.Decode(event.Type, event.PayloadJSON)
+	payload := safe.Payload
+	out := baseChatEvent(event)
 	switch event.Type {
 	case "message.delta":
-		out := baseChatEvent(event)
 		out.Event = &turingv1.ChatStreamEvent_TokenDelta{TokenDelta: &turingv1.TokenDelta{
 			MessageId: payloadString(payload, "messageId", "message_id"),
 			Delta:     payloadString(payload, "delta"),
 		}}
-		return out
 	case "message.completed":
-		out := baseChatEvent(event)
 		out.Event = &turingv1.ChatStreamEvent_MessageCompleted{MessageCompleted: &turingv1.MessageCompleted{
 			MessageId: payloadString(payload, "messageId", "message_id"),
 			Content:   payloadString(payload, "content"),
 		}}
-		return out
 	case "agent.run.started":
-		out := baseChatEvent(event)
 		out.Event = &turingv1.ChatStreamEvent_RunStarted{RunStarted: &turingv1.RunStarted{
-			RunId:   event.RunID,
-			JobId:   payloadString(payload, "jobId", "job_id"),
-			Attempt: payloadInt32(payload, "attempt"),
+			RunId:    event.RunID,
+			JobId:    payloadString(payload, "jobId", "job_id"),
+			Attempt:  payloadInt32(payload, "attempt"),
+			RunState: safe.RunState,
 		}}
-		return out
 	case "agent.run.completed":
-		out := baseChatEvent(event)
 		out.Event = &turingv1.ChatStreamEvent_RunCompleted{RunCompleted: &turingv1.RunCompleted{
 			RunId:              event.RunID,
 			AssistantMessageId: payloadString(payload, "assistantMessageId", "assistant_message_id"),
+			RunState:           safe.RunState,
 		}}
-		return out
 	case "agent.run.failed":
-		out := baseChatEvent(event)
 		out.Event = &turingv1.ChatStreamEvent_RunFailed{RunFailed: &turingv1.RunFailed{
 			RunId:     event.RunID,
-			Code:      payloadString(payload, "code"),
-			Message:   payloadString(payload, "message"),
-			Retryable: payloadBool(payload, "retryable"),
+			Code:      legacyFailureCode,
+			Message:   legacyRunFailureMessage,
+			Retryable: legacyRunFailureRetryable,
+			RunState:  safe.RunState,
 		}}
-		return out
 	case "agent.run.cancelled":
-		out := baseChatEvent(event)
 		out.Event = &turingv1.ChatStreamEvent_RunCancelled{RunCancelled: &turingv1.RunCancelled{
-			RunId:  event.RunID,
-			Reason: payloadString(payload, "reason"),
+			RunId:    event.RunID,
+			Reason:   legacyCancellationReason,
+			RunState: safe.RunState,
 		}}
-		return out
+	case runStateChangedEventType:
+		// The transitions with no lifecycle event of their own — entering
+		// recovery, returning to running — reach a client here rather than as
+		// a generic persisted event, so a live watcher learns them as state.
+		out.Event = &turingv1.ChatStreamEvent_RunStateChanged{RunStateChanged: &turingv1.RunStateChanged{
+			RunState: safe.RunState,
+		}}
 	default:
-		persisted, err := persistedEvent(event, payload)
-		if err != nil {
-			out := baseChatEvent(event)
-			out.Event = &turingv1.ChatStreamEvent_RunFailed{RunFailed: &turingv1.RunFailed{
-				RunId:   event.RunID,
-				Code:    "invalid_event_payload",
-				Message: err.Error(),
-			}}
-			return out
-		}
-		out := baseChatEvent(event)
-		out.Event = &turingv1.ChatStreamEvent_PersistedEvent{PersistedEvent: persisted}
-		return out
+		out.Event = &turingv1.ChatStreamEvent_PersistedEvent{PersistedEvent: persistedEvent(event, safe)}
 	}
+	return out
 }
 
 func baseChatEvent(event events.Event) *turingv1.ChatStreamEvent {
@@ -557,13 +588,6 @@ func baseChatEvent(event events.Event) *turingv1.ChatStreamEvent {
 	}
 }
 
-func decodePayload(payloadJSON string) (map[string]any, error) {
-	if payloadJSON == "" {
-		payloadJSON = "{}"
-	}
-	return safejson.DecodeObject(json.NewDecoder(strings.NewReader(payloadJSON)))
-}
-
 func payloadString(payload map[string]any, names ...string) string {
 	for _, name := range names {
 		if value, ok := payload[name].(string); ok {
@@ -571,11 +595,6 @@ func payloadString(payload map[string]any, names ...string) string {
 		}
 	}
 	return ""
-}
-
-func payloadBool(payload map[string]any, name string) bool {
-	value, ok := payload[name].(bool)
-	return ok && value
 }
 
 func payloadInt32(payload map[string]any, names ...string) int32 {
@@ -592,10 +611,21 @@ func payloadInt32(payload map[string]any, names ...string) int32 {
 	return 0
 }
 
-func persistedEvent(event events.Event, payload map[string]any) (*turingv1.TuringEvent, error) {
-	protoPayload, err := safejson.ToStruct(payload)
+// persistedEvent is the arm every event without a dedicated union takes —
+// approvals, tool calls, notices. It carries the same canonical snapshot the
+// dedicated unions carry, because an approval that moved a run's lifecycle is
+// as much a state change as a completion is.
+//
+// A payload that will not convert yields an empty one rather than an error: the
+// only thing left to say would be built from the bytes that failed, and this is
+// the boundary that exists to keep those in the database.
+func persistedEvent(event events.Event, safe events.SafeEvent) *turingv1.TuringEvent {
+	protoPayload, err := safejson.ToStruct(safe.Payload)
 	if err != nil {
-		return nil, err
+		// An empty struct rather than absence, so this arm and EventService
+		// render the same row identically. Parity between the live stream and
+		// the replay is the reason both go through one decoder at all.
+		protoPayload = &structpb.Struct{Fields: map[string]*structpb.Value{}}
 	}
 	return &turingv1.TuringEvent{
 		EventId:   event.EventID,
@@ -606,7 +636,8 @@ func persistedEvent(event events.Event, payload map[string]any) (*turingv1.Turin
 		Type:      mapEventType(event.Type),
 		CreatedAt: parseTimestamp(event.CreatedAt),
 		Payload:   protoPayload,
-	}, nil
+		RunState:  safe.RunState,
+	}
 }
 
 func mapEventType(value string) turingv1.TuringEventType {
@@ -632,6 +663,10 @@ func mapEventType(value string) turingv1.TuringEventType {
 		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_FAILED
 	case "agent.run.cancelled":
 		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_CANCELLED
+	// The durable type is agent.run.state_changed; the normalization above
+	// turns its underscore into a dot before this switch sees it.
+	case "agent.run.state.changed":
+		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED
 	case "tool.call.started":
 		return turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED
 	case "tool.call.completed":

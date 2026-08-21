@@ -1557,3 +1557,86 @@ func TestReapproveExpiredApprovedApprovalRevokesToken(t *testing.T) {
 		t.Fatalf("approval after reapprove = %+v, want expired with revoked token", approval)
 	}
 }
+
+// TestApprovalDenialRationaleStaysOutOfRunStateAndFailureEvents holds the line
+// TUR-002 drew. A human's reason for refusing a tool call is governed audit
+// input, not a generic machine diagnostic: it belongs in the approval row and
+// the bounded audit projection, and it must not reach a public event payload,
+// a run state, or a failure event on the way out.
+func TestApprovalDenialRationaleStaysOutOfRunStateAndFailureEvents(t *testing.T) {
+	h := newApprovalHarness(t)
+	enqueued := h.createRunningToolCall(t)
+	approvalID, err := h.service.CreateApprovalForTool(context.Background(), enqueued.RunID,
+		"call_1", "general_assistant", "files.update", map[string]any{"path": "note.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const rationale = "denied because this would email the whole company"
+	if _, err := turingv1.NewApprovalServiceClient(h.conn).DenyApproval(context.Background(),
+		&turingv1.DenyApprovalRequest{ApprovalId: approvalID, Reason: rationale}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The rationale is still where governance put it.
+	approval, err := h.repo.GetApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !approval.DenialReason.Valid || approval.DenialReason.String != rationale {
+		t.Fatalf("stored denial reason = %+v, want the operator's words preserved", approval.DenialReason)
+	}
+	var auditPayloads int
+	rows, err := h.database.QueryContext(context.Background(),
+		`SELECT payload_json FROM audit_logs WHERE payload_json LIKE ?`, "%"+rationale+"%")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var payload string
+		if err := rows.Scan(&payload); err != nil {
+			t.Fatal(err)
+		}
+		auditPayloads++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if auditPayloads == 0 {
+		t.Fatal("the governed audit projection lost the denial rationale")
+	}
+
+	// And nowhere else. Every public event this session can serve is read
+	// through the same boundary a client reads.
+	server := events.NewServer(h.repo, h.bus)
+	listed, err := server.ListEvents(context.Background(),
+		&turingv1.ListEventsRequest{SessionId: enqueued.SessionID, Limit: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawDenial, sawFailure bool
+	for _, event := range listed.GetEvents() {
+		switch event.GetType() {
+		case turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_DENIED:
+			sawDenial = true
+		case turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_FAILED:
+			sawFailure = true
+		}
+		for key, value := range event.GetPayload().AsMap() {
+			text, isText := value.(string)
+			if isText && strings.Contains(text, rationale) {
+				t.Fatalf("public %v payload republished the denial rationale under %q", event.GetType(), key)
+			}
+		}
+		state := event.GetRunState()
+		if state == nil {
+			continue
+		}
+		if strings.Contains(state.String(), rationale) {
+			t.Fatalf("run state on %v carries the denial rationale", event.GetType())
+		}
+	}
+	if !sawDenial || !sawFailure {
+		t.Fatalf("seeded events denial=%v failure=%v, want both public paths covered", sawDenial, sawFailure)
+	}
+}

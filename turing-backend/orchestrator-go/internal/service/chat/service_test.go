@@ -1750,6 +1750,10 @@ func TestMapChatEventConvertsKnownEvents(t *testing.T) {
 			},
 		},
 		{
+			// The legacy code, message and retryable fields are answered with
+			// fixed generic values whatever the row holds: a new client reads
+			// RunState, and an older one must not be handed a provider's own
+			// sentence just because a stored payload still has one.
 			name:  "run failed",
 			event: events.Event{SessionID: "sess_1", RunID: "run_1", TraceID: "trace_1", Sequence: 6, Type: "agent.run.failed", PayloadJSON: `{"code":"model_error","message":"boom","retryable":true}`},
 			assertFn: func(t *testing.T, got *turingv1.ChatStreamEvent) {
@@ -1759,8 +1763,8 @@ func TestMapChatEventConvertsKnownEvents(t *testing.T) {
 				if retryableField == nil || retryableField.Name() != "retryable" {
 					t.Fatalf("run_failed retryable field descriptor = %v, want field 4 named retryable", retryableField)
 				}
-				if failed.GetCode() != "model_error" || failed.GetMessage() != "boom" || !failed.ProtoReflect().Get(retryableField).Bool() {
-					t.Fatalf("run_failed = %+v", failed)
+				if failed.GetCode() != legacyFailureCode || failed.GetMessage() != "" || failed.ProtoReflect().Get(retryableField).Bool() {
+					t.Fatalf("run_failed = %+v, want the fixed generic legacy values", failed)
 				}
 			},
 		},
@@ -1769,8 +1773,8 @@ func TestMapChatEventConvertsKnownEvents(t *testing.T) {
 			event: events.Event{SessionID: "sess_1", RunID: "run_1", TraceID: "trace_1", Sequence: 7, Type: "agent.run.cancelled", PayloadJSON: `{"reason":"client_cancelled"}`},
 			assertFn: func(t *testing.T, got *turingv1.ChatStreamEvent) {
 				t.Helper()
-				if got.GetRunCancelled().GetReason() != "client_cancelled" {
-					t.Fatalf("run_cancelled = %+v", got.GetRunCancelled())
+				if got.GetRunCancelled().GetReason() != legacyCancellationReason {
+					t.Fatalf("run_cancelled = %+v, want the fixed generic legacy reason", got.GetRunCancelled())
 				}
 			},
 		},
@@ -1828,14 +1832,21 @@ func TestMapChatEventMapsSessionUpdatedFallback(t *testing.T) {
 	}
 }
 
-func TestMapChatEventReturnsRunFailedWhenPayloadIsInvalid(t *testing.T) {
+// A payload this build cannot read used to be answered with the JSON parser's
+// own sentence, which is built from the bytes it failed on — so an unreadable
+// row published exactly what the read boundary exists to withhold. The event
+// keeps the type it actually is and loses only the values nobody could read.
+func TestMapChatEventDropsUnreadablePayloadWithoutParserText(t *testing.T) {
 	got := mapChatEvent(events.Event{SessionID: "sess_1", RunID: "run_1", TraceID: "trace_1", Sequence: 8, Type: "message.delta", PayloadJSON: `{`})
-	failed := got.GetRunFailed()
-	if failed == nil {
-		t.Fatalf("event = %T, want run_failed", got.Event)
+	delta := got.GetTokenDelta()
+	if delta == nil {
+		t.Fatalf("event = %T, want token_delta", got.Event)
 	}
-	if failed.RunId != "run_1" || failed.Code == "" || failed.Message == "" {
-		t.Fatalf("run_failed = %+v", failed)
+	if delta.GetDelta() != "" || delta.GetMessageId() != "" {
+		t.Fatalf("token_delta = %+v, want no values read from an unreadable payload", delta)
+	}
+	if failed := got.GetRunFailed(); failed != nil {
+		t.Fatalf("unreadable payload reported a failure: %+v", failed)
 	}
 }
 

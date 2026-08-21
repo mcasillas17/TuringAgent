@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -147,5 +148,53 @@ func assertToolEventPayloadContract(t *testing.T, payloadJSON, toolCallID, toolN
 	}
 	if len(payload) != 4 {
 		t.Fatalf("terminal payload keys = %#v, want only toolCallId/toolName/serverName/category", payload)
+	}
+}
+
+// TestToolEventContractSurvivesThePublicReadBoundary carries the contract above
+// one step further than the write. A worker's beacon is normalized before it is
+// stored, but a database can be restored from a backup taken before that
+// normalization existed — so the boundary a client actually reads through has to
+// reach the same payload from a row that was never normalized at all.
+func TestToolEventContractSurvivesThePublicReadBoundary(t *testing.T) {
+	tests := []struct {
+		name         string
+		eventType    string
+		legacy       string
+		wantCategory runoutcome.Reason
+	}{
+		{
+			name:      "failed",
+			eventType: "tool.call.failed",
+			legacy: `{"toolCallId":"call_1","toolName":"system.time","serverName":"system",` +
+				`"error":"the tool wrote /Users/someone/secrets/private.key",` +
+				`"message":"tool exploded","resultSummary":"private result","durationMs":42,` +
+				`"args":{"secret":"not public"}}`,
+			wantCategory: runoutcome.ReasonToolFailure,
+		},
+		{
+			name:      "denied",
+			eventType: "tool.call.denied",
+			legacy: `{"toolCallId":"call_2","toolName":"system.shell","serverName":"system",` +
+				`"reason":"policy said no because the user objected","args":{"secret":"not public"}}`,
+			wantCategory: runoutcome.ReasonPolicyDenied,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			safe := events.Decode(test.eventType, test.legacy)
+			want := map[string]any{
+				"toolCallId": map[string]string{"failed": "call_1", "denied": "call_2"}[test.name],
+				"toolName":   map[string]string{"failed": "system.time", "denied": "system.shell"}[test.name],
+				"serverName": "system",
+				"category":   string(test.wantCategory),
+			}
+			if !reflect.DeepEqual(safe.Payload, want) {
+				t.Fatalf("public payload = %#v, want %#v", safe.Payload, want)
+			}
+			if safe.RunState != nil {
+				t.Fatalf("a tool event produced a run state %+v", safe.RunState)
+			}
+		})
 	}
 }

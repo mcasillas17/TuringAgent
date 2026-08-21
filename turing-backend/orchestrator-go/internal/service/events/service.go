@@ -2,7 +2,6 @@ package events
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -185,6 +184,7 @@ func mapEvent(event repository.Event) *turingv1.TuringEvent {
 	if event.RunID.Valid {
 		runID = event.RunID.String
 	}
+	safe := Decode(event.Type, event.PayloadJSON)
 	return &turingv1.TuringEvent{
 		EventId:   event.EventID,
 		SessionId: event.SessionID,
@@ -193,11 +193,17 @@ func mapEvent(event repository.Event) *turingv1.TuringEvent {
 		Sequence:  event.Sequence,
 		Type:      mapEventType(event.Type),
 		CreatedAt: parseEventTimestamp(event.CreatedAt),
-		Payload:   mapPayload(event.PayloadJSON),
+		Payload:   mapPayload(safe.Payload),
+		RunState:  safe.RunState,
 	}
 }
 
+// mapBusEvent is the live half of the same projection. It decodes through the
+// same function as the replay above rather than a parallel one: a client that
+// watches a run live and a client that reopens it later are looking at the same
+// durable row, and the whole point of this feature is that they agree.
 func mapBusEvent(event Event) *turingv1.TuringEvent {
+	safe := Decode(event.Type, event.PayloadJSON)
 	return &turingv1.TuringEvent{
 		EventId:   event.EventID,
 		SessionId: event.SessionID,
@@ -206,7 +212,8 @@ func mapBusEvent(event Event) *turingv1.TuringEvent {
 		Sequence:  event.Sequence,
 		Type:      mapEventType(event.Type),
 		CreatedAt: parseEventTimestamp(event.CreatedAt),
-		Payload:   mapPayload(event.PayloadJSON),
+		Payload:   mapPayload(safe.Payload),
+		RunState:  safe.RunState,
 	}
 }
 
@@ -233,6 +240,10 @@ func mapEventType(value string) turingv1.TuringEventType {
 		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_FAILED
 	case "agent.run.cancelled":
 		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_CANCELLED
+	// The durable type is agent.run.state_changed; the normalization above
+	// turns its underscore into a dot before this switch sees it.
+	case "agent.run.state.changed":
+		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED
 	case "tool.call.started":
 		return turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED
 	case "tool.call.completed":
@@ -262,19 +273,16 @@ func mapEventType(value string) turingv1.TuringEventType {
 	}
 }
 
-func mapPayload(payloadJSON string) *structpb.Struct {
-	if payloadJSON == "" {
-		return &structpb.Struct{Fields: map[string]*structpb.Value{}}
-	}
-	value, err := safejson.DecodeObject(json.NewDecoder(strings.NewReader(payloadJSON)))
+// mapPayload renders an already-allowlisted payload. A value that cannot be
+// converted yields an empty struct rather than an error message: by this point
+// the payload has been through the shared decoder, and there is nothing left
+// worth telling a client except what the event was.
+func mapPayload(payload map[string]any) *structpb.Struct {
+	converted, err := safejson.ToStruct(payload)
 	if err != nil {
 		return &structpb.Struct{Fields: map[string]*structpb.Value{}}
 	}
-	payload, err := safejson.ToStruct(value)
-	if err != nil {
-		return &structpb.Struct{Fields: map[string]*structpb.Value{}}
-	}
-	return payload
+	return converted
 }
 
 func parseEventTimestamp(value string) *timestamppb.Timestamp {
