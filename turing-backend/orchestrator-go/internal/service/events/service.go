@@ -3,7 +3,6 @@ package events
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
@@ -191,7 +190,7 @@ func mapEvent(event repository.Event) *turingv1.TuringEvent {
 		RunId:     runID,
 		TraceId:   event.TraceID,
 		Sequence:  event.Sequence,
-		Type:      mapEventType(event.Type),
+		Type:      MapEventType(event.Type),
 		CreatedAt: parseEventTimestamp(event.CreatedAt),
 		Payload:   mapPayload(safe.Payload),
 		RunState:  safe.RunState,
@@ -210,66 +209,10 @@ func mapBusEvent(event Event) *turingv1.TuringEvent {
 		RunId:     event.RunID,
 		TraceId:   event.TraceID,
 		Sequence:  event.Sequence,
-		Type:      mapEventType(event.Type),
+		Type:      MapEventType(event.Type),
 		CreatedAt: parseEventTimestamp(event.CreatedAt),
 		Payload:   mapPayload(safe.Payload),
 		RunState:  safe.RunState,
-	}
-}
-
-func mapEventType(value string) turingv1.TuringEventType {
-	normalized := strings.ToLower(value)
-	normalized = strings.TrimPrefix(normalized, "turing_event_type_")
-	normalized = strings.ReplaceAll(normalized, "_", ".")
-	switch normalized {
-	case "message.started":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_STARTED
-	case "message.delta":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA
-	case "message.completed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_COMPLETED
-	case "agent.run.queued":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_QUEUED
-	case "agent.run.started":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STARTED
-	case "agent.run.step":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP
-	case "agent.run.completed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_COMPLETED
-	case "agent.run.failed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_FAILED
-	case "agent.run.cancelled":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_CANCELLED
-	// The durable type is agent.run.state_changed; the normalization above
-	// turns its underscore into a dot before this switch sees it.
-	case "agent.run.state.changed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED
-	case "tool.call.started":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED
-	case "tool.call.completed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED
-	case "tool.call.failed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED
-	case "tool.call.denied":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_DENIED
-	case "approval.requested":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_REQUESTED
-	case "approval.approved":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_APPROVED
-	case "approval.denied":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_DENIED
-	case "approval.expired":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_EXPIRED
-	case "approval.consumed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_CONSUMED
-	case "error":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_ERROR
-	case "system":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_SYSTEM
-	case "session.updated":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_UPDATED
-	default:
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_UNSPECIFIED
 	}
 }
 

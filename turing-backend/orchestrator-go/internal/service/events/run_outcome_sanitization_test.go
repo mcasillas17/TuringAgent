@@ -8,6 +8,7 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/runstate"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -374,6 +375,13 @@ func TestUnknownNumericRunStateValuesNeverPanic(t *testing.T) {
 // TestEventReplayAndLiveBusCarryIdenticalVersionedRunState is the second half
 // of the parity promise: the same durable transition, read from replay and
 // received live, is the same versioned state.
+//
+// The stream is kept contiguous on purpose. SubscribeSessionEvents re-reads the
+// database whenever a bus event arrives more than one sequence ahead of what it
+// has sent, and that recovery path renders through the replay mapper — so a
+// test that lets a gap open is not watching the live mapper at all. Publishing
+// every durable row, in order, is what makes this an assertion about the live
+// half rather than about the replay half twice.
 func TestEventReplayAndLiveBusCarryIdenticalVersionedRunState(t *testing.T) {
 	h := newEventHarness(t)
 	run := seedEventRun(t, h, "Replay and live")
@@ -384,13 +392,16 @@ func TestEventReplayAndLiveBusCarryIdenticalVersionedRunState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubscribeSessionEvents: %v", err)
 	}
-	// Drain the replayed prefix so what follows is delivered by the bus.
+	// Drain the whole replayed prefix, not just up to a type that happens to be
+	// in it: what follows is delivered by the bus only if the server has
+	// finished replaying everything already durable.
+	seeded := latestSequence(t, h, run.sessionID)
 	for {
 		event, err := stream.Recv()
 		if err != nil {
 			t.Fatalf("recv replayed prefix: %v", err)
 		}
-		if event.GetType() == turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_QUEUED {
+		if event.GetSequence() >= seeded {
 			break
 		}
 	}
@@ -398,6 +409,14 @@ func TestEventReplayAndLiveBusCarryIdenticalVersionedRunState(t *testing.T) {
 	if err := h.repo.MarkRunRunning(context.Background(), run.runID); err != nil {
 		t.Fatalf("MarkRunRunning: %v", err)
 	}
+	// The start's own projection is published before the completion, so the
+	// completion arrives exactly one sequence past what the stream last sent.
+	started := publishDurableTail(t, h, run.sessionID, seeded)
+	liveStart := recvEventOfType(t, stream, turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED)
+	if liveStart.GetRunState().GetLifecycle() != turingv1.RunLifecycle_RUN_LIFECYCLE_RUNNING {
+		t.Fatalf("live start state = %+v, want running", liveStart.GetRunState())
+	}
+
 	running, err := h.repo.GetRunState(context.Background(), run.runID)
 	if err != nil {
 		t.Fatalf("GetRunState: %v", err)
@@ -411,35 +430,140 @@ func TestEventReplayAndLiveBusCarryIdenticalVersionedRunState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompleteRunCanonical: %v", err)
 	}
-	for _, event := range committed.Events {
-		h.bus.Publish(Event{
-			EventID:     event.EventID,
-			SessionID:   event.SessionID,
-			RunID:       event.RunID.String,
-			TraceID:     event.TraceID,
-			Sequence:    event.Sequence,
-			Type:        event.Type,
-			CreatedAt:   event.CreatedAt,
-			PayloadJSON: event.PayloadJSON,
-		})
-	}
+	publishDurableTail(t, h, run.sessionID, started)
 
 	live := recvEventOfType(t, stream, turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_COMPLETED)
 	if live.GetRunState() == nil {
 		t.Fatal("the live completion carried no run state")
 	}
+	// The whole projection is compared, not just its version: a live mapper
+	// that carried the right version onto the wrong identity, lifecycle or
+	// finish time would be exactly the disagreement this promise removes.
+	if !proto.Equal(live.GetRunState(), runstate.Project(committed.State)) {
+		t.Fatalf("live state %+v is not the committed projection %+v",
+			live.GetRunState(), runstate.Project(committed.State))
+	}
 	if live.GetRunState().GetStateVersion() != committed.State.StateVersion {
 		t.Fatalf("live state version = %d, want the committed %d",
 			live.GetRunState().GetStateVersion(), committed.State.StateVersion)
 	}
+	if live.GetRunId() != run.runID || live.GetSessionId() != run.sessionID {
+		t.Fatalf("live event identity = %s/%s, want %s/%s",
+			live.GetSessionId(), live.GetRunId(), run.sessionID, run.runID)
+	}
+	if live.GetCreatedAt() == nil {
+		t.Fatal("the live completion carried no created_at")
+	}
 
 	replayed := listedEvent(t, h, run.sessionID, live.GetEventId())
-	if !proto.Equal(live.GetRunState(), replayed.GetRunState()) {
-		t.Fatalf("live state %+v and replayed state %+v disagree", live.GetRunState(), replayed.GetRunState())
+	if !proto.Equal(live, replayed) {
+		t.Fatalf("live event %s and replayed event %s disagree", live, replayed)
 	}
-	if !proto.Equal(live.GetPayload(), replayed.GetPayload()) {
-		t.Fatalf("live payload %s and replayed payload %s disagree", live.GetPayload(), replayed.GetPayload())
+}
+
+// TestLiveAndReplayMappersRenderEveryRowIdentically is the mutation guard for
+// the live mapper itself.
+//
+// The stream test above can only observe the live half while the sequence stays
+// contiguous, which is a property of how that test publishes rather than of the
+// mapper. This one holds the two mappers against the same durable row directly,
+// so a change to either one alone — a dropped state, a dropped identity, a
+// payload that skipped the allowlist — fails here whatever the stream does.
+func TestLiveAndReplayMappersRenderEveryRowIdentically(t *testing.T) {
+	h := newEventHarness(t)
+	run := seedEventRun(t, h, "Mapper parity")
+	if err := h.repo.MarkRunRunning(context.Background(), run.runID); err != nil {
+		t.Fatalf("MarkRunRunning: %v", err)
 	}
+	running, err := h.repo.GetRunState(context.Background(), run.runID)
+	if err != nil {
+		t.Fatalf("GetRunState: %v", err)
+	}
+	if _, err := h.repo.CompleteRunCanonical(context.Background(), repository.CompleteRunInput{
+		RunID:                run.runID,
+		AssistantMessageID:   run.assistantMessageID,
+		Content:              "done",
+		ExpectedStateVersion: running.StateVersion,
+	}); err != nil {
+		t.Fatalf("CompleteRunCanonical: %v", err)
+	}
+	// A hand-edited failure row is included so the comparison covers the arm
+	// where the payload is reduced to nothing as well as the arms that keep it.
+	appendLegacyEvent(t, h, run, "AGENT_RUN_FAILED",
+		`{"code":"model_error","message":"connection refused by ollama at 127.0.0.1:11434","assignmentAttemptId":"attempt_7"}`)
+
+	rows, _, err := h.repo.ReplayEvents(context.Background(), run.sessionID, 0, 500)
+	if err != nil {
+		t.Fatalf("ReplayEvents: %v", err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("the seeded session produced no durable rows")
+	}
+	var carriedState int
+	for _, row := range rows {
+		runID := ""
+		if row.RunID.Valid {
+			runID = row.RunID.String
+		}
+		live := mapBusEvent(Event{
+			EventID:     row.EventID,
+			SessionID:   row.SessionID,
+			RunID:       runID,
+			TraceID:     row.TraceID,
+			Sequence:    row.Sequence,
+			Type:        row.Type,
+			CreatedAt:   row.CreatedAt,
+			PayloadJSON: row.PayloadJSON,
+		})
+		replayed := mapEvent(row)
+		if !proto.Equal(live, replayed) {
+			t.Fatalf("row %s (%s): live %s and replayed %s disagree", row.EventID, row.Type, live, replayed)
+		}
+		if live.GetRunState() != nil {
+			carriedState++
+		}
+	}
+	if carriedState == 0 {
+		t.Fatal("no seeded row carried a run state, so the comparison proved nothing about it")
+	}
+}
+
+// latestSequence asks the public replay how far the durable log currently goes.
+func latestSequence(t *testing.T, h *eventHarness, sessionID string) int64 {
+	t.Helper()
+	response, err := turingv1.NewEventServiceClient(h.conn).ListEvents(context.Background(),
+		&turingv1.ListEventsRequest{SessionId: sessionID, Limit: 500})
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	return response.GetLatestSequence()
+}
+
+// publishDurableTail publishes every durable row past a mark onto the bus, in
+// sequence order, the way the runtime publishes what it just committed.
+func publishDurableTail(t *testing.T, h *eventHarness, sessionID string, after int64) int64 {
+	t.Helper()
+	rows, latest, err := h.repo.ReplayEvents(context.Background(), sessionID, after, 500)
+	if err != nil {
+		t.Fatalf("ReplayEvents: %v", err)
+	}
+	for _, row := range rows {
+		runID := ""
+		if row.RunID.Valid {
+			runID = row.RunID.String
+		}
+		h.bus.Publish(Event{
+			EventID:     row.EventID,
+			SessionID:   row.SessionID,
+			RunID:       runID,
+			TraceID:     row.TraceID,
+			Sequence:    row.Sequence,
+			Type:        row.Type,
+			CreatedAt:   row.CreatedAt,
+			PayloadJSON: row.PayloadJSON,
+		})
+	}
+	return latest
 }
 
 func recvEventOfType(t *testing.T, stream turingv1.EventService_SubscribeSessionEventsClient, want turingv1.TuringEventType) *turingv1.TuringEvent {

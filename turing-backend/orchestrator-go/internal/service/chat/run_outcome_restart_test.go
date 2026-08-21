@@ -53,8 +53,10 @@ func newRestartHarness(t *testing.T) *restartHarness {
 	return &restartHarness{path: path, database: database, repo: repository.New(database)}
 }
 
-// restart closes the seeded database and reopens the same file, so what the
-// tests below read is what actually survived on disk.
+// restart closes the seeded database and reopens the same file the way the
+// process does at startup — open, then apply migrations — so what the tests
+// below read is what actually survived on disk and went through whatever the
+// migrations do to it on the way back up.
 func (h *restartHarness) restart(t *testing.T) *restartHarness {
 	t.Helper()
 	if err := h.database.Close(); err != nil {
@@ -65,6 +67,9 @@ func (h *restartHarness) restart(t *testing.T) *restartHarness {
 		t.Fatalf("reopen db: %v", err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
+	if err := db.ApplyMigrations(context.Background(), reopened); err != nil {
+		t.Fatalf("reapply migrations: %v", err)
+	}
 	return &restartHarness{path: h.path, database: reopened, repo: repository.New(reopened)}
 }
 
@@ -720,12 +725,12 @@ func TestChatDirectRunQueuedCarriesVersionOneRunState(t *testing.T) {
 }
 
 // TestChatAndEventTypeMappersMapRunStateChangedToTwentyThree pins the durable
-// type onto its allocated public value in both mappers. Both normalize
-// underscores to dots before switching, so the case literal they need is the
-// dotted one even though the durable type keeps its underscore.
+// type onto its allocated public value. Both services now publish through the
+// one shared mapper, so there is a single answer to pin rather than two that
+// have to be kept equal.
 func TestChatAndEventTypeMappersMapRunStateChangedToTwentyThree(t *testing.T) {
-	if got := mapEventType("agent.run.state_changed"); got != turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED {
-		t.Fatalf("chat.mapEventType = %v, want AGENT_RUN_STATE_CHANGED", got)
+	if got := events.MapEventType("agent.run.state_changed"); got != turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED {
+		t.Fatalf("shared MapEventType = %v, want AGENT_RUN_STATE_CHANGED", got)
 	}
 	if int32(turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED) != 23 {
 		t.Fatalf("state-changed event type = %d, want the allocated 23",
@@ -902,26 +907,40 @@ func TestAmbiguousCancellationStaysAbandonedAcrossLiveReplayAndReopen(t *testing
 	}
 
 	// A row the migration never reached is the remaining shape: the transport's
-	// own word for what happened, stored before any of this existed. The read
-	// boundary answers it with the fixed generic value rather than promoting it
-	// to a claim about what the user wanted.
-	legacy := mapChatEvent(events.Event{
-		SessionID: session, RunID: runID, TraceID: "trace_legacy", Sequence: 999,
+	// own word for what happened, stored before any of this existed. It is
+	// appended durably and then read the way a reopened client reads it, over
+	// the public replay and the public subscription, rather than by handing a
+	// repository struct to an unexported mapper. What a mapper does with a
+	// value nobody stored is not the promise; what a restarted process serves
+	// from the file is.
+	unmigrated, err := seeder.repo.AppendEvent(context.Background(), repository.AppendEventInput{
+		SessionID:   session,
+		RunID:       runID,
+		TraceID:     "trace_legacy",
 		Type:        "agent.run.cancelled",
 		PayloadJSON: `{"runId":"` + runID + `","reason":"client_cancelled","message":"stream gone"}`,
 	})
-	unmigrated := legacy.GetRunCancelled()
-	if unmigrated == nil {
-		t.Fatalf("unmigrated cancellation mapped to %T, want run_cancelled", legacy.Event)
-	}
-	if unmigrated.GetReason() != legacyCancellationReason {
-		t.Fatalf("unmigrated cancellation reason = %q, want the fixed generic value", unmigrated.GetReason())
-	}
-	if unmigrated.GetRunState() != nil {
-		t.Fatalf("a row with no snapshot produced a state %+v", unmigrated.GetRunState())
+	if err != nil {
+		t.Fatalf("append unmigrated cancellation: %v", err)
 	}
 
 	reopened := seeder.restart(t)
+	conn := publicServices(t, reopened)
+	replayedUnmigrated := listedEvent(t, conn, session, unmigrated.EventID)
+	if replayedUnmigrated.GetType() != turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_CANCELLED {
+		t.Fatalf("unmigrated cancellation published as %v", replayedUnmigrated.GetType())
+	}
+	if len(replayedUnmigrated.GetPayload().GetFields()) != 0 {
+		t.Fatalf("unmigrated cancellation published the payload %s", replayedUnmigrated.GetPayload())
+	}
+	if replayedUnmigrated.GetRunState() != nil {
+		t.Fatalf("a row with no snapshot produced a state %+v", replayedUnmigrated.GetRunState())
+	}
+	subscribed := subscribedEvent(t, conn, session, unmigrated.EventID)
+	if !proto.Equal(replayedUnmigrated, subscribed) {
+		t.Fatalf("replayed %s and subscribed %s disagree about the same row", replayedUnmigrated, subscribed)
+	}
+
 	history := reopenedMessageState(t, reopened, seeded)
 	if history.GetOutcomeReason() != turingv1.RunOutcomeReason_RUN_OUTCOME_REASON_ABANDONED {
 		t.Fatalf("reopened outcome = %v, want abandoned", history.GetOutcomeReason())
@@ -940,8 +959,50 @@ func TestAmbiguousCancellationStaysAbandonedAcrossLiveReplayAndReopen(t *testing
 				t.Fatalf("public payload key %q claims the user cancelled", key)
 			}
 		}
+		if strings.Contains(event.String(), "stream gone") || strings.Contains(event.String(), "client_cancelled") {
+			t.Fatalf("public event republished the transport's own words: %s", event.String())
+		}
 	}
 	assertNoUserCancelledProducer(t)
+}
+
+// listedEvent finds one row in the public replay of a session.
+func listedEvent(t *testing.T, conn *grpc.ClientConn, sessionID string, eventID string) *turingv1.TuringEvent {
+	t.Helper()
+	response, err := turingv1.NewEventServiceClient(conn).ListEvents(context.Background(),
+		&turingv1.ListEventsRequest{SessionId: sessionID, Limit: 500})
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	for _, event := range response.GetEvents() {
+		if event.GetEventId() == eventID {
+			return event
+		}
+	}
+	t.Fatalf("event %s missing from the public replay", eventID)
+	return nil
+}
+
+// subscribedEvent reads the same row off the public subscription, which serves
+// a reopened session its durable prefix before it serves anything live.
+func subscribedEvent(t *testing.T, conn *grpc.ClientConn, sessionID string, eventID string) *turingv1.TuringEvent {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stream, err := turingv1.NewEventServiceClient(conn).SubscribeSessionEvents(ctx,
+		&turingv1.SubscribeSessionEventsRequest{SessionId: sessionID})
+	if err != nil {
+		t.Fatalf("SubscribeSessionEvents: %v", err)
+	}
+	for {
+		event, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("subscription ended before %s: %v", eventID, err)
+		}
+		if event.GetEventId() == eventID {
+			return event
+		}
+	}
 }
 
 // orchestratorRoot is this module's own source tree: internal packages and the

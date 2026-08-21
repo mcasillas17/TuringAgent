@@ -353,8 +353,12 @@ func requestContentType(contentType string) error {
 // it as terminal would close a stream on a run that is still going.
 const runStateChangedEventType = "agent.run.state_changed"
 
+// isTerminalEvent asks the shared canonical name rather than the stored string,
+// for the same reason the payload allowlist does: a row that a client is told
+// is a completion has to end that client's stream, whichever spelling of the
+// type the row happens to hold.
 func isTerminalEvent(eventType string) bool {
-	switch eventType {
+	switch events.CanonicalType(eventType) {
 	case "agent.run.completed", "agent.run.failed", "agent.run.cancelled":
 		return true
 	default:
@@ -528,7 +532,11 @@ func mapChatEvent(event events.Event) *turingv1.ChatStreamEvent {
 	safe := events.Decode(event.Type, event.PayloadJSON)
 	payload := safe.Payload
 	out := baseChatEvent(event)
-	switch event.Type {
+	// The union a client receives is chosen from the same canonical name the
+	// payload allowlist used. Choosing it from the stored string instead would
+	// let a row spelled AGENT_RUN_FAILED arrive as a generic persisted event
+	// while its own type field called it a failure.
+	switch events.CanonicalType(event.Type) {
 	case "message.delta":
 		out.Event = &turingv1.ChatStreamEvent_TokenDelta{TokenDelta: &turingv1.TokenDelta{
 			MessageId: payloadString(payload, "messageId", "message_id"),
@@ -633,66 +641,10 @@ func persistedEvent(event events.Event, safe events.SafeEvent) *turingv1.TuringE
 		RunId:     event.RunID,
 		TraceId:   event.TraceID,
 		Sequence:  event.Sequence,
-		Type:      mapEventType(event.Type),
+		Type:      events.MapEventType(event.Type),
 		CreatedAt: parseTimestamp(event.CreatedAt),
 		Payload:   protoPayload,
 		RunState:  safe.RunState,
-	}
-}
-
-func mapEventType(value string) turingv1.TuringEventType {
-	normalized := strings.ToLower(value)
-	normalized = strings.TrimPrefix(normalized, "turing_event_type_")
-	normalized = strings.ReplaceAll(normalized, "_", ".")
-	switch normalized {
-	case "message.started":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_STARTED
-	case "message.delta":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA
-	case "message.completed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_COMPLETED
-	case "agent.run.queued":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_QUEUED
-	case "agent.run.started":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STARTED
-	case "agent.run.step":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP
-	case "agent.run.completed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_COMPLETED
-	case "agent.run.failed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_FAILED
-	case "agent.run.cancelled":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_CANCELLED
-	// The durable type is agent.run.state_changed; the normalization above
-	// turns its underscore into a dot before this switch sees it.
-	case "agent.run.state.changed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED
-	case "tool.call.started":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED
-	case "tool.call.completed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED
-	case "tool.call.failed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED
-	case "tool.call.denied":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_DENIED
-	case "approval.requested":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_REQUESTED
-	case "approval.approved":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_APPROVED
-	case "approval.denied":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_DENIED
-	case "approval.expired":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_EXPIRED
-	case "approval.consumed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_CONSUMED
-	case "error":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_ERROR
-	case "system":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_SYSTEM
-	case "session.updated":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_UPDATED
-	default:
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_UNSPECIFIED
 	}
 }
 

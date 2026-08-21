@@ -64,13 +64,18 @@ var executionOnlyKeys = []string{"assignmentAttemptId", "workerId", "leaseOwner"
 // Returning the parser's own sentence is what the old mapper did, and a parser
 // message is built from the bytes it failed on — which is precisely the content
 // this boundary exists to keep in the database.
+//
+// The type is resolved through CanonicalType first, so the allowlist below and
+// the public type a client is told are two consequences of one answer. Deciding
+// them separately is how a row stored as AGENT_RUN_FAILED came to be published
+// as a failure whose payload had never seen the failure allowlist.
 func Decode(eventType string, payloadJSON string) SafeEvent {
 	payload, err := decodeEventPayload(payloadJSON)
 	if err != nil {
 		return SafeEvent{Payload: map[string]any{}}
 	}
 	state := runStateFrom(payload)
-	return SafeEvent{Payload: publicPayload(eventType, payload), RunState: state}
+	return SafeEvent{Payload: publicPayload(CanonicalType(eventType), payload), RunState: state}
 }
 
 func decodeEventPayload(payloadJSON string) (map[string]any, error) {
@@ -85,8 +90,12 @@ func decodeEventPayload(payloadJSON string) (map[string]any, error) {
 // its writer built, minus the canonical snapshot, because those are the
 // governed projections this product deliberately shows: an assistant's own
 // output, the egress warning, an approval request's argument summary.
-func publicPayload(eventType string, payload map[string]any) map[string]any {
-	switch eventType {
+//
+// It takes the canonical type rather than the stored string, so a row cannot
+// dodge its allowlist by being spelled differently from the name this build
+// writes.
+func publicPayload(canonicalType string, payload map[string]any) map[string]any {
+	switch canonicalType {
 	case "agent.run.failed", "agent.run.cancelled":
 		// The canonical state says everything a client is allowed to learn
 		// about a terminal outcome, and it travels in the typed field.
@@ -94,9 +103,9 @@ func publicPayload(eventType string, payload map[string]any) map[string]any {
 	case "agent.run.step":
 		return publicRunStep(payload)
 	case "approval.denied", "approval.expired":
-		return identityPayload(payload, approvalIdentityKeys, approvalCategory(eventType))
+		return identityPayload(payload, approvalIdentityKeys, approvalCategory(canonicalType))
 	case "tool.call.failed", "tool.call.denied":
-		return identityPayload(payload, toolCallIdentityKeys, toolCallCategory(eventType))
+		return identityPayload(payload, toolCallIdentityKeys, toolCallCategory(canonicalType))
 	default:
 		return withoutInternalKeys(payload)
 	}
