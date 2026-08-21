@@ -340,41 +340,59 @@ repository first compares raw Go string bytes and verifies that neither complete
 marker occurs in source `message.content`; a collision fails the query instead
 of guessing which bytes FTS5 inserted.
 
-The parser then operates on raw `marked_snippet` bytes before rune decoding or
-UTF-8 repair. Its two states are `text` and `match`: only the exact start marker
-may transition `text -> match`, and only the exact end marker may transition
-`match -> text`. An end marker in `text`, a start marker in `match`, nested or
-reversed markers, a missing partner, or trailing `match` state is an internal
-failure. Sequential complete pairs are valid. The parser removes both complete
-marker byte strings and records each enclosed byte range as a match span. Every
-remaining non-marker byte, including matched text and surrounding context, is
-snippet payload.
+The scanner then operates on the raw `marked_snippet` string before rune
+decoding or UTF-8 repair. Its two states are `text` and `match`: only the exact
+start marker may transition `text -> match`, and only the exact end marker may
+transition `match -> text`. An end marker in `text`, a start marker in `match`,
+nested or reversed markers, a missing partner, or trailing `match` state is an
+internal failure. Sequential complete pairs are valid. Every stretch of bytes
+between complete markers, including matched text and surrounding context, is
+snippet payload, and is handed to the sanitizer as a zero-copy subslice of the
+string the driver returned, tagged with whether it sat inside a match. The
+markers themselves are never emitted. No parsed payload is materialized: the
+scanner reports only two counters — how many complete pairs it saw and how many
+payload bytes survive marker removal — so recognizing markers in a
+multi-megabyte fragment allocates nothing that grows with it.
 
 A snippet carrying *no* complete start marker and *no* complete end marker is a
 distinct, valid outcome rather than a structural failure. `snippet()` can only
 wrap a phrase that fits inside its 32-token window, so an exact phrase longer
 than that window has no in-window occurrence to mark and SQLite legitimately
 returns an unmarked fragment of the same matched row. The legacy projection
-returns that row, so the hit projection must return it too. The parser hands
-back the payload unchanged with zero match spans; only a completely empty
-snippet still fails, because FTS5 returns some text for every row it matches.
-Partial marker text is never a marker-free fragment: any occurrence of a
-complete start or end marker enters the state machine, so the structural
-failures above still apply.
+returns that row, so the hit projection must return it too. The scanner emits
+the payload unchanged as one unmatched chunk and reports zero pairs; only a
+snippet with no payload *and* no pair still fails, because FTS5 returns some
+text for every row it matches. Partial marker text is never a marker-free
+fragment: any occurrence of a complete start or end marker enters the state
+machine, so the structural failures above still apply.
 
-When the repository receives a fragment with zero match spans, it supplies one
-implicit whole-fragment byte span covering the entire payload before
-sanitizing. That span exists only so the bounding pass below has a window to
+The repository scans each fragment twice and copies it never. The first pass is
+validation only, with no consumer attached: a structurally broken snippet fails
+before anything reaches the sanitizer, and the pair count is known before
+sanitization begins. That ordering is what the second pass needs, because a
+fragment reported with zero pairs is streamed as one implicit whole-fragment
+match. That implicit span exists only so the bounding pass below has a window to
 open around; it is never published, adds no emphasis, and cannot widen or merge
-a match FTS5 did report, because it is applied only when there is no span at
+a match FTS5 did report, because it is applied only when there is no pair at
 all. The result is a bounded, unhighlighted excerpt drawn from the same
-authorized message row.
+authorized message row. Two `strings.Index` passes over the fragment is the
+price of not buffering what the first pass saw; both are reads of a string that
+already exists, and neither allocates.
 
-All snippet payload bytes are then repaired and sanitized. Because marker
-recognition and stripping finish first and the marker grammar is valid
+All snippet payload bytes are then repaired and sanitized as they stream past.
+Because marker recognition finishes first and the marker grammar is valid
 single-byte ASCII, invalid source UTF-8 cannot be repaired into a marker, cannot
 turn a start into an end, and cannot leave marker bytes in public output.
 Markers never cross the repository boundary.
+
+Chunking is invisible to sanitization. A scalar whose encoding begins before a
+marker and ends after it is one scalar of the payload — the marker was never
+part of it — so the sanitizer joins the pieces across the chunk boundary through
+a fixed four-byte carry, and attributes the joined scalar to the side it began
+on, exactly as decoding the payload as one buffer would. Runs of invalid bytes
+likewise collapse into a single U+FFFD across a chunk boundary. Content is not
+trusted to be well-formed UTF-8, so this is a shape a stored message can
+actually produce.
 
 The public snippet has no matched-term emphasis representation: no markup, ANSI
 sequence, Markdown delimiter, private-use sentinel, or embedded HTML. Internal
@@ -423,11 +441,26 @@ span:
    length of one token, so a single unbroken multi-megabyte token legitimately
    arrives as one fragment; every publishable window is at most 200 scalars and
    always covers part of the match, so neither edge can travel a full cap from
-   the match start and nothing outside that span can appear in output. The
-   fragment is still read once end to end, because collapsing trailing
-   whitespace makes it impossible to know otherwise whether any text survives
-   after the window; reading the buffer the driver already returned is not the
-   same as allocating a second one beside it.
+   the match start and nothing outside that span can appear in output.
+
+   That bound holds end to end, not merely after a parse. The value the driver
+   returns is streamed into the rolling window as zero-copy subslices, so the
+   only working memory the snippet pipeline adds to a row is the 400-scalar
+   window, the byte-offset table the bounding pass builds over it, the fixed
+   four-byte decode carry, and the published snippet — a few kilobytes,
+   whatever the fragment weighs. The fragment is still read end to end, twice:
+   once to validate the markers and once to sanitize, because collapsing
+   trailing whitespace makes it impossible to know otherwise whether any text
+   survives after the window, and because a marker-free fragment has to be
+   recognized as one before sanitization starts. Reading a string the driver
+   already returned is not the same as allocating a second one beside it.
+
+   Two allocations proportional to the row remain, and both are response data
+   rather than snippet working memory: the `Message.Content` the hit carries,
+   and the `marked_snippet` string the driver materializes for the extra
+   projected column. A hit query therefore costs about one more copy of the row
+   than the legacy projection over that same row, which is the figure the
+   repository test bounds.
 
 For a trigger-consistent projection, the final snippet is valid UTF-8,
 non-empty, single-line plain text, at most 200 scalars, at most 800 bytes, and
@@ -677,7 +710,7 @@ contract.
   matched phrase with SQLite edge ellipses where applicable.
 - Source text containing fixed marker-like ASCII cannot forge the per-query
   nonce-bearing markers; forced complete start/end collisions fail closed.
-- Raw-byte parser tests cover valid sequential pairs, missing partners, nesting,
+- Marker scanner tests cover valid sequential pairs, missing partners, nesting,
   reversed order, a start marker inside `match`, an end marker inside `text`,
   and an empty snippet; a snippet with zero complete markers is a valid
   marker-free fragment whose payload and empty match list are asserted, and
@@ -690,9 +723,21 @@ contract.
 - The implicit whole-fragment span is applied only when no span was recorded: a
   unit test proves it leaves recorded spans, including empty ones, untouched,
   and that a marker-free fragment which sanitizes to nothing still fails closed.
-- Invalid UTF-8 immediately adjacent to markers is repaired only after parsing;
-  tests prove it cannot confuse START with END and that neither complete
-  generated marker survives in the public snippet.
+- Invalid UTF-8 immediately adjacent to markers is repaired only after marker
+  recognition; tests prove it cannot confuse START with END and that neither
+  complete generated marker survives in the public snippet.
+- A scalar whose encoding straddles a marker is decoded as one scalar and
+  attributed to the side it began on, matching a whole-buffer decode; a
+  fuzz corpus that keeps producing that shape holds the streamed window,
+  its match, and its published snippet identical to a reference parser that
+  materializes the payload and decodes it whole.
+- The complete pipeline from the driver's marked string to the published
+  snippet stays inside a fixed allocation budget for both a 2 MiB and a 4 MiB
+  unbroken token, marked and marker-free, so no stage may copy the fragment;
+  the validation scan alone allocates nothing at all.
+- End to end, a hit query over one oversized row allocates no more than one
+  further copy of that row beyond what the legacy projection over the same row
+  allocates, which is the extra projected snippet column and nothing else.
 - A neighboring message containing a sentinel secret never contributes text to
   the hit snippet.
 - HTML/Markdown/ANSI-looking source remains inert plain text; no match markers

@@ -24,12 +24,38 @@ func fixedSearchMarkers() (string, string) {
 		"[[TURING-FTS5-SNIPPET-END:v1:" + nonce + "]]"
 }
 
-// searchSnippetWindowAllocBudgetBytes is the heap a single normalization may
-// claim. A searchSnippetWindowRunes window plus its bookkeeping needs a few
-// kilobytes; the budget is far above that and far below the multi-megabyte
-// fragments the bound test feeds in, so it fails an input-proportional
-// allocation without being sensitive to allocator sizing.
-const searchSnippetWindowAllocBudgetBytes = 128 << 10
+// searchSnippetPipelineAllocBudgetBytes is the transient heap one row's whole
+// snippet pipeline may claim: validating the marker structure of the string the
+// driver returned, streaming its chunks into the rolling window, and bounding
+// that window into the public snippet.
+//
+// A searchSnippetWindowRunes window, the byte-offset table the bounding pass
+// builds over it, and the published string need a few kilobytes between them.
+// The budget is far above that and orders of magnitude below the multi-megabyte
+// fragments the bound tests feed in, so it fails any allocation proportional to
+// the input without being sensitive to allocator sizing.
+const searchSnippetPipelineAllocBudgetBytes = 128 << 10
+
+// searchSnippetScanAllocBudgetBytes is the heap one validation pass may claim.
+// The scanner returns two counters and hands the consumer subslices of the
+// string it was given, so a correct pass allocates nothing at all; the budget
+// leaves room for test-harness noise between the two readings while still
+// failing any copy of the fragment.
+const searchSnippetScanAllocBudgetBytes = 4 << 10
+
+// searchHitRowSnippetAllocFactor is how much of one row's own bytes the hit
+// projection may allocate beyond what the legacy projection allocates for the
+// same row. The extra snippet column is one more copy of that row, so a correct
+// pipeline sits near 1x; the streaming rewrite removed two further copies that
+// put it near 3x. Two is the midpoint, which leaves either side a factor of
+// about two of headroom.
+const searchHitRowSnippetAllocFactor = 2
+
+// searchHitRowLegacyAllocCeiling keeps the baseline honest: the legacy
+// projection returns the same row without a snippet column, so it must stay a
+// small multiple of that row rather than growing into a budget large enough to
+// hide a regression on the hit side.
+const searchHitRowLegacyAllocCeiling = 5
 
 func TestNormalizeSearchScore(t *testing.T) {
 	for _, test := range []struct {
@@ -333,6 +359,327 @@ func TestParseMarkedSearchSnippetStripsMarkersBeforeUTF8Repair(t *testing.T) {
 	if bytes.Contains(parsed.text, []byte(start)) || bytes.Contains(parsed.text, []byte(end)) ||
 		bytes.Contains(parsed.text, []byte("TURING-FTS5-SNIPPET")) {
 		t.Fatalf("marker bytes survived parsing: %q", parsed.text)
+	}
+}
+
+// snippetSegment is one emission from the production scanner: a zero-copy
+// subslice of the marked string and whether it sat inside a marker pair.
+type snippetSegment struct {
+	chunk   string
+	inMatch bool
+}
+
+// collectSnippetSegments runs the production scanner and records everything it
+// emitted, so a test can assert on the stream itself rather than on whatever a
+// consumer happened to build out of it.
+func collectSnippetSegments(raw, start, end string) ([]snippetSegment, markedSearchSnippetShape, error) {
+	var segments []snippetSegment
+	shape, err := scanMarkedSearchSnippet(raw, start, end,
+		func(chunk string, inMatch bool) {
+			segments = append(segments, snippetSegment{chunk: chunk, inMatch: inMatch})
+		})
+	return segments, shape, err
+}
+
+// TestScanMarkedSearchSnippetEmitsChunksAndShape pins the scanner's own
+// contract, independently of the consumer that normalizes its output.
+//
+// The scanner is what production runs, so its emission order, its treatment of
+// an empty match — which is still a boundary the window has to observe — and
+// the shape it reports all need to be nailed down here rather than inferred
+// from a snippet at the far end of the pipeline.
+func TestScanMarkedSearchSnippetEmitsChunksAndShape(t *testing.T) {
+	start, end := fixedSearchMarkers()
+
+	for _, test := range []struct {
+		name         string
+		raw          string
+		wantSegments []snippetSegment
+		wantPairs    int
+		wantPayload  int
+	}{
+		{
+			name:         "marker free fragment",
+			raw:          "plain fragment",
+			wantSegments: []snippetSegment{{chunk: "plain fragment"}},
+			wantPairs:    0,
+			wantPayload:  14,
+		},
+		{
+			name: "sequential pairs with context",
+			raw:  "before " + start + "needle" + end + " middle " + start + "second" + end + " after",
+			wantSegments: []snippetSegment{
+				{chunk: "before "},
+				{chunk: "needle", inMatch: true},
+				{chunk: " middle "},
+				{chunk: "second", inMatch: true},
+				{chunk: " after"},
+			},
+			wantPairs:   2,
+			wantPayload: 33,
+		},
+		{
+			name:         "match is the whole fragment",
+			raw:          start + "only" + end,
+			wantSegments: []snippetSegment{{chunk: "only", inMatch: true}},
+			wantPairs:    1,
+			wantPayload:  4,
+		},
+		{
+			name: "adjacent pairs emit no empty text between them",
+			raw:  start + "ab" + end + start + "cd" + end,
+			wantSegments: []snippetSegment{
+				{chunk: "ab", inMatch: true},
+				{chunk: "cd", inMatch: true},
+			},
+			wantPairs:   2,
+			wantPayload: 4,
+		},
+		{
+			// An empty match carries no payload but is still a span the window
+			// must open and close on, so it is emitted rather than skipped.
+			name: "empty match is still emitted",
+			raw:  start + end + "tail",
+			wantSegments: []snippetSegment{
+				{chunk: "", inMatch: true},
+				{chunk: "tail"},
+			},
+			wantPairs:   1,
+			wantPayload: 4,
+		},
+		{
+			name: "invalid utf8 around markers stays with its own side",
+			raw:  "\xff" + start + "nee\xffdle" + end + "\xfe",
+			wantSegments: []snippetSegment{
+				{chunk: "\xff"},
+				{chunk: "nee\xffdle", inMatch: true},
+				{chunk: "\xfe"},
+			},
+			wantPairs:   1,
+			wantPayload: 9,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			segments, shape, err := collectSnippetSegments(test.raw, start, end)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(segments, test.wantSegments) {
+				t.Fatalf("segments = %+v, want %+v", segments, test.wantSegments)
+			}
+			if shape.pairs != test.wantPairs || shape.payloadBytes != test.wantPayload {
+				t.Fatalf("shape = %+v, want pairs=%d payloadBytes=%d",
+					shape, test.wantPairs, test.wantPayload)
+			}
+
+			// Every emitted chunk is a window into the caller's string rather
+			// than a copy of it, which is the whole point of the scanner.
+			for _, segment := range segments {
+				if len(segment.chunk) == 0 {
+					continue
+				}
+				if !strings.Contains(test.raw, segment.chunk) {
+					t.Fatalf("chunk %q is not a subslice of the marked string", segment.chunk)
+				}
+			}
+		})
+	}
+}
+
+// TestScanMarkedSearchSnippetRejectsInvalidMarkerStates keeps the state machine
+// exactly as strict at the scanner as it was at the byte parser, and pins that
+// a rejected scan reports no shape a caller could act on.
+func TestScanMarkedSearchSnippetRejectsInvalidMarkerStates(t *testing.T) {
+	start, end := fixedSearchMarkers()
+	other := "[[TURING-FTS5-SNIPPET-START:v1:" + strings.Repeat("b", 32) + "]]"
+	same := "[[TURING-FTS5-SNIPPET-SAME:v1:" + strings.Repeat("a", 32) + "]]"
+
+	for _, test := range []struct {
+		name  string
+		start string
+		end   string
+		raw   string
+	}{
+		{name: "empty input", start: start, end: end, raw: ""},
+		{name: "missing end", start: start, end: end, raw: "before " + start + "needle"},
+		{name: "end in text", start: start, end: end, raw: "before " + end + " after"},
+		{name: "end only", start: start, end: end, raw: end},
+		{name: "start in match", start: start, end: end, raw: start + "a" + start + "b" + end},
+		{name: "reversed order", start: start, end: end, raw: end + "needle" + start},
+		{name: "trailing match", start: start, end: end, raw: start + "a" + end + start + "b"},
+		{name: "ends at dangling start", start: start, end: end, raw: start + "a" + end + "before " + start},
+		{name: "wrong nonce start", start: start, end: end, raw: other + "needle" + end},
+		{name: "empty start marker", start: "", end: end, raw: "needle" + end},
+		{name: "empty end marker", start: start, end: "", raw: start + "needle"},
+		{name: "identical markers", start: same, end: same, raw: "a" + same + "needle" + same + "b"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			shape, err := scanMarkedSearchSnippet(test.raw, test.start, test.end, nil)
+			if !errors.Is(err, ErrInvalidSearchSnippetMarkers) {
+				t.Fatalf("error = %v, want ErrInvalidSearchSnippetMarkers", err)
+			}
+			if shape != (markedSearchSnippetShape{}) {
+				t.Fatalf("shape on failure = %+v, want the zero value", shape)
+			}
+			if strings.Contains(err.Error(), "needle") {
+				t.Fatalf("error leaks snippet content: %q", err.Error())
+			}
+
+			// The same rejection reaches the caller through the production
+			// entry point, which validates before it feeds anything forward.
+			snippet, err := sanitizeMarkedSearchSnippet(test.raw, test.start, test.end)
+			if !errors.Is(err, ErrInvalidSearchSnippetMarkers) {
+				t.Fatalf("sanitize error = %v, want ErrInvalidSearchSnippetMarkers", err)
+			}
+			if snippet != "" {
+				t.Fatalf("snippet on failure = %q", snippet)
+			}
+		})
+	}
+}
+
+// TestNormalizeMarkedSnippetWindowJoinsScalarsAcrossMarkers pins the one place
+// streaming could quietly change public output.
+//
+// Markers are removed while the input is still bytes, so a scalar whose
+// encoding begins before a marker and ends after it is a single scalar of the
+// payload — the marker was never part of it. A decoder that treated each
+// stretch between markers as its own buffer would instead see two runs of
+// invalid bytes and publish U+FFFD, and would also disagree about which side of
+// the match the scalar fell on.
+//
+// Content is not trusted to be well-formed UTF-8, so this is a shape a message
+// can actually produce, not a theoretical one.
+func TestNormalizeMarkedSnippetWindowJoinsScalarsAcrossMarkers(t *testing.T) {
+	start, end := fixedSearchMarkers()
+
+	for _, test := range []struct {
+		name        string
+		raw         string
+		wantSnippet string
+		wantFound   bool
+		wantMatch   runeSpan
+	}{
+		{
+			// "界" is E7 95 8C: its lead and first continuation byte sit in
+			// front of the match and its last byte opens the match. The scalar
+			// began outside, so it is context, and the match starts after it.
+			name:        "scalar opens before the match and closes inside it",
+			raw:         "lead \xe7\x95" + start + "\x8ctail" + end,
+			wantSnippet: "lead 界tail",
+			wantFound:   true,
+			wantMatch:   runeSpan{start: 6, end: 10},
+		},
+		{
+			// Mirror image: the scalar began inside the match, so it belongs
+			// to the match even though its last byte lies past the end marker.
+			name:        "scalar opens inside the match and closes after it",
+			raw:         start + "head \xe7\x95" + end + "\x8c trail",
+			wantSnippet: "head 界 trail",
+			wantFound:   true,
+			wantMatch:   runeSpan{start: 0, end: 6},
+		},
+		{
+			// F0 9F 98 80 is 😀, split three ways across two markers, so the
+			// match's only byte is swallowed by a scalar that started before
+			// it. No scalar ever lands inside the span, so there is no
+			// retained match — the same outcome as a match that whitespace
+			// collapses away — and the fragment fails rather than publishing
+			// text with nothing matched in it.
+			name:        "four byte scalar split across both markers",
+			raw:         "a\xf0\x9f" + start + "\x98" + end + "\x80b",
+			wantSnippet: "a😀b",
+			wantFound:   false,
+		},
+		{
+			// The completing bytes never arrive, so the trailing prefix is the
+			// invalid run it actually is.
+			name:        "unterminated scalar before the end of the fragment",
+			raw:         start + "head" + end + " \xe7\x95",
+			wantSnippet: "head \uFFFD",
+			wantFound:   true,
+			wantMatch:   runeSpan{start: 0, end: 4},
+		},
+		{
+			// A marker-free fragment is one chunk streamed as an implicit
+			// whole-fragment match, so its closing boundary is queued behind
+			// the unterminated scalar and only comes due when the carry drains
+			// at the end. Nothing else exercises that ordering by name.
+			name:        "marker free fragment ending mid scalar",
+			raw:         "tail \xe7\x95",
+			wantSnippet: "tail \uFFFD",
+			wantFound:   true,
+			wantMatch:   runeSpan{start: 0, end: 6},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			window, err := normalizeMarkedSnippetWindow(test.raw, start, end)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(window.text) != test.wantSnippet {
+				t.Fatalf("window text = %q, want %q", string(window.text), test.wantSnippet)
+			}
+			if window.found != test.wantFound || window.match != test.wantMatch {
+				t.Fatalf("match = %+v (found=%t), want %+v (found=%t)",
+					window.match, window.found, test.wantMatch, test.wantFound)
+			}
+			// A fragment with no retained match publishes nothing at all,
+			// rather than text with nothing matched in it.
+			snippet, err := sanitizeMarkedSearchSnippet(test.raw, start, end)
+			if test.wantFound {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if snippet != test.wantSnippet {
+					t.Fatalf("snippet = %q, want %q", snippet, test.wantSnippet)
+				}
+			} else if !errors.Is(err, ErrInvalidSearchSnippet) {
+				t.Fatalf("snippet = %q, error = %v, want ErrInvalidSearchSnippet",
+					snippet, err)
+			}
+
+			// The reference parser materializes the payload and decodes it as
+			// one buffer, which is what "the marker was never part of it" has
+			// to mean in practice.
+			parsed, err := parseMarkedSearchSnippet([]byte(test.raw), start, end)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reference := normalizeSnippetWindow(withWholeFragmentSpan(parsed))
+			if string(window.text) != string(reference.text) ||
+				window.match != reference.match ||
+				window.found != reference.found ||
+				window.totalRunes != reference.totalRunes ||
+				window.totalBytes != reference.totalBytes {
+				t.Fatalf("streamed %s disagrees with whole-buffer %s",
+					snippetWindowSummary(window), snippetWindowSummary(reference))
+			}
+		})
+	}
+}
+
+// TestScanMarkedSearchSnippetValidationPassIsAllocationFree pins the property
+// the streaming design rests on: recognizing markers in a multi-megabyte string
+// hands back subslices of it and allocates nothing proportional to it.
+func TestScanMarkedSearchSnippetValidationPassIsAllocationFree(t *testing.T) {
+	start, end := fixedSearchMarkers()
+	token := strings.Repeat("x", 2<<20)
+	raw := token + " " + start + "needle" + end + " " + token
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	shape, err := scanMarkedSearchSnippet(raw, start, end, nil)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shape.pairs != 1 || shape.payloadBytes != len(token)*2+8 {
+		t.Fatalf("shape = %+v, want one pair over the whole payload", shape)
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > searchSnippetScanAllocBudgetBytes {
+		t.Fatalf("scanning %d bytes allocated %d bytes, want at most %d",
+			len(raw), allocated, searchSnippetScanAllocBudgetBytes)
 	}
 }
 
@@ -735,112 +1082,124 @@ func TestSanitizeSearchSnippetPreservesCompleteMatchAtExactBounds(t *testing.T) 
 	}
 }
 
-// TestNormalizeSnippetWindowBoundsBuffersForMultiMegabyteToken is the
-// allocation contract. FTS5's 32-token fragment bound says nothing about the
-// size of one token, so a single multi-megabyte unbroken token reaches this
-// code as one fragment. Preparing a 200-scalar/800-byte snippet must not first
-// build a scalar-per-source-scalar copy of it: the working window is bounded by
-// searchSnippetWindowRunes no matter how long the source is, and the published
-// snippet still honours both public caps.
+// TestSanitizeMarkedSearchSnippetBoundsPipelineAllocation is the allocation
+// contract, measured around the whole production pipeline rather than around
+// one stage of it.
+//
+// FTS5's 32-token fragment bound says nothing about the size of one token, so a
+// single multi-megabyte unbroken token reaches this code as one fragment, and
+// the marked string the driver returns is that fragment plus markers. Turning
+// it into a 200-scalar/800-byte snippet must not copy it: not into a []byte,
+// not into a parsed payload, and not into a scalar-per-source-scalar buffer.
+// Everything between the driver's string and the published snippet is measured
+// here, so a copy at any stage fails.
+//
+// Two token sizes share one budget. An allocation proportional to the fragment
+// cannot pass both, so this proves independence from the input size rather than
+// merely picking a generous ceiling.
 //
 // The scan itself stays linear in the source, which is unavoidable — trailing
 // whitespace collapses, so whether any text survives after the window is only
-// knowable by reading to the end. Linear *reading* of a buffer the caller
+// knowable by reading to the end. Linear *reading* of a string the caller
 // already holds is not the same as linear *allocation* on top of it.
-func TestNormalizeSnippetWindowBoundsBuffersForMultiMegabyteToken(t *testing.T) {
+func TestSanitizeMarkedSearchSnippetBoundsPipelineAllocation(t *testing.T) {
 	start, end := fixedSearchMarkers()
-	// One unbroken token, well past any realistic message but exactly what the
-	// caps exist to survive.
-	const tokenScalars = 2 << 20
-	token := strings.Repeat("x", tokenScalars)
 
-	for _, test := range []struct {
-		name         string
-		raw          string
-		wantSnippet  string
-		wantTotal    int
-		wantMatchLen int
-	}{
-		{
-			name:         "oversized match",
-			raw:          start + token + end,
-			wantSnippet:  strings.Repeat("x", searchSnippetMaxRunes-1) + "\u2026",
-			wantTotal:    tokenScalars,
-			wantMatchLen: tokenScalars,
-		},
-		{
-			name:         "oversized lead before the match",
-			raw:          token + " " + start + "needle" + end,
-			wantSnippet:  "\u2026" + strings.Repeat("x", 192) + " needle",
-			wantTotal:    tokenScalars + 7,
-			wantMatchLen: 6,
-		},
-		{
-			name:         "oversized tail after the match",
-			raw:          start + "needle" + end + " " + token,
-			wantSnippet:  "needle " + strings.Repeat("x", 192) + "\u2026",
-			wantTotal:    tokenScalars + 7,
-			wantMatchLen: 6,
-		},
-		{
-			name:         "marker free oversized fragment",
-			raw:          token,
-			wantSnippet:  strings.Repeat("x", searchSnippetMaxRunes-1) + "\u2026",
-			wantTotal:    tokenScalars,
-			wantMatchLen: tokenScalars,
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			parsed := withWholeFragmentSpan(parseFixedSearchSnippet(t, test.raw))
+	for _, tokenScalars := range []int{2 << 20, 4 << 20} {
+		// One unbroken token, well past any realistic message but exactly what
+		// the caps exist to survive.
+		token := strings.Repeat("x", tokenScalars)
 
-			var before, after runtime.MemStats
-			runtime.ReadMemStats(&before)
-			window := normalizeSnippetWindow(parsed)
-			runtime.ReadMemStats(&after)
+		for _, test := range []struct {
+			name         string
+			raw          string
+			wantSnippet  string
+			wantTotal    int
+			wantMatchLen int
+		}{
+			{
+				name:         "marked oversized token",
+				raw:          start + token + end,
+				wantSnippet:  strings.Repeat("x", searchSnippetMaxRunes-1) + "\u2026",
+				wantTotal:    tokenScalars,
+				wantMatchLen: tokenScalars,
+			},
+			{
+				name:         "oversized lead before the match",
+				raw:          token + " " + start + "needle" + end,
+				wantSnippet:  "\u2026" + strings.Repeat("x", 192) + " needle",
+				wantTotal:    tokenScalars + 7,
+				wantMatchLen: 6,
+			},
+			{
+				name:         "oversized tail after the match",
+				raw:          start + "needle" + end + " " + token,
+				wantSnippet:  "needle " + strings.Repeat("x", 192) + "\u2026",
+				wantTotal:    tokenScalars + 7,
+				wantMatchLen: 6,
+			},
+			{
+				name:         "marker free oversized fragment",
+				raw:          token,
+				wantSnippet:  strings.Repeat("x", searchSnippetMaxRunes-1) + "\u2026",
+				wantTotal:    tokenScalars,
+				wantMatchLen: tokenScalars,
+			},
+		} {
+			t.Run(fmt.Sprintf("%s/%dMiB", test.name, tokenScalars>>20), func(t *testing.T) {
+				// The marked string is the value the driver hands back, built
+				// before the measurement opens: it is existing response data,
+				// not working memory this pipeline adds.
+				raw := test.raw
 
-			if len(window.text) > searchSnippetWindowRunes ||
-				cap(window.text) > searchSnippetWindowRunes {
-				t.Fatalf("window buffer len=%d cap=%d over %d source scalars, "+
-					"want at most %d",
-					len(window.text), cap(window.text), test.wantTotal,
-					searchSnippetWindowRunes)
-			}
-			// Belt and braces on the same claim, in bytes rather than scalars,
-			// so a bounded window fed by some other unbounded side buffer is
-			// still caught. The budget is far above what a 400-scalar window
-			// needs and far below the source, so it is not a timing-sensitive
-			// or allocator-tuning-sensitive assertion.
-			if allocated := after.TotalAlloc - before.TotalAlloc; allocated >
-				searchSnippetWindowAllocBudgetBytes {
-				t.Fatalf("normalizing %d source scalars allocated %d bytes, "+
-					"want at most %d",
-					test.wantTotal, allocated, searchSnippetWindowAllocBudgetBytes)
-			}
+				var before, after runtime.MemStats
+				runtime.ReadMemStats(&before)
+				got, err := sanitizeMarkedSearchSnippet(raw, start, end)
+				runtime.ReadMemStats(&after)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if allocated := after.TotalAlloc - before.TotalAlloc; allocated >
+					searchSnippetPipelineAllocBudgetBytes {
+					t.Fatalf("processing a %d byte marked snippet allocated %d bytes, "+
+						"want at most %d",
+						len(raw), allocated, searchSnippetPipelineAllocBudgetBytes)
+				}
 
-			if window.totalRunes != test.wantTotal {
-				t.Fatalf("totalRunes = %d, want %d", window.totalRunes, test.wantTotal)
-			}
-			if !window.found {
-				t.Fatal("window recorded no retained match")
-			}
-			if got := window.match.end - window.match.start; got != test.wantMatchLen {
-				t.Fatalf("match scalars = %d, want %d", got, test.wantMatchLen)
-			}
+				if got != test.wantSnippet {
+					t.Fatalf("snippet = %q (runes=%d bytes=%d), want %q",
+						got, utf8.RuneCountInString(got), len(got), test.wantSnippet)
+				}
+				if utf8.RuneCountInString(got) > searchSnippetMaxRunes ||
+					len(got) > searchSnippetMaxBytes {
+					t.Fatalf("bounds: runes=%d bytes=%d",
+						utf8.RuneCountInString(got), len(got))
+				}
 
-			got, err := sanitizeSearchSnippet(parsed)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got != test.wantSnippet {
-				t.Fatalf("snippet = %q (runes=%d bytes=%d), want %q",
-					got, utf8.RuneCountInString(got), len(got), test.wantSnippet)
-			}
-			if utf8.RuneCountInString(got) > searchSnippetMaxRunes ||
-				len(got) > searchSnippetMaxBytes {
-				t.Fatalf("bounds: runes=%d bytes=%d",
-					utf8.RuneCountInString(got), len(got))
-			}
-		})
+				// The retained buffer is checked separately, so a failure says
+				// whether the window or the pipeline around it grew.
+				window, err := normalizeMarkedSnippetWindow(raw, start, end)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(window.text) > searchSnippetWindowRunes ||
+					cap(window.text) > searchSnippetWindowRunes {
+					t.Fatalf("window buffer len=%d cap=%d over %d source scalars, "+
+						"want at most %d",
+						len(window.text), cap(window.text), test.wantTotal,
+						searchSnippetWindowRunes)
+				}
+				if window.totalRunes != test.wantTotal {
+					t.Fatalf("totalRunes = %d, want %d", window.totalRunes, test.wantTotal)
+				}
+				if !window.found {
+					t.Fatal("window recorded no retained match")
+				}
+				if got := window.match.end - window.match.start; got != test.wantMatchLen {
+					t.Fatalf("match scalars = %d, want %d", got, test.wantMatchLen)
+				}
+			})
+		}
 	}
 }
 
@@ -894,69 +1253,168 @@ func snippetWindowSummary(w snippetWindow) string {
 		w.base, w.totalRunes, w.totalBytes, w.match, w.found)
 }
 
-// TestNormalizeSnippetWindowMatchesUnwindowedNormalization is the differential
-// proof that bounding the working buffer changed nothing a caller can observe.
+// snippetFuzzCorpus builds one deterministic pseudo-random marked fragment.
 //
-// The reference run is this same normalizer with a retention radius wider than
-// the fragment, so it drops nothing and behaves like a full materialization;
-// the production run keeps only searchSnippetWindowRunes scalars. The counters,
-// the located match, and above all the published snippet must agree on every
-// fragment, including ones long enough to force several buffer compactions.
-func TestNormalizeSnippetWindowMatchesUnwindowedNormalization(t *testing.T) {
-	start, end := fixedSearchMarkers()
-	// A mix of every sanitization class: plain text, collapsing whitespace,
-	// multi-byte scalars, invalid UTF-8, controls, and bidi overrides.
+// The chunk alphabet covers every sanitization class — plain text, collapsing
+// whitespace, multi-byte scalars, invalid UTF-8, controls, and bidi overrides —
+// and, crucially for a streaming parser, the *pieces* of multi-byte scalars.
+// A lead byte written just before a marker and its continuation bytes written
+// just after it put a scalar astride a chunk boundary, which is the one shape
+// that can make a per-chunk decoder disagree with a decoder that sees the
+// payload as one buffer.
+func snippetFuzzCorpus(source *snippetFuzzSource, start, end string) string {
 	chunks := []string{
 		"a", "bc", "word ", "  ", "\t", "\n", "\u00a0", "😀", "界", "é",
 		"\xff", "\xfe\xfd", "\x00", "\x1b", "\u202e", "\u200f", "…", "x",
+		"\xe7", "\xe7\x95", "\x8c", "\xf0\x9f", "\x98\x80", "\xc3",
 	}
-	source := snippetFuzzSource{state: 0x9e3779b97f4a7c15}
-	var compacted, published int
+	var raw strings.Builder
+	inMatch := false
+	chunkCount := source.intn(220)
+	for chunk := 0; chunk < chunkCount; chunk++ {
+		// Open and close matches at random, always in balanced pairs, so the
+		// scanner sees the shape FTS5 emits.
+		if !inMatch && source.intn(12) == 0 {
+			raw.WriteString(start)
+			inMatch = true
+		} else if inMatch && source.intn(4) == 0 {
+			raw.WriteString(end)
+			inMatch = false
+		}
+		raw.WriteString(strings.Repeat(
+			chunks[source.intn(len(chunks))], 1+source.intn(40)))
+	}
+	if inMatch {
+		raw.WriteString(end)
+	}
+	return raw.String()
+}
+
+// TestScanMarkedSearchSnippetMatchesReferenceParser is the differential proof
+// that the streaming scanner reads exactly what the materializing parser reads.
+//
+// The reference parser copies every non-marker byte into a payload buffer and
+// records spans into it — the allocation production no longer performs — so
+// reassembling the scanner's chunks and their match ranges and comparing the
+// two catches any divergence in the state machine, in what counts as payload,
+// or in where a match begins and ends.
+func TestScanMarkedSearchSnippetMatchesReferenceParser(t *testing.T) {
+	start, end := fixedSearchMarkers()
+	source := snippetFuzzSource{state: 0x2545f4914f6cdd1d}
+	var compared, matched int
 
 	for run := 0; run < 400; run++ {
-		var raw strings.Builder
-		inMatch := false
-		chunkCount := source.intn(220)
-		for chunk := 0; chunk < chunkCount; chunk++ {
-			// Open and close matches at random, always in balanced pairs, so
-			// the parser sees the shape FTS5 emits.
-			if !inMatch && source.intn(12) == 0 {
-				raw.WriteString(start)
-				inMatch = true
-			} else if inMatch && source.intn(4) == 0 {
-				raw.WriteString(end)
-				inMatch = false
-			}
-			raw.WriteString(strings.Repeat(
-				chunks[source.intn(len(chunks))], 1+source.intn(40)))
-		}
-		if inMatch {
-			raw.WriteString(end)
-		}
+		raw := snippetFuzzCorpus(&source, start, end)
 
-		parsed, err := parseMarkedSearchSnippet([]byte(raw.String()), start, end)
+		parsed, parseErr := parseMarkedSearchSnippet([]byte(raw), start, end)
+		segments, shape, scanErr := collectSnippetSegments(raw, start, end)
+
+		if (parseErr == nil) != (scanErr == nil) {
+			t.Fatalf("run %d: reference error = %v, scanner error = %v",
+				run, parseErr, scanErr)
+		}
+		if parseErr != nil {
+			if !errors.Is(scanErr, ErrInvalidSearchSnippetMarkers) {
+				t.Fatalf("run %d: scanner error = %v, want ErrInvalidSearchSnippetMarkers",
+					run, scanErr)
+			}
+			continue
+		}
+		compared++
+
+		var text strings.Builder
+		var matches []byteSpan
+		for _, segment := range segments {
+			if segment.inMatch {
+				matches = append(matches,
+					byteSpan{start: text.Len(), end: text.Len() + len(segment.chunk)})
+			}
+			text.WriteString(segment.chunk)
+		}
+		if text.String() != string(parsed.text) {
+			t.Fatalf("run %d: scanned payload disagrees with the reference parser", run)
+		}
+		if !reflect.DeepEqual(matches, parsed.matches) {
+			t.Fatalf("run %d: scanned matches = %+v, reference = %+v",
+				run, matches, parsed.matches)
+		}
+		if shape.pairs != len(parsed.matches) || shape.payloadBytes != len(parsed.text) {
+			t.Fatalf("run %d: shape = %+v, reference had %d pairs over %d payload bytes",
+				run, shape, len(parsed.matches), len(parsed.text))
+		}
+		if len(matches) > 0 {
+			matched++
+		}
+	}
+
+	if compared < 300 || matched < 200 {
+		t.Fatalf("corpus too weak: %d fragments parsed and %d carried a marker pair",
+			compared, matched)
+	}
+}
+
+// TestNormalizeMarkedSnippetWindowMatchesUnwindowedNormalization is the
+// differential proof that neither streaming the fragment nor bounding the
+// working buffer changed anything a caller can observe.
+//
+// Three runs are compared on every fragment. The production run reads the
+// marked string directly and keeps only searchSnippetWindowRunes scalars. The
+// parsed run drives the same normalizer from the reference parser's
+// materialized payload, so a disagreement there is a streaming bug. The
+// reference run drives it from that same payload with a retention radius wider
+// than the fragment, so it drops nothing at all, and a disagreement there is a
+// windowing bug. The counters, the located match, and above all the published
+// snippet must agree across all three, including on fragments long enough to
+// force several buffer compactions.
+func TestNormalizeMarkedSnippetWindowMatchesUnwindowedNormalization(t *testing.T) {
+	start, end := fixedSearchMarkers()
+	source := snippetFuzzSource{state: 0x9e3779b97f4a7c15}
+	var compacted, published, straddled int
+
+	for run := 0; run < 400; run++ {
+		raw := snippetFuzzCorpus(&source, start, end)
+
+		parsed, err := parseMarkedSearchSnippet([]byte(raw), start, end)
 		if err != nil {
 			// Structurally impossible for a balanced generator except for the
 			// empty fragment, which is its own documented failure.
 			if !errors.Is(err, ErrInvalidSearchSnippetMarkers) {
 				t.Fatalf("run %d: %v", run, err)
 			}
+			if _, err := normalizeMarkedSnippetWindow(raw, start, end); !errors.Is(
+				err, ErrInvalidSearchSnippetMarkers) {
+				t.Fatalf("run %d: production error = %v, want the same rejection", run, err)
+			}
 			continue
 		}
 		parsed = withWholeFragmentSpan(parsed)
 
+		production, err := normalizeMarkedSnippetWindow(raw, start, end)
+		if err != nil {
+			t.Fatalf("run %d: %v", run, err)
+		}
 		bounded := normalizeSnippetWindow(parsed)
 		// A window past twice the fragment's scalar count can never drop a
 		// scalar, because there are fewer scalars than bytes.
-		reference := newSnippetNormalizer(2 * (len(parsed.text) + 1)).normalize(parsed)
+		reference := normalizeParsedSnippet(newSnippetNormalizer(2*(len(parsed.text)+1)), parsed)
 
-		if cap(bounded.text) > searchSnippetWindowRunes {
-			t.Fatalf("run %d: window cap = %d, want at most %d",
-				run, cap(bounded.text), searchSnippetWindowRunes)
+		if cap(production.text) > searchSnippetWindowRunes ||
+			cap(bounded.text) > searchSnippetWindowRunes {
+			t.Fatalf("run %d: window cap = %d/%d, want at most %d",
+				run, cap(production.text), cap(bounded.text), searchSnippetWindowRunes)
 		}
 		if reference.base != 0 {
 			t.Fatalf("run %d: reference dropped scalars at base %d",
 				run, reference.base)
+		}
+		if production.base != bounded.base ||
+			production.totalRunes != bounded.totalRunes ||
+			production.totalBytes != bounded.totalBytes ||
+			production.found != bounded.found ||
+			production.match != bounded.match ||
+			string(production.text) != string(bounded.text) {
+			t.Fatalf("run %d: streamed %s disagrees with parsed %s",
+				run, snippetWindowSummary(production), snippetWindowSummary(bounded))
 		}
 		if bounded.totalRunes != reference.totalRunes ||
 			bounded.totalBytes != reference.totalBytes ||
@@ -965,9 +1423,9 @@ func TestNormalizeSnippetWindowMatchesUnwindowedNormalization(t *testing.T) {
 			t.Fatalf("run %d: bounded %s disagrees with reference %s",
 				run, snippetWindowSummary(bounded), snippetWindowSummary(reference))
 		}
-		got, want := boundSearchSnippet(bounded), boundSearchSnippet(reference)
+		got, want := boundSearchSnippet(production), boundSearchSnippet(reference)
 		if got != want {
-			t.Fatalf("run %d: bounded snippet = %q, unwindowed = %q", run, got, want)
+			t.Fatalf("run %d: streamed snippet = %q, unwindowed = %q", run, got, want)
 		}
 		if bounded.base > 0 {
 			compacted++
@@ -975,14 +1433,53 @@ func TestNormalizeSnippetWindowMatchesUnwindowedNormalization(t *testing.T) {
 		if got != "" {
 			published++
 		}
+		if snippetFragmentStraddlesAMarker(raw, start, end) {
+			straddled++
+		}
 	}
 
 	// The corpus has to keep reaching the interesting states, or the agreement
 	// above is agreement about nothing.
-	if compacted < 40 || published < 200 {
-		t.Fatalf("corpus too weak: %d runs compacted the buffer and %d published "+
-			"a snippet", compacted, published)
+	if compacted < 40 || published < 200 || straddled < 20 {
+		t.Fatalf("corpus too weak: %d runs compacted the buffer, %d published a "+
+			"snippet, and %d put a scalar astride a marker", compacted, published, straddled)
 	}
+}
+
+// snippetFragmentStraddlesAMarker reports whether removing the markers would
+// join a partial UTF-8 sequence across a chunk boundary. It exists so the
+// differential corpus can prove it keeps producing the shape that separates a
+// per-chunk decoder from a whole-payload one.
+func snippetFragmentStraddlesAMarker(raw, start, end string) bool {
+	for _, marker := range []string{start, end} {
+		rest := raw
+		for {
+			at := strings.Index(rest, marker)
+			if at < 0 {
+				break
+			}
+			if at > 0 && lastPartialRune(rest[:at]) != "" {
+				return true
+			}
+			rest = rest[at+len(marker):]
+		}
+	}
+	return false
+}
+
+// lastPartialRune returns the trailing bytes of text that are not yet a full
+// encoding, or "" when text ends on a scalar boundary.
+func lastPartialRune(text string) string {
+	for back := 1; back <= utf8.UTFMax && back <= len(text); back++ {
+		tail := text[len(text)-back:]
+		if utf8.FullRuneInString(tail) {
+			return ""
+		}
+		if utf8.RuneStart(tail[0]) {
+			return tail
+		}
+	}
+	return ""
 }
 
 func TestSanitizeSearchSnippetRejectsEmptyOutput(t *testing.T) {
@@ -1751,6 +2248,97 @@ func TestSearchMessageHitsReturnBoundedSnippetWhenPhraseExceedsFTS5Window(t *tes
 	}
 	if strings.Contains(snippet, "TURING-FTS5-SNIPPET") {
 		t.Fatalf("snippet = %q leaks internal marker bytes", snippet)
+	}
+}
+
+// measureSearchAllocation reports the heap one query claims. TotalAlloc is
+// cumulative and unaffected by collection, so a GC landing inside the window
+// cannot make the reading look smaller than it was.
+func measureSearchAllocation(t *testing.T, run func() error) uint64 {
+	t.Helper()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	err := run()
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// TestSearchMessageHitsBoundPerRowSnippetAllocation is the end-to-end form of
+// the allocation contract: the row travels through the real driver, the real
+// scan, and the real snippet pipeline.
+//
+// The row's own bytes are charged twice by any hit query and cannot be avoided:
+// the driver returns the message content, and it returns the marked snippet
+// alongside it, which for one unbroken token is the whole row again. What must
+// not appear is a *third* copy — the []byte conversion and the parsed payload
+// the streaming pipeline replaced.
+//
+// The budget is stated against the legacy projection over the same row rather
+// than as an absolute figure. Legacy returns that row without a snippet column,
+// so it measures exactly what this driver costs to deliver these bytes today,
+// and a driver or SQLite change moves both sides together instead of turning
+// this into a maintenance burden or a silent pass.
+func TestSearchMessageHitsBoundPerRowSnippetAllocation(t *testing.T) {
+	for _, contentBytes := range []int{1 << 18, 1 << 20} {
+		t.Run(fmt.Sprintf("%dKiB", contentBytes>>10), func(t *testing.T) {
+			database := openTestDB(t)
+			repo := New(database)
+			ctx := context.Background()
+			// One unbroken token. FTS5's 32-token window cannot cut it, so the
+			// marked snippet SQLite returns is the entire row.
+			token := strings.Repeat("z", contentBytes)
+			insertSearchSession(t, ctx, database, "s1")
+			insertSearchMessage(t, ctx, database, "m-alloc", "s1", token, 1)
+
+			// Warm both statements so one-time preparation and page-cache
+			// costs are not charged to the measured runs.
+			if _, err := repo.SearchMessageHits(ctx, "", "", token, 10); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := repo.SearchMessages(ctx, "", "", token, 10); err != nil {
+				t.Fatal(err)
+			}
+
+			// Background work can only ever *add* to a TotalAlloc delta, so the
+			// smallest of several readings is the best estimate of what each
+			// query really costs. Taking the minimum on both sides tightens the
+			// budget rather than loosening it, so this removes flakiness
+			// without weakening the guard.
+			var hits []SearchHit
+			hitAlloc, legacyAlloc := ^uint64(0), ^uint64(0)
+			for reading := 0; reading < 3; reading++ {
+				hitAlloc = min(hitAlloc, measureSearchAllocation(t, func() error {
+					var err error
+					hits, err = repo.SearchMessageHits(ctx, "", "", token, 10)
+					return err
+				}))
+				legacyAlloc = min(legacyAlloc, measureSearchAllocation(t, func() error {
+					_, err := repo.SearchMessages(ctx, "", "", token, 10)
+					return err
+				}))
+			}
+
+			assertSearchHitIDs(t, hits, []string{"m-alloc"})
+			assertPublicSnippet(t, hits[0].Snippet)
+
+			// An unanchored baseline would let a regression hide inside it.
+			if legacyAlloc > uint64(searchHitRowLegacyAllocCeiling*contentBytes) {
+				t.Fatalf("legacy baseline allocated %d bytes for a %d byte row, "+
+					"want at most %dx it — the comparison below is no longer anchored",
+					legacyAlloc, contentBytes, searchHitRowLegacyAllocCeiling)
+			}
+			budget := legacyAlloc + uint64(searchHitRowSnippetAllocFactor*contentBytes)
+			if hitAlloc > budget {
+				t.Fatalf("hit query allocated %d bytes for a %d byte row against a "+
+					"%d byte legacy baseline, want at most %d (%dx the row above "+
+					"the baseline)",
+					hitAlloc, contentBytes, legacyAlloc, budget,
+					searchHitRowSnippetAllocFactor)
+			}
+		})
 	}
 }
 

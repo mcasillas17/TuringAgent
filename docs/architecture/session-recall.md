@@ -128,12 +128,23 @@ The published snippet is single-line literal plain text:
   so a match of exactly 200 scalars or exactly 800 bytes is returned unmarked
   even when the message continues on both sides. Surrounding context is added
   only after the whole match is secured, and pays for its own indicators.
-- Producing that snippet costs a fixed amount of working memory per row. FTS5's
-  32-token bound does not bound the length of one token, so a single unbroken
-  multi-megabyte token can arrive as one fragment; sanitization keeps only the
-  scalars a publishable window could reach — two caps' worth around the match —
-  and counts the rest, so a hostile or merely unusual message cannot make the
-  server allocate in proportion to it.
+- Producing that snippet costs a fixed amount of working memory per row, from
+  the value SQLite returns all the way to the published text. FTS5's 32-token
+  bound does not bound the length of one token, so a single unbroken
+  multi-megabyte token can arrive as one fragment. The server validates the
+  marker structure of that fragment in place and streams it through the
+  sanitizer as slices of the string the driver already returned; the sanitizer
+  keeps only the scalars a publishable window could reach — two caps' worth
+  around the match — and counts the rest. No second copy of the fragment is
+  made at any stage, so a hostile or merely unusual message cannot make the
+  server allocate in proportion to it. The fragment is read end to end twice,
+  once to validate and once to sanitize, but reading a string that already
+  exists is not the same as allocating another beside it.
+- What does still scale with the row is response data, not snippet working
+  memory: the matched `Message.content` the hit carries, and the marked
+  fragment SQLite materializes for the extra projected column. A hit query
+  therefore costs about one further copy of a row beyond what the unranked
+  search costs for that same row.
 
 A hit whose score or snippet cannot be proven safe fails the entire query with
 an opaque `Internal` error; the server never emits a partial, defaulted, or

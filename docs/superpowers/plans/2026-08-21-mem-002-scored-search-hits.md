@@ -333,9 +333,12 @@ func fixedSearchMarkers() (string, string) {
 }
 ```
 
-- [ ] **Step 3: Write RED parser tests**
+- [ ] **Step 3: Write RED marker scanner tests**
 
-Use fixed marker values and test exact state transitions:
+Use fixed marker values and test exact state transitions. The reference parser
+below is the test-only oracle: it materializes the payload, which is exactly
+what production must not do, so it stays in a `_test.go` file and gives the
+scanner something independent to be differentially checked against.
 
 ```go
 func TestParseMarkedSearchSnippet(t *testing.T) {
@@ -362,8 +365,14 @@ match, and an empty snippet; each must return `ErrInvalidSearchSnippetMarkers`.
 Add a separate success test for a snippet with zero complete markers: FTS5's
 32-token window cannot mark a phrase wider than itself, so an unmarked fragment
 is a legitimate result whose payload must come back unchanged with no match
-spans. Add invalid UTF-8 directly around markers and prove the parser strips
-markers before repair.
+spans. Add invalid UTF-8 directly around markers and prove marker recognition
+runs before repair.
+
+Table the same states directly against `scanMarkedSearchSnippet`, asserting the
+emitted chunk stream rather than a reassembled payload: emission order, an empty
+match emitted as a boundary with no payload, adjacent pairs emitting no empty
+text between them, and every chunk being a subslice of the input. A wrapper can
+hide an emission bug that a reassembled payload happens to smooth over.
 
 - [ ] **Step 4: Run primitive tests and verify RED**
 
@@ -406,9 +415,9 @@ type runeSpan struct {
 	end   int
 }
 
-type parsedSearchSnippet struct {
-	text    []byte
-	matches []byteSpan
+type markedSearchSnippetShape struct {
+	pairs        int
+	payloadBytes int
 }
 
 func normalizeSearchScore(raw float64) (float64, error) {
@@ -437,10 +446,12 @@ func newSearchSnippetMarkers(entropyReader io.Reader) (string, string, error) {
 }
 ```
 
-Implement `parseMarkedSearchSnippet` as the two-state raw-byte parser from the
-spec. It must search for both next exact markers, reject the marker invalid in
-the current state, copy only non-marker bytes, update recorded match offsets
-after marker removal, and return typed errors without including source values.
+Implement `scanMarkedSearchSnippet` as the two-state scanner from the spec,
+over `string` and using `strings.Index`. It must search for both next exact
+markers, reject the marker invalid in the current state, hand every stretch of
+non-marker bytes to `emit` as a zero-copy subslice tagged with its state, count
+pairs and payload bytes instead of accumulating them, and return typed errors
+without including source values. A `nil` emit makes it a validation-only pass.
 Zero complete markers is a success with no match spans, not a failure; only a
 completely empty snippet still fails, because FTS5 returns some text for every
 row it matches.
@@ -496,9 +507,15 @@ empty post-sanitization output, and exact 200-rune/800-byte boundaries. The
 boundary cases must include a complete match of exactly 200 scalars and one of
 exactly 800 bytes with source context on both sides, asserting the published
 snippet is the whole match with no indicator and no truncation, alongside a
-198-scalar match where both indicators do fit. Cover the allocation bound too:
-a multi-megabyte single token must leave the working window under
-`searchSnippetWindowRunes` while the published snippet still honours both caps. Add
+198-scalar match where both indicators do fit. Cover the allocation bound too,
+measured around the *whole* pipeline rather than after a parse: feeding
+`sanitizeMarkedSearchSnippet` a marked multi-megabyte single token, and a
+marker-free one, must stay inside a fixed named budget at both 2 MiB and 4 MiB —
+one budget across two sizes is what proves independence from the input — while
+the working window stays under `searchSnippetWindowRunes` and the published
+snippet still honours both caps. Add a repository-level companion that bounds
+one hit query's allocation against the legacy projection over the same row, so
+the end-to-end path is covered and not just the helper. Add
 `<script>alert(1)</script>` and `**bold**` payloads and assert those bytes remain
 literal rather than entity-escaped or emphasized; output may add only U+2026 at
 a cut edge or U+FFFD for explicitly replaced invalid/control input. The
@@ -521,8 +538,8 @@ Implement these focused helpers:
 
 ```go
 func rejectSearchSnippetMarkerCollision(content, start, end string) error
-func sanitizeSearchSnippet(parsed parsedSearchSnippet) (string, error)
-func normalizeSnippetWindow(parsed parsedSearchSnippet) snippetWindow
+func sanitizeMarkedSearchSnippet(raw, start, end string) (string, error)
+func normalizeMarkedSnippetWindow(raw, start, end string) (snippetWindow, error)
 func boundSearchSnippet(window snippetWindow) string
 func isSearchSnippetBidiControl(r rune) bool
 ```
@@ -540,13 +557,29 @@ and each scalar of context is charged for its indicators as it is taken. Only a
 matched token larger than the caps is truncated to the largest prefix that fits,
 indicators included.
 
-`normalizeSnippetWindow` never materializes the whole fragment. FTS5's 32-token
-bound does not bound one token, so a multi-megabyte token arrives as a single
-fragment; sanitization retains at most `searchSnippetWindowRunes` scalars around
-the first retained match and counts the rest, because every publishable window
-lies within one cap of that match start. The source is still read once end to
-end — collapsing trailing whitespace makes that unavoidable — but nothing
-proportional to it is allocated.
+`normalizeMarkedSnippetWindow` never materializes the fragment, at any stage.
+FTS5's 32-token bound does not bound one token, so a multi-megabyte token
+arrives as a single fragment; the marked string the driver returned is scanned
+in place and its chunks stream into the window, which retains at most
+`searchSnippetWindowRunes` scalars around the first retained match and counts
+the rest, because every publishable window lies within one cap of that match
+start.
+
+It scans twice: once with a `nil` emit to validate the marker structure and
+learn the pair count, and once to feed the normalizer. Both are needed. A broken
+snippet must fail before anything reaches the sanitizer, and a marker-free
+fragment has to be recognized as one *before* normalization so its single chunk
+can be streamed as the implicit whole-fragment match. The source is therefore
+read end to end twice — collapsing trailing whitespace makes even one full read
+unavoidable — but nothing proportional to it is allocated.
+
+The normalizer consumes `(chunk string, inMatch bool)`, opening a span before an
+in-match chunk and closing it after. Chunk splits must be invisible: carry the
+opening bytes of a scalar whose encoding continues into the next chunk in a
+fixed `utf8.UTFMax` buffer, defer any span boundary that lands while a scalar is
+carried until the decoder passes it, and let invalid-byte runs collapse across
+chunks. The deferred-boundary queue is a fixed array indexed by byte distance,
+because a boundary can never sit further ahead than a carried scalar is long.
 
 Run:
 
@@ -784,11 +817,7 @@ func (r *Repository) searchMessageHits(
 		if err != nil {
 			return nil, err
 		}
-		parsed, err := parseMarkedSearchSnippet([]byte(markedSnippet), start, end)
-		if err != nil {
-			return nil, err
-		}
-		snippet, err := sanitizeSearchSnippet(withWholeFragmentSpan(parsed))
+		snippet, err := sanitizeMarkedSearchSnippet(markedSnippet, start, end)
 		if err != nil {
 			return nil, err
 		}
@@ -823,10 +852,18 @@ For each row:
 1. scan complete message, raw score, and marked snippet;
 2. reject a complete marker appearing in `Message.Content`;
 3. normalize score;
-4. parse the snippet, give a marker-free fragment one implicit whole-fragment
-   span through `withWholeFragmentSpan` so the bounding pass has a window to
-   open around, then sanitize;
+4. sanitize the marked snippet *as the string the driver returned*: never
+   `[]byte(markedSnippet)`, and never through a parser that materializes the
+   payload. `sanitizeMarkedSearchSnippet` validates the markers, streams the
+   fragment's chunks into the bounded window, and treats a fragment with no
+   marker pair as one implicit whole-fragment match so the bounding pass has a
+   window to open around;
 5. append one `SearchHit`.
+
+The row's own bytes are already charged twice by this projection — the message
+content and the marked snippet the driver materializes for the extra column —
+and both are response data. Snippet processing must add nothing proportional on
+top of them.
 
 Close and drain this one reader before returning; never issue a nested query.
 If the shared predicate reports tokenless input, return `[]SearchHit{}, nil`,

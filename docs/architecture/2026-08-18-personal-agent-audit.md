@@ -518,11 +518,12 @@ excerpt of that same message when the phrase is wider than the window. Within
 the 200-scalar and 800-byte caps the complete match outranks the U+2026 cut
 indicators around it: a match that fits both caps on its own is published whole
 and the indicators are dropped together when they cannot fit beside it, so they
-are best-effort at that boundary. Snippet preparation also holds a fixed-size
-window rather than a copy of the fragment, so one unbroken multi-megabyte token
-cannot make the server allocate in proportion to it. Both projections share one
-predicate, so lifecycle visibility, scope, exclusion, limits, and literal-phrase
-handling are unchanged.
+are best-effort at that boundary. Snippet preparation holds a fixed-size window
+and never copies the fragment: the marked value SQLite returns is validated in
+place and streamed into that window, so one unbroken multi-megabyte token cannot
+make the server allocate in proportion to it at any stage. Both projections
+share one predicate, so lifecycle visibility, scope, exclusion, limits, and
+literal-phrase handling are unchanged.
 
 **Likely files:** `proto/turing/v1/sessions.proto`, sessions repository and
 service, generated Go/Dart, client mappers.

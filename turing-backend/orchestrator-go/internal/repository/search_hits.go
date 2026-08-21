@@ -1,7 +1,6 @@
 package repository
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -61,21 +60,6 @@ const (
 	searchSnippetMarkerSuffix = "]]"
 )
 
-// byteSpan is a half-open range over the parsed snippet's raw bytes, recorded
-// after marker removal so offsets refer to the payload the caller keeps.
-type byteSpan struct {
-	start int
-	end   int
-}
-
-// parsedSearchSnippet is snippet payload with its internal match spans. The
-// markers themselves are already gone; the spans are the only surviving record
-// of what FTS5 matched, and they never cross the repository boundary.
-type parsedSearchSnippet struct {
-	text    []byte
-	matches []byteSpan
-}
-
 // normalizeSearchScore turns SQLite's bm25() value into the public score.
 //
 // FTS5 multiplies the conventional BM25 formula by -1 so that ascending order
@@ -128,99 +112,127 @@ func newSearchSnippetMarkers(entropy io.Reader) (string, string, error) {
 		nil
 }
 
-// parseMarkedSearchSnippet strips the marker pair FTS5 wrapped around each
-// matched phrase and records where those phrases ended up in the payload.
+// markedSearchSnippetShape is everything one validation pass learns about a
+// marked snippet without keeping any of it: how many complete marker pairs it
+// carries, and how many payload bytes survive marker removal. Both are
+// counters, so learning it costs nothing that grows with the fragment.
+type markedSearchSnippetShape struct {
+	pairs        int
+	payloadBytes int
+}
+
+// scanMarkedSearchSnippet validates the marker pair FTS5 wrapped around each
+// matched phrase and hands every stretch of payload between them to emit,
+// tagged with whether it sat inside a match.
 //
-// It is a two-state machine over raw bytes — text and match — and only the
-// exact start marker may open a match, only the exact end marker may close
-// one. An end marker in text, a start marker inside a match, a missing
-// partner, or a snippet still in match state at the end all fail: FTS5 emits
-// balanced markers, so a structurally broken one means the value did not come
-// from the projection we asked for, and guessing which bytes were inserted is
-// exactly the guess this design refuses to make.
+// It is a two-state machine over the raw string — text and match — and only the
+// exact start marker may open a match, only the exact end marker may close one.
+// An end marker in text, a start marker inside a match, a missing partner, or a
+// snippet still in match state at the end all fail: FTS5 emits balanced
+// markers, so a structurally broken one means the value did not come from the
+// projection we asked for, and guessing which bytes were inserted is exactly
+// the guess this design refuses to make.
 //
 // A snippet carrying no complete marker at all is a different case, and it is
 // valid. `snippet()` can only mark a phrase that fits inside its token window,
 // so an exact phrase longer than that window legitimately yields an unmarked
-// fragment of the same matched row. The payload is returned as-is with no match
-// spans; only a completely empty snippet still fails, because FTS5 returns some
-// text for every row it matches.
+// fragment of the same matched row, emitted as one text chunk with no pairs.
+// Only a snippet with no payload and no pair still fails, because FTS5 returns
+// some text for every row it matches.
 //
-// Running before rune decoding is deliberate. Marker bytes are removed while
-// the input is still bytes, so invalid UTF-8 next to a marker cannot absorb
-// marker bytes, turn a start into an end, or leave marker fragments in public
-// output.
-func parseMarkedSearchSnippet(raw []byte, start, end string) (parsedSearchSnippet, error) {
+// Every emitted chunk is a subslice of raw, never a copy, so scanning a
+// multi-megabyte fragment allocates nothing that grows with it. Callers that
+// must not act on a structurally broken snippet pass a nil emit to validate
+// first: emission is streamed, so a chunk before the failure has already been
+// handed over by the time the error is returned.
+//
+// Running before rune decoding is deliberate. Markers are recognized while the
+// input is still bytes, so invalid UTF-8 next to a marker cannot absorb marker
+// bytes, turn a start into an end, or leave marker fragments in public output.
+func scanMarkedSearchSnippet(
+	raw, start, end string,
+	emit func(chunk string, inMatch bool),
+) (markedSearchSnippetShape, error) {
 	// The state machine only terminates because every iteration consumes a
 	// marker, and it can only distinguish the two states because the markers
 	// differ. An empty marker matches at every offset and consumes nothing, so
-	// the loop would spin forever; identical markers would let the parser
+	// the loop would spin forever; identical markers would let the scanner
 	// invent match boundaries and report success. newSearchSnippetMarkers can
 	// never produce either, so this rejects a caller mistake at the door rather
 	// than letting it become a hang or a silently wrong snippet.
 	if start == "" || end == "" || start == end {
-		return parsedSearchSnippet{}, fmt.Errorf(
+		return markedSearchSnippetShape{}, fmt.Errorf(
 			"%w: empty or identical markers", ErrInvalidSearchSnippetMarkers)
 	}
 
-	startMarker := []byte(start)
-	endMarker := []byte(end)
-
-	text := make([]byte, 0, len(raw))
-	var matches []byteSpan
-	matchStart := 0
+	var shape markedSearchSnippetShape
+	rest := raw
 	inMatch := false
 
-	for len(raw) > 0 {
-		nextStart := bytes.Index(raw, startMarker)
-		nextEnd := bytes.Index(raw, endMarker)
+	for len(rest) > 0 {
+		nextStart := strings.Index(rest, start)
+		nextEnd := strings.Index(rest, end)
 
 		if !inMatch {
 			if nextStart < 0 {
 				if nextEnd >= 0 {
-					return parsedSearchSnippet{}, fmt.Errorf(
+					return markedSearchSnippetShape{}, fmt.Errorf(
 						"%w: end marker outside a match", ErrInvalidSearchSnippetMarkers)
 				}
-				text = append(text, raw...)
+				shape.payloadBytes += len(rest)
+				if emit != nil {
+					emit(rest, false)
+				}
 				break
 			}
 			if nextEnd >= 0 && nextEnd < nextStart {
-				return parsedSearchSnippet{}, fmt.Errorf(
+				return markedSearchSnippetShape{}, fmt.Errorf(
 					"%w: end marker before start marker", ErrInvalidSearchSnippetMarkers)
 			}
-			text = append(text, raw[:nextStart]...)
-			raw = raw[nextStart+len(startMarker):]
-			matchStart = len(text)
+			// An empty stretch of text is not a boundary anything downstream
+			// can observe, so only a real one is emitted.
+			if nextStart > 0 {
+				shape.payloadBytes += nextStart
+				if emit != nil {
+					emit(rest[:nextStart], false)
+				}
+			}
+			rest = rest[nextStart+len(start):]
 			inMatch = true
 			continue
 		}
 
 		if nextEnd < 0 {
-			return parsedSearchSnippet{}, fmt.Errorf(
+			return markedSearchSnippetShape{}, fmt.Errorf(
 				"%w: start marker without end marker", ErrInvalidSearchSnippetMarkers)
 		}
 		if nextStart >= 0 && nextStart < nextEnd {
-			return parsedSearchSnippet{}, fmt.Errorf(
+			return markedSearchSnippetShape{}, fmt.Errorf(
 				"%w: nested start marker", ErrInvalidSearchSnippetMarkers)
 		}
-		text = append(text, raw[:nextEnd]...)
-		raw = raw[nextEnd+len(endMarker):]
-		matches = append(matches, byteSpan{start: matchStart, end: len(text)})
+		shape.payloadBytes += nextEnd
+		shape.pairs++
+		// An empty match is emitted even though it carries no payload: it is
+		// still a span the consumer has to open and close on.
+		if emit != nil {
+			emit(rest[:nextEnd], true)
+		}
+		rest = rest[nextEnd+len(end):]
 		inMatch = false
 	}
 
 	if inMatch {
-		return parsedSearchSnippet{}, fmt.Errorf(
+		return markedSearchSnippetShape{}, fmt.Errorf(
 			"%w: snippet ended inside a match", ErrInvalidSearchSnippetMarkers)
 	}
-	if len(text) == 0 && len(matches) == 0 {
+	if shape.payloadBytes == 0 && shape.pairs == 0 {
 		// FTS5 returns some text for every row it matches, so nothing at all is
 		// not a windowing outcome — it is a projection that did not come from
 		// the query we asked for.
-		return parsedSearchSnippet{}, fmt.Errorf(
+		return markedSearchSnippetShape{}, fmt.Errorf(
 			"%w: empty snippet", ErrInvalidSearchSnippetMarkers)
 	}
-	return parsedSearchSnippet{text: text, matches: matches}, nil
+	return shape, nil
 }
 
 // rejectSearchSnippetMarkerCollision refuses a row whose own content already
@@ -239,18 +251,35 @@ func rejectSearchSnippetMarkerCollision(content, start, end string) error {
 	return nil
 }
 
-// sanitizeSearchSnippet turns parsed snippet payload into the public snippet:
-// valid UTF-8, single-line plain text, bounded, and still showing what matched.
+// sanitizeMarkedSearchSnippet turns the marked string SQLite returned into the
+// public snippet: valid UTF-8, single-line plain text, bounded, and still
+// showing what matched.
+//
+// The fragment is read twice and copied never. The first pass validates the
+// marker state machine and counts pairs, so a structurally broken snippet fails
+// before anything is fed forward and a marker-free fragment is known to be one
+// before normalization starts. The second pass streams the same subslices into
+// the rolling window, which retains a fixed searchSnippetWindowRunes scalars
+// whatever the fragment weighs.
 //
 // Empty output, or output that no longer contains any matched text, is a
 // failure rather than a hit with invented or match-less text.
-func sanitizeSearchSnippet(parsed parsedSearchSnippet) (string, error) {
-	snippet := boundSearchSnippet(normalizeSnippetWindow(parsed))
+func sanitizeMarkedSearchSnippet(raw, start, end string) (string, error) {
+	window, err := normalizeMarkedSnippetWindow(raw, start, end)
+	if err != nil {
+		return "", err
+	}
+	return boundedSearchSnippetOrError(window)
+}
+
+// boundedSearchSnippetOrError bounds a sanitized window and re-checks the
+// result rather than trusting how it was built: this is the value that leaves
+// the repository.
+func boundedSearchSnippetOrError(window snippetWindow) (string, error) {
+	snippet := boundSearchSnippet(window)
 	if snippet == "" {
 		return "", ErrInvalidSearchSnippet
 	}
-	// Re-check the public result rather than trusting the construction above:
-	// this is the value that leaves the repository.
 	if !utf8.ValidString(snippet) ||
 		utf8.RuneCountInString(snippet) > searchSnippetMaxRunes ||
 		len(snippet) > searchSnippetMaxBytes {
@@ -326,24 +355,66 @@ type snippetNormalizer struct {
 	window       snippetWindow
 	pendingSpace bool
 	// openSpan is the global scalar index where the current match opened, or
-	// -1 when no match is open.
+	// -1 when no match is open. complete records that the first retained match
+	// has already closed; later matches are irrelevant, because the window
+	// opens on the first one.
 	openSpan int
-	// nextMatch is the byte span being tracked, and complete records that the
-	// first retained match has already closed. Later matches are irrelevant:
-	// the window opens on the first one.
-	nextMatch int
-	complete  bool
+	complete bool
+	// invalidRun records that the previous byte was part of a run of invalid
+	// UTF-8, so the whole run collapses into a single U+FFFD across chunk
+	// boundaries exactly as it would inside one.
+	invalidRun bool
+	// carry holds the leading bytes of a scalar whose encoding continues into
+	// the next chunk, so chunk splits decode identically to the concatenated
+	// payload. A scalar is at most utf8.UTFMax bytes, so this never grows.
+	carry    [utf8.UTFMax]byte
+	carryLen int
+	// deferredBoundaries counts span boundaries the decoder has not reached
+	// yet, indexed by how many bytes ahead of it they sit. A boundary can only
+	// be recorded while a scalar is carried, and a carried scalar is at most
+	// utf8.UTFMax bytes, so the whole queue fits in this fixed array; index 0
+	// is always empty because a boundary the decoder has reached is applied at
+	// once.
+	deferredBoundaries [utf8.UTFMax]int
 }
 
-// normalizeSnippetWindow sanitizes parsed snippet payload into a window bounded
-// by searchSnippetWindowRunes.
+// normalizeMarkedSnippetWindow validates a marked snippet and sanitizes its
+// payload into a window bounded by searchSnippetWindowRunes, without ever
+// holding a second copy of the fragment.
 //
-// The source is read once, byte by byte, which is unavoidable: trailing
-// whitespace collapses away, so whether any text survives after the window can
-// only be known by reading to the end. Reading a buffer the caller already
-// holds is not the same as allocating a second one the size of it.
-func normalizeSnippetWindow(parsed parsedSearchSnippet) snippetWindow {
-	return newSnippetNormalizer(searchSnippetWindowRunes).normalize(parsed)
+// The first pass proves the marker structure and reports whether the fragment
+// carried any pair at all; a marker-free fragment is then normalized as one
+// implicit whole-fragment match, so the bounding pass has a window to open
+// around. That has to be known before normalization starts, which is why the
+// scan runs twice rather than buffering what the first pass saw.
+//
+// The second pass reads the same string end to end, which is unavoidable:
+// trailing whitespace collapses away, so whether any text survives after the
+// window can only be known by reading to the end. Reading a string the driver
+// already returned is not the same as allocating a second one beside it.
+func normalizeMarkedSnippetWindow(raw, start, end string) (snippetWindow, error) {
+	shape, err := scanMarkedSearchSnippet(raw, start, end, nil)
+	if err != nil {
+		return snippetWindow{}, err
+	}
+	// A fragment FTS5 could not mark is windowed as a whole rather than around
+	// a match it never reported. The span is purely a windowing hint: it is
+	// never published, adds no emphasis, and covers only this same row's text.
+	// It is applied only when there is no pair at all, so it can never widen or
+	// merge a match FTS5 did report.
+	wholeFragment := shape.pairs == 0
+
+	normalizer := newSnippetNormalizer(searchSnippetWindowRunes)
+	if _, err := scanMarkedSearchSnippet(raw, start, end,
+		func(chunk string, inMatch bool) {
+			normalizer.writeChunk(chunk, inMatch || wholeFragment)
+		}); err != nil {
+		// Unreachable: the same string was just validated, and the scan is a
+		// pure function of it. Failing closed keeps that an assumption this
+		// code states rather than one it relies on silently.
+		return snippetWindow{}, err
+	}
+	return normalizer.finish(), nil
 }
 
 // newSnippetNormalizer builds a normalizer whose retained buffer is exactly
@@ -358,42 +429,165 @@ func newSnippetNormalizer(width int) *snippetNormalizer {
 	}
 }
 
-func (n *snippetNormalizer) normalize(parsed parsedSearchSnippet) snippetWindow {
-	invalidRun := false
-	for offset := 0; offset < len(parsed.text); {
-		n.applySpanBoundaries(parsed.matches, offset)
+// writeChunk feeds one stretch of payload into the window, opening a match span
+// before it and closing that span after it when the chunk sat inside a marker
+// pair. Chunks are subslices of the caller's string, so nothing is copied.
+func (n *snippetNormalizer) writeChunk(chunk string, inMatch bool) {
+	if inMatch {
+		n.boundary()
+	}
+	n.write(chunk)
+	if inMatch {
+		n.boundary()
+	}
+}
 
-		decoded, width := utf8.DecodeRune(parsed.text[offset:])
-		if decoded == utf8.RuneError && width <= 1 {
-			// One maximal run of invalid bytes becomes a single U+FFFD, which
-			// is what strings.ToValidUTF8 does; offsets still advance one byte
-			// at a time so a span boundary inside the run is not skipped.
-			if !invalidRun {
-				n.emit(utf8.RuneError)
-				invalidRun = true
+// finish drains a scalar left straddling the end of the payload and applies any
+// boundary the decoder never reached, then reports the window.
+//
+// A trailing incomplete encoding is charged one invalid byte at a time, which
+// the invalid-run rule collapses into a single U+FFFD — exactly what decoding
+// the whole payload as one buffer produces.
+func (n *snippetNormalizer) finish() snippetWindow {
+	for n.carryLen > 0 {
+		decoded, width := utf8.DecodeRune(n.carry[:n.carryLen])
+		n.consume(decoded, width)
+		n.carryLen = copy(n.carry[:], n.carry[width:n.carryLen])
+	}
+	// Nothing is left pending once the carry drains, because a boundary is
+	// never recorded further ahead than the carry is long. Applying the
+	// remainder keeps that a property this code enforces rather than assumes.
+	n.applyDeferredBoundaries(len(n.deferredBoundaries))
+	return n.window
+}
+
+// write decodes one chunk, joining a scalar that began in an earlier chunk to
+// the bytes that complete it so that the split is invisible to sanitization.
+func (n *snippetNormalizer) write(chunk string) {
+	for len(chunk) > 0 {
+		if n.carryLen == 0 {
+			if !utf8.FullRuneInString(chunk) {
+				// The rest of this chunk is the opening bytes of a scalar the
+				// next chunk finishes. It is at most utf8.UTFMax-1 bytes,
+				// because a longer prefix would already be a full encoding.
+				n.carryLen = copy(n.carry[:], chunk)
+				return
 			}
-			offset++
+			decoded, width := utf8.DecodeRuneInString(chunk)
+			n.consume(decoded, width)
+			chunk = chunk[width:]
 			continue
 		}
-		invalidRun = false
 
-		switch {
-		case unicode.IsSpace(decoded):
-			// Leading whitespace is dropped, and a pending space that is never
-			// followed by content trims the tail.
-			if n.window.totalRunes > 0 {
-				n.pendingSpace = true
-			}
-		case isSearchSnippetControl(decoded), isSearchSnippetBidiControl(decoded):
-			n.emit(utf8.RuneError)
-		default:
-			n.emit(decoded)
+		// Take only the bytes the carried scalar still needs, so bytes past it
+		// stay on the chunk and cannot jump ahead of a boundary between them.
+		for n.carryLen < len(n.carry) && len(chunk) > 0 &&
+			!utf8.FullRune(n.carry[:n.carryLen]) {
+			n.carry[n.carryLen] = chunk[0]
+			n.carryLen++
+			chunk = chunk[1:]
 		}
-		offset += width
+		if !utf8.FullRune(n.carry[:n.carryLen]) {
+			// Still short, and this chunk is spent.
+			return
+		}
+		decoded, width := utf8.DecodeRune(n.carry[:n.carryLen])
+		n.consume(decoded, width)
+		n.carryLen = copy(n.carry[:], n.carry[width:n.carryLen])
 	}
-	n.applySpanBoundaries(parsed.matches, len(parsed.text))
+}
 
-	return n.window
+// consume applies the sanitization rules to one decoded scalar and advances the
+// decoder past the bytes it occupied.
+func (n *snippetNormalizer) consume(decoded rune, width int) {
+	if decoded == utf8.RuneError && width <= 1 {
+		// One maximal run of invalid bytes becomes a single U+FFFD, which is
+		// what strings.ToValidUTF8 does; the decoder still advances one byte at
+		// a time so a span boundary inside the run is not skipped.
+		if !n.invalidRun {
+			n.emit(utf8.RuneError)
+			n.invalidRun = true
+		}
+		n.applyDeferredBoundaries(width)
+		return
+	}
+	n.invalidRun = false
+
+	switch {
+	case unicode.IsSpace(decoded):
+		// Leading whitespace is dropped, and a pending space that is never
+		// followed by content trims the tail.
+		if n.window.totalRunes > 0 {
+			n.pendingSpace = true
+		}
+	case isSearchSnippetControl(decoded), isSearchSnippetBidiControl(decoded):
+		n.emit(utf8.RuneError)
+	default:
+		n.emit(decoded)
+	}
+	n.applyDeferredBoundaries(width)
+}
+
+// boundary records one span boundary at the decoder's current position.
+//
+// While a scalar is carried the decoder still sits before it, so the boundary
+// belongs after that scalar and is queued at its distance ahead instead of
+// being applied now. That is what keeps a scalar straddling a marker attributed
+// to the side it started on, as it is when the payload is decoded as one
+// buffer.
+func (n *snippetNormalizer) boundary() {
+	if n.carryLen == 0 || n.carryLen >= len(n.deferredBoundaries) {
+		// A full carry always decodes, so the second case is unreachable;
+		// applying now keeps this total rather than indexing out of range.
+		n.applyBoundary()
+		return
+	}
+	n.deferredBoundaries[n.carryLen]++
+}
+
+// applyDeferredBoundaries applies every queued boundary sitting fewer than
+// distance bytes ahead of the decoder and shifts the rest down by that much.
+// Queued boundaries are recorded in arrival order, which is also ascending
+// position order, so applying them as one run preserves both.
+func (n *snippetNormalizer) applyDeferredBoundaries(distance int) {
+	var shifted [utf8.UTFMax]int
+	due := 0
+	for ahead := 1; ahead < len(n.deferredBoundaries); ahead++ {
+		count := n.deferredBoundaries[ahead]
+		if count == 0 {
+			continue
+		}
+		if ahead <= distance {
+			due += count
+			continue
+		}
+		shifted[ahead-distance] = count
+	}
+	n.deferredBoundaries = shifted
+	for applied := 0; applied < due; applied++ {
+		n.applyBoundary()
+	}
+}
+
+// applyBoundary opens or closes a match span. Boundaries strictly alternate —
+// every match chunk contributes exactly one open followed by one close — so the
+// open span itself says which of the two this is, with no queue of kinds to
+// keep alongside the queue of positions.
+func (n *snippetNormalizer) applyBoundary() {
+	if n.complete {
+		// The first retained match has closed; nothing after it can change the
+		// window, so later spans are not tracked at all.
+		return
+	}
+	if n.openSpan < 0 {
+		n.openSpan = n.nextRuneIndex()
+		return
+	}
+	if n.window.found {
+		n.window.match.end = n.window.totalRunes
+		n.complete = true
+	}
+	n.openSpan = -1
 }
 
 func (n *snippetNormalizer) emit(r rune) {
@@ -473,30 +667,6 @@ func (n *snippetNormalizer) compact() {
 	}
 	n.window.text = n.window.text[:copy(n.window.text, n.window.text[drop:])]
 	n.window.base += drop
-}
-
-// applySpanBoundaries closes and opens every match span that lands on this byte
-// offset, so spans that touch after marker removal stay separate. Tracking
-// stops once the first retained match closes.
-func (n *snippetNormalizer) applySpanBoundaries(matches []byteSpan, offset int) {
-	for !n.complete {
-		if n.openSpan < 0 && n.nextMatch < len(matches) &&
-			matches[n.nextMatch].start <= offset {
-			n.openSpan = n.nextRuneIndex()
-			continue
-		}
-		if n.openSpan >= 0 && n.nextMatch < len(matches) &&
-			matches[n.nextMatch].end <= offset {
-			if n.window.found {
-				n.window.match.end = n.window.totalRunes
-				n.complete = true
-			}
-			n.openSpan = -1
-			n.nextMatch++
-			continue
-		}
-		return
-	}
 }
 
 // isSearchSnippetControl reports the C0, C1, and DEL code points. Whitespace
@@ -650,23 +820,6 @@ func boundSearchSnippet(window snippetWindow) string {
 	return bounded.String()
 }
 
-// withWholeFragmentSpan gives a marker-free fragment one implicit match span
-// covering the whole payload.
-//
-// The bounding pass windows around a match, so with no span at all it would
-// reject a fragment that is perfectly good text. The span is purely a
-// windowing hint for that pass: it is never published, adds no emphasis to the
-// public snippet, and the text it covers is still only the matched message's
-// own content. A fragment with real marker spans is returned untouched, so this
-// can never widen or merge a match FTS5 actually reported.
-func withWholeFragmentSpan(parsed parsedSearchSnippet) parsedSearchSnippet {
-	if len(parsed.matches) > 0 {
-		return parsed
-	}
-	parsed.matches = []byteSpan{{start: 0, end: len(parsed.text)}}
-	return parsed
-}
-
 // SearchHit is one ranked search result: the same message the legacy search
 // returns, plus the ranking and preview values that only make sense in the
 // context of the query that produced them. Neither is persisted, and neither is
@@ -767,14 +920,12 @@ func (r *Repository) searchMessageHits(
 		if err != nil {
 			return nil, err
 		}
-		parsed, err := parseMarkedSearchSnippet([]byte(markedSnippet), start, end)
-		if err != nil {
-			return nil, err
-		}
-		// A marker-free fragment is windowed as a whole rather than around a
-		// match FTS5 never reported. The result is an unhighlighted excerpt of
-		// this same row, still sanitized and still bounded.
-		snippet, err := sanitizeSearchSnippet(withWholeFragmentSpan(parsed))
+		// The marked snippet is used as the string the driver returned: no
+		// second copy of the fragment is made, and no representation
+		// proportional to it is built. A marker-free fragment is windowed as a
+		// whole rather than around a match FTS5 never reported, which yields an
+		// unhighlighted excerpt of this same row, still sanitized and bounded.
+		snippet, err := sanitizeMarkedSearchSnippet(markedSnippet, start, end)
 		if err != nil {
 			return nil, err
 		}
