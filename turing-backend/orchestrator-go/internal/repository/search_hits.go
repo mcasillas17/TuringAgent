@@ -2,6 +2,8 @@ package repository
 
 import (
 	"bytes"
+	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -482,4 +484,120 @@ func firstRetainedSearchMatch(matches []runeSpan) (runeSpan, bool) {
 		}
 	}
 	return runeSpan{}, false
+}
+
+// SearchHit is one ranked search result: the same message the legacy search
+// returns, plus the ranking and preview values that only make sense in the
+// context of the query that produced them. Neither is persisted, and neither is
+// comparable across queries or database snapshots.
+type SearchHit struct {
+	Message Message
+	Score   float64
+	Snippet string
+}
+
+// SearchMessageHits runs a message search and returns each result with its
+// score and a bounded snippet.
+//
+// It is additive: the legacy projection keeps returning whole messages with no
+// ranking metadata, and both share one predicate so the two searches can never
+// disagree about which sessions and messages are visible.
+func (r *Repository) SearchMessageHits(
+	ctx context.Context,
+	sessionID string,
+	excludedSessionID string,
+	query string,
+	limit int,
+) ([]SearchHit, error) {
+	return r.searchMessageHits(ctx, sessionID, excludedSessionID, query, limit, rand.Reader)
+}
+
+// searchMessageHits is SearchMessageHits with its entropy source as a
+// parameter. Tests pin the marker nonce through it; the exported method is the
+// only production entry point and always uses crypto/rand, so there is no
+// exported seam that could weaken markers at runtime.
+//
+// The whole result set comes from one statement over one reader. The
+// orchestrator runs a single SQLite connection, so a per-row query or nested
+// repository call while this reader is open would deadlock against itself and
+// hold the connection away from deletion and lifecycle writers.
+func (r *Repository) searchMessageHits(
+	ctx context.Context,
+	sessionID string,
+	excludedSessionID string,
+	query string,
+	limit int,
+	entropy io.Reader,
+) ([]SearchHit, error) {
+	predicate, predicateArgs, ok := searchMessagesPredicate(searchMessagesInput{
+		sessionID:         sessionID,
+		excludedSessionID: excludedSessionID,
+		query:             query,
+		limit:             limit,
+	})
+	if !ok {
+		return []SearchHit{}, nil
+	}
+	// Markers are built before the reader opens: a random-source failure must
+	// fail the request rather than hold a connection.
+	start, end, err := newSearchSnippetMarkers(entropy)
+	if err != nil {
+		return nil, err
+	}
+
+	// The marker placeholders sit in the SELECT list, so their arguments come
+	// before the predicate's phrase, scope, and limit arguments.
+	sqlQuery := `
+		SELECT
+			m.id, m.session_id, COALESCE(m.run_id, ''), m.role, m.content,
+			m.content_type, m.sequence, m.created_at,
+			bm25(messages_fts),
+			snippet(messages_fts, 0, ?, ?, '…', 32)` + predicate
+	args := append([]any{start, end}, predicateArgs...)
+
+	rows, err := r.db.QueryContext(ctx, sqlQuery, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	hits := make([]SearchHit, 0)
+	for rows.Next() {
+		var (
+			message       Message
+			rawScore      float64
+			markedSnippet string
+		)
+		if err := rows.Scan(
+			&message.MessageID, &message.SessionID, &message.RunID,
+			&message.Role, &message.Content, &message.ContentType,
+			&message.Sequence, &message.CreatedAt,
+			&rawScore, &markedSnippet,
+		); err != nil {
+			return nil, err
+		}
+		// Every step below fails the whole query rather than dropping a row or
+		// emitting a plausible-looking default: a result that cannot prove its
+		// own score and snippet is worse than no result at all.
+		if err := rejectSearchSnippetMarkerCollision(message.Content, start, end); err != nil {
+			return nil, err
+		}
+		score, err := normalizeSearchScore(rawScore)
+		if err != nil {
+			return nil, err
+		}
+		parsed, err := parseMarkedSearchSnippet([]byte(markedSnippet), start, end)
+		if err != nil {
+			return nil, err
+		}
+		snippet, err := sanitizeSearchSnippet(parsed)
+		if err != nil {
+			return nil, err
+		}
+		hits = append(hits, SearchHit{Message: message, Score: score, Snippet: snippet})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return hits, nil
 }

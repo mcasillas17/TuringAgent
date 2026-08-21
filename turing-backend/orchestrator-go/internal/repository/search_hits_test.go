@@ -2,9 +2,12 @@ package repository
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -720,4 +723,802 @@ func TestNewSearchSnippetMarkersAreNeverDegenerate(t *testing.T) {
 	if start == "" || end == "" || start == end {
 		t.Fatalf("degenerate generated markers: %q %q", start, end)
 	}
+}
+
+// deterministicSearchEntropy returns exactly the bytes one marker nonce
+// consumes, so a test can predict the markers a query will build without the
+// exported method exposing an entropy seam.
+func deterministicSearchEntropy(fill byte) *bytes.Reader {
+	return bytes.NewReader(bytes.Repeat([]byte{fill}, searchSnippetMarkerNonceBytes))
+}
+
+func assertSearchHitIDs(t *testing.T, hits []SearchHit, want []string) {
+	t.Helper()
+	if hits == nil {
+		t.Fatalf("hits slice is nil, want %v", want)
+	}
+	got := make([]string, 0, len(hits))
+	for _, hit := range hits {
+		got = append(got, hit.Message.MessageID)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("hit message IDs = %v, want %v", got, want)
+	}
+}
+
+// assertPublicSnippet checks every invariant the repository promises about a
+// snippet it hands out, independently of the fixture that produced it.
+func assertPublicSnippet(t *testing.T, snippet string) {
+	t.Helper()
+	if snippet == "" {
+		t.Fatal("snippet is empty")
+	}
+	if !utf8.ValidString(snippet) {
+		t.Fatalf("snippet is not valid UTF-8: %q", snippet)
+	}
+	if count := utf8.RuneCountInString(snippet); count > searchSnippetMaxRunes {
+		t.Fatalf("snippet rune count = %d, want <= %d", count, searchSnippetMaxRunes)
+	}
+	if len(snippet) > searchSnippetMaxBytes {
+		t.Fatalf("snippet byte size = %d, want <= %d", len(snippet), searchSnippetMaxBytes)
+	}
+	if strings.ContainsAny(snippet, "\n\r\t\x00") {
+		t.Fatalf("snippet is not single-line plain text: %q", snippet)
+	}
+	if strings.Contains(snippet, searchSnippetStartPrefix) ||
+		strings.Contains(snippet, searchSnippetEndPrefix) {
+		t.Fatalf("snippet leaks internal markers: %q", snippet)
+	}
+}
+
+func assertPublicScore(t *testing.T, score float64) {
+	t.Helper()
+	if math.IsNaN(score) || math.IsInf(score, 0) || score < 0 || math.Signbit(score) {
+		t.Fatalf("score = %v, want finite and non-negative", score)
+	}
+}
+
+// TestSearchMessageHitsExposeHigherIsBetterScoresAndLegacyParity pins the two
+// contracts that make the hit projection safe to add: the score direction is
+// inverted relative to raw bm25, and every message value is byte-identical to
+// what the legacy projection already returns for the same fixture.
+func TestSearchMessageHitsExposeHigherIsBetterScoresAndLegacyParity(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	insertSearchSession(t, ctx, database, "s1")
+	insertSearchSession(t, ctx, database, "s2")
+	insertSearchMessage(t, ctx, database, "m-rank-high", "s1", "rankterm rankterm rankterm", 1)
+	insertSearchMessage(t, ctx, database, "m-rank-s1", "s1", "rankterm", 2)
+	insertSearchMessage(t, ctx, database, "m-rank-s2", "s2", "rankterm", 1)
+	insertSearchMessage(t, ctx, database, "m-not-a-match", "s2", "unrelated", 2)
+	if _, err := database.ExecContext(ctx, `UPDATE messages SET run_id = 'run-rank-high' WHERE id = 'm-rank-high'`); err != nil {
+		t.Fatalf("set message run_id: %v", err)
+	}
+
+	messages, err := repo.SearchMessages(ctx, "", "", "rankterm", 10)
+	if err != nil {
+		t.Fatalf("SearchMessages: %v", err)
+	}
+	hits, err := repo.SearchMessageHits(ctx, "", "", "rankterm", 10)
+	if err != nil {
+		t.Fatalf("SearchMessageHits: %v", err)
+	}
+	assertSearchHitIDs(t, hits, []string{"m-rank-high", "m-rank-s1", "m-rank-s2"})
+	if len(hits) != len(messages) {
+		t.Fatalf("hit count = %d, legacy message count = %d", len(hits), len(messages))
+	}
+	for i := range hits {
+		if !reflect.DeepEqual(hits[i].Message, messages[i]) {
+			t.Fatalf("hit %d message = %+v, legacy message = %+v", i, hits[i].Message, messages[i])
+		}
+	}
+	if hits[0].Message.RunID != "run-rank-high" {
+		t.Fatalf("hit run ID = %q, want run-rank-high", hits[0].Message.RunID)
+	}
+	if !(hits[0].Score > hits[1].Score) {
+		t.Fatalf("best hit score %v is not above %v", hits[0].Score, hits[1].Score)
+	}
+	for i, hit := range hits {
+		assertPublicScore(t, hit.Score)
+		assertPublicSnippet(t, hit.Snippet)
+		if !strings.Contains(hit.Snippet, "rankterm") {
+			t.Fatalf("hit %d snippet = %q, want the matched term", i, hit.Snippet)
+		}
+	}
+
+	var rawBest float64
+	if err := database.QueryRowContext(ctx, `
+		SELECT bm25(messages_fts)
+		FROM messages_fts
+		JOIN messages m ON m.rowid = messages_fts.rowid
+		WHERE messages_fts MATCH ? AND m.id = 'm-rank-high'`,
+		`"rankterm"`,
+	).Scan(&rawBest); err != nil {
+		t.Fatalf("select raw bm25: %v", err)
+	}
+	if hits[0].Score != -rawBest {
+		t.Fatalf("public score = %v, want exactly the negated raw bm25 %v", hits[0].Score, -rawBest)
+	}
+}
+
+// TestSearchMessageHitsBreakEqualScoresByMessageID proves the tie-break is the
+// message ID and that a real bm25 tie produces one shared public score rather
+// than two values that merely sort the same way.
+func TestSearchMessageHitsBreakEqualScoresByMessageID(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	insertSearchSession(t, ctx, database, "s1")
+	insertSearchMessage(t, ctx, database, "m-tie-b", "s1", "tieterm", 1)
+	insertSearchMessage(t, ctx, database, "m-tie-a", "s1", "tieterm", 2)
+
+	rows, err := database.QueryContext(ctx, `
+		SELECT bm25(messages_fts)
+		FROM messages_fts
+		JOIN messages m ON m.rowid = messages_fts.rowid
+		WHERE messages_fts MATCH ?
+		ORDER BY m.id`,
+		`"tieterm"`,
+	)
+	if err != nil {
+		t.Fatalf("select raw bm25: %v", err)
+	}
+	var raw []float64
+	for rows.Next() {
+		var value float64
+		if err := rows.Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		raw = append(raw, value)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) != 2 || raw[0] != raw[1] {
+		t.Fatalf("fixture raw bm25 values = %v, want two equal values", raw)
+	}
+
+	hits, err := repo.SearchMessageHits(ctx, "", "", "tieterm", 10)
+	if err != nil {
+		t.Fatalf("SearchMessageHits: %v", err)
+	}
+	assertSearchHitIDs(t, hits, []string{"m-tie-a", "m-tie-b"})
+	if hits[0].Score != hits[1].Score {
+		t.Fatalf("tied scores diverged: %v != %v", hits[0].Score, hits[1].Score)
+	}
+	assertPublicScore(t, hits[0].Score)
+}
+
+// TestSearchMessageHitsCanaryPinsFiniteNonPositiveBM25 pins the linked driver's
+// bm25 sign. A term carried by nearly every document is the case where a
+// conventional BM25 implementation would go positive; SQLite's negated form
+// must not. A driver upgrade that changes this fails here rather than turning
+// every production search into an internal error.
+func TestSearchMessageHitsCanaryPinsFiniteNonPositiveBM25(t *testing.T) {
+	database := openTestDB(t)
+	ctx := context.Background()
+	insertSearchSession(t, ctx, database, "s1")
+	const documents = 200
+	const carriers = 199
+	for i := 0; i < documents; i++ {
+		content := fmt.Sprintf("filler%03d body words", i)
+		if i < carriers {
+			content = "canaryterm " + content
+		}
+		insertSearchMessage(t, ctx, database, fmt.Sprintf("m-canary-%03d", i), "s1", content, int64(i+1))
+	}
+
+	rows, err := database.QueryContext(ctx, `
+		SELECT bm25(messages_fts)
+		FROM messages_fts
+		WHERE messages_fts MATCH ?`,
+		`"canaryterm"`,
+	)
+	if err != nil {
+		t.Fatalf("select raw bm25: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	scored := 0
+	for rows.Next() {
+		var raw float64
+		if err := rows.Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		if math.IsNaN(raw) || math.IsInf(raw, 0) || raw > 0 {
+			t.Fatalf("raw bm25 = %v, want finite and non-positive", raw)
+		}
+		if _, err := normalizeSearchScore(raw); err != nil {
+			t.Fatalf("normalizeSearchScore(%v) = %v", raw, err)
+		}
+		scored++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if scored != carriers {
+		t.Fatalf("scored rows = %d, want %d", scored, carriers)
+	}
+}
+
+// TestSearchMessageHitsRoundTripExactMarkersThroughSQLite is the linked-driver
+// canary: bound marker TEXT must survive the driver byte-for-byte, and FTS5
+// must wrap those exact bytes around a match at the start, middle, and end of
+// real external-content rows.
+func TestSearchMessageHitsRoundTripExactMarkersThroughSQLite(t *testing.T) {
+	database := openTestDB(t)
+	ctx := context.Background()
+	start, end, err := newSearchSnippetMarkers(deterministicSearchEntropy(0x5a))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var gotStart, gotEnd string
+	if err := database.QueryRowContext(ctx, `SELECT ?, ?`, start, end).Scan(&gotStart, &gotEnd); err != nil {
+		t.Fatalf("round-trip bound markers: %v", err)
+	}
+	if gotStart != start || gotEnd != end {
+		t.Fatalf("driver altered bound markers: %q/%q, want %q/%q", gotStart, gotEnd, start, end)
+	}
+	if strings.IndexByte(gotStart, 0) >= 0 || strings.IndexByte(gotEnd, 0) >= 0 {
+		t.Fatal("driver introduced NUL into a marker")
+	}
+	if gotStart == gotEnd {
+		t.Fatal("driver collapsed the marker pair into one value")
+	}
+
+	insertSearchSession(t, ctx, database, "s1")
+	insertSearchMessage(t, ctx, database, "m-marker-1-start", "s1", "markerterm alpha bravo charlie delta", 1)
+	insertSearchMessage(t, ctx, database, "m-marker-2-middle", "s1", "alpha bravo markerterm charlie delta", 2)
+	insertSearchMessage(t, ctx, database, "m-marker-3-end", "s1", "alpha bravo charlie delta markerterm", 3)
+
+	rows, err := database.QueryContext(ctx, `
+		SELECT m.id, snippet(messages_fts, 0, ?, ?, '…', 32)
+		FROM messages_fts
+		JOIN messages m ON m.rowid = messages_fts.rowid
+		WHERE messages_fts MATCH ?
+		ORDER BY m.id`,
+		start, end, `"markerterm"`,
+	)
+	if err != nil {
+		t.Fatalf("select marked snippets: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	seen := 0
+	for rows.Next() {
+		var id, marked string
+		if err := rows.Scan(&id, &marked); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(marked, start+"markerterm"+end) {
+			t.Fatalf("%s marked snippet = %q, want exact markers around the match", id, marked)
+		}
+		if strings.IndexByte(marked, 0) >= 0 {
+			t.Fatalf("%s marked snippet contains NUL: %q", id, marked)
+		}
+		parsed, err := parseMarkedSearchSnippet([]byte(marked), start, end)
+		if err != nil {
+			t.Fatalf("%s parse: %v", id, err)
+		}
+		if len(parsed.matches) != 1 {
+			t.Fatalf("%s match spans = %+v, want one", id, parsed.matches)
+		}
+		matched := string(parsed.text[parsed.matches[0].start:parsed.matches[0].end])
+		if matched != "markerterm" {
+			t.Fatalf("%s match span text = %q, want markerterm", id, matched)
+		}
+		if strings.Contains(string(parsed.text), "[[TURING-FTS5-SNIPPET") {
+			t.Fatalf("%s parsed payload retains marker bytes: %q", id, parsed.text)
+		}
+		snippet, err := sanitizeSearchSnippet(parsed)
+		if err != nil {
+			t.Fatalf("%s sanitize: %v", id, err)
+		}
+		assertPublicSnippet(t, snippet)
+		seen++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if seen != 3 {
+		t.Fatalf("marked snippet rows = %d, want 3", seen)
+	}
+}
+
+// TestSearchMessageHitsFailClosedOnMarkerCollision drives the collision guard
+// end to end: with entropy pinned, source content can be authored to carry this
+// query's exact marker, and the whole query must fail rather than trust the
+// parser's boundaries.
+func TestSearchMessageHitsFailClosedOnMarkerCollision(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		endSide bool
+	}{
+		{name: "start marker in content"},
+		{name: "end marker in content", endSide: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			database := openTestDB(t)
+			repo := New(database)
+			ctx := context.Background()
+			start, end, err := newSearchSnippetMarkers(deterministicSearchEntropy(0xaa))
+			if err != nil {
+				t.Fatal(err)
+			}
+			forged := start
+			if testCase.endSide {
+				forged = end
+			}
+			insertSearchSession(t, ctx, database, "s1")
+			insertSearchMessage(t, ctx, database, "m-collision", "s1", forged+" needle", 1)
+
+			hits, err := repo.searchMessageHits(
+				ctx, "", "", "needle", 10, deterministicSearchEntropy(0xaa),
+			)
+			if !errors.Is(err, ErrSearchSnippetMarkerCollision) || hits != nil {
+				t.Fatalf("hits, error = %+v, %v", hits, err)
+			}
+		})
+	}
+}
+
+// TestSearchMessageHitsReturnMatchCenteredBoundedSnippets covers the public
+// snippet's shape: it keeps the match, keeps context on both sides when there
+// is room, obeys both caps, and treats markup, control bytes, and non-Latin
+// scripts as inert text rather than formatting.
+func TestSearchMessageHitsReturnMatchCenteredBoundedSnippets(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	insertSearchSession(t, ctx, database, "s1")
+
+	filler := strings.TrimSpace(strings.Repeat("contextword12 ", 20))
+	longBody := filler + " boundterm " + filler
+	// One token larger than both caps: bounds win and the largest prefix that
+	// still fits stays visible.
+	oversizedToken := "oversizedterm" + strings.Repeat("q", 900)
+	oversized := "prefixword " + oversizedToken + " suffixword"
+
+	for i, fixture := range []struct {
+		id      string
+		content string
+	}{
+		{id: "m-snip-1-long", content: longBody},
+		{id: "m-snip-2-markup", content: "<script>alert(\"markupterm\")</script> **markupterm** \x1b[31mred\x1b[0m"},
+		{id: "m-snip-3-cjk", content: "会議 東京 予定 資料"},
+		{id: "m-snip-4-rtl", content: "\u202eمرحبا rtlterm بالعالم\u202c"},
+		{id: "m-snip-5-emoji", content: "cafe\u0301 🤖 emojiterm 👍🏽 done"},
+		{id: "m-snip-6-lines", content: "first line\nsecond\tlineterm\r\nthird\x07line"},
+		{id: "m-snip-7-oversized", content: oversized},
+	} {
+		insertSearchMessage(t, ctx, database, fixture.id, "s1", fixture.content, int64(i+1))
+	}
+
+	for _, testCase := range []struct {
+		name        string
+		query       string
+		wantID      string
+		wantContain []string
+		wantAbsent  []string
+		centered    bool
+	}{
+		{
+			name:        "long body keeps context on both sides",
+			query:       "boundterm",
+			wantID:      "m-snip-1-long",
+			wantContain: []string{"boundterm", "contextword12"},
+			centered:    true,
+		},
+		{
+			name:        "markup stays literal",
+			query:       "markupterm",
+			wantID:      "m-snip-2-markup",
+			wantContain: []string{"markupterm", "<script>", "**"},
+			wantAbsent:  []string{"\x1b"},
+		},
+		{
+			name:        "cjk token survives",
+			query:       "東京",
+			wantID:      "m-snip-3-cjk",
+			wantContain: []string{"東京", "会議"},
+		},
+		{
+			name:        "rtl text keeps letters and drops explicit overrides",
+			query:       "rtlterm",
+			wantID:      "m-snip-4-rtl",
+			wantContain: []string{"rtlterm", "مرحبا"},
+			wantAbsent:  []string{"\u202e", "\u202c"},
+		},
+		{
+			name:        "emoji and combining marks survive",
+			query:       "emojiterm",
+			wantID:      "m-snip-5-emoji",
+			wantContain: []string{"emojiterm", "🤖", "cafe\u0301", "👍🏽"},
+		},
+		{
+			name:        "line breaks and controls collapse",
+			query:       "lineterm",
+			wantID:      "m-snip-6-lines",
+			wantContain: []string{"lineterm", "second lineterm"},
+			wantAbsent:  []string{"\n", "\r", "\t", "\x07"},
+		},
+		{
+			name:        "oversized match token is truncated to the caps",
+			query:       oversizedToken,
+			wantID:      "m-snip-7-oversized",
+			wantContain: []string{"oversizedterm"},
+			wantAbsent:  []string{"prefixword", "suffixword"},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			hits, err := repo.SearchMessageHits(ctx, "", "", testCase.query, 10)
+			if err != nil {
+				t.Fatalf("SearchMessageHits(%q): %v", testCase.query, err)
+			}
+			assertSearchHitIDs(t, hits, []string{testCase.wantID})
+			snippet := hits[0].Snippet
+			assertPublicSnippet(t, snippet)
+			for _, want := range testCase.wantContain {
+				if !strings.Contains(snippet, want) {
+					t.Fatalf("snippet = %q, want it to contain %q", snippet, want)
+				}
+			}
+			for _, unwanted := range testCase.wantAbsent {
+				if strings.Contains(snippet, unwanted) {
+					t.Fatalf("snippet = %q, want it to omit %q", snippet, unwanted)
+				}
+			}
+			if testCase.centered {
+				index := strings.Index(snippet, testCase.query)
+				if index <= 0 || index+len(testCase.query) >= len(snippet) {
+					t.Fatalf("snippet = %q, want the match centered with context on both sides", snippet)
+				}
+			}
+		})
+	}
+}
+
+// TestSearchMessageHitsNeverReadSnippetTextFromNeighborMessage pins snippet
+// provenance: the fragment comes from the hit's own row, never from the
+// messages stored next to it.
+func TestSearchMessageHitsNeverReadSnippetTextFromNeighborMessage(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	const secret = "sentinelsecret"
+	insertSearchSession(t, ctx, database, "s1")
+	insertSearchMessage(t, ctx, database, "m-provenance-1-before", "s1", secret+"alpha before the hit", 1)
+	insertSearchMessage(t, ctx, database, "m-provenance-2-hit", "s1", "provenanceterm inside the hit message", 2)
+	insertSearchMessage(t, ctx, database, "m-provenance-3-after", "s1", secret+"omega after the hit", 3)
+
+	hits, err := repo.SearchMessageHits(ctx, "", "", "provenanceterm", 10)
+	if err != nil {
+		t.Fatalf("SearchMessageHits: %v", err)
+	}
+	assertSearchHitIDs(t, hits, []string{"m-provenance-2-hit"})
+	assertPublicSnippet(t, hits[0].Snippet)
+	if strings.Contains(hits[0].Snippet, secret) {
+		t.Fatalf("snippet = %q, want no neighbor content", hits[0].Snippet)
+	}
+	if !strings.Contains(hits[0].Message.Content, strings.TrimSuffix(strings.TrimPrefix(hits[0].Snippet, "…"), "…")) {
+		t.Fatalf("snippet = %q is not a fragment of its own message %q", hits[0].Snippet, hits[0].Message.Content)
+	}
+}
+
+// TestSearchMessageHitsDocumentDivergentExternalContentBehavior records what
+// happens when a database is mutated around the FTS triggers, which application
+// writes never do. A row whose match position no longer exists yields no
+// markers and fails closed; a same-shape replacement can still produce balanced
+// markers around stale offsets, and MEM-002 only guarantees that the text stays
+// confined to the returned message.
+func TestSearchMessageHitsDocumentDivergentExternalContentBehavior(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	const secret = "divergentneighborsecret"
+	insertSearchSession(t, ctx, database, "s1")
+	insertSearchMessage(t, ctx, database, "m-divergent-short", "s1", "alpha beta divergentterm", 1)
+	insertSearchMessage(t, ctx, database, "m-divergent-stale", "s1", "staleterm trailing", 2)
+	insertSearchMessage(t, ctx, database, "m-divergent-neighbor", "s1", secret+" untouched", 3)
+
+	if _, err := database.ExecContext(ctx, `DROP TRIGGER messages_fts_au`); err != nil {
+		t.Fatalf("drop update trigger: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := database.ExecContext(context.Background(), `
+			CREATE TRIGGER messages_fts_au AFTER UPDATE ON messages BEGIN
+			  INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+			  INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+			END;`,
+		); err != nil {
+			t.Fatalf("restore update trigger: %v", err)
+		}
+		if _, err := database.ExecContext(
+			context.Background(),
+			`INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')`,
+		); err != nil {
+			t.Fatalf("rebuild search index: %v", err)
+		}
+	})
+
+	if _, err := database.ExecContext(ctx,
+		`UPDATE messages SET content = 'alpha' WHERE id = 'm-divergent-short'`,
+	); err != nil {
+		t.Fatalf("shorten divergent row: %v", err)
+	}
+	hits, err := repo.SearchMessageHits(ctx, "", "", "divergentterm", 10)
+	if !errors.Is(err, ErrInvalidSearchSnippetMarkers) || hits != nil {
+		t.Fatalf("shortened row hits, error = %+v, %v", hits, err)
+	}
+
+	if _, err := database.ExecContext(ctx,
+		`UPDATE messages SET content = 'replaced trailing' WHERE id = 'm-divergent-stale'`,
+	); err != nil {
+		t.Fatalf("replace divergent row: %v", err)
+	}
+	hits, err = repo.SearchMessageHits(ctx, "", "", "staleterm", 10)
+	if err != nil {
+		t.Fatalf("stale offsets: %v", err)
+	}
+	assertSearchHitIDs(t, hits, []string{"m-divergent-stale"})
+	assertPublicSnippet(t, hits[0].Snippet)
+	if hits[0].Snippet != "replaced trailing" {
+		t.Fatalf("snippet = %q, want only the returned row's own current content", hits[0].Snippet)
+	}
+	if strings.Contains(hits[0].Snippet, secret) {
+		t.Fatalf("snippet = %q, want no neighbor content", hits[0].Snippet)
+	}
+}
+
+// TestSearchMessageHitsKeepExactIdentifierSemantics proves MEM-002 adds no ID
+// lookup: an identifier is findable because its tokens are in the content, and
+// an identifier that exists only as a primary key still matches nothing.
+func TestSearchMessageHitsKeepExactIdentifierSemantics(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	const identifier = "msg_identifierterm_01"
+	insertSearchSession(t, ctx, database, "s1")
+	insertSearchMessage(t, ctx, database, identifier, "s1", "this body never names the key", 1)
+	insertSearchMessage(t, ctx, database, "m-identifier-body", "s1",
+		"leading words "+identifier+" trailing words", 2)
+
+	hits, err := repo.SearchMessageHits(ctx, "", "", identifier, 10)
+	if err != nil {
+		t.Fatalf("SearchMessageHits: %v", err)
+	}
+	assertSearchHitIDs(t, hits, []string{"m-identifier-body"})
+	assertPublicSnippet(t, hits[0].Snippet)
+	if !strings.Contains(hits[0].Snippet, identifier) {
+		t.Fatalf("snippet = %q, want the identifier", hits[0].Snippet)
+	}
+}
+
+// TestSearchMessageHitsIncludeActiveAndArchivedSessions pins archive as
+// reversible visibility state: archived conversations stay searchable.
+func TestSearchMessageHitsIncludeActiveAndArchivedSessions(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	insertListSession(t, ctx, database, "s-active", "active", "2026-08-20T04:00:00.000000000Z")
+	insertListSession(t, ctx, database, "s-archived", "archived", "2026-08-20T04:00:01.000000000Z")
+	insertSearchMessage(t, ctx, database, "m-lifecycle-1-active", "s-active", "lifecycleterm", 1)
+	insertSearchMessage(t, ctx, database, "m-lifecycle-2-archived", "s-archived", "lifecycleterm", 1)
+
+	hits, err := repo.SearchMessageHits(ctx, "", "", "lifecycleterm", 10)
+	if err != nil {
+		t.Fatalf("SearchMessageHits: %v", err)
+	}
+	assertSearchHitIDs(t, hits, []string{"m-lifecycle-1-active", "m-lifecycle-2-archived"})
+
+	scoped, err := repo.SearchMessageHits(ctx, "s-archived", "", "lifecycleterm", 10)
+	if err != nil {
+		t.Fatalf("SearchMessageHits scoped: %v", err)
+	}
+	assertSearchHitIDs(t, scoped, []string{"m-lifecycle-2-archived"})
+}
+
+// TestSearchMessageHitsExcludeDeletingSessions keeps deletion precedence ahead
+// of both search and archive.
+func TestSearchMessageHitsExcludeDeletingSessions(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	insertSearchSession(t, ctx, database, "s-keep")
+	insertSearchSession(t, ctx, database, "s-deleting")
+	insertSearchMessage(t, ctx, database, "m-deletion-keep", "s-keep", "deletionterm", 1)
+	insertSearchMessage(t, ctx, database, "m-deletion-gone", "s-deleting", "deletionterm", 1)
+	if _, err := database.ExecContext(ctx,
+		`UPDATE sessions SET deletion_state = 'deleting' WHERE id = 's-deleting'`,
+	); err != nil {
+		t.Fatalf("mark session deleting: %v", err)
+	}
+
+	hits, err := repo.SearchMessageHits(ctx, "", "", "deletionterm", 10)
+	if err != nil {
+		t.Fatalf("SearchMessageHits: %v", err)
+	}
+	assertSearchHitIDs(t, hits, []string{"m-deletion-keep"})
+
+	scoped, err := repo.SearchMessageHits(ctx, "s-deleting", "", "deletionterm", 10)
+	if err != nil {
+		t.Fatalf("SearchMessageHits scoped: %v", err)
+	}
+	assertSearchHitIDs(t, scoped, []string{})
+}
+
+// TestSearchMessageHitsPinPublicSessionStatusDomain freezes the searchable
+// status domain in the schema itself, so adding a lifecycle status forces an
+// explicit decision about whether its conversations are searchable.
+func TestSearchMessageHitsPinPublicSessionStatusDomain(t *testing.T) {
+	database := openTestDB(t)
+	ctx := context.Background()
+	var ddl string
+	if err := database.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'sessions'`,
+	).Scan(&ddl); err != nil {
+		t.Fatalf("read sessions DDL: %v", err)
+	}
+	normalized := strings.Join(strings.Fields(ddl), " ")
+	const wantCheck = "CHECK (status IN ('active','archived'))"
+	if !strings.Contains(normalized, wantCheck) {
+		t.Fatalf("sessions DDL = %q, want it to contain %q", normalized, wantCheck)
+	}
+	domain := regexp.MustCompile(`CHECK \(status IN \(([^)]*)\)\)`).FindAllStringSubmatch(normalized, -1)
+	if len(domain) != 1 || domain[0][1] != `'active','archived'` {
+		t.Fatalf("sessions status domain = %v, want exactly one 'active','archived' domain", domain)
+	}
+}
+
+// TestSearchMessageHitsPreserveScopeExclusionAndLimits keeps the hit projection
+// on exactly the legacy scope, exclusion, and limit behavior, including the
+// empty-but-not-nil result for a real token that matches nothing.
+func TestSearchMessageHitsPreserveScopeExclusionAndLimits(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	insertSearchSession(t, ctx, database, "s1")
+	insertSearchSession(t, ctx, database, "s2")
+	for i := 1; i <= 21; i++ {
+		insertSearchMessage(t, ctx, database, fmt.Sprintf("m-limit-%02d", i), "s1", "limitterm", int64(i))
+	}
+	insertSearchMessage(t, ctx, database, "m-limit-s2", "s2", "limitterm", 1)
+
+	all := make([]string, 0, 22)
+	for i := 1; i <= 21; i++ {
+		all = append(all, fmt.Sprintf("m-limit-%02d", i))
+	}
+	all = append(all, "m-limit-s2")
+
+	scoped, err := repo.SearchMessageHits(ctx, "s2", "", "limitterm", 10)
+	if err != nil {
+		t.Fatalf("SearchMessageHits scoped: %v", err)
+	}
+	assertSearchHitIDs(t, scoped, []string{"m-limit-s2"})
+
+	excluded, err := repo.SearchMessageHits(ctx, "", "s1", "limitterm", 10)
+	if err != nil {
+		t.Fatalf("SearchMessageHits excluded: %v", err)
+	}
+	assertSearchHitIDs(t, excluded, []string{"m-limit-s2"})
+
+	valid, err := repo.SearchMessageHits(ctx, "", "", "limitterm", 2)
+	if err != nil {
+		t.Fatalf("SearchMessageHits valid limit: %v", err)
+	}
+	assertSearchHitIDs(t, valid, all[:2])
+
+	maximum, err := repo.SearchMessageHits(ctx, "", "", "limitterm", 100)
+	if err != nil {
+		t.Fatalf("SearchMessageHits maximum limit: %v", err)
+	}
+	assertSearchHitIDs(t, maximum, all)
+
+	for _, limit := range []int{0, -1, 101} {
+		defaulted, err := repo.SearchMessageHits(ctx, "", "", "limitterm", limit)
+		if err != nil {
+			t.Fatalf("SearchMessageHits limit %d: %v", limit, err)
+		}
+		assertSearchHitIDs(t, defaulted, all[:20])
+	}
+
+	noMatch, err := repo.SearchMessageHits(ctx, "", "", "missingterm", 10)
+	if err != nil {
+		t.Fatalf("SearchMessageHits no match: %v", err)
+	}
+	assertSearchHitIDs(t, noMatch, []string{})
+}
+
+// TestSearchMessageHitsKeepLiteralPhraseInjectionResistance keeps every query
+// string data: FTS operators, unbalanced quotes, and NUL stay inside the
+// server-built quoted phrase.
+func TestSearchMessageHitsKeepLiteralPhraseInjectionResistance(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	insertSearchSession(t, ctx, database, "s1")
+	insertSearchMessage(t, ctx, database, "m-literal", "s1", "operatorword OR broadword", 1)
+	insertSearchMessage(t, ctx, database, "m-operator-only", "s1", "operatorword", 2)
+	insertSearchMessage(t, ctx, database, "m-broad-only", "s1", "broadword", 3)
+	insertSearchMessage(t, ctx, database, "m-malformed", "s1", "\"unterminated", 4)
+	insertSearchMessage(t, ctx, database, "m-nul-phrase", "s1", "alpha beta", 5)
+	insertSearchMessage(t, ctx, database, "m-nul-alpha", "s1", "alpha", 6)
+	insertSearchMessage(t, ctx, database, "m-nul-beta", "s1", "beta", 7)
+
+	for _, testCase := range []struct {
+		name   string
+		query  string
+		wantID string
+	}{
+		{name: "operator looking", query: "operatorword OR broadword", wantID: "m-literal"},
+		{name: "unbalanced quote", query: "\"unterminated", wantID: "m-malformed"},
+		{name: "nul delimiter", query: "alpha\x00beta", wantID: "m-nul-phrase"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			hits, err := repo.SearchMessageHits(ctx, "", "", testCase.query, 10)
+			if err != nil {
+				t.Fatalf("SearchMessageHits(%q): %v", testCase.query, err)
+			}
+			assertSearchHitIDs(t, hits, []string{testCase.wantID})
+			assertPublicSnippet(t, hits[0].Snippet)
+		})
+	}
+}
+
+// TestSearchMessageHitsTokenlessInputReturnsEmptySlice keeps a query FTS5 has
+// no token for a successful empty result, and specifically not a nil slice a
+// caller could confuse with an unset field.
+func TestSearchMessageHitsTokenlessInputReturnsEmptySlice(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	insertSearchSession(t, ctx, database, "s1")
+	insertSearchMessage(t, ctx, database, "m-tokenless", "s1", "ordinary searchable content", 1)
+
+	for _, query := range []string{"", "...", "!!!", "🤖", "\x00", "\u0301"} {
+		hits, err := repo.SearchMessageHits(ctx, "", "", query, 10)
+		if err != nil {
+			t.Fatalf("SearchMessageHits(%q): %v", query, err)
+		}
+		assertSearchHitIDs(t, hits, []string{})
+	}
+}
+
+// TestSearchMessageHitsReturnContextAndRowErrors keeps failures typed and
+// value-free instead of returning a partial result set.
+func TestSearchMessageHitsReturnContextAndRowErrors(t *testing.T) {
+	t.Run("canceled context", func(t *testing.T) {
+		repo := New(openTestDB(t))
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		hits, err := repo.SearchMessageHits(ctx, "", "", "anything", 10)
+		if !errors.Is(err, context.Canceled) || hits != nil {
+			t.Fatalf("hits, error = %+v, %v", hits, err)
+		}
+	})
+
+	t.Run("row scan error", func(t *testing.T) {
+		database := openTestDB(t)
+		repo := New(database)
+		ctx := context.Background()
+		insertSearchSession(t, ctx, database, "s1")
+		if _, err := database.ExecContext(ctx, `
+			INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at)
+			VALUES ('m-bad-sequence', 's1', 'user', 'scanerrorterm', 'text', 'not-a-number', '2026-08-10T00:00:00Z')`,
+		); err != nil {
+			t.Fatalf("insert malformed row: %v", err)
+		}
+
+		hits, err := repo.SearchMessageHits(ctx, "", "", "scanerrorterm", 10)
+		if err == nil || hits != nil {
+			t.Fatalf("hits, error = %+v, %v", hits, err)
+		}
+		if strings.Contains(err.Error(), "scanerrorterm") {
+			t.Fatalf("error leaks message content: %v", err)
+		}
+	})
 }
