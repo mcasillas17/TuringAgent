@@ -67,8 +67,10 @@ work with its own gate. The UI says this when an `mcp.json` entry uses
 **Importing is not enabling.** This is the rule already settled for skills, and
 it applies unchanged. An imported server arrives **disabled**. Its tools arrive
 `approval_required` — which `DefaultPolicyFor` already does for anything not in
-its seed map, so no new defaulting logic is needed. A remote server additionally
-requires acknowledging egress before it can be enabled.
+its seed map, so no new defaulting logic is needed.
+
+**A remote server does not get its own egress consent.** See the correction
+below: it joins the one that already exists.
 
 **`mcp.json` is an import format, not the source of truth.** Read from a
 mounted folder the way `skills/` is. Registered servers live in the database
@@ -81,8 +83,8 @@ problem would be a second thing to get wrong.
 ## What is built
 
 1. **Migration `0015`** — `mcp_servers` (id, name, transport, url, sealed
-   token, tier, enabled, egress_acknowledged_at, created_at). Tools keep their
-   existing table and gain a foreign key to it.
+   token, tier, enabled, created_at). Tools keep their existing table and gain a
+   foreign key to it. **No egress column** — see the correction below.
 2. **Registry repository** — CRUD, plus reconciliation with `mcp.json`.
 3. **Discovery against a registered server** — `tools/list` over JSON-RPC 2.0,
    the same shape the bundled servers speak. Failure is recorded and shown, not
@@ -91,8 +93,9 @@ problem would be a second thing to get wrong.
 4. **Caller-side approval gate** — for non-bundled tiers, refuse dispatch of a
    `approval_required` tool without a valid unconsumed approval, then consume.
 5. **Client** — the MCPs section grows from a read-only tool list to servers
-   with their tools, liveness, tier, and the egress acknowledgement. Tool
-   policy becomes editable.
+   with their tools, liveness and tier. A remote server is labelled as one, and
+   the consent for reaching it is the per-run egress decision, not a switch on
+   this page. Tool policy becomes editable.
 
 ## What is deliberately not built
 
@@ -102,6 +105,36 @@ problem would be a second thing to get wrong.
   rather than implying it is.
 - **Publishing our servers to the host.** The boundary that says MCP ports are
   internal-only stays.
+
+## Correction: egress consent already exists
+
+This plan originally gave `mcp_servers` an `egress_acknowledged_at` column and a
+rule that a remote server could not be enabled until it was set. **That was
+written a day before TUR-003 (#69) merged, and it is now the wrong shape.**
+
+`ChatService.PrepareRemoteEgress` returns a short-lived signed challenge binding
+the session, the effective route and endpoint, the selected tool names, the
+skill snapshot, and a typed set of data categories — which already includes
+**tool schemas, tool arguments and tool results**. `SendMessage` refuses without
+the acknowledgement. One run, one decision.
+
+A remote MCP server is exactly that: tool arguments and results leaving the
+machine. So it belongs *inside* that decision, not beside it.
+
+Concretely:
+
+- **No egress column on `mcp_servers`.** Enabling a server is a statement about
+  what exists, not permission to reach it.
+- **A run that may call a remote server's tool names that server's endpoint in
+  the prepared decision**, and declares the tool-argument and tool-result
+  categories.
+- **The frozen tool set already covers the hard part.** TUR-003 makes the
+  selected tool names a worker-claim requirement, so a run cannot silently widen
+  or substitute the set after consent. That property is inherited free.
+
+A one-time per-server checkbox would have been weaker than what exists, and
+worse, it would have looked like consent while granting it once for every
+future run. Two consent paths for one boundary is how the weaker one wins.
 
 ## The tests that pin the risky parts
 
@@ -159,9 +192,6 @@ func TestImportingMcpJsonLeavesEverythingOff(t *testing.T) {
 	if server.Enabled {
 		t.Fatal("an imported server must arrive disabled")
 	}
-	if server.EgressAcknowledgedAt != nil {
-		t.Fatal("importing must not acknowledge egress on the user's behalf")
-	}
 	for _, tool := range toolsOf(t, server) {
 		if tool.Policy == PolicySafe {
 			t.Fatalf("%s arrived safe; an unknown tool must be approval_required", tool.Name)
@@ -169,16 +199,23 @@ func TestImportingMcpJsonLeavesEverythingOff(t *testing.T) {
 	}
 }
 
-// 5. A remote server cannot be switched on without the egress acknowledgement.
-func TestRemoteServerCannotBeEnabledWithoutAcknowledgingEgress(t *testing.T) {
+// 5. A remote server's tools must appear in the run's egress decision, not in
+//    a switch of their own. Enabling the server is not consent to reach it.
+func TestRemoteServerToolsEnterThePerRunEgressDecision(t *testing.T) {
 	server := importRemote(t, "https://vendor.example/mcp")
+	enable(t, server)
 
-	if err := enable(t, server); err == nil {
-		t.Fatal("enabling a remote server without acknowledging egress must fail")
+	prepared := prepareRemoteEgress(t, sessionWith(t, "vendor.lookup"))
+
+	if !containsEndpoint(prepared, "https://vendor.example/mcp") {
+		t.Fatal("the prepared decision must name every remote endpoint the run may reach")
 	}
-	acknowledgeEgress(t, server)
-	if err := enable(t, server); err != nil {
-		t.Fatalf("enable after acknowledgement: %v", err)
+	if !containsCategory(prepared, CategoryToolArguments) ||
+		!containsCategory(prepared, CategoryToolResults) {
+		t.Fatal("calling a remote tool sends its arguments and results off the machine")
+	}
+	if _, err := sendWithoutAcknowledgement(t, prepared); err == nil {
+		t.Fatal("a run reaching a remote server must require the egress acknowledgement")
 	}
 }
 
@@ -204,6 +241,10 @@ being so the moment a third server can exist. It needs:
 - a section on caller-side enforcement, saying plainly what is guaranteed and
   what is not for a server we did not write
 - the sandbox-confinement claim scoped to bundled servers
+
+`docs/architecture/remote-egress-policy.md` needs remote MCP servers named as a
+second egress path alongside remote model providers — same decision, same
+categories, a different destination.
 
 `docs/VISION.md` needs the approval invariant to gain a second qualification
 beside the automations one — same shape, same honesty: what changes is *who*
