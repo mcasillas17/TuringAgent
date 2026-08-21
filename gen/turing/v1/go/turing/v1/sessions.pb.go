@@ -1166,8 +1166,10 @@ type SearchHit struct {
 	// Finite and non-negative. Higher means a more relevant match within the
 	// same SearchMessages response. Not comparable across queries or snapshots.
 	Score float64 `protobuf:"fixed64,2,opt,name=score,proto3" json:"score,omitempty"`
-	// Bounded single-line plain text selected from message.content around the
-	// match. Contains no server-added markup and must not be treated as HTML.
+	// Bounded single-line plain text selected from message.content. It is
+	// centered on the match when one fits FTS5's snippet window, and is
+	// otherwise a bounded unhighlighted excerpt of the same message. Contains
+	// no server-added markup and must not be treated as HTML.
 	Snippet       string `protobuf:"bytes,3,opt,name=snippet,proto3" json:"snippet,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

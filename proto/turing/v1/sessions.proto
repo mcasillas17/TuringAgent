@@ -132,8 +132,10 @@ message SearchHit {
   // same SearchMessages response. Not comparable across queries or snapshots.
   double score = 2;
 
-  // Bounded single-line plain text selected from message.content around the
-  // match. Contains no server-added markup and must not be treated as HTML.
+  // Bounded single-line plain text selected from message.content. It is
+  // centered on the match when one fits FTS5's snippet window, and is
+  // otherwise a bounded unhighlighted excerpt of the same message. Contains
+  // no server-added markup and must not be treated as HTML.
   string snippet = 3;
 }
 

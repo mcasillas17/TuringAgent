@@ -15,6 +15,9 @@ class SearchHit {
   /// carry plain messages without hit metadata.
   final double? score;
 
-  /// Server-built match excerpt, null only for legacy responses.
+  /// Server-built bounded plain-text excerpt of the message, centered on the
+  /// match when one fits the server's snippet window and otherwise an
+  /// unhighlighted excerpt of the same message. Null only for legacy
+  /// responses.
   final String? snippet;
 }
