@@ -142,6 +142,18 @@ func newSearchSnippetMarkers(entropy io.Reader) (string, string, error) {
 // marker bytes, turn a start into an end, or leave marker fragments in public
 // output.
 func parseMarkedSearchSnippet(raw []byte, start, end string) (parsedSearchSnippet, error) {
+	// The state machine only terminates because every iteration consumes a
+	// marker, and it can only distinguish the two states because the markers
+	// differ. An empty marker matches at every offset and consumes nothing, so
+	// the loop would spin forever; identical markers would let the parser
+	// invent match boundaries and report success. newSearchSnippetMarkers can
+	// never produce either, so this rejects a caller mistake at the door rather
+	// than letting it become a hang or a silently wrong snippet.
+	if start == "" || end == "" || start == end {
+		return parsedSearchSnippet{}, fmt.Errorf(
+			"%w: empty or identical markers", ErrInvalidSearchSnippetMarkers)
+	}
+
 	startMarker := []byte(start)
 	endMarker := []byte(end)
 

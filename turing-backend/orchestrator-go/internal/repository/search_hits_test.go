@@ -229,6 +229,10 @@ func TestParseMarkedSearchSnippetRejectsInvalidMarkerStates(t *testing.T) {
 		{name: "start in match", raw: start + "a" + start + "b" + end},
 		{name: "reversed order", raw: end + "needle" + start},
 		{name: "trailing match", raw: start + "a" + end + start + "b"},
+		// A complete pair followed by a start marker that is the last byte of
+		// the snippet: the loop runs out of input while still in match state,
+		// which is the only way to reach the post-loop guard.
+		{name: "ends at dangling start", raw: start + "a" + end + "before " + start},
 		{name: "wrong nonce start", raw: other + "needle" + end},
 		{name: "truncated start marker", raw: start[:len(start)-1] + "needle" + end},
 		{name: "start marker split by invalid utf8", raw: start[:10] + "\xff" + start[10:] + "needle" + end},
@@ -609,5 +613,111 @@ func TestSanitizeSearchSnippetRejectsEmptyOutput(t *testing.T) {
 				t.Fatalf("snippet on failure = %q", got)
 			}
 		})
+	}
+}
+
+// TestSanitizeSearchSnippetSkipsMatchEmptiedBySanitization pins the search in
+// firstRetainedSearchMatch: the first recorded match can normalize away to an
+// empty span, and the snippet must then be windowed around a later surviving
+// match instead of being rejected.
+func TestSanitizeSearchSnippetSkipsMatchEmptiedBySanitization(t *testing.T) {
+	start, end := fixedSearchMarkers()
+	lead := strings.Repeat("z", 400)
+	raw := lead + start + " " + end + "ctx" + start + "needle" + end
+
+	parsed := parseFixedSearchSnippet(t, raw)
+	if len(parsed.matches) != 2 {
+		t.Fatalf("matches = %+v, want two recorded spans", parsed.matches)
+	}
+	text, spans := normalizeSnippetRunes(parsed)
+	if len(spans) != 2 || spans[0].end != spans[0].start || spans[1].end <= spans[1].start {
+		t.Fatalf("spans = %+v over %q", spans, string(text))
+	}
+
+	got, err := sanitizeSearchSnippet(parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "needle") {
+		t.Fatalf("snippet = %q, want the surviving match", got)
+	}
+	if utf8.RuneCountInString(got) > searchSnippetMaxRunes || len(got) > searchSnippetMaxBytes {
+		t.Fatalf("invalid bounds: runes=%d bytes=%d", utf8.RuneCountInString(got), len(got))
+	}
+}
+
+// TestNormalizeSnippetRunesClampsMatchEmptiedByPendingSpace pins the clamp in
+// applySpanBoundaries. The match is a single space that collapses into the
+// pending space in front of it, so its start index is provisionally past the
+// end of the emitted text; without the clamp the span would be inverted.
+func TestNormalizeSnippetRunesClampsMatchEmptiedByPendingSpace(t *testing.T) {
+	start, end := fixedSearchMarkers()
+	parsed := parseFixedSearchSnippet(t, "abc "+start+" "+end+"def")
+
+	text, spans := normalizeSnippetRunes(parsed)
+	if string(text) != "abc def" {
+		t.Fatalf("text = %q, want %q", string(text), "abc def")
+	}
+	if !reflect.DeepEqual(spans, []runeSpan{{start: 3, end: 3}}) {
+		t.Fatalf("spans = %+v, want one empty span at 3", spans)
+	}
+
+	got, err := sanitizeSearchSnippet(parsed)
+	if !errors.Is(err, ErrInvalidSearchSnippet) {
+		t.Fatalf("error = %v, want ErrInvalidSearchSnippet", err)
+	}
+	if got != "" {
+		t.Fatalf("snippet on failure = %q", got)
+	}
+}
+
+// TestParseMarkedSearchSnippetRejectsDegenerateMarkers pins the precondition
+// the two-state machine depends on: an empty marker matches at every offset,
+// so the loop consumes nothing and spins forever, and a start marker equal to
+// its end marker leaves no way to tell an opening from a closing marker, so
+// the parser silently invents match boundaries. Production markers can never
+// be degenerate, which is exactly why the caller has to be stopped at the door
+// rather than trusted.
+func TestParseMarkedSearchSnippetRejectsDegenerateMarkers(t *testing.T) {
+	start, end := fixedSearchMarkers()
+	same := "[[TURING-FTS5-SNIPPET-SAME:v1:" + strings.Repeat("a", 32) + "]]"
+
+	for _, test := range []struct {
+		name  string
+		start string
+		end   string
+		raw   string
+	}{
+		{name: "empty start", start: "", end: end, raw: "needle" + end},
+		{name: "empty end", start: start, end: "", raw: start + "needle"},
+		{name: "both empty", start: "", end: "", raw: "needle"},
+		{name: "identical markers", start: same, end: same, raw: "a" + same + "needle" + same + "b"},
+		{name: "identical empty markers", start: "", end: "", raw: ""},
+		{name: "identical real start marker", start: start, end: start, raw: start + "needle" + start},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parsed, err := parseMarkedSearchSnippet([]byte(test.raw), test.start, test.end)
+			if !errors.Is(err, ErrInvalidSearchSnippetMarkers) {
+				t.Fatalf("error = %v, want ErrInvalidSearchSnippetMarkers", err)
+			}
+			if parsed.text != nil || parsed.matches != nil {
+				t.Fatalf("parsed payload on failure = %q %+v", parsed.text, parsed.matches)
+			}
+			if strings.Contains(err.Error(), "needle") {
+				t.Fatalf("error leaks snippet content: %q", err.Error())
+			}
+		})
+	}
+}
+
+// TestNewSearchSnippetMarkersAreNeverDegenerate ties the parser precondition
+// back to the only production source of markers.
+func TestNewSearchSnippetMarkersAreNeverDegenerate(t *testing.T) {
+	start, end, err := newSearchSnippetMarkers(bytes.NewReader(bytes.Repeat([]byte{0xa5}, searchSnippetMarkerNonceBytes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if start == "" || end == "" || start == end {
+		t.Fatalf("degenerate generated markers: %q %q", start, end)
 	}
 }
