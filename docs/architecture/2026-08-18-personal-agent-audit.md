@@ -510,10 +510,12 @@ messages field, selected by `SearchMessagesRequest.response_format`: exactly one
 projection per response, an unrecognized value rejected as `InvalidArgument`,
 and a one-call legacy fallback for a new client talking to an older server.
 `SearchHit.score` is normalized `-bm25(messages_fts)` with deterministic
-`message_id` tie-breaking; `SearchHit.snippet` is a match-centered, sanitized,
-single-line plain-text excerpt of the matched message only. Both projections
-share one predicate, so lifecycle visibility, scope, exclusion, limits, and
-literal-phrase handling are unchanged.
+`message_id` tie-breaking; `SearchHit.snippet` is a sanitized, single-line
+plain-text excerpt of the matched message only, centered on the match whenever
+FTS5's 32-token snippet window could mark one and an unhighlighted bounded
+excerpt of that same message when the phrase is wider than the window. Both
+projections share one predicate, so lifecycle visibility, scope, exclusion,
+limits, and literal-phrase handling are unchanged.
 
 **Likely files:** `proto/turing/v1/sessions.proto`, sessions repository and
 service, generated Go/Dart, client mappers.
@@ -535,7 +537,8 @@ boundaries), and MEM-013 (optional local semantic retrieval).
 **Acceptance evidence:** Repository tests cover score normalization and the
 pinned finite non-positive bm25 canary, `message_id` tie-breaking, marker
 grammar/entropy/round-trip and fail-closed collision handling, match-centered
-windowing, exact scalar and byte bounds, oversized-token truncation, literal
+windowing, bounded marker-free excerpts for phrases wider than the snippet
+window, exact scalar and byte bounds, oversized-token truncation, literal
 markup, whitespace/control/bidi normalization, natural-script preservation,
 same-message snippet provenance, active/archived inclusion with `deleting`
 exclusion, scope/exclusion/limit parity with the legacy projection, literal

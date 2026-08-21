@@ -7,7 +7,7 @@ until PR #68 (`TUR-008`, reviewed at head
 
 ## Goal
 
-`SessionService.SearchMessages` returns the relevance signal and match-centered
+`SessionService.SearchMessages` returns the relevance signal and bounded
 excerpt that SQLite FTS5 already computes. New consumers explicitly request an
 additive, canonical `SearchHit`; existing consumers continue receiving
 protobuf-equivalent `Message` values in the same order through the legacy
@@ -341,11 +341,31 @@ The parser then operates on raw `marked_snippet` bytes before rune decoding or
 UTF-8 repair. Its two states are `text` and `match`: only the exact start marker
 may transition `text -> match`, and only the exact end marker may transition
 `match -> text`. An end marker in `text`, a start marker in `match`, nested or
-reversed markers, a missing partner, trailing `match` state, or zero complete
-pairs is an internal failure. Sequential complete pairs are valid. The parser
-removes both complete marker byte strings and records each enclosed byte range
-as a match span. Every remaining non-marker byte, including matched text and
-surrounding context, is snippet payload.
+reversed markers, a missing partner, or trailing `match` state is an internal
+failure. Sequential complete pairs are valid. The parser removes both complete
+marker byte strings and records each enclosed byte range as a match span. Every
+remaining non-marker byte, including matched text and surrounding context, is
+snippet payload.
+
+A snippet carrying *no* complete start marker and *no* complete end marker is a
+distinct, valid outcome rather than a structural failure. `snippet()` can only
+wrap a phrase that fits inside its 32-token window, so an exact phrase longer
+than that window has no in-window occurrence to mark and SQLite legitimately
+returns an unmarked fragment of the same matched row. The legacy projection
+returns that row, so the hit projection must return it too. The parser hands
+back the payload unchanged with zero match spans; only a completely empty
+snippet still fails, because FTS5 returns some text for every row it matches.
+Partial marker text is never a marker-free fragment: any occurrence of a
+complete start or end marker enters the state machine, so the structural
+failures above still apply.
+
+When the repository receives a fragment with zero match spans, it supplies one
+implicit whole-fragment byte span covering the entire payload before
+sanitizing. That span exists only so the bounding pass below has a window to
+open around; it is never published, adds no emphasis, and cannot widen or merge
+a match FTS5 did report, because it is applied only when there is no span at
+all. The result is a bounded, unhighlighted excerpt drawn from the same
+authorized message row.
 
 All snippet payload bytes are then repaired and sanitized. Because marker
 recognition and stripping finish first and the marker grammar is valid
@@ -376,17 +396,22 @@ span:
    U+2066-U+2069 become U+FFFD. Natural RTL characters and language-significant
    joiners remain intact.
 5. If the sanitized fragment exceeds either 200 Unicode scalar values or 800
-   UTF-8 bytes, the repository selects a window around the first marked match.
-   It reserves one scalar and three bytes for U+2026 at each cut edge, never
-   splits an encoded rune, and trims space adjacent to an inserted ellipsis.
-   A complete sanitized match remains in the window whenever that match itself
-   fits both caps. If one matched token alone exceeds a cap, bounds take
-   precedence and the largest match prefix that fits remains visible.
+   UTF-8 bytes, the repository selects a window around the first marked match,
+   or around the implicit whole-fragment span when the fragment carried no
+   markers. It reserves one scalar and three bytes for U+2026 at each cut edge,
+   never splits an encoded rune, and trims space adjacent to an inserted
+   ellipsis. A complete sanitized match remains in the window whenever that
+   match itself fits both caps. If one matched token alone exceeds a cap, bounds
+   take precedence and the largest match prefix that fits remains visible. A
+   marker-free fragment is windowed from its own start, so only its tail is cut.
 
 For a trigger-consistent projection, the final snippet is valid UTF-8,
 non-empty, single-line plain text, at most 200 scalars, at most 800 bytes, and
-contains FTS5-marked match text. The dual limit matters because FTS5's token
-limit does not bound one oversized unbroken token.
+contains FTS5-marked match text whenever FTS5 marked any. When the phrase is
+wider than the 32-token window there is no marked text to contain, and the
+snippet is a bounded unhighlighted excerpt of the same message instead. The dual
+limit matters because FTS5's token limit does not bound one oversized unbroken
+token.
 
 HTML metacharacters remain literal source text; they are not entity-escaped in
 the data contract. Consumers must render the field as text, not HTML, Markdown,
@@ -394,16 +419,19 @@ ANSI, or another executable format. Flutter's `Text` widget satisfies that
 contract. Escape-at-the-rendering-sink remains mandatory for any future web
 consumer.
 
-An empty sanitized snippet, invalid internal marker structure, or marker
+An empty sanitized snippet, structurally invalid internal markers, or a marker
 collision is an internal search failure, not a hit with invented text. A
 trigger-consistent external-content projection is a database invariant:
 application writes update `messages` and `messages_fts` in the same transaction.
 If a database is manually mutated around those triggers, SQLite may return zero
 markers or balanced markers around stale offsets without a statement error.
-Zero/malformed markers fail closed; balanced-but-stale offsets cannot be
-distinguished from valid FTS output without reimplementing the tokenizer and are
-outside MEM-002's guarantee. The snippet still contains text only from the same
-returned message, never an adjacent or unauthorized row.
+Neither case is distinguishable from a legitimate result: zero markers is
+exactly what an over-window phrase produces, and balanced-but-stale offsets
+cannot be told from valid FTS output without reimplementing the tokenizer. Both
+are therefore outside MEM-002's match-correctness guarantee and yield an excerpt
+rather than an error. What still holds in both cases is confinement: the snippet
+contains text only from the same returned message, never an adjacent or
+unauthorized row.
 
 A linked-driver canary binds both exact marker values, selects them back as
 TEXT, and requires byte-for-byte equality, distinctness, and absence of NUL.
@@ -625,9 +653,19 @@ contract.
   matched phrase with SQLite edge ellipses where applicable.
 - Source text containing fixed marker-like ASCII cannot forge the per-query
   nonce-bearing markers; forced complete start/end collisions fail closed.
-- Raw-byte parser tests cover valid sequential pairs, zero pairs, missing
-  partners, nesting, reversed order, a start marker inside `match`, and an end
-  marker inside `text`.
+- Raw-byte parser tests cover valid sequential pairs, missing partners, nesting,
+  reversed order, a start marker inside `match`, an end marker inside `text`,
+  and an empty snippet; a snippet with zero complete markers is a valid
+  marker-free fragment whose payload and empty match list are asserted, and
+  partial marker text does not turn a structurally broken snippet into one.
+- A phrase longer than the 32-token snippet window returns one hit whose snippet
+  is a bounded, unhighlighted fragment of that same message: the repository test
+  first proves the marked projection really carries no markers, then requires
+  legacy/hit parity on the message, a valid public score, both caps, and that
+  the snippet minus edge ellipses is a substring of the hit's own content.
+- The implicit whole-fragment span is applied only when no span was recorded: a
+  unit test proves it leaves recorded spans, including empty ones, untouched,
+  and that a marker-free fragment which sanitizes to nothing still fails closed.
 - Invalid UTF-8 immediately adjacent to markers is repaired only after parsing;
   tests prove it cannot confuse START with END and that neither complete
   generated marker survives in the public snippet.
@@ -647,7 +685,8 @@ contract.
 - Invalid UTF-8 external-content data is repaired with U+FFFD; an empty
   sanitized snippet fails closed.
 - A deliberately shortened divergent external-content row produces no markers
-  and fails via the marker-structure invariant.
+  and returns an excerpt of its own current content, the same way an over-window
+  phrase does.
 - A balanced-but-stale divergence fixture documents SQLite's out-of-band
   corruption boundary: returned snippet text remains confined to that message,
   but match correctness is not claimed.
@@ -681,6 +720,9 @@ contract.
   separate legacy- and hit-format calls return protobuf-equal
   `messages`/`hits.map(message)` in count, value, and order when both calls
   succeed against a trigger-consistent database.
+- A phrase wider than the 32-token snippet window keeps that parity over the
+  wire: both formats return the same message and the hit carries a non-empty
+  bounded snippet instead of `Internal`.
 - Service hits carry the repository score/snippet without recomputation.
 - Each response populates only its requested array, and a near-4 MiB legacy
   fixture remains within the current transport behavior instead of being

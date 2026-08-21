@@ -13,16 +13,16 @@ const _emptyResultsCopy =
 /// How much of a message body a legacy result row shows and announces.
 ///
 /// Only reached for a mixed-version hit that arrived without a server
-/// snippet: canonical hits carry a match-centred excerpt the server already
-/// bounded, and that one is rendered as received. Bodies are unbounded — a
-/// pasted log or a whole file is a normal message — but a row is a summary
-/// someone skims, or hears, while deciding which conversation to open. This
-/// fallback keeps the body's opening: enough to tell one hit from another,
-/// and enough to carry the matched phrase whenever it appears near the start.
-/// Centring the window on the match itself isn't possible here, because a
-/// legacy response carries the message but no snippet and no match offset, so
-/// a phrase buried deep in a long body is identified by its conversation,
-/// date and opening rather than quoted.
+/// snippet: canonical hits carry an excerpt the server already bounded, and
+/// that one is rendered as received. Bodies are unbounded — a pasted log or a
+/// whole file is a normal message — but a row is a summary someone skims, or
+/// hears, while deciding which conversation to open. This fallback keeps the
+/// body's opening: enough to tell one hit from another, and enough to carry
+/// the matched phrase whenever it appears near the start. Centring the window
+/// on the match itself isn't possible here, because a legacy response carries
+/// the message but no snippet and no match offset, so a phrase buried deep in
+/// a long body is identified by its conversation, date and opening rather
+/// than quoted.
 const _maxExcerptRunes = 200;
 
 /// How many lines of that excerpt a row renders before clipping.
@@ -619,12 +619,13 @@ class _SearchScreenState extends State<SearchScreen> {
     final date = MaterialLocalizations.of(context).formatShortDate(localDate);
     final role = hit.message.role;
     // Bodies are unbounded, and a row is a summary of one. Canonical hits
-    // carry the server's match-centred snippet: bounded, single-line, with
-    // control characters and bidi overrides replaced. It is not stripped of
-    // markup — any HTML/Markdown-looking bytes in it remain literal source
-    // text — and it is rendered/announced verbatim as plain Text, never
-    // parsed or interpreted. A legacy hit arrives without one, and falls
-    // back to a bounded opening of the body.
+    // carry the server's snippet: bounded, single-line, with control
+    // characters and bidi overrides replaced, and centred on the match unless
+    // the phrase was too wide for the server's snippet window. It is not
+    // stripped of markup — any HTML/Markdown-looking bytes in it remain
+    // literal source text — and it is rendered/announced verbatim as plain
+    // Text, never parsed or interpreted. A legacy hit arrives without one,
+    // and falls back to a bounded opening of the body.
     final excerpt = hit.snippet ?? _excerpt(hit.message.content);
     return Semantics(
       key: ValueKey('hit-${hit.message.messageId}'),

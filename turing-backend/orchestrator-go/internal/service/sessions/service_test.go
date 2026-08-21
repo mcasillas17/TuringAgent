@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
@@ -1351,6 +1352,71 @@ func TestSessionServiceSearchMessagesFormatsHaveMessageParity(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A phrase longer than FTS5's 32-token snippet window has no in-window
+// occurrence for `snippet()` to mark, so the marked projection comes back
+// without markers. That is a windowing outcome, not a broken invariant: both
+// formats must still answer with the same message, and the hit format must
+// carry a bounded excerpt instead of an opaque Internal error.
+func TestSessionServiceSearchMessagesReturnsBoundedSnippetForOverWindowPhrase(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	words := func(format string, count int) []string {
+		out := make([]string, 0, count)
+		for i := 0; i < count; i++ {
+			out = append(out, fmt.Sprintf(format, i))
+		}
+		return out
+	}
+	phrase := strings.Join(words("overwindowword%02d", 40), " ")
+	content := strings.Join(words("overwindowfiller%03d", 100), " ") +
+		" " + phrase + " " + strings.Join(words("overwindowtail%02d", 20), " ")
+	insertServiceSearchSession(t, ctx, h.database, "session-over-window")
+	insertServiceSearchMessage(t, ctx, h.database, "message-over-window", "session-over-window", "user", content, 1)
+
+	legacy, err := client.SearchMessages(ctx, &turingv1.SearchMessagesRequest{
+		Query:          phrase,
+		Limit:          10,
+		ResponseFormat: turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_LEGACY_MESSAGES,
+	})
+	if err != nil {
+		t.Fatalf("SearchMessages legacy: %v", err)
+	}
+	if len(legacy.GetMessages()) != 1 {
+		t.Fatalf("legacy messages = %+v, want exactly the buried-phrase message", legacy.GetMessages())
+	}
+
+	hits, err := client.SearchMessages(ctx, &turingv1.SearchMessagesRequest{
+		Query:          phrase,
+		Limit:          10,
+		ResponseFormat: turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_HITS,
+	})
+	if err != nil {
+		t.Fatalf("SearchMessages hits: %v (code %v)", err, status.Code(err))
+	}
+	if len(hits.GetHits()) != 1 {
+		t.Fatalf("hits = %+v, want exactly one", hits.GetHits())
+	}
+	if !proto.Equal(hits.GetHits()[0].GetMessage(), legacy.GetMessages()[0]) {
+		t.Fatalf("hit message = %+v, want the legacy message %+v",
+			hits.GetHits()[0].GetMessage(), legacy.GetMessages()[0])
+	}
+	snippet := hits.GetHits()[0].GetSnippet()
+	if snippet == "" {
+		t.Fatal("hit carries no snippet for an over-window phrase")
+	}
+	if utf8.RuneCountInString(snippet) > 200 || len(snippet) > 800 {
+		t.Fatalf("snippet bounds: runes=%d bytes=%d", utf8.RuneCountInString(snippet), len(snippet))
+	}
+	if strings.Contains(snippet, "TURING-FTS5-SNIPPET") {
+		t.Fatalf("snippet = %q leaks internal markers", snippet)
+	}
+	excerpt := strings.TrimSpace(strings.Trim(snippet, "…"))
+	if excerpt == "" || !strings.Contains(content, excerpt) {
+		t.Fatalf("snippet = %q is not a fragment of its own message", snippet)
 	}
 }
 

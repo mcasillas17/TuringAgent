@@ -134,10 +134,17 @@ func newSearchSnippetMarkers(entropy io.Reader) (string, string, error) {
 // It is a two-state machine over raw bytes — text and match — and only the
 // exact start marker may open a match, only the exact end marker may close
 // one. An end marker in text, a start marker inside a match, a missing
-// partner, a snippet still in match state at the end, or zero complete pairs
-// all fail: FTS5 emits balanced markers, so anything else means the value did
-// not come from the projection we asked for, and guessing which bytes were
-// inserted is exactly the guess this design refuses to make.
+// partner, or a snippet still in match state at the end all fail: FTS5 emits
+// balanced markers, so a structurally broken one means the value did not come
+// from the projection we asked for, and guessing which bytes were inserted is
+// exactly the guess this design refuses to make.
+//
+// A snippet carrying no complete marker at all is a different case, and it is
+// valid. `snippet()` can only mark a phrase that fits inside its token window,
+// so an exact phrase longer than that window legitimately yields an unmarked
+// fragment of the same matched row. The payload is returned as-is with no match
+// spans; only a completely empty snippet still fails, because FTS5 returns some
+// text for every row it matches.
 //
 // Running before rune decoding is deliberate. Marker bytes are removed while
 // the input is still bytes, so invalid UTF-8 next to a marker cannot absorb
@@ -206,9 +213,12 @@ func parseMarkedSearchSnippet(raw []byte, start, end string) (parsedSearchSnippe
 		return parsedSearchSnippet{}, fmt.Errorf(
 			"%w: snippet ended inside a match", ErrInvalidSearchSnippetMarkers)
 	}
-	if len(matches) == 0 {
+	if len(text) == 0 && len(matches) == 0 {
+		// FTS5 returns some text for every row it matches, so nothing at all is
+		// not a windowing outcome — it is a projection that did not come from
+		// the query we asked for.
 		return parsedSearchSnippet{}, fmt.Errorf(
-			"%w: no complete marker pair", ErrInvalidSearchSnippetMarkers)
+			"%w: empty snippet", ErrInvalidSearchSnippetMarkers)
 	}
 	return parsedSearchSnippet{text: text, matches: matches}, nil
 }
@@ -486,6 +496,23 @@ func firstRetainedSearchMatch(matches []runeSpan) (runeSpan, bool) {
 	return runeSpan{}, false
 }
 
+// withWholeFragmentSpan gives a marker-free fragment one implicit match span
+// covering the whole payload.
+//
+// The bounding pass windows around a match, so with no span at all it would
+// reject a fragment that is perfectly good text. The span is purely a
+// windowing hint for that pass: it is never published, adds no emphasis to the
+// public snippet, and the text it covers is still only the matched message's
+// own content. A fragment with real marker spans is returned untouched, so this
+// can never widen or merge a match FTS5 actually reported.
+func withWholeFragmentSpan(parsed parsedSearchSnippet) parsedSearchSnippet {
+	if len(parsed.matches) > 0 {
+		return parsed
+	}
+	parsed.matches = []byteSpan{{start: 0, end: len(parsed.text)}}
+	return parsed
+}
+
 // SearchHit is one ranked search result: the same message the legacy search
 // returns, plus the ranking and preview values that only make sense in the
 // context of the query that produced them. Neither is persisted, and neither is
@@ -590,7 +617,10 @@ func (r *Repository) searchMessageHits(
 		if err != nil {
 			return nil, err
 		}
-		snippet, err := sanitizeSearchSnippet(parsed)
+		// A marker-free fragment is windowed as a whole rather than around a
+		// match FTS5 never reported. The result is an unhighlighted excerpt of
+		// this same row, still sanitized and still bounded.
+		snippet, err := sanitizeSearchSnippet(withWholeFragmentSpan(parsed))
 		if err != nil {
 			return nil, err
 		}

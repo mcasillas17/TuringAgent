@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Return negotiated, higher-is-better SQLite FTS5 search hits with safe match-centered snippets while preserving the exact legacy message response for old callers.
+**Goal:** Return negotiated, higher-is-better SQLite FTS5 search hits with safe bounded snippets, centered on the match whenever FTS5's snippet window could mark one, while preserving the exact legacy message response for old callers.
 
 **Architecture:** Add an append-only protobuf response-format negotiation so unspecified and legacy requests use the existing message-only repository path, while hit requests use a new search-specific repository projection. Keep score normalization, marker parsing, and snippet sanitization in a focused repository file; keep service negotiation, runtime compatibility, Dart mapping, and UI rendering at their existing boundaries.
 
@@ -357,10 +357,13 @@ func TestParseMarkedSearchSnippet(t *testing.T) {
 }
 ```
 
-Table-test zero pairs, missing end, end in text, start in match, reversed order,
-and trailing match; each must return `ErrInvalidSearchSnippetMarkers`.
-Add invalid UTF-8 directly around markers and prove the parser strips markers
-before repair.
+Table-test missing end, end in text, start in match, reversed order, trailing
+match, and an empty snippet; each must return `ErrInvalidSearchSnippetMarkers`.
+Add a separate success test for a snippet with zero complete markers: FTS5's
+32-token window cannot mark a phrase wider than itself, so an unmarked fragment
+is a legitimate result whose payload must come back unchanged with no match
+spans. Add invalid UTF-8 directly around markers and prove the parser strips
+markers before repair.
 
 - [ ] **Step 4: Run primitive tests and verify RED**
 
@@ -437,8 +440,10 @@ func newSearchSnippetMarkers(entropyReader io.Reader) (string, string, error) {
 Implement `parseMarkedSearchSnippet` as the two-state raw-byte parser from the
 spec. It must search for both next exact markers, reject the marker invalid in
 the current state, copy only non-marker bytes, update recorded match offsets
-after marker removal, require at least one complete pair, and return typed
-errors without including source values.
+after marker removal, and return typed errors without including source values.
+Zero complete markers is a success with no match spans, not a failure; only a
+completely empty snippet still fails, because FTS5 returns some text for every
+row it matches.
 
 - [ ] **Step 6: Add collision and sanitizer RED tests**
 
@@ -561,6 +566,7 @@ func TestSearchMessageHitsCanaryPinsFiniteNonPositiveBM25(t *testing.T)
 func TestSearchMessageHitsRoundTripExactMarkersThroughSQLite(t *testing.T)
 func TestSearchMessageHitsFailClosedOnMarkerCollision(t *testing.T)
 func TestSearchMessageHitsReturnMatchCenteredBoundedSnippets(t *testing.T)
+func TestSearchMessageHitsReturnBoundedSnippetWhenPhraseExceedsFTS5Window(t *testing.T)
 func TestSearchMessageHitsNeverReadSnippetTextFromNeighborMessage(t *testing.T)
 func TestSearchMessageHitsDocumentDivergentExternalContentBehavior(t *testing.T)
 func TestSearchMessageHitsKeepExactIdentifierSemantics(t *testing.T)
@@ -589,11 +595,22 @@ token absent from every row and asserts an empty non-nil hit slice, separately
 from the tokenless-input case.
 
 The divergence test temporarily drops the update trigger before changing source
-content: a shortened row must fail with `ErrInvalidSearchSnippetMarkers`; a
-same-length replacement may retain balanced stale offsets, but its snippet must
-contain bytes only from that returned message. Restore trigger-consistent state
-inside test cleanup. The identifier test proves an ID in `message.content`
-matches and centers, while an ID present only in `messages.id` returns no hit.
+content: a shortened row yields no markers, which is the same shape an
+over-window phrase produces, so it returns an excerpt of its own current content
+rather than failing; a same-length replacement may retain balanced stale
+offsets, but its snippet must likewise contain bytes only from that returned
+message. Restore trigger-consistent state inside test cleanup. The identifier
+test proves an ID in `message.content` matches and centers, while an ID present
+only in `messages.id` returns no hit.
+
+`TestSearchMessageHitsReturnBoundedSnippetWhenPhraseExceedsFTS5Window` inserts
+100 filler words, an exact 40-word phrase, and 20 trailing words, then queries
+that 40-word phrase. It first selects the marked projection directly and asserts
+neither marker appears, so the fixture provably exercises the marker-free
+window. `SearchMessages` must return the row and `SearchMessageHits` must return
+the same message with a valid score and a snippet that satisfies both caps,
+carries no marker bytes, and — with edge ellipses stripped — is a substring of
+that hit's own `Message.Content`.
 
 The collision integration test uses deterministic entropy:
 
@@ -750,7 +767,7 @@ func (r *Repository) searchMessageHits(
 		if err != nil {
 			return nil, err
 		}
-		snippet, err := sanitizeSearchSnippet(parsed)
+		snippet, err := sanitizeSearchSnippet(withWholeFragmentSpan(parsed))
 		if err != nil {
 			return nil, err
 		}
@@ -785,7 +802,9 @@ For each row:
 1. scan complete message, raw score, and marked snippet;
 2. reject a complete marker appearing in `Message.Content`;
 3. normalize score;
-4. parse and sanitize snippet;
+4. parse the snippet, give a marker-free fragment one implicit whole-fragment
+   span through `withWholeFragmentSpan` so the bounding pass has a window to
+   open around, then sanitize;
 5. append one `SearchHit`.
 
 Close and drain this one reader before returning; never issue a nested query.
@@ -841,6 +860,7 @@ func TestSessionServiceSearchMessagesDefaultsToLegacyMessages(t *testing.T)
 func TestSessionServiceSearchMessagesReturnsOnlyHitsWhenRequested(t *testing.T)
 func TestSessionServiceSearchMessagesRejectsUnknownResponseFormat(t *testing.T)
 func TestSessionServiceSearchMessagesFormatsHaveMessageParity(t *testing.T)
+func TestSessionServiceSearchMessagesReturnsBoundedSnippetForOverWindowPhrase(t *testing.T)
 func TestSessionServiceSearchMessagesLogsOnlyInvariantClass(t *testing.T)
 func TestSessionServiceSearchMessagesDoesNotDuplicateLargeLegacyPayload(t *testing.T)
 func TestSessionServiceSearchMessagesCannotReturnWithdrawnContentInEitherFormat(t *testing.T)
@@ -865,6 +885,13 @@ Make the parity test table-driven over ranked, tied, scoped, excluded, archived,
 limited, and empty fixtures. Each case makes separate legacy and HITS calls
 against unchanged data and compares `legacy.Messages` to every
 `hit.GetMessage()` by protobuf equality and order.
+
+`TestSessionServiceSearchMessagesReturnsBoundedSnippetForOverWindowPhrase`
+extends that parity to a phrase wider than the 32-token snippet window: a
+message of 100 filler words, an exact 40-word phrase, and 20 trailing words is
+queried in both formats. Both must return the same message, and the hit must
+carry a non-empty snippet within both caps, free of marker bytes and a substring
+of the source content once edge ellipses are stripped — never `Internal`.
 
 Call the content-free error-mapping helper directly with
 `repository.ErrSearchMarkerEntropy`, capture `log.SetOutput`, and assert the log
@@ -1404,8 +1431,9 @@ Document:
 - unspecified/legacy requests return `messages`; explicit HITS returns `hits`;
 - `score = -bm25`, higher-is-better only within one query/snapshot;
 - ties use `message_id ASC`;
-- snippets are match-centered, single-line plain text, at most 200 scalars and
-  800 UTF-8 bytes, with no public markup;
+- snippets are single-line plain text, at most 200 scalars and
+  800 UTF-8 bytes, with no public markup, centered on the match unless the
+  phrase is wider than FTS5's 32-token snippet window;
 - active and archived sessions remain visible while deleting/deleted sessions
   do not;
 - runtime recall intentionally remains legacy until MEM-004.

@@ -78,16 +78,27 @@ literal passed to that call. That token bound is independent of the 200-scalar
 and 800-byte caps, so a snippet is *not* guaranteed to be the whole message
 even when the message is comfortably under both post-processing caps: a
 message of more than 32 tokens is cut by FTS5, and the leading or trailing edge
-of its source text can be missing. What the bound does guarantee is that a
-phrase buried deep in a long body is still quoted, rather than being replaced
-by the body's opening.
+of its source text can be missing.
+
+The window is also what the *phrase* has to fit into. A phrase of more than 32
+tokens has no occurrence that fits, so FTS5 returns a fragment of the matched
+message with no match markers at all. That is a legitimate result, not a
+failure: the search still returns the message, and its snippet is a bounded,
+unhighlighted excerpt of that same message rather than a quotation of the
+phrase. So the guarantee is narrower than "a buried phrase is always quoted" —
+a phrase that fits the window and is buried deep in a long body is quoted
+instead of being replaced by the body's opening, while a phrase wider than the
+window yields an excerpt that may not contain it.
 
 The published snippet is single-line literal plain text:
 
 - FTS5 wraps matched phrases in per-query, high-entropy ASCII markers that are
-  stripped inside the repository; message content that impersonates a marker
-  fails the whole query rather than producing an ambiguous snippet. No
-  server-added markup of any kind reaches the caller.
+  stripped inside the repository; a structurally broken marker sequence, or
+  message content that impersonates a marker, fails the whole query rather than
+  producing an ambiguous snippet. A fragment with no markers at all is not
+  broken — it is what an over-window phrase produces — and is published as a
+  plain excerpt. No server-added markup of any kind reaches the caller, and
+  matched text carries no emphasis in either case.
 - Any HTML-, Markdown-, ANSI-, or otherwise control-sequence-*looking* text in
   the stored message is left exactly as stored: those are ordinary printable
   source characters and stay literal, so `<b>`, `**bold**`, and a written-out

@@ -217,6 +217,52 @@ func TestParseMarkedSearchSnippetHandlesEdgeAndAdjacentPairs(t *testing.T) {
 	}
 }
 
+// TestParseMarkedSearchSnippetAcceptsMarkerFreeFragment pins the marker-free
+// outcome. FTS5's snippet() window is 32 tokens, so an exact phrase longer than
+// that window has no in-window occurrence to wrap, and SQLite legitimately
+// returns a fragment of the same matched row with no markers at all. That is a
+// windowing result, not a structural failure: the payload passes through
+// unchanged and carries no match spans.
+func TestParseMarkedSearchSnippetAcceptsMarkerFreeFragment(t *testing.T) {
+	start, end := fixedSearchMarkers()
+	for _, test := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "plain fragment", raw: "plain snippet with no markers"},
+		{name: "fragment with edge ellipses", raw: "…a fragment cut on both edges…"},
+		{name: "marker-shaped text with another nonce", raw: "[[TURING-FTS5-SNIPPET-START:v1:" + strings.Repeat("b", 32) + "]] tail"},
+		{name: "truncated start marker", raw: start[:len(start)-1] + " tail"},
+		{name: "truncated end marker", raw: "lead " + end[:len(end)-1]},
+		{name: "invalid utf8 payload", raw: "lead \xff tail"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parsed, err := parseMarkedSearchSnippet([]byte(test.raw), start, end)
+			if err != nil {
+				t.Fatalf("parseMarkedSearchSnippet(%q) = %v, want a marker-free success", test.raw, err)
+			}
+			if string(parsed.text) != test.raw {
+				t.Fatalf("text = %q, want the raw payload %q", parsed.text, test.raw)
+			}
+			if len(parsed.matches) != 0 {
+				t.Fatalf("matches = %+v, want none", parsed.matches)
+			}
+		})
+	}
+
+	// The payload is the parser's own copy: the caller may not alias, and later
+	// mutate, the buffer SQLite's value was scanned into.
+	raw := []byte("aliasing check")
+	parsed, err := parseMarkedSearchSnippet(raw, start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[0] = 'X'
+	if string(parsed.text) != "aliasing check" {
+		t.Fatalf("text = %q, want a copy independent of the input buffer", parsed.text)
+	}
+}
+
 func TestParseMarkedSearchSnippetRejectsInvalidMarkerStates(t *testing.T) {
 	start, end := fixedSearchMarkers()
 	other := "[[TURING-FTS5-SNIPPET-START:v1:" + strings.Repeat("b", 32) + "]]"
@@ -225,7 +271,8 @@ func TestParseMarkedSearchSnippetRejectsInvalidMarkerStates(t *testing.T) {
 		name string
 		raw  string
 	}{
-		{name: "zero pairs", raw: "plain snippet with no markers"},
+		// An empty snippet is not a windowing outcome: FTS5 returns some text
+		// for every row it matches, so nothing at all still fails closed.
 		{name: "empty input", raw: ""},
 		{name: "missing end", raw: "before " + start + "needle"},
 		{name: "end in text", raw: "before " + end + " after"},
@@ -682,6 +729,91 @@ func TestNormalizeSnippetRunesClampsMatchEmptiedByPendingSpace(t *testing.T) {
 // the parser silently invents match boundaries. Production markers can never
 // be degenerate, which is exactly why the caller has to be stopped at the door
 // rather than trusted.
+// TestWithWholeFragmentSpanOnlyFillsAnAbsentMatch pins the narrowness of the
+// windowing hint: it is applied only when FTS5 reported no match at all, and it
+// never widens, merges, or reorders spans FTS5 did report.
+func TestWithWholeFragmentSpanOnlyFillsAnAbsentMatch(t *testing.T) {
+	markerFree := withWholeFragmentSpan(parsedSearchSnippet{text: []byte("plain fragment")})
+	if string(markerFree.text) != "plain fragment" {
+		t.Fatalf("text = %q, want it unchanged", markerFree.text)
+	}
+	if !reflect.DeepEqual(markerFree.matches, []byteSpan{{start: 0, end: 14}}) {
+		t.Fatalf("matches = %+v, want one whole-fragment span", markerFree.matches)
+	}
+
+	marked := parsedSearchSnippet{text: []byte("abcdef"), matches: []byteSpan{{1, 2}, {4, 5}}}
+	kept := withWholeFragmentSpan(marked)
+	if !reflect.DeepEqual(kept.matches, []byteSpan{{1, 2}, {4, 5}}) {
+		t.Fatalf("matches = %+v, want the recorded spans untouched", kept.matches)
+	}
+
+	// An empty span is still a span FTS5 recorded, so a match that sanitizes
+	// away must not be silently replaced by the whole fragment.
+	empty := parsedSearchSnippet{text: []byte("abc"), matches: []byteSpan{{1, 1}}}
+	if got := withWholeFragmentSpan(empty); !reflect.DeepEqual(got.matches, []byteSpan{{1, 1}}) {
+		t.Fatalf("matches = %+v, want the empty recorded span untouched", got.matches)
+	}
+}
+
+// TestSanitizeMarkerFreeFragmentStillFailsClosedOnEmptyOutput proves the
+// windowing hint does not weaken the empty-snippet guard: a fragment that
+// sanitizes to nothing is still a failure, not a hit with blank text.
+func TestSanitizeMarkerFreeFragmentStillFailsClosedOnEmptyOutput(t *testing.T) {
+	start, end := fixedSearchMarkers()
+	for _, test := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "whitespace only", raw: " \t\n "},
+		{name: "unicode whitespace only", raw: "\u2028\u00a0\u3000"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parsed, err := parseMarkedSearchSnippet([]byte(test.raw), start, end)
+			if err != nil {
+				t.Fatalf("parse = %v, want a marker-free success", err)
+			}
+			got, err := sanitizeSearchSnippet(withWholeFragmentSpan(parsed))
+			if !errors.Is(err, ErrInvalidSearchSnippet) {
+				t.Fatalf("error = %v, want ErrInvalidSearchSnippet", err)
+			}
+			if got != "" {
+				t.Fatalf("snippet on failure = %q", got)
+			}
+		})
+	}
+}
+
+// TestSanitizeMarkerFreeFragmentIsBoundedAndUnhighlighted covers the public
+// shape of an over-window excerpt: the caps still hold, the cut edge is marked
+// with the same ellipsis every other cut uses, and nothing is emphasized.
+func TestSanitizeMarkerFreeFragmentIsBoundedAndUnhighlighted(t *testing.T) {
+	start, end := fixedSearchMarkers()
+	raw := strings.Repeat("界", 400)
+
+	parsed, err := parseMarkedSearchSnippet([]byte(raw), start, end)
+	if err != nil {
+		t.Fatalf("parse = %v, want a marker-free success", err)
+	}
+	got, err := sanitizeSearchSnippet(withWholeFragmentSpan(parsed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if utf8.RuneCountInString(got) > searchSnippetMaxRunes || len(got) > searchSnippetMaxBytes {
+		t.Fatalf("invalid bounds: runes=%d bytes=%d", utf8.RuneCountInString(got), len(got))
+	}
+	// The window opens at the fragment's own start, so only the tail is cut.
+	if strings.HasPrefix(got, string(searchSnippetEllipsis)) ||
+		!strings.HasSuffix(got, string(searchSnippetEllipsis)) {
+		t.Fatalf("snippet = %q, want a trailing cut edge only", got)
+	}
+	if !strings.HasPrefix(got, strings.Repeat("界", 10)) {
+		t.Fatalf("snippet = %q, want the fragment's own opening text", got)
+	}
+	if strings.ContainsAny(got, "<>*[]") || strings.Contains(got, "TURING-FTS5-SNIPPET") {
+		t.Fatalf("snippet = %q, want no added emphasis or markers", got)
+	}
+}
+
 func TestParseMarkedSearchSnippetRejectsDegenerateMarkers(t *testing.T) {
 	start, end := fixedSearchMarkers()
 	same := "[[TURING-FTS5-SNIPPET-SAME:v1:" + strings.Repeat("a", 32) + "]]"
@@ -1182,6 +1314,95 @@ func TestSearchMessageHitsReturnMatchCenteredBoundedSnippets(t *testing.T) {
 	}
 }
 
+// longPhraseSearchFixture builds a message whose exact query phrase is longer
+// than FTS5's 32-token snippet window and is buried behind a filler prefix, plus
+// the phrase itself.
+func longPhraseSearchFixture() (content, phrase string) {
+	words := func(format string, count int) []string {
+		out := make([]string, 0, count)
+		for i := 0; i < count; i++ {
+			out = append(out, fmt.Sprintf(format, i))
+		}
+		return out
+	}
+	phrase = strings.Join(words("phraseword%02d", 40), " ")
+	content = strings.Join(words("fillerword%03d", 100), " ") +
+		" " + phrase + " " + strings.Join(words("trailword%02d", 20), " ")
+	return content, phrase
+}
+
+// TestSearchMessageHitsReturnBoundedSnippetWhenPhraseExceedsFTS5Window pins the
+// marker-free outcome end to end. `snippet(..., 32)` can only mark a phrase that
+// fits inside its 32-token window, so a 40-token exact phrase legitimately comes
+// back with zero markers. The legacy projection returns the row, so the hit
+// projection must return it too — as a bounded, unhighlighted excerpt of that
+// same message rather than an internal failure.
+func TestSearchMessageHitsReturnBoundedSnippetWhenPhraseExceedsFTS5Window(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	content, phrase := longPhraseSearchFixture()
+	if got := len(strings.Fields(phrase)); got != 40 {
+		t.Fatalf("phrase token count = %d, want 40 so it exceeds the 32-token window", got)
+	}
+	const neighborSecret = "longphraseneighborsecret"
+	insertSearchSession(t, ctx, database, "s1")
+	insertSearchMessage(t, ctx, database, "m-long-phrase", "s1", content, 1)
+	insertSearchMessage(t, ctx, database, "m-long-phrase-neighbor", "s1", neighborSecret+" untouched", 2)
+
+	// The marked projection really does come back without a marker pair: the
+	// assertions below would otherwise prove nothing about this window.
+	start, end, err := newSearchSnippetMarkers(deterministicSearchEntropy(0x3c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var marked string
+	if err := database.QueryRowContext(ctx, `
+		SELECT snippet(messages_fts, 0, ?, ?, '…', 32)
+		FROM messages_fts
+		JOIN messages m ON m.rowid = messages_fts.rowid
+		WHERE messages_fts MATCH ? AND m.id = 'm-long-phrase'`,
+		start, end, fts5Phrase(phrase),
+	).Scan(&marked); err != nil {
+		t.Fatalf("select marked snippet: %v", err)
+	}
+	if strings.Contains(marked, start) || strings.Contains(marked, end) {
+		t.Fatalf("fixture no longer exercises the marker-free window: %q", marked)
+	}
+
+	messages, err := repo.SearchMessages(ctx, "", "", phrase, 10)
+	if err != nil {
+		t.Fatalf("SearchMessages: %v", err)
+	}
+	assertSearchMessageIDs(t, messages, []string{"m-long-phrase"})
+
+	hits, err := repo.SearchMessageHits(ctx, "", "", phrase, 10)
+	if err != nil {
+		t.Fatalf("SearchMessageHits: %v", err)
+	}
+	assertSearchHitIDs(t, hits, []string{"m-long-phrase"})
+	if !reflect.DeepEqual(hits[0].Message, messages[0]) {
+		t.Fatalf("hit message = %+v, legacy message = %+v", hits[0].Message, messages[0])
+	}
+	assertPublicScore(t, hits[0].Score)
+	assertPublicSnippet(t, hits[0].Snippet)
+
+	snippet := hits[0].Snippet
+	excerpt := strings.TrimSpace(strings.Trim(snippet, string(searchSnippetEllipsis)))
+	if excerpt == "" {
+		t.Fatalf("snippet = %q, want text beyond the edge ellipses", snippet)
+	}
+	if !strings.Contains(hits[0].Message.Content, excerpt) {
+		t.Fatalf("snippet %q is not a fragment of its own message %q", snippet, hits[0].Message.Content)
+	}
+	if strings.Contains(snippet, neighborSecret) {
+		t.Fatalf("snippet = %q, want no neighbor content", snippet)
+	}
+	if strings.Contains(snippet, "TURING-FTS5-SNIPPET") {
+		t.Fatalf("snippet = %q leaks internal marker bytes", snippet)
+	}
+}
+
 // TestSearchMessageHitsNeverReadSnippetTextFromNeighborMessage pins snippet
 // provenance: the fragment comes from the hit's own row, never from the
 // messages stored next to it.
@@ -1212,9 +1433,11 @@ func TestSearchMessageHitsNeverReadSnippetTextFromNeighborMessage(t *testing.T) 
 // TestSearchMessageHitsDocumentDivergentExternalContentBehavior records what
 // happens when a database is mutated around the FTS triggers, which application
 // writes never do. A row whose match position no longer exists yields no
-// markers and fails closed; a same-shape replacement can still produce balanced
-// markers around stale offsets, and MEM-002 only guarantees that the text stays
-// confined to the returned message.
+// markers, which is the same shape a phrase wider than the snippet window
+// produces, so it returns an unhighlighted excerpt rather than failing; a
+// same-shape replacement can still produce balanced markers around stale
+// offsets. In both cases MEM-002 only guarantees that the text stays confined
+// to the returned message, never that the excerpt shows a real match.
 func TestSearchMessageHitsDocumentDivergentExternalContentBehavior(t *testing.T) {
 	database := openTestDB(t)
 	repo := New(database)
@@ -1238,8 +1461,16 @@ func TestSearchMessageHitsDocumentDivergentExternalContentBehavior(t *testing.T)
 		t.Fatalf("shorten divergent row: %v", err)
 	}
 	hits, err := repo.SearchMessageHits(ctx, "", "", "divergentterm", 10)
-	if !errors.Is(err, ErrInvalidSearchSnippetMarkers) || hits != nil {
-		t.Fatalf("shortened row hits, error = %+v, %v", hits, err)
+	if err != nil {
+		t.Fatalf("shortened row: %v", err)
+	}
+	assertSearchHitIDs(t, hits, []string{"m-divergent-short"})
+	assertPublicSnippet(t, hits[0].Snippet)
+	if hits[0].Snippet != "alpha" {
+		t.Fatalf("snippet = %q, want only the returned row's own current content", hits[0].Snippet)
+	}
+	if strings.Contains(hits[0].Snippet, secret) {
+		t.Fatalf("snippet = %q, want no neighbor content", hits[0].Snippet)
 	}
 
 	if _, err := database.ExecContext(ctx,
