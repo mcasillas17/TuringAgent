@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -1224,25 +1225,12 @@ func TestSearchMessageHitsDocumentDivergentExternalContentBehavior(t *testing.T)
 	insertSearchMessage(t, ctx, database, "m-divergent-stale", "s1", "staleterm trailing", 2)
 	insertSearchMessage(t, ctx, database, "m-divergent-neighbor", "s1", secret+" untouched", 3)
 
+	// The trigger stays dropped for the rest of the test: openTestDB gives this
+	// test its own temporary database and closes it, so nothing outside this
+	// function can observe the divergent index.
 	if _, err := database.ExecContext(ctx, `DROP TRIGGER messages_fts_au`); err != nil {
 		t.Fatalf("drop update trigger: %v", err)
 	}
-	t.Cleanup(func() {
-		if _, err := database.ExecContext(context.Background(), `
-			CREATE TRIGGER messages_fts_au AFTER UPDATE ON messages BEGIN
-			  INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
-			  INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
-			END;`,
-		); err != nil {
-			t.Fatalf("restore update trigger: %v", err)
-		}
-		if _, err := database.ExecContext(
-			context.Background(),
-			`INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')`,
-		); err != nil {
-			t.Fatalf("rebuild search index: %v", err)
-		}
-	})
 
 	if _, err := database.ExecContext(ctx,
 		`UPDATE messages SET content = 'alpha' WHERE id = 'm-divergent-short'`,
@@ -1484,6 +1472,53 @@ func TestSearchMessageHitsTokenlessInputReturnsEmptySlice(t *testing.T) {
 			t.Fatalf("SearchMessageHits(%q): %v", query, err)
 		}
 		assertSearchHitIDs(t, hits, []string{})
+	}
+}
+
+// TestSearchMessageHitsFailClosedOnMarkerEntropyBeforeQuerying pins the
+// ordering that makes a random-source failure survivable: the markers are built
+// before any reader opens, so the request fails closed, leaks none of the bytes
+// the reader did hand back, and leaves the orchestrator's single SQLite
+// connection free for the very next query. The follow-up legacy search runs on
+// a deadline so a connection held open by an unclosed reader surfaces as a test
+// failure instead of a hang.
+func TestSearchMessageHitsFailClosedOnMarkerEntropyBeforeQuerying(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	insertSearchSession(t, ctx, database, "s1")
+	insertSearchMessage(t, ctx, database, "m-entropy", "s1", "entropyterm inside the body", 1)
+
+	// The fixture is searchable first, so the failure below can only come from
+	// the entropy source and not from an empty or unmatched query.
+	messages, err := repo.SearchMessages(ctx, "", "", "entropyterm", 10)
+	if err != nil {
+		t.Fatalf("seed SearchMessages: %v", err)
+	}
+	if len(messages) != 1 || messages[0].MessageID != "m-entropy" {
+		t.Fatalf("seed messages = %+v, want m-entropy", messages)
+	}
+
+	reader := &shortEntropyReader{
+		data: []byte("SECRETENTROPY15"),
+		err:  errors.New("random source drained"),
+	}
+	hits, err := repo.searchMessageHits(ctx, "", "", "entropyterm", 10, reader)
+	if !errors.Is(err, ErrSearchMarkerEntropy) || hits != nil {
+		t.Fatalf("hits, error = %+v, %v", hits, err)
+	}
+	if strings.Contains(err.Error(), "SECRET") {
+		t.Fatalf("error leaks entropy bytes: %v", err)
+	}
+
+	followUp, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	messages, err = repo.SearchMessages(followUp, "", "", "entropyterm", 10)
+	if err != nil {
+		t.Fatalf("SearchMessages after entropy failure: %v", err)
+	}
+	if len(messages) != 1 || messages[0].MessageID != "m-entropy" {
+		t.Fatalf("messages after entropy failure = %+v, want m-entropy", messages)
 	}
 }
 
