@@ -1698,6 +1698,7 @@ func captureOpenAIToolFunctions(t *testing.T, definitions []ToolDefinition, mess
 }
 
 func captureOpenAIRequest(t *testing.T, definitions []ToolDefinition, messages []ChatMessage) ([]map[string]any, map[string]any) {
+	t.Helper()
 	return captureOpenAIRequestForModel(t, "gpt-4o-mini", definitions, messages)
 }
 

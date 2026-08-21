@@ -383,6 +383,24 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		if errors.Is(modelErr, context.DeadlineExceeded) {
 			return emitRunFailed(emit, job, "model_timeout", turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT, retryClass(!successfulToolSideEffect))
 		}
+		// Only an explicit completion validates this turn, and it validates the
+		// whole turn — its text and its tool calls alike. A channel that simply
+		// closed has said nothing: the text is a truncated fragment, and the
+		// tool calls may be truncated too, or may be ones the model was still
+		// revising. Completing on that would persist a fragment as the
+		// assistant's finished words; executing on it would commit a side
+		// effect nobody asked for, which no later correction can take back. So
+		// the check comes before both, and the ownership fence takes it from
+		// there.
+		if !explicitlyFinished {
+			return emitRunFailed(
+				emit,
+				job,
+				"model_stream_error",
+				turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
+				retryClass(!successfulToolSideEffect),
+			)
+		}
 		if finishReason == "length" {
 			setting := maxOutputTokensSetting(provider)
 			if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP, map[string]any{
@@ -399,20 +417,6 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			}
 		}
 		if len(calls) == 0 {
-			// The channel closed without a terminal event. Completing here
-			// would make a torn connection indistinguishable from a model that
-			// answered, and would persist a truncated fragment — or nothing at
-			// all — as the assistant's finished words. It is the transport
-			// failure it is, and the ownership fence takes it from there.
-			if !explicitlyFinished {
-				return emitRunFailed(
-					emit,
-					job,
-					"model_stream_error",
-					turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
-					retryClass(!successfulToolSideEffect),
-				)
-			}
 			// An empty answer is still an answer the model explicitly finished,
 			// so it is reported as the empty success it is. Replacing it with
 			// apologetic filler used to make a completion that produced nothing
@@ -494,18 +498,11 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			})); err != nil {
 				return err
 			}
-			// The guard decides to stop, but it cannot decide that the model
-			// finished: the last turn may itself have been cut off mid-stream,
-			// and its text is then a fragment like any other.
-			if !explicitlyFinished {
-				return emitRunFailed(
-					emit,
-					job,
-					"model_stream_error",
-					turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
-					retryClass(!successfulToolSideEffect),
-				)
-			}
+			// The guard decides to stop, and it can only be reached on a turn
+			// whose stream explicitly finished — the EOF check above fences
+			// every unfinished one before a single tool runs. So the text this
+			// turn produced is the model's own finished words, not a fragment.
+			//
 			// The step notice above already says the run stopped at the tool
 			// iteration limit. Whatever text the model produced before that is
 			// the answer; if it produced none, the completion says so honestly
@@ -811,13 +808,13 @@ func (a *GeneralAssistant) executeToolCall(
 	}
 	entry, found := registry.Lookup(call.Name)
 	if !found {
-		if err := emitAssistantToolCallFailed(emit, job, call, "unknown_tool"); err != nil {
+		if err := emitAssistantToolCallFailed(emit, job, call); err != nil {
 			return toolCallOutcome{}, err
 		}
 		return unknownToolOutcome(call, registry)
 	}
 	if a.tools == nil || a.tools.Runner == nil {
-		if err := emitAssistantToolCallFailed(emit, job, call, "tool_runner_unavailable"); err != nil {
+		if err := emitAssistantToolCallFailed(emit, job, call); err != nil {
 			return toolCallOutcome{}, err
 		}
 		return toolErrorOutcome(call, "tool_runner_unavailable")
@@ -851,7 +848,11 @@ func (a *GeneralAssistant) executeToolCall(
 			return toolCallOutcome{}, err
 		}
 		if !tools.BeaconWasPosted(err) {
-			if emitErr := emitAssistantToolCallFailed(emit, job, call, err.Error()); emitErr != nil {
+			// The event is durable and public; the tool-role result below is
+			// neither. So the error's own words go back to the model, which
+			// asked for this call and can act on them, and the event carries
+			// only the identity and the category.
+			if emitErr := emitAssistantToolCallFailed(emit, job, call); emitErr != nil {
 				return toolCallOutcome{}, emitErr
 			}
 		}
@@ -886,18 +887,38 @@ func (e ToolResultReportingError) Unwrap() error {
 	return e.err
 }
 
-func emitAssistantToolCallFailed(emit func(*turingv1.RuntimeUpdate) error, job *turingv1.AgentJob, call llm.ToolCall, message string) error {
+// toolFailureCategory is the only category a tool.call.failed event may carry.
+//
+// It is the same word the orchestrator's own writer puts on that event —
+// runoutcome.ToolCallFailureCategory("tool.call.failed"), which is
+// runoutcome.ReasonToolFailure — spelled out here rather than imported, because
+// orchestrator-go's internal packages are not reachable from this module
+// directory. It is a copy of one vocabulary, deliberately not a second one, and
+// runoutcome's producer-pair scan reads this constant back out of the source to
+// keep the two spellings identical.
+const toolFailureCategory = "tool_failure"
+
+func emitAssistantToolCallFailed(emit func(*turingv1.RuntimeUpdate) error, job *turingv1.AgentJob, call llm.ToolCall) error {
 	if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED, map[string]any{
 		"toolName": call.Name, "toolCallId": call.ID,
 	})); err != nil {
 		return err
 	}
-	return emitToolCallFailed(emit, job, call, message)
+	return emitToolCallFailed(emit, job, call)
 }
 
-func emitToolCallFailed(emit func(*turingv1.RuntimeUpdate) error, job *turingv1.AgentJob, call llm.ToolCall, message string) error {
+// emitToolCallFailed writes the run's public record that this tool call ended
+// badly.
+//
+// RuntimeService persists a generic runtime event's payload verbatim and
+// returns it to clients, so this payload is a durable public payload and is
+// held to the same rule as the orchestrator's own tool.call.failed writer: the
+// identity the client was already promised, plus one allowlisted category. No
+// error, no message, no result, no reason. What actually went wrong is a Go
+// error the caller still holds, and a developer reads it there.
+func emitToolCallFailed(emit func(*turingv1.RuntimeUpdate) error, job *turingv1.AgentJob, call llm.ToolCall) error {
 	return emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED, map[string]any{
-		"toolName": call.Name, "toolCallId": call.ID, "error": message,
+		"toolName": call.Name, "toolCallId": call.ID, "category": toolFailureCategory,
 	}))
 }
 

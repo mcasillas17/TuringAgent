@@ -3170,10 +3170,14 @@ func (p *toolThenModelFailureProvider) EstimateRequestTokens(req llm.ChatRequest
 func (p *toolThenModelFailureProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	p.calls++
 	if p.calls == 1 {
-		out := make(chan llm.StreamEvent, 1)
+		out := make(chan llm.StreamEvent, 2)
 		out <- llm.StreamEvent{Type: "tool_call", ToolCalls: []llm.ToolCall{{
 			ID: "provider_call", Name: "system.write",
 		}}}
+		// The first turn finished normally; what this fixture is about is the
+		// SECOND turn failing. Without the explicit finish the first turn would
+		// be a cut-off stream, and the run would never reach the second.
+		out <- llm.StreamEvent{Type: "completed", FinishReason: "tool_calls"}
 		close(out)
 		return out, nil
 	}
@@ -3241,10 +3245,13 @@ func (p *toolThenNeverClosingProvider) EstimateRequestTokens(req llm.ChatRequest
 func (p *toolThenNeverClosingProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	p.calls++
 	if p.calls == 1 {
-		out := make(chan llm.StreamEvent, 1)
+		out := make(chan llm.StreamEvent, 2)
 		out <- llm.StreamEvent{Type: "tool_call", ToolCalls: []llm.ToolCall{{
 			ID: "provider_call", Name: "system.write",
 		}}}
+		// Finished, so the tool actually runs; the stall this fixture is about
+		// belongs to the turn after it.
+		out <- llm.StreamEvent{Type: "completed", FinishReason: "tool_calls"}
 		close(out)
 		return out, nil
 	}
@@ -3979,8 +3986,9 @@ func (p *toolThenSilentStreamProvider) StreamChat(context.Context, llm.ChatReque
 
 // The iteration limit stops a run the runtime decided to stop, but it cannot
 // decide the model finished. When the turn that hit the limit was itself cut
-// off, the accumulated text is a fragment, and the limit's own step notice does
-// not make it an answer.
+// off, the EOF fence rejects that turn before its tool calls run — so the
+// accumulated text is never promoted to an answer, and the limit's own step
+// notice never gets to describe a fragment as one.
 func TestToolIterationLimitDoesNotCompleteACutOffFinalTurn(t *testing.T) {
 	provider := &silentFinalTurnLoopingProvider{}
 	client := &assistantTestToolLister{

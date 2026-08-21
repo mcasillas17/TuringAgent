@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
@@ -99,6 +100,9 @@ func TestToolAfterFailureIngestionPersistsNoRawText(t *testing.T) {
 				"streamed":  streamed.PayloadJSON,
 			} {
 				assertToolTerminalPayload(t, name, payloadJSON, toolCallID, "system.time", test.wantCategory)
+				if strings.Contains(payloadJSON, toolBeaconPoison) {
+					t.Fatalf("%s payload carried the beacon's own words: %s", name, payloadJSON)
+				}
 			}
 
 			var errorCode, errorMessage, resultSummary string
@@ -113,6 +117,18 @@ func TestToolAfterFailureIngestionPersistsNoRawText(t *testing.T) {
 			}
 			if errorCode != test.wantCode {
 				t.Fatalf("tool_calls.error_code = %q, want %q", errorCode, test.wantCode)
+			}
+			// result_summary is the deliberate exception, and asserting it is
+			// the point rather than an afterthought: it is the operator's
+			// diagnostic column — the same place the tool.call.after audit
+			// record keeps the beacon verbatim — so it KEEPS what the tool
+			// said, in full, while every public projection above carries only
+			// the identity and the category. Reading it without asserting on it
+			// would have left that split unpinned in both directions: nothing
+			// would notice the column being emptied, and nothing would notice
+			// the summary starting to leak into the payloads.
+			if resultSummary != toolBeaconPoison {
+				t.Fatalf("tool_calls.result_summary = %q, want the beacon's summary kept verbatim for operators", resultSummary)
 			}
 		})
 	}

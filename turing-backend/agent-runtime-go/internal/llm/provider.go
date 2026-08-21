@@ -186,17 +186,30 @@ func providerError(code string, message string) StreamEvent {
 // classified is left to the orchestrator's fail-closed default rather than
 // guessed at here.
 func providerFailureOrigin(code string) turingv1.FailureOrigin {
-	switch code {
-	case "model_unavailable", "model_auth_failed", "model_request_failed",
-		"model_quota_exceeded", "model_bad_chunk":
-		return turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL
-	case "model_stream_error", "model_timeout":
-		return turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT
-	case "model_error":
-		return turingv1.FailureOrigin_FAILURE_ORIGIN_EXTERNAL_PROVIDER
-	default:
-		return turingv1.FailureOrigin_FAILURE_ORIGIN_UNKNOWN
+	if origin, ok := providerFailureOrigins[code]; ok {
+		return origin
 	}
+	return turingv1.FailureOrigin_FAILURE_ORIGIN_UNKNOWN
+}
+
+// providerFailureOrigins is that mapping, as a table rather than a switch.
+//
+// The orchestrator pairs each of these codes with its origin to pick the public
+// outcome, and it cannot import this package — agent-runtime-go's internal
+// packages are not reachable from orchestrator-go — so its inventory is a copy.
+// A copy needs something to be checked against, and a table is readable from
+// source in one place; a switch spread across arms is not. Adding an entry here
+// is therefore the single edit that widens the forwarded provider vocabulary,
+// and runoutcome's producer-pair scan requires the two to agree.
+var providerFailureOrigins = map[string]turingv1.FailureOrigin{
+	"model_unavailable":    turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL,
+	"model_auth_failed":    turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL,
+	"model_request_failed": turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL,
+	"model_quota_exceeded": turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL,
+	"model_bad_chunk":      turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL,
+	"model_stream_error":   turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
+	"model_timeout":        turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
+	"model_error":          turingv1.FailureOrigin_FAILURE_ORIGIN_EXTERNAL_PROVIDER,
 }
 
 func providerHTTPErrorCode(status int) string {

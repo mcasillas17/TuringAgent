@@ -101,12 +101,17 @@ var allowedOutcomeReasons = map[string][]runoutcome.Reason{
 
 // Project renders one durable run state as the public one, or nothing.
 //
-// Nothing is a real answer here. A client that receives no state renders the
-// neutral "no assistant response was recorded" card; a client that receives a
-// state renders that state as fact. So anything this function cannot vouch for
-// — a pair the matrix forbids, a run with no identity, a version no client
-// could reconcile against — is returned as absence rather than as a plausible
-// outcome nobody can justify.
+// Nothing is a real answer here. Absence is what a reader is meant to show as
+// "no assistant response was recorded"; a projected state is what it is meant
+// to show as fact. So anything this function cannot vouch for — a pair the
+// matrix forbids, a run with no identity, a version no client could reconcile
+// against — is returned as absence rather than as a plausible outcome nobody
+// can justify.
+//
+// The Flutter client does not read this state yet: it renders the persisted
+// event payloads, and consuming the projected lifecycle and outcome is the
+// planned Task 9/10 work. What is committed here is the projection, which is
+// what that work will render.
 //
 // An unrecognized lifecycle or reason is the opposite case and is projected as
 // the explicit UNKNOWN value: the row is internally consistent as far as this

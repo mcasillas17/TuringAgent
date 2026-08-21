@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -12,9 +13,14 @@ import (
 
 // setAfterRunStateReadForCancelHook installs the barrier the abandonment path
 // exposes for exactly this regression, and returns the restore the test defers.
-func setAfterRunStateReadForCancelHook(hook func(runID string)) func() {
-	afterRunStateReadForCancelHook = hook
-	return func() { afterRunStateReadForCancelHook = nil }
+//
+// The barrier lives on the server rather than on the package, so two harnesses
+// in the same run cannot install it over each other and a forgotten restore
+// cannot leak into an unrelated test.
+func setAfterRunStateReadForCancelHook(t *testing.T, h *harness, hook func(runID string)) func() {
+	t.Helper()
+	h.service.afterRunStateReadForCancel = hook
+	return func() { h.service.afterRunStateReadForCancel = nil }
 }
 
 // A client stream can go away while the run it started is still moving. The
@@ -32,7 +38,7 @@ func TestAbandonmentTerminalizesAfterALostVersionRace(t *testing.T) {
 	enqueued := h.enqueueRunningRun(t, "abandon me")
 
 	var once sync.Once
-	restore := setAfterRunStateReadForCancelHook(func(runID string) {
+	restore := setAfterRunStateReadForCancelHook(t, h, func(runID string) {
 		// Exactly one bump: the abandonment must lose its first guarded update
 		// and then succeed against the version it re-reads. Bumping on every
 		// read would only prove that an unbounded retry loop spins forever.
@@ -74,7 +80,7 @@ func TestAbandonmentIsIdempotentAgainstAnAlreadyTerminalRun(t *testing.T) {
 	enqueued := h.enqueueRunningRun(t, "already finished")
 
 	var once sync.Once
-	restore := setAfterRunStateReadForCancelHook(func(runID string) {
+	restore := setAfterRunStateReadForCancelHook(t, h, func(runID string) {
 		once.Do(func() {
 			state, err := h.repo.GetRunState(context.Background(), runID)
 			if err != nil {
@@ -113,7 +119,7 @@ func TestAbandonmentStopsWhenTheRunIsDeletedMidRace(t *testing.T) {
 	enqueued := h.enqueueRunningRun(t, "deleted mid-abandonment")
 
 	var once sync.Once
-	restore := setAfterRunStateReadForCancelHook(func(runID string) {
+	restore := setAfterRunStateReadForCancelHook(t, h, func(runID string) {
 		once.Do(func() {
 			// The version moves first, so the guarded cancellation loses and
 			// the retry is the code under test; the session then goes away
@@ -162,7 +168,7 @@ func TestAbandonmentGivesUpAfterItsRetryBudget(t *testing.T) {
 	enqueued := h.enqueueRunningRun(t, "never settles")
 
 	reads := 0
-	restore := setAfterRunStateReadForCancelHook(func(runID string) {
+	restore := setAfterRunStateReadForCancelHook(t, h, func(runID string) {
 		reads++
 		state, err := h.repo.GetRunState(context.Background(), runID)
 		if err != nil {
@@ -188,13 +194,13 @@ func TestAbandonmentGivesUpAfterItsRetryBudget(t *testing.T) {
 	})
 	defer restore()
 
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
-		defer close(done)
-		h.service.cancelRun(enqueued.RunID)
+		done <- h.service.abandonRun(context.Background(), enqueued.RunID)
 	}()
+	var err error
 	select {
-	case <-done:
+	case err = <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("abandonment never gave up on a run whose version kept moving")
 	}
@@ -203,6 +209,88 @@ func TestAbandonmentGivesUpAfterItsRetryBudget(t *testing.T) {
 		t.Fatalf("run state reads = %d, want the exact budget %d", reads, maxCancelVersionAttempts)
 	}
 	assertCancelledEventPublished(t, h, enqueued.RunID, 0)
+	// Giving up is a real outcome: a run that was supposed to stop is still
+	// running with nobody watching it. Returning nil here made that
+	// indistinguishable from a clean abandonment, so nothing logged it and no
+	// test could see it.
+	if !errors.Is(err, errAbandonmentContended) {
+		t.Fatalf("exhausted abandonment returned %v, want the contended sentinel", err)
+	}
+	// Safe by construction: the sentinel is a fixed sentence, so a run ID, a
+	// session, or a database error cannot ride out on it.
+	if err.Error() != errAbandonmentContended.Error() {
+		t.Fatalf("abandonment error text = %q, want the bare sentinel", err.Error())
+	}
+}
+
+// Giving up on the durable half does not mean giving up on the run. The runtime
+// still has to be told to stop executing it, or the exhaustion turns a run
+// nobody is watching into a run nobody is watching that also keeps burning a
+// worker slot.
+func TestAbandonmentStillNotifiesTheRuntimeAfterExhaustingItsBudget(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRunningRun(t, "contended but still running")
+	notifier := &cancelNotificationRecorder{}
+	h.service.runtime = notifier
+
+	restore := setAfterRunStateReadForCancelHook(t, h, func(runID string) {
+		state, err := h.repo.GetRunState(context.Background(), runID)
+		if err != nil {
+			t.Errorf("read run state: %v", err)
+			return
+		}
+		if state.Lifecycle == "recovering" {
+			if _, err := h.repo.ResumeRecoveringRun(context.Background(), repository.ResumeRecoveringRunInput{
+				RunID: runID, ExpectedStateVersion: state.StateVersion,
+			}); err != nil {
+				t.Errorf("resume run: %v", err)
+			}
+			return
+		}
+		if _, err := h.repo.FenceRunOwnership(context.Background(), repository.FenceRunOwnershipInput{
+			RunID: runID, ExpectedStateVersion: state.StateVersion,
+		}); err != nil {
+			t.Errorf("bump run version: %v", err)
+		}
+	})
+	defer restore()
+
+	h.service.cancelRun(enqueued.RunID)
+
+	if notifier.runIDs() != 1 {
+		t.Fatalf("runtime cancellations = %d, want the run still told to stop", notifier.runIDs())
+	}
+}
+
+type cancelNotificationRecorder struct {
+	mu        sync.Mutex
+	cancelled []string
+}
+
+func (r *cancelNotificationRecorder) DispatchPending(context.Context) error { return nil }
+
+func (r *cancelNotificationRecorder) CancelRun(_ context.Context, runID string, _ string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cancelled = append(r.cancelled, runID)
+}
+
+func (r *cancelNotificationRecorder) ValidateRouting(context.Context, repository.RoutingRequirements) error {
+	return nil
+}
+
+func (r *cancelNotificationRecorder) RefreshPendingRoutingState(context.Context, string) error {
+	return nil
+}
+
+func (r *cancelNotificationRecorder) RoutableDefaultModel(_ string, configured string) string {
+	return configured
+}
+
+func (r *cancelNotificationRecorder) runIDs() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.cancelled)
 }
 
 // assertCancelledEventPublished checks the durable log rather than the bus, so

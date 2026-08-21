@@ -27,6 +27,16 @@ type Server struct {
 	runtime     runtimeDispatcher
 	ollamaModel string
 	openAIModel string
+	// afterRunStateReadForCancel is the barrier the disconnect version-race
+	// regression installs, at the exact point between reading the run's version
+	// and guarding the cancellation with it. It is nil in production.
+	//
+	// It lives on the server rather than on the package so two harnesses in one
+	// test binary cannot install it over each other, and so a forgotten restore
+	// cannot leak into an unrelated test. Written by the test that owns this
+	// server before it triggers the path, and read from whatever goroutine runs
+	// it — an ordering the test establishes, not one this field enforces.
+	afterRunStateReadForCancel func(runID string)
 }
 
 type runtimeDispatcher interface {
@@ -340,10 +350,13 @@ func mapEnqueueError(ctx context.Context, err error) error {
 	return status.Error(codes.Internal, "enqueue user message failed")
 }
 
-// afterRunStateReadForCancelHook is set only by the disconnect version-race
-// regression, at the exact point between reading the run's version and guarding
-// the cancellation with it.
-var afterRunStateReadForCancelHook func(runID string)
+// errAbandonmentContended reports that a run's version kept moving underneath
+// the abandonment until its budget ran out.
+//
+// It says that and nothing else: it is logged, and a log line is a durable
+// operator-facing record, so a run ID, a session, or a database driver's
+// sentence must not be able to ride out on it.
+var errAbandonmentContended = errors.New("abandonment lost its version race on every attempt")
 
 // maxCancelVersionAttempts bounds how many times an abandonment re-reads a run
 // whose version moved underneath it.
@@ -375,15 +388,41 @@ const maxCancelVersionAttempts = 3
 func (s *Server) cancelRun(runID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if err := s.abandonRun(ctx, runID); err != nil {
+		// Losing the whole budget is not a no-op: a run that was supposed to
+		// stop is still marked as going, and nobody is watching it. Discarding
+		// that made an exhausted abandonment look exactly like a clean one — no
+		// log line, no test could observe it, and the only evidence was a run
+		// that never ended. Reported here rather than returned, because the
+		// caller is a deferred cleanup with nowhere to put an error.
+		log.Printf("abandon run %s: %v", runID, err)
+	}
+	// Told to stop either way. The durable half failing does not make the run
+	// stop executing, and leaving the runtime uninformed would turn a lost race
+	// into a worker slot held by a run nobody wants.
+	if s.runtime != nil {
+		s.runtime.CancelRun(ctx, runID, "client_cancelled")
+	}
+}
+
+// abandonRun is the durable half: it terminalizes the run and publishes what
+// that transition produced, or reports why it could not.
+//
+// Split out from cancelRun so the outcome is a value rather than a side effect.
+// A caller — and a test — can then tell "terminalized", "already terminal or
+// gone", and "contended until the budget ran out" apart, which the single
+// swallowing loop could not express.
+func (s *Server) abandonRun(ctx context.Context, runID string) error {
 	for attempt := 0; attempt < maxCancelVersionAttempts; attempt++ {
 		state, err := s.repo.GetRunState(ctx, runID)
 		if err != nil {
 			// Deletion and a closed database both land here. Neither is a race
-			// this can win, and neither leaves a run to tell the runtime about.
-			return
+			// this can win, and neither leaves a run to terminalize. Reported as
+			// success rather than as a contended loss: nothing was lost.
+			return nil
 		}
-		if afterRunStateReadForCancelHook != nil {
-			afterRunStateReadForCancelHook(runID)
+		if s.afterRunStateReadForCancel != nil {
+			s.afterRunStateReadForCancel(runID)
 		}
 		result, err := s.repo.CancelRunCanonical(ctx, repository.CancelRunInput{
 			RunID:                runID,
@@ -393,19 +432,22 @@ func (s *Server) cancelRun(runID string) {
 		if errors.Is(err, repository.ErrRunTransitionConflict) && ctx.Err() == nil {
 			continue
 		}
-		if err == nil {
-			// Only the committed transition publishes. A duplicate carries no
-			// events, so a replayed abandonment cannot announce a second
-			// cancellation for a run that already has one.
-			for _, event := range result.Events {
-				s.bus.Publish(busEventFromRepository(event))
-			}
+		if err != nil {
+			// A refusal means the run is already terminal and there is nothing
+			// left to cancel. The error itself is not reported onward: it is a
+			// repository sentinel or a driver's sentence, and this value is
+			// logged.
+			return nil
 		}
-		break
+		// Only the committed transition publishes. A duplicate carries no
+		// events, so a replayed abandonment cannot announce a second
+		// cancellation for a run that already has one.
+		for _, event := range result.Events {
+			s.bus.Publish(busEventFromRepository(event))
+		}
+		return nil
 	}
-	if s.runtime != nil {
-		s.runtime.CancelRun(ctx, runID, "client_cancelled")
-	}
+	return errAbandonmentContended
 }
 
 func (s *Server) cancelRunIfClientCancelled(ctx context.Context, runID string) {

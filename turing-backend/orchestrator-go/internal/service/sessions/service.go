@@ -258,8 +258,9 @@ func mapMessage(sessionID string, message repository.Message) *turingv1.Message 
 	}
 	// Absent state stays absent. The repository returns state only for a
 	// message whose run correlation it could prove, and the projection returns
-	// none for a row it cannot vouch for; either way the client renders the
-	// neutral card rather than an outcome nobody stands behind.
+	// none for a row it cannot vouch for; either way what is published is
+	// silence rather than an outcome nobody stands behind. Rendering that
+	// silence as the neutral card is the planned Task 9/10 client work.
 	if message.RunState != nil {
 		mapped.RunState = runstate.Project(*message.RunState)
 	}

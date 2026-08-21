@@ -280,11 +280,12 @@ func selectorName(expression ast.Expr) string {
 	return pkg.Name + "." + selector.Sel.Name
 }
 
-// The provider package chooses the origin for a forwarded provider error from
-// its own code, so those pairs are producer pairs too even though the agent
-// passes them through as variables. They are pinned here by value.
-func TestForwardedProviderErrorPairsNormalizeToKnownCodes(t *testing.T) {
-	forwarded := map[string]Origin{
+// approvedForwardedProviderPairs is every (origin, code) the llm package
+// attaches to a provider error the agent then forwards verbatim. Like
+// runtimeProducerPairs it is written by hand, so widening the provider
+// vocabulary is a deliberate edit here as well as there.
+func approvedForwardedProviderPairs() map[string]Origin {
+	return map[string]Origin{
 		"model_unavailable":    OriginProviderProtocol,
 		"model_auth_failed":    OriginProviderProtocol,
 		"model_request_failed": OriginProviderProtocol,
@@ -294,17 +295,178 @@ func TestForwardedProviderErrorPairsNormalizeToKnownCodes(t *testing.T) {
 		"model_timeout":        OriginProviderTransport,
 		"model_error":          OriginExternalProvider,
 	}
-	names := make([]string, 0, len(forwarded))
-	for code := range forwarded {
+}
+
+// The provider package chooses the origin for a forwarded provider error from
+// its own code, so those pairs are producer pairs too even though the agent
+// passes them through as variables.
+//
+// The inventory is checked against the llm package's own mapping table rather
+// than trusted on its own: a hand-copy is exactly the thing that drifts, and
+// the drift is silent — a provider code whose origin moved would still
+// terminalize the run, just with its code replaced by CodeUnknown. The table
+// lives in a sibling module directory, so it is read from source for the same
+// reason the runtime producer scan is: orchestrator-go's internal packages are
+// not importable from there, and this test must not become the reason they are.
+func TestForwardedProviderErrorPairsNormalizeToKnownCodes(t *testing.T) {
+	approved := approvedForwardedProviderPairs()
+	scanned := scanProviderFailureOrigins(t)
+
+	for code, origin := range scanned {
+		if _, ok := approved[code]; !ok {
+			t.Errorf("the llm package maps the uninventoried code %q to %v", code, origin)
+			continue
+		}
+		if approved[code] != origin {
+			t.Errorf("the llm package maps %q to %v, inventory says %v", code, origin, approved[code])
+		}
+	}
+	for code := range approved {
+		if _, ok := scanned[code]; !ok {
+			t.Errorf("inventory lists %q but the llm package maps no such code", code)
+		}
+	}
+
+	names := make([]string, 0, len(approved))
+	for code := range approved {
 		names = append(names, code)
 	}
 	sort.Strings(names)
 	for _, code := range names {
 		t.Run(code, func(t *testing.T) {
-			got := NormalizeFailure(forwarded[code], code, RetryClassNever)
+			got := NormalizeFailure(approved[code], code, RetryClassNever)
 			if got.Code() != code {
 				t.Fatalf("provider code %q normalized to %q", code, got.Code())
 			}
+			if got.Origin() != approved[code] {
+				t.Fatalf("provider code %q normalized to origin %v, want %v", code, got.Origin(), approved[code])
+			}
 		})
 	}
+}
+
+// providerOriginTableName is the llm package's single mapping from a provider
+// error code to the origin that code always describes. Naming it here rather
+// than scanning every switch in the package is deliberate: the point of the
+// table existing is that there is one place to read.
+const providerOriginTableName = "providerFailureOrigins"
+
+// scanProviderFailureOrigins reads that table out of the llm package's source.
+// An entry whose origin is not a spelled-out generated constant fails the scan
+// rather than being skipped, because a computed origin is exactly the case a
+// value-based pin cannot see.
+func scanProviderFailureOrigins(t *testing.T) map[string]Origin {
+	t.Helper()
+	directory := filepath.Join("..", "..", "..", "agent-runtime-go", "internal", "llm")
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatalf("read provider directory %s: %v", directory, err)
+	}
+	fileSet := token.NewFileSet()
+	origins := map[string]Origin{}
+	found := false
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		path := filepath.Join(directory, name)
+		file, err := parser.ParseFile(fileSet, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			spec, ok := node.(*ast.ValueSpec)
+			if !ok || len(spec.Names) != 1 || spec.Names[0].Name != providerOriginTableName || len(spec.Values) != 1 {
+				return true
+			}
+			composite, ok := spec.Values[0].(*ast.CompositeLit)
+			if !ok {
+				t.Fatalf("%s is not a composite literal", providerOriginTableName)
+			}
+			found = true
+			for _, element := range composite.Elts {
+				pair, ok := element.(*ast.KeyValueExpr)
+				if !ok {
+					t.Fatalf("%s has a non key-value entry", providerOriginTableName)
+				}
+				code, ok := stringLiteral(pair.Key)
+				if !ok {
+					t.Fatalf("%s has an entry whose code is not a string literal", providerOriginTableName)
+				}
+				origin, ok := failureOriginSelector(pair.Value)
+				if !ok {
+					t.Fatalf("%s entry %q has an origin this scan cannot read", providerOriginTableName, code)
+				}
+				origins[code] = origin
+			}
+			return false
+		})
+	}
+	if !found {
+		t.Fatalf("the llm package no longer declares %s", providerOriginTableName)
+	}
+	return origins
+}
+
+// TestRuntimeToolFailureCategoryMatchesTheApprovedVocabulary pins the one word
+// the agent writes on a tool.call.failed event.
+//
+// The orchestrator writes that event too, from an after-beacon, and takes its
+// category from ToolCallFailureCategory. The agent cannot call that function —
+// this package is not importable from agent-runtime-go — so it spells the
+// category out as a constant, and a spelled-out copy is a second vocabulary
+// waiting to happen. The constant is read back out of the source here and
+// required to be exactly the category the orchestrator uses, so a client can
+// never tell which of the two producers wrote a tool.call.failed.
+func TestRuntimeToolFailureCategoryMatchesTheApprovedVocabulary(t *testing.T) {
+	want, isFailure := ToolCallFailureCategory("tool.call.failed")
+	if !isFailure {
+		t.Fatal("tool.call.failed is no longer a categorized failure event")
+	}
+	got := scanRuntimeStringConstant(t,
+		filepath.Join("..", "..", "..", "agent-runtime-go", "internal", "agent"), "toolFailureCategory")
+	if got != string(want) {
+		t.Fatalf("the runtime writes category %q on tool.call.failed, the orchestrator writes %q", got, want)
+	}
+}
+
+// scanRuntimeStringConstant reads one spelled-out string constant out of a
+// sibling module directory.
+func scanRuntimeStringConstant(t *testing.T, directory string, name string) string {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatalf("read directory %s: %v", directory, err)
+	}
+	fileSet := token.NewFileSet()
+	for _, entry := range entries {
+		fileName := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(fileName, ".go") || strings.HasSuffix(fileName, "_test.go") {
+			continue
+		}
+		path := filepath.Join(directory, fileName)
+		file, err := parser.ParseFile(fileSet, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		value := ""
+		ast.Inspect(file, func(node ast.Node) bool {
+			spec, ok := node.(*ast.ValueSpec)
+			if !ok || len(spec.Names) != 1 || spec.Names[0].Name != name || len(spec.Values) != 1 {
+				return true
+			}
+			literal, ok := stringLiteral(spec.Values[0])
+			if !ok {
+				t.Fatalf("%s in %s is not a spelled-out string literal", name, path)
+			}
+			value = literal
+			return false
+		})
+		if value != "" {
+			return value
+		}
+	}
+	t.Fatalf("no directory file declares the constant %s", name)
+	return ""
 }

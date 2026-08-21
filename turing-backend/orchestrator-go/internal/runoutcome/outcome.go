@@ -248,8 +248,10 @@ func ToolCallFailureCategory(eventType string) (Reason, bool) {
 }
 
 // StepNotice is a failure-like run-step projection: a category plus bounded
-// counters. It accepts no display string, so the sentence a client shows is
-// derived from the category by the client instead of persisted by the backend.
+// counters. It accepts no display string, so the sentence a reader shows has to
+// be derived from the category rather than persisted by the backend. Deriving
+// it is the planned Task 9/10 client work; what is committed here is the
+// category the backend is allowed to publish.
 type StepNotice struct {
 	category    NoticeCategory
 	attempt     int32

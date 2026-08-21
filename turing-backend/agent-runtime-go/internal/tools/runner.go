@@ -23,12 +23,6 @@ type Runner struct {
 	MetadataFetchers []func(context.Context) error
 }
 
-// The after-beacon carries a code from this package's own allowlisted
-// vocabulary and no message. The wrapped error still travels back to the caller
-// as a Go error — that is where a developer reads it — but it does not cross
-// the beacon boundary, because everything on a beacon can become a durable
-// public payload.
-
 type RunInput struct {
 	AgentID         turingv1.AgentId
 	RunID           string
@@ -173,6 +167,13 @@ func (r *Runner) fetchMetadata(ctx context.Context, timeout time.Duration) error
 	return group.Wait()
 }
 
+// postAfter reports how a tool call ended.
+//
+// The after-beacon carries a code from this package's own allowlisted
+// vocabulary and no message. The wrapped error still travels back to the caller
+// as a Go error — that is where a developer reads it — but it does not cross
+// the beacon boundary, because everything on a beacon can become a durable
+// public payload.
 func (r *Runner) postAfter(ctx context.Context, input RunInput, toolCallID string, status turingv1.ToolCallStatus, summary string, callErr *turingv1.ToolCallError, started time.Time) error {
 	reportCtx, cancel := afterReportContext(ctx, input.Timeout)
 	defer cancel()

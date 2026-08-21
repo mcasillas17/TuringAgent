@@ -1751,10 +1751,41 @@ func (s *Server) handleRunCancelledAck(ctx context.Context, ack *turingv1.Runtim
 	if !isTerminalRunStatus(run.Status) {
 		return status.Error(codes.FailedPrecondition, "run is not cancelled")
 	}
+	if !acknowledgedVersionMatches(ack.GetObservedStateVersion(), run) {
+		return status.Error(codes.FailedPrecondition, "run_cancelled_ack observed_state_version does not match run")
+	}
 	if err := s.repo.AcknowledgeExecutionExit(ctx, ack.RunId); err != nil {
 		return mapRunStateError(err)
 	}
 	return nil
+}
+
+// acknowledgedVersionMatches compares the version an execution-exit
+// acknowledgement observed with the versions this run actually reached.
+//
+// The acknowledgement is the last thing a worker says about a run, and what it
+// releases is the execution fence — the guard that keeps a terminal run's
+// identity closed until the process that was running it is known to be gone. A
+// fenced predecessor still holds the version it was assigned at, several
+// transitions behind, so accepting any version at all would let the attempt
+// that LOST the run declare execution finished on behalf of the attempt that
+// owns it.
+//
+// Two versions are legitimate. Normally the worker observes the run's current
+// version: every command that terminalizes a run — the cancellation, the
+// approval decision — is sent after that transition commits, so what the worker
+// was last told is what the run holds. One version of slack is allowed on top of
+// that for a report computed just before the terminal transition, which names
+// the version the run terminalized FROM; that is the same pre-terminal
+// convention matchesPreTerminalVersion applies to terminal reports. Nothing
+// further back belongs to this attempt, and nothing ahead exists.
+//
+// Zero is protobuf absence, not a claim: a worker built before the field
+// existed names no version, and is judged on the terminal status alone exactly
+// as before. This is the same absence rule matchesPreTerminalVersion and
+// terminalExpectation apply to terminal reports.
+func acknowledgedVersionMatches(observed int64, run repository.Run) bool {
+	return observed == 0 || observed == run.StateVersion || observed == run.StateVersion-1
 }
 
 func (s *Server) isLateMatchingTerminalUpdate(ctx context.Context, update *turingv1.RuntimeUpdate) (bool, error) {
@@ -2326,9 +2357,10 @@ func (s *Server) grantUnattendedApproval(ctx context.Context, approvalID string,
 // The alternative — creating the approval and letting it sit — is the failure
 // mode this whole feature exists to avoid: a run waiting on a person who is
 // asleep, silent until the approval TTL quietly expires. So the tool call is
-// denied and the run is failed with a reason naming the automation and the
-// tool, which is what the client renders and what the automation's last-run
-// status reports.
+// denied and the run is failed under the automation-policy origin, which is
+// what the automation's last-run status reports and what the public
+// policy-denied outcome is projected from. Which automation and which tool are
+// in the audit record, not in the run's failure — see below.
 func (s *Server) blockUnattendedTool(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run, argsJSON string, argsHash string, grant repository.AutomationRunGrant) (*turingv1.ToolPolicyDecision, error) {
 	decision, err := s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, AutomationNotAllowlistedCode)
 	if err != nil {
@@ -2346,8 +2378,9 @@ func (s *Server) blockUnattendedTool(ctx context.Context, beacon *turingv1.ToolC
 	// where they belong. They are deliberately not carried into the run's
 	// failure: agent_runs.error_message is a public diagnostic column, and a
 	// sentence naming an automation and a tool is exactly the kind of content
-	// TUR-009 stops persisting there. The client renders the policy-denied
-	// outcome instead.
+	// TUR-009 stops persisting there. What is published instead is the
+	// policy-denied outcome; rendering that outcome is the planned Task 9/10
+	// client work.
 	//
 	// The decision is discarded rather than merged: on a replayed beacon
 	// denyToolBefore reports why the tool call is ALREADY terminal

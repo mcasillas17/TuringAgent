@@ -58,20 +58,26 @@ type Options struct {
 }
 
 type Worker struct {
-	options     Options
-	client      RuntimeClient
-	executor    Executor
-	mu          sync.Mutex
-	active      map[string]*activeRun
-	approvals   map[string]string
-	toolCalls   map[string]string
-	decisionMu  sync.Mutex
-	decisions   map[string][]*decisionWaiter
-	generations map[string]uint64
-	writerMu    sync.Mutex
-	writer      *outboundWriter
-	fatalMu     sync.Mutex
-	fatal       chan error
+	options  Options
+	client   RuntimeClient
+	executor Executor
+	mu       sync.Mutex
+	active   map[string]*activeRun
+	// terminalAttempts remembers, for a bounded and recent set of runs, the
+	// assignment attempt that already claimed the run's terminal report.
+	terminalAttempts map[string]terminalAttempt
+	// terminalOrder is the insertion order of terminalAttempts, so the oldest
+	// entry is the one evicted when the bound is reached.
+	terminalOrder []string
+	approvals     map[string]string
+	toolCalls     map[string]string
+	decisionMu    sync.Mutex
+	decisions     map[string][]*decisionWaiter
+	generations   map[string]uint64
+	writerMu      sync.Mutex
+	writer        *outboundWriter
+	fatalMu       sync.Mutex
+	fatal         chan error
 }
 
 type decisionWaiter struct {
@@ -83,6 +89,10 @@ type decisionWaiter struct {
 }
 
 type activeRun struct {
+	// runID is carried on the entry because the terminal-report claim is made
+	// through the entry, and what has to be remembered afterwards is which run
+	// and attempt made it.
+	runID  string
 	cancel context.CancelCauseFunc
 	done   chan struct{}
 	mu     sync.Mutex
@@ -107,9 +117,31 @@ const (
 	defaultHeartbeatInterval    = 30 * time.Second
 	defaultDecisionTombstoneTTL = 100 * time.Millisecond
 	maxConcurrentRuns           = 128
+	// maxRememberedTerminalAttempts bounds the terminal-report memory.
+	//
+	// The window it has to cover is one round trip: the orchestrator proves
+	// ownership and sends a same-attempt refresh while this worker is reporting
+	// how the run ended. Only runs that terminalized inside that window can
+	// have a refresh still in flight, and a worker runs at most
+	// MaxConcurrentRuns of them at a time — so a few hundred entries is orders
+	// of magnitude more than the race can produce, while still being a fixed
+	// ceiling rather than a promise that something else will clean up.
+	maxRememberedTerminalAttempts = 256
 )
 
+// terminalAttempt is the assignment whose terminal report a run already
+// committed to sending.
+type terminalAttempt struct {
+	attemptID string
+}
+
 var errOutboundWriterStopped = errors.New("runtime outbound writer stopped")
+
+// errRunNarrationPaused is returned to a caller that needs an answer from the
+// orchestrator on a run whose narration is withheld. It names the condition and
+// nothing about the run, the tool, or the arguments, because it travels back
+// through the tool runner and out to callers that must not learn any of that.
+var errRunNarrationPaused = errors.New("run narration is paused")
 var errShutdownRequested = errors.New("runtime shutdown requested")
 var errRuntimeDisconnected = errors.New("runtime stream disconnected")
 
@@ -328,7 +360,8 @@ func New(options Options, client RuntimeClient, executor Executor) *Worker {
 	options.ExternalAgentCredentialRefs = cloneCredentialRefs(options.ExternalAgentCredentialRefs)
 	return &Worker{
 		options: options, client: client, executor: executor, active: map[string]*activeRun{},
-		approvals: map[string]string{}, toolCalls: map[string]string{}, decisions: map[string][]*decisionWaiter{},
+		terminalAttempts: map[string]terminalAttempt{},
+		approvals:        map[string]string{}, toolCalls: map[string]string{}, decisions: map[string][]*decisionWaiter{},
 		generations: map[string]uint64{},
 	}
 }
@@ -618,6 +651,7 @@ func (w *Worker) handleCommand(ctx context.Context, stream RuntimeStream, cmd *t
 func (w *Worker) startRun(parent context.Context, stream RuntimeStream, job *turingv1.AgentJob) {
 	runCtx, cancel := context.WithCancelCause(parent)
 	entry := &activeRun{
+		runID:     job.GetRunId(),
 		cancel:    cancel,
 		done:      make(chan struct{}),
 		attemptID: job.GetAssignmentAttemptId(),
@@ -637,6 +671,17 @@ func (w *Worker) startRun(parent context.Context, stream RuntimeStream, job *tur
 		w.mu.Unlock()
 		cancel(context.Canceled)
 		existing.refreshAssignment(job.GetAssignmentAttemptId(), job.GetExpectedStateVersion())
+		return
+	}
+	if w.terminalAttemptReportedLocked(job.GetRunId(), job.GetAssignmentAttemptId()) {
+		// The same refresh, arriving after this attempt's executor already
+		// exited. There is no entry left to apply it to, and starting one would
+		// run the whole job a second time, commit its side effects again, and
+		// produce a second terminal report the orchestrator has to refuse.
+		// Checked after the active-entry branch above so a live run's refresh
+		// keeps taking exactly the path it always did.
+		w.mu.Unlock()
+		cancel(context.Canceled)
 		return
 	}
 	if len(w.active) >= w.options.MaxConcurrentRuns {
@@ -662,6 +707,9 @@ func (w *Worker) startRun(parent context.Context, stream RuntimeStream, job *tur
 		return
 	}
 	w.active[job.GetRunId()] = entry
+	// A run that is starting again under a new attempt has nothing to remember:
+	// the entry could only ever suppress an attempt nobody will mention again.
+	w.forgetTerminalAttemptLocked(job.GetRunId())
 	w.mu.Unlock()
 	go func() {
 		defer close(entry.done)
@@ -681,6 +729,15 @@ func (w *Worker) startRun(parent context.Context, stream RuntimeStream, job *tur
 		if entry.isStopping() {
 			return
 		}
+		// Remembered BEFORE the run leaves the active map, and before any
+		// terminal report is claimed or sent. Between the delete and the send
+		// the run is in neither place, and a same-attempt refresh landing in
+		// that window — the recv loop runs concurrently with this goroutine —
+		// would look like a brand new assignment. This is also why it is
+		// unconditional: an executor that exited without reporting anything is
+		// just as finished as one that reported, and starting its attempt again
+		// would re-run the whole job either way.
+		w.rememberTerminalAttempt(entry)
 		w.deleteActive(job.GetRunId())
 		if terminal != nil {
 			w.sendTerminalOnce(entry, runCtx, stream, terminal)
@@ -745,6 +802,9 @@ func (w *Worker) cancelRunWithCause(ctx context.Context, stream RuntimeStream, r
 	if !started {
 		return nil
 	}
+	if ownsTerminalReport {
+		w.rememberTerminalAttempt(entry)
+	}
 	entry.cancel(cause)
 	go func() {
 		<-entry.done
@@ -756,6 +816,72 @@ func (w *Worker) cancelRunWithCause(ctx context.Context, stream RuntimeStream, r
 		}
 	}()
 	return nil
+}
+
+// rememberTerminalAttempt records that this assignment has claimed the run's
+// terminal report, so a redelivered or refreshed assignment for the SAME
+// attempt is recognized as what it is rather than started again.
+//
+// The memory is bounded by count and evicted oldest-first. Nothing here expires
+// on a timer: a timer would be another goroutine to leak, and an entry that
+// outlives its race is harmless — the only assignment it can suppress is one
+// naming an attempt that has already reported.
+func (w *Worker) rememberTerminalAttempt(entry *activeRun) {
+	if entry == nil {
+		return
+	}
+	// Read before the worker lock is taken, never under it: entry.mu is only
+	// ever acquired outside w.mu, and keeping it that way is what stops the two
+	// from ever being ordered both ways.
+	runID, attemptID := entry.identity()
+	if runID == "" || attemptID == "" {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if _, exists := w.terminalAttempts[runID]; !exists {
+		w.terminalOrder = append(w.terminalOrder, runID)
+	}
+	w.terminalAttempts[runID] = terminalAttempt{attemptID: attemptID}
+	w.evictTerminalAttemptsLocked()
+}
+
+func (w *Worker) evictTerminalAttemptsLocked() {
+	for len(w.terminalAttempts) > maxRememberedTerminalAttempts && len(w.terminalOrder) > 0 {
+		oldest := w.terminalOrder[0]
+		w.terminalOrder = w.terminalOrder[1:]
+		delete(w.terminalAttempts, oldest)
+	}
+}
+
+// forgetTerminalAttemptLocked drops the memory for a run a new attempt is about
+// to execute, so a run re-dispatched many times does not hold an entry naming an
+// attempt nobody will ever mention again.
+func (w *Worker) forgetTerminalAttemptLocked(runID string) {
+	if _, exists := w.terminalAttempts[runID]; !exists {
+		return
+	}
+	delete(w.terminalAttempts, runID)
+	for index, remembered := range w.terminalOrder {
+		if remembered == runID {
+			w.terminalOrder = append(w.terminalOrder[:index], w.terminalOrder[index+1:]...)
+			return
+		}
+	}
+}
+
+// terminalAttemptReportedLocked reports whether this exact assignment attempt
+// has already claimed the run's terminal report.
+//
+// Both identities must be present and equal. An orchestrator that sends no
+// attempt ID cannot be told a redelivery from a re-dispatch, and refusing there
+// would strand a run that legitimately needs to run again.
+func (w *Worker) terminalAttemptReportedLocked(runID string, attemptID string) bool {
+	if runID == "" || attemptID == "" {
+		return false
+	}
+	remembered, exists := w.terminalAttempts[runID]
+	return exists && remembered.attemptID == attemptID
 }
 
 func (w *Worker) activeRun(runID string) *activeRun {
@@ -896,11 +1022,27 @@ func (w *Worker) sendTerminalOnce(entry *activeRun, ctx context.Context, stream 
 // run's outcome travels on the terminal report, which is still sent and is
 // fenced by the version this assignment last accepted.
 func (w *Worker) sendRunUpdate(ctx context.Context, entry *activeRun, stream RuntimeStream, update *turingv1.RuntimeUpdate) error {
+	err := w.sendRunUpdateReportingPause(ctx, entry, stream, update)
+	if errors.Is(err, errRunNarrationPaused) {
+		// Narration is advisory, so a withheld one is not the executor's
+		// problem and is reported as the no-op it is.
+		return nil
+	}
+	return err
+}
+
+// sendRunUpdateReportingPause is the same send, for callers that cannot treat a
+// withheld update as done.
+//
+// Narration is one-way and may be dropped; a tool beacon is a question, and
+// dropping it silently leaves the asker waiting for an answer that was never
+// requested. Those callers need the pause reported rather than absorbed.
+func (w *Worker) sendRunUpdateReportingPause(ctx context.Context, entry *activeRun, stream RuntimeStream, update *turingv1.RuntimeUpdate) error {
 	if entry == nil {
 		return w.send(ctx, stream, update)
 	}
 	if entry.outboundPaused() {
-		return nil
+		return errRunNarrationPaused
 	}
 	if err := w.send(ctx, stream, update); err != nil {
 		entry.pauseOutbound()
@@ -977,11 +1119,15 @@ func (w *Worker) postToolBeacon(ctx context.Context, stream RuntimeStream, beaco
 	w.mu.Lock()
 	w.toolCalls[beacon.ToolCallId] = beacon.RunId
 	w.mu.Unlock()
-	if err := w.sendRunUpdate(ctx, w.activeRun(beacon.GetRunId()), stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: beacon}}); err != nil {
+	if err := w.sendRunUpdateReportingPause(ctx, w.activeRun(beacon.GetRunId()), stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: beacon}}); err != nil {
 		if outboundSendStarted(err) {
 			sent = true
 			return nil, sentBeaconError{err: err}
 		}
+		// A paused run leaves here too, and deliberately as a plain error: the
+		// beacon was never posted, so the runner must not report an after-beacon
+		// for it, and the executor fails out through the reporting path that
+		// already exists rather than blocking on a decision nobody will send.
 		return nil, err
 	}
 	sent = true
@@ -1150,6 +1296,15 @@ func (r *activeRun) claimTerminalReport() bool {
 	}
 	r.terminalReportClaimed = true
 	return true
+}
+
+// identity is the run and assignment this entry belongs to. Both are written
+// once, at construction, and this reads them under the entry's own lock so no
+// caller has to know that.
+func (r *activeRun) identity() (string, string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.runID, r.attemptID
 }
 
 // expectedVersion is the highest state version this assignment has been told

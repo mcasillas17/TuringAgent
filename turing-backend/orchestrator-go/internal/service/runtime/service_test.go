@@ -3970,6 +3970,7 @@ func expectStreamRejection(t *testing.T, stream turingv1.RuntimeService_ConnectW
 }
 
 func waitForRunStatus(t *testing.T, h *harness, runID string, want string) {
+	t.Helper()
 	deadline := time.After(2 * time.Second)
 	for {
 		state := h.runState(t, runID)

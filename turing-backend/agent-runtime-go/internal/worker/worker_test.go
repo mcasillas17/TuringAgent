@@ -1629,8 +1629,13 @@ func TestWorkerPausesOutboundRunUpdatesUntilSameAttemptRefresh(t *testing.T) {
 	stall := make(chan struct{})
 	stalled := make(chan struct{})
 	var stallOnce sync.Once
+	stalledOne := false
 	stream.sendFn = func(update *turingv1.RuntimeUpdate) error {
-		if update.GetEvent().GetType() == turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
+		// Only the FIRST run-step stalls. Everything after it is forwarded, so
+		// what does and does not reach the wire later is observable rather than
+		// swallowed by the fixture.
+		if !stalledOne && update.GetEvent().GetType() == turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
+			stalledOne = true
 			stallOnce.Do(func() { close(stalled) })
 			<-stall
 			return nil
@@ -1664,23 +1669,37 @@ func TestWorkerPausesOutboundRunUpdatesUntilSameAttemptRefresh(t *testing.T) {
 	}
 	close(stall)
 
+	// Withheld while paused, and given a type nothing else in this test uses so
+	// the wire can be read for its absence rather than timed for it.
+	withheld := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
+		RunId: runID, Type: turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED,
+	}}}
+	if err := emit(withheld); err != nil {
+		t.Fatalf("withheld update reported an error to the executor: %v", err)
+	}
+
+	assignJob(t, stream, runID, attemptID, 5)
+	// A second assignment the worker has no capacity for. Its rejection is sent
+	// synchronously from the same receive loop that just applied the refresh, so
+	// reading it off the wire proves the refresh landed — no polling, and no
+	// waiting out a duration to conclude nothing happened.
+	assignJob(t, stream, "run_capacity_probe", "attempt-probe", 1)
+	busy := nextSent(t, stream)
+	if failed := busy.GetRunFailed(); failed == nil || failed.GetCode() != "worker_busy" {
+		t.Fatalf("first update after the refresh = %+v, want the busy rejection; a withheld update reached the wire", busy)
+	}
+	if entry := worker.activeRun(runID); entry == nil || entry.expectedVersion() != 5 {
+		t.Fatalf("worker version after the refresh = %+v, want 5", entry)
+	}
+
 	delta := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
 		RunId: runID, Type: turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA,
 	}}}
 	if err := emit(delta); err != nil {
-		t.Fatalf("withheld update reported an error to the executor: %v", err)
-	}
-	select {
-	case update := <-stream.sent:
-		t.Fatalf("paused run still narrated itself: %+v", update)
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	assignJob(t, stream, runID, attemptID, 5)
-	waitForWorkerVersion(t, worker, runID, 5)
-	if err := emit(delta); err != nil {
 		t.Fatalf("resumed update failed: %v", err)
 	}
+	// The writer sends in order, so the withheld update would have arrived
+	// before this one had it been queued rather than dropped.
 	if update := nextSent(t, stream); update.GetEvent().GetType() != turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA {
 		t.Fatalf("resumed update = %+v, want the message delta", update)
 	}
