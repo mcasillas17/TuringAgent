@@ -239,6 +239,7 @@ The public lifecycle transitions are:
 | running | waiting approval | approval becomes required |
 | waiting approval | running | matching Ready from the owned runtime attempt commits the versioned transition |
 | running or waiting approval | recovering | worker ownership becomes uncertain or fenced |
+| running | queued | one short transaction proves the current assignment was released without uncertain execution and requeues it |
 | recovering | running | the same still-owned attempt proves ownership and resumes |
 | recovering | queued | lease recovery requeues the job |
 | queued, running, waiting approval, or recovering | failed | canonical failure or exhausted recovery |
@@ -271,7 +272,16 @@ worker, assignment attempt, target, outcome, correlation, or version is fenced.
 Advisory attempt counts and notices are projections and cannot turn an
 otherwise equal canonical transition into a second state change.
 
-Entering recovery is therefore durable and observable:
+The direct running-to-queued edge is narrow, not a general retry shortcut. It is
+valid only when the same transaction both fences the current assignment identity
+and proves there is no uncertain executor: either the assignment command is known
+not to have been delivered, or the authenticated current attempt has explicitly
+returned a same-run-transient failure and thereby released ownership. The job row,
+run row, version increment, and one queued projection commit atomically. A stale
+attempt, an unresolved send, a lost stream, a lease expiry, or any path on which
+execution may still continue cannot use this edge.
+
+Entering recovery is durable and observable whenever ownership is uncertain:
 
 1. Worker send/receive loss changes the run from running or waiting approval to
    recovering, increments the version, records the update time, and appends the
@@ -283,8 +293,12 @@ Entering recovery is therefore durable and observable:
 4. TUR-010 still owns how long a queued run may wait without a worker.
 
 Internal send states such as pending-send, sending, delivered, uncertain, and
-fenced remain execution details. They affect the public lifecycle only at the
-transitions above.
+fenced remain execution details. A proven pending-send or failed send permits the
+confirmed-release edge; delivered, uncertain, fenced, or expired ownership must
+use recovering. They affect the public lifecycle only at the transitions above.
+`RequeueClaimedJob` therefore branches on the execution state read inside its
+transaction: only `pending_send` uses direct confirmed release; a delivered or
+other allowed post-send state uses the uncertain recovery path.
 
 Approval persistence, token consumption, or queuing `RuntimeApprovalUpdated`
 does not move the run back to running. Failure to deliver that original decision
@@ -335,25 +349,45 @@ used by migration preflight and joined history reads. The unique indexes,
 existing foreign key, writer boundary, and value-free read failure together
 enforce the invariant without relying on client deduplication.
 
-Null or mismatched legacy correlation is not rewritten speculatively.
-`ListMessages` joins by the message's scalar run ID to the run primary key and
-requires the mirrored assistant message ID, role, and session to match before
-returning `RunState`. That join is zero-or-one and cannot fan out a message row.
+Null or mismatched legacy correlation is not rewritten speculatively. Migration
+first derives the canonical lifecycle. Every nonterminal lifecycle — queued,
+running, waiting approval, or recovering — requires a complete successful
+shared-correlation validation. A null, one-sided, role-mismatched, or
+session-mismatched nonterminal link aborts the whole migration with the existing
+value-free `run/message correlation conflict` sentinel. The migration record,
+rebuilt schema, backfill table, scrub, and event rewrites all roll back.
 
-A duplicate in either correlation direction is different from a nullable or
-single mismatched legacy row: it makes ownership ambiguous and intentionally
-aborts startup. Migration surfaces only the sentinel remediation class
-`run/message correlation conflict`; errors and logs contain no row IDs, message
-content, or database paths. The operator must restore a consistent database
-from a backup before retrying. Null or single mismatches retain the neutral
-legacy fallback below.
+Terminal failed, completed, or cancelled legacy rows do not need to make future
+progress. Their null or single unusable links therefore retain the neutral
+fallback and are never rewritten or used to adopt content. `ListMessages` joins
+by the message's scalar run ID to the run primary key and requires the mirrored
+assistant message ID, role, and session to match before returning `RunState`.
+That join is zero-or-one and cannot fan out a message row.
 
-If correlation is absent or inconsistent, the service omits `RunState`.
-Flutter renders a neutral "No assistant response was recorded" card for a
-non-displayable assistant message without usable state. It does not fabricate a
-failed or completed lifecycle. `RUN_LIFECYCLE_UNKNOWN` and
+A duplicate in either correlation direction is always ambiguous and
+intentionally aborts startup. A null or single mismatch is also fatal when the
+derived lifecycle is nonterminal, because otherwise startup would accept a run
+that claim or canonical transition code cannot safely progress. Migration
+surfaces only the sentinel remediation class `run/message correlation conflict`;
+errors and logs contain no row IDs, message content, or database paths. The
+operator must restore a consistent database from a backup before retrying.
+Only terminal null or single mismatches retain the neutral legacy fallback
+below.
+
+If a retained terminal correlation is absent or inconsistent, the service omits
+`RunState`. Flutter renders a neutral "No assistant response was recorded" card
+for a non-displayable assistant message without usable state. It does not
+fabricate a failed or completed lifecycle. A successful TUR-009 migration never
+retains that shape for a nonterminal run. `RUN_LIFECYCLE_UNKNOWN` and
 `RUN_OUTCOME_REASON_LEGACY_UNKNOWN` are reserved for an explicit future
 canonical unknown state; this migration does not synthesize one.
+
+Claim ordering uses the initiating user-message sequence, not an assistant link
+that legacy corruption may make unusable. Thus an earlier active run still
+blocks later work in its session while startup remediation is pending. The
+canonical transition core validates a complete assistant correlation even when
+both stored directions are empty; new writers cannot turn a nonterminal run
+into the neutral terminal-only fallback.
 
 The existing message page boundary and limit are applied to message rows with a
 zero-or-one primary-key join, so an embedded state cannot change page
@@ -488,10 +522,11 @@ from the generated enum in both Go and Dart.
 | unknown or unspecified origin | unknown | internal failure |
 
 `worker_busy` and `worker_unavailable` are nonterminal dispatch/recovery
-conditions. They keep `outcome_reason=none` while the lifecycle moves through
-recovering or queued. If the attempt budget is exhausted, the terminal outcome
-is retries exhausted or recovery interrupted according to the existing
-terminal path.
+conditions. They keep `outcome_reason=none`. An authenticated current-attempt
+rejection uses the atomic confirmed-release edge to queued; a lost or uncertain
+attempt enters recovering before it can be requeued. If the attempt budget is
+exhausted, the terminal outcome is retries exhausted or recovery interrupted
+according to the existing terminal path.
 
 The current ChatService uses the same stream-cancellation signal for an
 intentional stop and an unkeyed transport loss, and Flutter exposes no explicit
@@ -572,7 +607,9 @@ the runner performs:
 
 The `before` hook performs the value-free correlation preflight, creates a
 temporary backfill table inside the transaction, and scans existing runs by
-stable `rowid` keyset. A batch is capped at both 128 rows and 16 MiB of selected
+stable `rowid` keyset. For each row it derives lifecycle first, then requires
+successful complete correlation for a nonterminal lifecycle before adopting
+content or writing backfill state. A batch is capped at both 128 rows and 16 MiB of selected
 variable-width data; fixed Go per-row overhead is therefore also bounded by the
 row cap. A length-only cursor first accounts for the byte length of every TEXT
 or BLOB column the hook will select. A single row over 16 MiB fails with only
@@ -604,8 +641,8 @@ filesystem, model, tool, or network calls.
 
 Within that mechanism, the migration:
 
-1. Validates the correlation uniqueness preconditions without returning row
-   values.
+1. Validates correlation uniqueness and every nonterminal row's complete
+   bidirectional link without returning row values.
 2. Rebuilds or extends `agent_runs` for recovering status and canonical state
    fields.
 3. Backfills version `1`, state-updated time, lifecycle, displayable-content
@@ -753,6 +790,9 @@ Strict test-driven development covers:
 - migration canonical timestamp parsing/formatting, outcome backfill, version
   bounds, value-free duplicate-correlation failure, indexes, raw-field
   scrubbing, safe event rewriting, and approval-rationale preservation;
+- table-driven migration rejection for queued, running, waiting-approval, and
+  recovering rows with null, one-sided, role-mismatched, or session-mismatched
+  links, proving complete rollback and no migration record;
 - exact/over-limit 16 MiB migration byte-budget behavior with value-free failure;
 - injected migration rollback before SQL, after rebuild, after scrub, after event
   rewrite, after index creation, before the migration record, and after its
@@ -760,6 +800,12 @@ Strict test-driven development covers:
 - repository lifecycle/version transactions, monotonic update time under a
   regressing clock, timestamp/version overflow rollback, and
   one-event-per-transition;
+- confirmed current-attempt and proven-unsent requeues committing exactly one
+  running-to-queued version/event, while stream loss, lease expiry, stale
+  attempts, and unresolved sends cannot bypass recovering;
+- canonical transitions rejecting absent as well as mismatched nonterminal
+  correlation, and same-session claim ordering preventing a corrupt earlier
+  active run from being leapfrogged;
 - one-query message/run projection without pagination fan-out;
 - public gRPC restart round trips for every lifecycle and terminal reason;
 - completed-with-content and completed-with-whitespace-only content;
@@ -786,13 +832,15 @@ Strict test-driven development covers:
 - send-message idempotency stability;
 - Flutter adjacent ordering and blank-bubble suppression;
 - run ID plus version stale/equal/newer reconciliation;
+- Dart transition-graph acceptance of running-to-queued for committed
+  confirmed-release projections, while terminal states remain immutable;
 - history/live parity and overlapping page boundaries;
 - 10,000 unloaded historical/live run events retaining at most the 64-entry
   initial buffer, deterministically evicting to one coalesced resync, and never
   creating detached cards;
 - TUR-002 denial rationale surviving migration in approval/audit storage while
   remaining absent from `RunState` and public failure events;
-- neutral legacy fallback;
+- terminal-only neutral legacy correlation fallback;
 - exhaustive enum-to-client-copy switches.
 
 Concurrency tests use channels, barriers, completers, and synchronous stream

@@ -388,7 +388,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 				continue
 			}
 			if beacon := update.GetToolBeacon(); beacon != nil {
-				release, beginErr := connectedWorker.beginUpdate(update)
+				_, release, beginErr := connectedWorker.beginUpdate(update)
 				if beginErr != nil {
 					if err := s.sendBeaconDecision(ctx, connectedWorker, beacon, protocolErrorDecision(beacon)); err != nil {
 						recvErr <- err
@@ -408,7 +408,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 				continue
 			}
 			if resumeReady := update.GetApprovalResumeReady(); resumeReady != nil {
-				release, beginErr := connectedWorker.beginUpdate(update)
+				_, release, beginErr := connectedWorker.beginUpdate(update)
 				if beginErr != nil {
 					recvErr <- approvalResumeGateError(beginErr)
 					return
@@ -429,7 +429,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 				}
 				continue
 			}
-			release, err := connectedWorker.beginUpdate(update)
+			owned, release, err := connectedWorker.beginUpdate(update)
 			if err != nil {
 				ignored, duplicateErr := s.isLateMatchingTerminalUpdate(ctx, update)
 				if duplicateErr != nil {
@@ -453,7 +453,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 						return nil
 					}
 				}
-				suppressDispatch, err := s.applyUpdateForWorker(ctx, update)
+				suppressDispatch, err := s.applyUpdateForWorker(ctx, update, ready.WorkerId, owned)
 				if err != nil {
 					handled, reconcileErr := s.reconcileLateAssignedUpdate(ctx, connectedWorker, ready.WorkerId, update)
 					if reconcileErr != nil {
@@ -1668,7 +1668,24 @@ func (w *worker) enqueue(ctx context.Context, queued workerCommand) error {
 	}
 }
 
-func (w *worker) beginUpdate(update *turingv1.RuntimeUpdate) (func(), error) {
+// beginUpdate gates one update on the worker still being connected and still
+// owning the run the update is about, and returns the assignment it checked.
+//
+// updateMu serializes updates on this stream, so two updates from the same
+// worker do not interleave. The assignment itself is read under w.mu, and that
+// snapshot is advisory: beginUpdate releases w.mu before returning, and a
+// concurrent dispatch installs assignments under w.mu without taking updateMu,
+// so the assignment can be replaced after the gate has read it even while this
+// update is still serialized. The returned value may therefore already be
+// superseded by the time a downstream write runs.
+//
+// Returning the snapshot rather than leaving callers to look it up again is
+// what lets a downstream write name the attempt this update claims to belong
+// to. Correctness does not rest on that name being current: the repository
+// re-reads the run inside its transaction and fences on worker, assignment
+// attempt, and expected state version, so a superseded snapshot is rejected
+// there rather than applied.
+func (w *worker) beginUpdate(update *turingv1.RuntimeUpdate) (assignment, func(), error) {
 	runID := updateRunID(update)
 	w.updateMu.Lock()
 	if runID == "" {
@@ -1677,26 +1694,26 @@ func (w *worker) beginUpdate(update *turingv1.RuntimeUpdate) (func(), error) {
 		w.mu.Unlock()
 		if closed {
 			w.updateMu.Unlock()
-			return nil, status.Error(codes.Canceled, "worker is disconnected")
+			return assignment{}, nil, status.Error(codes.Canceled, "worker is disconnected")
 		}
-		return w.updateMu.Unlock, nil
+		return assignment{}, w.updateMu.Unlock, nil
 	}
 	w.mu.Lock()
-	_, assigned := w.assignments[runID]
+	owned, assigned := w.assignments[runID]
 	closed := w.closed
 	w.mu.Unlock()
 	if closed {
 		w.updateMu.Unlock()
-		return nil, status.Error(codes.Canceled, "worker is disconnected")
+		return assignment{}, nil, status.Error(codes.Canceled, "worker is disconnected")
 	}
 	if !assigned {
 		if beacon := update.GetToolBeacon(); beacon != nil && beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
-			return w.updateMu.Unlock, nil
+			return assignment{}, w.updateMu.Unlock, nil
 		}
 		w.updateMu.Unlock()
-		return nil, status.Error(codes.PermissionDenied, "run is not assigned to worker")
+		return assignment{}, nil, status.Error(codes.PermissionDenied, "run is not assigned to worker")
 	}
-	return w.updateMu.Unlock, nil
+	return owned, w.updateMu.Unlock, nil
 }
 
 func (w *worker) hasAssignment(runID string) bool {
@@ -1879,7 +1896,9 @@ func (s *Server) applyUpdate(ctx context.Context, update *turingv1.RuntimeUpdate
 	case *turingv1.RuntimeUpdate_RunCompleted:
 		return s.handleRunCompleted(ctx, value.RunCompleted)
 	case *turingv1.RuntimeUpdate_RunFailed:
-		_, err := s.handleRunFailed(ctx, value.RunFailed)
+		// applyUpdate has no authenticated stream behind it, so it can name no
+		// owner: a release it cannot attribute is an uncertain one.
+		_, err := s.handleRunFailed(ctx, value.RunFailed, runReleaseOwner{})
 		return err
 	case *turingv1.RuntimeUpdate_RunCancelledAck:
 		return s.handleRunCancelledAck(ctx, value.RunCancelledAck)
@@ -1894,11 +1913,42 @@ func (s *Server) applyUpdate(ctx context.Context, update *turingv1.RuntimeUpdate
 // rejection, so a worker that just said it was full is not immediately handed
 // the whole queue again — see workerBusyFailureCode for why no other retryable
 // failure may skip it.
-func (s *Server) applyUpdateForWorker(ctx context.Context, update *turingv1.RuntimeUpdate) (suppressDispatch bool, err error) {
+//
+// workerID and owned are the identity beginUpdate already established: the
+// authenticated worker on this stream, and the assignment it still holds for
+// this run. They are carried down rather than rediscovered because a retryable
+// failure is the one report that releases a run without ending it, and the
+// repository can only commit that release directly if somebody proves who was
+// holding it.
+func (s *Server) applyUpdateForWorker(
+	ctx context.Context,
+	update *turingv1.RuntimeUpdate,
+	workerID string,
+	owned assignment,
+) (suppressDispatch bool, err error) {
 	if failed := update.GetRunFailed(); failed != nil {
-		return s.handleRunFailed(ctx, failed)
+		return s.handleRunFailed(ctx, failed, releasedBy(workerID, owned))
 	}
 	return false, s.applyUpdate(ctx, update)
+}
+
+// runReleaseOwner is the proven holder of a run at the moment it was released.
+// Both halves are present or neither is: half an identity proves nothing, and
+// the repository refuses it rather than treating it as an anonymous report.
+type runReleaseOwner struct {
+	workerID  string
+	attemptID string
+}
+
+// releasedBy pairs the authenticated worker with the attempt it was gated on.
+// An update that arrived without a live assignment — a late report, or an
+// internal caller with no stream behind it — yields no owner at all, which is
+// the honest input for a release nobody can vouch for.
+func releasedBy(workerID string, owned assignment) runReleaseOwner {
+	if workerID == "" || owned.attemptID == "" {
+		return runReleaseOwner{}
+	}
+	return runReleaseOwner{workerID: workerID, attemptID: owned.attemptID}
 }
 
 func (s *Server) normalizeRuntimeEvent(ctx context.Context, event *turingv1.TuringEvent) (*turingv1.TuringEvent, error) {
@@ -2296,7 +2346,7 @@ func terminalExpectation(reported int64, run repository.Run) int64 {
 	return run.StateVersion
 }
 
-func (s *Server) handleRunFailed(ctx context.Context, failed *turingv1.RuntimeRunFailed) (bool, error) {
+func (s *Server) handleRunFailed(ctx context.Context, failed *turingv1.RuntimeRunFailed, owner runReleaseOwner) (bool, error) {
 	if failed == nil || failed.RunId == "" {
 		return false, status.Error(codes.InvalidArgument, "run_failed is required")
 	}
@@ -2305,8 +2355,19 @@ func (s *Server) handleRunFailed(ctx context.Context, failed *turingv1.RuntimeRu
 		return false, err
 	}
 	failure := normalizeRuntimeFailure(failed)
+	// The same legacy-zero resolution a terminal report gets: a worker built
+	// before the field existed names no version, and the run's own current
+	// version stands in for it under the same guard.
+	expected := terminalExpectation(failed.GetExpectedStateVersion(), run)
 	if failure.RetryClass() == runoutcome.RetryClassSameRunTransient {
-		decision, err := s.repo.RequeueOrFailRetryableRun(ctx, failed.RunId, failure, s.dispatch.MaxAttempts)
+		decision, err := s.repo.RequeueOrFailRetryableRun(ctx, repository.RetryableRunFailureInput{
+			RunID:                failed.RunId,
+			ExpectedStateVersion: expected,
+			WorkerID:             owner.workerID,
+			AssignmentAttemptID:  owner.attemptID,
+			Failure:              failure,
+			MaxAttempts:          s.dispatch.MaxAttempts,
+		})
 		if err != nil {
 			return false, mapRunStateError(err)
 		}
@@ -2317,7 +2378,6 @@ func (s *Server) handleRunFailed(ctx context.Context, failed *turingv1.RuntimeRu
 		// may skip the dispatch that follows. See workerBusyFailureCode.
 		return decision.Requeued && failure.Code() == workerBusyFailureCode, nil
 	}
-	expected := terminalExpectation(failed.GetExpectedStateVersion(), run)
 	// An abandoned outcome is a cancellation, not a failure: it says the client
 	// went away, which is the one thing this transport can honestly report and
 	// is not something the run did wrong. Routing it onto the failed lifecycle
@@ -2374,6 +2434,15 @@ func mapRunStateError(err error) error {
 		errors.Is(err, repository.ErrRunNotCancellable),
 		errors.Is(err, repository.ErrRunNotActive):
 		return status.Error(codes.FailedPrecondition, err.Error())
+	case errors.Is(err, repository.ErrAssignmentFenced):
+		// A report the repository fenced was computed against a premise the run
+		// does not hold — a version it never reached, or an attempt it no longer
+		// owns. That is a precondition failure like the others, and reporting it
+		// as one is what tells a worker its report was refused rather than lost.
+		// The sentinel's own text is sent, not the error's: a wrapped fence can
+		// carry the run, job, or worker it was about, and none of that belongs
+		// on a stream the orchestrator is refusing.
+		return status.Error(codes.FailedPrecondition, repository.ErrAssignmentFenced.Error())
 	default:
 		return err
 	}

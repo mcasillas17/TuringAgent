@@ -499,7 +499,7 @@ func TestReadyGateRefusalKeepsItsOwnKind(t *testing.T) {
 	}}
 
 	unassigned := &worker{assignments: map[string]assignment{}, done: make(chan struct{})}
-	if _, err := unassigned.beginUpdate(ready); err == nil {
+	if _, _, err := unassigned.beginUpdate(ready); err == nil {
 		t.Fatal("the gate admitted a Ready for a run this worker does not hold")
 	} else if got := approvalResumeGateError(err); status.Code(got) != codes.FailedPrecondition {
 		t.Fatalf("unassigned refusal = %v, want FailedPrecondition", got)
@@ -510,7 +510,7 @@ func TestReadyGateRefusalKeepsItsOwnKind(t *testing.T) {
 		done:        make(chan struct{}),
 	}
 	disconnected.close()
-	refused, err := disconnected.beginUpdate(ready)
+	_, refused, err := disconnected.beginUpdate(ready)
 	if refused != nil || err == nil {
 		t.Fatal("the gate admitted a Ready on a disconnected worker")
 	}

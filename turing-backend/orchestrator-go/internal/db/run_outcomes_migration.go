@@ -588,9 +588,23 @@ func readLegacyRunBatch(ctx context.Context, tx *sql.Tx, cursor int64, lastRowID
 // is adopted only from a link that passes the shared correlation rule: a run
 // that names a message which does not name it back has not proven ownership,
 // and inheriting that message's bytes would be a guess.
+//
+// What an unusable link costs depends entirely on whether the row is finished.
+// Terminal history is immutable, so the link buys nothing but the content it
+// declines to adopt, and the neutral fallback is honest. A nonterminal row is a
+// promise of future work, and every canonical transition validates the same
+// link before it writes — so migrating one would mint a run that can never be
+// started, finished, or requeued, and whose session cannot move past it.
+// Refusing is therefore the conservative choice, and it says only which class
+// of problem occurred: the row, its session, and its content stay out of the
+// error entirely.
 func deriveRunOutcome(row legacyRunRow) (runOutcomeBackfill, error) {
+	lifecycle, err := deriveRunLifecycle(row)
+	if err != nil {
+		return runOutcomeBackfill{}, err
+	}
 	content := ""
-	if runcorrelation.Validate(runcorrelation.Link{
+	if linkErr := runcorrelation.Validate(runcorrelation.Link{
 		RunID:                 row.id,
 		RunSessionID:          row.sessionID,
 		RunAssistantMessageID: row.assistantMessageID.String,
@@ -598,14 +612,14 @@ func deriveRunOutcome(row legacyRunRow) (runOutcomeBackfill, error) {
 		MessageSessionID:      row.messageSessionID.String,
 		MessageRunID:          row.messageRunID.String,
 		MessageRole:           row.messageRole.String,
-	}) == nil {
+	}); linkErr != nil {
+		if !isTerminalLegacyLifecycle(lifecycle) {
+			return runOutcomeBackfill{}, linkErr
+		}
+	} else {
 		content = row.messageContent.String
 	}
 	hasContent := runoutcome.HasDisplayableContent(content)
-	lifecycle, err := deriveRunLifecycle(row)
-	if err != nil {
-		return runOutcomeBackfill{}, err
-	}
 	stateUpdatedAt, err := deriveStateUpdatedAt(row)
 	if err != nil {
 		return runOutcomeBackfill{}, err
@@ -618,6 +632,18 @@ func deriveRunOutcome(row legacyRunRow) (runOutcomeBackfill, error) {
 		hasDisplayableContent: hasContent,
 		contentSHA256:         runoutcome.ContentSHA256(content),
 	}, nil
+}
+
+// isTerminalLegacyLifecycle names the canonical lifecycles a run can never
+// leave. Only these may carry the neutral fallback for an unusable assistant
+// link, because only these are done needing one.
+func isTerminalLegacyLifecycle(lifecycle string) bool {
+	switch lifecycle {
+	case "completed", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 // deriveRunLifecycle widens the legacy statuses that were never honest. A row
@@ -1178,8 +1204,10 @@ func requireCanonicalRunState(ctx context.Context, tx *sql.Tx) error {
 	// preflight above. A mutually named pair that disagrees about session or
 	// role still has exactly one claimant on each side, so it has one honest
 	// reading: the link is unusable. deriveRunOutcome already refused to adopt
-	// its content, and the two partial unique indexes still prevent a second
-	// claimant from appearing. Aborting a whole migration over a row the
-	// fallback handles neutrally would contradict the fallback.
+	// its content on a terminal row, and already refused to migrate a
+	// nonterminal one at all, and the two partial unique indexes still prevent
+	// a second claimant from appearing. Aborting a whole migration over a
+	// terminal row the fallback handles neutrally would contradict the
+	// fallback.
 	return nil
 }

@@ -269,7 +269,11 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 			}
 		}
 		if executionState == "pending_send" {
-			_, requeueEvents, err := requeueAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, false)
+			// The command for this attempt never left the orchestrator, and the
+			// job and attempt guarded below are the ones it was built for. That
+			// is proof there is no executor, so the run is released straight
+			// back to the queue instead of publishing a recovery.
+			_, requeueEvents, err := requeueUnsentAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, false)
 			if err != nil {
 				return AssignmentReconciliation{}, err
 			}
@@ -576,20 +580,58 @@ func hasAuthorizedApprovalTx(ctx context.Context, tx *sql.Tx, runID string) (boo
 }
 
 func requeueAssignmentTx(ctx context.Context, tx *sql.Tx, runID, jobID, attemptID string, incrementAttempt bool) (RunState, []Event, error) {
-	if jobID == "" {
-		if err := tx.QueryRowContext(ctx, `SELECT id FROM jobs WHERE run_id = ? AND status = 'in_progress'`, runID).Scan(&jobID); err != nil {
-			return RunState{}, nil, err
-		}
+	jobID, err := inProgressJobIDTx(ctx, tx, runID, jobID)
+	if err != nil {
+		return RunState{}, nil, err
 	}
 	requeued, events, err := requeueRunThroughRecoveryTx(ctx, tx, runID, jobID,
 		runTransitionIdentity{assignmentAttemptID: attemptID}, incrementAttempt)
 	if err != nil {
-		if errors.Is(err, ErrRunTransitionConflict) {
-			return RunState{}, nil, ErrAssignmentFenced
-		}
-		return RunState{}, nil, err
+		return RunState{}, nil, mapRequeueConflict(err)
 	}
 	return requeued, events, nil
+}
+
+// requeueUnsentAssignmentTx is requeueAssignmentTx for an assignment whose
+// command provably never reached a worker. It releases the same job under the
+// same guards and then takes the direct edge, because a command that was never
+// sent leaves nothing behind to be uncertain about.
+func requeueUnsentAssignmentTx(ctx context.Context, tx *sql.Tx, runID, jobID, attemptID string, incrementAttempt bool) (RunState, []Event, error) {
+	jobID, err := inProgressJobIDTx(ctx, tx, runID, jobID)
+	if err != nil {
+		return RunState{}, nil, err
+	}
+	if err := releaseJobToPendingTx(ctx, tx, runID, jobID, attemptID, incrementAttempt); err != nil {
+		return RunState{}, nil, mapRequeueConflict(err)
+	}
+	requeued, events, err := requeueUnsentRunLifecycleTx(ctx, tx, runID,
+		runTransitionIdentity{assignmentAttemptID: attemptID})
+	if err != nil {
+		return RunState{}, nil, mapRequeueConflict(err)
+	}
+	return requeued, events, nil
+}
+
+// inProgressJobIDTx resolves the job a reconciliation is about when the caller
+// did not name one.
+func inProgressJobIDTx(ctx context.Context, tx *sql.Tx, runID, jobID string) (string, error) {
+	if jobID != "" {
+		return jobID, nil
+	}
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM jobs WHERE run_id = ? AND status = 'in_progress'`, runID).Scan(&jobID); err != nil {
+		return "", err
+	}
+	return jobID, nil
+}
+
+// mapRequeueConflict translates a lost lifecycle race into the sentinel
+// assignment callers already branch on.
+func mapRequeueConflict(err error) error {
+	if errors.Is(err, ErrRunTransitionConflict) {
+		return ErrAssignmentFenced
+	}
+	return err
 }
 
 func reconcileWaitingApprovalTx(ctx context.Context, tx *sql.Tx, runID, sessionID, traceID string, preserveExecution bool) (AssignmentReconciliation, error) {

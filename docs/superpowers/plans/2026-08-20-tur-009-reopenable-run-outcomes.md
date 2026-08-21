@@ -984,13 +984,19 @@ Then update:
 - assignment start to queued → running;
 - approval required to running → waiting approval;
 - worker uncertainty/fencing to running or waiting approval → recovering;
+- a current assignment whose command is proven unsent, or whose authenticated
+  current attempt explicitly reports a same-run-transient failure, to running →
+  queued in the same transaction that releases the job;
 - proof by the same still-owned attempt to recovering → running;
 - lease/retry requeue to recovering → queued.
 
-Where retry handling needs both active → recovering and recovering → queued,
-commit both real transitions in one short transaction with two incremented
-versions and two ordered event projections. Do not invent the unsupported
-running → queued transition.
+The running → queued edge is not a general retry shortcut. The repository accepts
+it only through a confirmed-release input carrying the current version and
+assignment identity, or through the exact pre-delivery job/attempt guards. A
+stream loss, unresolved send, stale attempt, lease expiry, or other uncertain
+owner must commit active → recovering and recovering → queued as two real
+transitions in one short transaction with two incremented versions and two
+ordered event projections.
 
 - [ ] **Step 4: Write terminal identity RED tests**
 
@@ -1765,9 +1771,306 @@ git commit -m "feat: expose safe versioned run outcomes" \
 
 ---
 
+### Task 8A: Reconcile Confirmed-Release and Uncertain-Ownership Requeues
+
+This blocker task records the post-Task-8 correction to the transition graph.
+Current main had direct running-to-queued writers for every retry and recovery;
+the first TUR-009 implementation replaced all of them with
+running-to-recovering-to-queued. Neither universal rule is honest. A proven
+release has no uncertain phase, while a lost owner must expose one.
+
+**Files:**
+- Modify: `docs/superpowers/specs/2026-08-20-tur-009-reopenable-run-outcomes-design.md`
+- Modify: `docs/superpowers/plans/2026-08-20-tur-009-reopenable-run-outcomes.md`
+- Modify: `turing-backend/orchestrator-go/internal/repository/run_state.go`
+- Modify: `turing-backend/orchestrator-go/internal/repository/jobs.go`
+- Modify: `turing-backend/orchestrator-go/internal/repository/assignments.go`
+- Modify: `turing-backend/orchestrator-go/internal/repository/retry_requeue_test.go`
+- Modify: `turing-backend/orchestrator-go/internal/repository/recovering_lifecycle_test.go`
+- Modify: `turing-backend/orchestrator-go/internal/repository/repository_test.go`
+- Modify: `turing-backend/orchestrator-go/internal/service/runtime/service.go`
+- Modify: `turing-backend/orchestrator-go/internal/service/runtime/retryable_failure_test.go`
+- Create: `turing-client/turing_app/lib/models/run_lifecycle.dart`
+- Create: `turing-client/turing_app/test/models/run_lifecycle_test.dart`
+
+- [ ] **Step 1: Write repository graph RED tests**
+
+Add:
+
+- `TestConfirmedReleaseRetryRequeuesRunningDirectlyToQueued`
+- `TestConfirmedUnsentAssignmentsRequeueRunningDirectlyToQueued`
+- `TestUncertainOwnershipRequeueStillCommitsRecoveringThenQueued`
+- `TestConfirmedReleaseRejectsStaleVersionWorkerAndAttempt`
+- `TestWaitingApprovalCannotUseConfirmedReleaseRequeue`
+
+The first two tests assert one version increment and one ordered queued
+projection. The uncertain test asserts recovering at `version+1` and queued at
+`version+2`. The fencing tests assert unchanged rows and event counts.
+
+Run:
+
+```bash
+go test -tags sqlite_fts5 \
+  ./turing-backend/orchestrator-go/internal/repository \
+  -run 'TestConfirmedRelease|TestConfirmedUnsent|TestUncertainOwnershipRequeue|TestWaitingApprovalCannotUse' \
+  -count=1
+```
+
+Expected RED: all current retry and pre-delivery writers still route through
+recovering, and there is no guarded confirmed-release transition.
+
+- [ ] **Step 2: Implement separate confirmed-release and uncertain-owner paths**
+
+Add a typed repository input:
+
+```go
+type RetryableRunFailureInput struct {
+	RunID                string
+	ExpectedStateVersion int64
+	WorkerID             string
+	AssignmentAttemptID  string
+	Failure              runoutcome.Failure
+	MaxAttempts          int
+}
+```
+
+Change `RequeueOrFailRetryableRun` to accept that input. Its requeue branch
+updates the exact in-progress job and applies a transaction-local
+running-to-queued transition guarded by version, worker, and attempt. The
+transition clears ownership, preserves `outcome_reason=none`, increments once,
+and appends one queued snapshot.
+
+Route `AbortPendingAssignment`, `AbortUnsentAssignment`, and stale
+`pending_send` reconciliation through the confirmed-release lifecycle helper
+with their existing job/execution/attempt guards. `RequeueClaimedJob` branches
+on the execution state observed inside its transaction: `pending_send` uses
+confirmed release, while delivered or any other allowed post-send state uses
+the uncertain recovery helper. Keep lease loss, stream loss, `uncertain`, and
+already-fenced reconciliation on
+`running|waiting_approval → recovering → queued`. Do not weaken terminal or
+approval guards.
+
+- [ ] **Step 3: Write the runtime-boundary RED test**
+
+Add `TestRuntimeRetryableFailureUsesCurrentAttemptConfirmedRelease`. Drive a
+retryable failure through the authenticated worker stream and assert the
+published/durable lifecycle sequence contains queued at `version+1`, no
+recovering projection, and no raw diagnostic. Replay a stale prior-attempt
+report and assert it is fenced without changing the row or event count.
+
+Run:
+
+```bash
+go test -tags sqlite_fts5 \
+  ./turing-backend/orchestrator-go/internal/service/runtime \
+  -run 'TestRuntimeRetryableFailureUsesCurrentAttemptConfirmedRelease' \
+  -count=1
+```
+
+Expected RED: `applyUpdateForWorker` does not pass the connected worker's
+durable assignment identity into the retry repository input.
+
+- [ ] **Step 4: Carry authenticated assignment identity to the repository**
+
+Change `applyUpdateForWorker` and `handleRunFailed` to receive the connected
+worker ID and assignment snapshot already protected by `worker.beginUpdate`.
+Populate `RetryableRunFailureInput` with that worker ID, attempt ID, the
+worker-reported expected version after legacy-zero resolution, normalized
+failure, and configured attempt cap. Keep terminal failure handling unchanged.
+
+- [ ] **Step 5: Write the Dart graph RED test**
+
+Create `run_lifecycle_test.dart` with a table asserting:
+
+- running-to-queued is accepted because the client receives only the committed
+  confirmed-release projection, not the private trigger;
+- running/waiting-to-recovering and recovering-to-running/queued are accepted;
+- queued-to-running and approval wait/resume are accepted;
+- terminal states reject every outgoing transition;
+- unrelated backward edges remain rejected.
+
+Run:
+
+```bash
+( cd turing-client/turing_app && \
+  flutter test test/models/run_lifecycle_test.dart )
+```
+
+Expected RED: no semantic lifecycle graph exists in Flutter.
+
+- [ ] **Step 6: Add the minimal reusable Dart lifecycle graph**
+
+Create `run_lifecycle.dart` with the semantic lifecycle enum and a total
+`canTransitionTo` helper. The helper accepts only the public pairs in the
+approved design; it does not attempt to infer private backend trigger identity.
+Task 9 reuses this enum from `run_state.dart` rather than declaring a competing
+one.
+
+- [ ] **Step 7: Run the correction boundary**
+
+```bash
+go test -tags sqlite_fts5 \
+  ./turing-backend/orchestrator-go/internal/repository \
+  ./turing-backend/orchestrator-go/internal/service/runtime -count=1
+go test -tags sqlite_fts5 -race \
+  ./turing-backend/orchestrator-go/internal/repository \
+  ./turing-backend/orchestrator-go/internal/service/runtime -count=1
+go build -tags sqlite_fts5 ./...
+( cd turing-client/turing_app && \
+  flutter test test/models/run_lifecycle_test.dart && flutter analyze )
+```
+
+Do not commit yet. Task 8B is a second lifecycle blocker discovered before this
+checkpoint closed; both corrections receive one fresh combined spec/quality
+review and one clean commit after Task 8B.
+
+---
+
+### Task 8B: Fail Startup for Unprogressable Nonterminal Legacy Correlations
+
+The original fallback accepted any single broken legacy correlation. That is
+safe only for immutable terminal history. A nonterminal row accepted that way
+cannot be claimed or transitioned safely, and an invalid assistant link can
+remove it from the same-session ordering subquery so later work leapfrogs it.
+
+**Files:**
+- Modify: `docs/superpowers/specs/2026-08-20-tur-009-reopenable-run-outcomes-design.md`
+- Modify: `docs/superpowers/plans/2026-08-20-tur-009-reopenable-run-outcomes.md`
+- Modify: `turing-backend/orchestrator-go/internal/db/run_outcomes_migration.go`
+- Modify: `turing-backend/orchestrator-go/internal/db/run_outcomes_migration_test.go`
+- Modify: `turing-backend/orchestrator-go/internal/repository/run_state.go`
+- Modify: `turing-backend/orchestrator-go/internal/repository/run_state_test.go`
+- Modify: `turing-backend/orchestrator-go/internal/repository/jobs.go`
+- Modify: `turing-backend/orchestrator-go/internal/repository/repository_test.go`
+
+- [ ] **Step 1: Write exhaustive nonterminal migration RED tests**
+
+Add table-driven
+`TestRunOutcomeMigrationRejectsEveryNonterminalBrokenCorrelationValueFree`.
+Cross every derived nonterminal lifecycle — queued, running, waiting approval,
+and recovering (legacy running/waiting with active uncertain or fenced
+execution) — with:
+
+- null run and message directions;
+- run-to-message only;
+- message-to-run only;
+- non-assistant role;
+- cross-session pairing.
+
+For every row, assert `errors.Is(err, runcorrelation.ErrConflict)`, exact error
+text `run/message correlation conflict`, no `0016_run_outcomes.sql` migration
+record, no canonical columns or indexes, no temporary backfill table, unchanged
+legacy run/message/job rows, and the same value-free failure after close/reopen.
+
+Keep and rename only if useful
+`TestRunOutcomeMigrationAllowsNullAndSingleMismatchedLegacyCorrelation`; its
+failed/completed fixtures remain the terminal neutral-fallback proof.
+
+Run:
+
+```bash
+go test -tags sqlite_fts5 \
+  ./turing-backend/orchestrator-go/internal/db \
+  -run 'TestRunOutcomeMigrationRejectsEveryNonterminalBrokenCorrelationValueFree|TestRunOutcomeMigrationAllowsNullAndSingleMismatchedLegacyCorrelation' \
+  -count=1
+```
+
+Expected RED: `deriveRunOutcome` ignores correlation failure for every lifecycle,
+writes neutral content identity, and completes migration.
+
+- [ ] **Step 2: Validate correlation after deriving lifecycle**
+
+In `deriveRunOutcome`, derive lifecycle first and call the shared
+`runcorrelation.Validate` once. If validation fails and lifecycle is queued,
+running, waiting approval, or recovering, return the shared sentinel
+immediately. If lifecycle is terminal, preserve the current neutral behavior:
+adopt no message bytes, keep the empty-content digest, and do not rewrite either
+side. Do not log or wrap row identifiers, content, sessions, or paths.
+
+- [ ] **Step 3: Write transition and session-order RED tests**
+
+Add:
+
+- `TestCanonicalTransitionRejectsAbsentNonterminalCorrelationValueFree`
+- `TestCorruptActiveRunCannotBeTransitionedOrLeapfrogged`
+
+The transition test removes both assistant-link directions from a queued run and
+asserts completion, failure, cancellation, assignment start, and requeue all
+return `runcorrelation.ErrConflict` without changing the row, job, or event
+count.
+
+The ordering test enqueues two same-session runs, claims the first, removes both
+assistant-link directions from that active run, and then asserts:
+
+- a canonical cancellation of the first run fails with the value-free sentinel
+  and writes nothing;
+- `ClaimNextJob` returns no later job;
+- the second job remains pending and queued;
+- no started event exists for the second run.
+
+Run:
+
+```bash
+go test -tags sqlite_fts5 \
+  ./turing-backend/orchestrator-go/internal/repository \
+  -run 'TestCanonicalTransitionRejectsAbsentNonterminalCorrelationValueFree|TestCorruptActiveRunCannotBeTransitionedOrLeapfrogged' \
+  -count=1
+```
+
+Expected RED: the transition core treats two empty directions as absence rather
+than conflict, and the claim-order subquery's assistant-message joins omit the
+corrupt active blocker.
+
+- [ ] **Step 4: Make transition and ordering boundaries fail closed**
+
+Always call the shared correlation validator in `applyRunTransitionTx`; do not
+skip validation when both assistant-link directions are empty. Terminal legacy
+fallback remains a read-only history rule, not a writer exception.
+
+Change same-session claim ordering to compare the initiating user-message
+sequence for earlier and candidate runs. Those IDs are non-null run-owned
+ordering anchors and do not depend on the assistant correlation being usable.
+Keep job age/routing order and session serialization unchanged.
+
+- [ ] **Step 5: Run the combined blocker gate, review, and commit**
+
+```bash
+go test -tags sqlite_fts5 \
+  ./turing-backend/orchestrator-go/internal/db \
+  ./turing-backend/orchestrator-go/internal/repository \
+  ./turing-backend/orchestrator-go/internal/service/runtime -count=1
+go test -tags sqlite_fts5 -race \
+  ./turing-backend/orchestrator-go/internal/db \
+  ./turing-backend/orchestrator-go/internal/repository \
+  ./turing-backend/orchestrator-go/internal/service/runtime -count=1
+go build -tags sqlite_fts5 ./...
+( cd turing-client/turing_app && \
+  flutter test test/models/run_lifecycle_test.dart && flutter analyze )
+```
+
+Run a fresh combined Opus spec-compliance review first and a separate Opus
+code-quality review second. Resolve and rereview until both explicitly report no
+remaining feedback.
+
+```bash
+git add docs/superpowers/specs/2026-08-20-tur-009-reopenable-run-outcomes-design.md \
+  docs/superpowers/plans/2026-08-20-tur-009-reopenable-run-outcomes.md \
+  turing-backend/orchestrator-go/internal/db \
+  turing-backend/orchestrator-go/internal/repository \
+  turing-backend/orchestrator-go/internal/service/runtime \
+  turing-client/turing_app/lib/models/run_lifecycle.dart \
+  turing-client/turing_app/test/models/run_lifecycle_test.dart
+git commit -m "fix: preserve honest run transitions" \
+  -m "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>" \
+  -m "Copilot-Session: 2d56d516-9e29-4b22-95f1-c851589f6ad3"
+```
+
+---
+
 ### Task 9: Add Flutter Run-State Models, Raw-Wire Safety, and Localization
 
 **Files:**
+- Modify: `turing-client/turing_app/lib/models/run_lifecycle.dart`
 - Create: `turing-client/turing_app/lib/models/run_state.dart`
 - Modify: `turing-client/turing_app/lib/models/message.dart`
 - Modify: `turing-client/turing_app/lib/models/turing_event.dart`
@@ -1804,14 +2107,16 @@ Run:
   flutter test test/models/run_state_test.dart test/models/grpc_mappers_test.dart )
 ```
 
-Expected RED: no domain run state or mapping exists.
+Expected RED: the lifecycle graph exists from Task 8A, but no immutable domain
+run state, outcome mapping, or protobuf mapper exists.
 
 - [ ] **Step 2: Add immutable domain enums and state**
 
-`run_state.dart` defines semantic lifecycle/outcome enums, terminal and valid
-transition helpers, structural equality, and immutable `RunState`. Store version
-as Dart `int` after checked conversion from protobuf `Int64`; reject zero,
-negative, and values outside signed 64-bit range.
+`run_lifecycle.dart` retains the semantic lifecycle enum and transition helper
+from Task 8A. `run_state.dart` defines the outcome enum, terminal helper,
+structural equality, and immutable `RunState`. Store version as Dart `int` after
+checked conversion from protobuf `Int64`; reject zero, negative, and values
+outside signed 64-bit range.
 
 `Message` receives nullable `runState`. `TuringEvent` receives nullable
 `runState`; do not hide it inside the untyped payload map.
@@ -2418,6 +2723,8 @@ verification, live CI, and retained risks to the coordinator.
 | 6 | runtime/agent/LLM/tool/worker plus repository/chat/telemetry tests, obsolete-call zero scan, runtime/worker race tests, root Go build |
 | 7 | repeated Ready/Accepted race matrix, runtime/worker race tests, full repository tests, root Go build |
 | 8 | chat/event/session/approval/runtime tests and root Go build |
+| 8A | repository/runtime Go tests and race tests, root Go build, Dart graph test, Flutter analyze |
+| 8B | migration/repository/runtime tests and race tests, root Go build, Dart graph test, Flutter analyze |
 | 9 | focused Flutter model/wire/content tests and Flutter analyze |
 | 10 | focused timeline/card tests and Flutter analyze |
 | 11 | roadmap compatibility regressions before the documentation-only commit |
@@ -2465,8 +2772,8 @@ before proceeding.
 | Selected Approach | 4, 5, 8 |
 | Canonical Durable Model | 2, 3, 4 |
 | Public Protobuf Contract | 0, 1, 5, 8, 9 |
-| Lifecycle and Version Transitions | 4, 6, 7 |
-| Correlation and Query Invariants | 3, 4, 5, 10 |
+| Lifecycle and Version Transitions | 4, 6, 7, 8A, 9 |
+| Correlation and Query Invariants | 3, 4, 5, 8B, 10 |
 | Typed Failure Normalization | 2, 4, 6, 8 |
 | Existing Run-Terminal Code Mapping | 2, 3, 6 |
 | Subsidiary Failure Code Mapping | 2, 3, 4, 8 |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"testing"
@@ -796,40 +797,28 @@ func TestRepeatedRequeueIsAWriteFreeDuplicateDespiteClearedOwnership(t *testing.
 }
 
 // TestCanonicalEventOmitsAbsentAssistantIdentityFromRunState carries the rule
-// the run-outcomes migration already follows into the live writer. The
+// the run-outcomes migration already follows into the public projection. The
 // migration refuses to publish an assistant message ID it could not prove, and
 // drops the key rather than publishing an empty one, because a client that
 // reads assistantMessageId as present-but-empty would treat "" as an identity
 // and look for a message nobody has.
 //
-// The live repository can reach the same shape: a run whose assistant link is
-// absent — a migrated legacy run, or one whose message did not survive — still
-// terminalizes, because the guarded transition only demands correlation of a
-// run that claims a link at all. Everything else the projection knows is still
-// canonical and must survive.
+// The shape is history, not a live write. No canonical transition can produce
+// it any more: the guarded writer demands a complete, mutually consistent link
+// from every run it touches, because half a link proves ownership no better
+// than a contradictory one. What can still reach a reader is a terminal run
+// whose assistant message did not survive — a migrated legacy row, or one
+// stripped afterwards. That row is immutable, so this is a pure read, and
+// everything else the projection knows must still survive.
 func TestCanonicalEventOmitsAbsentAssistantIdentityFromRunState(t *testing.T) {
 	database := openTestDB(t)
 	repo := New(database)
 	ctx := context.Background()
 	unlinked := enqueueRun(t, repo, "Absent assistant link")
-	// Strip the link the way legacy history arrives: neither side names the
-	// other, so there is nothing to prove rather than something that disagrees.
-	if _, err := database.ExecContext(ctx,
-		`UPDATE agent_runs SET assistant_message_id = NULL WHERE id = ?`, unlinked.RunID); err != nil {
-		t.Fatalf("clear the run's assistant pointer: %v", err)
-	}
-	if _, err := database.ExecContext(ctx,
-		`DELETE FROM messages WHERE id = ?`, unlinked.AssistantMessageID); err != nil {
-		t.Fatalf("delete the assistant message: %v", err)
-	}
 	queued, err := repo.GetRunState(ctx, unlinked.RunID)
 	if err != nil {
 		t.Fatalf("GetRunState: %v", err)
 	}
-	if queued.AssistantMessageID != "" {
-		t.Fatalf("unlinked run still names assistant message %q", queued.AssistantMessageID)
-	}
-
 	cancelled, err := repo.CancelRunCanonical(ctx, CancelRunInput{
 		RunID:                unlinked.RunID,
 		ExpectedStateVersion: queued.StateVersion,
@@ -838,10 +827,31 @@ func TestCanonicalEventOmitsAbsentAssistantIdentityFromRunState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CancelRunCanonical: %v", err)
 	}
-	// The durable payload is asserted alongside the returned one: a client that
-	// reopens the session reads the stored bytes, not the returned struct.
-	terminal := onlyCancelledEvent(t, cancelled.Events)
-	storedPayload := storedEventPayload(t, database, terminal.EventID)
+	// Strip the link the way legacy history arrives: neither side names the
+	// other, so there is nothing to prove rather than something that disagrees.
+	// The run is already terminal, so nothing will write to it again.
+	if _, err := database.ExecContext(ctx,
+		`UPDATE agent_runs SET assistant_message_id = NULL WHERE id = ?`, unlinked.RunID); err != nil {
+		t.Fatalf("clear the run's assistant pointer: %v", err)
+	}
+	if _, err := database.ExecContext(ctx,
+		`DELETE FROM messages WHERE id = ?`, unlinked.AssistantMessageID); err != nil {
+		t.Fatalf("delete the assistant message: %v", err)
+	}
+	historic, err := repo.GetRunState(ctx, unlinked.RunID)
+	if err != nil {
+		t.Fatalf("GetRunState: %v", err)
+	}
+	if historic.AssistantMessageID != "" {
+		t.Fatalf("unlinked run still names assistant message %q", historic.AssistantMessageID)
+	}
+	// Asserted through the marshaled payload rather than the map, because a
+	// client reads the encoded bytes and an omitted key has to survive that
+	// encoding rather than only the projection that built it.
+	payloadJSON, err := marshalRunStatePayload(nil, historic)
+	if err != nil {
+		t.Fatalf("marshalRunStatePayload: %v", err)
+	}
 	wantState := map[string]any{
 		"runId":                 unlinked.RunID,
 		"userMessageId":         unlinked.UserMessageID,
@@ -852,22 +862,14 @@ func TestCanonicalEventOmitsAbsentAssistantIdentityFromRunState(t *testing.T) {
 		"finishedAt":            cancelled.State.FinishedAt.String,
 		"hasDisplayableContent": false,
 	}
-	for name, payloadJSON := range map[string]string{
-		"returned": terminal.PayloadJSON,
-		"durable":  storedPayload,
-	} {
-		t.Run(name, func(t *testing.T) {
-			state := decodeRunStateMap(t, payloadJSON)
-			// Named separately from the comparison below so a regression that
-			// publishes the empty identity reports what it actually did.
-			if published, present := state["assistantMessageId"]; present {
-				t.Fatalf("%s snapshot published assistantMessageId = %#v for a run with no assistant message",
-					name, published)
-			}
-			if !reflect.DeepEqual(state, wantState) {
-				t.Fatalf("%s snapshot = %#v, want %#v", name, state, wantState)
-			}
-		})
+	state := decodeRunStateMap(t, payloadJSON)
+	// Named separately from the comparison below so a regression that publishes
+	// the empty identity reports what it actually did.
+	if published, present := state["assistantMessageId"]; present {
+		t.Fatalf("snapshot published assistantMessageId = %#v for a run with no assistant message", published)
+	}
+	if !reflect.DeepEqual(state, wantState) {
+		t.Fatalf("snapshot = %#v, want %#v", state, wantState)
 	}
 
 	// The omission is absence, not a blanket removal: a run that does own an
@@ -926,4 +928,302 @@ func storedEventPayload(t *testing.T, database *db.DB, eventID string) string {
 		t.Fatalf("read stored event %q: %v", eventID, err)
 	}
 	return payloadJSON
+}
+
+// -----------------------------------------------------------------------------
+// Absent nonterminal correlation
+//
+// A run whose assistant link disagrees with itself is already refused. A run
+// that has NO link at all was treated as a different case: absence, not
+// conflict. That distinction is defensible when reading immutable history — a
+// legacy row simply has nothing to adopt — but it cannot be a writer rule. The
+// shared validator rejects absence for the same reason it rejects a mismatch:
+// half a link proves no ownership, so a transition committed on top of it
+// publishes state against a message that does not claim the run.
+// -----------------------------------------------------------------------------
+
+// breakAssistantLinkBothDirections removes both halves of a run's circular
+// assistant link, leaving the run and its message alive but no longer naming
+// each other. Both updates are checked, so a fixture cannot silently
+// no-op and leave the test asserting against an intact link.
+func breakAssistantLinkBothDirections(t *testing.T, repo *Repository, runID string) {
+	t.Helper()
+	ctx := context.Background()
+	messageSide, err := repo.db.ExecContext(ctx,
+		`UPDATE messages SET run_id = NULL WHERE run_id = ? AND role = 'assistant'`, runID)
+	if err != nil {
+		t.Fatalf("clear message->run direction: %v", err)
+	}
+	if affected, err := messageSide.RowsAffected(); err != nil || affected != 1 {
+		t.Fatalf("cleared %d message->run links (err %v), want exactly 1", affected, err)
+	}
+	runSide, err := repo.db.ExecContext(ctx,
+		`UPDATE agent_runs SET assistant_message_id = NULL WHERE id = ? AND assistant_message_id IS NOT NULL`, runID)
+	if err != nil {
+		t.Fatalf("clear run->message direction: %v", err)
+	}
+	if affected, err := runSide.RowsAffected(); err != nil || affected != 1 {
+		t.Fatalf("cleared %d run->message links (err %v), want exactly 1", affected, err)
+	}
+}
+
+// runWriteSnapshot is everything a refused transition must leave alone: the
+// canonical row, the job that carries the run's dispatch state, and the number
+// of durable events the session can replay.
+type runWriteSnapshot struct {
+	state  RunState
+	jobs   []string
+	events int
+}
+
+func snapshotRunWrites(t *testing.T, repo *Repository, runID string) runWriteSnapshot {
+	t.Helper()
+	ctx := context.Background()
+	state, err := repo.GetRunState(ctx, runID)
+	if err != nil {
+		t.Fatalf("GetRunState: %v", err)
+	}
+	rows, err := repo.db.QueryContext(ctx, `
+		SELECT id, status, attempt, COALESCE(lease_owner, '<null>'), COALESCE(finished_at, '<null>'),
+			COALESCE(error_code, '<null>')
+		FROM jobs WHERE run_id = ? ORDER BY id
+	`, runID)
+	if err != nil {
+		t.Fatalf("read jobs: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	jobs := make([]string, 0, 2)
+	for rows.Next() {
+		var id, status, leaseOwner, finishedAt, errorCode string
+		var attempt int
+		if err := rows.Scan(&id, &status, &attempt, &leaseOwner, &finishedAt, &errorCode); err != nil {
+			t.Fatalf("scan job: %v", err)
+		}
+		jobs = append(jobs, fmt.Sprintf("%s/%s/%s/%s/%s/attempt=%d",
+			id, status, leaseOwner, finishedAt, errorCode, attempt))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read jobs: %v", err)
+	}
+	return runWriteSnapshot{state: state, jobs: jobs, events: countRunEvents(t, repo, runID)}
+}
+
+// absentLinkSurface is one canonical writer, paired with the fixture that puts
+// a run in a lifecycle the writer would otherwise accept. Pairing them is what
+// makes the refusal mean something: without it, a rejection could be an
+// ordinary lifecycle conflict rather than the correlation gate.
+type absentLinkSurface struct {
+	name string
+	// arrange returns the run under test and the command to run against it once
+	// its assistant link has been removed.
+	arrange func(t *testing.T, repo *Repository) (string, func() error)
+}
+
+func absentLinkSurfaces() []absentLinkSurface {
+	ctx := context.Background()
+	return []absentLinkSurface{
+		{
+			name: "assignment start",
+			arrange: func(t *testing.T, repo *Repository) (string, func() error) {
+				t.Helper()
+				enqueued := enqueueRun(t, repo, "Absent link claim")
+				return enqueued.RunID, func() error {
+					_, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-absent")
+					return err
+				}
+			},
+		},
+		{
+			name: "direct start",
+			arrange: func(t *testing.T, repo *Repository) (string, func() error) {
+				t.Helper()
+				enqueued := enqueueRun(t, repo, "Absent link direct start")
+				return enqueued.RunID, func() error { return repo.MarkRunRunning(ctx, enqueued.RunID) }
+			},
+		},
+		{
+			// The terminal commands below name no assistant message on
+			// purpose. Naming one would be refused by the terminal identity
+			// guard instead, which would hide whether the correlation gate ran
+			// at all.
+			name: "complete",
+			arrange: func(t *testing.T, repo *Repository) (string, func() error) {
+				t.Helper()
+				enqueued := runningRunForAbsentLink(t, repo, "worker-absent-complete")
+				return enqueued, func() error {
+					_, err := repo.CompleteRunCanonical(ctx, CompleteRunInput{
+						RunID: enqueued, Content: "done",
+						ExpectedStateVersion: currentVersion(t, repo, enqueued),
+					})
+					return err
+				}
+			},
+		},
+		{
+			name: "fail",
+			arrange: func(t *testing.T, repo *Repository) (string, func() error) {
+				t.Helper()
+				enqueued := runningRunForAbsentLink(t, repo, "worker-absent-fail")
+				return enqueued, func() error {
+					_, err := repo.FailRunCanonical(ctx, FailRunInput{
+						RunID: enqueued, ExpectedStateVersion: currentVersion(t, repo, enqueued),
+						Failure: providerFailureForTest(),
+					})
+					return err
+				}
+			},
+		},
+		{
+			name: "cancel",
+			arrange: func(t *testing.T, repo *Repository) (string, func() error) {
+				t.Helper()
+				enqueued := runningRunForAbsentLink(t, repo, "worker-absent-cancel")
+				return enqueued, func() error {
+					_, err := repo.CancelRunCanonical(ctx, CancelRunInput{
+						RunID: enqueued, ExpectedStateVersion: currentVersion(t, repo, enqueued),
+						Cancellation: abandonedCancellationForTest(),
+					})
+					return err
+				}
+			},
+		},
+		{
+			name: "fence ownership",
+			arrange: func(t *testing.T, repo *Repository) (string, func() error) {
+				t.Helper()
+				enqueued := enqueueRun(t, repo, "Absent link fence")
+				claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-absent-fence")
+				if err != nil {
+					t.Fatalf("ClaimNextJob: %v", err)
+				}
+				return enqueued.RunID, func() error {
+					_, err := repo.FenceRunOwnership(ctx, FenceRunOwnershipInput{
+						RunID: enqueued.RunID, ExpectedStateVersion: currentVersion(t, repo, enqueued.RunID),
+						WorkerID: "worker-absent-fence", AssignmentAttemptID: claimed.AssignmentAttemptID,
+					})
+					return err
+				}
+			},
+		},
+		{
+			name: "resume recovering",
+			arrange: func(t *testing.T, repo *Repository) (string, func() error) {
+				t.Helper()
+				enqueued, claimed, _ := recoveringRun(t, repo, "worker-absent-resume")
+				return enqueued.RunID, func() error {
+					_, err := repo.ResumeRecoveringRun(ctx, ResumeRecoveringRunInput{
+						RunID: enqueued.RunID, ExpectedStateVersion: currentVersion(t, repo, enqueued.RunID),
+						WorkerID: "worker-absent-resume", AssignmentAttemptID: claimed.AssignmentAttemptID,
+					})
+					return err
+				}
+			},
+		},
+		{
+			name: "requeue recovering",
+			arrange: func(t *testing.T, repo *Repository) (string, func() error) {
+				t.Helper()
+				enqueued, claimed, _ := recoveringRun(t, repo, "worker-absent-requeue")
+				return enqueued.RunID, func() error {
+					_, err := repo.RequeueRecoveringRun(ctx, RequeueRecoveringRunInput{
+						RunID: enqueued.RunID, ExpectedStateVersion: currentVersion(t, repo, enqueued.RunID),
+						AssignmentAttemptID: claimed.AssignmentAttemptID,
+					})
+					return err
+				}
+			},
+		},
+		{
+			// The direct running-to-queued edge: the assignment command never
+			// left the orchestrator, so there is no recovery to publish.
+			name: "direct requeue of an unsent assignment",
+			arrange: func(t *testing.T, repo *Repository) (string, func() error) {
+				t.Helper()
+				enqueued := enqueueRun(t, repo, "Absent link unsent requeue")
+				claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-absent-unsent")
+				if err != nil {
+					t.Fatalf("ClaimNextJob: %v", err)
+				}
+				return enqueued.RunID, func() error {
+					return repo.AbortPendingAssignment(ctx, Assignment{
+						JobID: claimed.JobID, RunID: enqueued.RunID,
+						WorkerID: "worker-absent-unsent", AttemptID: claimed.AssignmentAttemptID,
+					})
+				}
+			},
+		},
+		{
+			// The uncertain edge: the command was delivered, so the run has to
+			// pass through recovering before it returns to the queue.
+			name: "uncertain requeue of a delivered assignment",
+			arrange: func(t *testing.T, repo *Repository) (string, func() error) {
+				t.Helper()
+				enqueued := enqueueRun(t, repo, "Absent link uncertain requeue")
+				claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-absent-delivered")
+				if err != nil {
+					t.Fatalf("ClaimNextJob: %v", err)
+				}
+				if err := repo.BeginAssignmentSend(ctx, Assignment{
+					JobID: claimed.JobID, RunID: enqueued.RunID,
+					WorkerID: "worker-absent-delivered", AttemptID: claimed.AssignmentAttemptID,
+				}); err != nil {
+					t.Fatalf("BeginAssignmentSend: %v", err)
+				}
+				if err := repo.MarkAssignmentDelivered(ctx, Assignment{
+					JobID: claimed.JobID, RunID: enqueued.RunID,
+					WorkerID: "worker-absent-delivered", AttemptID: claimed.AssignmentAttemptID,
+				}); err != nil {
+					t.Fatalf("MarkAssignmentDelivered: %v", err)
+				}
+				return enqueued.RunID, func() error {
+					return repo.RequeueClaimedJob(ctx, claimed.JobID, enqueued.RunID)
+				}
+			},
+		},
+	}
+}
+
+// runningRunForAbsentLink claims a fresh run so the terminal writers below have
+// a lifecycle they would otherwise accept.
+func runningRunForAbsentLink(t *testing.T, repo *Repository, worker string) string {
+	t.Helper()
+	enqueued := enqueueRun(t, repo, "Absent link terminal")
+	if _, err := repo.ClaimNextJob(context.Background(), "general_assistant", worker); err != nil {
+		t.Fatalf("ClaimNextJob: %v", err)
+	}
+	return enqueued.RunID
+}
+
+// TestCanonicalTransitionRejectsAbsentNonterminalCorrelationValueFree pins the
+// writer boundary: no canonical transition may commit against a run with no
+// usable assistant link, and the refusal names the class of problem rather than
+// the row.
+func TestCanonicalTransitionRejectsAbsentNonterminalCorrelationValueFree(t *testing.T) {
+	for _, surface := range absentLinkSurfaces() {
+		t.Run(surface.name, func(t *testing.T) {
+			repo := New(openTestDB(t))
+			runID, invoke := surface.arrange(t, repo)
+			breakAssistantLinkBothDirections(t, repo, runID)
+			before := snapshotRunWrites(t, repo, runID)
+
+			err := invoke()
+			if !errors.Is(err, runcorrelation.ErrConflict) {
+				t.Fatalf("%s on a run with no assistant link = %v, want runcorrelation.ErrConflict",
+					surface.name, err)
+			}
+			if got := err.Error(); got != "run/message correlation conflict" {
+				t.Fatalf("%s error = %q, want exactly the value-free correlation sentinel", surface.name, got)
+			}
+			after := snapshotRunWrites(t, repo, runID)
+			if after.state != before.state {
+				t.Fatalf("%s changed the run row: %+v, want %+v", surface.name, after.state, before.state)
+			}
+			if !reflect.DeepEqual(after.jobs, before.jobs) {
+				t.Fatalf("%s changed the job rows: %+v, want %+v", surface.name, after.jobs, before.jobs)
+			}
+			if after.events != before.events {
+				t.Fatalf("%s appended %d events, want none", surface.name, after.events-before.events)
+			}
+		})
+	}
 }

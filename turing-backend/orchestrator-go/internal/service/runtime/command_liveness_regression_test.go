@@ -274,7 +274,7 @@ func TestRecoveryReclaimsAssignmentWithoutTimelyWorkerHeartbeat(t *testing.T) {
 	if registered != nil {
 		t.Fatal("stale-heartbeat recovery retained the worker registration")
 	}
-	if release, err := connected.beginUpdate(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Event{
+	if _, release, err := connected.beginUpdate(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Event{
 		Event: &turingv1.TuringEvent{RunId: enqueued.RunID, Type: turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA},
 	}}); status.Code(err) != codes.Canceled {
 		if release != nil {

@@ -380,9 +380,9 @@ check, lint) before merge.
 #### TUR-009 — Persist reopenable run outcomes
 
 **Outcome:** Reopening a conversation never shows an unexplained empty assistant turn.  
-**Scope:** Expose run status and failure/cancellation reason with message history or a run-history API; render terminal cards after reopen.  
+**Scope:** Persist and expose authoritative versioned run lifecycle plus safe failure/cancellation reason with message history; render terminal cards after reopen; migrate legacy state with value-free correlation failure and an FK-safe parent-table rebuild that preserves populated run-owned children.
 **Likely files:** message/run proto, sessions repository/service, Flutter conversation timeline.  
-**Acceptance:** Completed, failed, and cancelled runs round-trip after restart; no empty placeholder is ambiguous.  
+**Acceptance:** Completed, failed, and cancelled runs round-trip after restart; no empty placeholder is ambiguous; every nonterminal legacy row with null or invalid run/message correlation aborts migration without partial state, terminal invalid history keeps its neutral fallback, and populated run-owned child rows survive the rebuild exactly.
 **Dependencies:** None.
 
 #### TUR-010 — Surface no-worker and queue-timeout state

@@ -3201,7 +3201,7 @@ func TestNotifyApprovalUpdatedSendsTokenToAssignedWorker(t *testing.T) {
 
 func TestWorkerCloseWaitsForInFlightUpdate(t *testing.T) {
 	connectedWorker := &worker{commands: make(chan workerCommand), assignments: map[string]assignment{"run_1": {runID: "run_1", jobID: "job_1"}}}
-	release, err := connectedWorker.beginUpdate(&turingv1.RuntimeUpdate{
+	_, release, err := connectedWorker.beginUpdate(&turingv1.RuntimeUpdate{
 		Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: "run_1"}},
 	})
 	if err != nil {
@@ -4176,7 +4176,7 @@ func TestOrchestratorTypedFailureIngestionNormalizesEveryRuntimeOrigin(t *testin
 				FailureOrigin:        test.origin,
 				AutomaticRetryClass:  test.retry,
 				ExpectedStateVersion: state.StateVersion,
-			}); err != nil {
+			}, runReleaseOwner{}); err != nil {
 				t.Fatalf("handleRunFailed: %v", err)
 			}
 
@@ -4216,7 +4216,7 @@ func TestRuntimeFailureMessageIsNeverPersisted(t *testing.T) {
 		Message:              "SECRET-PROVIDER-DIAGNOSTIC",
 		FailureOrigin:        turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
 		ExpectedStateVersion: state.StateVersion,
-	}); err != nil {
+	}, runReleaseOwner{}); err != nil {
 		t.Fatalf("handleRunFailed: %v", err)
 	}
 
@@ -4314,7 +4314,7 @@ func TestUnknownOriginAndRetryClassFailClosed(t *testing.T) {
 				AutomaticRetryClass:  test.retry,
 				Retryable:            true,
 				ExpectedStateVersion: state.StateVersion,
-			}); err != nil {
+			}, runReleaseOwner{}); err != nil {
 				t.Fatalf("handleRunFailed: %v", err)
 			}
 
@@ -4515,7 +4515,7 @@ func TestDurablePartialContentSurvivesFailureButLiveDeltaIsNotPromised(t *testin
 		Code:                 "model_stream_failed",
 		FailureOrigin:        turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
 		ExpectedStateVersion: state.StateVersion,
-	}); err != nil {
+	}, runReleaseOwner{}); err != nil {
 		t.Fatalf("handleRunFailed: %v", err)
 	}
 

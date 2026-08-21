@@ -118,10 +118,10 @@ func TestPendingSendRecoveryDoesNotConsumeExecutionAttempt(t *testing.T) {
 				t.Fatal(err)
 			}
 			// The requeue is no longer silent, and that is the point: it
-			// publishes the two real transitions it made — the run stopped
-			// being owned, then it went back to the queue — and nothing else.
-			// What it must still NOT publish is a retry notice, because no
-			// attempt was consumed.
+			// publishes what actually happened — the command for this attempt
+			// never left the orchestrator, so the run went straight back to the
+			// queue with no uncertain owner to report. What it must still NOT
+			// publish is a retry notice, because no attempt was consumed.
 			if !reconciliation.Requeued || reconciliation.Cleared {
 				t.Fatalf("pending-send reconciliation = %+v, want a requeue", reconciliation)
 			}
@@ -135,7 +135,7 @@ func TestPendingSendRecoveryDoesNotConsumeExecutionAttempt(t *testing.T) {
 				}
 				lifecycles = append(lifecycles, decodeRunStateSnapshot(t, event).Lifecycle)
 			}
-			if want := []string{lifecycleRecovering, lifecycleQueued}; !reflect.DeepEqual(lifecycles, want) {
+			if want := []string{lifecycleQueued}; !reflect.DeepEqual(lifecycles, want) {
 				t.Fatalf("pending-send requeue projected %v, want %v", lifecycles, want)
 			}
 			var status string

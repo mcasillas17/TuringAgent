@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runcorrelation"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -1498,4 +1501,116 @@ func TestRuntimeFailureTerminalizesPendingApprovalBeforeLateResolution(t *testin
 			}
 		})
 	}
+}
+
+// -----------------------------------------------------------------------------
+// A corrupt active run must block its session rather than be stepped over
+//
+// Same-session claim ordering used to be decided by joining each run to its
+// assistant message and comparing sequences. That join silently drops a run
+// whose assistant link is missing, so a run that is still active on paper stops
+// counting as an earlier blocker and the next turn in the same conversation is
+// dispatched around it. Combined with a correlation gate that refuses to
+// transition that same run, the result is the worst pair available: the stuck
+// run can never be cleared, and the session keeps moving without it.
+// -----------------------------------------------------------------------------
+
+// corruptActiveSameSessionRuns enqueues two runs in one session, claims the
+// first, and then removes both directions of the first run's assistant link.
+// The second run is untouched: its link is intact, so nothing about it explains
+// a claim it should not get.
+func corruptActiveSameSessionRuns(t *testing.T) (*Repository, EnqueueUserMessageResult, EnqueueUserMessageResult) {
+	t.Helper()
+	ctx := context.Background()
+	repo := New(openTestDB(t))
+	session, err := repo.CreateSession(ctx, "Corrupt active run")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	first, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "first", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatalf("enqueue first: %v", err)
+	}
+	second, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "second", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatalf("enqueue second: %v", err)
+	}
+	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-corrupt")
+	if err != nil {
+		t.Fatalf("ClaimNextJob: %v", err)
+	}
+	if claimed.RunID != first.RunID {
+		t.Fatalf("first claim run = %q, want %q", claimed.RunID, first.RunID)
+	}
+	breakAssistantLinkBothDirections(t, repo, first.RunID)
+	return repo, first, second
+}
+
+func TestCorruptActiveRunCannotBeTransitionedOrLeapfrogged(t *testing.T) {
+	t.Run("cancelling the corrupt run is refused without writing", func(t *testing.T) {
+		ctx := context.Background()
+		repo, first, _ := corruptActiveSameSessionRuns(t)
+		before := snapshotRunWrites(t, repo, first.RunID)
+
+		// No assistant message is named, so the terminal identity guard cannot
+		// be what refuses this: only the correlation gate can.
+		_, err := repo.CancelRunCanonical(ctx, CancelRunInput{
+			RunID:                first.RunID,
+			ExpectedStateVersion: before.state.StateVersion,
+			Cancellation:         runoutcome.AbandonedCancellation(),
+		})
+		if !errors.Is(err, runcorrelation.ErrConflict) {
+			t.Fatalf("cancel of a corrupt active run = %v, want runcorrelation.ErrConflict", err)
+		}
+		if got := err.Error(); got != "run/message correlation conflict" {
+			t.Fatalf("cancel error = %q, want exactly the value-free correlation sentinel", got)
+		}
+		after := snapshotRunWrites(t, repo, first.RunID)
+		if after.state != before.state || !reflect.DeepEqual(after.jobs, before.jobs) || after.events != before.events {
+			t.Fatalf("refused cancel wrote something: %+v, want %+v", after, before)
+		}
+	})
+
+	t.Run("later same-session work does not leapfrog it", func(t *testing.T) {
+		ctx := context.Background()
+		repo, _, second := corruptActiveSameSessionRuns(t)
+
+		claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-later")
+		if err != nil {
+			t.Fatalf("ClaimNextJob: %v", err)
+		}
+		if claimed.JobID != "" {
+			t.Fatalf("claimed %+v while an earlier active run in the same session was unprogressable", claimed)
+		}
+		var jobStatus string
+		if err := repo.db.QueryRowContext(ctx,
+			`SELECT status FROM jobs WHERE run_id = ?`, second.RunID).Scan(&jobStatus); err != nil {
+			t.Fatalf("read second job: %v", err)
+		}
+		if jobStatus != "pending" {
+			t.Fatalf("second job status = %q, want pending", jobStatus)
+		}
+		state, err := repo.GetRunState(ctx, second.RunID)
+		if err != nil {
+			t.Fatalf("GetRunState: %v", err)
+		}
+		if state.Lifecycle != lifecycleQueued || state.StateVersion != 1 {
+			t.Fatalf("second run = %s at version %d, want queued at version 1", state.Lifecycle, state.StateVersion)
+		}
+		var started int
+		if err := repo.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'agent.run.started'`,
+			second.RunID).Scan(&started); err != nil {
+			t.Fatalf("count started events: %v", err)
+		}
+		if started != 0 {
+			t.Fatalf("second run has %d started events, want none", started)
+		}
+	})
 }

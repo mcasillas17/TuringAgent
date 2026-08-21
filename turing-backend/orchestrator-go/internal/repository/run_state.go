@@ -458,12 +458,15 @@ func applyRunTransitionTx(
 	if err != nil {
 		return RunTransitionResult{}, err
 	}
-	// A run whose assistant link is broken cannot be transitioned: its state
-	// would be published against a message that does not claim it.
-	if row.assistantMessageID != "" || row.messageID != "" {
-		if err := validateRunCorrelationLink(row.link()); err != nil {
-			return RunTransitionResult{}, err
-		}
+	// A run whose assistant link is not complete and mutually consistent cannot
+	// be transitioned: its state would be published against a message that does
+	// not claim it. Absence is refused on the same terms as a mismatch, because
+	// half a link proves ownership no better than a contradictory one. The
+	// neutral fallback that lets a legacy row survive without a usable link is
+	// a rule about immutable history, read-only by construction; a writer that
+	// borrowed it would commit new state on top of the same missing proof.
+	if err := validateRunCorrelationLink(row.link()); err != nil {
+		return RunTransitionResult{}, err
 	}
 
 	expected := transition.expectedVersion
@@ -876,20 +879,25 @@ type RequeueRecoveringRunInput struct {
 }
 
 // RequeueRecoveringRun sends a recovering run back to the queue for another
-// worker. There is deliberately no running-to-queued shortcut: a run whose
-// worker is gone passes through recovering first, so the interval where nobody
-// owned it is durable rather than erased.
+// worker. A run whose worker is merely gone passes through recovering first, so
+// the interval where nobody owned it is durable rather than erased; only a
+// release this transaction can prove takes the direct edge below.
 func (r *Repository) RequeueRecoveringRun(ctx context.Context, input RequeueRecoveringRunInput) (RunTransitionResult, error) {
 	return r.runInTransition(ctx, requeueRecoveringTransition(input.RunID, input.ExpectedStateVersion, runTransitionIdentity{
 		assignmentAttemptID: input.AssignmentAttemptID,
 	}), nil)
 }
 
-func requeueRecoveringTransition(runID string, expectedVersion int64, identity runTransitionIdentity) runTransition {
+// requeueTransition is the shared body of every transition that puts a run back
+// on the queue. The target, the outcome, and the execution columns it clears
+// are identical no matter which state the run is coming from; only the source
+// lifecycle differs, and that difference is exactly what separates a proven
+// release from a recovery.
+func requeueTransition(runID string, expectedVersion int64, allowedFrom []string, identity runTransitionIdentity) runTransition {
 	return runTransition{
 		runID:           runID,
 		expectedVersion: expectedVersion,
-		allowedFrom:     []string{lifecycleRecovering},
+		allowedFrom:     allowedFrom,
 		to:              lifecycleQueued,
 		reason:          runoutcome.ReasonNone,
 		identity:        identity,
@@ -905,10 +913,47 @@ func requeueRecoveringTransition(runID string, expectedVersion int64, identity r
 	}
 }
 
+func requeueRecoveringTransition(runID string, expectedVersion int64, identity runTransitionIdentity) runTransition {
+	return requeueTransition(runID, expectedVersion, []string{lifecycleRecovering}, identity)
+}
+
 // requeueRecoveringTransitionInTx is the requeue for a writer already inside
 // the transaction it is guarding, on the same terms as the fence above.
 func requeueRecoveringTransitionInTx(runID string, identity runTransitionIdentity) runTransition {
 	transition := requeueRecoveringTransition(runID, unresolvedStateVersion, identity)
+	transition.transactionLocal = true
+	return transition
+}
+
+// releaseRunningTransition is the direct running-to-queued edge, and it is
+// narrow on purpose.
+//
+// Recovering exists to publish the interval where nobody could say whether a
+// run was still executing. A release this transaction can prove has no such
+// interval: the assignment either never reached a worker, or the authenticated
+// attempt that owned it handed it back. Publishing recovering for those would
+// describe an executor that does not exist, and committing two versions would
+// make a client reconcile through a state the run was never in.
+//
+// The proof is the caller's to supply, and the guards it must pass are the
+// caller's whole authority: the exact version the release was computed against,
+// and the worker and attempt the row still records. Anything short of that is
+// uncertainty and belongs on the recovering path.
+func releaseRunningTransition(runID string, expectedVersion int64, identity runTransitionIdentity) runTransition {
+	return requeueTransition(runID, expectedVersion, []string{lifecycleRunning}, identity)
+}
+
+// releaseRunningTransitionInTx is the same direct edge for a writer already
+// inside the transaction it is guarding.
+//
+// Recovering joins the accepted sources here and only here: this constructor
+// serves the pre-delivery writers, whose proof is that the assignment command
+// never left the orchestrator. That fact does not stop being true because an
+// earlier reconciliation already fenced the run, and forcing such a run through
+// recovering a second time would publish a phase it is already in.
+func releaseRunningTransitionInTx(runID string, identity runTransitionIdentity) runTransition {
+	transition := requeueTransition(runID, unresolvedStateVersion,
+		[]string{lifecycleRunning, lifecycleRecovering}, identity)
 	transition.transactionLocal = true
 	return transition
 }

@@ -578,10 +578,12 @@ func TestRunOutcomeMigrationSplitsAtOneHundredTwentyEightRows(t *testing.T) {
 	defer database.Close()
 	seedLegacySession(t, ctx, database, "sess_rows")
 	for index := 0; index < 300; index++ {
+		id := fmt.Sprintf("run_%03d", index)
 		seedLegacyRun(t, ctx, database, legacyRun{
-			id:        fmt.Sprintf("run_%03d", index),
-			sessionID: "sess_rows",
-			status:    "queued",
+			id:                 id,
+			sessionID:          "sess_rows",
+			status:             "queued",
+			assistantMessageID: id + "_assistant",
 		})
 	}
 
@@ -1500,19 +1502,30 @@ func TestRunOutcomeMigrationBackfillsEveryLifecycleAndOutcome(t *testing.T) {
 		wantLifecycle string
 		wantReason    string
 	}{
+		// The nonterminal shapes carry a well-formed assistant link. A
+		// nonterminal run is a promise of future work and every canonical
+		// transition validates that link, so one without it does not migrate at
+		// all; seeding it here would be asserting an outcome for a row the
+		// migration refuses.
 		{
 			name:          "queued",
-			run:           legacyRun{status: "queued"},
+			run:           legacyRun{status: "queued", assistantMessageID: "msg"},
 			wantLifecycle: "queued", wantReason: "none",
 		},
 		{
-			name:          "running with a live worker",
-			run:           legacyRun{status: "running", executionActive: 1, executionState: "delivered"},
+			name: "running with a live worker",
+			run: legacyRun{
+				status: "running", executionActive: 1, executionState: "delivered",
+				assistantMessageID: "msg",
+			},
 			wantLifecycle: "running", wantReason: "none",
 		},
 		{
-			name:          "waiting approval with a live worker",
-			run:           legacyRun{status: "waiting_approval", executionActive: 1, executionState: "delivered"},
+			name: "waiting approval with a live worker",
+			run: legacyRun{
+				status: "waiting_approval", executionActive: 1, executionState: "delivered",
+				assistantMessageID: "msg",
+			},
 			wantLifecycle: "waiting_approval", wantReason: "none",
 		},
 		{
@@ -1688,6 +1701,9 @@ func TestRunOutcomeMigrationBackfillsUncertainOwnershipAsRecovering(t *testing.T
 		{id: "run_running_exited", status: "running", executionActive: 0, executionState: "uncertain"},
 	} {
 		seed.sessionID = "sess_recovering"
+		// Every row here is nonterminal, so each needs the well-formed
+		// assistant link a nonterminal migration requires.
+		seed.assistantMessageID = seed.id + "_assistant"
 		seedLegacyRun(t, ctx, database, seed)
 	}
 
@@ -1862,10 +1878,12 @@ func TestRunOutcomeMigrationCanonicalizesOffsetAndVariableFractionTimestamps(t *
 		{
 			id: "run_started_only", status: "running", executionActive: 1, executionState: "delivered",
 			createdAt: "2026-03-04T00:00:00.5Z", startedAt: "2026-03-04T01:02:03.000000004Z",
+			assistantMessageID: "msg_started_only",
 		},
 		{
 			id: "run_created_only", status: "queued",
-			createdAt: "2026-01-02T03:04:05Z",
+			createdAt:          "2026-01-02T03:04:05Z",
+			assistantMessageID: "msg_created_only",
 		},
 	} {
 		seed.sessionID = "sess_time"
@@ -1909,8 +1927,9 @@ func TestRunOutcomeMigrationSelectsStateUpdatedAtByLifecyclePrecedence(t *testin
 		{
 			id: "run_start_before_create", status: "running",
 			executionActive: 1, executionState: "delivered",
-			createdAt: "2026-05-01T08:00:00.000000000Z",
-			startedAt: "2026-05-01T03:00:00.000000000Z",
+			createdAt:          "2026-05-01T08:00:00.000000000Z",
+			startedAt:          "2026-05-01T03:00:00.000000000Z",
+			assistantMessageID: "msg_start_before_create",
 		},
 		// finished_at outranks both of the later timestamps beneath it.
 		{
@@ -1996,7 +2015,10 @@ func TestRunOutcomeMigrationCreatesBidirectionalPartialUniqueIndexes(t *testing.
 		id: "run_unique", sessionID: "sess_unique", status: "completed",
 		assistantMessageID: "msg_unique", assistantContent: "answer",
 	})
-	seedLegacyRun(t, ctx, database, legacyRun{id: "run_other", sessionID: "sess_unique", status: "queued"})
+	seedLegacyRun(t, ctx, database, legacyRun{
+		id: "run_other", sessionID: "sess_unique", status: "queued",
+		assistantMessageID: "msg_other",
+	})
 
 	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
 		t.Fatal(err)
@@ -3071,5 +3093,347 @@ func TestRunOutcomeMigrationRewritesFailureEventEdgePayloads(t *testing.T) {
 	if got := readEventPayload(t, ctx, database, "sess_event_edges", 4); !reflect.DeepEqual(
 		got, map[string]any{"stateVersion": float64(1), "category": "dispatch_retry"}) {
 		t.Fatalf("out-of-range notice = %#v, want the category with no counters", got)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Nonterminal legacy correlations that cannot progress
+//
+// The neutral fallback pinned by
+// TestRunOutcomeMigrationAllowsNullAndSingleMismatchedLegacyCorrelation is a
+// rule about HISTORY: a terminal row is immutable, so an unusable link costs
+// nothing but the content it declines to adopt. A nonterminal row is a promise
+// of future work, and that promise cannot be kept. Every canonical transition
+// validates the same link before it writes, so such a run can never be started,
+// completed, failed, cancelled, or requeued — and an invalid link also drops it
+// out of the same-session ordering subquery, so later work in its session
+// leapfrogs a run that is still, on paper, active.
+//
+// Migrating that row is therefore not a conservative choice. It is the creation
+// of a permanently stuck run, and it fails closed here instead.
+// -----------------------------------------------------------------------------
+
+// legacyLifecycleFixture is one legacy row shape and the canonical nonterminal
+// lifecycle the migration derives from it. The derived name is carried so a
+// failure message says which lifecycle was accepted rather than which columns
+// were seeded.
+type legacyLifecycleFixture struct {
+	name            string
+	derived         string
+	status          string
+	executionActive int
+	executionState  string
+	startedAt       string
+}
+
+// nonterminalLegacyLifecycles crosses every legacy shape that derives a
+// nonterminal canonical lifecycle, including both execution states that widen a
+// dishonest running/waiting row into recovering.
+var nonterminalLegacyLifecycles = []legacyLifecycleFixture{
+	{name: "queued", derived: "queued", status: "queued", executionState: "none"},
+	{
+		name: "running", derived: "running", status: "running",
+		executionActive: 1, executionState: "delivered", startedAt: "2026-01-01T00:00:01.000000000Z",
+	},
+	{
+		name: "waiting approval", derived: "waiting_approval", status: "waiting_approval",
+		executionActive: 1, executionState: "delivered", startedAt: "2026-01-01T00:00:01.000000000Z",
+	},
+	{
+		name: "recovering from uncertain running", derived: "recovering", status: "running",
+		executionActive: 1, executionState: "uncertain", startedAt: "2026-01-01T00:00:01.000000000Z",
+	},
+	{
+		name: "recovering from fenced waiting approval", derived: "recovering", status: "waiting_approval",
+		executionActive: 1, executionState: "fenced", startedAt: "2026-01-01T00:00:01.000000000Z",
+	},
+}
+
+// legacyCorrelationCorruption is one way a legacy assistant link fails the
+// shared rule while leaving exactly one claimant on each side — that is, every
+// break the duplicate preflight deliberately does not catch.
+type legacyCorrelationCorruption struct {
+	name string
+	// seed adjusts the fixture before it is written, for breaks that only exist
+	// at insert time.
+	seed func(legacyRun) legacyRun
+	// mutate breaks an otherwise well-formed pair after both rows exist.
+	mutate func(t *testing.T, ctx context.Context, database *DB, run legacyRun)
+}
+
+func nonterminalCorrelationCorruptions() []legacyCorrelationCorruption {
+	return []legacyCorrelationCorruption{
+		{
+			name: "null in both directions",
+			seed: func(run legacyRun) legacyRun {
+				run.assistantMessageID = ""
+				return run
+			},
+		},
+		{
+			name: "run names the message but the message names nobody",
+			mutate: func(t *testing.T, ctx context.Context, database *DB, run legacyRun) {
+				t.Helper()
+				if _, err := database.ExecContext(ctx,
+					`UPDATE messages SET run_id = NULL WHERE id = ?`, run.assistantMessageID); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "message names the run but the run names nobody",
+			mutate: func(t *testing.T, ctx context.Context, database *DB, run legacyRun) {
+				t.Helper()
+				if _, err := database.ExecContext(ctx,
+					`UPDATE agent_runs SET assistant_message_id = NULL WHERE id = ?`, run.id); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "linked message is not the assistant turn",
+			seed: func(run legacyRun) legacyRun {
+				run.assistantRole = "tool"
+				return run
+			},
+		},
+		{
+			name: "linked message belongs to another session",
+			mutate: func(t *testing.T, ctx context.Context, database *DB, run legacyRun) {
+				t.Helper()
+				if _, err := database.ExecContext(ctx,
+					`UPDATE messages SET session_id = ? WHERE id = ?`,
+					otherLegacySessionID, run.assistantMessageID); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+}
+
+// otherLegacySessionID is the second session the cross-session break files its
+// assistant message under. It exists because messages.session_id is a foreign
+// key, so the break cannot be expressed with an invented session.
+const otherLegacySessionID = "sess_nonterminal_other"
+
+// legacyRowSnapshot is every legacy row a rejected migration must leave exactly
+// as it found it, rendered as sorted column text so a comparison names the
+// difference rather than a struct address.
+type legacyRowSnapshot struct {
+	runs     []string
+	messages []string
+	jobs     []string
+	events   []string
+}
+
+func snapshotLegacyRows(t *testing.T, ctx context.Context, database *DB) legacyRowSnapshot {
+	t.Helper()
+	return legacyRowSnapshot{
+		runs: scanRowText(t, ctx, database, `
+			SELECT id, session_id, COALESCE(assistant_message_id, '<null>'), status,
+				COALESCE(error_code, '<null>'), COALESCE(error_message, '<null>'),
+				execution_active, execution_state, COALESCE(started_at, '<null>'),
+				COALESCE(finished_at, '<null>')
+			FROM agent_runs ORDER BY id`),
+		messages: scanRowText(t, ctx, database, `
+			SELECT id, session_id, COALESCE(run_id, '<null>'), role, content
+			FROM messages ORDER BY id`),
+		jobs: scanRowText(t, ctx, database, `
+			SELECT id, run_id, status, COALESCE(error_code, '<null>'), COALESCE(error_message, '<null>')
+			FROM jobs ORDER BY id`),
+		events: scanRowText(t, ctx, database, `
+			SELECT id, type, payload_json FROM events ORDER BY id`),
+	}
+}
+
+// scanRowText renders a result set as one joined string per row, so a snapshot
+// comparison works for any column list without a per-table struct.
+func scanRowText(t *testing.T, ctx context.Context, database *DB, query string) []string {
+	t.Helper()
+	rows, err := database.QueryContext(ctx, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	columns, err := rows.Columns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := make([]string, 0, 8)
+	for rows.Next() {
+		cells := make([]any, len(columns))
+		targets := make([]any, len(columns))
+		for i := range cells {
+			targets[i] = &cells[i]
+		}
+		if err := rows.Scan(targets...); err != nil {
+			t.Fatal(err)
+		}
+		parts := make([]string, 0, len(columns))
+		for i, column := range columns {
+			parts = append(parts, fmt.Sprintf("%s=%v", column, cells[i]))
+		}
+		rendered = append(rendered, strings.Join(parts, " "))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return rendered
+}
+
+// assertRunOutcomesMigrationLeftNoTrace proves the rejection rolled back
+// everything the migration would otherwise have committed: the record, the
+// widened schema, the correlation indexes, the temporary backfill table, the
+// raw-diagnostic scrub, and the public event rewrite.
+func assertRunOutcomesMigrationLeftNoTrace(
+	t *testing.T,
+	ctx context.Context,
+	database *DB,
+	before legacyRowSnapshot,
+) {
+	t.Helper()
+	var recorded int
+	if err := database.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`,
+		runOutcomesMigrationVersion).Scan(&recorded); err != nil {
+		t.Fatal(err)
+	}
+	if recorded != 0 {
+		t.Fatalf("migration record count = %d, want 0", recorded)
+	}
+	for _, column := range []string{"state_version", "state_updated_at", "outcome_reason", "assistant_content_sha256"} {
+		if hasColumn(t, ctx, database, "agent_runs", column) {
+			t.Fatalf("agent_runs.%s survived a rejected migration", column)
+		}
+	}
+	assertLegacyRunStatusVocabulary(t, ctx, database)
+	for _, name := range []string{"idx_runs_assistant_message_unique", "idx_messages_assistant_run_unique"} {
+		if sqliteObjectExists(t, ctx, database, "index", name) {
+			t.Fatalf("index %q survived a rejected migration", name)
+		}
+	}
+	if sqliteObjectExists(t, ctx, database, "table", runOutcomesBackfillTable) {
+		t.Fatalf("%s survived a rejected migration", runOutcomesBackfillTable)
+	}
+	after := snapshotLegacyRows(t, ctx, database)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("rejected migration changed legacy rows:\n after = %+v\n before = %+v", after, before)
+	}
+}
+
+// legacyRunStatusCheck is the exact status vocabulary migration 0016 widens.
+// The rollback proof matches it against the stored DDL instead of probing with
+// a write, because any write — even one that matches no row — would either be
+// vacuous against the CHECK or perturb the legacy snapshot compared below.
+const legacyRunStatusCheck = `CHECK (status IN ('queued','running','waiting_approval','completed','failed','cancelled'))`
+
+// assertLegacyRunStatusVocabulary reads agent_runs' stored CREATE TABLE text
+// and proves it is still the pre-0016 one: it admits no 'recovering' and it
+// still spells out every legacy status. Migration 0016's widened table fails
+// both halves — it names 'recovering' and no longer carries the legacy check —
+// so a surviving rebuild cannot pass by accident.
+func assertLegacyRunStatusVocabulary(t *testing.T, ctx context.Context, database *DB) {
+	t.Helper()
+	var stored sql.NullString
+	if err := database.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_runs'`).Scan(&stored); err != nil {
+		t.Fatalf("reading stored agent_runs DDL: %v", err)
+	}
+	if !stored.Valid || strings.TrimSpace(stored.String) == "" {
+		t.Fatal("agent_runs has no stored DDL after a rejected migration")
+	}
+	// The rebuild lays the status check out across its own lines, so compare on
+	// whitespace-normalized text rather than on the legacy file's formatting.
+	ddl := strings.Join(strings.Fields(stored.String), " ")
+	if strings.Contains(ddl, `'recovering'`) {
+		t.Fatalf("rolled-back agent_runs DDL still admits 'recovering': %s", ddl)
+	}
+	if !strings.Contains(ddl, legacyRunStatusCheck) {
+		t.Fatalf("agent_runs DDL lost the legacy status check %s: %s", legacyRunStatusCheck, ddl)
+	}
+}
+
+// TestRunOutcomeMigrationRejectsEveryNonterminalBrokenCorrelationValueFree
+// crosses every derived nonterminal lifecycle with every single-claimant way
+// the assistant link can fail the shared rule. None of them may migrate, and
+// none of them may say why in terms an operator could mistake for row content.
+func TestRunOutcomeMigrationRejectsEveryNonterminalBrokenCorrelationValueFree(t *testing.T) {
+	for _, lifecycle := range nonterminalLegacyLifecycles {
+		for _, corruption := range nonterminalCorrelationCorruptions() {
+			t.Run(lifecycle.name+"/"+corruption.name, func(t *testing.T) {
+				ctx := context.Background()
+				path := filepath.Join(t.TempDir(), "nonterminal-correlation.db")
+				database := openMigratedThroughLegacy(t, ctx, path)
+				seedLegacySession(t, ctx, database, "sess_nonterminal")
+				seedLegacySession(t, ctx, database, otherLegacySessionID)
+				run := legacyRun{
+					id:                 "run_nonterminal",
+					sessionID:          "sess_nonterminal",
+					status:             lifecycle.status,
+					executionActive:    lifecycle.executionActive,
+					executionState:     lifecycle.executionState,
+					startedAt:          lifecycle.startedAt,
+					assistantMessageID: "msg_nonterminal",
+					assistantContent:   "half-written answer",
+				}
+				if corruption.seed != nil {
+					run = corruption.seed(run)
+				}
+				seedLegacyRun(t, ctx, database, run)
+				// A job and a raw failure event, so the rollback proof covers
+				// the diagnostic scrub and the public event rewrite rather than
+				// only the run table.
+				seedLegacyNonterminalJob(t, ctx, database, run.id)
+				seedLegacyEvent(t, ctx, database, run.sessionID, run.id, 10, "tool.call.failed",
+					`{"toolCallId":"call_nonterminal","toolName":"files.update","message":"provider stack trace"}`)
+				if corruption.mutate != nil {
+					corruption.mutate(t, ctx, database, run)
+				}
+				before := snapshotLegacyRows(t, ctx, database)
+
+				err := applyRunOutcomesMigration(t, ctx, database)
+				if !errors.Is(err, runcorrelation.ErrConflict) {
+					t.Fatalf("ApplyMigrations error = %v, want runcorrelation.ErrConflict for a %s run",
+						err, lifecycle.derived)
+				}
+				if got := err.Error(); got != "run/message correlation conflict" {
+					t.Fatalf("error = %q, want exactly the value-free correlation sentinel", got)
+				}
+				assertRunOutcomesMigrationLeftNoTrace(t, ctx, database, before)
+
+				// A restart must not turn the refusal into an acceptance: the
+				// operator has to repair the row, and the second attempt says
+				// exactly as little as the first.
+				if err := database.Close(); err != nil {
+					t.Fatal(err)
+				}
+				reopened, err := Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer reopened.Close()
+				retry := ApplyMigrations(ctx, reopened)
+				if !errors.Is(retry, runcorrelation.ErrConflict) {
+					t.Fatalf("reopened ApplyMigrations error = %v, want runcorrelation.ErrConflict", retry)
+				}
+				if got := retry.Error(); got != "run/message correlation conflict" {
+					t.Fatalf("reopened error = %q, want exactly the value-free correlation sentinel", got)
+				}
+				assertRunOutcomesMigrationLeftNoTrace(t, ctx, reopened, before)
+			})
+		}
+	}
+}
+
+// seedLegacyNonterminalJob writes the pending job a nonterminal run still owns,
+// carrying the raw diagnostics the migration's scrub would otherwise clear.
+func seedLegacyNonterminalJob(t *testing.T, ctx context.Context, database *DB, runID string) {
+	t.Helper()
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO jobs (id, run_id, agent_id, status, payload_json, error_code, error_message, created_at, created_at_ns)
+		VALUES ('job_nonterminal', ?, 'general_assistant', 'pending', '{}', 'weird_legacy_code', 'provider text',
+			'2026-01-01T00:00:00.000000000Z', 1)
+	`, runID); err != nil {
+		t.Fatal(err)
 	}
 }
