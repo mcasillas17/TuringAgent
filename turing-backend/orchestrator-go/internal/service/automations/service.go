@@ -163,20 +163,22 @@ func toProto(automation repository.Automation) *turingv1.Automation {
 		tools = append(tools, &turingv1.AutomationTool{ServerName: tool.ServerName, ToolName: tool.ToolName})
 	}
 	return &turingv1.Automation{
-		AutomationId:  automation.AutomationID,
-		Name:          automation.Name,
-		Prompt:        automation.Prompt,
-		Schedule:      scheduleToProto(automation.Schedule),
-		Enabled:       automation.Enabled,
-		AllowedTools:  tools,
-		LastRunAt:     parseTimestamp(automation.LastRunAt),
-		NextRunAt:     parseTimestamp(automation.NextDueAt),
-		SessionId:     automation.SessionID,
-		LastRunId:     automation.LastRunID,
-		LastRunStatus: automation.LastRunStatus,
-		LastRunError:  automation.LastRunError,
-		CreatedAt:     parseTimestamp(automation.CreatedAt),
-		UpdatedAt:     parseTimestamp(automation.UpdatedAt),
+		AutomationId:              automation.AutomationID,
+		Name:                      automation.Name,
+		Prompt:                    automation.Prompt,
+		Schedule:                  scheduleToProto(automation.Schedule),
+		Enabled:                   automation.Enabled,
+		AllowedTools:              tools,
+		LastRunAt:                 parseTimestamp(automation.LastRunAt),
+		NextRunAt:                 parseTimestamp(automation.NextDueAt),
+		SessionId:                 automation.SessionID,
+		LastRunId:                 automation.LastRunID,
+		LastRunStatus:             automation.LastRunStatus,
+		LastRunError:              automation.LastRunError,
+		LastOccurrenceFailureCode: automation.LastOccurrenceFailureCode,
+		LastOccurrenceFailedAt:    parseTimestamp(automation.LastOccurrenceFailedAt),
+		CreatedAt:                 parseTimestamp(automation.CreatedAt),
+		UpdatedAt:                 parseTimestamp(automation.UpdatedAt),
 	}
 }
 

@@ -94,13 +94,14 @@ Memory extraction, indexing, maintenance, and evaluation are local by default
 and introduce no background network traffic. A remote provider selected for a
 run does not gain standing access to the memory store.
 
-Before memory can be sent off-machine, a future egress policy must make the
-destination and exact data classes visible and bind the choice to the
-session/run. Only the minimum selected items may be sent, each with provenance
-and sensitivity filtering. Candidates, full-memory exports, connector data,
-and background consolidation must not be sent to remote providers implicitly.
-An egress record belongs to the run and remains attributable even if routing
-configuration later changes.
+The remote-egress policy makes the destination and conservative maximum data
+classes visible and binds a one-time decision to the exact request and run.
+Memory/profile is a typed category but is not currently applicable or sent.
+When memory egress is implemented, adding that category will force a new
+prepare/confirm cycle, and only selected items with provenance and sensitivity
+filtering may be included. Candidates, full-memory exports, connector data, and
+background consolidation must not be sent implicitly. The egress record belongs
+to the run and remains attributable even if routing configuration later changes.
 
 ## Retention
 

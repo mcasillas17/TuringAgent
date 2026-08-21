@@ -12,12 +12,16 @@ Implemented in the client:
 - Backend URL and API key settings stored through secure client storage.
 - gRPC client for config, sessions, message search, event replay, streaming session events, and approval actions.
 - Chat tab wired to backend sessions and streamed message deltas.
+- Active conversations are cursor-paginated and expose rename, archive, and
+  permanent delete actions; an archived-conversations dialog paginates,
+  renames, restores, or permanently deletes archived rows.
 - Exact-phrase conversation search across all sessions, grouped by conversation
   and linked back to the matching chat.
 - Inline tool-call status cards for live `tool.call.*` events.
 - Inline notices when a live agent run reaches its tool-iteration limit.
 - Approval cards for `approval.requested` events, cleared by approval terminal events.
-- Model provider selector for `ollama` or `openai_compatible` per sent message.
+- Model provider preference for `ollama` or `openai_compatible`; every effective
+  remote send separately confirms its exact endpoint and disclosed categories.
 - Typed session-withdrawal receipts and terminal `session.deleted` events. The
   shell removes a conversation only after a completed receipt or its terminal
   event; an in-progress or failed-external receipt remains visible for retry.
@@ -69,9 +73,9 @@ authorization: Bearer <api-key>
 
 `ResponsiveShell` remains the primary app surface:
 
-- **Chat** renders `SessionListScreen`, which lists sessions once the backend is
-  available, opens backend-connected `ChatScreen` instances, and exposes
-  **Search conversations** in both embedded and standalone layouts.
+- **Chat** lists active sessions in `ResponsiveShell`, loads additional cursor
+  pages, opens backend-connected `ChatScreen` instances, and exposes search and
+  archived-conversation management.
 - **Devices** is a placeholder: `IoT Devices Dashboard`.
 - **Stats** is a placeholder: `Stats & Usage`.
 - **Integrations** is a placeholder: `Integrations Status`.
@@ -85,16 +89,28 @@ The Chat tab uses the generated gRPC services for commands, queries, and streame
 
 - `SessionService.GetConfig` for backend capabilities and model providers.
 - `SessionService.ListSessions`, `SessionService.GetSession`, and
-  `SessionService.CreateSession` for chat sessions and search-result headings.
+  `SessionService.CreateSession` for paginated chat sessions and search-result
+  headings.
+- `SessionService.RenameSession`, `SessionService.ArchiveSession`, and
+  `SessionService.RestoreSession` for explicit lifecycle actions. Returned
+  session snapshots remain authoritative.
 - `SessionService.ListMessages` to load persisted messages.
 - `SessionService.SearchMessages` to search one exact phrase across all
   sessions. Search results appear immediately; unresolved session titles use a
   session-ID fallback and update when metadata arrives.
-- `ChatService.SendMessage` to enqueue a user message and selected model provider.
+- `ChatService.PrepareRemoteEgress` to obtain a side-effect-free, exact-request
+  disclosure before a remote send.
+- `ChatService.SendMessage` to enqueue a user message and selected model
+  provider, carrying one-time consent when the effective route is remote.
 - `EventService.ListEvents` and `EventService.SubscribeSessionEvents` for replay and live updates.
 - `ApprovalService.ApproveApproval` and `ApprovalService.DenyApproval` for approval cards.
 
 When a session opens, `ChatScreen` loads persisted messages and subscribes to the session event stream. Incoming `message.delta` events update the active assistant message locally rather than making the client own model execution. Live tool calls render in order between message bubbles, and an `agent.run.step` event renders the runtime-provided note as accessible meta text when the tool-iteration limit cuts a run short.
+
+The shell preserves session timestamp nanoseconds and reconciles list pages,
+lifecycle RPC responses, and `session.updated` events by authoritative snapshot.
+An archived row cannot be restored by omission from an active page or by an
+older status-less event.
 
 Historical tool cards and run notices are suppressed during event replay because persisted messages do not carry event sequence values that could place those artifacts back into the transcript correctly. Live events committed after the screen's startup watermark still render normally.
 

@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -1143,6 +1144,7 @@ func repositoryRoutingCapabilities(capabilities *registeredWorkerCapabilities) *
 	return &repository.WorkerRoutingCapabilities{
 		Models: models, Tools: tools, MaxConcurrentRuns: capabilities.maxConcurrentRuns,
 		ExternalAgentCredentialRefs: credentialRefs,
+		RemoteEgressDecisionVersion: capabilities.remoteEgressDecisionVersion,
 	}
 }
 
@@ -1156,6 +1158,7 @@ func routingRequirementsForJob(job repository.Job) repository.RoutingRequirement
 		ModelProvider:                  job.ModelProvider,
 		Model:                          job.Model,
 		RequestedTools:                 job.RequestedTools,
+		SelectedTools:                  job.SelectedTools,
 		RequiredContextTokens:          job.RequiredContextTokens,
 		MinimumWorkerMaxConcurrentRuns: job.MinimumWorkerMaxConcurrentRuns,
 		ExternalAgent:                  job.ExternalAgent != nil,
@@ -1176,6 +1179,7 @@ func routingRequirementsForAgentJob(job *turingv1.AgentJob) repository.RoutingRe
 		ModelProvider:                  modelProviderName(job.GetModelProvider()),
 		Model:                          job.GetModel(),
 		RequestedTools:                 append([]string(nil), job.GetRequestedTools()...),
+		SelectedTools:                  append([]string(nil), job.GetSelectedTools()...),
 		RequiredContextTokens:          int(job.GetRequiredContextTokens()),
 		MinimumWorkerMaxConcurrentRuns: int(job.GetMinimumWorkerMaxConcurrentRuns()),
 		ExternalAgent:                  job.GetExternalAgent() != nil,
@@ -2362,7 +2366,53 @@ func mapJob(job repository.Job) *turingv1.AgentJob {
 		ExternalAgent:                  toProtoExternalAgent(job.ExternalAgent),
 		RequiredContextTokens:          int32(job.RequiredContextTokens),
 		MinimumWorkerMaxConcurrentRuns: int32(job.MinimumWorkerMaxConcurrentRuns),
+		EgressDecision:                 toProtoEgressDecision(job.EgressDecision),
+		SelectedTools:                  append([]string(nil), job.SelectedTools...),
 	}
+}
+
+func toProtoEgressDecision(decision *repository.RunEgressDecision) *turingv1.RunEgressDecision {
+	if decision == nil {
+		return nil
+	}
+	categories := make([]turingv1.EgressDataCategory, 0, len(decision.DataCategories))
+	for _, name := range decision.DataCategories {
+		value, ok := turingv1.EgressDataCategory_value[name]
+		if !ok {
+			categories = append(categories, turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_UNSPECIFIED)
+			continue
+		}
+		categories = append(categories, turingv1.EgressDataCategory(value))
+	}
+	consentedAt, _ := time.Parse(time.RFC3339Nano, decision.ConsentGrantedAt)
+	return &turingv1.RunEgressDecision{
+		DecisionId:                decision.DecisionID,
+		Version:                   int32(decision.Version),
+		Provider:                  providerToProto(decision.Provider),
+		Model:                     decision.Model,
+		Endpoint:                  decision.Endpoint,
+		EndpointHost:              decision.EndpointHost,
+		ExternalAgentId:           decision.ExternalAgentID,
+		DataCategories:            categories,
+		ConsentGrantedAt:          timestamppb.New(consentedAt),
+		ChallengeFingerprint:      decision.ChallengeFingerprint,
+		SelectedTools:             append([]string(nil), decision.SelectedTools...),
+		SkillSnapshotFingerprint:  decision.SkillSnapshotFingerprint,
+		RecallApplicable:          decision.RecallApplicable,
+		MemoryProfileApplicable:   decision.MemoryProfileApplicable,
+		ExternalCredentialRefHash: decision.ExternalCredentialRefHash,
+		RequestDigest:             decision.RequestDigest,
+	}
+}
+
+func providerToProto(provider string) turingv1.ModelProvider {
+	if provider == "openai_compatible" {
+		return turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE
+	}
+	if provider == "ollama" {
+		return turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA
+	}
+	return turingv1.ModelProvider_MODEL_PROVIDER_UNSPECIFIED
 }
 
 // toProtoExternalAgent keeps nil as nil. An empty target would look like a
@@ -2373,6 +2423,7 @@ func toProtoExternalAgent(target *repository.ExternalAgentTarget) *turingv1.Exte
 		return nil
 	}
 	return &turingv1.ExternalAgentTarget{
+		AgentId:       target.AgentID,
 		DisplayName:   target.DisplayName,
 		BaseUrl:       target.BaseURL,
 		CredentialRef: target.CredentialRef,

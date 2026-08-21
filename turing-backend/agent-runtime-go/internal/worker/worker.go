@@ -41,6 +41,9 @@ type Options struct {
 	UpdateSendTimeout           time.Duration
 	Models                      []*turingv1.ModelCapability
 	ExternalAgentCredentialRefs []string
+	// RemoteEgressDecisionVersion is opt-in: only an executor that validates a
+	// frozen RunEgressDecision before provider I/O may advertise it.
+	RemoteEgressDecisionVersion int32
 	// SupportsExternalAgents mirrors the coarse legacy wire field. Exact
 	// routing authorization comes only from ExternalAgentCredentialRefs.
 	SupportsExternalAgents bool
@@ -438,6 +441,7 @@ func (w *Worker) Run(ctx context.Context) error {
 			MaxConcurrentRuns:           int32(w.options.MaxConcurrentRuns),
 			SupportsExternalAgents:      w.options.SupportsExternalAgents || len(w.options.ExternalAgentCredentialRefs) > 0,
 			ExternalAgentCredentialRefs: cloneCredentialRefs(w.options.ExternalAgentCredentialRefs),
+			RemoteEgressDecisionVersion: w.options.RemoteEgressDecisionVersion,
 		}
 	}
 	if err := w.send(streamCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: ready}}); err != nil {

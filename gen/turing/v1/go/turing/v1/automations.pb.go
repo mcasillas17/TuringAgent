@@ -105,8 +105,12 @@ type Automation struct {
 	LastRunError  string                 `protobuf:"bytes,12,opt,name=last_run_error,json=lastRunError,proto3" json:"last_run_error,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Most recent scheduled occurrence that failed before a run could be
+	// created, kept separate so it never rewrites the outcome of last_run_id.
+	LastOccurrenceFailureCode string                 `protobuf:"bytes,15,opt,name=last_occurrence_failure_code,json=lastOccurrenceFailureCode,proto3" json:"last_occurrence_failure_code,omitempty"`
+	LastOccurrenceFailedAt    *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=last_occurrence_failed_at,json=lastOccurrenceFailedAt,proto3" json:"last_occurrence_failed_at,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *Automation) Reset() {
@@ -233,6 +237,20 @@ func (x *Automation) GetCreatedAt() *timestamppb.Timestamp {
 func (x *Automation) GetUpdatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.UpdatedAt
+	}
+	return nil
+}
+
+func (x *Automation) GetLastOccurrenceFailureCode() string {
+	if x != nil {
+		return x.LastOccurrenceFailureCode
+	}
+	return ""
+}
+
+func (x *Automation) GetLastOccurrenceFailedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastOccurrenceFailedAt
 	}
 	return nil
 }
@@ -726,7 +744,7 @@ var File_turing_v1_automations_proto protoreflect.FileDescriptor
 
 const file_turing_v1_automations_proto_rawDesc = "" +
 	"\n" +
-	"\x1bturing/v1/automations.proto\x12\tturing.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xed\x04\n" +
+	"\x1bturing/v1/automations.proto\x12\tturing.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x85\x06\n" +
 	"\n" +
 	"Automation\x12#\n" +
 	"\rautomation_id\x18\x01 \x01(\tR\fautomationId\x12\x12\n" +
@@ -746,7 +764,9 @@ const file_turing_v1_automations_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"N\n" +
+	"updated_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12?\n" +
+	"\x1clast_occurrence_failure_code\x18\x0f \x01(\tR\x19lastOccurrenceFailureCode\x12U\n" +
+	"\x19last_occurrence_failed_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\x16lastOccurrenceFailedAt\"N\n" +
 	"\x0eAutomationTool\x12\x1f\n" +
 	"\vserver_name\x18\x01 \x01(\tR\n" +
 	"serverName\x12\x1b\n" +
@@ -822,27 +842,28 @@ var file_turing_v1_automations_proto_depIdxs = []int32{
 	11, // 3: turing.v1.Automation.next_run_at:type_name -> google.protobuf.Timestamp
 	11, // 4: turing.v1.Automation.created_at:type_name -> google.protobuf.Timestamp
 	11, // 5: turing.v1.Automation.updated_at:type_name -> google.protobuf.Timestamp
-	0,  // 6: turing.v1.AutomationSchedule.kind:type_name -> turing.v1.AutomationScheduleKind
-	3,  // 7: turing.v1.CreateAutomationRequest.schedule:type_name -> turing.v1.AutomationSchedule
-	2,  // 8: turing.v1.CreateAutomationRequest.allowed_tools:type_name -> turing.v1.AutomationTool
-	3,  // 9: turing.v1.UpdateAutomationRequest.schedule:type_name -> turing.v1.AutomationSchedule
-	2,  // 10: turing.v1.UpdateAutomationRequest.allowed_tools:type_name -> turing.v1.AutomationTool
-	1,  // 11: turing.v1.ListAutomationsResponse.automations:type_name -> turing.v1.Automation
-	4,  // 12: turing.v1.AutomationService.CreateAutomation:input_type -> turing.v1.CreateAutomationRequest
-	5,  // 13: turing.v1.AutomationService.UpdateAutomation:input_type -> turing.v1.UpdateAutomationRequest
-	6,  // 14: turing.v1.AutomationService.SetAutomationEnabled:input_type -> turing.v1.SetAutomationEnabledRequest
-	7,  // 15: turing.v1.AutomationService.DeleteAutomation:input_type -> turing.v1.DeleteAutomationRequest
-	9,  // 16: turing.v1.AutomationService.ListAutomations:input_type -> turing.v1.ListAutomationsRequest
-	1,  // 17: turing.v1.AutomationService.CreateAutomation:output_type -> turing.v1.Automation
-	1,  // 18: turing.v1.AutomationService.UpdateAutomation:output_type -> turing.v1.Automation
-	1,  // 19: turing.v1.AutomationService.SetAutomationEnabled:output_type -> turing.v1.Automation
-	8,  // 20: turing.v1.AutomationService.DeleteAutomation:output_type -> turing.v1.DeleteAutomationResponse
-	10, // 21: turing.v1.AutomationService.ListAutomations:output_type -> turing.v1.ListAutomationsResponse
-	17, // [17:22] is the sub-list for method output_type
-	12, // [12:17] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	11, // 6: turing.v1.Automation.last_occurrence_failed_at:type_name -> google.protobuf.Timestamp
+	0,  // 7: turing.v1.AutomationSchedule.kind:type_name -> turing.v1.AutomationScheduleKind
+	3,  // 8: turing.v1.CreateAutomationRequest.schedule:type_name -> turing.v1.AutomationSchedule
+	2,  // 9: turing.v1.CreateAutomationRequest.allowed_tools:type_name -> turing.v1.AutomationTool
+	3,  // 10: turing.v1.UpdateAutomationRequest.schedule:type_name -> turing.v1.AutomationSchedule
+	2,  // 11: turing.v1.UpdateAutomationRequest.allowed_tools:type_name -> turing.v1.AutomationTool
+	1,  // 12: turing.v1.ListAutomationsResponse.automations:type_name -> turing.v1.Automation
+	4,  // 13: turing.v1.AutomationService.CreateAutomation:input_type -> turing.v1.CreateAutomationRequest
+	5,  // 14: turing.v1.AutomationService.UpdateAutomation:input_type -> turing.v1.UpdateAutomationRequest
+	6,  // 15: turing.v1.AutomationService.SetAutomationEnabled:input_type -> turing.v1.SetAutomationEnabledRequest
+	7,  // 16: turing.v1.AutomationService.DeleteAutomation:input_type -> turing.v1.DeleteAutomationRequest
+	9,  // 17: turing.v1.AutomationService.ListAutomations:input_type -> turing.v1.ListAutomationsRequest
+	1,  // 18: turing.v1.AutomationService.CreateAutomation:output_type -> turing.v1.Automation
+	1,  // 19: turing.v1.AutomationService.UpdateAutomation:output_type -> turing.v1.Automation
+	1,  // 20: turing.v1.AutomationService.SetAutomationEnabled:output_type -> turing.v1.Automation
+	8,  // 21: turing.v1.AutomationService.DeleteAutomation:output_type -> turing.v1.DeleteAutomationResponse
+	10, // 22: turing.v1.AutomationService.ListAutomations:output_type -> turing.v1.ListAutomationsResponse
+	18, // [18:23] is the sub-list for method output_type
+	13, // [13:18] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_automations_proto_init() }

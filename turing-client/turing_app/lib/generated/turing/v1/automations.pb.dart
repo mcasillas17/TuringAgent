@@ -43,6 +43,8 @@ class Automation extends $pb.GeneratedMessage {
     $core.String? lastRunError,
     $1.Timestamp? createdAt,
     $1.Timestamp? updatedAt,
+    $core.String? lastOccurrenceFailureCode,
+    $1.Timestamp? lastOccurrenceFailedAt,
   }) {
     final result = create();
     if (automationId != null) result.automationId = automationId;
@@ -59,6 +61,10 @@ class Automation extends $pb.GeneratedMessage {
     if (lastRunError != null) result.lastRunError = lastRunError;
     if (createdAt != null) result.createdAt = createdAt;
     if (updatedAt != null) result.updatedAt = updatedAt;
+    if (lastOccurrenceFailureCode != null)
+      result.lastOccurrenceFailureCode = lastOccurrenceFailureCode;
+    if (lastOccurrenceFailedAt != null)
+      result.lastOccurrenceFailedAt = lastOccurrenceFailedAt;
     return result;
   }
 
@@ -95,6 +101,9 @@ class Automation extends $pb.GeneratedMessage {
     ..aOM<$1.Timestamp>(13, _omitFieldNames ? '' : 'createdAt',
         subBuilder: $1.Timestamp.create)
     ..aOM<$1.Timestamp>(14, _omitFieldNames ? '' : 'updatedAt',
+        subBuilder: $1.Timestamp.create)
+    ..aOS(15, _omitFieldNames ? '' : 'lastOccurrenceFailureCode')
+    ..aOM<$1.Timestamp>(16, _omitFieldNames ? '' : 'lastOccurrenceFailedAt',
         subBuilder: $1.Timestamp.create)
     ..hasRequiredFields = false;
 
@@ -258,6 +267,28 @@ class Automation extends $pb.GeneratedMessage {
   void clearUpdatedAt() => $_clearField(14);
   @$pb.TagNumber(14)
   $1.Timestamp ensureUpdatedAt() => $_ensure(13);
+
+  /// Most recent scheduled occurrence that failed before a run could be
+  /// created, kept separate so it never rewrites the outcome of last_run_id.
+  @$pb.TagNumber(15)
+  $core.String get lastOccurrenceFailureCode => $_getSZ(14);
+  @$pb.TagNumber(15)
+  set lastOccurrenceFailureCode($core.String value) => $_setString(14, value);
+  @$pb.TagNumber(15)
+  $core.bool hasLastOccurrenceFailureCode() => $_has(14);
+  @$pb.TagNumber(15)
+  void clearLastOccurrenceFailureCode() => $_clearField(15);
+
+  @$pb.TagNumber(16)
+  $1.Timestamp get lastOccurrenceFailedAt => $_getN(15);
+  @$pb.TagNumber(16)
+  set lastOccurrenceFailedAt($1.Timestamp value) => $_setField(16, value);
+  @$pb.TagNumber(16)
+  $core.bool hasLastOccurrenceFailedAt() => $_has(15);
+  @$pb.TagNumber(16)
+  void clearLastOccurrenceFailedAt() => $_clearField(16);
+  @$pb.TagNumber(16)
+  $1.Timestamp ensureLastOccurrenceFailedAt() => $_ensure(15);
 }
 
 /// A tool named by the pair the orchestrator's policy lookup uses, so an

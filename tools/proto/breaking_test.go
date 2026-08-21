@@ -4,9 +4,36 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
+
+func TestSessionsLifecycleContract(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join("..", "..", "proto", "turing", "v1", "sessions.proto"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proto := string(source)
+
+	assertProtoFieldNumber(t, proto, "ListSessionsRequest", "page", 1)
+	assertProtoFieldNumber(t, proto, "ListSessionsRequest", "filter", 2)
+	assertProtoEnumValue(t, proto, "SessionListFilter", "SESSION_LIST_FILTER_UNSPECIFIED", 0)
+	assertProtoEnumValue(t, proto, "SessionListFilter", "SESSION_LIST_FILTER_ACTIVE", 1)
+	assertProtoEnumValue(t, proto, "SessionListFilter", "SESSION_LIST_FILTER_ARCHIVED", 2)
+	assertProtoEnumValue(t, proto, "SessionListFilter", "SESSION_LIST_FILTER_ALL", 3)
+	for _, message := range []string{
+		"RenameSessionResponse",
+		"ArchiveSessionResponse",
+		"RestoreSessionResponse",
+	} {
+		assertProtoFieldNumber(t, proto, message, "session", 1)
+	}
+	for _, rpc := range []string{"RenameSession", "ArchiveSession", "RestoreSession"} {
+		assertProtoRPC(t, proto, "SessionService", rpc)
+	}
+}
 
 func TestBreakingCompatibility(t *testing.T) {
 	requireBuf(t)
@@ -66,6 +93,43 @@ func TestBreakingCompatibility(t *testing.T) {
 			}
 		})
 	}
+}
+
+func assertProtoFieldNumber(t *testing.T, proto, message, field string, number int) {
+	t.Helper()
+	block := protoBlock(t, proto, "message", message)
+	pattern := regexp.MustCompile(`(?m)^\s*[A-Za-z0-9_.]+\s+` + regexp.QuoteMeta(field) + `\s*=\s*` + strconv.Itoa(number) + `\s*;`)
+	if !pattern.MatchString(block) {
+		t.Fatalf("message %s field %s does not use number %d", message, field, number)
+	}
+}
+
+func assertProtoEnumValue(t *testing.T, proto, enum, value string, number int) {
+	t.Helper()
+	block := protoBlock(t, proto, "enum", enum)
+	pattern := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(value) + `\s*=\s*` + strconv.Itoa(number) + `\s*;`)
+	if !pattern.MatchString(block) {
+		t.Fatalf("enum %s value %s does not use number %d", enum, value, number)
+	}
+}
+
+func assertProtoRPC(t *testing.T, proto, service, rpc string) {
+	t.Helper()
+	block := protoBlock(t, proto, "service", service)
+	pattern := regexp.MustCompile(`(?m)^\s*rpc\s+` + regexp.QuoteMeta(rpc) + `\s*\(`)
+	if !pattern.MatchString(block) {
+		t.Fatalf("service %s does not declare RPC %s", service, rpc)
+	}
+}
+
+func protoBlock(t *testing.T, proto, kind, name string) string {
+	t.Helper()
+	pattern := regexp.MustCompile(`(?s)\b` + regexp.QuoteMeta(kind) + `\s+` + regexp.QuoteMeta(name) + `\s*\{(.*?)\}`)
+	match := pattern.FindStringSubmatch(proto)
+	if len(match) != 2 {
+		t.Fatalf("%s %s not found", kind, name)
+	}
+	return match[1]
 }
 
 func TestBreakingCompatibilityInShallowCheckout(t *testing.T) {

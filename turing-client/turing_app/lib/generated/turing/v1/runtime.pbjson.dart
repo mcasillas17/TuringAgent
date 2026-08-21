@@ -96,6 +96,15 @@ const AgentJob$json = {
       '5': 5,
       '10': 'minimumWorkerMaxConcurrentRuns'
     },
+    {
+      '1': 'egress_decision',
+      '3': 17,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.RunEgressDecision',
+      '10': 'egressDecision'
+    },
+    {'1': 'selected_tools', '3': 18, '4': 3, '5': 9, '10': 'selectedTools'},
   ],
 };
 
@@ -113,7 +122,9 @@ final $typed_data.Uint8List agentJobDescriptor = $convert.base64Decode(
     'VudBgOIAEoCzIeLnR1cmluZy52MS5FeHRlcm5hbEFnZW50VGFyZ2V0Ug1leHRlcm5hbEFnZW50'
     'EjYKF3JlcXVpcmVkX2NvbnRleHRfdG9rZW5zGA8gASgFUhVyZXF1aXJlZENvbnRleHRUb2tlbn'
     'MSSgoibWluaW11bV93b3JrZXJfbWF4X2NvbmN1cnJlbnRfcnVucxgQIAEoBVIebWluaW11bVdv'
-    'cmtlck1heENvbmN1cnJlbnRSdW5z');
+    'cmtlck1heENvbmN1cnJlbnRSdW5zEkUKD2VncmVzc19kZWNpc2lvbhgRIAEoCzIcLnR1cmluZy'
+    '52MS5SdW5FZ3Jlc3NEZWNpc2lvblIOZWdyZXNzRGVjaXNpb24SJQoOc2VsZWN0ZWRfdG9vbHMY'
+    'EiADKAlSDXNlbGVjdGVkVG9vbHM=');
 
 @$core.Deprecated('Use externalAgentTargetDescriptor instead')
 const ExternalAgentTarget$json = {
@@ -122,6 +133,7 @@ const ExternalAgentTarget$json = {
     {'1': 'display_name', '3': 1, '4': 1, '5': 9, '10': 'displayName'},
     {'1': 'base_url', '3': 2, '4': 1, '5': 9, '10': 'baseUrl'},
     {'1': 'credential_ref', '3': 3, '4': 1, '5': 9, '10': 'credentialRef'},
+    {'1': 'agent_id', '3': 4, '4': 1, '5': 9, '10': 'agentId'},
   ],
 };
 
@@ -129,7 +141,7 @@ const ExternalAgentTarget$json = {
 final $typed_data.Uint8List externalAgentTargetDescriptor = $convert.base64Decode(
     'ChNFeHRlcm5hbEFnZW50VGFyZ2V0EiEKDGRpc3BsYXlfbmFtZRgBIAEoCVILZGlzcGxheU5hbW'
     'USGQoIYmFzZV91cmwYAiABKAlSB2Jhc2VVcmwSJQoOY3JlZGVudGlhbF9yZWYYAyABKAlSDWNy'
-    'ZWRlbnRpYWxSZWY=');
+    'ZWRlbnRpYWxSZWYSGQoIYWdlbnRfaWQYBCABKAlSB2FnZW50SWQ=');
 
 @$core.Deprecated('Use skillSnapshotDescriptor instead')
 const SkillSnapshot$json = {
@@ -252,6 +264,13 @@ const WorkerCapabilities$json = {
       '5': 9,
       '10': 'externalAgentCredentialRefs'
     },
+    {
+      '1': 'remote_egress_decision_version',
+      '3': 7,
+      '4': 1,
+      '5': 5,
+      '10': 'remoteEgressDecisionVersion'
+    },
   ],
 };
 
@@ -263,7 +282,8 @@ final $typed_data.Uint8List workerCapabilitiesDescriptor = $convert.base64Decode
     '9vbHMSLgoTbWF4X2NvbmN1cnJlbnRfcnVucxgEIAEoBVIRbWF4Q29uY3VycmVudFJ1bnMSOAoY'
     'c3VwcG9ydHNfZXh0ZXJuYWxfYWdlbnRzGAUgASgIUhZzdXBwb3J0c0V4dGVybmFsQWdlbnRzEk'
     'MKHmV4dGVybmFsX2FnZW50X2NyZWRlbnRpYWxfcmVmcxgGIAMoCVIbZXh0ZXJuYWxBZ2VudENy'
-    'ZWRlbnRpYWxSZWZz');
+    'ZWRlbnRpYWxSZWZzEkMKHnJlbW90ZV9lZ3Jlc3NfZGVjaXNpb25fdmVyc2lvbhgHIAEoBVIbcm'
+    'Vtb3RlRWdyZXNzRGVjaXNpb25WZXJzaW9u');
 
 @$core.Deprecated('Use runtimeWorkerReadyDescriptor instead')
 const RuntimeWorkerReady$json = {

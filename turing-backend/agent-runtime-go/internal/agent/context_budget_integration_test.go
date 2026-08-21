@@ -1072,6 +1072,7 @@ func TestExecuteNoticesRealOpenAILengthStopWithPendingToolFragment(t *testing.T)
 	}
 	job := testJob()
 	job.ModelProvider = turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE
+	authorizeDirectRemoteJob(job, server.URL)
 	assistant := NewGeneralAssistant(
 		map[turingv1.ModelProvider]llm.Provider{
 			turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE: provider,
@@ -1113,6 +1114,7 @@ func TestExecuteDoesNotRunIDAndNameOnlyOpenAIToolCallAtLength(t *testing.T) {
 	}
 	job := testJob()
 	job.ModelProvider = turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE
+	authorizeDirectRemoteJob(job, server.URL)
 	client := &assistantTestToolLister{
 		definitions: []map[string]any{{"name": "files.create"}},
 		result:      map[string]any{"ok": true},
@@ -1155,6 +1157,7 @@ func TestExecuteDoesNotRunSparseOpenAIToolCallsAtLength(t *testing.T) {
 	}
 	job := testJob()
 	job.ModelProvider = turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE
+	authorizeDirectRemoteJob(job, server.URL)
 	client := &assistantTestToolLister{
 		definitions: []map[string]any{{"name": "first"}, {"name": "third"}},
 		result:      map[string]any{"ok": true},

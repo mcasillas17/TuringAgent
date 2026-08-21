@@ -8,12 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 )
 
@@ -24,11 +24,14 @@ type EnqueueUserMessageInput struct {
 	AgentID                        string
 	ModelProvider                  string
 	Model                          string
+	RequestedModel                 string
 	ExecutionModel                 string
 	IdempotencyKey                 string
 	RequestedTools                 []string
+	SelectedTools                  []string
 	RequiredContextTokens          int
 	MinimumWorkerMaxConcurrentRuns int
+	EgressDecision                 *PendingEgressDecision
 	ValidateRouting                func(context.Context, RoutingRequirements) error
 }
 
@@ -37,6 +40,7 @@ type RoutingRequirements struct {
 	ModelProvider                  string
 	Model                          string
 	RequestedTools                 []string
+	SelectedTools                  []string
 	RequiredContextTokens          int
 	MinimumWorkerMaxConcurrentRuns int
 	ExternalAgent                  bool
@@ -54,6 +58,7 @@ type WorkerRoutingCapabilities struct {
 	Tools                       []string
 	MaxConcurrentRuns           int
 	ExternalAgentCredentialRefs []string
+	RemoteEgressDecisionVersion int
 }
 
 type PendingRoutingWork struct {
@@ -106,8 +111,10 @@ type Job struct {
 	Skills                         []SkillSnapshot
 	// ExternalAgent is nil for the local assistant, which is the default and
 	// the common case.
-	ExternalAgent *ExternalAgentTarget
-	StartedEvent  Event
+	ExternalAgent  *ExternalAgentTarget
+	EgressDecision *RunEgressDecision
+	SelectedTools  []string
+	StartedEvent   Event
 }
 
 type queuedJobPayload struct {
@@ -117,6 +124,8 @@ type queuedJobPayload struct {
 	MinimumWorkerMaxConcurrentRuns int                  `json:"minimumWorkerMaxConcurrentRuns"`
 	Skills                         []SkillSnapshot      `json:"skills"`
 	ExternalAgent                  *ExternalAgentTarget `json:"externalAgent"`
+	EgressDecision                 *RunEgressDecision   `json:"egressDecision"`
+	SelectedTools                  []string             `json:"selectedTools"`
 }
 
 type Assignment struct {
@@ -163,28 +172,71 @@ func (record sendMessageIdempotencyRecord) result() EnqueueUserMessageResult {
 }
 
 func enqueueRequestFingerprint(input EnqueueUserMessageInput) (string, error) {
+	type egressFingerprint struct {
+		Version                   int      `json:"version"`
+		Provider                  string   `json:"provider"`
+		Model                     string   `json:"model"`
+		RequestDigest             string   `json:"request_digest"`
+		ExternalAgentID           string   `json:"external_agent_id"`
+		ExternalCredentialRefHash string   `json:"external_credential_ref_hash"`
+		Endpoint                  string   `json:"endpoint"`
+		EndpointHost              string   `json:"endpoint_host"`
+		DataCategories            []string `json:"data_categories"`
+		SelectedTools             []string `json:"selected_tools"`
+		SkillSnapshotFingerprint  string   `json:"skill_snapshot_fingerprint"`
+		RecallApplicable          bool     `json:"recall_applicable"`
+		MemoryProfileApplicable   bool     `json:"memory_profile_applicable"`
+	}
+	var egressDecision *egressFingerprint
+	if input.EgressDecision != nil {
+		egressDecision = &egressFingerprint{
+			Version:                   input.EgressDecision.Version,
+			Provider:                  input.EgressDecision.Provider,
+			Model:                     input.EgressDecision.Model,
+			RequestDigest:             input.EgressDecision.RequestDigest,
+			ExternalAgentID:           input.EgressDecision.ExternalAgentID,
+			ExternalCredentialRefHash: input.EgressDecision.ExternalCredentialRefHash,
+			Endpoint:                  input.EgressDecision.Endpoint,
+			EndpointHost:              input.EgressDecision.EndpointHost,
+			DataCategories:            append([]string(nil), input.EgressDecision.DataCategories...),
+			SelectedTools:             append([]string(nil), input.EgressDecision.SelectedTools...),
+			SkillSnapshotFingerprint:  input.EgressDecision.SkillSnapshotFingerprint,
+			RecallApplicable:          input.EgressDecision.RecallApplicable,
+			MemoryProfileApplicable:   input.EgressDecision.MemoryProfileApplicable,
+		}
+	}
+	version := 3
+	requestedModel := input.RequestedModel
+	if egressDecision == nil {
+		version = 2
+		requestedModel = ""
+	}
 	canonical, err := json.Marshal(struct {
-		Version                        int      `json:"version"`
-		SessionID                      string   `json:"session_id"`
-		Content                        string   `json:"content"`
-		ContentType                    string   `json:"content_type"`
-		AgentID                        string   `json:"agent_id"`
-		ModelProvider                  string   `json:"model_provider"`
-		Model                          string   `json:"model"`
-		RequestedTools                 []string `json:"requested_tools"`
-		RequiredContextTokens          int      `json:"required_context_tokens"`
-		MinimumWorkerMaxConcurrentRuns int      `json:"minimum_worker_max_concurrent_runs"`
+		Version                        int                `json:"version"`
+		SessionID                      string             `json:"session_id"`
+		Content                        string             `json:"content"`
+		ContentType                    string             `json:"content_type"`
+		AgentID                        string             `json:"agent_id"`
+		ModelProvider                  string             `json:"model_provider"`
+		Model                          string             `json:"model"`
+		RequestedModel                 string             `json:"requested_model,omitempty"`
+		RequestedTools                 []string           `json:"requested_tools"`
+		RequiredContextTokens          int                `json:"required_context_tokens"`
+		MinimumWorkerMaxConcurrentRuns int                `json:"minimum_worker_max_concurrent_runs"`
+		EgressDecision                 *egressFingerprint `json:"egress_decision,omitempty"`
 	}{
-		Version:                        2,
+		Version:                        version,
 		SessionID:                      input.SessionID,
 		Content:                        input.Content,
 		ContentType:                    input.ContentType,
 		AgentID:                        input.AgentID,
 		ModelProvider:                  input.ModelProvider,
 		Model:                          input.Model,
+		RequestedModel:                 requestedModel,
 		RequestedTools:                 input.RequestedTools,
 		RequiredContextTokens:          input.RequiredContextTokens,
 		MinimumWorkerMaxConcurrentRuns: input.MinimumWorkerMaxConcurrentRuns,
+		EgressDecision:                 egressDecision,
 	})
 	if err != nil {
 		return "", err
@@ -453,6 +505,7 @@ func resolveEnqueueRouteTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMes
 		ModelProvider:                  input.ModelProvider,
 		Model:                          model,
 		RequestedTools:                 append([]string(nil), input.RequestedTools...),
+		SelectedTools:                  append([]string(nil), input.SelectedTools...),
 		RequiredContextTokens:          input.RequiredContextTokens,
 		MinimumWorkerMaxConcurrentRuns: input.MinimumWorkerMaxConcurrentRuns,
 	}}
@@ -468,15 +521,18 @@ func resolveEnqueueRouteTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMes
 	resolved.requirements.ExternalAgent = true
 	resolved.requirements.ExternalAgentCredentialRef = routedAgent.CredentialRef
 	resolved.routedAgent = routedAgent
+	canonicalEndpoint, err := backendegress.ParseKeyedEndpoint(routedAgent.BaseURL)
+	if err != nil {
+		return resolvedEnqueueRoute{}, ErrExternalAgentBaseURLInsecure
+	}
 	resolved.externalTarget = &ExternalAgentTarget{
+		AgentID:       routedAgent.AgentID,
 		DisplayName:   routedAgent.DisplayName,
-		BaseURL:       routedAgent.BaseURL,
+		BaseURL:       canonicalEndpoint.Canonical,
 		CredentialRef: routedAgent.CredentialRef,
 	}
 	resolved.externalAgentName = sql.NullString{String: routedAgent.DisplayName, Valid: true}
-	if parsed, parseErr := url.Parse(routedAgent.BaseURL); parseErr == nil && parsed.Host != "" {
-		resolved.externalAgentHost = sql.NullString{String: parsed.Host, Valid: true}
-	}
+	resolved.externalAgentHost = sql.NullString{String: canonicalEndpoint.Host, Valid: true}
 	return resolved, nil
 }
 
@@ -487,6 +543,9 @@ func resolveEnqueueRouteTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMes
 // lose a run or fire the same one twice.
 func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMessageInput) (EnqueueUserMessageResult, error) {
 	input = normalizeEnqueueUserMessageInput(input)
+	if err := requireActiveSessionTx(ctx, tx, input.SessionID); err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
 	// Resolve the effective destination before writing anything. A conversation
 	// routed to an external agent overrides request provider/model fields, and
 	// routing validation must evaluate that same frozen destination.
@@ -501,6 +560,32 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 		}
 	}
 	modelProvider, model := resolvedRoute.requirements.ModelProvider, resolvedRoute.requirements.Model
+	egressDecision, err := normalizePendingEgressDecision(input.EgressDecision)
+	if err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	if modelProvider == "openai_compatible" && egressDecision == nil {
+		return EnqueueUserMessageResult{}, ErrRemoteEgressConsentRequired
+	}
+	if modelProvider != "openai_compatible" && egressDecision != nil {
+		return EnqueueUserMessageResult{}, ErrLocalEgressDecisionForbidden
+	}
+	if egressDecision != nil &&
+		(egressDecision.Provider != modelProvider || egressDecision.Model != model) {
+		return EnqueueUserMessageResult{}, ErrEgressDecisionInvalid
+	}
+	if egressDecision != nil {
+		if resolvedRoute.requirements.ExternalAgent {
+			if egressDecision.ExternalAgentID != resolvedRoute.routedAgent.AgentID ||
+				egressDecision.ExternalCredentialRefHash != backendegress.HashCredentialReference(resolvedRoute.routedAgent.CredentialRef) ||
+				egressDecision.Endpoint != resolvedRoute.externalTarget.BaseURL {
+				return EnqueueUserMessageResult{}, ErrEgressDecisionInvalid
+			}
+		} else if egressDecision.ExternalAgentID != "" ||
+			egressDecision.ExternalCredentialRefHash != "" {
+			return EnqueueUserMessageResult{}, ErrEgressDecisionInvalid
+		}
+	}
 
 	created := time.Now().UTC()
 	userMessageID := ids.New("msg")
@@ -518,14 +603,17 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return EnqueueUserMessageResult{}, err
 	}
+	var timestampAnchors []time.Time
 	if latestCreatedAt != "" {
 		latest, parseErr := time.Parse(time.RFC3339Nano, latestCreatedAt)
 		if parseErr != nil {
 			return EnqueueUserMessageResult{}, parseErr
 		}
-		if !created.After(latest) {
-			created = latest.Add(time.Nanosecond)
-		}
+		timestampAnchors = append(timestampAnchors, latest)
+	}
+	created, err = nextSessionActivityTimeTx(ctx, tx, input.SessionID, created, timestampAnchors...)
+	if err != nil {
+		return EnqueueUserMessageResult{}, err
 	}
 	createdAt := FormatTimestamp(created)
 	assistantCreatedAt := FormatTimestamp(created.Add(time.Nanosecond))
@@ -546,6 +634,14 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	// from a careless paste a credential. Only the recipient is worth keeping.
 	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status, model_provider, model_name, external_agent_name, external_agent_host, created_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`, runID, input.SessionID, userMessageID, assistantMessageID, input.AgentID, traceID, modelProvider, model, resolvedRoute.externalAgentName, resolvedRoute.externalAgentHost, createdAt); err != nil {
 		return EnqueueUserMessageResult{}, err
+	}
+	var storedEgressDecision *RunEgressDecision
+	if egressDecision != nil {
+		decision, insertErr := insertRunEgressDecisionTx(ctx, tx, runID, egressDecision)
+		if insertErr != nil {
+			return EnqueueUserMessageResult{}, insertErr
+		}
+		storedEgressDecision = &decision
 	}
 	// Name the conversation after the first thing said in it, and mark the
 	// session as touched so the client's most-recent-first list actually
@@ -572,12 +668,16 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	`, derivedTitle, derivedTitle, derivedTitle, createdAt, input.SessionID); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
-	var sessionTitle string
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(title, '') FROM sessions WHERE id = ?`, input.SessionID).Scan(&sessionTitle); err != nil {
+	var sessionTitle, sessionStatus string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COALESCE(title, ''), status FROM sessions WHERE id = ?`,
+		input.SessionID,
+	).Scan(&sessionTitle, &sessionStatus); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	sessionUpdatedPayload, err := json.Marshal(map[string]string{
 		"title":     sessionTitle,
+		"status":    sessionStatus,
 		"updatedAt": createdAt,
 	})
 	if err != nil {
@@ -595,6 +695,15 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
+	if egressDecision != nil {
+		actualSkillFingerprint, fingerprintErr := skillSnapshotFingerprint(skillSnapshots)
+		if fingerprintErr != nil {
+			return EnqueueUserMessageResult{}, fingerprintErr
+		}
+		if actualSkillFingerprint != egressDecision.SkillSnapshotFingerprint {
+			return EnqueueUserMessageResult{}, ErrEgressDecisionInvalid
+		}
+	}
 	jobPayload, err := json.Marshal(map[string]any{
 		"userText":                       input.Content,
 		"sessionId":                      input.SessionID,
@@ -610,7 +719,9 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 		// Frozen for the same reason the skills are: re-pointing or deleting
 		// the agent while this job waits must not redirect a message the user
 		// already sent, and must not send it to a company they did not pick.
-		"externalAgent": resolvedRoute.externalTarget,
+		"externalAgent":  resolvedRoute.externalTarget,
+		"egressDecision": storedEgressDecision,
+		"selectedTools":  egressDecisionSelectedTools(egressDecision, input.SelectedTools),
 	})
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
@@ -644,23 +755,67 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	// command is answered locally before a provider is ever chosen, and a
 	// cancelled or unclaimed run never reaches a vendor at all. "Sent … left
 	// your machine" would be a false statement in the transcript on every one
-	// of those, which this project ranks as the worst kind of defect. "Sending
-	// … leaves" is true in both outcomes.
+	// of those, which this project ranks as the worst kind of defect. The notice
+	// below stays conditional on the run actually reaching the provider.
 	var routingEvents []Event
-	if resolvedRoute.requirements.ExternalAgent {
+	if storedEgressDecision != nil {
+		destination := storedEgressDecision.EndpointHost
+		displayCategories := make([]string, len(storedEgressDecision.DataCategories))
+		for index, category := range storedEgressDecision.DataCategories {
+			displayCategories[index] = egressCategoryLabel(category)
+		}
 		notice, err := appendRunNoticeTx(ctx, tx, input.SessionID, runID, traceID,
-			"Sending to "+flattenNoticeText(resolvedRoute.routedAgent.DisplayName)+" — this message leaves your machine",
+			"Sending to "+destination+" — disclosed data categories: "+
+				strings.Join(displayCategories, ", ")+
+				". Data leaves your machine if this run reaches the provider",
 			map[string]any{
-				"externalAgent": resolvedRoute.routedAgent.DisplayName,
-				"endpoint":      ExternalAgentEndpointHost(resolvedRoute.routedAgent.BaseURL),
-				"model":         resolvedRoute.routedAgent.Model,
+				"provider":        storedEgressDecision.Provider,
+				"endpoint":        storedEgressDecision.EndpointHost,
+				"model":           storedEgressDecision.Model,
+				"dataCategories":  storedEgressDecision.DataCategories,
+				"decisionVersion": storedEgressDecision.Version,
 			}, createdAt)
 		if err != nil {
 			return EnqueueUserMessageResult{}, err
 		}
 		routingEvents = append(routingEvents, notice)
+		if err := recordAuditTx(ctx, tx, runID, "client", "", "egress.consent.recorded", runID,
+			auditPayload(map[string]any{
+				"provider":         storedEgressDecision.Provider,
+				"endpointHost":     storedEgressDecision.EndpointHost,
+				"dataCategories":   storedEgressDecision.DataCategories,
+				"decisionVersion":  storedEgressDecision.Version,
+				"consentGrantedAt": storedEgressDecision.ConsentGrantedAt,
+			})); err != nil {
+			return EnqueueUserMessageResult{}, err
+		}
 	}
 	return EnqueueUserMessageResult{SessionID: input.SessionID, UserMessageID: userMessageID, AssistantMessageID: assistantMessageID, RunID: runID, JobID: jobID, TraceID: traceID, Status: "queued", SessionUpdatedEvent: sessionUpdatedEvent, QueuedEvent: queuedEvent, RoutingEvents: routingEvents}, nil
+}
+
+func egressCategoryLabel(category string) string {
+	switch category {
+	case "EGRESS_DATA_CATEGORY_CURRENT_MESSAGE":
+		return "Current message"
+	case "EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY":
+		return "Conversation history"
+	case "EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL":
+		return "Cross-session recall"
+	case "EGRESS_DATA_CATEGORY_MEMORY_PROFILE":
+		return "Memory and profile"
+	case "EGRESS_DATA_CATEGORY_SKILL_CONTENT":
+		return "Enabled skill content"
+	case "EGRESS_DATA_CATEGORY_TOOL_SCHEMAS":
+		return "Tool schemas"
+	case "EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS":
+		return "Tool arguments"
+	case "EGRESS_DATA_CATEGORY_TOOL_RESULTS":
+		return "Tool results"
+	case "EGRESS_DATA_CATEGORY_ATTACHMENTS":
+		return "Attachments"
+	default:
+		return "Unknown data category"
+	}
 }
 
 func normalizeEnqueueUserMessageInput(input EnqueueUserMessageInput) EnqueueUserMessageInput {
@@ -670,14 +825,11 @@ func normalizeEnqueueUserMessageInput(input EnqueueUserMessageInput) EnqueueUser
 	input.RequestedTools = append([]string{}, input.RequestedTools...)
 	sort.Strings(input.RequestedTools)
 	input.RequestedTools = slices.Compact(input.RequestedTools)
+	input.SelectedTools = append([]string{}, input.SelectedTools...)
+	sort.Strings(input.SelectedTools)
+	input.SelectedTools = slices.Compact(input.SelectedTools)
+	input.EgressDecision = clonePendingEgressDecision(input.EgressDecision)
 	return input
-}
-
-// flattenNoticeText collapses a user-chosen name to a single line before it is
-// pasted into a sentence. An agent named across two lines would otherwise
-// break the notice in half, and the second half would read as its own claim.
-func flattenNoticeText(value string) string {
-	return strings.Join(strings.Fields(value), " ")
 }
 
 func (r *Repository) ClaimNextJob(ctx context.Context, agentID string, leaseOwner string) (Job, error) {
@@ -805,6 +957,8 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 		// conversation that was never routed away. nil means the local assistant,
 		// which is the only default that keeps the transcript on this machine.
 		candidate.ExternalAgent = payload.ExternalAgent
+		candidate.EgressDecision = payload.EgressDecision
+		candidate.SelectedTools = payload.SelectedTools
 		externalAgentCredentialRef := ""
 		if candidate.ExternalAgent != nil {
 			externalAgentCredentialRef = candidate.ExternalAgent.CredentialRef
@@ -814,6 +968,7 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 			ModelProvider:                  candidate.ModelProvider,
 			Model:                          candidate.Model,
 			RequestedTools:                 candidate.RequestedTools,
+			SelectedTools:                  candidate.SelectedTools,
 			RequiredContextTokens:          candidate.RequiredContextTokens,
 			MinimumWorkerMaxConcurrentRuns: candidate.MinimumWorkerMaxConcurrentRuns,
 			ExternalAgent:                  candidate.ExternalAgent != nil,
@@ -893,7 +1048,8 @@ func claimRoutingFilterSQL(capabilities *WorkerRoutingCapabilities) (string, []a
 	const externalAgentType = `json_type(j.payload_json, '$.externalAgent')`
 	var destinations []string
 	var args []any
-	if len(capabilities.ExternalAgentCredentialRefs) > 0 {
+	egressAware := capabilities.RemoteEgressDecisionVersion >= RunEgressDecisionVersion
+	if egressAware && len(capabilities.ExternalAgentCredentialRefs) > 0 {
 		placeholders := make([]string, len(capabilities.ExternalAgentCredentialRefs))
 		for index, credentialRef := range capabilities.ExternalAgentCredentialRefs {
 			placeholders[index] = "?"
@@ -906,6 +1062,9 @@ func claimRoutingFilterSQL(capabilities *WorkerRoutingCapabilities) (string, []a
 		)`)
 	}
 	for _, model := range capabilities.Models {
+		if model.Provider == "openai_compatible" && !egressAware {
+			continue
+		}
 		destinations = append(destinations, `(
 			COALESCE(`+externalAgentType+`, 'null') <> 'object'
 			AND r.model_provider = ?
@@ -929,6 +1088,10 @@ func claimRoutingFilterSQL(capabilities *WorkerRoutingCapabilities) (string, []a
 		AND NOT EXISTS (
 			SELECT 1
 			FROM json_each(COALESCE(json_extract(j.payload_json, '$.requestedTools'), json('[]')))
+		)
+		AND NOT EXISTS (
+			SELECT 1
+			FROM json_each(COALESCE(json_extract(j.payload_json, '$.selectedTools'), json('[]')))
 		)`
 		return filter, args
 	}
@@ -942,7 +1105,15 @@ func claimRoutingFilterSQL(capabilities *WorkerRoutingCapabilities) (string, []a
 			SELECT 1
 			FROM json_each(COALESCE(json_extract(j.payload_json, '$.requestedTools'), json('[]'))) requested_tool
 			WHERE requested_tool.value NOT IN (` + strings.Join(placeholders, ", ") + `)
+		)
+		AND NOT EXISTS (
+			SELECT 1
+			FROM json_each(COALESCE(json_extract(j.payload_json, '$.selectedTools'), json('[]'))) selected_tool
+			WHERE selected_tool.value NOT IN (` + strings.Join(placeholders, ", ") + `)
 		)`
+	for _, tool := range capabilities.Tools {
+		args = append(args, tool)
+	}
 	return filter, args
 }
 
@@ -996,6 +1167,7 @@ func (r *Repository) ListPendingRoutingWorkPage(
 			return nil, after, err
 		}
 		item.Requirements.RequestedTools = append([]string(nil), payload.RequestedTools...)
+		item.Requirements.SelectedTools = append([]string(nil), payload.SelectedTools...)
 		item.Requirements.RequiredContextTokens = payload.RequiredContextTokens
 		item.Requirements.MinimumWorkerMaxConcurrentRuns = payload.MinimumWorkerMaxConcurrentRuns
 		item.Requirements.ExternalAgent = payload.ExternalAgent != nil

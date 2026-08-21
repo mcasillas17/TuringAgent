@@ -10,6 +10,8 @@ import 'package:turing_flutter_app/generated/turing/v1/sessions.pb.dart'
 import 'package:turing_flutter_app/generated/google/protobuf/timestamp.pb.dart'
     as timestamppb;
 import 'package:turing_flutter_app/models/grpc_mappers.dart';
+import 'package:turing_flutter_app/models/session.dart';
+import 'package:turing_flutter_app/models/session_page.dart';
 import 'package:turing_flutter_app/generated/google/protobuf/struct.pb.dart'
     as structpb;
 
@@ -75,12 +77,14 @@ void main() {
     final earlier = GrpcMappers.sessionToModel(
       sessionpb.Session(
         sessionId: 'sess_z',
+        status: 'active',
         updatedAt: timestamppb.Timestamp(seconds: Int64(1), nanos: 100),
       ),
     );
     final later = GrpcMappers.sessionToModel(
       sessionpb.Session(
         sessionId: 'sess_a',
+        status: 'active',
         updatedAt: timestamppb.Timestamp(seconds: Int64(1), nanos: 900),
       ),
     );
@@ -88,6 +92,30 @@ void main() {
     expect(earlier.updatedAt, later.updatedAt);
     expect(earlier.updatedAtNanoseconds, 1000000100);
     expect(later.updatedAtNanoseconds, 1000000900);
+  });
+
+  test('maps archived session pages with exact cursor and nanoseconds', () {
+    final page = GrpcMappers.sessionPageToModel(
+      sessionpb.ListSessionsResponse(
+        sessions: [
+          sessionpb.Session(
+            sessionId: 'sess_archived',
+            title: 'Archived',
+            status: 'archived',
+            updatedAt: timestamppb.Timestamp(
+              seconds: Int64(1770000000),
+              nanos: 1,
+            ),
+          ),
+        ],
+        page: commonpb.PageResponse(nextCursor: 'cursor-next'),
+      ),
+    );
+
+    expect(page, isA<SessionPage>());
+    expect(page.sessions.single.status, SessionStatus.archived);
+    expect(page.nextCursor, 'cursor-next');
+    expect(page.sessions.single.updatedAtNanoseconds, 1770000000000000001);
   });
 
   test('maps token deltas into assistant message content', () {

@@ -15,6 +15,8 @@ import '../support/no_audit_api.dart';
 import '../support/no_skills_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_automations_api.dart';
+import '../support/no_remote_egress_api.dart';
+import '../support/no_session_lifecycle_api.dart';
 import '../support/no_telemetry_api.dart';
 
 /// What the user types into the credential field. Nothing on screen may ever
@@ -604,6 +606,8 @@ class _IntegrationsApi
         NoSkillsApi,
         NoExternalAgentsApi,
         NoAutomationsApi,
+        NoRemoteEgressApi,
+        NoSessionLifecycleApi,
         NoTelemetryApi
     implements TuringApi {
   final List<IntegrationConnection> connections = [];

@@ -187,6 +187,9 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	if job == nil {
 		return fmt.Errorf("job is required")
 	}
+	if err := validateEgressDecisionShape(job); err != nil {
+		return emitRunFailed(emit, job, "egress_decision_invalid", err.Error(), false)
+	}
 	messages, err := a.messages.FetchMessages(
 		ctx,
 		job.GetSessionId(),
@@ -214,6 +217,9 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	if llm.ProviderIsNil(provider) {
 		return emitRunFailed(emit, job, "model_provider_unavailable", fmt.Sprintf("Provider %s is not configured", job.GetModelProvider().String()), false)
 	}
+	if err := validateEgressProvider(job, provider); err != nil {
+		return emitRunFailed(emit, job, "egress_decision_invalid", err.Error(), false)
+	}
 	registry, err := a.discoverTools(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -231,6 +237,12 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	// through skill_view or an exact $path/id invocation. Legacy queued jobs
 	// retain their old full-body snapshot behavior until they drain.
 	toolDefinitions := registry.Definitions()
+	if job.GetModelProvider() == turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE {
+		toolDefinitions, err = registry.DefinitionsFor(job.GetSelectedTools())
+		if err != nil {
+			return emitRunFailed(emit, job, "egress_decision_invalid", err.Error(), false)
+		}
+	}
 	recallForContext := a.prepareRecallForRun(ctx, job)
 	var content strings.Builder
 	var tokens runTokenAccumulator
@@ -420,6 +432,16 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			}
 			return completeRun(emit, job, content.String(), tokens.reported())
 		}
+		if job.GetModelProvider() == turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE &&
+			len(job.GetSelectedTools()) == 0 {
+			return emitRunFailed(
+				emit,
+				job,
+				"egress_decision_invalid",
+				"remote model requested a tool without tool-result disclosure",
+				false,
+			)
+		}
 		if toolCallCount+len(calls) > a.maxToolCallsPerRun {
 			return emitRunFailed(
 				emit,
@@ -476,7 +498,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			return emitRunFailed(emit, job, "context_budget_exceeded", err.Error(), false)
 		}
 		for _, call := range calls {
-			outcome, err := a.executeToolCall(ctx, job, emit, registry, call)
+			outcome, err := a.executeToolCall(ctx, job, emit, registry, toolDefinitions, call)
 			successfulToolSideEffect = successfulToolSideEffect || outcome.SuccessfulSideEffect
 			if err != nil {
 				if errors.Is(err, errRunTerminalized) {
@@ -809,17 +831,18 @@ func (a *GeneralAssistant) executeToolCall(
 	job *turingv1.AgentJob,
 	emit func(*turingv1.RuntimeUpdate) error,
 	registry *ToolRegistry,
+	availableDefinitions []llm.ToolDefinition,
 	call llm.ToolCall,
 ) (toolCallOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return toolCallOutcome{}, err
 	}
 	entry, found := registry.Lookup(call.Name)
-	if !found {
+	if !found || !toolDefinitionAvailable(availableDefinitions, call.Name) {
 		if err := emitAssistantToolCallFailed(emit, job, call, "unknown_tool"); err != nil {
 			return toolCallOutcome{}, err
 		}
-		return unknownToolOutcome(call, registry)
+		return unknownToolOutcome(call, availableDefinitions)
 	}
 	if a.tools == nil || a.tools.Runner == nil {
 		if err := emitAssistantToolCallFailed(emit, job, call, "tool_runner_unavailable"); err != nil {
@@ -928,12 +951,12 @@ type unknownToolPayload struct {
 // unknownToolOutcome builds the recoverable error for an unknown tool name. Same
 // outcome shape as toolErrorOutcome — a tool-role result threaded back to the
 // model — but with actionable content.
-func unknownToolOutcome(call llm.ToolCall, registry *ToolRegistry) (toolCallOutcome, error) {
-	definitions := registry.Definitions()
+func unknownToolOutcome(call llm.ToolCall, definitions []llm.ToolDefinition) (toolCallOutcome, error) {
 	available := make([]string, 0, len(definitions))
 	for _, definition := range definitions {
 		available = append(available, definition.Name)
 	}
+
 	payload := unknownToolPayload{
 		Error:          "unknown_tool",
 		RejectedTool:   call.Name,
@@ -950,6 +973,15 @@ func unknownToolOutcome(call llm.ToolCall, registry *ToolRegistry) (toolCallOutc
 	}
 	result := toolResultMessage(call, data)
 	return toolCallOutcome{ResultMessage: &result, AppendedBytes: len(data)}, nil
+}
+
+func toolDefinitionAvailable(definitions []llm.ToolDefinition, name string) bool {
+	for _, definition := range definitions {
+		if definition.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func toolErrorOutcome(call llm.ToolCall, message string) (toolCallOutcome, error) {

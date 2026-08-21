@@ -20,6 +20,7 @@ import 'automation.dart' as model_automation;
 import 'message.dart' as model_message;
 import 'search_hit.dart' as model_search_hit;
 import 'session.dart' as model_session;
+import 'session_page.dart' as model_session_page;
 import 'skill.dart' as model_skill;
 import 'telemetry.dart' as model_telemetry;
 import 'tool_descriptor.dart' as model_tool;
@@ -114,6 +115,10 @@ class GrpcMappers {
       lastRunId: automation.lastRunId,
       lastRunStatus: automation.lastRunStatus,
       lastRunError: automation.lastRunError,
+      lastOccurrenceFailureCode: automation.lastOccurrenceFailureCode,
+      lastOccurrenceFailedAt: automation.hasLastOccurrenceFailedAt()
+          ? automation.lastOccurrenceFailedAt.toDateTime().toLocal()
+          : null,
     );
   }
 
@@ -348,6 +353,22 @@ class GrpcMappers {
       updatedAtNanoseconds:
           session.updatedAt.seconds.toInt() * 1000000000 +
           session.updatedAt.nanos,
+      status: switch (session.status) {
+        'active' => model_session.SessionStatus.active,
+        'archived' => model_session.SessionStatus.archived,
+        _ => throw const FormatException('invalid session status'),
+      },
+    );
+  }
+
+  static model_session_page.SessionPage sessionPageToModel(
+    sessionpb.ListSessionsResponse response,
+  ) {
+    return model_session_page.SessionPage(
+      sessions: response.sessions.map(sessionToModel).toList(growable: false),
+      nextCursor: response.page.nextCursor.isEmpty
+          ? null
+          : response.page.nextCursor,
     );
   }
 
@@ -844,7 +865,49 @@ class GrpcMappers {
       denialReasonTruncated: payload.hasDenialReasonTruncated()
           ? payload.denialReasonTruncated
           : null,
+      endpointHost: payload.hasEndpointHost() ? payload.endpointHost : null,
+      egressDataCategories: payload.egressDataCategories
+          .map(egressDataCategoryToString)
+          .toList(growable: false),
+      egressDecisionVersion: payload.hasEgressDecisionVersion()
+          ? payload.egressDecisionVersion
+          : null,
+      egressConsentGrantedAt: payload.hasEgressConsentGrantedAt()
+          ? payload.egressConsentGrantedAt.toDateTime().toUtc()
+          : null,
     );
+  }
+
+  static String egressDataCategoryToString(
+    commonpb.EgressDataCategory category,
+  ) {
+    switch (category) {
+      case commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_CURRENT_MESSAGE:
+        return 'current_message';
+      case commonpb
+          .EgressDataCategory
+          .EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY:
+        return 'conversation_history';
+      case commonpb
+          .EgressDataCategory
+          .EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL:
+        return 'cross_session_recall';
+      case commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_MEMORY_PROFILE:
+        return 'memory_profile';
+      case commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_SKILL_CONTENT:
+        return 'skill_content';
+      case commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_TOOL_SCHEMAS:
+        return 'tool_schemas';
+      case commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS:
+        return 'tool_arguments';
+      case commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_TOOL_RESULTS:
+        return 'tool_results';
+      case commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_ATTACHMENTS:
+        return 'attachments';
+      case commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_UNSPECIFIED:
+        throw StateError('Unspecified egress category cannot be displayed');
+    }
+    throw StateError('Unknown egress category: $category');
   }
 
   /// Unspecified is not a fourth state this client can safely render: it

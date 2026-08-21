@@ -17,6 +17,7 @@ import 'package:turing_flutter_app/networking/api_client.dart';
 import '../support/no_audit_api.dart';
 import '../support/no_skills_api.dart';
 import '../support/no_integrations_api.dart';
+import '../support/no_session_lifecycle_api.dart';
 import '../support/no_automations_api.dart';
 import '../support/no_telemetry_api.dart';
 
@@ -570,14 +571,14 @@ class _Offline implements Exception {
 
 /// A working in-memory backend, so the UI is exercised against something that
 /// behaves like the real one rather than a stub that always says yes.
-class _AgentApi
+class _AgentApi extends TuringApi
     with
         NoAuditApi,
         NoSkillsApi,
         NoIntegrationsApi,
+        NoSessionLifecycleApi,
         NoAutomationsApi,
-        NoTelemetryApi
-    implements TuringApi {
+        NoTelemetryApi {
   final List<ExternalAgent> agents = [];
   final Map<String, String> routes = {};
   final List<ExternalAgent> created = [];

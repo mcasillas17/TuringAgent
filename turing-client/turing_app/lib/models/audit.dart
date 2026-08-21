@@ -91,6 +91,10 @@ class AuditPayload {
     this.decisionCommentTruncated,
     this.denialReason,
     this.denialReasonTruncated,
+    this.endpointHost,
+    this.egressDataCategories = const [],
+    this.egressDecisionVersion,
+    this.egressConsentGrantedAt,
   });
 
   final AuditPayloadState state;
@@ -130,6 +134,10 @@ class AuditPayload {
   /// sentence, not the tool-policy [reason] that explains why a call needed
   /// approval in the first place — they are separate fields on purpose.
   final String? denialReason;
+  final String? endpointHost;
+  final List<String> egressDataCategories;
+  final int? egressDecisionVersion;
+  final DateTime? egressConsentGrantedAt;
 
   /// True when the backend had to shorten [denialReason]; see
   /// [decisionCommentTruncated].

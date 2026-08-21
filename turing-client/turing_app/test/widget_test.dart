@@ -18,6 +18,7 @@ import 'package:turing_flutter_app/networking/event_source.dart';
 import 'support/no_audit_api.dart';
 import 'support/no_external_agents_api.dart';
 import 'support/no_integrations_api.dart';
+import 'support/no_session_lifecycle_api.dart';
 import 'support/no_automations_api.dart';
 import 'support/no_skills_api.dart';
 import 'support/no_telemetry_api.dart';
@@ -88,15 +89,15 @@ class _FakeAuthStorage implements ClientAuthStorage {
   }) async {}
 }
 
-class _ClosableFakeApiClient
+class _ClosableFakeApiClient extends ClosableTuringApi
     with
         NoAuditApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
+        NoSessionLifecycleApi,
         NoAutomationsApi,
-        NoTelemetryApi
-    implements ClosableTuringApi {
+        NoTelemetryApi {
   bool closed = false;
 
   @override

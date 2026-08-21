@@ -18,9 +18,10 @@ The recommended path is:
 3. Define erasure and provenance invariants before creating derived memory.
 4. Add user-controlled, evidence-backed semantic and procedural memory.
 5. Add automatic learning only as a reviewable candidate workflow.
-6. Add local embeddings only if the evaluation suite proves lexical retrieval is insufficient.
-7. Conform to MCP and add connectors only after the memory and trust boundaries are stable.
-8. Add a second specialized agent only after capability discovery, routing, and concurrent-worker behavior are explicit.
+6. Evaluate and, if approved, protect managed SQLite state at rest and support whole-database cryptographic retirement only after backup and restore integrity is proven.
+7. Add local embeddings only if the evaluation suite proves lexical retrieval is insufficient.
+8. Conform to MCP and add connectors only after the memory and trust boundaries are stable.
+9. Add a second specialized agent only after capability discovery, routing, and concurrent-worker behavior are explicit.
 
 The target is not a graph-heavy autonomous system. It is a local, inspectable assistant whose beliefs can be traced, corrected, exported, and withdrawn.
 
@@ -141,6 +142,7 @@ Mem0's current V3 documentation demonstrates scoped, ADD-only fact extraction, e
 | Remote privacy | Provider selected per request | Explicit per-session/run egress policy and visible data scope | Critical |
 | Audit | Redacted authenticated read API; no built-in viewer | Redacted, filterable read path with a viewer | Medium |
 | Export/backup | Missing | Open-format export, consistent backup, tested restore | High |
+| State at rest | The database file is unencrypted; only stored integration credentials are sealed, and automated backup is missing | If approved, encrypted managed database and backups, with whole-database cryptographic retirement only on platforms that pass key-custody qualification | High |
 | Connectors | Two hard-coded in-repo JSON-RPC tool servers | Standards-conformant MCP plus connector provenance and consent | High |
 | Multi-agent | One general assistant | Capability-aware routing and explicit handoff | Later |
 | Evaluation | No memory/retrieval harness | Checked-in quality, safety, latency, and deletion suites | Critical |
@@ -234,10 +236,10 @@ Task IDs are stable references, not priority numbers. Delivery order follows `do
 
 #### TUR-002 — Persist approval decision rationale
 
-**Outcome:** A recorded approval or denial keeps the reason the user supplied instead of silently discarding an advertised API field.  
-**Scope:** Add decision-comment and denial-reason storage; consume `ApproveApprovalRequest.comment` and `DenyApprovalRequest.reason`; expose both through audit with empty and absent values distinguished.  
-**Likely files:** approvals schema/proto/service/repository and audit mapping.  
-**Acceptance:** A comment or reason survives restart; repository/service tests prove both request fields are consumed and included in the corresponding audit record. TUR-013 later makes that record user-readable.  
+**Outcome:** A recorded approval or denial keeps the reason the user supplied instead of silently discarding an advertised API field.
+**Scope:** Add decision-comment and denial-reason storage; consume `ApproveApprovalRequest.comment` and `DenyApprovalRequest.reason`; expose both through audit with empty and absent values distinguished.
+**Likely files:** approvals schema/proto/service/repository and audit mapping.
+**Acceptance:** A comment or reason survives restart; repository/service tests prove both request fields are consumed and included in the corresponding audit record. TUR-013 later makes that record user-readable.
 **Dependencies:** None.
 **Status:** Implemented. Human decisions persist the matching field atomically;
 because the existing proto3 scalars have no presence, omitted and explicit empty
@@ -255,7 +257,7 @@ preview/diff UX, and no approval viewer UI ships here.
 
 #### TUR-007 — Derive stable session titles from the first user turn — Implemented
 
-**Outcome:** Conversations and search groups are distinguishable instead of remaining "New chat."  
+**Outcome:** Conversations and search groups are distinguishable instead of remaining "New chat."
 **Delivered:** The enqueue transaction derives a deterministic, single-line, rune-safe title from the first usable user turn, preserves it on later turns, and persists `session.updated` with the authoritative title and timestamp. Flutter creates untitled sessions and applies the durable event without polling; startup backfill repairs legacy `New chat` rows.
 
 **Verification:** Repository tests cover whitespace-only, multiline, long, non-ASCII, explicit-title, later-message, backfill, replay, and deletion behavior. Event service and Flutter widget tests cover protocol mapping and live session/search rendering. See `docs/architecture/session-titles.md`.
@@ -280,34 +282,42 @@ preview/diff UX, and no approval viewer UI ships here.
 
 **Status:** In review — pending merge.
 
-**Outcome:** Retrying the same client operation cannot create duplicate messages, runs, or side effects.  
-**Scope:** Persist and consume `SendMessageRequest.idempotency_key`; bind it to session and request identity; return the original IDs for an identical replay; reject a conflicting payload.  
-**Likely files:** `proto/turing/v1/chat.proto`, chat service, jobs repository, schema migration, integration tests.  
-**Acceptance:** Concurrent duplicate requests produce one user message and one run; replay resumes the same event stream; conflicting reuse returns a typed error.  
+**Outcome:** Retrying the same client operation cannot create duplicate messages, runs, or side effects.
+**Scope:** Persist and consume `SendMessageRequest.idempotency_key`; bind it to session and request identity; return the original IDs for an identical replay; reject a conflicting payload.
+**Likely files:** `proto/turing/v1/chat.proto`, chat service, jobs repository, schema migration, integration tests.
+**Acceptance:** Concurrent duplicate requests produce one user message and one run; replay resumes the same event stream; conflicting reuse returns a typed error.
 **Dependencies:** None.
 
 #### TUR-021 — Add inspectable approval previews
 
-**Outcome:** The user can inspect exactly what a proposed mutation will change before deciding.  
-**Scope:** Add approval detail APIs with structured arguments, bounded previews/diffs and hashes; link approval events to details.  
-**Likely files:** approvals proto/service/repository, file-tool precondition data, Flutter approval UI.  
-**Acceptance:** File writes show a bounded before/after preview; secrets and oversized content are redacted; the preview is bound to the same argument hash that approval authorizes.  
+**Outcome:** The user can inspect exactly what a proposed mutation will change before deciding.
+**Scope:** Add approval detail APIs with structured arguments, bounded previews/diffs and hashes; link approval events to details.
+**Likely files:** approvals proto/service/repository, file-tool precondition data, Flutter approval UI.
+**Acceptance:** File writes show a bounded before/after preview; secrets and oversized content are redacted; the preview is bound to the same argument hash that approval authorizes.
 **Dependencies:** TUR-013.
 
 #### TUR-003 — Enforce explicit remote-provider egress policy
 
-**Outcome:** Users know and control when conversation, recall, memory, and tool data leave the machine.  
-**Scope:** Record remote-provider consent per run, disclose the data categories included, enforce HTTPS for keyed non-loopback endpoints, and prohibit implicit fallback.  
-**Likely files:** session/provider schema and proto, chat validation, runtime provider configuration, Flutter provider selection.  
-**Acceptance:** Each remote run records consent and disclosed data categories; local failure never silently falls back remotely; no background feature inherits consent from an interactive request.  
+**Outcome:** Users know and control when conversation, recall, memory, and tool data leave the machine.
+**Scope:** Record remote-provider consent per run, disclose the data categories included, enforce HTTPS for keyed non-loopback endpoints, and prohibit implicit fallback.
+**Likely files:** session/provider schema and proto, chat validation, runtime provider configuration, Flutter provider selection.
+**Acceptance:** Each remote run records consent and disclosed data categories; local failure never silently falls back remotely; no background feature inherits consent from an interactive request.
 **Dependencies:** None.
+**Pending-merge artifact:** [Remote-provider egress policy](remote-egress-policy.md).
+**Pending-merge coverage:** One-time signed disclosure challenges are bound to
+the exact request, effective destination, selected tools/skills, context flags,
+categories, nonce, and expiry; run-owned decisions survive exact idempotent
+replay and assignment retry. Keyed remote endpoints require HTTPS except exact
+loopback, redirects are refused, runtime destination/category checks fail
+closed, and automations record a typed durable failure instead of inheriting
+interactive consent.
 
 #### TUR-004 — Close session-deletion withdrawal gaps
 
-**Outcome:** Deleting a session deterministically withdraws session-owned database state, derived state, and tool artifacts.  
-**Scope:** Publish a terminal deletion event, close/reconcile subscribers, attach session/run provenance to sandbox artifacts, define keep/delete policy, and document SQLite/WAL physical-erasure limits. Evaluate whole-database encryption plus key destruction as the credible byte-withdrawal strategy instead of promising reliable file overwrite on SSDs.  
-**Likely files:** session deletion repository/service, events service, MCP file metadata, client session state, architecture docs.  
-**Acceptance:** Subscribers are notified; session-owned artifacts are listed and deleted or explicitly retained by policy; no search or memory path returns deleted content.  
+**Outcome:** Deleting a session deterministically withdraws session-owned database state, derived state, and tool artifacts.
+**Scope:** Publish a terminal deletion event, close/reconcile subscribers, attach session/run provenance to sandbox artifacts, define keep/delete policy, and document SQLite/WAL physical-erasure limits. Keep whole-database encryption and key destruction in the separate TUR-022 follow-up instead of promising per-session physical erasure or reliable file overwrite on SSDs.
+**Likely files:** session deletion repository/service, events service, MCP file metadata, client session state, architecture docs.
+**Acceptance:** Subscribers are notified; session-owned artifacts are listed and deleted or explicitly retained by policy; no search or memory path returns deleted content.
 **Dependencies:** MEM-001.
 **Implementation pending merge:** `SessionService.DeleteSession` now returns a
 typed durable receipt instead of waiting indefinitely. It immediately hides a
@@ -319,16 +329,16 @@ server-issued session/run/generation provenance, reserve a durable manifest
 row before I/O, and default to `delete_on_session_delete`; pre-existing root
 files are the sole `retain_legacy_unowned` exception. External cleanup failure
 stays retryable and never reports completion. The accompanying documentation
-distinguishes logical withdrawal from physical erasure and evaluates
-whole-database encryption/key destruction without adding SQLCipher or an
-encryption migration.
+distinguishes logical withdrawal from physical erasure and defers
+whole-database encryption/key destruction to a separate feasibility design,
+tracked here as TUR-022, without adding SQLCipher or an encryption migration.
 
 #### TUR-005 — Harden runtime and orchestrator containers
 
-**Outcome:** Every backend service follows the same least-privilege container posture already used by MCP services.  
-**Scope:** Non-root users, read-only roots, dropped capabilities, `no-new-privileges`, and minimal writable mounts.  
-**Likely files:** orchestrator/runtime Dockerfiles, Compose, Docker security tests.  
-**Acceptance:** Security tests cover all services; normal startup, model calls, and persistence still work.  
+**Outcome:** Every backend service follows the same least-privilege container posture already used by MCP services.
+**Scope:** Non-root users, read-only roots, dropped capabilities, `no-new-privileges`, and minimal writable mounts.
+**Likely files:** orchestrator/runtime Dockerfiles, Compose, Docker security tests.
+**Acceptance:** Security tests cover all services; normal startup, model calls, and persistence still work.
 **Dependencies:** None.
 **Status:** Pending merge. Branch `mcasillas17-tur-005-container-hardening`
 adds the runtime image identity, applies one fail-closed Compose posture to all
@@ -338,10 +348,10 @@ model-loop, and persistence evidence before merge.
 
 #### TUR-006 — Introduce service-scoped internal identities
 
-**Outcome:** Compromise of one internal service does not grant access to every internal RPC.  
-**Scope:** Separate runtime, approval-consumer, and connector credentials; authorize per method; remove provider and MCP secrets from processes that do not need them.  
-**Likely files:** auth interceptors, app registration, internal clients, Compose/init scripts.  
-**Acceptance:** Each service can call only required methods; existing approval consumption remains atomic; no new network listener is introduced.  
+**Outcome:** Compromise of one internal service does not grant access to every internal RPC.
+**Scope:** Separate runtime, approval-consumer, and connector credentials; authorize per method; remove provider and MCP secrets from processes that do not need them.
+**Likely files:** auth interceptors, app registration, internal clients, Compose/init scripts.
+**Acceptance:** Each service can call only required methods; existing approval consumption remains atomic; no new network listener is introduced.
 **Dependencies:** None.
 **Status:** Pending merge. Branch `mcasillas17-tur-006-service-identities`
 splits the single shared `TURING_INTERNAL_TOKEN` into `TURING_RUNTIME_TOKEN`
@@ -386,42 +396,47 @@ check, lint) before merge.
 
 #### TUR-008 — Complete session lifecycle and pagination
 
-**Outcome:** Session ordering, pagination, archive/rename behavior, and limits match the public contract.  
-**Scope:** Update `sessions.updated_at` on activity; implement bounded stable cursors; consume `PageRequest.cursor`; populate `PageResponse`; add explicit rename/archive operations and input limits. Today `updated_at` is only set at creation, so ordering is creation order, and the service advertises but ignores cursor pagination.  
-**Likely files:** sessions proto/service/repository, jobs transaction, Flutter session actions.  
-**Acceptance:** Pagination is stable under inserts; active conversations reorder correctly; invalid cursors and excessive limits fail predictably.  
+**Status:** Implemented. See [Session lifecycle and pagination](session-lifecycle.md) for the public behavior and its mutable-row keyset trade-off.
+
+**Outcome:** Session ordering, pagination, archive/rename behavior, and limits match the public contract.
+**Scope:** Shipped monotonic activity updates, authenticated bounded keyset cursors, consumed `PageRequest.cursor`, populated `PageResponse`, explicit rename/archive/restore operations, active/archived/all filters, and server-authoritative input limits. Flutter exposes active load-more plus rename, archive, archived-list restore, and permanent delete actions.
+
+**Likely files:** Delivered across the sessions proto/service/repository, accepted-message transaction, lifecycle migration/configuration, and Flutter session model/network/shell surfaces.
+
+**Acceptance:** Covered by repository, public gRPC, cursor, migration, and Flutter regressions: pagination remains stable under concurrent inserts; active conversations reorder on durable activity; stale pages and legacy events cannot resurrect archived rows; malformed cursors and excessive limits fail predictably.
+
 **Dependencies:** None.
 
 #### TUR-009 — Persist reopenable run outcomes
 
-**Outcome:** Reopening a conversation never shows an unexplained empty assistant turn.  
-**Scope:** Expose run status and failure/cancellation reason with message history or a run-history API; render terminal cards after reopen.  
-**Likely files:** message/run proto, sessions repository/service, Flutter conversation timeline.  
-**Acceptance:** Completed, failed, and cancelled runs round-trip after restart; no empty placeholder is ambiguous.  
+**Outcome:** Reopening a conversation never shows an unexplained empty assistant turn.
+**Scope:** Expose run status and failure/cancellation reason with message history or a run-history API; render terminal cards after reopen.
+**Likely files:** message/run proto, sessions repository/service, Flutter conversation timeline.
+**Acceptance:** Completed, failed, and cancelled runs round-trip after restart; no empty placeholder is ambiguous.
 **Dependencies:** None.
 
 #### TUR-010 — Surface no-worker and queue-timeout state
 
-**Outcome:** A queued run cannot wait indefinitely without explanation.  
-**Scope:** Persist queue age and worker availability notices; add configurable terminalization/pause policy for unavailable capabilities.  
-**Likely files:** dispatcher/reaper, jobs repository, events, Flutter status cards.  
-**Acceptance:** A run with no eligible worker shows an immediate durable notice and reaches the configured terminal/pause state.  
+**Outcome:** A queued run cannot wait indefinitely without explanation.
+**Scope:** Persist queue age and worker availability notices; add configurable terminalization/pause policy for unavailable capabilities.
+**Likely files:** dispatcher/reaper, jobs repository, events, Flutter status cards.
+**Acceptance:** A run with no eligible worker shows an immediate durable notice and reaches the configured terminal/pause state.
 **Dependencies:** TUR-018.
 
 #### TUR-011 — Batch model deltas
 
-**Outcome:** Streaming remains responsive without one SQLite transaction and replay cycle per provider chunk.  
-**Scope:** Implement time/byte coalescing using a real, documented flush setting while preserving sequence and terminal durability.  
-**Likely files:** runtime output pipeline or orchestrator event ingestion, configuration, streaming tests.  
-**Acceptance:** A 1,000-chunk fixture produces a bounded number of writes; resume reconstructs byte-identical output; terminal events flush pending text; the test records the transaction budget on the single SQLite connection.  
+**Outcome:** Streaming remains responsive without one SQLite transaction and replay cycle per provider chunk.
+**Scope:** Implement time/byte coalescing using a real, documented flush setting while preserving sequence and terminal durability.
+**Likely files:** runtime output pipeline or orchestrator event ingestion, configuration, streaming tests.
+**Acceptance:** A 1,000-chunk fixture produces a bounded number of writes; resume reconstructs byte-identical output; terminal events flush pending text; the test records the transaction budget on the single SQLite connection.
 **Dependencies:** None.
 
 #### TUR-012 — Extend approval push to approved decisions
 
-**Outcome:** Approval wakes the exact waiting tool call immediately under normal operation.  
-**Scope:** Extend the existing denied/expired push handling to approved decisions; retain polling only after stream loss; handle duplicate and late updates.  
-**Likely files:** runtime worker, tool runner, orchestrator client, runtime command tests.  
-**Acceptance:** Approval latency is not tied to the one-second poll interval; reconnect races preserve single consumption.  
+**Outcome:** Approval wakes the exact waiting tool call immediately under normal operation.
+**Scope:** Extend the existing denied/expired push handling to approved decisions; retain polling only after stream loss; handle duplicate and late updates.
+**Likely files:** runtime worker, tool runner, orchestrator client, runtime command tests.
+**Acceptance:** Approval latency is not tied to the one-second poll interval; reconnect races preserve single consumption.
 **Dependencies:** None.
 
 #### TUR-013 — Add a redacted audit read API
@@ -439,18 +454,18 @@ check, lint) before merge.
 
 #### TUR-014 — Capture provider usage and actionable health
 
-**Outcome:** Local operators can explain latency, model usage, queue pressure, and dependency readiness.  
-**Scope:** Persist provider tokens/timing where available; honor `LOG_LEVEL`; expose structured readiness for DB, workers, MCP, and configured providers; add local metrics without sensitive content.  
-**Likely files:** provider parsers, run completion/schema/proto, health service, process logging.  
-**Acceptance:** Usage and latency appear per run; health is degraded when a required dependency is unavailable; local models never invent monetary cost.  
+**Outcome:** Local operators can explain latency, model usage, queue pressure, and dependency readiness.
+**Scope:** Persist provider tokens/timing where available; honor `LOG_LEVEL`; expose structured readiness for DB, workers, MCP, and configured providers; add local metrics without sensitive content.
+**Likely files:** provider parsers, run completion/schema/proto, health service, process logging.
+**Acceptance:** Usage and latency appear per run; health is degraded when a required dependency is unavailable; local models never invent monetary cost.
 **Dependencies:** TUR-018.
 
 #### TUR-019 — Enforce protobuf compatibility
 
-**Outcome:** Additive evolution remains safe for Flutter and future clients before the memory APIs expand the contract.  
-**Scope:** Reserve removed fields/numbers and add CI breaking-change checks against `main` while retaining deterministic generation checks.  
-**Likely files:** proto files, `tools/proto`, CI workflow and self-guard tests.  
-**Acceptance:** Additive changes pass; renumbering/removing a live field fails CI.  
+**Outcome:** Additive evolution remains safe for Flutter and future clients before the memory APIs expand the contract.
+**Scope:** Reserve removed fields/numbers and add CI breaking-change checks against `main` while retaining deterministic generation checks.
+**Likely files:** proto files, `tools/proto`, CI workflow and self-guard tests.
+**Acceptance:** Additive changes pass; renumbering/removing a live field fails CI.
 **Dependencies:** None.
 **Implementation pending merge:** `buf.yaml` selects Buf 1.72.0 `FILE`
 compatibility for the `proto` module; `tools/proto/breaking.sh` refreshes and
@@ -466,10 +481,10 @@ implementation adds no speculative reservations.
 
 #### MEM-001 — Define the memory threat model and derived-state contract
 
-**Outcome:** Memory cannot weaken local-first privacy, approval, or deletion guarantees.  
-**Scope:** Document trust classes, writers, scopes, egress, retention, backup/export, correction, and deletion rules; add a schema guard that rejects user-derived tables without cascading provenance or an explicit scrubbed exception.  
-**Likely files:** `docs/VISION.md`, new memory architecture doc, DB schema-invariant tests.  
-**Acceptance:** The guard passes today and fails for a synthetic derived-text table with no source cascade; exceptions are explicit and justified.  
+**Outcome:** Memory cannot weaken local-first privacy, approval, or deletion guarantees.
+**Scope:** Document trust classes, writers, scopes, egress, retention, backup/export, correction, and deletion rules; add a schema guard that rejects user-derived tables without cascading provenance or an explicit scrubbed exception.
+**Likely files:** `docs/VISION.md`, new memory architecture doc, DB schema-invariant tests.
+**Acceptance:** The guard passes today and fails for a synthetic derived-text table with no source cascade; exceptions are explicit and justified.
 **Dependencies:** None. **Blocks every derived memory task.**
 
 **Completion contract:** The same landed change must contain
@@ -481,160 +496,169 @@ remains blocked until the commit containing the contract is on `main`.
 
 #### MEM-002 — Return scored, explainable search hits
 
-**Outcome:** Search consumers receive the ranking signal SQLite already computes.  
-**Scope:** Add an additive `SearchHit` with message, normalized score semantics, and snippet while temporarily preserving the legacy messages field.  
-**Likely files:** `proto/turing/v1/sessions.proto`, sessions repository/service, generated Go/Dart, client mappers.  
-**Acceptance:** Results expose documented score ordering and safe snippets; legacy callers receive identical messages; proto checks pass.  
+**Outcome:** Search consumers receive the ranking signal SQLite already computes.
+**Scope:** Add an additive `SearchHit` with message, normalized score semantics, and snippet while temporarily preserving the legacy messages field.
+**Likely files:** `proto/turing/v1/sessions.proto`, sessions repository/service, generated Go/Dart, client mappers.
+**Acceptance:** Results expose documented score ordering and safe snippets; legacy callers receive identical messages; proto checks pass.
 **Dependencies:** None.
 
 #### MEM-003 — Build a deterministic recall evaluation harness
 
-**Outcome:** Retrieval changes are decided by evidence instead of intuition.  
-**Scope:** Add synthetic, checked-in sessions and labelled queries covering exact IDs, paraphrases, updates, temporal questions, multi-session synthesis, CJK, injection, deletion, and abstention; report Recall@k, MRR, nDCG, stale-use rate, latency, assembled-prompt size, and whether the selected recall block survived context assembly.  
-**Likely files:** backend test fixtures and a dedicated recall-evaluation test package.  
-**Acceptance:** The suite records a baseline and fails on regression; each required failure class has at least one fixture; expected lexical failures remain visible.  
+**Outcome:** Retrieval changes are decided by evidence instead of intuition.
+**Scope:** Add synthetic, checked-in sessions and labelled queries covering exact IDs, paraphrases, updates, temporal questions, multi-session synthesis, CJK, injection, deletion, and abstention; report Recall@k, MRR, nDCG, stale-use rate, latency, assembled-prompt size, and whether the selected recall block survived context assembly.
+**Likely files:** backend test fixtures and a dedicated recall-evaluation test package.
+**Acceptance:** The suite records a baseline and fails on regression; each required failure class has at least one fixture; expected lexical failures remain visible.
 **Dependencies:** MEM-002.
 
 #### MEM-004 — Collapse recall into one structured search request
 
-**Outcome:** Recall makes one RPC and preserves server-side relevance ranking.  
-**Scope:** Add validated repeated terms and explicit match mode; build safe FTS queries server-side; retain deduplication and byte budgets in the runtime.  
-**Likely files:** sessions proto/repository/service, runtime recall/search client, fuzz and parity tests.  
-**Acceptance:** One RPC per turn; FTS operators cannot be injected; evaluation metrics are equal or better than baseline.  
+**Outcome:** Recall makes one RPC and preserves server-side relevance ranking.
+**Scope:** Add validated repeated terms and explicit match mode; build safe FTS queries server-side; retain deduplication and byte budgets in the runtime.
+**Likely files:** sessions proto/repository/service, runtime recall/search client, fuzz and parity tests.
+**Acceptance:** One RPC per turn; FTS operators cannot be injected; evaluation metrics are equal or better than baseline.
 **Dependencies:** MEM-002, MEM-003.
 
 #### MEM-016 — Make CJK recall behavior explicit and useful
 
-**Outcome:** CJK users are not left with a silently weaker memory path.  
-**Scope:** Use MEM-003 to choose and document a lexical strategy for scripts without whitespace token boundaries, such as validated n-grams or an alternate FTS tokenizer; retain exact-ID behavior and injection resistance.  
-**Likely files:** recall term extraction, search repository, tokenizer configuration/migration if justified, evaluation fixtures.  
-**Acceptance:** Labelled CJK Recall@5 improves over the recorded baseline without regressing exact identifiers or FTS query safety.  
+**Outcome:** CJK users are not left with a silently weaker memory path.
+**Scope:** Use MEM-003 to choose and document a lexical strategy for scripts without whitespace token boundaries, such as validated n-grams or an alternate FTS tokenizer; retain exact-ID behavior and injection resistance.
+**Likely files:** recall term extraction, search repository, tokenizer configuration/migration if justified, evaluation fixtures.
+**Acceptance:** Labelled CJK Recall@5 improves over the recorded baseline without regressing exact identifiers or FTS query safety.
 **Dependencies:** MEM-003, MEM-004.
 
 ### Phase 3: Add user-controlled long-term memory
 
 #### MEM-005 — Add the versioned memory schema
 
-**Outcome:** Turing has a first-class semantic/procedural memory domain with provenance and temporal revision.  
-**Scope:** Add the minimum manual-memory substrate: items, evidence, revisions, scope, fact/preference/instruction kinds, active/superseded/retracted state, observed/valid times, supersession links, and FTS projection. Candidate/extractor/confidence fields land with MEM-009 when they have real behavior.  
-**Likely files:** DB migrations, migration tests, repository models.  
-**Acceptance:** Source/session deletion cascades through memory and FTS; supersession preserves history but removes the old item from current beliefs; MEM-001's guard passes.  
+**Outcome:** Turing has a first-class semantic/procedural memory domain with provenance and temporal revision.
+**Scope:** Add the minimum manual-memory substrate: items, evidence, revisions, scope, fact/preference/instruction kinds, active/superseded/retracted state, observed/valid times, supersession links, and FTS projection. Candidate/extractor/confidence fields land with MEM-009 when they have real behavior.
+**Likely files:** DB migrations, migration tests, repository models.
+**Acceptance:** Source/session deletion cascades through memory and FTS; supersession preserves history but removes the old item from current beliefs; MEM-001's guard passes.
 **Dependencies:** MEM-001.
 
 #### MEM-006 — Add authenticated memory APIs and repository operations
 
-**Outcome:** Clients can create, inspect, edit, supersede, retract, delete, and export manual memory.  
-**Scope:** Public memory RPCs and transactional repository operations; server-owned provenance; mutation audit events.  
-**Likely files:** new memory proto/service/repository, app registration, generated clients.  
-**Acceptance:** Invalid lifecycle transitions fail; concurrent revisions are conflict-safe; callers cannot forge source or provenance metadata.  
+**Outcome:** Clients can create, inspect, edit, supersede, retract, delete, and export manual memory.
+**Scope:** Public memory RPCs and transactional repository operations; server-owned provenance; mutation audit events.
+**Likely files:** new memory proto/service/repository, app registration, generated clients.
+**Acceptance:** Invalid lifecycle transitions fail; concurrent revisions are conflict-safe; callers cannot forge source or provenance metadata.
 **Dependencies:** MEM-005, TUR-013.
 
 #### MEM-007 — Ship manual profile and "remember this" UX
 
-**Outcome:** Useful personal memory exists before automatic extraction.  
-**Scope:** Editable profile/instruction views, explicit remember action from a user message, source/date/status display, correction, and forget controls.  
-**Likely files:** Flutter memory feature, gRPC client/mappers, conversation actions.  
-**Acceptance:** Explicit remember creates an active memory; normal conversation creates no active memory; every item has visible provenance and correction/delete actions.  
+**Outcome:** Useful personal memory exists before automatic extraction.
+**Scope:** Editable profile/instruction views, explicit remember action from a user message, source/date/status display, correction, and forget controls.
+**Likely files:** Flutter memory feature, gRPC client/mappers, conversation actions.
+**Acceptance:** Explicit remember creates an active memory; normal conversation creates no active memory; every item has visible provenance and correction/delete actions.
 **Dependencies:** MEM-006.
 
 #### MEM-008 — Compose safe, transparent memory recall
 
-**Outcome:** Active profile, curated memories, and raw transcript recall influence answers under separate budgets.  
-**Scope:** Filter by status, scope, and temporal validity; frame all retrieved content as attributed evidence; emit structured memory-use events and per-turn controls.  
-**Likely files:** runtime memory package, general assistant, events proto, Flutter run notices/details.  
-**Acceptance:** Superseded or deleted items never appear; each injected item is inspectable; users can disable memory globally, per session, or per turn.  
+**Outcome:** Active profile, curated memories, and raw transcript recall influence answers under separate budgets.
+**Scope:** Filter by status, scope, and temporal validity; frame all retrieved content as attributed evidence; emit structured memory-use events and per-turn controls.
+**Likely files:** runtime memory package, general assistant, events proto, Flutter run notices/details.
+**Acceptance:** Superseded or deleted items never appear; each injected item is inspectable; users can disable memory globally, per session, or per turn.
 **Dependencies:** MEM-006, MEM-007, MEM-003.
 
 #### MEM-009 — Add local candidate extraction and review
 
-**Outcome:** Turing can learn without silently rewriting its beliefs.  
-**Scope:** Run bounded extraction after answer completion; use user-authored text only in v1; create candidates, never active memories; add approve/edit/reject review queue.  
-**Likely files:** runtime extraction pipeline, internal memory service, candidate events, Flutter review queue.  
-**Acceptance:** Extraction never delays or fails a run; malformed/timeout results create nothing; assistant/tool/recalled content cannot become a candidate source; no remote egress occurs by default; the implementation states and tests its transaction budget on the single SQLite connection.  
+**Outcome:** Turing can learn without silently rewriting its beliefs.
+**Scope:** Run bounded extraction after answer completion; use user-authored text only in v1; create candidates, never active memories; add approve/edit/reject review queue.
+**Likely files:** runtime extraction pipeline, internal memory service, candidate events, Flutter review queue.
+**Acceptance:** Extraction never delays or fails a run; malformed/timeout results create nothing; assistant/tool/recalled content cannot become a candidate source; no remote egress occurs by default; the implementation states and tests its transaction budget on the single SQLite connection.
 **Dependencies:** MEM-006, MEM-007, MEM-003.
 
 #### MEM-010 — Add reversible consolidation and supersession
 
-**Outcome:** Duplicate or conflicting candidates are resolved without destructive, opaque rewriting.  
-**Scope:** Bounded local background job, deterministic eligibility, duplicate detection, proposed supersession, preimage, review log, and revert.  
-**Likely files:** orchestrator job domain, memory repository/service, review UI.  
-**Acceptance:** Failure is a safe no-op; active beliefs change only through an audited transition; every consolidation can be inspected and reverted; work is batched so the single SQLite connection cannot be monopolized.  
+**Outcome:** Duplicate or conflicting candidates are resolved without destructive, opaque rewriting.
+**Scope:** Bounded local background job, deterministic eligibility, duplicate detection, proposed supersession, preimage, review log, and revert.
+**Likely files:** orchestrator job domain, memory repository/service, review UI.
+**Acceptance:** Failure is a safe no-op; active beliefs change only through an audited transition; every consolidation can be inspected and reverted; work is batched so the single SQLite connection cannot be monopolized.
 **Dependencies:** MEM-009.
 
 #### MEM-011 — Add fact- and message-level forgetting
 
-**Outcome:** Users can withdraw one fact or source without deleting the surrounding conversation.  
-**Scope:** Delete/retract memory APIs; message deletion rules; cascade through FTS, future vectors, candidates, summaries, caches, and prompts; handle run anchor foreign keys explicitly.  
-**Likely files:** sessions and memory proto/services/repositories, deletion events, Flutter actions.  
-**Acceptance:** Deleted content cannot be recalled after restart; in-flight and run-anchor cases have explicit tested behavior; audit retains only scrubbed tombstones.  
+**Outcome:** Users can withdraw one fact or source without deleting the surrounding conversation.
+**Scope:** Delete/retract memory APIs; message deletion rules; cascade through FTS, future vectors, candidates, summaries, caches, and prompts; handle run anchor foreign keys explicitly.
+**Likely files:** sessions and memory proto/services/repositories, deletion events, Flutter actions.
+**Acceptance:** Deleted content cannot be recalled after restart; in-flight and run-anchor cases have explicit tested behavior; audit retains only scrubbed tombstones.
 **Dependencies:** MEM-005, MEM-006, MEM-001.
 
 #### MEM-012 — Add memory-specific observability
 
-**Outcome:** A user can answer "why did Turing remember or use this?"  
-**Scope:** Trace retrieval, injection, extraction, candidate creation, promotion, supersession, retraction, and index deletion without recording sensitive content by default.  
-**Likely files:** audit/event schemas and services, memory pipeline, Flutter run/memory details.  
-**Acceptance:** Each memory used in a run links to its source and decision history; retention/redaction are configurable and tested.  
+**Outcome:** A user can answer "why did Turing remember or use this?"
+**Scope:** Trace retrieval, injection, extraction, candidate creation, promotion, supersession, retraction, and index deletion without recording sensitive content by default.
+**Likely files:** audit/event schemas and services, memory pipeline, Flutter run/memory details.
+**Acceptance:** Each memory used in a run links to its source and decision history; retention/redaction are configurable and tested.
 **Dependencies:** TUR-013, MEM-008, MEM-009.
 
 #### MEM-015 — Capture selected tool results as attributed evidence
 
-**Outcome:** Useful facts read from files or system tools can be found later without treating tool output as trusted user belief.  
-**Scope:** Persist an allowlisted, bounded evidence representation for selected tool results with tool call, run, session, trust class, and source-artifact provenance; keep it outside active profile/instructions until explicit user promotion.  
-**Likely files:** evidence schema/repository, tool completion pipeline, search/memory APIs, deletion propagation tests.  
-**Acceptance:** "What was in the file we inspected?" can retrieve attributed evidence; prompt-like tool content cannot create active memory; deleting the source session/artifact removes every projection.  
+**Outcome:** Useful facts read from files or system tools can be found later without treating tool output as trusted user belief.
+**Scope:** Persist an allowlisted, bounded evidence representation for selected tool results with tool call, run, session, trust class, and source-artifact provenance; keep it outside active profile/instructions until explicit user promotion.
+**Likely files:** evidence schema/repository, tool completion pipeline, search/memory APIs, deletion propagation tests.
+**Acceptance:** "What was in the file we inspected?" can retrieve attributed evidence; prompt-like tool content cannot create active memory; deleting the source session/artifact removes every projection.
 **Dependencies:** MEM-001, MEM-005, MEM-011.
 
 ### Phase 4: Retrieval upgrades, gated by evidence
 
 #### MEM-013 — Add optional local semantic retrieval
 
-**Outcome:** Paraphrase retrieval improves only where the evaluation corpus proves FTS is insufficient.  
-**Entry criterion:** MEM-003 identifies a labelled query class that MEM-004 does not solve and local embeddings improve without unacceptable latency or stale-use regressions.  
-**Scope:** Explicit local embedding provider, same-store vector projection if feasible, lexical fallback, scope/status/time filters, fusion, rebuild, and deletion propagation.  
-**Acceptance:** Enabled/disabled metrics are checked in; embedder failure degrades to lexical results; deletion removes vector rows transactionally; remote embeddings are opt-in and disclosed.  
+**Outcome:** Paraphrase retrieval improves only where the evaluation corpus proves FTS is insufficient.
+**Entry criterion:** MEM-003 identifies a labelled query class that MEM-004 does not solve and local embeddings improve without unacceptable latency or stale-use regressions.
+**Scope:** Explicit local embedding provider, same-store vector projection if feasible, lexical fallback, scope/status/time filters, fusion, rebuild, and deletion propagation.
+**Acceptance:** Enabled/disabled metrics are checked in; embedder failure degrades to lexical results; deletion removes vector rows transactionally; remote embeddings are opt-in and disclosed.
 **Dependencies:** MEM-003, MEM-004, MEM-005, MEM-011.
 
 #### MEM-014 — Add token-aware context assembly and summaries
 
-**Outcome:** Long sessions fit model limits without silently losing live tool protocol or important evidence.  
-**Scope:** Provider/model capability metadata, explicit token budgets, provenance-preserving summaries, and priority order across profile, memory, recall, history, and tools.  
-**Likely files:** provider interface, general assistant context builder, summary persistence, evaluation fixtures.  
-**Acceptance:** Long-session and tool-chain tests stay within model limits; summary failure falls back safely; deletion removes source-derived summaries.  
+**Outcome:** Long sessions fit model limits without silently losing live tool protocol or important evidence.
+**Scope:** Provider/model capability metadata, explicit token budgets, provenance-preserving summaries, and priority order across profile, memory, recall, history, and tools.
+**Likely files:** provider interface, general assistant context builder, summary persistence, evaluation fixtures.
+**Acceptance:** Long-session and tool-chain tests stay within model limits; summary failure falls back safely; deletion removes source-derived summaries.
 **Dependencies:** TUR-018, MEM-001, MEM-003.
 
-### Phase 5: Ownership, retention, and portability
+### Phase 5: Ownership, retention, portability, and database retirement
 
 #### TUR-015 — Add session and memory export
 
-**Outcome:** "Your data" includes possession, not only deletion.  
-**Scope:** Stream allowlisted JSON Lines for sessions, messages, runs, tool calls, approvals, events, and memory; omit tokens/JTIs/secrets.  
-**Likely files:** session/memory proto and services, export repository queries, Flutter save flow.  
-**Acceptance:** Export round-trips content byte-for-byte and streams large sessions; secret-denylist tests pass.  
+**Outcome:** "Your data" includes possession, not only deletion.
+**Scope:** Stream allowlisted JSON Lines for sessions, messages, runs, tool calls, approvals, events, and memory; omit tokens/JTIs/secrets.
+**Likely files:** session/memory proto and services, export repository queries, Flutter save flow.
+**Acceptance:** Export round-trips content byte-for-byte and streams large sessions; secret-denylist tests pass.
 **Dependencies:** MEM-006.
 
 #### TUR-016 — Add consistent backup, restore, and migration integrity
 
-**Outcome:** Local state can be recovered and schema history cannot drift silently.  
-**Scope:** WAL-aware consistent backup, optional encrypted export, restore verification, migration checksums, and documented recovery. Preserve the current full-filename migration ordering; duplicate numeric prefixes are cosmetic, not a defect.  
-**Likely files:** DB package, scripts, migration runner/tests, operator docs.  
-**Acceptance:** Automated backup/restore reproduces database invariants; altered applied migrations are detected; secrets are not bundled unintentionally.  
+**Outcome:** Local state can be recovered and schema history cannot drift silently.
+**Scope:** WAL-aware consistent backup, optional user-passphrase-encrypted export, restore verification, migration checksums, and documented recovery. Preserve the current full-filename migration ordering; duplicate numeric prefixes are cosmetic, not a defect. This task owns consistent backup and restore semantics; its optional encrypted export remains outside managed database-key custody and retirement. TUR-022 owns encryption and key custody for the resulting Turing-managed artifacts.
+**Likely files:** DB package, scripts, migration runner/tests, operator docs.
+**Acceptance:** Automated backup/restore reproduces database invariants; altered applied migrations are detected; secrets are not bundled unintentionally.
 **Dependencies:** TUR-015.
+
+#### TUR-022 — Add encrypted database retirement
+
+**Outcome:** Turing protects its managed SQLite state at rest and can retire an entire database cryptographically without claiming per-session forensic erasure.
+**Entry criterion:** The project owner approves a TUR-022 feasibility and design artifact under `docs/architecture/` before implementation; this gate is part of this single roadmap task, not a second dependency. The artifact must compare SQLCipher-compatible Go drivers and record the selection evidence for licensing, `sqlite_fts5`, supported builds, WAL and temporary-file behavior, backup integration, and migration safety. It must define numeric transaction, batch, startup-pause, and cancellation-latency budgets; define the platform key-custody and legacy-plaintext boundaries; resolve how the containerized orchestrator obtains the unwrapped key after host restart without weakening OS-keystore custody; and define unattended restart and scheduled-automation behavior while the key is unavailable.
+**Scope:** After the gate passes, add whole-database encryption at rest. Encryption approval does not itself approve retirement: each platform must separately prove exclusive, inspectable key custody, and unknown, synced, escrowed, exportable, or device-backed-up wrappers make that platform retirement-ineligible. Encrypt database content in the main file, journals, and WAL; ensure the `-shm` wal-index carries no database content or is avoided through an approved locking mode; and keep SQLite file-backed temporary storage disabled while re-establishing the per-connection guard under the selected driver. Keep an envelope-wrapped data key in OS-keystore custody. Keep database-encryption and wrapping keys in a distinct key domain from the credential-specific `TURING_INTEGRATION_KEY`; coexist with that credential key unless the approved design explicitly supersedes it with a migration. Provide crash-safe, bounded, and resumable plaintext-to-encrypted migration, rotation, restore, rollback, and explicit key-loss UX. Reuse TUR-016's backup/restore semantics while encrypting managed backups; inventory every Turing-managed wrapped-key copy and every managed legacy plaintext database, backup, WAL, journal, `-shm`, migration, restore, and staging artifact; and fail closed when key custody is unavailable. The retained `legacy_skill_export_recovery` rows are managed database content and retire with the database. Emitted `SKILL.md` recovery files and their atomic-export staging files are separately governed file-backed copies: inventory and disclose them, and do not claim database retirement withdraws legacy skill content. Before a database becomes eligible for cryptographic retirement, migrate every readable managed plaintext predecessor and backup into encrypted custody, verify that no recoverable wrapper exists outside Turing's custody, fence ingress and schedulers, suppress automatic process restart, quiesce every client, close database handles, and confirm zero processes can use an unwrapped key before destroying the managed wrappers. This retirement boundary does not promise forensic erasure of process memory or pre-encryption storage remnants. State explicitly that user-created copies and exports remain outside Turing's control and that one database key cannot erase one session.
+**Likely files:** DB connection, configuration, migration, and credential-sealing packages; init/runtime scripts and `.env.example` for keystore mode or selector configuration only, never key bytes; backup/restore tooling; platform keystore adapters; orchestrator and runtime container builds; Compose build configuration; CI workflow and self-guard tests; Flutter recovery UX; privacy, security, and operator docs.
+**Acceptance:** Tagged build and search tests prove the selected driver preserves `sqlite_fts5`. Runtime tests prove that, after migration, no supported SQLite path writes plaintext database content to the main database, journals, WAL, `-shm` wal-index, or SQLite temporary files, and that managed backups are encrypted. Database-encryption keys, wrapping keys, and passphrases never appear in the database DSN, environment, process arguments, logs, or error text; `TURING_INTEGRATION_KEY` remains a separate credential-sealing domain. Existing data migrates and restores within the approved numeric transaction, batch, startup, and cancellation budgets; interrupted work resumes without monopolizing SQLite's single connection; wrapper and legacy-plaintext inventories cover every managed artifact named in scope; and missing or wrong keys never open, truncate, replace, or silently recreate the database. Restore reports a missing or rotated credential-sealing key separately, without blocking database recovery or storing credentials in plaintext. Fault-injection tests prove interrupted migration, rotation, restore, and rollback recover safely; unavailable key custody fails closed without allowing scheduled automation to bypass the locked database; documented restart behavior is deterministic; and key loss produces an explicit, non-destructive recovery state in Flutter. Retirement is unavailable when external wrapper state is unknown or any recoverable external wrapper remains. Otherwise, tests fence ingress, schedulers, and automatic restart; confirm zero live key holders; delete every managed wrapper; and prove that neither a previously active client nor a reopened process can read any encrypted-era Turing-managed database or backup. Every readable managed pre-encryption database and backup is migrated before retirement can succeed; residual storage bytes plus separately governed file-backed recovery exports and staging files are reported but never counted as cryptographically retired. Product text distinguishes whole-database retirement from per-session logical withdrawal and disclaims user-created and OS-managed copies outside Turing's custody.
+**Dependencies:** TUR-004, TUR-016. TUR-016 must land before TUR-022 starts so encryption does not precede proven backup and restore integrity.
 
 #### TUR-017 — Add bounded retention
 
-**Outcome:** Events, audit detail, run steps, tool results, rejected candidates, and trash cannot grow forever.  
-**Scope:** Default-safe retention policy, bounded sweeps, active-run exclusions, replay gap semantics, and immutable approval/deletion evidence.  
-**Likely files:** configuration, reaper, repositories, audit/memory policy UI.  
-**Acceptance:** Defaults preserve existing data; enabled pruning is batched and observable; replay reports a resync requirement instead of silently omitting history; sweeps have a tested transaction budget on the single SQLite connection.  
+**Outcome:** Events, audit detail, run steps, tool results, rejected candidates, and trash cannot grow forever.
+**Scope:** Default-safe retention policy, bounded sweeps, active-run exclusions, replay gap semantics, and immutable approval/deletion evidence.
+**Likely files:** configuration, reaper, repositories, audit/memory policy UI.
+**Acceptance:** Defaults preserve existing data; enabled pruning is batched and observable; replay reports a resync requirement instead of silently omitting history; sweeps have a tested transaction budget on the single SQLite connection.
 **Dependencies:** TUR-013, MEM-012.
 
 #### TUR-018 — Advertise worker provider, model, and agent capabilities
 
-**Outcome:** The orchestrator can validate routing before enqueue and reason about unavailable work.  
-**Scope:** Worker-ready protocol advertises providers, models, context limits, tool support, agent IDs, and capacity.  
-**Likely files:** runtime proto, worker registration, dispatcher, session config APIs.  
-**Acceptance:** Unsupported selections fail before enqueue; capability loss updates queue notices; reconnect restores the registry.  
+**Outcome:** The orchestrator can validate routing before enqueue and reason about unavailable work.
+**Scope:** Worker-ready protocol advertises providers, models, context limits, tool support, agent IDs, and capacity.
+**Likely files:** runtime proto, worker registration, dispatcher, session config APIs.
+**Acceptance:** Unsupported selections fail before enqueue; capability loss updates queue notices; reconnect restores the registry.
 **Dependencies:** None.
 **Pending-merge artifact:** [Worker capability routing](worker-capabilities.md).
 **Pending-merge coverage:** Exact external credential refs are validated before
@@ -647,42 +671,42 @@ by regression tests.
 
 #### CON-001 — Make the in-repo tool protocol MCP-conformant
 
-**Outcome:** Turing's client and servers interoperate with standard MCP implementations.  
-**Scope:** Adopt the official Go SDK or implement the current protocol surface; preserve `_meta.approvalToken`, server isolation, and orchestrator-owned policy.  
-**Likely files:** runtime MCP client, both MCP servers/modules, conformance tests.  
-**Acceptance:** A stock client discovers and calls Turing tools; Turing calls a stock test server; unknown tools still default to approval-required; no MCP port is published.  
+**Outcome:** Turing's client and servers interoperate with standard MCP implementations.
+**Scope:** Adopt the official Go SDK or implement the current protocol surface; preserve `_meta.approvalToken`, server isolation, and orchestrator-owned policy.
+**Likely files:** runtime MCP client, both MCP servers/modules, conformance tests.
+**Acceptance:** A stock client discovers and calls Turing tools; Turing calls a stock test server; unknown tools still default to approval-required; no MCP port is published.
 **Dependencies:** TUR-019. Do not enable arbitrary servers in this task; service-scoped identities are required before CON-002 enables configurable servers.
 
 #### CON-002 — Make MCP servers configuration-driven
 
-**Outcome:** Named servers and credentials can be added without recompiling the runtime.  
-**Scope:** Configured endpoints, service-scoped credentials, health/capability registry, per-server network and policy scopes.  
-**Likely files:** runtime config/registry, Compose/init scripts, tool policy administration.  
-**Acceptance:** Multiple servers can be added/disabled independently; discovery failure is isolated; server descriptions remain untrusted data.  
+**Outcome:** Named servers and credentials can be added without recompiling the runtime.
+**Scope:** Configured endpoints, service-scoped credentials, health/capability registry, per-server network and policy scopes.
+**Likely files:** runtime config/registry, Compose/init scripts, tool policy administration.
+**Acceptance:** Multiple servers can be added/disabled independently; discovery failure is isolated; server descriptions remain untrusted data.
 **Dependencies:** CON-001, TUR-006, TUR-018.
 
 #### CON-003 — Add local imports before live connectors
 
-**Outcome:** Turing can ingest user-owned knowledge with a reversible, inspectable workflow.  
-**Scope:** Markdown/JSON import preview, source identity, content hashes, idempotency, candidate isolation, and rollback.  
-**Likely files:** import proto/service/repository, memory candidate pipeline, Flutter import flow.  
-**Acceptance:** Re-import is idempotent; imported content is not automatically added to profile/system instructions; rollback removes every projection.  
+**Outcome:** Turing can ingest user-owned knowledge with a reversible, inspectable workflow.
+**Scope:** Markdown/JSON import preview, source identity, content hashes, idempotency, candidate isolation, and rollback.
+**Likely files:** import proto/service/repository, memory candidate pipeline, Flutter import flow.
+**Acceptance:** Re-import is idempotent; imported content is not automatically added to profile/system instructions; rollback removes every projection.
 **Dependencies:** MEM-006, MEM-009, MEM-011.
 
 #### CON-004 — Add connector consent, provenance, and revocation
 
-**Outcome:** Calendar, email, source-control, and other integrations share one safe lifecycle.  
-**Scope:** Connector registry, explicit scopes, secret storage boundary, sync cursors, source-deletion propagation, revoke, and per-source trust classification.  
-**Likely files:** new connector domain, internal identities, memory evidence, UI consent/revoke flows.  
-**Acceptance:** Revocation stops sync and invalidates credentials; source deletion propagates; connector content cannot promote itself into active memory or policy.  
+**Outcome:** Calendar, email, source-control, and other integrations share one safe lifecycle.
+**Scope:** Connector registry, explicit scopes, secret storage boundary, sync cursors, source-deletion propagation, revoke, and per-source trust classification.
+**Likely files:** new connector domain, internal identities, memory evidence, UI consent/revoke flows.
+**Acceptance:** Revocation stops sync and invalidates credentials; source deletion propagates; connector content cannot promote itself into active memory or policy.
 **Dependencies:** CON-002, CON-003, TUR-006, MEM-011.
 
 #### AGT-001 — Add a second specialized agent and explicit handoff
 
-**Outcome:** Turing supports plural agents without surrendering dispatch, recovery, or policy ownership.  
-**Scope:** Add a second `AgentId`, deterministic routing/handoff, per-agent tools and provider capabilities, capacity, events, and concurrent-run tests.  
-**Likely files:** common/runtime proto, executor implementations, dispatcher, worker pools, policy registry, Flutter agent status.  
-**Acceptance:** Routing is deterministic and visible; handoff preserves trace/provenance; concurrent agents do not violate session serialization, leases, fencing, or approval scope; load tests record transaction contention and queue latency with SQLite's single connection.  
+**Outcome:** Turing supports plural agents without surrendering dispatch, recovery, or policy ownership.
+**Scope:** Add a second `AgentId`, deterministic routing/handoff, per-agent tools and provider capabilities, capacity, events, and concurrent-run tests.
+**Likely files:** common/runtime proto, executor implementations, dispatcher, worker pools, policy registry, Flutter agent status.
+**Acceptance:** Routing is deterministic and visible; handoff preserves trace/provenance; concurrent agents do not violate session serialization, leases, fencing, or approval scope; load tests record transaction contention and queue latency with SQLite's single connection.
 **Dependencies:** TUR-010, TUR-011, TUR-014, TUR-018, TUR-019, CON-002.
 
 ## Dependency table
@@ -712,6 +736,7 @@ Every edge in this table appears in the corresponding task's `Dependencies` line
 | TUR-019 | None |
 | TUR-020 | None |
 | TUR-021 | TUR-013 |
+| TUR-022 | TUR-004, TUR-016 |
 | MEM-001 | None |
 | MEM-002 | None |
 | MEM-003 | MEM-002 |
@@ -742,7 +767,7 @@ Every edge in this table appears in the corresponding task's `Dependencies` line
 4. **Measure and improve lexical recall:** MEM-002, MEM-003, MEM-004, MEM-016.
 5. **Ship minimum lovable memory:** MEM-005, MEM-006, MEM-007, MEM-008, MEM-011.
 6. **Add safe learning and explainability:** MEM-009, MEM-010, MEM-012, MEM-015.
-7. **Deliver ownership and longevity:** TUR-015, TUR-016, TUR-017.
+7. **Deliver ownership and longevity:** TUR-015, TUR-016, TUR-017, and TUR-022 only when its entry criterion passes.
 8. **Make evidence-gated retrieval upgrades:** MEM-013 and MEM-014 only when their entry criteria pass.
 9. **Add connectivity:** CON-001, CON-002, CON-003, CON-004.
 10. **Add plural agents:** AGT-001 after capability, queue, streaming, observability, and MCP foundations are proven.
@@ -762,5 +787,6 @@ Turing reaches the intended state when all of the following are true:
 - embeddings and graphs are optional optimizations justified by recorded failures;
 - remote providers and connectors disclose exactly what data they receive;
 - audit, health, queue state, and terminal outcomes are visible after restart;
+- if the feasibility gate approves at-rest encryption, Turing-managed SQLite state and backups are encrypted; where platform key custody also qualifies for retirement, retirement is whole-database only and does not imply control over user-created or OS-managed copies or per-session forensic erasure;
 - standard MCP integrations preserve Turing's fail-closed policy and approval boundary;
 - additional agents use explicit routing, capabilities, and handoff rather than hidden framework state.

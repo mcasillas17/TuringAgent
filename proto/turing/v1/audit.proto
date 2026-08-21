@@ -62,6 +62,10 @@ message AuditPayload {
   optional bool decision_comment_truncated = 19;
   optional string denial_reason = 20;
   optional bool denial_reason_truncated = 21;
+  optional string endpoint_host = 22;
+  repeated EgressDataCategory egress_data_categories = 23;
+  optional int32 egress_decision_version = 24;
+  optional google.protobuf.Timestamp egress_consent_granted_at = 25;
 }
 
 message AuditEntry {

@@ -424,6 +424,7 @@ func TestEnqueueRecordsWhereARoutedRunWasSent(t *testing.T) {
 	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
 		SessionID: session.SessionID, Content: "hello", AgentID: "general_assistant",
 		ModelProvider: "ollama", Model: "qwen2.5:7b",
+		EgressDecision: testRemoteEgressDecision(t, agent.Model, agent.BaseURL, agent.AgentID, agent.CredentialRef),
 	})
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)

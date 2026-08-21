@@ -670,6 +670,14 @@ The shipped runtime sends `COMPLETE` after every successful discovery,
 including a successful empty result, and `FAILED` when a required discovery
 attempt fails.
 
+For a remote model run, the orchestrator freezes the selected `server/tool`
+names into the one-time egress decision and job. The runtime filters its local
+registry to that exact set before serializing tool schemas; a missing selected
+tool fails the run rather than widening or substituting the set. Tool arguments
+and results are separately disclosed categories. These egress controls do not
+replace tool policy or approval: a disclosed tool mutation still requires the
+same argument-bound, single-use approval.
+
 JWT signing requirements:
 
 - Algorithm: **HS256** only. The header must be `{"alg":"HS256","typ":"JWT"}`.

@@ -10,6 +10,7 @@ import (
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/persisttime"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/skillfiles"
 )
 
@@ -27,11 +28,39 @@ func (r *Repository) SetSkillStore(store *skillfiles.Store) {
 }
 
 type Session struct {
-	SessionID string
-	Title     sql.NullString
-	Status    string
-	CreatedAt string
+	SessionID   string
+	Title       sql.NullString
+	TitleOrigin string
+	Status      string
+	CreatedAt   string
+	UpdatedAt   string
+}
+
+type SessionListFilter string
+
+const (
+	SessionListActive   SessionListFilter = "active"
+	SessionListArchived SessionListFilter = "archived"
+	SessionListAll      SessionListFilter = "all"
+)
+
+var (
+	ErrInvalidSessionStatus      = errors.New("invalid persisted session status")
+	ErrInvalidSessionTimestamp   = errors.New("invalid persisted session timestamp")
+	ErrInvalidSessionTitleOrigin = errors.New("invalid persisted session title origin")
+	ErrInvalidSessionFilter      = errors.New("invalid session list filter")
+	ErrInvalidSessionPage        = errors.New("invalid session page")
+)
+
+type SessionCursor struct {
 	UpdatedAt string
+	SessionID string
+}
+
+type ListSessionsInput struct {
+	Filter SessionListFilter
+	After  *SessionCursor
+	Limit  int
 }
 
 type Message struct {
@@ -57,6 +86,7 @@ func (r *Repository) CreateSession(ctx context.Context, title string) (Session, 
 		session.Title = sql.NullString{String: title, Valid: true}
 		titleOrigin = "explicit"
 	}
+	session.TitleOrigin = titleOrigin
 	_, err := r.db.ExecContext(ctx, `INSERT INTO sessions (id, title, title_origin, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`, session.SessionID, nullableString(session.Title), titleOrigin, createdAt, createdAt)
 	return session, err
 }
@@ -65,8 +95,18 @@ func (r *Repository) ListSessions(ctx context.Context, limit int) ([]Session, er
 	if limit <= 0 {
 		limit = 50
 	}
-	query := `SELECT id, title, status, created_at, updated_at FROM sessions WHERE deletion_state = 'active' ORDER BY ` + sqliteTimestampNanos("updated_at") + ` DESC, id DESC LIMIT ?`
-	rows, err := r.db.QueryContext(ctx, query, limit)
+	return r.ListSessionsPage(ctx, ListSessionsInput{
+		Filter: SessionListActive,
+		Limit:  limit,
+	})
+}
+
+func (r *Repository) ListSessionsPage(ctx context.Context, input ListSessionsInput) ([]Session, error) {
+	query, args, err := listSessionsQuery(input)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +114,10 @@ func (r *Repository) ListSessions(ctx context.Context, limit int) ([]Session, er
 	var sessions []Session
 	for rows.Next() {
 		var session Session
-		if err := rows.Scan(&session.SessionID, &session.Title, &session.Status, &session.CreatedAt, &session.UpdatedAt); err != nil {
+		if err := rows.Scan(&session.SessionID, &session.Title, &session.TitleOrigin, &session.Status, &session.CreatedAt, &session.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if err := validateSession(session); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, session)
@@ -82,14 +125,82 @@ func (r *Repository) ListSessions(ctx context.Context, limit int) ([]Session, er
 	return sessions, rows.Err()
 }
 
+func listSessionsQuery(input ListSessionsInput) (string, []any, error) {
+	if input.Limit <= 0 {
+		return "", nil, ErrInvalidSessionPage
+	}
+
+	var query string
+	var args []any
+	switch input.Filter {
+	case SessionListActive, SessionListArchived:
+		query = `
+			SELECT id, title, title_origin, status, created_at, updated_at
+			FROM sessions INDEXED BY idx_sessions_status_updated
+			WHERE deletion_state = 'active' AND status = ?`
+		args = append(args, string(input.Filter))
+	case SessionListAll:
+		query = `
+			SELECT id, title, title_origin, status, created_at, updated_at
+			FROM sessions INDEXED BY idx_sessions_updated
+			WHERE deletion_state = 'active'`
+	default:
+		return "", nil, ErrInvalidSessionFilter
+	}
+	if input.After != nil {
+		if input.After.SessionID == "" {
+			return "", nil, ErrInvalidSessionPage
+		}
+		if _, err := persisttime.ParseCanonical(input.After.UpdatedAt); err != nil {
+			return "", nil, ErrInvalidSessionPage
+		}
+		query += ` AND (updated_at, id) < (?, ?)`
+		args = append(args, input.After.UpdatedAt, input.After.SessionID)
+	}
+	query += ` ORDER BY updated_at DESC, id DESC LIMIT ?`
+	args = append(args, input.Limit)
+	return query, args, nil
+}
+
 func (r *Repository) GetSession(ctx context.Context, sessionID string) (Session, error) {
 	var session Session
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id, title, status, created_at, updated_at
+		SELECT id, title, title_origin, status, created_at, updated_at
 		FROM sessions
-		WHERE id = ? AND deletion_state = 'active'
-	`, sessionID).Scan(&session.SessionID, &session.Title, &session.Status, &session.CreatedAt, &session.UpdatedAt)
+		WHERE id = ? AND deletion_state = 'active'`,
+		sessionID,
+	).Scan(
+		&session.SessionID,
+		&session.Title,
+		&session.TitleOrigin,
+		&session.Status,
+		&session.CreatedAt,
+		&session.UpdatedAt,
+	)
+	if err == nil {
+		err = validateSession(session)
+	}
 	return session, err
+}
+
+func validateSession(session Session) error {
+	switch session.TitleOrigin {
+	case "unset", "explicit", "derived":
+	default:
+		return ErrInvalidSessionTitleOrigin
+	}
+	switch session.Status {
+	case string(SessionListActive), string(SessionListArchived):
+	default:
+		return ErrInvalidSessionStatus
+	}
+	if _, err := persisttime.ParseCanonical(session.CreatedAt); err != nil {
+		return ErrInvalidSessionTimestamp
+	}
+	if _, err := persisttime.ParseCanonical(session.UpdatedAt); err != nil {
+		return ErrInvalidSessionTimestamp
+	}
+	return nil
 }
 
 func requireActiveSessionTx(ctx context.Context, tx *sql.Tx, sessionID string) error {

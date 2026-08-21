@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"sync"
@@ -456,6 +457,94 @@ func TestDeletingTheConversationLetsTheNextFireMakeAFreshOne(t *testing.T) {
 	}
 }
 
+func TestAutomationUsesFreshConversationWhenPreviousIsWithdrawing(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	automation := mustCreateDueAutomation(
+		t,
+		repo,
+		ctx,
+		"Digest",
+		everyFiveMinutes(),
+	)
+	due := mustParse(t, automation.NextDueAt)
+	first, found, err := repo.ClaimDueAutomation(ctx, due, automationDefaults)
+	if err != nil || !found {
+		t.Fatalf("first claim = found %v err %v", found, err)
+	}
+	finishRun(t, repo, first.RunID)
+	beforeWithdrawal, err := repo.GetAutomation(ctx, automation.AutomationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.BeginSessionDeletion(ctx, first.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	var messagesBefore, runsBefore int
+	if err := repo.db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM messages WHERE session_id = ?`,
+		first.SessionID,
+	).Scan(&messagesBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM agent_runs WHERE session_id = ?`,
+		first.SessionID,
+	).Scan(&runsBefore); err != nil {
+		t.Fatal(err)
+	}
+
+	second, found, err := repo.ClaimDueAutomation(
+		ctx,
+		due.Add(5*time.Minute),
+		automationDefaults,
+	)
+	if err != nil || !found {
+		t.Fatalf("claim during withdrawal = found %v err %v", found, err)
+	}
+	if second.SessionID == "" || second.SessionID == first.SessionID {
+		t.Fatalf(
+			"second conversation = %q, want fresh session after withdrawing %q",
+			second.SessionID,
+			first.SessionID,
+		)
+	}
+	for table, before := range map[string]int{
+		"messages":   messagesBefore,
+		"agent_runs": runsBefore,
+	} {
+		var after int
+		if err := repo.db.QueryRowContext(
+			ctx,
+			"SELECT COUNT(*) FROM "+table+" WHERE session_id = ?",
+			first.SessionID,
+		).Scan(&after); err != nil {
+			t.Fatal(err)
+		}
+		if after != before {
+			t.Fatalf("%s count = %d, want unchanged %d", table, after, before)
+		}
+	}
+	reloaded, err := repo.GetAutomation(ctx, automation.AutomationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.NextDueAt == beforeWithdrawal.NextDueAt {
+		t.Fatalf(
+			"next due did not advance after fresh-session fire: %q",
+			reloaded.NextDueAt,
+		)
+	}
+	if reloaded.SessionID != second.SessionID {
+		t.Fatalf(
+			"automation session = %q, want fresh session %q",
+			reloaded.SessionID,
+			second.SessionID,
+		)
+	}
+}
+
 // The allowlist a run is judged against is the one that existed when it fired.
 // Widening it mid-run must not widen what that run may already be doing.
 func TestTheRunGrantIsFrozenAtFireTime(t *testing.T) {
@@ -679,7 +768,7 @@ func TestUnavailableAutomationRouteAdvancesWithoutPersistingWork(t *testing.T) {
 	}
 }
 
-func TestAutomationValidatesItsExistingExternalAgentRoute(t *testing.T) {
+func TestAutomationFailsItsExistingExternalAgentRouteBeforeWorkerValidation(t *testing.T) {
 	repo, ctx := newTitleTestRepo(t)
 	automation := mustCreateDueAutomation(t, repo, ctx, "External route", everyFiveMinutes())
 	firstDue := mustParse(t, automation.NextDueAt)
@@ -712,18 +801,18 @@ func TestAutomationValidatesItsExistingExternalAgentRoute(t *testing.T) {
 	}
 	defaults := automationDefaults
 	defaults.ValidateRouting = func(_ context.Context, route RoutingRequirements) error {
-		if !route.ExternalAgent || route.ModelProvider != "openai_compatible" || route.Model != "external-model" {
-			t.Fatalf("validated route = %+v, want frozen external-agent destination", route)
-		}
-		return errors.New("external agents unavailable")
+		t.Fatalf("remote automation reached worker validation: %+v", route)
+		return nil
 	}
 
 	fire, found, err := repo.ClaimDueAutomation(ctx, mustParse(t, reloaded.NextDueAt), defaults)
 	if err != nil || !found {
 		t.Fatalf("external route claim = found %v err %v", found, err)
 	}
-	if !fire.Skipped || fire.SkippedReason != SkippedRoutingUnavailable || fire.RunID != "" {
-		t.Fatalf("fire = %+v, want routing-unavailable skip", fire)
+	if fire.Skipped || !fire.Failed ||
+		fire.FailureCode != AutomationFailureRemoteEgressRequiresInteractiveConsent ||
+		fire.RunID != "" {
+		t.Fatalf("fire = %+v, want durable remote-egress failure", fire)
 	}
 	for table, before := range countsBefore {
 		var after int
@@ -736,13 +825,68 @@ func TestAutomationValidatesItsExistingExternalAgentRoute(t *testing.T) {
 	}
 }
 
-func TestClaimDueAutomationCarriesExternalRoutingEvents(t *testing.T) {
+func TestAutomationValidatesFreshDefaultRouteWhenPreviousSessionIsWithdrawing(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	automation := mustCreateDueAutomation(t, repo, ctx, "Fresh route", everyFiveMinutes())
+	firstDue := mustParse(t, automation.NextDueAt)
+	first, found, err := repo.ClaimDueAutomation(ctx, firstDue, automationDefaults)
+	if err != nil || !found || first.Skipped {
+		t.Fatalf("first claim = %+v, found %v, err %v", first, found, err)
+	}
+	finishRun(t, repo, first.RunID)
+	agent, err := repo.CreateExternalAgent(ctx, ExternalAgentInput{
+		DisplayName: "External", Provider: "anthropic", BaseURL: "https://example.com",
+		Model: "external-model", CredentialRef: "external",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetSessionAgent(ctx, first.SessionID, agent.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.BeginSessionDeletion(ctx, first.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := repo.GetAutomation(ctx, automation.AutomationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults := automationDefaults
+	validated := false
+	defaults.ValidateRouting = func(_ context.Context, route RoutingRequirements) error {
+		validated = true
+		if route.ExternalAgent ||
+			route.ModelProvider != automationDefaults.ModelProvider ||
+			route.Model != automationDefaults.Model {
+			t.Fatalf("validated route = %+v, want fresh default route", route)
+		}
+		return nil
+	}
+
+	fire, found, err := repo.ClaimDueAutomation(
+		ctx,
+		mustParse(t, reloaded.NextDueAt),
+		defaults,
+	)
+	if err != nil || !found || fire.Skipped {
+		t.Fatalf("fresh route claim = %+v, found %v, err %v", fire, found, err)
+	}
+	if !validated {
+		t.Fatal("fresh default route was not validated")
+	}
+	if fire.SessionID == first.SessionID {
+		t.Fatalf("fire reused withdrawing session %q", first.SessionID)
+	}
+}
+
+func TestClaimDueAutomationRecordsRemoteEgressFailureAuditWithoutRun(t *testing.T) {
 	repo, ctx := newTitleTestRepo(t)
 	automation := mustCreateDueAutomation(t, repo, ctx, "External event", everyFiveMinutes())
 	session, err := repo.CreateSession(ctx, automation.Name)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := repo.db.ExecContext(ctx,
 		`UPDATE automations SET session_id = ? WHERE id = ?`,
 		session.SessionID, automation.AutomationID); err != nil {
@@ -763,10 +907,99 @@ func TestClaimDueAutomationCarriesExternalRoutingEvents(t *testing.T) {
 	if err != nil || !found || fire.Skipped {
 		t.Fatalf("claim = %+v, found %v, err %v", fire, found, err)
 	}
-	if len(fire.RoutingEvents) != 1 ||
-		fire.RoutingEvents[0].Type != "agent.run.step" ||
-		fire.RoutingEvents[0].Sequence <= fire.QueuedEvent.Sequence {
-		t.Fatalf("routing events = %+v, queued sequence = %d", fire.RoutingEvents, fire.QueuedEvent.Sequence)
+	if !fire.Failed || fire.FailureCode != AutomationFailureRemoteEgressRequiresInteractiveConsent ||
+		fire.RunID != "" || fire.JobID != "" {
+		t.Fatalf("fire = %+v, want remote-egress failure without a run", fire)
+	}
+	var auditCount int
+	if err := repo.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM audit_logs
+		WHERE actor_type = 'automation' AND actor_id = ?
+			AND action = 'automation.remote_egress_blocked'
+	`, automation.AutomationID).Scan(&auditCount); err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("remote egress audit rows = %d, want 1", auditCount)
+	}
+	var lastRunAt sql.NullString
+	if err := repo.db.QueryRowContext(ctx,
+		`SELECT last_run_at FROM automations WHERE id = ?`, automation.AutomationID).Scan(&lastRunAt); err != nil {
+		t.Fatal(err)
+	}
+	if lastRunAt.Valid {
+		t.Fatalf("blocked occurrence set last_run_at = %q", lastRunAt.String)
+	}
+	reloaded, err := repo.GetAutomation(ctx, automation.AutomationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.LastRunStatus != "" || reloaded.LastRunError != "" {
+		t.Fatalf("blocked occurrence rewrote last run = %q/%q", reloaded.LastRunStatus, reloaded.LastRunError)
+	}
+	if reloaded.LastOccurrenceFailureCode != AutomationFailureRemoteEgressRequiresInteractiveConsent ||
+		reloaded.LastOccurrenceFailedAt == "" {
+		t.Fatalf("durable blocked occurrence = %q/%q",
+			reloaded.LastOccurrenceFailureCode, reloaded.LastOccurrenceFailedAt)
+	}
+	if err := repo.ClearSessionAgent(ctx, session.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	successful, found, err := repo.ClaimDueAutomation(
+		ctx,
+		mustParse(t, reloaded.NextDueAt),
+		automationDefaults,
+	)
+	if err != nil || !found || successful.Failed || successful.Skipped {
+		t.Fatalf("local recovery fire = %+v found=%v err=%v", successful, found, err)
+	}
+	finishRun(t, repo, successful.RunID)
+	recovered, err := repo.GetAutomation(ctx, automation.AutomationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.LastRunStatus != "completed" ||
+		recovered.LastOccurrenceFailureCode != "" ||
+		recovered.LastOccurrenceFailedAt != "" {
+		t.Fatalf("successful run left stale blocked state: %+v", recovered)
+	}
+}
+
+func TestClaimDueAutomationAdvancesPastLegacyInsecureExternalRoute(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	automation := mustCreateDueAutomation(t, repo, ctx, "Legacy external", everyFiveMinutes())
+	session, err := repo.CreateSession(ctx, automation.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.db.ExecContext(ctx,
+		`UPDATE automations SET session_id = ? WHERE id = ?`,
+		session.SessionID, automation.AutomationID); err != nil {
+		t.Fatal(err)
+	}
+	agent := mustCreateAgent(t, ctx, repo, anthropicAgent())
+	if _, err := repo.SetSessionAgent(ctx, session.SessionID, agent.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.db.ExecContext(ctx,
+		`UPDATE external_agents SET base_url = 'http://host.docker.internal:4000/v1' WHERE id = ?`,
+		agent.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	due := automation.NextDueAt
+	fire, found, err := repo.ClaimDueAutomation(ctx, mustParse(t, due), automationDefaults)
+	if err != nil || !found {
+		t.Fatalf("claim = %+v found=%v err=%v", fire, found, err)
+	}
+	if !fire.Failed || fire.FailureCode != AutomationFailureRemoteEgressConfigurationInvalid {
+		t.Fatalf("fire = %+v, want durable configuration failure", fire)
+	}
+	reloaded, err := repo.GetAutomation(ctx, automation.AutomationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.NextDueAt == due {
+		t.Fatal("legacy insecure route did not advance next_due_at")
 	}
 }
 

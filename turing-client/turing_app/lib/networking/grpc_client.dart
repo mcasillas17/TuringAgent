@@ -33,8 +33,10 @@ import '../models/external_agent.dart';
 import '../models/grpc_mappers.dart';
 import '../models/integration.dart';
 import '../models/message.dart';
+import '../models/remote_egress.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
+import '../models/session_page.dart';
 import '../models/session_deletion.dart';
 import '../models/skill.dart';
 import '../models/telemetry.dart';
@@ -84,11 +86,11 @@ class GrpcMetadataInterceptor extends grpc.ClientInterceptor {
   }
 }
 
-abstract interface class ClosableTuringApi implements TuringApi {
+abstract class ClosableTuringApi extends TuringApi {
   Future<void> close();
 }
 
-class TuringGrpcApi implements ClosableTuringApi {
+class TuringGrpcApi implements ClosableTuringApi, RemoteEgressApi {
   TuringGrpcApi({
     required this.baseUrl,
     required this.apiKey,
@@ -145,6 +147,8 @@ class TuringGrpcApi implements ClosableTuringApi {
       providers[GrpcMappers.modelProviderToString(provider.provider)] = {
         'enabled': provider.enabled,
         'defaultModel': provider.defaultModel,
+        'remoteEndpoint': provider.remoteEndpoint,
+        'requiresPerRunConsent': provider.requiresPerRunConsent,
       };
     }
     final enabledProviders = response.providers
@@ -175,12 +179,31 @@ class TuringGrpcApi implements ClosableTuringApi {
 
   @override
   Future<List<Session>> listSessions({int limit = 50, String? after}) async {
+    final page = await listSessionPage(limit: limit, cursor: after);
+    return page.sessions;
+  }
+
+  @override
+  Future<SessionPage> listSessionPage({
+    int limit = 50,
+    String? cursor,
+    SessionListFilter filter = SessionListFilter.active,
+  }) async {
     final response = await _sessions.listSessions(
       sessionpb.ListSessionsRequest(
-        page: commonpb.PageRequest(limit: limit, cursor: after ?? ''),
+        page: commonpb.PageRequest(limit: limit, cursor: cursor ?? ''),
+        filter: switch (filter) {
+          SessionListFilter.active =>
+            sessionpb.SessionListFilter.SESSION_LIST_FILTER_ACTIVE,
+          SessionListFilter.archived =>
+            sessionpb.SessionListFilter.SESSION_LIST_FILTER_ARCHIVED,
+          SessionListFilter.all =>
+            sessionpb.SessionListFilter.SESSION_LIST_FILTER_ALL,
+        },
       ),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
     );
-    return response.sessions.map(GrpcMappers.sessionToModel).toList();
+    return GrpcMappers.sessionPageToModel(response);
   }
 
   @override
@@ -190,6 +213,36 @@ class TuringGrpcApi implements ClosableTuringApi {
       options: grpc.CallOptions(timeout: _startupUnaryTimeout),
     );
     return GrpcMappers.sessionToModel(response);
+  }
+
+  @override
+  Future<Session> renameSession({
+    required String sessionId,
+    required String title,
+  }) async {
+    final response = await _sessions.renameSession(
+      sessionpb.RenameSessionRequest(sessionId: sessionId, title: title),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+    return GrpcMappers.sessionToModel(response.session);
+  }
+
+  @override
+  Future<Session> archiveSession({required String sessionId}) async {
+    final response = await _sessions.archiveSession(
+      sessionpb.ArchiveSessionRequest(sessionId: sessionId),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+    return GrpcMappers.sessionToModel(response.session);
+  }
+
+  @override
+  Future<Session> restoreSession({required String sessionId}) async {
+    final response = await _sessions.restoreSession(
+      sessionpb.RestoreSessionRequest(sessionId: sessionId),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+    return GrpcMappers.sessionToModel(response.session);
   }
 
   @override
@@ -310,6 +363,78 @@ class TuringGrpcApi implements ClosableTuringApi {
     String modelProvider = 'ollama',
     String? idempotencyKey,
   }) {
+    return _sendMessage(
+      sessionId: sessionId,
+      content: content,
+      modelProvider: modelProvider,
+      idempotencyKey: idempotencyKey,
+    );
+  }
+
+  @override
+  Future<RemoteEgressDisclosure?> prepareRemoteEgress({
+    required String sessionId,
+    required String content,
+    String modelProvider = 'ollama',
+    required String idempotencyKey,
+  }) async {
+    final response = await _chat.prepareRemoteEgress(
+      chatpb.PrepareRemoteEgressRequest(
+        sessionId: sessionId,
+        content: content,
+        contentType: 'text',
+        agentId: commonpb.AgentId.AGENT_ID_GENERAL_ASSISTANT,
+        modelProvider: GrpcMappers.modelProviderFromString(modelProvider),
+        idempotencyKey: idempotencyKey,
+      ),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+    if (!response.hasDisclosure()) return null;
+    final disclosure = response.disclosure;
+    return RemoteEgressDisclosure(
+      challenge: disclosure.challenge,
+      provider: GrpcMappers.modelProviderToString(disclosure.provider),
+      model: disclosure.model,
+      endpoint: disclosure.endpoint,
+      endpointHost: disclosure.endpointHost,
+      externalAgentId: disclosure.externalAgentId,
+      dataCategories: disclosure.dataCategories
+          .map(_egressCategoryFromProto)
+          .toList(growable: false),
+      expiresAt: disclosure.expiresAt.toDateTime().toUtc(),
+    );
+  }
+
+  @override
+  Future<Map<String, dynamic>> sendMessageWithRemoteEgressConsent({
+    required String sessionId,
+    required String content,
+    String modelProvider = 'ollama',
+    required String idempotencyKey,
+    required RemoteEgressConsent consent,
+  }) {
+    return _sendMessage(
+      sessionId: sessionId,
+      content: content,
+      modelProvider: modelProvider,
+      idempotencyKey: idempotencyKey,
+      remoteEgressConsent: commonpb.RemoteEgressConsent(
+        challenge: consent.challenge,
+        acknowledged: true,
+        acknowledgedDataCategories: consent.acknowledgedDataCategories.map(
+          _egressCategoryToProto,
+        ),
+      ),
+    );
+  }
+
+  Future<Map<String, dynamic>> _sendMessage({
+    required String sessionId,
+    required String content,
+    required String modelProvider,
+    String? idempotencyKey,
+    commonpb.RemoteEgressConsent? remoteEgressConsent,
+  }) {
     final stream = _chat.sendMessage(
       chatpb.SendMessageRequest(
         sessionId: sessionId,
@@ -318,6 +443,7 @@ class TuringGrpcApi implements ClosableTuringApi {
         agentId: commonpb.AgentId.AGENT_ID_GENERAL_ASSISTANT,
         modelProvider: GrpcMappers.modelProviderFromString(modelProvider),
         idempotencyKey: idempotencyKey ?? '',
+        remoteEgressConsent: remoteEgressConsent,
       ),
     );
     final queued = Completer<Map<String, dynamic>>();
@@ -355,6 +481,73 @@ class TuringGrpcApi implements ClosableTuringApi {
       cancelOnError: false,
     );
     return queued.future;
+  }
+
+  static EgressDataCategory _egressCategoryFromProto(
+    commonpb.EgressDataCategory category,
+  ) {
+    switch (category) {
+      case commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_CURRENT_MESSAGE:
+        return EgressDataCategory.currentMessage;
+      case commonpb
+          .EgressDataCategory
+          .EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY:
+        return EgressDataCategory.conversationHistory;
+      case commonpb
+          .EgressDataCategory
+          .EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL:
+        return EgressDataCategory.crossSessionRecall;
+      case commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_MEMORY_PROFILE:
+        return EgressDataCategory.memoryProfile;
+      case commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_SKILL_CONTENT:
+        return EgressDataCategory.skillContent;
+      case commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_TOOL_SCHEMAS:
+        return EgressDataCategory.toolSchemas;
+      case commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS:
+        return EgressDataCategory.toolArguments;
+      case commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_TOOL_RESULTS:
+        return EgressDataCategory.toolResults;
+      case commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_ATTACHMENTS:
+        return EgressDataCategory.attachments;
+      case commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_UNSPECIFIED:
+        throw const TuringApiException(
+          code: 'invalid_egress_category',
+          message: 'The server returned an unspecified egress category',
+        );
+    }
+    throw TuringApiException(
+      code: 'invalid_egress_category',
+      message: 'The server returned an unknown egress category: $category',
+    );
+  }
+
+  static commonpb.EgressDataCategory _egressCategoryToProto(
+    EgressDataCategory category,
+  ) {
+    switch (category) {
+      case EgressDataCategory.currentMessage:
+        return commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_CURRENT_MESSAGE;
+      case EgressDataCategory.conversationHistory:
+        return commonpb
+            .EgressDataCategory
+            .EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY;
+      case EgressDataCategory.crossSessionRecall:
+        return commonpb
+            .EgressDataCategory
+            .EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL;
+      case EgressDataCategory.memoryProfile:
+        return commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_MEMORY_PROFILE;
+      case EgressDataCategory.skillContent:
+        return commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_SKILL_CONTENT;
+      case EgressDataCategory.toolSchemas:
+        return commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_TOOL_SCHEMAS;
+      case EgressDataCategory.toolArguments:
+        return commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS;
+      case EgressDataCategory.toolResults:
+        return commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_TOOL_RESULTS;
+      case EgressDataCategory.attachments:
+        return commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_ATTACHMENTS;
+    }
   }
 
   @override

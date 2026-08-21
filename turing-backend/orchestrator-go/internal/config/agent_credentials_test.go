@@ -63,6 +63,8 @@ func TestLoadFromMapKeepsOnlyCredentialNames(t *testing.T) {
 		"TURING_APPROVAL_CONSUMER_TOKEN": "approval-consumer",
 		"MCP_FILES_ENABLED":              "true",
 		"TURING_APPROVAL_JWT_SECRET":     "secret",
+		"TURING_EGRESS_SIGNING_SECRET":   "egress-secret",
+		"TURING_CURSOR_HMAC_SECRET":      strings.Repeat("ab", 32),
 		AgentAPIKeysVar:                  `{"claude":"sk-ant-1"}`,
 	})
 	if err != nil {
@@ -85,6 +87,8 @@ func TestLoadFromMapRefusesMalformedAgentKeys(t *testing.T) {
 		"TURING_APPROVAL_CONSUMER_TOKEN": "approval-consumer",
 		"MCP_FILES_ENABLED":              "true",
 		"TURING_APPROVAL_JWT_SECRET":     "secret",
+		"TURING_EGRESS_SIGNING_SECRET":   "egress-secret",
+		"TURING_CURSOR_HMAC_SECRET":      strings.Repeat("ab", 32),
 		AgentAPIKeysVar:                  "not json",
 	})
 	if err == nil {

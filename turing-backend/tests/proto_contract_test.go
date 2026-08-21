@@ -121,6 +121,7 @@ func TestWorkerCapabilityRoutingProtoContract(t *testing.T) {
 	assertProtoField(t, capabilities, "max_concurrent_runs", 4, protoreflect.Int32Kind, false, "")
 	assertProtoField(t, capabilities, "supports_external_agents", 5, protoreflect.BoolKind, false, "")
 	assertProtoField(t, capabilities, "external_agent_credential_refs", 6, protoreflect.StringKind, true, "")
+	assertProtoField(t, capabilities, "remote_egress_decision_version", 7, protoreflect.Int32Kind, false, "")
 
 	workerReady := runtimeFile.Messages().ByName("RuntimeWorkerReady")
 	assertProtoField(t, workerReady, "registration_id", 6, protoreflect.StringKind, false, "")
@@ -150,6 +151,96 @@ func TestWorkerCapabilityRoutingProtoContract(t *testing.T) {
 	assertProtoField(t, provider, "models", 4, protoreflect.MessageKind, true, "turing.v1.ModelCapability")
 	agent := common.Messages().ByName("AgentDescriptor")
 	assertProtoField(t, agent, "available", 3, protoreflect.BoolKind, false, "")
+}
+
+func TestRemoteEgressProtoContract(t *testing.T) {
+	common := turingv1.File_turing_v1_common_proto
+	categories := common.Enums().ByName("EgressDataCategory")
+	for _, name := range []protoreflect.Name{
+		"EGRESS_DATA_CATEGORY_CURRENT_MESSAGE",
+		"EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY",
+		"EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL",
+		"EGRESS_DATA_CATEGORY_MEMORY_PROFILE",
+		"EGRESS_DATA_CATEGORY_SKILL_CONTENT",
+		"EGRESS_DATA_CATEGORY_TOOL_SCHEMAS",
+		"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS",
+		"EGRESS_DATA_CATEGORY_TOOL_RESULTS",
+		"EGRESS_DATA_CATEGORY_ATTACHMENTS",
+	} {
+		if categories == nil || categories.Values().ByName(name) == nil {
+			t.Fatalf("EgressDataCategory is missing %s", name)
+		}
+	}
+
+	disclosure := common.Messages().ByName("RemoteEgressDisclosure")
+	assertProtoField(t, disclosure, "challenge", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, disclosure, "provider", 2, protoreflect.EnumKind, false, "")
+	assertProtoField(t, disclosure, "model", 3, protoreflect.StringKind, false, "")
+	assertProtoField(t, disclosure, "endpoint", 4, protoreflect.StringKind, false, "")
+	assertProtoField(t, disclosure, "endpoint_host", 5, protoreflect.StringKind, false, "")
+	assertProtoField(t, disclosure, "external_agent_id", 6, protoreflect.StringKind, false, "")
+	assertProtoField(t, disclosure, "data_categories", 7, protoreflect.EnumKind, true, "")
+	assertProtoField(t, disclosure, "expires_at", 8, protoreflect.MessageKind, false, "google.protobuf.Timestamp")
+
+	consent := common.Messages().ByName("RemoteEgressConsent")
+	assertProtoField(t, consent, "challenge", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, consent, "acknowledged_data_categories", 2, protoreflect.EnumKind, true, "")
+	assertProtoField(t, consent, "acknowledged", 3, protoreflect.BoolKind, false, "")
+
+	decision := common.Messages().ByName("RunEgressDecision")
+	assertProtoField(t, decision, "decision_id", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, decision, "version", 2, protoreflect.Int32Kind, false, "")
+	assertProtoField(t, decision, "provider", 3, protoreflect.EnumKind, false, "")
+	assertProtoField(t, decision, "model", 4, protoreflect.StringKind, false, "")
+	assertProtoField(t, decision, "endpoint", 5, protoreflect.StringKind, false, "")
+	assertProtoField(t, decision, "endpoint_host", 6, protoreflect.StringKind, false, "")
+	assertProtoField(t, decision, "external_agent_id", 7, protoreflect.StringKind, false, "")
+	assertProtoField(t, decision, "data_categories", 8, protoreflect.EnumKind, true, "")
+	assertProtoField(t, decision, "consent_granted_at", 9, protoreflect.MessageKind, false, "google.protobuf.Timestamp")
+	assertProtoField(t, decision, "challenge_fingerprint", 10, protoreflect.StringKind, false, "")
+	assertProtoField(t, decision, "selected_tools", 11, protoreflect.StringKind, true, "")
+	assertProtoField(t, decision, "skill_snapshot_fingerprint", 12, protoreflect.StringKind, false, "")
+	assertProtoField(t, decision, "recall_applicable", 13, protoreflect.BoolKind, false, "")
+	assertProtoField(t, decision, "memory_profile_applicable", 14, protoreflect.BoolKind, false, "")
+	assertProtoField(t, decision, "external_credential_ref_hash", 15, protoreflect.StringKind, false, "")
+	assertProtoField(t, decision, "request_digest", 16, protoreflect.StringKind, false, "")
+
+	provider := common.Messages().ByName("ProviderConfig")
+	assertProtoField(t, provider, "remote_endpoint", 5, protoreflect.StringKind, false, "")
+	assertProtoField(t, provider, "requires_per_run_consent", 6, protoreflect.BoolKind, false, "")
+
+	chatFile := turingv1.File_turing_v1_chat_proto
+	send := chatFile.Messages().ByName("SendMessageRequest")
+	assertProtoField(t, send, "remote_egress_consent", 11, protoreflect.MessageKind, false, "turing.v1.RemoteEgressConsent")
+	prepare := chatFile.Messages().ByName("PrepareRemoteEgressRequest")
+	assertProtoField(t, prepare, "session_id", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, prepare, "content", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, prepare, "idempotency_key", 7, protoreflect.StringKind, false, "")
+	response := chatFile.Messages().ByName("PrepareRemoteEgressResponse")
+	assertProtoField(t, response, "disclosure", 1, protoreflect.MessageKind, false, "turing.v1.RemoteEgressDisclosure")
+	service := chatFile.Services().ByName("ChatService")
+	method := service.Methods().ByName("PrepareRemoteEgress")
+	if method == nil {
+		t.Fatal("ChatService.PrepareRemoteEgress is missing")
+	}
+	if got := string(method.Input().FullName()); got != "turing.v1.PrepareRemoteEgressRequest" {
+		t.Fatalf("PrepareRemoteEgress input = %q", got)
+	}
+	if got := string(method.Output().FullName()); got != "turing.v1.PrepareRemoteEgressResponse" {
+		t.Fatalf("PrepareRemoteEgress output = %q", got)
+	}
+
+	job := turingv1.File_turing_v1_runtime_proto.Messages().ByName("AgentJob")
+	assertProtoField(t, job, "egress_decision", 17, protoreflect.MessageKind, false, "turing.v1.RunEgressDecision")
+	assertProtoField(t, job, "selected_tools", 18, protoreflect.StringKind, true, "")
+	externalTarget := turingv1.File_turing_v1_runtime_proto.Messages().ByName("ExternalAgentTarget")
+	assertProtoField(t, externalTarget, "agent_id", 4, protoreflect.StringKind, false, "")
+
+	auditPayload := turingv1.File_turing_v1_audit_proto.Messages().ByName("AuditPayload")
+	assertProtoField(t, auditPayload, "endpoint_host", 22, protoreflect.StringKind, false, "")
+	assertProtoField(t, auditPayload, "egress_data_categories", 23, protoreflect.EnumKind, true, "")
+	assertProtoField(t, auditPayload, "egress_decision_version", 24, protoreflect.Int32Kind, false, "")
+	assertProtoField(t, auditPayload, "egress_consent_granted_at", 25, protoreflect.MessageKind, false, "google.protobuf.Timestamp")
 }
 
 func assertProtoField(t *testing.T, message protoreflect.MessageDescriptor, name protoreflect.Name, number protoreflect.FieldNumber, kind protoreflect.Kind, repeated bool, messageType protoreflect.FullName) {
