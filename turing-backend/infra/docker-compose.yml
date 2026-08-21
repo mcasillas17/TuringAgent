@@ -33,6 +33,7 @@ services:
       ORCHESTRATOR_INTERNAL_PORT: ${ORCHESTRATOR_INTERNAL_PORT:-3001}
       DATABASE_PATH: ${DATABASE_PATH:-/app/data/turing.db}
       SKILLS_ROOT: /skills
+      MCP_CONFIG_ROOT: /mcp
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
       OLLAMA_CONTEXT_WINDOW_TOKENS: ${OLLAMA_CONTEXT_WINDOW_TOKENS:-32768}
@@ -65,9 +66,11 @@ services:
     volumes:
       - ../data:/app/data
       - ../skills:/skills
+      - ../mcp:/mcp:ro
     networks:
       - net-system
       - net-files
+      - net-mcp-registry
 
   turing-agent-runtime-general:
     # The in-process reconnect loop covers stream failures; this covers what it
@@ -195,3 +198,8 @@ services:
 networks:
   net-system:
   net-files:
+  net-mcp-registry:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.31.254.0/24

@@ -120,6 +120,14 @@ message RemoteEgressDisclosure {
   string external_agent_id = 6;
   repeated EgressDataCategory data_categories = 7;
   google.protobuf.Timestamp expires_at = 8;
+  repeated RemoteMcpEgressDestination remote_mcp_servers = 9;
+  repeated string selected_tools = 10;
+}
+
+message RemoteMcpEgressDestination {
+  string server_name = 1;
+  string endpoint = 2;
+  string endpoint_host = 3;
 }
 
 message RemoteEgressConsent {
@@ -148,6 +156,7 @@ message RunEgressDecision {
   bool memory_profile_applicable = 14;
   string external_credential_ref_hash = 15;
   string request_digest = 16;
+  repeated RemoteMcpEgressDestination remote_mcp_servers = 17;
 }
 
 message AgentDescriptor {

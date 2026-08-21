@@ -12,6 +12,7 @@ import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 
 import '../support/no_audit_api.dart';
+import '../support/no_mcp_registry_api.dart';
 import '../support/no_skills_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_automations_api.dart';
@@ -603,6 +604,7 @@ class _ConnectCall {
 class _IntegrationsApi
     with
         NoAuditApi,
+        NoMcpRegistryApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoAutomationsApi,

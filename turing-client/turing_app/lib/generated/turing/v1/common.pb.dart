@@ -590,6 +590,8 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
     $core.String? externalAgentId,
     $core.Iterable<EgressDataCategory>? dataCategories,
     $1.Timestamp? expiresAt,
+    $core.Iterable<RemoteMcpEgressDestination>? remoteMcpServers,
+    $core.Iterable<$core.String>? selectedTools,
   }) {
     final result = create();
     if (challenge != null) result.challenge = challenge;
@@ -600,6 +602,9 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
     if (externalAgentId != null) result.externalAgentId = externalAgentId;
     if (dataCategories != null) result.dataCategories.addAll(dataCategories);
     if (expiresAt != null) result.expiresAt = expiresAt;
+    if (remoteMcpServers != null)
+      result.remoteMcpServers.addAll(remoteMcpServers);
+    if (selectedTools != null) result.selectedTools.addAll(selectedTools);
     return result;
   }
 
@@ -632,6 +637,10 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
         defaultEnumValue: EgressDataCategory.EGRESS_DATA_CATEGORY_UNSPECIFIED)
     ..aOM<$1.Timestamp>(8, _omitFieldNames ? '' : 'expiresAt',
         subBuilder: $1.Timestamp.create)
+    ..pc<RemoteMcpEgressDestination>(
+        9, _omitFieldNames ? '' : 'remoteMcpServers', $pb.PbFieldType.PM,
+        subBuilder: RemoteMcpEgressDestination.create)
+    ..pPS(10, _omitFieldNames ? '' : 'selectedTools')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -724,6 +733,95 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
   void clearExpiresAt() => $_clearField(8);
   @$pb.TagNumber(8)
   $1.Timestamp ensureExpiresAt() => $_ensure(7);
+
+  @$pb.TagNumber(9)
+  $pb.PbList<RemoteMcpEgressDestination> get remoteMcpServers => $_getList(8);
+
+  @$pb.TagNumber(10)
+  $pb.PbList<$core.String> get selectedTools => $_getList(9);
+}
+
+class RemoteMcpEgressDestination extends $pb.GeneratedMessage {
+  factory RemoteMcpEgressDestination({
+    $core.String? serverName,
+    $core.String? endpoint,
+    $core.String? endpointHost,
+  }) {
+    final result = create();
+    if (serverName != null) result.serverName = serverName;
+    if (endpoint != null) result.endpoint = endpoint;
+    if (endpointHost != null) result.endpointHost = endpointHost;
+    return result;
+  }
+
+  RemoteMcpEgressDestination._();
+
+  factory RemoteMcpEgressDestination.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RemoteMcpEgressDestination.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RemoteMcpEgressDestination',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'serverName')
+    ..aOS(2, _omitFieldNames ? '' : 'endpoint')
+    ..aOS(3, _omitFieldNames ? '' : 'endpointHost')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RemoteMcpEgressDestination clone() =>
+      RemoteMcpEgressDestination()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RemoteMcpEgressDestination copyWith(
+          void Function(RemoteMcpEgressDestination) updates) =>
+      super.copyWith(
+              (message) => updates(message as RemoteMcpEgressDestination))
+          as RemoteMcpEgressDestination;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RemoteMcpEgressDestination create() => RemoteMcpEgressDestination._();
+  @$core.override
+  RemoteMcpEgressDestination createEmptyInstance() => create();
+  static $pb.PbList<RemoteMcpEgressDestination> createRepeated() =>
+      $pb.PbList<RemoteMcpEgressDestination>();
+  @$core.pragma('dart2js:noInline')
+  static RemoteMcpEgressDestination getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RemoteMcpEgressDestination>(create);
+  static RemoteMcpEgressDestination? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get serverName => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set serverName($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasServerName() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearServerName() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get endpoint => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set endpoint($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasEndpoint() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearEndpoint() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get endpointHost => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set endpointHost($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasEndpointHost() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearEndpointHost() => $_clearField(3);
 }
 
 class RemoteEgressConsent extends $pb.GeneratedMessage {
@@ -826,6 +924,7 @@ class RunEgressDecision extends $pb.GeneratedMessage {
     $core.bool? memoryProfileApplicable,
     $core.String? externalCredentialRefHash,
     $core.String? requestDigest,
+    $core.Iterable<RemoteMcpEgressDestination>? remoteMcpServers,
   }) {
     final result = create();
     if (decisionId != null) result.decisionId = decisionId;
@@ -848,6 +947,8 @@ class RunEgressDecision extends $pb.GeneratedMessage {
     if (externalCredentialRefHash != null)
       result.externalCredentialRefHash = externalCredentialRefHash;
     if (requestDigest != null) result.requestDigest = requestDigest;
+    if (remoteMcpServers != null)
+      result.remoteMcpServers.addAll(remoteMcpServers);
     return result;
   }
 
@@ -888,6 +989,9 @@ class RunEgressDecision extends $pb.GeneratedMessage {
     ..aOB(14, _omitFieldNames ? '' : 'memoryProfileApplicable')
     ..aOS(15, _omitFieldNames ? '' : 'externalCredentialRefHash')
     ..aOS(16, _omitFieldNames ? '' : 'requestDigest')
+    ..pc<RemoteMcpEgressDestination>(
+        17, _omitFieldNames ? '' : 'remoteMcpServers', $pb.PbFieldType.PM,
+        subBuilder: RemoteMcpEgressDestination.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1044,6 +1148,9 @@ class RunEgressDecision extends $pb.GeneratedMessage {
   $core.bool hasRequestDigest() => $_has(15);
   @$pb.TagNumber(16)
   void clearRequestDigest() => $_clearField(16);
+
+  @$pb.TagNumber(17)
+  $pb.PbList<RemoteMcpEgressDestination> get remoteMcpServers => $_getList(16);
 }
 
 class AgentDescriptor extends $pb.GeneratedMessage {

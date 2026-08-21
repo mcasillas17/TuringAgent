@@ -1,21 +1,54 @@
 # MCP Security and Integration Guide
 
-This guide describes the implemented security boundary for the Go
-`mcp-system` and `mcp-files` servers and their integration with the agent
-runtime and orchestrator.
+This guide describes the implemented security boundary for bundled and
+registered MCP servers and their integration with the agent runtime and
+orchestrator.
 
 ## Deployment boundary
 
-| Service | Endpoint | Bearer-token environment variable | Purpose |
-|---|---|---|---|
-| `mcp-system` | `:7100/mcp` | `MCP_SYSTEM_TOKEN_GENERAL` | Read-only system tools |
-| `mcp-files` | `:7110/mcp` | `MCP_FILES_TOKEN_GENERAL` | Sandboxed file tools |
+| Tier | Example | Egress | Sandbox-confined | Approval enforcement |
+|---|---|---|---|---|
+| Bundled | `mcp-system`, `mcp-files` | No | Yes | Cooperating MCP server |
+| Local container, third-party | `http://vendor-mcp:9000/mcp` | No | No | Orchestrator caller |
+| Remote URL | `https://vendor.example/mcp` | Yes, per run | No | Orchestrator caller |
+| stdio / `command` / `npx` | `command: "npx"` | Refused | Refused | Not registered |
 
-Compose exposes these ports only to internal Docker networks; it does not
-publish them to the host. An empty configured bearer token denies every
-request rather than opening the service.
+The two bundled servers remain on private Docker networks; Compose does not
+publish their ports to the host. Third-party local containers join the
+dedicated internal-only `net-mcp-registry` network (`172.31.254.0/24`) and
+expose no host port; the caller rejects any local-tier resolution outside that
+subnet. An empty
+configured bundled bearer token denies every request rather than opening the
+service.
 
-All four backend services run as explicit non-root users. Compose makes every
+The orchestrator imports `mcp/mcp.json` into SQLite. Import preserves a
+previous user enablement decision only while the endpoint and tier are
+unchanged; repointing a server disables it and withdraws the old tool snapshot.
+An explicit empty `tools` snapshot withdraws prior tools, and policy edits
+cannot reactivate a tool the current snapshot no longer contains. New servers
+never arrive enabled. Bearers are
+sealed with `internal/secretbox` under `TURING_INTEGRATION_KEY`; no public or
+internal response contains a token or ciphertext. A `command` entry is retained
+as an import issue explaining that stdio is unsupported, and no server row is
+created for it. Malformed documents and entries whose token cannot be sealed
+are reported on the MCPs page without preventing the rest of the backend from
+starting. Imported servers can also be removed through the registry API.
+Removal writes a local import tombstone, so an unchanged `mcp.json` cannot
+silently recreate the server at the next restart; importing it again requires a
+new name.
+
+Local-container enablement performs bounded `tools/list` discovery. Remote
+enablement performs no network request: remote entries can carry an optional
+`tools` snapshot in `mcp.json`, and otherwise remain visible with no callable
+tools. This is deliberate;
+contacting a remote server merely to discover it would make enablement an
+undeclared egress consent.
+
+Peer-controlled MCP errors and results are scrubbed of the registered bearer
+before they can cross the internal RPC boundary or reach liveness state, tool
+events, audit, or persisted result summaries.
+
+All four bundled backend services run as explicit non-root users. Compose makes every
 root filesystem read-only, drops all Linux capabilities without adding any
 back, and sets `no-new-privileges`. Writable storage is allowlisted:
 
@@ -45,7 +78,7 @@ fixed loopback bind; MCP ports are exposed only inside their assigned network.
 The orchestrator configures SQLite `temp_store=MEMORY`, so sorts and transient
 b-trees do not require write access to `/tmp`; durable SQLite files and WAL
 artifacts remain under `/app/data`.
-The servers bound request bodies and configure header, read, write, and idle
+The bundled servers bound request bodies and configure header, read, write, and idle
 HTTP timeouts. `mcp-system` accepts at most 1 MiB per request; `mcp-files`
 allows the worst-case escaped 512 KiB mutation envelope (about 3.1 MiB). Both
 cap encoded responses at 1 MiB. Responses are ordinary bounded JSON responses,
@@ -109,7 +142,7 @@ and accepts only a
 strictly scoped session namespace request. Public audit records opaque artifact
 identity, policy, state, and error class, never path or content.
 
-The runtime follows paginated `tools/list` responses in order, with limits of
+Bundled discovery follows paginated `tools/list` responses in order, with limits of
 100 pages, 10,000 tools, and 4 MiB of aggregate encoded descriptors. It
 validates names, descriptions, object-rooted input schemas, and duplicate
 names across servers. Catalog entries with policy `disabled` are filtered out
@@ -242,6 +275,34 @@ The runtime and file server both enforce ordering:
 7. Only after successful consumption can file content or namespace state be
    mutated. A later write failure does not restore the single-use approval.
 8. The runtime posts an AFTER beacon with the result or failure.
+
+### Caller-side enforcement for non-bundled servers
+
+A third-party server does not know Turing's approval JWT format and never
+receives `TURING_APPROVAL_CONSUMER_TOKEN`. Giving it that identity would let it
+consume approvals for calls it did not make.
+
+For local-container and remote tiers, the runtime sends the approved
+`approval_id` back to the orchestrator over its existing least-privilege
+internal connection. The orchestrator verifies the run, server, tool and
+canonical argument hash, atomically consumes the approval, and only then sends
+JSON-RPC to the registered endpoint. The signed approval JWT is not forwarded
+on this path.
+
+This preserves argument binding and single use, but the enforcement point is
+different and the guarantee is narrower. Bundled `mcp-files` rejects a forged
+direct request itself. A third-party server would not; the guarantee holds
+because its registered endpoint and sealed bearer are usable only through the
+orchestrator proxy. A process that can reach or authenticate to that server by
+some other route is outside this guarantee.
+
+Immediately before HTTP dispatch, the proxy rechecks that the run is still
+execution-active, the session is not being withdrawn, the server and tool are
+still present/enabled, and (for remote tiers) the endpoint and tool remain in
+the run-owned egress decision. That final check is the dispatch linearization
+point. A cancellation committed after it observes an already in-flight call;
+as with a bundled write after approval consumption, it does not retroactively
+restore the consumed approval.
 
 Human approval comments and denial reasons are durable decision evidence. The
 orchestrator stores them in separate nullable columns in the same transaction as
@@ -540,8 +601,8 @@ intentional: a partially completed write is still a "used" approval.
 
 The internal gRPC server authorizes each caller by which of two registered
 tokens its bearer matches, not by anything the caller claims about itself.
-`TURING_APPROVAL_CONSUMER_TOKEN` (held by `mcp-files`, and by any future MCP
-server that consumes approvals) is authorized for
+`TURING_APPROVAL_CONSUMER_TOKEN` (held only by the bundled `mcp-files`
+consumer) is authorized for
 `ApprovalService.ConsumeApproval`, `FinalizeSandboxArtifact`, and
 `CheckSessionCapability`. `TURING_RUNTIME_TOKEN` (held by
 `agent-runtime-go`) is authorized for that method plus
@@ -610,7 +671,7 @@ Flutter consumes four public event types:
 denied events. Provider IDs, arguments, status, duration, and result summaries
 remain in persisted tool/audit state rather than this UI payload.
 
-### Agent runtime (Tasks 8 and 11)
+### Agent runtime
 
 - Holds one bearer token per MCP server: `MCP_SYSTEM_TOKEN_GENERAL` and
   `MCP_FILES_TOKEN_GENERAL`.
@@ -622,16 +683,21 @@ remain in persisted tool/audit state rather than this UI payload.
   `params._meta.approvalToken`, not to `params.arguments`.
 - Treats any HTTP non-2xx from an MCP server as a hard error (e.g.
   `MCP HTTP 401`) rather than as a tool result.
+- Lists enabled non-bundled servers over the internal registry RPC and invokes
+  them through `CallRegisteredMcpTool`; it never receives their endpoint bearer.
+- Refreshes and re-reports its capability snapshot when server enablement,
+  discovery or tool policy changes.
 
 ### Orchestrator
 
 The orchestrator implements the signing side and the gRPC consume method that
 the Files MCP verifier calls.
 
-#### Dynamic tool discovery and policy
+#### Dynamic tool discovery, registry and policy
 
-The runtime is the only component that connects to MCP servers, so it reports
-its `tools/list` results in the first `RuntimeWorkerReady` message. Each entry
+The runtime connects directly only to bundled MCP servers. The orchestrator
+discovers local third-party servers and proxies all non-bundled calls. The
+runtime reports the combined snapshot in `RuntimeWorkerReady`; each entry
 contains only `server_name`, `tool_name`, and the JSON argument schema. Policy
 is never accepted from the runtime; the orchestrator remains authoritative.
 
@@ -670,13 +736,14 @@ The shipped runtime sends `COMPLETE` after every successful discovery,
 including a successful empty result, and `FAILED` when a required discovery
 attempt fails.
 
-For a remote model run, the orchestrator freezes the selected `server/tool`
-names into the one-time egress decision and job. The runtime filters its local
-registry to that exact set before serializing tool schemas; a missing selected
-tool fails the run rather than widening or substituting the set. Tool arguments
-and results are separately disclosed categories. These egress controls do not
-replace tool policy or approval: a disclosed tool mutation still requires the
-same argument-bound, single-use approval.
+For a run using a remote model or remote MCP server, the orchestrator freezes
+the selected `server/tool` names and every remote MCP endpoint into the one-time
+egress decision and job. The runtime filters its local registry to that exact
+set before serializing tool schemas; a missing selected tool fails the run
+rather than widening or substituting the set. Remote MCP tool arguments and
+results are disclosed categories. The proxy refuses a remote call whose server,
+endpoint and tool are absent from the run-owned decision. Egress controls do
+not replace tool policy or approval.
 
 JWT signing requirements:
 

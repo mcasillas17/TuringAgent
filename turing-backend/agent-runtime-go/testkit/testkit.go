@@ -70,6 +70,17 @@ func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 		ModelTimeout:       cfg.modelTimeout(),
 		ToolTimeout:        cfg.toolTimeout(),
 		TotalToolTimeout:   cfg.totalToolTimeout(),
+		RegisteredMCPServers: func(ctx context.Context) (map[string]agent.ToolLister, error) {
+			clients, err := mcp.NewRegistryClients(ctx, client)
+			if err != nil {
+				return nil, err
+			}
+			servers := make(map[string]agent.ToolLister, len(clients))
+			for name, registered := range clients {
+				servers[name] = registered
+			}
+			return servers, nil
+		},
 	}
 	executor := agent.NewGeneralAssistant(providers, client, toolset)
 	runtimeWorker := worker.New(worker.Options{

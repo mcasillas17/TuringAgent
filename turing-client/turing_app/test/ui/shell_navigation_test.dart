@@ -13,6 +13,7 @@ import 'package:turing_flutter_app/models/agent_descriptor.dart';
 import 'package:turing_flutter_app/models/external_agent.dart';
 import 'package:turing_flutter_app/models/automation.dart';
 import 'package:turing_flutter_app/models/message.dart';
+import 'package:turing_flutter_app/models/mcp_server.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
 import 'package:turing_flutter_app/models/session_page.dart';
@@ -145,6 +146,50 @@ void main() {
 
       expect(find.text('Unknown policy'), findsOneWidget);
       expect(find.text('Runs freely'), findsNothing);
+    });
+
+    testWidgets('remote MCP metadata fits the compact layout', (tester) async {
+      final api = _FakeApi()
+        ..mcpRegistry = McpRegistrySnapshot(
+          servers: [
+            McpServer(
+              serverId: 'mcp_vendor',
+              name: 'vendor',
+              transport: 'http',
+              url: 'https://vendor.example/mcp',
+              tier: McpServerTier.remoteUrl,
+              enabled: true,
+              liveness: McpServerLiveness.down,
+              statusMessage: 'The server did not answer tools/list.',
+              sandboxConfined: false,
+              tools: const [
+                ToolDescriptor(
+                  serverName: 'vendor',
+                  toolName: 'vendor.lookup.with.a.long.name',
+                  policy: ToolPolicy.approvalRequired,
+                ),
+              ],
+            ),
+          ],
+          unsupported: const [
+            UnsupportedMcpServer(
+              name: 'stdio-vendor',
+              reason: 'stdio/command MCP servers are unsupported',
+            ),
+          ],
+        );
+      await _pumpShell(tester, api: api, size: _phone);
+
+      await tester.tap(find.byTooltip('Open navigation menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('MCPs'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Remote · per-run consent'), findsOneWidget);
+      expect(find.text('Not sandbox-confined'), findsOneWidget);
+      expect(find.text('Down'), findsOneWidget);
+      expect(find.text('stdio-vendor was not imported'), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
 
     testWidgets('Agents lists the local assistant and what you added', (
@@ -2307,6 +2352,7 @@ class _FakeApi extends TuringApi
     ),
   ];
   List<ToolDescriptor> tools = const [];
+  McpRegistrySnapshot? mcpRegistry;
   List<AgentDescriptor> agents = const [];
   Object? toolsError;
   Object? agentsError;
@@ -2411,6 +2457,36 @@ class _FakeApi extends TuringApi
     final error = toolsError;
     if (error != null) throw error;
     return tools;
+  }
+
+  @override
+  Future<McpRegistrySnapshot> listMcpServers() async {
+    final registry = mcpRegistry;
+    if (registry != null) {
+      final error = toolsError;
+      if (error != null) throw error;
+      return registry;
+    }
+    return super.listMcpServers();
+  }
+
+  @override
+  Future<McpServer> setMcpServerEnabled({
+    required String serverId,
+    required bool enabled,
+  }) async {
+    return mcpRegistry!.servers.firstWhere(
+      (server) => server.serverId == serverId,
+    );
+  }
+
+  @override
+  Future<ToolDescriptor> updateMcpToolPolicy({
+    required String serverId,
+    required String toolName,
+    required ToolPolicy policy,
+  }) async {
+    return ToolDescriptor(serverName: '', toolName: toolName, policy: policy);
   }
 
   /// A working in-memory automation library, so the Automations UI is tested
@@ -2619,6 +2695,9 @@ class _FakeApi extends TuringApi
       status: SessionStatus.archived,
     );
   }
+
+  @override
+  Future<void> deleteMcpServer({required String serverId}) async {}
 
   @override
   Future<Session> restoreSession({required String sessionId}) async {

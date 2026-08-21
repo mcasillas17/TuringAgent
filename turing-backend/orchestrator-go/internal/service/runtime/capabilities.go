@@ -38,6 +38,30 @@ type registeredWorkerCapabilities struct {
 	remoteEgressDecisionVersion int
 }
 
+func cloneRegisteredWorkerCapabilities(input *registeredWorkerCapabilities) *registeredWorkerCapabilities {
+	if input == nil {
+		return nil
+	}
+	cloned := &registeredWorkerCapabilities{
+		models:                      append([]registeredModelCapability(nil), input.models...),
+		agentIDs:                    make(map[string]struct{}, len(input.agentIDs)),
+		tools:                       make(map[string]struct{}, len(input.tools)),
+		externalAgentCredentialRefs: make(map[string]struct{}, len(input.externalAgentCredentialRefs)),
+		maxConcurrentRuns:           input.maxConcurrentRuns,
+		remoteEgressDecisionVersion: input.remoteEgressDecisionVersion,
+	}
+	for value := range input.agentIDs {
+		cloned.agentIDs[value] = struct{}{}
+	}
+	for value := range input.tools {
+		cloned.tools[value] = struct{}{}
+	}
+	for value := range input.externalAgentCredentialRefs {
+		cloned.externalAgentCredentialRefs[value] = struct{}{}
+	}
+	return cloned
+}
+
 func decodeWorkerCapabilities(snapshot *turingv1.WorkerCapabilities) (*registeredWorkerCapabilities, []repository.DiscoveredTool, error) {
 	if snapshot == nil {
 		return nil, nil, fmt.Errorf("capabilities are required")
@@ -288,6 +312,8 @@ func (s *Server) replaceWorkerCapabilities(
 	connectedWorker *worker,
 	update *turingv1.RuntimeWorkerCapabilitiesUpdated,
 ) error {
+	s.registryMu.RLock()
+	defer s.registryMu.RUnlock()
 	if update.GetWorkerId() == "" || update.GetRegistrationId() == "" || update.GetCapabilities() == nil {
 		return status.Error(codes.InvalidArgument, "worker_id, registration_id, and capabilities are required")
 	}
@@ -297,6 +323,10 @@ func (s *Server) replaceWorkerCapabilities(
 	capabilities, discovered, err := decodeWorkerCapabilities(update.GetCapabilities())
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "worker capabilities are invalid: %v", err)
+	}
+	capabilities, discovered, err = s.filterRegisteredWorkerTools(ctx, capabilities, discovered)
+	if err != nil {
+		return status.Error(codes.Internal, "filter worker tool capabilities")
 	}
 
 	s.mu.Lock()

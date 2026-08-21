@@ -1,21 +1,23 @@
-# Remote-provider egress policy
+# Remote egress policy
 
-**Status:** TUR-003 pending merge.
+**Status:** implemented.
 
 Turing's default execution path is local Ollama. A run reaches an
 OpenAI-compatible endpoint only after the client asks the orchestrator for a
-disclosure and the user confirms that exact prepared send.
+disclosure and the user confirms that exact prepared send. A registered remote
+MCP server is the second egress path and uses the same decision.
 
 ## One run, one decision
 
 `ChatService.PrepareRemoteEgress` is read-only. It resolves the effective
-provider, model, external-agent identity, canonical endpoint, selected tool
+provider, model, external-agent identity, canonical model endpoint, every
+remote MCP server and endpoint, selected tool
 names, eligible skill snapshot, recall/memory flags, and conservative maximum
 data categories for the request. It returns a short-lived challenge signed by
 the orchestrator-only `TURING_EGRESS_SIGNING_SECRET`.
 
 The challenge binds the session, idempotency key, request payload digest,
-effective route, endpoint, a non-secret credential-reference digest, tools,
+effective route, all endpoints, a non-secret credential-reference digest, tools,
 skills, context flags, categories, nonce, and expiry. `SendMessage` requires
 explicit acknowledgment and revalidates the context. The enqueue transaction
 writes the run-owned decision, job, events, idempotency record, and redacted
@@ -42,6 +44,16 @@ runtime use may be smaller, never larger. Memory/profile and attachments are
 currently unsupported and therefore absent. Routed external agents also omit
 cross-session recall. Direct OpenAI-compatible runs may include recall.
 
+A local-model run that may call a remote MCP server discloses only the
+categories that can cross that boundary: tool arguments and tool results. A
+mixed run takes the conservative union. Enabling a remote server is not consent
+to contact it, and there is no per-server acknowledgement flag. Because the
+local model is offered every enabled tool, an enabled remote tool makes every
+such run a run that may call it; each send therefore asks for its own decision.
+Disabling all tools from that remote server restores the no-consent local path.
+The confirmation names each exact remote MCP endpoint and the frozen tools
+available at that destination, not merely the endpoint host.
+
 ## Endpoint and fallback rules
 
 Credentialed non-loopback endpoints require HTTPS. Plain HTTP is accepted only
@@ -53,6 +65,13 @@ non-HTTP schemes are rejected.
 Credentialed provider clients reject all redirects before a redirected request
 is sent. Provider selection is exact: local failure cannot consult or fall back
 to a remote provider, model, endpoint, or external agent.
+
+Remote MCP URLs require HTTPS, reject redirects, and resolve through a dialer
+that refuses loopback, private, link-local, multicast and unspecified
+addresses. Local third-party URLs require an explicit port and a single Docker
+service name; redirects, reserved names, host aliases and IP literals are
+refused. At dispatch the name must resolve entirely inside the fixed
+`172.31.254.0/24` subnet of the internal-only `net-mcp-registry` network.
 
 Ollama is the local provider identity, so its endpoint is restricted to
 `localhost`, `host.docker.internal`, or a loopback IP literal. Pointing the
@@ -69,6 +88,8 @@ fresh disclosure.
 Automations cannot inherit interactive consent. A remote effective route
 advances the schedule but creates no run; it records the typed durable failure
 `remote_egress_requires_interactive_consent` and a redacted audit row.
+Automations receive no run-owned decision for a remote MCP destination either;
+the proxy refuses the remote call rather than inheriting interactive consent.
 
 `egress.consent.recorded` exposes only provider, endpoint host, typed
 categories, decision version, and consent timestamp. It never stores or returns

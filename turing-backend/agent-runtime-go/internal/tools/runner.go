@@ -21,6 +21,17 @@ type MCPClient interface {
 	CallTool(ctx context.Context, name string, args map[string]any, tokens ...string) (map[string]any, error)
 }
 
+type CallerEnforcedMCPClient interface {
+	MCPClient
+	CallToolWithCallerApproval(
+		ctx context.Context,
+		runID string,
+		approvalID string,
+		name string,
+		args map[string]any,
+	) (map[string]any, error)
+}
+
 type Runner struct {
 	PostBeacon       func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error)
 	WaitApproval     func(context.Context, string) (string, error)
@@ -142,7 +153,18 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 		return RunOutcome{}, markBeaconPosted(err)
 	}
 	callCtx, cancel := stageContext(ctx, input.Timeout)
-	result, err := input.MCPClient.CallTool(callCtx, input.ToolName, input.Args, approvalToken, provenanceToken)
+	var result map[string]any
+	if callerEnforced, ok := input.MCPClient.(CallerEnforcedMCPClient); ok {
+		result, err = callerEnforced.CallToolWithCallerApproval(
+			callCtx,
+			input.RunID,
+			decision.GetApprovalId(),
+			input.ToolName,
+			input.Args,
+		)
+	} else {
+		result, err = input.MCPClient.CallTool(callCtx, input.ToolName, input.Args, approvalToken, provenanceToken)
+	}
 	cancel()
 	if err != nil {
 		var operationErr error = RecoverableToolError{err: err}

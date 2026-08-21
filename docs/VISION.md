@@ -57,7 +57,12 @@ Each is a decision already made and defended in review, cited to where it happen
 
 **Recalled context is attributed.** Memory that arrives unattributed reads as confabulation. If an answer draws on an earlier conversation, the user is told (#33).
 
-**Approvals are single-use and argument-bound.** A mutating file tool needs a short-lived HS256 token carrying `iss`/`sub`/`aud`/tool/`args_hash`, verified by the MCP server against the actual call and consumed exactly once. Approving one write does not approve the next.
+**Approvals are single-use and argument-bound.** A bundled mutating file tool
+needs a short-lived HS256 token carrying `iss`/`sub`/`aud`/tool/`args_hash`,
+verified by the MCP server against the actual call and consumed exactly once.
+For a non-bundled server, the orchestrator verifies the same run/tool/argument
+binding and consumes before proxy dispatch. Approving one call does not approve
+the next.
 
 **Small-model accommodations are features, not hacks.** Zero-argument tool calls (#21) and recoverable unknown-tool errors (#29) exist because real local models make those mistakes. Meeting the model where it is beats requiring a better one.
 
@@ -77,7 +82,7 @@ Each is a decision already made and defended in review, cited to where it happen
 | Telemetry | Working, and **local by construction** — aggregation over the orchestrator's own SQLite, served to the user's own client, with no collector, no identifier and no write path. Token counts are captured from what a provider reports (Ollama's `prompt_eval_count`/`eval_count`, an OpenAI-compatible `usage` object) and are **NULL when nothing reported them**; nothing estimates a token count anywhere. Runs routed off the machine are attributed per run at enqueue, so a later settings change cannot rewrite what left |
 | Streaming + resilience | Working; reconnect, requeue, lease recovery, run-visibility notices (#24, #30, #33) |
 | Job queue | Durable: SQLite job table with leases, fencing token, heartbeat renewal, orphan recovery, 3-attempt cap |
-| Tool servers | Two: safe system tools, sandboxed file tools |
+| Tool servers | Registry-backed: two bundled servers plus disabled-by-default local-container and remote-URL imports; stdio refused |
 | Skills | File-backed `SKILL.md` library under `turing-backend/skills/`. Enabled metadata is indexed for every run; bodies and references load progressively only after every declared capability is granted. Grants gate loading and do **not** authorize tools. The 0011 upgrade retains legacy rows in a migration-only recovery table and re-exports them on startup; conflicts preserve recovery, and application code never removes nonempty rows. Cleanup is an offline/manual operator action after the files are verified. Enabled skill text selected by a routed run leaves the machine, and the routing picker says so |
 | Third-party accounts | **Stored, not used.** Connections hold a credential the user minted themselves (IMAP/CalDAV app password, Notion integration token, GitHub PAT), under explicit consent and revocable. No tool reads one yet, and the page says so. OAuth-only providers are listed as unsupported with the reason |
 | Agents | **One** (`general_assistant`) behind an executor *interface* with one implementation. Multi-agent is a **goal** — see below |
@@ -110,11 +115,25 @@ These are not capabilities we are declining. They are the properties the rest of
   destination, tools/skills, context flags, and data categories. Consent is
   run-owned, not a session/provider preference; redirects and local-to-remote
   fallback are refused, and background work cannot inherit it. See
-  [Remote-provider egress policy](architecture/remote-egress-policy.md).
+  Remote MCP endpoints join that exact run-owned decision and disclose tool
+  arguments/results; enabling a server is not consent to reach it. See
+  [Remote egress policy](architecture/remote-egress-policy.md).
 - **Derived state cannot outlive its source.** Every application-owned table is classified, and user-derived state needs cascading provenance to its declared source. SQLite-managed indexes must prove equivalent transactional deletion; only an explicitly justified, content-free scrubbed audit tombstone may survive withdrawal. The trust, scope, writer, egress, retention, correction, export, deletion, and physical-erasure limits are defined in [`docs/architecture/memory-governance.md`](architecture/memory-governance.md) and enforced by the DB schema-invariant tests.
 - **Every mutation is approved, argument-bound, and single-use.** New mutating capability inherits the existing approval flow; it does not get its own weaker one.
+  - **Qualified by third-party MCP enforcement.** Bundled `mcp-files` verifies
+    and consumes at the callee. A server we did not write receives ordinary
+    JSON-RPC and cannot enforce Turing's token, so the orchestrator validates
+    the run/server/tool/argument binding and consumes immediately before
+    dispatch. What changes is who enforces, not whether approval exists. The
+    guarantee is narrower: it holds because the orchestrator proxy is the only
+    path holding that server's endpoint bearer, not because the third-party
+    process would reject a direct forged call. The approval-consumer identity
+    remains exclusive to bundled `mcp-files`.
   - **Qualified once, by automations.** A scheduled run has nobody to ask, so an automation carries a per-automation allowlist of specific `(server, tool)` pairs — never global, never a wildcard, never inherited by a conversation the user drives by hand. What that buys is *when* the decision is made, not *whether*: the orchestrator still creates the approval and still grants it through the same signing and state transition a person's click takes, so the token mcp-files verifies is the same short-lived, single-use, `args_hash`-bound token it always was. What is genuinely weaker is that consent is given in advance and in general ("this automation may run `files.update`") rather than in the moment and in particular ("write *this* to *that* path"). Unattended approvals are recorded with `actor_type = 'automation'` so an operator can tell them from a person's afterwards. A tool an automation was not pre-approved for fails the run rather than waiting for someone who is not there.
-- **Tools stay confined to the sandbox.** Capability may grow inside that boundary; nothing gets an escape hatch out of it.
+- **Bundled tools stay confined to the sandbox.** Capability may grow inside
+  that reviewed boundary; nothing bundled gets an escape hatch out of it. A
+  third-party process is explicitly labelled **not sandbox-confined** because
+  Turing cannot truthfully claim confinement for code it did not write.
 - **Skill text is untrusted input, not authority.** A copied `SKILL.md` may guide an answer only after enablement and any declared grants. It cannot override system/user precedence, tool policy, or approval, and its capability grants never become tool permissions.
 - **The orchestrator owns durable state and control flow.** The job queue, leases, fencing, retries, recovery, and event streaming are ours. This is what was previously written as "no graph orchestration frameworks" — that framing was wrong. The real constraint is that nothing may take ownership of those, because they are the hard-won parts (#30, #31, #33).
 - **The backend stays a single language.** It is 100% Go today. A framework requiring a Python or Node runtime in the backend costs a second toolchain, image, and dependency surface — that cost, not the abstraction, is the reason LangGraph-style tools are a poor fit here.

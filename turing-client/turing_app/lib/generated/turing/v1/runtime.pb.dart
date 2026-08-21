@@ -1838,6 +1838,64 @@ class RuntimeShutdownRequested extends $pb.GeneratedMessage {
   void clearReason() => $_clearField(1);
 }
 
+class RuntimeMcpRegistryChanged extends $pb.GeneratedMessage {
+  factory RuntimeMcpRegistryChanged({
+    $core.String? registrationId,
+  }) {
+    final result = create();
+    if (registrationId != null) result.registrationId = registrationId;
+    return result;
+  }
+
+  RuntimeMcpRegistryChanged._();
+
+  factory RuntimeMcpRegistryChanged.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RuntimeMcpRegistryChanged.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RuntimeMcpRegistryChanged',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'registrationId')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RuntimeMcpRegistryChanged clone() =>
+      RuntimeMcpRegistryChanged()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RuntimeMcpRegistryChanged copyWith(
+          void Function(RuntimeMcpRegistryChanged) updates) =>
+      super.copyWith((message) => updates(message as RuntimeMcpRegistryChanged))
+          as RuntimeMcpRegistryChanged;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RuntimeMcpRegistryChanged create() => RuntimeMcpRegistryChanged._();
+  @$core.override
+  RuntimeMcpRegistryChanged createEmptyInstance() => create();
+  static $pb.PbList<RuntimeMcpRegistryChanged> createRepeated() =>
+      $pb.PbList<RuntimeMcpRegistryChanged>();
+  @$core.pragma('dart2js:noInline')
+  static RuntimeMcpRegistryChanged getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RuntimeMcpRegistryChanged>(create);
+  static RuntimeMcpRegistryChanged? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get registrationId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set registrationId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasRegistrationId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearRegistrationId() => $_clearField(1);
+}
+
 enum RuntimeCommand_Command {
   workerAccepted,
   runAssigned,
@@ -1845,6 +1903,7 @@ enum RuntimeCommand_Command {
   approvalUpdated,
   shutdownRequested,
   toolPolicyDecision,
+  mcpRegistryChanged,
   notSet
 }
 
@@ -1856,6 +1915,7 @@ class RuntimeCommand extends $pb.GeneratedMessage {
     RuntimeApprovalUpdated? approvalUpdated,
     RuntimeShutdownRequested? shutdownRequested,
     $4.ToolPolicyDecision? toolPolicyDecision,
+    RuntimeMcpRegistryChanged? mcpRegistryChanged,
   }) {
     final result = create();
     if (workerAccepted != null) result.workerAccepted = workerAccepted;
@@ -1865,6 +1925,8 @@ class RuntimeCommand extends $pb.GeneratedMessage {
     if (shutdownRequested != null) result.shutdownRequested = shutdownRequested;
     if (toolPolicyDecision != null)
       result.toolPolicyDecision = toolPolicyDecision;
+    if (mcpRegistryChanged != null)
+      result.mcpRegistryChanged = mcpRegistryChanged;
     return result;
   }
 
@@ -1885,13 +1947,14 @@ class RuntimeCommand extends $pb.GeneratedMessage {
     4: RuntimeCommand_Command.approvalUpdated,
     5: RuntimeCommand_Command.shutdownRequested,
     6: RuntimeCommand_Command.toolPolicyDecision,
+    7: RuntimeCommand_Command.mcpRegistryChanged,
     0: RuntimeCommand_Command.notSet
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeCommand',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..oo(0, [1, 2, 3, 4, 5, 6])
+    ..oo(0, [1, 2, 3, 4, 5, 6, 7])
     ..aOM<RuntimeWorkerAccepted>(1, _omitFieldNames ? '' : 'workerAccepted',
         subBuilder: RuntimeWorkerAccepted.create)
     ..aOM<AgentJob>(2, _omitFieldNames ? '' : 'runAssigned',
@@ -1905,6 +1968,9 @@ class RuntimeCommand extends $pb.GeneratedMessage {
         subBuilder: RuntimeShutdownRequested.create)
     ..aOM<$4.ToolPolicyDecision>(6, _omitFieldNames ? '' : 'toolPolicyDecision',
         subBuilder: $4.ToolPolicyDecision.create)
+    ..aOM<RuntimeMcpRegistryChanged>(
+        7, _omitFieldNames ? '' : 'mcpRegistryChanged',
+        subBuilder: RuntimeMcpRegistryChanged.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1997,6 +2063,18 @@ class RuntimeCommand extends $pb.GeneratedMessage {
   void clearToolPolicyDecision() => $_clearField(6);
   @$pb.TagNumber(6)
   $4.ToolPolicyDecision ensureToolPolicyDecision() => $_ensure(5);
+
+  @$pb.TagNumber(7)
+  RuntimeMcpRegistryChanged get mcpRegistryChanged => $_getN(6);
+  @$pb.TagNumber(7)
+  set mcpRegistryChanged(RuntimeMcpRegistryChanged value) =>
+      $_setField(7, value);
+  @$pb.TagNumber(7)
+  $core.bool hasMcpRegistryChanged() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearMcpRegistryChanged() => $_clearField(7);
+  @$pb.TagNumber(7)
+  RuntimeMcpRegistryChanged ensureMcpRegistryChanged() => $_ensure(6);
 }
 
 const $core.bool _omitFieldNames =

@@ -638,6 +638,20 @@ final $typed_data.Uint8List runtimeShutdownRequestedDescriptor =
     $convert.base64Decode(
         'ChhSdW50aW1lU2h1dGRvd25SZXF1ZXN0ZWQSFgoGcmVhc29uGAEgASgJUgZyZWFzb24=');
 
+@$core.Deprecated('Use runtimeMcpRegistryChangedDescriptor instead')
+const RuntimeMcpRegistryChanged$json = {
+  '1': 'RuntimeMcpRegistryChanged',
+  '2': [
+    {'1': 'registration_id', '3': 1, '4': 1, '5': 9, '10': 'registrationId'},
+  ],
+};
+
+/// Descriptor for `RuntimeMcpRegistryChanged`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List runtimeMcpRegistryChangedDescriptor =
+    $convert.base64Decode(
+        'ChlSdW50aW1lTWNwUmVnaXN0cnlDaGFuZ2VkEicKD3JlZ2lzdHJhdGlvbl9pZBgBIAEoCVIOcm'
+        'VnaXN0cmF0aW9uSWQ=');
+
 @$core.Deprecated('Use runtimeCommandDescriptor instead')
 const RuntimeCommand$json = {
   '1': 'RuntimeCommand',
@@ -696,6 +710,15 @@ const RuntimeCommand$json = {
       '9': 0,
       '10': 'toolPolicyDecision'
     },
+    {
+      '1': 'mcp_registry_changed',
+      '3': 7,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.RuntimeMcpRegistryChanged',
+      '9': 0,
+      '10': 'mcpRegistryChanged'
+    },
   ],
   '8': [
     {'1': 'command'},
@@ -712,4 +735,6 @@ final $typed_data.Uint8List runtimeCommandDescriptor = $convert.base64Decode(
     'BkYXRlZEgAUg9hcHByb3ZhbFVwZGF0ZWQSVAoSc2h1dGRvd25fcmVxdWVzdGVkGAUgASgLMiMu'
     'dHVyaW5nLnYxLlJ1bnRpbWVTaHV0ZG93blJlcXVlc3RlZEgAUhFzaHV0ZG93blJlcXVlc3RlZB'
     'JRChR0b29sX3BvbGljeV9kZWNpc2lvbhgGIAEoCzIdLnR1cmluZy52MS5Ub29sUG9saWN5RGVj'
-    'aXNpb25IAFISdG9vbFBvbGljeURlY2lzaW9uQgkKB2NvbW1hbmQ=');
+    'aXNpb25IAFISdG9vbFBvbGljeURlY2lzaW9uElgKFG1jcF9yZWdpc3RyeV9jaGFuZ2VkGAcgAS'
+    'gLMiQudHVyaW5nLnYxLlJ1bnRpbWVNY3BSZWdpc3RyeUNoYW5nZWRIAFISbWNwUmVnaXN0cnlD'
+    'aGFuZ2VkQgkKB2NvbW1hbmQ=');

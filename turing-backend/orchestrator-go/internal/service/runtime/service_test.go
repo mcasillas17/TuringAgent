@@ -9,6 +9,7 @@ import (
 	"net"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -89,6 +90,28 @@ func newHarnessWithDispatch(t *testing.T, dispatch DispatchConfig) *harness {
 	}
 	database := openRuntimeTestDB(t)
 	repo := repository.New(database)
+	customServer, err := repo.UpsertImportedMCPServer(context.Background(), repository.ImportedMCPServer{
+		Name: "custom", URL: "http://custom:9000/mcp", Tier: repository.MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetMCPServerEnabled(context.Background(), customServer.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ReplaceMCPServerTools(context.Background(), customServer.ID, []repository.MCPServerTool{
+		{Name: "custom.unrecognized", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
+		{Name: "custom.inspect", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
+		{Name: "custom.replace", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(
+		context.Background(),
+		`UPDATE tools SET enabled = 0 WHERE server_name = 'custom'`,
+	); err != nil {
+		t.Fatal(err)
+	}
 	bus := events.NewBus(8)
 	approvals := approvalsvc.New(repo, bus, "approval-secret")
 	service := NewWithConfig(repo, bus, dispatch, approvals)
@@ -935,8 +958,9 @@ func TestConnectWorkerTerminalizesApprovalWhenDecisionSendFails(t *testing.T) {
 	defer cancel()
 
 	err = h.service.ConnectWorker(&failingApprovalDecisionStream{
-		ctx:    ctx,
-		cancel: cancel,
+		ctx:      ctx,
+		cancel:   cancel,
+		assigned: make(chan struct{}),
 		ready: &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
 			WorkerId:          "worker-decision-send-fails",
 			AgentId:           turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
@@ -1030,8 +1054,9 @@ func TestConnectWorkerFencesTerminalDecisionFailureUntilRecovery(t *testing.T) {
 	streamCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	err = h.service.ConnectWorker(&failingApprovalDecisionStream{
-		ctx:    streamCtx,
-		cancel: cancel,
+		ctx:      streamCtx,
+		cancel:   cancel,
+		assigned: make(chan struct{}),
 		ready: &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
 			WorkerId: "worker-terminal-decision-send-fails", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
 		}}},
@@ -1366,15 +1391,20 @@ func (s *failingAssignmentStream) Context() context.Context { return s.ctx }
 
 type failingApprovalDecisionStream struct {
 	grpc.ServerStream
-	ctx        context.Context
-	cancel     context.CancelFunc
-	ready      *turingv1.RuntimeUpdate
-	beacon     *turingv1.RuntimeUpdate
-	readySent  bool
-	beaconSent bool
+	ctx          context.Context
+	cancel       context.CancelFunc
+	ready        *turingv1.RuntimeUpdate
+	beacon       *turingv1.RuntimeUpdate
+	readySent    bool
+	beaconSent   bool
+	assigned     chan struct{}
+	assignedOnce sync.Once
 }
 
 func (s *failingApprovalDecisionStream) Send(cmd *turingv1.RuntimeCommand) error {
+	if cmd.GetRunAssigned() != nil && s.assigned != nil {
+		s.assignedOnce.Do(func() { close(s.assigned) })
+	}
 	if cmd.GetToolPolicyDecision() != nil {
 		if s.cancel != nil {
 			s.cancel()
@@ -1391,6 +1421,13 @@ func (s *failingApprovalDecisionStream) Recv() (*turingv1.RuntimeUpdate, error) 
 	}
 	if !s.beaconSent {
 		s.beaconSent = true
+		if s.assigned != nil {
+			select {
+			case <-s.assigned:
+			case <-s.ctx.Done():
+				return nil, s.ctx.Err()
+			}
+		}
 		return s.beacon, nil
 	}
 	<-s.ctx.Done()

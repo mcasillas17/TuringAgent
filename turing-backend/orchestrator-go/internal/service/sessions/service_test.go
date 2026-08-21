@@ -657,6 +657,15 @@ func TestSessionServiceServesPublicReadEndpoints(t *testing.T) {
 		t.Fatalf("agents = %+v", agents.Agents)
 	}
 
+	customServer, err := h.repo.UpsertImportedMCPServer(ctx, repository.ImportedMCPServer{
+		Name: "custom", URL: "http://custom:9000/mcp", Tier: repository.MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.SetMCPServerEnabled(ctx, customServer.ID, true); err != nil {
+		t.Fatal(err)
+	}
 	if err := h.repo.UpsertTools(ctx, []repository.DiscoveredTool{
 		{ServerName: "custom", ToolName: "custom.scan", SchemaJSON: `{}`, Policy: "approval_required"},
 		{ServerName: "files", ToolName: "files.create", SchemaJSON: `{}`, Policy: "disabled"},
@@ -672,14 +681,14 @@ func TestSessionServiceServesPublicReadEndpoints(t *testing.T) {
 	for _, tool := range tools.Tools {
 		gotTools[tool.ServerName+"/"+tool.ToolName] = tool.Policy
 	}
-	if len(gotTools) != 3 {
-		t.Fatalf("tools = %+v, want exact database snapshot", tools.Tools)
+	if len(gotTools) != 2 {
+		t.Fatalf("tools = %+v, want only callable database snapshot", tools.Tools)
 	}
 	if gotTools["system/system.time"] != turingv1.ToolPolicy_TOOL_POLICY_SAFE {
 		t.Fatalf("system.time policy = %v", gotTools["system/system.time"])
 	}
-	if gotTools["files/files.create"] != turingv1.ToolPolicy_TOOL_POLICY_DISABLED {
-		t.Fatalf("files.create policy = %v", gotTools["files/files.create"])
+	if _, present := gotTools["files/files.create"]; present {
+		t.Fatal("disabled files.create was returned as callable")
 	}
 	if gotTools["custom/custom.scan"] != turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED {
 		t.Fatalf("custom.scan policy = %v", gotTools["custom/custom.scan"])

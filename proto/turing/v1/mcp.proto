@@ -5,6 +5,83 @@ package turing.v1;
 option go_package = "github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1";
 
 import "google/protobuf/struct.proto";
+import "turing/v1/common.proto";
+
+enum McpServerTier {
+  MCP_SERVER_TIER_UNSPECIFIED = 0;
+  MCP_SERVER_TIER_BUNDLED = 1;
+  MCP_SERVER_TIER_LOCAL_CONTAINER = 2;
+  MCP_SERVER_TIER_REMOTE_URL = 3;
+}
+
+enum McpServerLiveness {
+  MCP_SERVER_LIVENESS_UNSPECIFIED = 0;
+  MCP_SERVER_LIVENESS_UNKNOWN = 1;
+  MCP_SERVER_LIVENESS_UP = 2;
+  MCP_SERVER_LIVENESS_DOWN = 3;
+}
+
+message McpToolDescriptor {
+  string tool_name = 1;
+  ToolPolicy policy = 2;
+  google.protobuf.Struct schema = 3;
+  bool enabled = 4;
+  bool present = 5;
+}
+
+message McpServerDescriptor {
+  string server_id = 1;
+  string name = 2;
+  string transport = 3;
+  string url = 4;
+  McpServerTier tier = 5;
+  bool enabled = 6;
+  McpServerLiveness liveness = 7;
+  string status_message = 8;
+  bool sandbox_confined = 9;
+  repeated McpToolDescriptor tools = 10;
+}
+
+message UnsupportedMcpServer {
+  string name = 1;
+  string reason = 2;
+}
+
+message ListMcpServersRequest {}
+
+message ListMcpServersResponse {
+  repeated McpServerDescriptor servers = 1;
+  repeated UnsupportedMcpServer unsupported = 2;
+}
+
+message SetMcpServerEnabledRequest {
+  string server_id = 1;
+  bool enabled = 2;
+}
+
+message UpdateMcpToolPolicyRequest {
+  string server_id = 1;
+  string tool_name = 2;
+  ToolPolicy policy = 3;
+}
+
+message DeleteMcpServerRequest {
+  string server_id = 1;
+}
+
+message DeleteMcpServerResponse {}
+
+message CallRegisteredMcpToolRequest {
+  string server_id = 1;
+  string run_id = 2;
+  string approval_id = 3;
+  string tool_name = 4;
+  google.protobuf.Struct args = 5;
+}
+
+message CallRegisteredMcpToolResponse {
+  google.protobuf.Struct result = 1;
+}
 
 message McpRequest {
   string server_name = 1;
@@ -14,4 +91,12 @@ message McpRequest {
 
 message McpResult {
   google.protobuf.Struct result = 1;
+}
+
+service McpRegistryService {
+  rpc ListMcpServers(ListMcpServersRequest) returns (ListMcpServersResponse);
+  rpc SetMcpServerEnabled(SetMcpServerEnabledRequest) returns (McpServerDescriptor);
+  rpc UpdateMcpToolPolicy(UpdateMcpToolPolicyRequest) returns (McpToolDescriptor);
+  rpc DeleteMcpServer(DeleteMcpServerRequest) returns (DeleteMcpServerResponse);
+  rpc CallRegisteredMcpTool(CallRegisteredMcpToolRequest) returns (CallRegisteredMcpToolResponse);
 }

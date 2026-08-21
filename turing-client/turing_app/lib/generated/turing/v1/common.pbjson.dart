@@ -342,6 +342,15 @@ const RemoteEgressDisclosure$json = {
       '6': '.google.protobuf.Timestamp',
       '10': 'expiresAt'
     },
+    {
+      '1': 'remote_mcp_servers',
+      '3': 9,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.RemoteMcpEgressDestination',
+      '10': 'remoteMcpServers'
+    },
+    {'1': 'selected_tools', '3': 10, '4': 3, '5': 9, '10': 'selectedTools'},
   ],
 };
 
@@ -353,7 +362,26 @@ final $typed_data.Uint8List remoteEgressDisclosureDescriptor = $convert.base64De
     '9pbnRfaG9zdBgFIAEoCVIMZW5kcG9pbnRIb3N0EioKEWV4dGVybmFsX2FnZW50X2lkGAYgASgJ'
     'Ug9leHRlcm5hbEFnZW50SWQSRgoPZGF0YV9jYXRlZ29yaWVzGAcgAygOMh0udHVyaW5nLnYxLk'
     'VncmVzc0RhdGFDYXRlZ29yeVIOZGF0YUNhdGVnb3JpZXMSOQoKZXhwaXJlc19hdBgIIAEoCzIa'
-    'Lmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBSCWV4cGlyZXNBdA==');
+    'Lmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBSCWV4cGlyZXNBdBJTChJyZW1vdGVfbWNwX3Nlcn'
+    'ZlcnMYCSADKAsyJS50dXJpbmcudjEuUmVtb3RlTWNwRWdyZXNzRGVzdGluYXRpb25SEHJlbW90'
+    'ZU1jcFNlcnZlcnMSJQoOc2VsZWN0ZWRfdG9vbHMYCiADKAlSDXNlbGVjdGVkVG9vbHM=');
+
+@$core.Deprecated('Use remoteMcpEgressDestinationDescriptor instead')
+const RemoteMcpEgressDestination$json = {
+  '1': 'RemoteMcpEgressDestination',
+  '2': [
+    {'1': 'server_name', '3': 1, '4': 1, '5': 9, '10': 'serverName'},
+    {'1': 'endpoint', '3': 2, '4': 1, '5': 9, '10': 'endpoint'},
+    {'1': 'endpoint_host', '3': 3, '4': 1, '5': 9, '10': 'endpointHost'},
+  ],
+};
+
+/// Descriptor for `RemoteMcpEgressDestination`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List remoteMcpEgressDestinationDescriptor =
+    $convert.base64Decode(
+        'ChpSZW1vdGVNY3BFZ3Jlc3NEZXN0aW5hdGlvbhIfCgtzZXJ2ZXJfbmFtZRgBIAEoCVIKc2Vydm'
+        'VyTmFtZRIaCghlbmRwb2ludBgCIAEoCVIIZW5kcG9pbnQSIwoNZW5kcG9pbnRfaG9zdBgDIAEo'
+        'CVIMZW5kcG9pbnRIb3N0');
 
 @$core.Deprecated('Use remoteEgressConsentDescriptor instead')
 const RemoteEgressConsent$json = {
@@ -450,6 +478,14 @@ const RunEgressDecision$json = {
       '10': 'externalCredentialRefHash'
     },
     {'1': 'request_digest', '3': 16, '4': 1, '5': 9, '10': 'requestDigest'},
+    {
+      '1': 'remote_mcp_servers',
+      '3': 17,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.RemoteMcpEgressDestination',
+      '10': 'remoteMcpServers'
+    },
   ],
 };
 
@@ -468,7 +504,9 @@ final $typed_data.Uint8List runEgressDecisionDescriptor = $convert.base64Decode(
     'Z2VycHJpbnQSKwoRcmVjYWxsX2FwcGxpY2FibGUYDSABKAhSEHJlY2FsbEFwcGxpY2FibGUSOg'
     'oZbWVtb3J5X3Byb2ZpbGVfYXBwbGljYWJsZRgOIAEoCFIXbWVtb3J5UHJvZmlsZUFwcGxpY2Fi'
     'bGUSPwocZXh0ZXJuYWxfY3JlZGVudGlhbF9yZWZfaGFzaBgPIAEoCVIZZXh0ZXJuYWxDcmVkZW'
-    '50aWFsUmVmSGFzaBIlCg5yZXF1ZXN0X2RpZ2VzdBgQIAEoCVINcmVxdWVzdERpZ2VzdA==');
+    '50aWFsUmVmSGFzaBIlCg5yZXF1ZXN0X2RpZ2VzdBgQIAEoCVINcmVxdWVzdERpZ2VzdBJTChJy'
+    'ZW1vdGVfbWNwX3NlcnZlcnMYESADKAsyJS50dXJpbmcudjEuUmVtb3RlTWNwRWdyZXNzRGVzdG'
+    'luYXRpb25SEHJlbW90ZU1jcFNlcnZlcnM=');
 
 @$core.Deprecated('Use agentDescriptorDescriptor instead')
 const AgentDescriptor$json = {

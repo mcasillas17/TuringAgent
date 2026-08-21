@@ -575,6 +575,67 @@ func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeAppro
 	}, nil
 }
 
+// ConsumeApprovalForThirdParty enforces the cooperative approval invariant at
+// the caller when the destination server cannot verify or consume Turing's JWT.
+// The guarantee is intentionally narrower than mcp-files: it holds because the
+// orchestrator is the only component with the registered endpoint and bearer.
+func (s *Server) ConsumeApprovalForThirdParty(
+	ctx context.Context,
+	approvalID string,
+	runID string,
+	serverName string,
+	toolName string,
+	args map[string]any,
+) error {
+	if approvalID == "" {
+		return status.Error(codes.FailedPrecondition, "approval is required")
+	}
+	approval, err := s.repo.GetApproval(ctx, approvalID)
+	if err != nil {
+		return mapApprovalError(err)
+	}
+	_, argsHash, err := canonicalArgs(args)
+	if err != nil {
+		return status.Error(codes.InvalidArgument, "tool args are not valid JSON")
+	}
+	if approval.RunID != runID ||
+		approval.ServerName != serverName ||
+		approval.ToolName != toolName ||
+		approval.ArgsHash != argsHash {
+		return status.Error(codes.FailedPrecondition, "approval does not match this tool call")
+	}
+	transition, err := s.repo.ConsumeApprovalWithEvent(ctx, approvalID, "")
+	if errors.Is(err, repository.ErrApprovalExpired) {
+		if transition.ApprovalEvent.EventID != "" {
+			s.publishEvent(transition.ApprovalEvent)
+		}
+		if transition.ToolEvent.EventID != "" {
+			s.publishEvent(transition.ToolEvent)
+		}
+		if transition.RunFailedEvent.EventID != "" {
+			s.publishEvent(transition.RunFailedEvent)
+		}
+		s.finishPostCommit(transition.Approval, "system", "approval.expired", "expired", "")
+		return status.Error(codes.FailedPrecondition, "approval expired")
+	}
+	if err != nil {
+		return mapApprovalError(err)
+	}
+	if transition.ApprovalEvent.EventID != "" {
+		s.publishEvent(transition.ApprovalEvent)
+	}
+	_, _ = s.audit.RecordForExistingRun(
+		ctx,
+		transition.Approval.RunID,
+		"mcp",
+		"",
+		"approval.consumed",
+		transition.Approval.ApprovalID,
+		map[string]any{"toolName": transition.Approval.ToolName},
+	)
+	return nil
+}
+
 func canonicalArgs(args map[string]any) (string, string, error) {
 	data, err := safejson.MarshalCanonical(args)
 	if err != nil {

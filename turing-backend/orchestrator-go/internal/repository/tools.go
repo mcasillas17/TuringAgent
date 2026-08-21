@@ -26,18 +26,73 @@ func (r *Repository) UpsertTools(ctx context.Context, tools []DiscoveredTool) er
 	defer func() { _ = tx.Rollback() }()
 
 	discoveredAt := now()
-	if _, err := tx.ExecContext(ctx, `UPDATE tools SET enabled = 0 WHERE enabled = 1`); err != nil {
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE tools
+		SET present = 0, enabled = 0
+		WHERE mcp_server_id IS NULL OR mcp_server_id IN (
+			SELECT id FROM mcp_servers WHERE tier = 'bundled'
+		)
+	`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE mcp_server_status
+		SET status = 'down', error = '', checked_at = ?
+		WHERE mcp_server_id IN (
+			SELECT id FROM mcp_servers WHERE tier = 'bundled'
+		)
+	`, discoveredAt); err != nil {
 		return err
 	}
 	for _, tool := range tools {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO tools (id, server_name, tool_name, policy, schema_json, enabled, discovered_at)
-			VALUES (?, ?, ?, ?, ?, 1, ?)
+		if tool.ServerName == "skills" {
+			_, err := tx.ExecContext(ctx, `
+				INSERT INTO tools (
+					id, server_name, tool_name, policy, schema_json, enabled, discovered_at, mcp_server_id, present
+				) VALUES (?, ?, ?, ?, ?, 1, ?, NULL, 1)
+				ON CONFLICT(server_name, tool_name) DO UPDATE SET
+					schema_json = excluded.schema_json,
+					enabled = CASE WHEN tools.policy = 'disabled' THEN 0 ELSE 1 END,
+					discovered_at = excluded.discovered_at,
+					mcp_server_id = NULL,
+					present = 1
+			`, ids.New("tool"), tool.ServerName, tool.ToolName, tool.Policy, tool.SchemaJSON, discoveredAt)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		result, err := tx.ExecContext(ctx, `
+			INSERT INTO tools (
+				id, server_name, tool_name, policy, schema_json, enabled, discovered_at, mcp_server_id, present
+			)
+			SELECT ?, ?, ?, ?, ?, CASE WHEN ? = 'disabled' THEN 0 ELSE 1 END, ?, id, 1
+			FROM mcp_servers
+			WHERE name = ? AND enabled = 1
 			ON CONFLICT(server_name, tool_name) DO UPDATE SET
 				schema_json = excluded.schema_json,
-				enabled = 1,
-				discovered_at = excluded.discovered_at
-		`, ids.New("tool"), tool.ServerName, tool.ToolName, tool.Policy, tool.SchemaJSON, discoveredAt); err != nil {
+				enabled = CASE WHEN tools.policy = 'disabled' THEN 0 ELSE 1 END,
+				discovered_at = excluded.discovered_at,
+				mcp_server_id = excluded.mcp_server_id,
+				present = 1
+		`, ids.New("tool"), tool.ServerName, tool.ToolName, tool.Policy, tool.SchemaJSON, tool.Policy, discoveredAt, tool.ServerName)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected != 1 {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE mcp_server_status
+			SET status = 'up', error = '', checked_at = ?
+			WHERE mcp_server_id IN (
+				SELECT id FROM mcp_servers WHERE tier = 'bundled' AND name = ?
+			)
+		`, discoveredAt, tool.ServerName); err != nil {
 			return err
 		}
 	}
