@@ -182,7 +182,7 @@ func TestToolEventContractSurvivesThePublicReadBoundary(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			safe := events.Decode(test.eventType, test.legacy)
+			safe := events.Decode(test.eventType, "run_1", test.legacy)
 			want := map[string]any{
 				"toolCallId": map[string]string{"failed": "call_1", "denied": "call_2"}[test.name],
 				"toolName":   map[string]string{"failed": "system.time", "denied": "system.shell"}[test.name],

@@ -1958,6 +1958,11 @@ func (s *Server) normalizeRuntimeEvent(ctx context.Context, event *turingv1.Turi
 	if !isKnownRuntimeEventType(event.Type) {
 		return nil, status.Error(codes.InvalidArgument, "runtime event type is invalid")
 	}
+	switch event.Type {
+	case turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_QUEUED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STARTED:
+		return nil, status.Error(codes.InvalidArgument, "run lifecycle projections are repository-authored")
+	}
 	run, err := s.repo.GetRun(ctx, event.RunId)
 	if err != nil {
 		return nil, err
@@ -1974,6 +1979,10 @@ func (s *Server) normalizeRuntimeEvent(ctx context.Context, event *turingv1.Turi
 	out := proto.Clone(event).(*turingv1.TuringEvent)
 	out.SessionId = run.SessionID
 	out.TraceId = run.TraceID
+	// The worker narrates its run; it does not decide canonical state or
+	// repository-owned retry projections. Drop both before anything durable
+	// exists rather than leaving every reader to defend itself.
+	events.StripRepositoryAuthoredEventFields(out)
 	return out, nil
 }
 

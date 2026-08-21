@@ -57,6 +57,11 @@ var toolCallIdentityKeys = []string{"toolCallId", "toolName", "serverName", "mod
 // them for recovery, so they are dropped on the way out.
 var executionOnlyKeys = []string{"assignmentAttemptId", "workerId", "leaseOwner", "executionState"}
 
+// repositoryAuthoredStepKeys form the bounded retry/recovery projection. A
+// generic worker step may carry its own note and reason, but only the repository
+// can anchor retry counters or a category to a committed state version.
+var repositoryAuthoredStepKeys = []string{"category", "attempt", "attempts", "maxAttempts", "stateVersion"}
+
 // Decode reads one durable event row as the public contract allows it to be
 // read.
 //
@@ -69,13 +74,43 @@ var executionOnlyKeys = []string{"assignmentAttemptId", "workerId", "leaseOwner"
 // the public type a client is told are two consequences of one answer. Deciding
 // them separately is how a row stored as AGENT_RUN_FAILED came to be published
 // as a failure whose payload had never seen the failure allowlist.
-func Decode(eventType string, payloadJSON string) SafeEvent {
+//
+// eventRunID is the run the row itself belongs to, and a snapshot is only read
+// when it names that run. The identity is taken from the row rather than from
+// the payload because the payload is the part a writer controls.
+func Decode(eventType string, eventRunID string, payloadJSON string) SafeEvent {
 	payload, err := decodeEventPayload(payloadJSON)
 	if err != nil {
 		return SafeEvent{Payload: map[string]any{}}
 	}
-	state := runStateFrom(payload)
+	state := runStateFrom(eventRunID, payload)
 	return SafeEvent{Payload: publicPayload(CanonicalType(eventType), payload), RunState: state}
+}
+
+// StripRepositoryAuthoredEventFields removes projections from an event whose
+// author is not the repository — today, a worker's generic runtime event.
+//
+// Canonical run state and retry/recovery notices are records of transitions the
+// repository committed. A worker that could attach either would be able to tell
+// a client the run failed or exhausted retries at a version the database never
+// committed. These fields are dropped at ingress rather than rejecting the
+// event so legitimate worker narration still reaches the log.
+func StripRepositoryAuthoredEventFields(event *turingv1.TuringEvent) {
+	if event == nil {
+		return
+	}
+	event.RunState = nil
+	payload := event.GetPayload()
+	if payload == nil {
+		return
+	}
+	delete(payload.GetFields(), runStatePayloadKey)
+	if event.GetType() != turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
+		return
+	}
+	for _, key := range repositoryAuthoredStepKeys {
+		delete(payload.GetFields(), key)
+	}
 }
 
 func decodeEventPayload(payloadJSON string) (map[string]any, error) {
@@ -221,14 +256,24 @@ func runStepNotice(payload map[string]any) (runoutcome.NoticeCategory, int32, in
 // cannot disagree about the same run. A value this build does not recognize
 // becomes the explicit unknown there; a snapshot with no identity or no version
 // becomes no state at all.
-func runStateFrom(payload map[string]any) *turingv1.RunState {
+//
+// The snapshot must name the run whose row carries it. Only the repository's
+// transition writers author these, and they write the run they just moved — so
+// a snapshot that names nothing, or names some other run, was authored by
+// something that had no business authoring one, and there is no reading of it
+// that a client should be told.
+func runStateFrom(eventRunID string, payload map[string]any) *turingv1.RunState {
 	snapshot, ok := payload[runStatePayloadKey].(map[string]any)
 	if !ok {
 		return nil
 	}
+	snapshotRunID := payloadText(snapshot, "runId")
+	if snapshotRunID == "" || snapshotRunID != eventRunID {
+		return nil
+	}
 	version, _ := payloadInt64(snapshot, "stateVersion")
 	state := repository.RunState{
-		RunID:                 payloadText(snapshot, "runId"),
+		RunID:                 snapshotRunID,
 		UserMessageID:         payloadText(snapshot, "userMessageId"),
 		AssistantMessageID:    payloadText(snapshot, "assistantMessageId"),
 		Lifecycle:             payloadText(snapshot, "lifecycle"),

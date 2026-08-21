@@ -223,7 +223,7 @@ func (s *Server) queuedRunState(ctx context.Context, sessionID string, enqueued 
 			payloadJSON = replayed[0].PayloadJSON
 		}
 	}
-	return events.Decode(enqueued.QueuedEvent.Type, payloadJSON).RunState
+	return events.Decode(enqueued.QueuedEvent.Type, enqueued.RunID, payloadJSON).RunState
 }
 
 func (s *Server) dispatchEnqueued(ctx context.Context, enqueued repository.EnqueueUserMessageResult, cancelRunOnFailure bool) error {
@@ -529,7 +529,7 @@ const (
 )
 
 func mapChatEvent(event events.Event) *turingv1.ChatStreamEvent {
-	safe := events.Decode(event.Type, event.PayloadJSON)
+	safe := events.Decode(event.Type, event.RunID, event.PayloadJSON)
 	payload := safe.Payload
 	out := baseChatEvent(event)
 	// The union a client receives is chosen from the same canonical name the

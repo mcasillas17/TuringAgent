@@ -183,7 +183,7 @@ func mapEvent(event repository.Event) *turingv1.TuringEvent {
 	if event.RunID.Valid {
 		runID = event.RunID.String
 	}
-	safe := Decode(event.Type, event.PayloadJSON)
+	safe := Decode(event.Type, runID, event.PayloadJSON)
 	return &turingv1.TuringEvent{
 		EventId:   event.EventID,
 		SessionId: event.SessionID,
@@ -202,7 +202,7 @@ func mapEvent(event repository.Event) *turingv1.TuringEvent {
 // watches a run live and a client that reopens it later are looking at the same
 // durable row, and the whole point of this feature is that they agree.
 func mapBusEvent(event Event) *turingv1.TuringEvent {
-	safe := Decode(event.Type, event.PayloadJSON)
+	safe := Decode(event.Type, event.RunID, event.PayloadJSON)
 	return &turingv1.TuringEvent{
 		EventId:   event.EventID,
 		SessionId: event.SessionID,

@@ -195,7 +195,7 @@ func TestDecodeSanitizesWhateverTheTypeMapperCallsAFailure(t *testing.T) {
 				continue
 			}
 			checked++
-			payload := Decode(stored, legacyFailurePayload).Payload
+			payload := Decode(stored, "run_1", legacyFailurePayload).Payload
 			for _, key := range forbiddenPayloadKeys {
 				if _, exists := payload[key]; exists {
 					t.Fatalf("%q is published as a failure but kept the diagnostic key %q: %v",

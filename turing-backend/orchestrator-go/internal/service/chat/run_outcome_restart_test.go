@@ -821,7 +821,7 @@ func TestChatPersistedEventCarriesRunStateForApprovalAndStateChanged(t *testing.
 				t.Fatalf("approval persisted state = %+v, want waiting approval at %d", state, waitingVersion)
 			}
 		case "agent.run.state_changed":
-			built := persistedEvent(busEventFromRepository(row), events.Decode(row.Type, row.PayloadJSON))
+			built := persistedEvent(busEventFromRepository(row), events.Decode(row.Type, run.runID, row.PayloadJSON))
 			state := built.GetRunState()
 			if state == nil {
 				t.Fatal("a state-changed event reached the persisted arm without its snapshot")

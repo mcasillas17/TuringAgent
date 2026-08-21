@@ -349,11 +349,19 @@ func TestUnknownStoredLifecycleAndOutcomeMapToSemanticUnknown(t *testing.T) {
 	}
 }
 
-// TestUnknownNumericRunStateValuesNeverPanic pins the other direction of the
-// same rule: a value outside every generated enum arrives as a number, and the
-// mapping boundary has to answer with the domain unknown rather than crash or
-// render the integer.
-func TestUnknownNumericRunStateValuesNeverPanic(t *testing.T) {
+// TestUnrecognizedNumericRunLifecycleSurvivesTheProtobufWire is a wire-level
+// fact, not mapper coverage.
+//
+// It exercises protobuf's own round trip: a lifecycle value outside every
+// generated enum is preserved as its number rather than dropped or clamped, so
+// a message from a newer server survives a hop through this build intact. It
+// asserts nothing about the read boundary — no value on this path ever reaches
+// runstate.Project, which consumes the repository's stored strings. The
+// boundary that clients actually read through is covered by
+// TestUnrecognizedRunStateWordsReachClientsAsDomainUnknown and
+// TestUnknownStoredLifecycleAndOutcomeMapToSemanticUnknown, which drive real
+// rows through Decode and EventService.
+func TestUnrecognizedNumericRunLifecycleSurvivesTheProtobufWire(t *testing.T) {
 	state := &turingv1.RunState{
 		RunId:        "run_future",
 		Lifecycle:    turingv1.RunLifecycle(9999),
