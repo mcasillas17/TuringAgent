@@ -272,6 +272,88 @@ void main() {
     },
   );
 
+  // The server ranks hits and the client must render that exact order: it may
+  // not drop, reorder, or reverse rows on the way to the search list.
+  test(
+    'searchMessages preserves server hit order across every canonical hit',
+    () async {
+      final service = _CapturingSessionService();
+      service.searchMessagesResponse = sessionpb.SearchMessagesResponse(
+        hits: [
+          sessionpb.SearchHit(
+            message: commonpb.Message(
+              messageId: 'message-top',
+              sessionId: 'session-a',
+              role: commonpb.MessageRole.MESSAGE_ROLE_USER,
+              content: 'top  needle',
+              sequence: Int64(1),
+              createdAt: timestamppb.Timestamp.fromDateTime(
+                DateTime.utc(2026, 8, 13, 12, 35, 56),
+              ),
+            ),
+            score: 0.91,
+            snippet: 'top  needle snippet',
+          ),
+          sessionpb.SearchHit(
+            message: commonpb.Message(
+              messageId: 'message-middle',
+              sessionId: 'session-b',
+              role: commonpb.MessageRole.MESSAGE_ROLE_ASSISTANT,
+              content: 'middle needle',
+              sequence: Int64(2),
+              createdAt: timestamppb.Timestamp.fromDateTime(
+                DateTime.utc(2026, 8, 13, 12, 36, 56),
+              ),
+            ),
+            score: 0.52,
+            snippet: 'middle needle snippet',
+          ),
+          sessionpb.SearchHit(
+            message: commonpb.Message(
+              messageId: 'message-bottom',
+              sessionId: 'session-c',
+              role: commonpb.MessageRole.MESSAGE_ROLE_USER,
+              content: 'bottom needle',
+              sequence: Int64(3),
+              createdAt: timestamppb.Timestamp.fromDateTime(
+                DateTime.utc(2026, 8, 13, 12, 37, 56),
+              ),
+            ),
+            score: 0.13,
+            snippet: 'bottom needle snippet',
+          ),
+        ],
+      );
+      final api = await _startSessionApi(service);
+
+      final hits = await api.searchMessages(query: 'needle');
+
+      expect(service.searchMessagesCallCount, 1);
+      expect(hits, hasLength(3));
+      expect(hits.map((hit) => hit.message.messageId).toList(), <String>[
+        'message-top',
+        'message-middle',
+        'message-bottom',
+      ]);
+      expect(hits.map((hit) => hit.sessionId).toList(), <String>[
+        'session-a',
+        'session-b',
+        'session-c',
+      ]);
+      expect(hits.map((hit) => hit.score).toList(), <double>[0.91, 0.52, 0.13]);
+      expect(hits.map((hit) => hit.snippet).toList(), <String>[
+        'top  needle snippet',
+        'middle needle snippet',
+        'bottom needle snippet',
+      ]);
+      expect(hits.map((hit) => hit.message.content).toList(), <String>[
+        'top  needle',
+        'middle needle',
+        'bottom needle',
+      ]);
+    },
+  );
+
   // A nonconforming server may echo the same result in both arrays. Hits win
   // outright: concatenating would double every row in the search list.
   test('searchMessages prefers hits and ignores duplicate messages', () async {

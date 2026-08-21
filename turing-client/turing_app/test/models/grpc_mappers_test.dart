@@ -256,58 +256,65 @@ void main() {
       );
     }
 
-    final cases = <String, sessionpb.SearchHit>{
-      'missing message': sessionpb.SearchHit(
-        score: 0.5,
-        snippet: 'SENTINEL_SNIPPET',
+    final cases = <String, ({sessionpb.SearchHit hit, String message})>{
+      'missing message': (
+        hit: sessionpb.SearchHit(score: 0.5, snippet: 'SENTINEL_SNIPPET'),
+        message: 'search hit message is missing',
       ),
-      'NaN score': sessionpb.SearchHit(
-        message: sentinelMessage(),
-        score: double.nan,
-        snippet: 'SENTINEL_SNIPPET',
+      'NaN score': (
+        hit: sessionpb.SearchHit(
+          message: sentinelMessage(),
+          score: double.nan,
+          snippet: 'SENTINEL_SNIPPET',
+        ),
+        message: 'search hit score is invalid',
       ),
-      'positive infinite score': sessionpb.SearchHit(
-        message: sentinelMessage(),
-        score: double.infinity,
-        snippet: 'SENTINEL_SNIPPET',
+      'positive infinite score': (
+        hit: sessionpb.SearchHit(
+          message: sentinelMessage(),
+          score: double.infinity,
+          snippet: 'SENTINEL_SNIPPET',
+        ),
+        message: 'search hit score is invalid',
       ),
-      'negative infinite score': sessionpb.SearchHit(
-        message: sentinelMessage(),
-        score: double.negativeInfinity,
-        snippet: 'SENTINEL_SNIPPET',
+      'negative infinite score': (
+        hit: sessionpb.SearchHit(
+          message: sentinelMessage(),
+          score: double.negativeInfinity,
+          snippet: 'SENTINEL_SNIPPET',
+        ),
+        message: 'search hit score is invalid',
       ),
-      'negative score': sessionpb.SearchHit(
-        message: sentinelMessage(),
-        score: -0.25,
-        snippet: 'SENTINEL_SNIPPET',
+      'negative score': (
+        hit: sessionpb.SearchHit(
+          message: sentinelMessage(),
+          score: -0.25,
+          snippet: 'SENTINEL_SNIPPET',
+        ),
+        message: 'search hit score is invalid',
       ),
-      'empty snippet': sessionpb.SearchHit(
-        message: sentinelMessage(),
-        score: 0.5,
-        snippet: '',
+      'empty snippet': (
+        hit: sessionpb.SearchHit(
+          message: sentinelMessage(),
+          score: 0.5,
+          snippet: '',
+        ),
+        message: 'search hit snippet is invalid',
       ),
     };
 
-    cases.forEach((name, hit) {
+    cases.forEach((name, expected) {
       test(name, () {
         Object? thrown;
         try {
-          GrpcMappers.searchHitToModel(hit);
+          GrpcMappers.searchHitToModel(expected.hit);
         } catch (error) {
           thrown = error;
         }
 
         expect(thrown, isA<FormatException>(), reason: name);
         final failure = thrown! as FormatException;
-        expect(
-          failure.message,
-          anyOf(
-            'search hit message is missing',
-            'search hit score is invalid',
-            'search hit snippet is invalid',
-          ),
-          reason: name,
-        );
+        expect(failure.message, expected.message, reason: name);
         expect(failure.source, isNull, reason: name);
         expect(failure.offset, isNull, reason: name);
         for (final sentinel in sentinels) {
