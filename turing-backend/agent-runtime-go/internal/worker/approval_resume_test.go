@@ -482,3 +482,138 @@ func TestApprovalDecidedBeforeItsRequirementStillResumes(t *testing.T) {
 	}
 	fixture.completeToolCall(t)
 }
+
+// awaitCancelledAck reads the acknowledgement the cancellation path owes, so a
+// test proves the run ended the way the orchestrator asked rather than merely
+// stopping.
+func (f *approvalResumeFixture) awaitCancelledAck(t *testing.T, runID string) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case update := <-f.stream.sent:
+			if ack := update.GetRunCancelledAck(); ack != nil {
+				if ack.GetRunId() != runID {
+					t.Fatalf("cancellation ack names run %q, want %q", ack.GetRunId(), runID)
+				}
+				return
+			}
+			if update.GetRunFailed() != nil || update.GetRunCompleted() != nil {
+				t.Fatalf("worker reported %+v for a run terminalization already owns", update)
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for the cancellation ack")
+		}
+	}
+}
+
+// awaitResumeAbandoned waits for the paused executor to unwind and for its slot
+// to be released.
+func (f *approvalResumeFixture) awaitResumeAbandoned(t *testing.T, runID string) {
+	t.Helper()
+	select {
+	case err := <-f.executor.results:
+		if err == nil {
+			t.Fatal("the paused executor finished as if its resume had been accepted")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the paused executor did not exit")
+	}
+	f.assertToolIdle(t)
+	waitForInactiveRun(t, f.worker, runID)
+}
+
+// runAnotherRun proves the stream is still usable: a second assignment arrives
+// on it, its tool is allowed, and it runs to completion.
+func (f *approvalResumeFixture) runAnotherRun(t *testing.T, runID string) {
+	t.Helper()
+	select {
+	case err := <-f.done:
+		f.exited = true
+		t.Fatalf("the worker stream was torn down by a run terminalization already owned: %v", err)
+	default:
+	}
+	f.stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: &turingv1.AgentJob{
+		JobId: "job_after_cancellation", RunId: runID, TraceId: "trace_after_cancellation",
+		AssignmentAttemptId: "attempt_after_cancellation", ExpectedStateVersion: 1,
+	}}}
+	beacon := nextSent(t, f.stream).GetToolBeacon()
+	if beacon == nil || beacon.GetPhase() != turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+		t.Fatalf("first update of the next run = %+v, want a before beacon", beacon)
+	}
+	if beacon.GetRunId() != runID {
+		t.Fatalf("before beacon names run %q, want %q", beacon.GetRunId(), runID)
+	}
+	f.stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_ToolPolicyDecision{
+		ToolPolicyDecision: &turingv1.ToolPolicyDecision{
+			Decision:   turingv1.ToolPolicyDecision_DECISION_ALLOW,
+			ToolCallId: beacon.GetToolCallId(),
+			Phase:      beacon.GetPhase(),
+		},
+	}}
+	select {
+	case <-f.executor.mcp.called:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the next run's tool never ran")
+	}
+	f.completeToolCall(t)
+	select {
+	case err := <-f.done:
+		f.exited = true
+		t.Fatalf("the worker stream ended while another run was proceeding: %v", err)
+	default:
+	}
+}
+
+// TestTerminalizationBeforeAcceptedKeepsTheWorkerStream covers the run that is
+// ended by something else while its worker is holding the paused executor open
+// waiting for an acceptance.
+//
+// The unacknowledged-resume fatal exists for a real hazard: a Ready the
+// orchestrator may already have committed, whose acceptance this worker never
+// saw, leaves the run's true state unknowable from here — so the stream drops
+// and the ownership fence decides. None of that applies once the run has been
+// terminalized. The orchestrator asked for the cancellation, or a sibling
+// authorization was refused; either way the outcome is already owned and
+// already being acknowledged. Dropping the whole stream then takes down every
+// other run this worker is executing to re-establish something that is no
+// longer in doubt.
+func TestTerminalizationBeforeAcceptedKeepsTheWorkerStream(t *testing.T) {
+	t.Run("the orchestrator cancels the run", func(t *testing.T) {
+		fixture := startApprovalResumeWorker(t, "worker-resume-cancelled", 0)
+		fixture.awaitApprovalRequired(t, "approval_cancelled")
+		fixture.decide("approval_cancelled", approvalResumeWaitingVersion)
+		fixture.awaitReady(t)
+
+		fixture.stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunCancelled{
+			RunCancelled: &turingv1.RuntimeRunCancelled{
+				RunId: approvalResumeRunID, StateVersion: approvalResumeWaitingVersion + 1,
+			},
+		}}
+
+		fixture.awaitResumeAbandoned(t, approvalResumeRunID)
+		fixture.awaitCancelledAck(t, approvalResumeRunID)
+		fixture.runAnotherRun(t, "run_after_cancellation")
+	})
+
+	t.Run("a sibling authorization is refused", func(t *testing.T) {
+		fixture := startApprovalResumeWorker(t, "worker-resume-sibling-denied", 0)
+		fixture.awaitApprovalRequired(t, "approval_sibling_waiting")
+		// The run's other outstanding authorization. A model that asked for two
+		// tools has two, and refusing either one ends the run.
+		fixture.worker.rememberApproval("approval_sibling_denied", approvalResumeRunID)
+		fixture.decide("approval_sibling_waiting", approvalResumeWaitingVersion)
+		fixture.awaitReady(t)
+
+		fixture.stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_ApprovalUpdated{
+			ApprovalUpdated: &turingv1.RuntimeApprovalUpdated{
+				ApprovalId: "approval_sibling_denied", Status: "denied",
+				StateVersion: approvalResumeWaitingVersion + 1,
+			},
+		}}
+
+		fixture.awaitResumeAbandoned(t, approvalResumeRunID)
+		fixture.awaitCancelledAck(t, approvalResumeRunID)
+		fixture.runAnotherRun(t, "run_after_sibling_denial")
+	})
+}

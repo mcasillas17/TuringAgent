@@ -34,6 +34,27 @@ const (
 // nobody owned it.
 const runStateChangedEventType = "agent.run.state_changed"
 
+// approvalIdentityPayloadKey names the approval whose authorization triggered a
+// lifecycle event. It is already the key every approval event publishes, and it
+// is an ID a client is given anyway — the approval it was asked to decide — so
+// carrying it on the resume's own projection tells a watcher which of a run's
+// outstanding authorizations was acted on without widening what a public
+// payload may contain.
+//
+// The worker and the assignment attempt that also identify a resume stay out of
+// it. They are row and dispatch guards, and no client has any business knowing
+// which process is executing a run.
+const approvalIdentityPayloadKey = "approvalId"
+
+// approvalIdentityPayloadPath is the same key as a JSON path, bound as a query
+// argument rather than concatenated into SQL.
+const approvalIdentityPayloadPath = "$." + approvalIdentityPayloadKey
+
+// runStateVersionPayloadPath locates the committed version inside the canonical
+// snapshot every lifecycle event carries, which is what identifies the single
+// event a given transition wrote.
+const runStateVersionPayloadPath = "$.runState.stateVersion"
+
 // unresolvedStateVersion marks a transaction-local transition whose caller
 // carries no expected version. It is never a stored or public value — zero is
 // protobuf absence — and it is only reachable through the ...InTx constructors
@@ -175,6 +196,24 @@ type runTransition struct {
 	// carried against the row, because the row no longer has one; it requires
 	// the absence the transition itself produced instead.
 	clearsOwnership bool
+	// requiresAuthorizedApproval demands that the named approval still
+	// authorizes something. It is opt-in because most transitions that name an
+	// approval are the ones deciding it — a request is recorded while the
+	// approval is pending by definition, and demanding an answer there would
+	// refuse the very transition that asks the question.
+	requiresAuthorizedApproval bool
+	// durableApprovalIdentity makes the named approval part of what the
+	// duplicate rule compares, by reading it back off the event this transition
+	// commits.
+	//
+	// It exists because the row records no such thing. Two approvals on one run
+	// produce two Readys that agree on the run, the worker, the attempt, the
+	// expected version and the resulting lifecycle, so from the row alone the
+	// second is indistinguishable from the first one repeating — and answering
+	// it as a replay hands a worker an acceptance for an authorization that
+	// resumed nothing. The event is where the difference is durable, which also
+	// means a process that never saw the first Ready reaches the same verdict.
+	durableApprovalIdentity bool
 	// rejection is the sentinel this writer owes a caller when the row is not in
 	// a lifecycle it accepts — already terminal, or simply not there yet.
 	// Terminal writers keep their existing sentinels because callers outside
@@ -444,12 +483,20 @@ func applyRunTransitionTx(
 	// approval this run never owned would otherwise be told "yes, that is
 	// already done" and handed this run's state — the strongest possible answer
 	// to a decision about something else entirely.
+	//
+	// Whether the approval still authorizes anything is checked in the same
+	// place and for the same reason: a transition that requires an
+	// authorization must not be able to reach the replay path on a question
+	// nobody answered, or on an answer of no.
 	if transition.identity.approvalID != "" {
-		owned, err := runOwnsApprovalTx(ctx, tx, transition.runID, transition.identity.approvalID)
+		approvalStatus, err := runApprovalStatusTx(ctx, tx, transition.runID, transition.identity.approvalID)
 		if err != nil {
 			return RunTransitionResult{}, err
 		}
-		if !owned {
+		if approvalStatus == "" {
+			return RunTransitionResult{}, ErrRunTransitionConflict
+		}
+		if transition.requiresAuthorizedApproval && !approvalAuthorizesResume(approvalStatus) {
 			return RunTransitionResult{}, ErrRunTransitionConflict
 		}
 	}
@@ -467,6 +514,20 @@ func applyRunTransitionTx(
 	}
 
 	if isRunTransitionDuplicate(row, transition, expected) {
+		// The row says this transition already happened. For a transition whose
+		// trigger the row does not record, that is only half an answer: what is
+		// left is whether THIS trigger is the one that committed the version the
+		// row is sitting at, which only the event it wrote can say.
+		committed, err := transitionCommittedThisTriggerTx(ctx, tx, transition, row.stateVersion)
+		if err != nil {
+			return RunTransitionResult{}, err
+		}
+		if !committed {
+			// Somebody else's transition put the row here. This one lost, which
+			// is a conflict rather than a replay — and it is refused before the
+			// lifecycle check below could give it any other answer.
+			return RunTransitionResult{}, ErrRunTransitionConflict
+		}
 		return RunTransitionResult{State: row.state(), Duplicate: true}, nil
 	}
 	if !slices.Contains(transition.allowedFrom, row.lifecycle) {
@@ -557,19 +618,25 @@ func applyRunTransitionTx(
 			return RunTransitionResult{}, err
 		}
 	}
-	eventType := transition.eventType
-	if eventType == "" {
-		eventType = runStateChangedEventType
-	}
 	payloadJSON, err := marshalRunStatePayload(transition.eventPayload, committed)
 	if err != nil {
 		return RunTransitionResult{}, err
 	}
-	event, err := appendRunEventTx(ctx, tx, row.sessionID, transition.runID, row.traceID, eventType, payloadJSON, transitionAt)
+	event, err := appendRunEventTx(ctx, tx, row.sessionID, transition.runID, row.traceID,
+		transitionEventType(transition), payloadJSON, transitionAt)
 	if err != nil {
 		return RunTransitionResult{}, err
 	}
 	return RunTransitionResult{State: committed, Events: append(events, event)}, nil
+}
+
+// transitionEventType is the single canonical projection a transition appends.
+// A writer with no lifecycle event of its own projects the shared state change.
+func transitionEventType(transition runTransition) string {
+	if transition.eventType != "" {
+		return transition.eventType
+	}
+	return runStateChangedEventType
 }
 
 // isRunTransitionDuplicate recognizes the one repeat that is free: the row is
@@ -609,16 +676,74 @@ func isRunTransitionDuplicate(row runRow, transition runTransition, expected int
 	return true
 }
 
-// runOwnsApprovalTx reports whether an approval belongs to this run. A decision
-// carried by a command is only that command's authority to move the run if the
-// run is the one the decision was made about.
-func runOwnsApprovalTx(ctx context.Context, tx *sql.Tx, runID string, approvalID string) (bool, error) {
-	var owned int
-	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM approvals WHERE id = ? AND run_id = ?`, approvalID, runID).Scan(&owned); err != nil {
+// transitionCommittedThisTriggerTx answers whether the version a row already
+// sits at was committed by this exact trigger.
+//
+// It reads the transition's own event, because that is the only durable record
+// of a trigger the run row does not keep. Matching on the resulting version and
+// the event type identifies exactly one event — every transition moves the
+// version by one and writes one projection — so a single matching row is proof
+// and anything else is not. Absence fails closed: an unexplained version is not
+// evidence that this command produced it.
+//
+// A transition that carries no durable trigger keeps the row-only rule it
+// always had. An event written before this rule existed carries no trigger
+// either, so a resume replayed across an upgrade is refused rather than
+// replayed — the honest answer, since nothing durable says which approval put
+// that run where it is.
+func transitionCommittedThisTriggerTx(ctx context.Context, tx *sql.Tx, transition runTransition, version int64) (bool, error) {
+	if !transition.durableApprovalIdentity {
+		return true, nil
+	}
+	if transition.identity.approvalID == "" {
+		return false, nil
+	}
+	var matches int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM events
+		WHERE run_id = ? AND type = ?
+			AND json_extract(payload_json, ?) = ?
+			AND json_extract(payload_json, ?) = ?
+	`,
+		transition.runID, transitionEventType(transition),
+		runStateVersionPayloadPath, version,
+		approvalIdentityPayloadPath, transition.identity.approvalID,
+	).Scan(&matches); err != nil {
 		return false, err
 	}
-	return owned == 1, nil
+	return matches == 1, nil
+}
+
+// runApprovalStatusTx reports the durable status of an approval this run owns.
+//
+// An empty status means the run does not own it, which is the answer that
+// matters most: a decision carried by a command is only that command's
+// authority to move the run if the run is the one the decision was made about.
+// Empty is unambiguous because the column is NOT NULL under a CHECK constraint
+// that admits only the four decided words and pending.
+func runApprovalStatusTx(ctx context.Context, tx *sql.Tx, runID string, approvalID string) (string, error) {
+	var status string
+	err := tx.QueryRowContext(ctx,
+		`SELECT status FROM approvals WHERE id = ? AND run_id = ?`, approvalID, runID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return status, nil
+}
+
+// approvalAuthorizesResume reports whether an approval's durable status still
+// stands as permission to make the call it was asked about.
+//
+// approved is a decision nobody has spent yet. consumed is the same decision
+// after mcp-files redeemed its token, which is what a replayed resume meets
+// once the authorized call has already run — the authorization is used up, not
+// withdrawn, so it must answer the replay rather than fence it. Pending is a
+// question nobody answered; denied and expired are an answer of no.
+func approvalAuthorizesResume(status string) bool {
+	return status == "approved" || status == "consumed"
 }
 
 // matchesTransitionIdentity checks the trigger identity against what the row

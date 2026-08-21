@@ -1167,6 +1167,14 @@ func (w *Worker) resumeApproval(ctx context.Context, stream RuntimeStream, resum
 // orchestrator may already have committed running, and a terminal report
 // computed against the older version would be refused anyway — so the stream is
 // dropped instead and the required ownership fence moves the run to recovering.
+//
+// started decides whether that is still this resume's call to make. It is false
+// when something else has already begun terminalizing the run — the
+// orchestrator cancelled it, or a sibling authorization was refused — and that
+// something owns the outcome and is already acknowledging it. There is nothing
+// left in doubt for a fence to settle, and dropping the stream would take down
+// every other run this worker is executing to re-establish a state the
+// orchestrator itself just dictated.
 func (w *Worker) failApprovalResume(
 	ctx context.Context,
 	stream RuntimeStream,
@@ -1187,7 +1195,7 @@ func (w *Worker) failApprovalResume(
 		w.rememberTerminalAttempt(entry)
 		w.sendTerminalOrReport(ctx, stream, update)
 	}
-	if readySent {
+	if started && readySent {
 		w.reportFatal(errApprovalResumeUnacknowledged)
 	}
 	if started {

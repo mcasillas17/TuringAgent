@@ -584,3 +584,119 @@ func TestConflictingReadyClosesStreamFencesRecoveryAndReleasesSlot(t *testing.T)
 		t.Fatal("worker registration survived a conflicting ready")
 	}
 }
+
+// siblingApproval records a second approval on the same run — the ordinary
+// shape of a model asking for two tools — and optionally answers it. The run
+// does not move: it was already waiting, and a second request or decision is
+// news about an approval rather than a lifecycle change.
+func (f *approvalResumeFixture) siblingApproval(t *testing.T, decided bool) string {
+	t.Helper()
+	approval, _, err := f.h.repo.CreateApprovalWithEvent(context.Background(), f.runID, "", "general_assistant",
+		"files.update", `{"path":"sibling.txt"}`, "sha256:approval-resume-sibling",
+		time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatalf("sibling CreateApprovalWithEvent: %v", err)
+	}
+	if decided {
+		if _, err := f.h.repo.ApproveApproval(context.Background(), approval.ApprovalID, "sibling-token", sql.NullString{}, ""); err != nil {
+			t.Fatalf("sibling ApproveApproval: %v", err)
+		}
+	}
+	if state := f.h.runState(t, f.runID); state != f.waiting {
+		t.Fatalf("the sibling approval moved the run: %+v, want %+v", state, f.waiting)
+	}
+	return approval.ApprovalID
+}
+
+// TestReadyForASecondSameRunApprovalAfterCommitIsFenced is the case a run with
+// two outstanding authorizations produces, and the one nothing but the
+// approval's own identity can tell apart.
+//
+// Both Readys name this run, this worker, this attempt and the same waiting
+// version, and both arrive at a row that is already running one version on.
+// Every guard the transition has in common with a replay therefore matches. If
+// the approval that actually moved the run is not part of what is compared, the
+// second Ready is answered with an acceptance and the worker proceeds to make a
+// call the orchestrator never resumed it for.
+func TestReadyForASecondSameRunApprovalAfterCommitIsFenced(t *testing.T) {
+	h := newHarness(t)
+	fixture := newApprovalResumeFixture(t, h, "worker-second-approval", "a second approval on the same run")
+	sibling := fixture.siblingApproval(t, true)
+	if _, err := h.service.resumeApprovedRun(context.Background(), fixture.ready(), fixture.workerID, fixture.connectedWorker(t)); err != nil {
+		t.Fatalf("the first resume was refused: %v", err)
+	}
+
+	ready := fixture.ready()
+	ready.ApprovalId = sibling
+	assertReadyIsFenced(t, fixture, ready)
+}
+
+// TestReadyNamingAnUndecidedApprovalIsFenced covers the approval nobody has
+// answered. Its row exists and belongs to this run, so ownership proves
+// nothing; what is missing is the only thing that authorizes a resume at all.
+// Restarting the run here would be the orchestrator acting on a question it
+// asked and never got an answer to.
+func TestReadyNamingAnUndecidedApprovalIsFenced(t *testing.T) {
+	h := newHarness(t)
+	fixture := newApprovalResumeFixture(t, h, "worker-undecided-approval", "ready names an undecided approval")
+	undecided := fixture.siblingApproval(t, false)
+
+	ready := fixture.ready()
+	ready.ApprovalId = undecided
+	assertReadyIsFenced(t, fixture, ready)
+
+	if state := h.runState(t, fixture.runID); state.Lifecycle != waitingApprovalRunStatus {
+		t.Fatalf("lifecycle after an undecided ready = %q, want %q", state.Lifecycle, waitingApprovalRunStatus)
+	}
+}
+
+// TestSecondSameRunApprovalReadyDeliversNoAcceptance is the same refusal seen
+// from the worker's side, which is where it matters: what must never reach the
+// stream is a second acceptance. An acceptance is the worker's entire authority
+// to act, so one handed out for an approval that resumed nothing is exactly the
+// unauthorized side effect this handshake exists to prevent.
+func TestSecondSameRunApprovalReadyDeliversNoAcceptance(t *testing.T) {
+	h := newHarness(t)
+	fixture := newApprovalResumeFixture(t, h, "worker-second-approval-stream", "a second approval reaches the stream")
+	sibling := fixture.siblingApproval(t, true)
+	fixture.sendReady(t, fixture.ready())
+	first := approvalResumeCommand(t, fixture.stream, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetApprovalResumeAccepted() != nil
+	}).GetApprovalResumeAccepted()
+	if first.GetApprovalId() != fixture.approvalID {
+		t.Fatalf("first acceptance = %+v, want the resumed approval %q", first, fixture.approvalID)
+	}
+	resumed := h.runState(t, fixture.runID)
+	events := approvalResumeStateEvents(t, h, fixture.runID)
+
+	conflicting := fixture.ready()
+	conflicting.ApprovalId = sibling
+	fixture.sendReady(t, conflicting)
+
+	if err := fixture.awaitExit(t); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("worker stream error = %v, want FailedPrecondition", err)
+	}
+	for {
+		select {
+		case command := <-fixture.stream.commands:
+			if accepted := command.GetApprovalResumeAccepted(); accepted != nil {
+				t.Fatalf("the second approval was accepted: %+v", accepted)
+			}
+			continue
+		default:
+		}
+		break
+	}
+	after := h.runState(t, fixture.runID)
+	if after.Lifecycle != recoveringRunStatus {
+		t.Fatalf("lifecycle = %q, want %q", after.Lifecycle, recoveringRunStatus)
+	}
+	// The fence the closing stream owes, and nothing else: the refused Ready
+	// itself must not have written a thing.
+	if after.StateVersion != resumed.StateVersion+1 {
+		t.Fatalf("state version = %d, want %d (fence only)", after.StateVersion, resumed.StateVersion+1)
+	}
+	if got := approvalResumeStateEvents(t, h, fixture.runID); got != events+1 {
+		t.Fatalf("the refused ready appended %d state events, want exactly the fence", got-events)
+	}
+}

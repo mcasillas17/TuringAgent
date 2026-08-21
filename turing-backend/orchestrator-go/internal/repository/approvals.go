@@ -229,6 +229,14 @@ type ResumeApprovedRunInput struct {
 // every other lifecycle change — one version forward, from waiting-approval
 // only, for the exact worker and attempt the row still records.
 //
+// The approval is guarded twice over, because it is the only part of the
+// trigger the run row cannot vouch for. It has to still authorize something,
+// which pending, denied and expired do not; and it is committed into the
+// transition's own event so the duplicate rule can tell the resume that
+// actually moved this run from a second one arriving behind it. Without that,
+// a run with two outstanding authorizations answers the second Ready with the
+// first one's acceptance.
+//
 // A repeat of the identical resume is the write-free duplicate the shared core
 // already recognizes, which is what lets a worker that lost the acceptance ask
 // again and be told the same thing rather than fenced.
@@ -244,6 +252,9 @@ func (r *Repository) ResumeApprovedRun(ctx context.Context, input ResumeApproved
 			assignmentAttemptID: input.AssignmentAttemptID,
 			approvalID:          input.ApprovalID,
 		},
+		requiresAuthorizedApproval: true,
+		durableApprovalIdentity:    true,
+		eventPayload:               map[string]any{approvalIdentityPayloadKey: input.ApprovalID},
 	}, nil)
 }
 
