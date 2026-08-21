@@ -18,9 +18,10 @@ The recommended path is:
 3. Define erasure and provenance invariants before creating derived memory.
 4. Add user-controlled, evidence-backed semantic and procedural memory.
 5. Add automatic learning only as a reviewable candidate workflow.
-6. Add local embeddings only if the evaluation suite proves lexical retrieval is insufficient.
-7. Conform to MCP and add connectors only after the memory and trust boundaries are stable.
-8. Add a second specialized agent only after capability discovery, routing, and concurrent-worker behavior are explicit.
+6. Evaluate and, if approved, protect managed SQLite state at rest and support whole-database cryptographic retirement only after backup and restore integrity is proven.
+7. Add local embeddings only if the evaluation suite proves lexical retrieval is insufficient.
+8. Conform to MCP and add connectors only after the memory and trust boundaries are stable.
+9. Add a second specialized agent only after capability discovery, routing, and concurrent-worker behavior are explicit.
 
 The target is not a graph-heavy autonomous system. It is a local, inspectable assistant whose beliefs can be traced, corrected, exported, and withdrawn.
 
@@ -141,6 +142,7 @@ Mem0's current V3 documentation demonstrates scoped, ADD-only fact extraction, e
 | Remote privacy | Provider selected per request | Explicit per-session/run egress policy and visible data scope | Critical |
 | Audit | Redacted authenticated read API; no built-in viewer | Redacted, filterable read path with a viewer | Medium |
 | Export/backup | Missing | Open-format export, consistent backup, tested restore | High |
+| State at rest | The database file is unencrypted; only stored integration credentials are sealed, and automated backup is missing | If approved, encrypted managed database and backups, with whole-database cryptographic retirement only on platforms that pass key-custody qualification | High |
 | Connectors | Two hard-coded in-repo JSON-RPC tool servers | Standards-conformant MCP plus connector provenance and consent | High |
 | Multi-agent | One general assistant | Capability-aware routing and explicit handoff | Later |
 | Evaluation | No memory/retrieval harness | Checked-in quality, safety, latency, and deletion suites | Critical |
@@ -305,7 +307,7 @@ preview/diff UX, and no approval viewer UI ships here.
 #### TUR-004 — Close session-deletion withdrawal gaps
 
 **Outcome:** Deleting a session deterministically withdraws session-owned database state, derived state, and tool artifacts.  
-**Scope:** Publish a terminal deletion event, close/reconcile subscribers, attach session/run provenance to sandbox artifacts, define keep/delete policy, and document SQLite/WAL physical-erasure limits. Evaluate whole-database encryption plus key destruction as the credible byte-withdrawal strategy instead of promising reliable file overwrite on SSDs.  
+**Scope:** Publish a terminal deletion event, close/reconcile subscribers, attach session/run provenance to sandbox artifacts, define keep/delete policy, and document SQLite/WAL physical-erasure limits. Keep whole-database encryption and key destruction in the separate TUR-022 follow-up instead of promising per-session physical erasure or reliable file overwrite on SSDs.  
 **Likely files:** session deletion repository/service, events service, MCP file metadata, client session state, architecture docs.  
 **Acceptance:** Subscribers are notified; session-owned artifacts are listed and deleted or explicitly retained by policy; no search or memory path returns deleted content.  
 **Dependencies:** MEM-001.
@@ -319,9 +321,9 @@ server-issued session/run/generation provenance, reserve a durable manifest
 row before I/O, and default to `delete_on_session_delete`; pre-existing root
 files are the sole `retain_legacy_unowned` exception. External cleanup failure
 stays retryable and never reports completion. The accompanying documentation
-distinguishes logical withdrawal from physical erasure and evaluates
-whole-database encryption/key destruction without adding SQLCipher or an
-encryption migration.
+distinguishes logical withdrawal from physical erasure and defers
+whole-database encryption/key destruction to a separate feasibility design,
+tracked here as TUR-022, without adding SQLCipher or an encryption migration.
 
 #### TUR-005 — Harden runtime and orchestrator containers
 
@@ -608,7 +610,7 @@ remains blocked until the commit containing the contract is on `main`.
 **Acceptance:** Long-session and tool-chain tests stay within model limits; summary failure falls back safely; deletion removes source-derived summaries.  
 **Dependencies:** TUR-018, MEM-001, MEM-003.
 
-### Phase 5: Ownership, retention, and portability
+### Phase 5: Ownership, retention, portability, and database retirement
 
 #### TUR-015 — Add session and memory export
 
@@ -621,10 +623,19 @@ remains blocked until the commit containing the contract is on `main`.
 #### TUR-016 — Add consistent backup, restore, and migration integrity
 
 **Outcome:** Local state can be recovered and schema history cannot drift silently.  
-**Scope:** WAL-aware consistent backup, optional encrypted export, restore verification, migration checksums, and documented recovery. Preserve the current full-filename migration ordering; duplicate numeric prefixes are cosmetic, not a defect.  
+**Scope:** WAL-aware consistent backup, optional user-passphrase-encrypted export, restore verification, migration checksums, and documented recovery. Preserve the current full-filename migration ordering; duplicate numeric prefixes are cosmetic, not a defect. This task owns consistent backup and restore semantics; its optional encrypted export remains outside managed database-key custody and retirement. TUR-022 owns encryption and key custody for the resulting Turing-managed artifacts.  
 **Likely files:** DB package, scripts, migration runner/tests, operator docs.  
 **Acceptance:** Automated backup/restore reproduces database invariants; altered applied migrations are detected; secrets are not bundled unintentionally.  
 **Dependencies:** TUR-015.
+
+#### TUR-022 — Add encrypted database retirement
+
+**Outcome:** Turing protects its managed SQLite state at rest and can retire an entire database cryptographically without claiming per-session forensic erasure.  
+**Entry criterion:** The project owner approves a TUR-022 feasibility and design artifact under `docs/architecture/` before implementation; this gate is part of this single roadmap task, not a second dependency. The artifact must compare SQLCipher-compatible Go drivers and record the selection evidence for licensing, `sqlite_fts5`, supported builds, WAL and temporary-file behavior, backup integration, and migration safety. It must define numeric transaction, batch, startup-pause, and cancellation-latency budgets; define the platform key-custody and legacy-plaintext boundaries; resolve how the containerized orchestrator obtains the unwrapped key after host restart without weakening OS-keystore custody; and define unattended restart and scheduled-automation behavior while the key is unavailable.  
+**Scope:** After the gate passes, add whole-database encryption at rest. Encryption approval does not itself approve retirement: each platform must separately prove exclusive, inspectable key custody, and unknown, synced, escrowed, exportable, or device-backed-up wrappers make that platform retirement-ineligible. Encrypt database content in the main file, journals, and WAL; ensure the `-shm` wal-index carries no database content or is avoided through an approved locking mode; and keep SQLite file-backed temporary storage disabled while re-establishing the per-connection guard under the selected driver. Keep an envelope-wrapped data key in OS-keystore custody. Keep database-encryption and wrapping keys in a distinct key domain from the credential-specific `TURING_INTEGRATION_KEY`; coexist with that credential key unless the approved design explicitly supersedes it with a migration. Provide crash-safe, bounded, and resumable plaintext-to-encrypted migration, rotation, restore, rollback, and explicit key-loss UX. Reuse TUR-016's backup/restore semantics while encrypting managed backups; inventory every Turing-managed wrapped-key copy and every managed legacy plaintext database, backup, WAL, journal, `-shm`, migration, restore, and staging artifact; and fail closed when key custody is unavailable. The retained `legacy_skill_export_recovery` rows are managed database content and retire with the database. Emitted `SKILL.md` recovery files and their atomic-export staging files are separately governed file-backed copies: inventory and disclose them, and do not claim database retirement withdraws legacy skill content. Before a database becomes eligible for cryptographic retirement, migrate every readable managed plaintext predecessor and backup into encrypted custody, verify that no recoverable wrapper exists outside Turing's custody, fence ingress and schedulers, suppress automatic process restart, quiesce every client, close database handles, and confirm zero processes can use an unwrapped key before destroying the managed wrappers. This retirement boundary does not promise forensic erasure of process memory or pre-encryption storage remnants. State explicitly that user-created copies and exports remain outside Turing's control and that one database key cannot erase one session.  
+**Likely files:** DB connection, configuration, migration, and credential-sealing packages; init/runtime scripts and `.env.example` for keystore mode or selector configuration only, never key bytes; backup/restore tooling; platform keystore adapters; orchestrator and runtime container builds; Compose build configuration; CI workflow and self-guard tests; Flutter recovery UX; privacy, security, and operator docs.  
+**Acceptance:** Tagged build and search tests prove the selected driver preserves `sqlite_fts5`. Runtime tests prove that, after migration, no supported SQLite path writes plaintext database content to the main database, journals, WAL, `-shm` wal-index, or SQLite temporary files, and that managed backups are encrypted. Database-encryption keys, wrapping keys, and passphrases never appear in the database DSN, environment, process arguments, logs, or error text; `TURING_INTEGRATION_KEY` remains a separate credential-sealing domain. Existing data migrates and restores within the approved numeric transaction, batch, startup, and cancellation budgets; interrupted work resumes without monopolizing SQLite's single connection; wrapper and legacy-plaintext inventories cover every managed artifact named in scope; and missing or wrong keys never open, truncate, replace, or silently recreate the database. Restore reports a missing or rotated credential-sealing key separately, without blocking database recovery or storing credentials in plaintext. Fault-injection tests prove interrupted migration, rotation, restore, and rollback recover safely; unavailable key custody fails closed without allowing scheduled automation to bypass the locked database; documented restart behavior is deterministic; and key loss produces an explicit, non-destructive recovery state in Flutter. Retirement is unavailable when external wrapper state is unknown or any recoverable external wrapper remains. Otherwise, tests fence ingress, schedulers, and automatic restart; confirm zero live key holders; delete every managed wrapper; and prove that neither a previously active client nor a reopened process can read any encrypted-era Turing-managed database or backup. Every readable managed pre-encryption database and backup is migrated before retirement can succeed; residual storage bytes plus separately governed file-backed recovery exports and staging files are reported but never counted as cryptographically retired. Product text distinguishes whole-database retirement from per-session logical withdrawal and disclaims user-created and OS-managed copies outside Turing's custody.  
+**Dependencies:** TUR-004, TUR-016. TUR-016 must land before TUR-022 starts so encryption does not precede proven backup and restore integrity.
 
 #### TUR-017 — Add bounded retention
 
@@ -717,6 +728,7 @@ Every edge in this table appears in the corresponding task's `Dependencies` line
 | TUR-019 | None |
 | TUR-020 | None |
 | TUR-021 | TUR-013 |
+| TUR-022 | TUR-004, TUR-016 |
 | MEM-001 | None |
 | MEM-002 | None |
 | MEM-003 | MEM-002 |
@@ -747,7 +759,7 @@ Every edge in this table appears in the corresponding task's `Dependencies` line
 4. **Measure and improve lexical recall:** MEM-002, MEM-003, MEM-004, MEM-016.
 5. **Ship minimum lovable memory:** MEM-005, MEM-006, MEM-007, MEM-008, MEM-011.
 6. **Add safe learning and explainability:** MEM-009, MEM-010, MEM-012, MEM-015.
-7. **Deliver ownership and longevity:** TUR-015, TUR-016, TUR-017.
+7. **Deliver ownership and longevity:** TUR-015, TUR-016, TUR-017, and TUR-022 only when its entry criterion passes.
 8. **Make evidence-gated retrieval upgrades:** MEM-013 and MEM-014 only when their entry criteria pass.
 9. **Add connectivity:** CON-001, CON-002, CON-003, CON-004.
 10. **Add plural agents:** AGT-001 after capability, queue, streaming, observability, and MCP foundations are proven.
@@ -767,5 +779,6 @@ Turing reaches the intended state when all of the following are true:
 - embeddings and graphs are optional optimizations justified by recorded failures;
 - remote providers and connectors disclose exactly what data they receive;
 - audit, health, queue state, and terminal outcomes are visible after restart;
+- if the feasibility gate approves at-rest encryption, Turing-managed SQLite state and backups are encrypted; where platform key custody also qualifies for retirement, retirement is whole-database only and does not imply control over user-created or OS-managed copies or per-session forensic erasure;
 - standard MCP integrations preserve Turing's fail-closed policy and approval boundary;
 - additional agents use explicit routing, capabilities, and handoff rather than hidden framework state.
