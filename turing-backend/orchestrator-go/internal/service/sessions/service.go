@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -356,25 +357,103 @@ func (s *Server) ListMessages(ctx context.Context, req *turingv1.ListMessagesReq
 	return &turingv1.ListMessagesResponse{Messages: out}, nil
 }
 
+// SearchMessages answers in exactly one projection. The response carries both
+// a legacy message list and a scored hit list, and filling both would let a
+// client read whichever it happened to know about while paying twice for the
+// same rows on the wire.
 func (s *Server) SearchMessages(ctx context.Context, req *turingv1.SearchMessagesRequest) (*turingv1.SearchMessagesResponse, error) {
 	if req == nil || strings.TrimSpace(req.Query) == "" {
 		return nil, status.Error(codes.InvalidArgument, "query is required")
 	}
-	messages, err := s.repo.SearchMessages(
-		ctx,
-		req.SessionId,
-		req.ExcludeSessionId,
-		req.Query,
-		int(req.Limit),
-	)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "search messages failed")
+	// No default fallback: an unrecognized format is a client this server does
+	// not understand, and answering it with a guess would silently serve a
+	// future format's request with today's shape.
+	switch req.GetResponseFormat() {
+	case turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_UNSPECIFIED,
+		turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_LEGACY_MESSAGES:
+		messages, err := s.repo.SearchMessages(
+			ctx,
+			req.SessionId,
+			req.ExcludeSessionId,
+			req.Query,
+			int(req.Limit),
+		)
+		if err != nil {
+			return nil, searchMessagesError(err)
+		}
+		return &turingv1.SearchMessagesResponse{Messages: mapSearchMessages(messages)}, nil
+	case turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_HITS:
+		hits, err := s.repo.SearchMessageHits(
+			ctx,
+			req.SessionId,
+			req.ExcludeSessionId,
+			req.Query,
+			int(req.Limit),
+		)
+		if err != nil {
+			return nil, searchMessagesError(err)
+		}
+		return &turingv1.SearchMessagesResponse{Hits: mapSearchHits(hits)}, nil
+	default:
+		return nil, status.Error(codes.InvalidArgument, "response_format is invalid")
 	}
+}
+
+// searchMessagesError turns any search failure into one opaque status.
+//
+// A metadata invariant failure means the repository refused to publish a score
+// or snippet it could not prove, which is a defect an operator has to be able
+// to see. The row that provoked it is someone's private conversation, and the
+// wrapped error carries its text, so only the invariant's class name is
+// logged: enough to find the bug, nothing about who was searching for what.
+// Ordinary database errors are not logged here at all; they say nothing an
+// operator cannot get from the database itself, and their text quotes content.
+func searchMessagesError(err error) error {
+	if class, ok := searchInvariantClass(err); ok {
+		log.Printf("search_messages invariant=%s", class)
+	}
+	return status.Error(codes.Internal, "search messages failed")
+}
+
+// searchInvariantClass names the broken invariant without quoting it. The
+// names are a stable log vocabulary, deliberately separate from the sentinel
+// error strings so that rewording an error does not silently rename a log
+// class an operator greps for.
+func searchInvariantClass(err error) (string, bool) {
+	switch {
+	case errors.Is(err, repository.ErrSearchMarkerEntropy):
+		return "marker_entropy", true
+	case errors.Is(err, repository.ErrInvalidSearchScore):
+		return "invalid_score", true
+	case errors.Is(err, repository.ErrSearchSnippetMarkerCollision):
+		return "marker_collision", true
+	case errors.Is(err, repository.ErrInvalidSearchSnippetMarkers):
+		return "marker_structure", true
+	case errors.Is(err, repository.ErrInvalidSearchSnippet):
+		return "invalid_snippet", true
+	default:
+		return "", false
+	}
+}
+
+func mapSearchMessages(messages []repository.Message) []*turingv1.Message {
 	out := make([]*turingv1.Message, 0, len(messages))
 	for _, message := range messages {
 		out = append(out, mapMessage(message.SessionID, message))
 	}
-	return &turingv1.SearchMessagesResponse{Messages: out}, nil
+	return out
+}
+
+func mapSearchHits(hits []repository.SearchHit) []*turingv1.SearchHit {
+	out := make([]*turingv1.SearchHit, 0, len(hits))
+	for _, hit := range hits {
+		out = append(out, &turingv1.SearchHit{
+			Message: mapMessage(hit.Message.SessionID, hit.Message),
+			Score:   hit.Score,
+			Snippet: hit.Snippet,
+		})
+	}
+	return out
 }
 
 func (s *Server) GetConfig(context.Context, *turingv1.GetConfigRequest) (*turingv1.GetConfigResponse, error) {
