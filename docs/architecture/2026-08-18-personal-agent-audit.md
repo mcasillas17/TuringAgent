@@ -501,6 +501,57 @@ remains blocked until the commit containing the contract is on `main`.
 **Likely files:** `proto/turing/v1/sessions.proto`, sessions repository/service, generated Go/Dart, client mappers.
 **Acceptance:** Results expose documented score ordering and safe snippets; legacy callers receive identical messages; proto checks pass.
 **Dependencies:** None.
+**Status:** Implemented. See
+[Session recall scope](session-recall.md#scored-search-hits) for the public
+contract.
+
+**Shipped behavior:** `SearchMessagesRequest.response_format` selects exactly
+one projection. Unspecified and `LEGACY_MESSAGES` return `messages` only,
+`HITS` returns `hits` only, and an unrecognized numeric value is
+`InvalidArgument` with no downgrade guess — so a response never carries the
+same bodies twice. A new client that asks for `HITS` from an older server
+receives that server's `messages` and maps them through a legacy fallback in
+the same single response: one RPC per search, no format retry, no
+concatenation. `SearchHit.score` is `-bm25(messages_fts)`, finite and
+non-negative, higher-is-better only within one query against one database
+snapshot, with equal scores broken deterministically by `message_id ASC`; it is
+not a probability, confidence, or cross-query metric. `SearchHit.snippet` is
+built only from the matched message's own content, windowed around the match
+whenever the body must be cut, and published as single-line literal plain text
+with no server-added markup, at
+most 200 Unicode scalars and 800 UTF-8 bytes, invalid UTF-8 repaired,
+whitespace collapsed, and C0/C1/DEL and explicit bidi controls replaced.
+Per-query high-entropy markers are stripped inside the repository, and content
+that impersonates them fails the query closed rather than producing an
+ambiguous snippet. Both projections share one predicate, so `active` and
+`archived` sessions stay searchable while `deleting` and deleted sessions are
+excluded from both, and scope, exclusion, the limit domain, and literal-phrase
+handling are unchanged. Any unprovable score or snippet fails the whole query
+with an opaque `Internal` error that quotes no message, snippet, or query text.
+Nothing is persisted: no score, snippet, cache, side table, or derived row, and
+no remote egress is introduced.
+
+**Limit:** This ships the ranking signal and a safe preview only. Runtime
+recall deliberately still sends the unspecified format and reads `messages`, so
+its own excerpts and ranking are untouched; no evaluation harness, metric,
+threshold, structured multi-term search request, tokenization change, or
+semantic retrieval lands here. MEM-003, MEM-004, and MEM-016 remain pending and
+own that work.
+
+**Acceptance evidence:** Repository tests cover score normalization and the
+pinned finite non-positive bm25 canary, `message_id` tie-breaking, marker
+grammar/entropy/round-trip and fail-closed collision handling, match-centered
+windowing, exact scalar and byte bounds, oversized-token truncation, literal
+markup, whitespace/control/bidi normalization, natural-script preservation,
+same-message snippet provenance, active/archived inclusion with `deleting`
+exclusion, scope/exclusion/limit parity with the legacy projection, literal
+phrase injection resistance, and tokenless empty success. Service tests cover
+format negotiation, unknown-format rejection, message parity between formats,
+single-projection payloads, invariant-class-only logging, and opaque database
+errors. `turing-backend/tests/proto_contract_test.go` pins the additive wire
+contract in both directions against the legacy descriptor. Flutter mapper,
+client, and search-screen tests cover canonical hit mapping, value-free mapping
+failures, one-call legacy fallback, and verbatim plain-text snippet rendering.
 
 #### MEM-003 — Build a deterministic recall evaluation harness
 
