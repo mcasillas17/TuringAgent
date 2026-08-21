@@ -32,6 +32,14 @@ type BeaconPosterSetter interface {
 	SetToolBeaconPoster(func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error))
 }
 
+// ApprovalResumerSetter is how the resume handshake reaches the code that
+// actually runs approved tools. It is a separate optional interface for the
+// same reason the beacon poster is: an executor that does not run tools has
+// nothing to resume.
+type ApprovalResumerSetter interface {
+	SetApprovalResumer(func(context.Context, tools.ApprovalResume) error)
+}
+
 type Options struct {
 	WorkerID                    string
 	AgentID                     turingv1.AgentId
@@ -70,14 +78,19 @@ type Worker struct {
 	// entry is the one evicted when the bound is reached.
 	terminalOrder []string
 	approvals     map[string]string
-	toolCalls     map[string]string
-	decisionMu    sync.Mutex
-	decisions     map[string][]*decisionWaiter
-	generations   map[string]uint64
-	writerMu      sync.Mutex
-	writer        *outboundWriter
-	fatalMu       sync.Mutex
-	fatal         chan error
+	resumes       map[string]*approvalResume
+	// unclaimedResumes is the insertion order of resume slots opened by a
+	// decision that arrived before the requirement naming it, so the oldest is
+	// dropped first if one is never claimed.
+	unclaimedResumes []string
+	toolCalls        map[string]string
+	decisionMu       sync.Mutex
+	decisions        map[string][]*decisionWaiter
+	generations      map[string]uint64
+	writerMu         sync.Mutex
+	writer           *outboundWriter
+	fatalMu          sync.Mutex
+	fatal            chan error
 }
 
 type decisionWaiter struct {
@@ -86,6 +99,25 @@ type decisionWaiter struct {
 	generation uint64
 	tombstone  bool
 	expiresAt  time.Time
+}
+
+// approvalResume is one approval's half-finished lifecycle handshake.
+//
+// It exists from the moment the worker learns which run an approval belongs to,
+// which is earlier than the moment anything waits on it: the decision command
+// and the acceptance command both arrive on the command loop and would
+// otherwise have nowhere to land while the executor is still between them.
+//
+// decided is closed when the approved decision command arrives; accepted
+// carries the orchestrator's durable acceptance. deadline is the instant the
+// wait stops, recorded so it can be read without inferring it from elapsed
+// time. All three are guarded by the worker's own lock.
+type approvalResume struct {
+	runID      string
+	decided    chan struct{}
+	accepted   chan *turingv1.RuntimeApprovalResumeAccepted
+	decideOnce sync.Once
+	deadline   time.Time
 }
 
 type activeRun struct {
@@ -127,6 +159,12 @@ const (
 	// of magnitude more than the race can produce, while still being a fixed
 	// ceiling rather than a promise that something else will clean up.
 	maxRememberedTerminalAttempts = 256
+	// maxUnclaimedApprovalDecisions bounds the decisions a worker remembers for
+	// approvals it has not yet been told the run of. Only a decision queued
+	// ahead of its own policy decision can land here, and the gap between them
+	// is one command, so a few dozen is far more than the ordering can produce
+	// while still being a ceiling rather than a hope.
+	maxUnclaimedApprovalDecisions = 64
 )
 
 // terminalAttempt is the assignment whose terminal report a run already
@@ -144,6 +182,11 @@ var errOutboundWriterStopped = errors.New("runtime outbound writer stopped")
 var errRunNarrationPaused = errors.New("run narration is paused")
 var errShutdownRequested = errors.New("runtime shutdown requested")
 var errRuntimeDisconnected = errors.New("runtime stream disconnected")
+
+// errApprovalResumeUnacknowledged drops a stream whose approval resume was
+// never answered. It names the condition only: the run, the approval, and the
+// tool are all things this error travels too far to carry.
+var errApprovalResumeUnacknowledged = errors.New("runtime approval resume was not acknowledged")
 
 // ErrInvalidConfig marks the validation failures Run reports before it touches
 // the network. They cannot succeed on retry, so a caller looping over Run must
@@ -361,7 +404,8 @@ func New(options Options, client RuntimeClient, executor Executor) *Worker {
 	return &Worker{
 		options: options, client: client, executor: executor, active: map[string]*activeRun{},
 		terminalAttempts: map[string]terminalAttempt{},
-		approvals:        map[string]string{}, toolCalls: map[string]string{}, decisions: map[string][]*decisionWaiter{},
+		approvals:        map[string]string{}, resumes: map[string]*approvalResume{},
+		toolCalls: map[string]string{}, decisions: map[string][]*decisionWaiter{},
 		generations: map[string]uint64{},
 	}
 }
@@ -448,6 +492,11 @@ func (w *Worker) Run(ctx context.Context) error {
 	if setter, ok := w.executor.(BeaconPosterSetter); ok {
 		setter.SetToolBeaconPoster(func(ctx context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 			return w.postToolBeacon(ctx, stream, beacon)
+		})
+	}
+	if setter, ok := w.executor.(ApprovalResumerSetter); ok {
+		setter.SetApprovalResumer(func(ctx context.Context, resume tools.ApprovalResume) error {
+			return w.resumeApproval(ctx, stream, resume)
 		})
 	}
 	ready := &turingv1.RuntimeWorkerReady{
@@ -643,7 +692,16 @@ func (w *Worker) handleCommand(ctx context.Context, stream RuntimeStream, cmd *t
 			if value.ApprovalUpdated.Status == "denied" || value.ApprovalUpdated.Status == "expired" {
 				return w.cancelApprovalRun(ctx, stream, value.ApprovalUpdated.ApprovalId, value.ApprovalUpdated.Status)
 			}
+			if value.ApprovalUpdated.Status == "approved" {
+				// The decision this worker was waiting to be told about. It is
+				// what permits asking for a resume, and nothing more: the run
+				// is still waiting-approval until the orchestrator says
+				// otherwise.
+				w.markApprovalDecided(value.ApprovalUpdated.GetApprovalId())
+			}
 		}
+	case *turingv1.RuntimeCommand_ApprovalResumeAccepted:
+		w.deliverResumeAcceptance(value.ApprovalResumeAccepted)
 	}
 	return nil
 }
@@ -899,6 +957,268 @@ func (w *Worker) runForApproval(approvalID string) string {
 	return w.approvals[approvalID]
 }
 
+// rememberApproval records which run an approval belongs to and opens the
+// resume slot for it.
+//
+// The slot is opened here, when the requirement is learned, rather than when
+// something waits on it. The decision and the acceptance both arrive on the
+// command loop, and the executor is not yet blocked on either; without a place
+// for them to land, a command that arrived a moment early would simply be lost
+// and the run would wait out its deadline for something it had already been
+// sent.
+func (w *Worker) rememberApproval(approvalID string, runID string) {
+	if approvalID == "" || runID == "" {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.approvals[approvalID] = runID
+	pending, exists := w.resumes[approvalID]
+	if !exists {
+		w.resumes[approvalID] = newApprovalResume(runID)
+		return
+	}
+	if pending.runID == "" {
+		// A decision that arrived before this requirement did. It is this run's
+		// after all, and now that the slot has an owner it is cleaned up with
+		// the run rather than by the orphan bound.
+		pending.runID = runID
+		w.claimUnclaimedResumeLocked(approvalID)
+	}
+}
+
+func newApprovalResume(runID string) *approvalResume {
+	return &approvalResume{
+		runID:    runID,
+		decided:  make(chan struct{}),
+		accepted: make(chan *turingv1.RuntimeApprovalResumeAccepted, 1),
+	}
+}
+
+// markApprovalDecided records that the approved decision command arrived.
+//
+// This is the only thing that permits asking for a resume. A token this worker
+// polled for is evidence about the approval, not about the run, and acting on
+// it would mean continuing a run the orchestrator never agreed to restart.
+//
+// The decision can legitimately arrive before the requirement that explains it:
+// an automation's own grant is queued ahead of the policy decision naming the
+// approval, and both travel the same ordered command channel. So an unknown
+// approval opens a slot rather than being dropped — bounded, because a slot
+// nobody ever claims has no run to be cleaned up with.
+func (w *Worker) markApprovalDecided(approvalID string) {
+	if approvalID == "" {
+		return
+	}
+	w.mu.Lock()
+	pending, exists := w.resumes[approvalID]
+	if !exists {
+		pending = newApprovalResume("")
+		w.resumes[approvalID] = pending
+		w.unclaimedResumes = append(w.unclaimedResumes, approvalID)
+		w.evictUnclaimedResumesLocked()
+	}
+	w.mu.Unlock()
+	pending.decideOnce.Do(func() { close(pending.decided) })
+}
+
+func (w *Worker) claimUnclaimedResumeLocked(approvalID string) {
+	for index, unclaimed := range w.unclaimedResumes {
+		if unclaimed == approvalID {
+			w.unclaimedResumes = append(w.unclaimedResumes[:index], w.unclaimedResumes[index+1:]...)
+			return
+		}
+	}
+}
+
+func (w *Worker) evictUnclaimedResumesLocked() {
+	for len(w.unclaimedResumes) > maxUnclaimedApprovalDecisions {
+		oldest := w.unclaimedResumes[0]
+		w.unclaimedResumes = w.unclaimedResumes[1:]
+		if pending, exists := w.resumes[oldest]; exists && pending.runID == "" {
+			delete(w.resumes, oldest)
+		}
+	}
+}
+
+// beginApprovalResume claims the pending resume for an approval and records the
+// instant its wait ends.
+func (w *Worker) beginApprovalResume(approvalID string, runID string, deadline time.Time) (*approvalResume, string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	pending, exists := w.resumes[approvalID]
+	if !exists {
+		return nil, ""
+	}
+	if pending.runID == "" {
+		return nil, ""
+	}
+	if runID != "" && pending.runID != runID {
+		return nil, ""
+	}
+	pending.deadline = deadline
+	return pending, pending.runID
+}
+
+// deliverResumeAcceptance releases a paused run on the orchestrator's durable
+// acceptance, and only on one that names this exact run, approval, and live
+// attempt at a version this assignment has not already moved past.
+//
+// A mismatched acceptance is dropped rather than acted on, and dropping it
+// changes nothing else — in particular it does not restart the wait, because
+// then any stream could hold this run paused indefinitely by sending
+// acceptances that were never about it.
+func (w *Worker) deliverResumeAcceptance(accepted *turingv1.RuntimeApprovalResumeAccepted) {
+	if accepted == nil || accepted.GetApprovalId() == "" {
+		return
+	}
+	w.mu.Lock()
+	pending := w.resumes[accepted.GetApprovalId()]
+	pendingRunID := ""
+	if pending != nil {
+		pendingRunID = pending.runID
+	}
+	w.mu.Unlock()
+	if pending == nil || pendingRunID == "" || pendingRunID != accepted.GetRunId() {
+		return
+	}
+	entry := w.activeRun(pendingRunID)
+	if entry == nil {
+		return
+	}
+	_, attemptID := entry.identity()
+	if accepted.GetAssignmentAttemptId() != "" && accepted.GetAssignmentAttemptId() != attemptID {
+		return
+	}
+	if version := accepted.GetStateVersion(); version > 0 && !entry.acceptVersion(version) {
+		return
+	}
+	select {
+	case pending.accepted <- accepted:
+	default:
+	}
+}
+
+// resumeApproval is the worker's half of the approval handshake.
+//
+// It waits for the decision command, tells the orchestrator this attempt is
+// restored and paused, and then holds the executor until the orchestrator says
+// it has durably committed running again. Everything after this point — the
+// approved tool call and the model work that follows it — happens only on that
+// acceptance.
+func (w *Worker) resumeApproval(ctx context.Context, stream RuntimeStream, resume tools.ApprovalResume) error {
+	if resume.ApprovalID == "" {
+		return errors.New("approval resume requires an approval")
+	}
+	waitCtx := ctx
+	if !resume.Deadline.IsZero() {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithDeadline(ctx, resume.Deadline)
+		defer cancel()
+	}
+	deadline, _ := waitCtx.Deadline()
+	pending, runID := w.beginApprovalResume(resume.ApprovalID, resume.RunID, deadline)
+	if pending == nil {
+		return errors.New("approval resume names an approval this worker is not holding")
+	}
+	entry := w.activeRun(runID)
+	if entry == nil {
+		return errors.New("approval resume names a run this worker is no longer running")
+	}
+	select {
+	case <-pending.decided:
+	case <-waitCtx.Done():
+		// Still waiting-approval, and this attempt still owns the run, so the
+		// worker can name what actually went wrong.
+		return w.failApprovalResume(ctx, stream, entry, runID, false, waitCtx.Err())
+	}
+	_, attemptID := entry.identity()
+	sendCtx, cancelSend := context.WithTimeout(ctx, w.options.UpdateSendTimeout)
+	err := w.sendRunUpdateReportingPause(sendCtx, entry, stream, &turingv1.RuntimeUpdate{
+		Update: &turingv1.RuntimeUpdate_ApprovalResumeReady{ApprovalResumeReady: &turingv1.RuntimeApprovalResumeReady{
+			RunId:                runID,
+			ApprovalId:           resume.ApprovalID,
+			ExpectedStateVersion: entry.expectedVersion(),
+			AssignmentAttemptId:  attemptID,
+		}},
+	})
+	cancelSend()
+	if err != nil {
+		// A Ready that failed to send may still have been received, and a run
+		// whose narration is already withheld has lost the orchestrator
+		// anyway. Either way this worker cannot claim the run is still waiting,
+		// so it drops the stream and lets the ownership fence decide.
+		return w.failApprovalResume(ctx, stream, entry, runID, true, err)
+	}
+	select {
+	case <-pending.accepted:
+		return nil
+	case <-waitCtx.Done():
+		return w.failApprovalResume(ctx, stream, entry, runID, true, waitCtx.Err())
+	}
+}
+
+// failApprovalResume ends a resume that cannot complete, without ever leaving
+// the paused executor holding its worker slot.
+//
+// readySent decides what may be said. Before Ready the row is still waiting
+// approval and this attempt still owns it, so a typed approval-delivery failure
+// at the version this worker knows is both true and useful. After Ready the
+// orchestrator may already have committed running, and a terminal report
+// computed against the older version would be refused anyway — so the stream is
+// dropped instead and the required ownership fence moves the run to recovering.
+func (w *Worker) failApprovalResume(
+	ctx context.Context,
+	stream RuntimeStream,
+	entry *activeRun,
+	runID string,
+	readySent bool,
+	cause error,
+) error {
+	started, ownsTerminalReport := entry.beginCancellation()
+	if started && ownsTerminalReport && !readySent {
+		update := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
+			RunId:               runID,
+			Code:                "approval_delivery_failed",
+			FailureOrigin:       turingv1.FailureOrigin_FAILURE_ORIGIN_APPROVAL_TRANSPORT,
+			AutomaticRetryClass: turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_NEVER,
+		}}}
+		stampObservedVersion(entry, update)
+		w.rememberTerminalAttempt(entry)
+		w.sendTerminalOrReport(ctx, stream, update)
+	}
+	if readySent {
+		w.reportFatal(errApprovalResumeUnacknowledged)
+	}
+	if started {
+		resumeErr := approvalResumeError{err: cause}
+		entry.cancel(resumeErr)
+		// The slot is released once the executor has actually unwound, exactly
+		// as a cancellation releases it. Waiting here would deadlock: this runs
+		// inside the executor being cancelled.
+		go func() {
+			<-entry.done
+			w.deleteActive(runID)
+		}()
+	}
+	return approvalResumeError{err: cause}
+}
+
+// approvalResumeError ends the run rather than the tool call. The tool never
+// ran, so there is nothing to report about it, and the run cannot continue
+// against a resume nobody confirmed.
+type approvalResumeError struct{ err error }
+
+func (e approvalResumeError) Error() string {
+	if e.err == nil {
+		return "approval resume was not acknowledged"
+	}
+	return "approval resume was not acknowledged: " + e.err.Error()
+}
+
+func (e approvalResumeError) Unwrap() error     { return e.err }
+func (e approvalResumeError) RunTerminal() bool { return true }
+
 // acceptCommandVersion records the state version an orchestrator command
 // carries, and reports whether the command is current.
 //
@@ -943,6 +1263,12 @@ func (w *Worker) deleteActiveEntry(runID string, expected *activeRun) {
 	for approvalID, approvalRunID := range w.approvals {
 		if approvalRunID == runID {
 			delete(w.approvals, approvalID)
+			delete(w.resumes, approvalID)
+		}
+	}
+	for approvalID, pending := range w.resumes {
+		if pending.runID == runID {
+			delete(w.resumes, approvalID)
 		}
 	}
 	for toolCallID, toolCallRunID := range w.toolCalls {
@@ -1137,9 +1463,7 @@ func (w *Worker) postToolBeacon(ctx context.Context, stream RuntimeStream, beaco
 		// version it carries is the state tool and model work continues from.
 		w.acceptCommandVersion(beacon.GetRunId(), decision.GetRunStateVersion())
 		if decision.GetDecision() == turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED && decision.GetApprovalId() != "" && beacon.GetRunId() != "" {
-			w.mu.Lock()
-			w.approvals[decision.GetApprovalId()] = beacon.GetRunId()
-			w.mu.Unlock()
+			w.rememberApproval(decision.GetApprovalId(), beacon.GetRunId())
 		}
 		return decision, nil
 	case <-ctx.Done():
@@ -1193,10 +1517,9 @@ func (w *Worker) deliverDecision(decision *turingv1.ToolPolicyDecision) {
 	}
 	if decision.GetDecision() == turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED && decision.GetApprovalId() != "" {
 		w.mu.Lock()
-		if runID := w.toolCalls[decision.GetToolCallId()]; runID != "" {
-			w.approvals[decision.GetApprovalId()] = runID
-		}
+		runID := w.toolCalls[decision.GetToolCallId()]
 		w.mu.Unlock()
+		w.rememberApproval(decision.GetApprovalId(), runID)
 	}
 	select {
 	case waiter.decision <- decision:

@@ -407,6 +407,28 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 				}
 				continue
 			}
+			if resumeReady := update.GetApprovalResumeReady(); resumeReady != nil {
+				release, beginErr := connectedWorker.beginUpdate(update)
+				if beginErr != nil {
+					recvErr <- status.Error(codes.FailedPrecondition, "approval resume does not name a live owned assignment")
+					return
+				}
+				accepted, resumeErr := s.resumeApprovedRun(ctx, resumeReady, ready.WorkerId, connectedWorker)
+				// Released before the acceptance goes out: the command loop
+				// takes this same lock to deliver an assignment and then takes
+				// the sender, so holding it across a send would order the two
+				// the other way round.
+				release()
+				if resumeErr != nil {
+					recvErr <- resumeErr
+					return
+				}
+				if err := s.deliverApprovalResumeAcceptance(ctx, stream, accepted, ready.WorkerId, connectedWorker); err != nil {
+					recvErr <- err
+					return
+				}
+				continue
+			}
 			release, err := connectedWorker.beginUpdate(update)
 			if err != nil {
 				ignored, duplicateErr := s.isLateMatchingTerminalUpdate(ctx, update)
@@ -475,7 +497,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 			return err
 		case cmd := <-commands:
 			if err := s.sendCommand(ctx, stream, cmd, connectedWorker, ready.WorkerId); err != nil {
-				return errors.Join(err, s.handleUndeliveredCommand(ctx, cmd.command, connectedWorker))
+				return errors.Join(err, s.handleUndeliveredCommand(ctx, cmd.command, ready.WorkerId, connectedWorker))
 			}
 		}
 	}
@@ -861,14 +883,224 @@ func updateRunID(update *turingv1.RuntimeUpdate) string {
 	if beacon := update.GetToolBeacon(); beacon != nil {
 		return beacon.RunId
 	}
+	// A resume names its run for the same reason a beacon does: the update lock
+	// this feeds has to serialize the commit against the dispatch bookkeeping
+	// for that exact run, and the assignment check it performs is the first
+	// half of proving the stream owns what it is asking about.
+	if ready := update.GetApprovalResumeReady(); ready != nil {
+		return ready.GetRunId()
+	}
 	return terminalRunID(update)
 }
 
-func (s *Server) handleUndeliveredCommand(ctx context.Context, cmd *turingv1.RuntimeCommand, worker *worker) error {
+// handleUndeliveredCommand answers a command that never reached its worker.
+//
+// Each kind owes something different. A tool-policy decision carrying an
+// approval is the authorization itself, so losing it ends the approval. An
+// approval decision is not: it is news about a decision already durably made,
+// and losing the news does not by itself end anything. An acceptance is the
+// opposite again — the run is already committed running, so it can only be
+// fenced.
+func (s *Server) handleUndeliveredCommand(ctx context.Context, cmd *turingv1.RuntimeCommand, workerID string, owner *worker) error {
 	if decision := cmd.GetToolPolicyDecision(); decision != nil && decision.GetApprovalId() != "" {
-		return s.terminalizeApprovalDeliveryFailure(ctx, decision.GetApprovalId(), worker)
+		return s.terminalizeApprovalDeliveryFailure(ctx, decision.GetApprovalId(), owner)
+	}
+	if updated := cmd.GetApprovalUpdated(); updated != nil {
+		return s.handleUndeliveredApprovalDecision(ctx, updated, workerID, owner)
+	}
+	if accepted := cmd.GetApprovalResumeAccepted(); accepted != nil {
+		return s.fenceRunOwnership(accepted.GetRunId(), workerID, accepted.GetAssignmentAttemptId())
 	}
 	return nil
+}
+
+// handleUndeliveredApprovalDecision answers an approval decision that never
+// reached its worker.
+//
+// Delivering the decision is not what resumes the run — only a Ready/Accepted
+// exchange is — so failing to deliver it must not move the run either. While
+// this attempt still provably owns the run, the honest answer stays
+// waiting-approval at the version already committed, and the worker can still
+// ask again. Once ownership can no longer be proven, the run takes the same
+// fence as any other lost worker: a row that goes on saying it is waiting for
+// an answer nobody will act on is describing a conversation with no second
+// party.
+func (s *Server) handleUndeliveredApprovalDecision(
+	_ context.Context,
+	updated *turingv1.RuntimeApprovalUpdated,
+	workerID string,
+	owner *worker,
+) error {
+	if updated.GetApprovalId() == "" || workerID == "" {
+		return nil
+	}
+	// The caller's context is the stream's, and the stream is exactly what has
+	// just failed. Reading the run through it would report the dead connection
+	// instead of deciding what the run's state should be, so this runs on its
+	// own short-lived one — the same shape every other recovery path here uses.
+	recoveryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	approval, err := s.repo.GetApproval(recoveryCtx, updated.GetApprovalId())
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	run, err := s.repo.GetRun(recoveryCtx, approval.RunID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	// A run this stream no longer owns is not this stream's to fence: some
+	// other attempt is answering for it now.
+	if run.WorkerID != workerID {
+		return nil
+	}
+	if s.ownershipProven(workerID, owner, run.RunID, run.ExecutionAttemptID) {
+		return nil
+	}
+	return s.fenceRunOwnership(run.RunID, workerID, run.ExecutionAttemptID)
+}
+
+// ownershipProven reports whether this worker still demonstrably holds the
+// named attempt: it is the current registration, it has not closed, and its
+// lease has not lapsed.
+func (s *Server) ownershipProven(workerID string, owner *worker, runID string, attemptID string) bool {
+	if owner == nil || workerID == "" || runID == "" {
+		return false
+	}
+	s.mu.Lock()
+	current := s.workers[workerID]
+	s.mu.Unlock()
+	if current != owner {
+		return false
+	}
+	return owner.hasLiveAssignmentAttempt(runID, attemptID, time.Now().UTC(), s.dispatch.LeaseDuration)
+}
+
+// fenceRunOwnership is the one ownership-loss transition every caller here
+// shares: an active run whose worker can no longer be reached moves to
+// recovering, one version forward, with its state projection.
+//
+// It runs on its own short-lived context because every caller reaches it
+// exactly when something has already gone wrong — a send failed, a stream is
+// closing — and the context those callers hold is often the one that just died.
+//
+// Losing the guarded transition is not an error. It means another writer owns
+// this run now, which is the fence working rather than failing.
+func (s *Server) fenceRunOwnership(runID string, workerID string, attemptID string) error {
+	if runID == "" || workerID == "" || attemptID == "" {
+		return nil
+	}
+	fenceCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	state, err := s.repo.GetRunState(fenceCtx, runID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	if !isActiveRunStatus(state.Lifecycle) {
+		return nil
+	}
+	result, err := s.repo.FenceRunOwnership(fenceCtx, repository.FenceRunOwnershipInput{
+		RunID:                runID,
+		ExpectedStateVersion: state.StateVersion,
+		WorkerID:             workerID,
+		AssignmentAttemptID:  attemptID,
+	})
+	if err != nil {
+		if errors.Is(err, repository.ErrRunTransitionConflict) {
+			return nil
+		}
+		return err
+	}
+	for _, event := range result.Events {
+		s.publishEvent(event)
+	}
+	return nil
+}
+
+// resumeApprovedRun commits one approval resume, or refuses it.
+//
+// It writes nothing but the transition itself. A refusal deliberately does not
+// fence: the Ready handler's job is to decide whether this exact trigger may
+// move the run, and a stream that asked for something it cannot have is fenced
+// by its own teardown, under the cause that is actually true — lost ownership,
+// not a resume that happened.
+//
+// The worker ID is the server-authenticated one from the stream rather than
+// anything the message carried, so a worker cannot name somebody else.
+func (s *Server) resumeApprovedRun(
+	ctx context.Context,
+	ready *turingv1.RuntimeApprovalResumeReady,
+	workerID string,
+	connectedWorker *worker,
+) (*turingv1.RuntimeApprovalResumeAccepted, error) {
+	if ready == nil || ready.GetRunId() == "" || ready.GetApprovalId() == "" ||
+		ready.GetAssignmentAttemptId() == "" || ready.GetExpectedStateVersion() < 1 {
+		return nil, status.Error(codes.FailedPrecondition, "approval resume is incomplete")
+	}
+	if !s.ownershipProven(workerID, connectedWorker, ready.GetRunId(), ready.GetAssignmentAttemptId()) {
+		return nil, status.Error(codes.FailedPrecondition, "approval resume does not name a live owned assignment")
+	}
+	result, err := s.repo.ResumeApprovedRun(ctx, repository.ResumeApprovedRunInput{
+		RunID:                ready.GetRunId(),
+		ApprovalID:           ready.GetApprovalId(),
+		WorkerID:             workerID,
+		AssignmentAttemptID:  ready.GetAssignmentAttemptId(),
+		ExpectedStateVersion: ready.GetExpectedStateVersion(),
+	})
+	if err != nil {
+		if errors.Is(err, repository.ErrRunTransitionConflict) ||
+			errors.Is(err, repository.ErrRunTransitionUnsupported) ||
+			errors.Is(err, repository.ErrRunStateVersionInvalid) ||
+			errors.Is(err, repository.ErrRunStateVersionExhausted) ||
+			errors.Is(err, sql.ErrNoRows) {
+			return nil, status.Error(codes.FailedPrecondition, "approval resume was fenced")
+		}
+		return nil, err
+	}
+	for _, event := range result.Events {
+		s.publishEvent(event)
+	}
+	// Reconstructed from what the transition durably holds, so a replay of the
+	// same Ready produces the identical acceptance rather than a second one.
+	return &turingv1.RuntimeApprovalResumeAccepted{
+		RunId:               ready.GetRunId(),
+		ApprovalId:          ready.GetApprovalId(),
+		StateVersion:        result.State.StateVersion,
+		AssignmentAttemptId: ready.GetAssignmentAttemptId(),
+	}, nil
+}
+
+// deliverApprovalResumeAcceptance hands the worker the acceptance the commit
+// already made.
+//
+// The row cannot go back. Waiting-approval was left the moment the transition
+// committed, and claiming it again would tell every reader the user's decision
+// is still outstanding. So a failed delivery takes the ownership fence instead,
+// and the stream fails with it.
+func (s *Server) deliverApprovalResumeAcceptance(
+	ctx context.Context,
+	stream turingv1.RuntimeService_ConnectWorkerServer,
+	accepted *turingv1.RuntimeApprovalResumeAccepted,
+	workerID string,
+	connectedWorker *worker,
+) error {
+	sendCtx, cancel := withDefaultTimeout(ctx, commandSendTimeout)
+	defer cancel()
+	err := connectedWorker.commandSender(stream).send(sendCtx, &turingv1.RuntimeCommand{
+		Command: &turingv1.RuntimeCommand_ApprovalResumeAccepted{ApprovalResumeAccepted: accepted},
+	})
+	if err == nil {
+		return nil
+	}
+	return errors.Join(err, s.fenceRunOwnership(accepted.GetRunId(), workerID, accepted.GetAssignmentAttemptId()))
 }
 
 func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService_ConnectWorkerServer, queued workerCommand, connectedWorker *worker, workerID string) error {

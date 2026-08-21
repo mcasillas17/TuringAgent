@@ -57,9 +57,12 @@ func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE: openAIProvider,
 	}
 
-	toolRunner := &tools.Runner{WaitApproval: func(ctx context.Context, approvalID string) (string, error) {
-		return client.WaitForApprovalToken(ctx, approvalID, 10*time.Millisecond, cfg.approvalTimeout())
-	}}
+	toolRunner := &tools.Runner{
+		WaitApproval: func(ctx context.Context, approvalID string) (string, error) {
+			return client.WaitForApprovalToken(ctx, approvalID, 10*time.Millisecond, cfg.approvalTimeout())
+		},
+		ApprovalWaitTimeout: cfg.approvalTimeout(),
+	}
 	toolset := &agent.GeneralAssistantTools{
 		SystemMCP:          mcp.NewClient(cfg.MCPSystemBaseURL, cfg.MCPSystemToken, http.DefaultClient),
 		FilesMCP:           mcp.NewClient(cfg.MCPFilesBaseURL, cfg.MCPFilesToken, http.DefaultClient),

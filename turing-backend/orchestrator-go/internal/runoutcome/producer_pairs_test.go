@@ -55,8 +55,9 @@ func runtimeProducerPairs() map[producerPair]string {
 		{OriginToolGuard, "tool_result_limit_exceeded"}:       "per-run tool result budget",
 
 		// internal/worker.
-		{OriginDispatch, "worker_busy"}:        "worker at capacity",
-		{OriginWorkerRuntime, "runtime_error"}: "executor error",
+		{OriginDispatch, "worker_busy"}:                       "worker at capacity",
+		{OriginWorkerRuntime, "runtime_error"}:                "executor error",
+		{OriginApprovalTransport, "approval_delivery_failed"}: "approval decision that never reached its paused run",
 	}
 }
 

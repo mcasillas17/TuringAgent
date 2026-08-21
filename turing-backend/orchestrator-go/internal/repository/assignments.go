@@ -183,14 +183,32 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 		}
 		return AssignmentReconciliation{Cleared: true}, nil
 	case lifecycleWaitingApproval:
-		reconciliation, err := reconcileWaitingApprovalTx(ctx, tx, assignment.RunID, sessionID, traceID, !staleRecovery && active == 1)
+		// Waiting-approval now covers two situations that must not be answered
+		// the same way.
+		//
+		// An undecided approval means the decision can never be delivered, and
+		// that is a transport failure with nothing else to it. A decision that
+		// was made and authorized but never resumed is the opposite: the token
+		// exists, the approved call may already have run, and nothing here can
+		// prove it did not. That uncertainty belongs on exactly the path a
+		// stale approved authorization has always taken — which is the running
+		// branch below, because that is where this state used to live before a
+		// resume became a separate, provable step.
+		authorized, err := hasAuthorizedApprovalTx(ctx, tx, assignment.RunID)
 		if err != nil {
 			return AssignmentReconciliation{}, err
 		}
-		if err := tx.Commit(); err != nil {
-			return AssignmentReconciliation{}, err
+		if !authorized {
+			reconciliation, err := reconcileWaitingApprovalTx(ctx, tx, assignment.RunID, sessionID, traceID, !staleRecovery && active == 1)
+			if err != nil {
+				return AssignmentReconciliation{}, err
+			}
+			if err := tx.Commit(); err != nil {
+				return AssignmentReconciliation{}, err
+			}
+			return reconciliation, nil
 		}
-		return reconciliation, nil
+		fallthrough
 	case lifecycleRunning, lifecycleRecovering:
 		// Recovering shares this branch because it IS this branch's state: a
 		// run whose worker ownership is already uncertain still has to be
@@ -542,6 +560,19 @@ func hasPendingApprovalTx(ctx context.Context, tx *sql.Tx, runID string) (bool, 
 		return false, err
 	}
 	return pending > 0, nil
+}
+
+// hasAuthorizedApprovalTx reports whether a run holds an approval whose token
+// was minted — approved, or already consumed by the tool server. Either way the
+// approved call may have run, which is what separates it from an approval
+// nobody has decided yet.
+func hasAuthorizedApprovalTx(ctx context.Context, tx *sql.Tx, runID string) (bool, error) {
+	var authorized int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM approvals WHERE run_id = ? AND status IN ('approved', 'consumed')`, runID).Scan(&authorized); err != nil {
+		return false, err
+	}
+	return authorized > 0, nil
 }
 
 func requeueAssignmentTx(ctx context.Context, tx *sql.Tx, runID, jobID, attemptID string, incrementAttempt bool) (RunState, []Event, error) {

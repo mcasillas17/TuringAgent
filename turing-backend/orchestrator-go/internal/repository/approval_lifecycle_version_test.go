@@ -113,8 +113,12 @@ func TestApprovalRequestCommitsOneVersionAndOneProjection(t *testing.T) {
 }
 
 // TestApprovalDecisionCommitsOneVersionAndOneProjection pins the other half.
-// A user said yes, so the run resumes: one more version, and approval.approved
-// carrying it.
+//
+// A user said yes, and that is not the same as the run resuming. The decision
+// is durable and its token exists, but the worker holding the paused attempt
+// has not proven anything yet, so the row stays exactly where it was: same
+// lifecycle, same version, and one approval.approved carrying that state rather
+// than a resumption nobody committed.
 func TestApprovalDecisionCommitsOneVersionAndOneProjection(t *testing.T) {
 	repo := New(openTestDB(t))
 	ctx := context.Background()
@@ -138,18 +142,12 @@ func TestApprovalDecisionCommitsOneVersionAndOneProjection(t *testing.T) {
 		t.Fatal("the decision reported no change")
 	}
 
-	resumed, err := repo.GetRunState(ctx, enqueued.RunID)
+	authorized, err := repo.GetRunState(ctx, enqueued.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resumed.Lifecycle != lifecycleRunning || resumed.OutcomeReason != "none" {
-		t.Fatalf("state = %s/%s, want running/none", resumed.Lifecycle, resumed.OutcomeReason)
-	}
-	if resumed.StateVersion != waiting.StateVersion+1 {
-		t.Fatalf("version = %d, want exactly one increment past %d", resumed.StateVersion, waiting.StateVersion)
-	}
-	if resumed.FinishedAt.Valid || resumed.FinishedAt.String != "" {
-		t.Fatalf("a resumed run carries a finish time: %+v", resumed.FinishedAt)
+	if authorized != waiting {
+		t.Fatalf("the decision moved the run: %+v, want %+v", authorized, waiting)
 	}
 	if after := countRunEvents(t, repo, enqueued.RunID); after != events+1 {
 		t.Fatalf("the approval decision appended %d events, want exactly 1", after-events)
@@ -157,14 +155,59 @@ func TestApprovalDecisionCommitsOneVersionAndOneProjection(t *testing.T) {
 	if decided.ApprovalEvent.Type != "approval.approved" {
 		t.Fatalf("decision event = %q, want approval.approved", decided.ApprovalEvent.Type)
 	}
-	assertSnapshotMatchesState(t, decodeRunStateSnapshot(t, decided.ApprovalEvent), resumed)
-	assertDurableSnapshot(t, repo, decided.ApprovalEvent, resumed)
+	var stateChangedAfterDecision int
+	if err := repo.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM events WHERE run_id = ? AND type = ?`,
+		enqueued.RunID, runStateChangedEventType).Scan(&stateChangedAfterDecision); err != nil {
+		t.Fatal(err)
+	}
+	if stateChangedAfterDecision != 0 {
+		t.Fatalf("the approval decision appended %d %s events", stateChangedAfterDecision, runStateChangedEventType)
+	}
+	assertSnapshotMatchesState(t, decodeRunStateSnapshot(t, decided.ApprovalEvent), waiting)
+	assertDurableSnapshot(t, repo, decided.ApprovalEvent, waiting)
+
+	// Only the worker's proven resume moves it, and then by exactly one version.
+	resumed, err := repo.ResumeApprovedRun(ctx, ResumeApprovedRunInput{
+		RunID: enqueued.RunID, ApprovalID: approval.ApprovalID, WorkerID: "worker-approval-decision",
+		AssignmentAttemptID:  approvalPairAttemptID(t, repo, enqueued.RunID),
+		ExpectedStateVersion: waiting.StateVersion,
+	})
+	if err != nil {
+		t.Fatalf("ResumeApprovedRun: %v", err)
+	}
+	if resumed.State.Lifecycle != lifecycleRunning || resumed.State.OutcomeReason != "none" {
+		t.Fatalf("state = %s/%s, want running/none", resumed.State.Lifecycle, resumed.State.OutcomeReason)
+	}
+	if resumed.State.StateVersion != waiting.StateVersion+1 {
+		t.Fatalf("version = %d, want exactly one increment past %d", resumed.State.StateVersion, waiting.StateVersion)
+	}
+	if resumed.State.FinishedAt.Valid || resumed.State.FinishedAt.String != "" {
+		t.Fatalf("a resumed run carries a finish time: %+v", resumed.State.FinishedAt)
+	}
+	if len(resumed.Events) != 1 {
+		t.Fatalf("the resume appended %d events, want exactly 1", len(resumed.Events))
+	}
+	assertSnapshotMatchesState(t, decodeRunStateSnapshot(t, resumed.Events[0]), resumed.State)
+	assertDurableSnapshot(t, repo, resumed.Events[0], resumed.State)
+}
+
+// approvalPairAttemptID reads the attempt the fixture's worker actually holds,
+// so a resume proves ownership rather than asserting it.
+func approvalPairAttemptID(t *testing.T, repo *Repository, runID string) string {
+	t.Helper()
+	run, err := repo.GetRun(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	return run.ExecutionAttemptID
 }
 
 // TestSecondApprovalDecisionOnAResumedRunStillProjectsIt covers the case a run
-// with two pending authorizations creates. The first decision resumes the run,
-// so the second one arrives at a run that is already running: its approval row
-// really does change, but its lifecycle does not.
+// with two pending authorizations creates. The first decision is answered and
+// the worker's resume commits running, so the second decision arrives at a run
+// that is already running: its approval row really does change, but its
+// lifecycle does not.
 //
 // The decision still has to be announced. Without an event the approval stays
 // pending in every client that is watching, and the user is asked to authorize
@@ -210,12 +253,17 @@ func TestSecondApprovalDecisionOnAResumedRunStillProjectsIt(t *testing.T) {
 	if _, err := repo.ApproveApprovalWithEvent(ctx, first.ApprovalID, "approval-token-1", sql.NullString{}, now()); err != nil {
 		t.Fatalf("first ApproveApprovalWithEvent: %v", err)
 	}
-	resumed, err := repo.GetRunState(ctx, enqueued.RunID)
+	resumption, err := repo.ResumeApprovedRun(ctx, ResumeApprovedRunInput{
+		RunID: enqueued.RunID, ApprovalID: first.ApprovalID, WorkerID: "worker-two-approvals",
+		AssignmentAttemptID:  approvalPairAttemptID(t, repo, enqueued.RunID),
+		ExpectedStateVersion: waiting.StateVersion,
+	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("ResumeApprovedRun: %v", err)
 	}
+	resumed := resumption.State
 	if resumed.Lifecycle != lifecycleRunning {
-		t.Fatalf("state after the first decision = %q, want running", resumed.Lifecycle)
+		t.Fatalf("state after the first resume = %q, want running", resumed.Lifecycle)
 	}
 	events := countRunEvents(t, repo, enqueued.RunID)
 
@@ -249,8 +297,8 @@ func TestSecondApprovalDecisionOnAResumedRunStillProjectsIt(t *testing.T) {
 		enqueued.RunID, runStateChangedEventType).Scan(&stateChanged); err != nil {
 		t.Fatal(err)
 	}
-	if stateChanged != 0 {
-		t.Fatalf("the second decision appended %d redundant %s events", stateChanged, runStateChangedEventType)
+	if stateChanged != 1 {
+		t.Fatalf("run has %d %s events, want exactly the resume's", stateChanged, runStateChangedEventType)
 	}
 	// The projection is the canonical state as it stands, so a client that
 	// reopens on this event sees the run it is actually looking at.

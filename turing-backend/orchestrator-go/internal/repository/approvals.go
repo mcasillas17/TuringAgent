@@ -204,6 +204,49 @@ func awaitApprovalTransitionTx(ctx context.Context, tx *sql.Tx, runID string, ap
 	return applyRunTransitionTx(ctx, tx, transition, nil)
 }
 
+// ResumeApprovedRunInput is the trigger identity a worker must prove to move a
+// run out of waiting-approval.
+//
+// Every field is part of that identity rather than a hint: the run the resume
+// is about, the approval the decision belongs to, the worker the orchestrator
+// authenticated, the assignment attempt that still owns the run, and the
+// version the worker computed its readiness against. A resume missing any of
+// them could be a fenced predecessor's, and a fenced predecessor resuming a run
+// somebody else now owns is the exact failure this transition exists to refuse.
+type ResumeApprovedRunInput struct {
+	RunID                string
+	ApprovalID           string
+	WorkerID             string
+	AssignmentAttemptID  string
+	ExpectedStateVersion int64
+}
+
+// ResumeApprovedRun returns a waiting-approval run to running.
+//
+// Persisting a decision, minting its token, or delivering it to a worker does
+// not do this: none of them is the worker saying it has restored the paused
+// attempt and is ready to act. This is that statement, and it is guarded like
+// every other lifecycle change — one version forward, from waiting-approval
+// only, for the exact worker and attempt the row still records.
+//
+// A repeat of the identical resume is the write-free duplicate the shared core
+// already recognizes, which is what lets a worker that lost the acceptance ask
+// again and be told the same thing rather than fenced.
+func (r *Repository) ResumeApprovedRun(ctx context.Context, input ResumeApprovedRunInput) (RunTransitionResult, error) {
+	return r.runInTransition(ctx, runTransition{
+		runID:           input.RunID,
+		expectedVersion: input.ExpectedStateVersion,
+		allowedFrom:     []string{lifecycleWaitingApproval},
+		to:              lifecycleRunning,
+		reason:          runoutcome.ReasonNone,
+		identity: runTransitionIdentity{
+			workerID:            input.WorkerID,
+			assignmentAttemptID: input.AssignmentAttemptID,
+			approvalID:          input.ApprovalID,
+		},
+	}, nil)
+}
+
 func (r *Repository) GetApproval(ctx context.Context, approvalID string) (ApprovalRecord, error) {
 	return approvalByID(ctx, r.db, approvalID)
 }
@@ -274,46 +317,35 @@ func (r *Repository) ApproveApprovalWithEvent(ctx context.Context, approvalID st
 	if err != nil {
 		return ApprovalTerminalization{}, err
 	}
-	var traceID string
-	if err := tx.QueryRowContext(ctx, `SELECT trace_id FROM agent_runs WHERE id = ?`, record.RunID).Scan(&traceID); err != nil {
-		return ApprovalTerminalization{}, err
-	}
-	// approval.approved IS the lifecycle event for waiting approval -> running.
-	// The approval identity is part of the transition identity, so a decision
-	// on a different approval cannot resume this run.
-	transition, err := applyRunTransitionTx(ctx, tx, runTransition{
-		runID:            record.RunID,
-		expectedVersion:  unresolvedStateVersion,
-		transactionLocal: true,
-		allowedFrom:      []string{lifecycleWaitingApproval},
-		to:               lifecycleRunning,
-		reason:           runoutcome.ReasonNone,
-		identity:         runTransitionIdentity{approvalID: approvalID},
-		eventType:        "approval.approved",
-		eventPayload:     approvalLifecyclePayload(record, traceID, "approval.approved"),
-	}, nil)
+	// Approving records a decision; it does not resume the run.
+	//
+	// Persisting the approval and minting its token are both things the
+	// orchestrator does to itself, and the worker they are for may not even be
+	// reachable. The row leaves waiting-approval only when that worker proves
+	// it restored the paused attempt and the guarded resume commits — see
+	// ResumeApprovedRun. Moving it here used to mean a run could report itself
+	// running while the only process that could act on the approval had
+	// already gone.
+	//
+	// The decision still has to be announced inside this transaction, or every
+	// client goes on asking the user to authorize something they already
+	// authorized. It carries the run state as it stands, so the projection can
+	// never disagree with the row it describes.
+	row, err := readRunRow(ctx, tx, record.RunID)
 	if err != nil {
-		if errors.Is(err, ErrRunTransitionConflict) {
-			return ApprovalTerminalization{}, errors.New("run is not waiting for approval")
-		}
 		return ApprovalTerminalization{}, err
 	}
-	var event Event
-	if len(transition.Events) > 0 {
-		event = transition.Events[0]
-	} else {
-		// The run is already running, because an earlier decision on another
-		// pending approval resumed it. This decision changed an approval and
-		// not the lifecycle, so the guarded transition committed nothing — but
-		// the decision still has to be announced, or the approval stays pending
-		// in every client watching and the user is asked to authorize something
-		// they already authorized. It is appended inside this same transaction,
-		// carrying the run state as it stands, so the projection can never
-		// disagree with the row it describes.
-		event, err = appendApprovalRunStateEventTx(ctx, tx, record, "approval.approved", transition.State, decidedAt)
-		if err != nil {
-			return ApprovalTerminalization{}, err
-		}
+	// A decision may only be recorded for a run that could still act on it.
+	// Waiting-approval is the ordinary case; running covers a run an earlier
+	// decision already resumed while it still held this second authorization.
+	// Anything else — recovering, queued, or terminal — has no attempt that
+	// could make the call the user is being asked to authorize.
+	if row.lifecycle != lifecycleWaitingApproval && row.lifecycle != lifecycleRunning {
+		return ApprovalTerminalization{}, errors.New("run is not waiting for approval")
+	}
+	event, err := appendApprovalRunStateEventTx(ctx, tx, record, "approval.approved", row.state(), decidedAt)
+	if err != nil {
+		return ApprovalTerminalization{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return ApprovalTerminalization{}, err

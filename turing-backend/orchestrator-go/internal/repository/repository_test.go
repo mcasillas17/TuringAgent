@@ -952,7 +952,10 @@ func TestApprovalLifecycleRecordsTokenAndUpdatesRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != "running" {
+	// The decision is recorded and its token minted, and neither of those is
+	// the worker proving it can act on them. The run leaves waiting-approval
+	// only when the resume commits.
+	if run.Status != "waiting_approval" {
 		t.Fatalf("run status = %q", run.Status)
 	}
 	var approvalJTI, approvalToken string

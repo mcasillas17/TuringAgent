@@ -223,7 +223,8 @@ func TestExecuteEnforcesAggregateSuccessfulToolResultLimit(t *testing.T) {
 				PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 					return approvalToolCall(beacon), nil
 				},
-				WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+				WaitApproval:   func(context.Context, string) (string, error) { return "token", nil },
+				ResumeApproved: allowAgentResume,
 			}
 			assistant := NewGeneralAssistant(
 				map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
@@ -896,7 +897,8 @@ func TestExecuteStopsAfterUncertainMCPCallFailure(t *testing.T) {
 			beacons = append(beacons, beacon)
 			return approvalToolCall(beacon), nil
 		},
-		WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+		WaitApproval:   func(context.Context, string) (string, error) { return "token", nil },
+		ResumeApproved: allowAgentResume,
 	}
 	provider := &queuedProvider{responses: [][]llm.StreamEvent{
 		{{Type: "tool_call", ToolCalls: []llm.ToolCall{{ID: "provider_call", Name: "system.write"}}}},
@@ -1093,7 +1095,8 @@ func TestExecuteStopsOnApprovalWaitFailures(t *testing.T) {
 					beacons = append(beacons, beacon)
 					return approvalToolCall(beacon), nil
 				},
-				WaitApproval: test.wait,
+				WaitApproval:   test.wait,
+				ResumeApproved: allowAgentResume,
 			}
 			provider := &queuedProvider{responses: [][]llm.StreamEvent{
 				{{Type: "tool_call", ToolCalls: []llm.ToolCall{{ID: "provider_call", Name: "system.write"}}}},
@@ -1369,7 +1372,7 @@ func TestExecuteReturnsCommittedSideEffectErrorWithoutModelRetry(t *testing.T) {
 			ApprovalId: "approval_1",
 			ToolCallId: beacon.GetToolCallId(),
 		}, nil
-	}, WaitApproval: func(context.Context, string) (string, error) { return "token", nil }}
+	}, WaitApproval: func(context.Context, string) (string, error) { return "token", nil }, ResumeApproved: allowAgentResume}
 	provider := &queuedProvider{responses: [][]llm.StreamEvent{
 		{{Type: "tool_call", ToolCalls: []llm.ToolCall{{ID: "provider_call", Name: "system.write"}}}},
 		{{Type: "delta", Text: "must not run"}},
@@ -2461,7 +2464,8 @@ func TestExecuteMakesTypedTransientProviderFailureNonRetryableAfterSideEffect(t 
 		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 			return approvalToolCall(beacon), nil
 		},
-		WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+		WaitApproval:   func(context.Context, string) (string, error) { return "token", nil },
+		ResumeApproved: allowAgentResume,
 	}
 	assistant := NewGeneralAssistant(
 		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
@@ -2527,6 +2531,7 @@ func TestExecuteMakesLaterModelFailuresNonRetryableOnlyAfterApprovalGatedSuccess
 					return approvalToolCall(beacon), nil
 				}
 				runner.WaitApproval = func(context.Context, string) (string, error) { return "token", nil }
+				runner.ResumeApproved = allowAgentResume
 			}
 			assistant := NewGeneralAssistant(
 				map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
@@ -2579,7 +2584,8 @@ func TestExecuteModelTimeoutIsNonRetryableAfterApprovalGatedSuccess(t *testing.T
 		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 			return approvalToolCall(beacon), nil
 		},
-		WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+		WaitApproval:   func(context.Context, string) (string, error) { return "token", nil },
+		ResumeApproved: allowAgentResume,
 	}
 	assistant := NewGeneralAssistant(
 		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
@@ -3930,7 +3936,8 @@ func TestProviderStreamClosedWithoutTerminalEventIsNotRetryableAfterSideEffect(t
 		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 			return approvalToolCall(beacon), nil
 		},
-		WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+		WaitApproval:   func(context.Context, string) (string, error) { return "token", nil },
+		ResumeApproved: allowAgentResume,
 	}
 	assistant := NewGeneralAssistant(
 		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},
@@ -4049,3 +4056,8 @@ func (p *silentFinalTurnLoopingProvider) StreamChat(context.Context, llm.ChatReq
 	close(out)
 	return out, nil
 }
+
+// allowAgentResume stands for an orchestrator that accepted the resume. The
+// handshake itself is covered in the worker and tool runner; these tests are
+// about what the assistant does once the approved call is permitted to run.
+func allowAgentResume(context.Context, tools.ApprovalResume) error { return nil }

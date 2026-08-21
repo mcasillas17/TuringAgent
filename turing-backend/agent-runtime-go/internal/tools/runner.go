@@ -18,9 +18,34 @@ type MCPClient interface {
 }
 
 type Runner struct {
-	PostBeacon       func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error)
-	WaitApproval     func(context.Context, string) (string, error)
-	MetadataFetchers []func(context.Context) error
+	PostBeacon   func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error)
+	WaitApproval func(context.Context, string) (string, error)
+	// ResumeApproved completes the lifecycle handshake for an approved call.
+	//
+	// It is separate from WaitApproval because the two answer different
+	// questions. WaitApproval answers "did someone authorize this?", which is
+	// about the approval. ResumeApproved answers "is this run durably running
+	// again, under this worker, right now?", which is about the run — and only
+	// that second answer makes it safe to commit a side effect. A runner with
+	// no way to ask it fails the call rather than proceeding on the first.
+	ResumeApproved func(context.Context, ApprovalResume) error
+	// ApprovalWaitTimeout is the whole budget an approval-gated call may spend
+	// waiting: for the decision AND for the resume that follows it. One budget
+	// rather than two, because a second one would silently double how long a
+	// run can hold its worker slot after a user already waited out the first.
+	ApprovalWaitTimeout time.Duration
+	MetadataFetchers    []func(context.Context) error
+}
+
+// ApprovalResume identifies one resume handshake for the worker that has to
+// carry it out.
+//
+// Deadline is the instant the approval wait already had, not a fresh one. Zero
+// means no approval budget is configured and the run context is the only bound.
+type ApprovalResume struct {
+	RunID      string
+	ApprovalID string
+	Deadline   time.Time
 }
 
 type RunInput struct {
@@ -112,8 +137,13 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 			}
 			return RunOutcome{}, err
 		}
-		approvalToken, err = r.WaitApproval(ctx, decision.GetApprovalId())
+		// The budget is fixed here, before the decision is waited for, so the
+		// resume below inherits whatever is left of it rather than starting a
+		// second one of its own.
+		approvalCtx, cancelApproval := approvalWaitContext(ctx, r.ApprovalWaitTimeout)
+		approvalToken, err = r.WaitApproval(approvalCtx, decision.GetApprovalId())
 		if err != nil {
+			cancelApproval()
 			if cause := terminalApprovalCause(ctx); cause != nil {
 				return RunOutcome{}, terminalRunError{err: cause}
 			}
@@ -121,6 +151,24 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 				return RunOutcome{}, terminalRunError{err: err}
 			}
 			operationErr := ApprovalWaitError{err: err}
+			if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "approval_wait_failed"}, started); reportErr != nil {
+				return RunOutcome{}, ReportingFailureError{operationErr: operationErr, reportErr: reportErr}
+			}
+			return RunOutcome{}, operationErr
+		}
+		// Holding the token is not permission to act. The run itself has to be
+		// durably running again under this worker first, and nothing below this
+		// line may touch the tool until it is.
+		resumeErr := r.resumeApproved(approvalCtx, input, decision.GetApprovalId())
+		cancelApproval()
+		if resumeErr != nil {
+			if cause := terminalApprovalCause(ctx); cause != nil {
+				return RunOutcome{}, terminalRunError{err: cause}
+			}
+			if runWasTerminalized(resumeErr) {
+				return RunOutcome{}, terminalRunError{err: resumeErr}
+			}
+			operationErr := ApprovalWaitError{err: resumeErr}
 			if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "approval_wait_failed"}, started); reportErr != nil {
 				return RunOutcome{}, ReportingFailureError{operationErr: operationErr, reportErr: reportErr}
 			}
@@ -154,6 +202,41 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 		return outcome, ReportingFailureError{operationErr: errors.New("safe tool call completed"), reportErr: err}
 	}
 	return outcome, nil
+}
+
+// resumeApproved completes the lifecycle handshake between an approved decision
+// and the call it authorizes.
+//
+// It is required rather than optional. A runner that cannot ask whether the run
+// was durably resumed has no way to tell "approved and running under me" from
+// "approved, then handed to somebody else while I was waiting", and the second
+// one is exactly when committing the side effect does damage.
+func (r *Runner) resumeApproved(ctx context.Context, input RunInput, approvalID string) error {
+	if r.ResumeApproved == nil {
+		return errors.New("approval resume is not configured")
+	}
+	return r.ResumeApproved(ctx, ApprovalResume{
+		RunID:      input.RunID,
+		ApprovalID: approvalID,
+		Deadline:   contextDeadline(ctx),
+	})
+}
+
+// approvalWaitContext bounds the whole approval phase — decision and resume —
+// by one budget.
+func approvalWaitContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, timeout)
+}
+
+func contextDeadline(ctx context.Context) time.Time {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return time.Time{}
+	}
+	return deadline
 }
 
 func (r *Runner) fetchMetadata(ctx context.Context, timeout time.Duration) error {

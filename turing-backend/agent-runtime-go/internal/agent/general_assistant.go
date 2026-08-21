@@ -147,6 +147,17 @@ func (a *GeneralAssistant) SetToolBeaconPoster(post func(context.Context, *turin
 	a.tools.Runner.PostBeacon = post
 }
 
+// SetApprovalResumer installs the lifecycle handshake the runner must complete
+// between an approved decision and the call it authorizes. It is set on the
+// same terms as the beacon poster: the worker owns the stream, the runner owns
+// the call, and neither knows the other's half.
+func (a *GeneralAssistant) SetApprovalResumer(resume func(context.Context, tools.ApprovalResume) error) {
+	if a.tools == nil || a.tools.Runner == nil {
+		return
+	}
+	a.tools.Runner.ResumeApproved = resume
+}
+
 // DiscoveredTools is the snapshot the worker reports on connect. It reuses the
 // same discovery Execute serves from, so what the orchestrator registers and
 // what the agent will actually run can never diverge — reporting one tool set

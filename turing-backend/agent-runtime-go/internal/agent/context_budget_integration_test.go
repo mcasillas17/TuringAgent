@@ -810,7 +810,8 @@ func TestExecuteRejectsUnfitToolProtocolBeforeSideEffect(t *testing.T) {
 				PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 					return approvalToolCall(beacon), nil
 				},
-				WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+				WaitApproval:   func(context.Context, string) (string, error) { return "token", nil },
+				ResumeApproved: allowAgentResume,
 			},
 		},
 	)
@@ -878,7 +879,8 @@ func TestExecuteCompletesAfterEscapeHeavyResultAtPreflightBoundary(t *testing.T)
 				PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 					return approvalToolCall(beacon), nil
 				},
-				WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+				WaitApproval:   func(context.Context, string) (string, error) { return "token", nil },
+				ResumeApproved: allowAgentResume,
 			},
 		},
 	)
