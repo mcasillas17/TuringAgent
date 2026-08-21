@@ -68,10 +68,17 @@ consumes the magnitude.
 
 `SearchHit.snippet` is built by the server from the matched message's own
 `content` and from nothing else — never from a neighboring message, another
-session, or the query text. A message that already fits the bounds below is
-returned whole; anything longer is windowed around the first surviving match,
-so a phrase buried deep in a long body is still quoted rather than replaced by
-the body's opening.
+session, or the query text.
+
+The excerpt is selected by FTS5 first, before any of the post-processing bounds
+below apply. `snippet(messages_fts, …, 32)` returns a match-centered fragment of
+**at most 32 FTS5 tokens**, marking omitted edges with an ellipsis. That token
+bound is independent of the 200-scalar and 800-byte caps, so a snippet is *not*
+guaranteed to be the whole message even when the message is comfortably under
+both post-processing caps: a message of more than 32 tokens is cut by FTS5, and
+the leading or trailing edge of its source text can be missing. What the bound
+does guarantee is that a phrase buried deep in a long body is still quoted,
+rather than being replaced by the body's opening.
 
 The published snippet is single-line literal plain text:
 
@@ -79,19 +86,24 @@ The published snippet is single-line literal plain text:
   stripped inside the repository; message content that impersonates a marker
   fails the whole query rather than producing an ambiguous snippet. No
   server-added markup of any kind reaches the caller.
-- Any HTML-, Markdown-, or control-looking bytes in the stored message stay
-  literal source characters. Clients must render the snippet as plain text and
-  must never parse or interpret it.
+- Any HTML-, Markdown-, ANSI-, or otherwise control-sequence-*looking* text in
+  the stored message is left exactly as stored: those are ordinary printable
+  source characters and stay literal, so `<b>`, `**bold**`, and a written-out
+  `\x1b[31m` survive verbatim rather than being escaped, stripped, or
+  interpreted. The replacement rule applies only to *actual* control code
+  points — real C0, C1, and DEL characters — which become U+FFFD. Clients must
+  render the snippet as plain text and must never parse or interpret it.
 - Invalid UTF-8 becomes U+FFFD. Unicode whitespace and line separators collapse
   to single ASCII spaces and are trimmed, so the value is always one line.
   Remaining C0, C1, and DEL controls, and the explicit bidi formatting controls
   (U+061C, U+200E–U+200F, U+202A–U+202E, U+2066–U+2069), become U+FFFD, so a
   result cannot display something other than what was stored. Natural
   right-to-left letters and joiners are content and are preserved.
-- The result is bounded twice: at most 200 Unicode scalar values and at most
-  800 UTF-8 bytes, with any inserted ellipsis charged against both caps and
-  every cut landing on a scalar boundary. A single matched token larger than
-  the caps is truncated rather than allowed to grow the response.
+- After FTS5's 32-token fragment bound, the result is bounded twice more: at
+  most 200 Unicode scalar values and at most 800 UTF-8 bytes, with any inserted
+  ellipsis charged against both caps and every cut landing on a scalar
+  boundary. A single matched token larger than the caps is truncated rather
+  than allowed to grow the response.
 
 A hit whose score or snippet cannot be proven safe fails the entire query with
 an opaque `Internal` error; the server never emits a partial, defaulted, or

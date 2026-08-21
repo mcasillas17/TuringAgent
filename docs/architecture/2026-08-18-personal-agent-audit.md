@@ -516,11 +516,15 @@ concatenation. `SearchHit.score` is `-bm25(messages_fts)`, finite and
 non-negative, higher-is-better only within one query against one database
 snapshot, with equal scores broken deterministically by `message_id ASC`; it is
 not a probability, confidence, or cross-query metric. `SearchHit.snippet` is
-built only from the matched message's own content, windowed around the match
-whenever the body must be cut, and published as single-line literal plain text
+built only from the matched message's own content, selected by FTS5 as a
+match-centered fragment of at most 32 tokens — a bound independent of the
+post-processing caps, so a snippet may omit source edges even when the message
+fits those caps — and published as single-line literal plain text
 with no server-added markup, at
 most 200 Unicode scalars and 800 UTF-8 bytes, invalid UTF-8 repaired,
-whitespace collapsed, and C0/C1/DEL and explicit bidi controls replaced.
+whitespace collapsed, and actual C0/C1/DEL and explicit bidi controls replaced
+with U+FFFD while printable HTML-, Markdown-, ANSI-, or control-sequence-looking
+text stays literal.
 Per-query high-entropy markers are stripped inside the repository, and content
 that impersonates them fails the query closed rather than producing an
 ambiguous snippet. Both projections share one predicate, so `active` and
