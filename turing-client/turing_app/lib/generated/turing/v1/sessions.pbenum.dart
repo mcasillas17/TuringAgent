@@ -14,6 +14,34 @@ import 'dart:core' as $core;
 
 import 'package:protobuf/protobuf.dart' as $pb;
 
+class SessionListFilter extends $pb.ProtobufEnum {
+  static const SessionListFilter SESSION_LIST_FILTER_UNSPECIFIED =
+      SessionListFilter._(
+          0, _omitEnumNames ? '' : 'SESSION_LIST_FILTER_UNSPECIFIED');
+  static const SessionListFilter SESSION_LIST_FILTER_ACTIVE =
+      SessionListFilter._(
+          1, _omitEnumNames ? '' : 'SESSION_LIST_FILTER_ACTIVE');
+  static const SessionListFilter SESSION_LIST_FILTER_ARCHIVED =
+      SessionListFilter._(
+          2, _omitEnumNames ? '' : 'SESSION_LIST_FILTER_ARCHIVED');
+  static const SessionListFilter SESSION_LIST_FILTER_ALL =
+      SessionListFilter._(3, _omitEnumNames ? '' : 'SESSION_LIST_FILTER_ALL');
+
+  static const $core.List<SessionListFilter> values = <SessionListFilter>[
+    SESSION_LIST_FILTER_UNSPECIFIED,
+    SESSION_LIST_FILTER_ACTIVE,
+    SESSION_LIST_FILTER_ARCHIVED,
+    SESSION_LIST_FILTER_ALL,
+  ];
+
+  static final $core.List<SessionListFilter?> _byValue =
+      $pb.ProtobufEnum.$_initByValueList(values, 3);
+  static SessionListFilter? valueOf($core.int value) =>
+      value < 0 || value >= _byValue.length ? null : _byValue[value];
+
+  const SessionListFilter._(super.value, super.name);
+}
+
 class SessionDeletionState extends $pb.ProtobufEnum {
   static const SessionDeletionState SESSION_DELETION_STATE_UNSPECIFIED =
       SessionDeletionState._(

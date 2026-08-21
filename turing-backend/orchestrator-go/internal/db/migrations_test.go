@@ -198,6 +198,7 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 		"0013_internal_service_identities",
 		"0013_send_message_idempotency",
 		"0014_session_deletion_withdrawal",
+		"0015_session_lifecycle",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("applied migrations = %v, want %v", got, want)
@@ -376,8 +377,8 @@ func TestCurrentSchemaVersionUsesLatestEmbeddedMigrationPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "0014" {
-		t.Fatalf("CurrentSchemaVersion = %q, want 0014", got)
+	if got != "0015" {
+		t.Fatalf("CurrentSchemaVersion = %q, want 0015", got)
 	}
 }
 
@@ -672,6 +673,7 @@ func TestAuditReadMigrationNormalizesLegacyVariableWidthCreatedAt(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	defer database.Close()
 	names, err := migrationNames()
 	if err != nil {
@@ -726,6 +728,185 @@ func TestAuditReadMigrationNormalizesLegacyVariableWidthCreatedAt(t *testing.T) 
 	}
 	if !reflect.DeepEqual(gotCreatedAt, wantCreatedAt) {
 		t.Fatalf("normalized created_at = %v, want %v (fixed 9-digit fraction, matching repository.FormatTimestamp)", gotCreatedAt, wantCreatedAt)
+	}
+}
+
+func TestSessionLifecycleMigrationNormalizesTimestampsAndAddsIndexes(t *testing.T) {
+	ctx := context.Background()
+	database := databaseBeforeMigration(t, ctx, "0015_session_lifecycle.sql")
+
+	testCases := []struct {
+		id        string
+		createdAt string
+		updatedAt string
+		want      string
+	}{
+		{
+			id:        "canonical",
+			createdAt: "2026-08-20T04:00:00.000000001Z",
+			updatedAt: "2026-08-20T04:00:00.000000001Z",
+			want:      "2026-08-20T04:00:00.000000001Z",
+		},
+		{
+			id:        "trimmed",
+			createdAt: "2026-08-20T04:00:00.12Z",
+			updatedAt: "2026-08-20T04:00:00.12Z",
+			want:      "2026-08-20T04:00:00.120000000Z",
+		},
+		{
+			id:        "whole-second",
+			createdAt: "2026-08-20T04:00:00Z",
+			updatedAt: "2026-08-20T04:00:00Z",
+			want:      "2026-08-20T04:00:00.000000000Z",
+		},
+		{
+			id:        "offset",
+			createdAt: "2026-08-19T21:00:00-07:00",
+			updatedAt: "2026-08-19T21:00:00-07:00",
+			want:      "2026-08-20T04:00:00.000000000Z",
+		},
+	}
+	for _, testCase := range testCases {
+		if _, err := database.ExecContext(ctx, `
+			INSERT INTO sessions (id, status, created_at, updated_at)
+			VALUES (?, 'active', ?, ?)`,
+			testCase.id,
+			testCase.createdAt,
+			testCase.updatedAt,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 300; i++ {
+		id := fmt.Sprintf("batch-%03d", i)
+		if _, err := database.ExecContext(ctx, `
+			INSERT INTO sessions (id, status, created_at, updated_at)
+			VALUES (?, 'active', '2026-08-20T04:00:00Z', '2026-08-20T04:00:00Z')`,
+			id,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, testCase := range testCases {
+		var createdAt, updatedAt string
+		if err := database.QueryRowContext(ctx, `
+			SELECT created_at, updated_at FROM sessions WHERE id = ?`,
+			testCase.id,
+		).Scan(&createdAt, &updatedAt); err != nil {
+			t.Fatal(err)
+		}
+		if createdAt != testCase.want || updatedAt != testCase.want {
+			t.Fatalf(
+				"session %q timestamps = (%q, %q), want %q",
+				testCase.id,
+				createdAt,
+				updatedAt,
+				testCase.want,
+			)
+		}
+	}
+	assertIndexColumns(t, ctx, database, "idx_sessions_updated", []indexColumn{
+		{name: "updated_at", descending: true},
+		{name: "id", descending: true},
+	})
+	assertIndexColumns(t, ctx, database, "idx_sessions_status_updated", []indexColumn{
+		{name: "status"},
+		{name: "updated_at", descending: true},
+		{name: "id", descending: true},
+	})
+}
+
+func TestSessionLifecycleMigrationUpgradesDatabaseThatAppliedOldVersion(t *testing.T) {
+	ctx := context.Background()
+	database := databaseBeforeMigration(t, ctx, "0015_session_lifecycle.sql")
+	if _, err := database.ExecContext(ctx, `
+		DROP INDEX IF EXISTS idx_sessions_updated;
+		CREATE INDEX idx_sessions_updated
+			ON sessions(updated_at DESC, id DESC);
+		CREATE INDEX idx_sessions_status_updated
+			ON sessions(status, updated_at DESC, id DESC);
+		INSERT INTO schema_migrations (version, applied_at)
+			VALUES ('0014_session_lifecycle', datetime('now'));
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatalf("upgrade old session lifecycle migration: %v", err)
+	}
+	assertIndexColumns(t, ctx, database, "idx_sessions_updated", []indexColumn{
+		{name: "updated_at", descending: true},
+		{name: "id", descending: true},
+	})
+	assertIndexColumns(t, ctx, database, "idx_sessions_status_updated", []indexColumn{
+		{name: "status"},
+		{name: "updated_at", descending: true},
+		{name: "id", descending: true},
+	})
+}
+
+func TestSessionLifecycleMigrationRollsBackMalformedTimestamp(t *testing.T) {
+	ctx := context.Background()
+	database := databaseBeforeMigration(t, ctx, "0015_session_lifecycle.sql")
+	const original = "2026-08-20T04:00:00Z"
+	for i := 0; i < 256; i++ {
+		id := fmt.Sprintf("valid-%03d", i)
+		if _, err := database.ExecContext(ctx, `
+			INSERT INTO sessions (id, status, created_at, updated_at)
+			VALUES (?, 'active', ?, ?)`,
+			id,
+			original,
+			original,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO sessions (id, status, created_at, updated_at)
+		VALUES ('z-malformed', 'active', 'not-a-time', '2026-08-20T04:00:00Z')`,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ApplyMigrations(ctx, database); err == nil {
+		t.Fatal("ApplyMigrations accepted malformed session timestamp")
+	}
+
+	var createdAt, updatedAt string
+	if err := database.QueryRowContext(ctx, `
+		SELECT created_at, updated_at FROM sessions WHERE id = 'valid-000'`,
+	).Scan(&createdAt, &updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if createdAt != original || updatedAt != original {
+		t.Fatalf("valid row changed despite rollback: (%q, %q)", createdAt, updatedAt)
+	}
+	assertIndexColumns(t, ctx, database, "idx_sessions_updated", []indexColumn{
+		{name: "updated_at"},
+	})
+	var statusIndexExists int
+	if err := database.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sqlite_master
+		WHERE type = 'index' AND name = 'idx_sessions_status_updated'`,
+	).Scan(&statusIndexExists); err != nil {
+		t.Fatal(err)
+	}
+	if statusIndexExists != 0 {
+		t.Fatal("status index exists after failed migration")
+	}
+	var applied int
+	if err := database.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM schema_migrations WHERE version = '0015_session_lifecycle'`,
+	).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if applied != 0 {
+		t.Fatal("failed session lifecycle migration was recorded as applied")
 	}
 }
 
@@ -896,6 +1077,7 @@ func applyMigration(t *testing.T, ctx context.Context, database *DB, name string
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := database.ExecContext(ctx, string(sqlText)); err != nil {
 		t.Fatal(err)
 	}
@@ -906,11 +1088,63 @@ func applyMigration(t *testing.T, ctx context.Context, database *DB, name string
 	}
 }
 
+func databaseBeforeMigration(t *testing.T, ctx context.Context, target string) *DB {
+	t.Helper()
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	names, err := migrationNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if name == target {
+			return database
+		}
+		applyMigration(t, ctx, database, name)
+	}
+	t.Fatalf("migration %q not found", target)
+	return nil
+}
+
+type indexColumn struct {
+	name       string
+	descending bool
+}
+
+func assertIndexColumns(t *testing.T, ctx context.Context, database *DB, indexName string, want []indexColumn) {
+	t.Helper()
+	rows, err := database.QueryContext(ctx, `PRAGMA index_xinfo(`+indexName+`)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var got []indexColumn
+	for rows.Next() {
+		var seqno, cid, descending, key int
+		var name, collation sql.NullString
+		if err := rows.Scan(&seqno, &cid, &name, &descending, &collation, &key); err != nil {
+			t.Fatal(err)
+		}
+		if key == 1 {
+			got = append(got, indexColumn{name: name.String, descending: descending == 1})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("index %q columns = %#v, want %#v", indexName, got, want)
+	}
+}
+
 func insertTestSession(t *testing.T, ctx context.Context, database *DB, id string) {
 	t.Helper()
 	if _, err := database.ExecContext(ctx, `
 		INSERT INTO sessions (id, created_at, updated_at)
-		VALUES (?, datetime('now'), datetime('now'))`, id); err != nil {
+		VALUES (?, '2026-01-01T00:00:00.000000000Z', '2026-01-01T00:00:00.000000000Z')`, id); err != nil {
 		t.Fatal(err)
 	}
 }

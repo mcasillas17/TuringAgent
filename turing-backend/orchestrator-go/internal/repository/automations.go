@@ -496,14 +496,20 @@ func (r *Repository) ClaimDueAutomation(ctx context.Context, at time.Time, defau
 			AgentID: defaults.AgentID, ModelProvider: defaults.ModelProvider, Model: defaults.Model,
 		}
 		if sessionID.Valid {
-			resolved, err := resolveEnqueueRouteTx(ctx, tx, EnqueueUserMessageInput{
-				SessionID: sessionID.String, AgentID: defaults.AgentID,
-				ModelProvider: defaults.ModelProvider, Model: defaults.Model,
-			})
+			active, err := automationSessionActiveTx(ctx, tx, sessionID.String)
 			if err != nil {
 				return AutomationFire{}, false, err
 			}
-			requirements = resolved.requirements
+			if active {
+				resolved, err := resolveEnqueueRouteTx(ctx, tx, EnqueueUserMessageInput{
+					SessionID: sessionID.String, AgentID: defaults.AgentID,
+					ModelProvider: defaults.ModelProvider, Model: defaults.Model,
+				})
+				if err != nil {
+					return AutomationFire{}, false, err
+				}
+				requirements = resolved.requirements
+			}
 		}
 		routingErr := defaults.ValidateRouting(ctx, requirements)
 		if routingErr != nil {
@@ -630,13 +636,12 @@ func (r *Repository) ClaimDueAutomation(ctx context.Context, at time.Time, defau
 // makes a fresh one rather than resurrecting what was withdrawn.
 func automationSessionTx(ctx context.Context, tx *sql.Tx, automationID string, name string, existing sql.NullString) (string, error) {
 	if existing.Valid && existing.String != "" {
-		var found string
-		err := tx.QueryRowContext(ctx, `SELECT id FROM sessions WHERE id = ?`, existing.String).Scan(&found)
-		if err == nil {
-			return found, nil
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
+		active, err := automationSessionActiveTx(ctx, tx, existing.String)
+		if err != nil {
 			return "", err
+		}
+		if active {
+			return existing.String, nil
 		}
 	}
 	createdAt := now()
@@ -652,6 +657,18 @@ func automationSessionTx(ctx context.Context, tx *sql.Tx, automationID string, n
 		return "", err
 	}
 	return sessionID, nil
+}
+
+func automationSessionActiveTx(ctx context.Context, tx *sql.Tx, sessionID string) (bool, error) {
+	var active bool
+	err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM sessions
+			WHERE id = ? AND deletion_state = 'active'
+		)
+	`, sessionID).Scan(&active)
+	return active, err
 }
 
 // GetAutomationRunGrant reports what an unattended run was permitted to do.

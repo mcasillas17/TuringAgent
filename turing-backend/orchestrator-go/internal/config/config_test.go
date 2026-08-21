@@ -9,13 +9,7 @@ import (
 )
 
 func TestLoadFromEnvRequiresSecretsAndDefaultsPorts(t *testing.T) {
-	env := map[string]string{
-		"TURING_CLIENT_API_KEY":          "client-key",
-		"TURING_RUNTIME_TOKEN":           "runtime-token",
-		"TURING_APPROVAL_CONSUMER_TOKEN": "approval-consumer-token",
-		"MCP_FILES_ENABLED":              "true",
-		"TURING_APPROVAL_JWT_SECRET":     "approval-secret",
-	}
+	env := requiredEnv()
 	cfg, err := LoadFromMap(env)
 	if err != nil {
 		t.Fatalf("LoadFromMap returned error: %v", err)
@@ -29,14 +23,8 @@ func TestLoadFromEnvRequiresSecretsAndDefaultsPorts(t *testing.T) {
 }
 
 func TestLoadFromEnvRejectsInvalidInteger(t *testing.T) {
-	env := map[string]string{
-		"TURING_CLIENT_API_KEY":          "client-key",
-		"TURING_RUNTIME_TOKEN":           "runtime-token",
-		"TURING_APPROVAL_CONSUMER_TOKEN": "approval-consumer-token",
-		"MCP_FILES_ENABLED":              "true",
-		"TURING_APPROVAL_JWT_SECRET":     "approval-secret",
-		"ORCHESTRATOR_PUBLIC_PORT":       "abc",
-	}
+	env := requiredEnv()
+	env["ORCHESTRATOR_PUBLIC_PORT"] = "abc"
 
 	_, err := LoadFromMap(env)
 	if err == nil {
@@ -45,14 +33,8 @@ func TestLoadFromEnvRejectsInvalidInteger(t *testing.T) {
 }
 
 func TestLoadFromEnvUsesApprovalTTL(t *testing.T) {
-	env := map[string]string{
-		"TURING_CLIENT_API_KEY":          "client-key",
-		"TURING_RUNTIME_TOKEN":           "runtime-token",
-		"TURING_APPROVAL_CONSUMER_TOKEN": "approval-consumer-token",
-		"MCP_FILES_ENABLED":              "true",
-		"TURING_APPROVAL_JWT_SECRET":     "approval-secret",
-		"TURING_APPROVAL_TIMEOUT_MS":     "75000",
-	}
+	env := requiredEnv()
+	env["TURING_APPROVAL_TIMEOUT_MS"] = "75000"
 
 	cfg, err := LoadFromMap(env)
 	if err != nil {
@@ -64,13 +46,7 @@ func TestLoadFromEnvUsesApprovalTTL(t *testing.T) {
 }
 
 func TestLoadFromMapValidatesMaxConcurrentRunsWithinRuntimeBound(t *testing.T) {
-	base := map[string]string{
-		"TURING_CLIENT_API_KEY":          "client-key",
-		"TURING_RUNTIME_TOKEN":           "runtime-token",
-		"TURING_APPROVAL_CONSUMER_TOKEN": "approval-consumer-token",
-		"MCP_FILES_ENABLED":              "true",
-		"TURING_APPROVAL_JWT_SECRET":     "approval-secret",
-	}
+	base := requiredEnv()
 	for _, value := range []string{"0", "129", "2147483648"} {
 		t.Run(value, func(t *testing.T) {
 			env := make(map[string]string, len(base)+1)
@@ -148,6 +124,49 @@ func requiredEnv() map[string]string {
 		"TURING_APPROVAL_CONSUMER_TOKEN": "approval-consumer-token",
 		"MCP_FILES_ENABLED":              "true",
 		"TURING_APPROVAL_JWT_SECRET":     "approval-secret",
+		"TURING_CURSOR_HMAC_SECRET":      strings.Repeat("ab", 32),
+	}
+}
+
+func TestLoadFromMapRequiresCursorHMACSecret(t *testing.T) {
+	env := requiredEnv()
+	delete(env, "TURING_CURSOR_HMAC_SECRET")
+
+	_, err := LoadFromMap(env)
+	if err == nil || !strings.Contains(err.Error(), "TURING_CURSOR_HMAC_SECRET") {
+		t.Fatalf("LoadFromMap error = %v, want missing cursor secret", err)
+	}
+}
+
+func TestLoadFromMapValidatesCursorHMACSecret(t *testing.T) {
+	for _, value := range []string{
+		"not-hex",
+		strings.Repeat("a", 63),
+		strings.Repeat("A", 64),
+		strings.Repeat("ab", 33),
+	} {
+		t.Run(value, func(t *testing.T) {
+			env := requiredEnv()
+			env["TURING_CURSOR_HMAC_SECRET"] = value
+			_, err := LoadFromMap(env)
+			if err == nil || !strings.Contains(err.Error(), "TURING_CURSOR_HMAC_SECRET") {
+				t.Fatalf("LoadFromMap cursor secret %q error = %v", value, err)
+			}
+		})
+	}
+
+	env := requiredEnv()
+	env["TURING_CURSOR_HMAC_SECRET"] = strings.Repeat("ab", 32)
+	cfg, err := LoadFromMap(env)
+	if err != nil {
+		t.Fatalf("LoadFromMap valid cursor secret: %v", err)
+	}
+	var want [32]byte
+	for i := range want {
+		want[i] = 0xab
+	}
+	if cfg.CursorHMACKey != want {
+		t.Fatalf("CursorHMACKey = %x, want %x", cfg.CursorHMACKey, want)
 	}
 }
 
@@ -336,6 +355,7 @@ func baseIntegrationEnv(extra map[string]string) map[string]string {
 		"TURING_APPROVAL_CONSUMER_TOKEN": "approval-consumer-token",
 		"MCP_FILES_ENABLED":              "true",
 		"TURING_APPROVAL_JWT_SECRET":     "approval-secret",
+		"TURING_CURSOR_HMAC_SECRET":      strings.Repeat("ab", 32),
 	}
 	for key, value := range extra {
 		env[key] = value

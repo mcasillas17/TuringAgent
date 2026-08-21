@@ -29,6 +29,9 @@ const (
 	SessionService_GetConfig_FullMethodName                   = "/turing.v1.SessionService/GetConfig"
 	SessionService_ListAgents_FullMethodName                  = "/turing.v1.SessionService/ListAgents"
 	SessionService_ListTools_FullMethodName                   = "/turing.v1.SessionService/ListTools"
+	SessionService_RenameSession_FullMethodName               = "/turing.v1.SessionService/RenameSession"
+	SessionService_ArchiveSession_FullMethodName              = "/turing.v1.SessionService/ArchiveSession"
+	SessionService_RestoreSession_FullMethodName              = "/turing.v1.SessionService/RestoreSession"
 )
 
 // SessionServiceClient is the client API for SessionService service.
@@ -45,6 +48,9 @@ type SessionServiceClient interface {
 	GetConfig(ctx context.Context, in *GetConfigRequest, opts ...grpc.CallOption) (*GetConfigResponse, error)
 	ListAgents(ctx context.Context, in *ListAgentsRequest, opts ...grpc.CallOption) (*ListAgentsResponse, error)
 	ListTools(ctx context.Context, in *ListToolsRequest, opts ...grpc.CallOption) (*ListToolsResponse, error)
+	RenameSession(ctx context.Context, in *RenameSessionRequest, opts ...grpc.CallOption) (*RenameSessionResponse, error)
+	ArchiveSession(ctx context.Context, in *ArchiveSessionRequest, opts ...grpc.CallOption) (*ArchiveSessionResponse, error)
+	RestoreSession(ctx context.Context, in *RestoreSessionRequest, opts ...grpc.CallOption) (*RestoreSessionResponse, error)
 }
 
 type sessionServiceClient struct {
@@ -155,6 +161,36 @@ func (c *sessionServiceClient) ListTools(ctx context.Context, in *ListToolsReque
 	return out, nil
 }
 
+func (c *sessionServiceClient) RenameSession(ctx context.Context, in *RenameSessionRequest, opts ...grpc.CallOption) (*RenameSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenameSessionResponse)
+	err := c.cc.Invoke(ctx, SessionService_RenameSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sessionServiceClient) ArchiveSession(ctx context.Context, in *ArchiveSessionRequest, opts ...grpc.CallOption) (*ArchiveSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ArchiveSessionResponse)
+	err := c.cc.Invoke(ctx, SessionService_ArchiveSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sessionServiceClient) RestoreSession(ctx context.Context, in *RestoreSessionRequest, opts ...grpc.CallOption) (*RestoreSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RestoreSessionResponse)
+	err := c.cc.Invoke(ctx, SessionService_RestoreSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SessionServiceServer is the server API for SessionService service.
 // All implementations must embed UnimplementedSessionServiceServer
 // for forward compatibility.
@@ -169,6 +205,9 @@ type SessionServiceServer interface {
 	GetConfig(context.Context, *GetConfigRequest) (*GetConfigResponse, error)
 	ListAgents(context.Context, *ListAgentsRequest) (*ListAgentsResponse, error)
 	ListTools(context.Context, *ListToolsRequest) (*ListToolsResponse, error)
+	RenameSession(context.Context, *RenameSessionRequest) (*RenameSessionResponse, error)
+	ArchiveSession(context.Context, *ArchiveSessionRequest) (*ArchiveSessionResponse, error)
+	RestoreSession(context.Context, *RestoreSessionRequest) (*RestoreSessionResponse, error)
 	mustEmbedUnimplementedSessionServiceServer()
 }
 
@@ -208,6 +247,15 @@ func (UnimplementedSessionServiceServer) ListAgents(context.Context, *ListAgents
 }
 func (UnimplementedSessionServiceServer) ListTools(context.Context, *ListToolsRequest) (*ListToolsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListTools not implemented")
+}
+func (UnimplementedSessionServiceServer) RenameSession(context.Context, *RenameSessionRequest) (*RenameSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RenameSession not implemented")
+}
+func (UnimplementedSessionServiceServer) ArchiveSession(context.Context, *ArchiveSessionRequest) (*ArchiveSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ArchiveSession not implemented")
+}
+func (UnimplementedSessionServiceServer) RestoreSession(context.Context, *RestoreSessionRequest) (*RestoreSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RestoreSession not implemented")
 }
 func (UnimplementedSessionServiceServer) mustEmbedUnimplementedSessionServiceServer() {}
 func (UnimplementedSessionServiceServer) testEmbeddedByValue()                        {}
@@ -410,6 +458,60 @@ func _SessionService_ListTools_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SessionService_RenameSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenameSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SessionServiceServer).RenameSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SessionService_RenameSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SessionServiceServer).RenameSession(ctx, req.(*RenameSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SessionService_ArchiveSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ArchiveSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SessionServiceServer).ArchiveSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SessionService_ArchiveSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SessionServiceServer).ArchiveSession(ctx, req.(*ArchiveSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SessionService_RestoreSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RestoreSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SessionServiceServer).RestoreSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SessionService_RestoreSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SessionServiceServer).RestoreSession(ctx, req.(*RestoreSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SessionService_ServiceDesc is the grpc.ServiceDesc for SessionService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -456,6 +558,18 @@ var SessionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListTools",
 			Handler:    _SessionService_ListTools_Handler,
+		},
+		{
+			MethodName: "RenameSession",
+			Handler:    _SessionService_RenameSession_Handler,
+		},
+		{
+			MethodName: "ArchiveSession",
+			Handler:    _SessionService_ArchiveSession_Handler,
+		},
+		{
+			MethodName: "RestoreSession",
+			Handler:    _SessionService_RestoreSession_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

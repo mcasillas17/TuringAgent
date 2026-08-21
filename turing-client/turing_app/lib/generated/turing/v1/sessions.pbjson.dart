@@ -14,6 +14,23 @@ import 'dart:convert' as $convert;
 import 'dart:core' as $core;
 import 'dart:typed_data' as $typed_data;
 
+@$core.Deprecated('Use sessionListFilterDescriptor instead')
+const SessionListFilter$json = {
+  '1': 'SessionListFilter',
+  '2': [
+    {'1': 'SESSION_LIST_FILTER_UNSPECIFIED', '2': 0},
+    {'1': 'SESSION_LIST_FILTER_ACTIVE', '2': 1},
+    {'1': 'SESSION_LIST_FILTER_ARCHIVED', '2': 2},
+    {'1': 'SESSION_LIST_FILTER_ALL', '2': 3},
+  ],
+};
+
+/// Descriptor for `SessionListFilter`. Decode as a `google.protobuf.EnumDescriptorProto`.
+final $typed_data.Uint8List sessionListFilterDescriptor = $convert.base64Decode(
+    'ChFTZXNzaW9uTGlzdEZpbHRlchIjCh9TRVNTSU9OX0xJU1RfRklMVEVSX1VOU1BFQ0lGSUVEEA'
+    'ASHgoaU0VTU0lPTl9MSVNUX0ZJTFRFUl9BQ1RJVkUQARIgChxTRVNTSU9OX0xJU1RfRklMVEVS'
+    'X0FSQ0hJVkVEEAISGwoXU0VTU0lPTl9MSVNUX0ZJTFRFUl9BTEwQAw==');
+
 @$core.Deprecated('Use sessionDeletionStateDescriptor instead')
 const SessionDeletionState$json = {
   '1': 'SessionDeletionState',
@@ -112,13 +129,22 @@ const ListSessionsRequest$json = {
       '6': '.turing.v1.PageRequest',
       '10': 'page'
     },
+    {
+      '1': 'filter',
+      '3': 2,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.SessionListFilter',
+      '10': 'filter'
+    },
   ],
 };
 
 /// Descriptor for `ListSessionsRequest`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List listSessionsRequestDescriptor = $convert.base64Decode(
     'ChNMaXN0U2Vzc2lvbnNSZXF1ZXN0EioKBHBhZ2UYASABKAsyFi50dXJpbmcudjEuUGFnZVJlcX'
-    'Vlc3RSBHBhZ2U=');
+    'Vlc3RSBHBhZ2USNAoGZmlsdGVyGAIgASgOMhwudHVyaW5nLnYxLlNlc3Npb25MaXN0RmlsdGVy'
+    'UgZmaWx0ZXI=');
 
 @$core.Deprecated('Use listSessionsResponseDescriptor instead')
 const ListSessionsResponse$json = {
@@ -276,6 +302,106 @@ final $typed_data.Uint8List deleteSessionResponseDescriptor = $convert.base64Dec
     'ChVEZWxldGVTZXNzaW9uUmVzcG9uc2USHQoKc2Vzc2lvbl9pZBgBIAEoCVIJc2Vzc2lvbklkEj'
     '0KCGRlbGV0aW9uGAIgASgLMiEudHVyaW5nLnYxLlNlc3Npb25EZWxldGlvblJlY2VpcHRSCGRl'
     'bGV0aW9u');
+
+@$core.Deprecated('Use renameSessionRequestDescriptor instead')
+const RenameSessionRequest$json = {
+  '1': 'RenameSessionRequest',
+  '2': [
+    {'1': 'session_id', '3': 1, '4': 1, '5': 9, '10': 'sessionId'},
+    {'1': 'title', '3': 2, '4': 1, '5': 9, '10': 'title'},
+  ],
+};
+
+/// Descriptor for `RenameSessionRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List renameSessionRequestDescriptor = $convert.base64Decode(
+    'ChRSZW5hbWVTZXNzaW9uUmVxdWVzdBIdCgpzZXNzaW9uX2lkGAEgASgJUglzZXNzaW9uSWQSFA'
+    'oFdGl0bGUYAiABKAlSBXRpdGxl');
+
+@$core.Deprecated('Use renameSessionResponseDescriptor instead')
+const RenameSessionResponse$json = {
+  '1': 'RenameSessionResponse',
+  '2': [
+    {
+      '1': 'session',
+      '3': 1,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.Session',
+      '10': 'session'
+    },
+  ],
+};
+
+/// Descriptor for `RenameSessionResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List renameSessionResponseDescriptor = $convert.base64Decode(
+    'ChVSZW5hbWVTZXNzaW9uUmVzcG9uc2USLAoHc2Vzc2lvbhgBIAEoCzISLnR1cmluZy52MS5TZX'
+    'NzaW9uUgdzZXNzaW9u');
+
+@$core.Deprecated('Use archiveSessionRequestDescriptor instead')
+const ArchiveSessionRequest$json = {
+  '1': 'ArchiveSessionRequest',
+  '2': [
+    {'1': 'session_id', '3': 1, '4': 1, '5': 9, '10': 'sessionId'},
+  ],
+};
+
+/// Descriptor for `ArchiveSessionRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List archiveSessionRequestDescriptor = $convert.base64Decode(
+    'ChVBcmNoaXZlU2Vzc2lvblJlcXVlc3QSHQoKc2Vzc2lvbl9pZBgBIAEoCVIJc2Vzc2lvbklk');
+
+@$core.Deprecated('Use archiveSessionResponseDescriptor instead')
+const ArchiveSessionResponse$json = {
+  '1': 'ArchiveSessionResponse',
+  '2': [
+    {
+      '1': 'session',
+      '3': 1,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.Session',
+      '10': 'session'
+    },
+  ],
+};
+
+/// Descriptor for `ArchiveSessionResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List archiveSessionResponseDescriptor =
+    $convert.base64Decode(
+        'ChZBcmNoaXZlU2Vzc2lvblJlc3BvbnNlEiwKB3Nlc3Npb24YASABKAsyEi50dXJpbmcudjEuU2'
+        'Vzc2lvblIHc2Vzc2lvbg==');
+
+@$core.Deprecated('Use restoreSessionRequestDescriptor instead')
+const RestoreSessionRequest$json = {
+  '1': 'RestoreSessionRequest',
+  '2': [
+    {'1': 'session_id', '3': 1, '4': 1, '5': 9, '10': 'sessionId'},
+  ],
+};
+
+/// Descriptor for `RestoreSessionRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List restoreSessionRequestDescriptor = $convert.base64Decode(
+    'ChVSZXN0b3JlU2Vzc2lvblJlcXVlc3QSHQoKc2Vzc2lvbl9pZBgBIAEoCVIJc2Vzc2lvbklk');
+
+@$core.Deprecated('Use restoreSessionResponseDescriptor instead')
+const RestoreSessionResponse$json = {
+  '1': 'RestoreSessionResponse',
+  '2': [
+    {
+      '1': 'session',
+      '3': 1,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.Session',
+      '10': 'session'
+    },
+  ],
+};
+
+/// Descriptor for `RestoreSessionResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List restoreSessionResponseDescriptor =
+    $convert.base64Decode(
+        'ChZSZXN0b3JlU2Vzc2lvblJlc3BvbnNlEiwKB3Nlc3Npb24YASABKAsyEi50dXJpbmcudjEuU2'
+        'Vzc2lvblIHc2Vzc2lvbg==');
 
 @$core.Deprecated('Use listMessagesRequestDescriptor instead')
 const ListMessagesRequest$json = {

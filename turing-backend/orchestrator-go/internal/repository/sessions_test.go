@@ -2,13 +2,248 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 )
+
+func TestListSessionsPageFiltersAndOrders(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	insertListSession(t, ctx, database, "active-newest", "active", "2026-08-20T04:00:05.000000000Z")
+	insertListSession(t, ctx, database, "same-z", "active", "2026-08-20T04:00:04.000000000Z")
+	insertListSession(t, ctx, database, "same-a", "active", "2026-08-20T04:00:04.000000000Z")
+	insertListSession(t, ctx, database, "active-oldest", "active", "2026-08-20T04:00:03.000000000Z")
+	insertListSession(t, ctx, database, "archived-newest", "archived", "2026-08-20T04:00:06.000000000Z")
+
+	testCases := []struct {
+		name   string
+		filter SessionListFilter
+		want   []string
+	}{
+		{
+			name:   "active",
+			filter: SessionListActive,
+			want:   []string{"active-newest", "same-z", "same-a", "active-oldest"},
+		},
+		{
+			name:   "archived",
+			filter: SessionListArchived,
+			want:   []string{"archived-newest"},
+		},
+		{
+			name:   "all",
+			filter: SessionListAll,
+			want:   []string{"archived-newest", "active-newest", "same-z", "same-a", "active-oldest"},
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			sessions, err := repo.ListSessionsPage(ctx, ListSessionsInput{
+				Filter: testCase.filter,
+				Limit:  10,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertSessionIDs(t, sessions, testCase.want)
+		})
+	}
+}
+
+func TestListSessionsPageAndGetExcludeDeletingSessions(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	active, err := repo.CreateSession(ctx, "Delete active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	archived, err := repo.CreateSession(ctx, "Delete archived")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ArchiveSession(ctx, archived.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	for _, sessionID := range []string{active.SessionID, archived.SessionID} {
+		if _, err := repo.BeginSessionDeletion(ctx, sessionID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.GetSession(ctx, sessionID); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("GetSession(%q) error = %v, want sql.ErrNoRows", sessionID, err)
+		}
+	}
+
+	for _, filter := range []SessionListFilter{
+		SessionListActive,
+		SessionListArchived,
+		SessionListAll,
+	} {
+		sessions, err := repo.ListSessionsPage(ctx, ListSessionsInput{
+			Filter: filter,
+			Limit:  10,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(sessions) != 0 {
+			t.Fatalf("filter %q returned deleting sessions: %+v", filter, sessions)
+		}
+	}
+}
+
+func TestListSessionsPageUsesStableKeysetDuringConcurrentInsert(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	insertListSession(t, ctx, database, "older-3", "active", "2026-08-20T04:00:03.000000000Z")
+	insertListSession(t, ctx, database, "older-2", "active", "2026-08-20T04:00:02.000000000Z")
+	insertListSession(t, ctx, database, "older-1", "active", "2026-08-20T04:00:01.000000000Z")
+
+	first, err := repo.ListSessionsPage(ctx, ListSessionsInput{Filter: SessionListActive, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSessionIDs(t, first, []string{"older-3", "older-2"})
+
+	insertListSession(t, ctx, database, "inserted-newest", "active", "2026-08-20T04:00:04.000000000Z")
+	second, err := repo.ListSessionsPage(ctx, ListSessionsInput{
+		Filter: SessionListActive,
+		After: &SessionCursor{
+			UpdatedAt: first[len(first)-1].UpdatedAt,
+			SessionID: first[len(first)-1].SessionID,
+		},
+		Limit: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSessionIDs(t, second, []string{"older-1"})
+}
+
+func TestListSessionsPageRejectsUnsupportedPersistedStatus(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	if _, err := database.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+		t.Fatal(err)
+	}
+	insertListSession(t, ctx, database, "internal-status", "future_internal", "2026-08-20T04:00:00.000000000Z")
+	if _, err := database.ExecContext(ctx, `PRAGMA ignore_check_constraints = OFF`); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := repo.ListSessionsPage(ctx, ListSessionsInput{Filter: SessionListAll, Limit: 10})
+	if !errors.Is(err, ErrInvalidSessionStatus) {
+		t.Fatalf("ListSessionsPage error = %v, want ErrInvalidSessionStatus", err)
+	}
+}
+
+func TestListSessionsPageRejectsMalformedPersistedTimestamp(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO sessions (id, status, created_at, updated_at)
+		VALUES ('malformed-time', 'active', 'not-a-time', '2026-08-20T04:00:00.000000000Z')`,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := repo.ListSessionsPage(ctx, ListSessionsInput{Filter: SessionListActive, Limit: 10})
+	if !errors.Is(err, ErrInvalidSessionTimestamp) {
+		t.Fatalf("ListSessionsPage error = %v, want ErrInvalidSessionTimestamp", err)
+	}
+}
+
+func TestSessionQueryPlansUseLifecycleIndexes(t *testing.T) {
+	database := openTestDB(t)
+	ctx := context.Background()
+	for i := 0; i < 500; i++ {
+		status := "active"
+		if i%3 == 0 {
+			status = "archived"
+		}
+		insertListSession(
+			t,
+			ctx,
+			database,
+			fmt.Sprintf("query-plan-%03d", i),
+			status,
+			fmt.Sprintf("2026-08-20T04:%02d:%02d.000000000Z", (i/60)%60, i%60),
+		)
+	}
+
+	testCases := []struct {
+		name      string
+		input     ListSessionsInput
+		wantIndex string
+	}{
+		{
+			name: "filtered",
+			input: ListSessionsInput{
+				Filter: SessionListActive,
+				After: &SessionCursor{
+					UpdatedAt: "2026-08-20T04:04:00.000000000Z",
+					SessionID: "query-plan-240",
+				},
+				Limit: 50,
+			},
+			wantIndex: "idx_sessions_status_updated",
+		},
+		{
+			name: "all",
+			input: ListSessionsInput{
+				Filter: SessionListAll,
+				After: &SessionCursor{
+					UpdatedAt: "2026-08-20T04:04:00.000000000Z",
+					SessionID: "query-plan-240",
+				},
+				Limit: 50,
+			},
+			wantIndex: "idx_sessions_updated",
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			query, args, err := listSessionsQuery(testCase.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows, err := database.QueryContext(ctx, "EXPLAIN QUERY PLAN\n"+query, args...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = rows.Close() }()
+			var details []string
+			for rows.Next() {
+				var id, parent, notUsed int
+				var detail string
+				if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+					t.Fatal(err)
+				}
+				details = append(details, detail)
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+			plan := strings.Join(details, "\n")
+			wantSearch := "SEARCH sessions USING INDEX " + testCase.wantIndex
+			if !strings.Contains(plan, wantSearch) {
+				t.Fatalf("query plan = %q, want keyset search %q", plan, wantSearch)
+			}
+			if strings.Contains(plan, "SCAN sessions") {
+				t.Fatalf("query plan performs a sessions scan: %q", plan)
+			}
+		})
+	}
+}
 
 func TestSearchMessagesRanksAndScopes(t *testing.T) {
 	database := openTestDB(t)
@@ -192,6 +427,30 @@ func insertSearchSession(t *testing.T, ctx context.Context, database *db.DB, id 
 	_, err := database.ExecContext(ctx, `INSERT INTO sessions (id, created_at, updated_at) VALUES (?, '2026-08-10T00:00:00Z', '2026-08-10T00:00:00Z')`, id)
 	if err != nil {
 		t.Fatalf("insert session %s: %v", id, err)
+	}
+}
+
+func insertListSession(t *testing.T, ctx context.Context, database *db.DB, id, status, updatedAt string) {
+	t.Helper()
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO sessions (id, status, created_at, updated_at)
+		VALUES (?, ?, '2026-08-20T04:00:00.000000000Z', ?)`,
+		id,
+		status,
+		updatedAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertSessionIDs(t *testing.T, sessions []Session, want []string) {
+	t.Helper()
+	got := make([]string, 0, len(sessions))
+	for _, session := range sessions {
+		got = append(got, session.SessionID)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("session IDs = %v, want %v", got, want)
 	}
 }
 

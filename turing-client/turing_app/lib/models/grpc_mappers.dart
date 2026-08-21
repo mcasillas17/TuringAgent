@@ -20,6 +20,7 @@ import 'automation.dart' as model_automation;
 import 'message.dart' as model_message;
 import 'search_hit.dart' as model_search_hit;
 import 'session.dart' as model_session;
+import 'session_page.dart' as model_session_page;
 import 'skill.dart' as model_skill;
 import 'telemetry.dart' as model_telemetry;
 import 'tool_descriptor.dart' as model_tool;
@@ -348,6 +349,22 @@ class GrpcMappers {
       updatedAtNanoseconds:
           session.updatedAt.seconds.toInt() * 1000000000 +
           session.updatedAt.nanos,
+      status: switch (session.status) {
+        'active' => model_session.SessionStatus.active,
+        'archived' => model_session.SessionStatus.archived,
+        _ => throw const FormatException('invalid session status'),
+      },
+    );
+  }
+
+  static model_session_page.SessionPage sessionPageToModel(
+    sessionpb.ListSessionsResponse response,
+  ) {
+    return model_session_page.SessionPage(
+      sessions: response.sessions.map(sessionToModel).toList(growable: false),
+      nextCursor: response.page.nextCursor.isEmpty
+          ? null
+          : response.page.nextCursor,
     );
   }
 

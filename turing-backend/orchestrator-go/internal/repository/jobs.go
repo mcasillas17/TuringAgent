@@ -487,6 +487,9 @@ func resolveEnqueueRouteTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMes
 // lose a run or fire the same one twice.
 func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMessageInput) (EnqueueUserMessageResult, error) {
 	input = normalizeEnqueueUserMessageInput(input)
+	if err := requireActiveSessionTx(ctx, tx, input.SessionID); err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
 	// Resolve the effective destination before writing anything. A conversation
 	// routed to an external agent overrides request provider/model fields, and
 	// routing validation must evaluate that same frozen destination.
@@ -518,14 +521,17 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return EnqueueUserMessageResult{}, err
 	}
+	var timestampAnchors []time.Time
 	if latestCreatedAt != "" {
 		latest, parseErr := time.Parse(time.RFC3339Nano, latestCreatedAt)
 		if parseErr != nil {
 			return EnqueueUserMessageResult{}, parseErr
 		}
-		if !created.After(latest) {
-			created = latest.Add(time.Nanosecond)
-		}
+		timestampAnchors = append(timestampAnchors, latest)
+	}
+	created, err = nextSessionActivityTimeTx(ctx, tx, input.SessionID, created, timestampAnchors...)
+	if err != nil {
+		return EnqueueUserMessageResult{}, err
 	}
 	createdAt := FormatTimestamp(created)
 	assistantCreatedAt := FormatTimestamp(created.Add(time.Nanosecond))
@@ -572,12 +578,16 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	`, derivedTitle, derivedTitle, derivedTitle, createdAt, input.SessionID); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
-	var sessionTitle string
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(title, '') FROM sessions WHERE id = ?`, input.SessionID).Scan(&sessionTitle); err != nil {
+	var sessionTitle, sessionStatus string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COALESCE(title, ''), status FROM sessions WHERE id = ?`,
+		input.SessionID,
+	).Scan(&sessionTitle, &sessionStatus); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	sessionUpdatedPayload, err := json.Marshal(map[string]string{
 		"title":     sessionTitle,
+		"status":    sessionStatus,
 		"updatedAt": createdAt,
 	})
 	if err != nil {

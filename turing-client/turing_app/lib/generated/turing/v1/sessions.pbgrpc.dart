@@ -104,6 +104,27 @@ class SessionServiceClient extends $grpc.Client {
     return $createUnaryCall(_$listTools, request, options: options);
   }
 
+  $grpc.ResponseFuture<$0.RenameSessionResponse> renameSession(
+    $0.RenameSessionRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$renameSession, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.ArchiveSessionResponse> archiveSession(
+    $0.ArchiveSessionRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$archiveSession, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.RestoreSessionResponse> restoreSession(
+    $0.RestoreSessionRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$restoreSession, request, options: options);
+  }
+
   // method descriptors
 
   static final _$createSession =
@@ -157,6 +178,21 @@ class SessionServiceClient extends $grpc.Client {
           '/turing.v1.SessionService/ListTools',
           ($0.ListToolsRequest value) => value.writeToBuffer(),
           $0.ListToolsResponse.fromBuffer);
+  static final _$renameSession =
+      $grpc.ClientMethod<$0.RenameSessionRequest, $0.RenameSessionResponse>(
+          '/turing.v1.SessionService/RenameSession',
+          ($0.RenameSessionRequest value) => value.writeToBuffer(),
+          $0.RenameSessionResponse.fromBuffer);
+  static final _$archiveSession =
+      $grpc.ClientMethod<$0.ArchiveSessionRequest, $0.ArchiveSessionResponse>(
+          '/turing.v1.SessionService/ArchiveSession',
+          ($0.ArchiveSessionRequest value) => value.writeToBuffer(),
+          $0.ArchiveSessionResponse.fromBuffer);
+  static final _$restoreSession =
+      $grpc.ClientMethod<$0.RestoreSessionRequest, $0.RestoreSessionResponse>(
+          '/turing.v1.SessionService/RestoreSession',
+          ($0.RestoreSessionRequest value) => value.writeToBuffer(),
+          $0.RestoreSessionResponse.fromBuffer);
 }
 
 @$pb.GrpcServiceName('turing.v1.SessionService')
@@ -247,6 +283,33 @@ abstract class SessionServiceBase extends $grpc.Service {
         false,
         ($core.List<$core.int> value) => $0.ListToolsRequest.fromBuffer(value),
         ($0.ListToolsResponse value) => value.writeToBuffer()));
+    $addMethod(
+        $grpc.ServiceMethod<$0.RenameSessionRequest, $0.RenameSessionResponse>(
+            'RenameSession',
+            renameSession_Pre,
+            false,
+            false,
+            ($core.List<$core.int> value) =>
+                $0.RenameSessionRequest.fromBuffer(value),
+            ($0.RenameSessionResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.ArchiveSessionRequest,
+            $0.ArchiveSessionResponse>(
+        'ArchiveSession',
+        archiveSession_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.ArchiveSessionRequest.fromBuffer(value),
+        ($0.ArchiveSessionResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.RestoreSessionRequest,
+            $0.RestoreSessionResponse>(
+        'RestoreSession',
+        restoreSession_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.RestoreSessionRequest.fromBuffer(value),
+        ($0.RestoreSessionResponse value) => value.writeToBuffer()));
   }
 
   $async.Future<$0.CreateSessionResponse> createSession_Pre(
@@ -335,4 +398,31 @@ abstract class SessionServiceBase extends $grpc.Service {
 
   $async.Future<$0.ListToolsResponse> listTools(
       $grpc.ServiceCall call, $0.ListToolsRequest request);
+
+  $async.Future<$0.RenameSessionResponse> renameSession_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.RenameSessionRequest> $request) async {
+    return renameSession($call, await $request);
+  }
+
+  $async.Future<$0.RenameSessionResponse> renameSession(
+      $grpc.ServiceCall call, $0.RenameSessionRequest request);
+
+  $async.Future<$0.ArchiveSessionResponse> archiveSession_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.ArchiveSessionRequest> $request) async {
+    return archiveSession($call, await $request);
+  }
+
+  $async.Future<$0.ArchiveSessionResponse> archiveSession(
+      $grpc.ServiceCall call, $0.ArchiveSessionRequest request);
+
+  $async.Future<$0.RestoreSessionResponse> restoreSession_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.RestoreSessionRequest> $request) async {
+    return restoreSession($call, await $request);
+  }
+
+  $async.Future<$0.RestoreSessionResponse> restoreSession(
+      $grpc.ServiceCall call, $0.RestoreSessionRequest request);
 }
