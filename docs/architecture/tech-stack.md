@@ -22,6 +22,10 @@ For the public, redacted audit read API — its exact filters, keyset cursor,
 per-action field allowlist, and deletion-scrub semantics — see
 [Audit read API](audit-read-api.md).
 
+For authoritative run lifecycle/outcomes, failure redaction, version fencing,
+restart behavior, and Flutter reconciliation, see
+[Durable run outcomes](run-outcomes.md).
+
 ## gRPC and protobuf
 
 Protocol definitions live under `proto/turing/v1/`.
@@ -53,6 +57,29 @@ never on the internal one — and authenticated with the same
 `TURING_CLIENT_API_KEY` bearer token as every other public RPC. See
 [Audit read API](audit-read-api.md) for its filters, pagination, and
 redaction contract.
+
+## Durable run outcomes
+
+`agent_runs` is the sole lifecycle/outcome authority. Its monotonic
+`state_version`, canonical UTC update time, closed outcome category, correlated
+message IDs, and internal assistant-content digest are updated with exactly one
+lifecycle event in a short guarded transaction. `SessionService.ListMessages`
+embeds the safe public `RunState` on the assistant row, while live lifecycle
+events carry the same snapshot. Event replay therefore delivers state but never
+reconstructs a competing answer.
+
+Worker assignments carry the expected state version and durable assignment
+attempt ID. Terminal reports, ownership recovery, and approval Ready/Accepted
+resume are fenced by those values. Confirmed-unsent `pending_send` work may move
+directly from running back to queued; delivered or uncertain work first enters
+durable recovering. Provider/tool/worker prose is normalized to closed categories
+before persistence and is absent from the public contract.
+
+Flutter reconciles by run ID and version, renders localized terminal/recovery
+cards beside the correlated assistant message, and bounds pre-history buffering
+to 64 run states. Completed content does not gain redundant terminal noise;
+completed-with-no-content, failed, cancelled, unknown, missing-content, and
+neutral legacy cases remain explicit after restart.
 
 ## Docker Compose services
 
@@ -107,7 +134,7 @@ Admission priority is:
 
 Recall search runs once per agent run, with separate bounded earlier-session and current-session searches per term so one scope cannot crowd the other out. Earlier-session matches receive excerpt slots first; omitted current-session history fills remaining capacity. The runtime caches one recall-budget-bounded payload per unique message plus lightweight per-term references. Fetched history and the live user turn retain message IDs through context assembly, so re-ranking suppresses exact admitted rows; occurrence counts are only a defensive fallback for ID-less callers. The runtime permits up to three ranking/budget passes under one two-second deadline if adding recall changes the contiguous history suffix. One broad fallback allows possible duplication rather than silently excluding a fetched current-session turn from both paths.
 
-Optional material is removed only in whole units. Whenever the omission set changes, the runtime emits an `agent.run.step` with `reason=context_budget`; the orchestrator persists it and the Flutter client renders its `note` inline during the live run. The replay watermark currently suppresses historical run notices on reopen. Mandatory live protocol that does not fit even with minimal result markers fails with `context_budget_exceeded`; a prospective tool chain is checked before tool execution. Provider request marshaling retains a separate 16 MiB hard limit but never trims history itself.
+Optional material is removed only in whole units. Whenever the omission set changes, the runtime emits an `agent.run.step` with `reason=context_budget`; the orchestrator persists it and the Flutter client renders its `note` inline during the live run. The replay watermark still suppresses historical nonterminal notices whose position cannot be reconstructed, while the run's authoritative recovery or terminal state reopens from message history. Mandatory live protocol that does not fit even with minimal result markers fails with `context_budget_exceeded`; a prospective tool chain is checked before tool execution. Provider request marshaling retains a separate 16 MiB hard limit but never trims history itself.
 
 A provider completion with finish reason `length` emits a durable `agent.run.step` with `reason=model_output_limit`, the configured reservation, and the relevant environment setting. The partial answer can still complete, but the cap is never silent; for a complete tool-call turn, the notice precedes tool execution. An unfinished OpenAI-compatible tool fragment at `length` is discarded rather than executed or mislabeled as protocol corruption.
 

@@ -116,6 +116,32 @@ post-claim fence restarts the worker scan so a compatible worker that appeared o
 idle during the claim can receive the run. Concurrent abort/recovery fences are benign,
 and advisory notice failure at the delivery fence is logged without blocking redispatch.
 
+## Run ownership and version fencing
+
+Each delivered `AgentJob` includes the run's `expected_state_version` and durable
+`assignment_attempt_id`. The worker echoes the expected version on completion or
+failure and echoes the attempt ID on approval resume. The orchestrator validates
+run, worker, attempt, correlated assistant message, and expected version before
+one canonical transition can commit. Matching duplicate reports are write-free;
+a stale or conflicting predecessor is fenced.
+
+Requeue behavior depends on delivery evidence read inside the repository
+transaction. A `pending_send` assignment, or a proven release by the
+authenticated current attempt, may commit the direct `running -> queued` edge.
+A delivered, uncertain, fenced, expired, or otherwise unresolved assignment
+must commit `running/waiting_approval -> recovering` before it can return to the
+queue. Neither path spans stream delivery, model work, or tool work.
+
+An approval decision does not itself resume execution. The worker first sends
+`RuntimeApprovalResumeReady` only after it has accepted the decision and restored
+the matching attempt to a paused boundary. The orchestrator validates the run,
+approval, worker, attempt, and pre-transition version, commits
+`waiting_approval -> running`, and returns
+`RuntimeApprovalResumeAccepted` with the new version. The worker continues only
+after receiving Accepted. Failed Accepted delivery fences the committed running
+state to recovering; a same-identity Ready retry replays the exact Accepted
+without another transition.
+
 Scheduled runs use the same validator before creating a session, message, run, or job.
 An unavailable occurrence advances its schedule and records `routing_unavailable`
 as a durable automation audit occurrence instead of creating work that cannot
@@ -202,6 +228,10 @@ Tests must fail without the implementation for:
 - capability-fence requeues preserving execution attempts;
 - pending-send teardown/recovery preserving attempts and heartbeat recovery serializing
   with the final delivery fence;
+- assignment and terminal reports carrying the expected state version and
+  durable attempt identity;
+- approval Ready/Accepted replay, conflict fencing, and Accepted-delivery
+  failure entering recovering before continuation;
 - post-claim fencing restarting dispatch when another compatible worker is available;
 - registration, capability, heartbeat revival, and recovery dispatch continuing when
   advisory queue-notice persistence fails;

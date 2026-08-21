@@ -379,11 +379,29 @@ check, lint) before merge.
 
 #### TUR-009 — Persist reopenable run outcomes
 
+**Status:** Implemented. See [Durable run outcomes](run-outcomes.md) for the
+authoritative state, transition, redaction, migration, and client-reconciliation
+contract.
+
 **Outcome:** Reopening a conversation never shows an unexplained empty assistant turn.  
 **Scope:** Persist and expose authoritative versioned run lifecycle plus safe failure/cancellation reason with message history; render terminal cards after reopen; migrate legacy state with value-free correlation failure and an FK-safe parent-table rebuild that preserves populated run-owned children.
 **Likely files:** message/run proto, sessions repository/service, Flutter conversation timeline.  
 **Acceptance:** Completed, failed, and cancelled runs round-trip after restart; no empty placeholder is ambiguous; every nonterminal legacy row with null or invalid run/message correlation aborts migration without partial state, terminal invalid history keeps its neutral fallback, and populated run-owned child rows survive the rebuild exactly.
 **Dependencies:** None.
+
+**Shipped behavior:** `agent_runs` is the sole durable authority for a
+monotonic versioned lifecycle, closed outcome category, correlation, terminal
+time, and internal content identity. Message history and every lifecycle event
+project the same redacted `RunState`; duplicate reports are write-free only when
+their full canonical identity matches, terminal states are immutable, and
+uncertain ownership is explicitly recovering. Flutter reconstructs localized
+cards from history, suppresses ambiguous empty bubbles, and reconciles live and
+replayed state by run ID/version with a bounded 64-entry startup buffer. Migration
+0016 rebuilds the parent table on one pinned connection while preserving
+populated children, bounds keyset batches to 128 rows and 16 MiB, scrubs raw
+diagnostics, and fails value-free and atomically for every nonterminal null,
+one-sided, role-mismatched, session-mismatched, or duplicate correlation.
+Terminal unusable links retain only the neutral fallback.
 
 #### TUR-010 — Surface no-worker and queue-timeout state
 

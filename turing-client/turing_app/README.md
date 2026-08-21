@@ -15,7 +15,9 @@ Implemented in the client:
 - Exact-phrase conversation search across all sessions, grouped by conversation
   and linked back to the matching chat.
 - Inline tool-call status cards for live `tool.call.*` events.
-- Inline notices when a live agent run reaches its tool-iteration limit.
+- Localized lifecycle/outcome cards reconstructed from the same versioned
+  `RunState` used by live events and persisted message history.
+- Inline safe notices for live run limits, retries, and recovery.
 - Approval cards for `approval.requested` events, cleared by approval terminal events.
 - Model provider selector for `ollama` or `openai_compatible` per sent message.
 
@@ -91,9 +93,17 @@ The Chat tab uses the generated gRPC services for commands, queries, and streame
 - `EventService.ListEvents` and `EventService.SubscribeSessionEvents` for replay and live updates.
 - `ApprovalService.ApproveApproval` and `ApprovalService.DenyApproval` for approval cards.
 
-When a session opens, `ChatScreen` loads persisted messages and subscribes to the session event stream. Incoming `message.delta` events update the active assistant message locally rather than making the client own model execution. Live tool calls render in order between message bubbles, and an `agent.run.step` event renders the runtime-provided note as accessible meta text when the tool-iteration limit cuts a run short.
+When a session opens, `ChatScreen` loads persisted messages and subscribes to the session event stream. Incoming `message.delta` events update the active assistant message locally rather than making the client own model execution. Live tool calls render in order between message bubbles. Safe `agent.run.step` categories render localized notices; backend-provided failure prose is never displayed.
 
-Historical tool cards and run notices are suppressed during event replay because persisted messages do not carry event sequence values that could place those artifacts back into the transcript correctly. Live events committed after the screen's startup watermark still render normally.
+The assistant message's embedded `RunState` is authoritative after reopen.
+`ChatScreen` reconciles each run by monotonic state version, drops stale or
+conflicting events, and renders recovery or terminal cards adjacent to the
+correlated assistant content. Completed content has no redundant card; empty
+success, failed, cancelled, missing-content, unknown, and neutral legacy states
+remain explicit. Initial buffering retains at most 64 run states and overflow
+causes one coalesced newest-page resync.
+
+Historical tool cards and nonterminal run notices are suppressed during event replay because persisted messages do not carry event sequence values that could place those artifacts back into the transcript correctly. Live events committed after the screen's startup watermark still render normally, and the durable run outcome itself always comes from message history.
 
 Approval cards appear from `approval.requested` and are removed on `approval.approved`, `approval.denied`, `approval.expired`, or `approval.consumed`.
 
@@ -106,11 +116,17 @@ Approval cards appear from `approval.requested` and are removed on `approval.app
 - `lib/features/search/search_screen.dart`: debounced, accessible exact-phrase
   conversation search and grouped result navigation.
 - `lib/features/chat/chat_screen.dart`: active backend-connected chat screen for message loading, sending, streaming deltas, inline run/tool activity, and approvals.
+- `lib/features/chat/run_state_reconciler.dart`: pure run-ID/version acceptance
+  rules shared by history and live state.
+- `lib/features/chat/run_state_card.dart`: localized durable lifecycle/outcome
+  presentation, including legacy and missing-content fallbacks.
 - `lib/features/chat/tool_call_card.dart`: inline live tool-call lifecycle UI.
-- `lib/features/chat/run_notice_card.dart`: accessible inline metadata for a truncated live run.
+- `lib/features/chat/run_notice_card.dart`: localized accessible metadata for
+  allowlisted run notices.
 - `lib/features/approvals/approval_card.dart`: approve/deny UI.
 - `lib/features/chat/model_provider_selector.dart`: provider selection control.
-- `lib/models/`: typed client models for sessions, messages, approvals, config, and streamed Turing events.
+- `lib/models/`: typed client models for sessions, messages, approvals, config,
+  versioned run state, and streamed Turing events.
 - `lib/networking/api_client.dart`: typed API interface shared by widgets and gRPC implementation.
 - `lib/networking/grpc_client.dart`: gRPC protocol client.
 - `lib/networking/grpc_event_source.dart`: gRPC event stream client.
