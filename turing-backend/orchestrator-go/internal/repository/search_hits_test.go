@@ -8,6 +8,7 @@ import (
 	"math"
 	"reflect"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,13 @@ func fixedSearchMarkers() (string, string) {
 	return "[[TURING-FTS5-SNIPPET-START:v1:" + nonce + "]]",
 		"[[TURING-FTS5-SNIPPET-END:v1:" + nonce + "]]"
 }
+
+// searchSnippetWindowAllocBudgetBytes is the heap a single normalization may
+// claim. A searchSnippetWindowRunes window plus its bookkeeping needs a few
+// kilobytes; the budget is far above that and far below the multi-megabyte
+// fragments the bound test feeds in, so it fails an input-proportional
+// allocation without being sensitive to allocator sizing.
+const searchSnippetWindowAllocBudgetBytes = 128 << 10
 
 func TestNormalizeSearchScore(t *testing.T) {
 	for _, test := range []struct {
@@ -549,6 +557,14 @@ func TestSanitizeSearchSnippetTruncatesOversizedMatchToken(t *testing.T) {
 			raw:  "lead " + start + strings.Repeat("x", 500) + end,
 			want: "\u2026" + strings.Repeat("x", 198) + "\u2026",
 		},
+		{
+			// Leading context longer than the retained window, so the window
+			// has already discarded its own start before the match opens and
+			// both cut edges are real.
+			name: "token after leading context wider than the window",
+			raw:  strings.Repeat("a", 300) + start + strings.Repeat("x", 500) + end,
+			want: "\u2026" + strings.Repeat("x", 198) + "\u2026",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := sanitizeSearchSnippet(parseFixedSearchSnippet(t, test.raw))
@@ -644,6 +660,331 @@ func TestSanitizeSearchSnippetHonorsExactRuneAndByteBounds(t *testing.T) {
 	}
 }
 
+// TestSanitizeSearchSnippetPreservesCompleteMatchAtExactBounds pins the
+// priority between a complete match and the cut indicators drawn around it.
+// The match is the reason the snippet exists, so a sanitized match that fits
+// both caps on its own is published whole; the U+2026 indicators are
+// best-effort at that boundary and are dropped together when they cannot both
+// sit beside it. Charging them first would truncate an exactly-fitting match
+// and publish a shorter excerpt than the caps allow.
+func TestSanitizeSearchSnippetPreservesCompleteMatchAtExactBounds(t *testing.T) {
+	start, end := fixedSearchMarkers()
+	// 200 scalars / 200 bytes, and 200 scalars / 800 bytes: each sits exactly
+	// on one of the two caps.
+	exactASCII := strings.Repeat("x", searchSnippetMaxRunes)
+	exactEmoji := strings.Repeat("😀", searchSnippetMaxRunes)
+
+	for _, test := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "exact scalar cap with context on both sides",
+			raw:  "lead " + start + exactASCII + end + " tail",
+			want: exactASCII,
+		},
+		{
+			name: "exact byte cap with context on both sides",
+			raw:  "lead " + start + exactEmoji + end + " tail",
+			want: exactEmoji,
+		},
+		{
+			name: "exact scalar cap with leading context only",
+			raw:  "lead " + start + exactASCII + end,
+			want: exactASCII,
+		},
+		{
+			name: "exact scalar cap with trailing context only",
+			raw:  start + exactASCII + end + " tail",
+			want: exactASCII,
+		},
+		{
+			name: "exact byte cap with trailing context only",
+			raw:  start + exactEmoji + end + " tail",
+			want: exactEmoji,
+		},
+		{
+			name: "one scalar under the cap still outranks a single indicator",
+			raw: "lead " + start + strings.Repeat("x", searchSnippetMaxRunes-1) +
+				end + " tail",
+			want: strings.Repeat("x", searchSnippetMaxRunes-1),
+		},
+		{
+			name: "two scalars under the cap leaves room for both indicators",
+			raw: "lead " + start + strings.Repeat("x", searchSnippetMaxRunes-2) +
+				end + " tail",
+			want: "\u2026" + strings.Repeat("x", searchSnippetMaxRunes-2) + "\u2026",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := sanitizeSearchSnippet(parseFixedSearchSnippet(t, test.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("snippet = %q (runes=%d bytes=%d), want %q",
+					got, utf8.RuneCountInString(got), len(got), test.want)
+			}
+			if utf8.RuneCountInString(got) > searchSnippetMaxRunes ||
+				len(got) > searchSnippetMaxBytes {
+				t.Fatalf("bounds: runes=%d bytes=%d",
+					utf8.RuneCountInString(got), len(got))
+			}
+		})
+	}
+}
+
+// TestNormalizeSnippetWindowBoundsBuffersForMultiMegabyteToken is the
+// allocation contract. FTS5's 32-token fragment bound says nothing about the
+// size of one token, so a single multi-megabyte unbroken token reaches this
+// code as one fragment. Preparing a 200-scalar/800-byte snippet must not first
+// build a scalar-per-source-scalar copy of it: the working window is bounded by
+// searchSnippetWindowRunes no matter how long the source is, and the published
+// snippet still honours both public caps.
+//
+// The scan itself stays linear in the source, which is unavoidable — trailing
+// whitespace collapses, so whether any text survives after the window is only
+// knowable by reading to the end. Linear *reading* of a buffer the caller
+// already holds is not the same as linear *allocation* on top of it.
+func TestNormalizeSnippetWindowBoundsBuffersForMultiMegabyteToken(t *testing.T) {
+	start, end := fixedSearchMarkers()
+	// One unbroken token, well past any realistic message but exactly what the
+	// caps exist to survive.
+	const tokenScalars = 2 << 20
+	token := strings.Repeat("x", tokenScalars)
+
+	for _, test := range []struct {
+		name         string
+		raw          string
+		wantSnippet  string
+		wantTotal    int
+		wantMatchLen int
+	}{
+		{
+			name:         "oversized match",
+			raw:          start + token + end,
+			wantSnippet:  strings.Repeat("x", searchSnippetMaxRunes-1) + "\u2026",
+			wantTotal:    tokenScalars,
+			wantMatchLen: tokenScalars,
+		},
+		{
+			name:         "oversized lead before the match",
+			raw:          token + " " + start + "needle" + end,
+			wantSnippet:  "\u2026" + strings.Repeat("x", 192) + " needle",
+			wantTotal:    tokenScalars + 7,
+			wantMatchLen: 6,
+		},
+		{
+			name:         "oversized tail after the match",
+			raw:          start + "needle" + end + " " + token,
+			wantSnippet:  "needle " + strings.Repeat("x", 192) + "\u2026",
+			wantTotal:    tokenScalars + 7,
+			wantMatchLen: 6,
+		},
+		{
+			name:         "marker free oversized fragment",
+			raw:          token,
+			wantSnippet:  strings.Repeat("x", searchSnippetMaxRunes-1) + "\u2026",
+			wantTotal:    tokenScalars,
+			wantMatchLen: tokenScalars,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parsed := withWholeFragmentSpan(parseFixedSearchSnippet(t, test.raw))
+
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			window := normalizeSnippetWindow(parsed)
+			runtime.ReadMemStats(&after)
+
+			if len(window.text) > searchSnippetWindowRunes ||
+				cap(window.text) > searchSnippetWindowRunes {
+				t.Fatalf("window buffer len=%d cap=%d over %d source scalars, "+
+					"want at most %d",
+					len(window.text), cap(window.text), test.wantTotal,
+					searchSnippetWindowRunes)
+			}
+			// Belt and braces on the same claim, in bytes rather than scalars,
+			// so a bounded window fed by some other unbounded side buffer is
+			// still caught. The budget is far above what a 400-scalar window
+			// needs and far below the source, so it is not a timing-sensitive
+			// or allocator-tuning-sensitive assertion.
+			if allocated := after.TotalAlloc - before.TotalAlloc; allocated >
+				searchSnippetWindowAllocBudgetBytes {
+				t.Fatalf("normalizing %d source scalars allocated %d bytes, "+
+					"want at most %d",
+					test.wantTotal, allocated, searchSnippetWindowAllocBudgetBytes)
+			}
+
+			if window.totalRunes != test.wantTotal {
+				t.Fatalf("totalRunes = %d, want %d", window.totalRunes, test.wantTotal)
+			}
+			if !window.found {
+				t.Fatal("window recorded no retained match")
+			}
+			if got := window.match.end - window.match.start; got != test.wantMatchLen {
+				t.Fatalf("match scalars = %d, want %d", got, test.wantMatchLen)
+			}
+
+			got, err := sanitizeSearchSnippet(parsed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.wantSnippet {
+				t.Fatalf("snippet = %q (runes=%d bytes=%d), want %q",
+					got, utf8.RuneCountInString(got), len(got), test.wantSnippet)
+			}
+			if utf8.RuneCountInString(got) > searchSnippetMaxRunes ||
+				len(got) > searchSnippetMaxBytes {
+				t.Fatalf("bounds: runes=%d bytes=%d",
+					utf8.RuneCountInString(got), len(got))
+			}
+		})
+	}
+}
+
+// snippetFuzzSource is a deterministic xorshift64 generator. The differential
+// test needs reproducible pseudo-random fragments, not cryptographic ones, and
+// an inline generator keeps the corpus identical on every machine and run.
+type snippetFuzzSource struct{ state uint64 }
+
+func (s *snippetFuzzSource) intn(n int) int {
+	s.state ^= s.state << 13
+	s.state ^= s.state >> 7
+	s.state ^= s.state << 17
+	return int(s.state % uint64(n))
+}
+
+// TestSearchSnippetRuneLenChargesUnencodableRunesAsReplacement pins the width
+// accounting the byte cap rests on. string() writes U+FFFD for a rune Go cannot
+// encode, so charging utf8.RuneLen's -1 would make a window measure smaller
+// than the bytes it actually produces.
+func TestSearchSnippetRuneLenChargesUnencodableRunesAsReplacement(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		r    rune
+		want int
+	}{
+		{name: "ascii", r: 'x', want: 1},
+		{name: "two byte", r: 'é', want: 2},
+		{name: "three byte", r: '界', want: 3},
+		{name: "four byte", r: '😀', want: 4},
+		{name: "replacement character", r: utf8.RuneError, want: 3},
+		{name: "unpaired surrogate", r: rune(0xd800), want: 3},
+		{name: "out of range", r: rune(0x110000), want: 3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := searchSnippetRuneLen(test.r); got != test.want {
+				t.Fatalf("searchSnippetRuneLen(%U) = %d, want %d",
+					test.r, got, test.want)
+			}
+			if got, want := searchSnippetRuneLen(test.r), len(string(test.r)); got != want {
+				t.Fatalf("searchSnippetRuneLen(%U) = %d, but string() writes %d bytes",
+					test.r, got, want)
+			}
+		})
+	}
+}
+
+// snippetWindowSummary reports a window without its buffer, which can hold
+// hundreds of scalars that say nothing about a disagreement.
+func snippetWindowSummary(w snippetWindow) string {
+	return fmt.Sprintf("{base:%d totalRunes:%d totalBytes:%d match:%+v found:%t}",
+		w.base, w.totalRunes, w.totalBytes, w.match, w.found)
+}
+
+// TestNormalizeSnippetWindowMatchesUnwindowedNormalization is the differential
+// proof that bounding the working buffer changed nothing a caller can observe.
+//
+// The reference run is this same normalizer with a retention radius wider than
+// the fragment, so it drops nothing and behaves like a full materialization;
+// the production run keeps only searchSnippetWindowRunes scalars. The counters,
+// the located match, and above all the published snippet must agree on every
+// fragment, including ones long enough to force several buffer compactions.
+func TestNormalizeSnippetWindowMatchesUnwindowedNormalization(t *testing.T) {
+	start, end := fixedSearchMarkers()
+	// A mix of every sanitization class: plain text, collapsing whitespace,
+	// multi-byte scalars, invalid UTF-8, controls, and bidi overrides.
+	chunks := []string{
+		"a", "bc", "word ", "  ", "\t", "\n", "\u00a0", "😀", "界", "é",
+		"\xff", "\xfe\xfd", "\x00", "\x1b", "\u202e", "\u200f", "…", "x",
+	}
+	source := snippetFuzzSource{state: 0x9e3779b97f4a7c15}
+	var compacted, published int
+
+	for run := 0; run < 400; run++ {
+		var raw strings.Builder
+		inMatch := false
+		chunkCount := source.intn(220)
+		for chunk := 0; chunk < chunkCount; chunk++ {
+			// Open and close matches at random, always in balanced pairs, so
+			// the parser sees the shape FTS5 emits.
+			if !inMatch && source.intn(12) == 0 {
+				raw.WriteString(start)
+				inMatch = true
+			} else if inMatch && source.intn(4) == 0 {
+				raw.WriteString(end)
+				inMatch = false
+			}
+			raw.WriteString(strings.Repeat(
+				chunks[source.intn(len(chunks))], 1+source.intn(40)))
+		}
+		if inMatch {
+			raw.WriteString(end)
+		}
+
+		parsed, err := parseMarkedSearchSnippet([]byte(raw.String()), start, end)
+		if err != nil {
+			// Structurally impossible for a balanced generator except for the
+			// empty fragment, which is its own documented failure.
+			if !errors.Is(err, ErrInvalidSearchSnippetMarkers) {
+				t.Fatalf("run %d: %v", run, err)
+			}
+			continue
+		}
+		parsed = withWholeFragmentSpan(parsed)
+
+		bounded := normalizeSnippetWindow(parsed)
+		// A window past twice the fragment's scalar count can never drop a
+		// scalar, because there are fewer scalars than bytes.
+		reference := newSnippetNormalizer(2 * (len(parsed.text) + 1)).normalize(parsed)
+
+		if cap(bounded.text) > searchSnippetWindowRunes {
+			t.Fatalf("run %d: window cap = %d, want at most %d",
+				run, cap(bounded.text), searchSnippetWindowRunes)
+		}
+		if reference.base != 0 {
+			t.Fatalf("run %d: reference dropped scalars at base %d",
+				run, reference.base)
+		}
+		if bounded.totalRunes != reference.totalRunes ||
+			bounded.totalBytes != reference.totalBytes ||
+			bounded.found != reference.found ||
+			bounded.match != reference.match {
+			t.Fatalf("run %d: bounded %s disagrees with reference %s",
+				run, snippetWindowSummary(bounded), snippetWindowSummary(reference))
+		}
+		got, want := boundSearchSnippet(bounded), boundSearchSnippet(reference)
+		if got != want {
+			t.Fatalf("run %d: bounded snippet = %q, unwindowed = %q", run, got, want)
+		}
+		if bounded.base > 0 {
+			compacted++
+		}
+		if got != "" {
+			published++
+		}
+	}
+
+	// The corpus has to keep reaching the interesting states, or the agreement
+	// above is agreement about nothing.
+	if compacted < 40 || published < 200 {
+		t.Fatalf("corpus too weak: %d runs compacted the buffer and %d published "+
+			"a snippet", compacted, published)
+	}
+}
+
 func TestSanitizeSearchSnippetRejectsEmptyOutput(t *testing.T) {
 	start, end := fixedSearchMarkers()
 	for _, test := range []struct {
@@ -667,10 +1008,10 @@ func TestSanitizeSearchSnippetRejectsEmptyOutput(t *testing.T) {
 	}
 }
 
-// TestSanitizeSearchSnippetSkipsMatchEmptiedBySanitization pins the search in
-// firstRetainedSearchMatch: the first recorded match can normalize away to an
-// empty span, and the snippet must then be windowed around a later surviving
-// match instead of being rejected.
+// TestSanitizeSearchSnippetSkipsMatchEmptiedBySanitization pins which match the
+// window opens on: the first recorded match can normalize away to nothing, and
+// the snippet must then be windowed around a later surviving match instead of
+// being rejected.
 func TestSanitizeSearchSnippetSkipsMatchEmptiedBySanitization(t *testing.T) {
 	start, end := fixedSearchMarkers()
 	lead := strings.Repeat("z", 400)
@@ -680,9 +1021,16 @@ func TestSanitizeSearchSnippetSkipsMatchEmptiedBySanitization(t *testing.T) {
 	if len(parsed.matches) != 2 {
 		t.Fatalf("matches = %+v, want two recorded spans", parsed.matches)
 	}
-	text, spans := normalizeSnippetRunes(parsed)
-	if len(spans) != 2 || spans[0].end != spans[0].start || spans[1].end <= spans[1].start {
-		t.Fatalf("spans = %+v over %q", spans, string(text))
+	// "z"*400 + " " + "ctx" is 404 scalars, so the emptied first match leaves
+	// no span and the retained match is the "needle" that follows it.
+	window := normalizeSnippetWindow(parsed)
+	if !window.found ||
+		!reflect.DeepEqual(window.match, runeSpan{start: 404, end: 410}) {
+		t.Fatalf("window match = %+v (found=%t), want the surviving needle span",
+			window.match, window.found)
+	}
+	if window.totalRunes != 410 {
+		t.Fatalf("totalRunes = %d, want 410", window.totalRunes)
 	}
 
 	got, err := sanitizeSearchSnippet(parsed)
@@ -697,20 +1045,23 @@ func TestSanitizeSearchSnippetSkipsMatchEmptiedBySanitization(t *testing.T) {
 	}
 }
 
-// TestNormalizeSnippetRunesClampsMatchEmptiedByPendingSpace pins the clamp in
-// applySpanBoundaries. The match is a single space that collapses into the
+// TestNormalizeSnippetWindowDropsMatchEmptiedByPendingSpace pins the retention
+// rule in the normalizer. The match is a single space that collapses into the
 // pending space in front of it, so its start index is provisionally past the
-// end of the emitted text; without the clamp the span would be inverted.
-func TestNormalizeSnippetRunesClampsMatchEmptiedByPendingSpace(t *testing.T) {
+// end of the emitted text. No scalar ever lands inside it, so it is not a
+// retained match — rather than an empty or inverted span the bounding pass has
+// to defend against.
+func TestNormalizeSnippetWindowDropsMatchEmptiedByPendingSpace(t *testing.T) {
 	start, end := fixedSearchMarkers()
 	parsed := parseFixedSearchSnippet(t, "abc "+start+" "+end+"def")
 
-	text, spans := normalizeSnippetRunes(parsed)
-	if string(text) != "abc def" {
-		t.Fatalf("text = %q, want %q", string(text), "abc def")
+	window := normalizeSnippetWindow(parsed)
+	if string(window.text) != "abc def" || window.base != 0 ||
+		window.totalRunes != 7 || window.totalBytes != 7 {
+		t.Fatalf("window = %+v, want the whole %q", window, "abc def")
 	}
-	if !reflect.DeepEqual(spans, []runeSpan{{start: 3, end: 3}}) {
-		t.Fatalf("spans = %+v, want one empty span at 3", spans)
+	if window.found {
+		t.Fatalf("window match = %+v, want no retained match", window.match)
 	}
 
 	got, err := sanitizeSearchSnippet(parsed)

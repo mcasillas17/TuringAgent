@@ -245,8 +245,7 @@ func rejectSearchSnippetMarkerCollision(content, start, end string) error {
 // Empty output, or output that no longer contains any matched text, is a
 // failure rather than a hit with invented or match-less text.
 func sanitizeSearchSnippet(parsed parsedSearchSnippet) (string, error) {
-	text, matches := normalizeSnippetRunes(parsed)
-	snippet := boundSearchSnippet(text, matches)
+	snippet := boundSearchSnippet(normalizeSnippetWindow(parsed))
 	if snippet == "" {
 		return "", ErrInvalidSearchSnippet
 	}
@@ -260,8 +259,51 @@ func sanitizeSearchSnippet(parsed parsedSearchSnippet) (string, error) {
 	return snippet, nil
 }
 
-// normalizeSnippetRunes repairs and flattens snippet payload, translating the
-// byte match spans into rune spans over the result.
+// searchSnippetWindowRunes is the ceiling on how many sanitized scalars the
+// repository holds at once while preparing one snippet, whatever the source
+// fragment weighs.
+//
+// FTS5's 32-token fragment bound says nothing about how long one token is, so a
+// single unbroken multi-megabyte token arrives here as one fragment. Every
+// window this package can publish lies inside
+// [match start - searchSnippetMaxRunes, match start + searchSnippetMaxRunes):
+// the output is at most searchSnippetMaxRunes scalars and always covers at
+// least one scalar of the match, so neither edge can travel a full cap away
+// from the match start. Retaining exactly that span, and counting the rest,
+// makes the working set a fixed 400 scalars rather than a copy of the input.
+const searchSnippetWindowRunes = 2 * searchSnippetMaxRunes
+
+// snippetWindow is the bounded working representation of a sanitized snippet.
+//
+// text holds the sanitized scalars for global indices [base, base+len(text)),
+// which is a window around the first retained match rather than the whole
+// fragment. The counters describe everything sanitization saw, so the bounding
+// pass can still tell whether text was dropped at either edge without holding
+// it.
+type snippetWindow struct {
+	text       []rune
+	base       int
+	totalRunes int
+	totalBytes int
+	// match is the first retained match in global scalar indices. It is only
+	// meaningful when found is set, and its end can lie beyond the retained
+	// window when one matched token is longer than the caps.
+	match runeSpan
+	found bool
+}
+
+// searchSnippetRuneLen is the UTF-8 width string() would write for r. A rune Go
+// cannot encode is written as U+FFFD, so it is charged that width.
+func searchSnippetRuneLen(r rune) int {
+	if width := utf8.RuneLen(r); width > 0 {
+		return width
+	}
+	return utf8.RuneLen(utf8.RuneError)
+}
+
+// snippetNormalizer repairs and flattens snippet payload into a bounded
+// snippetWindow, locating the first match that survives sanitization as it
+// goes.
 //
 // The rules are the design's, in this order: invalid UTF-8 becomes U+FFFD;
 // Unicode whitespace and line separators become one ASCII space, collapsed and
@@ -273,57 +315,53 @@ func sanitizeSearchSnippet(parsed parsedSearchSnippet) (string, error) {
 // are deliberately left alone: stripping them would corrupt Arabic, Hebrew, and
 // emoji sequences to defend against an override the explicit-control rule
 // already removes.
-func normalizeSnippetRunes(parsed parsedSearchSnippet) ([]rune, []runeSpan) {
-	text := make([]rune, 0, len(parsed.text))
-	spans := make([]runeSpan, 0, len(parsed.matches))
+type snippetNormalizer struct {
+	// retain is how many sanitized scalars are kept on each side of the match
+	// start, so the buffer is twice it. Production derives it from
+	// searchSnippetWindowRunes; it is a parameter rather than a constant read
+	// here so the bounded window can be differentially checked against an
+	// unwindowed run of this same code, with no mutable package state and no
+	// production seam.
+	retain       int
+	window       snippetWindow
+	pendingSpace bool
+	// openSpan is the global scalar index where the current match opened, or
+	// -1 when no match is open.
+	openSpan int
+	// nextMatch is the byte span being tracked, and complete records that the
+	// first retained match has already closed. Later matches are irrelevant:
+	// the window opens on the first one.
+	nextMatch int
+	complete  bool
+}
 
-	pendingSpace := false
-	openSpan := -1
-	next := 0
+// normalizeSnippetWindow sanitizes parsed snippet payload into a window bounded
+// by searchSnippetWindowRunes.
+//
+// The source is read once, byte by byte, which is unavoidable: trailing
+// whitespace collapses away, so whether any text survives after the window can
+// only be known by reading to the end. Reading a buffer the caller already
+// holds is not the same as allocating a second one the size of it.
+func normalizeSnippetWindow(parsed parsedSearchSnippet) snippetWindow {
+	return newSnippetNormalizer(searchSnippetWindowRunes).normalize(parsed)
+}
 
-	emit := func(r rune) {
-		if pendingSpace {
-			text = append(text, ' ')
-			pendingSpace = false
-		}
-		text = append(text, r)
+// newSnippetNormalizer builds a normalizer whose retained buffer is exactly
+// width scalars: half reaching back from the match start and half forward from
+// it, which is the split the caps justify. A test can pass a width wider than
+// the fragment to get an unwindowed reference run of this same code.
+func newSnippetNormalizer(width int) *snippetNormalizer {
+	return &snippetNormalizer{
+		retain:   width / 2,
+		window:   snippetWindow{text: make([]rune, 0, width)},
+		openSpan: -1,
 	}
-	// nextRuneIndex is where the next emitted rune will land, including a space
-	// that is still pending. Using it as a match start keeps a span over the
-	// match's own runes instead of the collapsed space in front of it.
-	nextRuneIndex := func() int {
-		if pendingSpace {
-			return len(text) + 1
-		}
-		return len(text)
-	}
-	// applySpanBoundaries closes and opens every match span that lands on this
-	// byte offset, so spans that touch after marker removal stay separate.
-	applySpanBoundaries := func(offset int) {
-		for {
-			if openSpan < 0 && next < len(parsed.matches) && parsed.matches[next].start <= offset {
-				openSpan = nextRuneIndex()
-				continue
-			}
-			if openSpan >= 0 && next < len(parsed.matches) && parsed.matches[next].end <= offset {
-				start := openSpan
-				if start > len(text) {
-					// The whole match normalized away, so record an empty span
-					// rather than an inverted one.
-					start = len(text)
-				}
-				spans = append(spans, runeSpan{start: start, end: len(text)})
-				openSpan = -1
-				next++
-				continue
-			}
-			return
-		}
-	}
+}
 
+func (n *snippetNormalizer) normalize(parsed parsedSearchSnippet) snippetWindow {
 	invalidRun := false
 	for offset := 0; offset < len(parsed.text); {
-		applySpanBoundaries(offset)
+		n.applySpanBoundaries(parsed.matches, offset)
 
 		decoded, width := utf8.DecodeRune(parsed.text[offset:])
 		if decoded == utf8.RuneError && width <= 1 {
@@ -331,7 +369,7 @@ func normalizeSnippetRunes(parsed parsedSearchSnippet) ([]rune, []runeSpan) {
 			// is what strings.ToValidUTF8 does; offsets still advance one byte
 			// at a time so a span boundary inside the run is not skipped.
 			if !invalidRun {
-				emit(utf8.RuneError)
+				n.emit(utf8.RuneError)
 				invalidRun = true
 			}
 			offset++
@@ -343,19 +381,122 @@ func normalizeSnippetRunes(parsed parsedSearchSnippet) ([]rune, []runeSpan) {
 		case unicode.IsSpace(decoded):
 			// Leading whitespace is dropped, and a pending space that is never
 			// followed by content trims the tail.
-			if len(text) > 0 {
-				pendingSpace = true
+			if n.window.totalRunes > 0 {
+				n.pendingSpace = true
 			}
 		case isSearchSnippetControl(decoded), isSearchSnippetBidiControl(decoded):
-			emit(utf8.RuneError)
+			n.emit(utf8.RuneError)
 		default:
-			emit(decoded)
+			n.emit(decoded)
 		}
 		offset += width
 	}
-	applySpanBoundaries(len(parsed.text))
+	n.applySpanBoundaries(parsed.matches, len(parsed.text))
 
-	return text, spans
+	return n.window
+}
+
+func (n *snippetNormalizer) emit(r rune) {
+	if n.pendingSpace {
+		n.pendingSpace = false
+		n.push(' ')
+	}
+	n.push(r)
+}
+
+// nextRuneIndex is where the next emitted scalar will land, including a space
+// that is still pending. Using it as a match start keeps a span over the
+// match's own scalars instead of the collapsed space in front of it.
+func (n *snippetNormalizer) nextRuneIndex() int {
+	if n.pendingSpace {
+		return n.window.totalRunes + 1
+	}
+	return n.window.totalRunes
+}
+
+// push counts one sanitized scalar and retains it only while it can still
+// appear in some legal output window.
+//
+// A match is "retained" exactly when a scalar lands at or after the index its
+// span opened on. That replaces an after-the-fact emptiness check: a match made
+// only of controls or collapsed whitespace never receives a scalar, so it is
+// never mistaken for evidence of a match, and a start index provisionally past
+// the emitted text can never become an inverted span.
+func (n *snippetNormalizer) push(r rune) {
+	index := n.window.totalRunes
+	n.window.totalRunes++
+	n.window.totalBytes += searchSnippetRuneLen(r)
+
+	if !n.window.found && n.openSpan >= 0 && index >= n.openSpan {
+		n.window.found = true
+		n.window.match = runeSpan{start: n.openSpan, end: n.openSpan}
+		// The match start is now known, so everything a window can never reach
+		// again is dropped in one shift, leaving room for the scalars after it.
+		n.compact()
+	}
+	if n.window.found && index >= n.window.match.start+n.retain {
+		// Past the furthest scalar any legal window reaches. It still counts
+		// toward the totals, but it is not stored.
+		return
+	}
+
+	if len(n.window.text) == cap(n.window.text) {
+		n.compact()
+		if len(n.window.text) == cap(n.window.text) {
+			// Unreachable given the bound above: refusing to grow keeps
+			// searchSnippetWindowRunes an absolute ceiling rather than a
+			// ceiling that holds only while the proof does.
+			return
+		}
+	}
+	n.window.text = append(n.window.text, r)
+}
+
+// compact drops retained scalars below the floor any future window can reach,
+// shifting the remainder down inside the same backing array.
+//
+// Before a match is found the floor trails the scan by retain scalars, because a
+// match starting at the very next scalar could still window back that far. Once
+// the match start is known the floor is fixed, so this shifts at most once more
+// and the remaining retain scalars after the match always have room.
+func (n *snippetNormalizer) compact() {
+	floor := n.window.totalRunes - 1 - n.retain
+	if n.window.found {
+		floor = n.window.match.start - n.retain
+	}
+	drop := floor - n.window.base
+	if drop <= 0 {
+		return
+	}
+	if drop > len(n.window.text) {
+		drop = len(n.window.text)
+	}
+	n.window.text = n.window.text[:copy(n.window.text, n.window.text[drop:])]
+	n.window.base += drop
+}
+
+// applySpanBoundaries closes and opens every match span that lands on this byte
+// offset, so spans that touch after marker removal stay separate. Tracking
+// stops once the first retained match closes.
+func (n *snippetNormalizer) applySpanBoundaries(matches []byteSpan, offset int) {
+	for !n.complete {
+		if n.openSpan < 0 && n.nextMatch < len(matches) &&
+			matches[n.nextMatch].start <= offset {
+			n.openSpan = n.nextRuneIndex()
+			continue
+		}
+		if n.openSpan >= 0 && n.nextMatch < len(matches) &&
+			matches[n.nextMatch].end <= offset {
+			if n.window.found {
+				n.window.match.end = n.window.totalRunes
+				n.complete = true
+			}
+			n.openSpan = -1
+			n.nextMatch++
+			continue
+		}
+		return
+	}
 }
 
 // isSearchSnippetControl reports the C0, C1, and DEL code points. Whitespace
@@ -380,67 +521,76 @@ func isSearchSnippetBidiControl(r rune) bool {
 	}
 }
 
-// boundSearchSnippet cuts sanitized text down to a window that respects both
-// caps while keeping matched text visible. It returns "" when no window can
-// satisfy that, which the caller turns into ErrInvalidSearchSnippet.
+// boundSearchSnippet cuts a sanitized window down to a snippet that respects
+// both caps while keeping matched text visible. It returns "" when no window
+// can satisfy that, which the caller turns into ErrInvalidSearchSnippet.
 //
-// The window starts at the first surviving match and grows outward, so a
-// complete match is preserved whenever it fits. When one matched token is
-// larger than the caps on its own the bounds win and the largest prefix that
-// fits stays visible, because an unbounded snippet is the thing this function
-// exists to prevent. Both caps are checked with the ellipsis already paid for,
-// and every cut lands on a rune boundary.
-func boundSearchSnippet(text []rune, matches []runeSpan) string {
-	if len(text) == 0 {
+// The priority order is deliberate. A sanitized match that fits both caps on
+// its own is published complete: it is the reason the snippet exists, so it
+// outranks the U+2026 cut indicators around it. Those indicators are added only
+// when every edge that needs one can be paid for beside the whole match, and
+// are dropped together otherwise, because a snippet that marks one cut edge and
+// silently swallows the other describes the source less honestly than one that
+// marks neither. Context grows outward only after the whole match is secured,
+// and every scalar of context is charged for its indicators as it is taken.
+//
+// When one matched token is larger than the caps on its own the bounds win and
+// the largest prefix that fits stays visible, with indicators charged as usual,
+// because an unbounded snippet is the thing this function exists to prevent.
+// Every cut lands on a scalar boundary.
+func boundSearchSnippet(window snippetWindow) string {
+	if !window.found || window.totalRunes == 0 {
 		return ""
 	}
-	match, found := firstRetainedSearchMatch(matches)
-	if !found {
+	matchRunes := window.match.end - window.match.start
+	if matchRunes <= 0 {
 		return ""
+	}
+	// Nothing was dropped at either edge and both caps already hold, so the
+	// whole fragment is the snippet. A marker-free fragment reaches this with
+	// its implicit whole-fragment span and is published unwindowed.
+	if window.base == 0 &&
+		window.totalRunes <= searchSnippetMaxRunes &&
+		window.totalBytes <= searchSnippetMaxBytes {
+		return string(window.text)
 	}
 
+	text := window.text
 	// Prefix byte offsets keep every window measurement O(1); string(text[a:b])
-	// per candidate window would be quadratic on a long oversized token.
+	// per candidate window would be quadratic across the retained window.
 	offsets := make([]int, len(text)+1)
 	for i, r := range text {
-		width := utf8.RuneLen(r)
-		if width < 0 {
-			// A rune Go cannot encode is written as U+FFFD by string(), so
-			// charge it the same width.
-			width = utf8.RuneLen(utf8.RuneError)
-		}
-		offsets[i+1] = offsets[i] + width
+		offsets[i+1] = offsets[i] + searchSnippetRuneLen(r)
 	}
+	// The retained window is a slice of a longer fragment, so a cut edge is a
+	// question about the global position, not about this buffer.
+	cutBefore := func(low int) bool { return window.base+low > 0 }
+	cutAfter := func(high int) bool { return window.base+high < window.totalRunes }
 	fits := func(low, high int) bool {
 		runes := high - low
 		size := offsets[high] - offsets[low]
-		if low > 0 {
-			runes += 1
+		if cutBefore(low) {
+			runes++
 			size += searchSnippetEllipsisBytes
 		}
-		if high < len(text) {
-			runes += 1
+		if cutAfter(high) {
+			runes++
 			size += searchSnippetEllipsisBytes
 		}
 		return runes <= searchSnippetMaxRunes && size <= searchSnippetMaxBytes
 	}
 
-	if fits(0, len(text)) {
-		return string(text)
+	low := window.match.start - window.base
+	high := low + matchRunes
+	if high > len(text) {
+		// Only an oversized match can outrun the retained window, and that
+		// match is about to be truncated anyway.
+		high = len(text)
 	}
-
-	low, high := match.start, match.end
-	truncatedMatch := false
-	for high > low && !fits(low, high) {
-		high--
-		truncatedMatch = true
-	}
-	if high <= low {
-		return ""
-	}
-	if !truncatedMatch {
+	if matchRunes <= searchSnippetMaxRunes &&
+		offsets[high]-offsets[low] <= searchSnippetMaxBytes {
 		// Grow context evenly so a match keeps its surroundings on both sides
-		// when there is room for them.
+		// when there is room for them once its indicators are paid for.
 		for {
 			grew := false
 			if low > 0 && fits(low-1, high) {
@@ -455,45 +605,49 @@ func boundSearchSnippet(text []rune, matches []runeSpan) string {
 				break
 			}
 		}
-	}
-
-	// Trim space that would otherwise sit against an inserted ellipsis. This
-	// only shrinks the window, so both caps still hold.
-	if low > 0 {
-		for low < high && text[low] == ' ' {
-			low++
-		}
-	}
-	if high < len(text) {
-		for high > low && text[high-1] == ' ' {
+	} else {
+		for high > low && !fits(low, high) {
 			high--
 		}
+		if high <= low {
+			return ""
+		}
 	}
-	if high <= low || max(low, match.start) >= min(high, match.end) {
+
+	// Indicators are affordable for every window reached by growth or
+	// truncation above; only an exactly-fitting match left alone can fail this.
+	indicate := fits(low, high)
+	if indicate {
+		// Trim space that would otherwise sit against an inserted ellipsis.
+		// This only shrinks the window, so both caps still hold. With no
+		// ellipsis to sit against there is nothing to trim, and trimming would
+		// eat into the complete match this branch exists to preserve.
+		if cutBefore(low) {
+			for low < high && text[low] == ' ' {
+				low++
+			}
+		}
+		if cutAfter(high) {
+			for high > low && text[high-1] == ' ' {
+				high--
+			}
+		}
+	}
+	matchLow := window.match.start - window.base
+	matchHigh := matchLow + matchRunes
+	if high <= low || max(low, matchLow) >= min(high, matchHigh) {
 		return ""
 	}
 
 	var bounded strings.Builder
-	if low > 0 {
+	if indicate && cutBefore(low) {
 		bounded.WriteRune(searchSnippetEllipsis)
 	}
 	bounded.WriteString(string(text[low:high]))
-	if high < len(text) {
+	if indicate && cutAfter(high) {
 		bounded.WriteRune(searchSnippetEllipsis)
 	}
 	return bounded.String()
-}
-
-// firstRetainedSearchMatch returns the first match span that still covers real
-// text. A span can be emptied by sanitization — a match made only of control
-// characters, for example — and an empty span is not evidence of a match.
-func firstRetainedSearchMatch(matches []runeSpan) (runeSpan, bool) {
-	for _, match := range matches {
-		if match.end > match.start {
-			return match, true
-		}
-	}
-	return runeSpan{}, false
 }
 
 // withWholeFragmentSpan gives a marker-free fragment one implicit match span

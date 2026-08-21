@@ -1,9 +1,10 @@
 # MEM-002 Scored Search Hits Design
 
 **Status:** Approved by the coordinator on 2026-08-20 at design commit
-`6f46448efb846fef26a7951e44238504b3f51179`. Implementation remains blocked
-until PR #68 (`TUR-008`, reviewed at head
-`18669085f642bf81614438b48a65ffb1bf9a439e`) lands on `main`.
+`6f46448efb846fef26a7951e44238504b3f51179`. The blocking dependency is
+resolved: `TUR-008` landed on `main` as `00145ae0` (PR #68). Implementation
+against this design exists on the `mcasillas17-mem-002-scored-search-hits`
+branch and is in full-diff review; it is not merged.
 
 ## Goal
 
@@ -400,12 +401,33 @@ span:
 5. If the sanitized fragment exceeds either 200 Unicode scalar values or 800
    UTF-8 bytes, the repository selects a window around the first marked match,
    or around the implicit whole-fragment span when the fragment carried no
-   markers. It reserves one scalar and three bytes for U+2026 at each cut edge,
-   never splits an encoded rune, and trims space adjacent to an inserted
-   ellipsis. A complete sanitized match remains in the window whenever that
-   match itself fits both caps. If one matched token alone exceeds a cap, bounds
-   take precedence and the largest match prefix that fits remains visible. A
+   markers. It never splits an encoded rune, and it trims space adjacent to an
+   inserted ellipsis. A complete sanitized match remains in the window whenever
+   that match itself fits both caps — measured on the match alone, before any
+   cut indicator. If one matched token alone exceeds a cap, bounds take
+   precedence and the largest match prefix that fits remains visible. A
    marker-free fragment is windowed from its own start, so only its tail is cut.
+6. U+2026 marks each cut edge and costs one scalar and three bytes against both
+   caps, but it ranks below the complete match. Indicators are added only when
+   every edge that needs one fits alongside the whole match; when they cannot,
+   all of them are omitted rather than truncating a match that fits, because a
+   snippet marking one cut edge while silently swallowing the other describes
+   its source less honestly than one marking neither. A match of exactly 200
+   scalars or exactly 800 bytes is therefore published whole and unmarked even
+   with source text on both sides. Context grows outward only once the whole
+   match is secured, and each scalar of context is charged for its indicators as
+   it is taken, so cut indicators are best-effort only at this one boundary.
+7. Sanitization retains at most 400 scalars — two caps' worth — around the first
+   retained match and counts everything else, so the working set is fixed rather
+   than proportional to the fragment. FTS5's 32-token bound does not bound the
+   length of one token, so a single unbroken multi-megabyte token legitimately
+   arrives as one fragment; every publishable window is at most 200 scalars and
+   always covers part of the match, so neither edge can travel a full cap from
+   the match start and nothing outside that span can appear in output. The
+   fragment is still read once end to end, because collapsing trailing
+   whitespace makes it impossible to know otherwise whether any text survives
+   after the window; reading the buffer the driver already returned is not the
+   same as allocating a second one beside it.
 
 For a trigger-consistent projection, the final snippet is valid UTF-8,
 non-empty, single-line plain text, at most 200 scalars, at most 800 bytes, and
@@ -781,8 +803,9 @@ contract.
 
 ## Approval and implementation gate
 
-This document is the complete MEM-002 behavior design. No implementation,
-generated-code update, or implementation plan starts from the current branch.
-After explicit coordinator approval and PR #68 landing on `main`, the worktree
-must fetch and normally merge current `main`, then implement against the landed
-TUR-008 surfaces while preserving this contract.
+This document is the complete MEM-002 behavior design. Both gates it named have
+been passed: the coordinator approved it, and PR #68 landed TUR-008 on `main` as
+`00145ae0`. The implementation worktree merged current `main` and implements
+against the landed TUR-008 surfaces while preserving this contract; that work is
+in full-diff review on `mcasillas17-mem-002-scored-search-hits` and has not
+merged. This document remains the contract, not a record of what shipped.

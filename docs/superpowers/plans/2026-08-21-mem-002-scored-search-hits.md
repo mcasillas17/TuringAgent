@@ -492,7 +492,13 @@ func TestSanitizeSearchSnippetRepairsAndBoundsText(t *testing.T) {
 
 Also cover C0/C1/DEL, tabs and Unicode whitespace, bidi controls, RTL, emoji,
 combining marks, CJK, middle/end match windows, one oversized matched token,
-empty post-sanitization output, and exact 200-rune/800-byte boundaries. Add
+empty post-sanitization output, and exact 200-rune/800-byte boundaries. The
+boundary cases must include a complete match of exactly 200 scalars and one of
+exactly 800 bytes with source context on both sides, asserting the published
+snippet is the whole match with no indicator and no truncation, alongside a
+198-scalar match where both indicators do fit. Cover the allocation bound too:
+a multi-megabyte single token must leave the working window under
+`searchSnippetWindowRunes` while the published snippet still honours both caps. Add
 `<script>alert(1)</script>` and `**bold**` payloads and assert those bytes remain
 literal rather than entity-escaped or emphasized; output may add only U+2026 at
 a cut edge or U+FFFD for explicitly replaced invalid/control input. The
@@ -516,16 +522,31 @@ Implement these focused helpers:
 ```go
 func rejectSearchSnippetMarkerCollision(content, start, end string) error
 func sanitizeSearchSnippet(parsed parsedSearchSnippet) (string, error)
-func normalizeSnippetRunes(parsed parsedSearchSnippet) ([]rune, []runeSpan)
-func boundSearchSnippet(text []rune, matches []runeSpan) string
+func normalizeSnippetWindow(parsed parsedSearchSnippet) snippetWindow
+func boundSearchSnippet(window snippetWindow) string
 func isSearchSnippetBidiControl(r rune) bool
 ```
 
-Preserve the first complete match when it fits, reserve U+2026 for every cut
-edge, truncate an oversized match prefix within both caps, collapse whitespace,
-and replace invalid/control/bidi data with U+FFFD. Return
-`ErrInvalidSearchSnippet` if bounded output is empty or contains no retained
-match text.
+Preserve the first complete match whenever the sanitized match itself fits both
+caps, collapse whitespace, and replace invalid/control/bidi data with U+FFFD.
+Return `ErrInvalidSearchSnippet` if bounded output is empty or contains no
+retained match text.
+
+U+2026 marks each cut edge, but it ranks below the complete match: the
+indicators are added only when every edge that needs one can be paid for beside
+the whole match, and are dropped together otherwise rather than truncating a
+match that fits. Context grows outward only after the whole match is secured,
+and each scalar of context is charged for its indicators as it is taken. Only a
+matched token larger than the caps is truncated to the largest prefix that fits,
+indicators included.
+
+`normalizeSnippetWindow` never materializes the whole fragment. FTS5's 32-token
+bound does not bound one token, so a multi-megabyte token arrives as a single
+fragment; sanitization retains at most `searchSnippetWindowRunes` scalars around
+the first retained match and counts the rest, because every publishable window
+lies within one cap of that match start. The source is still read once end to
+end — collapsing trailing whitespace makes that unavoidable — but nothing
+proportional to it is allocated.
 
 Run:
 

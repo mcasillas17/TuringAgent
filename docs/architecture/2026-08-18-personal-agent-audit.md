@@ -496,9 +496,10 @@ remains blocked until the commit containing the contract is on `main`.
 
 #### MEM-002 — Return scored, explainable search hits
 
-**Status:** Implemented. The canonical public contract — score semantics,
-snippet safety rules, format negotiation, and the visibility and limit domain —
-is specified in [Session recall
+**Status:** Implemented on the `mcasillas17-mem-002-scored-search-hits` branch
+and in full-diff review; not yet merged to `main`. The canonical public contract
+— score semantics, snippet safety rules, format negotiation, and the visibility
+and limit domain — is specified in [Session recall
 scope](session-recall.md#scored-search-hits); the summary below restates it
 only in outline.
 
@@ -513,9 +514,15 @@ and a one-call legacy fallback for a new client talking to an older server.
 `message_id` tie-breaking; `SearchHit.snippet` is a sanitized, single-line
 plain-text excerpt of the matched message only, centered on the match whenever
 FTS5's 32-token snippet window could mark one and an unhighlighted bounded
-excerpt of that same message when the phrase is wider than the window. Both
-projections share one predicate, so lifecycle visibility, scope, exclusion,
-limits, and literal-phrase handling are unchanged.
+excerpt of that same message when the phrase is wider than the window. Within
+the 200-scalar and 800-byte caps the complete match outranks the U+2026 cut
+indicators around it: a match that fits both caps on its own is published whole
+and the indicators are dropped together when they cannot fit beside it, so they
+are best-effort at that boundary. Snippet preparation also holds a fixed-size
+window rather than a copy of the fragment, so one unbroken multi-megabyte token
+cannot make the server allocate in proportion to it. Both projections share one
+predicate, so lifecycle visibility, scope, exclusion, limits, and literal-phrase
+handling are unchanged.
 
 **Likely files:** `proto/turing/v1/sessions.proto`, sessions repository and
 service, generated Go/Dart, client mappers.

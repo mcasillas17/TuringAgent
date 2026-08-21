@@ -117,10 +117,23 @@ The published snippet is single-line literal plain text:
   than what was stored. Natural right-to-left letters and joiners are content
   and are preserved.
 - After FTS5's 32-token fragment bound, the result is bounded twice more: at
-  most 200 Unicode scalar values and at most 800 UTF-8 bytes, with any inserted
-  ellipsis charged against both caps and every cut landing on a scalar
-  boundary. A single matched token larger than the caps is truncated rather
-  than allowed to grow the response.
+  most 200 Unicode scalar values and at most 800 UTF-8 bytes, with every cut
+  landing on a scalar boundary. A single matched token larger than the caps is
+  truncated rather than allowed to grow the response.
+- A cut edge is marked with an inserted U+2026, which is charged against both
+  caps like any other content. The complete match outranks those indicators: a
+  sanitized match that fits both caps on its own is published whole, and the
+  indicators are added only when every edge that needs one fits beside it. When
+  they cannot, all of them are omitted rather than shortening a match that fits,
+  so a match of exactly 200 scalars or exactly 800 bytes is returned unmarked
+  even when the message continues on both sides. Surrounding context is added
+  only after the whole match is secured, and pays for its own indicators.
+- Producing that snippet costs a fixed amount of working memory per row. FTS5's
+  32-token bound does not bound the length of one token, so a single unbroken
+  multi-megabyte token can arrive as one fragment; sanitization keeps only the
+  scalars a publishable window could reach — two caps' worth around the match —
+  and counts the rest, so a hostile or merely unusual message cannot make the
+  server allocate in proportion to it.
 
 A hit whose score or snippet cannot be proven safe fails the entire query with
 an opaque `Internal` error; the server never emits a partial, defaulted, or
