@@ -12,6 +12,8 @@ import 'package:turing_flutter_app/generated/google/protobuf/timestamp.pb.dart'
 import 'package:turing_flutter_app/models/grpc_mappers.dart';
 import 'package:turing_flutter_app/generated/google/protobuf/struct.pb.dart'
     as structpb;
+import 'package:turing_flutter_app/models/run_lifecycle.dart';
+import 'package:turing_flutter_app/models/run_state.dart';
 
 void main() {
   // Guards the tool-call UI: the chat screen switches on these dotted strings,
@@ -125,7 +127,7 @@ void main() {
     expect(mapped.payload['serverName'], 'system');
   });
 
-  test('maps run state changed chat event type and structural payload', () {
+  test('chat persisted state changed maps type and semantic run state', () {
     final mapped = GrpcMappers.chatStreamEventToTuringEvent(
       ChatStreamEvent(
         sessionId: 'sess_1',
@@ -138,10 +140,14 @@ void main() {
     );
 
     expect(mapped.type, 'agent.run.state_changed');
-    expect(mapped.payload, {'runId': 'run_1', 'stateVersion': 7});
+    expect(mapped.runState?.runId, 'run_1');
+    expect(mapped.runState?.stateVersion, 7);
+    expect(mapped.runState?.lifecycle, RunLifecycle.unknown);
+    expect(mapped.runState?.outcomeReason, RunOutcomeReason.unknown);
+    expect(mapped.payload, isEmpty);
   });
 
-  test('maps persisted event type twenty three to agent run state changed', () {
+  test('event service state changed maps type and semantic run state', () {
     final mapped = GrpcMappers.turingEventToTuringEvent(
       eventpb.TuringEvent(
         type: eventpb.TuringEventType.TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED,
@@ -155,7 +161,11 @@ void main() {
     );
 
     expect(mapped.type, 'agent.run.state_changed');
-    expect(mapped.payload, {'runId': 'run_1', 'stateVersion': 7});
+    expect(mapped.runState?.runId, 'run_1');
+    expect(mapped.runState?.stateVersion, 7);
+    expect(mapped.runState?.lifecycle, RunLifecycle.unknown);
+    expect(mapped.runState?.outcomeReason, RunOutcomeReason.unknown);
+    expect(mapped.payload, {'outcomeReason': 'provider_failure'});
   });
 
   // A server that types an event as state-changed without filling the typed
@@ -176,6 +186,7 @@ void main() {
     );
 
     expect(mapped.type, 'agent.run.state_changed');
+    expect(mapped.runState, isNull);
     expect(mapped.payload, {'runId': 'run_1', 'note': 'legacy projection'});
   });
 
@@ -198,6 +209,7 @@ void main() {
     );
 
     expect(mapped.type, 'agent.run.failed');
+    expect(mapped.runState?.stateVersion, 7);
     expect(mapped.payload, {
       'errorCode': 'provider_failure',
       'message': 'upstream timeout',
@@ -215,7 +227,28 @@ void main() {
     );
 
     expect(mapped.type, 'agent.run.state_changed');
+    expect(mapped.runState, isNull);
     expect(mapped.payload, isEmpty);
+  });
+
+  test('absent message run state remains neutral legacy absence', () {
+    final mapped = GrpcMappers.messageToModel(
+      commonpb.Message(
+        messageId: 'msg_assistant',
+        role: commonpb.MessageRole.MESSAGE_ROLE_ASSISTANT,
+      ),
+    );
+
+    expect(mapped.runState, isNull);
+  });
+
+  test('unknown event type never becomes a raw numeric label', () {
+    final mapped = GrpcMappers.turingEventToTuringEvent(
+      eventpb.TuringEvent.fromBuffer(const [0x30, 0x7f]),
+    );
+
+    expect(mapped.type, 'system');
+    expect(mapped.type, isNot(contains('127')));
   });
 
   test('generated chat event oneof remains exhaustively mapped', () {

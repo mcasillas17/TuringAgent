@@ -1,0 +1,72 @@
+{
+  "@@locale": "en",
+  "runStatusUnavailableTitle": "Run status unavailable",
+  "runStatusUnavailableDetail": "This app cannot identify the run's current status.",
+  "runQueuedTitle": "Queued",
+  "runQueuedDetail": "The run is waiting to start.",
+  "runRunningTitle": "Working",
+  "runRunningDetail": "The assistant is working on this run.",
+  "runWaitingApprovalTitle": "Waiting for approval",
+  "runWaitingApprovalDetail": "The run is paused until an approval is decided.",
+  "runRecoveringTitle": "Recovering",
+  "runRecoveringDetail": "The app is recovering this run after an interruption.",
+  "runCompletedTitle": "Completed",
+  "runCompletedDetail": "The assistant response is complete.",
+  "runCompletedNoContentTitle": "Completed",
+  "runCompletedNoContentDetail": "No assistant response was recorded.",
+  "runFailedTitle": "Run failed",
+  "runFailedDetail": "The run ended before it could complete.",
+  "runCancelledTitle": "Run interrupted",
+  "runCancelledDetail": "The run ended before it could finish.",
+  "runOutcomeUnavailableTitle": "Outcome unavailable",
+  "runOutcomeUnavailableDetail": "This app cannot identify why the run ended.",
+  "runNoResponseTitle": "No response recorded",
+  "runNoResponseDetail": "No assistant response was recorded for this run.",
+  "runOutcomeNoneTitle": "No terminal outcome",
+  "runOutcomeNoneDetail": "The run has no terminal outcome.",
+  "runUserCancelledTitle": "Run cancelled",
+  "runUserCancelledDetail": "You cancelled this run.",
+  "runAbandonedTitle": "Run interrupted",
+  "runAbandonedDetail": "The run ended before it could finish.",
+  "runExpiredTitle": "Run expired",
+  "runExpiredDetail": "The run expired before it could finish.",
+  "runContextLimitTitle": "Context limit reached",
+  "runContextLimitDetail": "The run could not continue within its context limit.",
+  "runProviderFailureTitle": "Provider unavailable",
+  "runProviderFailureDetail": "The model provider could not complete this run.",
+  "runToolFailureTitle": "Tool failed",
+  "runToolFailureDetail": "A tool could not complete this run.",
+  "runPolicyDeniedTitle": "Action not allowed",
+  "runPolicyDeniedDetail": "A policy prevented this run from continuing.",
+  "runRetriesExhaustedTitle": "Retries exhausted",
+  "runRetriesExhaustedDetail": "The run could not recover after its retry attempts.",
+  "runRecoveryInterruptedTitle": "Recovery interrupted",
+  "runRecoveryInterruptedDetail": "The run ended while the app was recovering it.",
+  "runSideEffectUncertainTitle": "Result uncertain",
+  "runSideEffectUncertainDetail": "The app could not confirm whether an action completed.",
+  "runApprovalDeliveryFailedTitle": "Approval could not resume",
+  "runApprovalDeliveryFailedDetail": "The approved action could not be delivered safely.",
+  "runInternalFailureTitle": "Internal failure",
+  "runInternalFailureDetail": "The app could not complete this run.",
+  "runDispatchRetryNotice": "Starting attempt {attempt} of {maxAttempts}.",
+  "@runDispatchRetryNotice": {
+    "placeholders": {
+      "attempt": {"type": "int"},
+      "maxAttempts": {"type": "int"}
+    }
+  },
+  "runRecoveryRetryNotice": "Recovering with attempt {attempt} of {maxAttempts}.",
+  "@runRecoveryRetryNotice": {
+    "placeholders": {
+      "attempt": {"type": "int"},
+      "maxAttempts": {"type": "int"}
+    }
+  },
+  "runRecoveryExhaustedNotice": "Recovery stopped after attempt {attempt} of {maxAttempts}.",
+  "@runRecoveryExhaustedNotice": {
+    "placeholders": {
+      "attempt": {"type": "int"},
+      "maxAttempts": {"type": "int"}
+    }
+  }
+}

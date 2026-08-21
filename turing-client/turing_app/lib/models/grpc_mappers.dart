@@ -1,3 +1,5 @@
+import 'package:fixnum/fixnum.dart';
+
 import '../generated/google/protobuf/struct.pb.dart' as structpb;
 import '../generated/google/protobuf/timestamp.pb.dart' as timestamppb;
 
@@ -12,12 +14,15 @@ import '../generated/turing/v1/integrations.pb.dart' as integrationpb;
 import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
 import '../generated/turing/v1/skills.pb.dart' as skillpb;
 import '../generated/turing/v1/telemetry.pb.dart' as telemetrypb;
+import '../utils/protobuf_enum.dart';
 import 'agent_descriptor.dart' as model_agent;
 import 'audit.dart' as model_audit;
 import 'external_agent.dart' as model_external_agent;
 import 'integration.dart' as model_integration;
 import 'automation.dart' as model_automation;
 import 'message.dart' as model_message;
+import 'run_lifecycle.dart' as model_run_lifecycle;
+import 'run_state.dart' as model_run_state;
 import 'search_hit.dart' as model_search_hit;
 import 'session.dart' as model_session;
 import 'skill.dart' as model_skill;
@@ -355,6 +360,9 @@ class GrpcMappers {
     return model_message.Message(
       messageId: message.messageId,
       runId: message.runId.isEmpty ? null : message.runId,
+      runState: message.hasRunState()
+          ? runStateToModel(message.runState)
+          : null,
       role: messageRoleToString(message.role),
       content: message.content,
       sequence: message.sequence.toInt(),
@@ -372,13 +380,6 @@ class GrpcMappers {
   static model_event.TuringEvent turingEventToTuringEvent(
     eventpb.TuringEvent event,
   ) {
-    // Only a present typed RunState may replace the persisted payload. A
-    // state-changed event without one keeps whatever the server actually
-    // stored instead of inventing a zero run identity and version.
-    final hasRunState =
-        event.type ==
-            eventpb.TuringEventType.TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED &&
-        event.hasRunState();
     return model_event.TuringEvent(
       eventId: event.eventId,
       sessionId: event.sessionId,
@@ -387,9 +388,8 @@ class GrpcMappers {
       sequence: event.sequence.toInt(),
       type: eventTypeToString(event.type),
       createdAt: _timestampToDateTime(event.createdAt),
-      payload: hasRunState
-          ? _runStatePayload(event.runState)
-          : structToMap(event.payload),
+      payload: structToMap(event.payload),
+      runState: event.hasRunState() ? runStateToModel(event.runState) : null,
     );
   }
 
@@ -410,7 +410,112 @@ class GrpcMappers {
       type: type,
       createdAt: DateTime.now().toUtc(),
       payload: _chatStreamPayload(event),
+      runState: _chatStreamRunState(event),
     );
+  }
+
+  static model_run_state.RunState? runStateToModel(commonpb.RunState runState) {
+    final version = runState.stateVersion.toInt();
+    if (runState.runId.isEmpty ||
+        version < 1 ||
+        Int64(version) != runState.stateVersion) {
+      return null;
+    }
+    return model_run_state.RunState(
+      runId: runState.runId,
+      userMessageId: runState.userMessageId,
+      assistantMessageId: runState.assistantMessageId,
+      lifecycle: runLifecycleToModel(
+        decodeClosedEnum(
+          message: runState,
+          fieldNumber: 4,
+          readValue: () => runState.lifecycle,
+          unknownValue: commonpb.RunLifecycle.RUN_LIFECYCLE_UNKNOWN,
+        ),
+      ),
+      outcomeReason: runOutcomeReasonToModel(
+        decodeClosedEnum(
+          message: runState,
+          fieldNumber: 5,
+          readValue: () => runState.outcomeReason,
+          unknownValue: commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_UNKNOWN,
+        ),
+      ),
+      stateVersion: version,
+      stateUpdatedAt: _timestampToDateTime(runState.stateUpdatedAt),
+      finishedAt: runState.hasFinishedAt()
+          ? _timestampToDateTime(runState.finishedAt)
+          : null,
+      hasDisplayableContent: runState.hasDisplayableContent,
+    );
+  }
+
+  static model_run_lifecycle.RunLifecycle runLifecycleToModel(
+    commonpb.RunLifecycle lifecycle,
+  ) {
+    switch (lifecycle) {
+      case commonpb.RunLifecycle.RUN_LIFECYCLE_QUEUED:
+        return model_run_lifecycle.RunLifecycle.queued;
+      case commonpb.RunLifecycle.RUN_LIFECYCLE_RUNNING:
+        return model_run_lifecycle.RunLifecycle.running;
+      case commonpb.RunLifecycle.RUN_LIFECYCLE_WAITING_APPROVAL:
+        return model_run_lifecycle.RunLifecycle.waitingApproval;
+      case commonpb.RunLifecycle.RUN_LIFECYCLE_RECOVERING:
+        return model_run_lifecycle.RunLifecycle.recovering;
+      case commonpb.RunLifecycle.RUN_LIFECYCLE_COMPLETED:
+        return model_run_lifecycle.RunLifecycle.completed;
+      case commonpb.RunLifecycle.RUN_LIFECYCLE_FAILED:
+        return model_run_lifecycle.RunLifecycle.failed;
+      case commonpb.RunLifecycle.RUN_LIFECYCLE_CANCELLED:
+        return model_run_lifecycle.RunLifecycle.cancelled;
+      case commonpb.RunLifecycle.RUN_LIFECYCLE_UNSPECIFIED:
+      case commonpb.RunLifecycle.RUN_LIFECYCLE_UNKNOWN:
+      default:
+        return model_run_lifecycle.RunLifecycle.unknown;
+    }
+  }
+
+  static model_run_state.RunOutcomeReason runOutcomeReasonToModel(
+    commonpb.RunOutcomeReason reason,
+  ) {
+    switch (reason) {
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_NONE:
+        return model_run_state.RunOutcomeReason.none;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_COMPLETED_NO_CONTENT:
+        return model_run_state.RunOutcomeReason.completedNoContent;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_USER_CANCELLED:
+        return model_run_state.RunOutcomeReason.userCancelled;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_ABANDONED:
+        return model_run_state.RunOutcomeReason.abandoned;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_EXPIRED:
+        return model_run_state.RunOutcomeReason.expired;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_CONTEXT_LIMIT:
+        return model_run_state.RunOutcomeReason.contextLimit;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_PROVIDER_FAILURE:
+        return model_run_state.RunOutcomeReason.providerFailure;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_TOOL_FAILURE:
+        return model_run_state.RunOutcomeReason.toolFailure;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_POLICY_DENIED:
+        return model_run_state.RunOutcomeReason.policyDenied;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_RETRIES_EXHAUSTED:
+        return model_run_state.RunOutcomeReason.retriesExhausted;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_RECOVERY_INTERRUPTED:
+        return model_run_state.RunOutcomeReason.recoveryInterrupted;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_SIDE_EFFECT_UNCERTAIN:
+        return model_run_state.RunOutcomeReason.sideEffectUncertain;
+      case commonpb
+          .RunOutcomeReason
+          .RUN_OUTCOME_REASON_APPROVAL_DELIVERY_FAILED:
+        return model_run_state.RunOutcomeReason.approvalDeliveryFailed;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_INTERNAL_FAILURE:
+        return model_run_state.RunOutcomeReason.internalFailure;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_LEGACY_UNKNOWN:
+        return model_run_state.RunOutcomeReason.legacyUnknown;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_UNSPECIFIED:
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_UNKNOWN:
+      default:
+        return model_run_state.RunOutcomeReason.unknown;
+    }
   }
 
   static String modelProviderToString(commonpb.ModelProvider provider) {
@@ -644,9 +749,7 @@ class GrpcMappers {
       case chatpb.ChatStreamEvent_Event.persistedEvent:
         return structToMap(event.persistedEvent.payload);
       case chatpb.ChatStreamEvent_Event.runStateChanged:
-        return event.runStateChanged.hasRunState()
-            ? _runStatePayload(event.runStateChanged.runState)
-            : const {};
+        return const {};
       case chatpb.ChatStreamEvent_Event.notSet:
         return const {};
     }
@@ -669,14 +772,62 @@ class GrpcMappers {
     };
   }
 
-  // Structural allowlist: only the run identity and the version that orders
-  // state changes. Enum names, numbers, and diagnostics are never exposed as
-  // user-facing text from here.
-  static Map<String, dynamic> _runStatePayload(commonpb.RunState runState) {
-    return {
-      'runId': runState.runId,
-      'stateVersion': runState.stateVersion.toInt(),
-    };
+  static model_run_state.RunState? _chatStreamRunState(
+    chatpb.ChatStreamEvent event,
+  ) {
+    commonpb.RunState? state;
+    switch (event.whichEvent()) {
+      case chatpb.ChatStreamEvent_Event.runQueued:
+        state = event.runQueued.hasRunState() ? event.runQueued.runState : null;
+      case chatpb.ChatStreamEvent_Event.runStarted:
+        state = event.runStarted.hasRunState()
+            ? event.runStarted.runState
+            : null;
+      case chatpb.ChatStreamEvent_Event.approvalRequested:
+        state = event.approvalRequested.hasRunState()
+            ? event.approvalRequested.runState
+            : null;
+      case chatpb.ChatStreamEvent_Event.approvalApproved:
+        state = event.approvalApproved.hasRunState()
+            ? event.approvalApproved.runState
+            : null;
+      case chatpb.ChatStreamEvent_Event.approvalDenied:
+        state = event.approvalDenied.hasRunState()
+            ? event.approvalDenied.runState
+            : null;
+      case chatpb.ChatStreamEvent_Event.approvalExpired:
+        state = event.approvalExpired.hasRunState()
+            ? event.approvalExpired.runState
+            : null;
+      case chatpb.ChatStreamEvent_Event.approvalConsumed:
+        state = event.approvalConsumed.hasRunState()
+            ? event.approvalConsumed.runState
+            : null;
+      case chatpb.ChatStreamEvent_Event.runCompleted:
+        state = event.runCompleted.hasRunState()
+            ? event.runCompleted.runState
+            : null;
+      case chatpb.ChatStreamEvent_Event.runFailed:
+        state = event.runFailed.hasRunState() ? event.runFailed.runState : null;
+      case chatpb.ChatStreamEvent_Event.runCancelled:
+        state = event.runCancelled.hasRunState()
+            ? event.runCancelled.runState
+            : null;
+      case chatpb.ChatStreamEvent_Event.runStateChanged:
+        state = event.runStateChanged.hasRunState()
+            ? event.runStateChanged.runState
+            : null;
+      case chatpb.ChatStreamEvent_Event.messageStarted:
+      case chatpb.ChatStreamEvent_Event.tokenDelta:
+      case chatpb.ChatStreamEvent_Event.toolCallStarted:
+      case chatpb.ChatStreamEvent_Event.toolCallCompleted:
+      case chatpb.ChatStreamEvent_Event.toolCallFailed:
+      case chatpb.ChatStreamEvent_Event.messageCompleted:
+      case chatpb.ChatStreamEvent_Event.persistedEvent:
+      case chatpb.ChatStreamEvent_Event.notSet:
+        state = null;
+    }
+    return state == null ? null : runStateToModel(state);
   }
 
   /// Telemetry, where the interesting part of the mapping is what does NOT

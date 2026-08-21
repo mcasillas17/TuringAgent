@@ -1,0 +1,284 @@
+import 'package:fixnum/fixnum.dart';
+import 'package:flutter/widgets.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:turing_flutter_app/generated/google/protobuf/timestamp.pb.dart'
+    as timestamppb;
+import 'package:turing_flutter_app/generated/turing/v1/common.pb.dart'
+    as commonpb;
+import 'package:turing_flutter_app/l10n/generated/app_localizations.dart';
+import 'package:turing_flutter_app/l10n/run_state_localizations.dart';
+import 'package:turing_flutter_app/models/grpc_mappers.dart';
+import 'package:turing_flutter_app/models/run_lifecycle.dart';
+import 'package:turing_flutter_app/models/run_state.dart';
+
+void main() {
+  final updatedAt = DateTime.utc(2026, 8, 21, 1, 2, 3);
+  final finishedAt = DateTime.utc(2026, 8, 21, 1, 2, 4);
+
+  commonpb.RunState protoState({
+    commonpb.RunLifecycle lifecycle =
+        commonpb.RunLifecycle.RUN_LIFECYCLE_FAILED,
+    commonpb.RunOutcomeReason outcome =
+        commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_PROVIDER_FAILURE,
+    Int64? stateVersion,
+  }) {
+    return commonpb.RunState(
+      runId: 'run_1',
+      userMessageId: 'msg_user',
+      assistantMessageId: 'msg_assistant',
+      lifecycle: lifecycle,
+      outcomeReason: outcome,
+      stateVersion: stateVersion ?? Int64(7),
+      stateUpdatedAt: timestamppb.Timestamp.fromDateTime(updatedAt),
+      finishedAt: timestamppb.Timestamp.fromDateTime(finishedAt),
+      hasDisplayableContent: true,
+    );
+  }
+
+  test('maps message run state without internal fields', () {
+    final message = GrpcMappers.messageToModel(
+      commonpb.Message(
+        messageId: 'msg_assistant',
+        runId: 'run_1',
+        role: commonpb.MessageRole.MESSAGE_ROLE_ASSISTANT,
+        content: 'partial answer',
+        runState: protoState(),
+      ),
+    );
+
+    expect(
+      message.runState,
+      RunState(
+        runId: 'run_1',
+        userMessageId: 'msg_user',
+        assistantMessageId: 'msg_assistant',
+        lifecycle: RunLifecycle.failed,
+        outcomeReason: RunOutcomeReason.providerFailure,
+        stateVersion: 7,
+        stateUpdatedAt: updatedAt,
+        finishedAt: finishedAt,
+        hasDisplayableContent: true,
+      ),
+    );
+  });
+
+  test('maps every known lifecycle and outcome', () {
+    final lifecycles = {
+      commonpb.RunLifecycle.RUN_LIFECYCLE_UNKNOWN: RunLifecycle.unknown,
+      commonpb.RunLifecycle.RUN_LIFECYCLE_QUEUED: RunLifecycle.queued,
+      commonpb.RunLifecycle.RUN_LIFECYCLE_RUNNING: RunLifecycle.running,
+      commonpb.RunLifecycle.RUN_LIFECYCLE_WAITING_APPROVAL:
+          RunLifecycle.waitingApproval,
+      commonpb.RunLifecycle.RUN_LIFECYCLE_RECOVERING: RunLifecycle.recovering,
+      commonpb.RunLifecycle.RUN_LIFECYCLE_COMPLETED: RunLifecycle.completed,
+      commonpb.RunLifecycle.RUN_LIFECYCLE_FAILED: RunLifecycle.failed,
+      commonpb.RunLifecycle.RUN_LIFECYCLE_CANCELLED: RunLifecycle.cancelled,
+    };
+    expect(
+      {
+        ...lifecycles.keys,
+        commonpb.RunLifecycle.RUN_LIFECYCLE_UNSPECIFIED,
+      },
+      commonpb.RunLifecycle.values.toSet(),
+    );
+    for (final entry in lifecycles.entries) {
+      expect(GrpcMappers.runLifecycleToModel(entry.key), entry.value);
+    }
+
+    final outcomes = {
+      commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_UNKNOWN:
+          RunOutcomeReason.unknown,
+      commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_NONE: RunOutcomeReason.none,
+      commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_COMPLETED_NO_CONTENT:
+          RunOutcomeReason.completedNoContent,
+      commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_USER_CANCELLED:
+          RunOutcomeReason.userCancelled,
+      commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_ABANDONED:
+          RunOutcomeReason.abandoned,
+      commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_EXPIRED:
+          RunOutcomeReason.expired,
+      commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_CONTEXT_LIMIT:
+          RunOutcomeReason.contextLimit,
+      commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_PROVIDER_FAILURE:
+          RunOutcomeReason.providerFailure,
+      commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_TOOL_FAILURE:
+          RunOutcomeReason.toolFailure,
+      commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_POLICY_DENIED:
+          RunOutcomeReason.policyDenied,
+      commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_RETRIES_EXHAUSTED:
+          RunOutcomeReason.retriesExhausted,
+      commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_RECOVERY_INTERRUPTED:
+          RunOutcomeReason.recoveryInterrupted,
+      commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_SIDE_EFFECT_UNCERTAIN:
+          RunOutcomeReason.sideEffectUncertain,
+      commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_APPROVAL_DELIVERY_FAILED:
+          RunOutcomeReason.approvalDeliveryFailed,
+      commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_INTERNAL_FAILURE:
+          RunOutcomeReason.internalFailure,
+      commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_LEGACY_UNKNOWN:
+          RunOutcomeReason.legacyUnknown,
+    };
+    expect(
+      {
+        ...outcomes.keys,
+        commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_UNSPECIFIED,
+      },
+      commonpb.RunOutcomeReason.values.toSet(),
+    );
+    for (final entry in outcomes.entries) {
+      expect(GrpcMappers.runOutcomeReasonToModel(entry.key), entry.value);
+    }
+  });
+
+  test('present unspecified lifecycle maps to semantic unknown', () {
+    final state = GrpcMappers.runStateToModel(
+      protoState(lifecycle: commonpb.RunLifecycle.RUN_LIFECYCLE_UNSPECIFIED),
+    );
+
+    expect(state?.lifecycle, RunLifecycle.unknown);
+  });
+
+  test('present unspecified outcome maps to semantic unknown', () {
+    final state = GrpcMappers.runStateToModel(
+      protoState(
+        outcome: commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_UNSPECIFIED,
+      ),
+    );
+
+    expect(state?.outcomeReason, RunOutcomeReason.unknown);
+  });
+
+  test('rejects absent or nonpositive state versions', () {
+    expect(
+      GrpcMappers.runStateToModel(protoState(stateVersion: Int64.ZERO)),
+      isNull,
+    );
+    expect(
+      GrpcMappers.runStateToModel(protoState(stateVersion: Int64(-1))),
+      isNull,
+    );
+  });
+
+  test('rejects run state without its reconciliation identity', () {
+    final state = protoState()..clearRunId();
+
+    expect(GrpcMappers.runStateToModel(state), isNull);
+  });
+
+  test('accepts the maximum signed 64-bit state version', () {
+    final state = GrpcMappers.runStateToModel(
+      protoState(stateVersion: Int64.MAX_VALUE),
+    );
+
+    expect(state?.stateVersion, 9223372036854775807);
+  });
+
+  test('terminal helper and structural equality cover the full state', () {
+    final state = RunState(
+      runId: 'run_1',
+      userMessageId: 'msg_user',
+      assistantMessageId: 'msg_assistant',
+      lifecycle: RunLifecycle.failed,
+      outcomeReason: RunOutcomeReason.providerFailure,
+      stateVersion: 7,
+      stateUpdatedAt: updatedAt,
+      finishedAt: finishedAt,
+      hasDisplayableContent: true,
+    );
+
+    expect(state.isTerminal, isTrue);
+    expect(state, state.copyWith());
+    expect(
+      state,
+      isNot(state.copyWith(outcomeReason: RunOutcomeReason.toolFailure)),
+    );
+  });
+
+  test(
+    'run state copy resolves through English localization resources',
+    () async {
+      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+      final copy = localizedRunStateCopy(
+        l10n,
+        RunState(
+          runId: 'run_1',
+          userMessageId: 'msg_user',
+          assistantMessageId: 'msg_assistant',
+          lifecycle: RunLifecycle.failed,
+          outcomeReason: RunOutcomeReason.providerFailure,
+          stateVersion: 7,
+          stateUpdatedAt: updatedAt,
+          finishedAt: finishedAt,
+          hasDisplayableContent: false,
+        ),
+      );
+
+      expect(copy.title, 'Provider unavailable');
+      expect(copy.detail, 'The model provider could not complete this run.');
+    },
+  );
+
+  test('every lifecycle and outcome has localized safe copy', () async {
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+
+    for (final lifecycle in RunLifecycle.values) {
+      final copy = localizedRunLifecycleCopy(l10n, lifecycle);
+      expect(copy.title, isNotEmpty, reason: lifecycle.name);
+      expect(copy.detail, isNotEmpty, reason: lifecycle.name);
+    }
+    for (final outcome in RunOutcomeReason.values) {
+      final copy = localizedRunOutcomeCopy(l10n, outcome);
+      expect(copy.title, isNotEmpty, reason: outcome.name);
+      expect(copy.detail, isNotEmpty, reason: outcome.name);
+    }
+    for (final category in RunStepNoticeCategory.values) {
+      final copy = localizedRunStepNotice(
+        l10n,
+        category,
+        attempt: 2,
+        maxAttempts: 3,
+      );
+      expect(copy, isNotEmpty, reason: category.name);
+      expect(copy, contains('2'));
+      expect(copy, contains('3'));
+    }
+  });
+
+  test('localized cards ignore backend message note reason and code', () async {
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    final copy = localizedRunStateCopy(
+      l10n,
+      RunState(
+        runId: 'run_1',
+        userMessageId: 'msg_user',
+        assistantMessageId: 'msg_assistant',
+        lifecycle: RunLifecycle.cancelled,
+        outcomeReason: RunOutcomeReason.abandoned,
+        stateVersion: 8,
+        stateUpdatedAt: updatedAt,
+        finishedAt: finishedAt,
+        hasDisplayableContent: false,
+      ),
+    );
+
+    final rendered = '${copy.title} ${copy.detail}';
+    for (final raw in [
+      'provider said token=secret',
+      'note=/private/path',
+      'reason=approval_token',
+      'code=raw_provider_failure',
+    ]) {
+      expect(rendered, isNot(contains(raw)));
+    }
+    expect(rendered, 'Run interrupted The run ended before it could finish.');
+  });
+
+  test('absent legacy state has neutral no-response copy', () async {
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+
+    final copy = localizedNoResponseCopy(l10n);
+
+    expect(copy.title, 'No response recorded');
+    expect(copy.detail, 'No assistant response was recorded for this run.');
+  });
+}
