@@ -15,9 +15,9 @@ import 'dart:core' as $core;
 import 'package:fixnum/fixnum.dart' as $fixnum;
 import 'package:protobuf/protobuf.dart' as $pb;
 
-import '../../google/protobuf/struct.pb.dart' as $1;
-import 'common.pbenum.dart' as $3;
-import 'events.pb.dart' as $2;
+import '../../google/protobuf/struct.pb.dart' as $2;
+import 'common.pb.dart' as $1;
+import 'events.pb.dart' as $3;
 
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
 
@@ -26,13 +26,14 @@ class SendMessageRequest extends $pb.GeneratedMessage {
     $core.String? sessionId,
     $core.String? content,
     $core.String? contentType,
-    $3.AgentId? agentId,
-    $3.ModelProvider? modelProvider,
+    $1.AgentId? agentId,
+    $1.ModelProvider? modelProvider,
     $core.String? model,
     $core.String? idempotencyKey,
     $core.Iterable<$core.String>? requestedTools,
     $core.int? requiredContextTokens,
     $core.int? minimumWorkerMaxConcurrentRuns,
+    $1.RemoteEgressConsent? remoteEgressConsent,
   }) {
     final result = create();
     if (sessionId != null) result.sessionId = sessionId;
@@ -47,6 +48,8 @@ class SendMessageRequest extends $pb.GeneratedMessage {
       result.requiredContextTokens = requiredContextTokens;
     if (minimumWorkerMaxConcurrentRuns != null)
       result.minimumWorkerMaxConcurrentRuns = minimumWorkerMaxConcurrentRuns;
+    if (remoteEgressConsent != null)
+      result.remoteEgressConsent = remoteEgressConsent;
     return result;
   }
 
@@ -66,15 +69,15 @@ class SendMessageRequest extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'sessionId')
     ..aOS(2, _omitFieldNames ? '' : 'content')
     ..aOS(3, _omitFieldNames ? '' : 'contentType')
-    ..e<$3.AgentId>(4, _omitFieldNames ? '' : 'agentId', $pb.PbFieldType.OE,
-        defaultOrMaker: $3.AgentId.AGENT_ID_UNSPECIFIED,
-        valueOf: $3.AgentId.valueOf,
-        enumValues: $3.AgentId.values)
-    ..e<$3.ModelProvider>(
+    ..e<$1.AgentId>(4, _omitFieldNames ? '' : 'agentId', $pb.PbFieldType.OE,
+        defaultOrMaker: $1.AgentId.AGENT_ID_UNSPECIFIED,
+        valueOf: $1.AgentId.valueOf,
+        enumValues: $1.AgentId.values)
+    ..e<$1.ModelProvider>(
         5, _omitFieldNames ? '' : 'modelProvider', $pb.PbFieldType.OE,
-        defaultOrMaker: $3.ModelProvider.MODEL_PROVIDER_UNSPECIFIED,
-        valueOf: $3.ModelProvider.valueOf,
-        enumValues: $3.ModelProvider.values)
+        defaultOrMaker: $1.ModelProvider.MODEL_PROVIDER_UNSPECIFIED,
+        valueOf: $1.ModelProvider.valueOf,
+        enumValues: $1.ModelProvider.values)
     ..aOS(6, _omitFieldNames ? '' : 'model')
     ..aOS(7, _omitFieldNames ? '' : 'idempotencyKey')
     ..pPS(8, _omitFieldNames ? '' : 'requestedTools')
@@ -82,6 +85,9 @@ class SendMessageRequest extends $pb.GeneratedMessage {
         9, _omitFieldNames ? '' : 'requiredContextTokens', $pb.PbFieldType.O3)
     ..a<$core.int>(10, _omitFieldNames ? '' : 'minimumWorkerMaxConcurrentRuns',
         $pb.PbFieldType.O3)
+    ..aOM<$1.RemoteEgressConsent>(
+        11, _omitFieldNames ? '' : 'remoteEgressConsent',
+        subBuilder: $1.RemoteEgressConsent.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -133,18 +139,18 @@ class SendMessageRequest extends $pb.GeneratedMessage {
   void clearContentType() => $_clearField(3);
 
   @$pb.TagNumber(4)
-  $3.AgentId get agentId => $_getN(3);
+  $1.AgentId get agentId => $_getN(3);
   @$pb.TagNumber(4)
-  set agentId($3.AgentId value) => $_setField(4, value);
+  set agentId($1.AgentId value) => $_setField(4, value);
   @$pb.TagNumber(4)
   $core.bool hasAgentId() => $_has(3);
   @$pb.TagNumber(4)
   void clearAgentId() => $_clearField(4);
 
   @$pb.TagNumber(5)
-  $3.ModelProvider get modelProvider => $_getN(4);
+  $1.ModelProvider get modelProvider => $_getN(4);
   @$pb.TagNumber(5)
-  set modelProvider($3.ModelProvider value) => $_setField(5, value);
+  set modelProvider($1.ModelProvider value) => $_setField(5, value);
   @$pb.TagNumber(5)
   $core.bool hasModelProvider() => $_has(4);
   @$pb.TagNumber(5)
@@ -192,6 +198,257 @@ class SendMessageRequest extends $pb.GeneratedMessage {
   $core.bool hasMinimumWorkerMaxConcurrentRuns() => $_has(9);
   @$pb.TagNumber(10)
   void clearMinimumWorkerMaxConcurrentRuns() => $_clearField(10);
+
+  @$pb.TagNumber(11)
+  $1.RemoteEgressConsent get remoteEgressConsent => $_getN(10);
+  @$pb.TagNumber(11)
+  set remoteEgressConsent($1.RemoteEgressConsent value) =>
+      $_setField(11, value);
+  @$pb.TagNumber(11)
+  $core.bool hasRemoteEgressConsent() => $_has(10);
+  @$pb.TagNumber(11)
+  void clearRemoteEgressConsent() => $_clearField(11);
+  @$pb.TagNumber(11)
+  $1.RemoteEgressConsent ensureRemoteEgressConsent() => $_ensure(10);
+}
+
+/// Side-effect-free preflight for the exact SendMessage payload that may leave
+/// the machine. The exact idempotency_key value is bound, including empty.
+class PrepareRemoteEgressRequest extends $pb.GeneratedMessage {
+  factory PrepareRemoteEgressRequest({
+    $core.String? sessionId,
+    $core.String? content,
+    $core.String? contentType,
+    $1.AgentId? agentId,
+    $1.ModelProvider? modelProvider,
+    $core.String? model,
+    $core.String? idempotencyKey,
+    $core.Iterable<$core.String>? requestedTools,
+    $core.int? requiredContextTokens,
+    $core.int? minimumWorkerMaxConcurrentRuns,
+  }) {
+    final result = create();
+    if (sessionId != null) result.sessionId = sessionId;
+    if (content != null) result.content = content;
+    if (contentType != null) result.contentType = contentType;
+    if (agentId != null) result.agentId = agentId;
+    if (modelProvider != null) result.modelProvider = modelProvider;
+    if (model != null) result.model = model;
+    if (idempotencyKey != null) result.idempotencyKey = idempotencyKey;
+    if (requestedTools != null) result.requestedTools.addAll(requestedTools);
+    if (requiredContextTokens != null)
+      result.requiredContextTokens = requiredContextTokens;
+    if (minimumWorkerMaxConcurrentRuns != null)
+      result.minimumWorkerMaxConcurrentRuns = minimumWorkerMaxConcurrentRuns;
+    return result;
+  }
+
+  PrepareRemoteEgressRequest._();
+
+  factory PrepareRemoteEgressRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory PrepareRemoteEgressRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'PrepareRemoteEgressRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'sessionId')
+    ..aOS(2, _omitFieldNames ? '' : 'content')
+    ..aOS(3, _omitFieldNames ? '' : 'contentType')
+    ..e<$1.AgentId>(4, _omitFieldNames ? '' : 'agentId', $pb.PbFieldType.OE,
+        defaultOrMaker: $1.AgentId.AGENT_ID_UNSPECIFIED,
+        valueOf: $1.AgentId.valueOf,
+        enumValues: $1.AgentId.values)
+    ..e<$1.ModelProvider>(
+        5, _omitFieldNames ? '' : 'modelProvider', $pb.PbFieldType.OE,
+        defaultOrMaker: $1.ModelProvider.MODEL_PROVIDER_UNSPECIFIED,
+        valueOf: $1.ModelProvider.valueOf,
+        enumValues: $1.ModelProvider.values)
+    ..aOS(6, _omitFieldNames ? '' : 'model')
+    ..aOS(7, _omitFieldNames ? '' : 'idempotencyKey')
+    ..pPS(8, _omitFieldNames ? '' : 'requestedTools')
+    ..a<$core.int>(
+        9, _omitFieldNames ? '' : 'requiredContextTokens', $pb.PbFieldType.O3)
+    ..a<$core.int>(10, _omitFieldNames ? '' : 'minimumWorkerMaxConcurrentRuns',
+        $pb.PbFieldType.O3)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  PrepareRemoteEgressRequest clone() =>
+      PrepareRemoteEgressRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  PrepareRemoteEgressRequest copyWith(
+          void Function(PrepareRemoteEgressRequest) updates) =>
+      super.copyWith(
+              (message) => updates(message as PrepareRemoteEgressRequest))
+          as PrepareRemoteEgressRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static PrepareRemoteEgressRequest create() => PrepareRemoteEgressRequest._();
+  @$core.override
+  PrepareRemoteEgressRequest createEmptyInstance() => create();
+  static $pb.PbList<PrepareRemoteEgressRequest> createRepeated() =>
+      $pb.PbList<PrepareRemoteEgressRequest>();
+  @$core.pragma('dart2js:noInline')
+  static PrepareRemoteEgressRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<PrepareRemoteEgressRequest>(create);
+  static PrepareRemoteEgressRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get sessionId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set sessionId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasSessionId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearSessionId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get content => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set content($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasContent() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearContent() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get contentType => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set contentType($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasContentType() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearContentType() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $1.AgentId get agentId => $_getN(3);
+  @$pb.TagNumber(4)
+  set agentId($1.AgentId value) => $_setField(4, value);
+  @$pb.TagNumber(4)
+  $core.bool hasAgentId() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearAgentId() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $1.ModelProvider get modelProvider => $_getN(4);
+  @$pb.TagNumber(5)
+  set modelProvider($1.ModelProvider value) => $_setField(5, value);
+  @$pb.TagNumber(5)
+  $core.bool hasModelProvider() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearModelProvider() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.String get model => $_getSZ(5);
+  @$pb.TagNumber(6)
+  set model($core.String value) => $_setString(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasModel() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearModel() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.String get idempotencyKey => $_getSZ(6);
+  @$pb.TagNumber(7)
+  set idempotencyKey($core.String value) => $_setString(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasIdempotencyKey() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearIdempotencyKey() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $pb.PbList<$core.String> get requestedTools => $_getList(7);
+
+  @$pb.TagNumber(9)
+  $core.int get requiredContextTokens => $_getIZ(8);
+  @$pb.TagNumber(9)
+  set requiredContextTokens($core.int value) => $_setSignedInt32(8, value);
+  @$pb.TagNumber(9)
+  $core.bool hasRequiredContextTokens() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearRequiredContextTokens() => $_clearField(9);
+
+  @$pb.TagNumber(10)
+  $core.int get minimumWorkerMaxConcurrentRuns => $_getIZ(9);
+  @$pb.TagNumber(10)
+  set minimumWorkerMaxConcurrentRuns($core.int value) =>
+      $_setSignedInt32(9, value);
+  @$pb.TagNumber(10)
+  $core.bool hasMinimumWorkerMaxConcurrentRuns() => $_has(9);
+  @$pb.TagNumber(10)
+  void clearMinimumWorkerMaxConcurrentRuns() => $_clearField(10);
+}
+
+class PrepareRemoteEgressResponse extends $pb.GeneratedMessage {
+  factory PrepareRemoteEgressResponse({
+    $1.RemoteEgressDisclosure? disclosure,
+  }) {
+    final result = create();
+    if (disclosure != null) result.disclosure = disclosure;
+    return result;
+  }
+
+  PrepareRemoteEgressResponse._();
+
+  factory PrepareRemoteEgressResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory PrepareRemoteEgressResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'PrepareRemoteEgressResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOM<$1.RemoteEgressDisclosure>(1, _omitFieldNames ? '' : 'disclosure',
+        subBuilder: $1.RemoteEgressDisclosure.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  PrepareRemoteEgressResponse clone() =>
+      PrepareRemoteEgressResponse()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  PrepareRemoteEgressResponse copyWith(
+          void Function(PrepareRemoteEgressResponse) updates) =>
+      super.copyWith(
+              (message) => updates(message as PrepareRemoteEgressResponse))
+          as PrepareRemoteEgressResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static PrepareRemoteEgressResponse create() =>
+      PrepareRemoteEgressResponse._();
+  @$core.override
+  PrepareRemoteEgressResponse createEmptyInstance() => create();
+  static $pb.PbList<PrepareRemoteEgressResponse> createRepeated() =>
+      $pb.PbList<PrepareRemoteEgressResponse>();
+  @$core.pragma('dart2js:noInline')
+  static PrepareRemoteEgressResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<PrepareRemoteEgressResponse>(create);
+  static PrepareRemoteEgressResponse? _defaultInstance;
+
+  /// Absent for a request whose effective route is local.
+  @$pb.TagNumber(1)
+  $1.RemoteEgressDisclosure get disclosure => $_getN(0);
+  @$pb.TagNumber(1)
+  set disclosure($1.RemoteEgressDisclosure value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasDisclosure() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearDisclosure() => $_clearField(1);
+  @$pb.TagNumber(1)
+  $1.RemoteEgressDisclosure ensureDisclosure() => $_ensure(0);
 }
 
 class RunQueued extends $pb.GeneratedMessage {
@@ -353,7 +610,7 @@ class RunStarted extends $pb.GeneratedMessage {
 class MessageStarted extends $pb.GeneratedMessage {
   factory MessageStarted({
     $core.String? messageId,
-    $3.MessageRole? role,
+    $1.MessageRole? role,
   }) {
     final result = create();
     if (messageId != null) result.messageId = messageId;
@@ -375,10 +632,10 @@ class MessageStarted extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'messageId')
-    ..e<$3.MessageRole>(2, _omitFieldNames ? '' : 'role', $pb.PbFieldType.OE,
-        defaultOrMaker: $3.MessageRole.MESSAGE_ROLE_UNSPECIFIED,
-        valueOf: $3.MessageRole.valueOf,
-        enumValues: $3.MessageRole.values)
+    ..e<$1.MessageRole>(2, _omitFieldNames ? '' : 'role', $pb.PbFieldType.OE,
+        defaultOrMaker: $1.MessageRole.MESSAGE_ROLE_UNSPECIFIED,
+        valueOf: $1.MessageRole.valueOf,
+        enumValues: $1.MessageRole.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -412,9 +669,9 @@ class MessageStarted extends $pb.GeneratedMessage {
   void clearMessageId() => $_clearField(1);
 
   @$pb.TagNumber(2)
-  $3.MessageRole get role => $_getN(1);
+  $1.MessageRole get role => $_getN(1);
   @$pb.TagNumber(2)
-  set role($3.MessageRole value) => $_setField(2, value);
+  set role($1.MessageRole value) => $_setField(2, value);
   @$pb.TagNumber(2)
   $core.bool hasRole() => $_has(1);
   @$pb.TagNumber(2)
@@ -492,7 +749,7 @@ class ToolEvent extends $pb.GeneratedMessage {
     $core.String? toolCallId,
     $core.String? serverName,
     $core.String? toolName,
-    $1.Struct? payload,
+    $2.Struct? payload,
   }) {
     final result = create();
     if (toolCallId != null) result.toolCallId = toolCallId;
@@ -518,8 +775,8 @@ class ToolEvent extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'toolCallId')
     ..aOS(2, _omitFieldNames ? '' : 'serverName')
     ..aOS(3, _omitFieldNames ? '' : 'toolName')
-    ..aOM<$1.Struct>(4, _omitFieldNames ? '' : 'payload',
-        subBuilder: $1.Struct.create)
+    ..aOM<$2.Struct>(4, _omitFieldNames ? '' : 'payload',
+        subBuilder: $2.Struct.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -569,15 +826,15 @@ class ToolEvent extends $pb.GeneratedMessage {
   void clearToolName() => $_clearField(3);
 
   @$pb.TagNumber(4)
-  $1.Struct get payload => $_getN(3);
+  $2.Struct get payload => $_getN(3);
   @$pb.TagNumber(4)
-  set payload($1.Struct value) => $_setField(4, value);
+  set payload($2.Struct value) => $_setField(4, value);
   @$pb.TagNumber(4)
   $core.bool hasPayload() => $_has(3);
   @$pb.TagNumber(4)
   void clearPayload() => $_clearField(4);
   @$pb.TagNumber(4)
-  $1.Struct ensurePayload() => $_ensure(3);
+  $2.Struct ensurePayload() => $_ensure(3);
 }
 
 class ApprovalEvent extends $pb.GeneratedMessage {
@@ -998,7 +1255,7 @@ class ChatStreamEvent extends $pb.GeneratedMessage {
     RunCompleted? runCompleted,
     RunFailed? runFailed,
     RunCancelled? runCancelled,
-    $2.TuringEvent? persistedEvent,
+    $3.TuringEvent? persistedEvent,
   }) {
     final result = create();
     if (sessionId != null) result.sessionId = sessionId;
@@ -1097,8 +1354,8 @@ class ChatStreamEvent extends $pb.GeneratedMessage {
         subBuilder: RunFailed.create)
     ..aOM<RunCancelled>(25, _omitFieldNames ? '' : 'runCancelled',
         subBuilder: RunCancelled.create)
-    ..aOM<$2.TuringEvent>(26, _omitFieldNames ? '' : 'persistedEvent',
-        subBuilder: $2.TuringEvent.create)
+    ..aOM<$3.TuringEvent>(26, _omitFieldNames ? '' : 'persistedEvent',
+        subBuilder: $3.TuringEvent.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1339,15 +1596,15 @@ class ChatStreamEvent extends $pb.GeneratedMessage {
   RunCancelled ensureRunCancelled() => $_ensure(19);
 
   @$pb.TagNumber(26)
-  $2.TuringEvent get persistedEvent => $_getN(20);
+  $3.TuringEvent get persistedEvent => $_getN(20);
   @$pb.TagNumber(26)
-  set persistedEvent($2.TuringEvent value) => $_setField(26, value);
+  set persistedEvent($3.TuringEvent value) => $_setField(26, value);
   @$pb.TagNumber(26)
   $core.bool hasPersistedEvent() => $_has(20);
   @$pb.TagNumber(26)
   void clearPersistedEvent() => $_clearField(26);
   @$pb.TagNumber(26)
-  $2.TuringEvent ensurePersistedEvent() => $_ensure(20);
+  $3.TuringEvent ensurePersistedEvent() => $_ensure(20);
 }
 
 const $core.bool _omitFieldNames =

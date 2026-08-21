@@ -395,10 +395,12 @@ func (s *Server) GetConfig(context.Context, *turingv1.GetConfigRequest) (*turing
 			Models:       advertised[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA],
 		},
 		{
-			Provider:     turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
-			Enabled:      len(advertised[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE]) > 0,
-			DefaultModel: openAIDefault,
-			Models:       advertised[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE],
+			Provider:              turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
+			Enabled:               len(advertised[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE]) > 0,
+			DefaultModel:          openAIDefault,
+			Models:                advertised[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE],
+			RemoteEndpoint:        s.cfg.OpenAIBaseURL,
+			RequiresPerRunConsent: true,
 		},
 	}
 	return &turingv1.GetConfigResponse{

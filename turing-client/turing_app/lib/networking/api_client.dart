@@ -6,6 +6,7 @@ import '../models/external_agent.dart';
 import '../models/integration.dart';
 import '../models/automation.dart';
 import '../models/message.dart';
+import '../models/remote_egress.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
 import '../models/session_page.dart';
@@ -15,7 +16,7 @@ import '../models/telemetry.dart';
 import '../models/tool_descriptor.dart';
 import '../models/turing_event.dart';
 
-abstract class TuringApi {
+abstract class TuringApi implements RemoteEgressApi {
   Future<Map<String, dynamic>> getConfig();
 
   Future<Map<String, dynamic>> createSession({String? title});
@@ -73,6 +74,34 @@ abstract class TuringApi {
     String modelProvider = 'ollama',
     String? idempotencyKey,
   });
+
+  @override
+  Future<RemoteEgressDisclosure?> prepareRemoteEgress({
+    required String sessionId,
+    required String content,
+    String modelProvider = 'ollama',
+    required String idempotencyKey,
+  }) async {
+    if (modelProvider == 'ollama') return null;
+    throw const TuringApiException(
+      code: 'remote_egress_unsupported',
+      message: 'This client cannot prepare remote egress consent',
+    );
+  }
+
+  @override
+  Future<Map<String, dynamic>> sendMessageWithRemoteEgressConsent({
+    required String sessionId,
+    required String content,
+    String modelProvider = 'ollama',
+    required String idempotencyKey,
+    required RemoteEgressConsent consent,
+  }) {
+    throw const TuringApiException(
+      code: 'remote_egress_unsupported',
+      message: 'This client cannot send remote egress consent',
+    );
+  }
 
   Future<Map<String, dynamic>> approveApproval(
     String approvalId, {
@@ -246,6 +275,23 @@ abstract class TuringApi {
     AuditOrder order = AuditOrder.descending,
     int limit = 50,
     String? cursor,
+  });
+}
+
+abstract interface class RemoteEgressApi {
+  Future<RemoteEgressDisclosure?> prepareRemoteEgress({
+    required String sessionId,
+    required String content,
+    String modelProvider = 'ollama',
+    required String idempotencyKey,
+  });
+
+  Future<Map<String, dynamic>> sendMessageWithRemoteEgressConsent({
+    required String sessionId,
+    required String content,
+    String modelProvider = 'ollama',
+    required String idempotencyKey,
+    required RemoteEgressConsent consent,
   });
 }
 

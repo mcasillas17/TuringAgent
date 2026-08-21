@@ -68,7 +68,10 @@ func newHarnessWithDatabase(t *testing.T, database *db.DB) *harness {
 			SupportsExternalAgents:      true,
 		},
 	})
-	chatServer := New(repo, bus, runtimeServer, "llama3.2", "gpt-4o-mini")
+	chatServer := NewWithEgressConfig(repo, bus, runtimeServer, "llama3.2", "gpt-4o-mini", EgressConfig{
+		OpenAIBaseURL: "https://api.openai.com/v1",
+		SigningSecret: "test-egress-signing-secret",
+	})
 	lis := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
 	turingv1.RegisterChatServiceServer(grpcServer, chatServer)
@@ -222,6 +225,31 @@ type dispatchContextRecorder struct {
 	callOrder            []string
 }
 
+type blockingDispatcher struct {
+	started chan struct{}
+	release <-chan struct{}
+}
+
+func (d *blockingDispatcher) DispatchPending(context.Context) error {
+	close(d.started)
+	<-d.release
+	return nil
+}
+
+func (*blockingDispatcher) CancelRun(context.Context, string, string) {}
+
+func (*blockingDispatcher) ValidateRouting(context.Context, repository.RoutingRequirements) error {
+	return nil
+}
+
+func (*blockingDispatcher) RefreshPendingRoutingState(context.Context, string) error {
+	return nil
+}
+
+func (*blockingDispatcher) RoutableDefaultModel(_ string, configured string) string {
+	return configured
+}
+
 func (d *dispatchContextRecorder) DispatchPending(ctx context.Context) error {
 	d.contextErr = ctx.Err()
 	d.dispatchCalls++
@@ -275,11 +303,28 @@ type queuedChatStream struct {
 	ctx context.Context
 }
 
+type notifyingQueuedChatStream struct {
+	grpc.ServerStream
+	ctx    context.Context
+	queued chan struct{}
+}
+
 func (s *queuedChatStream) Context() context.Context {
 	return s.ctx
 }
 
 func (s *queuedChatStream) Send(*turingv1.ChatStreamEvent) error {
+	return nil
+}
+
+func (s *notifyingQueuedChatStream) Context() context.Context {
+	return s.ctx
+}
+
+func (s *notifyingQueuedChatStream) Send(event *turingv1.ChatStreamEvent) error {
+	if event.GetRunQueued() != nil {
+		s.queued <- struct{}{}
+	}
 	return nil
 }
 
@@ -958,10 +1003,11 @@ func defaultChatWorkerCapabilities(supportsExternalAgents bool) *turingv1.Worker
 				MaxContextTokens: 8192,
 			},
 		},
-		AgentIds:               []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
-		Tools:                  []*turingv1.DiscoveredTool{{ServerName: "system", ToolName: "system.time", Schema: &structpb.Struct{}}},
-		MaxConcurrentRuns:      2,
-		SupportsExternalAgents: supportsExternalAgents,
+		AgentIds:                    []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+		Tools:                       []*turingv1.DiscoveredTool{{ServerName: "system", ToolName: "system.time", Schema: &structpb.Struct{}}},
+		MaxConcurrentRuns:           2,
+		SupportsExternalAgents:      supportsExternalAgents,
+		RemoteEgressDecisionVersion: 1,
 	}
 	if supportsExternalAgents {
 		capabilities.ExternalAgentCredentialRefs = []string{"claude", "external"}
@@ -1280,6 +1326,65 @@ func TestSendMessageDeletingSessionReturnsFailedPrecondition(t *testing.T) {
 	}
 }
 
+func TestSendMessageStreamClosesCleanlyWhenSessionIsDeleted(t *testing.T) {
+	database := openChatTestDB(t)
+	repo := repository.New(database)
+	bus := events.NewBus(8)
+	dispatchStarted := make(chan struct{})
+	dispatchRelease := make(chan struct{})
+	dispatcher := &blockingDispatcher{
+		started: dispatchStarted,
+		release: dispatchRelease,
+	}
+	service := New(repo, bus, dispatcher, "llama3.2", "gpt-4o-mini")
+	session, err := repo.CreateSession(context.Background(), "Delete while streaming")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &notifyingQueuedChatStream{
+		ctx:    context.Background(),
+		queued: make(chan struct{}, 1),
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- service.SendMessage(&turingv1.SendMessageRequest{
+			SessionId:     session.SessionID,
+			Content:       "delete this stream",
+			ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+			Model:         "llama3.2",
+		}, stream)
+	}()
+	<-stream.queued
+	<-dispatchStarted
+
+	receipt, err := repo.BeginSessionDeletion(context.Background(), session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err = repo.AdvanceSessionDeletion(context.Background(), session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.State != "completed" {
+		t.Fatalf("deletion state = %q, want completed", receipt.State)
+	}
+	bus.TerminateSession(events.Event{
+		SessionID: session.SessionID,
+		Sequence:  receipt.TerminalSequence,
+		Type:      "session.deleted",
+	})
+	close(dispatchRelease)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("SendMessage after session deletion = %v, want clean close", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SendMessage did not close after session deletion")
+	}
+}
+
 func TestSendMessageCancellationCancelsRun(t *testing.T) {
 	h := newHarness(t)
 	worker := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(false))
@@ -1301,11 +1406,10 @@ func TestSendMessageCancellationCancelsRun(t *testing.T) {
 	}
 	runID := first.GetRunQueued().RunId
 	cancel()
-	for {
+	// A run-started event may already be buffered when cancellation wins on
+	// the server. Drain in-flight events until the cancelled stream closes.
+	for err == nil {
 		_, err = stream.Recv()
-		if err != nil {
-			break
-		}
 	}
 	if status.Code(err) != codes.Canceled && err != io.EOF {
 		t.Fatalf("Recv after cancel = %v", err)

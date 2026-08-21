@@ -90,6 +90,21 @@ const Automation$json = {
       '6': '.google.protobuf.Timestamp',
       '10': 'updatedAt'
     },
+    {
+      '1': 'last_occurrence_failure_code',
+      '3': 15,
+      '4': 1,
+      '5': 9,
+      '10': 'lastOccurrenceFailureCode'
+    },
+    {
+      '1': 'last_occurrence_failed_at',
+      '3': 16,
+      '4': 1,
+      '5': 11,
+      '6': '.google.protobuf.Timestamp',
+      '10': 'lastOccurrenceFailedAt'
+    },
   ],
 };
 
@@ -106,7 +121,9 @@ final $typed_data.Uint8List automationDescriptor = $convert.base64Decode(
     'GAsgASgJUg1sYXN0UnVuU3RhdHVzEiQKDmxhc3RfcnVuX2Vycm9yGAwgASgJUgxsYXN0UnVuRX'
     'Jyb3ISOQoKY3JlYXRlZF9hdBgNIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBSCWNy'
     'ZWF0ZWRBdBI5Cgp1cGRhdGVkX2F0GA4gASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcF'
-    'IJdXBkYXRlZEF0');
+    'IJdXBkYXRlZEF0Ej8KHGxhc3Rfb2NjdXJyZW5jZV9mYWlsdXJlX2NvZGUYDyABKAlSGWxhc3RP'
+    'Y2N1cnJlbmNlRmFpbHVyZUNvZGUSVQoZbGFzdF9vY2N1cnJlbmNlX2ZhaWxlZF9hdBgQIAEoCz'
+    'IaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBSFmxhc3RPY2N1cnJlbmNlRmFpbGVkQXQ=');
 
 @$core.Deprecated('Use automationToolDescriptor instead')
 const AutomationTool$json = {

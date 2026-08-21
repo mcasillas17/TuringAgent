@@ -97,8 +97,12 @@ type AgentJob struct {
 	ExternalAgent                  *ExternalAgentTarget `protobuf:"bytes,14,opt,name=external_agent,json=externalAgent,proto3" json:"external_agent,omitempty"`
 	RequiredContextTokens          int32                `protobuf:"varint,15,opt,name=required_context_tokens,json=requiredContextTokens,proto3" json:"required_context_tokens,omitempty"`
 	MinimumWorkerMaxConcurrentRuns int32                `protobuf:"varint,16,opt,name=minimum_worker_max_concurrent_runs,json=minimumWorkerMaxConcurrentRuns,proto3" json:"minimum_worker_max_concurrent_runs,omitempty"`
-	unknownFields                  protoimpl.UnknownFields
-	sizeCache                      protoimpl.SizeCache
+	EgressDecision                 *RunEgressDecision   `protobuf:"bytes,17,opt,name=egress_decision,json=egressDecision,proto3" json:"egress_decision,omitempty"`
+	// Exact tool names frozen by the orchestrator for this run. The runtime may
+	// expose a subset after context budgeting, never tools outside this set.
+	SelectedTools []string `protobuf:"bytes,18,rep,name=selected_tools,json=selectedTools,proto3" json:"selected_tools,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AgentJob) Reset() {
@@ -243,6 +247,20 @@ func (x *AgentJob) GetMinimumWorkerMaxConcurrentRuns() int32 {
 	return 0
 }
 
+func (x *AgentJob) GetEgressDecision() *RunEgressDecision {
+	if x != nil {
+		return x.EgressDecision
+	}
+	return nil
+}
+
+func (x *AgentJob) GetSelectedTools() []string {
+	if x != nil {
+		return x.SelectedTools
+	}
+	return nil
+}
+
 // Where to send a run that the user routed off this machine.
 //
 // Deliberately not the full ExternalAgent message: the runtime has no use for
@@ -260,6 +278,7 @@ type ExternalAgentTarget struct {
 	DisplayName   string                 `protobuf:"bytes,1,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
 	BaseUrl       string                 `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
 	CredentialRef string                 `protobuf:"bytes,3,opt,name=credential_ref,json=credentialRef,proto3" json:"credential_ref,omitempty"`
+	AgentId       string                 `protobuf:"bytes,4,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -311,6 +330,13 @@ func (x *ExternalAgentTarget) GetBaseUrl() string {
 func (x *ExternalAgentTarget) GetCredentialRef() string {
 	if x != nil {
 		return x.CredentialRef
+	}
+	return ""
+}
+
+func (x *ExternalAgentTarget) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
 	}
 	return ""
 }
@@ -494,6 +520,9 @@ type WorkerCapabilities struct {
 	// Credential names only, never API keys. This complete set authorizes which
 	// frozen external-agent destinations this worker can execute.
 	ExternalAgentCredentialRefs []string `protobuf:"bytes,6,rep,name=external_agent_credential_refs,json=externalAgentCredentialRefs,proto3" json:"external_agent_credential_refs,omitempty"`
+	// Highest run-egress decision version this worker enforces before provider
+	// I/O. Zero means it predates explicit remote-egress enforcement.
+	RemoteEgressDecisionVersion int32 `protobuf:"varint,7,opt,name=remote_egress_decision_version,json=remoteEgressDecisionVersion,proto3" json:"remote_egress_decision_version,omitempty"`
 	unknownFields               protoimpl.UnknownFields
 	sizeCache                   protoimpl.SizeCache
 }
@@ -568,6 +597,13 @@ func (x *WorkerCapabilities) GetExternalAgentCredentialRefs() []string {
 		return x.ExternalAgentCredentialRefs
 	}
 	return nil
+}
+
+func (x *WorkerCapabilities) GetRemoteEgressDecisionVersion() int32 {
+	if x != nil {
+		return x.RemoteEgressDecisionVersion
+	}
+	return 0
 }
 
 type RuntimeWorkerReady struct {
@@ -1557,7 +1593,7 @@ var File_turing_v1_runtime_proto protoreflect.FileDescriptor
 
 const file_turing_v1_runtime_proto_rawDesc = "" +
 	"\n" +
-	"\x17turing/v1/runtime.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16turing/v1/common.proto\x1a\x16turing/v1/events.proto\x1a\x15turing/v1/tools.proto\"\xaf\x05\n" +
+	"\x17turing/v1/runtime.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16turing/v1/common.proto\x1a\x16turing/v1/events.proto\x1a\x15turing/v1/tools.proto\"\x9d\x06\n" +
 	"\bAgentJob\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x15\n" +
 	"\x06run_id\x18\x02 \x01(\tR\x05runId\x12\x1d\n" +
@@ -1576,11 +1612,14 @@ const file_turing_v1_runtime_proto_rawDesc = "" +
 	"\x06skills\x18\r \x03(\v2\x18.turing.v1.SkillSnapshotR\x06skills\x12E\n" +
 	"\x0eexternal_agent\x18\x0e \x01(\v2\x1e.turing.v1.ExternalAgentTargetR\rexternalAgent\x126\n" +
 	"\x17required_context_tokens\x18\x0f \x01(\x05R\x15requiredContextTokens\x12J\n" +
-	"\"minimum_worker_max_concurrent_runs\x18\x10 \x01(\x05R\x1eminimumWorkerMaxConcurrentRuns\"z\n" +
+	"\"minimum_worker_max_concurrent_runs\x18\x10 \x01(\x05R\x1eminimumWorkerMaxConcurrentRuns\x12E\n" +
+	"\x0fegress_decision\x18\x11 \x01(\v2\x1c.turing.v1.RunEgressDecisionR\x0eegressDecision\x12%\n" +
+	"\x0eselected_tools\x18\x12 \x03(\tR\rselectedTools\"\x95\x01\n" +
 	"\x13ExternalAgentTarget\x12!\n" +
 	"\fdisplay_name\x18\x01 \x01(\tR\vdisplayName\x12\x19\n" +
 	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12%\n" +
-	"\x0ecredential_ref\x18\x03 \x01(\tR\rcredentialRef\"\xf8\x02\n" +
+	"\x0ecredential_ref\x18\x03 \x01(\tR\rcredentialRef\x12\x19\n" +
+	"\bagent_id\x18\x04 \x01(\tR\aagentId\"\xf8\x02\n" +
 	"\rSkillSnapshot\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\"\n" +
 	"\finstructions\x18\x02 \x01(\tR\finstructions\x12\x19\n" +
@@ -1599,14 +1638,15 @@ const file_turing_v1_runtime_proto_rawDesc = "" +
 	"\vserver_name\x18\x01 \x01(\tR\n" +
 	"serverName\x12\x1b\n" +
 	"\ttool_name\x18\x02 \x01(\tR\btoolName\x12/\n" +
-	"\x06schema\x18\x03 \x01(\v2\x17.google.protobuf.StructR\x06schema\"\xd9\x02\n" +
+	"\x06schema\x18\x03 \x01(\v2\x17.google.protobuf.StructR\x06schema\"\x9e\x03\n" +
 	"\x12WorkerCapabilities\x122\n" +
 	"\x06models\x18\x01 \x03(\v2\x1a.turing.v1.ModelCapabilityR\x06models\x12/\n" +
 	"\tagent_ids\x18\x02 \x03(\x0e2\x12.turing.v1.AgentIdR\bagentIds\x12/\n" +
 	"\x05tools\x18\x03 \x03(\v2\x19.turing.v1.DiscoveredToolR\x05tools\x12.\n" +
 	"\x13max_concurrent_runs\x18\x04 \x01(\x05R\x11maxConcurrentRuns\x128\n" +
 	"\x18supports_external_agents\x18\x05 \x01(\bR\x16supportsExternalAgents\x12C\n" +
-	"\x1eexternal_agent_credential_refs\x18\x06 \x03(\tR\x1bexternalAgentCredentialRefs\"\x81\x03\n" +
+	"\x1eexternal_agent_credential_refs\x18\x06 \x03(\tR\x1bexternalAgentCredentialRefs\x12C\n" +
+	"\x1eremote_egress_decision_version\x18\a \x01(\x05R\x1bremoteEgressDecisionVersion\"\x81\x03\n" +
 	"\x12RuntimeWorkerReady\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12-\n" +
 	"\bagent_id\x18\x02 \x01(\x0e2\x12.turing.v1.AgentIdR\aagentId\x12.\n" +
@@ -1717,50 +1757,52 @@ var file_turing_v1_runtime_proto_goTypes = []any{
 	nil,                                      // 19: turing.v1.SkillSnapshot.ReferencesEntry
 	(AgentId)(0),                             // 20: turing.v1.AgentId
 	(ModelProvider)(0),                       // 21: turing.v1.ModelProvider
-	(*structpb.Struct)(nil),                  // 22: google.protobuf.Struct
-	(*ModelCapability)(nil),                  // 23: turing.v1.ModelCapability
-	(*TuringEvent)(nil),                      // 24: turing.v1.TuringEvent
-	(*ToolCallBeacon)(nil),                   // 25: turing.v1.ToolCallBeacon
-	(*ToolPolicyDecision)(nil),               // 26: turing.v1.ToolPolicyDecision
+	(*RunEgressDecision)(nil),                // 22: turing.v1.RunEgressDecision
+	(*structpb.Struct)(nil),                  // 23: google.protobuf.Struct
+	(*ModelCapability)(nil),                  // 24: turing.v1.ModelCapability
+	(*TuringEvent)(nil),                      // 25: turing.v1.TuringEvent
+	(*ToolCallBeacon)(nil),                   // 26: turing.v1.ToolCallBeacon
+	(*ToolPolicyDecision)(nil),               // 27: turing.v1.ToolPolicyDecision
 }
 var file_turing_v1_runtime_proto_depIdxs = []int32{
 	20, // 0: turing.v1.AgentJob.agent_id:type_name -> turing.v1.AgentId
 	21, // 1: turing.v1.AgentJob.model_provider:type_name -> turing.v1.ModelProvider
 	3,  // 2: turing.v1.AgentJob.skills:type_name -> turing.v1.SkillSnapshot
 	2,  // 3: turing.v1.AgentJob.external_agent:type_name -> turing.v1.ExternalAgentTarget
-	19, // 4: turing.v1.SkillSnapshot.references:type_name -> turing.v1.SkillSnapshot.ReferencesEntry
-	22, // 5: turing.v1.DiscoveredTool.schema:type_name -> google.protobuf.Struct
-	23, // 6: turing.v1.WorkerCapabilities.models:type_name -> turing.v1.ModelCapability
-	20, // 7: turing.v1.WorkerCapabilities.agent_ids:type_name -> turing.v1.AgentId
-	4,  // 8: turing.v1.WorkerCapabilities.tools:type_name -> turing.v1.DiscoveredTool
-	20, // 9: turing.v1.RuntimeWorkerReady.agent_id:type_name -> turing.v1.AgentId
-	4,  // 10: turing.v1.RuntimeWorkerReady.tools:type_name -> turing.v1.DiscoveredTool
-	0,  // 11: turing.v1.RuntimeWorkerReady.tool_discovery_status:type_name -> turing.v1.ToolDiscoveryStatus
-	5,  // 12: turing.v1.RuntimeWorkerReady.capabilities:type_name -> turing.v1.WorkerCapabilities
-	5,  // 13: turing.v1.RuntimeWorkerCapabilitiesUpdated.capabilities:type_name -> turing.v1.WorkerCapabilities
-	22, // 14: turing.v1.RuntimeRunCompleted.usage:type_name -> google.protobuf.Struct
-	9,  // 15: turing.v1.RuntimeRunCompleted.token_usage:type_name -> turing.v1.RunTokenUsage
-	6,  // 16: turing.v1.RuntimeUpdate.worker_ready:type_name -> turing.v1.RuntimeWorkerReady
-	8,  // 17: turing.v1.RuntimeUpdate.heartbeat:type_name -> turing.v1.RuntimeHeartbeat
-	24, // 18: turing.v1.RuntimeUpdate.event:type_name -> turing.v1.TuringEvent
-	25, // 19: turing.v1.RuntimeUpdate.tool_beacon:type_name -> turing.v1.ToolCallBeacon
-	10, // 20: turing.v1.RuntimeUpdate.run_completed:type_name -> turing.v1.RuntimeRunCompleted
-	11, // 21: turing.v1.RuntimeUpdate.run_failed:type_name -> turing.v1.RuntimeRunFailed
-	12, // 22: turing.v1.RuntimeUpdate.run_cancelled_ack:type_name -> turing.v1.RuntimeCancelledAck
-	7,  // 23: turing.v1.RuntimeUpdate.worker_capabilities_updated:type_name -> turing.v1.RuntimeWorkerCapabilitiesUpdated
-	14, // 24: turing.v1.RuntimeCommand.worker_accepted:type_name -> turing.v1.RuntimeWorkerAccepted
-	1,  // 25: turing.v1.RuntimeCommand.run_assigned:type_name -> turing.v1.AgentJob
-	15, // 26: turing.v1.RuntimeCommand.run_cancelled:type_name -> turing.v1.RuntimeRunCancelled
-	16, // 27: turing.v1.RuntimeCommand.approval_updated:type_name -> turing.v1.RuntimeApprovalUpdated
-	17, // 28: turing.v1.RuntimeCommand.shutdown_requested:type_name -> turing.v1.RuntimeShutdownRequested
-	26, // 29: turing.v1.RuntimeCommand.tool_policy_decision:type_name -> turing.v1.ToolPolicyDecision
-	13, // 30: turing.v1.RuntimeService.ConnectWorker:input_type -> turing.v1.RuntimeUpdate
-	18, // 31: turing.v1.RuntimeService.ConnectWorker:output_type -> turing.v1.RuntimeCommand
-	31, // [31:32] is the sub-list for method output_type
-	30, // [30:31] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	22, // 4: turing.v1.AgentJob.egress_decision:type_name -> turing.v1.RunEgressDecision
+	19, // 5: turing.v1.SkillSnapshot.references:type_name -> turing.v1.SkillSnapshot.ReferencesEntry
+	23, // 6: turing.v1.DiscoveredTool.schema:type_name -> google.protobuf.Struct
+	24, // 7: turing.v1.WorkerCapabilities.models:type_name -> turing.v1.ModelCapability
+	20, // 8: turing.v1.WorkerCapabilities.agent_ids:type_name -> turing.v1.AgentId
+	4,  // 9: turing.v1.WorkerCapabilities.tools:type_name -> turing.v1.DiscoveredTool
+	20, // 10: turing.v1.RuntimeWorkerReady.agent_id:type_name -> turing.v1.AgentId
+	4,  // 11: turing.v1.RuntimeWorkerReady.tools:type_name -> turing.v1.DiscoveredTool
+	0,  // 12: turing.v1.RuntimeWorkerReady.tool_discovery_status:type_name -> turing.v1.ToolDiscoveryStatus
+	5,  // 13: turing.v1.RuntimeWorkerReady.capabilities:type_name -> turing.v1.WorkerCapabilities
+	5,  // 14: turing.v1.RuntimeWorkerCapabilitiesUpdated.capabilities:type_name -> turing.v1.WorkerCapabilities
+	23, // 15: turing.v1.RuntimeRunCompleted.usage:type_name -> google.protobuf.Struct
+	9,  // 16: turing.v1.RuntimeRunCompleted.token_usage:type_name -> turing.v1.RunTokenUsage
+	6,  // 17: turing.v1.RuntimeUpdate.worker_ready:type_name -> turing.v1.RuntimeWorkerReady
+	8,  // 18: turing.v1.RuntimeUpdate.heartbeat:type_name -> turing.v1.RuntimeHeartbeat
+	25, // 19: turing.v1.RuntimeUpdate.event:type_name -> turing.v1.TuringEvent
+	26, // 20: turing.v1.RuntimeUpdate.tool_beacon:type_name -> turing.v1.ToolCallBeacon
+	10, // 21: turing.v1.RuntimeUpdate.run_completed:type_name -> turing.v1.RuntimeRunCompleted
+	11, // 22: turing.v1.RuntimeUpdate.run_failed:type_name -> turing.v1.RuntimeRunFailed
+	12, // 23: turing.v1.RuntimeUpdate.run_cancelled_ack:type_name -> turing.v1.RuntimeCancelledAck
+	7,  // 24: turing.v1.RuntimeUpdate.worker_capabilities_updated:type_name -> turing.v1.RuntimeWorkerCapabilitiesUpdated
+	14, // 25: turing.v1.RuntimeCommand.worker_accepted:type_name -> turing.v1.RuntimeWorkerAccepted
+	1,  // 26: turing.v1.RuntimeCommand.run_assigned:type_name -> turing.v1.AgentJob
+	15, // 27: turing.v1.RuntimeCommand.run_cancelled:type_name -> turing.v1.RuntimeRunCancelled
+	16, // 28: turing.v1.RuntimeCommand.approval_updated:type_name -> turing.v1.RuntimeApprovalUpdated
+	17, // 29: turing.v1.RuntimeCommand.shutdown_requested:type_name -> turing.v1.RuntimeShutdownRequested
+	27, // 30: turing.v1.RuntimeCommand.tool_policy_decision:type_name -> turing.v1.ToolPolicyDecision
+	13, // 31: turing.v1.RuntimeService.ConnectWorker:input_type -> turing.v1.RuntimeUpdate
+	18, // 32: turing.v1.RuntimeService.ConnectWorker:output_type -> turing.v1.RuntimeCommand
+	32, // [32:33] is the sub-list for method output_type
+	31, // [31:32] is the sub-list for method input_type
+	31, // [31:31] is the sub-list for extension type_name
+	31, // [31:31] is the sub-list for extension extendee
+	0,  // [0:31] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_runtime_proto_init() }

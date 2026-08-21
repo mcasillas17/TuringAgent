@@ -14,6 +14,7 @@ import (
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/auth"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
@@ -38,6 +39,27 @@ type harness struct {
 }
 
 var runtimeTestDatabaseSequence atomic.Uint64
+
+func runtimeRemoteDecision(model string) *repository.PendingEgressDecision {
+	sequence := runtimeTestDatabaseSequence.Add(1)
+	skillFingerprint, _ := backendegress.SkillSnapshotFingerprint(nil)
+	return &repository.PendingEgressDecision{
+		Version:              repository.RunEgressDecisionVersion,
+		ChallengeNonce:       fmt.Sprintf("runtime-nonce-%d", sequence),
+		ChallengeFingerprint: fmt.Sprintf("runtime-fingerprint-%d", sequence),
+		RequestDigest:        fmt.Sprintf("runtime-request-digest-%d", sequence),
+		Provider:             "openai_compatible", Model: model,
+		Endpoint: "https://api.openai.com/v1", EndpointHost: "api.openai.com",
+		DataCategories: []string{
+			"EGRESS_DATA_CATEGORY_CURRENT_MESSAGE",
+			"EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY",
+			"EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL",
+			"EGRESS_DATA_CATEGORY_SKILL_CONTENT",
+		},
+		SkillSnapshotFingerprint: skillFingerprint,
+		ConsentGrantedAt:         repository.FormatTimestamp(time.Now().UTC()),
+	}
+}
 
 func newHarness(t *testing.T) *harness {
 	return newHarnessWithDispatch(t, DispatchConfig{})

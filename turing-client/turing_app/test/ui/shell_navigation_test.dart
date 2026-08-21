@@ -2292,14 +2292,13 @@ Future<void> _pumpShell(
   await tester.pumpAndSettle();
 }
 
-class _FakeApi
+class _FakeApi extends TuringApi
     with
         NoAuditApi,
         NoIntegrationsApi,
         NoAutomationsApi,
         NoTelemetryApi,
-        NoSkillsApi
-    implements TuringApi {
+        NoSkillsApi {
   List<Session> sessions = [
     Session(
       sessionId: 'sess_existing',

@@ -1,0 +1,138 @@
+package agent
+
+import (
+	"errors"
+	"fmt"
+	"slices"
+
+	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
+)
+
+func validateEgressDecisionShape(job *turingv1.AgentJob) error {
+	remote := job.GetModelProvider() == turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE ||
+		job.GetExternalAgent() != nil
+	decision := job.GetEgressDecision()
+	if !remote {
+		if decision != nil {
+			return errors.New("local run carries a remote egress decision")
+		}
+		return nil
+	}
+	if decision == nil {
+		return errors.New("remote run has no egress decision")
+	}
+	if job.GetModelProvider() != turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE {
+		return errors.New("external agent run is not routed through the remote provider")
+	}
+	if decision.GetVersion() != backendegress.DecisionVersion ||
+		decision.GetDecisionId() == "" ||
+		decision.GetChallengeFingerprint() == "" ||
+		decision.GetRequestDigest() == "" ||
+		decision.GetProvider() != job.GetModelProvider() ||
+		decision.GetModel() != job.GetModel() ||
+		decision.GetEndpoint() == "" ||
+		decision.GetEndpointHost() == "" ||
+		decision.GetConsentGrantedAt() == nil ||
+		decision.GetSkillSnapshotFingerprint() == "" ||
+		!slices.Equal(decision.GetSelectedTools(), job.GetSelectedTools()) {
+		return errors.New("remote run decision does not match its frozen job")
+	}
+	skillFingerprint, err := runtimeSkillSnapshotFingerprint(job.GetSkills())
+	if err != nil || skillFingerprint != decision.GetSkillSnapshotFingerprint() {
+		return errors.New("remote run skill snapshot differs from the egress decision")
+	}
+	recallApplicable := job.GetExternalAgent() == nil
+	if decision.GetRecallApplicable() != recallApplicable ||
+		decision.GetMemoryProfileApplicable() {
+		return errors.New("remote run context flags differ from the egress decision")
+	}
+	endpoint, err := backendegress.ParseKeyedEndpoint(decision.GetEndpoint())
+	if err != nil || endpoint.Canonical != decision.GetEndpoint() || endpoint.Host != decision.GetEndpointHost() {
+		return errors.New("remote run decision endpoint is invalid")
+	}
+
+	present := make(map[turingv1.EgressDataCategory]struct{}, len(decision.GetDataCategories()))
+	for _, category := range decision.GetDataCategories() {
+		if category <= turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_UNSPECIFIED ||
+			category > turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_ATTACHMENTS {
+			return errors.New("remote run decision has an unknown data category")
+		}
+		if _, duplicate := present[category]; duplicate {
+			return errors.New("remote run decision has duplicate data categories")
+		}
+		present[category] = struct{}{}
+	}
+	required := []turingv1.EgressDataCategory{
+		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CURRENT_MESSAGE,
+		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY,
+		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT,
+	}
+	if job.GetExternalAgent() == nil {
+		required = append(required, turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL)
+	}
+	if len(job.GetSelectedTools()) > 0 {
+		required = append(required,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_SCHEMAS,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_RESULTS)
+	}
+	for _, category := range required {
+		if _, ok := present[category]; !ok {
+			return fmt.Errorf("remote run decision is missing %s", category.String())
+		}
+	}
+	if len(present) != len(required) {
+		return errors.New("remote run decision contains inapplicable data categories")
+	}
+	return nil
+}
+
+func runtimeSkillSnapshotFingerprint(skills []*turingv1.SkillSnapshot) (string, error) {
+	snapshots := make([]backendegress.SkillSnapshot, len(skills))
+	for index, skill := range skills {
+		snapshots[index] = backendegress.SkillSnapshot{
+			SkillID: skill.GetSkillId(), Name: skill.GetName(),
+			Description: skill.GetDescription(), Category: skill.GetCategory(),
+			Instructions: skill.GetInstructions(), References: skill.GetReferences(),
+			Withheld:            skill.GetWithheld(),
+			MissingCapabilities: skill.GetMissingCapabilities(),
+		}
+	}
+	return backendegress.SkillSnapshotFingerprint(snapshots)
+}
+
+func validateEgressProvider(job *turingv1.AgentJob, provider llm.Provider) error {
+	if job.GetModelProvider() != turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE {
+		if remote, ok := provider.(llm.EgressProvider); ok && remote.EgressEndpoint() != "" {
+			return errors.New("local run resolved to a provider with a remote endpoint")
+		}
+		return nil
+	}
+	decision := job.GetEgressDecision()
+	if provider.ID() != "openai_compatible" {
+		return errors.New("remote run resolved to a non-remote provider")
+	}
+	remote, ok := provider.(llm.EgressProvider)
+	if !ok {
+		return errors.New("remote provider does not expose its endpoint identity")
+	}
+	if remote.EgressEndpoint() != decision.GetEndpoint() {
+		return errors.New("remote provider endpoint differs from the egress decision")
+	}
+	if target := job.GetExternalAgent(); target != nil {
+		if target.GetAgentId() == "" || target.GetAgentId() != decision.GetExternalAgentId() {
+			return errors.New("external agent identity differs from the egress decision")
+		}
+		if target.GetBaseUrl() != decision.GetEndpoint() {
+			return errors.New("external agent endpoint differs from the egress decision")
+		}
+		if backendegress.HashCredentialReference(target.GetCredentialRef()) !=
+			decision.GetExternalCredentialRefHash() {
+			return errors.New("external agent credential reference differs from the egress decision")
+		}
+		return nil
+	}
+	return nil
+}

@@ -58,10 +58,12 @@ type Automation struct {
 	SessionID string
 	// The outcome of LastRunID, joined from agent_runs so "what happened while
 	// I was asleep" is answerable without opening the conversation.
-	LastRunStatus string
-	LastRunError  string
-	CreatedAt     string
-	UpdatedAt     string
+	LastRunStatus             string
+	LastRunError              string
+	LastOccurrenceFailureCode string
+	LastOccurrenceFailedAt    string
+	CreatedAt                 string
+	UpdatedAt                 string
 }
 
 type AutomationInput struct {
@@ -120,6 +122,8 @@ type AutomationFire struct {
 	// still moved on, so the automation is not stuck; SkippedReason says why.
 	Skipped       bool
 	SkippedReason string
+	Failed        bool
+	FailureCode   string
 }
 
 // Reasons an occurrence is passed over.
@@ -133,8 +137,10 @@ const (
 	// time from it, so the automation is disabled rather than left to be
 	// re-selected by every future tick, which would block every automation
 	// behind it forever.
-	SkippedScheduleUnreadable = "schedule_unreadable"
-	SkippedRoutingUnavailable = "routing_unavailable"
+	SkippedScheduleUnreadable                               = "schedule_unreadable"
+	SkippedRoutingUnavailable                               = "routing_unavailable"
+	AutomationFailureRemoteEgressRequiresInteractiveConsent = "remote_egress_requires_interactive_consent"
+	AutomationFailureRemoteEgressConfigurationInvalid       = "remote_egress_configuration_invalid"
 )
 
 func validateAutomation(input AutomationInput) (AutomationInput, error) {
@@ -491,26 +497,112 @@ func (r *Repository) ClaimDueAutomation(ctx context.Context, at time.Time, defau
 			Skipped: true, SkippedReason: SkippedPreviousRunUnfinished,
 		}, true, nil
 	}
-	if defaults.ValidateRouting != nil {
-		requirements := RoutingRequirements{
-			AgentID: defaults.AgentID, ModelProvider: defaults.ModelProvider, Model: defaults.Model,
+	requirements := RoutingRequirements{
+		AgentID: defaults.AgentID, ModelProvider: defaults.ModelProvider, Model: defaults.Model,
+	}
+	if sessionID.Valid {
+		active, activeErr := automationSessionActiveTx(ctx, tx, sessionID.String)
+		if activeErr != nil {
+			return AutomationFire{}, false, activeErr
 		}
-		if sessionID.Valid {
-			active, err := automationSessionActiveTx(ctx, tx, sessionID.String)
-			if err != nil {
-				return AutomationFire{}, false, err
-			}
-			if active {
-				resolved, err := resolveEnqueueRouteTx(ctx, tx, EnqueueUserMessageInput{
-					SessionID: sessionID.String, AgentID: defaults.AgentID,
-					ModelProvider: defaults.ModelProvider, Model: defaults.Model,
-				})
-				if err != nil {
-					return AutomationFire{}, false, err
+		if active {
+			resolved, resolveErr := resolveEnqueueRouteTx(ctx, tx, EnqueueUserMessageInput{
+				SessionID: sessionID.String, AgentID: defaults.AgentID,
+				ModelProvider: defaults.ModelProvider, Model: defaults.Model,
+			})
+			if resolveErr != nil {
+				if errors.Is(resolveErr, ErrExternalAgentBaseURLInsecure) ||
+					errors.Is(resolveErr, ErrExternalAgentBaseURLInvalid) {
+					result, updateErr := tx.ExecContext(ctx, `
+						UPDATE automations
+						SET next_due_at = ?, updated_at = ?
+						WHERE id = ? AND enabled = 1 AND next_due_at = ?
+					`, FormatTimestamp(nextDue), firedAt, automationID, dueAt)
+					if updateErr != nil {
+						return AutomationFire{}, false, updateErr
+					}
+					advanced, rowsErr := result.RowsAffected()
+					if rowsErr != nil {
+						return AutomationFire{}, false, rowsErr
+					}
+					if advanced != 1 {
+						return AutomationFire{}, false, nil
+					}
+					payload, marshalErr := json.Marshal(map[string]any{
+						"code":       AutomationFailureRemoteEgressConfigurationInvalid,
+						"firedDueAt": dueAt,
+						"nextDueAt":  FormatTimestamp(nextDue),
+					})
+					if marshalErr != nil {
+						return AutomationFire{}, false, marshalErr
+					}
+					if auditErr := recordAuditTx(
+						ctx, tx, "", "automation", automationID,
+						"automation.remote_egress_blocked", automationID, string(payload),
+					); auditErr != nil {
+						return AutomationFire{}, false, auditErr
+					}
+					if commitErr := tx.Commit(); commitErr != nil {
+						return AutomationFire{}, false, commitErr
+					}
+					return AutomationFire{
+						AutomationID: automationID, Name: name, Failed: true,
+						FailureCode: AutomationFailureRemoteEgressConfigurationInvalid,
+					}, true, nil
 				}
-				requirements = resolved.requirements
+				return AutomationFire{}, false, resolveErr
 			}
+			requirements = resolved.requirements
 		}
+	}
+	if requirements.ModelProvider == "openai_compatible" {
+		result, updateErr := tx.ExecContext(ctx, `
+			UPDATE automations
+			SET next_due_at = ?, updated_at = ?
+			WHERE id = ? AND enabled = 1 AND next_due_at = ?
+		`, FormatTimestamp(nextDue), firedAt, automationID, dueAt)
+		if updateErr != nil {
+			return AutomationFire{}, false, updateErr
+		}
+		advanced, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return AutomationFire{}, false, rowsErr
+		}
+		if advanced != 1 {
+			return AutomationFire{}, false, nil
+		}
+		payload, marshalErr := json.Marshal(map[string]any{
+			"code":       AutomationFailureRemoteEgressRequiresInteractiveConsent,
+			"provider":   requirements.ModelProvider,
+			"firedDueAt": dueAt,
+			"nextDueAt":  FormatTimestamp(nextDue),
+		})
+		if marshalErr != nil {
+			return AutomationFire{}, false, marshalErr
+		}
+		if auditErr := recordAuditTx(
+			ctx,
+			tx,
+			"",
+			"automation",
+			automationID,
+			"automation.remote_egress_blocked",
+			automationID,
+			string(payload),
+		); auditErr != nil {
+			return AutomationFire{}, false, auditErr
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return AutomationFire{}, false, commitErr
+		}
+		return AutomationFire{
+			AutomationID: automationID,
+			Name:         name,
+			Failed:       true,
+			FailureCode:  AutomationFailureRemoteEgressRequiresInteractiveConsent,
+		}, true, nil
+	}
+	if defaults.ValidateRouting != nil {
 		routingErr := defaults.ValidateRouting(ctx, requirements)
 		if routingErr != nil {
 			result, err := tx.ExecContext(ctx, `
@@ -704,9 +796,21 @@ const automationSelect = `
 	SELECT a.id, a.name, a.prompt, a.schedule_kind, a.interval_seconds, a.daily_minute_utc, a.enabled,
 		a.next_due_at, a.last_run_at, a.last_run_id, a.session_id,
 		COALESCE(r.status, ''), COALESCE(r.error_message, ''),
+		COALESCE(json_extract(blocked.payload_json, '$.code'), ''),
+		COALESCE(blocked.created_at, ''),
 		a.created_at, a.updated_at
 	FROM automations a
-	LEFT JOIN agent_runs r ON r.id = a.last_run_id`
+	LEFT JOIN agent_runs r ON r.id = a.last_run_id
+	LEFT JOIN audit_logs blocked ON blocked.rowid = (
+		SELECT candidate.rowid
+		FROM audit_logs candidate
+		WHERE candidate.actor_type = 'automation'
+			AND candidate.actor_id = a.id
+			AND candidate.action = 'automation.remote_egress_blocked'
+			AND candidate.created_at > COALESCE(a.last_run_at, '')
+		ORDER BY candidate.created_at DESC, candidate.rowid DESC
+		LIMIT 1
+	)`
 
 func automationByIDTx(ctx context.Context, tx *sql.Tx, automationID string) (Automation, error) {
 	rows, err := tx.QueryContext(ctx, automationSelect+` WHERE a.id = ?`, automationID)
@@ -740,6 +844,7 @@ func scanAutomations(rows *sql.Rows) ([]Automation, error) {
 		if err := rows.Scan(&automation.AutomationID, &automation.Name, &automation.Prompt, &scheduleKind,
 			&intervalSeconds, &dailyMinute, &enabled, &nextDue, &lastRunAt, &lastRunID, &sessionID,
 			&automation.LastRunStatus, &automation.LastRunError,
+			&automation.LastOccurrenceFailureCode, &automation.LastOccurrenceFailedAt,
 			&automation.CreatedAt, &automation.UpdatedAt); err != nil {
 			return nil, err
 		}

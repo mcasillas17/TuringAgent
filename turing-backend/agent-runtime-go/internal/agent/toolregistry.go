@@ -244,6 +244,36 @@ func (r *ToolRegistry) Definitions() []llm.ToolDefinition {
 	return definitions
 }
 
+func (r *ToolRegistry) DefinitionsFor(selected []string) ([]llm.ToolDefinition, error) {
+	if len(selected) == 0 {
+		return nil, nil
+	}
+	allowed := make(map[string]struct{}, len(selected))
+	for _, name := range selected {
+		allowed[name] = struct{}{}
+	}
+	definitions := make([]llm.ToolDefinition, 0, len(selected))
+	for index, discovered := range r.discovered {
+		identity := discovered.ServerName + "/" + discovered.ToolName
+		if _, ok := allowed[identity]; !ok {
+			continue
+		}
+		definition := r.definitions[index]
+		definition.Parameters = cloneNormalizedJSONMap(definition.Parameters)
+		definitions = append(definitions, definition)
+		delete(allowed, identity)
+	}
+	if len(allowed) != 0 {
+		missing := make([]string, 0, len(allowed))
+		for name := range allowed {
+			missing = append(missing, name)
+		}
+		sort.Strings(missing)
+		return nil, fmt.Errorf("selected tool snapshot is unavailable: %s", strings.Join(missing, ", "))
+	}
+	return definitions, nil
+}
+
 // Discovered returns the snapshot to report on connect, in the registry's own
 // stable order so a reconnect does not look like a changed tool set. Schemas are
 // cloned: a caller marshalling or mutating one must not corrupt the registry the

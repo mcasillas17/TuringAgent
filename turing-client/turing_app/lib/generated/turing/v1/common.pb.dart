@@ -469,12 +469,17 @@ class ProviderConfig extends $pb.GeneratedMessage {
     $core.bool? enabled,
     $core.String? defaultModel,
     $core.Iterable<ModelCapability>? models,
+    $core.String? remoteEndpoint,
+    $core.bool? requiresPerRunConsent,
   }) {
     final result = create();
     if (provider != null) result.provider = provider;
     if (enabled != null) result.enabled = enabled;
     if (defaultModel != null) result.defaultModel = defaultModel;
     if (models != null) result.models.addAll(models);
+    if (remoteEndpoint != null) result.remoteEndpoint = remoteEndpoint;
+    if (requiresPerRunConsent != null)
+      result.requiresPerRunConsent = requiresPerRunConsent;
     return result;
   }
 
@@ -500,6 +505,8 @@ class ProviderConfig extends $pb.GeneratedMessage {
     ..pc<ModelCapability>(
         4, _omitFieldNames ? '' : 'models', $pb.PbFieldType.PM,
         subBuilder: ModelCapability.create)
+    ..aOS(5, _omitFieldNames ? '' : 'remoteEndpoint')
+    ..aOB(6, _omitFieldNames ? '' : 'requiresPerRunConsent')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -552,6 +559,491 @@ class ProviderConfig extends $pb.GeneratedMessage {
 
   @$pb.TagNumber(4)
   $pb.PbList<ModelCapability> get models => $_getList(3);
+
+  /// Canonical provider base endpoint. Empty for local providers.
+  @$pb.TagNumber(5)
+  $core.String get remoteEndpoint => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set remoteEndpoint($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasRemoteEndpoint() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearRemoteEndpoint() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.bool get requiresPerRunConsent => $_getBF(5);
+  @$pb.TagNumber(6)
+  set requiresPerRunConsent($core.bool value) => $_setBool(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasRequiresPerRunConsent() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearRequiresPerRunConsent() => $_clearField(6);
+}
+
+class RemoteEgressDisclosure extends $pb.GeneratedMessage {
+  factory RemoteEgressDisclosure({
+    $core.String? challenge,
+    ModelProvider? provider,
+    $core.String? model,
+    $core.String? endpoint,
+    $core.String? endpointHost,
+    $core.String? externalAgentId,
+    $core.Iterable<EgressDataCategory>? dataCategories,
+    $1.Timestamp? expiresAt,
+  }) {
+    final result = create();
+    if (challenge != null) result.challenge = challenge;
+    if (provider != null) result.provider = provider;
+    if (model != null) result.model = model;
+    if (endpoint != null) result.endpoint = endpoint;
+    if (endpointHost != null) result.endpointHost = endpointHost;
+    if (externalAgentId != null) result.externalAgentId = externalAgentId;
+    if (dataCategories != null) result.dataCategories.addAll(dataCategories);
+    if (expiresAt != null) result.expiresAt = expiresAt;
+    return result;
+  }
+
+  RemoteEgressDisclosure._();
+
+  factory RemoteEgressDisclosure.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RemoteEgressDisclosure.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RemoteEgressDisclosure',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'challenge')
+    ..e<ModelProvider>(2, _omitFieldNames ? '' : 'provider', $pb.PbFieldType.OE,
+        defaultOrMaker: ModelProvider.MODEL_PROVIDER_UNSPECIFIED,
+        valueOf: ModelProvider.valueOf,
+        enumValues: ModelProvider.values)
+    ..aOS(3, _omitFieldNames ? '' : 'model')
+    ..aOS(4, _omitFieldNames ? '' : 'endpoint')
+    ..aOS(5, _omitFieldNames ? '' : 'endpointHost')
+    ..aOS(6, _omitFieldNames ? '' : 'externalAgentId')
+    ..pc<EgressDataCategory>(
+        7, _omitFieldNames ? '' : 'dataCategories', $pb.PbFieldType.KE,
+        valueOf: EgressDataCategory.valueOf,
+        enumValues: EgressDataCategory.values,
+        defaultEnumValue: EgressDataCategory.EGRESS_DATA_CATEGORY_UNSPECIFIED)
+    ..aOM<$1.Timestamp>(8, _omitFieldNames ? '' : 'expiresAt',
+        subBuilder: $1.Timestamp.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RemoteEgressDisclosure clone() =>
+      RemoteEgressDisclosure()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RemoteEgressDisclosure copyWith(
+          void Function(RemoteEgressDisclosure) updates) =>
+      super.copyWith((message) => updates(message as RemoteEgressDisclosure))
+          as RemoteEgressDisclosure;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RemoteEgressDisclosure create() => RemoteEgressDisclosure._();
+  @$core.override
+  RemoteEgressDisclosure createEmptyInstance() => create();
+  static $pb.PbList<RemoteEgressDisclosure> createRepeated() =>
+      $pb.PbList<RemoteEgressDisclosure>();
+  @$core.pragma('dart2js:noInline')
+  static RemoteEgressDisclosure getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RemoteEgressDisclosure>(create);
+  static RemoteEgressDisclosure? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get challenge => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set challenge($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasChallenge() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearChallenge() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  ModelProvider get provider => $_getN(1);
+  @$pb.TagNumber(2)
+  set provider(ModelProvider value) => $_setField(2, value);
+  @$pb.TagNumber(2)
+  $core.bool hasProvider() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearProvider() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get model => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set model($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasModel() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearModel() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get endpoint => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set endpoint($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasEndpoint() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearEndpoint() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get endpointHost => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set endpointHost($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasEndpointHost() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearEndpointHost() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.String get externalAgentId => $_getSZ(5);
+  @$pb.TagNumber(6)
+  set externalAgentId($core.String value) => $_setString(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasExternalAgentId() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearExternalAgentId() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $pb.PbList<EgressDataCategory> get dataCategories => $_getList(6);
+
+  @$pb.TagNumber(8)
+  $1.Timestamp get expiresAt => $_getN(7);
+  @$pb.TagNumber(8)
+  set expiresAt($1.Timestamp value) => $_setField(8, value);
+  @$pb.TagNumber(8)
+  $core.bool hasExpiresAt() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearExpiresAt() => $_clearField(8);
+  @$pb.TagNumber(8)
+  $1.Timestamp ensureExpiresAt() => $_ensure(7);
+}
+
+class RemoteEgressConsent extends $pb.GeneratedMessage {
+  factory RemoteEgressConsent({
+    $core.String? challenge,
+    $core.Iterable<EgressDataCategory>? acknowledgedDataCategories,
+    $core.bool? acknowledged,
+  }) {
+    final result = create();
+    if (challenge != null) result.challenge = challenge;
+    if (acknowledgedDataCategories != null)
+      result.acknowledgedDataCategories.addAll(acknowledgedDataCategories);
+    if (acknowledged != null) result.acknowledged = acknowledged;
+    return result;
+  }
+
+  RemoteEgressConsent._();
+
+  factory RemoteEgressConsent.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RemoteEgressConsent.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RemoteEgressConsent',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'challenge')
+    ..pc<EgressDataCategory>(2,
+        _omitFieldNames ? '' : 'acknowledgedDataCategories', $pb.PbFieldType.KE,
+        valueOf: EgressDataCategory.valueOf,
+        enumValues: EgressDataCategory.values,
+        defaultEnumValue: EgressDataCategory.EGRESS_DATA_CATEGORY_UNSPECIFIED)
+    ..aOB(3, _omitFieldNames ? '' : 'acknowledged')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RemoteEgressConsent clone() => RemoteEgressConsent()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RemoteEgressConsent copyWith(void Function(RemoteEgressConsent) updates) =>
+      super.copyWith((message) => updates(message as RemoteEgressConsent))
+          as RemoteEgressConsent;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RemoteEgressConsent create() => RemoteEgressConsent._();
+  @$core.override
+  RemoteEgressConsent createEmptyInstance() => create();
+  static $pb.PbList<RemoteEgressConsent> createRepeated() =>
+      $pb.PbList<RemoteEgressConsent>();
+  @$core.pragma('dart2js:noInline')
+  static RemoteEgressConsent getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RemoteEgressConsent>(create);
+  static RemoteEgressConsent? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get challenge => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set challenge($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasChallenge() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearChallenge() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $pb.PbList<EgressDataCategory> get acknowledgedDataCategories => $_getList(1);
+
+  @$pb.TagNumber(3)
+  $core.bool get acknowledged => $_getBF(2);
+  @$pb.TagNumber(3)
+  set acknowledged($core.bool value) => $_setBool(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasAcknowledged() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearAcknowledged() => $_clearField(3);
+}
+
+/// The orchestrator-owned decision frozen for one remote run. It contains no
+/// challenge, nonce, credential value/reference, or request content; one-way
+/// digests bind those inputs without disclosing them.
+class RunEgressDecision extends $pb.GeneratedMessage {
+  factory RunEgressDecision({
+    $core.String? decisionId,
+    $core.int? version,
+    ModelProvider? provider,
+    $core.String? model,
+    $core.String? endpoint,
+    $core.String? endpointHost,
+    $core.String? externalAgentId,
+    $core.Iterable<EgressDataCategory>? dataCategories,
+    $1.Timestamp? consentGrantedAt,
+    $core.String? challengeFingerprint,
+    $core.Iterable<$core.String>? selectedTools,
+    $core.String? skillSnapshotFingerprint,
+    $core.bool? recallApplicable,
+    $core.bool? memoryProfileApplicable,
+    $core.String? externalCredentialRefHash,
+    $core.String? requestDigest,
+  }) {
+    final result = create();
+    if (decisionId != null) result.decisionId = decisionId;
+    if (version != null) result.version = version;
+    if (provider != null) result.provider = provider;
+    if (model != null) result.model = model;
+    if (endpoint != null) result.endpoint = endpoint;
+    if (endpointHost != null) result.endpointHost = endpointHost;
+    if (externalAgentId != null) result.externalAgentId = externalAgentId;
+    if (dataCategories != null) result.dataCategories.addAll(dataCategories);
+    if (consentGrantedAt != null) result.consentGrantedAt = consentGrantedAt;
+    if (challengeFingerprint != null)
+      result.challengeFingerprint = challengeFingerprint;
+    if (selectedTools != null) result.selectedTools.addAll(selectedTools);
+    if (skillSnapshotFingerprint != null)
+      result.skillSnapshotFingerprint = skillSnapshotFingerprint;
+    if (recallApplicable != null) result.recallApplicable = recallApplicable;
+    if (memoryProfileApplicable != null)
+      result.memoryProfileApplicable = memoryProfileApplicable;
+    if (externalCredentialRefHash != null)
+      result.externalCredentialRefHash = externalCredentialRefHash;
+    if (requestDigest != null) result.requestDigest = requestDigest;
+    return result;
+  }
+
+  RunEgressDecision._();
+
+  factory RunEgressDecision.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RunEgressDecision.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RunEgressDecision',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'decisionId')
+    ..a<$core.int>(2, _omitFieldNames ? '' : 'version', $pb.PbFieldType.O3)
+    ..e<ModelProvider>(3, _omitFieldNames ? '' : 'provider', $pb.PbFieldType.OE,
+        defaultOrMaker: ModelProvider.MODEL_PROVIDER_UNSPECIFIED,
+        valueOf: ModelProvider.valueOf,
+        enumValues: ModelProvider.values)
+    ..aOS(4, _omitFieldNames ? '' : 'model')
+    ..aOS(5, _omitFieldNames ? '' : 'endpoint')
+    ..aOS(6, _omitFieldNames ? '' : 'endpointHost')
+    ..aOS(7, _omitFieldNames ? '' : 'externalAgentId')
+    ..pc<EgressDataCategory>(
+        8, _omitFieldNames ? '' : 'dataCategories', $pb.PbFieldType.KE,
+        valueOf: EgressDataCategory.valueOf,
+        enumValues: EgressDataCategory.values,
+        defaultEnumValue: EgressDataCategory.EGRESS_DATA_CATEGORY_UNSPECIFIED)
+    ..aOM<$1.Timestamp>(9, _omitFieldNames ? '' : 'consentGrantedAt',
+        subBuilder: $1.Timestamp.create)
+    ..aOS(10, _omitFieldNames ? '' : 'challengeFingerprint')
+    ..pPS(11, _omitFieldNames ? '' : 'selectedTools')
+    ..aOS(12, _omitFieldNames ? '' : 'skillSnapshotFingerprint')
+    ..aOB(13, _omitFieldNames ? '' : 'recallApplicable')
+    ..aOB(14, _omitFieldNames ? '' : 'memoryProfileApplicable')
+    ..aOS(15, _omitFieldNames ? '' : 'externalCredentialRefHash')
+    ..aOS(16, _omitFieldNames ? '' : 'requestDigest')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RunEgressDecision clone() => RunEgressDecision()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RunEgressDecision copyWith(void Function(RunEgressDecision) updates) =>
+      super.copyWith((message) => updates(message as RunEgressDecision))
+          as RunEgressDecision;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RunEgressDecision create() => RunEgressDecision._();
+  @$core.override
+  RunEgressDecision createEmptyInstance() => create();
+  static $pb.PbList<RunEgressDecision> createRepeated() =>
+      $pb.PbList<RunEgressDecision>();
+  @$core.pragma('dart2js:noInline')
+  static RunEgressDecision getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RunEgressDecision>(create);
+  static RunEgressDecision? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get decisionId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set decisionId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasDecisionId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearDecisionId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.int get version => $_getIZ(1);
+  @$pb.TagNumber(2)
+  set version($core.int value) => $_setSignedInt32(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasVersion() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearVersion() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  ModelProvider get provider => $_getN(2);
+  @$pb.TagNumber(3)
+  set provider(ModelProvider value) => $_setField(3, value);
+  @$pb.TagNumber(3)
+  $core.bool hasProvider() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearProvider() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get model => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set model($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasModel() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearModel() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get endpoint => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set endpoint($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasEndpoint() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearEndpoint() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.String get endpointHost => $_getSZ(5);
+  @$pb.TagNumber(6)
+  set endpointHost($core.String value) => $_setString(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasEndpointHost() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearEndpointHost() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.String get externalAgentId => $_getSZ(6);
+  @$pb.TagNumber(7)
+  set externalAgentId($core.String value) => $_setString(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasExternalAgentId() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearExternalAgentId() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $pb.PbList<EgressDataCategory> get dataCategories => $_getList(7);
+
+  @$pb.TagNumber(9)
+  $1.Timestamp get consentGrantedAt => $_getN(8);
+  @$pb.TagNumber(9)
+  set consentGrantedAt($1.Timestamp value) => $_setField(9, value);
+  @$pb.TagNumber(9)
+  $core.bool hasConsentGrantedAt() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearConsentGrantedAt() => $_clearField(9);
+  @$pb.TagNumber(9)
+  $1.Timestamp ensureConsentGrantedAt() => $_ensure(8);
+
+  @$pb.TagNumber(10)
+  $core.String get challengeFingerprint => $_getSZ(9);
+  @$pb.TagNumber(10)
+  set challengeFingerprint($core.String value) => $_setString(9, value);
+  @$pb.TagNumber(10)
+  $core.bool hasChallengeFingerprint() => $_has(9);
+  @$pb.TagNumber(10)
+  void clearChallengeFingerprint() => $_clearField(10);
+
+  @$pb.TagNumber(11)
+  $pb.PbList<$core.String> get selectedTools => $_getList(10);
+
+  @$pb.TagNumber(12)
+  $core.String get skillSnapshotFingerprint => $_getSZ(11);
+  @$pb.TagNumber(12)
+  set skillSnapshotFingerprint($core.String value) => $_setString(11, value);
+  @$pb.TagNumber(12)
+  $core.bool hasSkillSnapshotFingerprint() => $_has(11);
+  @$pb.TagNumber(12)
+  void clearSkillSnapshotFingerprint() => $_clearField(12);
+
+  @$pb.TagNumber(13)
+  $core.bool get recallApplicable => $_getBF(12);
+  @$pb.TagNumber(13)
+  set recallApplicable($core.bool value) => $_setBool(12, value);
+  @$pb.TagNumber(13)
+  $core.bool hasRecallApplicable() => $_has(12);
+  @$pb.TagNumber(13)
+  void clearRecallApplicable() => $_clearField(13);
+
+  @$pb.TagNumber(14)
+  $core.bool get memoryProfileApplicable => $_getBF(13);
+  @$pb.TagNumber(14)
+  set memoryProfileApplicable($core.bool value) => $_setBool(13, value);
+  @$pb.TagNumber(14)
+  $core.bool hasMemoryProfileApplicable() => $_has(13);
+  @$pb.TagNumber(14)
+  void clearMemoryProfileApplicable() => $_clearField(14);
+
+  @$pb.TagNumber(15)
+  $core.String get externalCredentialRefHash => $_getSZ(14);
+  @$pb.TagNumber(15)
+  set externalCredentialRefHash($core.String value) => $_setString(14, value);
+  @$pb.TagNumber(15)
+  $core.bool hasExternalCredentialRefHash() => $_has(14);
+  @$pb.TagNumber(15)
+  void clearExternalCredentialRefHash() => $_clearField(15);
+
+  @$pb.TagNumber(16)
+  $core.String get requestDigest => $_getSZ(15);
+  @$pb.TagNumber(16)
+  set requestDigest($core.String value) => $_setString(15, value);
+  @$pb.TagNumber(16)
+  $core.bool hasRequestDigest() => $_has(15);
+  @$pb.TagNumber(16)
+  void clearRequestDigest() => $_clearField(16);
 }
 
 class AgentDescriptor extends $pb.GeneratedMessage {

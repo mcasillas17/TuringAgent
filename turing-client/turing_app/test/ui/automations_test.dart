@@ -10,6 +10,7 @@ import '../support/no_audit_api.dart';
 import '../support/no_skills_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
+import '../support/no_remote_egress_api.dart';
 import '../support/no_session_lifecycle_api.dart';
 import '../support/no_telemetry_api.dart';
 
@@ -728,6 +729,7 @@ class _FakeApi
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
+        NoRemoteEgressApi,
         NoSessionLifecycleApi,
         NoTelemetryApi
     implements TuringApi {

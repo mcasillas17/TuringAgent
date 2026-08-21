@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/secretbox"
 )
 
@@ -35,7 +36,8 @@ type Config struct {
 	// MCPFilesBaseURL is a non-secret internal endpoint used only for
 	// signed session-namespace cleanup; the orchestrator never receives the
 	// normal mcp-files bearer token.
-	MCPFilesBaseURL string
+	MCPFilesBaseURL     string
+	EgressSigningSecret string
 	// IntegrationKey seals third-party credentials before they are stored.
 	// Optional: when it is empty, connecting an account is refused with a
 	// reason rather than the credential being stored in the clear.
@@ -200,6 +202,10 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	egressSigningSecret, err := required("TURING_EGRESS_SIGNING_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
 	cursorSecret, err := required("TURING_CURSOR_HMAC_SECRET")
 	if err != nil {
 		return Config{}, err
@@ -288,6 +294,26 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	openAIBaseURL := stringValue("OPENAI_BASE_URL", "https://api.openai.com/v1")
+	if openAIEnabled {
+		endpoint, parseErr := egress.ParseKeyedEndpoint(openAIBaseURL)
+		if parseErr != nil {
+			return Config{}, fmt.Errorf("OPENAI_BASE_URL: %w", parseErr)
+		}
+		openAIBaseURL = endpoint.Canonical
+	} else {
+		endpoint, parseErr := egress.ParseUnkeyedEndpoint(openAIBaseURL)
+		if parseErr != nil {
+			return Config{}, fmt.Errorf("OPENAI_BASE_URL: %w", parseErr)
+		}
+		openAIBaseURL = endpoint.Canonical
+	}
+	ollamaEndpoint, err := egress.ParseLocalEndpoint(
+		stringValue("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
+	)
+	if err != nil {
+		return Config{}, fmt.Errorf("OLLAMA_BASE_URL: %w", err)
+	}
 
 	skillsRoot := stringValue("SKILLS_ROOT", "/skills")
 	if !filepath.IsAbs(skillsRoot) || filepath.Clean(skillsRoot) != skillsRoot {
@@ -300,16 +326,17 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		MCPFilesCleanupToken:      mcpFilesCleanupToken,
 		MCPFilesBaseURL:           stringValue("MCP_FILES_BASE_URL", "http://turing-mcp-files:7110/mcp"),
 		ApprovalJWTSecret:         approvalSecret,
+		EgressSigningSecret:       egressSigningSecret,
 		CursorHMACKey:             cursorHMACKey,
 		IntegrationKey:            integrationKey,
 		PublicPort:                publicPort,
 		InternalPort:              internalPort,
 		DatabasePath:              stringValue("DATABASE_PATH", "/app/data/turing.db"),
 		SkillsRoot:                skillsRoot,
-		OllamaBaseURL:             stringValue("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
+		OllamaBaseURL:             ollamaEndpoint.Canonical,
 		OllamaModel:               stringValue("OLLAMA_MODEL", "qwen2.5:7b"),
 		OllamaContextWindowTokens: ollamaContextWindowTokens,
-		OpenAIBaseURL:             stringValue("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+		OpenAIBaseURL:             openAIBaseURL,
 		FilesMCPEnabled:           filesMCPEnabled,
 		OpenAIEnabled:             openAIEnabled,
 		OpenAIModel:               stringValue("OPENAI_MODEL", "gpt-4o-mini"),

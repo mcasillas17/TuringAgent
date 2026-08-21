@@ -154,6 +154,7 @@ func TestRecoveryDispatchesRequeuedWorkAfterRoutingNoticeFailure(t *testing.T) {
 	if _, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
 		SessionID: session.SessionID, Content: "needs OpenAI", AgentID: "general_assistant",
 		ModelProvider: "openai_compatible", Model: "gpt-4o-mini",
+		EgressDecision: runtimeRemoteDecision("gpt-4o-mini"),
 	}); err != nil {
 		t.Fatal(err)
 	}

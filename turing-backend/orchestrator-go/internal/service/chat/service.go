@@ -26,6 +26,9 @@ type Server struct {
 	runtime     runtimeDispatcher
 	ollamaModel string
 	openAIModel string
+	egress      EgressConfig
+	now         func() time.Time
+	nonce       func() (string, error)
 }
 
 type runtimeDispatcher interface {
@@ -37,7 +40,15 @@ type runtimeDispatcher interface {
 }
 
 func New(repo *repository.Repository, bus *events.Bus, runtimeServer runtimeDispatcher, ollamaModel string, openAIModel string) *Server {
-	return &Server{repo: repo, bus: bus, runtime: runtimeServer, ollamaModel: ollamaModel, openAIModel: openAIModel}
+	return NewWithEgressConfig(repo, bus, runtimeServer, ollamaModel, openAIModel, EgressConfig{})
+}
+
+func NewWithEgressConfig(repo *repository.Repository, bus *events.Bus, runtimeServer runtimeDispatcher, ollamaModel string, openAIModel string, egressConfig EgressConfig) *Server {
+	return &Server{
+		repo: repo, bus: bus, runtime: runtimeServer,
+		ollamaModel: ollamaModel, openAIModel: openAIModel,
+		egress: egressConfig, now: time.Now, nonce: newEgressNonce,
+	}
 }
 
 func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.ChatService_SendMessageServer) error {
@@ -58,6 +69,15 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 	requestedTools, err := requestTools(req.GetRequestedTools())
 	if err != nil {
 		return err
+	}
+	if consent := req.GetRemoteEgressConsent(); consent != nil {
+		if err := validateRemoteSendBounds(req, requestedTools); err != nil {
+			return err
+		}
+		if len(consent.GetChallenge()) > maxEgressChallengeBytes*2 ||
+			len(consent.GetAcknowledgedDataCategories()) > int(turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_ATTACHMENTS) {
+			return status.Error(codes.InvalidArgument, "remote egress consent is too large")
+		}
 	}
 	if req.GetRequiredContextTokens() < 0 {
 		return status.Error(codes.InvalidArgument, "required_context_tokens must be non-negative")
@@ -102,6 +122,7 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 		AgentID:                        agentID,
 		ModelProvider:                  modelProvider,
 		Model:                          model,
+		RequestedModel:                 req.GetModel(),
 		ExecutionModel:                 executionModel,
 		IdempotencyKey:                 req.IdempotencyKey,
 		RequestedTools:                 requestedTools,
@@ -111,9 +132,18 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 	if s.runtime != nil {
 		input.ValidateRouting = s.runtime.ValidateRouting
 	}
-	enqueued, err := s.repo.EnqueueUserMessage(ctx, input)
+	replayed, foundReplay, err := s.applyRemoteEgress(ctx, req, &input)
 	if err != nil {
-		return mapEnqueueError(ctx, err)
+		return err
+	}
+	var enqueued repository.EnqueueUserMessageResult
+	if foundReplay {
+		enqueued = replayed
+	} else {
+		enqueued, err = s.repo.EnqueueUserMessage(ctx, input)
+		if err != nil {
+			return mapEnqueueError(ctx, err)
+		}
 	}
 	if !enqueued.Replayed {
 		s.bus.Publish(events.FromRepositoryEvent(enqueued.SessionUpdatedEvent))
@@ -167,8 +197,11 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 				s.cancelRun(enqueued.RunID)
 			}
 			return status.Error(codes.Canceled, "client cancelled stream")
-		case _, ok := <-ch:
+		case event, ok := <-ch:
 			if !ok {
+				return nil
+			}
+			if event.Type == "session.deleted" {
 				return nil
 			}
 			done, err := s.streamAvailableEvents(ctx, req.SessionId, enqueued.RunID, &lastSent, cancelRunOnClientDisconnect, stream)
@@ -237,6 +270,9 @@ func (s *Server) streamAvailableEvents(ctx context.Context, sessionID string, ru
 					s.cancelRun(runID)
 				}
 				return false, status.Error(codes.Canceled, "client cancelled stream")
+			}
+			if errors.Is(err, repository.ErrSessionNotFound) {
+				return true, nil
 			}
 			return false, status.Error(codes.Internal, "replay events failed")
 		}
@@ -340,6 +376,16 @@ func mapEnqueueError(ctx context.Context, err error) error {
 	}
 	if errors.Is(err, repository.ErrIdempotencyConflict) {
 		return status.Error(codes.AlreadyExists, "idempotency key was already used for a different request")
+	}
+	if errors.Is(err, repository.ErrEgressChallengeAlreadyUsed) {
+		return status.Error(codes.AlreadyExists, "remote egress challenge was already used")
+	}
+	if errors.Is(err, repository.ErrRemoteEgressConsentRequired) ||
+		errors.Is(err, repository.ErrLocalEgressDecisionForbidden) ||
+		errors.Is(err, repository.ErrEgressDecisionInvalid) ||
+		errors.Is(err, repository.ErrExternalAgentBaseURLInsecure) ||
+		errors.Is(err, repository.ErrExternalAgentBaseURLInvalid) {
+		return status.Error(codes.FailedPrecondition, "remote egress decision is invalid for this request")
 	}
 	if errors.Is(err, repository.ErrSessionDeleting) {
 		return status.Error(codes.FailedPrecondition, "session deletion is in progress")

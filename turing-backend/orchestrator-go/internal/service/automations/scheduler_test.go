@@ -258,7 +258,7 @@ func TestTickPublishesSessionUpdatedBeforeQueued(t *testing.T) {
 	}
 }
 
-func TestTickPublishesExternalRoutingEventAfterQueued(t *testing.T) {
+func TestTickDoesNotDispatchOrPublishBlockedRemoteAutomation(t *testing.T) {
 	h := newSchedulerHarness(t)
 	automation := createEnabled(t, h.repo, h.ctx, "External digest", repository.Schedule{Kind: repository.ScheduleInterval, Interval: 5 * time.Minute})
 	session, err := h.repo.CreateSession(h.ctx, automation.Name)
@@ -287,16 +287,13 @@ func TestTickPublishesExternalRoutingEventAfterQueued(t *testing.T) {
 	if err := h.scheduler.Tick(h.ctx); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"session.updated", "agent.run.queued", "agent.run.step"}
-	for index, wantType := range want {
-		select {
-		case event := <-published:
-			if event.Type != wantType {
-				t.Fatalf("published event %d = %q, want %q", index, event.Type, wantType)
-			}
-		case <-time.After(time.Second):
-			t.Fatalf("timed out waiting for published event %d (%s)", index, wantType)
-		}
+	select {
+	case event := <-published:
+		t.Fatalf("blocked remote automation published %q", event.Type)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if h.dispatcher.count() != 0 {
+		t.Fatalf("dispatch calls = %d, want 0", h.dispatcher.count())
 	}
 }
 

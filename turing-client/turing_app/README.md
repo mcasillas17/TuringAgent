@@ -20,7 +20,8 @@ Implemented in the client:
 - Inline tool-call status cards for live `tool.call.*` events.
 - Inline notices when a live agent run reaches its tool-iteration limit.
 - Approval cards for `approval.requested` events, cleared by approval terminal events.
-- Model provider selector for `ollama` or `openai_compatible` per sent message.
+- Model provider preference for `ollama` or `openai_compatible`; every effective
+  remote send separately confirms its exact endpoint and disclosed categories.
 - Typed session-withdrawal receipts and terminal `session.deleted` events. The
   shell removes a conversation only after a completed receipt or its terminal
   event; an in-progress or failed-external receipt remains visible for retry.
@@ -97,7 +98,10 @@ The Chat tab uses the generated gRPC services for commands, queries, and streame
 - `SessionService.SearchMessages` to search one exact phrase across all
   sessions. Search results appear immediately; unresolved session titles use a
   session-ID fallback and update when metadata arrives.
-- `ChatService.SendMessage` to enqueue a user message and selected model provider.
+- `ChatService.PrepareRemoteEgress` to obtain a side-effect-free, exact-request
+  disclosure before a remote send.
+- `ChatService.SendMessage` to enqueue a user message and selected model
+  provider, carrying one-time consent when the effective route is remote.
 - `EventService.ListEvents` and `EventService.SubscribeSessionEvents` for replay and live updates.
 - `ApprovalService.ApproveApproval` and `ApprovalService.DenyApproval` for approval cards.
 

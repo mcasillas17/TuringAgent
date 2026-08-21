@@ -151,7 +151,10 @@ func New(cfg config.Config) (*App, error) {
 	agentService := agentsvc.New(repo, cfg.AgentCredentialNames)
 	automationService := automationsvc.New(repo)
 	eventService := eventsvc.NewServer(repo, eventBus)
-	chatService := chatsvc.New(repo, eventBus, runtimeService, cfg.OllamaModel, cfg.OpenAIModel)
+	chatService := chatsvc.NewWithEgressConfig(repo, eventBus, runtimeService, cfg.OllamaModel, cfg.OpenAIModel, chatsvc.EgressConfig{
+		OpenAIBaseURL: cfg.OpenAIBaseURL,
+		SigningSecret: cfg.EgressSigningSecret,
+	})
 	// Passing the server-side approval signing secret means the cursor MAC key
 	// is derived deterministically (auditsvc.New domain-separates it), so a
 	// cursor minted before a restart is still accepted after one — as long as

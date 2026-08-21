@@ -8,6 +8,8 @@ The project is designed for local development first: secrets stay in your local 
 
 - Runs a Go gRPC orchestrator for sessions, messages, runs, events, and approvals.
 - Runs a Go agent runtime that connects to local or OpenAI-compatible models.
+- Requires a fresh destination and data-category confirmation for every remote
+  run; the decision is recorded with the run and cannot authorize background work.
 - Exposes MCP tool servers for safe system tools and approval-gated sandboxed file tools.
 - Provides a Flutter client with settings, conversation search, automatically
   named and paginated session lists, rename/archive/restore actions, chat,
@@ -138,6 +140,7 @@ Common values:
 | `TURING_RUNTIME_TOKEN` | Bearer token for the agent runtime's internal gRPC calls (claim jobs, read session history, poll/consume approvals) |
 | `TURING_APPROVAL_CONSUMER_TOKEN` | Bearer token for mcp-files' internal gRPC calls; authorized for `ApprovalService.ConsumeApproval`, `FinalizeSandboxArtifact`, and `CheckSessionCapability`, never the runtime's methods |
 | `TURING_APPROVAL_JWT_SECRET` | HS256 secret used for approval tokens |
+| `TURING_EGRESS_SIGNING_SECRET` | Orchestrator-only key for short-lived, one-time remote-egress disclosure challenges |
 | `TURING_CURSOR_HMAC_SECRET` | Orchestrator-only 32-byte hex key authenticating opaque session cursors; rotation invalidates outstanding cursors |
 | Approval-consumer scope | `ApprovalService.ConsumeApproval`, `FinalizeSandboxArtifact`, and `CheckSessionCapability`; never runtime-only methods |
 | `TURING_APPROVAL_TIMEOUT_MS` / `TURING_APPROVAL_WAIT_TIMEOUT_MS` | Approval lifetime and the longer runtime observation bound (defaults: 65s / 71s) |
@@ -145,11 +148,11 @@ Common values:
 | `HOST_IDENTITY_MODE` | Managed compatibility marker; `init.sh` always resets it to `auto` |
 | `HOST_UID` / `HOST_GID` | Current canonical non-root host IDs, managed by `init.sh` and overridden safely by `scripts/compose.sh` at launch |
 | `ORCHESTRATOR_GRPC_ADDR` | Internal orchestrator gRPC address, usually `turing-orchestrator:3001` |
-| `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Local model endpoint and default model |
+| `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Local model endpoint and default model. The URL must use localhost, `host.docker.internal`, or a loopback IP literal; remote Ollama hosts are refused rather than treated as local |
 | `OLLAMA_KEEP_ALIVE` | How long Ollama holds the model in memory after a reply (default `2m`). Accepts a duration (`30s`, `2m`) or whole seconds (`-1` = forever); integer spellings are canonicalized before JSON encoding. Sent per request, so it does not depend on Ollama's own env var. Keep it above `TURING_APPROVAL_WAIT_TIMEOUT_MS` or the model unloads mid-run |
 | `OLLAMA_CONTEXT_WINDOW_TOKENS` | Local context cap and advertised routing ceiling (default `32768`). Must be `1`–`16777216`; invalid values fail startup. Every request sends an explicit `options.num_ctx` rounded up to a stable power-of-two bucket covering admitted prompt bytes plus output reserve, never above this cap. Small requests avoid the maximum allocation, nearby turns reuse the same runner, and the runtime never relies on the host default |
 | `OLLAMA_MAX_OUTPUT_TOKENS` | Answer reservation inside the Ollama window (default `2048`). Must be positive and smaller than the window; sent as `options.num_predict`. A `length` stop emits a durable run notice |
-| `OPENAI_API_KEY` / `OPENAI_MODEL` | Optional OpenAI-compatible model configuration |
+| `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL` | Optional OpenAI-compatible model configuration. A keyed non-loopback URL must use HTTPS; plaintext is limited to exact localhost/loopback IP development endpoints, and redirects are refused |
 | `OPENAI_CONTEXT_WINDOW_TOKENS` | Local window and advertised routing ceiling for OpenAI-compatible models and routed external agents (default `32768`, same validation). Match it to the configured model; it is enforced locally and is not sent as Ollama's `num_ctx` |
 | `OPENAI_MAX_OUTPUT_TOKENS` | Answer reservation for OpenAI-compatible requests (default `2048`); sent as `max_completion_tokens` for o1/o3/o4 and GPT-5 model families, and `max_tokens` otherwise. A `length` stop emits the same durable notice |
 
@@ -194,6 +197,15 @@ orchestrator remains stopped, use a SQLite client to run
 - **Backend is not reachable:** check that Docker Compose is running and port `3000` is free.
 - **Authentication fails:** confirm the Flutter API key matches `TURING_CLIENT_API_KEY` in `turing-backend/.env`.
 - **No model response:** ensure Ollama is running on the host and the configured model is available.
+- **Remote send is refused:** confirm the per-run disclosure in the client. If
+  configuration fails at startup, use HTTPS for keyed non-loopback
+  `OPENAI_BASE_URL` values; `host.docker.internal` is not a plaintext keyed
+  exception. Existing external-agent endpoints saved with plaintext
+  `host.docker.internal` must be changed to HTTPS or an exact localhost/loopback
+  IP endpoint before they can be used again.
+- **Upgrade reports missing `TURING_EGRESS_SIGNING_SECRET`:** rerun
+  `turing-backend/scripts/init.sh`. It preserves populated values and adds the
+  new orchestrator-only signing key to the existing `.env`.
 - **Run fails with `context_budget_exceeded`:** the current user turn, attached skills, required schemas, or minimal live tool protocol cannot fit alongside the output reservation. Increase the matching provider window only when the selected model supports it, or lower its output reservation; Turing will not split protocol to force a request through.
 - **Smoke test times out:** inspect the `turing-orchestrator` and `turing-agent-runtime-general` container logs.
 - **Initialization refuses root:** run it from the non-root host account that owns the checkout and sandbox; do not use `sudo`.
@@ -224,6 +236,7 @@ or migration.
 - [Stable session title lifecycle](docs/architecture/session-titles.md)
 - [Session lifecycle and pagination](docs/architecture/session-lifecycle.md)
 - [Audit read API](docs/architecture/audit-read-api.md)
+- [Remote-provider egress policy](docs/architecture/remote-egress-policy.md)
 - [MCP security and approval flow](docs/mcp-security-and-integration.md)
 - [Flutter client guide](turing-client/turing_app/README.md)
 - [Go/gRPC migration design](docs/superpowers/specs/2026-05-15-turing-go-grpc-migration-design.md)

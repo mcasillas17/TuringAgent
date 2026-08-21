@@ -122,6 +122,7 @@ var currentSchemaTablePolicies = []schemaTablePolicy{
 	{table: "automation_allowed_tools", kind: schemaTableCascadeOwned, sourceTable: "automations"},
 	{table: "automation_runs", kind: schemaTableCascadeOwned, sourceTable: "agent_runs"},
 	{table: "send_message_idempotency", kind: schemaTableCascadeOwned, sourceTable: "sessions"},
+	{table: "run_egress_decisions", kind: schemaTableCascadeOwned, sourceTable: "agent_runs"},
 	{table: "sandbox_artifacts", kind: schemaTableCascadeOwned, sourceTable: "sessions"},
 }
 

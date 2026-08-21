@@ -97,6 +97,7 @@ func newSessionHarness(t *testing.T) *sessionHarness {
 		CursorHMACKey:     [32]byte{1},
 		OllamaModel:       "llama3.2",
 		OpenAIEnabled:     true,
+		OpenAIBaseURL:     "https://api.openai.com/v1",
 		OpenAIModel:       "gpt-4o-mini",
 	}, capabilities, bus)
 	turingv1.RegisterSessionServiceServer(grpcServer, service)
@@ -628,6 +629,13 @@ func TestSessionServiceServesPublicReadEndpoints(t *testing.T) {
 	}
 	if cfg.Providers[1].GetEnabled() || len(cfg.Providers[1].GetModels()) != 0 {
 		t.Fatalf("unadvertised OpenAI provider = %+v, want disabled with no models", cfg.Providers[1])
+	}
+	if cfg.Providers[0].GetRemoteEndpoint() != "" || cfg.Providers[0].GetRequiresPerRunConsent() {
+		t.Fatalf("Ollama egress metadata = %+v, want local", cfg.Providers[0])
+	}
+	if cfg.Providers[1].GetRemoteEndpoint() != "https://api.openai.com/v1" ||
+		!cfg.Providers[1].GetRequiresPerRunConsent() {
+		t.Fatalf("OpenAI egress metadata = %+v", cfg.Providers[1])
 	}
 	h.capabilities.providers[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA] = []*turingv1.ModelCapability{{
 		Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "live-fallback",
