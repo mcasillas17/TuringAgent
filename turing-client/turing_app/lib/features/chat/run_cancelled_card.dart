@@ -1,30 +1,41 @@
 import 'package:flutter/material.dart';
 
+import '../../l10n/generated/app_localizations.dart';
+import '../../l10n/run_state_localizations.dart';
+import '../../models/run_lifecycle.dart';
+import '../../models/run_state.dart';
 import 'terminal_outcome_card.dart';
 
-/// Presentational card for a terminal `agent.run.cancelled` event.
+/// Presentational card for a terminal, cancelled/interrupted run.
 ///
-/// The backend cancels a run server-side (`cancelRun`, orchestrator-go
-/// internal/service/chat/service.go) on exactly two conditions:
-/// `SendMessage`'s own context is cancelled (checked at four checkpoints —
-/// initial send, dispatch loop teardown, replay error, relay send) or
-/// `DispatchPending` fails unconditionally. A bare `stream.Send` failure does
-/// not cancel a run unless the context is already cancelled — even though
-/// this screen exposes no cancel affordance of its own. Deliberately
-/// distinct from [RunFailureCard]: a cancellation is not a failure and must
-/// never be announced as one. Shares its visual chrome with [RunFailureCard],
+/// The backend cancels or abandons a run server-side for a variety of
+/// reasons this app classifies through [RunOutcomeReason] — a user's own
+/// cancellation, an ambiguous `client_cancelled`/tool-cleanup abandonment,
+/// approval expiry, and so on. Deliberately distinct from [RunFailureCard]:
+/// a cancellation is not a failure and must never be announced as one.
+/// Shares its visual chrome with [RunFailureCard],
 /// [MessageSendUnconfirmedCard], and [MessageSendFailureCard] via
 /// [TerminalOutcomeCard] — every non-routine outcome this screen reports
-/// gets the same error-styled treatment — but keeps its own truthful "Run
-/// cancelled" wording, in the rendered text and in the accessibility label
-/// alike.
+/// gets the same error-styled treatment.
+///
+/// Takes a semantic [RunOutcomeReason], never a raw message string — see
+/// [RunFailureCard]'s own doc for why that matters. Live legacy events
+/// first pass through the safe enum mapper, so this constructor can never
+/// receive backend prose.
 class RunCancelledCard extends StatelessWidget {
-  const RunCancelledCard({super.key, required this.message});
+  const RunCancelledCard({super.key, required this.reason});
 
-  final String message;
+  final RunOutcomeReason reason;
 
   @override
   Widget build(BuildContext context) {
-    return TerminalOutcomeCard(outcomeLabel: 'Run cancelled', message: message);
+    final l10n = AppLocalizations.of(context);
+    // `none` mirrors `localizedRunStateCopy`'s own fallback: an
+    // unclassified cancellation still needs truthful lifecycle-level
+    // copy, not the generic cross-lifecycle "outcome unavailable" wording.
+    final copy = reason == RunOutcomeReason.none
+        ? localizedRunLifecycleCopy(l10n, RunLifecycle.cancelled)
+        : localizedRunOutcomeCopy(l10n, reason);
+    return TerminalOutcomeCard(outcomeLabel: copy.title, message: copy.detail);
   }
 }

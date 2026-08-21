@@ -12,6 +12,8 @@
   "runRecoveringDetail": "The app is recovering this run after an interruption.",
   "runCompletedTitle": "Completed",
   "runCompletedDetail": "The assistant response is complete.",
+  "runCompletedContentUnavailableTitle": "Response unavailable",
+  "runCompletedContentUnavailableDetail": "The run completed, but the saved assistant response could not be loaded.",
   "runCompletedNoContentTitle": "Completed",
   "runCompletedNoContentDetail": "No assistant response was recorded.",
   "runFailedTitle": "Run failed",

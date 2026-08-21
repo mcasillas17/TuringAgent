@@ -48,6 +48,13 @@ class AppLocalizationsEn extends AppLocalizations {
   String get runCompletedDetail => 'The assistant response is complete.';
 
   @override
+  String get runCompletedContentUnavailableTitle => 'Response unavailable';
+
+  @override
+  String get runCompletedContentUnavailableDetail =>
+      'The run completed, but the saved assistant response could not be loaded.';
+
+  @override
   String get runCompletedNoContentTitle => 'Completed';
 
   @override

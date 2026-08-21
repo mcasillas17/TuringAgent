@@ -16,6 +16,15 @@ LocalizedRunCopy localizedNoResponseCopy(AppLocalizations l10n) {
   );
 }
 
+LocalizedRunCopy localizedCompletedContentUnavailableCopy(
+  AppLocalizations l10n,
+) {
+  return LocalizedRunCopy(
+    title: l10n.runCompletedContentUnavailableTitle,
+    detail: l10n.runCompletedContentUnavailableDetail,
+  );
+}
+
 LocalizedRunCopy localizedRunStateCopy(AppLocalizations l10n, RunState state) {
   switch (state.lifecycle) {
     case RunLifecycle.queued:

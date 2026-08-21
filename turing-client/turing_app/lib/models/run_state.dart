@@ -21,6 +21,9 @@ enum RunOutcomeReason {
 
 enum RunStepNoticeCategory { dispatchRetry, recoveryRetry, recoveryExhausted }
 
+/// Mirrors the backend's public retry-notice counter bound.
+const maxRunStepNoticeAttempts = 1000;
+
 class RunState {
   const RunState({
     required this.runId,

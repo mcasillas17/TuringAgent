@@ -166,6 +166,18 @@ abstract class AppLocalizations {
   /// **'The assistant response is complete.'**
   String get runCompletedDetail;
 
+  /// No description provided for @runCompletedContentUnavailableTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Response unavailable'**
+  String get runCompletedContentUnavailableTitle;
+
+  /// No description provided for @runCompletedContentUnavailableDetail.
+  ///
+  /// In en, this message translates to:
+  /// **'The run completed, but the saved assistant response could not be loaded.'**
+  String get runCompletedContentUnavailableDetail;
+
   /// No description provided for @runCompletedNoContentTitle.
   ///
   /// In en, this message translates to:
