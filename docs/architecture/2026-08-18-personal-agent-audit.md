@@ -250,10 +250,10 @@ user-readable: `AuditService.ListAuditEntries` discloses the stored comment as
 `decision_comment` on `approval.approved` and the stored reason as
 `denial_reason` on `approval.denied`, each with its `*_truncated` flag when the
 writer set one, and each preserving present-empty (a human typed nothing)
-against absent (no human field was recorded) — see [Audit read
-API](audit-read-api.md#approval-decision-rationale). That closes this task's
-stated TUR-013 read dependency; TUR-021 remains the approval preview/diff UX,
-and no approval viewer UI ships here.
+against absent (no human field was recorded) — see
+[Audit read API](audit-read-api.md#approval-decision-rationale). That closes
+this task's stated TUR-013 read dependency; TUR-021 remains the approval
+preview/diff UX, and no approval viewer UI ships here.
 
 #### TUR-007 — Derive stable session titles from the first user turn — Implemented
 
@@ -363,11 +363,11 @@ authorizes only the methods on that identity's allowlist: the runtime may call
 `RuntimeService.ConnectWorker`, `SessionService.ListMessages`/
 `SearchMessages`, and `ApprovalService.GetApprovalForRuntime`/
 `ConsumeApproval`; the approval consumer (bundled `mcp-files` only) may call
-`ApprovalService.ConsumeApproval`, `FinalizeSandboxArtifact`, and
-`CheckSessionCapability`; the latter two support the provenance-bound
-reservation, finalization, and post-I/O state checks. A wrong-service call
-fails `PermissionDenied` before reaching a handler; an unknown or malformed
-bearer fails `Unauthenticated`. The orchestrator also
+`ApprovalService.ConsumeApproval`,
+`FinalizeSandboxArtifact`, and `CheckSessionCapability`; the latter two support
+the provenance-bound reservation, finalization, and post-I/O state checks.
+A wrong-service call fails `PermissionDenied` before reaching a handler; an
+unknown or malformed bearer fails `Unauthenticated`. The orchestrator also
 drops the now-dead `MCP_SYSTEM_TOKEN_GENERAL` entirely and replaces
 `MCP_FILES_TOKEN_GENERAL`/`OPENAI_API_KEY` with Compose-derived
 `MCP_FILES_ENABLED`/`OPENAI_ENABLED` booleans, since it only ever reported
@@ -496,10 +496,11 @@ remains blocked until the commit containing the contract is on `main`.
 
 #### MEM-002 — Return scored, explainable search hits
 
-**Status:** Implemented. See [Session recall
-scope](session-recall.md#scored-search-hits) for the public contract — score
-semantics, snippet safety rules, format negotiation, and the visibility and
-limit domain are specified there and are not restated here.
+**Status:** Implemented. The canonical public contract — score semantics,
+snippet safety rules, format negotiation, and the visibility and limit domain —
+is specified in [Session recall
+scope](session-recall.md#scored-search-hits); the summary below restates it
+only in outline.
 
 **Outcome:** Search consumers receive the ranking signal SQLite already
 computes.
@@ -526,8 +527,10 @@ legacy callers receive identical messages; proto checks pass.
 recall deliberately still sends the unspecified format and reads `messages`, so
 its own excerpts and ranking are untouched; no evaluation harness, metric,
 threshold, structured multi-term search request, tokenization change, or
-semantic retrieval lands here. MEM-003, MEM-004, and MEM-016 remain pending and
-own that work.
+semantic retrieval lands here. That work stays with the pending tasks that own
+it: MEM-003 (evaluation harness and metrics), MEM-004 (structured multi-term
+search request), MEM-016 (tokenization for scripts without whitespace
+boundaries), and MEM-013 (optional local semantic retrieval).
 
 **Acceptance evidence:** Repository tests cover score normalization and the
 pinned finite non-positive bm25 canary, `message_id` tie-breaking, marker
