@@ -619,9 +619,12 @@ class _SearchScreenState extends State<SearchScreen> {
     final date = MaterialLocalizations.of(context).formatShortDate(localDate);
     final role = hit.message.role;
     // Bodies are unbounded, and a row is a summary of one. Canonical hits
-    // carry the server's match-centred snippet, already bounded and stripped
-    // of markup, so it is shown and announced verbatim; a legacy hit arrives
-    // without one, and falls back to a bounded opening of the body.
+    // carry the server's match-centred snippet: bounded, single-line, with
+    // control characters and bidi overrides replaced. It is not stripped of
+    // markup — any HTML/Markdown-looking bytes in it remain literal source
+    // text — and it is rendered/announced verbatim as plain Text, never
+    // parsed or interpreted. A legacy hit arrives without one, and falls
+    // back to a bounded opening of the body.
     final excerpt = hit.snippet ?? _excerpt(hit.message.content);
     return Semantics(
       key: ValueKey('hit-${hit.message.messageId}'),
