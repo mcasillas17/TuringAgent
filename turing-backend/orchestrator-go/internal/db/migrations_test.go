@@ -200,9 +200,60 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 		"0014_run_egress_decisions",
 		"0014_session_deletion_withdrawal",
 		"0015_session_lifecycle",
+		"0016_mcp_registry",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("applied migrations = %v, want %v", got, want)
+	}
+}
+
+func TestMCPRegistryMigrationRegistersServersAndLinksTools(t *testing.T) {
+	ctx := context.Background()
+	database := databaseBeforeMigration(t, ctx, "0016_mcp_registry.sql")
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO tools (id, server_name, tool_name, policy, schema_json, enabled, discovered_at)
+		VALUES
+			('tool_system', 'system', 'system.time', 'safe', '{}', 1, '2026-08-21T00:00:00Z'),
+			('tool_vendor', 'legacy-vendor', 'vendor.lookup', 'safe', '{}', 1, '2026-08-21T00:00:00Z')
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := database.QueryContext(ctx, `
+		SELECT s.name, s.tier, s.enabled, t.tool_name, t.enabled
+		FROM mcp_servers s
+		LEFT JOIN tools t ON t.mcp_server_id = s.id
+		ORDER BY s.name, t.tool_name
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var got []string
+	for rows.Next() {
+		var name, tier string
+		var serverEnabled int
+		var toolName sql.NullString
+		var toolEnabled sql.NullInt64
+		if err := rows.Scan(&name, &tier, &serverEnabled, &toolName, &toolEnabled); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, fmt.Sprintf("%s:%s:%d:%s:%d", name, tier, serverEnabled, toolName.String, toolEnabled.Int64))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"files:bundled:1::0",
+		"legacy-vendor:local_container:0:vendor.lookup:0",
+		"system:bundled:1:system.time:1",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("registry rows = %v, want %v", got, want)
 	}
 }
 
@@ -465,8 +516,8 @@ func TestCurrentSchemaVersionUsesLatestEmbeddedMigrationPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "0015" {
-		t.Fatalf("CurrentSchemaVersion = %q, want 0015", got)
+	if got != "0016" {
+		t.Fatalf("CurrentSchemaVersion = %q, want 0016", got)
 	}
 }
 

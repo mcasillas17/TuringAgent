@@ -50,6 +50,7 @@ type Server struct {
 	workerStreams      sync.WaitGroup
 	toolsMu            sync.Mutex
 	toolsets           map[string]workerToolset
+	registryMu         sync.RWMutex
 	dispatch           DispatchConfig
 }
 
@@ -264,6 +265,17 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 		}
 		maxConcurrent = capabilities.maxConcurrentRuns
 	}
+	s.registryMu.RLock()
+	registryLocked := true
+	defer func() {
+		if registryLocked {
+			s.registryMu.RUnlock()
+		}
+	}()
+	capabilities, discovered, err = s.filterRegisteredWorkerTools(ctx, capabilities, discovered)
+	if err != nil {
+		return status.Error(codes.Internal, "filter worker tool capabilities")
+	}
 	s.refreshPendingCapabilityStateAdvisory(ctx, "registry seed", "", false, false)
 	commands := make(chan *turingv1.RuntimeCommand, maxWorkerConcurrentRuns)
 	connectedWorker := &worker{
@@ -330,6 +342,8 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 	if err := s.persistDiscoveredTools(ctx, ready.GetWorkerId(), connectedWorker, discovered); err != nil {
 		return status.Error(codes.Internal, "persist worker tool capabilities")
 	}
+	s.registryMu.RUnlock()
+	registryLocked = false
 	s.refreshPendingCapabilityStateAdvisory(ctx, "worker connected", ready.GetWorkerId(), true, true)
 	acceptedCtx, cancelAccepted := withDefaultTimeout(ctx, commandSendTimeout)
 	err = connectedWorker.commandSender(stream).send(acceptedCtx, &turingv1.RuntimeCommand{
@@ -563,9 +577,35 @@ func (s *Server) persistDiscoveredTools(ctx context.Context, workerID string, ow
 		} else {
 			delete(s.toolsets, workerID)
 		}
+
 		return err
 	}
 	return nil
+}
+
+func (s *Server) filterRegisteredWorkerTools(
+	ctx context.Context,
+	capabilities *registeredWorkerCapabilities,
+	discovered []repository.DiscoveredTool,
+) (*registeredWorkerCapabilities, []repository.DiscoveredTool, error) {
+	filteredCapabilities := cloneRegisteredWorkerCapabilities(capabilities)
+	filtered := make([]repository.DiscoveredTool, 0, len(discovered))
+	for _, tool := range discovered {
+		if tool.ServerName == "skills" {
+			filtered = append(filtered, tool)
+			continue
+		}
+		available, err := s.repo.MCPToolAvailable(ctx, tool.ServerName, tool.ToolName)
+		if err != nil {
+			return nil, nil, err
+		}
+		if available {
+			filtered = append(filtered, tool)
+			continue
+		}
+		delete(filteredCapabilities.tools, tool.ServerName+"/"+tool.ToolName)
+	}
+	return filteredCapabilities, filtered, nil
 }
 
 func (s *Server) removeDiscoveredTools(workerID string, owner *worker) error {
@@ -2192,6 +2232,7 @@ func (s *Server) NotifyApprovalUpdated(ctx context.Context, runID string, approv
 		if approvalStatus == "denied" || approvalStatus == "expired" {
 			s.releaseUnownedTerminalRun(ctx, runID)
 		}
+
 		return nil
 	}
 	sendCtx, cancel := withDefaultTimeout(ctx, 5*time.Second)
@@ -2204,6 +2245,67 @@ func (s *Server) NotifyApprovalUpdated(ctx context.Context, runID string, approv
 		return err
 	}
 	return nil
+}
+
+func (s *Server) NotifyMCPRegistryChanged(ctx context.Context) error {
+	s.registryMu.Lock()
+	defer s.registryMu.Unlock()
+	enabled, err := s.repo.ListEnabledTools(ctx)
+	if err != nil {
+		return err
+	}
+	enabledTools := make(map[string]struct{}, len(enabled))
+	for _, tool := range enabled {
+		enabledTools[tool.ServerName+"/"+tool.ToolName] = struct{}{}
+	}
+
+	s.toolsMu.Lock()
+	for workerID, toolset := range s.toolsets {
+		filtered := toolset.tools[:0]
+		for _, tool := range toolset.tools {
+			if _, keep := enabledTools[tool.ServerName+"/"+tool.ToolName]; keep {
+				filtered = append(filtered, tool)
+			}
+		}
+		toolset.tools = filtered
+		s.toolsets[workerID] = toolset
+	}
+	s.toolsMu.Unlock()
+
+	s.mu.Lock()
+	workers := make([]*worker, 0, len(s.workers))
+	for _, connected := range s.workers {
+		workers = append(workers, connected)
+	}
+	s.mu.Unlock()
+
+	var notifyErr error
+	for _, connected := range workers {
+		connected.mu.Lock()
+		if connected.capabilities != nil {
+			filtered := cloneRegisteredWorkerCapabilities(connected.capabilities)
+			for tool := range filtered.tools {
+				if _, keep := enabledTools[tool]; !keep {
+					delete(filtered.tools, tool)
+				}
+			}
+			connected.capabilities = filtered
+		}
+		connected.mu.Unlock()
+		sendCtx, cancel := withDefaultTimeout(ctx, 5*time.Second)
+		err := connected.send(sendCtx, &turingv1.RuntimeCommand{
+			Command: &turingv1.RuntimeCommand_McpRegistryChanged{
+				McpRegistryChanged: &turingv1.RuntimeMcpRegistryChanged{
+					RegistrationId: connected.registrationID,
+				},
+			},
+		})
+		cancel()
+		if err != nil {
+			notifyErr = errors.Join(notifyErr, err)
+		}
+	}
+	return notifyErr
 }
 
 func mapToolCallError(err error) error {
@@ -2385,6 +2487,14 @@ func toProtoEgressDecision(decision *repository.RunEgressDecision) *turingv1.Run
 		categories = append(categories, turingv1.EgressDataCategory(value))
 	}
 	consentedAt, _ := time.Parse(time.RFC3339Nano, decision.ConsentGrantedAt)
+	remoteMCPServers := make([]*turingv1.RemoteMcpEgressDestination, len(decision.RemoteMCPServers))
+	for index, destination := range decision.RemoteMCPServers {
+		remoteMCPServers[index] = &turingv1.RemoteMcpEgressDestination{
+			ServerName:   destination.ServerName,
+			Endpoint:     destination.Endpoint,
+			EndpointHost: destination.EndpointHost,
+		}
+	}
 	return &turingv1.RunEgressDecision{
 		DecisionId:                decision.DecisionID,
 		Version:                   int32(decision.Version),
@@ -2402,6 +2512,7 @@ func toProtoEgressDecision(decision *repository.RunEgressDecision) *turingv1.Run
 		MemoryProfileApplicable:   decision.MemoryProfileApplicable,
 		ExternalCredentialRefHash: decision.ExternalCredentialRefHash,
 		RequestDigest:             decision.RequestDigest,
+		RemoteMcpServers:          remoteMCPServers,
 	}
 }
 

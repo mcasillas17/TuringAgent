@@ -469,6 +469,9 @@ func executeComposeWithSetup(
 	if err := os.Mkdir(filepath.Join(root, "skills"), 0700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Mkdir(filepath.Join(root, "mcp"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	if setup != nil {
 		setup(t, root)
 	}

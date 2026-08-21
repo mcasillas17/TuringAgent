@@ -23,6 +23,10 @@ type RuntimeClient interface {
 	ConnectWorker(ctx context.Context) (RuntimeStream, error)
 }
 
+type ToolRegistryInvalidator interface {
+	InvalidateToolRegistry()
+}
+
 type Executor interface {
 	Execute(ctx context.Context, job *turingv1.AgentJob, emit func(*turingv1.RuntimeUpdate) error) error
 }
@@ -60,20 +64,23 @@ type Options struct {
 }
 
 type Worker struct {
-	options     Options
-	client      RuntimeClient
-	executor    Executor
-	mu          sync.Mutex
-	active      map[string]*activeRun
-	approvals   map[string]string
-	toolCalls   map[string]string
-	decisionMu  sync.Mutex
-	decisions   map[string][]*decisionWaiter
-	generations map[string]uint64
-	writerMu    sync.Mutex
-	writer      *outboundWriter
-	fatalMu     sync.Mutex
-	fatal       chan error
+	options        Options
+	client         RuntimeClient
+	executor       Executor
+	mu             sync.Mutex
+	active         map[string]*activeRun
+	approvals      map[string]string
+	toolCalls      map[string]string
+	decisionMu     sync.Mutex
+	decisions      map[string][]*decisionWaiter
+	generations    map[string]uint64
+	writerMu       sync.Mutex
+	writer         *outboundWriter
+	fatalMu        sync.Mutex
+	fatal          chan error
+	refreshMu      sync.Mutex
+	refreshRunning bool
+	refreshPending *turingv1.RuntimeMcpRegistryChanged
 }
 
 type decisionWaiter struct {
@@ -594,8 +601,100 @@ func (w *Worker) handleCommand(ctx context.Context, stream RuntimeStream, cmd *t
 		if value.ApprovalUpdated != nil && (value.ApprovalUpdated.Status == "denied" || value.ApprovalUpdated.Status == "expired") {
 			return w.cancelApprovalRun(ctx, stream, value.ApprovalUpdated.ApprovalId, value.ApprovalUpdated.Status)
 		}
+	case *turingv1.RuntimeCommand_McpRegistryChanged:
+		w.scheduleMCPRegistryRefresh(ctx, stream, value.McpRegistryChanged)
+		return nil
 	}
 	return nil
+}
+
+func (w *Worker) scheduleMCPRegistryRefresh(
+	ctx context.Context,
+	stream RuntimeStream,
+	command *turingv1.RuntimeMcpRegistryChanged,
+) {
+	if command == nil {
+		w.reportFatal(errors.New("MCP registry refresh command is required"))
+		return
+	}
+	w.refreshMu.Lock()
+	w.refreshPending = &turingv1.RuntimeMcpRegistryChanged{
+		RegistrationId: command.GetRegistrationId(),
+	}
+	if w.refreshRunning {
+		w.refreshMu.Unlock()
+		return
+	}
+	w.refreshRunning = true
+	w.refreshMu.Unlock()
+
+	go func() {
+		for {
+			w.refreshMu.Lock()
+			pending := w.refreshPending
+			w.refreshPending = nil
+			if pending == nil {
+				w.refreshRunning = false
+				w.refreshMu.Unlock()
+				return
+			}
+			w.refreshMu.Unlock()
+			update, err := w.refreshMCPRegistry(ctx, pending)
+			if err != nil {
+				w.refreshMu.Lock()
+				w.refreshRunning = false
+				w.refreshMu.Unlock()
+				w.reportFatal(err)
+				return
+			}
+			sendCtx, cancel := context.WithTimeout(ctx, w.options.UpdateSendTimeout)
+			err = w.send(sendCtx, stream, update)
+			cancel()
+			if err != nil {
+				w.refreshMu.Lock()
+				w.refreshRunning = false
+				w.refreshMu.Unlock()
+				w.reportFatal(err)
+				return
+			}
+		}
+	}()
+}
+
+func (w *Worker) refreshMCPRegistry(
+	ctx context.Context,
+	command *turingv1.RuntimeMcpRegistryChanged,
+) (*turingv1.RuntimeUpdate, error) {
+	if command == nil || command.GetRegistrationId() == "" {
+		return nil, errors.New("MCP registry refresh registration_id is required")
+	}
+	if invalidator, ok := w.executor.(ToolRegistryInvalidator); ok {
+		invalidator.InvalidateToolRegistry()
+	}
+	if w.options.DiscoverTools == nil {
+		return nil, errors.New("MCP registry refresh requires tool discovery")
+	}
+	discovered, err := w.options.DiscoverTools(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("refresh MCP registry tools: %w", err)
+	}
+	return &turingv1.RuntimeUpdate{
+		Update: &turingv1.RuntimeUpdate_WorkerCapabilitiesUpdated{
+			WorkerCapabilitiesUpdated: &turingv1.RuntimeWorkerCapabilitiesUpdated{
+				WorkerId:       w.options.WorkerID,
+				RegistrationId: command.GetRegistrationId(),
+				Capabilities: &turingv1.WorkerCapabilities{
+					Models:                      cloneModelCapabilities(w.options.Models),
+					AgentIds:                    []turingv1.AgentId{w.options.AgentID},
+					Tools:                       discovered,
+					MaxConcurrentRuns:           int32(w.options.MaxConcurrentRuns),
+					SupportsExternalAgents:      w.options.SupportsExternalAgents || len(w.options.ExternalAgentCredentialRefs) > 0,
+					ExternalAgentCredentialRefs: cloneCredentialRefs(w.options.ExternalAgentCredentialRefs),
+					RemoteEgressDecisionVersion: w.options.RemoteEgressDecisionVersion,
+				},
+			},
+		},
+	}, nil
 }
 
 func (w *Worker) startRun(parent context.Context, stream RuntimeStream, job *turingv1.AgentJob) {

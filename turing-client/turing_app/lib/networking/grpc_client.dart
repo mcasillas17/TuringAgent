@@ -20,6 +20,8 @@ import '../generated/turing/v1/events.pb.dart' as eventpb;
 import '../generated/turing/v1/events.pbgrpc.dart' as eventgrpc;
 import '../generated/turing/v1/integrations.pb.dart' as integrationpb;
 import '../generated/turing/v1/integrations.pbgrpc.dart' as integrationgrpc;
+import '../generated/turing/v1/mcp.pb.dart' as mcppb;
+import '../generated/turing/v1/mcp.pbgrpc.dart' as mcpgrpc;
 import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
 import '../generated/turing/v1/sessions.pbgrpc.dart' as sessiongrpc;
 import '../generated/turing/v1/skills.pb.dart' as skillpb;
@@ -33,6 +35,7 @@ import '../models/external_agent.dart';
 import '../models/grpc_mappers.dart';
 import '../models/integration.dart';
 import '../models/message.dart';
+import '../models/mcp_server.dart';
 import '../models/remote_egress.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
@@ -120,6 +123,7 @@ class TuringGrpcApi implements ClosableTuringApi, RemoteEgressApi {
       options: options,
     );
     _audit = auditgrpc.AuditServiceClient(_channel, options: options);
+    _mcpRegistry = mcpgrpc.McpRegistryServiceClient(_channel, options: options);
   }
 
   final String baseUrl;
@@ -136,6 +140,7 @@ class TuringGrpcApi implements ClosableTuringApi, RemoteEgressApi {
   late final automationgrpc.AutomationServiceClient _automations;
   late final telemetrygrpc.TelemetryServiceClient _telemetry;
   late final auditgrpc.AuditServiceClient _audit;
+  late final mcpgrpc.McpRegistryServiceClient _mcpRegistry;
 
   GrpcAuthMetadata get _metadata => GrpcAuthMetadata(apiKey: apiKey);
 
@@ -401,6 +406,16 @@ class TuringGrpcApi implements ClosableTuringApi, RemoteEgressApi {
       dataCategories: disclosure.dataCategories
           .map(_egressCategoryFromProto)
           .toList(growable: false),
+      remoteMcpServers: disclosure.remoteMcpServers
+          .map(
+            (server) => RemoteMcpDestination(
+              serverName: server.serverName,
+              endpoint: server.endpoint,
+              endpointHost: server.endpointHost,
+            ),
+          )
+          .toList(growable: false),
+      selectedTools: List.unmodifiable(disclosure.selectedTools),
       expiresAt: disclosure.expiresAt.toDateTime().toUtc(),
     );
   }
@@ -588,6 +603,105 @@ class TuringGrpcApi implements ClosableTuringApi, RemoteEgressApi {
   Future<List<ToolDescriptor>> listTools() async {
     final response = await _sessions.listTools(sessionpb.ListToolsRequest());
     return response.tools.map(GrpcMappers.toolToModel).toList();
+  }
+
+  @override
+  Future<McpRegistrySnapshot> listMcpServers() async {
+    final response = await _mcpRegistry.listMcpServers(
+      mcppb.ListMcpServersRequest(),
+    );
+    return McpRegistrySnapshot(
+      servers: response.servers.map(_mcpServerToModel).toList(),
+      unsupported: response.unsupported
+          .map(
+            (entry) =>
+                UnsupportedMcpServer(name: entry.name, reason: entry.reason),
+          )
+          .toList(),
+    );
+  }
+
+  @override
+  Future<McpServer> setMcpServerEnabled({
+    required String serverId,
+    required bool enabled,
+  }) async {
+    final response = await _mcpRegistry.setMcpServerEnabled(
+      mcppb.SetMcpServerEnabledRequest(serverId: serverId, enabled: enabled),
+    );
+    return _mcpServerToModel(response);
+  }
+
+  @override
+  Future<ToolDescriptor> updateMcpToolPolicy({
+    required String serverId,
+    required String toolName,
+    required ToolPolicy policy,
+  }) async {
+    final response = await _mcpRegistry.updateMcpToolPolicy(
+      mcppb.UpdateMcpToolPolicyRequest(
+        serverId: serverId,
+        toolName: toolName,
+        policy: switch (policy) {
+          ToolPolicy.safe => commonpb.ToolPolicy.TOOL_POLICY_SAFE,
+          ToolPolicy.approvalRequired =>
+            commonpb.ToolPolicy.TOOL_POLICY_APPROVAL_REQUIRED,
+          ToolPolicy.disabled => commonpb.ToolPolicy.TOOL_POLICY_DISABLED,
+          ToolPolicy.unspecified => commonpb.ToolPolicy.TOOL_POLICY_UNSPECIFIED,
+        },
+      ),
+    );
+    return ToolDescriptor(
+      serverName: '',
+      toolName: response.toolName,
+      policy: GrpcMappers.toolPolicyToModel(response.policy),
+    );
+  }
+
+  @override
+  Future<void> deleteMcpServer({required String serverId}) async {
+    await _mcpRegistry.deleteMcpServer(
+      mcppb.DeleteMcpServerRequest(serverId: serverId),
+    );
+  }
+
+  McpServer _mcpServerToModel(mcppb.McpServerDescriptor server) {
+    return McpServer(
+      serverId: server.serverId,
+      name: server.name,
+      transport: server.transport,
+      url: server.url,
+      tier: switch (server.tier) {
+        mcppb.McpServerTier.MCP_SERVER_TIER_BUNDLED => McpServerTier.bundled,
+        mcppb.McpServerTier.MCP_SERVER_TIER_LOCAL_CONTAINER =>
+          McpServerTier.localContainer,
+        mcppb.McpServerTier.MCP_SERVER_TIER_REMOTE_URL =>
+          McpServerTier.remoteUrl,
+        _ => McpServerTier.unspecified,
+      },
+      enabled: server.enabled,
+      liveness: switch (server.liveness) {
+        mcppb.McpServerLiveness.MCP_SERVER_LIVENESS_UNKNOWN =>
+          McpServerLiveness.unknown,
+        mcppb.McpServerLiveness.MCP_SERVER_LIVENESS_UP => McpServerLiveness.up,
+        mcppb.McpServerLiveness.MCP_SERVER_LIVENESS_DOWN =>
+          McpServerLiveness.down,
+        _ => McpServerLiveness.unspecified,
+      },
+      statusMessage: server.statusMessage,
+      sandboxConfined: server.sandboxConfined,
+      tools: server.tools
+          .map(
+            (tool) => ToolDescriptor(
+              serverName: server.name,
+              toolName: tool.toolName,
+              policy: GrpcMappers.toolPolicyToModel(tool.policy),
+              enabled: tool.enabled,
+              present: tool.present,
+            ),
+          )
+          .toList(),
+    );
   }
 
   @override

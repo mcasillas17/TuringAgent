@@ -39,14 +39,15 @@ type ContextRecaller interface {
 }
 
 type GeneralAssistantTools struct {
-	SystemMCP          ToolLister
-	FilesMCP           ToolLister
-	Runner             *tools.Runner
-	Recall             ContextRecaller
-	MaxToolCallsPerRun int
-	ModelTimeout       time.Duration
-	ToolTimeout        time.Duration
-	TotalToolTimeout   time.Duration
+	SystemMCP            ToolLister
+	FilesMCP             ToolLister
+	Runner               *tools.Runner
+	Recall               ContextRecaller
+	MaxToolCallsPerRun   int
+	ModelTimeout         time.Duration
+	ToolTimeout          time.Duration
+	TotalToolTimeout     time.Duration
+	RegisteredMCPServers func(context.Context) (map[string]ToolLister, error)
 }
 
 const (
@@ -90,9 +91,10 @@ type GeneralAssistant struct {
 	recall             ContextRecaller
 	maxToolCallsPerRun int
 
-	registryMu sync.Mutex
-	registry   *ToolRegistry
-	discovery  *toolDiscovery
+	registryMu         sync.Mutex
+	registry           *ToolRegistry
+	discovery          *toolDiscovery
+	registryGeneration uint64
 }
 
 type toolDiscovery struct {
@@ -100,6 +102,7 @@ type toolDiscovery struct {
 	registry               *ToolRegistry
 	err                    error
 	retryAfterLeaderCancel bool
+	generation             uint64
 }
 
 func NewGeneralAssistant(providers map[turingv1.ModelProvider]llm.Provider, messages MessageClient, toolset *GeneralAssistantTools) *GeneralAssistant {
@@ -146,7 +149,15 @@ func (a *GeneralAssistant) SetToolBeaconPoster(post func(context.Context, *turin
 	if a.tools == nil || a.tools.Runner == nil {
 		return
 	}
+
 	a.tools.Runner.PostBeacon = post
+}
+
+func (a *GeneralAssistant) InvalidateToolRegistry() {
+	a.registryMu.Lock()
+	a.registryGeneration++
+	a.registry = nil
+	a.registryMu.Unlock()
 }
 
 // DiscoveredTools is the snapshot the worker reports on connect. It reuses the
@@ -181,6 +192,13 @@ func (a *GeneralAssistant) AdvertisedTools(ctx context.Context) ([]*turingv1.Dis
 		})
 	}
 	return out, nil
+}
+
+func toolDefinitionsForJob(registry *ToolRegistry, job *turingv1.AgentJob) ([]llm.ToolDefinition, error) {
+	if job.GetEgressDecision() != nil {
+		return registry.DefinitionsFor(job.GetSelectedTools())
+	}
+	return registry.Definitions(), nil
 }
 
 func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, emit func(*turingv1.RuntimeUpdate) error) error {
@@ -236,12 +254,9 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	// Filesystem skills contribute a bounded metadata index. Bodies arrive only
 	// through skill_view or an exact $path/id invocation. Legacy queued jobs
 	// retain their old full-body snapshot behavior until they drain.
-	toolDefinitions := registry.Definitions()
-	if job.GetModelProvider() == turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE {
-		toolDefinitions, err = registry.DefinitionsFor(job.GetSelectedTools())
-		if err != nil {
-			return emitRunFailed(emit, job, "egress_decision_invalid", err.Error(), false)
-		}
+	toolDefinitions, err := toolDefinitionsForJob(registry, job)
+	if err != nil {
+		return emitRunFailed(emit, job, "egress_decision_invalid", err.Error(), false)
 	}
 	recallForContext := a.prepareRecallForRun(ctx, job)
 	var content strings.Builder
@@ -257,6 +272,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+
 		skillMessages, skillIndexIncluded, skillIndexOmitted, err := buildSkillMessagesWithinContext(
 			provider,
 			job.GetModel(),
@@ -763,6 +779,7 @@ func (a *GeneralAssistant) discoverTools(ctx context.Context) (*ToolRegistry, er
 	parentCtx := ctx
 	ctx, cancel := boundedContext(ctx, a.toolTimeout())
 	defer cancel()
+discoveryLoop:
 	for {
 		a.registryMu.Lock()
 		if a.registry != nil {
@@ -786,18 +803,21 @@ func (a *GeneralAssistant) discoverTools(ctx context.Context) (*ToolRegistry, er
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
-				if discovery.err == nil {
-					return discovery.registry, nil
-				}
 				if discovery.retryAfterLeaderCancel {
 					continue
+				}
+				if discovery.err == nil {
+					return discovery.registry, nil
 				}
 				return nil, discovery.err
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
 		}
-		discovery := &toolDiscovery{done: make(chan struct{})}
+		discovery := &toolDiscovery{
+			done:       make(chan struct{}),
+			generation: a.registryGeneration,
+		}
 		a.discovery = discovery
 		a.registryMu.Unlock()
 
@@ -809,19 +829,56 @@ func (a *GeneralAssistant) discoverTools(ctx context.Context) (*ToolRegistry, er
 			if !isNilToolLister(a.tools.FilesMCP) {
 				servers["files"] = a.tools.FilesMCP
 			}
+			if a.tools.RegisteredMCPServers != nil {
+				registered, loadErr := a.tools.RegisteredMCPServers(ctx)
+				if loadErr != nil {
+					a.registryMu.Lock()
+					stale := discovery.generation != a.registryGeneration
+					discovery.err = loadErr
+					discovery.retryAfterLeaderCancel = stale || parentCtx.Err() != nil
+					a.discovery = nil
+					close(discovery.done)
+					a.registryMu.Unlock()
+					if stale {
+						continue discoveryLoop
+					}
+					return nil, loadErr
+				}
+				for serverName, client := range registered {
+					if _, exists := servers[serverName]; exists {
+						a.registryMu.Lock()
+						stale := discovery.generation != a.registryGeneration
+						discovery.err = fmt.Errorf("registered MCP server %q shadows a bundled server", serverName)
+						discovery.retryAfterLeaderCancel = stale
+						a.discovery = nil
+						close(discovery.done)
+						a.registryMu.Unlock()
+						if stale {
+							continue discoveryLoop
+						}
+						return nil, discovery.err
+					}
+					servers[serverName] = client
+				}
+			}
 		}
 		registry, err := BuildToolRegistry(ctx, servers)
 
 		a.registryMu.Lock()
+		stale := discovery.generation != a.registryGeneration
 		discovery.registry = registry
 		discovery.err = err
-		discovery.retryAfterLeaderCancel = err != nil && parentCtx.Err() != nil && errors.Is(err, parentCtx.Err())
-		if err == nil {
+		discovery.retryAfterLeaderCancel = stale ||
+			(err != nil && parentCtx.Err() != nil && errors.Is(err, parentCtx.Err()))
+		if err == nil && !stale {
 			a.registry = registry
 		}
 		a.discovery = nil
 		close(discovery.done)
 		a.registryMu.Unlock()
+		if stale {
+			continue
+		}
 		return registry, err
 	}
 }

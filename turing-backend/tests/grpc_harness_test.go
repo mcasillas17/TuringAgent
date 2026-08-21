@@ -344,6 +344,11 @@ func (h *grpcHarness) waitForRuntimeWorker(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
+		select {
+		case workerErr := <-h.workerDone:
+			t.Fatalf("runtime worker exited before advertising capabilities: %v", workerErr)
+		default:
+		}
 		lastErr = h.app.ValidateRuntimeRoute(
 			context.Background(), "general_assistant", "openai_compatible", "fake-model",
 		)
@@ -1164,6 +1169,9 @@ func TestSendMessageStreamsTokensToCompletion(t *testing.T) {
 func TestDiscoveredToolsAppearInListTools(t *testing.T) {
 	harness := newGRPCHarness(t)
 	defer harness.close()
+	if err := harness.repo.RegisterLocalMCPServer(context.Background(), "custom"); err != nil {
+		t.Fatal(err)
+	}
 
 	internalCtx, cancelInternal := context.WithTimeout(
 		metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+integrationRuntimeToken),

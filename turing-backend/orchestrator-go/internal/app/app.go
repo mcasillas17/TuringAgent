@@ -4,8 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/auth"
@@ -20,6 +25,7 @@ import (
 	chatsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/chat"
 	eventsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	integrationsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/integrations"
+	mcpregistrysvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/mcpregistry"
 	runtimesvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/runtime"
 	sessionsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/sessions"
 	skillsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/skills"
@@ -36,15 +42,16 @@ type App struct {
 	PublicServer   *grpc.Server
 	InternalServer *grpc.Server
 
-	Repository      *repository.Repository
-	EventBus        *eventsvc.Bus
-	RuntimeService  *runtimesvc.Server
-	SessionService  *sessionsvc.Server
-	EventService    *eventsvc.Server
-	ChatService     *chatsvc.Server
-	ApprovalService *approvalsvc.Server
-	AuditService    *auditsvc.Server
-	HealthService   *HealthServer
+	Repository         *repository.Repository
+	EventBus           *eventsvc.Bus
+	RuntimeService     *runtimesvc.Server
+	SessionService     *sessionsvc.Server
+	EventService       *eventsvc.Server
+	ChatService        *chatsvc.Server
+	ApprovalService    *approvalsvc.Server
+	AuditService       *auditsvc.Server
+	MCPRegistryService *mcpregistrysvc.Server
+	HealthService      *HealthServer
 	// InternalIdentityNames is the exact set of least-privilege identity
 	// names wired into InternalServer's authorization interceptors — names
 	// only, never the bearer tokens or the live, mutable allowlists those
@@ -67,6 +74,18 @@ type App struct {
 	deletionReconcileCancel context.CancelFunc
 	deletionReconcileDone   chan struct{}
 	authFailures            *auth.AsyncFailureRecorder
+}
+
+func boundedAppDiagnostic(message string, limit int) string {
+	message = strings.ToValidUTF8(message, "\uFFFD")
+	if len(message) <= limit {
+		return message
+	}
+	message = message[:limit]
+	for !utf8.ValidString(message) {
+		message = message[:len(message)-1]
+	}
+	return message
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -178,6 +197,34 @@ func New(cfg config.Config) (*App, error) {
 		}
 	}
 	integrationService := integrationsvc.New(repo, integrationSealer, auditService)
+	mcpRegistryService := mcpregistrysvc.New(repo, integrationSealer, nil)
+	mcpRegistryService.SetApprovalEnforcer(approvalService)
+	mcpRegistryService.SetRegistryChangeNotifier(runtimeService)
+	if cfg.MCPConfigRoot != "" {
+		mcpJSON, readErr := os.ReadFile(filepath.Join(cfg.MCPConfigRoot, "mcp.json"))
+		if readErr == nil {
+			if _, err := mcpRegistryService.ImportJSON(context.Background(), mcpJSON); err != nil {
+				message := boundedAppDiagnostic(err.Error(), 512)
+				if recordErr := repo.ReplaceMCPImportIssues(
+					context.Background(),
+					map[string]string{"_document": message},
+				); recordErr != nil {
+					_ = database.Close()
+					return nil, fmt.Errorf("record mcp.json import failure: %w", recordErr)
+				}
+
+				log.Printf("mcp.json import failed: %v", err)
+			}
+		} else if errors.Is(readErr, os.ErrNotExist) {
+			if err := repo.ReplaceMCPImportIssues(context.Background(), map[string]string{}); err != nil {
+				_ = database.Close()
+				return nil, fmt.Errorf("clear mcp.json import issues: %w", err)
+			}
+		} else if !errors.Is(readErr, os.ErrNotExist) {
+			_ = database.Close()
+			return nil, fmt.Errorf("read mcp.json: %w", readErr)
+		}
+	}
 	healthService := &HealthServer{schemaVersion: schemaVersion}
 	persistAuthFailure := func(ctx context.Context, failure auth.Failure) error {
 		return auditService.Record(ctx, failure.RequestID, failure.ActorType, failure.Peer, "auth.failed", failure.Method, map[string]any{
@@ -192,8 +239,7 @@ func New(cfg config.Config) (*App, error) {
 	internalAuth := auth.InterceptorOptions{FailureRecorder: authFailures.Record}
 	// Two least-privilege internal identities share the internal gRPC port:
 	// the runtime claims jobs and reads session history for context and
-	// recall; the approval consumer (mcp-files, and any future MCP server
-	// that consumes approvals) may call ConsumeApproval,
+	// recall; the approval consumer (bundled mcp-files only) may call ConsumeApproval,
 	// FinalizeSandboxArtifact, and CheckSessionCapability. Neither token
 	// grants the other's methods, so a compromised mcp-files cannot claim a
 	// job or read conversation history, and a compromised runtime cannot be
@@ -205,6 +251,8 @@ func New(cfg config.Config) (*App, error) {
 			turingv1.SessionService_SearchMessages_FullMethodName,
 			turingv1.ApprovalService_GetApprovalForRuntime_FullMethodName,
 			turingv1.ApprovalService_ConsumeApproval_FullMethodName,
+			turingv1.McpRegistryService_ListMcpServers_FullMethodName,
+			turingv1.McpRegistryService_CallRegisteredMcpTool_FullMethodName,
 		),
 		auth.NewServiceIdentity("approval-consumer", cfg.ApprovalConsumerToken,
 			turingv1.ApprovalService_ConsumeApproval_FullMethodName,
@@ -251,6 +299,7 @@ func New(cfg config.Config) (*App, error) {
 	// Public only: nothing internal reads a connection today, and the sealed
 	// credential is not served to anyone at all.
 	turingv1.RegisterIntegrationServiceServer(publicServer, integrationService)
+	turingv1.RegisterMcpRegistryServiceServer(publicServer, mcpregistrysvc.NewPublicServer(mcpRegistryService))
 	// Public only: nothing outside the orchestrator schedules a run, and the
 	// runtime has no reason to read the automation library.
 	turingv1.RegisterAutomationServiceServer(publicServer, automationService)
@@ -268,6 +317,7 @@ func New(cfg config.Config) (*App, error) {
 	turingv1.RegisterSessionServiceServer(internalServer, sessionService)
 	turingv1.RegisterApprovalServiceServer(internalServer, approvalsvc.NewInternalServer(approvalService))
 	turingv1.RegisterRuntimeServiceServer(internalServer, runtimeService)
+	turingv1.RegisterMcpRegistryServiceServer(internalServer, mcpregistrysvc.NewInternalServer(mcpRegistryService))
 
 	application := &App{
 		PublicServer:          publicServer,
@@ -280,6 +330,7 @@ func New(cfg config.Config) (*App, error) {
 		ChatService:           chatService,
 		ApprovalService:       approvalService,
 		AuditService:          auditService,
+		MCPRegistryService:    mcpRegistryService,
 		HealthService:         healthService,
 		InternalIdentityNames: internalIdentityNames,
 		database:              database,

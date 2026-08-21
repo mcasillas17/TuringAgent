@@ -41,6 +41,21 @@ type Run struct {
 	ExecutionActive bool
 }
 
+func (r *Repository) RegisterLocalMCPServer(ctx context.Context, name string) error {
+	server, err := r.inner.UpsertImportedMCPServer(ctx, repository.ImportedMCPServer{
+		Name: name, URL: "http://" + name + ":9000/mcp", Tier: repository.MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		return err
+	}
+	if err := r.inner.SetMCPServerEnabled(ctx, server.ID, true); err != nil {
+		return err
+	}
+	return r.inner.ReplaceMCPServerTools(ctx, server.ID, []repository.MCPServerTool{{
+		Name: name + ".inspect", Policy: "approval_required", SchemaJSON: `{"type":"object"}`,
+	}})
+}
+
 func NewApp(cfg Config) (*App, error) {
 	inner, err := app.New(config.Config{
 		ClientAPIKey:             cfg.ClientAPIKey,

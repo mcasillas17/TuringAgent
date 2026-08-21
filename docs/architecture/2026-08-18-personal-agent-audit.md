@@ -362,8 +362,8 @@ which registered token matches — never from a caller-supplied claim — and
 authorizes only the methods on that identity's allowlist: the runtime may call
 `RuntimeService.ConnectWorker`, `SessionService.ListMessages`/
 `SearchMessages`, and `ApprovalService.GetApprovalForRuntime`/
-`ConsumeApproval`; the approval consumer (`mcp-files`, and any future MCP
-server that consumes approvals) may call `ApprovalService.ConsumeApproval`,
+`ConsumeApproval`; the approval consumer (bundled `mcp-files` only) may call
+`ApprovalService.ConsumeApproval`,
 `FinalizeSandboxArtifact`, and `CheckSessionCapability`; the latter two support
 the provenance-bound reservation, finalization, and post-I/O state checks.
 A wrong-service call fails `PermissionDenied` before reaching a handler; an

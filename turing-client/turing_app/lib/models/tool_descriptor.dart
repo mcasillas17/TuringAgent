@@ -20,9 +20,13 @@ class ToolDescriptor {
     required this.serverName,
     required this.toolName,
     required this.policy,
+    this.enabled = true,
+    this.present = true,
   });
 
   final String serverName;
   final String toolName;
   final ToolPolicy policy;
+  final bool enabled;
+  final bool present;
 }
