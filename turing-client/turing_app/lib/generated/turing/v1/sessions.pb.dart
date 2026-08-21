@@ -1354,18 +1354,105 @@ class ListMessagesResponse extends $pb.GeneratedMessage {
   $pb.PbList<$2.Message> get messages => $_getList(0);
 }
 
+class SearchHit extends $pb.GeneratedMessage {
+  factory SearchHit({
+    $2.Message? message,
+    $core.double? score,
+    $core.String? snippet,
+  }) {
+    final result = create();
+    if (message != null) result.message = message;
+    if (score != null) result.score = score;
+    if (snippet != null) result.snippet = snippet;
+    return result;
+  }
+
+  SearchHit._();
+
+  factory SearchHit.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory SearchHit.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'SearchHit',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOM<$2.Message>(1, _omitFieldNames ? '' : 'message',
+        subBuilder: $2.Message.create)
+    ..a<$core.double>(2, _omitFieldNames ? '' : 'score', $pb.PbFieldType.OD)
+    ..aOS(3, _omitFieldNames ? '' : 'snippet')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SearchHit clone() => SearchHit()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SearchHit copyWith(void Function(SearchHit) updates) =>
+      super.copyWith((message) => updates(message as SearchHit)) as SearchHit;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static SearchHit create() => SearchHit._();
+  @$core.override
+  SearchHit createEmptyInstance() => create();
+  static $pb.PbList<SearchHit> createRepeated() => $pb.PbList<SearchHit>();
+  @$core.pragma('dart2js:noInline')
+  static SearchHit getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<SearchHit>(create);
+  static SearchHit? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $2.Message get message => $_getN(0);
+  @$pb.TagNumber(1)
+  set message($2.Message value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasMessage() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearMessage() => $_clearField(1);
+  @$pb.TagNumber(1)
+  $2.Message ensureMessage() => $_ensure(0);
+
+  /// Finite and non-negative. Higher means a more relevant match within the
+  /// same SearchMessages response. Not comparable across queries or snapshots.
+  @$pb.TagNumber(2)
+  $core.double get score => $_getN(1);
+  @$pb.TagNumber(2)
+  set score($core.double value) => $_setDouble(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasScore() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearScore() => $_clearField(2);
+
+  /// Bounded single-line plain text selected from message.content around the
+  /// match. Contains no server-added markup and must not be treated as HTML.
+  @$pb.TagNumber(3)
+  $core.String get snippet => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set snippet($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasSnippet() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearSnippet() => $_clearField(3);
+}
+
 class SearchMessagesRequest extends $pb.GeneratedMessage {
   factory SearchMessagesRequest({
     $core.String? query,
     $core.String? sessionId,
     $core.int? limit,
     $core.String? excludeSessionId,
+    SearchMessagesResponseFormat? responseFormat,
   }) {
     final result = create();
     if (query != null) result.query = query;
     if (sessionId != null) result.sessionId = sessionId;
     if (limit != null) result.limit = limit;
     if (excludeSessionId != null) result.excludeSessionId = excludeSessionId;
+    if (responseFormat != null) result.responseFormat = responseFormat;
     return result;
   }
 
@@ -1386,6 +1473,12 @@ class SearchMessagesRequest extends $pb.GeneratedMessage {
     ..aOS(2, _omitFieldNames ? '' : 'sessionId')
     ..a<$core.int>(3, _omitFieldNames ? '' : 'limit', $pb.PbFieldType.O3)
     ..aOS(4, _omitFieldNames ? '' : 'excludeSessionId')
+    ..e<SearchMessagesResponseFormat>(
+        5, _omitFieldNames ? '' : 'responseFormat', $pb.PbFieldType.OE,
+        defaultOrMaker: SearchMessagesResponseFormat
+            .SEARCH_MESSAGES_RESPONSE_FORMAT_UNSPECIFIED,
+        valueOf: SearchMessagesResponseFormat.valueOf,
+        enumValues: SearchMessagesResponseFormat.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1446,14 +1539,27 @@ class SearchMessagesRequest extends $pb.GeneratedMessage {
   $core.bool hasExcludeSessionId() => $_has(3);
   @$pb.TagNumber(4)
   void clearExcludeSessionId() => $_clearField(4);
+
+  /// Unsupported numeric values are rejected with InvalidArgument.
+  @$pb.TagNumber(5)
+  SearchMessagesResponseFormat get responseFormat => $_getN(4);
+  @$pb.TagNumber(5)
+  set responseFormat(SearchMessagesResponseFormat value) =>
+      $_setField(5, value);
+  @$pb.TagNumber(5)
+  $core.bool hasResponseFormat() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearResponseFormat() => $_clearField(5);
 }
 
 class SearchMessagesResponse extends $pb.GeneratedMessage {
   factory SearchMessagesResponse({
     $core.Iterable<$2.Message>? messages,
+    $core.Iterable<SearchHit>? hits,
   }) {
     final result = create();
     if (messages != null) result.messages.addAll(messages);
+    if (hits != null) result.hits.addAll(hits);
     return result;
   }
 
@@ -1472,6 +1578,8 @@ class SearchMessagesResponse extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..pc<$2.Message>(1, _omitFieldNames ? '' : 'messages', $pb.PbFieldType.PM,
         subBuilder: $2.Message.create)
+    ..pc<SearchHit>(2, _omitFieldNames ? '' : 'hits', $pb.PbFieldType.PM,
+        subBuilder: SearchHit.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1497,8 +1605,12 @@ class SearchMessagesResponse extends $pb.GeneratedMessage {
       $pb.GeneratedMessage.$_defaultFor<SearchMessagesResponse>(create);
   static SearchMessagesResponse? _defaultInstance;
 
+  /// Legacy compatibility field. New consumers request HITS.
   @$pb.TagNumber(1)
   $pb.PbList<$2.Message> get messages => $_getList(0);
+
+  @$pb.TagNumber(2)
+  $pb.PbList<SearchHit> get hits => $_getList(1);
 }
 
 class GetConfigRequest extends $pb.GeneratedMessage {

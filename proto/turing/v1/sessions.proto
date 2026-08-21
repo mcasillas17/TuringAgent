@@ -114,15 +114,42 @@ message ListMessagesResponse {
   repeated Message messages = 1;
 }
 
+// Selects one response representation so hit metadata does not duplicate
+// unbounded message bodies.
+enum SearchMessagesResponseFormat {
+  // Resolves to LEGACY_MESSAGES for old callers.
+  SEARCH_MESSAGES_RESPONSE_FORMAT_UNSPECIFIED = 0;
+  // Returns only SearchMessagesResponse.messages.
+  SEARCH_MESSAGES_RESPONSE_FORMAT_LEGACY_MESSAGES = 1;
+  // Returns only SearchMessagesResponse.hits.
+  SEARCH_MESSAGES_RESPONSE_FORMAT_HITS = 2;
+}
+
+message SearchHit {
+  Message message = 1;
+
+  // Finite and non-negative. Higher means a more relevant match within the
+  // same SearchMessages response. Not comparable across queries or snapshots.
+  double score = 2;
+
+  // Bounded single-line plain text selected from message.content around the
+  // match. Contains no server-added markup and must not be treated as HTML.
+  string snippet = 3;
+}
+
 message SearchMessagesRequest {
   string query = 1;
   string session_id = 2; // optional scope; empty = all sessions
   int32 limit = 3;
   string exclude_session_id = 4; // optional exclusion; applied after session_id scope
+  // Unsupported numeric values are rejected with InvalidArgument.
+  SearchMessagesResponseFormat response_format = 5;
 }
 
 message SearchMessagesResponse {
+  // Legacy compatibility field. New consumers request HITS.
   repeated Message messages = 1;
+  repeated SearchHit hits = 2;
 }
 
 message GetConfigRequest {}
