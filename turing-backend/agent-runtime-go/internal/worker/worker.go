@@ -1133,7 +1133,16 @@ func (w *Worker) resumeApproval(ctx context.Context, stream RuntimeStream, resum
 		return w.failApprovalResume(ctx, stream, entry, runID, false, waitCtx.Err())
 	}
 	_, attemptID := entry.identity()
-	sendCtx, cancelSend := context.WithTimeout(ctx, w.options.UpdateSendTimeout)
+	// Bounded by what is LEFT of the approval budget, never by a fresh one.
+	// The send is part of the same wait the user already sat through, so a
+	// timeout of its own would let a resume outlive the deadline everything
+	// else was told about — and it is also what makes a decision arriving in
+	// the same instant the budget expires deterministic. Both arms of the wait
+	// above are ready then, and select chooses between them at random; because
+	// a spent budget cannot start a send either, both orders reach the same
+	// answer instead of flipping a coin between failing the run and dropping
+	// the stream.
+	sendCtx, cancelSend := context.WithTimeout(waitCtx, w.options.UpdateSendTimeout)
 	err := w.sendRunUpdateReportingPause(sendCtx, entry, stream, &turingv1.RuntimeUpdate{
 		Update: &turingv1.RuntimeUpdate_ApprovalResumeReady{ApprovalResumeReady: &turingv1.RuntimeApprovalResumeReady{
 			RunId:                runID,
@@ -1144,11 +1153,14 @@ func (w *Worker) resumeApproval(ctx context.Context, stream RuntimeStream, resum
 	})
 	cancelSend()
 	if err != nil {
-		// A Ready that failed to send may still have been received, and a run
-		// whose narration is already withheld has lost the orchestrator
-		// anyway. Either way this worker cannot claim the run is still waiting,
-		// so it drops the stream and lets the ownership fence decide.
-		return w.failApprovalResume(ctx, stream, entry, runID, true, err)
+		// Only a send that BEGAN can have been received. Until then the Ready
+		// is still sitting in this process — abandoned in the writer's queue,
+		// or refused because the run's narration is withheld — so the row is
+		// still waiting approval and this attempt still owns it, and the honest
+		// answer is the transport failure rather than dropping every other run
+		// on this stream. Once the bytes are in flight none of that is knowable
+		// any more, and the stream goes so the ownership fence can decide.
+		return w.failApprovalResume(ctx, stream, entry, runID, outboundSendStarted(err), err)
 	}
 	select {
 	case <-pending.accepted:
@@ -1161,12 +1173,13 @@ func (w *Worker) resumeApproval(ctx context.Context, stream RuntimeStream, resum
 // failApprovalResume ends a resume that cannot complete, without ever leaving
 // the paused executor holding its worker slot.
 //
-// readySent decides what may be said. Before Ready the row is still waiting
-// approval and this attempt still owns it, so a typed approval-delivery failure
-// at the version this worker knows is both true and useful. After Ready the
-// orchestrator may already have committed running, and a terminal report
-// computed against the older version would be refused anyway — so the stream is
-// dropped instead and the required ownership fence moves the run to recovering.
+// readySent decides what may be said. Before the Ready is in flight the row is
+// still waiting approval and this attempt still owns it, so a typed
+// approval-delivery failure at the version this worker knows is both true and
+// useful. Once the Ready may have been received the orchestrator may already
+// have committed running, and a terminal report computed against the older
+// version would be refused anyway — so the stream is dropped instead and the
+// required ownership fence moves the run to recovering.
 //
 // started decides whether that is still this resume's call to make. It is false
 // when something else has already begun terminalizing the run — the
@@ -1184,6 +1197,16 @@ func (w *Worker) failApprovalResume(
 	cause error,
 ) error {
 	started, ownsTerminalReport := entry.beginCancellation()
+	if started && ownsTerminalReport {
+		// Remembered on BOTH paths, and before the entry is released below.
+		// Claiming the terminal report is what ends this attempt, whether or
+		// not anything is said about it: the executor will not report again and
+		// the run is about to leave the active map. A same-attempt refresh
+		// arriving after that — the orchestrator handing back the version it
+		// committed while ownership was in doubt — would otherwise look like a
+		// brand new assignment and run the whole job a second time.
+		w.rememberTerminalAttempt(entry)
+	}
 	if started && ownsTerminalReport && !readySent {
 		update := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
 			RunId:               runID,
@@ -1192,7 +1215,6 @@ func (w *Worker) failApprovalResume(
 			AutomaticRetryClass: turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_NEVER,
 		}}}
 		stampObservedVersion(entry, update)
-		w.rememberTerminalAttempt(entry)
 		w.sendTerminalOrReport(ctx, stream, update)
 	}
 	if started && readySent {

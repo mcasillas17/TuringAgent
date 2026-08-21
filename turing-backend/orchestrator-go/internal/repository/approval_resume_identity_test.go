@@ -133,6 +133,14 @@ func (f *approvalResumeFixture) assertResumeRefusedAt(t *testing.T, approvalID s
 	if !errors.Is(err, ErrRunTransitionConflict) {
 		t.Fatalf("refused resume error = %v, want %v", err, ErrRunTransitionConflict)
 	}
+	// A refusal names the condition and nothing else: an identifier in an error
+	// string is row content leaving the row, and these travel out to callers
+	// that must not learn which approvals or runs exist.
+	for _, secret := range []string{approvalID, f.runID} {
+		if secret != "" && strings.Contains(err.Error(), secret) {
+			t.Fatalf("conflict error %q leaked the identifier %q", err.Error(), secret)
+		}
+	}
 	if result.State != (RunState{}) || result.Duplicate || len(result.Events) != 0 {
 		t.Fatalf("refused resume returned %+v, want nothing", result)
 	}
@@ -269,6 +277,95 @@ func TestSecondApprovalResumeAfterCommitIsFenced(t *testing.T) {
 	}
 
 	fixture.assertResumeRefused(t, second)
+}
+
+// foreignApproval records an approved approval on a DIFFERENT run, which is
+// what a resume must never be able to use as its authority. It is answered
+// rather than left pending so the refusal below can only come from ownership.
+func foreignApproval(t *testing.T, repo *Repository, title string) string {
+	t.Helper()
+	ctx := context.Background()
+	other := enqueueRun(t, repo, title)
+	if err := repo.MarkRunRunning(ctx, other.RunID); err != nil {
+		t.Fatalf("MarkRunRunning: %v", err)
+	}
+	approval, err := repo.CreateApproval(ctx, other.RunID, "", "general_assistant",
+		"files.update", `{}`, "sha256:foreign", "2099-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatalf("CreateApproval: %v", err)
+	}
+	if _, err := repo.ApproveApproval(ctx, approval.ApprovalID, "token-foreign", sql.NullString{}, now()); err != nil {
+		t.Fatalf("ApproveApproval: %v", err)
+	}
+	return approval.ApprovalID
+}
+
+// TestApprovalResumeRequiresAnApprovalThisRunOwns closes the gap between "an
+// approval that authorizes something" and "an approval that authorizes
+// something HERE".
+//
+// The foreign approval is genuinely approved, so nothing about its own status
+// refuses it; what refuses it is that it belongs to another run. Ownership is
+// established by scoping the lookup to this run, and a resume that could borrow
+// somebody else's answer would restart a run on a decision made about a
+// different tool call entirely.
+func TestApprovalResumeRequiresAnApprovalThisRunOwns(t *testing.T) {
+	repo := New(openTestDB(t))
+	fixture := newApprovalResumeFixture(t, repo, "worker-resume-foreign")
+	fixture.approve(t, "call_resume_owned", "owned.txt")
+
+	for name, approvalID := range map[string]string{
+		"an approval owned by another run": foreignApproval(t, repo, "Another run"),
+		"an approval that never existed":   "appr_never_existed",
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture.assertResumeRefused(t, approvalID)
+
+			if state := fixture.state(t); state.Lifecycle != lifecycleWaitingApproval {
+				t.Fatalf("lifecycle after %s = %q, want waiting_approval", name, state.Lifecycle)
+			}
+		})
+	}
+}
+
+// TestApprovalOwnershipIsCheckedBeforeAWriteFreeReplay covers the window a
+// replay opens.
+//
+// A duplicate is recognised from the row: the run is already exactly where the
+// command wanted it, one version on. That is just as true for a command naming
+// an approval this run never owned, so the row-level rule alone would answer it
+// with this run's state and report a successful replay — the strongest possible
+// "yes" to a command that had no authority at all. The refusal therefore has to
+// outrank that rule, and here it is outranked twice: ownership is established
+// before anything else can answer, and the durable trigger this transition
+// commits does not name the approval being claimed either. The genuine repeat
+// still costs nothing.
+func TestApprovalOwnershipIsCheckedBeforeAWriteFreeReplay(t *testing.T) {
+	repo := New(openTestDB(t))
+	fixture := newApprovalResumeFixture(t, repo, "worker-resume-replay-identity")
+	approvalID := fixture.approve(t, "call_resume_replay_identity", "owned.txt")
+	waiting := fixture.waiting
+	committed, err := fixture.resume(approvalID)
+	if err != nil {
+		t.Fatalf("ResumeApprovedRun: %v", err)
+	}
+
+	for name, foreign := range map[string]string{
+		"an approval owned by another run": foreignApproval(t, repo, "Another run entirely"),
+		"an approval that never existed":   "appr_never_existed",
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture.assertResumeRefusedAt(t, foreign, waiting.StateVersion)
+		})
+	}
+
+	replayed, err := fixture.resumeWith(repo, approvalID, waiting.StateVersion)
+	if err != nil {
+		t.Fatalf("replayed ResumeApprovedRun: %v", err)
+	}
+	if !replayed.Duplicate || replayed.State != committed.State {
+		t.Fatalf("replayed resume = %+v, want the committed %+v as a duplicate", replayed, committed.State)
+	}
 }
 
 // TestApprovalResumeRequiresAnAuthorizedApproval covers the other half of the

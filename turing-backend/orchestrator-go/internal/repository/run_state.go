@@ -833,14 +833,18 @@ func fenceOwnershipTransitionInTx(runID string, identity runTransitionIdentity, 
 
 // ResumeRecoveringRunInput proves that the same still-owned attempt is alive
 // and returns the run to running.
+//
+// There is deliberately no approval here. Recovering-to-running is the generic
+// proof that a worker is back, and the approval handshake has its own
+// transition — ResumeApprovedRun — which guards the approval twice over and
+// commits it into the event so a replay can be told apart. Naming an approval
+// on this one would have looked like the same guarantee while providing none of
+// it: nothing durable would record which authorization moved the run.
 type ResumeRecoveringRunInput struct {
 	RunID                string
 	ExpectedStateVersion int64
 	WorkerID             string
 	AssignmentAttemptID  string
-	// ApprovalID is set when the resume follows an approval decision, so a
-	// replay of a different approval cannot be mistaken for this one.
-	ApprovalID string
 }
 
 // ResumeRecoveringRun returns a recovering run to running.
@@ -858,7 +862,6 @@ func (r *Repository) ResumeRecoveringRun(ctx context.Context, input ResumeRecove
 		identity: runTransitionIdentity{
 			workerID:            input.WorkerID,
 			assignmentAttemptID: input.AssignmentAttemptID,
-			approvalID:          input.ApprovalID,
 		},
 		extraSet:  `execution_state = 'delivered'`,
 		extraArgs: nil,

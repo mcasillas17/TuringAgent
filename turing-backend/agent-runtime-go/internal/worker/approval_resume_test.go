@@ -565,6 +565,71 @@ func (f *approvalResumeFixture) runAnotherRun(t *testing.T, runID string) {
 	}
 }
 
+// awaitTypedDeliveryFailure drains the stream up to the run's typed transport
+// failure, and fails if a Ready appears on the way. Draining rather than
+// reading one update is deliberate: the point is that NOTHING asked the
+// orchestrator to resume, so every update in the window has to be inspected.
+func (f *approvalResumeFixture) awaitTypedDeliveryFailure(t *testing.T) *turingv1.RuntimeRunFailed {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case update := <-f.stream.sent:
+			if ready := update.GetApprovalResumeReady(); ready != nil {
+				t.Fatalf("the worker asked to resume on a token alone: %+v", ready)
+			}
+			if failed := update.GetRunFailed(); failed != nil {
+				return failed
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for the run's transport failure")
+		}
+	}
+}
+
+// TestApprovalTokenAloneNeverResumesOrRunsTheCall is the command gate, stated
+// as the property it protects.
+//
+// The worker's approval wait SUCCEEDS here: a durable token exists and is
+// handed straight back. That is evidence about the approval and nothing else.
+// The orchestrator's approved decision command is what says this run may ask to
+// be resumed, and it deliberately never arrives — so no Ready may go out, the
+// authorized call must not run, and the run must end on its existing budget
+// with the slot released rather than sitting on it waiting for a command it was
+// never sent.
+//
+// This is also the shape a reviewer will keep proposing to simplify: the token
+// is right there, so why not proceed? Because a token proves a person said yes,
+// while only the orchestrator can say the run is durably running again under
+// THIS worker — and acting on the first is how a side effect is committed for a
+// run somebody else now owns.
+func TestApprovalTokenAloneNeverResumesOrRunsTheCall(t *testing.T) {
+	fixture := startApprovalResumeWorker(t, "worker-token-only", 100*time.Millisecond)
+	// Hands the runner its token, and stops exactly there: no approved
+	// decision command is ever delivered.
+	fixture.awaitApprovalRequired(t, "approval_token_only")
+
+	failed := fixture.awaitTypedDeliveryFailure(t)
+
+	if failed.GetRunId() != approvalResumeRunID || failed.GetCode() != "approval_delivery_failed" {
+		t.Fatalf("failure = %+v, want approval_delivery_failed for run %q", failed, approvalResumeRunID)
+	}
+	if failed.GetFailureOrigin() != turingv1.FailureOrigin_FAILURE_ORIGIN_APPROVAL_TRANSPORT {
+		t.Fatalf("failure origin = %s, want approval transport", failed.GetFailureOrigin())
+	}
+	if failed.GetAutomaticRetryClass() != turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_NEVER {
+		t.Fatalf("retry class = %s, want never", failed.GetAutomaticRetryClass())
+	}
+	if failed.GetExpectedStateVersion() != approvalResumeWaitingVersion {
+		t.Fatalf("failure version = %d, want the waiting-approval %d",
+			failed.GetExpectedStateVersion(), approvalResumeWaitingVersion)
+	}
+	fixture.awaitResumeAbandoned(t, approvalResumeRunID)
+	// The stream is still the worker's, because nothing about this run was ever
+	// in doubt: it never left waiting approval.
+	fixture.runAnotherRun(t, "run_after_token_only")
+}
+
 // TestTerminalizationBeforeAcceptedKeepsTheWorkerStream covers the run that is
 // ended by something else while its worker is holding the paused executor open
 // waiting for an acceptance.

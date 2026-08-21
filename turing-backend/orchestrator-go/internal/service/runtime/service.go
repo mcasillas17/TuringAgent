@@ -410,7 +410,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 			if resumeReady := update.GetApprovalResumeReady(); resumeReady != nil {
 				release, beginErr := connectedWorker.beginUpdate(update)
 				if beginErr != nil {
-					recvErr <- status.Error(codes.FailedPrecondition, "approval resume does not name a live owned assignment")
+					recvErr <- approvalResumeGateError(beginErr)
 					return
 				}
 				accepted, resumeErr := s.resumeApprovedRun(ctx, resumeReady, ready.WorkerId, connectedWorker)
@@ -898,9 +898,13 @@ func updateRunID(update *turingv1.RuntimeUpdate) string {
 // Each kind owes something different. A tool-policy decision carrying an
 // approval is the authorization itself, so losing it ends the approval. An
 // approval decision is not: it is news about a decision already durably made,
-// and losing the news does not by itself end anything. An acceptance is the
-// opposite again — the run is already committed running, so it can only be
-// fenced.
+// and losing the news does not by itself end anything.
+//
+// A resume acceptance never arrives here. It is handed to the worker directly
+// from the Ready handler rather than queued, because the row is already
+// committed running by then and the delivery has to be answered in the same
+// breath — see deliverApprovalResumeAcceptance, which fences the run itself
+// when its send fails.
 func (s *Server) handleUndeliveredCommand(ctx context.Context, cmd *turingv1.RuntimeCommand, workerID string, owner *worker) error {
 	if decision := cmd.GetToolPolicyDecision(); decision != nil && decision.GetApprovalId() != "" {
 		return s.terminalizeApprovalDeliveryFailure(ctx, decision.GetApprovalId(), owner)
@@ -908,10 +912,23 @@ func (s *Server) handleUndeliveredCommand(ctx context.Context, cmd *turingv1.Run
 	if updated := cmd.GetApprovalUpdated(); updated != nil {
 		return s.handleUndeliveredApprovalDecision(ctx, updated, workerID, owner)
 	}
-	if accepted := cmd.GetApprovalResumeAccepted(); accepted != nil {
-		return s.fenceRunOwnership(accepted.GetRunId(), workerID, accepted.GetAssignmentAttemptId())
-	}
 	return nil
+}
+
+// approvalResumeGateError is what a Ready owes when the update gate refuses it.
+//
+// The gate refuses for two unrelated reasons and they must not be flattened
+// into one. A run this worker does not hold is a precondition the Ready itself
+// violated, and the handshake says so in its own words. A worker that is
+// already disconnected is not about the Ready at all: the stream is going, its
+// teardown reports that same cancellation, and relabelling it here would make
+// the handler's outcome depend on which goroutine noticed first while hiding a
+// cancellation callers recognise inside what looks like a protocol violation.
+func approvalResumeGateError(err error) error {
+	if status.Code(err) == codes.Canceled {
+		return err
+	}
+	return status.Error(codes.FailedPrecondition, "approval resume does not name a live owned assignment")
 }
 
 // handleUndeliveredApprovalDecision answers an approval decision that never

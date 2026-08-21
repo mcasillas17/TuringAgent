@@ -9,6 +9,7 @@ import (
 	"net"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -914,8 +915,9 @@ func TestConnectWorkerTerminalizesApprovalWhenDecisionSendFails(t *testing.T) {
 	defer cancel()
 
 	err = h.service.ConnectWorker(&failingApprovalDecisionStream{
-		ctx:    ctx,
-		cancel: cancel,
+		ctx:      ctx,
+		cancel:   cancel,
+		assigned: make(chan struct{}),
 		ready: &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
 			WorkerId:          "worker-decision-send-fails",
 			AgentId:           turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
@@ -1009,8 +1011,9 @@ func TestConnectWorkerFencesTerminalDecisionFailureUntilRecovery(t *testing.T) {
 	streamCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	err = h.service.ConnectWorker(&failingApprovalDecisionStream{
-		ctx:    streamCtx,
-		cancel: cancel,
+		ctx:      streamCtx,
+		cancel:   cancel,
+		assigned: make(chan struct{}),
 		ready: &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
 			WorkerId: "worker-terminal-decision-send-fails", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
 		}}},
@@ -1343,17 +1346,33 @@ func (s *failingAssignmentStream) Recv() (*turingv1.RuntimeUpdate, error) {
 
 func (s *failingAssignmentStream) Context() context.Context { return s.ctx }
 
+// failingApprovalDecisionStream is a worker whose tool-policy decision cannot
+// be delivered.
+//
+// Its beacon deliberately waits for the assignment to be sent. A real worker
+// cannot beacon for a run it has not been handed, and without that wait the
+// beacon races the assignment for the worker's update lock: whichever wins
+// decides whether the run is still 'running' when BeginAssignmentSend guards
+// it, so the assignment is fenced or delivered depending on scheduling alone.
+// The wait models the protocol's own causality rather than the fast path CI
+// happened to take.
 type failingApprovalDecisionStream struct {
 	grpc.ServerStream
-	ctx        context.Context
-	cancel     context.CancelFunc
-	ready      *turingv1.RuntimeUpdate
-	beacon     *turingv1.RuntimeUpdate
-	readySent  bool
-	beaconSent bool
+	ctx          context.Context
+	cancel       context.CancelFunc
+	ready        *turingv1.RuntimeUpdate
+	beacon       *turingv1.RuntimeUpdate
+	assigned     chan struct{}
+	assignedOnce sync.Once
+	readySent    bool
+	beaconSent   bool
 }
 
 func (s *failingApprovalDecisionStream) Send(cmd *turingv1.RuntimeCommand) error {
+	if cmd.GetRunAssigned() != nil {
+		s.assignedOnce.Do(func() { close(s.assigned) })
+		return nil
+	}
 	if cmd.GetToolPolicyDecision() != nil {
 		if s.cancel != nil {
 			s.cancel()
@@ -1370,6 +1389,11 @@ func (s *failingApprovalDecisionStream) Recv() (*turingv1.RuntimeUpdate, error) 
 	}
 	if !s.beaconSent {
 		s.beaconSent = true
+		select {
+		case <-s.assigned:
+		case <-s.ctx.Done():
+			return nil, s.ctx.Err()
+		}
 		return s.beacon, nil
 	}
 	<-s.ctx.Done()

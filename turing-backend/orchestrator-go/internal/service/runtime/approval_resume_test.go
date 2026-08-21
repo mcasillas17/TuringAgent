@@ -479,6 +479,50 @@ func TestReadyWithConflictingExpectedVersionIsFenced(t *testing.T) {
 	assertReadyIsFenced(t, fixture, ready)
 }
 
+// TestReadyGateRefusalKeepsItsOwnKind pins the two refusals the update gate can
+// produce, and keeps them apart.
+//
+// The gate says one of two different things. "This worker does not hold that
+// run" is a precondition the Ready itself violated, and the handshake's own
+// FailedPrecondition is the right answer. "This worker is disconnected" is not
+// about the Ready at all — the stream is already going, and its teardown
+// reports that same cancellation from the other side. Relabelling it as a
+// precondition failure makes the handler's outcome depend on which goroutine
+// noticed the disconnect first, and buries a cancellation the caller can
+// recognise inside an error that looks like a protocol violation.
+//
+// Both inputs are taken from the gate itself rather than written out here, so
+// the mapping cannot drift away from what it maps.
+func TestReadyGateRefusalKeepsItsOwnKind(t *testing.T) {
+	ready := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ApprovalResumeReady{
+		ApprovalResumeReady: &turingv1.RuntimeApprovalResumeReady{RunId: "run_ready_gate"},
+	}}
+
+	unassigned := &worker{assignments: map[string]assignment{}, done: make(chan struct{})}
+	if _, err := unassigned.beginUpdate(ready); err == nil {
+		t.Fatal("the gate admitted a Ready for a run this worker does not hold")
+	} else if got := approvalResumeGateError(err); status.Code(got) != codes.FailedPrecondition {
+		t.Fatalf("unassigned refusal = %v, want FailedPrecondition", got)
+	}
+
+	disconnected := &worker{
+		assignments: map[string]assignment{"run_ready_gate": {runID: "run_ready_gate"}},
+		done:        make(chan struct{}),
+	}
+	disconnected.close()
+	refused, err := disconnected.beginUpdate(ready)
+	if refused != nil || err == nil {
+		t.Fatal("the gate admitted a Ready on a disconnected worker")
+	}
+	mapped := approvalResumeGateError(err)
+	if status.Code(mapped) != codes.Canceled {
+		t.Fatalf("disconnected refusal = %v, want the gate's own Canceled", mapped)
+	}
+	if !errors.Is(mapped, err) {
+		t.Fatalf("disconnected refusal = %v, want the gate's own error %v", mapped, err)
+	}
+}
+
 // TestDetectedAcceptedDeliveryFailureMovesRunningToRecovering is the case the
 // commit ordering creates: the row is already running and the worker was never
 // told. Reverting to waiting-approval would be a lie about a decision that has
