@@ -20,6 +20,7 @@
 **/data.backup-*
 **/data.worktree-backup-*
 turing-backend/skills
+turing-backend/mcp
 **/sandbox
 
 # Dependency caches, generated build output, and test artifacts

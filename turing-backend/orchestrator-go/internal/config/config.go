@@ -46,6 +46,7 @@ type Config struct {
 	InternalPort              int
 	DatabasePath              string
 	SkillsRoot                string
+	MCPConfigRoot             string
 	OllamaBaseURL             string
 	OllamaModel               string
 	OllamaContextWindowTokens int
@@ -319,6 +320,10 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if !filepath.IsAbs(skillsRoot) || filepath.Clean(skillsRoot) != skillsRoot {
 		return Config{}, fmt.Errorf("SKILLS_ROOT must be a clean absolute path")
 	}
+	mcpConfigRoot := stringValue("MCP_CONFIG_ROOT", "/mcp")
+	if !filepath.IsAbs(mcpConfigRoot) || filepath.Clean(mcpConfigRoot) != mcpConfigRoot {
+		return Config{}, fmt.Errorf("MCP_CONFIG_ROOT must be a clean absolute path")
+	}
 	return Config{
 		ClientAPIKey:              clientKey,
 		RuntimeToken:              runtimeToken,
@@ -333,6 +338,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		InternalPort:              internalPort,
 		DatabasePath:              stringValue("DATABASE_PATH", "/app/data/turing.db"),
 		SkillsRoot:                skillsRoot,
+		MCPConfigRoot:             mcpConfigRoot,
 		OllamaBaseURL:             ollamaEndpoint.Canonical,
 		OllamaModel:               stringValue("OLLAMA_MODEL", "qwen2.5:7b"),
 		OllamaContextWindowTokens: ollamaContextWindowTokens,

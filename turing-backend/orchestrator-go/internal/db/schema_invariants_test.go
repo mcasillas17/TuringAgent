@@ -69,6 +69,22 @@ var currentSchemaTablePolicies = []schemaTablePolicy{
 		kind:      schemaTableIndependent,
 		rationale: "Tools are a discovered capability catalog, not user-derived memory.",
 	},
+	{
+		table:     "mcp_servers",
+		kind:      schemaTableIndependent,
+		rationale: "MCP servers are user-managed capability destinations with explicit enablement.",
+	},
+	{table: "mcp_server_status", kind: schemaTableCascadeOwned, sourceTable: "mcp_servers"},
+	{
+		table:     "mcp_import_issues",
+		kind:      schemaTableIndependent,
+		rationale: "Import issues are configuration diagnostics derived only from the local mcp.json file.",
+	},
+	{
+		table:     "mcp_import_tombstones",
+		kind:      schemaTableIndependent,
+		rationale: "Import tombstones preserve an explicit local deletion across future mcp.json startup imports.",
+	},
 	{table: "tool_calls", kind: schemaTableCascadeOwned, sourceTable: "agent_runs"},
 	{table: "approvals", kind: schemaTableCascadeOwned, sourceTable: "agent_runs"},
 	{

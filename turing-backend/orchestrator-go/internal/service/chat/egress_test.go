@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestPrepareRemoteEgressDisclosesExactRemoteMaximumWithoutPersistence(t *testing.T) {
@@ -87,6 +89,78 @@ func TestPrepareRemoteEgressDeletingSessionReturnsFailedPrecondition(t *testing.
 	)
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("PrepareRemoteEgress error = %v, want FailedPrecondition", err)
+	}
+}
+
+func TestRemoteServerToolsEnterThePerRunEgressDecision(t *testing.T) {
+	h := newHarness(t)
+	server, err := h.repo.UpsertImportedMCPServer(context.Background(), repository.ImportedMCPServer{
+		Name: "vendor",
+		URL:  "https://vendor.example/mcp",
+		Tier: repository.MCPServerTierRemoteURL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.SetMCPServerEnabled(context.Background(), server.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.ReplaceMCPServerTools(context.Background(), server.ID, []repository.MCPServerTool{{
+		Name: "vendor.lookup", Policy: "approval_required", SchemaJSON: `{"type":"object"}`,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	capabilities := defaultChatWorkerCapabilities(false)
+	capabilities.Tools = append(capabilities.Tools, &turingv1.DiscoveredTool{
+		ServerName: "vendor",
+		ToolName:   "vendor.lookup",
+		Schema:     &structpb.Struct{},
+	})
+	worker := connectChatTestWorker(t, h, capabilities)
+	defer func() { _ = worker.CloseSend() }()
+	sessionID := h.createSession(t)
+	request := &turingv1.PrepareRemoteEgressRequest{
+		SessionId:      sessionID,
+		Content:        "look it up",
+		ContentType:    "text",
+		AgentId:        turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ModelProvider:  turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+		Model:          "llama3.2",
+		IdempotencyKey: "remote_mcp_prepare",
+		RequestedTools: []string{"vendor/vendor.lookup"},
+	}
+
+	prepared, err := h.chatClient.PrepareRemoteEgress(h.clientContext(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disclosure := prepared.GetDisclosure()
+	if disclosure == nil {
+		t.Fatal("remote MCP tool produced no egress disclosure")
+	}
+	destinations := disclosure.GetRemoteMcpServers()
+	if len(destinations) != 1 ||
+		destinations[0].GetServerName() != "vendor" ||
+		destinations[0].GetEndpoint() != "https://vendor.example/mcp" {
+		t.Fatalf("remote MCP destinations = %+v", destinations)
+	}
+	if !slices.Contains(disclosure.GetDataCategories(), turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS) ||
+		!slices.Contains(disclosure.GetDataCategories(), turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_RESULTS) {
+		t.Fatalf("categories = %v, want tool arguments and results", disclosure.GetDataCategories())
+	}
+
+	err = sendMessageError(h, &turingv1.SendMessageRequest{
+		SessionId:      request.GetSessionId(),
+		Content:        request.GetContent(),
+		ContentType:    request.GetContentType(),
+		AgentId:        request.GetAgentId(),
+		ModelProvider:  request.GetModelProvider(),
+		Model:          request.GetModel(),
+		IdempotencyKey: request.GetIdempotencyKey(),
+		RequestedTools: request.GetRequestedTools(),
+	})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("send without acknowledgement error = %v, want FailedPrecondition", err)
 	}
 }
 

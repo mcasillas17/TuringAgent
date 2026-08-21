@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"testing"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 )
 
 func TestUpsertToolsStoresSnapshotAndPreservesExistingPolicy(t *testing.T) {
@@ -32,23 +34,23 @@ func TestUpsertToolsStoresSnapshotAndPreservesExistingPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListEnabledTools: %v", err)
 	}
-	if len(tools) != 1 {
-		t.Fatalf("enabled tools = %+v, want only refreshed tool", tools)
-	}
-	if got := tools[0]; got.ServerName != "files" || got.ToolName != "files.create" || got.Policy != "disabled" || got.SchemaJSON != `{"type":"object","required":["path"]}` {
-		t.Fatalf("refreshed tool = %+v", got)
+	if len(tools) != 0 {
+		t.Fatalf("enabled tools = %+v, want disabled policy to stay unavailable", tools)
 	}
 	if policy, enabled, found, err := repo.GetToolPolicy(ctx, "system", "system.time"); err != nil || !found || enabled || policy != "safe" {
 		t.Fatalf("omitted tool state: policy=%q enabled=%v found=%v err=%v", policy, enabled, found, err)
 	}
-	if policy, enabled, found, err := repo.GetToolPolicy(ctx, "files", "files.create"); err != nil || !found || !enabled || policy != "disabled" {
+	if policy, enabled, found, err := repo.GetToolPolicy(ctx, "files", "files.create"); err != nil || !found || enabled || policy != "disabled" {
 		t.Fatalf("files.create state: policy=%q enabled=%v found=%v err=%v", policy, enabled, found, err)
 	}
 }
 
 func TestGetToolPolicyScopesLookupToServer(t *testing.T) {
-	repo := New(openTestDB(t))
+	database := openTestDB(t)
+	repo := New(database)
 	ctx := context.Background()
+	registerRepositoryTestServer(t, ctx, database, "trusted")
+	registerRepositoryTestServer(t, ctx, database, "untrusted")
 	if err := repo.UpsertTools(ctx, []DiscoveredTool{
 		{ServerName: "trusted", ToolName: "shared.name", SchemaJSON: `{}`, Policy: "safe"},
 		{ServerName: "untrusted", ToolName: "shared.name", SchemaJSON: `{}`, Policy: "disabled"},
@@ -57,7 +59,7 @@ func TestGetToolPolicyScopesLookupToServer(t *testing.T) {
 	}
 
 	policy, enabled, found, err := repo.GetToolPolicy(ctx, "untrusted", "shared.name")
-	if err != nil || !found || !enabled || policy != "disabled" {
+	if err != nil || !found || enabled || policy != "disabled" {
 		t.Fatalf("untrusted state: policy=%q enabled=%v found=%v err=%v", policy, enabled, found, err)
 	}
 	if _, _, found, err := repo.GetToolPolicy(ctx, "missing", "shared.name"); err != nil || found {
@@ -81,9 +83,32 @@ func TestUpsertToolsMarksRegistryInitializedForEmptySnapshot(t *testing.T) {
 	}
 }
 
-func TestUpsertToolsRollsBackSnapshotOnInvalidTool(t *testing.T) {
+func TestUpsertToolsUpdatesBundledServerLiveness(t *testing.T) {
 	repo := New(openTestDB(t))
 	ctx := context.Background()
+	if err := repo.UpsertTools(ctx, []DiscoveredTool{{
+		ServerName: "system", ToolName: "system.time", SchemaJSON: `{}`, Policy: "safe",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := repo.ListMCPServers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := map[string]string{}
+	for _, server := range servers {
+		statuses[server.Name] = server.Status
+	}
+	if statuses["system"] != "up" || statuses["files"] != "down" {
+		t.Fatalf("bundled liveness = %v, want system up and files down", statuses)
+	}
+}
+
+func TestUpsertToolsRollsBackSnapshotOnInvalidTool(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	registerRepositoryTestServer(t, ctx, database, "broken")
 	if err := repo.UpsertTools(ctx, []DiscoveredTool{{ServerName: "system", ToolName: "system.time", SchemaJSON: `{}`, Policy: "safe"}}); err != nil {
 		t.Fatalf("UpsertTools initial snapshot: %v", err)
 	}
@@ -94,5 +119,41 @@ func TestUpsertToolsRollsBackSnapshotOnInvalidTool(t *testing.T) {
 	policy, enabled, found, err := repo.GetToolPolicy(ctx, "system", "system.time")
 	if err != nil || !found || !enabled || policy != "safe" {
 		t.Fatalf("previous snapshot was not restored: policy=%q enabled=%v found=%v err=%v", policy, enabled, found, err)
+	}
+}
+
+func TestUpsertToolsDropsAnUnregisteredServerFromTheSnapshot(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	if err := repo.UpsertTools(ctx, []DiscoveredTool{{
+		ServerName: "system", ToolName: "system.time", SchemaJSON: `{}`, Policy: "safe",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := repo.UpsertTools(ctx, []DiscoveredTool{{
+		ServerName: "stranger", ToolName: "system.time", SchemaJSON: `{}`, Policy: "safe",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, found, lookupErr := repo.GetToolPolicy(ctx, "stranger", "system.time"); lookupErr != nil || found {
+		t.Fatalf("unregistered server entered registry: found=%v err=%v", found, lookupErr)
+	}
+}
+
+func registerRepositoryTestServer(t *testing.T, ctx context.Context, database *db.DB, name string) {
+	t.Helper()
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO mcp_servers (id, name, transport, url, tier, enabled, created_at)
+		VALUES (?, ?, 'http', 'http://vendor:9000/mcp', 'local_container', 1, datetime('now'))
+	`, "mcp_"+name, name); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO mcp_server_status (mcp_server_id, status)
+		VALUES (?, 'unknown')
+	`, "mcp_"+name); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -207,6 +207,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"ORCHESTRATOR_INTERNAL_PORT",
 			"DATABASE_PATH",
 			"SKILLS_ROOT",
+			"MCP_CONFIG_ROOT",
 			"OLLAMA_BASE_URL",
 			"OLLAMA_MODEL",
 			"OLLAMA_CONTEXT_WINDOW_TOKENS",
@@ -455,17 +456,17 @@ func TestEveryComposeServiceUsesLeastPrivilegeRuntime(t *testing.T) {
 	for _, violation := range composeInheritanceViolations(document) {
 		t.Error(violation)
 	}
-	for _, violation := range composeNetworkDefinitionViolations(document, []string{"net-files", "net-system"}) {
+	for _, violation := range composeNetworkDefinitionViolations(document, []string{"net-files", "net-mcp-registry", "net-system"}) {
 		t.Error(violation)
 	}
 	policies := map[string]composeRuntimePolicy{
 		"turing-orchestrator": {
 			user:     "${HOST_UID:?Use scripts/compose.sh to launch}:${HOST_GID:?Use scripts/compose.sh to launch}",
-			volumes:  []string{"../data:/app/data", "../skills:/skills"},
+			volumes:  []string{"../data:/app/data", "../skills:/skills", "../mcp:/mcp:ro"},
 			tmpfs:    []string{"/dev/shm:ro,nosuid,nodev,noexec,size=64k"},
 			ports:    []string{"127.0.0.1:${ORCHESTRATOR_PUBLIC_PORT:-3000}:${ORCHESTRATOR_PUBLIC_PORT:-3000}"},
 			expose:   []string{"3001"},
-			networks: []string{"net-system", "net-files"},
+			networks: []string{"net-system", "net-files", "net-mcp-registry"},
 		},
 		"turing-agent-runtime-general": {
 			user:       "turing-agent-runtime:turing-agent-runtime",
@@ -948,6 +949,9 @@ func composeNetworkDefinitionViolations(document composeDocument, expected []str
 	}
 	for _, name := range actual {
 		definition := document.Networks[name]
+		if name == "net-mcp-registry" && registryNetworkDefinitionValid(definition) {
+			continue
+		}
 		empty := !yamlNodePresent(definition) ||
 			(definition.Kind == yaml.ScalarNode && definition.Tag == "!!null") ||
 			(definition.Kind == yaml.MappingNode && len(definition.Content) == 0)
@@ -956,6 +960,28 @@ func composeNetworkDefinitionViolations(document composeDocument, expected []str
 		}
 	}
 	return violations
+}
+
+func registryNetworkDefinitionValid(definition yaml.Node) bool {
+	var policy struct {
+		Internal bool `yaml:"internal"`
+		IPAM     struct {
+			Config []struct {
+				Subnet string `yaml:"subnet"`
+			} `yaml:"config"`
+		} `yaml:"ipam"`
+	}
+	if err := definition.Decode(&policy); err != nil ||
+		!policy.Internal ||
+		len(policy.IPAM.Config) != 1 ||
+		policy.IPAM.Config[0].Subnet != "172.31.254.0/24" {
+		return false
+	}
+	if definition.Kind != yaml.MappingNode || len(definition.Content) != 4 {
+		return false
+	}
+	return definition.Content[0].Value == "internal" &&
+		definition.Content[2].Value == "ipam"
 }
 
 func composeRuntimePolicyViolations(serviceName string, service composeService, policy composeRuntimePolicy) []string {

@@ -51,27 +51,29 @@ type PendingEgressDecision struct {
 	RecallApplicable          bool
 	MemoryProfileApplicable   bool
 	ConsentGrantedAt          string
+	RemoteMCPServers          []RemoteMCPServerEgress
 }
 
 type RunEgressDecision struct {
-	DecisionID                string   `json:"decisionId"`
-	RunID                     string   `json:"runId"`
-	Version                   int      `json:"version"`
-	ChallengeNonce            string   `json:"challengeNonce"`
-	ChallengeFingerprint      string   `json:"challengeFingerprint"`
-	RequestDigest             string   `json:"requestDigest"`
-	Provider                  string   `json:"provider"`
-	Model                     string   `json:"model"`
-	ExternalAgentID           string   `json:"externalAgentId,omitempty"`
-	ExternalCredentialRefHash string   `json:"externalCredentialRefHash,omitempty"`
-	Endpoint                  string   `json:"endpoint"`
-	EndpointHost              string   `json:"endpointHost"`
-	DataCategories            []string `json:"dataCategories"`
-	SelectedTools             []string `json:"selectedTools"`
-	SkillSnapshotFingerprint  string   `json:"skillSnapshotFingerprint"`
-	RecallApplicable          bool     `json:"recallApplicable"`
-	MemoryProfileApplicable   bool     `json:"memoryProfileApplicable"`
-	ConsentGrantedAt          string   `json:"consentGrantedAt"`
+	DecisionID                string                  `json:"decisionId"`
+	RunID                     string                  `json:"runId"`
+	Version                   int                     `json:"version"`
+	ChallengeNonce            string                  `json:"challengeNonce"`
+	ChallengeFingerprint      string                  `json:"challengeFingerprint"`
+	RequestDigest             string                  `json:"requestDigest"`
+	Provider                  string                  `json:"provider"`
+	Model                     string                  `json:"model"`
+	ExternalAgentID           string                  `json:"externalAgentId,omitempty"`
+	ExternalCredentialRefHash string                  `json:"externalCredentialRefHash,omitempty"`
+	Endpoint                  string                  `json:"endpoint"`
+	EndpointHost              string                  `json:"endpointHost"`
+	DataCategories            []string                `json:"dataCategories"`
+	SelectedTools             []string                `json:"selectedTools"`
+	SkillSnapshotFingerprint  string                  `json:"skillSnapshotFingerprint"`
+	RecallApplicable          bool                    `json:"recallApplicable"`
+	MemoryProfileApplicable   bool                    `json:"memoryProfileApplicable"`
+	ConsentGrantedAt          string                  `json:"consentGrantedAt"`
+	RemoteMCPServers          []RemoteMCPServerEgress `json:"remoteMcpServers"`
 }
 
 func normalizePendingEgressDecision(input *PendingEgressDecision) (*PendingEgressDecision, error) {
@@ -81,20 +83,31 @@ func normalizePendingEgressDecision(input *PendingEgressDecision) (*PendingEgres
 	normalized := *input
 	normalized.DataCategories = append([]string(nil), input.DataCategories...)
 	normalized.SelectedTools = append([]string(nil), input.SelectedTools...)
+	normalized.RemoteMCPServers = append([]RemoteMCPServerEgress{}, input.RemoteMCPServers...)
 	slices.Sort(normalized.SelectedTools)
+	slices.SortFunc(normalized.RemoteMCPServers, func(left, right RemoteMCPServerEgress) int {
+		return strings.Compare(left.ServerName, right.ServerName)
+	})
 	if normalized.Version != RunEgressDecisionVersion ||
 		normalized.ChallengeNonce == "" ||
 		normalized.ChallengeFingerprint == "" ||
 		normalized.RequestDigest == "" ||
-		normalized.Provider != "openai_compatible" ||
+		(normalized.Provider != "openai_compatible" && normalized.Provider != "ollama") ||
 		normalized.Model == "" ||
-		normalized.Endpoint == "" ||
-		normalized.EndpointHost == "" ||
 		(normalized.ExternalAgentID != "" && normalized.ExternalCredentialRefHash == "") ||
 		(normalized.ExternalAgentID == "" && normalized.ExternalCredentialRefHash != "") ||
 		normalized.SkillSnapshotFingerprint == "" ||
 		normalized.ConsentGrantedAt == "" ||
 		hasEmptyOrDuplicate(normalized.SelectedTools) {
+		return nil, ErrEgressDecisionInvalid
+	}
+	if normalized.Provider == "openai_compatible" {
+		if normalized.Endpoint == "" || normalized.EndpointHost == "" {
+			return nil, ErrEgressDecisionInvalid
+		}
+	} else if normalized.Endpoint != "" || normalized.EndpointHost != "" ||
+		normalized.ExternalAgentID != "" || normalized.ExternalCredentialRefHash != "" ||
+		len(normalized.RemoteMCPServers) == 0 {
 		return nil, ErrEgressDecisionInvalid
 	}
 	if len(normalized.DataCategories) == 0 {
@@ -108,11 +121,25 @@ func normalizePendingEgressDecision(input *PendingEgressDecision) (*PendingEgres
 		}
 		previousCategory = order
 	}
-	endpoint, err := backendegress.ParseKeyedEndpoint(normalized.Endpoint)
-	if err != nil ||
-		endpoint.Canonical != normalized.Endpoint ||
-		endpoint.Host != normalized.EndpointHost {
-		return nil, ErrEgressDecisionInvalid
+	if normalized.Endpoint != "" {
+		endpoint, err := backendegress.ParseKeyedEndpoint(normalized.Endpoint)
+		if err != nil ||
+			endpoint.Canonical != normalized.Endpoint ||
+			endpoint.Host != normalized.EndpointHost {
+			return nil, ErrEgressDecisionInvalid
+		}
+	}
+	for index, destination := range normalized.RemoteMCPServers {
+		if destination.ServerName == "" ||
+			(index > 0 && normalized.RemoteMCPServers[index-1].ServerName == destination.ServerName) {
+			return nil, ErrEgressDecisionInvalid
+		}
+		endpoint, err := backendegress.ParseKeyedEndpoint(destination.Endpoint)
+		if err != nil ||
+			endpoint.Canonical != destination.Endpoint ||
+			endpoint.Host != destination.EndpointHost {
+			return nil, ErrEgressDecisionInvalid
+		}
 	}
 	if _, err := time.Parse(time.RFC3339Nano, normalized.ConsentGrantedAt); err != nil {
 		return nil, ErrEgressDecisionInvalid
@@ -136,7 +163,11 @@ func clonePendingEgressDecision(input *PendingEgressDecision) *PendingEgressDeci
 	cloned := *input
 	cloned.DataCategories = append([]string(nil), input.DataCategories...)
 	cloned.SelectedTools = append([]string(nil), input.SelectedTools...)
+	cloned.RemoteMCPServers = append([]RemoteMCPServerEgress{}, input.RemoteMCPServers...)
 	slices.Sort(cloned.SelectedTools)
+	slices.SortFunc(cloned.RemoteMCPServers, func(left, right RemoteMCPServerEgress) int {
+		return strings.Compare(left.ServerName, right.ServerName)
+	})
 	return &cloned
 }
 
@@ -198,6 +229,10 @@ func insertRunEgressDecisionTx(ctx context.Context, tx *sql.Tx, runID string, pe
 	if err != nil {
 		return RunEgressDecision{}, err
 	}
+	remoteMCPServersJSON, err := json.Marshal(pending.RemoteMCPServers)
+	if err != nil {
+		return RunEgressDecision{}, err
+	}
 	decision := RunEgressDecision{
 		DecisionID:                ids.New("egress"),
 		RunID:                     runID,
@@ -217,6 +252,7 @@ func insertRunEgressDecisionTx(ctx context.Context, tx *sql.Tx, runID string, pe
 		RecallApplicable:          pending.RecallApplicable,
 		MemoryProfileApplicable:   pending.MemoryProfileApplicable,
 		ConsentGrantedAt:          pending.ConsentGrantedAt,
+		RemoteMCPServers:          append([]RemoteMCPServerEgress{}, pending.RemoteMCPServers...),
 	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO run_egress_decisions (
@@ -225,8 +261,8 @@ func insertRunEgressDecisionTx(ctx context.Context, tx *sql.Tx, runID string, pe
 			external_credential_ref_hash,
 			endpoint, endpoint_host, data_categories_json, selected_tools_json,
 			skill_snapshot_fingerprint, recall_applicable,
-			memory_profile_applicable, consent_granted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			memory_profile_applicable, consent_granted_at, remote_mcp_servers_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		decision.DecisionID,
 		decision.Version,
@@ -246,6 +282,7 @@ func insertRunEgressDecisionTx(ctx context.Context, tx *sql.Tx, runID string, pe
 		decision.RecallApplicable,
 		decision.MemoryProfileApplicable,
 		decision.ConsentGrantedAt,
+		string(remoteMCPServersJSON),
 	)
 	if err != nil {
 		if isUniqueViolation(err) &&
@@ -260,14 +297,14 @@ func insertRunEgressDecisionTx(ctx context.Context, tx *sql.Tx, runID string, pe
 func (r *Repository) GetRunEgressDecision(ctx context.Context, runID string) (RunEgressDecision, error) {
 	var decision RunEgressDecision
 	var externalAgentID sql.NullString
-	var categoriesJSON, toolsJSON string
+	var categoriesJSON, toolsJSON, remoteMCPServersJSON string
 	err := r.db.QueryRowContext(ctx, `
 		SELECT decision_id, run_id, decision_version, challenge_nonce,
 			challenge_fingerprint, request_digest, provider, model_name, external_agent_id,
 			external_credential_ref_hash,
 			endpoint, endpoint_host, data_categories_json, selected_tools_json,
 			skill_snapshot_fingerprint, recall_applicable,
-			memory_profile_applicable, consent_granted_at
+			memory_profile_applicable, consent_granted_at, remote_mcp_servers_json
 		FROM run_egress_decisions
 		WHERE run_id = ?
 	`, runID).Scan(
@@ -289,6 +326,7 @@ func (r *Repository) GetRunEgressDecision(ctx context.Context, runID string) (Ru
 		&decision.RecallApplicable,
 		&decision.MemoryProfileApplicable,
 		&decision.ConsentGrantedAt,
+		&remoteMCPServersJSON,
 	)
 	if err != nil {
 		return RunEgressDecision{}, err
@@ -303,7 +341,37 @@ func (r *Repository) GetRunEgressDecision(ctx context.Context, runID string) (Ru
 	if err := json.Unmarshal([]byte(toolsJSON), &decision.SelectedTools); err != nil {
 		return RunEgressDecision{}, err
 	}
+	if err := json.Unmarshal([]byte(remoteMCPServersJSON), &decision.RemoteMCPServers); err != nil {
+		return RunEgressDecision{}, err
+	}
 	return decision, nil
+}
+
+func (r *Repository) RunAllowsRemoteMCP(
+	ctx context.Context,
+	runID string,
+	serverName string,
+	endpoint string,
+	toolName string,
+) (bool, error) {
+	decision, err := r.GetRunEgressDecision(ctx, runID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !slices.Contains(decision.SelectedTools, serverName+"/"+toolName) ||
+		!slices.Contains(decision.DataCategories, "EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS") ||
+		!slices.Contains(decision.DataCategories, "EGRESS_DATA_CATEGORY_TOOL_RESULTS") {
+		return false, nil
+	}
+	for _, destination := range decision.RemoteMCPServers {
+		if destination.ServerName == serverName && destination.Endpoint == endpoint {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func EnqueueRequestFingerprint(input EnqueueUserMessageInput) (string, error) {

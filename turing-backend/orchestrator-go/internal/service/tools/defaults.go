@@ -1,6 +1,9 @@
 package tools
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 type policyKey struct {
 	serverName string
@@ -31,10 +34,33 @@ func DefaultPolicyFor(serverName string, toolName string) Policy {
 	if permanentlyDisabled(serverName, toolName) {
 		return PolicyDisabled
 	}
+
 	if policy, ok := seedPolicies[policyKey{serverName: serverName, toolName: toolName}]; ok {
 		return policy
 	}
 	return PolicyApprovalRequired
+}
+
+func BundledServerForTool(toolName string) (string, bool) {
+	switch {
+	case strings.HasPrefix(toolName, "system."):
+		return "system", true
+	case strings.HasPrefix(toolName, "files."):
+		return "files", true
+	case toolName == "skills_list" || toolName == "skill_view":
+		return "skills", true
+	}
+
+	for key := range seedPolicies {
+		if key.toolName == toolName {
+			return key.serverName, true
+		}
+	}
+	return "", false
+}
+
+func BundledToolRequiresApproval(serverName string, toolName string) bool {
+	return seedPolicies[policyKey{serverName: serverName, toolName: toolName}] == PolicyApprovalRequired
 }
 
 func permanentlyDisabled(serverName string, toolName string) bool {

@@ -6,6 +6,7 @@ import '../models/external_agent.dart';
 import '../models/integration.dart';
 import '../models/automation.dart';
 import '../models/message.dart';
+import '../models/mcp_server.dart';
 import '../models/remote_egress.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
@@ -116,6 +117,60 @@ abstract class TuringApi implements RemoteEgressApi {
   /// Every tool the backend has discovered from its MCP servers, with the
   /// approval policy currently attached to each.
   Future<List<ToolDescriptor>> listTools();
+
+  Future<McpRegistrySnapshot> listMcpServers() async {
+    final tools = await listTools();
+    final grouped = <String, List<ToolDescriptor>>{};
+    for (final tool in tools) {
+      grouped.putIfAbsent(tool.serverName, () => []).add(tool);
+    }
+    return McpRegistrySnapshot(
+      servers: [
+        for (final entry in grouped.entries)
+          McpServer(
+            serverId: entry.key,
+            name: entry.key,
+            transport: 'http',
+            url: '',
+            tier: McpServerTier.unspecified,
+            enabled: true,
+            liveness: McpServerLiveness.unknown,
+            statusMessage: '',
+            sandboxConfined: false,
+            tools: entry.value,
+          ),
+      ],
+      unsupported: const [],
+    );
+  }
+
+  Future<McpServer> setMcpServerEnabled({
+    required String serverId,
+    required bool enabled,
+  }) {
+    throw const TuringApiException(
+      code: 'mcp_registry_unsupported',
+      message: 'This client cannot update MCP servers',
+    );
+  }
+
+  Future<ToolDescriptor> updateMcpToolPolicy({
+    required String serverId,
+    required String toolName,
+    required ToolPolicy policy,
+  }) {
+    throw const TuringApiException(
+      code: 'mcp_registry_unsupported',
+      message: 'This client cannot update MCP tool policy',
+    );
+  }
+
+  Future<void> deleteMcpServer({required String serverId}) {
+    throw const TuringApiException(
+      code: 'mcp_registry_unsupported',
+      message: 'This client cannot delete MCP servers',
+    );
+  }
 
   /// The agents the backend can route a run to.
   Future<List<AgentDescriptor>> listAgents();

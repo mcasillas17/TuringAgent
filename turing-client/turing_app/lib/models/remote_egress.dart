@@ -24,7 +24,11 @@ class RemoteEgressDisclosure {
     required List<EgressDataCategory> dataCategories,
     required this.expiresAt,
     this.externalAgentId = '',
-  }) : dataCategories = List.unmodifiable(dataCategories);
+    List<RemoteMcpDestination> remoteMcpServers = const [],
+    List<String> selectedTools = const [],
+  }) : dataCategories = List.unmodifiable(dataCategories),
+       remoteMcpServers = List.unmodifiable(remoteMcpServers),
+       selectedTools = List.unmodifiable(selectedTools);
 
   final String challenge;
   final String provider;
@@ -33,7 +37,21 @@ class RemoteEgressDisclosure {
   final String endpointHost;
   final String externalAgentId;
   final List<EgressDataCategory> dataCategories;
+  final List<RemoteMcpDestination> remoteMcpServers;
+  final List<String> selectedTools;
   final DateTime expiresAt;
+}
+
+class RemoteMcpDestination {
+  const RemoteMcpDestination({
+    required this.serverName,
+    required this.endpoint,
+    required this.endpointHost,
+  });
+
+  final String serverName;
+  final String endpoint;
+  final String endpointHost;
 }
 
 class RemoteEgressConsent {

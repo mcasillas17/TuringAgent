@@ -1443,6 +1443,50 @@ func (x *RuntimeShutdownRequested) GetReason() string {
 	return ""
 }
 
+type RuntimeMcpRegistryChanged struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	RegistrationId string                 `protobuf:"bytes,1,opt,name=registration_id,json=registrationId,proto3" json:"registration_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *RuntimeMcpRegistryChanged) Reset() {
+	*x = RuntimeMcpRegistryChanged{}
+	mi := &file_turing_v1_runtime_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RuntimeMcpRegistryChanged) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RuntimeMcpRegistryChanged) ProtoMessage() {}
+
+func (x *RuntimeMcpRegistryChanged) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_runtime_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RuntimeMcpRegistryChanged.ProtoReflect.Descriptor instead.
+func (*RuntimeMcpRegistryChanged) Descriptor() ([]byte, []int) {
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *RuntimeMcpRegistryChanged) GetRegistrationId() string {
+	if x != nil {
+		return x.RegistrationId
+	}
+	return ""
+}
+
 type RuntimeCommand struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Command:
@@ -1453,6 +1497,7 @@ type RuntimeCommand struct {
 	//	*RuntimeCommand_ApprovalUpdated
 	//	*RuntimeCommand_ShutdownRequested
 	//	*RuntimeCommand_ToolPolicyDecision
+	//	*RuntimeCommand_McpRegistryChanged
 	Command       isRuntimeCommand_Command `protobuf_oneof:"command"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1460,7 +1505,7 @@ type RuntimeCommand struct {
 
 func (x *RuntimeCommand) Reset() {
 	*x = RuntimeCommand{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[17]
+	mi := &file_turing_v1_runtime_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1472,7 +1517,7 @@ func (x *RuntimeCommand) String() string {
 func (*RuntimeCommand) ProtoMessage() {}
 
 func (x *RuntimeCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[17]
+	mi := &file_turing_v1_runtime_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1485,7 +1530,7 @@ func (x *RuntimeCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeCommand.ProtoReflect.Descriptor instead.
 func (*RuntimeCommand) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{17}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *RuntimeCommand) GetCommand() isRuntimeCommand_Command {
@@ -1549,6 +1594,15 @@ func (x *RuntimeCommand) GetToolPolicyDecision() *ToolPolicyDecision {
 	return nil
 }
 
+func (x *RuntimeCommand) GetMcpRegistryChanged() *RuntimeMcpRegistryChanged {
+	if x != nil {
+		if x, ok := x.Command.(*RuntimeCommand_McpRegistryChanged); ok {
+			return x.McpRegistryChanged
+		}
+	}
+	return nil
+}
+
 type isRuntimeCommand_Command interface {
 	isRuntimeCommand_Command()
 }
@@ -1577,6 +1631,10 @@ type RuntimeCommand_ToolPolicyDecision struct {
 	ToolPolicyDecision *ToolPolicyDecision `protobuf:"bytes,6,opt,name=tool_policy_decision,json=toolPolicyDecision,proto3,oneof"`
 }
 
+type RuntimeCommand_McpRegistryChanged struct {
+	McpRegistryChanged *RuntimeMcpRegistryChanged `protobuf:"bytes,7,opt,name=mcp_registry_changed,json=mcpRegistryChanged,proto3,oneof"`
+}
+
 func (*RuntimeCommand_WorkerAccepted) isRuntimeCommand_Command() {}
 
 func (*RuntimeCommand_RunAssigned) isRuntimeCommand_Command() {}
@@ -1588,6 +1646,8 @@ func (*RuntimeCommand_ApprovalUpdated) isRuntimeCommand_Command() {}
 func (*RuntimeCommand_ShutdownRequested) isRuntimeCommand_Command() {}
 
 func (*RuntimeCommand_ToolPolicyDecision) isRuntimeCommand_Command() {}
+
+func (*RuntimeCommand_McpRegistryChanged) isRuntimeCommand_Command() {}
 
 var File_turing_v1_runtime_proto protoreflect.FileDescriptor
 
@@ -1704,14 +1764,17 @@ const file_turing_v1_runtime_proto_rawDesc = "" +
 	"\x0eapproval_token\x18\x02 \x01(\tR\rapprovalToken\x12\x16\n" +
 	"\x06status\x18\x03 \x01(\tR\x06status\"2\n" +
 	"\x18RuntimeShutdownRequested\x12\x16\n" +
-	"\x06reason\x18\x01 \x01(\tR\x06reason\"\xe2\x03\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\"D\n" +
+	"\x19RuntimeMcpRegistryChanged\x12'\n" +
+	"\x0fregistration_id\x18\x01 \x01(\tR\x0eregistrationId\"\xbc\x04\n" +
 	"\x0eRuntimeCommand\x12K\n" +
 	"\x0fworker_accepted\x18\x01 \x01(\v2 .turing.v1.RuntimeWorkerAcceptedH\x00R\x0eworkerAccepted\x128\n" +
 	"\frun_assigned\x18\x02 \x01(\v2\x13.turing.v1.AgentJobH\x00R\vrunAssigned\x12E\n" +
 	"\rrun_cancelled\x18\x03 \x01(\v2\x1e.turing.v1.RuntimeRunCancelledH\x00R\frunCancelled\x12N\n" +
 	"\x10approval_updated\x18\x04 \x01(\v2!.turing.v1.RuntimeApprovalUpdatedH\x00R\x0fapprovalUpdated\x12T\n" +
 	"\x12shutdown_requested\x18\x05 \x01(\v2#.turing.v1.RuntimeShutdownRequestedH\x00R\x11shutdownRequested\x12Q\n" +
-	"\x14tool_policy_decision\x18\x06 \x01(\v2\x1d.turing.v1.ToolPolicyDecisionH\x00R\x12toolPolicyDecisionB\t\n" +
+	"\x14tool_policy_decision\x18\x06 \x01(\v2\x1d.turing.v1.ToolPolicyDecisionH\x00R\x12toolPolicyDecision\x12X\n" +
+	"\x14mcp_registry_changed\x18\a \x01(\v2$.turing.v1.RuntimeMcpRegistryChangedH\x00R\x12mcpRegistryChangedB\t\n" +
 	"\acommand*\x82\x01\n" +
 	"\x13ToolDiscoveryStatus\x12%\n" +
 	"!TOOL_DISCOVERY_STATUS_UNSPECIFIED\x10\x00\x12\"\n" +
@@ -1733,7 +1796,7 @@ func file_turing_v1_runtime_proto_rawDescGZIP() []byte {
 }
 
 var file_turing_v1_runtime_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_turing_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_turing_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_turing_v1_runtime_proto_goTypes = []any{
 	(ToolDiscoveryStatus)(0),                 // 0: turing.v1.ToolDiscoveryStatus
 	(*AgentJob)(nil),                         // 1: turing.v1.AgentJob
@@ -1753,39 +1816,40 @@ var file_turing_v1_runtime_proto_goTypes = []any{
 	(*RuntimeRunCancelled)(nil),              // 15: turing.v1.RuntimeRunCancelled
 	(*RuntimeApprovalUpdated)(nil),           // 16: turing.v1.RuntimeApprovalUpdated
 	(*RuntimeShutdownRequested)(nil),         // 17: turing.v1.RuntimeShutdownRequested
-	(*RuntimeCommand)(nil),                   // 18: turing.v1.RuntimeCommand
-	nil,                                      // 19: turing.v1.SkillSnapshot.ReferencesEntry
-	(AgentId)(0),                             // 20: turing.v1.AgentId
-	(ModelProvider)(0),                       // 21: turing.v1.ModelProvider
-	(*RunEgressDecision)(nil),                // 22: turing.v1.RunEgressDecision
-	(*structpb.Struct)(nil),                  // 23: google.protobuf.Struct
-	(*ModelCapability)(nil),                  // 24: turing.v1.ModelCapability
-	(*TuringEvent)(nil),                      // 25: turing.v1.TuringEvent
-	(*ToolCallBeacon)(nil),                   // 26: turing.v1.ToolCallBeacon
-	(*ToolPolicyDecision)(nil),               // 27: turing.v1.ToolPolicyDecision
+	(*RuntimeMcpRegistryChanged)(nil),        // 18: turing.v1.RuntimeMcpRegistryChanged
+	(*RuntimeCommand)(nil),                   // 19: turing.v1.RuntimeCommand
+	nil,                                      // 20: turing.v1.SkillSnapshot.ReferencesEntry
+	(AgentId)(0),                             // 21: turing.v1.AgentId
+	(ModelProvider)(0),                       // 22: turing.v1.ModelProvider
+	(*RunEgressDecision)(nil),                // 23: turing.v1.RunEgressDecision
+	(*structpb.Struct)(nil),                  // 24: google.protobuf.Struct
+	(*ModelCapability)(nil),                  // 25: turing.v1.ModelCapability
+	(*TuringEvent)(nil),                      // 26: turing.v1.TuringEvent
+	(*ToolCallBeacon)(nil),                   // 27: turing.v1.ToolCallBeacon
+	(*ToolPolicyDecision)(nil),               // 28: turing.v1.ToolPolicyDecision
 }
 var file_turing_v1_runtime_proto_depIdxs = []int32{
-	20, // 0: turing.v1.AgentJob.agent_id:type_name -> turing.v1.AgentId
-	21, // 1: turing.v1.AgentJob.model_provider:type_name -> turing.v1.ModelProvider
+	21, // 0: turing.v1.AgentJob.agent_id:type_name -> turing.v1.AgentId
+	22, // 1: turing.v1.AgentJob.model_provider:type_name -> turing.v1.ModelProvider
 	3,  // 2: turing.v1.AgentJob.skills:type_name -> turing.v1.SkillSnapshot
 	2,  // 3: turing.v1.AgentJob.external_agent:type_name -> turing.v1.ExternalAgentTarget
-	22, // 4: turing.v1.AgentJob.egress_decision:type_name -> turing.v1.RunEgressDecision
-	19, // 5: turing.v1.SkillSnapshot.references:type_name -> turing.v1.SkillSnapshot.ReferencesEntry
-	23, // 6: turing.v1.DiscoveredTool.schema:type_name -> google.protobuf.Struct
-	24, // 7: turing.v1.WorkerCapabilities.models:type_name -> turing.v1.ModelCapability
-	20, // 8: turing.v1.WorkerCapabilities.agent_ids:type_name -> turing.v1.AgentId
+	23, // 4: turing.v1.AgentJob.egress_decision:type_name -> turing.v1.RunEgressDecision
+	20, // 5: turing.v1.SkillSnapshot.references:type_name -> turing.v1.SkillSnapshot.ReferencesEntry
+	24, // 6: turing.v1.DiscoveredTool.schema:type_name -> google.protobuf.Struct
+	25, // 7: turing.v1.WorkerCapabilities.models:type_name -> turing.v1.ModelCapability
+	21, // 8: turing.v1.WorkerCapabilities.agent_ids:type_name -> turing.v1.AgentId
 	4,  // 9: turing.v1.WorkerCapabilities.tools:type_name -> turing.v1.DiscoveredTool
-	20, // 10: turing.v1.RuntimeWorkerReady.agent_id:type_name -> turing.v1.AgentId
+	21, // 10: turing.v1.RuntimeWorkerReady.agent_id:type_name -> turing.v1.AgentId
 	4,  // 11: turing.v1.RuntimeWorkerReady.tools:type_name -> turing.v1.DiscoveredTool
 	0,  // 12: turing.v1.RuntimeWorkerReady.tool_discovery_status:type_name -> turing.v1.ToolDiscoveryStatus
 	5,  // 13: turing.v1.RuntimeWorkerReady.capabilities:type_name -> turing.v1.WorkerCapabilities
 	5,  // 14: turing.v1.RuntimeWorkerCapabilitiesUpdated.capabilities:type_name -> turing.v1.WorkerCapabilities
-	23, // 15: turing.v1.RuntimeRunCompleted.usage:type_name -> google.protobuf.Struct
+	24, // 15: turing.v1.RuntimeRunCompleted.usage:type_name -> google.protobuf.Struct
 	9,  // 16: turing.v1.RuntimeRunCompleted.token_usage:type_name -> turing.v1.RunTokenUsage
 	6,  // 17: turing.v1.RuntimeUpdate.worker_ready:type_name -> turing.v1.RuntimeWorkerReady
 	8,  // 18: turing.v1.RuntimeUpdate.heartbeat:type_name -> turing.v1.RuntimeHeartbeat
-	25, // 19: turing.v1.RuntimeUpdate.event:type_name -> turing.v1.TuringEvent
-	26, // 20: turing.v1.RuntimeUpdate.tool_beacon:type_name -> turing.v1.ToolCallBeacon
+	26, // 19: turing.v1.RuntimeUpdate.event:type_name -> turing.v1.TuringEvent
+	27, // 20: turing.v1.RuntimeUpdate.tool_beacon:type_name -> turing.v1.ToolCallBeacon
 	10, // 21: turing.v1.RuntimeUpdate.run_completed:type_name -> turing.v1.RuntimeRunCompleted
 	11, // 22: turing.v1.RuntimeUpdate.run_failed:type_name -> turing.v1.RuntimeRunFailed
 	12, // 23: turing.v1.RuntimeUpdate.run_cancelled_ack:type_name -> turing.v1.RuntimeCancelledAck
@@ -1795,14 +1859,15 @@ var file_turing_v1_runtime_proto_depIdxs = []int32{
 	15, // 27: turing.v1.RuntimeCommand.run_cancelled:type_name -> turing.v1.RuntimeRunCancelled
 	16, // 28: turing.v1.RuntimeCommand.approval_updated:type_name -> turing.v1.RuntimeApprovalUpdated
 	17, // 29: turing.v1.RuntimeCommand.shutdown_requested:type_name -> turing.v1.RuntimeShutdownRequested
-	27, // 30: turing.v1.RuntimeCommand.tool_policy_decision:type_name -> turing.v1.ToolPolicyDecision
-	13, // 31: turing.v1.RuntimeService.ConnectWorker:input_type -> turing.v1.RuntimeUpdate
-	18, // 32: turing.v1.RuntimeService.ConnectWorker:output_type -> turing.v1.RuntimeCommand
-	32, // [32:33] is the sub-list for method output_type
-	31, // [31:32] is the sub-list for method input_type
-	31, // [31:31] is the sub-list for extension type_name
-	31, // [31:31] is the sub-list for extension extendee
-	0,  // [0:31] is the sub-list for field type_name
+	28, // 30: turing.v1.RuntimeCommand.tool_policy_decision:type_name -> turing.v1.ToolPolicyDecision
+	18, // 31: turing.v1.RuntimeCommand.mcp_registry_changed:type_name -> turing.v1.RuntimeMcpRegistryChanged
+	13, // 32: turing.v1.RuntimeService.ConnectWorker:input_type -> turing.v1.RuntimeUpdate
+	19, // 33: turing.v1.RuntimeService.ConnectWorker:output_type -> turing.v1.RuntimeCommand
+	33, // [33:34] is the sub-list for method output_type
+	32, // [32:33] is the sub-list for method input_type
+	32, // [32:32] is the sub-list for extension type_name
+	32, // [32:32] is the sub-list for extension extendee
+	0,  // [0:32] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_runtime_proto_init() }
@@ -1824,13 +1889,14 @@ func file_turing_v1_runtime_proto_init() {
 		(*RuntimeUpdate_RunCancelledAck)(nil),
 		(*RuntimeUpdate_WorkerCapabilitiesUpdated)(nil),
 	}
-	file_turing_v1_runtime_proto_msgTypes[17].OneofWrappers = []any{
+	file_turing_v1_runtime_proto_msgTypes[18].OneofWrappers = []any{
 		(*RuntimeCommand_WorkerAccepted)(nil),
 		(*RuntimeCommand_RunAssigned)(nil),
 		(*RuntimeCommand_RunCancelled)(nil),
 		(*RuntimeCommand_ApprovalUpdated)(nil),
 		(*RuntimeCommand_ShutdownRequested)(nil),
 		(*RuntimeCommand_ToolPolicyDecision)(nil),
+		(*RuntimeCommand_McpRegistryChanged)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1838,7 +1904,7 @@ func file_turing_v1_runtime_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_runtime_proto_rawDesc), len(file_turing_v1_runtime_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   19,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

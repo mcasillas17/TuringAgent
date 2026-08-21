@@ -197,6 +197,10 @@ message RuntimeShutdownRequested {
   string reason = 1;
 }
 
+message RuntimeMcpRegistryChanged {
+  string registration_id = 1;
+}
+
 message RuntimeCommand {
   oneof command {
     RuntimeWorkerAccepted worker_accepted = 1;
@@ -205,6 +209,7 @@ message RuntimeCommand {
     RuntimeApprovalUpdated approval_updated = 4;
     RuntimeShutdownRequested shutdown_requested = 5;
     ToolPolicyDecision tool_policy_decision = 6;
+    RuntimeMcpRegistryChanged mcp_registry_changed = 7;
   }
 }
 

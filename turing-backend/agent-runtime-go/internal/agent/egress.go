@@ -11,19 +11,20 @@ import (
 )
 
 func validateEgressDecisionShape(job *turingv1.AgentJob) error {
-	remote := job.GetModelProvider() == turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE ||
+	providerRemote := job.GetModelProvider() == turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE ||
 		job.GetExternalAgent() != nil
 	decision := job.GetEgressDecision()
-	if !remote {
-		if decision != nil {
-			return errors.New("local run carries a remote egress decision")
+	if decision == nil {
+		if providerRemote {
+			return errors.New("remote run has no egress decision")
 		}
 		return nil
 	}
-	if decision == nil {
-		return errors.New("remote run has no egress decision")
+	hasRemoteMCP := len(decision.GetRemoteMcpServers()) > 0
+	if !providerRemote && !hasRemoteMCP {
+		return errors.New("local run carries an inapplicable egress decision")
 	}
-	if job.GetModelProvider() != turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE {
+	if providerRemote && job.GetModelProvider() != turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE {
 		return errors.New("external agent run is not routed through the remote provider")
 	}
 	if decision.GetVersion() != backendegress.DecisionVersion ||
@@ -32,25 +33,54 @@ func validateEgressDecisionShape(job *turingv1.AgentJob) error {
 		decision.GetRequestDigest() == "" ||
 		decision.GetProvider() != job.GetModelProvider() ||
 		decision.GetModel() != job.GetModel() ||
-		decision.GetEndpoint() == "" ||
-		decision.GetEndpointHost() == "" ||
 		decision.GetConsentGrantedAt() == nil ||
 		decision.GetSkillSnapshotFingerprint() == "" ||
 		!slices.Equal(decision.GetSelectedTools(), job.GetSelectedTools()) {
 		return errors.New("remote run decision does not match its frozen job")
 	}
+	if providerRemote {
+		if decision.GetEndpoint() == "" || decision.GetEndpointHost() == "" {
+			return errors.New("remote provider decision has no endpoint")
+		}
+	} else if decision.GetEndpoint() != "" || decision.GetEndpointHost() != "" ||
+		decision.GetExternalAgentId() != "" || decision.GetExternalCredentialRefHash() != "" {
+		return errors.New("local-provider decision contains a remote model destination")
+	}
 	skillFingerprint, err := runtimeSkillSnapshotFingerprint(job.GetSkills())
 	if err != nil || skillFingerprint != decision.GetSkillSnapshotFingerprint() {
 		return errors.New("remote run skill snapshot differs from the egress decision")
 	}
-	recallApplicable := job.GetExternalAgent() == nil
+	recallApplicable := providerRemote && job.GetExternalAgent() == nil
 	if decision.GetRecallApplicable() != recallApplicable ||
 		decision.GetMemoryProfileApplicable() {
 		return errors.New("remote run context flags differ from the egress decision")
 	}
-	endpoint, err := backendegress.ParseKeyedEndpoint(decision.GetEndpoint())
-	if err != nil || endpoint.Canonical != decision.GetEndpoint() || endpoint.Host != decision.GetEndpointHost() {
-		return errors.New("remote run decision endpoint is invalid")
+	if providerRemote {
+		endpoint, err := backendegress.ParseKeyedEndpoint(decision.GetEndpoint())
+		if err != nil || endpoint.Canonical != decision.GetEndpoint() || endpoint.Host != decision.GetEndpointHost() {
+			return errors.New("remote run decision endpoint is invalid")
+		}
+	}
+	for index, destination := range decision.GetRemoteMcpServers() {
+		if destination.GetServerName() == "" ||
+			(index > 0 && decision.GetRemoteMcpServers()[index-1].GetServerName() >= destination.GetServerName()) {
+			return errors.New("remote MCP destinations are invalid or unsorted")
+		}
+		endpoint, err := backendegress.ParseKeyedEndpoint(destination.GetEndpoint())
+		if err != nil || endpoint.Canonical != destination.GetEndpoint() || endpoint.Host != destination.GetEndpointHost() {
+			return errors.New("remote MCP destination endpoint is invalid")
+		}
+		hasSelectedTool := false
+		for _, tool := range job.GetSelectedTools() {
+			if len(tool) > len(destination.GetServerName()) &&
+				tool[:len(destination.GetServerName())+1] == destination.GetServerName()+"/" {
+				hasSelectedTool = true
+				break
+			}
+		}
+		if !hasSelectedTool {
+			return errors.New("remote MCP destination has no selected tool")
+		}
 	}
 
 	present := make(map[turingv1.EgressDataCategory]struct{}, len(decision.GetDataCategories()))
@@ -64,20 +94,29 @@ func validateEgressDecisionShape(job *turingv1.AgentJob) error {
 		}
 		present[category] = struct{}{}
 	}
-	required := []turingv1.EgressDataCategory{
-		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CURRENT_MESSAGE,
-		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY,
-		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT,
+	required := make([]turingv1.EgressDataCategory, 0)
+	if providerRemote {
+		required = append(required,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CURRENT_MESSAGE,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT)
+		if job.GetExternalAgent() == nil {
+			required = append(required, turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL)
+		}
 	}
-	if job.GetExternalAgent() == nil {
-		required = append(required, turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL)
-	}
-	if len(job.GetSelectedTools()) > 0 {
+	if providerRemote && len(job.GetSelectedTools()) > 0 {
 		required = append(required,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_SCHEMAS,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_RESULTS)
 	}
+	if hasRemoteMCP {
+		required = append(required,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_RESULTS)
+	}
+	slices.Sort(required)
+	required = slices.Compact(required)
 	for _, category := range required {
 		if _, ok := present[category]; !ok {
 			return fmt.Errorf("remote run decision is missing %s", category.String())

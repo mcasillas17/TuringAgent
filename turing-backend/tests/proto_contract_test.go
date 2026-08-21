@@ -170,6 +170,7 @@ func TestRemoteEgressProtoContract(t *testing.T) {
 		if categories == nil || categories.Values().ByName(name) == nil {
 			t.Fatalf("EgressDataCategory is missing %s", name)
 		}
+
 	}
 
 	disclosure := common.Messages().ByName("RemoteEgressDisclosure")
@@ -181,6 +182,13 @@ func TestRemoteEgressProtoContract(t *testing.T) {
 	assertProtoField(t, disclosure, "external_agent_id", 6, protoreflect.StringKind, false, "")
 	assertProtoField(t, disclosure, "data_categories", 7, protoreflect.EnumKind, true, "")
 	assertProtoField(t, disclosure, "expires_at", 8, protoreflect.MessageKind, false, "google.protobuf.Timestamp")
+	assertProtoField(t, disclosure, "remote_mcp_servers", 9, protoreflect.MessageKind, true, "turing.v1.RemoteMcpEgressDestination")
+	assertProtoField(t, disclosure, "selected_tools", 10, protoreflect.StringKind, true, "")
+
+	remoteMCP := common.Messages().ByName("RemoteMcpEgressDestination")
+	assertProtoField(t, remoteMCP, "server_name", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, remoteMCP, "endpoint", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, remoteMCP, "endpoint_host", 3, protoreflect.StringKind, false, "")
 
 	consent := common.Messages().ByName("RemoteEgressConsent")
 	assertProtoField(t, consent, "challenge", 1, protoreflect.StringKind, false, "")
@@ -204,6 +212,7 @@ func TestRemoteEgressProtoContract(t *testing.T) {
 	assertProtoField(t, decision, "memory_profile_applicable", 14, protoreflect.BoolKind, false, "")
 	assertProtoField(t, decision, "external_credential_ref_hash", 15, protoreflect.StringKind, false, "")
 	assertProtoField(t, decision, "request_digest", 16, protoreflect.StringKind, false, "")
+	assertProtoField(t, decision, "remote_mcp_servers", 17, protoreflect.MessageKind, true, "turing.v1.RemoteMcpEgressDestination")
 
 	provider := common.Messages().ByName("ProviderConfig")
 	assertProtoField(t, provider, "remote_endpoint", 5, protoreflect.StringKind, false, "")
@@ -241,6 +250,41 @@ func TestRemoteEgressProtoContract(t *testing.T) {
 	assertProtoField(t, auditPayload, "egress_data_categories", 23, protoreflect.EnumKind, true, "")
 	assertProtoField(t, auditPayload, "egress_decision_version", 24, protoreflect.Int32Kind, false, "")
 	assertProtoField(t, auditPayload, "egress_consent_granted_at", 25, protoreflect.MessageKind, false, "google.protobuf.Timestamp")
+}
+
+func TestMCPRegistryProtoContract(t *testing.T) {
+	file := turingv1.File_turing_v1_mcp_proto
+	server := file.Messages().ByName("McpServerDescriptor")
+	assertProtoField(t, server, "server_id", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, server, "name", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, server, "transport", 3, protoreflect.StringKind, false, "")
+	assertProtoField(t, server, "url", 4, protoreflect.StringKind, false, "")
+	assertProtoField(t, server, "tier", 5, protoreflect.EnumKind, false, "")
+	assertProtoField(t, server, "enabled", 6, protoreflect.BoolKind, false, "")
+	assertProtoField(t, server, "liveness", 7, protoreflect.EnumKind, false, "")
+	assertProtoField(t, server, "status_message", 8, protoreflect.StringKind, false, "")
+	assertProtoField(t, server, "sandbox_confined", 9, protoreflect.BoolKind, false, "")
+	assertProtoField(t, server, "tools", 10, protoreflect.MessageKind, true, "turing.v1.McpToolDescriptor")
+	if server.Fields().ByName("token") != nil || server.Fields().ByName("sealed_token") != nil {
+		t.Fatal("McpServerDescriptor must not expose server credentials")
+	}
+	tool := file.Messages().ByName("McpToolDescriptor")
+	assertProtoField(t, tool, "present", 5, protoreflect.BoolKind, false, "")
+
+	service := file.Services().ByName("McpRegistryService")
+	for _, name := range []protoreflect.Name{
+		"ListMcpServers",
+		"SetMcpServerEnabled",
+		"UpdateMcpToolPolicy",
+		"DeleteMcpServer",
+		"CallRegisteredMcpTool",
+	} {
+		if service == nil || service.Methods().ByName(name) == nil {
+			t.Fatalf("McpRegistryService.%s is missing", name)
+		}
+	}
+	command := turingv1.File_turing_v1_runtime_proto.Messages().ByName("RuntimeCommand")
+	assertProtoField(t, command, "mcp_registry_changed", 7, protoreflect.MessageKind, false, "turing.v1.RuntimeMcpRegistryChanged")
 }
 
 func assertProtoField(t *testing.T, message protoreflect.MessageDescriptor, name protoreflect.Name, number protoreflect.FieldNumber, kind protoreflect.Kind, repeated bool, messageType protoreflect.FullName) {

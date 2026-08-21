@@ -62,27 +62,35 @@ type egressContext struct {
 	SkillSnapshotFingerprint  string
 	RecallApplicable          bool
 	MemoryProfileApplicable   bool
+	RemoteMCPServers          []repository.RemoteMCPServerEgress
+}
+
+type remoteMCPChallengeDestination struct {
+	ServerName   string `json:"server_name"`
+	Endpoint     string `json:"endpoint"`
+	EndpointHost string `json:"endpoint_host"`
 }
 
 type egressChallengePayload struct {
-	Version                   int      `json:"version"`
-	Nonce                     string   `json:"nonce"`
-	IssuedAtUnixNano          int64    `json:"issued_at_unix_nano"`
-	ExpiresAtUnixNano         int64    `json:"expires_at_unix_nano"`
-	SessionID                 string   `json:"session_id"`
-	IdempotencyKey            string   `json:"idempotency_key"`
-	RequestDigest             string   `json:"request_digest"`
-	Provider                  string   `json:"provider"`
-	Model                     string   `json:"model"`
-	ExternalAgentID           string   `json:"external_agent_id,omitempty"`
-	ExternalCredentialRefHash string   `json:"external_credential_ref_hash,omitempty"`
-	Endpoint                  string   `json:"endpoint"`
-	EndpointHost              string   `json:"endpoint_host"`
-	DataCategories            []int32  `json:"data_categories"`
-	SelectedTools             []string `json:"selected_tools"`
-	SkillSnapshotFingerprint  string   `json:"skill_snapshot_fingerprint"`
-	RecallApplicable          bool     `json:"recall_applicable"`
-	MemoryProfileApplicable   bool     `json:"memory_profile_applicable"`
+	Version                   int                             `json:"version"`
+	Nonce                     string                          `json:"nonce"`
+	IssuedAtUnixNano          int64                           `json:"issued_at_unix_nano"`
+	ExpiresAtUnixNano         int64                           `json:"expires_at_unix_nano"`
+	SessionID                 string                          `json:"session_id"`
+	IdempotencyKey            string                          `json:"idempotency_key"`
+	RequestDigest             string                          `json:"request_digest"`
+	Provider                  string                          `json:"provider"`
+	Model                     string                          `json:"model"`
+	ExternalAgentID           string                          `json:"external_agent_id,omitempty"`
+	ExternalCredentialRefHash string                          `json:"external_credential_ref_hash,omitempty"`
+	Endpoint                  string                          `json:"endpoint"`
+	EndpointHost              string                          `json:"endpoint_host"`
+	DataCategories            []int32                         `json:"data_categories"`
+	SelectedTools             []string                        `json:"selected_tools"`
+	SkillSnapshotFingerprint  string                          `json:"skill_snapshot_fingerprint"`
+	RecallApplicable          bool                            `json:"recall_applicable"`
+	MemoryProfileApplicable   bool                            `json:"memory_profile_applicable"`
+	RemoteMCPServers          []remoteMCPChallengeDestination `json:"remote_mcp_servers,omitempty"`
 }
 
 func (s *Server) PrepareRemoteEgress(ctx context.Context, req *turingv1.PrepareRemoteEgressRequest) (*turingv1.PrepareRemoteEgressResponse, error) {
@@ -139,6 +147,7 @@ func (s *Server) PrepareRemoteEgress(ctx context.Context, req *turingv1.PrepareR
 		SkillSnapshotFingerprint:  resolved.SkillSnapshotFingerprint,
 		RecallApplicable:          resolved.RecallApplicable,
 		MemoryProfileApplicable:   resolved.MemoryProfileApplicable,
+		RemoteMCPServers:          toChallengeRemoteMCPServers(resolved.RemoteMCPServers),
 	}
 	challenge, err := s.signEgressChallenge(payload)
 	if err != nil {
@@ -146,14 +155,16 @@ func (s *Server) PrepareRemoteEgress(ctx context.Context, req *turingv1.PrepareR
 	}
 	return &turingv1.PrepareRemoteEgressResponse{
 		Disclosure: &turingv1.RemoteEgressDisclosure{
-			Challenge:       challenge,
-			Provider:        providerToProto(resolved.Provider),
-			Model:           resolved.Model,
-			Endpoint:        resolved.Endpoint,
-			EndpointHost:    resolved.EndpointHost,
-			ExternalAgentId: resolved.ExternalAgentID,
-			DataCategories:  append([]turingv1.EgressDataCategory(nil), resolved.DataCategories...),
-			ExpiresAt:       timestamppb.New(time.Unix(0, payload.ExpiresAtUnixNano).UTC()),
+			Challenge:        challenge,
+			Provider:         providerToProto(resolved.Provider),
+			Model:            resolved.Model,
+			Endpoint:         resolved.Endpoint,
+			EndpointHost:     resolved.EndpointHost,
+			ExternalAgentId:  resolved.ExternalAgentID,
+			DataCategories:   append([]turingv1.EgressDataCategory(nil), resolved.DataCategories...),
+			ExpiresAt:        timestamppb.New(time.Unix(0, payload.ExpiresAtUnixNano).UTC()),
+			RemoteMcpServers: toProtoRemoteMCPServers(resolved.RemoteMCPServers),
+			SelectedTools:    append([]string(nil), resolved.SelectedTools...),
 		},
 	}, nil
 }
@@ -229,6 +240,7 @@ func (s *Server) applyRemoteEgress(
 		SkillSnapshotFingerprint:  payload.SkillSnapshotFingerprint,
 		RecallApplicable:          payload.RecallApplicable,
 		MemoryProfileApplicable:   payload.MemoryProfileApplicable,
+		RemoteMCPServers:          fromChallengeRemoteMCPServers(payload.RemoteMCPServers),
 		ConsentGrantedAt:          repository.FormatTimestamp(s.now().UTC()),
 	}
 	currentModel := input.Model
@@ -380,6 +392,7 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 	resolved := &egressContext{}
 	externalCredentialRef := ""
 	rawEndpoint := ""
+	providerEgress := false
 	agent, routed, err := s.repo.GetSessionAgent(ctx, input.SessionID)
 	if err != nil {
 		return nil, mapSessionError(ctx, err)
@@ -391,6 +404,7 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 		resolved.ExternalCredentialRefHash = backendegress.HashCredentialReference(agent.CredentialRef)
 		rawEndpoint = agent.BaseURL
 		externalCredentialRef = agent.CredentialRef
+		providerEgress = true
 	} else if input.ModelProvider == "openai_compatible" {
 		resolved.Provider = input.ModelProvider
 		resolved.Model = input.Model
@@ -399,8 +413,13 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 		}
 		rawEndpoint = s.egress.OpenAIBaseURL
 		resolved.RecallApplicable = true
+		providerEgress = true
 	} else {
-		return nil, nil
+		resolved.Provider = input.ModelProvider
+		resolved.Model = input.Model
+		if input.ExecutionModel != "" {
+			resolved.Model = input.ExecutionModel
+		}
 	}
 	if len(resolved.Model) == 0 || len(resolved.Model) > maxEgressModelBytes {
 		return nil, status.Error(codes.FailedPrecondition, "remote egress model name is too long")
@@ -417,16 +436,6 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 			return nil, err
 		}
 	}
-	endpoint, parseErr := backendegress.ParseKeyedEndpoint(rawEndpoint)
-	if parseErr != nil {
-		message := "configured OpenAI endpoint is insecure"
-		if routed {
-			message = "configured external agent endpoint is insecure"
-		}
-		return nil, status.Error(codes.FailedPrecondition, message)
-	}
-	resolved.Endpoint = endpoint.Canonical
-	resolved.EndpointHost = endpoint.Host
 	if source, ok := s.runtime.(egressToolSource); ok {
 		resolved.SelectedTools = source.EgressToolNames(route)
 	} else if source, ok := s.runtime.(liveToolSource); ok {
@@ -447,27 +456,53 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 	if selectedToolBytes > maxEgressSelectedToolBytes {
 		return nil, status.Error(codes.FailedPrecondition, "remote egress tool snapshot is too large")
 	}
+	resolved.RemoteMCPServers, err = s.repo.RemoteMCPServersForTools(ctx, resolved.SelectedTools)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, "resolve remote MCP egress failed")
+	}
+	if !providerEgress && len(resolved.RemoteMCPServers) == 0 {
+		return nil, nil
+	}
+	if providerEgress {
+		endpoint, parseErr := backendegress.ParseKeyedEndpoint(rawEndpoint)
+		if parseErr != nil {
+			message := "configured OpenAI endpoint is insecure"
+			if routed {
+				message = "configured external agent endpoint is insecure"
+			}
+			return nil, status.Error(codes.FailedPrecondition, message)
+		}
+		resolved.Endpoint = endpoint.Canonical
+		resolved.EndpointHost = endpoint.Host
+	}
 	resolved.SkillSnapshotFingerprint, err = s.repo.EgressSkillSnapshotFingerprint(ctx)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "resolve remote egress skill context failed")
 	}
-	resolved.DataCategories = []turingv1.EgressDataCategory{
-		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CURRENT_MESSAGE,
-		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY,
+	if providerEgress {
+		resolved.DataCategories = []turingv1.EgressDataCategory{
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CURRENT_MESSAGE,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT,
+		}
 	}
 	if resolved.RecallApplicable {
 		resolved.DataCategories = append(resolved.DataCategories,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL)
 	}
-	resolved.DataCategories = append(resolved.DataCategories,
-		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT)
-	if len(resolved.SelectedTools) > 0 {
+	if providerEgress && len(resolved.SelectedTools) > 0 {
 		resolved.DataCategories = append(resolved.DataCategories,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_SCHEMAS,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_RESULTS)
 	}
+	if len(resolved.RemoteMCPServers) > 0 {
+		resolved.DataCategories = append(resolved.DataCategories,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_RESULTS)
+	}
 	slices.Sort(resolved.DataCategories)
+	resolved.DataCategories = slices.Compact(resolved.DataCategories)
 	return resolved, nil
 }
 
@@ -567,15 +602,23 @@ func validChallengePayload(payload egressChallengePayload) bool {
 		payload.SessionID == "" || len(payload.SessionID) > maxEgressIDBytes ||
 		len(payload.IdempotencyKey) > maxEgressIDBytes ||
 		payload.RequestDigest == "" ||
-		payload.Provider != "openai_compatible" ||
+		(payload.Provider != "openai_compatible" && payload.Provider != "ollama") ||
 		payload.Model == "" || len(payload.Model) > maxEgressModelBytes ||
-		payload.Endpoint == "" || payload.EndpointHost == "" ||
 		(payload.ExternalAgentID != "" && payload.ExternalCredentialRefHash == "") ||
 		(payload.ExternalAgentID == "" && payload.ExternalCredentialRefHash != "") ||
 		payload.ExpiresAtUnixNano <= payload.IssuedAtUnixNano ||
 		len(payload.SelectedTools) > maxEgressTools ||
 		!slices.IsSorted(payload.SelectedTools) ||
 		!slices.IsSorted(payload.DataCategories) {
+		return false
+	}
+	if payload.Provider == "openai_compatible" {
+		if payload.Endpoint == "" || payload.EndpointHost == "" {
+			return false
+		}
+	} else if payload.Endpoint != "" || payload.EndpointHost != "" ||
+		payload.ExternalAgentID != "" || payload.ExternalCredentialRefHash != "" ||
+		len(payload.RemoteMCPServers) == 0 {
 		return false
 	}
 	for index, category := range payload.DataCategories {
@@ -596,8 +639,23 @@ func validChallengePayload(payload egressChallengePayload) bool {
 	if selectedToolBytes > maxEgressSelectedToolBytes {
 		return false
 	}
-	endpoint, err := backendegress.ParseKeyedEndpoint(payload.Endpoint)
-	return err == nil && endpoint.Canonical == payload.Endpoint && endpoint.Host == payload.EndpointHost
+	if payload.Endpoint != "" {
+		endpoint, err := backendegress.ParseKeyedEndpoint(payload.Endpoint)
+		if err != nil || endpoint.Canonical != payload.Endpoint || endpoint.Host != payload.EndpointHost {
+			return false
+		}
+	}
+	for index, destination := range payload.RemoteMCPServers {
+		if destination.ServerName == "" ||
+			(index > 0 && payload.RemoteMCPServers[index-1].ServerName >= destination.ServerName) {
+			return false
+		}
+		endpoint, err := backendegress.ParseKeyedEndpoint(destination.Endpoint)
+		if err != nil || endpoint.Canonical != destination.Endpoint || endpoint.Host != destination.EndpointHost {
+			return false
+		}
+	}
+	return true
 }
 
 func payloadMatchesEgressContext(payload egressChallengePayload, resolved egressContext) bool {
@@ -611,6 +669,7 @@ func payloadMatchesEgressContext(payload egressChallengePayload, resolved egress
 		payload.RecallApplicable == resolved.RecallApplicable &&
 		payload.MemoryProfileApplicable == resolved.MemoryProfileApplicable &&
 		slices.Equal(payload.SelectedTools, resolved.SelectedTools) &&
+		slices.Equal(payload.RemoteMCPServers, toChallengeRemoteMCPServers(resolved.RemoteMCPServers)) &&
 		slices.Equal(payload.DataCategories, categoryNumbers(resolved.DataCategories))
 }
 
@@ -634,7 +693,46 @@ func providerToProto(provider string) turingv1.ModelProvider {
 	if provider == "openai_compatible" {
 		return turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE
 	}
+	if provider == "ollama" {
+		return turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA
+	}
 	return turingv1.ModelProvider_MODEL_PROVIDER_UNSPECIFIED
+}
+
+func toChallengeRemoteMCPServers(destinations []repository.RemoteMCPServerEgress) []remoteMCPChallengeDestination {
+	result := make([]remoteMCPChallengeDestination, len(destinations))
+	for index, destination := range destinations {
+		result[index] = remoteMCPChallengeDestination{
+			ServerName:   destination.ServerName,
+			Endpoint:     destination.Endpoint,
+			EndpointHost: destination.EndpointHost,
+		}
+	}
+	return result
+}
+
+func fromChallengeRemoteMCPServers(destinations []remoteMCPChallengeDestination) []repository.RemoteMCPServerEgress {
+	result := make([]repository.RemoteMCPServerEgress, len(destinations))
+	for index, destination := range destinations {
+		result[index] = repository.RemoteMCPServerEgress{
+			ServerName:   destination.ServerName,
+			Endpoint:     destination.Endpoint,
+			EndpointHost: destination.EndpointHost,
+		}
+	}
+	return result
+}
+
+func toProtoRemoteMCPServers(destinations []repository.RemoteMCPServerEgress) []*turingv1.RemoteMcpEgressDestination {
+	result := make([]*turingv1.RemoteMcpEgressDestination, len(destinations))
+	for index, destination := range destinations {
+		result[index] = &turingv1.RemoteMcpEgressDestination{
+			ServerName:   destination.ServerName,
+			Endpoint:     destination.Endpoint,
+			EndpointHost: destination.EndpointHost,
+		}
+	}
+	return result
 }
 
 func newEgressNonce() (string, error) {
