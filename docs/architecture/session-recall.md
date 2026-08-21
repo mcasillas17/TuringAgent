@@ -71,14 +71,16 @@ consumes the magnitude.
 session, or the query text.
 
 The excerpt is selected by FTS5 first, before any of the post-processing bounds
-below apply. `snippet(messages_fts, …, 32)` returns a match-centered fragment of
-**at most 32 FTS5 tokens**, marking omitted edges with an ellipsis. That token
-bound is independent of the 200-scalar and 800-byte caps, so a snippet is *not*
-guaranteed to be the whole message even when the message is comfortably under
-both post-processing caps: a message of more than 32 tokens is cut by FTS5, and
-the leading or trailing edge of its source text can be missing. What the bound
-does guarantee is that a phrase buried deep in a long body is still quoted,
-rather than being replaced by the body's opening.
+below apply. `snippet(messages_fts, 0, ?, ?, '…', 32)` — where the two bound
+parameters carry the per-query match markers — returns a match-centered
+fragment of **at most 32 FTS5 tokens**, marking omitted edges with the `…`
+literal passed to that call. That token bound is independent of the 200-scalar
+and 800-byte caps, so a snippet is *not* guaranteed to be the whole message
+even when the message is comfortably under both post-processing caps: a
+message of more than 32 tokens is cut by FTS5, and the leading or trailing edge
+of its source text can be missing. What the bound does guarantee is that a
+phrase buried deep in a long body is still quoted, rather than being replaced
+by the body's opening.
 
 The published snippet is single-line literal plain text:
 
@@ -91,14 +93,18 @@ The published snippet is single-line literal plain text:
   source characters and stay literal, so `<b>`, `**bold**`, and a written-out
   `\x1b[31m` survive verbatim rather than being escaped, stripped, or
   interpreted. The replacement rule applies only to *actual* control code
-  points — real C0, C1, and DEL characters — which become U+FFFD. Clients must
-  render the snippet as plain text and must never parse or interpret it.
-- Invalid UTF-8 becomes U+FFFD. Unicode whitespace and line separators collapse
-  to single ASCII spaces and are trimmed, so the value is always one line.
-  Remaining C0, C1, and DEL controls, and the explicit bidi formatting controls
-  (U+061C, U+200E–U+200F, U+202A–U+202E, U+2066–U+2069), become U+FFFD, so a
-  result cannot display something other than what was stored. Natural
-  right-to-left letters and joiners are content and are preserved.
+  points — real C0, C1, and DEL characters. Those that are whitespace, such as
+  tab and newline, normalize to a space first (see below); every remaining
+  non-whitespace control becomes U+FFFD. Clients must render the snippet as
+  plain text and must never parse or interpret it.
+- Invalid UTF-8 becomes U+FFFD. Unicode whitespace and line separators — which
+  include the whitespace C0 controls — collapse to single ASCII spaces and are
+  trimmed, so the value is always one line. The C0, C1, and DEL controls that
+  remain after that step are non-whitespace, and they, together with the
+  explicit bidi formatting controls (U+061C, U+200E–U+200F, U+202A–U+202E,
+  U+2066–U+2069), become U+FFFD, so a result cannot display something other
+  than what was stored. Natural right-to-left letters and joiners are content
+  and are preserved.
 - After FTS5's 32-token fragment bound, the result is bounded twice more: at
   most 200 Unicode scalar values and at most 800 UTF-8 bytes, with any inserted
   ellipsis charged against both caps and every cut landing on a scalar
@@ -114,9 +120,10 @@ guessed hit, and never puts message, snippet, or query text in an error or log.
 Because both projections share the same predicate, hits and legacy messages
 agree on lifecycle: messages in `active` and `archived` sessions remain
 visible, while sessions that are `deleting` or already deleted are excluded
-from both. Scope, exclusion, the 1–100 limit domain with its default of 20, and
-literal-phrase handling are unchanged; a query with no FTS5 token is still a
-successful empty response.
+from both. Scope, exclusion, the limit domain, and literal-phrase handling are
+unchanged: a limit of 1–100 is used as given, while a limit that is `<= 0` or
+`> 100` is not an error and falls back to 20. A query with no FTS5 token is
+still a successful empty response.
 
 No score, snippet, cache, side table, or derived row is persisted. Both values
 exist only inside the response that computed them. Scoring and snippet

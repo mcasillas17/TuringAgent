@@ -250,10 +250,10 @@ user-readable: `AuditService.ListAuditEntries` discloses the stored comment as
 `decision_comment` on `approval.approved` and the stored reason as
 `denial_reason` on `approval.denied`, each with its `*_truncated` flag when the
 writer set one, and each preserving present-empty (a human typed nothing)
-against absent (no human field was recorded) — see
-[Audit read API](audit-read-api.md#approval-decision-rationale). That closes
-this task's stated TUR-013 read dependency; TUR-021 remains the approval
-preview/diff UX, and no approval viewer UI ships here.
+against absent (no human field was recorded) — see [Audit read
+API](audit-read-api.md#approval-decision-rationale). That closes this task's
+stated TUR-013 read dependency; TUR-021 remains the approval preview/diff UX,
+and no approval viewer UI ships here.
 
 #### TUR-007 — Derive stable session titles from the first user turn — Implemented
 
@@ -363,11 +363,11 @@ authorizes only the methods on that identity's allowlist: the runtime may call
 `RuntimeService.ConnectWorker`, `SessionService.ListMessages`/
 `SearchMessages`, and `ApprovalService.GetApprovalForRuntime`/
 `ConsumeApproval`; the approval consumer (bundled `mcp-files` only) may call
-`ApprovalService.ConsumeApproval`,
-`FinalizeSandboxArtifact`, and `CheckSessionCapability`; the latter two support
-the provenance-bound reservation, finalization, and post-I/O state checks.
-A wrong-service call fails `PermissionDenied` before reaching a handler; an
-unknown or malformed bearer fails `Unauthenticated`. The orchestrator also
+`ApprovalService.ConsumeApproval`, `FinalizeSandboxArtifact`, and
+`CheckSessionCapability`; the latter two support the provenance-bound
+reservation, finalization, and post-I/O state checks. A wrong-service call
+fails `PermissionDenied` before reaching a handler; an unknown or malformed
+bearer fails `Unauthenticated`. The orchestrator also
 drops the now-dead `MCP_SYSTEM_TOKEN_GENERAL` entirely and replaces
 `MCP_FILES_TOKEN_GENERAL`/`OPENAI_API_KEY` with Compose-derived
 `MCP_FILES_ENABLED`/`OPENAI_ENABLED` booleans, since it only ever reported
@@ -496,46 +496,33 @@ remains blocked until the commit containing the contract is on `main`.
 
 #### MEM-002 — Return scored, explainable search hits
 
-**Outcome:** Search consumers receive the ranking signal SQLite already computes.
-**Scope:** Add an additive `SearchHit` with message, normalized score semantics, and snippet while temporarily preserving the legacy messages field.
-**Likely files:** `proto/turing/v1/sessions.proto`, sessions repository/service, generated Go/Dart, client mappers.
-**Acceptance:** Results expose documented score ordering and safe snippets; legacy callers receive identical messages; proto checks pass.
+**Status:** Implemented. See [Session recall
+scope](session-recall.md#scored-search-hits) for the public contract — score
+semantics, snippet safety rules, format negotiation, and the visibility and
+limit domain are specified there and are not restated here.
+
+**Outcome:** Search consumers receive the ranking signal SQLite already
+computes.
+
+**Scope:** Shipped an additive `SearchHit` alongside the preserved legacy
+messages field, selected by `SearchMessagesRequest.response_format`: exactly one
+projection per response, an unrecognized value rejected as `InvalidArgument`,
+and a one-call legacy fallback for a new client talking to an older server.
+`SearchHit.score` is normalized `-bm25(messages_fts)` with deterministic
+`message_id` tie-breaking; `SearchHit.snippet` is a match-centered, sanitized,
+single-line plain-text excerpt of the matched message only. Both projections
+share one predicate, so lifecycle visibility, scope, exclusion, limits, and
+literal-phrase handling are unchanged.
+
+**Likely files:** `proto/turing/v1/sessions.proto`, sessions repository and
+service, generated Go/Dart, client mappers.
+
+**Acceptance:** Results expose documented score ordering and safe snippets;
+legacy callers receive identical messages; proto checks pass.
+
 **Dependencies:** None.
-**Status:** Implemented. See
-[Session recall scope](session-recall.md#scored-search-hits) for the public
-contract.
 
-**Shipped behavior:** `SearchMessagesRequest.response_format` selects exactly
-one projection. Unspecified and `LEGACY_MESSAGES` return `messages` only,
-`HITS` returns `hits` only, and an unrecognized numeric value is
-`InvalidArgument` with no downgrade guess — so a response never carries the
-same bodies twice. A new client that asks for `HITS` from an older server
-receives that server's `messages` and maps them through a legacy fallback in
-the same single response: one RPC per search, no format retry, no
-concatenation. `SearchHit.score` is `-bm25(messages_fts)`, finite and
-non-negative, higher-is-better only within one query against one database
-snapshot, with equal scores broken deterministically by `message_id ASC`; it is
-not a probability, confidence, or cross-query metric. `SearchHit.snippet` is
-built only from the matched message's own content, selected by FTS5 as a
-match-centered fragment of at most 32 tokens — a bound independent of the
-post-processing caps, so a snippet may omit source edges even when the message
-fits those caps — and published as single-line literal plain text
-with no server-added markup, at
-most 200 Unicode scalars and 800 UTF-8 bytes, invalid UTF-8 repaired,
-whitespace collapsed, and actual C0/C1/DEL and explicit bidi controls replaced
-with U+FFFD while printable HTML-, Markdown-, ANSI-, or control-sequence-looking
-text stays literal.
-Per-query high-entropy markers are stripped inside the repository, and content
-that impersonates them fails the query closed rather than producing an
-ambiguous snippet. Both projections share one predicate, so `active` and
-`archived` sessions stay searchable while `deleting` and deleted sessions are
-excluded from both, and scope, exclusion, the limit domain, and literal-phrase
-handling are unchanged. Any unprovable score or snippet fails the whole query
-with an opaque `Internal` error that quotes no message, snippet, or query text.
-Nothing is persisted: no score, snippet, cache, side table, or derived row, and
-no remote egress is introduced.
-
-**Limit:** This ships the ranking signal and a safe preview only. Runtime
+**Non-goals:** This ships the ranking signal and a safe preview only. Runtime
 recall deliberately still sends the unspecified format and reads `messages`, so
 its own excerpts and ranking are untouched; no evaluation harness, metric,
 threshold, structured multi-term search request, tokenization change, or
