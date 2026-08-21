@@ -2324,6 +2324,414 @@ void main() {
 
       handle.dispose();
     });
+
+    testWidgets('renders the canonical server snippet', (tester) async {
+      final handle = tester.ensureSemantics();
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
+
+      // The match sits past anything an opening excerpt could reach, so only
+      // the server's match-centred snippet can quote it.
+      final body =
+          'opening ${List<String>.filled(1000, 'x').join()} server match at end';
+
+      await tester.enterText(
+        find.byKey(const Key('search-field')),
+        'server match',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+      api.searchCalls.single.completer.complete([
+        _hit(
+          id: 'canonical',
+          sessionId: 'session-1',
+          content: body,
+          score: 0.5,
+          snippet: '…server match at end',
+          createdAt: DateTime.utc(2026, 8, 21),
+        ),
+      ]);
+      await tester.pump();
+
+      expect(find.text('…server match at end'), findsOneWidget);
+      expect(find.text(body), findsNothing);
+      final label = tester
+          .getSemantics(find.byKey(const ValueKey('hit-canonical')))
+          .label;
+      expect(label, contains('…server match at end'));
+      expect(label, isNot(contains(body)));
+      // Not just the whole body: the body's opening must not be announced
+      // either, or the row would be quoting content the server didn't pick.
+      expect(label, isNot(contains('opening xxx')));
+      // Relevance is how the server chose and ordered these rows, not
+      // something a reader has to see or hear.
+      expect(label, isNot(contains('0.5')));
+      expect(find.textContaining('0.5'), findsNothing);
+
+      handle.dispose();
+    });
+
+    testWidgets('renders hostile-looking snippet text as inert characters', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
+
+      // Everything a sanitized server snippet is still allowed to contain:
+      // text that merely looks like markup, a shell escape, or a formatting
+      // directive, plus the replacement character the server leaves behind
+      // where it stripped a bidi control, and scripts whose runes are
+      // multi-byte or right-to-left. None of it is a language the row speaks:
+      // each must reach the screen as literal characters.
+      const fixtures = <(String, String)>[
+        ('html', '…<script>alert("x")</script> deploy…'),
+        ('markdown', '…**deploy** _staging_ [link](http://example.test)…'),
+        // ANSI-looking, not actual ANSI: the server replaces real escape
+        // bytes, so what can arrive is the printable spelling of one.
+        ('ansi', r'…\e[31mdeploy\e[0m ESC[1;31m staging…'),
+        // What sanitization leaves where explicit bidi controls were.
+        ('bidi', '…\uFFFD\uFFFDdeploy staging\uFFFD…'),
+        ('emoji', '…🚀 deploy 👨‍👩‍👧‍👦 staging 🇲🇽…'),
+        ('rtl', '…نشر البيئة التجريبية עברית…'),
+        ('cjk', '…部署 ステージング 배포…'),
+      ];
+
+      for (final (id, snippet) in fixtures) {
+        // A fresh tree per fixture, so one row's state can't explain the
+        // next one's, and the previous screen's debounce dies with it.
+        await tester.pumpWidget(const SizedBox.shrink());
+        final api = _FakeSearchApi();
+        await _pumpScreen(tester, api);
+        await tester.enterText(
+          find.byKey(const Key('search-field')),
+          'deploy $id',
+        );
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pump();
+        expect(api.queries, ['deploy $id'], reason: id);
+        api.searchCalls.single.completer.complete([
+          _hit(
+            id: id,
+            sessionId: 'session-1',
+            content: 'a body the row must ignore once a snippet arrived',
+            score: 1.5,
+            snippet: snippet,
+            createdAt: DateTime.utc(2026, 8, 21),
+          ),
+        ]);
+        await tester.pump();
+
+        expect(tester.takeException(), isNull, reason: id);
+
+        final row = find.byKey(ValueKey('hit-$id'));
+        final title = tester.widget<Text>(
+          find.descendant(of: row, matching: find.byType(Text)).first,
+        );
+        expect(
+          title.data,
+          snippet,
+          reason: '$id must render byte-for-byte, with nothing re-encoded',
+        );
+        expect(
+          title.textSpan,
+          isNull,
+          reason:
+              '$id must stay one flat string: a span tree would mean the row '
+              'parsed it into styled pieces',
+        );
+        expect(
+          title.style?.color,
+          isNull,
+          reason: '$id must not colour or style itself',
+        );
+        expect(find.text(snippet), findsOneWidget, reason: id);
+        // Two Texts and no more: the snippet and the "role · date" subtitle.
+        // Anything the row had split, linkified or decorated would show up
+        // here as extra text widgets.
+        expect(
+          find.descendant(of: row, matching: find.byType(Text)),
+          findsNWidgets(2),
+          reason: id,
+        );
+
+        final label = tester.getSemantics(row).label;
+        expect(label, endsWith(': $snippet'), reason: id);
+        expect(
+          label.runes.length,
+          lessThan(300),
+          reason: '$id must stay a skimmable announcement',
+        );
+        expect(_hasUnpairedSurrogate(label), isFalse, reason: id);
+        expect(_hasUnpairedSurrogate(title.data!), isFalse, reason: id);
+        expect(
+          _hasBidiControl(label),
+          isFalse,
+          reason: '$id must not gain a bidi control the server removed',
+        );
+        expect(_hasBidiControl(title.data!), isFalse, reason: id);
+      }
+
+      handle.dispose();
+    });
+
+    testWidgets('passes a long server snippet through without a second cut', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
+
+      await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+
+      // Longer than the legacy fallback's own budget, so a row that ran the
+      // snippet back through that fallback would be caught here. The server
+      // bounds what it sends and centres it on the match; cutting it again
+      // would drop exactly the trailing context it was built to carry.
+      final snippet = '…deploy ${'a' * 200} tail…';
+      expect(snippet.runes.length, greaterThan(200));
+      api.searchCalls.single.completer.complete([
+        _hit(
+          id: 'long',
+          sessionId: 'session-1',
+          content: 'unused body',
+          score: 2,
+          snippet: snippet,
+          createdAt: DateTime.utc(2026, 8, 21),
+        ),
+      ]);
+      await tester.pump();
+
+      expect(find.text(snippet), findsOneWidget);
+      expect(
+        tester.getSemantics(find.byKey(const ValueKey('hit-long'))).label,
+        endsWith(': $snippet'),
+      );
+
+      handle.dispose();
+    });
+
+    testWidgets('orders mixed canonical and legacy hits chronologically', (
+      tester,
+    ) async {
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
+
+      await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+
+      // A mixed-version response: scored hits and a plain legacy message,
+      // handed over in the server's relevance order. Carrying a snippet is
+      // not a reason to rank a row differently.
+      api.searchCalls.single.completer.complete([
+        _hit(
+          id: 'scored-old',
+          sessionId: 'session-1',
+          content: 'unused body',
+          score: 9.9,
+          snippet: '…deploy staging, oldest…',
+          sequence: 1,
+          createdAt: DateTime.utc(2026, 8, 13, 10),
+        ),
+        _hit(
+          id: 'scored-mid',
+          sessionId: 'session-1',
+          content: 'unused body',
+          score: 5,
+          snippet: '…deploy staging, middle…',
+          sequence: 2,
+          createdAt: DateTime.utc(2026, 8, 13, 11),
+        ),
+        _hit(
+          id: 'legacy-new',
+          sessionId: 'session-1',
+          content: 'deploy staging, newest',
+          sequence: 3,
+          createdAt: DateTime.utc(2026, 8, 13, 12),
+        ),
+      ]);
+      await tester.pump();
+
+      expect(
+        _hitTop(tester, 'legacy-new'),
+        lessThan(_hitTop(tester, 'scored-mid')),
+      );
+      expect(
+        _hitTop(tester, 'scored-mid'),
+        lessThan(_hitTop(tester, 'scored-old')),
+      );
+      expect(find.text('deploy staging, newest'), findsOneWidget);
+      expect(find.text('…deploy staging, middle…'), findsOneWidget);
+      expect(find.text('…deploy staging, oldest…'), findsOneWidget);
+    });
+
+    testWidgets('keeps the legacy opening excerpt when no snippet arrives', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
+
+      await tester.enterText(
+        find.byKey(const Key('search-field')),
+        'deploy staging',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+
+      // An old server: messages, no hit metadata at all.
+      final emojiBody = '🚀' * 1000;
+      api.searchCalls.single.completer.complete([
+        _hit(
+          id: 'legacy',
+          sessionId: 'session-1',
+          content: _longBody,
+          createdAt: DateTime.utc(2026, 8, 13, 12),
+        ),
+        _hit(
+          id: 'legacy-emoji',
+          sessionId: 'session-1',
+          content: emojiBody,
+          sequence: 2,
+          createdAt: DateTime.utc(2026, 8, 13, 11),
+        ),
+      ]);
+      await tester.pump();
+
+      final rendered = tester
+          .widget<Text>(
+            find
+                .descendant(
+                  of: find.byKey(const ValueKey('hit-legacy')),
+                  matching: find.byType(Text),
+                )
+                .first,
+          )
+          .data!;
+      expect(rendered, startsWith('deploy staging'));
+      expect(
+        rendered.runes.length,
+        201,
+        reason:
+            'the legacy fallback still keeps 200 runes of the opening plus '
+            'the ellipsis that marks the cut',
+      );
+      expect(rendered, endsWith('…'));
+      expect(_longBody, startsWith(rendered.substring(0, 200).trimRight()));
+
+      final emojiRendered = tester
+          .widget<Text>(
+            find
+                .descendant(
+                  of: find.byKey(const ValueKey('hit-legacy-emoji')),
+                  matching: find.byType(Text),
+                )
+                .first,
+          )
+          .data!;
+      expect(emojiRendered.runes.length, 201);
+      expect(
+        _hasUnpairedSurrogate(emojiRendered),
+        isFalse,
+        reason: 'the legacy cut still lands on a rune boundary',
+      );
+      final emojiLabel = tester
+          .getSemantics(find.byKey(const ValueKey('hit-legacy-emoji')))
+          .label;
+      expect(_hasUnpairedSurrogate(emojiLabel), isFalse);
+      expect(emojiLabel, endsWith(emojiRendered));
+
+      handle.dispose();
+    });
+
+    testWidgets('shows a mapping failure without echoing any value', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
+      final api = _FakeSearchApi();
+      await _pumpScreen(tester, api);
+
+      // A search that worked first, so the screen is actually holding a
+      // session ID, a message ID, a body and a snippet when the next one
+      // fails: sentinels it could leak, not values it never had.
+      await tester.enterText(find.byKey(const Key('search-field')), 'deploy');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+      api.searchCalls.single.completer.complete([
+        _hit(
+          id: 'msg-secret',
+          sessionId: 'session-secret',
+          content: 'deploy staging body',
+          score: 0.25,
+          snippet: '…server match at end…',
+          createdAt: DateTime.utc(2026, 8, 21),
+        ),
+      ]);
+      await tester.pump();
+      expect(find.byKey(const ValueKey('hit-msg-secret')), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const Key('search-field')),
+        'nuclear-launch-codes',
+      );
+      await _submitAgain(tester);
+      await tester.pump();
+
+      // What the mapper throws for a malformed hit: a compile-time constant,
+      // deliberately carrying none of the bytes it rejected. The screen
+      // renders and announces whatever it caught, so anything the exception
+      // carried — or anything the screen added around it — would be shown
+      // and spoken.
+      api.searchCalls[1].completer.completeError(
+        const FormatException('search hit score is invalid'),
+      );
+      await tester.pump();
+
+      final data = tester.getSemantics(find.byKey(const Key('search-error')));
+      expect(data.flagsCollection.isLiveRegion, isTrue);
+      final visible = tester
+          .widget<Text>(
+            find.descendant(
+              of: find.byKey(const Key('search-error')),
+              matching: find.textContaining('Search failed'),
+            ),
+          )
+          .data!;
+
+      for (final surface in [data.label, visible]) {
+        expect(surface, contains('search hit score is invalid'));
+        for (final sentinel in const [
+          'nuclear-launch-codes',
+          'session-secret',
+          'msg-secret',
+          'deploy staging body',
+          '…server match at end…',
+          '0.25',
+        ]) {
+          expect(
+            surface,
+            isNot(contains(sentinel)),
+            reason: 'a mapping failure must not leak $sentinel',
+          );
+        }
+      }
+      // The failed query replaces the results it invalidated, so nothing the
+      // old ones carried is left on screen to read either.
+      expect(find.byKey(const ValueKey('hit-msg-secret')), findsNothing);
+
+      // Recoverable like any other search failure.
+      expect(find.byKey(const Key('search-retry')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('search-retry')));
+      await tester.pump();
+      expect(api.queries, [
+        'deploy',
+        'nuclear-launch-codes',
+        'nuclear-launch-codes',
+      ]);
+
+      handle.dispose();
+    });
   });
 }
 
@@ -2365,6 +2773,19 @@ bool _hasUnpairedSurrogate(String text) {
     }
   }
   return false;
+}
+
+/// Whether [text] contains an explicit bidi formatting control — the class of
+/// characters the server replaces before a snippet leaves it, and which can
+/// reorder or hide the text around them wherever they survive.
+bool _hasBidiControl(String text) {
+  const controls = {0x061C, 0x200E, 0x200F};
+  return text.runes.any(
+    (rune) =>
+        controls.contains(rune) ||
+        (rune >= 0x202A && rune <= 0x202E) ||
+        (rune >= 0x2066 && rune <= 0x2069),
+  );
 }
 
 /// Short month names as rendered by `DefaultMaterialLocalizations`, spelled
@@ -2427,10 +2848,14 @@ SearchHit _hit({
   String role = 'user',
   String content = 'deploy staging',
   int sequence = 1,
+  double? score,
+  String? snippet,
   required DateTime createdAt,
 }) {
   return SearchHit(
     sessionId: sessionId,
+    score: score,
+    snippet: snippet,
     message: Message(
       messageId: id,
       role: role,
