@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1220,6 +1219,12 @@ func TestSessionServiceSearchMessagesReturnsOnlyHitsWhenRequested(t *testing.T) 
 		if !proto.Equal(hit.GetMessage(), wantMessage) {
 			t.Fatalf("hits[%d].message = %+v, want %+v", index, hit.GetMessage(), wantMessage)
 		}
+		// Scores are only comparable if the repository actually produced one:
+		// against an all-zero fixture the equality below would hold no matter
+		// what the service did with the value.
+		if !(wantHit.Score > 0) { // NaN fails this too, which `<= 0` would let through
+			t.Fatalf("repository hits[%d].score = %v, want a positive score so equality proves something", index, wantHit.Score)
+		}
 		if hit.GetScore() != wantHit.Score {
 			t.Fatalf("hits[%d].score = %v, want the repository score %v", index, hit.GetScore(), wantHit.Score)
 		}
@@ -1252,11 +1257,11 @@ func TestSessionServiceSearchMessagesRejectsUnknownResponseFormat(t *testing.T) 
 		t.Fatalf("SearchMessages error = %v (response %+v), want InvalidArgument", err, response)
 	}
 	message := status.Convert(err).Message()
+	// Exact equality is the echo check: any rendering of the rejected value
+	// would change this string, so a separate "does it contain 99" assertion
+	// could never fail on its own.
 	if message != "response_format is invalid" {
 		t.Fatalf("SearchMessages message = %q, want %q", message, "response_format is invalid")
-	}
-	if strings.Contains(message, "99") {
-		t.Fatalf("SearchMessages message echoed the rejected value: %q", message)
 	}
 }
 
@@ -1423,6 +1428,84 @@ func TestSessionServiceSearchMessagesLogsOnlyInvariantClass(t *testing.T) {
 	})
 }
 
+// A metadata invariant failure has to survive the whole handler path, not just
+// the mapper: the RPC answers with the same opaque status any other failure
+// gets, and the only trace is the invariant's class name. A real database
+// cannot be made to break its own score invariant on demand, so the search
+// seam is replaced with a repository that fails that way, wrapped in the kind
+// of context an error usually accumulates.
+func TestSessionServiceSearchMessagesHitFormatLogsOnlyInvariantClassOverRPC(t *testing.T) {
+	const (
+		secretQuery   = "hitinvariantquerysecret"
+		secretContent = "hitinvariantcontentsecret"
+	)
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	stub := &failingMessageSearcher{
+		err: fmt.Errorf(
+			"search %q matched %q: %w",
+			secretQuery, secretContent, repository.ErrInvalidSearchScore,
+		),
+	}
+	h.service.search = stub
+
+	var err error
+	logged := captureSessionLog(t, func() {
+		_, err = client.SearchMessages(context.Background(), &turingv1.SearchMessagesRequest{
+			Query:          secretQuery,
+			Limit:          10,
+			ResponseFormat: turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_HITS,
+		})
+	})
+
+	if stub.hitCalls != 1 {
+		t.Fatalf("SearchMessageHits calls = %d, want 1", stub.hitCalls)
+	}
+	if stub.legacyCalls != 0 {
+		t.Fatalf("SearchMessages legacy calls = %d, want none for the hit projection", stub.legacyCalls)
+	}
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("SearchMessages error = %v, want Internal", err)
+	}
+	if got := status.Convert(err).Message(); got != "search messages failed" {
+		t.Fatalf("SearchMessages message = %q, want %q", got, "search messages failed")
+	}
+	if !strings.Contains(logged, "search_messages invariant=invalid_score") {
+		t.Fatalf("log = %q, want the invariant class for a rejected score", logged)
+	}
+	for _, secret := range []string{secretQuery, secretContent, stub.err.Error()} {
+		if strings.Contains(logged, secret) {
+			t.Fatalf("log = %q leaked %q", logged, secret)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("status = %v leaked %q", err, secret)
+		}
+	}
+}
+
+// failingMessageSearcher answers both projections with one prepared failure.
+// It satisfies messageSearcher, so it can only stand in for the repository as
+// long as the handler asks the repository exactly what production asks it.
+type failingMessageSearcher struct {
+	err         error
+	legacyCalls int
+	hitCalls    int
+}
+
+func (f *failingMessageSearcher) SearchMessages(
+	context.Context, string, string, string, int,
+) ([]repository.Message, error) {
+	f.legacyCalls++
+	return nil, f.err
+}
+
+func (f *failingMessageSearcher) SearchMessageHits(
+	context.Context, string, string, string, int,
+) ([]repository.SearchHit, error) {
+	f.hitCalls++
+	return nil, f.err
+}
+
 // The hit projection must route its failures through the same content-free
 // mapper the legacy projection uses, rather than growing its own error path.
 func TestSessionServiceSearchMessagesHidesDatabaseErrorsInHitFormat(t *testing.T) {
@@ -1449,8 +1532,12 @@ func TestSessionServiceSearchMessagesHidesDatabaseErrorsInHitFormat(t *testing.T
 	if strings.Contains(lower, "sqlite") || strings.Contains(lower, "database is closed") {
 		t.Fatalf("SearchMessages leaked database details: %v", err)
 	}
-	if strings.Contains(strings.ToLower(logged), "sql") || strings.Contains(strings.ToLower(logged), "closed") {
-		t.Fatalf("log = %q leaked database details", logged)
+	// An ordinary database failure is not an invariant report, so it produces
+	// no log line at all. Requiring emptiness rather than the absence of a few
+	// keywords also catches a future line that leaks content this test never
+	// thought to name.
+	if logged != "" {
+		t.Fatalf("log = %q, want nothing for an ordinary database error in the hit projection", logged)
 	}
 }
 
@@ -1486,8 +1573,11 @@ func TestSessionServiceSearchMessagesDoesNotDuplicateLargeLegacyPayload(t *testi
 		t.Fatalf("hits = %d, want none alongside a large legacy payload", len(response.GetHits()))
 	}
 	for index, message := range response.GetMessages() {
-		if message.GetContent() != content {
-			t.Fatalf("messages[%d] content length = %d, want %d", index, len(message.GetContent()), len(content))
+		if got := message.GetContent(); got != content {
+			t.Fatalf(
+				"messages[%d] content mismatch: got %d bytes, want %d bytes, first difference at byte %d",
+				index, len(got), len(content), firstByteDifference(got, content),
+			)
 		}
 	}
 	size := proto.Size(response)
@@ -1498,6 +1588,19 @@ func TestSessionServiceSearchMessagesDoesNotDuplicateLargeLegacyPayload(t *testi
 	if size >= maxReceiveBytes {
 		t.Fatalf("response size = %d bytes, want it under the %d receive limit", size, maxReceiveBytes)
 	}
+}
+
+// firstByteDifference locates where two payloads diverge. Reporting only the
+// lengths is useless when they are equal, which is exactly the case where a
+// mismatch is hardest to explain. It reports an offset, never the bytes.
+func firstByteDifference(got, want string) int {
+	limit := min(len(got), len(want))
+	for index := 0; index < limit; index++ {
+		if got[index] != want[index] {
+			return index
+		}
+	}
+	return limit
 }
 
 // TUR-004: deletion is the only way a person can take back what they said, so a
@@ -1541,6 +1644,10 @@ func TestSessionServiceSearchMessagesCannotReturnWithdrawnContentInEitherFormat(
 		t.Fatalf("deletion receipt = %+v, want in-progress", deletion.GetDeletion())
 	}
 	assertSearchSentinelVisibility(t, ctx, client, false)
+	// The row is hidden, not gone: a purge would make the visibility assertion
+	// above pass for the wrong reason and would not prove the search predicate
+	// excludes rows that are still on disk.
+	assertSessionMessageRowCount(t, ctx, first, sentinel.SessionID, "sentinelmarker", 1)
 
 	if err := first.Close(); err != nil {
 		t.Fatalf("close first database: %v", err)
@@ -1548,6 +1655,34 @@ func TestSessionServiceSearchMessagesCannotReturnWithdrawnContentInEitherFormat(
 	second := openSessionTestDBAt(t, path)
 	restarted := newSessionHarnessWithDB(t, second)
 	assertSearchSentinelVisibility(t, ctx, turingv1.NewSessionServiceClient(restarted.conn), false)
+	assertSessionMessageRowCount(t, ctx, second, sentinel.SessionID, "sentinelmarker", 1)
+}
+
+// assertSessionMessageRowCount reads the stored rows directly, underneath every
+// search predicate, so a test can tell "hidden" apart from "deleted". It counts
+// only the rows carrying the marker: enqueuing a turn also writes an empty
+// assistant placeholder, which says nothing about whether the withdrawn text
+// survived.
+func assertSessionMessageRowCount(
+	t *testing.T,
+	ctx context.Context,
+	database *db.DB,
+	sessionID string,
+	marker string,
+	want int,
+) {
+	t.Helper()
+	var got int
+	if err := database.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM messages WHERE session_id = ? AND instr(content, ?) > 0`,
+		sessionID, marker,
+	).Scan(&got); err != nil {
+		t.Fatalf("count %s messages for %s: %v", marker, sessionID, err)
+	}
+	if got != want {
+		t.Fatalf("stored %s messages for %s = %d, want %d", marker, sessionID, got, want)
+	}
 }
 
 // assertSearchSentinelVisibility checks both response formats at once. The
@@ -1615,20 +1750,47 @@ func searchHitContents(hits []*turingv1.SearchHit) []string {
 	return out
 }
 
+// captureSessionLog redirects the standard logger for the duration of run and
+// returns what was written. It restores whatever writer was installed before,
+// not os.Stderr: a caller that nests captures, or a harness that already
+// redirected the logger, would otherwise silently lose its own output.
 func captureSessionLog(t *testing.T, run func()) string {
 	t.Helper()
 	var buffer bytes.Buffer
+	writer := log.Writer()
 	flags := log.Flags()
-	prefix := log.Prefix()
 	log.SetOutput(&buffer)
 	log.SetFlags(0)
 	t.Cleanup(func() {
-		log.SetOutput(os.Stderr)
+		log.SetOutput(writer)
 		log.SetFlags(flags)
-		log.SetPrefix(prefix)
 	})
 	run()
 	return buffer.String()
+}
+
+// Tests that assert on what a failure logs share one capture helper, so it has
+// to leave the logger exactly as it found it. Restoring a hardcoded os.Stderr
+// would send a still-running outer capture's output to the terminal, and every
+// assertion that outer capture makes would then read an empty log.
+func TestCaptureSessionLogRestoresTheWriterItFound(t *testing.T) {
+	outer := captureSessionLog(t, func() {
+		t.Run("inner", func(t *testing.T) {
+			inner := captureSessionLog(t, func() { log.Print("inner-line") })
+			if !strings.Contains(inner, "inner-line") {
+				t.Fatalf("inner log = %q, want the inner line", inner)
+			}
+		})
+		// The inner capture's restore ran when the subtest ended, so this line
+		// belongs to the outer capture again.
+		log.Print("outer-line")
+	})
+	if !strings.Contains(outer, "outer-line") {
+		t.Fatalf("outer log = %q, want the line written after the nested capture ended", outer)
+	}
+	if strings.Contains(outer, "inner-line") {
+		t.Fatalf("outer log = %q, want the nested capture to have kept its own line", outer)
+	}
 }
 
 func TestSessionServiceListsMessagesOnlyBeforeBoundary(t *testing.T) {

@@ -23,11 +23,38 @@ import (
 type Server struct {
 	turingv1.UnimplementedSessionServiceServer
 	repo            *repository.Repository
+	search          messageSearcher
 	cfg             config.Config
 	capabilities    capabilitySource
 	cursors         sessionCursorCodec
 	bus             *eventsvc.Bus
 	artifactCleaner sessionArtifactCleaner
+}
+
+// messageSearcher is the only part of the repository the search handler needs.
+// It exists so a test can hand the handler a repository that fails the way a
+// broken metadata invariant fails, which a real SQLite database will not do on
+// demand. It is deliberately narrow: every other operation still goes through
+// the concrete repository, so this seam cannot be widened into a general
+// stand-in for storage.
+//
+// The signatures mirror *repository.Repository exactly, so the compiler
+// rejects a stub that answers a different question than production does.
+type messageSearcher interface {
+	SearchMessages(
+		ctx context.Context,
+		sessionID string,
+		excludedSessionID string,
+		query string,
+		limit int,
+	) ([]repository.Message, error)
+	SearchMessageHits(
+		ctx context.Context,
+		sessionID string,
+		excludedSessionID string,
+		query string,
+		limit int,
+	) ([]repository.SearchHit, error)
 }
 
 type capabilitySource interface {
@@ -54,6 +81,7 @@ func New(repo *repository.Repository, cfg config.Config, capabilities capability
 	}
 	return &Server{
 		repo:         repo,
+		search:       repo,
 		cfg:          cfg,
 		capabilities: capabilities,
 		cursors:      newSessionCursorCodec(cfg.CursorHMACKey),
@@ -371,7 +399,7 @@ func (s *Server) SearchMessages(ctx context.Context, req *turingv1.SearchMessage
 	switch req.GetResponseFormat() {
 	case turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_UNSPECIFIED,
 		turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_LEGACY_MESSAGES:
-		messages, err := s.repo.SearchMessages(
+		messages, err := s.search.SearchMessages(
 			ctx,
 			req.SessionId,
 			req.ExcludeSessionId,
@@ -383,7 +411,7 @@ func (s *Server) SearchMessages(ctx context.Context, req *turingv1.SearchMessage
 		}
 		return &turingv1.SearchMessagesResponse{Messages: mapSearchMessages(messages)}, nil
 	case turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_HITS:
-		hits, err := s.repo.SearchMessageHits(
+		hits, err := s.search.SearchMessageHits(
 			ctx,
 			req.SessionId,
 			req.ExcludeSessionId,
