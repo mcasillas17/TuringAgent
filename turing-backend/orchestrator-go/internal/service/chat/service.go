@@ -106,8 +106,12 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 			executionModel = s.runtime.RoutableDefaultModel(modelProvider, configured)
 		}
 	}
-	if _, err := s.repo.GetSession(ctx, req.SessionId); err != nil {
+	withdrawalState, err := s.repo.SessionWithdrawalState(ctx, req.SessionId)
+	if err != nil {
 		return mapSessionError(ctx, err)
+	}
+	if !withdrawalState.Active {
+		return mapSessionError(ctx, repository.ErrSessionDeleting)
 	}
 	ch, unsubscribe := s.bus.Subscribe(req.SessionId)
 	defer unsubscribe()
@@ -142,11 +146,11 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 		}
 	}
 	if !enqueued.Replayed {
-		s.bus.Publish(busEventFromRepository(enqueued.SessionUpdatedEvent))
+		s.bus.Publish(events.FromRepositoryEvent(enqueued.SessionUpdatedEvent))
 	}
 	queuedEvent := enqueued.QueuedEvent
 	if !enqueued.Replayed {
-		s.bus.Publish(busEventFromRepository(queuedEvent))
+		s.bus.Publish(events.FromRepositoryEvent(queuedEvent))
 	}
 	// Published alongside the queued event so a subscriber that is not this
 	// stream — a second window on the same conversation — still learns that
@@ -155,7 +159,7 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 	// were not told".
 	if !enqueued.Replayed {
 		for _, event := range enqueued.RoutingEvents {
-			s.bus.Publish(busEventFromRepository(event))
+			s.bus.Publish(events.FromRepositoryEvent(event))
 		}
 	}
 	cancelRunOnClientDisconnect := req.IdempotencyKey == ""
@@ -193,8 +197,11 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 				s.cancelRun(enqueued.RunID)
 			}
 			return status.Error(codes.Canceled, "client cancelled stream")
-		case _, ok := <-ch:
+		case event, ok := <-ch:
 			if !ok {
+				return nil
+			}
+			if event.Type == "session.deleted" {
 				return nil
 			}
 			done, err := s.streamAvailableEvents(ctx, req.SessionId, enqueued.RunID, &lastSent, cancelRunOnClientDisconnect, stream)
@@ -264,6 +271,9 @@ func (s *Server) streamAvailableEvents(ctx context.Context, sessionID string, ru
 				}
 				return false, status.Error(codes.Canceled, "client cancelled stream")
 			}
+			if errors.Is(err, repository.ErrSessionNotFound) {
+				return true, nil
+			}
 			return false, status.Error(codes.Internal, "replay events failed")
 		}
 		if len(replayed) == 0 {
@@ -276,7 +286,7 @@ func (s *Server) streamAvailableEvents(ctx context.Context, sessionID string, ru
 			if !event.RunID.Valid || event.RunID.String != runID {
 				continue
 			}
-			if err := stream.Send(mapChatEvent(busEventFromRepository(event))); err != nil {
+			if err := stream.Send(mapChatEvent(events.FromRepositoryEvent(event))); err != nil {
 				if cancelRunOnClientDisconnect {
 					s.cancelRunIfClientCancelled(ctx, runID)
 				}
@@ -350,7 +360,11 @@ func mapSessionError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return status.Error(codes.Canceled, "client cancelled stream")
 	}
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, repository.ErrSessionDeleting) {
+		return status.Error(codes.FailedPrecondition, "session deletion is in progress")
+	}
+	if errors.Is(err, sql.ErrNoRows) ||
+		errors.Is(err, repository.ErrSessionNotFound) {
 		return status.Error(codes.NotFound, "session not found")
 	}
 	return status.Error(codes.Internal, "get session failed")
@@ -389,10 +403,10 @@ func (s *Server) cancelRun(runID string) {
 	if err != nil {
 		return
 	}
-	events, err := s.repo.CancelRunWithEvent(ctx, runID, "client_cancelled", string(payload))
+	repositoryEvents, err := s.repo.CancelRunWithEvent(ctx, runID, "client_cancelled", string(payload))
 	if err == nil {
-		for _, event := range events {
-			s.bus.Publish(busEventFromRepository(event))
+		for _, event := range repositoryEvents {
+			s.bus.Publish(events.FromRepositoryEvent(event))
 		}
 	}
 	if s.runtime != nil {
@@ -405,23 +419,6 @@ func (s *Server) cancelRunIfClientCancelled(ctx context.Context, runID string) {
 		return
 	}
 	s.cancelRun(runID)
-}
-
-func busEventFromRepository(event repository.Event) events.Event {
-	runID := ""
-	if event.RunID.Valid {
-		runID = event.RunID.String
-	}
-	return events.Event{
-		EventID:     event.EventID,
-		SessionID:   event.SessionID,
-		RunID:       runID,
-		TraceID:     event.TraceID,
-		Sequence:    event.Sequence,
-		Type:        event.Type,
-		CreatedAt:   event.CreatedAt,
-		PayloadJSON: event.PayloadJSON,
-	}
 }
 
 func mapChatEvent(event events.Event) *turingv1.ChatStreamEvent {

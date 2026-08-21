@@ -461,6 +461,44 @@ func TestOnePoisonedAutomationDoesNotStopTheRest(t *testing.T) {
 	}
 }
 
+func TestWithdrawingConversationDoesNotStopDueAutomations(t *testing.T) {
+	h := newSchedulerHarness(t)
+	withdrawing := createEnabled(t, h.repo, h.ctx, "Withdrawing", repository.Schedule{Kind: repository.ScheduleInterval, Interval: 5 * time.Minute})
+	firstDue := parseTime(t, withdrawing.NextDueAt)
+	first, found, err := h.repo.ClaimDueAutomation(h.ctx, firstDue, schedulerDefaults)
+	if err != nil || !found {
+		t.Fatalf("first claim = found %v err %v", found, err)
+	}
+	h.finishRuns(t)
+	if _, err := h.repo.BeginSessionDeletion(h.ctx, first.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	healthy := createEnabled(t, h.repo, h.ctx, "Healthy", repository.Schedule{Kind: repository.ScheduleInterval, Interval: 5 * time.Minute})
+	withdrawingDue := firstDue.Add(time.Hour)
+	healthyDue := withdrawingDue.Add(time.Second)
+	if _, err := h.database.ExecContext(h.ctx,
+		`UPDATE automations SET next_due_at = ? WHERE id = ?`,
+		repository.FormatTimestamp(withdrawingDue), withdrawing.AutomationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.database.ExecContext(h.ctx,
+		`UPDATE automations SET next_due_at = ? WHERE id = ?`,
+		repository.FormatTimestamp(healthyDue), healthy.AutomationID); err != nil {
+		t.Fatal(err)
+	}
+	h.scheduler.now = func() time.Time { return healthyDue.Add(time.Second) }
+
+	if err := h.scheduler.Tick(h.ctx); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := h.firedRuns(t, withdrawing.AutomationID); got != 2 {
+		t.Fatalf("withdrawing automation fired %d runs, want 2", got)
+	}
+	if got := h.firedRuns(t, healthy.AutomationID); got != 1 {
+		t.Fatalf("healthy automation fired %d runs, want 1", got)
+	}
+}
+
 // A cancelled context stops the loop rather than draining a due backlog on the
 // way out.
 func TestTickStopsWhenTheContextIsCancelled(t *testing.T) {

@@ -19,6 +19,8 @@ var afterLegacySkillsExportHook func()
 // regression, immediately after the export's final root-path verification.
 var afterRecoverySkillsExportHook func()
 
+const sessionLifecycleMigrationVersion = "0015_session_lifecycle"
+
 func ApplyMigrations(ctx context.Context, database *DB) error {
 	return ApplyMigrationsWithSkillsRoot(ctx, database, "")
 }
@@ -62,6 +64,12 @@ func ApplyMigrationsWithSkillsRoot(ctx context.Context, database *DB, skillsRoot
 		tx, err := database.BeginTx(ctx, nil)
 		if err != nil {
 			return err
+		}
+		if version == sessionLifecycleMigrationVersion {
+			if err := normalizeSessionTimestamps(ctx, tx); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("%s: normalize session timestamps: %w", name, err)
+			}
 		}
 		if _, err := tx.ExecContext(ctx, string(sqlText)); err != nil {
 			_ = tx.Rollback()

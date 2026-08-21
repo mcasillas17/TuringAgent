@@ -10,6 +10,8 @@ import '../support/no_audit_api.dart';
 import '../support/no_skills_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
+import '../support/no_remote_egress_api.dart';
+import '../support/no_session_lifecycle_api.dart';
 import '../support/no_telemetry_api.dart';
 
 void main() {
@@ -721,13 +723,16 @@ Future<void> _pumpAutomations(
 /// A working in-memory automation library, so the UI is tested against
 /// something that behaves like the backend rather than a stub that always says
 /// yes.
-class _FakeApi extends TuringApi
+class _FakeApi
     with
         NoAuditApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
-        NoTelemetryApi {
+        NoRemoteEgressApi,
+        NoSessionLifecycleApi,
+        NoTelemetryApi
+    implements TuringApi {
   final List<Automation> automations = [];
   final List<Skill> skills = [];
   final List<String> deleted = [];

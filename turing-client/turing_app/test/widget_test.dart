@@ -18,6 +18,7 @@ import 'package:turing_flutter_app/networking/event_source.dart';
 import 'support/no_audit_api.dart';
 import 'support/no_external_agents_api.dart';
 import 'support/no_integrations_api.dart';
+import 'support/no_session_lifecycle_api.dart';
 import 'support/no_automations_api.dart';
 import 'support/no_skills_api.dart';
 import 'support/no_telemetry_api.dart';
@@ -94,6 +95,7 @@ class _ClosableFakeApiClient extends ClosableTuringApi
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
+        NoSessionLifecycleApi,
         NoAutomationsApi,
         NoTelemetryApi {
   bool closed = false;

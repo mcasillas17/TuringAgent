@@ -4,14 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 )
 
 type sessionUpdatedPayload struct {
 	Title     string `json:"title"`
+	Status    string `json:"status"`
 	UpdatedAt string `json:"updatedAt"`
 }
 
@@ -144,6 +147,9 @@ func TestEnqueueUserMessagePersistsSessionUpdatedEvent(t *testing.T) {
 	if payload.Title != "What is in the sandbox?" {
 		t.Fatalf("event title = %q, want derived title", payload.Title)
 	}
+	if payload.Status != "active" {
+		t.Fatalf("event status = %q, want active", payload.Status)
+	}
 	if payload.UpdatedAt == "" {
 		t.Fatal("event updatedAt is empty")
 	}
@@ -154,6 +160,135 @@ func TestEnqueueUserMessagePersistsSessionUpdatedEvent(t *testing.T) {
 	}
 	if len(replayed) < 2 || replayed[0].EventID != event.EventID {
 		t.Fatalf("replayed events = %+v, want session update first", replayed)
+	}
+}
+
+func TestEnqueueUserMessageKeepsSessionUpdatedAtMonotonic(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().UTC().Add(time.Hour)
+	futureText := FormatTimestamp(future)
+	if _, err := repo.db.ExecContext(ctx, `
+		UPDATE sessions SET updated_at = ? WHERE id = ?`,
+		futureText,
+		session.SessionID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID:     session.SessionID,
+		Content:       "A message after a future lifecycle mutation",
+		AgentID:       "general_assistant",
+		ModelProvider: "ollama",
+		Model:         "qwen2.5:7b",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := FormatTimestamp(future.Add(time.Nanosecond))
+	stored, err := repo.GetSession(ctx, session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.UpdatedAt != want {
+		t.Fatalf("session updated_at = %q, want %q", stored.UpdatedAt, want)
+	}
+	var userCreatedAt string
+	if err := repo.db.QueryRowContext(ctx, `
+		SELECT created_at FROM messages WHERE id = ?`,
+		enqueued.UserMessageID,
+	).Scan(&userCreatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if userCreatedAt != want {
+		t.Fatalf("user message created_at = %q, want %q", userCreatedAt, want)
+	}
+}
+
+func TestIdempotentEnqueueDoesNotTouchSessionUpdatedAt(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := EnqueueUserMessageInput{
+		SessionID:      session.SessionID,
+		Content:        "Only accept this once",
+		AgentID:        "general_assistant",
+		ModelProvider:  "ollama",
+		Model:          "qwen2.5:7b",
+		IdempotencyKey: "idempotent-session-activity",
+	}
+	if _, err := repo.EnqueueUserMessage(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+	before, err := repo.GetSession(ctx, session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	replayed, err := repo.EnqueueUserMessage(ctx, input)
+	if err != nil || !replayed.Replayed {
+		t.Fatalf("replay = %+v, %v", replayed, err)
+	}
+	afterReplay, err := repo.GetSession(ctx, session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterReplay.UpdatedAt != before.UpdatedAt {
+		t.Fatalf("replay updated_at = %q, want %q", afterReplay.UpdatedAt, before.UpdatedAt)
+	}
+
+	input.Content = "Conflicting retry"
+	if _, err := repo.EnqueueUserMessage(ctx, input); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("conflicting replay error = %v, want ErrIdempotencyConflict", err)
+	}
+	afterConflict, err := repo.GetSession(ctx, session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterConflict.UpdatedAt != before.UpdatedAt {
+		t.Fatalf("conflict updated_at = %q, want %q", afterConflict.UpdatedAt, before.UpdatedAt)
+	}
+}
+
+func TestFailedEnqueueRollsBackSessionUpdatedAt(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := session.UpdatedAt
+	if _, err := repo.db.ExecContext(ctx, `
+		CREATE TRIGGER fail_session_updated_event
+		BEFORE INSERT ON events
+		WHEN NEW.type = 'session.updated'
+		BEGIN
+			SELECT RAISE(ABORT, 'forced session event failure');
+		END`,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID:     session.SessionID,
+		Content:       "This transaction must roll back",
+		AgentID:       "general_assistant",
+		ModelProvider: "ollama",
+		Model:         "qwen2.5:7b",
+	}); err == nil {
+		t.Fatal("EnqueueUserMessage succeeded despite failing event trigger")
+	}
+	stored, err := repo.GetSession(ctx, session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.UpdatedAt != before {
+		t.Fatalf("failed enqueue updated_at = %q, want %q", stored.UpdatedAt, before)
 	}
 }
 

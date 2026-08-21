@@ -36,6 +36,7 @@ import '../models/message.dart';
 import '../models/remote_egress.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
+import '../models/session_page.dart';
 import '../models/session_deletion.dart';
 import '../models/skill.dart';
 import '../models/telemetry.dart';
@@ -178,12 +179,31 @@ class TuringGrpcApi implements ClosableTuringApi, RemoteEgressApi {
 
   @override
   Future<List<Session>> listSessions({int limit = 50, String? after}) async {
+    final page = await listSessionPage(limit: limit, cursor: after);
+    return page.sessions;
+  }
+
+  @override
+  Future<SessionPage> listSessionPage({
+    int limit = 50,
+    String? cursor,
+    SessionListFilter filter = SessionListFilter.active,
+  }) async {
     final response = await _sessions.listSessions(
       sessionpb.ListSessionsRequest(
-        page: commonpb.PageRequest(limit: limit, cursor: after ?? ''),
+        page: commonpb.PageRequest(limit: limit, cursor: cursor ?? ''),
+        filter: switch (filter) {
+          SessionListFilter.active =>
+            sessionpb.SessionListFilter.SESSION_LIST_FILTER_ACTIVE,
+          SessionListFilter.archived =>
+            sessionpb.SessionListFilter.SESSION_LIST_FILTER_ARCHIVED,
+          SessionListFilter.all =>
+            sessionpb.SessionListFilter.SESSION_LIST_FILTER_ALL,
+        },
       ),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
     );
-    return response.sessions.map(GrpcMappers.sessionToModel).toList();
+    return GrpcMappers.sessionPageToModel(response);
   }
 
   @override
@@ -193,6 +213,36 @@ class TuringGrpcApi implements ClosableTuringApi, RemoteEgressApi {
       options: grpc.CallOptions(timeout: _startupUnaryTimeout),
     );
     return GrpcMappers.sessionToModel(response);
+  }
+
+  @override
+  Future<Session> renameSession({
+    required String sessionId,
+    required String title,
+  }) async {
+    final response = await _sessions.renameSession(
+      sessionpb.RenameSessionRequest(sessionId: sessionId, title: title),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+    return GrpcMappers.sessionToModel(response.session);
+  }
+
+  @override
+  Future<Session> archiveSession({required String sessionId}) async {
+    final response = await _sessions.archiveSession(
+      sessionpb.ArchiveSessionRequest(sessionId: sessionId),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+    return GrpcMappers.sessionToModel(response.session);
+  }
+
+  @override
+  Future<Session> restoreSession({required String sessionId}) async {
+    final response = await _sessions.restoreSession(
+      sessionpb.RestoreSessionRequest(sessionId: sessionId),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+    return GrpcMappers.sessionToModel(response.session);
   }
 
   @override

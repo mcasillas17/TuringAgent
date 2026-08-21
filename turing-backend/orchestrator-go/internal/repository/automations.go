@@ -501,53 +501,59 @@ func (r *Repository) ClaimDueAutomation(ctx context.Context, at time.Time, defau
 		AgentID: defaults.AgentID, ModelProvider: defaults.ModelProvider, Model: defaults.Model,
 	}
 	if sessionID.Valid {
-		resolved, resolveErr := resolveEnqueueRouteTx(ctx, tx, EnqueueUserMessageInput{
-			SessionID: sessionID.String, AgentID: defaults.AgentID,
-			ModelProvider: defaults.ModelProvider, Model: defaults.Model,
-		})
-		if resolveErr != nil {
-			if errors.Is(resolveErr, ErrExternalAgentBaseURLInsecure) ||
-				errors.Is(resolveErr, ErrExternalAgentBaseURLInvalid) {
-				result, updateErr := tx.ExecContext(ctx, `
-					UPDATE automations
-					SET next_due_at = ?, updated_at = ?
-					WHERE id = ? AND enabled = 1 AND next_due_at = ?
-				`, FormatTimestamp(nextDue), firedAt, automationID, dueAt)
-				if updateErr != nil {
-					return AutomationFire{}, false, updateErr
-				}
-				advanced, rowsErr := result.RowsAffected()
-				if rowsErr != nil {
-					return AutomationFire{}, false, rowsErr
-				}
-				if advanced != 1 {
-					return AutomationFire{}, false, nil
-				}
-				payload, marshalErr := json.Marshal(map[string]any{
-					"code":       AutomationFailureRemoteEgressConfigurationInvalid,
-					"firedDueAt": dueAt,
-					"nextDueAt":  FormatTimestamp(nextDue),
-				})
-				if marshalErr != nil {
-					return AutomationFire{}, false, marshalErr
-				}
-				if auditErr := recordAuditTx(
-					ctx, tx, "", "automation", automationID,
-					"automation.remote_egress_blocked", automationID, string(payload),
-				); auditErr != nil {
-					return AutomationFire{}, false, auditErr
-				}
-				if commitErr := tx.Commit(); commitErr != nil {
-					return AutomationFire{}, false, commitErr
-				}
-				return AutomationFire{
-					AutomationID: automationID, Name: name, Failed: true,
-					FailureCode: AutomationFailureRemoteEgressConfigurationInvalid,
-				}, true, nil
-			}
-			return AutomationFire{}, false, resolveErr
+		active, activeErr := automationSessionActiveTx(ctx, tx, sessionID.String)
+		if activeErr != nil {
+			return AutomationFire{}, false, activeErr
 		}
-		requirements = resolved.requirements
+		if active {
+			resolved, resolveErr := resolveEnqueueRouteTx(ctx, tx, EnqueueUserMessageInput{
+				SessionID: sessionID.String, AgentID: defaults.AgentID,
+				ModelProvider: defaults.ModelProvider, Model: defaults.Model,
+			})
+			if resolveErr != nil {
+				if errors.Is(resolveErr, ErrExternalAgentBaseURLInsecure) ||
+					errors.Is(resolveErr, ErrExternalAgentBaseURLInvalid) {
+					result, updateErr := tx.ExecContext(ctx, `
+						UPDATE automations
+						SET next_due_at = ?, updated_at = ?
+						WHERE id = ? AND enabled = 1 AND next_due_at = ?
+					`, FormatTimestamp(nextDue), firedAt, automationID, dueAt)
+					if updateErr != nil {
+						return AutomationFire{}, false, updateErr
+					}
+					advanced, rowsErr := result.RowsAffected()
+					if rowsErr != nil {
+						return AutomationFire{}, false, rowsErr
+					}
+					if advanced != 1 {
+						return AutomationFire{}, false, nil
+					}
+					payload, marshalErr := json.Marshal(map[string]any{
+						"code":       AutomationFailureRemoteEgressConfigurationInvalid,
+						"firedDueAt": dueAt,
+						"nextDueAt":  FormatTimestamp(nextDue),
+					})
+					if marshalErr != nil {
+						return AutomationFire{}, false, marshalErr
+					}
+					if auditErr := recordAuditTx(
+						ctx, tx, "", "automation", automationID,
+						"automation.remote_egress_blocked", automationID, string(payload),
+					); auditErr != nil {
+						return AutomationFire{}, false, auditErr
+					}
+					if commitErr := tx.Commit(); commitErr != nil {
+						return AutomationFire{}, false, commitErr
+					}
+					return AutomationFire{
+						AutomationID: automationID, Name: name, Failed: true,
+						FailureCode: AutomationFailureRemoteEgressConfigurationInvalid,
+					}, true, nil
+				}
+				return AutomationFire{}, false, resolveErr
+			}
+			requirements = resolved.requirements
+		}
 	}
 	if requirements.ModelProvider == "openai_compatible" {
 		result, updateErr := tx.ExecContext(ctx, `
@@ -722,13 +728,12 @@ func (r *Repository) ClaimDueAutomation(ctx context.Context, at time.Time, defau
 // makes a fresh one rather than resurrecting what was withdrawn.
 func automationSessionTx(ctx context.Context, tx *sql.Tx, automationID string, name string, existing sql.NullString) (string, error) {
 	if existing.Valid && existing.String != "" {
-		var found string
-		err := tx.QueryRowContext(ctx, `SELECT id FROM sessions WHERE id = ?`, existing.String).Scan(&found)
-		if err == nil {
-			return found, nil
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
+		active, err := automationSessionActiveTx(ctx, tx, existing.String)
+		if err != nil {
 			return "", err
+		}
+		if active {
+			return existing.String, nil
 		}
 	}
 	createdAt := now()
@@ -744,6 +749,18 @@ func automationSessionTx(ctx context.Context, tx *sql.Tx, automationID string, n
 		return "", err
 	}
 	return sessionID, nil
+}
+
+func automationSessionActiveTx(ctx context.Context, tx *sql.Tx, sessionID string) (bool, error) {
+	var active bool
+	err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM sessions
+			WHERE id = ? AND deletion_state = 'active'
+		)
+	`, sessionID).Scan(&active)
+	return active, err
 }
 
 // GetAutomationRunGrant reports what an unattended run was permitted to do.

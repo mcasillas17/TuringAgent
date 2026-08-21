@@ -640,6 +640,29 @@ func TestInitGeneratesAndPreservesEgressSigningSecret(t *testing.T) {
 	assertEnvValue(t, restarted.env, "TURING_EGRESS_SIGNING_SECRET", existing)
 }
 
+func TestInitGeneratesACursorHMACSecretOfTheRightShape(t *testing.T) {
+	result := runInit(t, "501", "20", "")
+
+	value := envValue(t, result.env, "TURING_CURSOR_HMAC_SECRET")
+	if len(value) != 64 {
+		t.Fatalf("TURING_CURSOR_HMAC_SECRET = %q (%d chars), want 64 hex characters", value, len(value))
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		t.Fatalf("TURING_CURSOR_HMAC_SECRET is not hex: %v", err)
+	}
+	if value != strings.ToLower(value) {
+		t.Fatalf("TURING_CURSOR_HMAC_SECRET = %q, want lowercase hex", value)
+	}
+}
+
+func TestInitKeepsAnExistingCursorHMACSecret(t *testing.T) {
+	existing := strings.Repeat("cd", 32)
+
+	result := runInit(t, "501", "20", "TURING_CURSOR_HMAC_SECRET="+existing+"\n")
+	assertEnvValue(t, result.env, "TURING_CURSOR_HMAC_SECRET", existing)
+	assertEnvValue(t, result.env, "TURING_CURSOR_HMAC_SECRET", existing)
+}
+
 // The runtime and approval-consumer identities must never collide: a shared
 // secret would let a compromised approval consumer (mcp-files) present the
 // runtime's own credential and reach RuntimeService/SessionService, which is

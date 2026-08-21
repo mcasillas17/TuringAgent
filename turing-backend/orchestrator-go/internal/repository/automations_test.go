@@ -457,6 +457,94 @@ func TestDeletingTheConversationLetsTheNextFireMakeAFreshOne(t *testing.T) {
 	}
 }
 
+func TestAutomationUsesFreshConversationWhenPreviousIsWithdrawing(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	automation := mustCreateDueAutomation(
+		t,
+		repo,
+		ctx,
+		"Digest",
+		everyFiveMinutes(),
+	)
+	due := mustParse(t, automation.NextDueAt)
+	first, found, err := repo.ClaimDueAutomation(ctx, due, automationDefaults)
+	if err != nil || !found {
+		t.Fatalf("first claim = found %v err %v", found, err)
+	}
+	finishRun(t, repo, first.RunID)
+	beforeWithdrawal, err := repo.GetAutomation(ctx, automation.AutomationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.BeginSessionDeletion(ctx, first.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	var messagesBefore, runsBefore int
+	if err := repo.db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM messages WHERE session_id = ?`,
+		first.SessionID,
+	).Scan(&messagesBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM agent_runs WHERE session_id = ?`,
+		first.SessionID,
+	).Scan(&runsBefore); err != nil {
+		t.Fatal(err)
+	}
+
+	second, found, err := repo.ClaimDueAutomation(
+		ctx,
+		due.Add(5*time.Minute),
+		automationDefaults,
+	)
+	if err != nil || !found {
+		t.Fatalf("claim during withdrawal = found %v err %v", found, err)
+	}
+	if second.SessionID == "" || second.SessionID == first.SessionID {
+		t.Fatalf(
+			"second conversation = %q, want fresh session after withdrawing %q",
+			second.SessionID,
+			first.SessionID,
+		)
+	}
+	for table, before := range map[string]int{
+		"messages":   messagesBefore,
+		"agent_runs": runsBefore,
+	} {
+		var after int
+		if err := repo.db.QueryRowContext(
+			ctx,
+			"SELECT COUNT(*) FROM "+table+" WHERE session_id = ?",
+			first.SessionID,
+		).Scan(&after); err != nil {
+			t.Fatal(err)
+		}
+		if after != before {
+			t.Fatalf("%s count = %d, want unchanged %d", table, after, before)
+		}
+	}
+	reloaded, err := repo.GetAutomation(ctx, automation.AutomationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.NextDueAt == beforeWithdrawal.NextDueAt {
+		t.Fatalf(
+			"next due did not advance after fresh-session fire: %q",
+			reloaded.NextDueAt,
+		)
+	}
+	if reloaded.SessionID != second.SessionID {
+		t.Fatalf(
+			"automation session = %q, want fresh session %q",
+			reloaded.SessionID,
+			second.SessionID,
+		)
+	}
+}
+
 // The allowlist a run is judged against is the one that existed when it fired.
 // Widening it mid-run must not widen what that run may already be doing.
 func TestTheRunGrantIsFrozenAtFireTime(t *testing.T) {
@@ -734,6 +822,60 @@ func TestAutomationFailsItsExistingExternalAgentRouteBeforeWorkerValidation(t *t
 		if after != before {
 			t.Fatalf("%s count = %d, want unchanged %d", table, after, before)
 		}
+	}
+}
+
+func TestAutomationValidatesFreshDefaultRouteWhenPreviousSessionIsWithdrawing(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	automation := mustCreateDueAutomation(t, repo, ctx, "Fresh route", everyFiveMinutes())
+	firstDue := mustParse(t, automation.NextDueAt)
+	first, found, err := repo.ClaimDueAutomation(ctx, firstDue, automationDefaults)
+	if err != nil || !found || first.Skipped {
+		t.Fatalf("first claim = %+v, found %v, err %v", first, found, err)
+	}
+	finishRun(t, repo, first.RunID)
+	agent, err := repo.CreateExternalAgent(ctx, ExternalAgentInput{
+		DisplayName: "External", Provider: "anthropic", BaseURL: "https://example.com",
+		Model: "external-model", CredentialRef: "external",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetSessionAgent(ctx, first.SessionID, agent.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.BeginSessionDeletion(ctx, first.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := repo.GetAutomation(ctx, automation.AutomationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults := automationDefaults
+	validated := false
+	defaults.ValidateRouting = func(_ context.Context, route RoutingRequirements) error {
+		validated = true
+		if route.ExternalAgent ||
+			route.ModelProvider != automationDefaults.ModelProvider ||
+			route.Model != automationDefaults.Model {
+			t.Fatalf("validated route = %+v, want fresh default route", route)
+		}
+		return nil
+	}
+
+	fire, found, err := repo.ClaimDueAutomation(
+		ctx,
+		mustParse(t, reloaded.NextDueAt),
+		defaults,
+	)
+	if err != nil || !found || fire.Skipped {
+		t.Fatalf("fresh route claim = %+v, found %v, err %v", fire, found, err)
+	}
+	if !validated {
+		t.Fatal("fresh default route was not validated")
+	}
+	if fire.SessionID == first.SessionID {
+		t.Fatalf("fire reused withdrawing session %q", first.SessionID)
 	}
 }
 

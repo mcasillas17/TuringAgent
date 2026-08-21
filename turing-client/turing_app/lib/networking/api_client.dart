@@ -9,6 +9,7 @@ import '../models/message.dart';
 import '../models/remote_egress.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
+import '../models/session_page.dart';
 import '../models/session_deletion.dart';
 import '../models/skill.dart';
 import '../models/telemetry.dart';
@@ -22,7 +23,22 @@ abstract class TuringApi implements RemoteEgressApi {
 
   Future<List<Session>> listSessions({int limit = 50, String? after});
 
+  Future<SessionPage> listSessionPage({
+    int limit = 50,
+    String? cursor,
+    SessionListFilter filter = SessionListFilter.active,
+  });
+
   Future<Session> getSession({required String sessionId});
+
+  Future<Session> renameSession({
+    required String sessionId,
+    required String title,
+  });
+
+  Future<Session> archiveSession({required String sessionId});
+
+  Future<Session> restoreSession({required String sessionId});
 
   /// Starts or advances an idempotent session withdrawal. The caller removes
   /// local state only after a completed receipt; an in-progress or

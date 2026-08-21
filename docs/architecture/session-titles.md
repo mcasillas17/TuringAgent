@@ -39,7 +39,8 @@ has no `run_id`, and carries the authoritative metadata snapshot:
 ```json
 {
   "title": "What is in the sandbox?",
-  "updatedAt": "2026-08-18T20:00:00.000000000Z"
+  "updatedAt": "2026-08-18T20:00:00.000000000Z",
+  "status": "active"
 }
 ```
 
@@ -80,9 +81,12 @@ matches the backend with an exact nanosecond key: `updatedAt` descending, then
 session ID descending when timestamps tie. List/Get mappings read protobuf
 seconds/nanos directly, and CreateSession returns the same exact key alongside
 its display timestamp, so a newly created row does not lose sub-microsecond
-ordering. Locally deleted IDs remain
-tombstoned for the shell lifetime because omission from the 50-row page cannot
-prove absence.
+ordering. Locally deleted IDs remain tombstoned for the shell lifetime because omission
+from an active page cannot prove absence. The same rule protects archive state:
+the latest authoritative archived snapshot remains guarded until a strictly
+newer restore or deletion tombstone replaces it, so page omission or a delayed
+legacy status-less event cannot resurrect the row. See
+[Session lifecycle and pagination](session-lifecycle.md).
 Flutter does not call `ListSessions` after sending a message. Search group
 headings load the same stored session title, so the sidebar and search do not
 invent separate names for one conversation.
@@ -121,8 +125,9 @@ client; cross-client deletion propagation is a separate existing protocol gap.
 
 ## Configuration and limits
 
-There is no title-related environment variable. The 60-rune and 30-rune
-word-boundary thresholds are code-level UI contracts.
+There is no title-related environment variable. Derived titles use the 60-rune
+and 30-rune word-boundary thresholds above. Explicit rename titles are trimmed
+and limited independently to 120 Unicode scalar values.
 
 The implementation is rune-safe, not grapheme-cluster-aware. A combining
 sequence or emoji ZWJ sequence that crosses the exact cutoff can end with an odd

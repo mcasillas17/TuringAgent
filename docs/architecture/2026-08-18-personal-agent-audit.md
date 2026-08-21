@@ -394,10 +394,15 @@ check, lint) before merge.
 
 #### TUR-008 — Complete session lifecycle and pagination
 
+**Status:** Implemented. See [Session lifecycle and pagination](session-lifecycle.md) for the public behavior and its mutable-row keyset trade-off.
+
 **Outcome:** Session ordering, pagination, archive/rename behavior, and limits match the public contract.  
-**Scope:** Update `sessions.updated_at` on activity; implement bounded stable cursors; consume `PageRequest.cursor`; populate `PageResponse`; add explicit rename/archive operations and input limits. Today `updated_at` is only set at creation, so ordering is creation order, and the service advertises but ignores cursor pagination.  
-**Likely files:** sessions proto/service/repository, jobs transaction, Flutter session actions.  
-**Acceptance:** Pagination is stable under inserts; active conversations reorder correctly; invalid cursors and excessive limits fail predictably.  
+**Scope:** Shipped monotonic activity updates, authenticated bounded keyset cursors, consumed `PageRequest.cursor`, populated `PageResponse`, explicit rename/archive/restore operations, active/archived/all filters, and server-authoritative input limits. Flutter exposes active load-more plus rename, archive, archived-list restore, and permanent delete actions.
+
+**Likely files:** Delivered across the sessions proto/service/repository, accepted-message transaction, lifecycle migration/configuration, and Flutter session model/network/shell surfaces.
+
+**Acceptance:** Covered by repository, public gRPC, cursor, migration, and Flutter regressions: pagination remains stable under concurrent inserts; active conversations reorder on durable activity; stale pages and legacy events cannot resurrect archived rows; malformed cursors and excessive limits fail predictably.
+
 **Dependencies:** None.
 
 #### TUR-009 — Persist reopenable run outcomes

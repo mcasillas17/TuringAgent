@@ -12,7 +12,8 @@ The project is designed for local development first: secrets stay in your local 
   run; the decision is recorded with the run and cannot authorize background work.
 - Exposes MCP tool servers for safe system tools and approval-gated sandboxed file tools.
 - Provides a Flutter client with settings, conversation search, automatically
-  named session lists, chat, streamed responses, and approval cards.
+  named and paginated session lists, rename/archive/restore actions, chat,
+  streamed responses, and approval cards.
 - Exposes a redacted, paginated audit read API (`AuditService.ListAuditEntries`), including the approval comment or denial reason a person typed; audit inspection is exposed programmatically through the authenticated API and a thin client, with no built-in viewer yet.
 - Withdraws a deleted session through a durable lifecycle: reads/search/replay
   fail closed once withdrawal starts, active work is cancelled and reconciled,
@@ -140,6 +141,7 @@ Common values:
 | `TURING_APPROVAL_CONSUMER_TOKEN` | Bearer token for mcp-files' internal gRPC calls; authorized for `ApprovalService.ConsumeApproval`, `FinalizeSandboxArtifact`, and `CheckSessionCapability`, never the runtime's methods |
 | `TURING_APPROVAL_JWT_SECRET` | HS256 secret used for approval tokens |
 | `TURING_EGRESS_SIGNING_SECRET` | Orchestrator-only key for short-lived, one-time remote-egress disclosure challenges |
+| `TURING_CURSOR_HMAC_SECRET` | Orchestrator-only 32-byte hex key authenticating opaque session cursors; rotation invalidates outstanding cursors |
 | Approval-consumer scope | `ApprovalService.ConsumeApproval`, `FinalizeSandboxArtifact`, and `CheckSessionCapability`; never runtime-only methods |
 | `TURING_APPROVAL_TIMEOUT_MS` / `TURING_APPROVAL_WAIT_TIMEOUT_MS` | Approval lifetime and the longer runtime observation bound (defaults: 65s / 71s) |
 | `TURING_TOOL_TIMEOUT_MS` / `TURING_TOOL_TOTAL_TIMEOUT_MS` | Per-request MCP timeout and whole-tool lifecycle timeout (defaults: 30s / 180s) |
@@ -232,6 +234,7 @@ or migration.
 
 - [Tech stack and architecture](docs/architecture/tech-stack.md)
 - [Stable session title lifecycle](docs/architecture/session-titles.md)
+- [Session lifecycle and pagination](docs/architecture/session-lifecycle.md)
 - [Audit read API](docs/architecture/audit-read-api.md)
 - [Remote-provider egress policy](docs/architecture/remote-egress-policy.md)
 - [MCP security and approval flow](docs/mcp-security-and-integration.md)

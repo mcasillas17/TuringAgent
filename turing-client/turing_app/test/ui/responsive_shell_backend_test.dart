@@ -17,6 +17,8 @@ import 'package:turing_flutter_app/ui/shell/responsive_shell.dart';
 import '../support/no_audit_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
+import '../support/no_remote_egress_api.dart';
+import '../support/no_session_lifecycle_api.dart';
 import '../support/no_automations_api.dart';
 import '../support/no_skills_api.dart';
 import '../support/no_telemetry_api.dart';
@@ -277,14 +279,17 @@ void main() {
   });
 }
 
-class _FakeApiClient extends TuringApi
+class _FakeApiClient
     with
         NoAuditApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
         NoAutomationsApi,
-        NoTelemetryApi {
+        NoRemoteEgressApi,
+        NoSessionLifecycleApi,
+        NoTelemetryApi
+    implements TuringApi {
   @override
   Future<Map<String, dynamic>> approveApproval(
     String approvalId, {

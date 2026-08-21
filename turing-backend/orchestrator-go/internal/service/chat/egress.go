@@ -90,8 +90,12 @@ func (s *Server) PrepareRemoteEgress(ctx context.Context, req *turingv1.PrepareR
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.repo.GetSession(ctx, input.SessionID); err != nil {
+	withdrawalState, err := s.repo.SessionWithdrawalState(ctx, input.SessionID)
+	if err != nil {
 		return nil, mapSessionError(ctx, err)
+	}
+	if !withdrawalState.Active {
+		return nil, mapSessionError(ctx, repository.ErrSessionDeleting)
 	}
 	resolved, err := s.resolveEgressContext(ctx, input)
 	if err != nil {
@@ -378,7 +382,7 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 	rawEndpoint := ""
 	agent, routed, err := s.repo.GetSessionAgent(ctx, input.SessionID)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "resolve remote egress destination failed")
+		return nil, mapSessionError(ctx, err)
 	}
 	if routed {
 		resolved.Provider = "openai_compatible"

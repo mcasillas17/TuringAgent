@@ -15,6 +15,8 @@ import '../support/no_audit_api.dart';
 import '../support/no_skills_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_automations_api.dart';
+import '../support/no_remote_egress_api.dart';
+import '../support/no_session_lifecycle_api.dart';
 import '../support/no_telemetry_api.dart';
 
 /// What the user types into the credential field. Nothing on screen may ever
@@ -598,13 +600,16 @@ class _ConnectCall {
 
 /// A working in-memory backend, so the UI is tested against something that
 /// behaves like the real one rather than a stub that always says yes.
-class _IntegrationsApi extends TuringApi
+class _IntegrationsApi
     with
         NoAuditApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoAutomationsApi,
-        NoTelemetryApi {
+        NoRemoteEgressApi,
+        NoSessionLifecycleApi,
+        NoTelemetryApi
+    implements TuringApi {
   final List<IntegrationConnection> connections = [];
   final List<_ConnectCall> connectCalls = [];
   final List<String> revoked = [];

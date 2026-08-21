@@ -67,6 +67,29 @@ func TestPrepareRemoteEgressDisclosesExactRemoteMaximumWithoutPersistence(t *tes
 	}
 }
 
+func TestPrepareRemoteEgressDeletingSessionReturnsFailedPrecondition(t *testing.T) {
+	h := newHarness(t)
+	sessionID := h.createSession(t)
+	if _, err := h.repo.BeginSessionDeletion(context.Background(), sessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := h.chatClient.PrepareRemoteEgress(
+		h.clientContext(),
+		&turingv1.PrepareRemoteEgressRequest{
+			SessionId:      sessionID,
+			Content:        "do not prepare",
+			ContentType:    "text",
+			ModelProvider:  turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
+			Model:          "gpt-4o-mini",
+			IdempotencyKey: "deleting_session",
+		},
+	)
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("PrepareRemoteEgress error = %v, want FailedPrecondition", err)
+	}
+}
+
 func TestPrepareExternalAgentDisclosureOmitsCrossSessionRecall(t *testing.T) {
 	h := newHarness(t)
 	worker := connectChatTestWorker(t, h, defaultChatWorkerCapabilities(true))
