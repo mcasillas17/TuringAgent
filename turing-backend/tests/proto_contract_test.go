@@ -190,8 +190,8 @@ func TestSearchMessagesNewResponseIsReadableByLegacyDescriptor(t *testing.T) {
 	if err := proto.Unmarshal(wire, legacyMessage); err != nil {
 		t.Fatalf("unmarshal into legacy response: %v", err)
 	}
-	if legacyMessage.Descriptor().Fields().ByNumber(2) != nil {
-		t.Fatal("legacy response descriptor exposes field 2 after unmarshal")
+	if len(legacyMessage.GetUnknown()) == 0 {
+		t.Fatal("legacy message has no unknown fields, want field 2 (hits) preserved as unknown data")
 	}
 	if got := legacyMessage.Get(legacyDescriptor.Fields().ByNumber(1)).List().Len(); got != 0 {
 		t.Fatalf("legacy messages length = %d, want 0", got)
