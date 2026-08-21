@@ -227,6 +227,26 @@ func ApprovalFailureCategory(eventType string) (Reason, bool) {
 	}
 }
 
+// ToolCallFailureCategory is the same rule for a tool call's terminal event,
+// and exists for the same reason: the live writer and the 0011 rewrite must
+// answer it identically or a client could tell a migrated tool.call.failed from
+// a freshly written one.
+//
+// A tool call that ends denied was refused by policy; one that ends failed
+// broke while running. Which event is being written settles that, so no code
+// the beacon carried — and no message it carried — participates. tool.call.
+// started and tool.call.completed describe no failure and get no category.
+func ToolCallFailureCategory(eventType string) (Reason, bool) {
+	switch eventType {
+	case "tool.call.failed":
+		return ReasonToolFailure, true
+	case "tool.call.denied":
+		return ReasonPolicyDenied, true
+	default:
+		return "", false
+	}
+}
+
 // StepNotice is a failure-like run-step projection: a category plus bounded
 // counters. It accepts no display string, so the sentence a client shows is
 // derived from the category by the client instead of persisted by the backend.

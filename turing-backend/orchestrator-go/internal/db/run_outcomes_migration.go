@@ -1048,8 +1048,8 @@ func approvalEventCategory(eventType string) runoutcome.Reason {
 }
 
 func toolCallEventCategory(eventType string) runoutcome.Reason {
-	if eventType == "tool.call.denied" {
-		return runoutcome.ReasonPolicyDenied
+	if category, ok := runoutcome.ToolCallFailureCategory(eventType); ok {
+		return category
 	}
 	return runoutcome.ReasonToolFailure
 }

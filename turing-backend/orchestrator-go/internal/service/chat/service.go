@@ -340,6 +340,23 @@ func mapEnqueueError(ctx context.Context, err error) error {
 	return status.Error(codes.Internal, "enqueue user message failed")
 }
 
+// afterRunStateReadForCancelHook is set only by the disconnect version-race
+// regression, at the exact point between reading the run's version and guarding
+// the cancellation with it.
+var afterRunStateReadForCancelHook func(runID string)
+
+// maxCancelVersionAttempts bounds how many times an abandonment re-reads a run
+// whose version moved underneath it.
+//
+// The window is one read and one guarded update wide, and the writers that can
+// land inside it are the lifecycle transitions a single run makes — an ownership
+// fence, a resume, an approval decision. Three attempts covers a run that is
+// being moved while its client disappears; a fourth would mean something is
+// rewriting this run continuously, and spinning against that would hold a
+// goroutine and a database connection forever rather than let the recovery
+// loop deal with it.
+const maxCancelVersionAttempts = 3
+
 // cancelRun terminalizes a run whose client went away.
 //
 // The one stream-cancellation signal this product has covers a deliberate stop
@@ -347,22 +364,44 @@ func mapEnqueueError(ctx context.Context, err error) error {
 // affordance, so this cannot claim the user meant it. It reports abandonment,
 // which is the strongest thing that is actually true. Nothing about the
 // transport's own wording is persisted.
+//
+// The read and the guarded update are two steps, so another writer can commit
+// between them and the update then loses on version. That loss used to be
+// discarded: no event, no retry, and a run nobody was watching kept executing.
+// It is retried instead, against a freshly read version, a bounded number of
+// times. Only a version conflict is retried — a refusal means the run is
+// already terminal and there is nothing left to cancel, and a missing run means
+// it was deleted.
 func (s *Server) cancelRun(runID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	state, err := s.repo.GetRunState(ctx, runID)
-	if err != nil {
-		return
-	}
-	result, err := s.repo.CancelRunCanonical(ctx, repository.CancelRunInput{
-		RunID:                runID,
-		ExpectedStateVersion: state.StateVersion,
-		Cancellation:         runoutcome.AbandonedCancellation(),
-	})
-	if err == nil {
-		for _, event := range result.Events {
-			s.bus.Publish(busEventFromRepository(event))
+	for attempt := 0; attempt < maxCancelVersionAttempts; attempt++ {
+		state, err := s.repo.GetRunState(ctx, runID)
+		if err != nil {
+			// Deletion and a closed database both land here. Neither is a race
+			// this can win, and neither leaves a run to tell the runtime about.
+			return
 		}
+		if afterRunStateReadForCancelHook != nil {
+			afterRunStateReadForCancelHook(runID)
+		}
+		result, err := s.repo.CancelRunCanonical(ctx, repository.CancelRunInput{
+			RunID:                runID,
+			ExpectedStateVersion: state.StateVersion,
+			Cancellation:         runoutcome.AbandonedCancellation(),
+		})
+		if errors.Is(err, repository.ErrRunTransitionConflict) && ctx.Err() == nil {
+			continue
+		}
+		if err == nil {
+			// Only the committed transition publishes. A duplicate carries no
+			// events, so a replayed abandonment cannot announce a second
+			// cancellation for a run that already has one.
+			for _, event := range result.Events {
+				s.bus.Publish(busEventFromRepository(event))
+			}
+		}
+		break
 	}
 	if s.runtime != nil {
 		s.runtime.CancelRun(ctx, runID, "client_cancelled")

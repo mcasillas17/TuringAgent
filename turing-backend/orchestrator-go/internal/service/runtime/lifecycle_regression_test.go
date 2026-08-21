@@ -417,7 +417,10 @@ func TestDelayedIdenticalAfterDoesNotCloseWorkerStream(t *testing.T) {
 	if decision.GetDecision() != turingv1.ToolPolicyDecision_DECISION_ALLOW {
 		t.Fatalf("late cleanup decision = %+v, want allow", decision)
 	}
-	after.Error = &turingv1.ToolCallError{Code: "cancelled", Message: "conflicting cleanup"}
+	// A different typed code is what makes this report conflict. The message no
+	// longer participates: it is not persisted at all, so two reports that
+	// differ only in prose are the same durable fact.
+	after.Error = &turingv1.ToolCallError{Code: "mcp_call_failed", Message: "conflicting cleanup"}
 	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: after}}); err != nil {
 		t.Fatal(err)
 	}

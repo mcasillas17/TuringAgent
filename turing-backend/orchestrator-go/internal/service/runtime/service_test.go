@@ -2632,7 +2632,7 @@ func TestToolBeaconDeniesUnknownToolWithDurableEvent(t *testing.T) {
 		"toolCallId": "call_unknown",
 		"serverName": "system",
 		"toolName":   "system.shell",
-		"error":      "unknown_tool",
+		"category":   string(runoutcome.ReasonPolicyDenied),
 	}; !reflect.DeepEqual(payload, want) {
 		t.Fatalf("tool.call.denied payload = %+v", payload)
 	}

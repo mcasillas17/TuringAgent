@@ -9,6 +9,7 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	approvalsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/approvals"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -327,8 +328,14 @@ func TestABlockedToolIsVisibleInTheConversation(t *testing.T) {
 	for _, event := range replayed {
 		seen[event.Type] = event.PayloadJSON
 	}
-	if payload, ok := seen["tool.call.denied"]; !ok || !strings.Contains(payload, AutomationNotAllowlistedCode) {
-		t.Fatalf("tool.call.denied = %q, want it to name the reason", payload)
+	// The denial event carries the allowlisted category, not the policy string:
+	// which automation hit which tool is in the audit record above, and the
+	// run's own failure below still names the code. A client renders the
+	// category, so a denial cannot become a channel for policy prose.
+	if payload, ok := seen["tool.call.denied"]; !ok ||
+		!strings.Contains(payload, string(runoutcome.ReasonPolicyDenied)) ||
+		strings.Contains(payload, AutomationNotAllowlistedCode) {
+		t.Fatalf("tool.call.denied = %q, want the allowlisted category alone", payload)
 	}
 	if payload, ok := seen["agent.run.failed"]; !ok || !strings.Contains(payload, AutomationNotAllowlistedCode) {
 		t.Fatalf("agent.run.failed = %q, want it to name the reason", payload)

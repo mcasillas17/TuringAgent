@@ -656,19 +656,55 @@ func (s *Server) renewWorkerLeases(ctx context.Context, workerID string, connect
 	if heartbeat.GetWorkerId() != workerID {
 		return status.Error(codes.PermissionDenied, "heartbeat worker_id does not match connected worker")
 	}
+	refreshes, reconciled, err := s.reconcileHeartbeatState(ctx, workerID, connectedWorker)
+	if err != nil {
+		return err
+	}
+	// Queueing happens with the update lock released. The command buffer is
+	// bounded, and the only goroutine that drains it needs that same lock to
+	// deliver an assignment: queueing while holding it lets a full buffer close
+	// a cycle neither side can leave, on a stream context that never expires.
+	//
+	// The proofs are already committed at this point, so a refresh that cannot
+	// be delivered still fails this heartbeat, and the recovering truth stays
+	// durable through the ordinary reconciliation fence when the stream tears
+	// down. Order is preserved: the refreshes go out in the order the proofs
+	// were committed.
+	for _, refresh := range refreshes {
+		if err := connectedWorker.sendAssignmentRefresh(ctx, refresh); err != nil {
+			return err
+		}
+	}
+	if reconciled {
+		return s.DispatchPending(ctx)
+	}
+	return nil
+}
+
+// reconcileHeartbeatState does everything a heartbeat decides, under the update
+// lock, and hands back the refreshes that still have to reach the worker.
+//
+// It returns the refresh commands rather than sending them because sending can
+// block, and nothing that can block may run while this lock is held.
+func (s *Server) reconcileHeartbeatState(
+	ctx context.Context,
+	workerID string,
+	connectedWorker *worker,
+) ([]*turingv1.RuntimeCommand, bool, error) {
 	connectedWorker.updateMu.Lock()
 	defer connectedWorker.updateMu.Unlock()
 	// A run this worker still owns may have been fenced into recovering while
 	// its ownership was in doubt. The heartbeat resolves that doubt, so the
 	// proof runs before recovery: recovering a run whose owner is demonstrably
 	// alive would throw away work nobody needed to lose.
-	if err := s.proveOwnedRecoveringAssignments(ctx, workerID, connectedWorker); err != nil {
-		return err
+	refreshes, err := s.proveOwnedRecoveringAssignments(ctx, workerID, connectedWorker)
+	if err != nil {
+		return nil, false, err
 	}
 	assignments := connectedWorker.assignmentSnapshot(workerID)
 	renewed, err := s.repo.RenewAssignments(ctx, assignments, time.Now().UTC().Add(s.dispatch.LeaseDuration))
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	renewedSet := make(map[repository.Assignment]struct{}, len(renewed))
 	for _, assignment := range renewed {
@@ -681,7 +717,7 @@ func (s *Server) renewWorkerLeases(ctx context.Context, workerID string, connect
 		}
 		result, err := s.repo.RecoverAssignmentWithLimit(ctx, assignment, s.dispatch.MaxAttempts)
 		if err != nil {
-			return err
+			return nil, false, err
 		}
 		released := connectedWorker.releaseAssignmentAttempt(assignment.RunID, assignment.AttemptID)
 		for _, event := range result.Events {
@@ -693,43 +729,43 @@ func (s *Server) renewWorkerLeases(ctx context.Context, workerID string, connect
 	if revived {
 		s.refreshPendingCapabilityStateAdvisory(ctx, "worker heartbeat restored", workerID, false, true)
 	}
-	if reconciled || revived {
-		return s.DispatchPending(ctx)
-	}
-	return nil
+	return refreshes, reconciled || revived, nil
 }
 
 // proveOwnedRecoveringAssignments commits recovering -> running for every
-// assignment this worker can still prove it owns, and hands each proof back on
-// a same-attempt RunAssigned refresh.
+// assignment this worker can still prove it owns, and collects the same-attempt
+// RunAssigned refresh that hands each proof back.
 //
 // The refresh is what makes the transition legitimate. A lifecycle change the
 // worker never learns about is the defect the version fence exists to remove:
 // the worker would keep reporting against the state it last saw, and every one
-// of those reports would be refused. So the proof and the reply are one step,
-// and a refresh that cannot be delivered leaves the recovering truth in place
-// through the ordinary reconciliation fence when the stream tears down.
-func (s *Server) proveOwnedRecoveringAssignments(ctx context.Context, workerID string, connectedWorker *worker) error {
+// of those reports would be refused. So the proof and the reply belong to one
+// step — but only the proof happens here. Queueing a refresh can block on the
+// worker's bounded command buffer, and this runs under the update lock the
+// command loop needs to drain that buffer, so the caller sends them once the
+// lock is released. A refresh that cannot be delivered still fails the
+// heartbeat, and the recovering truth stays in place through the ordinary
+// reconciliation fence when the stream tears down.
+func (s *Server) proveOwnedRecoveringAssignments(ctx context.Context, workerID string, connectedWorker *worker) ([]*turingv1.RuntimeCommand, error) {
+	var refreshes []*turingv1.RuntimeCommand
 	for _, held := range connectedWorker.assignmentEntries() {
 		if held.job == nil {
 			continue
 		}
 		version, proven, err := s.proveRecoveringOwnership(ctx, held.runID, workerID, held.attemptID)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if !proven {
 			continue
 		}
 		refresh := proto.Clone(held.job).(*turingv1.AgentJob)
 		refresh.ExpectedStateVersion = version
-		if err := connectedWorker.sendAssignmentRefresh(ctx, &turingv1.RuntimeCommand{
+		refreshes = append(refreshes, &turingv1.RuntimeCommand{
 			Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: refresh},
-		}); err != nil {
-			return err
-		}
+		})
 	}
-	return nil
+	return refreshes, nil
 }
 
 // proveRecoveringOwnership returns the version a recovering run commits when
@@ -1341,6 +1377,23 @@ func (w *worker) sendAssignmentRefresh(ctx context.Context, command *turingv1.Ru
 	return w.enqueue(ctx, workerCommand{command: command, refresh: true})
 }
 
+// enqueue queues one command for the command loop to deliver.
+//
+// A buffer with room is filled under the worker lock, exactly as it always was:
+// closing the worker needs that lock too, so a command cannot be queued into a
+// registration that closed in between, and a caller that terminalizes on an
+// undelivered command still gets told.
+//
+// Only a full buffer waits, and that wait happens with the lock released.
+// Holding it across the wait closed a cycle: the command loop takes this same
+// lock to deliver an assignment, so a full buffer left the queueing side
+// waiting for space that only the loop could make and the loop waiting for a
+// lock only the queueing side could release. Closing the worker needs the lock
+// too, so even the teardown that should have broken the tie could not run.
+//
+// While waiting, a close is observed through the done channel. Nothing drains
+// the buffer once the command loop has exited, so a worker that closes mid-wait
+// reports disconnection rather than waiting out the caller's context.
 func (w *worker) enqueue(ctx context.Context, queued workerCommand) error {
 	w.mu.Lock()
 	if w.closed {
@@ -1348,12 +1401,20 @@ func (w *worker) enqueue(ctx context.Context, queued workerCommand) error {
 		return status.Error(codes.Canceled, "worker is disconnected")
 	}
 	commands := w.commands
+	done := w.done
 	select {
 	case commands <- queued:
 		w.mu.Unlock()
 		return nil
+	default:
+	}
+	w.mu.Unlock()
+	select {
+	case commands <- queued:
+		return nil
+	case <-done:
+		return status.Error(codes.Canceled, "worker is disconnected")
 	case <-ctx.Done():
-		w.mu.Unlock()
 		return ctx.Err()
 	}
 }
@@ -2393,12 +2454,20 @@ func toolStartedEventInput(beacon *turingv1.ToolCallBeacon, run repository.Run) 
 	}, nil
 }
 
+// denyToolBefore refuses a tool call and records the refusal.
+//
+// reason stays internal: it is the decision the runtime is told, and the
+// rationale the audit log keeps. The durable event gets the identity a client
+// was already promised plus the one category a denial can carry, so a client
+// reading tool.call.denied cannot tell a live denial from a migrated one, and
+// no policy string reaches it under any key.
 func (s *Server) denyToolBefore(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run, argsJSON string, argsHash string, reason string) (*turingv1.ToolPolicyDecision, error) {
+	category, _ := runoutcome.ToolCallFailureCategory("tool.call.denied")
 	deniedPayload, err := safejson.MarshalCanonical(map[string]any{
 		"toolCallId": beacon.ToolCallId,
 		"serverName": beaconServerName(beacon),
 		"toolName":   beacon.ToolName,
-		"error":      reason,
+		"category":   string(category),
 	})
 	if err != nil {
 		return nil, err
@@ -2466,18 +2535,17 @@ func (s *Server) handleToolAfter(ctx context.Context, beacon *turingv1.ToolCallB
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "tool args are not valid JSON")
 	}
-	errorCode, errorMessage := "", ""
-	if beacon.Error != nil {
-		errorCode = beacon.Error.Code
-		errorMessage = beacon.Error.Message
-	}
+	// Normalization happens here, before the tool call row and before the
+	// event, because both are durable and both are read back to clients. What
+	// the beacon actually said — a path, a key, a provider's prose in an error
+	// message — never reaches either.
 	payload := map[string]any{
 		"toolCallId": beacon.ToolCallId,
 		"serverName": beaconServerName(beacon),
 		"toolName":   beacon.ToolName,
 	}
-	if errorText := publicToolEventError(statusValue, beacon.Error); errorText != "" {
-		payload["error"] = errorText
+	if category, isFailure := runoutcome.ToolCallFailureCategory(eventType); isFailure {
+		payload["category"] = string(category)
 	}
 	payloadJSON, err := safejson.MarshalCanonical(payload)
 	if err != nil {
@@ -2493,9 +2561,12 @@ func (s *Server) handleToolAfter(ctx context.Context, beacon *turingv1.ToolCallB
 		WorkerID:        workerID,
 		Status:          statusValue,
 		ResultSummary:   beacon.ResultSummary,
-		ErrorCode:       errorCode,
-		ErrorMessage:    errorMessage,
-		DurationMS:      beacon.DurationMs,
+		ErrorCode:       toolAfterErrorCode(eventType, beacon),
+		// Deliberately empty on every terminal shape. error_message is the
+		// column a tool's or a provider's sentence used to reach a client
+		// through, and nothing the runtime can say belongs in it.
+		ErrorMessage: "",
+		DurationMS:   beacon.DurationMs,
 	}, eventType, string(payloadJSON))
 	if err != nil {
 		return nil, mapToolCallError(err)
@@ -2561,22 +2632,44 @@ func toolAfterStatus(beacon *turingv1.ToolCallBeacon) (string, string, error) {
 	}
 }
 
-func publicToolEventError(statusValue string, toolError *turingv1.ToolCallError) string {
-	if toolError != nil {
-		if toolError.Message != "" {
-			return toolError.Message
-		}
-		if toolError.Code != "" {
-			return toolError.Code
-		}
-	}
-	switch statusValue {
-	case "failed":
-		return "Tool call failed"
-	case "denied":
-		return "Tool call denied"
-	default:
+// toolAfterErrorCode is the only thing a tool-after beacon's error object is
+// allowed to contribute to durable storage, and even that survives only if it
+// is on the approved matrix.
+//
+// The beacon has no origin field, so the origin comes from what this call site
+// knows: it is ingesting a tool call's terminal report, and the runtime's tools
+// package reports from a closed vocabulary whose approved origins are fixed. A
+// code outside that vocabulary gets the origin its event type implies and then
+// fails closed to CodeUnknown, so an unrecognized worker cannot widen the
+// column by inventing a code. A non-failure terminal report contributes no code
+// at all.
+func toolAfterErrorCode(eventType string, beacon *turingv1.ToolCallBeacon) string {
+	if _, isFailure := runoutcome.ToolCallFailureCategory(eventType); !isFailure {
 		return ""
+	}
+	code := beacon.GetError().GetCode()
+	return runoutcome.NormalizeFailure(
+		toolAfterFailureOrigin(eventType, code), code, runoutcome.RetryClassNever,
+	).Code()
+}
+
+// toolAfterFailureOrigin names the origin the approved subsidiary mapping gives
+// each code the runtime's tools package can report on an after beacon, and
+// falls back to the origin the event type itself establishes: a denial came
+// from policy, and anything else that ended a tool call ended while it ran.
+func toolAfterFailureOrigin(eventType string, code string) runoutcome.Origin {
+	if eventType == "tool.call.denied" {
+		return runoutcome.OriginToolPolicy
+	}
+	switch code {
+	case "tool_policy_decision_failed", "tool_policy_decision_invalid":
+		return runoutcome.OriginToolPolicy
+	case "approval_wait_failed":
+		return runoutcome.OriginApprovalTransport
+	case "cancelled":
+		return runoutcome.OriginClientLifecycle
+	default:
+		return runoutcome.OriginToolExecution
 	}
 }
 

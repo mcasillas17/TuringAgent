@@ -324,6 +324,13 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		var turnText strings.Builder
 		var calls []llm.ToolCall
 		finishReason := ""
+		// Only a "completed" event says the model finished this turn. A stream
+		// that simply closes has said nothing: whatever text arrived is an
+		// unfinished fragment and whatever tool calls arrived may be truncated.
+		// Tracked separately from finishReason because a provider may finish
+		// with an empty reason, and an empty reason must not be mistaken for
+		// the absence of a finish.
+		explicitlyFinished := false
 	stream:
 		for {
 			var event llm.StreamEvent
@@ -355,6 +362,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			case "tool_call":
 				calls = append(calls, event.ToolCalls...)
 			case "completed":
+				explicitlyFinished = true
 				finishReason = event.FinishReason
 				// A run can make several model turns — one per tool round — and
 				// what the user is charged, in time or in money, is their sum.
@@ -391,6 +399,20 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			}
 		}
 		if len(calls) == 0 {
+			// The channel closed without a terminal event. Completing here
+			// would make a torn connection indistinguishable from a model that
+			// answered, and would persist a truncated fragment — or nothing at
+			// all — as the assistant's finished words. It is the transport
+			// failure it is, and the ownership fence takes it from there.
+			if !explicitlyFinished {
+				return emitRunFailed(
+					emit,
+					job,
+					"model_stream_error",
+					turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
+					retryClass(!successfulToolSideEffect),
+				)
+			}
 			// An empty answer is still an answer the model explicitly finished,
 			// so it is reported as the empty success it is. Replacing it with
 			// apologetic filler used to make a completion that produced nothing
@@ -471,6 +493,18 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				"maxToolIterations": maxToolIterations,
 			})); err != nil {
 				return err
+			}
+			// The guard decides to stop, but it cannot decide that the model
+			// finished: the last turn may itself have been cut off mid-stream,
+			// and its text is then a fragment like any other.
+			if !explicitlyFinished {
+				return emitRunFailed(
+					emit,
+					job,
+					"model_stream_error",
+					turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
+					retryClass(!successfulToolSideEffect),
+				)
 			}
 			// The step notice above already says the run stopped at the tool
 			// iteration limit. Whatever text the model produced before that is
@@ -1077,7 +1111,7 @@ func (a *GeneralAssistant) tryDebugTool(ctx context.Context, job *turingv1.Agent
 		return false, nil
 	}
 	if isNilToolLister(client) {
-		return true, emitRunFailed(emit, job, "tool_call_failed", turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_INFRASTRUCTURE, retryClass(false))
+		return true, emitRunFailed(emit, job, "tool_runner_unavailable", turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_INFRASTRUCTURE, retryClass(false))
 	}
 	result, err := a.tools.Runner.Run(ctx, tools.RunInput{
 		AgentID:      turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
