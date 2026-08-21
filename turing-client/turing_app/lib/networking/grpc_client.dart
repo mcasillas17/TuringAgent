@@ -333,10 +333,20 @@ class TuringGrpcApi implements ClosableTuringApi, RemoteEgressApi {
         query: query,
         sessionId: '',
         limit: limit,
+        responseFormat: sessionpb
+            .SearchMessagesResponseFormat
+            .SEARCH_MESSAGES_RESPONSE_FORMAT_HITS,
       ),
       options: grpc.CallOptions(timeout: _startupUnaryTimeout),
     );
-    return response.messages.map(GrpcMappers.searchHitToModel).toList();
+    if (response.hits.isNotEmpty) {
+      return response.hits
+          .map(GrpcMappers.searchHitToModel)
+          .toList(growable: false);
+    }
+    return response.messages
+        .map(GrpcMappers.legacySearchHitToModel)
+        .toList(growable: false);
   }
 
   @override

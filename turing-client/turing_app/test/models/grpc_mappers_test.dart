@@ -175,8 +175,150 @@ void main() {
     expect(mapped.runId, 'run_1');
   });
 
-  test('maps a search hit from a complete proto message', () {
+  test('maps a canonical scored search hit', () {
     final mapped = GrpcMappers.searchHitToModel(
+      sessionpb.SearchHit(
+        message: commonpb.Message(
+          messageId: 'message_42',
+          sessionId: 'session_42',
+          runId: 'run_42',
+          role: commonpb.MessageRole.MESSAGE_ROLE_USER,
+          content: 'prefix needle suffix',
+          sequence: Int64(99),
+          createdAt: timestamppb.Timestamp.fromDateTime(
+            DateTime.utc(2026, 8, 13, 12, 34, 56),
+          ),
+        ),
+        score: 0.75,
+        snippet: 'prefix needle suffix',
+      ),
+    );
+
+    expect(mapped.sessionId, 'session_42');
+    expect(mapped.score, 0.75);
+    expect(mapped.snippet, 'prefix needle suffix');
+    expect(mapped.message.messageId, 'message_42');
+    expect(mapped.message.runId, 'run_42');
+    expect(mapped.message.role, 'user');
+    expect(mapped.message.content, 'prefix needle suffix');
+    expect(mapped.message.sequence, 99);
+    expect(mapped.message.createdAt, DateTime.utc(2026, 8, 13, 12, 34, 56));
+  });
+
+  // A zero relevance score is a legitimate ranking value, so the strict mapper
+  // must not confuse it with the malformed cases below.
+  test('maps a canonical hit whose score is zero', () {
+    final mapped = GrpcMappers.searchHitToModel(
+      sessionpb.SearchHit(
+        message: commonpb.Message(
+          messageId: 'message_zero',
+          sessionId: 'session_zero',
+          role: commonpb.MessageRole.MESSAGE_ROLE_ASSISTANT,
+          content: 'needle',
+          sequence: Int64(1),
+          createdAt: timestamppb.Timestamp.fromDateTime(
+            DateTime.utc(2026, 8, 13, 12, 34, 56),
+          ),
+        ),
+        score: 0,
+        snippet: 'needle',
+      ),
+    );
+
+    expect(mapped.score, 0);
+    expect(mapped.snippet, 'needle');
+    expect(mapped.message.runId, isNull);
+  });
+
+  // The search screen renders and announces caught mapping errors, so a
+  // malformed hit must fail with a fixed class string that cannot smuggle
+  // attacker-controlled transcript, snippet, or query bytes into the UI.
+  group('rejects malformed canonical hits without leaking values', () {
+    const sentinels = <String>[
+      'SENTINEL_CONTENT',
+      'SENTINEL_SNIPPET',
+      'SENTINEL_SESSION',
+      'SENTINEL_MESSAGE_ID',
+      'SENTINEL_RUN',
+    ];
+
+    commonpb.Message sentinelMessage() {
+      return commonpb.Message(
+        messageId: 'SENTINEL_MESSAGE_ID',
+        sessionId: 'SENTINEL_SESSION',
+        runId: 'SENTINEL_RUN',
+        role: commonpb.MessageRole.MESSAGE_ROLE_USER,
+        content: 'SENTINEL_CONTENT',
+        sequence: Int64(7),
+        createdAt: timestamppb.Timestamp.fromDateTime(
+          DateTime.utc(2026, 8, 13, 12, 34, 56),
+        ),
+      );
+    }
+
+    final cases = <String, sessionpb.SearchHit>{
+      'missing message': sessionpb.SearchHit(
+        score: 0.5,
+        snippet: 'SENTINEL_SNIPPET',
+      ),
+      'NaN score': sessionpb.SearchHit(
+        message: sentinelMessage(),
+        score: double.nan,
+        snippet: 'SENTINEL_SNIPPET',
+      ),
+      'positive infinite score': sessionpb.SearchHit(
+        message: sentinelMessage(),
+        score: double.infinity,
+        snippet: 'SENTINEL_SNIPPET',
+      ),
+      'negative infinite score': sessionpb.SearchHit(
+        message: sentinelMessage(),
+        score: double.negativeInfinity,
+        snippet: 'SENTINEL_SNIPPET',
+      ),
+      'negative score': sessionpb.SearchHit(
+        message: sentinelMessage(),
+        score: -0.25,
+        snippet: 'SENTINEL_SNIPPET',
+      ),
+      'empty snippet': sessionpb.SearchHit(
+        message: sentinelMessage(),
+        score: 0.5,
+        snippet: '',
+      ),
+    };
+
+    cases.forEach((name, hit) {
+      test(name, () {
+        Object? thrown;
+        try {
+          GrpcMappers.searchHitToModel(hit);
+        } catch (error) {
+          thrown = error;
+        }
+
+        expect(thrown, isA<FormatException>(), reason: name);
+        final failure = thrown! as FormatException;
+        expect(
+          failure.message,
+          anyOf(
+            'search hit message is missing',
+            'search hit score is invalid',
+            'search hit snippet is invalid',
+          ),
+          reason: name,
+        );
+        expect(failure.source, isNull, reason: name);
+        expect(failure.offset, isNull, reason: name);
+        for (final sentinel in sentinels) {
+          expect(failure.toString(), isNot(contains(sentinel)), reason: name);
+        }
+      });
+    });
+  });
+
+  test('maps a legacy search hit with null score and snippet', () {
+    final mapped = GrpcMappers.legacySearchHitToModel(
       commonpb.Message(
         messageId: 'message_42',
         sessionId: 'session_42',
@@ -191,6 +333,8 @@ void main() {
     );
 
     expect(mapped.sessionId, 'session_42');
+    expect(mapped.score, isNull);
+    expect(mapped.snippet, isNull);
     expect(mapped.message.messageId, 'message_42');
     expect(mapped.message.runId, 'run_42');
     expect(mapped.message.role, 'user');

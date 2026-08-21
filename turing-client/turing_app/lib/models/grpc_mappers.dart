@@ -383,7 +383,33 @@ class GrpcMappers {
     );
   }
 
-  static model_search_hit.SearchHit searchHitToModel(commonpb.Message message) {
+  /// Maps a canonical scored hit. Malformed hits fail loudly with constant,
+  /// value-free errors: the search screen renders and announces caught mapping
+  /// failures, so no message, snippet, score, session, or query bytes may
+  /// appear in the exception.
+  static model_search_hit.SearchHit searchHitToModel(sessionpb.SearchHit hit) {
+    if (!hit.hasMessage()) {
+      throw const FormatException('search hit message is missing');
+    }
+    final score = hit.score;
+    if (!score.isFinite || score < 0) {
+      throw const FormatException('search hit score is invalid');
+    }
+    if (hit.snippet.isEmpty) {
+      throw const FormatException('search hit snippet is invalid');
+    }
+    return model_search_hit.SearchHit(
+      sessionId: hit.message.sessionId,
+      message: messageToModel(hit.message),
+      score: score,
+      snippet: hit.snippet,
+    );
+  }
+
+  /// Maps an old-server message-shaped result, which carries no hit metadata.
+  static model_search_hit.SearchHit legacySearchHitToModel(
+    commonpb.Message message,
+  ) {
     return model_search_hit.SearchHit(
       sessionId: message.sessionId,
       message: messageToModel(message),
