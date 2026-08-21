@@ -224,6 +224,8 @@ Prerequisites are protoc 34.1, `protoc-gen-go` 1.36.11,
 Run:
 
 ```bash
+TOOLS_ROOT="$(dirname "$(git rev-parse --show-toplevel)")/.turing-mem002-tools"
+export PATH="$TOOLS_ROOT/protoc-34.1/bin:$(go env GOPATH)/bin:$PATH"
 go test -tags sqlite_fts5 ./turing-backend/tests \
   -run '^TestSearchMessages' -count=1
 tools/proto/check.sh
@@ -485,7 +487,10 @@ func TestSanitizeSearchSnippetRepairsAndBoundsText(t *testing.T) {
 
 Also cover C0/C1/DEL, tabs and Unicode whitespace, bidi controls, RTL, emoji,
 combining marks, CJK, middle/end match windows, one oversized matched token,
-empty post-sanitization output, and exact 200-rune/800-byte boundaries. The
+empty post-sanitization output, and exact 200-rune/800-byte boundaries. Add
+`<script>alert(1)</script>` and `**bold**` payloads and assert those bytes remain
+literal rather than entity-escaped or emphasized; output may add only U+2026 at
+a cut edge or U+FFFD for explicitly replaced invalid/control input. The
 empty-output case must assert `errors.Is(err, ErrInvalidSearchSnippet)`.
 
 - [ ] **Step 7: Run sanitizer and collision tests and verify RED**
@@ -1558,6 +1563,8 @@ accept an isolated pass.
 - [ ] **Step 2: Verify generated and compatibility state**
 
 ```bash
+TOOLS_ROOT="$(dirname "$(git rev-parse --show-toplevel)")/.turing-mem002-tools"
+export PATH="$TOOLS_ROOT/protoc-34.1/bin:$(go env GOPATH)/bin:$PATH"
 tools/proto/check.sh
 tools/proto/breaking.sh origin/main
 git --no-pager diff --check 137d1238...HEAD
