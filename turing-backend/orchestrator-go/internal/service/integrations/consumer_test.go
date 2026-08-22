@@ -904,7 +904,7 @@ func TestListIntegrationToolsNamesConnectionsAndOmitsDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 	personal, err := server.ConnectAccount(ctx, &turingv1.ConnectAccountRequest{
-		Provider: turingv1.IntegrationProvider_INTEGRATION_PROVIDER_GITHUB,
+		Provider:    turingv1.IntegrationProvider_INTEGRATION_PROVIDER_GITHUB,
 		DisplayName: "Personal GitHub", Credential: "personal-token", ConsentAcknowledged: true,
 	})
 	if err != nil {
