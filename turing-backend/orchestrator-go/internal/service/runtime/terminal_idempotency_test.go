@@ -279,12 +279,18 @@ func TestTerminalizedAssignedRunReconcilesMatchingLateTerminalUpdate(t *testing.
 
 func TestLateTerminalUpdatesForReleasedRunKeepWorkerStreamUsable(t *testing.T) {
 	tests := []struct {
-		name           string
-		cancelFirst    bool
-		lateExitAck    bool
-		duplicateFirst bool
+		name                    string
+		cancelFirst             bool
+		lateExitAck             bool
+		duplicateFirst          bool
+		duplicateNamesCommitted bool
 	}{
 		{name: "duplicate_cancelled_ack", cancelFirst: true, duplicateFirst: true},
+		// A duplicate naming the run's real, nonzero committed version —
+		// not the zero a legacy worker leaves absent — so this pins the
+		// same acknowledgedVersionMatches acceptance a live worker's own
+		// retry would exercise, not just the legacy-absence case above.
+		{name: "duplicate_cancelled_ack_committed_version", cancelFirst: true, duplicateFirst: true, duplicateNamesCommitted: true},
 		{name: "duplicate_completed", duplicateFirst: true},
 		{name: "completed_then_exit_ack", lateExitAck: true},
 	}
@@ -314,8 +320,13 @@ func TestLateTerminalUpdatesForReleasedRunKeepWorkerStreamUsable(t *testing.T) {
 			ackFirst := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{
 				RunId: first.RunID,
 			}}}
+			var committedVersion int64
 			if test.cancelFirst {
 				cancelRunFixture(t, h, first.RunID)
+				committedVersion = h.runState(t, first.RunID).StateVersion
+				if committedVersion <= 0 {
+					t.Fatalf("committed version %d is not the nonzero durable version this case needs", committedVersion)
+				}
 				if err := stream.Send(ackFirst); err != nil {
 					t.Fatal(err)
 				}
@@ -331,6 +342,10 @@ func TestLateTerminalUpdatesForReleasedRunKeepWorkerStreamUsable(t *testing.T) {
 			switch {
 			case test.lateExitAck:
 				late = ackFirst
+			case test.duplicateNamesCommitted:
+				late = &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{
+					RunId: first.RunID, ObservedStateVersion: committedVersion,
+				}}}
 			case test.cancelFirst:
 				late = ackFirst
 			default:
@@ -348,6 +363,20 @@ func TestLateTerminalUpdatesForReleasedRunKeepWorkerStreamUsable(t *testing.T) {
 			recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
 				return command.GetRunAssigned() != nil && command.GetRunAssigned().GetRunId() == third.RunID
 			})
+
+			// The late duplicate did not tear the stream down: second's own
+			// completion (sent right behind it, on the same connection) went
+			// through and released normally, rather than second being forced
+			// into recovering the way TestDuplicateCancelledAckWithImpossibleVersionAfterReleaseClosesWorkerStream's
+			// unassigned, impossible-version duplicate leaves every run a
+			// closed stream was still holding.
+			secondRun, err := h.repo.GetRun(context.Background(), second.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if secondRun.Status != "completed" || secondRun.ExecutionActive {
+				t.Fatalf("an unrelated run did not settle normally after the late update: %+v", secondRun)
+			}
 		})
 	}
 }

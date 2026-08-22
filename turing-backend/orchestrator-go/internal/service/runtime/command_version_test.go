@@ -24,7 +24,6 @@ func TestRunCancelledCommandCarriesTheCommittedStateVersion(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.enqueueRun(t, "cancel with a version")
 	stream, assigned := h.connectAssignedWorker(t, "worker-cancel-version", enqueued.RunID)
-	_ = stream
 
 	// The cancellation commits first, exactly as the abandonment path does, so
 	// the version the command has to carry is the one that transition left
@@ -50,14 +49,26 @@ func TestRunCancelledCommandCarriesTheCommittedStateVersion(t *testing.T) {
 	// The seam: a worker accepts this command's version and stamps it onto the
 	// acknowledgement it sends back. Pinning each half against a number chosen
 	// by hand would leave the join untested, so the version this command
-	// actually carried is fed straight back in.
-	if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{
+	// actually carried is fed straight back in — over the real ConnectWorker
+	// stream this assignment already holds, not a direct applyUpdate call.
+	// Production always routes a run_cancelled_ack through
+	// reconcileLateAssignedUpdate first (see the comment on
+	// TestRunCancelledAckMustNameAVersionTheRunReached below), so exercising
+	// applyUpdate directly here would prove nothing about what dispatch
+	// actually enforces.
+	if err := stream.Send(&turingv1.RuntimeUpdate{
 		Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{
 			RunId:                enqueued.RunID,
 			ObservedStateVersion: command.GetStateVersion(),
 		}},
 	}); err != nil {
-		t.Fatalf("acknowledgement echoing this command's own version was refused: %v", err)
+		t.Fatalf("send run_cancelled_ack: %v", err)
+	}
+	awaitAckApplied(t, h, enqueued, stream, "sync-probe-cancelled-command-version")
+	if run, err := h.repo.GetRun(context.Background(), enqueued.RunID); err != nil {
+		t.Fatalf("GetRun: %v", err)
+	} else if run.ExecutionActive {
+		t.Fatal("acknowledgement echoing this command's own version was refused: execution fence still held")
 	}
 }
 
@@ -95,15 +106,48 @@ func TestApprovalUpdatedCommandCarriesTheResultingStateVersion(t *testing.T) {
 	// The seam: a worker cancelled by this command stamps the version the
 	// command carried onto its acknowledgement. Pinning each half against a
 	// number chosen by hand would leave the join untested, so the version this
-	// command actually carried is fed straight back in.
-	if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{
+	// command actually carried is fed straight back in — over the real
+	// ConnectWorker stream this assignment already holds, not a direct
+	// applyUpdate call. See the comment on
+	// TestRunCancelledAckMustNameAVersionTheRunReached below for why a direct
+	// applyUpdate call here would exercise code the dispatch loop never
+	// reaches for a real run_cancelled_ack.
+	if err := stream.Send(&turingv1.RuntimeUpdate{
 		Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{
 			RunId:                enqueued.RunID,
 			ObservedStateVersion: command.GetStateVersion(),
 		}},
 	}); err != nil {
-		t.Fatalf("acknowledgement echoing the approval command's version was refused: %v", err)
+		t.Fatalf("send run_cancelled_ack: %v", err)
 	}
+	awaitAckApplied(t, h, enqueued, stream, "sync-probe-approval-command-version")
+	if run, err := h.repo.GetRun(context.Background(), enqueued.RunID); err != nil {
+		t.Fatalf("GetRun: %v", err)
+	} else if run.ExecutionActive {
+		t.Fatal("acknowledgement echoing the approval command's version was refused: execution fence still held")
+	}
+}
+
+// awaitAckApplied sends a synchronizing tool-beacon probe right behind an
+// update already sent on stream and waits for its own decision, proving the
+// update ahead of it finished being applied before the caller inspects run
+// state. ConnectWorker serializes every update from one worker through a
+// single receive loop, so the probe's reply cannot arrive before the ack
+// ahead of it does — ignored outright, or used to release the fence,
+// whichever the run does with it.
+func awaitAckApplied(t *testing.T, h *harness, enqueued repository.EnqueueUserMessageResult, stream turingv1.RuntimeService_ConnectWorkerClient, probeID string) {
+	t.Helper()
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+		RunId: enqueued.RunID, TraceId: enqueued.TraceID, ToolCallId: probeID,
+		AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "system", ToolName: "system.time",
+		Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		Args:  mustStruct(t, map[string]any{"timezone": "UTC"}),
+	}}}); err != nil {
+		t.Fatalf("send sync probe: %v", err)
+	}
+	recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetToolPolicyDecision() != nil && cmd.GetToolPolicyDecision().GetToolCallId() == probeID
+	})
 }
 
 // The acknowledgement releases the execution fence, which is the last thing
@@ -180,23 +224,7 @@ func TestRunCancelledAckMustNameAVersionTheRunReached(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("send run_cancelled_ack: %v", err)
 			}
-			// The ack itself has no reply. ConnectWorker serializes every
-			// update from one worker through a single receive loop, so a
-			// probe sent right behind it cannot be answered until the ack
-			// ahead of it has finished being applied — ignored outright, or
-			// used to release the fence — whichever this run does with it.
-			probeID := "sync-probe-" + test.name
-			if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
-				RunId: enqueued.RunID, TraceId: enqueued.TraceID, ToolCallId: probeID,
-				AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "system", ToolName: "system.time",
-				Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
-				Args:  mustStruct(t, map[string]any{"timezone": "UTC"}),
-			}}}); err != nil {
-				t.Fatalf("send sync probe: %v", err)
-			}
-			recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
-				return cmd.GetToolPolicyDecision() != nil && cmd.GetToolPolicyDecision().GetToolCallId() == probeID
-			})
+			awaitAckApplied(t, h, enqueued, stream, "sync-probe-"+test.name)
 
 			run, getErr := h.repo.GetRun(context.Background(), enqueued.RunID)
 			if getErr != nil {

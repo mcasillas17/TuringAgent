@@ -2381,6 +2381,18 @@ func (s *Server) reconcileLateAssignedUpdate(ctx context.Context, connectedWorke
 	// fenced predecessor of the very same attempt, still carrying a version
 	// from before it was fenced, would release a fence the current attempt is
 	// still holding.
+	//
+	// A version-mismatched ack is deliberately handled — silently ignored,
+	// not surfaced as an error — even though beginUpdate proves the worker
+	// still holds this exact assignment: the mismatch alone means it cannot
+	// release a fence it does not match, so it is treated exactly like an
+	// already-established mismatched late RunCompleted/RunFailed and the
+	// stream stays up for whatever else this worker is still executing. That
+	// leniency is specific to a worker that is still assigned; once the
+	// assignment is gone entirely, the equivalent mismatch instead reaches
+	// isLateMatchingTerminalUpdate through beginUpdate's own ownership error,
+	// where an unassigned or wrong-attempt report remains the protocol
+	// violation it always was.
 	if (run.Status != "cancelled" || update.GetRunCancelledAck() != nil) && !isMatchingTerminalUpdate(run, update) {
 		return true, nil
 	}
