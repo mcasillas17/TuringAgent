@@ -377,6 +377,71 @@ func TestReadyWithheldByPausedNarrationFailsGracefully(t *testing.T) {
 	assertTypedDeliveryFailure(t, harness.sentUpdates())
 }
 
+// TestReadyWithheldByPausedNarrationNeverArmsAcceptance pins the boundary the
+// test above only shows the ordinary case of: a Ready refused locally for
+// paused narration must never arm recordAccepted's gate at all, so a
+// concurrent or forged acceptance racing this exact call cannot turn the
+// refusal into a win.
+//
+// entry.outboundPaused() answers true before
+// sendRunUpdateReportingPauseGated ever calls its onSendStarting hook or
+// w.send, so this Ready never reaches the transport — the orchestrator
+// cannot have produced a durable acceptance for it. The only honest gate is
+// therefore one that never runs pending.beginReadySend for this call at all.
+//
+// testBeforeReadyFailureClaim is the deterministic barrier that proves it,
+// the mirror image of testBeforeFinalSelect used elsewhere in this file: it
+// runs synchronously, on resumeApproval's own goroutine, immediately before
+// abandonOrClaim commits this failure as the resume's outcome — after
+// whatever the send attempt did or did not arm, and before anything claims
+// it. Attempting a matching recordAccepted from inside it, precisely there,
+// is what "a matching acceptance during the call" means without depending on
+// a goroutine ever winning a scheduling race for a window with no blocking
+// point of its own to synchronize on: if the gate had been armed
+// (readySendAttempted true) despite the pause refusal — for instance by
+// moving beginReadySend back to run unconditionally before the pause check,
+// as it used to — this attempt would succeed, and abandonOrClaim would go on
+// to find and claim an already-accepted outcome instead of abandoning it,
+// wrongly unpausing the run and adopting a version for a Ready that never
+// left this process. This test fails deterministically against that
+// mutation, not merely with some probability.
+func TestReadyWithheldByPausedNarrationNeverArmsAcceptance(t *testing.T) {
+	harness := newResumeDeliveryHarness(t)
+	harness.entry.pauseOutbound()
+	accepted := &turingv1.RuntimeApprovalResumeAccepted{
+		RunId: resumeDeliveryRunID, ApprovalId: resumeDeliveryApproval,
+		StateVersion: resumeDeliveryVersion + 1, AssignmentAttemptId: resumeDeliveryAttempt,
+	}
+
+	var recordedDuringCall bool
+	harness.pending.testBeforeReadyFailureClaim = func() {
+		recordedDuringCall = harness.pending.recordAccepted(accepted)
+	}
+
+	err := harness.resume(time.Now().Add(5 * time.Second))
+
+	if recordedDuringCall {
+		t.Fatal("a Ready refused for paused narration still let a matching acceptance record during the call: the gate armed before or without the pause check")
+	}
+	if !runWasTerminalized(err) {
+		t.Fatalf("resume error = %v, want a terminal run error", err)
+	}
+	if !errors.Is(err, errRunNarrationPaused) {
+		t.Fatalf("resume error = %v, want the withheld narration", err)
+	}
+	if !harness.entry.outboundPaused() {
+		t.Fatal("a forged acceptance unpaused a run whose Ready was never even attempted")
+	}
+	if got := harness.entry.expectedVersion(); got != resumeDeliveryVersion {
+		t.Fatalf("run version = %d, want the untouched %d: a forged acceptance must not move it", got, resumeDeliveryVersion)
+	}
+	if fatal := harness.fatalErr(); fatal != nil {
+		t.Fatalf("a Ready that was never queued dropped the whole worker stream: %v", fatal)
+	}
+	waitForInactiveRun(t, harness.worker, resumeDeliveryRunID)
+	assertTypedDeliveryFailure(t, harness.sentUpdates())
+}
+
 // TestReadyDeadlineAndDecisionTogetherAreDeterministic removes the coin flip.
 //
 // A decision that arrives in the same instant the budget expires makes both
@@ -547,7 +612,7 @@ func TestNoAcceptanceLeavesTheRunsVersionUnchanged(t *testing.T) {
 // that called abandonOrClaim directly on a wait-context timeout, without
 // requiring the Ready to have ever been sent. That branch is what let a
 // premature acceptance recorded here — dropped now, by recordAccepted's
-// readyStarted gate — resume the run anyway once the deadline fired.
+// readySendAttempted gate — resume the run anyway once the deadline fired.
 //
 // The final assertion below pins where beginReadySend runs relative to the
 // decision select, synchronously and without racing a goroutine against it.
@@ -555,11 +620,11 @@ func TestNoAcceptanceLeavesTheRunsVersionUnchanged(t *testing.T) {
 // decision-select's failing branch — the branch that, per its own comment,
 // never calls beginReadySend at all, because that call sits AFTER the select
 // in source order, reached only once it returns via the decided arm. So
-// readyStarted must still be false here, and a fresh acceptance offered
+// readySendAttempted must still be false here, and a fresh acceptance offered
 // after the resume gave up must be refused for that reason alone. If
 // beginReadySend were ever moved ahead of the decision select — so that it
 // ran the instant resumeApproval was entered, before waiting on either arm —
-// it would already have set readyStarted true by the time this failing
+// it would already have set readySendAttempted true by the time this failing
 // branch returned, regardless of decided never having fired, and this same
 // acceptance would be wrongly recorded instead.
 func TestAcceptanceDeliveredBeforeTheDecisionCannotResumeTheRun(t *testing.T) {
@@ -588,19 +653,19 @@ func TestAcceptanceDeliveredBeforeTheDecisionCannotResumeTheRun(t *testing.T) {
 		StateVersion: resumeDeliveryVersion + 1, AssignmentAttemptId: resumeDeliveryAttempt,
 	}
 	if harness.pending.recordAccepted(stillUnstarted) {
-		t.Fatal("recordAccepted succeeded after resumeApproval gave up on the decision it never saw: the Ready send was never even attempted, so readyStarted must still be false")
+		t.Fatal("recordAccepted succeeded after resumeApproval gave up on the decision it never saw: the Ready send was never even attempted, so readySendAttempted must still be false")
 	}
 }
 
 // TestAcceptanceDeliveredBeforeTheDecisionCannotSatisfyTheSubsequentReady is
-// the scenario the readyStarted gate most directly defends in production, and
+// the scenario the readySendAttempted gate most directly defends in production, and
 // a stricter one than the test above: the decision arrives AFTER the
 // premature acceptance, so the Ready this resume goes on to send actually
 // succeeds, and resumeApproval reaches its real final select — the one on
 // pending.signal and waitCtx.Done(), not the decision-select's removed claim
 // branch.
 //
-// Without the readyStarted gate, the premature acceptance recorded here would
+// Without the readySendAttempted gate, the premature acceptance recorded here would
 // have closed pending.signal well before that final select is ever reached,
 // so the select would find it already closed and claim it immediately —
 // wrongly resuming the run, and adopting a version, on an acceptance that
@@ -614,7 +679,7 @@ func TestAcceptanceDeliveredBeforeTheDecisionCannotSatisfyTheSubsequentReady(t *
 		StateVersion: resumeDeliveryVersion + 1, AssignmentAttemptId: resumeDeliveryAttempt,
 	}
 
-	// Delivered before the decision: readyStarted is false, so recordAccepted
+	// Delivered before the decision: readySendAttempted is false, so recordAccepted
 	// must refuse it rather than merely defer it.
 	harness.worker.deliverResumeAcceptance(premature)
 
@@ -939,7 +1004,7 @@ func TestAcceptanceRaceWithTheDeadlineIsLinearizedNeverMixed(t *testing.T) {
 		close(start)
 		wg.Wait()
 
-		err := <-result
+		err := harness.awaitResume(t, result)
 		cancel()
 
 		switch {
@@ -1028,7 +1093,7 @@ func TestAcceptanceRecordedBeforeFinalSelectAlwaysWins(t *testing.T) {
 
 		// The barrier: resumeApproval calls this, on its own goroutine,
 		// immediately before its final select — after the Ready has already
-		// been sent (readyStarted is already true by construction; nothing
+		// been sent (readySendAttempted is already true by construction; nothing
 		// else calls this hook). Recording the acceptance and cancelling the
 		// wait here, before returning, is what makes both arms ready before
 		// resumeApproval's select is ever entered, deterministically, with no
@@ -1044,7 +1109,7 @@ func TestAcceptanceRecordedBeforeFinalSelectAlwaysWins(t *testing.T) {
 		result := make(chan error, 1)
 		go func() { result <- harness.resumeWithContext(ctx, time.Time{}) }()
 
-		err := <-result
+		err := harness.awaitResume(t, result)
 		cancel()
 
 		if err != nil {
@@ -1211,7 +1276,7 @@ func TestApprovalResumeOutcomeCommitPoint(t *testing.T) {
 
 	// An acceptance before the Ready send has started cannot satisfy the
 	// resume, no matter what outcome is otherwise in play: recordAccepted's
-	// readyStarted gate is what makes resumeApproval's own decision-select
+	// readySendAttempted gate is what makes resumeApproval's own decision-select
 	// failing branch provably unable to observe a recorded acceptance,
 	// because beginReadySend only ever runs after that select returns.
 	t.Run("an acceptance before the Ready send has started cannot satisfy the resume", func(t *testing.T) {
@@ -1228,7 +1293,7 @@ func TestApprovalResumeOutcomeCommitPoint(t *testing.T) {
 		}
 		// The same acceptance on a FRESH resume whose Ready send has already
 		// started succeeds, proving the earlier rejection was about timing —
-		// readyStarted — and not about the acceptance value itself.
+		// readySendAttempted — and not about the acceptance value itself.
 		fresh := newApprovalResume("run_commit_ready_started_after")
 		fresh.beginReadySend()
 		if !fresh.recordAccepted(premature) {
@@ -1253,7 +1318,7 @@ func TestAcceptanceRacingAbandonmentIsLinearized(t *testing.T) {
 		pending := newApprovalResume("run_commit_race")
 		// The Ready send is already underway for every iteration of this
 		// race: this test is about the recordAccepted/abandonOrClaim commit
-		// point itself, not about the readyStarted gate that a separate test
+		// point itself, not about the readySendAttempted gate that a separate test
 		// covers on its own.
 		pending.beginReadySend()
 		accepted := &turingv1.RuntimeApprovalResumeAccepted{RunId: "run_commit_race", StateVersion: int64(i + 1)}
@@ -1399,7 +1464,7 @@ func TestAcceptanceDeliveryRacingTheFailureCommitNeverProducesAMixedOutcome(t *t
 // None of this drives resumeApproval or a clock. beginReadySend is called
 // directly on the pending resume — exactly the state resumeApproval itself
 // would already be in by the time an acceptance can legally be recorded, per
-// recordAccepted's own readyStarted gate, which a separate test above already
+// recordAccepted's own readySendAttempted gate, which a separate test above already
 // covers on its own — and the proof that nothing was recorded is
 // abandonOrClaim's own synchronous, single-commit-point answer: never a
 // sleep, and never a peek at a background goroutine's progress.
@@ -1442,7 +1507,7 @@ func TestDeliverResumeAcceptanceRejectsEachGuardIndividually(t *testing.T) {
 			harness := newResumeDeliveryHarness(t)
 			// The exact precondition recordAccepted requires before it will
 			// ever commit anything. Setting it directly here isolates the
-			// guard under test from the readyStarted gate, which is a
+			// guard under test from the readySendAttempted gate, which is a
 			// separate, already-covered concern.
 			harness.pending.beginReadySend()
 			beforeVersion := harness.entry.expectedVersion()

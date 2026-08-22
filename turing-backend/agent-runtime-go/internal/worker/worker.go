@@ -136,10 +136,10 @@ type approvalResume struct {
 	decideOnce sync.Once
 	deadline   time.Time
 
-	// outcomeMu guards outcome, accepted, and readyStarted. It is deliberately
-	// its own lock, not the worker's w.mu: deliverResumeAcceptance and
-	// resumeApproval's failing paths reach this decision from call sites that
-	// each already touch other locks (w.mu, the entry's) on their own way
+	// outcomeMu guards outcome, accepted, and readySendAttempted. It is
+	// deliberately its own lock, not the worker's w.mu: deliverResumeAcceptance
+	// and resumeApproval's failing paths reach this decision from call sites
+	// that each already touch other locks (w.mu, the entry's) on their own way
 	// here, just never while holding outcomeMu itself. Giving the resume's
 	// outcome a lock that nothing else ever acquires — always taken and
 	// released on its own, never nested inside another lock — is what keeps
@@ -148,21 +148,31 @@ type approvalResume struct {
 	outcomeMu sync.Mutex
 	outcome   resumeOutcome
 	accepted  *turingv1.RuntimeApprovalResumeAccepted
-	// readyStarted records that resumeApproval has begun attempting this
-	// resume's Ready send. It is set exactly once, by beginReadySend,
-	// immediately before resumeApproval attempts to send the Ready — never
-	// before the decision has arrived, because beginReadySend is only ever
-	// called after resumeApproval's decision select returns. It means only
-	// that the local attempt was initiated, not that any bytes reached the
-	// transport — the send below can still fail. recordAccepted refuses to
+	// readySendAttempted records that this resume's Ready send has passed the
+	// local pause check and been handed to w.send — not merely that
+	// resumeApproval decided to try it, and not that any bytes actually
+	// reached the transport: the send can still fail, or sit abandoned in the
+	// writer's own queue, after this is already true. It is set exactly once,
+	// by beginReadySend, which sendRunUpdateReportingPauseGated calls as its
+	// onSendStarting hook only after its own authoritative pause check has
+	// already let the send through — never before that check runs, and never
+	// at all for a Ready that check refuses. recordAccepted refuses to
 	// commit an acceptance until this is true: the orchestrator cannot have
-	// produced a durable acceptance for a Ready this worker had not yet
-	// attempted to send, so a stray or premature delivery arriving before
-	// this point can never be recorded, no matter what races it here. That
-	// is what makes the decision select's own failing branch unable to ever
-	// observe a recorded acceptance — the invariant is enforced locally
-	// rather than merely assumed.
-	readyStarted bool
+	// produced a durable acceptance for a Ready this worker never even tried
+	// to send, so a stray or premature delivery — one arriving before the
+	// decision, or one racing a Ready refused locally for paused narration —
+	// can never be recorded, no matter what races it here. That is what makes
+	// both the decision select's own failing branch and a pause-refused send
+	// unable to ever observe a recorded acceptance — the invariant is
+	// enforced locally rather than merely assumed. This is a distinct fact
+	// from outboundSendStarted(err), which asks the writer whether a later
+	// send error arrived after the bytes were handed off, and from
+	// failApprovalResume's readySent parameter, which is what the caller is
+	// allowed to say about a Ready that may have reached the orchestrator;
+	// readySendAttempted is narrower than either — a purely local record that
+	// this attempt began, taken before either of those questions can even be
+	// asked.
+	readySendAttempted bool
 	// signal is closed exactly once, the instant an acceptance is recorded, so
 	// a blocked wait can wake up rather than poll for one. It carries no
 	// payload and settles nothing by itself — outcome and accepted, read under
@@ -183,6 +193,19 @@ type approvalResume struct {
 	// un-raced barrier. Production never sets this field, so it is always nil
 	// there and this check is a zero-cost no-op outside tests.
 	testBeforeFinalSelect func()
+	// testBeforeReadyFailureClaim, when non-nil, is called by resumeApproval
+	// synchronously, on resumeApproval's own goroutine, immediately after a
+	// Ready send attempt has failed — whether refused locally for paused
+	// narration or failed in transit — and immediately before abandonOrClaim
+	// commits that failure as this resume's outcome. It is the mirror image
+	// of testBeforeFinalSelect above for the failing side of the same call: a
+	// test can install a hook here to attempt a recordAccepted
+	// deterministically inside the exact window between whatever the failed
+	// send did or did not arm and the commit point that acts on it, without
+	// depending on a goroutine ever winning a scheduling race for that
+	// window. Production never sets this field, so it is always nil there
+	// and this check is a zero-cost no-op outside tests.
+	testBeforeReadyFailureClaim func()
 }
 
 // resumeOutcome is the one durable fact a pending resume ever settles into.
@@ -1174,21 +1197,24 @@ func newApprovalResume(runID string) *approvalResume {
 // recordAccepted stores a durable acceptance for later claiming, unless a
 // failing path has already reached outcomeMu first and abandoned this resume
 // — once abandoned, no later acceptance can revive it — or the Ready send this
-// acceptance would answer has not even been attempted yet. It reports whether
-// the acceptance was recorded.
+// acceptance would answer has not even started yet. It reports whether the
+// acceptance was recorded.
 //
 // This is the "record" half of the single linearizable commit point: whether
 // this call or a concurrent abandonOrClaim acquires outcomeMu first is what
 // decides the resume's fate, and each of them only ever acts on what it
-// observes after acquiring it. The readyStarted check is a local invariant on
-// top of that commit point, not a race with it: readyStarted can only ever be
-// true after beginReadySend runs, which is only ever after the decision
-// arrived, so an acceptance offered any earlier is refused here regardless of
-// what outcome is otherwise in play.
+// observes after acquiring it. The readySendAttempted check is a local
+// invariant on top of that commit point, not a race with it: it can only ever
+// be true after beginReadySend runs, which sendRunUpdateReportingPauseGated
+// only ever calls once its own pause check has already let this exact send
+// through — never before the decision arrived, and never at all for a Ready
+// refused locally because narration is paused. So an acceptance offered any
+// earlier, including one racing a pause refusal for outcomeMu, is refused
+// here regardless of what outcome is otherwise in play.
 func (p *approvalResume) recordAccepted(accepted *turingv1.RuntimeApprovalResumeAccepted) bool {
 	p.outcomeMu.Lock()
 	defer p.outcomeMu.Unlock()
-	if !p.readyStarted || p.outcome != resumeOutcomePending {
+	if !p.readySendAttempted || p.outcome != resumeOutcomePending {
 		return false
 	}
 	p.outcome = resumeOutcomeAccepted
@@ -1197,22 +1223,27 @@ func (p *approvalResume) recordAccepted(accepted *turingv1.RuntimeApprovalResume
 	return true
 }
 
-// beginReadySend records, under outcomeMu, that resumeApproval is initiating
-// this resume's Ready send attempt locally — not that any bytes have reached
-// the transport, only that the attempt is beginning. Called exactly once,
-// from resumeApproval's sole call site, immediately before the send is
-// attempted and never before the decision select returns: by that point
-// nothing else can have reached outcomeMu first, so the resume is always
-// still resumeOutcomePending here and the assignment is unconditional. It is
-// what makes recordAccepted's readyStarted gate an honest local proof rather
-// than an assumption: an acceptance cannot be durably recorded for this
-// resume before this call has run, so nothing racing the decision select's
-// own failing branch can ever produce a recorded acceptance for it to
-// observe.
+// beginReadySend records, under outcomeMu, that this resume's Ready send has
+// actually started — not that any bytes have reached the transport, only
+// that the attempt is beginning. It is resumeApproval's sole onSendStarting
+// hook, passed to sendRunUpdateReportingPauseGated rather than called
+// directly, and that function calls it exactly once, only after its own
+// authoritative pause check has already decided this send is going out and
+// immediately before it actually begins — never before the decision select
+// returns, because resumeApproval never reaches that call any earlier, and
+// never at all for a Ready that check refuses for paused narration. By the
+// time this runs nothing else can have reached outcomeMu first, so the
+// resume is always still resumeOutcomePending here and the assignment is
+// unconditional. It is what makes recordAccepted's readySendAttempted gate an
+// honest local proof rather than an assumption: an acceptance cannot be
+// durably recorded for this resume before this call has run, so nothing
+// racing the decision select's own failing branch, or a pause refusal that
+// never calls this at all, can ever produce a recorded acceptance for either
+// of them to observe.
 func (p *approvalResume) beginReadySend() {
 	p.outcomeMu.Lock()
 	defer p.outcomeMu.Unlock()
-	p.readyStarted = true
+	p.readySendAttempted = true
 }
 
 // abandonOrClaim is the resume's single commit point for giving up. It is the
@@ -1303,9 +1334,14 @@ func (w *Worker) beginApprovalResume(approvalID string, runID string, deadline t
 	return pending, pending.runID
 }
 
-// deliverResumeAcceptance releases a paused run on the orchestrator's durable
-// acceptance, and only on one that names this exact run, approval, and live
-// attempt at a version this assignment has not already moved past.
+// deliverResumeAcceptance validates and records a durable acceptance from the
+// orchestrator for a paused run's pending resume, and only one that names
+// this exact run, approval, and live attempt at a version this assignment has
+// not already moved past. It does not itself release anything: completing the
+// resume — unpausing the run and adopting the version — is
+// completeAcceptedResume's job alone, and that only runs once resumeApproval's
+// own commit point, recordAccepted or abandonOrClaim, has actually claimed
+// the outcome this call merely offers.
 //
 // A mismatched acceptance is dropped rather than acted on, and dropping it
 // changes nothing else — in particular it does not restart the wait, because
@@ -1385,21 +1421,12 @@ func (w *Worker) resumeApproval(ctx context.Context, stream RuntimeStream, resum
 		// worker can name what actually went wrong. There is no claim branch
 		// here: beginReadySend has not run yet at this point in the call —
 		// it only ever runs after this select returns — so recordAccepted's
-		// readyStarted gate guarantees no acceptance can have been committed
-		// for this resume no matter what raced this deadline. The decision
-		// gate is authoritative and this failure is unconditional.
+		// readySendAttempted gate guarantees no acceptance can have been
+		// committed for this resume no matter what raced this deadline. The
+		// decision gate is authoritative and this failure is unconditional.
 		return w.failApprovalResume(ctx, stream, entry, runID, false, waitCtx.Err())
 	}
 	_, attemptID := entry.identity()
-	// beginReadySend marks, under the resume's own lock, that recordAccepted
-	// may now commit an acceptance for this resume. It runs immediately
-	// before the send begins so that a send error below — the only case
-	// where the Ready's fate becomes unknowable from here — still leaves an
-	// acceptance racing it eligible to win: readyStarted is set regardless of
-	// how the send below turns out, so "the send started" is true from this
-	// worker's own point of view the instant it is attempted, not only once
-	// it is confirmed to have reached the wire.
-	pending.beginReadySend()
 	// Bounded by what is LEFT of the approval budget, never by a fresh one.
 	// The send is part of the same wait the user already sat through, so a
 	// timeout of its own would let a resume outlive the deadline everything
@@ -1410,14 +1437,29 @@ func (w *Worker) resumeApproval(ctx context.Context, stream RuntimeStream, resum
 	// answer instead of flipping a coin between failing the run and dropping
 	// the stream.
 	sendCtx, cancelSend := context.WithTimeout(waitCtx, w.options.UpdateSendTimeout)
-	err := w.sendRunUpdateReportingPause(sendCtx, entry, stream, &turingv1.RuntimeUpdate{
+	// pending.beginReadySend is passed as sendRunUpdateReportingPauseGated's
+	// onSendStarting hook rather than called directly here, so it only runs
+	// once that function's own authoritative pause check has already decided
+	// this Ready is going out — never for one refused locally because
+	// narration is already paused, which returns errRunNarrationPaused below
+	// before onSendStarting or the actual send ever runs. That is the whole
+	// point: a Ready this attempt never even tried to send cannot be armed
+	// for acceptance, so a concurrent or forged delivery racing this exact
+	// call has nothing to record, no matter how it is timed. Once the gate
+	// does run — immediately before the send actually begins — a send error
+	// below still leaves an acceptance racing it eligible to win:
+	// readySendAttempted is set the instant the attempt begins, not only once
+	// it is confirmed to have reached the wire, so "the send started" is true
+	// from this worker's own point of view from then on regardless of how the
+	// send below turns out.
+	err := w.sendRunUpdateReportingPauseGated(sendCtx, entry, stream, &turingv1.RuntimeUpdate{
 		Update: &turingv1.RuntimeUpdate_ApprovalResumeReady{ApprovalResumeReady: &turingv1.RuntimeApprovalResumeReady{
 			RunId:                runID,
 			ApprovalId:           resume.ApprovalID,
 			ExpectedStateVersion: entry.expectedVersion(),
 			AssignmentAttemptId:  attemptID,
 		}},
-	})
+	}, pending.beginReadySend)
 	cancelSend()
 	if err != nil {
 		// A send error only means the Ready's fate is unknowable from HERE —
@@ -1426,11 +1468,17 @@ func (w *Worker) resumeApproval(ctx context.Context, stream RuntimeStream, resum
 		// is durable proof the Ready was received and acted on regardless of
 		// what this process's own send call returned, and it outranks the send
 		// error — the resume is done, and the run's outbound narration (which
-		// sendRunUpdateReportingPause just paused on this same error) is
+		// sendRunUpdateReportingPauseGated just paused on this same error) is
 		// refreshed rather than left muted for a run the orchestrator is
-		// still hearing from. Otherwise this call is what abandons the
-		// resume, atomically with respect to a delivery racing it for the
-		// same decision.
+		// still hearing from. A Ready refused locally for paused narration
+		// never reaches this far having armed anything at all — beginReadySend
+		// never ran for it — so this same commit point just as correctly finds
+		// nothing to claim and abandons it instead. Either way this call is
+		// what settles the resume, atomically with respect to a delivery
+		// racing it for the same decision.
+		if pending.testBeforeReadyFailureClaim != nil {
+			pending.testBeforeReadyFailureClaim()
+		}
 		if accepted, ok := pending.abandonOrClaim(); ok {
 			return w.completeAcceptedResume(entry, accepted)
 		}
@@ -1707,11 +1755,38 @@ func (w *Worker) sendRunUpdate(ctx context.Context, entry *activeRun, stream Run
 // dropping it silently leaves the asker waiting for an answer that was never
 // requested. Those callers need the pause reported rather than absorbed.
 func (w *Worker) sendRunUpdateReportingPause(ctx context.Context, entry *activeRun, stream RuntimeStream, update *turingv1.RuntimeUpdate) error {
+	return w.sendRunUpdateReportingPauseGated(ctx, entry, stream, update, nil)
+}
+
+// sendRunUpdateReportingPauseGated is sendRunUpdateReportingPause with one
+// additional seam: onSendStarting, when non-nil, runs exactly once,
+// synchronously, immediately after the pause check below has already decided
+// this update is going out — never before it, and never at all for an update
+// that check refuses — and immediately before the send it is about to make.
+// It is never invoked when entry is nil, because that path has no pause
+// check to gate on in the first place, and every caller that supplies a hook
+// always has a non-nil entry.
+//
+// resumeApproval is the only caller that supplies one, pending.beginReadySend,
+// so that recordAccepted's gate is armed at the exact instant a Ready send
+// actually begins and not a moment earlier. That ordering is what keeps a
+// Ready refused right below for paused narration — returned as
+// errRunNarrationPaused before onSendStarting or w.send ever run — from ever
+// arming acceptance for a send that never left this process, no matter what a
+// concurrent or forged delivery does to recordAccepted while this call is in
+// flight; duplicating the pause check outside this function to decide
+// whether to arm the gate would reopen exactly that race instead of closing
+// it. Every other caller passes nil and this behaves exactly like
+// sendRunUpdateReportingPause.
+func (w *Worker) sendRunUpdateReportingPauseGated(ctx context.Context, entry *activeRun, stream RuntimeStream, update *turingv1.RuntimeUpdate, onSendStarting func()) error {
 	if entry == nil {
 		return w.send(ctx, stream, update)
 	}
 	if entry.outboundPaused() {
 		return errRunNarrationPaused
+	}
+	if onSendStarting != nil {
+		onSendStarting()
 	}
 	if err := w.send(ctx, stream, update); err != nil {
 		entry.pauseOutbound()
