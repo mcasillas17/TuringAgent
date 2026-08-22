@@ -1202,6 +1202,28 @@ func (w *Worker) deliverResumeAcceptance(accepted *turingv1.RuntimeApprovalResum
 	}
 }
 
+// drainApprovalResumeAcceptance does a nonblocking read of a pending resume's
+// own acceptance channel.
+//
+// It exists because a committed acceptance is durable proof that the Ready
+// naming it was received and acted on, and that proof can already be sitting
+// in the channel before resumeApproval ever asks for it: the Ready's send
+// returning a deadline or transport error, and the wait's own deadline
+// expiring in the same instant an acceptance is delivered, are both races
+// between something that already happened and something that merely timed out
+// locally. A nonblocking read is the only thing that may resolve them — it
+// takes an acceptance that is already there and nothing else, so it never
+// turns a real timeout into a wait for one, and it never credits a stream that
+// genuinely received no acceptance with having one.
+func drainApprovalResumeAcceptance(pending *approvalResume) (*turingv1.RuntimeApprovalResumeAccepted, bool) {
+	select {
+	case accepted := <-pending.accepted:
+		return accepted, true
+	default:
+		return nil, false
+	}
+}
+
 // resumeApproval is the worker's half of the approval handshake.
 //
 // It waits for the decision command, tells the orchestrator this attempt is
@@ -1256,6 +1278,14 @@ func (w *Worker) resumeApproval(ctx context.Context, stream RuntimeStream, resum
 	})
 	cancelSend()
 	if err != nil {
+		// A send error only means the Ready's fate is unknowable from HERE —
+		// it does not mean the orchestrator never saw it. If an acceptance is
+		// already sitting in the channel, that is durable proof the Ready was
+		// received and acted on regardless of what this process's own send call
+		// returned, and it outranks the send error: the resume is done.
+		if _, ok := drainApprovalResumeAcceptance(pending); ok {
+			return nil
+		}
 		// Only a send that BEGAN can have been received. Until then the Ready
 		// is still sitting in this process — abandoned in the writer's queue,
 		// or refused because the run's narration is withheld — so the row is
@@ -1265,10 +1295,28 @@ func (w *Worker) resumeApproval(ctx context.Context, stream RuntimeStream, resum
 		// any more, and the stream goes so the ownership fence can decide.
 		return w.failApprovalResume(ctx, stream, entry, runID, outboundSendStarted(err), err)
 	}
+	// A nonblocking check before the blocking wait, so an acceptance that
+	// arrived while the send was still in flight cannot lose a simultaneous
+	// select against a wait context that expired in that same instant. Only an
+	// acceptance already buffered here may win this way — nothing waits beyond
+	// the budget for one that has not arrived yet.
+	if _, ok := drainApprovalResumeAcceptance(pending); ok {
+		return nil
+	}
 	select {
 	case <-pending.accepted:
 		return nil
 	case <-waitCtx.Done():
+		// The select firing on the deadline does not by itself mean nothing
+		// arrived: an acceptance can be buffered in the instant between the
+		// nonblocking check above and this select being entered, and select
+		// offers no ordering guarantee between two cases that are both ready.
+		// A last nonblocking drain right here is what actually closes that
+		// gap, rather than merely narrowing it — it still waits for nothing,
+		// so a deadline with no acceptance behind it fails exactly as before.
+		if _, ok := drainApprovalResumeAcceptance(pending); ok {
+			return nil
+		}
 		return w.failApprovalResume(ctx, stream, entry, runID, true, waitCtx.Err())
 	}
 }
