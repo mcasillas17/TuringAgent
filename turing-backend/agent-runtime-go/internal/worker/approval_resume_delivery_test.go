@@ -770,6 +770,9 @@ func TestAcceptedRecordedBeforeTheWaitBeginsIsClaimedWithoutBlocking(t *testing.
 	if harness.entry.outboundPaused() {
 		t.Fatal("a winning acceptance left the resumed run's outbound narration paused")
 	}
+	if got := harness.entry.expectedVersion(); got != resumeDeliveryVersion+1 {
+		t.Fatalf("run version after a winning acceptance = %d, want the accepted %d", got, resumeDeliveryVersion+1)
+	}
 }
 
 // TestBufferedAcceptanceOutranksSimultaneousDeadline covers the select the old
@@ -859,6 +862,9 @@ func TestBufferedAcceptanceOutranksSimultaneousDeadline(t *testing.T) {
 			}
 			if harness.entry.outboundPaused() {
 				t.Fatalf("attempt %d: a winning acceptance left the resumed run's outbound narration paused", attempt)
+			}
+			if got := harness.entry.expectedVersion(); got != resumeDeliveryVersion+1 {
+				t.Fatalf("attempt %d: run version after a winning acceptance = %d, want the accepted %d", attempt, got, resumeDeliveryVersion+1)
 			}
 		case runWasTerminalized(err):
 			fatal := harness.fatalErr()
@@ -1169,6 +1175,9 @@ func TestAcceptanceDeliveryRacingTheFailureCommitNeverProducesAMixedOutcome(t *t
 			}
 			if harness.entry.outboundPaused() {
 				t.Fatalf("iteration %d: a winning acceptance left the run's outbound narration paused", i)
+			}
+			if got := harness.entry.expectedVersion(); got != resumeDeliveryVersion+1 {
+				t.Fatalf("iteration %d: run version after a winning acceptance = %d, want the accepted %d", i, got, resumeDeliveryVersion+1)
 			}
 		case runWasTerminalized(err):
 			if !errors.Is(fatal, errApprovalResumeUnacknowledged) {

@@ -148,18 +148,20 @@ type approvalResume struct {
 	outcomeMu sync.Mutex
 	outcome   resumeOutcome
 	accepted  *turingv1.RuntimeApprovalResumeAccepted
-	// readyStarted records that this resume's Ready send has begun. It is set
-	// exactly once, by beginReadySend, immediately before resumeApproval
-	// attempts to send the Ready — never before the decision has arrived,
-	// because beginReadySend is only ever called after resumeApproval's
-	// decision select returns. recordAccepted refuses to commit an acceptance
-	// until this is true: the orchestrator cannot have produced a durable
-	// acceptance for a Ready this worker had not yet started sending, so a
-	// stray or premature delivery arriving before this point can never be
-	// recorded, no matter what races it here. That is what makes the
-	// decision select's own failing branch unable to ever observe a recorded
-	// acceptance — the invariant is enforced locally rather than merely
-	// assumed.
+	// readyStarted records that resumeApproval has begun attempting this
+	// resume's Ready send. It is set exactly once, by beginReadySend,
+	// immediately before resumeApproval attempts to send the Ready — never
+	// before the decision has arrived, because beginReadySend is only ever
+	// called after resumeApproval's decision select returns. It means only
+	// that the local attempt was initiated, not that any bytes reached the
+	// transport — the send below can still fail. recordAccepted refuses to
+	// commit an acceptance until this is true: the orchestrator cannot have
+	// produced a durable acceptance for a Ready this worker had not yet
+	// attempted to send, so a stray or premature delivery arriving before
+	// this point can never be recorded, no matter what races it here. That
+	// is what makes the decision select's own failing branch unable to ever
+	// observe a recorded acceptance — the invariant is enforced locally
+	// rather than merely assumed.
 	readyStarted bool
 	// signal is closed exactly once, the instant an acceptance is recorded, so
 	// a blocked wait can wake up rather than poll for one. It carries no
@@ -1160,8 +1162,8 @@ func newApprovalResume(runID string) *approvalResume {
 // recordAccepted stores a durable acceptance for later claiming, unless a
 // failing path has already reached outcomeMu first and abandoned this resume
 // — once abandoned, no later acceptance can revive it — or the Ready send this
-// acceptance would answer has not even started yet. It reports whether the
-// acceptance was recorded.
+// acceptance would answer has not even been attempted yet. It reports whether
+// the acceptance was recorded.
 //
 // This is the "record" half of the single linearizable commit point: whether
 // this call or a concurrent abandonOrClaim acquires outcomeMu first is what
@@ -1183,20 +1185,22 @@ func (p *approvalResume) recordAccepted(accepted *turingv1.RuntimeApprovalResume
 	return true
 }
 
-// beginReadySend records, under outcomeMu, that this resume's Ready send is
-// about to leave this process. Called at most once, immediately before
-// resumeApproval attempts the send — never before the decision select
-// returns — it is what makes recordAccepted's readyStarted gate an honest
-// local proof rather than an assumption: an acceptance cannot be durably
-// recorded for this resume before this call has run, so nothing racing the
-// decision select's own failing branch can ever produce a recorded acceptance
-// for it to observe.
+// beginReadySend records, under outcomeMu, that resumeApproval is initiating
+// this resume's Ready send attempt locally — not that any bytes have reached
+// the transport, only that the attempt is beginning. Called exactly once,
+// from resumeApproval's sole call site, immediately before the send is
+// attempted and never before the decision select returns: by that point
+// nothing else can have reached outcomeMu first, so the resume is always
+// still resumeOutcomePending here and the assignment is unconditional. It is
+// what makes recordAccepted's readyStarted gate an honest local proof rather
+// than an assumption: an acceptance cannot be durably recorded for this
+// resume before this call has run, so nothing racing the decision select's
+// own failing branch can ever produce a recorded acceptance for it to
+// observe.
 func (p *approvalResume) beginReadySend() {
 	p.outcomeMu.Lock()
 	defer p.outcomeMu.Unlock()
-	if p.outcome == resumeOutcomePending {
-		p.readyStarted = true
-	}
+	p.readyStarted = true
 }
 
 // abandonOrClaim is the resume's single commit point for giving up. It is the
