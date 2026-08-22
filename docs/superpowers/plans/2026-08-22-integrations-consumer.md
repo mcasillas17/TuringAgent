@@ -145,7 +145,8 @@ feature exists at all:
   carry an integration tool while the resolver returns nothing — which
   falls through `resolveEgressContext`'s early return and enqueues a
   local run with **no egress decision at all**: the tool is offered, every
-  call is refused at leg 3, no dialog and no error ever surfaces;
+  call is refused for want of any decision, no dialog and no error ever
+  surfaces;
 - the 0016 triggers — `0017` drops and recreates both (SQLite has no `ALTER
   TRIGGER`) widening the carve-out to `('skills','integrations')`;
 - `repository/tools.go` `UpsertTools`, which branches on the literal
@@ -361,10 +362,11 @@ signed challenge, not just the database row.** PR #73's pattern, all of it:
   shared helper** at both check sites (`resolveEgressContext` and
   `validChallengePayload`) — a slightly more permissive early check
   recreates the exact opaque signing failure the sub-budgets exist to
-  prevent. And `clonePendingEgressDecision`, which sits on the fingerprint
-  path, clones and sorts `RemoteMCPServers` explicitly today — the
-  integration slice gets the same clone-and-sort or it rides through
-  aliased and unsorted. These caps are reachable, unlike `maxEgressTools`:
+  prevent. And both `clonePendingEgressDecision` (the fingerprint path)
+  and `normalizePendingEgressDecision` (the persisted decision) clone,
+  sort, and per-entry-validate `RemoteMCPServers` explicitly today — the
+  integration slice gets the same treatment in **both**, or it rides
+  through aliased and unsorted. These caps are reachable, unlike `maxEgressTools`:
   sixteen connections is plausible once the deferred providers land.
 - Those entries ride inside the HMAC-signed `egressChallengePayload`, are
   covered by the structural validation and by
@@ -584,6 +586,12 @@ The honest file-level list:
   `BundledServerForTool`.
 - **`internal/service/mcpregistry/import.go`** — `integrations` added to
   the reserved server names.
+- **`turing-backend/internal/egress` and
+  `internal/service/mcpregistry/transport.go`** — the guarded resolver's
+  new shared home and the rewired original call site (with its transport
+  and special-address tests driving the same exported helper the
+  integrations client uses — two private copies of a security control is
+  exactly the drift the move exists to prevent).
 - **`proto/turing/v1`** — `CallIntegrationTool`, `ListIntegrationTools`,
   `UpdateToolPolicyByName`, `ListPseudoServerTools`;
   `integration_endpoints` on the egress disclosure and decision messages;
@@ -643,8 +651,9 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
    get the boundary probe test 13 gives the approval render: an entry
    rendering to exactly `maxIntegrationEndpointEntryBytes` prepares,
    signs, and verifies, one byte over is refused (this leg needs a
-   stubbed endpoint resolver or a direct test of the shared helper —
-   phase one's real entries, with a 64-rune name cap and a pinned host,
+   **stubbed endpoint resolver** — a direct helper test cannot assert
+   *where* the refusal came from, which is the point of the leg; phase
+   one's real entries, with a 64-rune name cap and a pinned host,
    cannot reach 768 bytes); exactly `maxIntegrationEndpoints` entries
    prepare and sign, one more is refused (reachable with real
    connections, no seam needed) — each refusal at `resolveEgressContext`
@@ -757,7 +766,12 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
     this step and which no shorter test reaches. And the leg the modal
     install depends on: with **no `TURING_INTEGRATION_KEY` configured**,
     discovery succeeds and every non-integration tool still registers —
-    the lister returned empty, not an error.
+    the lister returned empty, not an error. Finally, the third predicate
+    isolated directly, because its wrong version misbehaves only in the
+    registration window no end-to-end test reaches: a live connection,
+    **no** `tools` row for the tool, and `IntegrationEndpointsForTools`
+    still resolves a non-empty entry — the unit probe that kills an
+    `enabled`-filtering or row-requiring resolver.
 16. **The credential used is the credential named.** Two live GitHub
     connections; an approved call naming connection B; the outbound
     `Authorization` header carries B's credential, not A's — the test that
