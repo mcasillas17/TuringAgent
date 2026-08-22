@@ -133,6 +133,12 @@ func TestLoadFromMapValidatesJobMaxAttemptsWithinNoticeBound(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "TURING_JOB_MAX_ATTEMPTS") {
 		t.Fatalf("LoadFromMap TURING_JOB_MAX_ATTEMPTS=%d error = %v, want bounded validation", runoutcome.MaxNoticeAttempts+1, err)
 	}
+
+	env["TURING_JOB_MAX_ATTEMPTS"] = "0"
+	_, err = LoadFromMap(env)
+	if err == nil || !strings.Contains(err.Error(), "TURING_JOB_MAX_ATTEMPTS") {
+		t.Fatalf("LoadFromMap TURING_JOB_MAX_ATTEMPTS=0 error = %v, want bounded validation", err)
+	}
 }
 
 func TestLoadFromMapLoadsBoundedAdvertisedContextLimits(t *testing.T) {

@@ -258,7 +258,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	// value here — instead of letting it fail deep inside a requeue,
 	// exhaustion, or recovery transaction — keeps a bad config from
 	// wedging every retry transition behind a permanent rollback.
-	if maxAttempts > runoutcome.MaxNoticeAttempts {
+	if maxAttempts < 1 || maxAttempts > runoutcome.MaxNoticeAttempts {
 		return Config{}, fmt.Errorf("TURING_JOB_MAX_ATTEMPTS must be between 1 and %d", runoutcome.MaxNoticeAttempts)
 	}
 	maxRuns, err := intValue("TURING_MAX_CONCURRENT_RUNS_GENERAL", 1)
