@@ -6,14 +6,18 @@ import 'package:turing_flutter_app/models/integration.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
+import 'package:turing_flutter_app/models/session_deletion.dart';
 import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 
 import '../support/no_audit_api.dart';
+import '../support/no_mcp_registry_api.dart';
 import '../support/no_skills_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_automations_api.dart';
+import '../support/no_remote_egress_api.dart';
+import '../support/no_session_lifecycle_api.dart';
 import '../support/no_telemetry_api.dart';
 
 /// What the user types into the credential field. Nothing on screen may ever
@@ -600,9 +604,12 @@ class _ConnectCall {
 class _IntegrationsApi
     with
         NoAuditApi,
+        NoMcpRegistryApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoAutomationsApi,
+        NoRemoteEgressApi,
+        NoSessionLifecycleApi,
         NoTelemetryApi
     implements TuringApi {
   final List<IntegrationConnection> connections = [];
@@ -774,7 +781,13 @@ class _IntegrationsApi
       throw UnimplementedError();
 
   @override
-  Future<void> deleteSession({required String sessionId}) async {}
+  Future<SessionDeletionReceipt> deleteSession({
+    required String sessionId,
+  }) async => const SessionDeletionReceipt.completed();
+
+  @override
+  Future<List<SessionDeletionReceipt>> listSessionDeletionReceipts() async =>
+      const [];
 
   @override
   Future<List<Message>> listMessages({

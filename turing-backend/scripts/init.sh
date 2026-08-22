@@ -175,6 +175,38 @@ provision_skills() {
   fi
 }
 
+provision_mcp_config() {
+  local mcp_path="$PWD/mcp"
+  local config_path="$mcp_path/mcp.json"
+
+  if [[ -L "$mcp_path" ]]; then
+    printf 'Initialization failed: mcp must be a real directory, not a symlink.\n' >&2
+    return 1
+  fi
+  if [[ -e "$mcp_path" && ! -d "$mcp_path" ]]; then
+    printf 'Initialization failed: mcp must be a real directory.\n' >&2
+    return 1
+  fi
+  if [[ ! -e "$mcp_path" ]] && ! (umask 077 && mkdir -m 0700 -- "$mcp_path"); then
+    printf 'Initialization failed: could not create mcp directory.\n' >&2
+    return 1
+  fi
+  if [[ ! -O "$mcp_path" ]] || ! chmod 0700 "$mcp_path"; then
+    printf 'Initialization failed: mcp must be owned by the host user and securable.\n' >&2
+    return 1
+  fi
+  if [[ -e "$config_path" || -L "$config_path" ]]; then
+    if [[ -L "$config_path" || ! -f "$config_path" || ! -O "$config_path" ]]; then
+      printf 'Initialization failed: mcp/mcp.json must be an owned regular file, not a symlink.\n' >&2
+      return 1
+    fi
+    if ! chmod 0600 "$config_path" || [[ "$(path_mode "$config_path")" != "600" ]]; then
+      printf 'Initialization failed: mcp/mcp.json must have mode 0600.\n' >&2
+      return 1
+    fi
+  fi
+}
+
 path_mode() {
   local path="$1"
   local mode
@@ -291,6 +323,7 @@ if ! is_positive_id "$current_uid" || ! is_positive_id "$current_gid"; then
 fi
 provision_sandbox
 provision_skills
+provision_mcp_config
 
 validate_env_file
 if [[ ! -e .env ]]; then
@@ -308,9 +341,12 @@ ensure_var TURING_CLIENT_API_KEY "$(generate_client_key)"
 # has no business calling.
 ensure_var TURING_RUNTIME_TOKEN "$(generate_secret)"
 ensure_var TURING_APPROVAL_CONSUMER_TOKEN "$(generate_secret)"
+ensure_var TURING_MCP_FILES_CLEANUP_TOKEN "$(generate_secret)"
 ensure_var MCP_SYSTEM_TOKEN_GENERAL "$(generate_secret)"
 ensure_var MCP_FILES_TOKEN_GENERAL "$(generate_secret)"
 ensure_var TURING_APPROVAL_JWT_SECRET "$(generate_secret)"
+ensure_var TURING_EGRESS_SIGNING_SECRET "$(generate_secret)"
+ensure_var TURING_CURSOR_HMAC_SECRET "$(generate_secret)"
 ensure_var TURING_INTEGRATION_KEY "$(generate_secret)"
 configure_host_identity "$current_uid" "$current_gid"
 provision_data

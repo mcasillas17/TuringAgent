@@ -32,6 +32,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -66,6 +67,51 @@ type grpcHarness struct {
 	workerCancel     context.CancelFunc
 	workerDone       chan error
 	closeOnce        sync.Once
+}
+
+type consentingChatClient struct {
+	inner turingv1.ChatServiceClient
+}
+
+func (c *consentingChatClient) PrepareRemoteEgress(
+	ctx context.Context,
+	request *turingv1.PrepareRemoteEgressRequest,
+	options ...grpc.CallOption,
+) (*turingv1.PrepareRemoteEgressResponse, error) {
+	return c.inner.PrepareRemoteEgress(ctx, request, options...)
+}
+
+func (c *consentingChatClient) SendMessage(
+	ctx context.Context,
+	request *turingv1.SendMessageRequest,
+	options ...grpc.CallOption,
+) (grpc.ServerStreamingClient[turingv1.ChatStreamEvent], error) {
+	if request.GetModelProvider() != turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE ||
+		request.GetRemoteEgressConsent() != nil {
+		return c.inner.SendMessage(ctx, request, options...)
+	}
+	prepared, err := c.inner.PrepareRemoteEgress(ctx, &turingv1.PrepareRemoteEgressRequest{
+		SessionId: request.GetSessionId(), Content: request.GetContent(),
+		ContentType: request.GetContentType(), AgentId: request.GetAgentId(),
+		ModelProvider: request.GetModelProvider(), Model: request.GetModel(),
+		IdempotencyKey:                 request.GetIdempotencyKey(),
+		RequestedTools:                 request.GetRequestedTools(),
+		RequiredContextTokens:          request.GetRequiredContextTokens(),
+		MinimumWorkerMaxConcurrentRuns: request.GetMinimumWorkerMaxConcurrentRuns(),
+	}, options...)
+	if err != nil {
+		return nil, err
+	}
+	disclosure := prepared.GetDisclosure()
+	if disclosure == nil {
+		return nil, status.Error(codes.FailedPrecondition, "remote provider returned no egress disclosure")
+	}
+	consented := proto.Clone(request).(*turingv1.SendMessageRequest)
+	consented.RemoteEgressConsent = &turingv1.RemoteEgressConsent{
+		Challenge: disclosure.GetChallenge(), Acknowledged: true,
+		AcknowledgedDataCategories: disclosure.GetDataCategories(),
+	}
+	return c.inner.SendMessage(ctx, consented, options...)
 }
 
 type fakeModelServer struct {
@@ -144,6 +190,49 @@ func withFilesCreateTool() harnessOption {
 	return func(cfg *harnessConfig) { cfg.advertiseFilesCreate = true }
 }
 
+func TestPublicGRPCSessionDeletionDeliversTerminalAndRejectsReads(t *testing.T) {
+	h := newGRPCHarness(t, withoutRuntimeWorker())
+	ctx, cancel := context.WithTimeout(h.clientContext(), 5*time.Second)
+	defer cancel()
+	created, err := h.sessions.CreateSession(ctx, &turingv1.CreateSessionRequest{Title: "Delete over gRPC"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	stream, err := h.events.SubscribeSessionEvents(ctx, &turingv1.SubscribeSessionEventsRequest{
+		SessionId: created.GetSessionId(),
+	})
+	if err != nil {
+		t.Fatalf("SubscribeSessionEvents: %v", err)
+	}
+	if err := h.app.WaitForSessionEventSubscriber(ctx, created.GetSessionId()); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := h.sessions.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: created.GetSessionId()})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if deleted.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_COMPLETED {
+		t.Fatalf("deletion receipt = %+v, want completed", deleted.GetDeletion())
+	}
+	terminal, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("terminal event: %v", err)
+	}
+	if terminal.GetType() != turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_DELETED {
+		t.Fatalf("terminal type = %v, want SESSION_DELETED", terminal.GetType())
+	}
+	if _, err := stream.Recv(); status.Code(err) != codes.NotFound {
+		t.Fatalf("terminal stream close = %v, want NotFound", err)
+	}
+	if _, err := h.sessions.GetSession(ctx, &turingv1.GetSessionRequest{SessionId: created.GetSessionId()}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetSession after deletion = %v, want NotFound", err)
+	}
+	if _, err := h.events.ListEvents(ctx, &turingv1.ListEventsRequest{SessionId: created.GetSessionId()}); status.Code(err) != codes.NotFound {
+		t.Fatalf("ListEvents after deletion = %v, want NotFound", err)
+	}
+}
+
 func newGRPCHarness(t *testing.T, opts ...harnessOption) *grpcHarness {
 	t.Helper()
 	cfg := harnessConfig{startRuntimeWorker: true}
@@ -171,9 +260,12 @@ func newGRPCHarness(t *testing.T, opts ...harnessOption) *grpcHarness {
 		ApprovalConsumerToken:    integrationApprovalConsumerToken,
 		FilesMCPEnabled:          true,
 		ApprovalJWTSecret:        integrationApprovalKey,
+		EgressSigningSecret:      "integration-egress-signing-key",
 		DatabasePath:             dbPath,
 		OllamaModel:              "fake-ollama",
+		OpenAIBaseURL:            fakeModel.server.URL,
 		OpenAIModel:              "fake-model",
+		OpenAIEnabled:            true,
 		MaxConcurrentRunsGeneral: 1,
 		MaxToolCallsPerRun:       10,
 		ApprovalTTLMS:            int(cfg.approvalTTL / time.Millisecond),
@@ -200,7 +292,7 @@ func newGRPCHarness(t *testing.T, opts ...harnessOption) *grpcHarness {
 
 	h.publicConn = dialBufconn(t, publicLis)
 	h.internalConn = dialBufconn(t, internalLis)
-	h.chat = turingv1.NewChatServiceClient(h.publicConn)
+	h.chat = &consentingChatClient{inner: turingv1.NewChatServiceClient(h.publicConn)}
 	h.sessions = turingv1.NewSessionServiceClient(h.publicConn)
 	h.events = turingv1.NewEventServiceClient(h.publicConn)
 	h.approvals = turingv1.NewApprovalServiceClient(h.publicConn)
@@ -252,6 +344,11 @@ func (h *grpcHarness) waitForRuntimeWorker(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
+		select {
+		case workerErr := <-h.workerDone:
+			t.Fatalf("runtime worker exited before advertising capabilities: %v", workerErr)
+		default:
+		}
 		lastErr = h.app.ValidateRuntimeRoute(
 			context.Background(), "general_assistant", "openai_compatible", "fake-model",
 		)
@@ -782,9 +879,10 @@ func (f *fakeMCPServer) handle(w http.ResponseWriter, r *http.Request) {
 			writeJSONRPCError(w, requestID, "approval token required")
 			return
 		}
+		provenanceToken, _ := meta["provenanceToken"].(string)
 		if validateApproval {
-			if len(meta) != 1 {
-				f.reject(w, http.StatusBadRequest, fmt.Errorf("files MCP _meta = %#v, want only approvalToken", meta))
+			if len(meta) != 2 || provenanceToken == "" {
+				f.reject(w, http.StatusBadRequest, fmt.Errorf("files MCP _meta = %#v, want an approval token and a provenance capability", meta))
 				return
 			}
 			if blockCreate {
@@ -806,10 +904,32 @@ func (f *fakeMCPServer) handle(w http.ResponseWriter, r *http.Request) {
 				f.reject(w, http.StatusBadRequest, fmt.Errorf("files MCP approval token: %w", err))
 				return
 			}
+			provenance, err := integrationProvenanceClaims(provenanceToken, args)
+			if err != nil {
+				f.reject(w, http.StatusBadRequest, fmt.Errorf("files MCP provenance capability: %w", err))
+				return
+			}
 			ctx := metadata.AppendToOutgoingContext(r.Context(), "authorization", "Bearer "+integrationApprovalConsumerToken)
-			consumed, err := f.approvalClient.ConsumeApproval(ctx, &turingv1.ConsumeApprovalRequest{ApprovalId: approvalID})
+			consumed, err := f.approvalClient.ConsumeApproval(ctx, &turingv1.ConsumeApprovalRequest{
+				ApprovalId:      approvalID,
+				ProvenanceToken: provenanceToken,
+				PhysicalPath:    provenance.ownedPath(),
+			})
 			if err != nil || consumed.GetStatus() != turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED {
 				f.reject(w, http.StatusBadRequest, fmt.Errorf("files MCP consume approval %q: response=%v error=%v", approvalID, consumed, err))
+				return
+			}
+			reservation := consumed.GetReservation()
+			if reservation.GetArtifactId() == "" || reservation.GetPhysicalPath() != provenance.ownedPath() {
+				f.reject(w, http.StatusBadRequest, fmt.Errorf("files MCP artifact reservation = %v, want the run-scoped path %q", reservation, provenance.ownedPath()))
+				return
+			}
+			if _, err := f.approvalClient.FinalizeSandboxArtifact(ctx, &turingv1.FinalizeSandboxArtifactRequest{
+				ArtifactId:      reservation.GetArtifactId(),
+				ProvenanceToken: provenanceToken,
+				Committed:       true,
+			}); err != nil {
+				f.reject(w, http.StatusBadRequest, fmt.Errorf("files MCP finalize artifact %q: %w", reservation.GetArtifactId(), err))
 				return
 			}
 		}
@@ -879,6 +999,75 @@ func (f *fakeMCPServer) blockCreateCallUntilCancelled() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.blockCreate = true
+}
+
+// integrationProvenance is what the fake mcp-files reads out of the capability
+// the orchestrator issued: the session and run that own the write, and the path
+// it is scoped to. The real server derives the same physical path from it.
+type integrationProvenance struct {
+	sessionID   string
+	runID       string
+	logicalPath string
+}
+
+func (p integrationProvenance) ownedPath() string {
+	return "sessions/" + p.sessionID + "/runs/" + p.runID + "/files/" + p.logicalPath
+}
+
+func integrationProvenanceClaims(token string, args map[string]any) (integrationProvenance, error) {
+	claims, err := verifyIntegrationJWT(token)
+	if err != nil {
+		return integrationProvenance{}, err
+	}
+	canonicalArgs, err := json.Marshal(args)
+	if err != nil {
+		return integrationProvenance{}, err
+	}
+	argsHash := sha256.Sum256(canonicalArgs)
+	if claims["kind"] != "provenance" ||
+		claims["aud"] != "mcp-files" ||
+		claims["sub"] != "general_assistant" ||
+		claims["tool"] != "files.create" ||
+		claims["args_hash"] != "sha256:"+hex.EncodeToString(argsHash[:]) {
+		return integrationProvenance{}, fmt.Errorf("unexpected provenance claims: %#v", claims)
+	}
+	sessionID, _ := claims["sid"].(string)
+	runID, _ := claims["rid"].(string)
+	logicalPath, _ := claims["path"].(string)
+	if sessionID == "" || runID == "" || logicalPath == "" {
+		return integrationProvenance{}, fmt.Errorf("provenance capability lacks a session, run or path scope: %#v", claims)
+	}
+	return integrationProvenance{sessionID: sessionID, runID: runID, logicalPath: logicalPath}, nil
+}
+
+func verifyIntegrationJWT(token string) (map[string]any, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, errors.New("invalid JWT shape")
+	}
+	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, err
+	}
+	var header map[string]any
+	if err := json.Unmarshal(headerJSON, &header); err != nil || header["alg"] != "HS256" {
+		return nil, fmt.Errorf("invalid JWT header: %#v: %v", header, err)
+	}
+	mac := hmac.New(sha256.New, []byte(integrationApprovalKey))
+	_, _ = mac.Write([]byte(parts[0] + "." + parts[1]))
+	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || !hmac.Equal(signature, mac.Sum(nil)) {
+		return nil, errors.New("invalid JWT signature")
+	}
+	payloadJSON, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, err
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payloadJSON, &claims); err != nil {
+		return nil, err
+	}
+	return claims, nil
 }
 
 func validateIntegrationApprovalToken(token string, args map[string]any) (string, error) {
@@ -980,6 +1169,9 @@ func TestSendMessageStreamsTokensToCompletion(t *testing.T) {
 func TestDiscoveredToolsAppearInListTools(t *testing.T) {
 	harness := newGRPCHarness(t)
 	defer harness.close()
+	if err := harness.repo.RegisterLocalMCPServer(context.Background(), "custom"); err != nil {
+		t.Fatal(err)
+	}
 
 	internalCtx, cancelInternal := context.WithTimeout(
 		metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+integrationRuntimeToken),
@@ -1181,14 +1373,15 @@ func TestApprovalPersistenceFailureFencesRealWorkerUntilExecutorExit(t *testing.
 		done := make(chan error, 1)
 		go func() {
 			done <- runtimetestkit.RunWorkerWithExecutor(ctx, runtimetestkit.WorkerConfig{
-				Conn:               conn,
-				RuntimeToken:       integrationRuntimeToken,
-				WorkerID:           workerID,
-				MaxConcurrentRuns:  1,
-				TotalToolTimeout:   time.Second,
-				MaxToolCallsPerRun: 1,
-				OpenAIModel:        "fake-model",
-				DiscoveredTools:    discoveredTools,
+				Conn:                        conn,
+				RuntimeToken:                integrationRuntimeToken,
+				WorkerID:                    workerID,
+				MaxConcurrentRuns:           1,
+				TotalToolTimeout:            time.Second,
+				MaxToolCallsPerRun:          1,
+				OpenAIModel:                 "fake-model",
+				RemoteEgressDecisionVersion: 1,
+				DiscoveredTools:             discoveredTools,
 			}, executor)
 		}()
 		harness.waitForRuntimeWorker(t)

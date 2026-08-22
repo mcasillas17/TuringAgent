@@ -39,14 +39,15 @@ type ContextRecaller interface {
 }
 
 type GeneralAssistantTools struct {
-	SystemMCP          ToolLister
-	FilesMCP           ToolLister
-	Runner             *tools.Runner
-	Recall             ContextRecaller
-	MaxToolCallsPerRun int
-	ModelTimeout       time.Duration
-	ToolTimeout        time.Duration
-	TotalToolTimeout   time.Duration
+	SystemMCP            ToolLister
+	FilesMCP             ToolLister
+	Runner               *tools.Runner
+	Recall               ContextRecaller
+	MaxToolCallsPerRun   int
+	ModelTimeout         time.Duration
+	ToolTimeout          time.Duration
+	TotalToolTimeout     time.Duration
+	RegisteredMCPServers func(context.Context) (map[string]ToolLister, error)
 }
 
 const (
@@ -88,9 +89,10 @@ type GeneralAssistant struct {
 	recall             ContextRecaller
 	maxToolCallsPerRun int
 
-	registryMu sync.Mutex
-	registry   *ToolRegistry
-	discovery  *toolDiscovery
+	registryMu         sync.Mutex
+	registry           *ToolRegistry
+	discovery          *toolDiscovery
+	registryGeneration uint64
 }
 
 type toolDiscovery struct {
@@ -98,6 +100,7 @@ type toolDiscovery struct {
 	registry               *ToolRegistry
 	err                    error
 	retryAfterLeaderCancel bool
+	generation             uint64
 }
 
 func NewGeneralAssistant(providers map[turingv1.ModelProvider]llm.Provider, messages MessageClient, toolset *GeneralAssistantTools) *GeneralAssistant {
@@ -144,6 +147,7 @@ func (a *GeneralAssistant) SetToolBeaconPoster(post func(context.Context, *turin
 	if a.tools == nil || a.tools.Runner == nil {
 		return
 	}
+
 	a.tools.Runner.PostBeacon = post
 }
 
@@ -156,6 +160,13 @@ func (a *GeneralAssistant) SetApprovalResumer(resume func(context.Context, tools
 		return
 	}
 	a.tools.Runner.ResumeApproved = resume
+}
+
+func (a *GeneralAssistant) InvalidateToolRegistry() {
+	a.registryMu.Lock()
+	a.registryGeneration++
+	a.registry = nil
+	a.registryMu.Unlock()
 }
 
 // DiscoveredTools is the snapshot the worker reports on connect. It reuses the
@@ -192,9 +203,19 @@ func (a *GeneralAssistant) AdvertisedTools(ctx context.Context) ([]*turingv1.Dis
 	return out, nil
 }
 
+func toolDefinitionsForJob(registry *ToolRegistry, job *turingv1.AgentJob) ([]llm.ToolDefinition, error) {
+	if job.GetEgressDecision() != nil {
+		return registry.DefinitionsFor(job.GetSelectedTools())
+	}
+	return registry.Definitions(), nil
+}
+
 func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, emit func(*turingv1.RuntimeUpdate) error) error {
 	if job == nil {
 		return fmt.Errorf("job is required")
+	}
+	if err := validateEgressDecisionShape(job); err != nil {
+		return emitRunFailed(emit, job, "egress_decision_invalid", turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_POLICY, retryClass(false))
 	}
 	messages, err := a.messages.FetchMessages(
 		ctx,
@@ -223,6 +244,9 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	if llm.ProviderIsNil(provider) {
 		return emitRunFailed(emit, job, "model_provider_unavailable", turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_CONFIGURATION, retryClass(false))
 	}
+	if err := validateEgressProvider(job, provider); err != nil {
+		return emitRunFailed(emit, job, "egress_decision_invalid", turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_POLICY, retryClass(false))
+	}
 	registry, err := a.discoverTools(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -239,7 +263,10 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	// Filesystem skills contribute a bounded metadata index. Bodies arrive only
 	// through skill_view or an exact $path/id invocation. Legacy queued jobs
 	// retain their old full-body snapshot behavior until they drain.
-	toolDefinitions := registry.Definitions()
+	toolDefinitions, err := toolDefinitionsForJob(registry, job)
+	if err != nil {
+		return emitRunFailed(emit, job, "egress_decision_invalid", turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_POLICY, retryClass(false))
+	}
 	recallForContext := a.prepareRecallForRun(ctx, job)
 	var content strings.Builder
 	var tokens runTokenAccumulator
@@ -254,6 +281,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+
 		skillMessages, skillIndexIncluded, skillIndexOmitted, err := buildSkillMessagesWithinContext(
 			provider,
 			job.GetModel(),
@@ -435,6 +463,16 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			// filler was then persisted as the assistant's own words.
 			return completeRun(emit, job, content.String(), tokens.reported())
 		}
+		if job.GetModelProvider() == turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE &&
+			len(job.GetSelectedTools()) == 0 {
+			return emitRunFailed(
+				emit,
+				job,
+				"egress_decision_invalid",
+				turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_POLICY,
+				retryClass(false),
+			)
+		}
 		if toolCallCount+len(calls) > a.maxToolCallsPerRun {
 			return emitRunFailed(emit, job, "tool_call_limit_exceeded", turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_GUARD, retryClass(false))
 		}
@@ -485,7 +523,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			return emitRunFailed(emit, job, "context_budget_exceeded", turingv1.FailureOrigin_FAILURE_ORIGIN_CONTEXT_ASSEMBLY, retryClass(false))
 		}
 		for _, call := range calls {
-			outcome, err := a.executeToolCall(ctx, job, emit, registry, call)
+			outcome, err := a.executeToolCall(ctx, job, emit, registry, toolDefinitions, call)
 			successfulToolSideEffect = successfulToolSideEffect || outcome.SuccessfulSideEffect
 			if err != nil {
 				if errors.Is(err, errRunTerminalized) {
@@ -744,6 +782,7 @@ func (a *GeneralAssistant) discoverTools(ctx context.Context) (*ToolRegistry, er
 	parentCtx := ctx
 	ctx, cancel := boundedContext(ctx, a.toolTimeout())
 	defer cancel()
+discoveryLoop:
 	for {
 		a.registryMu.Lock()
 		if a.registry != nil {
@@ -767,18 +806,21 @@ func (a *GeneralAssistant) discoverTools(ctx context.Context) (*ToolRegistry, er
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
-				if discovery.err == nil {
-					return discovery.registry, nil
-				}
 				if discovery.retryAfterLeaderCancel {
 					continue
+				}
+				if discovery.err == nil {
+					return discovery.registry, nil
 				}
 				return nil, discovery.err
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
 		}
-		discovery := &toolDiscovery{done: make(chan struct{})}
+		discovery := &toolDiscovery{
+			done:       make(chan struct{}),
+			generation: a.registryGeneration,
+		}
 		a.discovery = discovery
 		a.registryMu.Unlock()
 
@@ -790,19 +832,56 @@ func (a *GeneralAssistant) discoverTools(ctx context.Context) (*ToolRegistry, er
 			if !isNilToolLister(a.tools.FilesMCP) {
 				servers["files"] = a.tools.FilesMCP
 			}
+			if a.tools.RegisteredMCPServers != nil {
+				registered, loadErr := a.tools.RegisteredMCPServers(ctx)
+				if loadErr != nil {
+					a.registryMu.Lock()
+					stale := discovery.generation != a.registryGeneration
+					discovery.err = loadErr
+					discovery.retryAfterLeaderCancel = stale || parentCtx.Err() != nil
+					a.discovery = nil
+					close(discovery.done)
+					a.registryMu.Unlock()
+					if stale {
+						continue discoveryLoop
+					}
+					return nil, loadErr
+				}
+				for serverName, client := range registered {
+					if _, exists := servers[serverName]; exists {
+						a.registryMu.Lock()
+						stale := discovery.generation != a.registryGeneration
+						discovery.err = fmt.Errorf("registered MCP server %q shadows a bundled server", serverName)
+						discovery.retryAfterLeaderCancel = stale
+						a.discovery = nil
+						close(discovery.done)
+						a.registryMu.Unlock()
+						if stale {
+							continue discoveryLoop
+						}
+						return nil, discovery.err
+					}
+					servers[serverName] = client
+				}
+			}
 		}
 		registry, err := BuildToolRegistry(ctx, servers)
 
 		a.registryMu.Lock()
+		stale := discovery.generation != a.registryGeneration
 		discovery.registry = registry
 		discovery.err = err
-		discovery.retryAfterLeaderCancel = err != nil && parentCtx.Err() != nil && errors.Is(err, parentCtx.Err())
-		if err == nil {
+		discovery.retryAfterLeaderCancel = stale ||
+			(err != nil && parentCtx.Err() != nil && errors.Is(err, parentCtx.Err()))
+		if err == nil && !stale {
 			a.registry = registry
 		}
 		a.discovery = nil
 		close(discovery.done)
 		a.registryMu.Unlock()
+		if stale {
+			continue
+		}
 		return registry, err
 	}
 }
@@ -812,17 +891,18 @@ func (a *GeneralAssistant) executeToolCall(
 	job *turingv1.AgentJob,
 	emit func(*turingv1.RuntimeUpdate) error,
 	registry *ToolRegistry,
+	availableDefinitions []llm.ToolDefinition,
 	call llm.ToolCall,
 ) (toolCallOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return toolCallOutcome{}, err
 	}
 	entry, found := registry.Lookup(call.Name)
-	if !found {
+	if !found || !toolDefinitionAvailable(availableDefinitions, call.Name) {
 		if err := emitAssistantToolCallFailed(emit, job, call); err != nil {
 			return toolCallOutcome{}, err
 		}
-		return unknownToolOutcome(call, registry)
+		return unknownToolOutcome(call, availableDefinitions)
 	}
 	if a.tools == nil || a.tools.Runner == nil {
 		if err := emitAssistantToolCallFailed(emit, job, call); err != nil {
@@ -955,12 +1035,12 @@ type unknownToolPayload struct {
 // unknownToolOutcome builds the recoverable error for an unknown tool name. Same
 // outcome shape as toolErrorOutcome — a tool-role result threaded back to the
 // model — but with actionable content.
-func unknownToolOutcome(call llm.ToolCall, registry *ToolRegistry) (toolCallOutcome, error) {
-	definitions := registry.Definitions()
+func unknownToolOutcome(call llm.ToolCall, definitions []llm.ToolDefinition) (toolCallOutcome, error) {
 	available := make([]string, 0, len(definitions))
 	for _, definition := range definitions {
 		available = append(available, definition.Name)
 	}
+
 	payload := unknownToolPayload{
 		Error:          "unknown_tool",
 		RejectedTool:   call.Name,
@@ -977,6 +1057,15 @@ func unknownToolOutcome(call llm.ToolCall, registry *ToolRegistry) (toolCallOutc
 	}
 	result := toolResultMessage(call, data)
 	return toolCallOutcome{ResultMessage: &result, AppendedBytes: len(data)}, nil
+}
+
+func toolDefinitionAvailable(definitions []llm.ToolDefinition, name string) bool {
+	for _, definition := range definitions {
+		if definition.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func toolErrorOutcome(call llm.ToolCall, message string) (toolCallOutcome, error) {

@@ -70,6 +70,8 @@ func approvedFailureMappings() []failureMappingCase {
 		{name: "approval_expired", origin: OriginApprovalExpiry, code: "approval_expired", wantReason: ReasonExpired},
 		{name: "automation_approval_failed", origin: OriginAutomationPolicy, code: "automation_approval_failed", wantReason: ReasonPolicyDenied},
 		{name: "automation_tool_not_allowlisted", origin: OriginAutomationPolicy, code: "automation_tool_not_allowlisted", wantReason: ReasonPolicyDenied},
+		{name: "egress_decision_required", origin: OriginToolPolicy, code: "egress_decision_required", wantReason: ReasonPolicyDenied},
+		{name: "egress_decision_invalid", origin: OriginToolPolicy, code: "egress_decision_invalid", wantReason: ReasonPolicyDenied},
 		// The current transport path cannot tell a deliberate stop from a lost
 		// socket, so it may only report abandonment.
 		{name: "client_cancelled", origin: OriginClientLifecycle, code: "client_cancelled", wantReason: ReasonAbandoned},

@@ -3,16 +3,20 @@ package sessions
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	eventsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -25,12 +29,15 @@ type sessionHarness struct {
 	repo         *repository.Repository
 	conn         *grpc.ClientConn
 	capabilities *sessionCapabilitySource
+	bus          *eventsvc.Bus
+	service      *Server
 }
 
 type sessionCapabilitySource struct {
-	providers map[turingv1.ModelProvider][]*turingv1.ModelCapability
-	agents    map[turingv1.AgentId]bool
-	tools     []string
+	providers         map[turingv1.ModelProvider][]*turingv1.ModelCapability
+	agents            map[turingv1.AgentId]bool
+	tools             []string
+	cancelledSessions []string
 }
 
 func (s *sessionCapabilitySource) ProviderCapabilities() map[turingv1.ModelProvider][]*turingv1.ModelCapability {
@@ -61,6 +68,10 @@ func (s *sessionCapabilitySource) LiveToolNames() []string {
 	return append([]string(nil), s.tools...)
 }
 
+func (s *sessionCapabilitySource) CancelSessionRuns(_ context.Context, sessionID string, _ string) {
+	s.cancelledSessions = append(s.cancelledSessions, sessionID)
+}
+
 func newSessionHarness(t *testing.T) *sessionHarness {
 	t.Helper()
 	return newSessionHarnessOn(t, openSessionTestDB(t))
@@ -87,13 +98,17 @@ func newSessionHarnessOn(t *testing.T, database *db.DB) *sessionHarness {
 	}
 	lis := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	turingv1.RegisterSessionServiceServer(grpcServer, New(repo, config.Config{
+	bus := eventsvc.NewBus(16)
+	service := New(repo, config.Config{
 		FilesMCPEnabled:   true,
 		ApprovalJWTSecret: "approval-secret",
+		CursorHMACKey:     [32]byte{1},
 		OllamaModel:       "llama3.2",
 		OpenAIEnabled:     true,
+		OpenAIBaseURL:     "https://api.openai.com/v1",
 		OpenAIModel:       "gpt-4o-mini",
-	}, capabilities))
+	}, capabilities, bus)
+	turingv1.RegisterSessionServiceServer(grpcServer, service)
 	go func() {
 		_ = grpcServer.Serve(lis)
 	}()
@@ -114,7 +129,14 @@ func newSessionHarnessOn(t *testing.T, database *db.DB) *sessionHarness {
 		grpcServer.Stop()
 		_ = conn.Close()
 	})
-	return &sessionHarness{database: database, repo: repo, conn: conn, capabilities: capabilities}
+	return &sessionHarness{
+		database:     database,
+		repo:         repo,
+		conn:         conn,
+		capabilities: capabilities,
+		bus:          bus,
+		service:      service,
+	}
 }
 
 func openSessionTestDB(t *testing.T) *db.DB {
@@ -133,11 +155,437 @@ func openSessionTestDB(t *testing.T) *db.DB {
 	return database
 }
 
-func TestSessionServiceServesPublicReadEndpoints(t *testing.T) {
+func TestSessionServiceCreatesSession(t *testing.T) {
 	h := newSessionHarness(t)
 	client := turingv1.NewSessionServiceClient(h.conn)
 	ctx := context.Background()
 
+	created, err := client.CreateSession(ctx, &turingv1.CreateSessionRequest{Title: "Test chat"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if created.SessionId == "" || created.CreatedAt == nil {
+		t.Fatalf("bad CreateSession response: %+v", created)
+	}
+}
+
+func TestListSessionsPaginatesStablyAndSupportsPageSizeChanges(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	for index, id := range []string{"older-1", "older-2", "older-3", "older-4"} {
+		if _, err := h.database.ExecContext(ctx, `
+				INSERT INTO sessions (id, title, title_origin, status, created_at, updated_at)
+				VALUES (?, ?, 'explicit', 'active', '2026-08-20T04:00:00.000000000Z', ?)`,
+			id,
+			id,
+			fmt.Sprintf("2026-08-20T04:00:%02d.000000000Z", index+1),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first, err := client.ListSessions(ctx, &turingv1.ListSessionsRequest{
+		Page: &turingv1.PageRequest{Limit: 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertProtoSessionIDs(t, first.Sessions, []string{"older-4", "older-3"})
+	if first.Page == nil || first.Page.NextCursor == "" {
+		t.Fatalf("first page = %+v, want next cursor", first.Page)
+	}
+	if _, err := h.database.ExecContext(ctx, `
+			INSERT INTO sessions (id, title, title_origin, status, created_at, updated_at)
+			VALUES (
+				'inserted-newest', 'inserted-newest', 'explicit', 'active',
+				'2026-08-20T04:00:00.000000000Z', '2026-08-20T04:00:05.000000000Z'
+			)`,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := client.ListSessions(ctx, &turingv1.ListSessionsRequest{
+		Page: &turingv1.PageRequest{Limit: 1, Cursor: first.Page.NextCursor},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertProtoSessionIDs(t, second.Sessions, []string{"older-2"})
+	if second.Page == nil || second.Page.NextCursor == "" {
+		t.Fatalf("second page = %+v, want next cursor", second.Page)
+	}
+
+	finalPage, err := client.ListSessions(ctx, &turingv1.ListSessionsRequest{
+		Page: &turingv1.PageRequest{Limit: 2, Cursor: second.Page.NextCursor},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertProtoSessionIDs(t, finalPage.Sessions, []string{"older-1"})
+	if finalPage.Page == nil || finalPage.Page.NextCursor != "" {
+		t.Fatalf("final page = %+v, want non-nil empty cursor", finalPage.Page)
+	}
+}
+
+func TestListSessionsValidatesLimitsAndCursorsPredictably(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	session, err := h.repo.CreateSession(ctx, "Cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	validPage, err := client.ListSessions(ctx, &turingv1.ListSessionsRequest{
+		Page: &turingv1.PageRequest{Limit: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validCursor := validPage.GetPage().GetNextCursor()
+	if validCursor != "" {
+		t.Fatal("single-row page unexpectedly has a next cursor")
+	}
+	second, err := h.repo.CreateSession(ctx, "Cursor 2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = second
+	validPage, err = client.ListSessions(ctx, &turingv1.ListSessionsRequest{
+		Page: &turingv1.PageRequest{Limit: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validCursor = validPage.GetPage().GetNextCursor()
+	if validCursor == "" {
+		t.Fatal("two-row page has no next cursor")
+	}
+
+	for _, limit := range []int32{-1, 101} {
+		_, err := client.ListSessions(ctx, &turingv1.ListSessionsRequest{
+			Page: &turingv1.PageRequest{Limit: limit},
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("limit %d error = %v, want InvalidArgument", limit, err)
+		}
+	}
+	if _, err := client.ListSessions(ctx, &turingv1.ListSessionsRequest{
+		Page: &turingv1.PageRequest{},
+	}); err != nil {
+		t.Fatalf("default page limit: %v", err)
+	}
+
+	foreign, err := newSessionCursorCodec([32]byte{2}).encode(sessionCursor{
+		Filter:    sessionFilterActive,
+		UpdatedAt: validPage.Sessions[0].UpdatedAt.AsTime().UTC().Format("2006-01-02T15:04:05.000000000Z"),
+		SessionID: validPage.Sessions[0].SessionId,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, request := range map[string]*turingv1.ListSessionsRequest{
+		"malformed": {
+			Page: &turingv1.PageRequest{Limit: 1, Cursor: "not-base64!"},
+		},
+		"padded": {
+			Page: &turingv1.PageRequest{Limit: 1, Cursor: validCursor + "="},
+		},
+		"wrong signing key": {
+			Page: &turingv1.PageRequest{Limit: 1, Cursor: foreign},
+		},
+		"foreign filter": {
+			Page:   &turingv1.PageRequest{Limit: 1, Cursor: validCursor},
+			Filter: turingv1.SessionListFilter_SESSION_LIST_FILTER_ARCHIVED,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := client.ListSessions(ctx, request)
+			if status.Code(err) != codes.InvalidArgument ||
+				status.Convert(err).Message() != "page.cursor is invalid" {
+				t.Fatalf("cursor error = %v", err)
+			}
+		})
+	}
+	_ = session
+}
+
+func TestSessionLifecycleRPCsValidatePublishAndReconcileVisibility(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+
+	created, err := client.CreateSession(ctx, &turingv1.CreateSessionRequest{Title: "  Initial  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := h.repo.GetSession(ctx, created.SessionId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Title.String != "Initial" || stored.TitleOrigin != "explicit" {
+		t.Fatalf("created session = %+v", stored)
+	}
+	empty, err := client.CreateSession(ctx, &turingv1.CreateSessionRequest{Title: " \n "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyStored, err := h.repo.GetSession(ctx, empty.SessionId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if emptyStored.Title.Valid || emptyStored.TitleOrigin != "unset" {
+		t.Fatalf("empty-title session = %+v", emptyStored)
+	}
+	if _, err := client.CreateSession(ctx, &turingv1.CreateSessionRequest{
+		Title: strings.Repeat("x", repository.MaxSessionTitleRunes+1),
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("oversize create title error = %v", err)
+	}
+
+	events, unsubscribe := h.bus.Subscribe(created.SessionId)
+	defer unsubscribe()
+	renamed, err := client.RenameSession(ctx, &turingv1.RenameSessionRequest{
+		SessionId: created.SessionId,
+		Title:     "  Renamed  ",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.GetSession().GetTitle() != "Renamed" {
+		t.Fatalf("rename response = %+v", renamed)
+	}
+	assertLifecycleBusEvent(t, events, "active", "Renamed")
+
+	if _, err := client.RenameSession(ctx, &turingv1.RenameSessionRequest{
+		SessionId: created.SessionId,
+		Title:     "Renamed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertNoLifecycleBusEvent(t, events)
+
+	archived, err := client.ArchiveSession(ctx, &turingv1.ArchiveSessionRequest{SessionId: created.SessionId})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archived.GetSession().GetStatus() != "archived" {
+		t.Fatalf("archive response = %+v", archived)
+	}
+	assertLifecycleBusEvent(t, events, "archived", "Renamed")
+	if _, err := client.GetSession(ctx, &turingv1.GetSessionRequest{SessionId: created.SessionId}); err != nil {
+		t.Fatalf("get archived session: %v", err)
+	}
+	active, err := client.ListSessions(ctx, &turingv1.ListSessionsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range active.Sessions {
+		if session.SessionId == created.SessionId {
+			t.Fatal("archived session remained in default active list")
+		}
+	}
+	archivedPage, err := client.ListSessions(ctx, &turingv1.ListSessionsRequest{
+		Filter: turingv1.SessionListFilter_SESSION_LIST_FILTER_ARCHIVED,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertProtoSessionIDs(t, archivedPage.Sessions, []string{created.SessionId})
+
+	if _, err := client.ArchiveSession(ctx, &turingv1.ArchiveSessionRequest{SessionId: created.SessionId}); err != nil {
+		t.Fatal(err)
+	}
+	assertNoLifecycleBusEvent(t, events)
+	restored, err := client.RestoreSession(ctx, &turingv1.RestoreSessionRequest{SessionId: created.SessionId})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.GetSession().GetStatus() != "active" {
+		t.Fatalf("restore response = %+v", restored)
+	}
+	assertLifecycleBusEvent(t, events, "active", "Renamed")
+
+	if _, err := client.ArchiveSession(ctx, &turingv1.ArchiveSessionRequest{SessionId: empty.SessionId}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: empty.SessionId}); err != nil {
+		t.Fatalf("delete archived session: %v", err)
+	}
+}
+
+func TestSessionLifecycleRPCsHonorDeletionPrecedence(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	session, err := h.repo.CreateSession(ctx, "Withdrawing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.BeginSessionDeletion(ctx, session.SessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, filter := range []turingv1.SessionListFilter{
+		turingv1.SessionListFilter_SESSION_LIST_FILTER_ACTIVE,
+		turingv1.SessionListFilter_SESSION_LIST_FILTER_ARCHIVED,
+		turingv1.SessionListFilter_SESSION_LIST_FILTER_ALL,
+	} {
+		page, err := client.ListSessions(ctx, &turingv1.ListSessionsRequest{Filter: filter})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, listed := range page.Sessions {
+			if listed.SessionId == session.SessionID {
+				t.Fatalf("filter %v returned deleting session", filter)
+			}
+		}
+	}
+	if _, err := client.GetSession(ctx, &turingv1.GetSessionRequest{
+		SessionId: session.SessionID,
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetSession error = %v, want NotFound", err)
+	}
+	if _, err := client.ListMessages(ctx, &turingv1.ListMessagesRequest{
+		SessionId: session.SessionID,
+		Limit:     10,
+	}); status.Code(err) != codes.NotFound || status.Convert(err).Message() != "session not found" {
+		t.Fatalf("ListMessages error = %v, want NotFound session not found", err)
+	}
+	for name, operation := range map[string]func() error{
+		"rename": func() error {
+			_, err := client.RenameSession(ctx, &turingv1.RenameSessionRequest{
+				SessionId: session.SessionID,
+				Title:     "Withdrawing",
+			})
+			return err
+		},
+		"archive": func() error {
+			_, err := client.ArchiveSession(ctx, &turingv1.ArchiveSessionRequest{
+				SessionId: session.SessionID,
+			})
+			return err
+		},
+		"restore": func() error {
+			_, err := client.RestoreSession(ctx, &turingv1.RestoreSessionRequest{
+				SessionId: session.SessionID,
+			})
+			return err
+		},
+	} {
+		if err := operation(); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("%s error = %v, want FailedPrecondition", name, err)
+		}
+	}
+}
+
+func TestSessionLifecycleRPCsValidateIDsAndUnknownSessions(t *testing.T) {
+	h := newSessionHarness(t)
+	ctx := context.Background()
+	invalidSessionIDs := []string{"", "line\nbreak", strings.Repeat("x", 257), string([]byte{0xff})}
+	for _, sessionID := range invalidSessionIDs {
+		if _, err := h.service.GetSession(ctx, &turingv1.GetSessionRequest{SessionId: sessionID}); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("GetSession(%q) error = %v, want InvalidArgument", sessionID, err)
+		}
+		for name, operation := range map[string]func() error{
+			"rename": func() error {
+				_, err := h.service.RenameSession(ctx, &turingv1.RenameSessionRequest{SessionId: sessionID, Title: "Title"})
+				return err
+			},
+			"archive": func() error {
+				_, err := h.service.ArchiveSession(ctx, &turingv1.ArchiveSessionRequest{SessionId: sessionID})
+				return err
+			},
+			"restore": func() error {
+				_, err := h.service.RestoreSession(ctx, &turingv1.RestoreSessionRequest{SessionId: sessionID})
+				return err
+			},
+		} {
+			if err := operation(); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("%s(%q) error = %v, want InvalidArgument", name, sessionID, err)
+			}
+		}
+	}
+	for name, operation := range map[string]func() error{
+		"rename": func() error {
+			_, err := h.service.RenameSession(ctx, nil)
+			return err
+		},
+		"archive": func() error {
+			_, err := h.service.ArchiveSession(ctx, nil)
+			return err
+		},
+		"restore": func() error {
+			_, err := h.service.RestoreSession(ctx, nil)
+			return err
+		},
+	} {
+		if err := operation(); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("%s(nil) error = %v, want InvalidArgument", name, err)
+		}
+	}
+	for _, operation := range []func() error{
+		func() error {
+			_, err := h.service.RenameSession(ctx, &turingv1.RenameSessionRequest{SessionId: "missing", Title: "Title"})
+			return err
+		},
+		func() error {
+			_, err := h.service.ArchiveSession(ctx, &turingv1.ArchiveSessionRequest{SessionId: "missing"})
+			return err
+		},
+		func() error {
+			_, err := h.service.RestoreSession(ctx, &turingv1.RestoreSessionRequest{SessionId: "missing"})
+			return err
+		},
+	} {
+		if err := operation(); status.Code(err) != codes.NotFound {
+			t.Fatalf("unknown lifecycle session error = %v, want NotFound", err)
+		}
+	}
+}
+
+func TestRenameSessionRPCEnforcesUnicodeScalarTitleLimit(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	created, err := client.CreateSession(ctx, &turingv1.CreateSessionRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	maxTitle := strings.Repeat("😀", repository.MaxSessionTitleRunes)
+	renamed, err := client.RenameSession(ctx, &turingv1.RenameSessionRequest{
+		SessionId: created.SessionId,
+		Title:     maxTitle,
+	})
+	if err != nil {
+		t.Fatalf("rename with maximum title length: %v", err)
+	}
+	if renamed.GetSession().GetTitle() != maxTitle {
+		t.Fatalf("rename title = %q, want %q", renamed.GetSession().GetTitle(), maxTitle)
+	}
+
+	for name, title := range map[string]string{
+		"empty":          "",
+		"whitespace":     " \n\t ",
+		"too many runes": maxTitle + "x",
+		"invalid UTF-8":  string([]byte{0xff}),
+	} {
+		_, err := h.service.RenameSession(ctx, &turingv1.RenameSessionRequest{
+			SessionId: created.SessionId,
+			Title:     title,
+		})
+		if status.Code(err) != codes.InvalidArgument ||
+			status.Convert(err).Message() != "title is invalid" {
+			t.Fatalf("%s rename error = %v, want value-free InvalidArgument", name, err)
+		}
+	}
+}
+
+func TestSessionServiceServesPublicReadEndpoints(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
 	created, err := client.CreateSession(ctx, &turingv1.CreateSessionRequest{Title: "Test chat"})
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
@@ -196,6 +644,13 @@ func TestSessionServiceServesPublicReadEndpoints(t *testing.T) {
 	if cfg.Providers[1].GetEnabled() || len(cfg.Providers[1].GetModels()) != 0 {
 		t.Fatalf("unadvertised OpenAI provider = %+v, want disabled with no models", cfg.Providers[1])
 	}
+	if cfg.Providers[0].GetRemoteEndpoint() != "" || cfg.Providers[0].GetRequiresPerRunConsent() {
+		t.Fatalf("Ollama egress metadata = %+v, want local", cfg.Providers[0])
+	}
+	if cfg.Providers[1].GetRemoteEndpoint() != "https://api.openai.com/v1" ||
+		!cfg.Providers[1].GetRequiresPerRunConsent() {
+		t.Fatalf("OpenAI egress metadata = %+v", cfg.Providers[1])
+	}
 	h.capabilities.providers[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA] = []*turingv1.ModelCapability{{
 		Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "live-fallback",
 	}}
@@ -216,6 +671,15 @@ func TestSessionServiceServesPublicReadEndpoints(t *testing.T) {
 		t.Fatalf("agents = %+v", agents.Agents)
 	}
 
+	customServer, err := h.repo.UpsertImportedMCPServer(ctx, repository.ImportedMCPServer{
+		Name: "custom", URL: "http://custom:9000/mcp", Tier: repository.MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.SetMCPServerEnabled(ctx, customServer.ID, true); err != nil {
+		t.Fatal(err)
+	}
 	if err := h.repo.UpsertTools(ctx, []repository.DiscoveredTool{
 		{ServerName: "custom", ToolName: "custom.scan", SchemaJSON: `{}`, Policy: "approval_required"},
 		{ServerName: "files", ToolName: "files.create", SchemaJSON: `{}`, Policy: "disabled"},
@@ -231,14 +695,14 @@ func TestSessionServiceServesPublicReadEndpoints(t *testing.T) {
 	for _, tool := range tools.Tools {
 		gotTools[tool.ServerName+"/"+tool.ToolName] = tool.Policy
 	}
-	if len(gotTools) != 3 {
-		t.Fatalf("tools = %+v, want exact database snapshot", tools.Tools)
+	if len(gotTools) != 2 {
+		t.Fatalf("tools = %+v, want only callable database snapshot", tools.Tools)
 	}
 	if gotTools["system/system.time"] != turingv1.ToolPolicy_TOOL_POLICY_SAFE {
 		t.Fatalf("system.time policy = %v", gotTools["system/system.time"])
 	}
-	if gotTools["files/files.create"] != turingv1.ToolPolicy_TOOL_POLICY_DISABLED {
-		t.Fatalf("files.create policy = %v", gotTools["files/files.create"])
+	if _, present := gotTools["files/files.create"]; present {
+		t.Fatal("disabled files.create was returned as callable")
 	}
 	if gotTools["custom/custom.scan"] != turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED {
 		t.Fatalf("custom.scan policy = %v", gotTools["custom/custom.scan"])
@@ -277,6 +741,262 @@ func TestListToolsExcludesPersistedToolsThatNoLiveWorkerAdvertises(t *testing.T)
 	}
 }
 
+func TestDeleteSessionStartsWithdrawalForLiveRun(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	session, err := h.repo.CreateSession(ctx, "Delete live run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "cancel before deletion", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.ClaimNextJob(ctx, "general_assistant", "worker-delete-live"); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := client.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if response.SessionId != session.SessionID {
+		t.Fatalf("DeleteSession response = %+v, want session id %q", response, session.SessionID)
+	}
+	if response.Deletion == nil || response.Deletion.State != turingv1.SessionDeletionState_SESSION_DELETION_STATE_IN_PROGRESS {
+		t.Fatalf("DeleteSession receipt = %+v, want in-progress receipt", response.Deletion)
+	}
+	if got := h.capabilities.cancelledSessions; len(got) != 1 || got[0] != session.SessionID {
+		t.Fatalf("runtime cancellation sessions = %v, want [%s]", got, session.SessionID)
+	}
+}
+
+func TestDeleteSessionPublishesTerminalEventAfterCompletedWithdrawal(t *testing.T) {
+	database := openSessionTestDB(t)
+	repo := repository.New(database)
+	bus := eventsvc.NewBus(1)
+	server := New(repo, config.Config{}, &sessionCapabilitySource{}, bus)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Delete terminal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, unsubscribe := bus.Subscribe(session.SessionID)
+	defer unsubscribe()
+
+	response, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if response.Deletion.GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_COMPLETED {
+		t.Fatalf("DeleteSession receipt = %+v, want completed", response.Deletion)
+	}
+	select {
+	case event, ok := <-events:
+		if !ok {
+			t.Fatal("terminal event channel closed before delivery")
+		}
+		if event.Type != "session.deleted" || event.Sequence != response.Deletion.TerminalSequence {
+			t.Fatalf("terminal event = %+v, receipt = %+v", event, response.Deletion)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for terminal deletion event")
+	}
+	if _, ok := <-events; ok {
+		t.Fatal("terminal deletion event stream remained open")
+	}
+}
+
+func TestDeleteSessionCompletesAfterArtifactCleanerRemovesOwnedNamespace(t *testing.T) {
+	database := openSessionTestDB(t)
+	repo := repository.New(database)
+	server := New(repo, config.Config{}, &sessionCapabilitySource{})
+	cleaner := &recordingArtifactCleaner{}
+	server.SetArtifactCleaner(cleaner)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Delete owned artifact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "write then withdraw", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO sandbox_artifacts (
+			id, session_id, run_id, logical_path_hash, physical_path, state, policy,
+			deletion_generation, created_at
+		) VALUES (?, ?, ?, ?, ?, 'ready', 'delete_on_session_delete', 0, ?)
+	`,
+		"artifact_service_cleanup",
+		session.SessionID,
+		enqueued.RunID,
+		"sha256:service",
+		"sessions/"+session.SessionID+"/runs/"+enqueued.RunID+"/files/note.txt",
+		repository.FormatTimestamp(time.Now()),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if response.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_COMPLETED {
+		t.Fatalf("deletion receipt = %+v, want completed", response.GetDeletion())
+	}
+	if response.GetDeletion().GetErrorCode() != "" {
+		t.Fatalf("completed receipt error code = %q, want empty", response.GetDeletion().GetErrorCode())
+	}
+	if cleaner.sessionID != session.SessionID || cleaner.calls != 1 {
+		t.Fatalf("cleaner calls = %+v, want one call for %q", cleaner, session.SessionID)
+	}
+}
+
+func TestDeleteSessionCountsRetainedLegacyArtifactWithoutDeletingIt(t *testing.T) {
+	database := openSessionTestDB(t)
+	repo := repository.New(database)
+	server := New(repo, config.Config{}, &sessionCapabilitySource{})
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Retain legacy artifact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "touch legacy", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO sandbox_artifacts (
+			id, session_id, run_id, logical_path_hash, physical_path, state, policy,
+			deletion_generation, created_at
+		) VALUES (?, ?, ?, ?, ?, 'ready', 'retain_legacy_unowned', 0, ?)
+	`,
+		"artifact_legacy_retained",
+		session.SessionID,
+		enqueued.RunID,
+		"sha256:legacy",
+		"legacy.txt",
+		repository.FormatTimestamp(time.Now()),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if response.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_COMPLETED {
+		t.Fatalf("deletion receipt = %+v, want completed", response.GetDeletion())
+	}
+	if got := response.GetDeletion().GetRetainedLegacyArtifactCount(); got != 1 {
+		t.Fatalf("retained legacy artifact count = %d, want 1", got)
+	}
+}
+
+func TestDeleteSessionRetainsFailedExternalReceiptWhenArtifactCleanerFails(t *testing.T) {
+	database := openSessionTestDB(t)
+	repo := repository.New(database)
+	server := New(repo, config.Config{}, &sessionCapabilitySource{})
+	cleaner := &flakyArtifactCleaner{err: errors.New("cleanup transport unavailable")}
+	server.SetArtifactCleaner(cleaner)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Fail artifact cleanup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "write then fail", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO sandbox_artifacts (
+			id, session_id, run_id, logical_path_hash, physical_path, state, policy,
+			deletion_generation, created_at
+		) VALUES (?, ?, ?, ?, ?, 'ready', 'delete_on_session_delete', 0, ?)
+	`,
+		"artifact_cleanup_failure",
+		session.SessionID,
+		enqueued.RunID,
+		"sha256:failure",
+		"sessions/"+session.SessionID+"/runs/"+enqueued.RunID+"/files/note.txt",
+		repository.FormatTimestamp(time.Now()),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if response.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_FAILED_EXTERNAL ||
+		response.GetDeletion().GetErrorCode() != "artifact_cleanup_failed" ||
+		!response.GetDeletion().GetRetryable() {
+		t.Fatalf("failed cleanup receipt = %+v", response.GetDeletion())
+	}
+	persisted, err := repo.SessionDeletionReceipt(ctx, session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ErrorCode != "artifact_cleanup_failed" {
+		t.Fatalf("persisted cleanup error = %q, want artifact_cleanup_failed", persisted.ErrorCode)
+	}
+	var auditPayload string
+	if err := database.QueryRowContext(ctx, `
+		SELECT payload_json
+		FROM audit_logs
+		WHERE action = 'session.artifact.cleanup.failed'
+			AND target = 'artifact_cleanup_failure'
+	`).Scan(&auditPayload); err != nil {
+		t.Fatalf("cleanup failure audit record: %v", err)
+	}
+	if strings.Contains(auditPayload, "note.txt") || strings.Contains(auditPayload, "sessions/") {
+		t.Fatalf("cleanup failure audit leaked a path: %q", auditPayload)
+	}
+	cleaner.err = nil
+	retry, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatalf("retry DeleteSession: %v", err)
+	}
+	if retry.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_COMPLETED ||
+		cleaner.calls != 2 {
+		t.Fatalf("retry receipt = %+v cleaner calls=%d", retry.GetDeletion(), cleaner.calls)
+	}
+}
+
+type recordingArtifactCleaner struct {
+	sessionID string
+	calls     int
+}
+
+type flakyArtifactCleaner struct {
+	calls int
+	err   error
+}
+
+func (c *flakyArtifactCleaner) CleanupSessionArtifacts(context.Context, string, int64) error {
+	c.calls++
+	return c.err
+}
+
+func (c *recordingArtifactCleaner) CleanupSessionArtifacts(_ context.Context, sessionID string, _ int64) error {
+	c.calls++
+	c.sessionID = sessionID
+	return nil
+}
+
 func TestSessionServiceSearchMessagesValidatesQuery(t *testing.T) {
 	h := newSessionHarness(t)
 	client := turingv1.NewSessionServiceClient(h.conn)
@@ -294,7 +1014,7 @@ func TestSessionServiceSearchMessagesValidatesQuery(t *testing.T) {
 		})
 	}
 
-	_, err := New(h.repo, config.Config{}, h.capabilities).SearchMessages(ctx, nil)
+	_, err := h.service.SearchMessages(ctx, nil)
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("SearchMessages nil request error = %v, want InvalidArgument", err)
 	}
@@ -499,8 +1219,9 @@ func insertServiceSearchMessage(t *testing.T, ctx context.Context, database *db.
 }
 
 // Deletion is the only way a user can withdraw what they have said, so its
-// failure modes must be distinguishable over the wire: a client has to be able
-// to say "already gone" and "still running" rather than "something broke".
+// states must be distinguishable over the wire: a client has to be able to say
+// "already gone", "still reconciling", or "completed" rather than "something
+// broke".
 func TestDeleteSessionReportsDistinctStatusCodes(t *testing.T) {
 	h := newSessionHarness(t)
 	ctx := context.Background()
@@ -513,7 +1234,8 @@ func TestDeleteSessionReportsDistinctStatusCodes(t *testing.T) {
 		t.Fatalf("unknown session = %v, want NotFound", status.Code(err))
 	}
 
-	// A session whose run is still in flight must refuse rather than orphan it.
+	// A queued run is cancelled and completed in the same non-blocking
+	// withdrawal call; it is not rejected or orphaned.
 	session, err := h.repo.CreateSession(ctx, "Busy")
 	if err != nil {
 		t.Fatal(err)
@@ -524,8 +1246,12 @@ func TestDeleteSessionReportsDistinctStatusCodes(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID}); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("live run = %v, want FailedPrecondition", status.Code(err))
+	busyResponse, err := client.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatalf("queued-session deletion: %v", err)
+	}
+	if busyResponse.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_COMPLETED {
+		t.Fatalf("queued-session receipt = %+v, want completed", busyResponse.GetDeletion())
 	}
 
 	// And the happy path actually removes it.
@@ -633,5 +1359,47 @@ func TestListMessagesRoundTripsRunStateAfterDatabaseReopen(t *testing.T) {
 	}
 	if got := state.GetFinishedAt().AsTime().Format("2006-01-02T15:04:05.000000000Z"); got != completed.State.FinishedAt.String {
 		t.Fatalf("finished at = %q, want %q", got, completed.State.FinishedAt.String)
+	}
+}
+
+func assertProtoSessionIDs(t *testing.T, sessions []*turingv1.Session, want []string) {
+	t.Helper()
+	got := make([]string, 0, len(sessions))
+	for _, session := range sessions {
+		got = append(got, session.SessionId)
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("session IDs = %v, want %v", got, want)
+	}
+}
+
+func assertLifecycleBusEvent(t *testing.T, events <-chan eventsvc.Event, wantStatus, wantTitle string) {
+	t.Helper()
+	select {
+	case event := <-events:
+		if event.Type != "session.updated" {
+			t.Fatalf("bus event type = %q, want session.updated", event.Type)
+		}
+		var payload struct {
+			Title  string `json:"title"`
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Title != wantTitle || payload.Status != wantStatus {
+			t.Fatalf("bus payload = %+v, want title %q status %q", payload, wantTitle, wantStatus)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for lifecycle bus event")
+	}
+}
+
+func assertNoLifecycleBusEvent(t *testing.T, events <-chan eventsvc.Event) {
+	t.Helper()
+	select {
+	case event := <-events:
+		t.Fatalf("unexpected lifecycle bus event: %+v", event)
+	default:
 	}
 }

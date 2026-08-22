@@ -133,6 +133,12 @@ They are not copied into `RunState` or failure events. Public ChatService and
 EventService readers sanitize malformed legacy payloads again as defense in
 depth.
 
+Automation summaries expose the durable terminal status but never project the
+legacy `agent_runs.error_message`. The retained `last_run_error` protobuf field
+is wire-compatible and empty; until that surface carries a typed outcome
+category, Flutter renders a neutral "The last run failed" notice and links to
+the conversation for the canonical run card.
+
 ## Assignment and approval fencing
 
 Every `AgentJob` includes the state version at assignment and a durable
@@ -192,7 +198,7 @@ because persisted messages do not carry an event/message interleaving key.
 
 ## Migration guarantees
 
-Migration `0016_run_outcomes` rebuilds `agent_runs` on one pinned SQLite
+Migration `0017_run_outcomes` rebuilds `agent_runs` on one pinned SQLite
 connection because it is the parent of run-owned child tables. Foreign keys are
 disabled only on that pinned connection before the transaction, all populated
 children remain in place, `foreign_key_check` must pass, and the runner proves
@@ -211,6 +217,13 @@ diagnostic messages; bounds safe codes; validates canonical fields and
 correlation; and creates the two unique indexes. Any validation, JSON,
 timestamp, SQL, hook, or injected failure rolls back the schema, child data,
 scrub, events, indexes, and migration record together.
+
+Populated run-owned children, including `run_egress_decisions` and idempotency
+replay rows, survive the parent rebuild byte-for-byte. Legacy TUR-003 terminal
+codes `egress_decision_required` and `egress_decision_invalid` normalize to the
+closed public `policy_denied` reason; their raw diagnostic text and failure-event
+payload are scrubbed in the same transaction. Reapplying the idempotency key
+after migration returns the original terminal run without another write.
 
 ## Retained limitations
 

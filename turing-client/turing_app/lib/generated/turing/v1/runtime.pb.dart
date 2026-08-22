@@ -15,8 +15,8 @@ import 'dart:core' as $core;
 import 'package:fixnum/fixnum.dart' as $fixnum;
 import 'package:protobuf/protobuf.dart' as $pb;
 
-import '../../google/protobuf/struct.pb.dart' as $1;
-import 'common.pb.dart' as $2;
+import '../../google/protobuf/struct.pb.dart' as $2;
+import 'common.pb.dart' as $1;
 import 'events.pb.dart' as $3;
 import 'runtime.pbenum.dart';
 import 'tools.pb.dart' as $4;
@@ -32,9 +32,9 @@ class AgentJob extends $pb.GeneratedMessage {
     $core.String? sessionId,
     $core.String? userMessageId,
     $core.String? assistantMessageId,
-    $2.AgentId? agentId,
+    $1.AgentId? agentId,
     $core.String? traceId,
-    $2.ModelProvider? modelProvider,
+    $1.ModelProvider? modelProvider,
     $core.String? model,
     $core.String? userText,
     $core.Iterable<$core.String>? requestedTools,
@@ -43,6 +43,8 @@ class AgentJob extends $pb.GeneratedMessage {
     ExternalAgentTarget? externalAgent,
     $core.int? requiredContextTokens,
     $core.int? minimumWorkerMaxConcurrentRuns,
+    $1.RunEgressDecision? egressDecision,
+    $core.Iterable<$core.String>? selectedTools,
     $fixnum.Int64? expectedStateVersion,
     $core.String? assignmentAttemptId,
   }) {
@@ -66,6 +68,8 @@ class AgentJob extends $pb.GeneratedMessage {
       result.requiredContextTokens = requiredContextTokens;
     if (minimumWorkerMaxConcurrentRuns != null)
       result.minimumWorkerMaxConcurrentRuns = minimumWorkerMaxConcurrentRuns;
+    if (egressDecision != null) result.egressDecision = egressDecision;
+    if (selectedTools != null) result.selectedTools.addAll(selectedTools);
     if (expectedStateVersion != null)
       result.expectedStateVersion = expectedStateVersion;
     if (assignmentAttemptId != null)
@@ -91,16 +95,16 @@ class AgentJob extends $pb.GeneratedMessage {
     ..aOS(3, _omitFieldNames ? '' : 'sessionId')
     ..aOS(4, _omitFieldNames ? '' : 'userMessageId')
     ..aOS(5, _omitFieldNames ? '' : 'assistantMessageId')
-    ..e<$2.AgentId>(6, _omitFieldNames ? '' : 'agentId', $pb.PbFieldType.OE,
-        defaultOrMaker: $2.AgentId.AGENT_ID_UNSPECIFIED,
-        valueOf: $2.AgentId.valueOf,
-        enumValues: $2.AgentId.values)
+    ..e<$1.AgentId>(6, _omitFieldNames ? '' : 'agentId', $pb.PbFieldType.OE,
+        defaultOrMaker: $1.AgentId.AGENT_ID_UNSPECIFIED,
+        valueOf: $1.AgentId.valueOf,
+        enumValues: $1.AgentId.values)
     ..aOS(7, _omitFieldNames ? '' : 'traceId')
-    ..e<$2.ModelProvider>(
+    ..e<$1.ModelProvider>(
         8, _omitFieldNames ? '' : 'modelProvider', $pb.PbFieldType.OE,
-        defaultOrMaker: $2.ModelProvider.MODEL_PROVIDER_UNSPECIFIED,
-        valueOf: $2.ModelProvider.valueOf,
-        enumValues: $2.ModelProvider.values)
+        defaultOrMaker: $1.ModelProvider.MODEL_PROVIDER_UNSPECIFIED,
+        valueOf: $1.ModelProvider.valueOf,
+        enumValues: $1.ModelProvider.values)
     ..aOS(9, _omitFieldNames ? '' : 'model')
     ..aOS(10, _omitFieldNames ? '' : 'userText')
     ..pPS(11, _omitFieldNames ? '' : 'requestedTools')
@@ -113,8 +117,11 @@ class AgentJob extends $pb.GeneratedMessage {
         15, _omitFieldNames ? '' : 'requiredContextTokens', $pb.PbFieldType.O3)
     ..a<$core.int>(16, _omitFieldNames ? '' : 'minimumWorkerMaxConcurrentRuns',
         $pb.PbFieldType.O3)
-    ..aInt64(17, _omitFieldNames ? '' : 'expectedStateVersion')
-    ..aOS(18, _omitFieldNames ? '' : 'assignmentAttemptId')
+    ..aOM<$1.RunEgressDecision>(17, _omitFieldNames ? '' : 'egressDecision',
+        subBuilder: $1.RunEgressDecision.create)
+    ..pPS(18, _omitFieldNames ? '' : 'selectedTools')
+    ..aInt64(19, _omitFieldNames ? '' : 'expectedStateVersion')
+    ..aOS(20, _omitFieldNames ? '' : 'assignmentAttemptId')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -182,9 +189,9 @@ class AgentJob extends $pb.GeneratedMessage {
   void clearAssistantMessageId() => $_clearField(5);
 
   @$pb.TagNumber(6)
-  $2.AgentId get agentId => $_getN(5);
+  $1.AgentId get agentId => $_getN(5);
   @$pb.TagNumber(6)
-  set agentId($2.AgentId value) => $_setField(6, value);
+  set agentId($1.AgentId value) => $_setField(6, value);
   @$pb.TagNumber(6)
   $core.bool hasAgentId() => $_has(5);
   @$pb.TagNumber(6)
@@ -200,9 +207,9 @@ class AgentJob extends $pb.GeneratedMessage {
   void clearTraceId() => $_clearField(7);
 
   @$pb.TagNumber(8)
-  $2.ModelProvider get modelProvider => $_getN(7);
+  $1.ModelProvider get modelProvider => $_getN(7);
   @$pb.TagNumber(8)
-  set modelProvider($2.ModelProvider value) => $_setField(8, value);
+  set modelProvider($1.ModelProvider value) => $_setField(8, value);
   @$pb.TagNumber(8)
   $core.bool hasModelProvider() => $_has(7);
   @$pb.TagNumber(8)
@@ -276,29 +283,45 @@ class AgentJob extends $pb.GeneratedMessage {
   @$pb.TagNumber(16)
   void clearMinimumWorkerMaxConcurrentRuns() => $_clearField(16);
 
+  @$pb.TagNumber(17)
+  $1.RunEgressDecision get egressDecision => $_getN(16);
+  @$pb.TagNumber(17)
+  set egressDecision($1.RunEgressDecision value) => $_setField(17, value);
+  @$pb.TagNumber(17)
+  $core.bool hasEgressDecision() => $_has(16);
+  @$pb.TagNumber(17)
+  void clearEgressDecision() => $_clearField(17);
+  @$pb.TagNumber(17)
+  $1.RunEgressDecision ensureEgressDecision() => $_ensure(16);
+
+  /// Exact tool names frozen by the orchestrator for this run. The runtime may
+  /// expose a subset after context budgeting, never tools outside this set.
+  @$pb.TagNumber(18)
+  $pb.PbList<$core.String> get selectedTools => $_getList(17);
+
   /// The run's state version at assignment. The worker echoes it on later
   /// reports so the orchestrator can reject anything computed against a state it
   /// has already moved past.
-  @$pb.TagNumber(17)
-  $fixnum.Int64 get expectedStateVersion => $_getI64(16);
-  @$pb.TagNumber(17)
-  set expectedStateVersion($fixnum.Int64 value) => $_setInt64(16, value);
-  @$pb.TagNumber(17)
-  $core.bool hasExpectedStateVersion() => $_has(16);
-  @$pb.TagNumber(17)
-  void clearExpectedStateVersion() => $_clearField(17);
+  @$pb.TagNumber(19)
+  $fixnum.Int64 get expectedStateVersion => $_getI64(18);
+  @$pb.TagNumber(19)
+  set expectedStateVersion($fixnum.Int64 value) => $_setInt64(18, value);
+  @$pb.TagNumber(19)
+  $core.bool hasExpectedStateVersion() => $_has(18);
+  @$pb.TagNumber(19)
+  void clearExpectedStateVersion() => $_clearField(19);
 
   /// Durable identity of this assignment attempt. It is what proves a later
   /// report or resume came from the attempt that still owns the run, rather than
   /// from a fenced predecessor; the worker must echo it unchanged.
-  @$pb.TagNumber(18)
-  $core.String get assignmentAttemptId => $_getSZ(17);
-  @$pb.TagNumber(18)
-  set assignmentAttemptId($core.String value) => $_setString(17, value);
-  @$pb.TagNumber(18)
-  $core.bool hasAssignmentAttemptId() => $_has(17);
-  @$pb.TagNumber(18)
-  void clearAssignmentAttemptId() => $_clearField(18);
+  @$pb.TagNumber(20)
+  $core.String get assignmentAttemptId => $_getSZ(19);
+  @$pb.TagNumber(20)
+  set assignmentAttemptId($core.String value) => $_setString(19, value);
+  @$pb.TagNumber(20)
+  $core.bool hasAssignmentAttemptId() => $_has(19);
+  @$pb.TagNumber(20)
+  void clearAssignmentAttemptId() => $_clearField(20);
 }
 
 /// Where to send a run that the user routed off this machine.
@@ -318,11 +341,13 @@ class ExternalAgentTarget extends $pb.GeneratedMessage {
     $core.String? displayName,
     $core.String? baseUrl,
     $core.String? credentialRef,
+    $core.String? agentId,
   }) {
     final result = create();
     if (displayName != null) result.displayName = displayName;
     if (baseUrl != null) result.baseUrl = baseUrl;
     if (credentialRef != null) result.credentialRef = credentialRef;
+    if (agentId != null) result.agentId = agentId;
     return result;
   }
 
@@ -342,6 +367,7 @@ class ExternalAgentTarget extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'displayName')
     ..aOS(2, _omitFieldNames ? '' : 'baseUrl')
     ..aOS(3, _omitFieldNames ? '' : 'credentialRef')
+    ..aOS(4, _omitFieldNames ? '' : 'agentId')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -391,6 +417,15 @@ class ExternalAgentTarget extends $pb.GeneratedMessage {
   $core.bool hasCredentialRef() => $_has(2);
   @$pb.TagNumber(3)
   void clearCredentialRef() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get agentId => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set agentId($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasAgentId() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearAgentId() => $_clearField(4);
 }
 
 /// A frozen skill snapshot as the runtime sees it. instructions retains field 2
@@ -536,7 +571,7 @@ class DiscoveredTool extends $pb.GeneratedMessage {
   factory DiscoveredTool({
     $core.String? serverName,
     $core.String? toolName,
-    $1.Struct? schema,
+    $2.Struct? schema,
   }) {
     final result = create();
     if (serverName != null) result.serverName = serverName;
@@ -560,8 +595,8 @@ class DiscoveredTool extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'serverName')
     ..aOS(2, _omitFieldNames ? '' : 'toolName')
-    ..aOM<$1.Struct>(3, _omitFieldNames ? '' : 'schema',
-        subBuilder: $1.Struct.create)
+    ..aOM<$2.Struct>(3, _omitFieldNames ? '' : 'schema',
+        subBuilder: $2.Struct.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -604,26 +639,27 @@ class DiscoveredTool extends $pb.GeneratedMessage {
   void clearToolName() => $_clearField(2);
 
   @$pb.TagNumber(3)
-  $1.Struct get schema => $_getN(2);
+  $2.Struct get schema => $_getN(2);
   @$pb.TagNumber(3)
-  set schema($1.Struct value) => $_setField(3, value);
+  set schema($2.Struct value) => $_setField(3, value);
   @$pb.TagNumber(3)
   $core.bool hasSchema() => $_has(2);
   @$pb.TagNumber(3)
   void clearSchema() => $_clearField(3);
   @$pb.TagNumber(3)
-  $1.Struct ensureSchema() => $_ensure(2);
+  $2.Struct ensureSchema() => $_ensure(2);
 }
 
 /// A complete, authoritative snapshot for one runtime registration.
 class WorkerCapabilities extends $pb.GeneratedMessage {
   factory WorkerCapabilities({
-    $core.Iterable<$2.ModelCapability>? models,
-    $core.Iterable<$2.AgentId>? agentIds,
+    $core.Iterable<$1.ModelCapability>? models,
+    $core.Iterable<$1.AgentId>? agentIds,
     $core.Iterable<DiscoveredTool>? tools,
     $core.int? maxConcurrentRuns,
     $core.bool? supportsExternalAgents,
     $core.Iterable<$core.String>? externalAgentCredentialRefs,
+    $core.int? remoteEgressDecisionVersion,
   }) {
     final result = create();
     if (models != null) result.models.addAll(models);
@@ -634,6 +670,8 @@ class WorkerCapabilities extends $pb.GeneratedMessage {
       result.supportsExternalAgents = supportsExternalAgents;
     if (externalAgentCredentialRefs != null)
       result.externalAgentCredentialRefs.addAll(externalAgentCredentialRefs);
+    if (remoteEgressDecisionVersion != null)
+      result.remoteEgressDecisionVersion = remoteEgressDecisionVersion;
     return result;
   }
 
@@ -650,19 +688,21 @@ class WorkerCapabilities extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'WorkerCapabilities',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<$2.ModelCapability>(
+    ..pc<$1.ModelCapability>(
         1, _omitFieldNames ? '' : 'models', $pb.PbFieldType.PM,
-        subBuilder: $2.ModelCapability.create)
-    ..pc<$2.AgentId>(2, _omitFieldNames ? '' : 'agentIds', $pb.PbFieldType.KE,
-        valueOf: $2.AgentId.valueOf,
-        enumValues: $2.AgentId.values,
-        defaultEnumValue: $2.AgentId.AGENT_ID_UNSPECIFIED)
+        subBuilder: $1.ModelCapability.create)
+    ..pc<$1.AgentId>(2, _omitFieldNames ? '' : 'agentIds', $pb.PbFieldType.KE,
+        valueOf: $1.AgentId.valueOf,
+        enumValues: $1.AgentId.values,
+        defaultEnumValue: $1.AgentId.AGENT_ID_UNSPECIFIED)
     ..pc<DiscoveredTool>(3, _omitFieldNames ? '' : 'tools', $pb.PbFieldType.PM,
         subBuilder: DiscoveredTool.create)
     ..a<$core.int>(
         4, _omitFieldNames ? '' : 'maxConcurrentRuns', $pb.PbFieldType.O3)
     ..aOB(5, _omitFieldNames ? '' : 'supportsExternalAgents')
     ..pPS(6, _omitFieldNames ? '' : 'externalAgentCredentialRefs')
+    ..a<$core.int>(7, _omitFieldNames ? '' : 'remoteEgressDecisionVersion',
+        $pb.PbFieldType.O3)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -687,10 +727,10 @@ class WorkerCapabilities extends $pb.GeneratedMessage {
   static WorkerCapabilities? _defaultInstance;
 
   @$pb.TagNumber(1)
-  $pb.PbList<$2.ModelCapability> get models => $_getList(0);
+  $pb.PbList<$1.ModelCapability> get models => $_getList(0);
 
   @$pb.TagNumber(2)
-  $pb.PbList<$2.AgentId> get agentIds => $_getList(1);
+  $pb.PbList<$1.AgentId> get agentIds => $_getList(1);
 
   @$pb.TagNumber(3)
   $pb.PbList<DiscoveredTool> get tools => $_getList(2);
@@ -719,12 +759,24 @@ class WorkerCapabilities extends $pb.GeneratedMessage {
   /// frozen external-agent destinations this worker can execute.
   @$pb.TagNumber(6)
   $pb.PbList<$core.String> get externalAgentCredentialRefs => $_getList(5);
+
+  /// Highest run-egress decision version this worker enforces before provider
+  /// I/O. Zero means it predates explicit remote-egress enforcement.
+  @$pb.TagNumber(7)
+  $core.int get remoteEgressDecisionVersion => $_getIZ(6);
+  @$pb.TagNumber(7)
+  set remoteEgressDecisionVersion($core.int value) =>
+      $_setSignedInt32(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasRemoteEgressDecisionVersion() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearRemoteEgressDecisionVersion() => $_clearField(7);
 }
 
 class RuntimeWorkerReady extends $pb.GeneratedMessage {
   factory RuntimeWorkerReady({
     $core.String? workerId,
-    $2.AgentId? agentId,
+    $1.AgentId? agentId,
     $core.int? maxConcurrentRuns,
     $core.Iterable<DiscoveredTool>? tools,
     ToolDiscoveryStatus? toolDiscoveryStatus,
@@ -757,10 +809,10 @@ class RuntimeWorkerReady extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'workerId')
-    ..e<$2.AgentId>(2, _omitFieldNames ? '' : 'agentId', $pb.PbFieldType.OE,
-        defaultOrMaker: $2.AgentId.AGENT_ID_UNSPECIFIED,
-        valueOf: $2.AgentId.valueOf,
-        enumValues: $2.AgentId.values)
+    ..e<$1.AgentId>(2, _omitFieldNames ? '' : 'agentId', $pb.PbFieldType.OE,
+        defaultOrMaker: $1.AgentId.AGENT_ID_UNSPECIFIED,
+        valueOf: $1.AgentId.valueOf,
+        enumValues: $1.AgentId.values)
     ..a<$core.int>(
         3, _omitFieldNames ? '' : 'maxConcurrentRuns', $pb.PbFieldType.O3)
     ..pc<DiscoveredTool>(4, _omitFieldNames ? '' : 'tools', $pb.PbFieldType.PM,
@@ -806,9 +858,9 @@ class RuntimeWorkerReady extends $pb.GeneratedMessage {
   void clearWorkerId() => $_clearField(1);
 
   @$pb.TagNumber(2)
-  $2.AgentId get agentId => $_getN(1);
+  $1.AgentId get agentId => $_getN(1);
   @$pb.TagNumber(2)
-  set agentId($2.AgentId value) => $_setField(2, value);
+  set agentId($1.AgentId value) => $_setField(2, value);
   @$pb.TagNumber(2)
   $core.bool hasAgentId() => $_has(1);
   @$pb.TagNumber(2)
@@ -1085,7 +1137,7 @@ class RuntimeRunCompleted extends $pb.GeneratedMessage {
     $core.String? runId,
     $core.String? assistantMessageId,
     $core.String? content,
-    $1.Struct? usage,
+    $2.Struct? usage,
     RunTokenUsage? tokenUsage,
     $fixnum.Int64? expectedStateVersion,
   }) {
@@ -1117,8 +1169,8 @@ class RuntimeRunCompleted extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'assistantMessageId')
     ..aOS(3, _omitFieldNames ? '' : 'content')
-    ..aOM<$1.Struct>(4, _omitFieldNames ? '' : 'usage',
-        subBuilder: $1.Struct.create)
+    ..aOM<$2.Struct>(4, _omitFieldNames ? '' : 'usage',
+        subBuilder: $2.Struct.create)
     ..aOM<RunTokenUsage>(5, _omitFieldNames ? '' : 'tokenUsage',
         subBuilder: RunTokenUsage.create)
     ..aInt64(6, _omitFieldNames ? '' : 'expectedStateVersion')
@@ -1177,15 +1229,15 @@ class RuntimeRunCompleted extends $pb.GeneratedMessage {
   /// Struct cannot express without the reader guessing whether a missing key
   /// means zero, so they travel in their own typed field below.
   @$pb.TagNumber(4)
-  $1.Struct get usage => $_getN(3);
+  $2.Struct get usage => $_getN(3);
   @$pb.TagNumber(4)
-  set usage($1.Struct value) => $_setField(4, value);
+  set usage($2.Struct value) => $_setField(4, value);
   @$pb.TagNumber(4)
   $core.bool hasUsage() => $_has(3);
   @$pb.TagNumber(4)
   void clearUsage() => $_clearField(4);
   @$pb.TagNumber(4)
-  $1.Struct ensureUsage() => $_ensure(3);
+  $2.Struct ensureUsage() => $_ensure(3);
 
   @$pb.TagNumber(5)
   RunTokenUsage get tokenUsage => $_getN(4);
@@ -2155,6 +2207,64 @@ class RuntimeShutdownRequested extends $pb.GeneratedMessage {
   void clearReason() => $_clearField(1);
 }
 
+class RuntimeMcpRegistryChanged extends $pb.GeneratedMessage {
+  factory RuntimeMcpRegistryChanged({
+    $core.String? registrationId,
+  }) {
+    final result = create();
+    if (registrationId != null) result.registrationId = registrationId;
+    return result;
+  }
+
+  RuntimeMcpRegistryChanged._();
+
+  factory RuntimeMcpRegistryChanged.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RuntimeMcpRegistryChanged.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RuntimeMcpRegistryChanged',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'registrationId')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RuntimeMcpRegistryChanged clone() =>
+      RuntimeMcpRegistryChanged()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RuntimeMcpRegistryChanged copyWith(
+          void Function(RuntimeMcpRegistryChanged) updates) =>
+      super.copyWith((message) => updates(message as RuntimeMcpRegistryChanged))
+          as RuntimeMcpRegistryChanged;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RuntimeMcpRegistryChanged create() => RuntimeMcpRegistryChanged._();
+  @$core.override
+  RuntimeMcpRegistryChanged createEmptyInstance() => create();
+  static $pb.PbList<RuntimeMcpRegistryChanged> createRepeated() =>
+      $pb.PbList<RuntimeMcpRegistryChanged>();
+  @$core.pragma('dart2js:noInline')
+  static RuntimeMcpRegistryChanged getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RuntimeMcpRegistryChanged>(create);
+  static RuntimeMcpRegistryChanged? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get registrationId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set registrationId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasRegistrationId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearRegistrationId() => $_clearField(1);
+}
+
 enum RuntimeCommand_Command {
   workerAccepted,
   runAssigned,
@@ -2162,6 +2272,7 @@ enum RuntimeCommand_Command {
   approvalUpdated,
   shutdownRequested,
   toolPolicyDecision,
+  mcpRegistryChanged,
   approvalResumeAccepted,
   notSet
 }
@@ -2174,6 +2285,7 @@ class RuntimeCommand extends $pb.GeneratedMessage {
     RuntimeApprovalUpdated? approvalUpdated,
     RuntimeShutdownRequested? shutdownRequested,
     $4.ToolPolicyDecision? toolPolicyDecision,
+    RuntimeMcpRegistryChanged? mcpRegistryChanged,
     RuntimeApprovalResumeAccepted? approvalResumeAccepted,
   }) {
     final result = create();
@@ -2184,6 +2296,8 @@ class RuntimeCommand extends $pb.GeneratedMessage {
     if (shutdownRequested != null) result.shutdownRequested = shutdownRequested;
     if (toolPolicyDecision != null)
       result.toolPolicyDecision = toolPolicyDecision;
+    if (mcpRegistryChanged != null)
+      result.mcpRegistryChanged = mcpRegistryChanged;
     if (approvalResumeAccepted != null)
       result.approvalResumeAccepted = approvalResumeAccepted;
     return result;
@@ -2206,14 +2320,15 @@ class RuntimeCommand extends $pb.GeneratedMessage {
     4: RuntimeCommand_Command.approvalUpdated,
     5: RuntimeCommand_Command.shutdownRequested,
     6: RuntimeCommand_Command.toolPolicyDecision,
-    7: RuntimeCommand_Command.approvalResumeAccepted,
+    7: RuntimeCommand_Command.mcpRegistryChanged,
+    8: RuntimeCommand_Command.approvalResumeAccepted,
     0: RuntimeCommand_Command.notSet
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeCommand',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..oo(0, [1, 2, 3, 4, 5, 6, 7])
+    ..oo(0, [1, 2, 3, 4, 5, 6, 7, 8])
     ..aOM<RuntimeWorkerAccepted>(1, _omitFieldNames ? '' : 'workerAccepted',
         subBuilder: RuntimeWorkerAccepted.create)
     ..aOM<AgentJob>(2, _omitFieldNames ? '' : 'runAssigned',
@@ -2227,8 +2342,11 @@ class RuntimeCommand extends $pb.GeneratedMessage {
         subBuilder: RuntimeShutdownRequested.create)
     ..aOM<$4.ToolPolicyDecision>(6, _omitFieldNames ? '' : 'toolPolicyDecision',
         subBuilder: $4.ToolPolicyDecision.create)
+    ..aOM<RuntimeMcpRegistryChanged>(
+        7, _omitFieldNames ? '' : 'mcpRegistryChanged',
+        subBuilder: RuntimeMcpRegistryChanged.create)
     ..aOM<RuntimeApprovalResumeAccepted>(
-        7, _omitFieldNames ? '' : 'approvalResumeAccepted',
+        8, _omitFieldNames ? '' : 'approvalResumeAccepted',
         subBuilder: RuntimeApprovalResumeAccepted.create)
     ..hasRequiredFields = false;
 
@@ -2324,16 +2442,28 @@ class RuntimeCommand extends $pb.GeneratedMessage {
   $4.ToolPolicyDecision ensureToolPolicyDecision() => $_ensure(5);
 
   @$pb.TagNumber(7)
-  RuntimeApprovalResumeAccepted get approvalResumeAccepted => $_getN(6);
+  RuntimeMcpRegistryChanged get mcpRegistryChanged => $_getN(6);
   @$pb.TagNumber(7)
-  set approvalResumeAccepted(RuntimeApprovalResumeAccepted value) =>
+  set mcpRegistryChanged(RuntimeMcpRegistryChanged value) =>
       $_setField(7, value);
   @$pb.TagNumber(7)
-  $core.bool hasApprovalResumeAccepted() => $_has(6);
+  $core.bool hasMcpRegistryChanged() => $_has(6);
   @$pb.TagNumber(7)
-  void clearApprovalResumeAccepted() => $_clearField(7);
+  void clearMcpRegistryChanged() => $_clearField(7);
   @$pb.TagNumber(7)
-  RuntimeApprovalResumeAccepted ensureApprovalResumeAccepted() => $_ensure(6);
+  RuntimeMcpRegistryChanged ensureMcpRegistryChanged() => $_ensure(6);
+
+  @$pb.TagNumber(8)
+  RuntimeApprovalResumeAccepted get approvalResumeAccepted => $_getN(7);
+  @$pb.TagNumber(8)
+  set approvalResumeAccepted(RuntimeApprovalResumeAccepted value) =>
+      $_setField(8, value);
+  @$pb.TagNumber(8)
+  $core.bool hasApprovalResumeAccepted() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearApprovalResumeAccepted() => $_clearField(8);
+  @$pb.TagNumber(8)
+  RuntimeApprovalResumeAccepted ensureApprovalResumeAccepted() => $_ensure(7);
 }
 
 const $core.bool _omitFieldNames =

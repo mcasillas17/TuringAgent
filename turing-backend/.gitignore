@@ -9,6 +9,9 @@ sandbox/*
 !sandbox/.gitkeep
 skills/*
 !skills/.gitkeep
+mcp/*
+!mcp/.gitkeep
+!mcp/mcp.json.example
 node_modules/
 dist/
 coverage/

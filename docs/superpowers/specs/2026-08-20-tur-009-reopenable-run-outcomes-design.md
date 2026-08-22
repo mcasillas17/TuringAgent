@@ -197,10 +197,10 @@ The exact additive allocations are:
 | `RunStateChanged` | `RunState run_state = 1` |
 | `ChatStreamEvent.oneof` | `RunStateChanged run_state_changed = 27` |
 | `TuringEvent` | `RunState run_state = 9` |
-| `TuringEventType` | `TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED = 23`; value `22` is reserved for TUR-004's `SESSION_DELETED` whether or not that PR has landed when generation runs |
+| `TuringEventType` | `TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED = 23`; merged TUR-004 owns `SESSION_DELETED = 22` |
 
-Internal runtime allocations are `AgentJob.expected_state_version = 17`,
-`AgentJob.assignment_attempt_id = 18`,
+Internal runtime allocations are `AgentJob.expected_state_version = 19`,
+`AgentJob.assignment_attempt_id = 20` (merged egress fields own 17 and 18),
 `RuntimeRunCompleted.expected_state_version = 6`,
 `RuntimeRunFailed.failure_origin = 5`,
 `RuntimeRunFailed.automatic_retry_class = 6`,
@@ -215,11 +215,11 @@ Internal runtime allocations are `AgentJob.expected_state_version = 17`,
 `RuntimeApprovalResumeAccepted.approval_id = 2`,
 `RuntimeApprovalResumeAccepted.state_version = 3`,
 `RuntimeApprovalResumeAccepted.assignment_attempt_id = 4`,
-`RuntimeCommand.approval_resume_accepted = 7`,
+`RuntimeCommand.approval_resume_accepted = 8` (merged MCP registry change owns 7),
 `RuntimeRunCancelled.state_version = 3`,
 `RuntimeApprovalUpdated.state_version = 4`, and
-`ToolPolicyDecision.run_state_version = 7`. Existing internal field numbers are
-unchanged; `RuntimeUpdate` value `8` remains
+`ToolPolicyDecision.run_state_version = 8` (merged provenance token owns 7).
+Existing merged field numbers are unchanged; `RuntimeUpdate` value `8` remains
 `worker_capabilities_updated`. Existing runtime retryable field `4` is
 deprecated and ignored by the new normalizer.
 
@@ -627,11 +627,15 @@ assistant content, and writes only normalized lifecycle/outcome values to the
 backfill table. Invalid timestamps fail with a value-free migration error;
 variable-width or offset source text is never copied into `state_updated_at`.
 
-The SQL file rebuilds `agent_runs` with the recovering status and canonical
-constraints, copying derived values from the backfill table. After all read
-cursors are closed it swaps the rebuilt table, creates the correlation indexes,
-and scrubs run/job/tool-call raw diagnostic columns. SQLite transactional DDL
-keeps the rebuild and indexes inside the migration transaction.
+Migration `0017_run_outcomes` rebuilds `agent_runs` with the recovering status
+and canonical constraints, copying derived values from the backfill table. It
+uses one pinned connection, disables foreign keys before the transaction, keeps
+populated run-owned children (including `run_egress_decisions` and idempotency
+replay rows) in place during the parent swap, proves `foreign_key_check`, commits
+all work with the migration record, and proves foreign keys were restored before
+returning the connection. After all read cursors are closed it swaps the rebuilt
+table, creates the correlation indexes, and scrubs run/job/tool-call raw
+diagnostic columns.
 
 The `after` hook applies the same 128-row and 16 MiB selected-data limits while
 scanning events by `rowid`, closes each cursor before writes, rewrites safe
@@ -656,6 +660,9 @@ Within that mechanism, the migration:
    tool code selected from trusted row context.
 8. Rewrites the known public failure event payloads above to their safe
    canonical projection or category, using the run's migrated version.
+9. Preserves populated TUR-003 egress decisions and maps legacy
+   `egress_decision_required` and `egress_decision_invalid` terminal failures to
+   bounded `policy_denied`, while scrubbing their raw diagnostics and payloads.
 
 It never copies arbitrary error text into canonical state or safe event
 payloads. Public read sanitization remains defense in depth for malformed rows

@@ -60,6 +60,23 @@ class ApprovalServiceClient extends $grpc.Client {
     return $createUnaryCall(_$consumeApproval, request, options: options);
   }
 
+  $grpc.ResponseFuture<$0.FinalizeSandboxArtifactResponse>
+      finalizeSandboxArtifact(
+    $0.FinalizeSandboxArtifactRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$finalizeSandboxArtifact, request,
+        options: options);
+  }
+
+  $grpc.ResponseFuture<$0.SessionCapabilityState> checkSessionCapability(
+    $0.CheckSessionCapabilityRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$checkSessionCapability, request,
+        options: options);
+  }
+
   // method descriptors
 
   static final _$approveApproval =
@@ -82,6 +99,17 @@ class ApprovalServiceClient extends $grpc.Client {
           '/turing.v1.ApprovalService/ConsumeApproval',
           ($0.ConsumeApprovalRequest value) => value.writeToBuffer(),
           $0.ApprovalResponse.fromBuffer);
+  static final _$finalizeSandboxArtifact = $grpc.ClientMethod<
+          $0.FinalizeSandboxArtifactRequest,
+          $0.FinalizeSandboxArtifactResponse>(
+      '/turing.v1.ApprovalService/FinalizeSandboxArtifact',
+      ($0.FinalizeSandboxArtifactRequest value) => value.writeToBuffer(),
+      $0.FinalizeSandboxArtifactResponse.fromBuffer);
+  static final _$checkSessionCapability = $grpc.ClientMethod<
+          $0.CheckSessionCapabilityRequest, $0.SessionCapabilityState>(
+      '/turing.v1.ApprovalService/CheckSessionCapability',
+      ($0.CheckSessionCapabilityRequest value) => value.writeToBuffer(),
+      $0.SessionCapabilityState.fromBuffer);
 }
 
 @$pb.GrpcServiceName('turing.v1.ApprovalService')
@@ -124,6 +152,24 @@ abstract class ApprovalServiceBase extends $grpc.Service {
             ($core.List<$core.int> value) =>
                 $0.ConsumeApprovalRequest.fromBuffer(value),
             ($0.ApprovalResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.FinalizeSandboxArtifactRequest,
+            $0.FinalizeSandboxArtifactResponse>(
+        'FinalizeSandboxArtifact',
+        finalizeSandboxArtifact_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.FinalizeSandboxArtifactRequest.fromBuffer(value),
+        ($0.FinalizeSandboxArtifactResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.CheckSessionCapabilityRequest,
+            $0.SessionCapabilityState>(
+        'CheckSessionCapability',
+        checkSessionCapability_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.CheckSessionCapabilityRequest.fromBuffer(value),
+        ($0.SessionCapabilityState value) => value.writeToBuffer()));
   }
 
   $async.Future<$0.ApprovalResponse> approveApproval_Pre(
@@ -160,4 +206,22 @@ abstract class ApprovalServiceBase extends $grpc.Service {
 
   $async.Future<$0.ApprovalResponse> consumeApproval(
       $grpc.ServiceCall call, $0.ConsumeApprovalRequest request);
+
+  $async.Future<$0.FinalizeSandboxArtifactResponse> finalizeSandboxArtifact_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.FinalizeSandboxArtifactRequest> $request) async {
+    return finalizeSandboxArtifact($call, await $request);
+  }
+
+  $async.Future<$0.FinalizeSandboxArtifactResponse> finalizeSandboxArtifact(
+      $grpc.ServiceCall call, $0.FinalizeSandboxArtifactRequest request);
+
+  $async.Future<$0.SessionCapabilityState> checkSessionCapability_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.CheckSessionCapabilityRequest> $request) async {
+    return checkSessionCapability($call, await $request);
+  }
+
+  $async.Future<$0.SessionCapabilityState> checkSessionCapability(
+      $grpc.ServiceCall call, $0.CheckSessionCapabilityRequest request);
 }

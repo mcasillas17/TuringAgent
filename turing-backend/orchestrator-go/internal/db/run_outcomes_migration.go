@@ -16,7 +16,7 @@ import (
 // runOutcomesMigrationVersion is the one version that runs through the hooked,
 // section-split, foreign-key-pinned path. Every other migration keeps the
 // ordinary single-statement-batch execution below.
-const runOutcomesMigrationVersion = "0016_run_outcomes"
+const runOutcomesMigrationVersion = "0017_run_outcomes"
 
 // Named seams the runner passes through, in execution order. They are the
 // rollback boundaries the migration tests inject at, and the phase names the
@@ -154,7 +154,13 @@ func migrationSections(version string, sqlText string) ([]migrationSection, erro
 // Errors are returned unwrapped. This migration's failure classes are
 // deliberately value-free sentinels, and a decorated message is one more place
 // a row value could leak into an operator log.
-func applyHookedMigration(ctx context.Context, database *DB, version string, sqlText string, hook migrationHook) error {
+func applyHookedMigration(
+	ctx context.Context,
+	database *DB,
+	version string,
+	sqlText string,
+	hook migrationHook,
+) (pending error) {
 	sections, err := migrationSections(version, sqlText)
 	if err != nil {
 		return err
@@ -171,11 +177,14 @@ func applyHookedMigration(ctx context.Context, database *DB, version string, sql
 	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
 		return restoreForeignKeys(ctx, database, conn, err)
 	}
-	pending := runHookedMigrationTx(ctx, conn, version, sections, hook)
+	defer func() {
+		pending = restoreForeignKeys(ctx, database, conn, pending)
+	}()
+	pending = runHookedMigrationTx(ctx, conn, version, sections, hook)
 	if migrationPinnedConnectionHook != nil {
 		migrationPinnedConnectionHook(ctx, conn)
 	}
-	return restoreForeignKeys(ctx, database, conn, pending)
+	return pending
 }
 
 func runHookedMigrationTx(
@@ -746,8 +755,15 @@ var legacyRunFailureOrigins = map[string]runoutcome.Origin{
 	"side_effect_uncertain":           runoutcome.OriginRecovery,
 	"approval_delivery_failed":        runoutcome.OriginApprovalTransport,
 	"approval_expired":                runoutcome.OriginApprovalExpiry,
+	"approval_denied":                 runoutcome.OriginToolPolicy,
 	"automation_approval_failed":      runoutcome.OriginAutomationPolicy,
 	"automation_tool_not_allowlisted": runoutcome.OriginAutomationPolicy,
+	"egress_decision_required":        runoutcome.OriginToolPolicy,
+	"egress_decision_invalid":         runoutcome.OriginToolPolicy,
+}
+
+var legacyRunFailureCodeAliases = map[string]string{
+	"approval_denied": "tool_policy_decision_failed",
 }
 
 // failedOutcomeReasons is the closed set the approved matrix allows on a failed
@@ -785,7 +801,11 @@ func deriveOutcomeReason(lifecycle string, errorCode string, hasContent bool) ru
 		if !allowlisted {
 			origin = runoutcome.OriginUnknown
 		}
-		reason := runoutcome.NormalizeFailure(origin, errorCode, runoutcome.RetryClassNever).Reason()
+		normalizedCode := errorCode
+		if alias, ok := legacyRunFailureCodeAliases[errorCode]; ok {
+			normalizedCode = alias
+		}
+		reason := runoutcome.NormalizeFailure(origin, normalizedCode, runoutcome.RetryClassNever).Reason()
 		if _, allowed := failedOutcomeReasons[reason]; !allowed {
 			return runoutcome.ReasonInternalFailure
 		}

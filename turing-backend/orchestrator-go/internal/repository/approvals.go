@@ -22,6 +22,7 @@ type ApprovalRecord struct {
 	RunID           string
 	ToolCallID      string
 	AgentID         string
+	ServerName      string
 	ToolName        string
 	ArgsJSON        string
 	ArgsHash        string
@@ -703,7 +704,7 @@ func approvalByID(ctx context.Context, q approvalQuerier, approvalID string) (Ap
 	var denialReason sql.NullString
 	var modelToolCallID sql.NullString
 	err := q.QueryRowContext(ctx, `
-		SELECT a.id, a.run_id, a.tool_call_id, a.agent_id, a.tool_name, a.args_json, a.args_hash,
+		SELECT a.id, a.run_id, a.tool_call_id, a.agent_id, COALESCE(tc.server_name, ''), a.tool_name, a.args_json, a.args_hash,
 			a.status, a.approval_token, a.approval_comment, a.denial_reason, a.expires_at, tc.model_tool_call_id
 		FROM approvals a
 		LEFT JOIN tool_calls tc ON tc.id = a.tool_call_id
@@ -713,6 +714,7 @@ func approvalByID(ctx context.Context, q approvalQuerier, approvalID string) (Ap
 		&record.RunID,
 		&toolCallID,
 		&record.AgentID,
+		&record.ServerName,
 		&record.ToolName,
 		&record.ArgsJSON,
 		&record.ArgsHash,

@@ -19,13 +19,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ChatService_SendMessage_FullMethodName = "/turing.v1.ChatService/SendMessage"
+	ChatService_PrepareRemoteEgress_FullMethodName = "/turing.v1.ChatService/PrepareRemoteEgress"
+	ChatService_SendMessage_FullMethodName         = "/turing.v1.ChatService/SendMessage"
 )
 
 // ChatServiceClient is the client API for ChatService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ChatServiceClient interface {
+	PrepareRemoteEgress(ctx context.Context, in *PrepareRemoteEgressRequest, opts ...grpc.CallOption) (*PrepareRemoteEgressResponse, error)
 	SendMessage(ctx context.Context, in *SendMessageRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ChatStreamEvent], error)
 }
 
@@ -35,6 +37,16 @@ type chatServiceClient struct {
 
 func NewChatServiceClient(cc grpc.ClientConnInterface) ChatServiceClient {
 	return &chatServiceClient{cc}
+}
+
+func (c *chatServiceClient) PrepareRemoteEgress(ctx context.Context, in *PrepareRemoteEgressRequest, opts ...grpc.CallOption) (*PrepareRemoteEgressResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PrepareRemoteEgressResponse)
+	err := c.cc.Invoke(ctx, ChatService_PrepareRemoteEgress_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *chatServiceClient) SendMessage(ctx context.Context, in *SendMessageRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ChatStreamEvent], error) {
@@ -60,6 +72,7 @@ type ChatService_SendMessageClient = grpc.ServerStreamingClient[ChatStreamEvent]
 // All implementations must embed UnimplementedChatServiceServer
 // for forward compatibility.
 type ChatServiceServer interface {
+	PrepareRemoteEgress(context.Context, *PrepareRemoteEgressRequest) (*PrepareRemoteEgressResponse, error)
 	SendMessage(*SendMessageRequest, grpc.ServerStreamingServer[ChatStreamEvent]) error
 	mustEmbedUnimplementedChatServiceServer()
 }
@@ -71,6 +84,9 @@ type ChatServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedChatServiceServer struct{}
 
+func (UnimplementedChatServiceServer) PrepareRemoteEgress(context.Context, *PrepareRemoteEgressRequest) (*PrepareRemoteEgressResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PrepareRemoteEgress not implemented")
+}
 func (UnimplementedChatServiceServer) SendMessage(*SendMessageRequest, grpc.ServerStreamingServer[ChatStreamEvent]) error {
 	return status.Error(codes.Unimplemented, "method SendMessage not implemented")
 }
@@ -95,6 +111,24 @@ func RegisterChatServiceServer(s grpc.ServiceRegistrar, srv ChatServiceServer) {
 	s.RegisterService(&ChatService_ServiceDesc, srv)
 }
 
+func _ChatService_PrepareRemoteEgress_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareRemoteEgressRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ChatServiceServer).PrepareRemoteEgress(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ChatService_PrepareRemoteEgress_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ChatServiceServer).PrepareRemoteEgress(ctx, req.(*PrepareRemoteEgressRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ChatService_SendMessage_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(SendMessageRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -112,7 +146,12 @@ type ChatService_SendMessageServer = grpc.ServerStreamingServer[ChatStreamEvent]
 var ChatService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "turing.v1.ChatService",
 	HandlerType: (*ChatServiceServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "PrepareRemoteEgress",
+			Handler:    _ChatService_PrepareRemoteEgress_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "SendMessage",

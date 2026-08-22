@@ -700,6 +700,7 @@ func TestRunOutcomeMigrationPreservesEveryRunOwnedChildRow(t *testing.T) {
 		{table: "tool_calls", query: `SELECT COUNT(*) FROM tool_calls WHERE run_id = 'run_children'`},
 		{table: "approvals", query: `SELECT COUNT(*) FROM approvals WHERE run_id = 'run_children'`},
 		{table: "automation_runs", query: `SELECT COUNT(*) FROM automation_runs WHERE run_id = 'run_children'`},
+		{table: "sandbox_artifacts", query: `SELECT COUNT(*) FROM sandbox_artifacts WHERE run_id = 'run_children'`},
 		{table: "send_message_idempotency", query: `SELECT COUNT(*) FROM send_message_idempotency WHERE run_id = 'run_children'`},
 		{table: "events", query: `SELECT COUNT(*) FROM events WHERE run_id = 'run_children'`},
 	} {
@@ -712,6 +713,369 @@ func TestRunOutcomeMigrationPreservesEveryRunOwnedChildRow(t *testing.T) {
 		}
 	}
 	assertNoForeignKeyViolations(t, ctx, reopened)
+}
+
+type egressDecisionRow struct {
+	DecisionID                string
+	DecisionVersion           int
+	RunID                     string
+	ChallengeNonce            string
+	ChallengeFingerprint      string
+	RequestDigest             string
+	Provider                  string
+	ModelName                 string
+	ExternalAgentID           sql.NullString
+	ExternalCredentialRefHash string
+	Endpoint                  string
+	EndpointHost              string
+	DataCategoriesJSON        string
+	SelectedToolsJSON         string
+	SkillSnapshotFingerprint  string
+	RecallApplicable          int
+	MemoryProfileApplicable   int
+	ConsentGrantedAt          string
+	RemoteMCPServersJSON      string
+}
+
+func readEgressDecisionRow(t *testing.T, ctx context.Context, database *DB, runID string) egressDecisionRow {
+	t.Helper()
+	var row egressDecisionRow
+	if err := database.QueryRowContext(ctx, `
+		SELECT decision_id, decision_version, run_id, challenge_nonce,
+			challenge_fingerprint, request_digest, provider, model_name,
+			external_agent_id, external_credential_ref_hash, endpoint, endpoint_host,
+			data_categories_json, selected_tools_json, skill_snapshot_fingerprint,
+			recall_applicable, memory_profile_applicable, consent_granted_at,
+			remote_mcp_servers_json
+		FROM run_egress_decisions
+		WHERE run_id = ?
+	`, runID).Scan(
+		&row.DecisionID, &row.DecisionVersion, &row.RunID, &row.ChallengeNonce,
+		&row.ChallengeFingerprint, &row.RequestDigest, &row.Provider, &row.ModelName,
+		&row.ExternalAgentID, &row.ExternalCredentialRefHash, &row.Endpoint, &row.EndpointHost,
+		&row.DataCategoriesJSON, &row.SelectedToolsJSON, &row.SkillSnapshotFingerprint,
+		&row.RecallApplicable, &row.MemoryProfileApplicable, &row.ConsentGrantedAt,
+		&row.RemoteMCPServersJSON,
+	); err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
+type idempotencyReplayRow struct {
+	SessionID          string
+	RequestFingerprint string
+	UserMessageID      string
+	AssistantMessageID string
+	RunID              string
+	JobID              string
+	TraceID            string
+	QueuedSequence     int64
+}
+
+func readIdempotencyReplayRow(t *testing.T, ctx context.Context, database *DB, key string) idempotencyReplayRow {
+	t.Helper()
+	var row idempotencyReplayRow
+	if err := database.QueryRowContext(ctx, `
+		SELECT session_id, request_fingerprint, user_message_id, assistant_message_id,
+			run_id, job_id, trace_id, queued_event_sequence
+		FROM send_message_idempotency
+		WHERE idempotency_key = ?
+	`, key).Scan(
+		&row.SessionID, &row.RequestFingerprint, &row.UserMessageID, &row.AssistantMessageID,
+		&row.RunID, &row.JobID, &row.TraceID, &row.QueuedSequence,
+	); err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
+func TestRunOutcomeMigrationComposesWithRemoteEgressHistory(t *testing.T) {
+	ctx := context.Background()
+	database := databaseBeforeMigration(t, ctx, "0014_run_egress_decisions.sql")
+
+	seedLegacySession(t, ctx, database, "sess_egress_denied")
+	seedLegacyRun(t, ctx, database, legacyRun{
+		id: "run_egress_denied", sessionID: "sess_egress_denied", status: "queued",
+		assistantMessageID: "msg_egress_denied",
+	})
+	if _, err := database.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET model_provider = 'openai_compatible', model_name = 'gpt-5-mini'
+		WHERE id = 'run_egress_denied';
+		INSERT INTO jobs (
+			id, run_id, agent_id, status, payload_json, created_at, created_at_ns
+		) VALUES (
+			'job_egress_denied', 'run_egress_denied', 'general_assistant', 'pending',
+			'{"secret":"must be scrubbed"}', '2026-01-01T00:00:00.000000000Z', 1
+		);
+		INSERT INTO send_message_idempotency (
+			idempotency_key, session_id, request_fingerprint, user_message_id,
+			assistant_message_id, run_id, job_id, trace_id, queued_event_sequence, created_at
+		) VALUES (
+			'idem_egress_denied', 'sess_egress_denied', 'fingerprint_denied',
+			'run_egress_denied_user', 'msg_egress_denied', 'run_egress_denied',
+			'job_egress_denied', 'trace_run_egress_denied', 1,
+			'2026-01-01T00:00:00.000000000Z'
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{
+		"0014_run_egress_decisions.sql",
+		"0014_session_deletion_withdrawal.sql",
+		"0015_session_lifecycle.sql",
+		"0016_mcp_registry.sql",
+	} {
+		applyMigration(t, ctx, database, name)
+	}
+
+	seedLegacySession(t, ctx, database, "sess_egress_preserved")
+	seedLegacyRun(t, ctx, database, legacyRun{
+		id: "run_egress_preserved", sessionID: "sess_egress_preserved", status: "completed",
+		assistantMessageID: "msg_egress_preserved", assistantContent: "kept response",
+		finishedAt: "2026-01-01T00:00:02.000000000Z",
+	})
+	if _, err := database.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET model_provider = 'openai_compatible', model_name = 'gpt-5-mini'
+		WHERE id = 'run_egress_preserved';
+		INSERT INTO jobs (
+			id, run_id, agent_id, status, payload_json, created_at, created_at_ns
+		) VALUES (
+			'job_egress_preserved', 'run_egress_preserved', 'general_assistant', 'completed',
+			'{}', '2026-01-01T00:00:00.000000000Z', 2
+		);
+		INSERT INTO send_message_idempotency (
+			idempotency_key, session_id, request_fingerprint, user_message_id,
+			assistant_message_id, run_id, job_id, trace_id, queued_event_sequence, created_at
+		) VALUES (
+			'idem_egress_preserved', 'sess_egress_preserved', 'fingerprint_preserved',
+			'run_egress_preserved_user', 'msg_egress_preserved', 'run_egress_preserved',
+			'job_egress_preserved', 'trace_run_egress_preserved', 7,
+			'2026-01-01T00:00:00.000000000Z'
+		);
+		INSERT INTO run_egress_decisions (
+			decision_id, decision_version, run_id, challenge_nonce,
+			challenge_fingerprint, request_digest, provider, model_name,
+			external_agent_id, external_credential_ref_hash, endpoint, endpoint_host,
+			data_categories_json, selected_tools_json, skill_snapshot_fingerprint,
+			recall_applicable, memory_profile_applicable, consent_granted_at,
+			remote_mcp_servers_json
+		) VALUES (
+			'decision_preserved', 3, 'run_egress_preserved', 'nonce_preserved',
+			'sha256:challenge', 'sha256:request', 'openai_compatible', 'gpt-5-mini',
+			NULL, '', 'https://api.example.test/v1', 'api.example.test',
+			'["EGRESS_DATA_CATEGORY_CURRENT_MESSAGE"]',
+			'["system/system.time"]', 'sha256:skills', 1, 0,
+			'2026-01-01T00:00:01.000000000Z',
+			'[{"serverName":"remote","endpoint":"https://mcp.example.test","endpointHost":"mcp.example.test"}]'
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	wantDecision := readEgressDecisionRow(t, ctx, database, "run_egress_preserved")
+	wantReplay := readIdempotencyReplayRow(t, ctx, database, "idem_egress_preserved")
+
+	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	if got := readEgressDecisionRow(t, ctx, database, "run_egress_preserved"); !reflect.DeepEqual(got, wantDecision) {
+		t.Fatalf("egress decision after migration = %#v, want exact preservation %#v", got, wantDecision)
+	}
+	if got := readIdempotencyReplayRow(t, ctx, database, "idem_egress_preserved"); got != wantReplay {
+		t.Fatalf("idempotency replay row after migration = %#v, want %#v", got, wantReplay)
+	}
+
+	var (
+		runStatus     string
+		outcomeReason string
+		runCode       sql.NullString
+		runMessage    sql.NullString
+		stateVersion  int64
+		jobStatus     string
+		jobCode       sql.NullString
+		jobMessage    sql.NullString
+		payloadJSON   string
+	)
+	if err := database.QueryRowContext(ctx, `
+		SELECT status, outcome_reason, error_code, error_message, state_version
+		FROM agent_runs
+		WHERE id = 'run_egress_denied'
+	`).Scan(&runStatus, &outcomeReason, &runCode, &runMessage, &stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus != "failed" || outcomeReason != "policy_denied" || stateVersion != 1 {
+		t.Fatalf("egress-denied run = %s/%s version %d, want failed/policy_denied version 1",
+			runStatus, outcomeReason, stateVersion)
+	}
+	if !runCode.Valid || runCode.String != "egress_decision_required" || runMessage.Valid {
+		t.Fatalf("egress-denied run diagnostics = code %v message %v, want fixed code and no message",
+			runCode, runMessage)
+	}
+	if err := database.QueryRowContext(ctx, `
+		SELECT status, error_code, error_message
+		FROM jobs
+		WHERE id = 'job_egress_denied'
+	`).Scan(&jobStatus, &jobCode, &jobMessage); err != nil {
+		t.Fatal(err)
+	}
+	if jobStatus != "failed" || !jobCode.Valid || jobCode.String != "egress_decision_required" || jobMessage.Valid {
+		t.Fatalf("egress-denied job = %s code %v message %v, want terminal fixed code and no message",
+			jobStatus, jobCode, jobMessage)
+	}
+	if err := database.QueryRowContext(ctx, `
+		SELECT payload_json
+		FROM events
+		WHERE id = 'evt_egress_required_run_egress_denied'
+	`).Scan(&payloadJSON); err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{
+		"egress_decision_required",
+		"remote run was queued before explicit egress consent",
+		"secret",
+	} {
+		if strings.Contains(payloadJSON, forbidden) {
+			t.Fatalf("rewritten egress-denied payload leaked %q: %s", forbidden, payloadJSON)
+		}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		t.Fatal(err)
+	}
+	runState, ok := payload["runState"].(map[string]any)
+	if len(payload) != 1 || !ok || runState["lifecycle"] != "failed" || runState["outcomeReason"] != "policy_denied" {
+		t.Fatalf("rewritten egress-denied payload = %#v, want only failed/policy_denied runState", payload)
+	}
+
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatalf("idempotent migration replay: %v", err)
+	}
+	if got := readEgressDecisionRow(t, ctx, database, "run_egress_preserved"); !reflect.DeepEqual(got, wantDecision) {
+		t.Fatalf("egress decision after migration replay = %#v, want %#v", got, wantDecision)
+	}
+	if got := readIdempotencyReplayRow(t, ctx, database, "idem_egress_preserved"); got != wantReplay {
+		t.Fatalf("idempotency row after migration replay = %#v, want %#v", got, wantReplay)
+	}
+	if err := database.QueryRowContext(ctx,
+		`SELECT status, state_version FROM agent_runs WHERE id = 'run_egress_denied'`,
+	).Scan(&runStatus, &stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus != "failed" || stateVersion != 1 {
+		t.Fatalf("migration replay revived terminal run as %s version %d", runStatus, stateVersion)
+	}
+	assertNoForeignKeyViolations(t, ctx, database)
+}
+
+func TestRunOutcomeMigrationPreservesPreexistingEgressDecisionInvalidAsPolicyDenial(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedThroughLegacy(t, ctx, ":memory:")
+	defer database.Close()
+
+	seedLegacySession(t, ctx, database, "sess_egress_invalid")
+	seedLegacyRun(t, ctx, database, legacyRun{
+		id: "run_egress_invalid", sessionID: "sess_egress_invalid", status: "failed",
+		assistantMessageID: "msg_egress_invalid", errorCode: "egress_decision_invalid",
+		errorMessage: "remote endpoint and consent record did not match",
+		finishedAt:   "2026-01-01T00:00:01.000000000Z",
+	})
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO jobs (
+			id, run_id, agent_id, status, payload_json, error_code, error_message,
+			created_at, created_at_ns, finished_at
+		) VALUES (
+			'job_egress_invalid', 'run_egress_invalid', 'general_assistant', 'failed',
+			'{}', 'egress_decision_invalid', 'remote endpoint and consent record did not match',
+			'2026-01-01T00:00:00.000000000Z', 1, '2026-01-01T00:00:01.000000000Z'
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	seedLegacyEvent(t, ctx, database, "sess_egress_invalid", "run_egress_invalid", 1, "agent.run.failed",
+		`{"code":"egress_decision_invalid","message":"remote endpoint and consent record did not match"}`)
+
+	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
+		t.Fatal(err)
+	}
+
+	var runCode, runMessage, outcomeReason, jobCode, jobMessage sql.NullString
+	if err := database.QueryRowContext(ctx, `
+		SELECT r.error_code, r.error_message, r.outcome_reason, j.error_code, j.error_message
+		FROM agent_runs r
+		JOIN jobs j ON j.run_id = r.id
+		WHERE r.id = 'run_egress_invalid'
+	`).Scan(&runCode, &runMessage, &outcomeReason, &jobCode, &jobMessage); err != nil {
+		t.Fatal(err)
+	}
+	if !runCode.Valid || runCode.String != "egress_decision_invalid" ||
+		!jobCode.Valid || jobCode.String != "egress_decision_invalid" ||
+		!outcomeReason.Valid || outcomeReason.String != "policy_denied" ||
+		runMessage.Valid || jobMessage.Valid {
+		t.Fatalf("migrated egress mismatch = run %v/%v/%v job %v/%v, want fixed codes, policy denial, and no messages",
+			runCode, runMessage, outcomeReason, jobCode, jobMessage)
+	}
+	var payload string
+	if err := database.QueryRowContext(ctx,
+		`SELECT payload_json FROM events WHERE run_id = 'run_egress_invalid'`,
+	).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(payload, "egress_decision_invalid") ||
+		strings.Contains(payload, "remote endpoint and consent record did not match") ||
+		!strings.Contains(payload, `"outcomeReason":"policy_denied"`) {
+		t.Fatalf("migrated failure payload = %s, want redacted policy-denied run state", payload)
+	}
+	assertNoForeignKeyViolations(t, ctx, database)
+}
+
+func TestRunOutcomeMigrationNormalizesLegacyApprovalDenialAsPolicyDenied(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedThroughLegacy(t, ctx, ":memory:")
+	defer database.Close()
+
+	seedLegacySession(t, ctx, database, "sess_policy_legacy")
+	seedLegacyRun(t, ctx, database, legacyRun{
+		id: "run_policy_legacy", sessionID: "sess_policy_legacy", status: "failed",
+		assistantMessageID: "msg_policy_legacy", errorCode: "approval_denied",
+		errorMessage: "private denial rationale",
+		finishedAt:   "2026-01-01T00:00:01.000000000Z",
+	})
+	seedLegacyEvent(t, ctx, database, "sess_policy_legacy", "run_policy_legacy", 1, "agent.run.failed",
+		`{"code":"approval_denied","message":"private denial rationale"}`)
+
+	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
+		t.Fatal(err)
+	}
+
+	var outcomeReason, errorMessage string
+	if err := database.QueryRowContext(ctx, `
+		SELECT outcome_reason, COALESCE(error_message, '')
+		FROM agent_runs
+		WHERE id = 'run_policy_legacy'
+	`).Scan(&outcomeReason, &errorMessage); err != nil {
+		t.Fatal(err)
+	}
+	if outcomeReason != "policy_denied" {
+		t.Fatalf("approval-denied outcome = %q, want policy_denied", outcomeReason)
+	}
+	if errorMessage != "" {
+		t.Fatalf("approval-denied diagnostic survived migration: %q", errorMessage)
+	}
+	var payload string
+	if err := database.QueryRowContext(ctx,
+		`SELECT payload_json FROM events WHERE run_id = 'run_policy_legacy'`,
+	).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(payload, "approval_denied") ||
+		strings.Contains(payload, "private denial rationale") ||
+		!strings.Contains(payload, `"outcomeReason":"policy_denied"`) {
+		t.Fatalf("migrated approval-denied payload = %s, want redacted policy-denied run state", payload)
+	}
 }
 
 // TestRunOutcomeMigrationRejectsMissingDuplicateOrReorderedMarkers guards the
@@ -767,11 +1131,18 @@ func seedRunOwnedChildren(t *testing.T, ctx context.Context, database *DB, sessi
 		VALUES ('approval_child', ?, 'call_child', 'general_assistant', 'files.update', '{"path":"note.txt"}', 'sha256:args', 'denied', 'looked risky to me', 'I did not want that file touched', '2026-01-01T00:01:00.000000000Z', '2026-01-01T00:00:00.000000000Z');
 		INSERT INTO automation_runs (run_id, automation_id, automation_name, allowed_tools_json, fired_at)
 		VALUES (?, 'automation_child', 'Nightly', '[]', '2026-01-01T00:00:00.000000000Z');
+		INSERT INTO sandbox_artifacts (
+			id, session_id, run_id, logical_path_hash, physical_path, state, policy,
+			deletion_generation, created_at)
+		VALUES (
+			'artifact_child', ?, ?, 'sha256:artifact-child', 'artifact-child.txt',
+			'ready', 'delete_on_session_delete', 0, '2026-01-01T00:00:00.000000000Z');
 		INSERT INTO send_message_idempotency (
 			idempotency_key, session_id, request_fingerprint, user_message_id, assistant_message_id,
 			run_id, job_id, trace_id, queued_event_sequence, created_at)
 		VALUES ('idem_child', ?, 'fingerprint', ?, ?, ?, 'job_child', ?, 1, '2026-01-01T00:00:00.000000000Z');
-	`, runID, runID, runID, runID, runID, sessionID, runID+"_user", assistantMessageID, runID, "trace_"+runID); err != nil {
+	`, runID, runID, runID, runID, runID, sessionID, runID,
+		sessionID, runID+"_user", assistantMessageID, runID, "trace_"+runID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.ExecContext(ctx, `
@@ -794,6 +1165,7 @@ func assertRunOwnedChildrenIntact(t *testing.T, ctx context.Context, database *D
 		{table: "tool_calls", query: `SELECT COUNT(*) FROM tool_calls WHERE run_id = ? AND result_summary = 'summary'`},
 		{table: "approvals", query: `SELECT COUNT(*) FROM approvals WHERE run_id = ? AND id = 'approval_child'`},
 		{table: "automation_runs", query: `SELECT COUNT(*) FROM automation_runs WHERE run_id = ?`},
+		{table: "sandbox_artifacts", query: `SELECT COUNT(*) FROM sandbox_artifacts WHERE run_id = ? AND id = 'artifact_child'`},
 		{table: "send_message_idempotency", query: `SELECT COUNT(*) FROM send_message_idempotency WHERE run_id = ?`},
 		{table: "events", query: `SELECT COUNT(*) FROM events WHERE run_id = ? AND id = 'event_child'`},
 	} {
@@ -1011,6 +1383,36 @@ func TestRunOutcomeMigrationRestoresForeignKeysAfterSuccessAndRollback(t *testin
 			assertRunOwnedChildrenIntact(t, ctx, database, "run_fk")
 		})
 	}
+}
+
+func TestRunOutcomeMigrationRestoresForeignKeysAfterPanic(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedThroughLegacy(t, ctx, ":memory:")
+	defer database.Close()
+	seedLegacySession(t, ctx, database, "sess_fk_panic")
+	seedLegacyRun(t, ctx, database, legacyRun{
+		id: "run_fk_panic", sessionID: "sess_fk_panic", status: "completed",
+		assistantMessageID: "msg_fk_panic", assistantContent: "answer",
+	})
+	seedRunOwnedChildren(t, ctx, database, "sess_fk_panic", "run_fk_panic", "msg_fk_panic")
+	migrationPhaseHook = func(_ context.Context, _ string, phase string, _ *sql.Tx) error {
+		if phase == migrationPhaseAfterIndexes {
+			panic("injected migration panic")
+		}
+		return nil
+	}
+	t.Cleanup(func() { migrationPhaseHook = nil })
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_ = applyRunOutcomesMigration(t, ctx, database)
+	}()
+	if recovered == nil {
+		t.Fatal("ApplyMigrations did not propagate the injected panic")
+	}
+	assertNoForeignKeyViolations(t, ctx, database)
+	assertRunOwnedChildrenIntact(t, ctx, database, "run_fk_panic")
 }
 
 // mutateAtMigrationPhase installs a phase observer that runs one statement in
@@ -1236,6 +1638,41 @@ func TestRunOutcomeMigrationAfterHookValidatesCanonicalStateWithoutTheSchemaChec
 				"weird_legacy_code", "provider stack trace")
 			assertRunOwnedChildrenIntact(t, ctx, reopened, "run_canonical_gate")
 			assertNoForeignKeyViolations(t, ctx, reopened)
+		})
+	}
+}
+
+func TestRunOutcomeSchemaRejectsNoncanonicalStateWrites(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedThroughLegacy(t, ctx, ":memory:")
+	defer database.Close()
+	seedLegacySession(t, ctx, database, "sess_schema_guards")
+	seedLegacyRun(t, ctx, database, legacyRun{
+		id: "run_schema_guards", sessionID: "sess_schema_guards", status: "completed",
+		assistantMessageID: "msg_schema_guards",
+		finishedAt:         "2026-01-01T00:00:01.000000000Z",
+	})
+	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, testCase := range []struct {
+		name   string
+		column string
+		value  string
+	}{
+		{name: "zero version", column: "state_version", value: "0"},
+		{name: "negative version", column: "state_version", value: "-1"},
+		{name: "variable-width timestamp", column: "state_updated_at", value: "'2026-01-01T00:00:00Z'"},
+		{name: "short content digest", column: "assistant_content_sha256", value: "'deadbeef'"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := database.ExecContext(ctx,
+				`UPDATE agent_runs SET `+testCase.column+` = `+testCase.value+
+					` WHERE id = 'run_schema_guards'`)
+			if err == nil {
+				t.Fatalf("noncanonical %s write succeeded", testCase.column)
+			}
 		})
 	}
 }
@@ -3321,15 +3758,15 @@ func assertRunOutcomesMigrationLeftNoTrace(
 	}
 }
 
-// legacyRunStatusCheck is the exact status vocabulary migration 0016 widens.
+// legacyRunStatusCheck is the exact status vocabulary migration 0017 widens.
 // The rollback proof matches it against the stored DDL instead of probing with
 // a write, because any write — even one that matches no row — would either be
 // vacuous against the CHECK or perturb the legacy snapshot compared below.
 const legacyRunStatusCheck = `CHECK (status IN ('queued','running','waiting_approval','completed','failed','cancelled'))`
 
 // assertLegacyRunStatusVocabulary reads agent_runs' stored CREATE TABLE text
-// and proves it is still the pre-0016 one: it admits no 'recovering' and it
-// still spells out every legacy status. Migration 0016's widened table fails
+// and proves it is still the pre-0017 one: it admits no 'recovering' and it
+// still spells out every legacy status. Migration 0017's widened table fails
 // both halves — it names 'recovering' and no longer carries the legacy check —
 // so a surviving rebuild cannot pass by accident.
 func assertLegacyRunStatusVocabulary(t *testing.T, ctx context.Context, database *DB) {

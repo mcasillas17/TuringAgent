@@ -111,3 +111,36 @@ func TestCancelRunFencesPendingAssignmentBeforeDelivery(t *testing.T) {
 		})
 	}
 }
+
+func TestPreservingFailureFencesActiveExecution(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Fence failed execution")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "fence this execution", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-fence"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := failRunPreservingExecutionAtCurrentVersion(
+		t, repo, enqueued.RunID, testFailure("approval_delivery_failed"),
+	); err != nil {
+		t.Fatalf("FailRunCanonical: %v", err)
+	}
+	run, err := repo.GetRun(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !run.ExecutionActive || run.ExecutionState != "uncertain" {
+		t.Fatalf("run = %+v, want active uncertain execution fence", run)
+	}
+}

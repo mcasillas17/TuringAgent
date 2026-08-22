@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +11,8 @@ import (
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func routedJob() *turingv1.AgentJob {
@@ -16,11 +20,374 @@ func routedJob() *turingv1.AgentJob {
 	job.ModelProvider = turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE
 	job.Model = "claude-sonnet-4-5"
 	job.ExternalAgent = &turingv1.ExternalAgentTarget{
+		AgentId:       "agent_claude",
 		DisplayName:   "Claude",
 		BaseUrl:       "https://api.anthropic.com/v1",
 		CredentialRef: "claude",
 	}
+	job.SelectedTools = []string{"skills/skill_view", "skills/skills_list"}
+	skillFingerprint, _ := backendegress.SkillSnapshotFingerprint(nil)
+	job.EgressDecision = &turingv1.RunEgressDecision{
+		DecisionId: "egress_test", Version: 1,
+		Provider: turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
+		Model:    "claude-sonnet-4-5", Endpoint: "https://api.anthropic.com/v1",
+		EndpointHost:              "api.anthropic.com",
+		ExternalAgentId:           "agent_claude",
+		ExternalCredentialRefHash: backendegress.HashCredentialReference("claude"),
+		DataCategories: []turingv1.EgressDataCategory{
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CURRENT_MESSAGE,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_SCHEMAS,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_RESULTS,
+		},
+		ChallengeFingerprint:     "fingerprint_test",
+		RequestDigest:            "request_digest_test",
+		ConsentGrantedAt:         timestamppb.Now(),
+		SelectedTools:            append([]string(nil), job.SelectedTools...),
+		SkillSnapshotFingerprint: skillFingerprint,
+		RecallApplicable:         false,
+	}
 	return job
+}
+
+func authorizeDirectRemoteJob(job *turingv1.AgentJob, endpoint string) {
+	skillFingerprint, _ := runtimeSkillSnapshotFingerprint(job.GetSkills())
+	job.EgressDecision = &turingv1.RunEgressDecision{
+		DecisionId: "egress_direct_test", Version: 1,
+		Provider: job.GetModelProvider(), Model: job.GetModel(),
+		Endpoint: endpoint, ChallengeFingerprint: "fingerprint_direct_test",
+		RequestDigest: "request_digest_direct_test",
+		DataCategories: []turingv1.EgressDataCategory{
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CURRENT_MESSAGE,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT,
+		},
+		ConsentGrantedAt:         timestamppb.Now(),
+		SkillSnapshotFingerprint: skillFingerprint,
+		RecallApplicable:         true,
+	}
+	parsed, _ := backendegress.ParseKeyedEndpoint(endpoint)
+	job.EgressDecision.EndpointHost = parsed.Host
+}
+
+func TestRoutedRunRejectsMissingEgressDecisionBeforeProviderIO(t *testing.T) {
+	remote := &scriptedProvider{endpoint: "https://api.anthropic.com/v1", events: []llm.StreamEvent{{Type: "completed", FinishReason: "stop"}}}
+	assistant := NewGeneralAssistant(nil, fakeMessageClient{}, &GeneralAssistantTools{})
+	assistant.SetExternalAgentProvider(func(*turingv1.ExternalAgentTarget) (llm.Provider, error) {
+		return remote, nil
+	})
+	job := routedJob()
+	job.EgressDecision = nil
+
+	updates := collectUpdates(t, assistant, job)
+	failure := findRunFailed(updates)
+	if failure == nil || failure.GetCode() != "egress_decision_invalid" || failure.GetRetryable() {
+		t.Fatalf("failure = %+v, want non-retryable egress_decision_invalid", failure)
+	}
+	if len(remote.requests) != 0 {
+		t.Fatalf("remote provider requests = %d, want 0", len(remote.requests))
+	}
+}
+
+func TestRoutedRunRejectsEndpointMismatchBeforeProviderIO(t *testing.T) {
+	remote := &scriptedProvider{endpoint: "https://api.anthropic.com/v1", events: []llm.StreamEvent{{Type: "completed", FinishReason: "stop"}}}
+	assistant := NewGeneralAssistant(nil, fakeMessageClient{}, &GeneralAssistantTools{})
+	assistant.SetExternalAgentProvider(func(*turingv1.ExternalAgentTarget) (llm.Provider, error) {
+		return remote, nil
+	})
+	job := routedJob()
+	job.EgressDecision.Endpoint = "https://other.example/v1"
+
+	updates := collectUpdates(t, assistant, job)
+	failure := findRunFailed(updates)
+	if failure == nil || failure.GetCode() != "egress_decision_invalid" {
+		t.Fatalf("failure = %+v, want egress_decision_invalid", failure)
+	}
+	if len(remote.requests) != 0 {
+		t.Fatalf("remote provider requests = %d, want 0", len(remote.requests))
+	}
+}
+
+func TestExternalTargetCannotBypassRemoteClassificationWithLocalProviderEnum(t *testing.T) {
+	remote := &scriptedProvider{endpoint: "https://api.anthropic.com/v1", events: []llm.StreamEvent{{Type: "completed"}}}
+	assistant := NewGeneralAssistant(nil, fakeMessageClient{}, &GeneralAssistantTools{})
+	assistant.SetExternalAgentProvider(func(*turingv1.ExternalAgentTarget) (llm.Provider, error) {
+		return remote, nil
+	})
+	job := routedJob()
+	job.ModelProvider = turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA
+
+	updates := collectUpdates(t, assistant, job)
+	failure := findRunFailed(updates)
+	if failure == nil || failure.GetCode() != "egress_decision_invalid" {
+		t.Fatalf("failure = %+v, want egress_decision_invalid", failure)
+	}
+	if len(remote.requests) != 0 {
+		t.Fatalf("remote provider requests = %d, want 0", len(remote.requests))
+	}
+}
+
+func TestRemoteRunRejectsUnsupportedDisclosureCategories(t *testing.T) {
+	remote := &scriptedProvider{endpoint: "https://api.anthropic.com/v1", events: []llm.StreamEvent{{Type: "completed"}}}
+	assistant := NewGeneralAssistant(nil, fakeMessageClient{}, &GeneralAssistantTools{})
+	assistant.SetExternalAgentProvider(func(*turingv1.ExternalAgentTarget) (llm.Provider, error) {
+		return remote, nil
+	})
+	job := routedJob()
+	job.EgressDecision.DataCategories = append(
+		job.EgressDecision.DataCategories,
+		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_MEMORY_PROFILE,
+	)
+
+	updates := collectUpdates(t, assistant, job)
+	failure := findRunFailed(updates)
+	if failure == nil || failure.GetCode() != "egress_decision_invalid" {
+		t.Fatalf("failure = %+v, want egress_decision_invalid", failure)
+	}
+	if len(remote.requests) != 0 {
+		t.Fatalf("remote provider requests = %d, want 0", len(remote.requests))
+	}
+}
+
+func TestLocalProviderMapCannotHideRemoteProvider(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests++
+	}))
+	defer server.Close()
+	provider := llm.NewOpenAICompatible(server.URL, "", server.Client())
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider,
+		},
+		fakeMessageClient{},
+		&GeneralAssistantTools{},
+	)
+
+	updates := collectUpdates(t, assistant, testJob())
+	failure := findRunFailed(updates)
+	if failure == nil || failure.GetCode() != "egress_decision_invalid" {
+		t.Fatalf("failure = %+v, want egress_decision_invalid", failure)
+	}
+
+	if requests != 0 {
+		t.Fatalf("remote HTTP requests = %d, want 0", requests)
+	}
+}
+
+func TestLocalRunRejectsRemoteEgressDecisionBeforeProviderIO(t *testing.T) {
+	local := &scriptedProvider{events: []llm.StreamEvent{{Type: "completed"}}}
+	assistant := NewGeneralAssistant(
+		map[turingv1.ModelProvider]llm.Provider{
+			turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: local,
+		},
+		fakeMessageClient{},
+		&GeneralAssistantTools{},
+	)
+	job := testJob()
+	job.EgressDecision = routedJob().EgressDecision
+
+	updates := collectUpdates(t, assistant, job)
+	failure := findRunFailed(updates)
+	if failure == nil || failure.GetCode() != "egress_decision_invalid" ||
+		failure.GetRetryable() {
+		t.Fatalf("failure = %+v, want non-retryable egress_decision_invalid", failure)
+	}
+	if len(local.requests) != 0 {
+		t.Fatalf("local provider requests = %d, want 0", len(local.requests))
+	}
+}
+
+func TestRemoteRunRejectsUnselectedToolAndListsOnlySelectedTools(t *testing.T) {
+	remote := &queuedProvider{
+		endpoint: "https://api.anthropic.com/v1",
+		responses: [][]llm.StreamEvent{
+			{{Type: "tool_call", ToolCalls: []llm.ToolCall{{
+				ID: "call_unselected", Name: "system.time", Arguments: map[string]any{},
+			}}}, {Type: "completed", FinishReason: "tool_calls"}},
+			{{Type: "delta", Text: "done"}, {Type: "completed", FinishReason: "stop"}},
+		},
+	}
+
+	client := &assistantTestToolLister{
+		definitions: []map[string]any{{"name": "system.time"}},
+		result:      map[string]any{"utc": "never"},
+	}
+	assistant := NewGeneralAssistant(
+		nil,
+		fakeMessageClient{},
+		&GeneralAssistantTools{
+			SystemMCP: client,
+			Runner:    &tools.Runner{PostBeacon: allowToolCall},
+		},
+	)
+	assistant.SetExternalAgentProvider(func(*turingv1.ExternalAgentTarget) (llm.Provider, error) {
+		return remote, nil
+	})
+
+	updates := collectUpdates(t, assistant, routedJob())
+	if failure := findRunFailed(updates); failure != nil {
+		t.Fatalf("remote run failed: %+v", failure)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("unselected tool executed %d time(s)", len(client.calls))
+	}
+	if len(remote.requests) != 2 {
+		t.Fatalf("remote requests = %d, want 2", len(remote.requests))
+	}
+	result := remote.requests[1].Messages[len(remote.requests[1].Messages)-1].Content
+	var payload unknownToolPayload
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.AvailableTools) != 2 ||
+		payload.AvailableTools[0] != "skills_list" ||
+		payload.AvailableTools[1] != "skill_view" {
+		t.Fatalf("unknown-tool available tools = %v", payload.AvailableTools)
+	}
+}
+
+func TestRemoteRunWithoutToolResultConsentDoesNotSendUnknownToolResult(t *testing.T) {
+	remote := &queuedProvider{
+		endpoint: "https://api.anthropic.com/v1",
+		responses: [][]llm.StreamEvent{
+			{{Type: "tool_call", ToolCalls: []llm.ToolCall{{
+				ID: "call_undisclosed", Name: "system.time", Arguments: map[string]any{},
+			}}}, {Type: "completed", FinishReason: "tool_calls"}},
+		},
+	}
+
+	assistant := NewGeneralAssistant(nil, fakeMessageClient{}, &GeneralAssistantTools{})
+	assistant.SetExternalAgentProvider(func(*turingv1.ExternalAgentTarget) (llm.Provider, error) {
+		return remote, nil
+	})
+	job := routedJob()
+	job.SelectedTools = nil
+	job.EgressDecision.SelectedTools = nil
+	job.EgressDecision.DataCategories = []turingv1.EgressDataCategory{
+		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CURRENT_MESSAGE,
+		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY,
+		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT,
+	}
+
+	updates := collectUpdates(t, assistant, job)
+	failure := findRunFailed(updates)
+	if failure == nil || failure.GetCode() != "egress_decision_invalid" {
+		t.Fatalf("failure = %+v, want egress_decision_invalid", failure)
+	}
+	if len(remote.requests) != 1 {
+		t.Fatalf("remote requests = %d, want exactly 1", len(remote.requests))
+	}
+}
+
+func TestRemoteRunRejectsSkillSnapshotFingerprintMismatch(t *testing.T) {
+	remote := &scriptedProvider{
+		endpoint: "https://api.anthropic.com/v1",
+		events:   []llm.StreamEvent{{Type: "completed"}},
+	}
+	assistant := NewGeneralAssistant(nil, fakeMessageClient{}, &GeneralAssistantTools{})
+	assistant.SetExternalAgentProvider(func(*turingv1.ExternalAgentTarget) (llm.Provider, error) {
+		return remote, nil
+	})
+	job := routedJob()
+	job.Skills = []*turingv1.SkillSnapshot{{
+		SkillId: "writing/tone", Name: "Tone", Instructions: "Changed snapshot",
+	}}
+
+	updates := collectUpdates(t, assistant, job)
+	failure := findRunFailed(updates)
+	if failure == nil || failure.GetCode() != "egress_decision_invalid" {
+		t.Fatalf("failure = %+v, want egress_decision_invalid", failure)
+	}
+	if len(remote.requests) != 0 {
+		t.Fatalf("remote requests = %d, want 0", len(remote.requests))
+	}
+}
+
+func TestRemoteRunRejectsUnavailableFrozenSelectedTool(t *testing.T) {
+	remote := &scriptedProvider{
+		endpoint: "https://api.anthropic.com/v1",
+		events:   []llm.StreamEvent{{Type: "completed"}},
+	}
+	assistant := NewGeneralAssistant(nil, fakeMessageClient{}, &GeneralAssistantTools{})
+	assistant.SetExternalAgentProvider(func(*turingv1.ExternalAgentTarget) (llm.Provider, error) {
+		return remote, nil
+	})
+	job := routedJob()
+	job.SelectedTools = append(job.SelectedTools, "system/missing")
+	job.EgressDecision.SelectedTools = append(
+		job.EgressDecision.SelectedTools,
+		"system/missing",
+	)
+
+	updates := collectUpdates(t, assistant, job)
+	failure := findRunFailed(updates)
+	if failure == nil || failure.GetCode() != "egress_decision_invalid" ||
+		failure.GetRetryable() {
+		t.Fatalf("failure = %+v, want non-retryable egress_decision_invalid", failure)
+	}
+	if len(remote.requests) != 0 {
+		t.Fatalf("remote requests = %d, want 0", len(remote.requests))
+	}
+}
+
+func TestRemoteRunRejectsProviderWithoutRemoteIdentity(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider llm.Provider
+	}{
+		{
+			name: "non-remote provider",
+			provider: &scriptedProvider{
+				events: []llm.StreamEvent{{Type: "completed"}},
+			},
+		},
+		{
+			name: "remote provider without endpoint identity",
+			provider: &nonIdentifyingRemoteProvider{
+				events: []llm.StreamEvent{{Type: "completed"}},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assistant := NewGeneralAssistant(nil, fakeMessageClient{}, &GeneralAssistantTools{})
+			assistant.SetExternalAgentProvider(func(*turingv1.ExternalAgentTarget) (llm.Provider, error) {
+				return test.provider, nil
+			})
+			updates := collectUpdates(t, assistant, routedJob())
+			failure := findRunFailed(updates)
+			if failure == nil || failure.GetCode() != "egress_decision_invalid" {
+				t.Fatalf("failure = %+v, want egress_decision_invalid", failure)
+			}
+		})
+	}
+}
+
+type nonIdentifyingRemoteProvider struct {
+	events []llm.StreamEvent
+}
+
+func (*nonIdentifyingRemoteProvider) ID() string { return "openai_compatible" }
+func (*nonIdentifyingRemoteProvider) ContextWindowTokens() int {
+	return llm.DefaultContextWindowTokens
+}
+func (*nonIdentifyingRemoteProvider) MaxOutputTokens() int {
+	return llm.DefaultMaxOutputTokens
+}
+func (*nonIdentifyingRemoteProvider) EstimateRequestTokens(req llm.ChatRequest) (int, error) {
+	return estimateTestProviderRequest(req)
+}
+func (p *nonIdentifyingRemoteProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	out := make(chan llm.StreamEvent, len(p.events))
+	for _, event := range p.events {
+		out <- event
+	}
+	close(out)
+	return out, nil
 }
 
 func TestExternalAgentProviderResolvesTheNamedKey(t *testing.T) {
@@ -92,7 +459,7 @@ func TestExternalAgentProviderRefusesANilTarget(t *testing.T) {
 // approval token. If that decision is ever reversed it should be by editing
 // this test, not by a change nobody noticed.
 func TestRoutedRunStillOffersTheLocalToolsItWasDiscoveredWith(t *testing.T) {
-	remote := &scriptedProvider{events: []llm.StreamEvent{
+	remote := &scriptedProvider{endpoint: "https://api.anthropic.com/v1", events: []llm.StreamEvent{
 		{Type: "delta", Text: "ok"},
 		{Type: "completed", FinishReason: "stop"},
 	}}
@@ -135,7 +502,7 @@ func TestRoutedRunNeverUsesTheLocalProviderMap(t *testing.T) {
 		{Type: "delta", Text: "local"},
 		{Type: "completed", FinishReason: "stop"},
 	}}
-	remote := &scriptedProvider{events: []llm.StreamEvent{
+	remote := &scriptedProvider{endpoint: "https://api.anthropic.com/v1", events: []llm.StreamEvent{
 		{Type: "delta", Text: "remote"},
 		{Type: "completed", FinishReason: "stop"},
 	}}
@@ -262,7 +629,12 @@ func TestRoutedExternalAgentNoticesOpenAIOutputLimit(t *testing.T) {
 		return provider, nil
 	})
 
-	updates := collectUpdates(t, assistant, routedJob())
+	job := routedJob()
+	job.ExternalAgent.BaseUrl = server.URL
+	job.EgressDecision.Endpoint = server.URL
+	endpoint, _ := backendegress.ParseKeyedEndpoint(server.URL)
+	job.EgressDecision.EndpointHost = endpoint.Host
+	updates := collectUpdates(t, assistant, job)
 
 	for _, update := range updates {
 		event := update.GetEvent()
@@ -281,7 +653,7 @@ func TestRoutedExternalAgentNoticesOpenAIOutputLimit(t *testing.T) {
 // The user opted ONE conversation into leaving. Recall draws on conversations
 // they never chose to send anywhere, so it must not widen that consent.
 func TestRoutedRunDoesNotSendRecalledMaterialFromOtherConversations(t *testing.T) {
-	remote := &scriptedProvider{events: []llm.StreamEvent{
+	remote := &scriptedProvider{endpoint: "https://api.anthropic.com/v1", events: []llm.StreamEvent{
 		{Type: "delta", Text: "ok"},
 		{Type: "completed", FinishReason: "stop"},
 	}}

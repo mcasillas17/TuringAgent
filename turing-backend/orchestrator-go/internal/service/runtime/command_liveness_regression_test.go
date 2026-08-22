@@ -788,6 +788,7 @@ func TestSendCommandCapabilityFenceDispatchesAfterRoutingNoticeFailure(t *testin
 		SessionID: session.SessionID, Content: "needs unavailable OpenAI", AgentID: "general_assistant",
 		ModelProvider: "openai_compatible", Model: "gpt-4o-mini",
 		RequestedTools: []string{"system/nonexistent"},
+		EgressDecision: runtimeRemoteDecision("gpt-4o-mini"),
 	}); err != nil {
 		t.Fatal(err)
 	}

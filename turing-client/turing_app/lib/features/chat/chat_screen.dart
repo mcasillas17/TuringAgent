@@ -7,6 +7,7 @@ import 'package:grpc/grpc.dart' show GrpcError, StatusCode;
 
 import '../../constants/app_colors.dart';
 import '../../models/message.dart';
+import '../../models/remote_egress.dart';
 import '../../models/run_lifecycle.dart';
 import '../../models/run_state.dart';
 import '../../models/turing_event.dart';
@@ -19,6 +20,7 @@ import 'message_send_unconfirmed_card.dart';
 import 'run_cancelled_card.dart';
 import 'run_failure_card.dart';
 import 'run_notice_card.dart';
+import 'remote_egress_dialog.dart';
 import 'run_state_card.dart';
 import 'run_state_reconciler.dart';
 import 'tool_call_card.dart';
@@ -42,6 +44,7 @@ class ChatScreen extends StatefulWidget {
     this.embedded = false,
     this.modelProvider = 'ollama',
     this.onSessionUpdated,
+    this.onSessionDeleted,
   });
 
   final String sessionId;
@@ -60,6 +63,7 @@ class ChatScreen extends StatefulWidget {
   /// conversation list. The event payload is authoritative, so the shell does
   /// not need to poll after a send.
   final ValueChanged<TuringEvent>? onSessionUpdated;
+  final ValueChanged<String>? onSessionDeleted;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -166,6 +170,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// user, whether or not the drop turns out to be recoverable.
   bool _streamEnded = false;
   bool _historyLoadFailed = false;
+  bool _sessionDeleted = false;
 
   /// True while startup is still IN PROGRESS — not yet ready, but also not
   /// yet known to have failed. The composer stays disabled, with a spinner
@@ -254,6 +259,23 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     _controller.addListener(_discardRetryForEditedText);
     unawaited(_start());
+  }
+
+  @override
+  void didUpdateWidget(ChatScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.modelProvider != widget.modelProvider) {
+      final retry = _retryableSend;
+      if (retry != null) {
+        _retryableSend = _RetryableSend(
+          retry.content,
+          retry.modelProvider,
+          retry.idempotencyKey,
+          retry.attempt,
+          null,
+        );
+      }
+    }
   }
 
   /// History is seeded BEFORE the subscription opens, never concurrently with
@@ -461,6 +483,8 @@ class _ChatScreenState extends State<ChatScreen> {
   ///     No other call site in the handler returns it.
   ///   * [StatusCode.alreadyExists] — an idempotency-key conflict is detected
   ///     before the enqueue transaction creates anything for this request.
+  ///   * [StatusCode.failedPrecondition] — remote-egress and routing validation
+  ///     either finishes before enqueue or rolls its enqueue transaction back.
   ///
   /// Deliberately excludes `StatusCode.canceled` and `StatusCode.internal`:
   /// the very same handler ALSO returns both from several points AFTER
@@ -471,6 +495,7 @@ class _ChatScreenState extends State<ChatScreen> {
     StatusCode.invalidArgument,
     StatusCode.notFound,
     StatusCode.alreadyExists,
+    StatusCode.failedPrecondition,
   };
 
   /// Whether [error] — whatever `sendMessage` rejected with, in
@@ -479,7 +504,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// `EnqueueUserMessage`, i.e. before the message or its run could exist
   /// server-side at all. Only a `GrpcError` whose `code` is in
   /// [_confirmedPreEnqueueSendFailureCodes] qualifies — see that constant
-  /// for exactly which three codes and why each one does.
+  /// for the exact allowlist and why each code belongs there.
   ///
   /// Everything else returns `false`, the safe default whenever this proof
   /// cannot be made: any OTHER `GrpcError` code (including
@@ -1042,7 +1067,6 @@ class _ChatScreenState extends State<ChatScreen> {
     _MessageEntry assistantEntry, {
     required bool insertAdjacent,
   }) {
-    assistantEntry.stateVersion = state.stateVersion;
     // A genuine, reconciled `RunState` is now known for this exact row —
     // any neutral "no response recorded" fallback beside it (rendered
     // because the row was originally loaded with no `RunState` at all; see
@@ -1168,6 +1192,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // `setState`. Guard once at the entry point — it covers all four of them,
     // and mirrors [_handleStreamEnded].
     if (!mounted) return;
+    if (_sessionDeleted) return;
     // Events are arriving, so any earlier drop notice is stale: an error does
     // not cancel the subscription (`cancelOnError` defaults to false), and the
     // stream can keep delivering after one.
@@ -1195,6 +1220,12 @@ class _ChatScreenState extends State<ChatScreen> {
       case 'session.updated':
         widget.onSessionUpdated?.call(event);
         break;
+      case 'session.deleted':
+        _sessionDeleted = true;
+        widget.onSessionDeleted?.call(event.sessionId);
+        unawaited(_subscription?.cancel());
+        _eventSource.close();
+        return;
       case 'agent.run.step':
         _applyRunStep(event);
         break;
@@ -1605,6 +1636,46 @@ class _ChatScreenState extends State<ChatScreen> {
     final idempotencyKey = isMatchingRetry
         ? retry.idempotencyKey
         : _newSendIdempotencyKey();
+    RemoteEgressConsent? remoteEgressConsent = isMatchingRetry
+        ? retry.remoteEgressConsent
+        : null;
+    final remoteEgressApi = widget.apiClient;
+    if (remoteEgressConsent == null) {
+      setState(() => _sending = true);
+      try {
+        final disclosure = await remoteEgressApi.prepareRemoteEgress(
+          sessionId: widget.sessionId,
+          content: text,
+          modelProvider: modelProvider,
+          idempotencyKey: idempotencyKey,
+        );
+        if (!mounted) return;
+        if (disclosure != null) {
+          final confirmed = await showRemoteEgressDialog(context, disclosure);
+          if (!mounted) return;
+          if (!confirmed) {
+            setState(() => _sending = false);
+            return;
+          }
+          remoteEgressConsent = RemoteEgressConsent(
+            challenge: disclosure.challenge,
+            acknowledgedDataCategories: disclosure.dataCategories,
+          );
+        }
+      } on Exception {
+        if (!mounted) return;
+        if (modelProvider != 'ollama') {
+          setState(() => _sending = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not prepare remote send')),
+          );
+          return;
+        }
+        // A local Ollama send must not depend on the disclosure preflight.
+        // If this session is actually routed away, SendMessage still rejects
+        // it server-side because no consent accompanies the request.
+      }
+    }
     _retryableSend = null;
     // Captured by reference (not looked up again later): `_messages` may
     // grow while this RPC is in flight (an unrelated run's own stream
@@ -1638,12 +1709,20 @@ class _ChatScreenState extends State<ChatScreen> {
     // in this method. Left unguarded, this `await` rejecting becomes an
     // unhandled Future rejection — the bubble above is added, then silence.
     try {
-      final queued = await widget.apiClient.sendMessage(
-        sessionId: widget.sessionId,
-        content: text,
-        modelProvider: modelProvider,
-        idempotencyKey: idempotencyKey,
-      );
+      final queued = remoteEgressConsent == null
+          ? await widget.apiClient.sendMessage(
+              sessionId: widget.sessionId,
+              content: text,
+              modelProvider: modelProvider,
+              idempotencyKey: idempotencyKey,
+            )
+          : await remoteEgressApi.sendMessageWithRemoteEgressConsent(
+              sessionId: widget.sessionId,
+              content: text,
+              modelProvider: modelProvider,
+              idempotencyKey: idempotencyKey,
+              consent: remoteEgressConsent,
+            );
       if (!mounted) return;
       setState(() {
         final runId = _asString(queued['runId']);
@@ -1673,7 +1752,7 @@ class _ChatScreenState extends State<ChatScreen> {
         // else about recovering from this rejection (draft restoration,
         // anchoring, the mounted guard above) is identical for both.
         _controller.text = text;
-        if (error is GrpcError && error.code == StatusCode.alreadyExists) {
+        if (_isConfirmedPreEnqueueSendFailure(error)) {
           _retryableSend = null;
         } else {
           _retryableSend = _RetryableSend(
@@ -1681,6 +1760,7 @@ class _ChatScreenState extends State<ChatScreen> {
             modelProvider,
             idempotencyKey,
             attempt,
+            remoteEgressConsent,
           );
         }
         // Anchored immediately after `attempt`, never appended to the
@@ -2008,12 +2088,14 @@ class _RetryableSend {
     this.modelProvider,
     this.idempotencyKey,
     this.attempt,
+    this.remoteEgressConsent,
   );
 
   final String content;
   final String modelProvider;
   final String idempotencyKey;
   final _MessageEntry attempt;
+  final RemoteEgressConsent? remoteEgressConsent;
 }
 
 class _ChatMessageTile extends StatelessWidget {
@@ -2335,12 +2417,6 @@ class _MessageEntry extends _ChatEntry {
   String? runId;
   bool canAdoptPersistedIdentity;
   final ValueNotifier<String> content;
-
-  /// The highest [RunState.stateVersion] whose adjacent card this row's own
-  /// run currently reflects, or null if none has been reconciled yet.
-  /// Bookkeeping only — [RunStateReconciler], keyed by run ID, is the
-  /// actual source of truth for what version is accepted.
-  int? stateVersion;
 
   @override
   void dispose() => content.dispose();

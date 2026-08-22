@@ -314,6 +314,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
     $core.String? reason,
     $core.bool? terminalRun,
     ToolCallPhase? phase,
+    $core.String? provenanceToken,
     $fixnum.Int64? runStateVersion,
   }) {
     final result = create();
@@ -323,6 +324,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
     if (reason != null) result.reason = reason;
     if (terminalRun != null) result.terminalRun = terminalRun;
     if (phase != null) result.phase = phase;
+    if (provenanceToken != null) result.provenanceToken = provenanceToken;
     if (runStateVersion != null) result.runStateVersion = runStateVersion;
     return result;
   }
@@ -353,7 +355,8 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
         defaultOrMaker: ToolCallPhase.TOOL_CALL_PHASE_UNSPECIFIED,
         valueOf: ToolCallPhase.valueOf,
         enumValues: ToolCallPhase.values)
-    ..aInt64(7, _omitFieldNames ? '' : 'runStateVersion')
+    ..aOS(7, _omitFieldNames ? '' : 'provenanceToken')
+    ..aInt64(8, _omitFieldNames ? '' : 'runStateVersion')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -431,18 +434,30 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
   @$pb.TagNumber(6)
   void clearPhase() => $_clearField(6);
 
+  /// Server-issued, server-signed capability binding this tool call to its
+  /// session, run, deletion generation, tool, arguments and path scope. The
+  /// runtime forwards it verbatim; it never mints or edits one.
+  @$pb.TagNumber(7)
+  $core.String get provenanceToken => $_getSZ(6);
+  @$pb.TagNumber(7)
+  set provenanceToken($core.String value) => $_setString(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasProvenanceToken() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearProvenanceToken() => $_clearField(7);
+
   /// The run's committed state version at the moment of this decision. A
   /// matching tool beacon can therefore prove ownership: the response carries
   /// the version forward before tool or model work continues, so a worker never
   /// advances past the state the orchestrator has committed.
-  @$pb.TagNumber(7)
-  $fixnum.Int64 get runStateVersion => $_getI64(6);
-  @$pb.TagNumber(7)
-  set runStateVersion($fixnum.Int64 value) => $_setInt64(6, value);
-  @$pb.TagNumber(7)
-  $core.bool hasRunStateVersion() => $_has(6);
-  @$pb.TagNumber(7)
-  void clearRunStateVersion() => $_clearField(7);
+  @$pb.TagNumber(8)
+  $fixnum.Int64 get runStateVersion => $_getI64(7);
+  @$pb.TagNumber(8)
+  set runStateVersion($fixnum.Int64 value) => $_setInt64(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasRunStateVersion() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearRunStateVersion() => $_clearField(8);
 }
 
 const $core.bool _omitFieldNames =

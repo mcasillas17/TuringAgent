@@ -3,13 +3,17 @@ package sessions
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/persisttime"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	eventsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/runstate"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -18,9 +22,12 @@ import (
 
 type Server struct {
 	turingv1.UnimplementedSessionServiceServer
-	repo         *repository.Repository
-	cfg          config.Config
-	capabilities capabilitySource
+	repo            *repository.Repository
+	cfg             config.Config
+	capabilities    capabilitySource
+	cursors         sessionCursorCodec
+	bus             *eventsvc.Bus
+	artifactCleaner sessionArtifactCleaner
 }
 
 type capabilitySource interface {
@@ -30,45 +37,136 @@ type capabilitySource interface {
 	LiveToolNames() []string
 }
 
-func New(repo *repository.Repository, cfg config.Config, capabilities capabilitySource) *Server {
-	return &Server{repo: repo, cfg: cfg, capabilities: capabilities}
+type sessionDeletionCanceler interface {
+	CancelSessionRuns(context.Context, string, string)
+}
+
+type sessionArtifactCleaner interface {
+	CleanupSessionArtifacts(context.Context, string, int64) error
+}
+
+const artifactCleanupTimeout = 10 * time.Second
+
+func New(repo *repository.Repository, cfg config.Config, capabilities capabilitySource, buses ...*eventsvc.Bus) *Server {
+	var bus *eventsvc.Bus
+	if len(buses) > 0 {
+		bus = buses[0]
+	}
+	return &Server{
+		repo:         repo,
+		cfg:          cfg,
+		capabilities: capabilities,
+		cursors:      newSessionCursorCodec(cfg.CursorHMACKey),
+		bus:          bus,
+	}
+}
+
+func (s *Server) SetArtifactCleaner(cleaner sessionArtifactCleaner) {
+	s.artifactCleaner = cleaner
+}
+
+// ResumePendingDeletions retries durable non-completed receipts. It is safe to
+// call repeatedly: each receipt uses the same lifecycle version and only a
+// completed receipt can publish the terminal event.
+func (s *Server) ResumePendingDeletions(ctx context.Context) error {
+	sessionIDs, err := s.repo.PendingSessionDeletionIDs(ctx)
+	if err != nil {
+		return err
+	}
+	var resumeErr error
+	for _, sessionID := range sessionIDs {
+		if _, err := s.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: sessionID}); err != nil {
+			if status.Code(err) == codes.NotFound {
+				continue
+			}
+			resumeErr = errors.Join(resumeErr, err)
+		}
+	}
+	return resumeErr
 }
 
 func (s *Server) CreateSession(ctx context.Context, req *turingv1.CreateSessionRequest) (*turingv1.CreateSessionResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "request is required")
 	}
-	session, err := s.repo.CreateSession(ctx, req.Title)
+	title := strings.TrimSpace(req.Title)
+	if !utf8.ValidString(title) || utf8.RuneCountInString(title) > repository.MaxSessionTitleRunes {
+		return nil, status.Error(codes.InvalidArgument, "title is invalid")
+	}
+	session, err := s.repo.CreateSession(ctx, title)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "create session failed")
 	}
-	return &turingv1.CreateSessionResponse{SessionId: session.SessionID, CreatedAt: parseTimestamp(session.CreatedAt)}, nil
+	createdAt, err := parseSessionTimestamp(session.CreatedAt)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "create session failed")
+	}
+	return &turingv1.CreateSessionResponse{SessionId: session.SessionID, CreatedAt: createdAt}, nil
 }
 
 func (s *Server) ListSessions(ctx context.Context, req *turingv1.ListSessionsRequest) (*turingv1.ListSessionsResponse, error) {
+	filter, repositoryFilter, err := sessionListFilter(req.GetFilter())
+	if err != nil {
+		return nil, err
+	}
 	limit := 50
 	if req != nil && req.Page != nil {
-		if req.Page.Limit < 0 {
-			return nil, status.Error(codes.InvalidArgument, "page.limit must be non-negative")
+		if req.Page.Limit < 0 || req.Page.Limit > 100 {
+			return nil, status.Error(codes.InvalidArgument, "page.limit must be between 1 and 100")
 		}
 		if req.Page.Limit > 0 {
 			limit = int(req.Page.Limit)
 		}
 	}
-	sessions, err := s.repo.ListSessions(ctx, limit)
+	var after *repository.SessionCursor
+	if req != nil && req.GetPage().GetCursor() != "" {
+		decoded, err := s.cursors.decode(req.GetPage().GetCursor(), filter)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "page.cursor is invalid")
+		}
+		after = &repository.SessionCursor{
+			UpdatedAt: decoded.UpdatedAt,
+			SessionID: decoded.SessionID,
+		}
+	}
+	sessions, err := s.repo.ListSessionsPage(ctx, repository.ListSessionsInput{
+		Filter: repositoryFilter,
+		After:  after,
+		Limit:  limit + 1,
+	})
 	if err != nil {
 		return nil, status.Error(codes.Internal, "list sessions failed")
 	}
+	hasMore := len(sessions) > limit
+	if hasMore {
+		sessions = sessions[:limit]
+	}
 	out := make([]*turingv1.Session, 0, len(sessions))
 	for _, session := range sessions {
-		out = append(out, mapSession(session))
+		mapped, err := mapSession(session)
+		if err != nil {
+			return nil, status.Error(codes.Internal, "list sessions failed")
+		}
+		out = append(out, mapped)
 	}
-	return &turingv1.ListSessionsResponse{Sessions: out, Page: &turingv1.PageResponse{}}, nil
+	page := &turingv1.PageResponse{}
+	if hasMore {
+		last := sessions[len(sessions)-1]
+		page.NextCursor, err = s.cursors.encode(sessionCursor{
+			Filter:    filter,
+			UpdatedAt: last.UpdatedAt,
+			SessionID: last.SessionID,
+		})
+		if err != nil {
+			return nil, status.Error(codes.Internal, "list sessions failed")
+		}
+	}
+	return &turingv1.ListSessionsResponse{Sessions: out, Page: page}, nil
 }
 
 func (s *Server) GetSession(ctx context.Context, req *turingv1.GetSessionRequest) (*turingv1.Session, error) {
-	if req == nil || req.SessionId == "" {
-		return nil, status.Error(codes.InvalidArgument, "session_id is required")
+	if req == nil || !validSessionID(req.SessionId) {
+		return nil, status.Error(codes.InvalidArgument, "session_id is invalid")
 	}
 	session, err := s.repo.GetSession(ctx, req.SessionId)
 	if err != nil {
@@ -77,34 +175,157 @@ func (s *Server) GetSession(ctx context.Context, req *turingv1.GetSessionRequest
 		}
 		return nil, status.Error(codes.Internal, "get session failed")
 	}
-	return mapSession(session), nil
+	mapped, err := mapSession(session)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "get session failed")
+	}
+	return mapped, nil
 }
 
-// DeleteSession removes a session and everything it produced. It is the only
-// way a user can withdraw what they have said, so the failure modes are
-// reported distinctly rather than collapsed into Internal: NotFound so the
-// client can say the session is already gone, and FailedPrecondition so it can
-// explain that work is still in flight rather than implying a bug.
+// DeleteSession starts or advances a durable, non-blocking withdrawal. A live
+// execution leaves a retryable receipt rather than keeping the RPC open or
+// deleting rows from under the worker.
 func (s *Server) DeleteSession(ctx context.Context, req *turingv1.DeleteSessionRequest) (*turingv1.DeleteSessionResponse, error) {
-	if req == nil || req.SessionId == "" {
-		return nil, status.Error(codes.InvalidArgument, "session_id is required")
+	if req == nil || !validSessionID(req.SessionId) {
+		return nil, status.Error(codes.InvalidArgument, "session_id is invalid")
 	}
-	if err := s.repo.DeleteSession(ctx, req.SessionId); err != nil {
+	receipt, err := s.repo.BeginSessionDeletion(ctx, req.SessionId)
+	if err != nil {
 		switch {
 		case errors.Is(err, repository.ErrSessionNotFound):
 			return nil, status.Error(codes.NotFound, "session not found")
-		case errors.Is(err, repository.ErrSessionHasActiveRun):
-			return nil, status.Error(codes.FailedPrecondition, "session has a run in progress")
 		default:
 			return nil, status.Error(codes.Internal, "delete session failed")
 		}
 	}
-	return &turingv1.DeleteSessionResponse{SessionId: req.SessionId}, nil
+	if canceler, ok := s.capabilities.(sessionDeletionCanceler); ok {
+		canceler.CancelSessionRuns(ctx, req.SessionId, "session_deleting")
+	}
+	receipt, err = s.repo.AdvanceSessionDeletion(ctx, req.SessionId)
+	if err != nil {
+		switch {
+		case errors.Is(err, repository.ErrSessionNotFound):
+			return nil, status.Error(codes.NotFound, "session not found")
+		default:
+			return nil, status.Error(codes.Internal, "delete session failed")
+		}
+	}
+	if receipt.State == "failed_external" &&
+		receipt.ErrorCode == "artifact_cleanup_pending" &&
+		s.artifactCleaner != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), artifactCleanupTimeout)
+		cleanupErr := s.artifactCleaner.CleanupSessionArtifacts(
+			cleanupCtx,
+			receipt.SessionID,
+			receipt.LifecycleVersion,
+		)
+		cancel()
+		if cleanupErr != nil {
+			if err := s.repo.MarkSessionDeletionExternalFailure(
+				context.WithoutCancel(ctx),
+				receipt.SessionID,
+				"artifact_cleanup_failed",
+			); err != nil {
+				return nil, status.Error(codes.Internal, "record session artifact cleanup failure")
+			}
+			current, err := s.repo.SessionDeletionReceipt(ctx, req.SessionId)
+			if err != nil {
+				return nil, status.Error(codes.Internal, "read session deletion receipt")
+			}
+			receipt = current
+		} else {
+			if err := s.removeOwnedArtifactManifestRows(ctx, receipt.SessionID); err != nil {
+				return nil, status.Error(codes.Internal, "delete session artifacts failed")
+			}
+			receipt, err = s.repo.AdvanceSessionDeletion(ctx, req.SessionId)
+			if err != nil {
+				return nil, status.Error(codes.Internal, "delete session failed")
+			}
+		}
+	}
+	if receipt.State == "completed" {
+		s.publishSessionDeleted(receipt)
+	}
+	return &turingv1.DeleteSessionResponse{
+		SessionId: req.SessionId,
+		Deletion:  mapSessionDeletionReceipt(receipt),
+	}, nil
+}
+
+func (s *Server) ListSessionDeletionReceipts(ctx context.Context, _ *turingv1.ListSessionDeletionReceiptsRequest) (*turingv1.ListSessionDeletionReceiptsResponse, error) {
+	receipts, err := s.repo.PendingSessionDeletionReceipts(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "list session deletion receipts failed")
+	}
+	out := make([]*turingv1.SessionDeletionReceipt, 0, len(receipts))
+	for _, receipt := range receipts {
+		out = append(out, mapSessionDeletionReceipt(receipt))
+	}
+	return &turingv1.ListSessionDeletionReceiptsResponse{Deletions: out}, nil
+}
+
+func (s *Server) removeOwnedArtifactManifestRows(ctx context.Context, sessionID string) error {
+	artifacts, err := s.repo.SessionSandboxArtifacts(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	for _, artifact := range artifacts {
+		if artifact.Policy != repository.SandboxArtifactPolicyDeleteOnSessionDelete {
+			continue
+		}
+		if err := s.repo.DeleteSandboxArtifact(ctx, artifact.ArtifactID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Server) publishSessionDeleted(receipt repository.SessionDeletionReceipt) {
+	if s.bus == nil {
+		return
+	}
+	payload, err := json.Marshal(map[string]any{
+		"lifecycleVersion": receipt.LifecycleVersion,
+		"runs":             receipt.RunCount,
+		"messages":         receipt.MessageCount,
+	})
+	if err != nil {
+		return
+	}
+	s.bus.TerminateSession(eventsvc.Event{
+		EventID:     "session_deleted:" + receipt.SessionID,
+		SessionID:   receipt.SessionID,
+		Sequence:    receipt.TerminalSequence,
+		Type:        "session.deleted",
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+		PayloadJSON: string(payload),
+	})
+}
+
+func mapSessionDeletionReceipt(receipt repository.SessionDeletionReceipt) *turingv1.SessionDeletionReceipt {
+	state := turingv1.SessionDeletionState_SESSION_DELETION_STATE_IN_PROGRESS
+	switch receipt.State {
+	case "failed_external":
+		state = turingv1.SessionDeletionState_SESSION_DELETION_STATE_FAILED_EXTERNAL
+	case "completed":
+		state = turingv1.SessionDeletionState_SESSION_DELETION_STATE_COMPLETED
+	}
+	return &turingv1.SessionDeletionReceipt{
+		SessionId:                   receipt.SessionID,
+		State:                       state,
+		LifecycleVersion:            receipt.LifecycleVersion,
+		Retryable:                   receipt.Retryable,
+		ErrorCode:                   receipt.ErrorCode,
+		TerminalSequence:            receipt.TerminalSequence,
+		RunCount:                    int32(receipt.RunCount),
+		MessageCount:                int32(receipt.MessageCount),
+		RetainedLegacyArtifactCount: int32(receipt.RetainedLegacyArtifactCount),
+	}
 }
 
 func (s *Server) ListMessages(ctx context.Context, req *turingv1.ListMessagesRequest) (*turingv1.ListMessagesResponse, error) {
-	if req == nil || req.SessionId == "" {
-		return nil, status.Error(codes.InvalidArgument, "session_id is required")
+	if req == nil || !validSessionID(req.SessionId) {
+		return nil, status.Error(codes.InvalidArgument, "session_id is invalid")
 	}
 	var (
 		messages []repository.Message
@@ -117,6 +338,9 @@ func (s *Server) ListMessages(ctx context.Context, req *turingv1.ListMessagesReq
 	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			if req.BeforeMessageId == "" {
+				return nil, status.Error(codes.NotFound, "session not found")
+			}
 			return nil, status.Error(codes.NotFound, "before_message_id not found in session")
 		}
 		return nil, status.Error(codes.Internal, "list messages failed")
@@ -167,10 +391,12 @@ func (s *Server) GetConfig(context.Context, *turingv1.GetConfigRequest) (*turing
 			Models:       advertised[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA],
 		},
 		{
-			Provider:     turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
-			Enabled:      len(advertised[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE]) > 0,
-			DefaultModel: openAIDefault,
-			Models:       advertised[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE],
+			Provider:              turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
+			Enabled:               len(advertised[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE]) > 0,
+			DefaultModel:          openAIDefault,
+			Models:                advertised[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE],
+			RemoteEndpoint:        s.cfg.OpenAIBaseURL,
+			RequiresPerRunConsent: true,
 		},
 	}
 	return &turingv1.GetConfigResponse{
@@ -231,7 +457,19 @@ func toProtoToolPolicy(policy string) turingv1.ToolPolicy {
 	}
 }
 
-func mapSession(session repository.Session) *turingv1.Session {
+func mapSession(session repository.Session) (*turingv1.Session, error) {
+	if session.Status != string(repository.SessionListActive) &&
+		session.Status != string(repository.SessionListArchived) {
+		return nil, repository.ErrInvalidSessionStatus
+	}
+	createdAt, err := parseSessionTimestamp(session.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	updatedAt, err := parseSessionTimestamp(session.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
 	title := ""
 	if session.Title.Valid {
 		title = session.Title.String
@@ -240,9 +478,9 @@ func mapSession(session repository.Session) *turingv1.Session {
 		SessionId: session.SessionID,
 		Title:     title,
 		Status:    session.Status,
-		CreatedAt: parseTimestamp(session.CreatedAt),
-		UpdatedAt: parseTimestamp(session.UpdatedAt),
-	}
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+	}, nil
 }
 
 func mapMessage(sessionID string, message repository.Message) *turingv1.Message {
@@ -259,8 +497,8 @@ func mapMessage(sessionID string, message repository.Message) *turingv1.Message 
 	// Absent state stays absent. The repository returns state only for a
 	// message whose run correlation it could prove, and the projection returns
 	// none for a row it cannot vouch for; either way what is published is
-	// silence rather than an outcome nobody stands behind. Rendering that
-	// silence as the neutral card is the planned Task 9/10 client work.
+	// silence rather than an outcome nobody stands behind. Flutter renders that
+	// absence neutrally instead of inventing a terminal result.
 	if message.RunState != nil {
 		mapped.RunState = runstate.Project(*message.RunState)
 	}
@@ -288,4 +526,26 @@ func parseTimestamp(value string) *timestamppb.Timestamp {
 		return nil
 	}
 	return timestamppb.New(t)
+}
+
+func parseSessionTimestamp(value string) (*timestamppb.Timestamp, error) {
+	parsed, err := persisttime.ParseCanonical(value)
+	if err != nil {
+		return nil, repository.ErrInvalidSessionTimestamp
+	}
+	return timestamppb.New(parsed), nil
+}
+
+func sessionListFilter(filter turingv1.SessionListFilter) (sessionFilter, repository.SessionListFilter, error) {
+	switch filter {
+	case turingv1.SessionListFilter_SESSION_LIST_FILTER_UNSPECIFIED,
+		turingv1.SessionListFilter_SESSION_LIST_FILTER_ACTIVE:
+		return sessionFilterActive, repository.SessionListActive, nil
+	case turingv1.SessionListFilter_SESSION_LIST_FILTER_ARCHIVED:
+		return sessionFilterArchived, repository.SessionListArchived, nil
+	case turingv1.SessionListFilter_SESSION_LIST_FILTER_ALL:
+		return sessionFilterAll, repository.SessionListAll, nil
+	default:
+		return 0, "", status.Error(codes.InvalidArgument, "filter is invalid")
+	}
 }

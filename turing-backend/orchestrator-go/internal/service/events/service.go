@@ -37,6 +37,9 @@ func (s *Server) ListEvents(ctx context.Context, req *turingv1.ListEventsRequest
 	}
 	events, latest, err := s.repo.ReplayEvents(ctx, req.SessionId, req.AfterSequence, limit)
 	if err != nil {
+		if errors.Is(err, repository.ErrSessionNotFound) {
+			return nil, status.Error(codes.NotFound, "session not found")
+		}
 		return nil, status.Error(codes.Internal, "list events failed")
 	}
 	out := make([]*turingv1.TuringEvent, 0, len(events))
@@ -56,6 +59,9 @@ func (s *Server) SubscribeSessionEvents(req *turingv1.SubscribeSessionEventsRequ
 	ctx := stream.Context()
 	_, latest, err := s.repo.ReplayEvents(ctx, req.SessionId, req.AfterSequence, 1)
 	if err != nil {
+		if errors.Is(err, repository.ErrSessionNotFound) {
+			return status.Error(codes.NotFound, "session not found")
+		}
 		return status.Error(codes.Internal, "replay events failed")
 	}
 	if req.AfterSequence > latest {
@@ -67,6 +73,9 @@ func (s *Server) SubscribeSessionEvents(req *turingv1.SubscribeSessionEventsRequ
 		if errors.As(err, &sendErr) {
 			return sendErr.err
 		}
+		if errors.Is(err, repository.ErrSessionNotFound) {
+			return status.Error(codes.NotFound, "session not found")
+		}
 		return status.Error(codes.Internal, "replay events failed")
 	}
 	ch, unsubscribe := s.bus.Subscribe(req.SessionId)
@@ -75,6 +84,9 @@ func (s *Server) SubscribeSessionEvents(req *turingv1.SubscribeSessionEventsRequ
 		var sendErr *eventStreamSendError
 		if errors.As(err, &sendErr) {
 			return sendErr.err
+		}
+		if errors.Is(err, repository.ErrSessionNotFound) {
+			return status.Error(codes.NotFound, "session not found")
 		}
 		return status.Error(codes.Internal, "replay events failed")
 	}
@@ -88,6 +100,12 @@ func (s *Server) SubscribeSessionEvents(req *turingv1.SubscribeSessionEventsRequ
 			}
 			if event.Sequence <= lastSent {
 				continue
+			}
+			if event.Type == "session.deleted" {
+				if err := stream.Send(mapBusEvent(event)); err != nil {
+					return err
+				}
+				return status.Error(codes.NotFound, "session deleted")
 			}
 			if event.Sequence > lastSent+1 {
 				if err := s.replayAvailable(ctx, req.SessionId, &lastSent, stream); err != nil {
@@ -134,7 +152,7 @@ func (s *Server) SubscribeSessionUpdates(_ *turingv1.SubscribeSessionUpdatesRequ
 			if !ok {
 				return nil
 			}
-			if event.Type != "session.updated" {
+			if event.Type != "session.updated" && event.Type != "session.deleted" {
 				continue
 			}
 			if err := stream.Send(mapBusEvent(event)); err != nil {

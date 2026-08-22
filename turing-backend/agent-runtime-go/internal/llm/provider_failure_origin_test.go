@@ -60,15 +60,13 @@ func producedProviderErrorCodes(t *testing.T) map[string]struct{} {
 	for _, envelope := range []struct {
 		errorType string
 		errorCode string
-		message   string
 	}{
 		{errorCode: "insufficient_quota"},
-		{errorType: "invalid_request_error", message: "Incorrect API key provided"},
-		{errorType: "invalid_request_error", message: "model not found"},
-		{errorType: "server_error", message: "service unavailable"},
-		{errorType: "something_new", message: "nothing this classifier recognizes"},
+		{errorType: "invalid_request_error"},
+		{errorType: "server_error"},
+		{errorType: "something_new"},
 	} {
-		produced[classifyOpenAIError(envelope.errorType, envelope.errorCode, envelope.message)] = struct{}{}
+		produced[classifyOpenAIError(envelope.errorType, envelope.errorCode)] = struct{}{}
 	}
 	return produced
 }

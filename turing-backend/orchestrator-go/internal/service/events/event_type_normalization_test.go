@@ -148,6 +148,7 @@ func TestEveryTypeSpellingPublishesTheSameEventType(t *testing.T) {
 		"error":                   turingv1.TuringEventType_TURING_EVENT_TYPE_ERROR,
 		"system":                  turingv1.TuringEventType_TURING_EVENT_TYPE_SYSTEM,
 		"session.updated":         turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_UPDATED,
+		"session.deleted":         turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_DELETED,
 	}
 	for durable, want := range durableTypes {
 		for spelling, rewrite := range typeSpellings {

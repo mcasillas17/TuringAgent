@@ -78,11 +78,19 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"TURING_CLIENT_API_KEY:",
 		"TURING_RUNTIME_TOKEN:",
 		"TURING_APPROVAL_CONSUMER_TOKEN:",
+		"TURING_MCP_FILES_CLEANUP_TOKEN:",
+		"TURING_MCP_FILES_CLEANUP_TOKEN:",
+		"MCP_FILES_BASE_URL:",
+		// The orchestrator uses this internal-only URL only to reconcile
+		// session-owned sandbox namespaces after deletion.
+		"MCP_FILES_BASE_URL:",
 		"TURING_APPROVAL_JWT_SECRET:",
+		"TURING_EGRESS_SIGNING_SECRET:",
 		"DATABASE_PATH:",
 		"SKILLS_ROOT:",
 		"OLLAMA_BASE_URL:",
-		// The orchestrator never calls OpenAI or mcp-files: it only reports
+		// The orchestrator never calls OpenAI or mcp-files through its normal
+		// bearer: it only reports
 		// through GetConfig whether each is configured, so it holds a
 		// Compose-derived boolean instead of the actual secret value.
 		"MCP_FILES_ENABLED:",
@@ -92,7 +100,6 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 	requireContainsNone(t, "turing-orchestrator", orchestrator,
 		"ORCHESTRATOR_GRPC_ADDR:",
 		"MCP_SYSTEM_BASE_URL:",
-		"MCP_FILES_BASE_URL:",
 		"FILES_SANDBOX_ROOT:",
 		// A single shared internal token let a compromised approval consumer
 		// present the runtime's own credential; this must never come back.
@@ -100,7 +107,8 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		// Dead here even before the split: the orchestrator never calls
 		// mcp-system and never used the token's value, only its presence.
 		"MCP_SYSTEM_TOKEN_GENERAL:",
-		// The orchestrator never calls mcp-files or OpenAI itself, so it must
+		// The orchestrator never calls mcp-files through its normal bearer or
+		// OpenAI itself, so it must
 		// never hold the bearer token or API key those calls would need.
 		"MCP_FILES_TOKEN_GENERAL:",
 		"OPENAI_API_KEY:",
@@ -130,6 +138,8 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		// must never hold the approval consumer's credential, or a
 		// compromised runtime could impersonate mcp-files.
 		"TURING_APPROVAL_CONSUMER_TOKEN:",
+		"TURING_EGRESS_SIGNING_SECRET:",
+		"TURING_MCP_FILES_CLEANUP_TOKEN:",
 	)
 
 	system := composeServiceBlock(t, compose, "turing-mcp-system")
@@ -140,6 +150,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"TURING_RUNTIME_TOKEN:",
 		"TURING_APPROVAL_CONSUMER_TOKEN:",
 		"TURING_APPROVAL_JWT_SECRET:",
+		"TURING_EGRESS_SIGNING_SECRET:",
 		"OPENAI_API_KEY:",
 		"OLLAMA_CONTEXT_WINDOW_TOKENS:",
 		"OLLAMA_MAX_OUTPUT_TOKENS:",
@@ -164,6 +175,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 	)
 	requireContainsNone(t, "turing-mcp-files", files,
 		"TURING_CLIENT_API_KEY:",
+		"TURING_EGRESS_SIGNING_SECRET:",
 		"OPENAI_API_KEY:",
 		"OLLAMA_CONTEXT_WINDOW_TOKENS:",
 		"OLLAMA_MAX_OUTPUT_TOKENS:",
@@ -183,14 +195,19 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"TURING_CLIENT_API_KEY",
 			"TURING_RUNTIME_TOKEN",
 			"TURING_APPROVAL_CONSUMER_TOKEN",
+			"TURING_MCP_FILES_CLEANUP_TOKEN",
+			"MCP_FILES_BASE_URL",
 			"MCP_FILES_ENABLED",
 			"OPENAI_ENABLED",
 			"TURING_APPROVAL_JWT_SECRET",
+			"TURING_EGRESS_SIGNING_SECRET",
+			"TURING_CURSOR_HMAC_SECRET",
 			"TURING_INTEGRATION_KEY",
 			"ORCHESTRATOR_PUBLIC_PORT",
 			"ORCHESTRATOR_INTERNAL_PORT",
 			"DATABASE_PATH",
 			"SKILLS_ROOT",
+			"MCP_CONFIG_ROOT",
 			"OLLAMA_BASE_URL",
 			"OLLAMA_MODEL",
 			"OLLAMA_CONTEXT_WINDOW_TOKENS",
@@ -247,6 +264,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"MCP_FILES_TOKEN_GENERAL",
 			"TURING_APPROVAL_JWT_SECRET",
 			"TURING_APPROVAL_CONSUMER_TOKEN",
+			"TURING_MCP_FILES_CLEANUP_TOKEN",
 			"ORCHESTRATOR_GRPC_ADDR",
 			"FILES_SANDBOX_ROOT",
 			"LOG_LEVEL",
@@ -438,17 +456,17 @@ func TestEveryComposeServiceUsesLeastPrivilegeRuntime(t *testing.T) {
 	for _, violation := range composeInheritanceViolations(document) {
 		t.Error(violation)
 	}
-	for _, violation := range composeNetworkDefinitionViolations(document, []string{"net-files", "net-system"}) {
+	for _, violation := range composeNetworkDefinitionViolations(document, []string{"net-files", "net-mcp-registry", "net-system"}) {
 		t.Error(violation)
 	}
 	policies := map[string]composeRuntimePolicy{
 		"turing-orchestrator": {
 			user:     "${HOST_UID:?Use scripts/compose.sh to launch}:${HOST_GID:?Use scripts/compose.sh to launch}",
-			volumes:  []string{"../data:/app/data", "../skills:/skills"},
+			volumes:  []string{"../data:/app/data", "../skills:/skills", "../mcp:/mcp:ro"},
 			tmpfs:    []string{"/dev/shm:ro,nosuid,nodev,noexec,size=64k"},
 			ports:    []string{"127.0.0.1:${ORCHESTRATOR_PUBLIC_PORT:-3000}:${ORCHESTRATOR_PUBLIC_PORT:-3000}"},
 			expose:   []string{"3001"},
-			networks: []string{"net-system", "net-files"},
+			networks: []string{"net-system", "net-files", "net-mcp-registry"},
 		},
 		"turing-agent-runtime-general": {
 			user:       "turing-agent-runtime:turing-agent-runtime",
@@ -931,6 +949,9 @@ func composeNetworkDefinitionViolations(document composeDocument, expected []str
 	}
 	for _, name := range actual {
 		definition := document.Networks[name]
+		if name == "net-mcp-registry" && registryNetworkDefinitionValid(definition) {
+			continue
+		}
 		empty := !yamlNodePresent(definition) ||
 			(definition.Kind == yaml.ScalarNode && definition.Tag == "!!null") ||
 			(definition.Kind == yaml.MappingNode && len(definition.Content) == 0)
@@ -939,6 +960,28 @@ func composeNetworkDefinitionViolations(document composeDocument, expected []str
 		}
 	}
 	return violations
+}
+
+func registryNetworkDefinitionValid(definition yaml.Node) bool {
+	var policy struct {
+		Internal bool `yaml:"internal"`
+		IPAM     struct {
+			Config []struct {
+				Subnet string `yaml:"subnet"`
+			} `yaml:"config"`
+		} `yaml:"ipam"`
+	}
+	if err := definition.Decode(&policy); err != nil ||
+		!policy.Internal ||
+		len(policy.IPAM.Config) != 1 ||
+		policy.IPAM.Config[0].Subnet != "172.31.254.0/24" {
+		return false
+	}
+	if definition.Kind != yaml.MappingNode || len(definition.Content) != 4 {
+		return false
+	}
+	return definition.Content[0].Value == "internal" &&
+		definition.Content[2].Value == "ipam"
 }
 
 func composeRuntimePolicyViolations(serviceName string, service composeService, policy composeRuntimePolicy) []string {

@@ -284,7 +284,7 @@ type runStateQuerier interface {
 
 // runRowQuery reads a run with the assistant message it owns.
 //
-// The join cannot fan out: schema 0016 carries a partial unique index on
+// The join cannot fan out: schema 0017 carries a partial unique index on
 // messages(run_id) where run_id is not null and role is 'assistant', which is
 // exactly this join's predicate, so a run matches at most one assistant row.
 // Without that index the guarded transitions below would be reading one row of

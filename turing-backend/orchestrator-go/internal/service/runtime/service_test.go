@@ -15,6 +15,7 @@ import (
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/auth"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
@@ -40,6 +41,27 @@ type harness struct {
 }
 
 var runtimeTestDatabaseSequence atomic.Uint64
+
+func runtimeRemoteDecision(model string) *repository.PendingEgressDecision {
+	sequence := runtimeTestDatabaseSequence.Add(1)
+	skillFingerprint, _ := backendegress.SkillSnapshotFingerprint(nil)
+	return &repository.PendingEgressDecision{
+		Version:              repository.RunEgressDecisionVersion,
+		ChallengeNonce:       fmt.Sprintf("runtime-nonce-%d", sequence),
+		ChallengeFingerprint: fmt.Sprintf("runtime-fingerprint-%d", sequence),
+		RequestDigest:        fmt.Sprintf("runtime-request-digest-%d", sequence),
+		Provider:             "openai_compatible", Model: model,
+		Endpoint: "https://api.openai.com/v1", EndpointHost: "api.openai.com",
+		DataCategories: []string{
+			"EGRESS_DATA_CATEGORY_CURRENT_MESSAGE",
+			"EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY",
+			"EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL",
+			"EGRESS_DATA_CATEGORY_SKILL_CONTENT",
+		},
+		SkillSnapshotFingerprint: skillFingerprint,
+		ConsentGrantedAt:         repository.FormatTimestamp(time.Now().UTC()),
+	}
+}
 
 func newHarness(t *testing.T) *harness {
 	return newHarnessWithDispatch(t, DispatchConfig{})
@@ -69,6 +91,28 @@ func newHarnessWithDispatch(t *testing.T, dispatch DispatchConfig) *harness {
 	}
 	database := openRuntimeTestDB(t)
 	repo := repository.New(database)
+	customServer, err := repo.UpsertImportedMCPServer(context.Background(), repository.ImportedMCPServer{
+		Name: "custom", URL: "http://custom:9000/mcp", Tier: repository.MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetMCPServerEnabled(context.Background(), customServer.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ReplaceMCPServerTools(context.Background(), customServer.ID, []repository.MCPServerTool{
+		{Name: "custom.unrecognized", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
+		{Name: "custom.inspect", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
+		{Name: "custom.replace", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(
+		context.Background(),
+		`UPDATE tools SET enabled = 0 WHERE server_name = 'custom'`,
+	); err != nil {
+		t.Fatal(err)
+	}
 	bus := events.NewBus(8)
 	approvals := approvalsvc.New(repo, bus, "approval-secret")
 	service := NewWithConfig(repo, bus, dispatch, approvals)
@@ -1362,16 +1406,15 @@ type failingApprovalDecisionStream struct {
 	cancel       context.CancelFunc
 	ready        *turingv1.RuntimeUpdate
 	beacon       *turingv1.RuntimeUpdate
-	assigned     chan struct{}
-	assignedOnce sync.Once
 	readySent    bool
 	beaconSent   bool
+	assigned     chan struct{}
+	assignedOnce sync.Once
 }
 
 func (s *failingApprovalDecisionStream) Send(cmd *turingv1.RuntimeCommand) error {
-	if cmd.GetRunAssigned() != nil {
+	if cmd.GetRunAssigned() != nil && s.assigned != nil {
 		s.assignedOnce.Do(func() { close(s.assigned) })
-		return nil
 	}
 	if cmd.GetToolPolicyDecision() != nil {
 		if s.cancel != nil {
@@ -1389,10 +1432,12 @@ func (s *failingApprovalDecisionStream) Recv() (*turingv1.RuntimeUpdate, error) 
 	}
 	if !s.beaconSent {
 		s.beaconSent = true
-		select {
-		case <-s.assigned:
-		case <-s.ctx.Done():
-			return nil, s.ctx.Err()
+		if s.assigned != nil {
+			select {
+			case <-s.assigned:
+			case <-s.ctx.Done():
+				return nil, s.ctx.Err()
+			}
 		}
 		return s.beacon, nil
 	}

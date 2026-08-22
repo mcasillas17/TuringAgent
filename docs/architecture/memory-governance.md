@@ -94,13 +94,14 @@ Memory extraction, indexing, maintenance, and evaluation are local by default
 and introduce no background network traffic. A remote provider selected for a
 run does not gain standing access to the memory store.
 
-Before memory can be sent off-machine, a future egress policy must make the
-destination and exact data classes visible and bind the choice to the
-session/run. Only the minimum selected items may be sent, each with provenance
-and sensitivity filtering. Candidates, full-memory exports, connector data,
-and background consolidation must not be sent to remote providers implicitly.
-An egress record belongs to the run and remains attributable even if routing
-configuration later changes.
+The remote-egress policy makes the destination and conservative maximum data
+classes visible and binds a one-time decision to the exact request and run.
+Memory/profile is a typed category but is not currently applicable or sent.
+When memory egress is implemented, adding that category will force a new
+prepare/confirm cycle, and only selected items with provenance and sensitivity
+filtering may be included. Candidates, full-memory exports, connector data, and
+background consolidation must not be sent implicitly. The egress record belongs
+to the run and remains attributable even if routing configuration later changes.
 
 ## Retention
 
@@ -182,6 +183,14 @@ Product language must therefore distinguish:
 
 Encryption-at-rest and backup lifecycle work require separate designs; this
 contract does not imply that either has shipped.
+
+Whole-database encryption plus destruction of every database-key wrapper and
+encrypted backup is the credible strategy to evaluate for retiring an entire
+database without promising SSD overwrite. A single database key cannot
+selectively erase one session, however: per-session byte withdrawal would need
+separate encrypted storage/key boundaries and its own restore, key-loss, WAL,
+and backup lifecycle design. TUR-004 therefore documents this limit and does
+not add SQLCipher, key management, or an encryption migration.
 
 ## Enforcement and tests
 

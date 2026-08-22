@@ -165,9 +165,9 @@ Do not copy code from an unmerged PR.
 
 - [ ] **Step 3: Select the migration number after the merge**
 
-Current reservation is
-`turing-backend/orchestrator-go/internal/db/schema/0016_run_outcomes.sql`, leaving
-`0014` and `0015` available to the two open roadmap migrations. After the merge:
+The final selected migration is
+`turing-backend/orchestrator-go/internal/db/schema/0017_run_outcomes.sql`, selected
+after the final main merge because main already owned prefix `0016`. After the merge:
 
 1. If the highest merged prefix is below `0016`, keep `0016_run_outcomes.sql`.
 2. If `0016` or a higher prefix already exists, select the first unused prefix
@@ -201,8 +201,8 @@ The merged descriptors must leave these additions intact:
 | `ChatStreamEvent.run_state_changed` | 27 |
 | `TuringEvent.run_state` | 9 |
 | `TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED` | 23 |
-| `AgentJob.expected_state_version` | 17 |
-| `AgentJob.assignment_attempt_id` | 18 |
+| `AgentJob.expected_state_version` | 19; merged egress fields retain 17 and 18 |
+| `AgentJob.assignment_attempt_id` | 20 |
 | `RuntimeRunCompleted.expected_state_version` | 6 |
 | `RuntimeRunFailed.failure_origin` | 5 |
 | `RuntimeRunFailed.automatic_retry_class` | 6 |
@@ -211,10 +211,10 @@ The merged descriptors must leave these additions intact:
 | `RuntimeApprovalResumeReady` fields | 1 through 4 as approved |
 | `RuntimeUpdate.approval_resume_ready` | 9; value 8 stays worker capabilities |
 | `RuntimeApprovalResumeAccepted` fields | 1 through 4 as approved |
-| `RuntimeCommand.approval_resume_accepted` | 7 |
+| `RuntimeCommand.approval_resume_accepted` | 8; merged MCP registry change retains 7 |
 | `RuntimeRunCancelled.state_version` | 3 |
 | `RuntimeApprovalUpdated.state_version` | 4 |
-| `ToolPolicyDecision.run_state_version` | 7 |
+| `ToolPolicyDecision.run_state_version` | 8; merged provenance token retains 7 |
 
 If a merged contract occupies any required number other than event value 22,
 stop and return to the design gate. Do not renumber an existing field.
@@ -297,7 +297,8 @@ In `runtime.proto`:
 
 In `tools.proto`:
 
-- add `ToolPolicyDecision.run_state_version = 7`; retain fields 1 through 6.
+- add `ToolPolicyDecision.run_state_version = 8`; retain merged fields 1 through
+  7, including the provenance token.
 
 - [ ] **Step 3: Generate with the pinned toolchain**
 
@@ -557,7 +558,7 @@ git commit -m "feat: normalize durable run outcomes" \
 - Create: `turing-backend/orchestrator-go/internal/db/run_outcomes_migration.go`
 - Create: `turing-backend/orchestrator-go/internal/db/run_outcomes_migration_test.go`
 - Create using Task 0’s selected number:
-  `turing-backend/orchestrator-go/internal/db/schema/0016_run_outcomes.sql`
+  `turing-backend/orchestrator-go/internal/db/schema/0017_run_outcomes.sql`
 - Modify: `turing-backend/orchestrator-go/internal/db/migrations_test.go`
 - Modify: `turing-backend/orchestrator-go/internal/repository/jobs.go`
 - Create: `turing-backend/orchestrator-go/internal/repository/run_outcome_migration_enqueue_test.go`
@@ -566,7 +567,7 @@ git commit -m "feat: normalize durable run outcomes" \
 - [ ] **Step 1: Write and run the embedded-migration RED test first**
 
 Update `TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder` with the
-selected exact migration name (currently `0016_run_outcomes`) and update
+selected exact migration name (`0017_run_outcomes`) and update
 `TestCurrentSchemaVersionUsesLatestEmbeddedMigrationPrefix` from hardcoded
 `0013` to Task 0's selected prefix. Run:
 
@@ -1958,7 +1959,7 @@ execution) — with:
 - cross-session pairing.
 
 For every row, assert `errors.Is(err, runcorrelation.ErrConflict)`, exact error
-text `run/message correlation conflict`, no `0016_run_outcomes.sql` migration
+text `run/message correlation conflict`, no `0017_run_outcomes.sql` migration
 record, no canonical columns or indexes, no temporary backfill table, unchanged
 legacy run/message/job rows, and the same value-free failure after close/reopen.
 

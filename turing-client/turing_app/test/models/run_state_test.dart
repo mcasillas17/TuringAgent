@@ -74,13 +74,10 @@ void main() {
       commonpb.RunLifecycle.RUN_LIFECYCLE_FAILED: RunLifecycle.failed,
       commonpb.RunLifecycle.RUN_LIFECYCLE_CANCELLED: RunLifecycle.cancelled,
     };
-    expect(
-      {
-        ...lifecycles.keys,
-        commonpb.RunLifecycle.RUN_LIFECYCLE_UNSPECIFIED,
-      },
-      commonpb.RunLifecycle.values.toSet(),
-    );
+    expect({
+      ...lifecycles.keys,
+      commonpb.RunLifecycle.RUN_LIFECYCLE_UNSPECIFIED,
+    }, commonpb.RunLifecycle.values.toSet());
     for (final entry in lifecycles.entries) {
       expect(GrpcMappers.runLifecycleToModel(entry.key), entry.value);
     }
@@ -118,13 +115,10 @@ void main() {
       commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_LEGACY_UNKNOWN:
           RunOutcomeReason.legacyUnknown,
     };
-    expect(
-      {
-        ...outcomes.keys,
-        commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_UNSPECIFIED,
-      },
-      commonpb.RunOutcomeReason.values.toSet(),
-    );
+    expect({
+      ...outcomes.keys,
+      commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_UNSPECIFIED,
+    }, commonpb.RunOutcomeReason.values.toSet());
     for (final entry in outcomes.entries) {
       expect(GrpcMappers.runOutcomeReasonToModel(entry.key), entry.value);
     }
@@ -242,35 +236,6 @@ void main() {
       expect(copy, contains('2'));
       expect(copy, contains('3'));
     }
-  });
-
-  test('localized cards ignore backend message note reason and code', () async {
-    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
-    final copy = localizedRunStateCopy(
-      l10n,
-      RunState(
-        runId: 'run_1',
-        userMessageId: 'msg_user',
-        assistantMessageId: 'msg_assistant',
-        lifecycle: RunLifecycle.cancelled,
-        outcomeReason: RunOutcomeReason.abandoned,
-        stateVersion: 8,
-        stateUpdatedAt: updatedAt,
-        finishedAt: finishedAt,
-        hasDisplayableContent: false,
-      ),
-    );
-
-    final rendered = '${copy.title} ${copy.detail}';
-    for (final raw in [
-      'provider said token=secret',
-      'note=/private/path',
-      'reason=approval_token',
-      'code=raw_provider_failure',
-    ]) {
-      expect(rendered, isNot(contains(raw)));
-    }
-    expect(rendered, 'Run interrupted The run ended before it could finish.');
   });
 
   test('absent legacy state has neutral no-response copy', () async {

@@ -111,6 +111,17 @@ String formatWhen(DateTime? when) {
   return '$date $time';
 }
 
+String describeOccurrenceFailure(String code) {
+  switch (code) {
+    case 'remote_egress_requires_interactive_consent':
+      return 'Remote runs require interactive consent.';
+    case 'remote_egress_configuration_invalid':
+      return 'The remote destination configuration is invalid.';
+    default:
+      return 'This scheduled attempt was blocked.';
+  }
+}
+
 /// Work that runs without you starting it.
 class AutomationsPage extends StatefulWidget {
   const AutomationsPage({
@@ -417,7 +428,7 @@ class _AutomationCard extends StatelessWidget {
               color: palette.textMuted,
             ),
           ),
-          if (automation.lastRunFailed && automation.lastRunError.isNotEmpty)
+          if (automation.lastRunFailed)
             Padding(
               padding: const EdgeInsets.only(top: 12),
               child: Container(
@@ -437,7 +448,7 @@ class _AutomationCard extends StatelessWidget {
                     const SizedBox(width: 9),
                     Expanded(
                       child: Text(
-                        'The last run failed. ${automation.lastRunError}',
+                        'The last run failed.',
                         style: TextStyle(
                           fontSize: 12.5,
                           height: 1.5,
@@ -446,6 +457,19 @@ class _AutomationCard extends StatelessWidget {
                       ),
                     ),
                   ],
+                ),
+              ),
+            ),
+          if (automation.lastOccurrenceFailureCode.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(
+                'Scheduled attempt blocked ${formatWhen(automation.lastOccurrenceFailedAt)}. '
+                '${describeOccurrenceFailure(automation.lastOccurrenceFailureCode)}',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  height: 1.5,
+                  color: AppColors.danger,
                 ),
               ),
             ),

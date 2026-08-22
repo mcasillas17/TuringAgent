@@ -6,6 +6,7 @@ import 'package:turing_flutter_app/models/agent_descriptor.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
+import 'package:turing_flutter_app/models/session_deletion.dart';
 import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
@@ -14,8 +15,11 @@ import 'package:turing_flutter_app/networking/event_source.dart';
 import 'package:turing_flutter_app/ui/shell/responsive_shell.dart';
 
 import '../support/no_audit_api.dart';
+import '../support/no_mcp_registry_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
+import '../support/no_remote_egress_api.dart';
+import '../support/no_session_lifecycle_api.dart';
 import '../support/no_automations_api.dart';
 import '../support/no_skills_api.dart';
 import '../support/no_telemetry_api.dart';
@@ -102,10 +106,11 @@ void main() {
     await tester.tap(find.byTooltip('Delete chat'));
     await tester.pumpAndSettle();
 
-    // The dialog must say it is permanent, and must not overclaim: sandbox
-    // files outlive the conversation.
+    // The dialog distinguishes files the session owns from legacy root files it
+    // cannot safely claim or remove.
     expect(find.textContaining('cannot be undone'), findsOneWidget);
-    expect(find.textContaining('sandbox are not removed'), findsOneWidget);
+    expect(find.textContaining('Session-owned sandbox files'), findsOneWidget);
+    expect(find.textContaining('legacy sandbox files'), findsOneWidget);
 
     await tester.tap(find.widgetWithText(TextButton, 'Delete'));
     await tester.pumpAndSettle();
@@ -146,6 +151,109 @@ void main() {
     expect(find.text('Existing chat'), findsOneWidget);
   });
 
+  testWidgets(
+    'an in-progress deletion receipt keeps the conversation visible',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final api = _FakeApiClient()
+        ..deletionResult = const SessionDeletionReceipt.inProgress();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResponsiveShell(
+            apiClient: api,
+            eventSourceFactory: () => _FakeEventSource(),
+            authStorage: _FakeAuthStorage(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Existing chat'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Delete chat'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Existing chat'), findsOneWidget);
+      expect(find.textContaining('still being withdrawn'), findsOneWidget);
+    },
+  );
+
+  testWidgets('a durable pending receipt appears after a fresh shell refresh', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final api = _FakeApiClient()
+      ..sessions = []
+      ..pendingDeletionReceipts = const [
+        SessionDeletionReceipt(
+          sessionId: 'sess_pending',
+          state: SessionDeletionState.failedExternal,
+          retryable: true,
+          errorCode: 'artifact_cleanup_failed',
+        ),
+      ];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ResponsiveShell(
+          apiClient: api,
+          eventSourceFactory: () => _FakeEventSource(),
+          authStorage: _FakeAuthStorage(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Deletion pending'), findsOneWidget);
+  });
+
+  testWidgets('a terminal session event removes the active conversation', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final source = _FakeEventSource();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ResponsiveShell(
+          apiClient: _FakeApiClient(),
+          eventSourceFactory: () => source,
+          authStorage: _FakeAuthStorage(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Existing chat'));
+    await tester.pumpAndSettle();
+
+    source._events.add(
+      TuringEvent(
+        eventId: 'evt_deleted',
+        sessionId: 'sess_existing',
+        traceId: 'trace_deleted',
+        sequence: 1,
+        type: 'session.deleted',
+        createdAt: DateTime.utc(2026, 8, 19),
+        payload: const {},
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Existing chat'), findsNothing);
+    expect(find.text('Ask Turing anything'), findsOneWidget);
+  });
+
   testWidgets('settings opens from the sidebar', (tester) async {
     tester.view.physicalSize = const Size(1200, 800);
     tester.view.devicePixelRatio = 1;
@@ -175,10 +283,13 @@ void main() {
 class _FakeApiClient
     with
         NoAuditApi,
+        NoMcpRegistryApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
         NoAutomationsApi,
+        NoRemoteEgressApi,
+        NoSessionLifecycleApi,
         NoTelemetryApi
     implements TuringApi {
   @override
@@ -211,10 +322,22 @@ class _FakeApiClient
 
   final List<String> deletedSessionIds = [];
 
+  SessionDeletionReceipt deletionResult =
+      const SessionDeletionReceipt.completed();
+
   @override
-  Future<void> deleteSession({required String sessionId}) async {
+  Future<SessionDeletionReceipt> deleteSession({
+    required String sessionId,
+  }) async {
     deletedSessionIds.add(sessionId);
+    return deletionResult;
   }
+
+  List<SessionDeletionReceipt> pendingDeletionReceipts = const [];
+
+  @override
+  Future<List<SessionDeletionReceipt>> listSessionDeletionReceipts() async =>
+      pendingDeletionReceipts;
 
   @override
   Future<Session> getSession({required String sessionId}) async {

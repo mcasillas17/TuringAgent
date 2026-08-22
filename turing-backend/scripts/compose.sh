@@ -60,6 +60,25 @@ validate_skills_bind_source() {
   fi
 }
 
+validate_mcp_bind_source() {
+  local mcp_path="$PWD/mcp"
+  local config_path="$mcp_path/mcp.json"
+  if [[ -L "$mcp_path" || ! -d "$mcp_path" ]]; then
+    printf 'Compose launch failed: mcp must be a real directory, not a symlink.\n' >&2
+    return 1
+  fi
+  if [[ ! -O "$mcp_path" || ! -r "$mcp_path" || ! -x "$mcp_path" || "$(path_mode "$mcp_path")" != "700" ]]; then
+    printf 'Compose launch failed: mcp must be owned, readable, traversable, and mode 0700.\n' >&2
+    return 1
+  fi
+  if [[ -e "$config_path" || -L "$config_path" ]]; then
+    if [[ -L "$config_path" || ! -f "$config_path" || ! -O "$config_path" || "$(path_mode "$config_path")" != "600" ]]; then
+      printf 'Compose launch failed: mcp/mcp.json must be an owned regular file with mode 0600.\n' >&2
+      return 1
+    fi
+  fi
+}
+
 path_mode() {
   local path="$1"
   local mode
@@ -165,6 +184,7 @@ if [[ -f .env ]]; then
   if [[ "${1:-}" != "down" ]]; then
     validate_sandbox_bind_source
     validate_skills_bind_source
+    validate_mcp_bind_source
     validate_data_bind_source
   fi
   exec env HOST_UID="$current_uid" HOST_GID="$current_gid" \

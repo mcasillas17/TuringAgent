@@ -7,9 +7,12 @@ import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 
 import '../support/no_audit_api.dart';
+import '../support/no_mcp_registry_api.dart';
 import '../support/no_skills_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
+import '../support/no_remote_egress_api.dart';
+import '../support/no_session_lifecycle_api.dart';
 import '../support/no_telemetry_api.dart';
 
 void main() {
@@ -200,7 +203,9 @@ void main() {
 
     // The whole point of the last-run status: an operator asks "what happened
     // while I was asleep" and the answer is on the card.
-    testWidgets('a failed last run says so, with the reason', (tester) async {
+    testWidgets('a failed last run says so without projecting a raw reason', (
+      tester,
+    ) async {
       final api = _FakeApi()
         ..automations.add(
           _automation(
@@ -212,9 +217,67 @@ void main() {
         );
       await _pumpAutomations(tester, api);
 
-      expect(find.textContaining('The last run failed'), findsOneWidget);
-      expect(find.textContaining('files.update'), findsOneWidget);
+      expect(find.text('The last run failed.'), findsOneWidget);
+      expect(find.textContaining('files.update'), findsNothing);
     });
+
+    testWidgets('a failed last run still says so without a raw reason', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..automations.add(_automation(lastRunStatus: 'failed'));
+      await _pumpAutomations(tester, api);
+
+      expect(find.text('The last run failed.'), findsOneWidget);
+    });
+
+    testWidgets('an unknown scheduled failure code renders neutral copy', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..automations.add(
+          _automation(
+            lastOccurrenceFailureCode: 'some_future_secret_code',
+            lastOccurrenceFailedAt: DateTime(2026, 8, 18, 7, 45),
+          ),
+        );
+      await _pumpAutomations(tester, api);
+
+      expect(
+        find.textContaining('This scheduled attempt was blocked.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('some_future_secret_code'), findsNothing);
+      expect(find.textContaining('some future secret code'), findsNothing);
+    });
+
+    for (final (code, copy) in [
+      (
+        'remote_egress_requires_interactive_consent',
+        'Remote runs require interactive consent.',
+      ),
+      (
+        'remote_egress_configuration_invalid',
+        'The remote destination configuration is invalid.',
+      ),
+    ]) {
+      testWidgets('$code renders its specific safe copy', (tester) async {
+        final api = _FakeApi()
+          ..automations.add(
+            _automation(
+              lastOccurrenceFailureCode: code,
+              lastOccurrenceFailedAt: DateTime(2026, 8, 18, 7, 45),
+            ),
+          );
+        await _pumpAutomations(tester, api);
+
+        expect(find.textContaining(copy), findsOneWidget);
+        expect(
+          find.textContaining('This scheduled attempt was blocked.'),
+          findsNothing,
+        );
+      });
+    }
 
     testWidgets('the conversation it produced is one tap away', (tester) async {
       final api = _FakeApi()..automations.add(_automation(sessionId: 'sess_7'));
@@ -660,6 +723,8 @@ Automation _automation({
   String sessionId = '',
   String lastRunStatus = '',
   String lastRunError = '',
+  String lastOccurrenceFailureCode = '',
+  DateTime? lastOccurrenceFailedAt,
   List<AutomationTool> allowedTools = const [],
 }) {
   return Automation(
@@ -674,6 +739,8 @@ Automation _automation({
     sessionId: sessionId,
     lastRunStatus: lastRunStatus,
     lastRunError: lastRunError,
+    lastOccurrenceFailureCode: lastOccurrenceFailureCode,
+    lastOccurrenceFailedAt: lastOccurrenceFailedAt,
   );
 }
 
@@ -724,9 +791,12 @@ Future<void> _pumpAutomations(
 class _FakeApi
     with
         NoAuditApi,
+        NoMcpRegistryApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
+        NoRemoteEgressApi,
+        NoSessionLifecycleApi,
         NoTelemetryApi
     implements TuringApi {
   final List<Automation> automations = [];

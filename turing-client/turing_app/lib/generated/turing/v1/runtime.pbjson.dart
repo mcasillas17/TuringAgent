@@ -159,15 +159,24 @@ const AgentJob$json = {
       '10': 'minimumWorkerMaxConcurrentRuns'
     },
     {
-      '1': 'expected_state_version',
+      '1': 'egress_decision',
       '3': 17,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.RunEgressDecision',
+      '10': 'egressDecision'
+    },
+    {'1': 'selected_tools', '3': 18, '4': 3, '5': 9, '10': 'selectedTools'},
+    {
+      '1': 'expected_state_version',
+      '3': 19,
       '4': 1,
       '5': 3,
       '10': 'expectedStateVersion'
     },
     {
       '1': 'assignment_attempt_id',
-      '3': 18,
+      '3': 20,
       '4': 1,
       '5': 9,
       '10': 'assignmentAttemptId'
@@ -189,9 +198,11 @@ final $typed_data.Uint8List agentJobDescriptor = $convert.base64Decode(
     'VudBgOIAEoCzIeLnR1cmluZy52MS5FeHRlcm5hbEFnZW50VGFyZ2V0Ug1leHRlcm5hbEFnZW50'
     'EjYKF3JlcXVpcmVkX2NvbnRleHRfdG9rZW5zGA8gASgFUhVyZXF1aXJlZENvbnRleHRUb2tlbn'
     'MSSgoibWluaW11bV93b3JrZXJfbWF4X2NvbmN1cnJlbnRfcnVucxgQIAEoBVIebWluaW11bVdv'
-    'cmtlck1heENvbmN1cnJlbnRSdW5zEjQKFmV4cGVjdGVkX3N0YXRlX3ZlcnNpb24YESABKANSFG'
-    'V4cGVjdGVkU3RhdGVWZXJzaW9uEjIKFWFzc2lnbm1lbnRfYXR0ZW1wdF9pZBgSIAEoCVITYXNz'
-    'aWdubWVudEF0dGVtcHRJZA==');
+    'cmtlck1heENvbmN1cnJlbnRSdW5zEkUKD2VncmVzc19kZWNpc2lvbhgRIAEoCzIcLnR1cmluZy'
+    '52MS5SdW5FZ3Jlc3NEZWNpc2lvblIOZWdyZXNzRGVjaXNpb24SJQoOc2VsZWN0ZWRfdG9vbHMY'
+    'EiADKAlSDXNlbGVjdGVkVG9vbHMSNAoWZXhwZWN0ZWRfc3RhdGVfdmVyc2lvbhgTIAEoA1IUZX'
+    'hwZWN0ZWRTdGF0ZVZlcnNpb24SMgoVYXNzaWdubWVudF9hdHRlbXB0X2lkGBQgASgJUhNhc3Np'
+    'Z25tZW50QXR0ZW1wdElk');
 
 @$core.Deprecated('Use externalAgentTargetDescriptor instead')
 const ExternalAgentTarget$json = {
@@ -200,6 +211,7 @@ const ExternalAgentTarget$json = {
     {'1': 'display_name', '3': 1, '4': 1, '5': 9, '10': 'displayName'},
     {'1': 'base_url', '3': 2, '4': 1, '5': 9, '10': 'baseUrl'},
     {'1': 'credential_ref', '3': 3, '4': 1, '5': 9, '10': 'credentialRef'},
+    {'1': 'agent_id', '3': 4, '4': 1, '5': 9, '10': 'agentId'},
   ],
 };
 
@@ -207,7 +219,7 @@ const ExternalAgentTarget$json = {
 final $typed_data.Uint8List externalAgentTargetDescriptor = $convert.base64Decode(
     'ChNFeHRlcm5hbEFnZW50VGFyZ2V0EiEKDGRpc3BsYXlfbmFtZRgBIAEoCVILZGlzcGxheU5hbW'
     'USGQoIYmFzZV91cmwYAiABKAlSB2Jhc2VVcmwSJQoOY3JlZGVudGlhbF9yZWYYAyABKAlSDWNy'
-    'ZWRlbnRpYWxSZWY=');
+    'ZWRlbnRpYWxSZWYSGQoIYWdlbnRfaWQYBCABKAlSB2FnZW50SWQ=');
 
 @$core.Deprecated('Use skillSnapshotDescriptor instead')
 const SkillSnapshot$json = {
@@ -330,6 +342,13 @@ const WorkerCapabilities$json = {
       '5': 9,
       '10': 'externalAgentCredentialRefs'
     },
+    {
+      '1': 'remote_egress_decision_version',
+      '3': 7,
+      '4': 1,
+      '5': 5,
+      '10': 'remoteEgressDecisionVersion'
+    },
   ],
 };
 
@@ -341,7 +360,8 @@ final $typed_data.Uint8List workerCapabilitiesDescriptor = $convert.base64Decode
     '9vbHMSLgoTbWF4X2NvbmN1cnJlbnRfcnVucxgEIAEoBVIRbWF4Q29uY3VycmVudFJ1bnMSOAoY'
     'c3VwcG9ydHNfZXh0ZXJuYWxfYWdlbnRzGAUgASgIUhZzdXBwb3J0c0V4dGVybmFsQWdlbnRzEk'
     'MKHmV4dGVybmFsX2FnZW50X2NyZWRlbnRpYWxfcmVmcxgGIAMoCVIbZXh0ZXJuYWxBZ2VudENy'
-    'ZWRlbnRpYWxSZWZz');
+    'ZWRlbnRpYWxSZWZzEkMKHnJlbW90ZV9lZ3Jlc3NfZGVjaXNpb25fdmVyc2lvbhgHIAEoBVIbcm'
+    'Vtb3RlRWdyZXNzRGVjaXNpb25WZXJzaW9u');
 
 @$core.Deprecated('Use runtimeWorkerReadyDescriptor instead')
 const RuntimeWorkerReady$json = {
@@ -804,6 +824,20 @@ final $typed_data.Uint8List runtimeShutdownRequestedDescriptor =
     $convert.base64Decode(
         'ChhSdW50aW1lU2h1dGRvd25SZXF1ZXN0ZWQSFgoGcmVhc29uGAEgASgJUgZyZWFzb24=');
 
+@$core.Deprecated('Use runtimeMcpRegistryChangedDescriptor instead')
+const RuntimeMcpRegistryChanged$json = {
+  '1': 'RuntimeMcpRegistryChanged',
+  '2': [
+    {'1': 'registration_id', '3': 1, '4': 1, '5': 9, '10': 'registrationId'},
+  ],
+};
+
+/// Descriptor for `RuntimeMcpRegistryChanged`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List runtimeMcpRegistryChangedDescriptor =
+    $convert.base64Decode(
+        'ChlSdW50aW1lTWNwUmVnaXN0cnlDaGFuZ2VkEicKD3JlZ2lzdHJhdGlvbl9pZBgBIAEoCVIOcm'
+        'VnaXN0cmF0aW9uSWQ=');
+
 @$core.Deprecated('Use runtimeCommandDescriptor instead')
 const RuntimeCommand$json = {
   '1': 'RuntimeCommand',
@@ -863,8 +897,17 @@ const RuntimeCommand$json = {
       '10': 'toolPolicyDecision'
     },
     {
-      '1': 'approval_resume_accepted',
+      '1': 'mcp_registry_changed',
       '3': 7,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.RuntimeMcpRegistryChanged',
+      '9': 0,
+      '10': 'mcpRegistryChanged'
+    },
+    {
+      '1': 'approval_resume_accepted',
+      '3': 8,
       '4': 1,
       '5': 11,
       '6': '.turing.v1.RuntimeApprovalResumeAccepted',
@@ -887,6 +930,8 @@ final $typed_data.Uint8List runtimeCommandDescriptor = $convert.base64Decode(
     'BkYXRlZEgAUg9hcHByb3ZhbFVwZGF0ZWQSVAoSc2h1dGRvd25fcmVxdWVzdGVkGAUgASgLMiMu'
     'dHVyaW5nLnYxLlJ1bnRpbWVTaHV0ZG93blJlcXVlc3RlZEgAUhFzaHV0ZG93blJlcXVlc3RlZB'
     'JRChR0b29sX3BvbGljeV9kZWNpc2lvbhgGIAEoCzIdLnR1cmluZy52MS5Ub29sUG9saWN5RGVj'
-    'aXNpb25IAFISdG9vbFBvbGljeURlY2lzaW9uEmQKGGFwcHJvdmFsX3Jlc3VtZV9hY2NlcHRlZB'
-    'gHIAEoCzIoLnR1cmluZy52MS5SdW50aW1lQXBwcm92YWxSZXN1bWVBY2NlcHRlZEgAUhZhcHBy'
-    'b3ZhbFJlc3VtZUFjY2VwdGVkQgkKB2NvbW1hbmQ=');
+    'aXNpb25IAFISdG9vbFBvbGljeURlY2lzaW9uElgKFG1jcF9yZWdpc3RyeV9jaGFuZ2VkGAcgAS'
+    'gLMiQudHVyaW5nLnYxLlJ1bnRpbWVNY3BSZWdpc3RyeUNoYW5nZWRIAFISbWNwUmVnaXN0cnlD'
+    'aGFuZ2VkEmQKGGFwcHJvdmFsX3Jlc3VtZV9hY2NlcHRlZBgIIAEoCzIoLnR1cmluZy52MS5SdW'
+    '50aW1lQXBwcm92YWxSZXN1bWVBY2NlcHRlZEgAUhZhcHByb3ZhbFJlc3VtZUFjY2VwdGVkQgkK'
+    'B2NvbW1hbmQ=');

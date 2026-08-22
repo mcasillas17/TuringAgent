@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 )
 
 const (
@@ -40,7 +42,7 @@ func NewOllama(baseURL string, client *http.Client) *Ollama {
 	}
 	return &Ollama{
 		baseURL:             strings.TrimRight(baseURL, "/"),
-		client:              client,
+		client:              egress.NoRedirectClient(client),
 		contextWindowTokens: DefaultContextWindowTokens,
 		maxOutputTokens:     DefaultMaxOutputTokens,
 	}
@@ -131,7 +133,7 @@ func (p *Ollama) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 	httpReq.Header.Set("content-type", "application/json")
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, err
+		return nil, egress.RedactRedirectError(err)
 	}
 	out := make(chan StreamEvent)
 	go func() {

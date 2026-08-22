@@ -98,6 +98,11 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 				fire.Name, fire.AutomationID, fire.SkippedReason)
 			continue
 		}
+		if fire.Failed {
+			log.Printf("automation %s (%s) failed an occurrence: %s",
+				fire.Name, fire.AutomationID, fire.FailureCode)
+			continue
+		}
 		if s.bus != nil {
 			if fire.SessionUpdatedEvent.EventID != "" {
 				s.bus.Publish(busEvent(fire.SessionUpdatedEvent))

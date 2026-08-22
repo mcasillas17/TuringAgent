@@ -56,12 +56,30 @@ func (r *Repository) ReplayEvents(ctx context.Context, sessionID string, afterSe
 	if limit <= 0 || limit > 500 {
 		limit = 500
 	}
-
-	var latest int64
-	if err := r.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence), 0) FROM events WHERE session_id = ?`, sessionID).Scan(&latest); err != nil {
+	if _, err := r.GetSession(ctx, sessionID); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, 0, ErrSessionNotFound
+		}
 		return nil, 0, err
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id, session_id, run_id, trace_id, sequence, type, payload_json, created_at FROM events WHERE session_id = ? AND sequence > ? ORDER BY sequence LIMIT ?`, sessionID, afterSequence, limit)
+
+	var latest int64
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT COALESCE(MAX(e.sequence), 0)
+		FROM events e
+		JOIN sessions s ON s.id = e.session_id AND s.deletion_state = 'active'
+		WHERE e.session_id = ?
+	`, sessionID).Scan(&latest); err != nil {
+		return nil, 0, err
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT e.id, e.session_id, e.run_id, e.trace_id, e.sequence, e.type, e.payload_json, e.created_at
+		FROM events e
+		JOIN sessions s ON s.id = e.session_id AND s.deletion_state = 'active'
+		WHERE e.session_id = ? AND e.sequence > ?
+		ORDER BY e.sequence
+		LIMIT ?
+	`, sessionID, afterSequence, limit)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -85,6 +103,7 @@ func (r *Repository) ListLatestSessionUpdatedEvents(ctx context.Context, limit i
 		WITH page AS (
 			SELECT id, updated_at
 			FROM sessions
+			WHERE deletion_state = 'active'
 			ORDER BY ` + sqliteTimestampNanos("updated_at") + ` DESC, id DESC
 			LIMIT ?
 		),

@@ -535,3 +535,22 @@ func (*approvalStateClient) ConsumeApproval(
 ) (*turingv1.ApprovalResponse, error) {
 	panic("unexpected call")
 }
+
+// The runtime never finalizes sandbox artifacts or checks session capabilities;
+// mcp-files does both, over its own internal channel. A call arriving here
+// would mean the runtime had grown a responsibility it must not have.
+func (*approvalStateClient) FinalizeSandboxArtifact(
+	context.Context,
+	*turingv1.FinalizeSandboxArtifactRequest,
+	...grpc.CallOption,
+) (*turingv1.FinalizeSandboxArtifactResponse, error) {
+	panic("unexpected call")
+}
+
+func (*approvalStateClient) CheckSessionCapability(
+	context.Context,
+	*turingv1.CheckSessionCapabilityRequest,
+	...grpc.CallOption,
+) (*turingv1.SessionCapabilityState, error) {
+	panic("unexpected call")
+}

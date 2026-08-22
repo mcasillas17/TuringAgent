@@ -118,6 +118,76 @@ func (ModelProvider) EnumDescriptor() ([]byte, []int) {
 	return file_turing_v1_common_proto_rawDescGZIP(), []int{1}
 }
 
+type EgressDataCategory int32
+
+const (
+	EgressDataCategory_EGRESS_DATA_CATEGORY_UNSPECIFIED          EgressDataCategory = 0
+	EgressDataCategory_EGRESS_DATA_CATEGORY_CURRENT_MESSAGE      EgressDataCategory = 1
+	EgressDataCategory_EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY EgressDataCategory = 2
+	EgressDataCategory_EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL EgressDataCategory = 3
+	EgressDataCategory_EGRESS_DATA_CATEGORY_MEMORY_PROFILE       EgressDataCategory = 4
+	EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT        EgressDataCategory = 5
+	EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_SCHEMAS         EgressDataCategory = 6
+	EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS       EgressDataCategory = 7
+	EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_RESULTS         EgressDataCategory = 8
+	EgressDataCategory_EGRESS_DATA_CATEGORY_ATTACHMENTS          EgressDataCategory = 9
+)
+
+// Enum value maps for EgressDataCategory.
+var (
+	EgressDataCategory_name = map[int32]string{
+		0: "EGRESS_DATA_CATEGORY_UNSPECIFIED",
+		1: "EGRESS_DATA_CATEGORY_CURRENT_MESSAGE",
+		2: "EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY",
+		3: "EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL",
+		4: "EGRESS_DATA_CATEGORY_MEMORY_PROFILE",
+		5: "EGRESS_DATA_CATEGORY_SKILL_CONTENT",
+		6: "EGRESS_DATA_CATEGORY_TOOL_SCHEMAS",
+		7: "EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS",
+		8: "EGRESS_DATA_CATEGORY_TOOL_RESULTS",
+		9: "EGRESS_DATA_CATEGORY_ATTACHMENTS",
+	}
+	EgressDataCategory_value = map[string]int32{
+		"EGRESS_DATA_CATEGORY_UNSPECIFIED":          0,
+		"EGRESS_DATA_CATEGORY_CURRENT_MESSAGE":      1,
+		"EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY": 2,
+		"EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL": 3,
+		"EGRESS_DATA_CATEGORY_MEMORY_PROFILE":       4,
+		"EGRESS_DATA_CATEGORY_SKILL_CONTENT":        5,
+		"EGRESS_DATA_CATEGORY_TOOL_SCHEMAS":         6,
+		"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS":       7,
+		"EGRESS_DATA_CATEGORY_TOOL_RESULTS":         8,
+		"EGRESS_DATA_CATEGORY_ATTACHMENTS":          9,
+	}
+)
+
+func (x EgressDataCategory) Enum() *EgressDataCategory {
+	p := new(EgressDataCategory)
+	*p = x
+	return p
+}
+
+func (x EgressDataCategory) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (EgressDataCategory) Descriptor() protoreflect.EnumDescriptor {
+	return file_turing_v1_common_proto_enumTypes[2].Descriptor()
+}
+
+func (EgressDataCategory) Type() protoreflect.EnumType {
+	return &file_turing_v1_common_proto_enumTypes[2]
+}
+
+func (x EgressDataCategory) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use EgressDataCategory.Descriptor instead.
+func (EgressDataCategory) EnumDescriptor() ([]byte, []int) {
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{2}
+}
+
 type RoutingRequirementKind int32
 
 const (
@@ -166,11 +236,11 @@ func (x RoutingRequirementKind) String() string {
 }
 
 func (RoutingRequirementKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_turing_v1_common_proto_enumTypes[2].Descriptor()
+	return file_turing_v1_common_proto_enumTypes[3].Descriptor()
 }
 
 func (RoutingRequirementKind) Type() protoreflect.EnumType {
-	return &file_turing_v1_common_proto_enumTypes[2]
+	return &file_turing_v1_common_proto_enumTypes[3]
 }
 
 func (x RoutingRequirementKind) Number() protoreflect.EnumNumber {
@@ -179,7 +249,7 @@ func (x RoutingRequirementKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RoutingRequirementKind.Descriptor instead.
 func (RoutingRequirementKind) EnumDescriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{2}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{3}
 }
 
 type MessageRole int32
@@ -221,11 +291,11 @@ func (x MessageRole) String() string {
 }
 
 func (MessageRole) Descriptor() protoreflect.EnumDescriptor {
-	return file_turing_v1_common_proto_enumTypes[3].Descriptor()
+	return file_turing_v1_common_proto_enumTypes[4].Descriptor()
 }
 
 func (MessageRole) Type() protoreflect.EnumType {
-	return &file_turing_v1_common_proto_enumTypes[3]
+	return &file_turing_v1_common_proto_enumTypes[4]
 }
 
 func (x MessageRole) Number() protoreflect.EnumNumber {
@@ -234,7 +304,7 @@ func (x MessageRole) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use MessageRole.Descriptor instead.
 func (MessageRole) EnumDescriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{3}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{4}
 }
 
 type ToolPolicy int32
@@ -273,11 +343,11 @@ func (x ToolPolicy) String() string {
 }
 
 func (ToolPolicy) Descriptor() protoreflect.EnumDescriptor {
-	return file_turing_v1_common_proto_enumTypes[4].Descriptor()
+	return file_turing_v1_common_proto_enumTypes[5].Descriptor()
 }
 
 func (ToolPolicy) Type() protoreflect.EnumType {
-	return &file_turing_v1_common_proto_enumTypes[4]
+	return &file_turing_v1_common_proto_enumTypes[5]
 }
 
 func (x ToolPolicy) Number() protoreflect.EnumNumber {
@@ -286,7 +356,7 @@ func (x ToolPolicy) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ToolPolicy.Descriptor instead.
 func (ToolPolicy) EnumDescriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{4}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{5}
 }
 
 // Legacy run status. Superseded for durable public outcome snapshots by
@@ -338,11 +408,11 @@ func (x RunStatus) String() string {
 }
 
 func (RunStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_turing_v1_common_proto_enumTypes[5].Descriptor()
+	return file_turing_v1_common_proto_enumTypes[6].Descriptor()
 }
 
 func (RunStatus) Type() protoreflect.EnumType {
-	return &file_turing_v1_common_proto_enumTypes[5]
+	return &file_turing_v1_common_proto_enumTypes[6]
 }
 
 func (x RunStatus) Number() protoreflect.EnumNumber {
@@ -351,7 +421,7 @@ func (x RunStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RunStatus.Descriptor instead.
 func (RunStatus) EnumDescriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{5}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{6}
 }
 
 // The authoritative public phase of a run. UNSPECIFIED means the field was
@@ -412,11 +482,11 @@ func (x RunLifecycle) String() string {
 }
 
 func (RunLifecycle) Descriptor() protoreflect.EnumDescriptor {
-	return file_turing_v1_common_proto_enumTypes[6].Descriptor()
+	return file_turing_v1_common_proto_enumTypes[7].Descriptor()
 }
 
 func (RunLifecycle) Type() protoreflect.EnumType {
-	return &file_turing_v1_common_proto_enumTypes[6]
+	return &file_turing_v1_common_proto_enumTypes[7]
 }
 
 func (x RunLifecycle) Number() protoreflect.EnumNumber {
@@ -425,7 +495,7 @@ func (x RunLifecycle) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RunLifecycle.Descriptor instead.
 func (RunLifecycle) EnumDescriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{6}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{7}
 }
 
 // Why a run reached its terminal lifecycle, as a closed vocabulary a client can
@@ -511,11 +581,11 @@ func (x RunOutcomeReason) String() string {
 }
 
 func (RunOutcomeReason) Descriptor() protoreflect.EnumDescriptor {
-	return file_turing_v1_common_proto_enumTypes[7].Descriptor()
+	return file_turing_v1_common_proto_enumTypes[8].Descriptor()
 }
 
 func (RunOutcomeReason) Type() protoreflect.EnumType {
-	return &file_turing_v1_common_proto_enumTypes[7]
+	return &file_turing_v1_common_proto_enumTypes[8]
 }
 
 func (x RunOutcomeReason) Number() protoreflect.EnumNumber {
@@ -524,7 +594,7 @@ func (x RunOutcomeReason) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RunOutcomeReason.Descriptor instead.
 func (RunOutcomeReason) EnumDescriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{7}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{8}
 }
 
 // The durable, self-contained answer to "what happened to this run", carried on
@@ -981,13 +1051,16 @@ func (x *ModelCapability) GetMaxContextTokens() int32 {
 }
 
 type ProviderConfig struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Provider      ModelProvider          `protobuf:"varint,1,opt,name=provider,proto3,enum=turing.v1.ModelProvider" json:"provider,omitempty"`
-	Enabled       bool                   `protobuf:"varint,2,opt,name=enabled,proto3" json:"enabled,omitempty"`
-	DefaultModel  string                 `protobuf:"bytes,3,opt,name=default_model,json=defaultModel,proto3" json:"default_model,omitempty"`
-	Models        []*ModelCapability     `protobuf:"bytes,4,rep,name=models,proto3" json:"models,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Provider     ModelProvider          `protobuf:"varint,1,opt,name=provider,proto3,enum=turing.v1.ModelProvider" json:"provider,omitempty"`
+	Enabled      bool                   `protobuf:"varint,2,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	DefaultModel string                 `protobuf:"bytes,3,opt,name=default_model,json=defaultModel,proto3" json:"default_model,omitempty"`
+	Models       []*ModelCapability     `protobuf:"bytes,4,rep,name=models,proto3" json:"models,omitempty"`
+	// Canonical provider base endpoint. Empty for local providers.
+	RemoteEndpoint        string `protobuf:"bytes,5,opt,name=remote_endpoint,json=remoteEndpoint,proto3" json:"remote_endpoint,omitempty"`
+	RequiresPerRunConsent bool   `protobuf:"varint,6,opt,name=requires_per_run_consent,json=requiresPerRunConsent,proto3" json:"requires_per_run_consent,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *ProviderConfig) Reset() {
@@ -1048,6 +1121,431 @@ func (x *ProviderConfig) GetModels() []*ModelCapability {
 	return nil
 }
 
+func (x *ProviderConfig) GetRemoteEndpoint() string {
+	if x != nil {
+		return x.RemoteEndpoint
+	}
+	return ""
+}
+
+func (x *ProviderConfig) GetRequiresPerRunConsent() bool {
+	if x != nil {
+		return x.RequiresPerRunConsent
+	}
+	return false
+}
+
+type RemoteEgressDisclosure struct {
+	state            protoimpl.MessageState        `protogen:"open.v1"`
+	Challenge        string                        `protobuf:"bytes,1,opt,name=challenge,proto3" json:"challenge,omitempty"`
+	Provider         ModelProvider                 `protobuf:"varint,2,opt,name=provider,proto3,enum=turing.v1.ModelProvider" json:"provider,omitempty"`
+	Model            string                        `protobuf:"bytes,3,opt,name=model,proto3" json:"model,omitempty"`
+	Endpoint         string                        `protobuf:"bytes,4,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
+	EndpointHost     string                        `protobuf:"bytes,5,opt,name=endpoint_host,json=endpointHost,proto3" json:"endpoint_host,omitempty"`
+	ExternalAgentId  string                        `protobuf:"bytes,6,opt,name=external_agent_id,json=externalAgentId,proto3" json:"external_agent_id,omitempty"`
+	DataCategories   []EgressDataCategory          `protobuf:"varint,7,rep,packed,name=data_categories,json=dataCategories,proto3,enum=turing.v1.EgressDataCategory" json:"data_categories,omitempty"`
+	ExpiresAt        *timestamppb.Timestamp        `protobuf:"bytes,8,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	RemoteMcpServers []*RemoteMcpEgressDestination `protobuf:"bytes,9,rep,name=remote_mcp_servers,json=remoteMcpServers,proto3" json:"remote_mcp_servers,omitempty"`
+	SelectedTools    []string                      `protobuf:"bytes,10,rep,name=selected_tools,json=selectedTools,proto3" json:"selected_tools,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *RemoteEgressDisclosure) Reset() {
+	*x = RemoteEgressDisclosure{}
+	mi := &file_turing_v1_common_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoteEgressDisclosure) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoteEgressDisclosure) ProtoMessage() {}
+
+func (x *RemoteEgressDisclosure) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_common_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoteEgressDisclosure.ProtoReflect.Descriptor instead.
+func (*RemoteEgressDisclosure) Descriptor() ([]byte, []int) {
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *RemoteEgressDisclosure) GetChallenge() string {
+	if x != nil {
+		return x.Challenge
+	}
+	return ""
+}
+
+func (x *RemoteEgressDisclosure) GetProvider() ModelProvider {
+	if x != nil {
+		return x.Provider
+	}
+	return ModelProvider_MODEL_PROVIDER_UNSPECIFIED
+}
+
+func (x *RemoteEgressDisclosure) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *RemoteEgressDisclosure) GetEndpoint() string {
+	if x != nil {
+		return x.Endpoint
+	}
+	return ""
+}
+
+func (x *RemoteEgressDisclosure) GetEndpointHost() string {
+	if x != nil {
+		return x.EndpointHost
+	}
+	return ""
+}
+
+func (x *RemoteEgressDisclosure) GetExternalAgentId() string {
+	if x != nil {
+		return x.ExternalAgentId
+	}
+	return ""
+}
+
+func (x *RemoteEgressDisclosure) GetDataCategories() []EgressDataCategory {
+	if x != nil {
+		return x.DataCategories
+	}
+	return nil
+}
+
+func (x *RemoteEgressDisclosure) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *RemoteEgressDisclosure) GetRemoteMcpServers() []*RemoteMcpEgressDestination {
+	if x != nil {
+		return x.RemoteMcpServers
+	}
+	return nil
+}
+
+func (x *RemoteEgressDisclosure) GetSelectedTools() []string {
+	if x != nil {
+		return x.SelectedTools
+	}
+	return nil
+}
+
+type RemoteMcpEgressDestination struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ServerName    string                 `protobuf:"bytes,1,opt,name=server_name,json=serverName,proto3" json:"server_name,omitempty"`
+	Endpoint      string                 `protobuf:"bytes,2,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
+	EndpointHost  string                 `protobuf:"bytes,3,opt,name=endpoint_host,json=endpointHost,proto3" json:"endpoint_host,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoteMcpEgressDestination) Reset() {
+	*x = RemoteMcpEgressDestination{}
+	mi := &file_turing_v1_common_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoteMcpEgressDestination) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoteMcpEgressDestination) ProtoMessage() {}
+
+func (x *RemoteMcpEgressDestination) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_common_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoteMcpEgressDestination.ProtoReflect.Descriptor instead.
+func (*RemoteMcpEgressDestination) Descriptor() ([]byte, []int) {
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *RemoteMcpEgressDestination) GetServerName() string {
+	if x != nil {
+		return x.ServerName
+	}
+	return ""
+}
+
+func (x *RemoteMcpEgressDestination) GetEndpoint() string {
+	if x != nil {
+		return x.Endpoint
+	}
+	return ""
+}
+
+func (x *RemoteMcpEgressDestination) GetEndpointHost() string {
+	if x != nil {
+		return x.EndpointHost
+	}
+	return ""
+}
+
+type RemoteEgressConsent struct {
+	state                      protoimpl.MessageState `protogen:"open.v1"`
+	Challenge                  string                 `protobuf:"bytes,1,opt,name=challenge,proto3" json:"challenge,omitempty"`
+	AcknowledgedDataCategories []EgressDataCategory   `protobuf:"varint,2,rep,packed,name=acknowledged_data_categories,json=acknowledgedDataCategories,proto3,enum=turing.v1.EgressDataCategory" json:"acknowledged_data_categories,omitempty"`
+	Acknowledged               bool                   `protobuf:"varint,3,opt,name=acknowledged,proto3" json:"acknowledged,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
+}
+
+func (x *RemoteEgressConsent) Reset() {
+	*x = RemoteEgressConsent{}
+	mi := &file_turing_v1_common_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoteEgressConsent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoteEgressConsent) ProtoMessage() {}
+
+func (x *RemoteEgressConsent) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_common_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoteEgressConsent.ProtoReflect.Descriptor instead.
+func (*RemoteEgressConsent) Descriptor() ([]byte, []int) {
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *RemoteEgressConsent) GetChallenge() string {
+	if x != nil {
+		return x.Challenge
+	}
+	return ""
+}
+
+func (x *RemoteEgressConsent) GetAcknowledgedDataCategories() []EgressDataCategory {
+	if x != nil {
+		return x.AcknowledgedDataCategories
+	}
+	return nil
+}
+
+func (x *RemoteEgressConsent) GetAcknowledged() bool {
+	if x != nil {
+		return x.Acknowledged
+	}
+	return false
+}
+
+// The orchestrator-owned decision frozen for one remote run. It contains no
+// challenge, nonce, credential value/reference, or request content; one-way
+// digests bind those inputs without disclosing them.
+type RunEgressDecision struct {
+	state                     protoimpl.MessageState        `protogen:"open.v1"`
+	DecisionId                string                        `protobuf:"bytes,1,opt,name=decision_id,json=decisionId,proto3" json:"decision_id,omitempty"`
+	Version                   int32                         `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	Provider                  ModelProvider                 `protobuf:"varint,3,opt,name=provider,proto3,enum=turing.v1.ModelProvider" json:"provider,omitempty"`
+	Model                     string                        `protobuf:"bytes,4,opt,name=model,proto3" json:"model,omitempty"`
+	Endpoint                  string                        `protobuf:"bytes,5,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
+	EndpointHost              string                        `protobuf:"bytes,6,opt,name=endpoint_host,json=endpointHost,proto3" json:"endpoint_host,omitempty"`
+	ExternalAgentId           string                        `protobuf:"bytes,7,opt,name=external_agent_id,json=externalAgentId,proto3" json:"external_agent_id,omitempty"`
+	DataCategories            []EgressDataCategory          `protobuf:"varint,8,rep,packed,name=data_categories,json=dataCategories,proto3,enum=turing.v1.EgressDataCategory" json:"data_categories,omitempty"`
+	ConsentGrantedAt          *timestamppb.Timestamp        `protobuf:"bytes,9,opt,name=consent_granted_at,json=consentGrantedAt,proto3" json:"consent_granted_at,omitempty"`
+	ChallengeFingerprint      string                        `protobuf:"bytes,10,opt,name=challenge_fingerprint,json=challengeFingerprint,proto3" json:"challenge_fingerprint,omitempty"`
+	SelectedTools             []string                      `protobuf:"bytes,11,rep,name=selected_tools,json=selectedTools,proto3" json:"selected_tools,omitempty"`
+	SkillSnapshotFingerprint  string                        `protobuf:"bytes,12,opt,name=skill_snapshot_fingerprint,json=skillSnapshotFingerprint,proto3" json:"skill_snapshot_fingerprint,omitempty"`
+	RecallApplicable          bool                          `protobuf:"varint,13,opt,name=recall_applicable,json=recallApplicable,proto3" json:"recall_applicable,omitempty"`
+	MemoryProfileApplicable   bool                          `protobuf:"varint,14,opt,name=memory_profile_applicable,json=memoryProfileApplicable,proto3" json:"memory_profile_applicable,omitempty"`
+	ExternalCredentialRefHash string                        `protobuf:"bytes,15,opt,name=external_credential_ref_hash,json=externalCredentialRefHash,proto3" json:"external_credential_ref_hash,omitempty"`
+	RequestDigest             string                        `protobuf:"bytes,16,opt,name=request_digest,json=requestDigest,proto3" json:"request_digest,omitempty"`
+	RemoteMcpServers          []*RemoteMcpEgressDestination `protobuf:"bytes,17,rep,name=remote_mcp_servers,json=remoteMcpServers,proto3" json:"remote_mcp_servers,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
+}
+
+func (x *RunEgressDecision) Reset() {
+	*x = RunEgressDecision{}
+	mi := &file_turing_v1_common_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RunEgressDecision) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunEgressDecision) ProtoMessage() {}
+
+func (x *RunEgressDecision) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_common_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunEgressDecision.ProtoReflect.Descriptor instead.
+func (*RunEgressDecision) Descriptor() ([]byte, []int) {
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *RunEgressDecision) GetDecisionId() string {
+	if x != nil {
+		return x.DecisionId
+	}
+	return ""
+}
+
+func (x *RunEgressDecision) GetVersion() int32 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *RunEgressDecision) GetProvider() ModelProvider {
+	if x != nil {
+		return x.Provider
+	}
+	return ModelProvider_MODEL_PROVIDER_UNSPECIFIED
+}
+
+func (x *RunEgressDecision) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *RunEgressDecision) GetEndpoint() string {
+	if x != nil {
+		return x.Endpoint
+	}
+	return ""
+}
+
+func (x *RunEgressDecision) GetEndpointHost() string {
+	if x != nil {
+		return x.EndpointHost
+	}
+	return ""
+}
+
+func (x *RunEgressDecision) GetExternalAgentId() string {
+	if x != nil {
+		return x.ExternalAgentId
+	}
+	return ""
+}
+
+func (x *RunEgressDecision) GetDataCategories() []EgressDataCategory {
+	if x != nil {
+		return x.DataCategories
+	}
+	return nil
+}
+
+func (x *RunEgressDecision) GetConsentGrantedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ConsentGrantedAt
+	}
+	return nil
+}
+
+func (x *RunEgressDecision) GetChallengeFingerprint() string {
+	if x != nil {
+		return x.ChallengeFingerprint
+	}
+	return ""
+}
+
+func (x *RunEgressDecision) GetSelectedTools() []string {
+	if x != nil {
+		return x.SelectedTools
+	}
+	return nil
+}
+
+func (x *RunEgressDecision) GetSkillSnapshotFingerprint() string {
+	if x != nil {
+		return x.SkillSnapshotFingerprint
+	}
+	return ""
+}
+
+func (x *RunEgressDecision) GetRecallApplicable() bool {
+	if x != nil {
+		return x.RecallApplicable
+	}
+	return false
+}
+
+func (x *RunEgressDecision) GetMemoryProfileApplicable() bool {
+	if x != nil {
+		return x.MemoryProfileApplicable
+	}
+	return false
+}
+
+func (x *RunEgressDecision) GetExternalCredentialRefHash() string {
+	if x != nil {
+		return x.ExternalCredentialRefHash
+	}
+	return ""
+}
+
+func (x *RunEgressDecision) GetRequestDigest() string {
+	if x != nil {
+		return x.RequestDigest
+	}
+	return ""
+}
+
+func (x *RunEgressDecision) GetRemoteMcpServers() []*RemoteMcpEgressDestination {
+	if x != nil {
+		return x.RemoteMcpServers
+	}
+	return nil
+}
+
 type AgentDescriptor struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            AgentId                `protobuf:"varint,1,opt,name=id,proto3,enum=turing.v1.AgentId" json:"id,omitempty"`
@@ -1059,7 +1557,7 @@ type AgentDescriptor struct {
 
 func (x *AgentDescriptor) Reset() {
 	*x = AgentDescriptor{}
-	mi := &file_turing_v1_common_proto_msgTypes[8]
+	mi := &file_turing_v1_common_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1071,7 +1569,7 @@ func (x *AgentDescriptor) String() string {
 func (*AgentDescriptor) ProtoMessage() {}
 
 func (x *AgentDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[8]
+	mi := &file_turing_v1_common_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1084,7 +1582,7 @@ func (x *AgentDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDescriptor.ProtoReflect.Descriptor instead.
 func (*AgentDescriptor) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{8}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *AgentDescriptor) GetId() AgentId {
@@ -1128,7 +1626,7 @@ type Message struct {
 
 func (x *Message) Reset() {
 	*x = Message{}
-	mi := &file_turing_v1_common_proto_msgTypes[9]
+	mi := &file_turing_v1_common_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1140,7 +1638,7 @@ func (x *Message) String() string {
 func (*Message) ProtoMessage() {}
 
 func (x *Message) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[9]
+	mi := &file_turing_v1_common_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1153,7 +1651,7 @@ func (x *Message) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Message.ProtoReflect.Descriptor instead.
 func (*Message) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{9}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Message) GetMessageId() string {
@@ -1257,12 +1755,56 @@ const file_turing_v1_common_proto_rawDesc = "" +
 	"\x0fModelCapability\x124\n" +
 	"\bprovider\x18\x01 \x01(\x0e2\x18.turing.v1.ModelProviderR\bprovider\x12\x14\n" +
 	"\x05model\x18\x02 \x01(\tR\x05model\x12,\n" +
-	"\x12max_context_tokens\x18\x03 \x01(\x05R\x10maxContextTokens\"\xb9\x01\n" +
+	"\x12max_context_tokens\x18\x03 \x01(\x05R\x10maxContextTokens\"\x9b\x02\n" +
 	"\x0eProviderConfig\x124\n" +
 	"\bprovider\x18\x01 \x01(\x0e2\x18.turing.v1.ModelProviderR\bprovider\x12\x18\n" +
 	"\aenabled\x18\x02 \x01(\bR\aenabled\x12#\n" +
 	"\rdefault_model\x18\x03 \x01(\tR\fdefaultModel\x122\n" +
-	"\x06models\x18\x04 \x03(\v2\x1a.turing.v1.ModelCapabilityR\x06models\"v\n" +
+	"\x06models\x18\x04 \x03(\v2\x1a.turing.v1.ModelCapabilityR\x06models\x12'\n" +
+	"\x0fremote_endpoint\x18\x05 \x01(\tR\x0eremoteEndpoint\x127\n" +
+	"\x18requires_per_run_consent\x18\x06 \x01(\bR\x15requiresPerRunConsent\"\xee\x03\n" +
+	"\x16RemoteEgressDisclosure\x12\x1c\n" +
+	"\tchallenge\x18\x01 \x01(\tR\tchallenge\x124\n" +
+	"\bprovider\x18\x02 \x01(\x0e2\x18.turing.v1.ModelProviderR\bprovider\x12\x14\n" +
+	"\x05model\x18\x03 \x01(\tR\x05model\x12\x1a\n" +
+	"\bendpoint\x18\x04 \x01(\tR\bendpoint\x12#\n" +
+	"\rendpoint_host\x18\x05 \x01(\tR\fendpointHost\x12*\n" +
+	"\x11external_agent_id\x18\x06 \x01(\tR\x0fexternalAgentId\x12F\n" +
+	"\x0fdata_categories\x18\a \x03(\x0e2\x1d.turing.v1.EgressDataCategoryR\x0edataCategories\x129\n" +
+	"\n" +
+	"expires_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12S\n" +
+	"\x12remote_mcp_servers\x18\t \x03(\v2%.turing.v1.RemoteMcpEgressDestinationR\x10remoteMcpServers\x12%\n" +
+	"\x0eselected_tools\x18\n" +
+	" \x03(\tR\rselectedTools\"~\n" +
+	"\x1aRemoteMcpEgressDestination\x12\x1f\n" +
+	"\vserver_name\x18\x01 \x01(\tR\n" +
+	"serverName\x12\x1a\n" +
+	"\bendpoint\x18\x02 \x01(\tR\bendpoint\x12#\n" +
+	"\rendpoint_host\x18\x03 \x01(\tR\fendpointHost\"\xb8\x01\n" +
+	"\x13RemoteEgressConsent\x12\x1c\n" +
+	"\tchallenge\x18\x01 \x01(\tR\tchallenge\x12_\n" +
+	"\x1cacknowledged_data_categories\x18\x02 \x03(\x0e2\x1d.turing.v1.EgressDataCategoryR\x1aacknowledgedDataCategories\x12\"\n" +
+	"\facknowledged\x18\x03 \x01(\bR\facknowledged\"\xd9\x06\n" +
+	"\x11RunEgressDecision\x12\x1f\n" +
+	"\vdecision_id\x18\x01 \x01(\tR\n" +
+	"decisionId\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\x05R\aversion\x124\n" +
+	"\bprovider\x18\x03 \x01(\x0e2\x18.turing.v1.ModelProviderR\bprovider\x12\x14\n" +
+	"\x05model\x18\x04 \x01(\tR\x05model\x12\x1a\n" +
+	"\bendpoint\x18\x05 \x01(\tR\bendpoint\x12#\n" +
+	"\rendpoint_host\x18\x06 \x01(\tR\fendpointHost\x12*\n" +
+	"\x11external_agent_id\x18\a \x01(\tR\x0fexternalAgentId\x12F\n" +
+	"\x0fdata_categories\x18\b \x03(\x0e2\x1d.turing.v1.EgressDataCategoryR\x0edataCategories\x12H\n" +
+	"\x12consent_granted_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\x10consentGrantedAt\x123\n" +
+	"\x15challenge_fingerprint\x18\n" +
+	" \x01(\tR\x14challengeFingerprint\x12%\n" +
+	"\x0eselected_tools\x18\v \x03(\tR\rselectedTools\x12<\n" +
+	"\x1askill_snapshot_fingerprint\x18\f \x01(\tR\x18skillSnapshotFingerprint\x12+\n" +
+	"\x11recall_applicable\x18\r \x01(\bR\x10recallApplicable\x12:\n" +
+	"\x19memory_profile_applicable\x18\x0e \x01(\bR\x17memoryProfileApplicable\x12?\n" +
+	"\x1cexternal_credential_ref_hash\x18\x0f \x01(\tR\x19externalCredentialRefHash\x12%\n" +
+	"\x0erequest_digest\x18\x10 \x01(\tR\rrequestDigest\x12S\n" +
+	"\x12remote_mcp_servers\x18\x11 \x03(\v2%.turing.v1.RemoteMcpEgressDestinationR\x10remoteMcpServers\"v\n" +
 	"\x0fAgentDescriptor\x12\"\n" +
 	"\x02id\x18\x01 \x01(\x0e2\x12.turing.v1.AgentIdR\x02id\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12\x1c\n" +
@@ -1286,7 +1828,18 @@ const file_turing_v1_common_proto_rawDesc = "" +
 	"\rModelProvider\x12\x1e\n" +
 	"\x1aMODEL_PROVIDER_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15MODEL_PROVIDER_OLLAMA\x10\x01\x12$\n" +
-	" MODEL_PROVIDER_OPENAI_COMPATIBLE\x10\x02*\xd9\x02\n" +
+	" MODEL_PROVIDER_OPENAI_COMPATIBLE\x10\x02*\xb0\x03\n" +
+	"\x12EgressDataCategory\x12$\n" +
+	" EGRESS_DATA_CATEGORY_UNSPECIFIED\x10\x00\x12(\n" +
+	"$EGRESS_DATA_CATEGORY_CURRENT_MESSAGE\x10\x01\x12-\n" +
+	")EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY\x10\x02\x12-\n" +
+	")EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL\x10\x03\x12'\n" +
+	"#EGRESS_DATA_CATEGORY_MEMORY_PROFILE\x10\x04\x12&\n" +
+	"\"EGRESS_DATA_CATEGORY_SKILL_CONTENT\x10\x05\x12%\n" +
+	"!EGRESS_DATA_CATEGORY_TOOL_SCHEMAS\x10\x06\x12'\n" +
+	"#EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS\x10\a\x12%\n" +
+	"!EGRESS_DATA_CATEGORY_TOOL_RESULTS\x10\b\x12$\n" +
+	" EGRESS_DATA_CATEGORY_ATTACHMENTS\x10\t*\xd9\x02\n" +
 	"\x16RoutingRequirementKind\x12(\n" +
 	"$ROUTING_REQUIREMENT_KIND_UNSPECIFIED\x10\x00\x12%\n" +
 	"!ROUTING_REQUIREMENT_KIND_PROVIDER\x10\x01\x12\"\n" +
@@ -1358,49 +1911,63 @@ func file_turing_v1_common_proto_rawDescGZIP() []byte {
 	return file_turing_v1_common_proto_rawDescData
 }
 
-var file_turing_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
-var file_turing_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_turing_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
+var file_turing_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_turing_v1_common_proto_goTypes = []any{
-	(AgentId)(0),                     // 0: turing.v1.AgentId
-	(ModelProvider)(0),               // 1: turing.v1.ModelProvider
-	(RoutingRequirementKind)(0),      // 2: turing.v1.RoutingRequirementKind
-	(MessageRole)(0),                 // 3: turing.v1.MessageRole
-	(ToolPolicy)(0),                  // 4: turing.v1.ToolPolicy
-	(RunStatus)(0),                   // 5: turing.v1.RunStatus
-	(RunLifecycle)(0),                // 6: turing.v1.RunLifecycle
-	(RunOutcomeReason)(0),            // 7: turing.v1.RunOutcomeReason
-	(*RunState)(nil),                 // 8: turing.v1.RunState
-	(*RequestMetadata)(nil),          // 9: turing.v1.RequestMetadata
-	(*PageRequest)(nil),              // 10: turing.v1.PageRequest
-	(*PageResponse)(nil),             // 11: turing.v1.PageResponse
-	(*ErrorDetail)(nil),              // 12: turing.v1.ErrorDetail
-	(*RoutingUnavailableDetail)(nil), // 13: turing.v1.RoutingUnavailableDetail
-	(*ModelCapability)(nil),          // 14: turing.v1.ModelCapability
-	(*ProviderConfig)(nil),           // 15: turing.v1.ProviderConfig
-	(*AgentDescriptor)(nil),          // 16: turing.v1.AgentDescriptor
-	(*Message)(nil),                  // 17: turing.v1.Message
-	(*timestamppb.Timestamp)(nil),    // 18: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),          // 19: google.protobuf.Struct
+	(AgentId)(0),                       // 0: turing.v1.AgentId
+	(ModelProvider)(0),                 // 1: turing.v1.ModelProvider
+	(EgressDataCategory)(0),            // 2: turing.v1.EgressDataCategory
+	(RoutingRequirementKind)(0),        // 3: turing.v1.RoutingRequirementKind
+	(MessageRole)(0),                   // 4: turing.v1.MessageRole
+	(ToolPolicy)(0),                    // 5: turing.v1.ToolPolicy
+	(RunStatus)(0),                     // 6: turing.v1.RunStatus
+	(RunLifecycle)(0),                  // 7: turing.v1.RunLifecycle
+	(RunOutcomeReason)(0),              // 8: turing.v1.RunOutcomeReason
+	(*RunState)(nil),                   // 9: turing.v1.RunState
+	(*RequestMetadata)(nil),            // 10: turing.v1.RequestMetadata
+	(*PageRequest)(nil),                // 11: turing.v1.PageRequest
+	(*PageResponse)(nil),               // 12: turing.v1.PageResponse
+	(*ErrorDetail)(nil),                // 13: turing.v1.ErrorDetail
+	(*RoutingUnavailableDetail)(nil),   // 14: turing.v1.RoutingUnavailableDetail
+	(*ModelCapability)(nil),            // 15: turing.v1.ModelCapability
+	(*ProviderConfig)(nil),             // 16: turing.v1.ProviderConfig
+	(*RemoteEgressDisclosure)(nil),     // 17: turing.v1.RemoteEgressDisclosure
+	(*RemoteMcpEgressDestination)(nil), // 18: turing.v1.RemoteMcpEgressDestination
+	(*RemoteEgressConsent)(nil),        // 19: turing.v1.RemoteEgressConsent
+	(*RunEgressDecision)(nil),          // 20: turing.v1.RunEgressDecision
+	(*AgentDescriptor)(nil),            // 21: turing.v1.AgentDescriptor
+	(*Message)(nil),                    // 22: turing.v1.Message
+	(*timestamppb.Timestamp)(nil),      // 23: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),            // 24: google.protobuf.Struct
 }
 var file_turing_v1_common_proto_depIdxs = []int32{
-	6,  // 0: turing.v1.RunState.lifecycle:type_name -> turing.v1.RunLifecycle
-	7,  // 1: turing.v1.RunState.outcome_reason:type_name -> turing.v1.RunOutcomeReason
-	18, // 2: turing.v1.RunState.state_updated_at:type_name -> google.protobuf.Timestamp
-	18, // 3: turing.v1.RunState.finished_at:type_name -> google.protobuf.Timestamp
-	19, // 4: turing.v1.ErrorDetail.details:type_name -> google.protobuf.Struct
-	2,  // 5: turing.v1.RoutingUnavailableDetail.kind:type_name -> turing.v1.RoutingRequirementKind
+	7,  // 0: turing.v1.RunState.lifecycle:type_name -> turing.v1.RunLifecycle
+	8,  // 1: turing.v1.RunState.outcome_reason:type_name -> turing.v1.RunOutcomeReason
+	23, // 2: turing.v1.RunState.state_updated_at:type_name -> google.protobuf.Timestamp
+	23, // 3: turing.v1.RunState.finished_at:type_name -> google.protobuf.Timestamp
+	24, // 4: turing.v1.ErrorDetail.details:type_name -> google.protobuf.Struct
+	3,  // 5: turing.v1.RoutingUnavailableDetail.kind:type_name -> turing.v1.RoutingRequirementKind
 	1,  // 6: turing.v1.ModelCapability.provider:type_name -> turing.v1.ModelProvider
 	1,  // 7: turing.v1.ProviderConfig.provider:type_name -> turing.v1.ModelProvider
-	14, // 8: turing.v1.ProviderConfig.models:type_name -> turing.v1.ModelCapability
-	0,  // 9: turing.v1.AgentDescriptor.id:type_name -> turing.v1.AgentId
-	3,  // 10: turing.v1.Message.role:type_name -> turing.v1.MessageRole
-	18, // 11: turing.v1.Message.created_at:type_name -> google.protobuf.Timestamp
-	8,  // 12: turing.v1.Message.run_state:type_name -> turing.v1.RunState
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	15, // 8: turing.v1.ProviderConfig.models:type_name -> turing.v1.ModelCapability
+	1,  // 9: turing.v1.RemoteEgressDisclosure.provider:type_name -> turing.v1.ModelProvider
+	2,  // 10: turing.v1.RemoteEgressDisclosure.data_categories:type_name -> turing.v1.EgressDataCategory
+	23, // 11: turing.v1.RemoteEgressDisclosure.expires_at:type_name -> google.protobuf.Timestamp
+	18, // 12: turing.v1.RemoteEgressDisclosure.remote_mcp_servers:type_name -> turing.v1.RemoteMcpEgressDestination
+	2,  // 13: turing.v1.RemoteEgressConsent.acknowledged_data_categories:type_name -> turing.v1.EgressDataCategory
+	1,  // 14: turing.v1.RunEgressDecision.provider:type_name -> turing.v1.ModelProvider
+	2,  // 15: turing.v1.RunEgressDecision.data_categories:type_name -> turing.v1.EgressDataCategory
+	23, // 16: turing.v1.RunEgressDecision.consent_granted_at:type_name -> google.protobuf.Timestamp
+	18, // 17: turing.v1.RunEgressDecision.remote_mcp_servers:type_name -> turing.v1.RemoteMcpEgressDestination
+	0,  // 18: turing.v1.AgentDescriptor.id:type_name -> turing.v1.AgentId
+	4,  // 19: turing.v1.Message.role:type_name -> turing.v1.MessageRole
+	23, // 20: turing.v1.Message.created_at:type_name -> google.protobuf.Timestamp
+	9,  // 21: turing.v1.Message.run_state:type_name -> turing.v1.RunState
+	22, // [22:22] is the sub-list for method output_type
+	22, // [22:22] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_common_proto_init() }
@@ -1413,8 +1980,8 @@ func file_turing_v1_common_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_common_proto_rawDesc), len(file_turing_v1_common_proto_rawDesc)),
-			NumEnums:      8,
-			NumMessages:   10,
+			NumEnums:      9,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

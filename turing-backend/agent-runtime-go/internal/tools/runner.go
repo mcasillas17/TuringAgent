@@ -13,8 +13,23 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// MCPClient is the transport for one tool call. The variadic tokens are the
+// server-issued capabilities for that call, in order: the approval token, then
+// the provenance capability. Both may be empty, and a server that is issued
+// neither is called exactly as before.
 type MCPClient interface {
-	CallTool(ctx context.Context, name string, args map[string]any, approvalToken ...string) (map[string]any, error)
+	CallTool(ctx context.Context, name string, args map[string]any, tokens ...string) (map[string]any, error)
+}
+
+type CallerEnforcedMCPClient interface {
+	MCPClient
+	CallToolWithCallerApproval(
+		ctx context.Context,
+		runID string,
+		approvalID string,
+		name string,
+		args map[string]any,
+	) (map[string]any, error)
 }
 
 type Runner struct {
@@ -119,6 +134,10 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 		return RunOutcome{}, terminalRunError{err: errors.New(reason)}
 	}
 	approvalToken := ""
+	// Minted by the orchestrator for this exact call and forwarded untouched.
+	// It is empty for servers that do not write sandbox artifacts, and an empty
+	// one is simply not sent.
+	provenanceToken := decision.GetProvenanceToken()
 	sideEffecting := false
 	switch decision.GetDecision() {
 	case turingv1.ToolPolicyDecision_DECISION_ALLOW:
@@ -182,7 +201,18 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 		return RunOutcome{}, markBeaconPosted(err)
 	}
 	callCtx, cancel := stageContext(ctx, input.Timeout)
-	result, err := input.MCPClient.CallTool(callCtx, input.ToolName, input.Args, approvalToken)
+	var result map[string]any
+	if callerEnforced, ok := input.MCPClient.(CallerEnforcedMCPClient); ok {
+		result, err = callerEnforced.CallToolWithCallerApproval(
+			callCtx,
+			input.RunID,
+			decision.GetApprovalId(),
+			input.ToolName,
+			input.Args,
+		)
+	} else {
+		result, err = input.MCPClient.CallTool(callCtx, input.ToolName, input.Args, approvalToken, provenanceToken)
+	}
 	cancel()
 	if err != nil {
 		var operationErr error = RecoverableToolError{err: err}

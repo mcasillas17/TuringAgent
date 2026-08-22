@@ -277,7 +277,6 @@ func TestLoadFromEnvRejectsTimeoutMillisecondsThatOverflowDuration(t *testing.T)
 
 func TestLoadFromEnvRejectsInvalidEndpointURLs(t *testing.T) {
 	for _, env := range []string{
-		"OLLAMA_BASE_URL",
 		"OPENAI_BASE_URL",
 		"MCP_SYSTEM_BASE_URL",
 		"MCP_FILES_BASE_URL",
@@ -289,6 +288,7 @@ func TestLoadFromEnvRejectsInvalidEndpointURLs(t *testing.T) {
 			"provider.example/v1",
 			"https://provider.example/v1?tenant=one",
 			"https://provider.example/v1#fragment",
+			"http://[::1",
 		} {
 			t.Run(env+"/"+value, func(t *testing.T) {
 				_, err := LoadFromEnv(mapEnv(map[string]string{
@@ -300,14 +300,24 @@ func TestLoadFromEnvRejectsInvalidEndpointURLs(t *testing.T) {
 					!strings.Contains(err.Error(), "absolute http or https URL with a non-empty host") {
 					t.Fatalf("LoadFromEnv(%s=%q) error = %v, want env-specific URL validation", env, value, err)
 				}
+
 			})
 		}
 	}
 }
 
+func TestLoadFromEnvRejectsRemoteOllamaEndpoint(t *testing.T) {
+	_, err := LoadFromEnv(mapEnv(map[string]string{
+		"TURING_RUNTIME_TOKEN": "runtime",
+		"OLLAMA_BASE_URL":      "https://ollama.example.com",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "OLLAMA_BASE_URL") {
+		t.Fatalf("LoadFromEnv error = %v, want local Ollama endpoint rejection", err)
+	}
+}
+
 func TestLoadFromEnvAcceptsHTTPAndHTTPSEndpointURLs(t *testing.T) {
 	for _, env := range []string{
-		"OLLAMA_BASE_URL",
 		"OPENAI_BASE_URL",
 		"MCP_SYSTEM_BASE_URL",
 		"MCP_FILES_BASE_URL",
@@ -327,6 +337,31 @@ func TestLoadFromEnvAcceptsHTTPAndHTTPSEndpointURLs(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestLoadFromEnvRejectsPlaintextKeyedRemoteOpenAIEndpoint(t *testing.T) {
+	_, err := LoadFromEnv(mapEnv(map[string]string{
+		"TURING_RUNTIME_TOKEN": "runtime",
+		"OPENAI_API_KEY":       "configured",
+		"OPENAI_BASE_URL":      "http://host.docker.internal:8080/v1",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "OPENAI_BASE_URL") {
+		t.Fatalf("LoadFromEnv error = %v, want keyed endpoint rejection", err)
+	}
+}
+
+func TestLoadFromEnvCanonicalizesKeyedOpenAIEndpoint(t *testing.T) {
+	cfg, err := LoadFromEnv(mapEnv(map[string]string{
+		"TURING_RUNTIME_TOKEN": "runtime",
+		"OPENAI_API_KEY":       "configured",
+		"OPENAI_BASE_URL":      "HTTPS://Example.COM:443/v1/",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OpenAIBaseURL != "https://example.com/v1" {
+		t.Fatalf("OpenAIBaseURL = %q", cfg.OpenAIBaseURL)
 	}
 }
 

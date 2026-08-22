@@ -100,6 +100,11 @@ type Provider interface {
 	StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error)
 }
 
+type EgressProvider interface {
+	Provider
+	EgressEndpoint() string
+}
+
 // EstimateRequestTokens applies the runtime's conservative admission rule: one
 // serialized UTF-8 request byte counts as one upper-bound token estimate.
 // Providers must estimate their exact wire representation.

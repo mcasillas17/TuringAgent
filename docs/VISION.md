@@ -35,7 +35,17 @@ Three commitments, in priority order when they conflict:
 A north star that cannot be falsified is decoration. These are the checks:
 
 - A privacy claim is falsified the moment any default path sends data off the machine, or any port beyond `:3000` is published.
-- Commitment 1 is also falsified by anything the user cannot withdraw. Whole-session deletion now exists and removes the conversation from the search index; the check fails again the moment something the user said survives a delete somewhere they cannot see. **Three places it currently does:** files written into the sandbox by `files.*` tools are not session-scoped (`mcp-files` has no notion of a session), so they outlive the conversation; SQLite runs with `secure_delete` off and WAL on, so deleted text stays in freed pages until overwritten or `VACUUM`ed — deletion is row-level, not byte-level; and a client already subscribed to a deleted session is told nothing, since no event is published on deletion.
+- Commitment 1 is also falsified by anything the user cannot withdraw.
+  Whole-session withdrawal removes application-owned content from supported
+  reads/search/recall, fences work and provenance capabilities when deletion
+  begins, removes session-owned sandbox artifacts on successful finalization,
+  and tells existing subscribers with one terminal event. A deliberate
+  migration exception remains: files that predate session provenance at the
+  sandbox root are classified `retain_legacy_unowned`, counted in the receipt,
+  and never silently claimed or deleted. SQLite runs with `secure_delete` off
+  and WAL on, so logical withdrawal is not byte-level forensic erasure: freed
+  pages, WAL/shm files, snapshots, device remapping, and backups can retain
+  bytes outside Turing's control.
 - Commitment 2 is falsified by any state where the user waits with no indication why, or any mutation that happened without a matching approval record.
 - Commitment 3 is falsified when the honest answer to "why did that fail?" is "use a bigger model."
 
@@ -47,7 +57,12 @@ Each is a decision already made and defended in review, cited to where it happen
 
 **Recalled context is attributed.** Memory that arrives unattributed reads as confabulation. If an answer draws on an earlier conversation, the user is told (#33).
 
-**Approvals are single-use and argument-bound.** A mutating file tool needs a short-lived HS256 token carrying `iss`/`sub`/`aud`/tool/`args_hash`, verified by the MCP server against the actual call and consumed exactly once. Approving one write does not approve the next.
+**Approvals are single-use and argument-bound.** A bundled mutating file tool
+needs a short-lived HS256 token carrying `iss`/`sub`/`aud`/tool/`args_hash`,
+verified by the MCP server against the actual call and consumed exactly once.
+For a non-bundled server, the orchestrator verifies the same run/tool/argument
+binding and consumes before proxy dispatch. Approving one call does not approve
+the next.
 
 **Small-model accommodations are features, not hacks.** Zero-argument tool calls (#21) and recoverable unknown-tool errors (#29) exist because real local models make those mistakes. Meeting the model where it is beats requiring a better one.
 
@@ -68,19 +83,27 @@ Each is a decision already made and defended in review, cited to where it happen
 | Streaming + resilience | Working; reconnect, requeue, lease recovery, run-visibility notices (#24, #30, #33) |
 | Durable run outcomes | Working - `agent_runs` owns versioned lifecycle/outcome truth; message history and live events carry the same redacted snapshot, and Flutter reconstructs localized recovery/terminal cards after reopen (TUR-009) |
 | Job queue | Durable: SQLite job table with leases, fencing token, heartbeat renewal, orphan recovery, 3-attempt cap |
-| Tool servers | Two: safe system tools, sandboxed file tools |
+| Tool servers | Registry-backed: two bundled servers plus disabled-by-default local-container and remote-URL imports; stdio refused |
 | Skills | File-backed `SKILL.md` library under `turing-backend/skills/`. Enabled metadata is indexed for every run; bodies and references load progressively only after every declared capability is granted. Grants gate loading and do **not** authorize tools. The 0011 upgrade retains legacy rows in a migration-only recovery table and re-exports them on startup; conflicts preserve recovery, and application code never removes nonempty rows. Cleanup is an offline/manual operator action after the files are verified. Enabled skill text selected by a routed run leaves the machine, and the routing picker says so |
 | Third-party accounts | **Stored, not used.** Connections hold a credential the user minted themselves (IMAP/CalDAV app password, Notion integration token, GitHub PAT), under explicit consent and revocable. No tool reads one yet, and the page says so. OAuth-only providers are listed as unsupported with the reason |
 | Agents | **One** (`general_assistant`) behind an executor *interface* with one implementation. Multi-agent is a **goal** — see below |
 | Process split | **Shipped** — the agent runtime is its own container, leased over a bidi gRPC stream. (It is *not* its own Go module; only `mcp-files` and `mcp-system` are.) |
 | Clients | **One** (Flutter, macOS-focused). Codegen emits Go and Dart only; both are consumed today |
-| Providers | Ollama (default), OpenAI-compatible (opt-in per request) |
+| Providers | Ollama (default), OpenAI-compatible with one-time per-run destination/category consent |
 
 Context admission is conservative rather than tokenizer-exact: built-in providers measure their exact serialized request, count one UTF-8 byte as an upper bound of one prompt token, and reserve configured output tokens inside the window. Recall deduplicates against admitted history and converges if the suffix changes, so a budgeted-out current-session turn is not silently excluded from both paths. Oversized tool-result bodies can be replaced by explicit omission markers without dropping the tool message or its correlation ID. The operator configures each provider/model window; Turing does not yet discover model capabilities or persist exact provider token usage. Provenance-preserving summaries remain MEM-014, not part of TUR-020.
 
 Known gaps, honestly: a requeued run with no worker waits indefinitely; historical tool cards and nonterminal run notices cannot be placed back into the transcript; partial live model deltas are not guaranteed to survive reopen; there is no explicit cancel-intent API, so the current transport path can claim only abandonment; there is no curated user memory, only a governance contract and keyword recall over raw messages; audit is now readable through a redacted public API and a thin Flutter client call, but there is no large audit viewer, and this API surfaces only the actions already recorded today - it does not make memory decisions or run retries inspectable beyond the safe typed lifecycle/outcome and subsidiary categories already recorded.
 
-Commitment #1's sharpest gap is now partly closed: **whole-session deletion works.** `SessionService.DeleteSession` removes a session and cascades to its messages, runs, jobs, events, tool calls and approvals; the content leaves the FTS index too, so recall cannot resurface it. Audit rows survive with their content scrubbed, so the record still evidences that something happened without retaining what was withdrawn. Deleting a session with a run in flight is refused rather than orphaning the worker.
+Commitment #1's sharpest gap is now materially closed: **whole-session
+withdrawal is a durable state machine.** `SessionService.DeleteSession` starts
+or advances a typed receipt; an active or externally blocked operation remains
+visible and retryable rather than claiming success. Once deletion begins,
+session reads, FTS search, recall, event replay, new messages, approvals and
+tool calls fail closed. Existing subscribers receive exactly one terminal,
+non-replayed deletion event only after artifact cleanup, audit scrub and the
+database cascade commit. Audit keeps only a scrubbed tombstone. The client
+removes a session only after a completed receipt or terminal event.
 
 Still missing: **message-level deletion**, and any way to forget one fact without deleting the conversation around it. Those need curated memory, which does not exist yet.
 
@@ -88,11 +111,30 @@ Still missing: **message-level deletion**, and any way to forget one fact withou
 
 These are not capabilities we are declining. They are the properties the rest of the system is built on; violating one voids a commitment above, so they hold regardless of what gets built later.
 
-- **Nothing leaves the machine by default.** A remote provider is opt-in per request, never a default path, and no feature may introduce background egress.
+- **Nothing leaves the machine by default.** A remote provider requires a
+  one-time signed disclosure and explicit confirmation for the exact request,
+  destination, tools/skills, context flags, and data categories. Consent is
+  run-owned, not a session/provider preference; redirects and local-to-remote
+  fallback are refused, and background work cannot inherit it. See
+  Remote MCP endpoints join that exact run-owned decision and disclose tool
+  arguments/results; enabling a server is not consent to reach it. See
+  [Remote egress policy](architecture/remote-egress-policy.md).
 - **Derived state cannot outlive its source.** Every application-owned table is classified, and user-derived state needs cascading provenance to its declared source. SQLite-managed indexes must prove equivalent transactional deletion; only an explicitly justified, content-free scrubbed audit tombstone may survive withdrawal. The trust, scope, writer, egress, retention, correction, export, deletion, and physical-erasure limits are defined in [`docs/architecture/memory-governance.md`](architecture/memory-governance.md) and enforced by the DB schema-invariant tests.
 - **Every mutation is approved, argument-bound, and single-use.** New mutating capability inherits the existing approval flow; it does not get its own weaker one.
+  - **Qualified by third-party MCP enforcement.** Bundled `mcp-files` verifies
+    and consumes at the callee. A server we did not write receives ordinary
+    JSON-RPC and cannot enforce Turing's token, so the orchestrator validates
+    the run/server/tool/argument binding and consumes immediately before
+    dispatch. What changes is who enforces, not whether approval exists. The
+    guarantee is narrower: it holds because the orchestrator proxy is the only
+    path holding that server's endpoint bearer, not because the third-party
+    process would reject a direct forged call. The approval-consumer identity
+    remains exclusive to bundled `mcp-files`.
   - **Qualified once, by automations.** A scheduled run has nobody to ask, so an automation carries a per-automation allowlist of specific `(server, tool)` pairs — never global, never a wildcard, never inherited by a conversation the user drives by hand. What that buys is *when* the decision is made, not *whether*: the orchestrator still creates the approval and still grants it through the same signing and state transition a person's click takes, so the token mcp-files verifies is the same short-lived, single-use, `args_hash`-bound token it always was. What is genuinely weaker is that consent is given in advance and in general ("this automation may run `files.update`") rather than in the moment and in particular ("write *this* to *that* path"). Unattended approvals are recorded with `actor_type = 'automation'` so an operator can tell them from a person's afterwards. A tool an automation was not pre-approved for fails the run rather than waiting for someone who is not there.
-- **Tools stay confined to the sandbox.** Capability may grow inside that boundary; nothing gets an escape hatch out of it.
+- **Bundled tools stay confined to the sandbox.** Capability may grow inside
+  that reviewed boundary; nothing bundled gets an escape hatch out of it. A
+  third-party process is explicitly labelled **not sandbox-confined** because
+  Turing cannot truthfully claim confinement for code it did not write.
 - **Skill text is untrusted input, not authority.** A copied `SKILL.md` may guide an answer only after enablement and any declared grants. It cannot override system/user precedence, tool policy, or approval, and its capability grants never become tool permissions.
 - **The orchestrator owns durable state and control flow.** The job queue, leases, fencing, retries, recovery, and event streaming are ours. This is what was previously written as "no graph orchestration frameworks" — that framing was wrong. The real constraint is that nothing may take ownership of those, because they are the hard-won parts (#30, #31, #33).
 - **The backend stays a single language.** It is 100% Go today. A framework requiring a Python or Node runtime in the backend costs a second toolchain, image, and dependency surface — that cost, not the abstraction, is the reason LangGraph-style tools are a poor fit here.

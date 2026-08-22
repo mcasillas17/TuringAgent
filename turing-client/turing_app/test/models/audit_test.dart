@@ -52,6 +52,30 @@ void main() {
     expect(noHumanField.denialReason, isNull);
     expect(noHumanField.denialReasonTruncated, isNull);
   });
+
+  test('AuditPayload holds only typed remote egress metadata', () {
+    final consentedAt = DateTime.utc(2026, 8, 20, 1, 2, 3);
+    final payload = AuditPayload(
+      state: AuditPayloadState.present,
+      provider: 'openai_compatible',
+      endpointHost: 'api.example.com',
+      egressDataCategories: const ['current_message', 'conversation_history'],
+      egressDecisionVersion: 1,
+      egressConsentGrantedAt: consentedAt,
+    );
+
+    expect(payload.endpointHost, 'api.example.com');
+    expect(payload.egressDataCategories, [
+      'current_message',
+      'conversation_history',
+    ]);
+    expect(payload.egressDecisionVersion, 1);
+    expect(payload.egressConsentGrantedAt, consentedAt);
+    expect(
+      () => payload.egressDataCategories.add('tool_results'),
+      throwsUnsupportedError,
+    );
+  });
 }
 
 AuditEntry _entry(String auditId) {

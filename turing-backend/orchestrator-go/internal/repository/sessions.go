@@ -3,12 +3,14 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/persisttime"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runcorrelation"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/skillfiles"
@@ -28,11 +30,39 @@ func (r *Repository) SetSkillStore(store *skillfiles.Store) {
 }
 
 type Session struct {
-	SessionID string
-	Title     sql.NullString
-	Status    string
-	CreatedAt string
+	SessionID   string
+	Title       sql.NullString
+	TitleOrigin string
+	Status      string
+	CreatedAt   string
+	UpdatedAt   string
+}
+
+type SessionListFilter string
+
+const (
+	SessionListActive   SessionListFilter = "active"
+	SessionListArchived SessionListFilter = "archived"
+	SessionListAll      SessionListFilter = "all"
+)
+
+var (
+	ErrInvalidSessionStatus      = errors.New("invalid persisted session status")
+	ErrInvalidSessionTimestamp   = errors.New("invalid persisted session timestamp")
+	ErrInvalidSessionTitleOrigin = errors.New("invalid persisted session title origin")
+	ErrInvalidSessionFilter      = errors.New("invalid session list filter")
+	ErrInvalidSessionPage        = errors.New("invalid session page")
+)
+
+type SessionCursor struct {
 	UpdatedAt string
+	SessionID string
+}
+
+type ListSessionsInput struct {
+	Filter SessionListFilter
+	After  *SessionCursor
+	Limit  int
 }
 
 type Message struct {
@@ -83,9 +113,15 @@ const historyPageColumns = `id, session_id, run_id, role, content, content_type,
 // it cannot leak it.
 func historyJoinQuery(page string, order string) string {
 	return `
-		WITH page AS (` + page + `)
-		SELECT p.id, p.session_id, COALESCE(p.run_id, ''), p.role, p.content, p.content_type,
-			p.sequence, p.created_at,
+		WITH active_session AS (
+			SELECT id
+			FROM sessions
+			WHERE id = ? AND deletion_state = 'active'
+		),
+		page AS (` + page + `)
+		SELECT COALESCE(p.id, ''), COALESCE(p.session_id, ''), COALESCE(p.run_id, ''),
+			COALESCE(p.role, ''), COALESCE(p.content, ''), COALESCE(p.content_type, ''),
+			COALESCE(p.sequence, 0), COALESCE(p.created_at, ''),
 			COALESCE(r.id, ''), COALESCE(r.session_id, ''), COALESCE(r.user_message_id, ''),
 			COALESCE(r.assistant_message_id, ''), COALESCE(r.status, ''), COALESCE(r.outcome_reason, ''),
 			COALESCE(r.state_version, 0), COALESCE(r.state_updated_at, ''), r.finished_at,
@@ -93,7 +129,8 @@ func historyJoinQuery(page string, order string) string {
 				WHERE claimant.run_id = p.run_id AND claimant.role = ?),
 			(SELECT COUNT(*) FROM agent_runs owner
 				WHERE owner.assistant_message_id = p.id)
-		FROM page p
+		FROM active_session active
+		LEFT JOIN page p ON TRUE
 		LEFT JOIN agent_runs r ON r.id = p.run_id
 		ORDER BY ` + order + `
 	`
@@ -101,11 +138,11 @@ func historyJoinQuery(page string, order string) string {
 
 // historyJoinArgs appends the one argument historyJoinQuery adds of its own.
 //
-// The page's placeholders come first because the page is a leading CTE, so the
-// role binds last. It is bound rather than spliced into the SQL because a
-// literal is a second place the predicate could be edited; SQLite still reaches
-// the partial index through it, since it chooses that index against the value
-// actually bound and re-prepares when the value changes.
+// The active-session ID and page arguments bind first; the role binds last. It
+// is bound rather than spliced into the SQL because a literal is a second place
+// the predicate could be edited; SQLite still reaches the partial index through
+// it, since it chooses that index against the value actually bound and
+// re-prepares when the value changes.
 func historyJoinArgs(pageArgs ...any) []any {
 	return append(pageArgs, runcorrelation.AssistantRole)
 }
@@ -117,7 +154,7 @@ var (
 	newestHistoryQuery = historyJoinQuery(`
 		SELECT `+historyPageColumns+`
 		FROM messages
-		WHERE session_id = ?
+		WHERE session_id = (SELECT id FROM active_session)
 		ORDER BY sequence DESC
 		LIMIT ?
 	`, `p.sequence DESC`)
@@ -125,7 +162,7 @@ var (
 	olderHistoryQuery = historyJoinQuery(`
 		SELECT `+historyPageColumns+`
 		FROM messages
-		WHERE session_id = ?
+		WHERE session_id = (SELECT id FROM active_session)
 			AND sequence < ?
 		ORDER BY sequence DESC, id DESC
 		LIMIT ?
@@ -140,7 +177,9 @@ var (
 // with yields the message with no state rather than somebody else's outcome.
 func scanHistoryPage(rows *sql.Rows) ([]Message, error) {
 	var reversed []Message
+	sessionFound := false
 	for rows.Next() {
+		sessionFound = true
 		var (
 			message               Message
 			messageSessionID      string
@@ -202,10 +241,15 @@ func scanHistoryPage(rows *sql.Rows) ([]Message, error) {
 				}
 			}
 		}
-		reversed = append(reversed, message)
+		if message.MessageID != "" {
+			reversed = append(reversed, message)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	if !sessionFound {
+		return nil, sql.ErrNoRows
 	}
 	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
 		reversed[i], reversed[j] = reversed[j], reversed[i]
@@ -225,6 +269,7 @@ func (r *Repository) CreateSession(ctx context.Context, title string) (Session, 
 		session.Title = sql.NullString{String: title, Valid: true}
 		titleOrigin = "explicit"
 	}
+	session.TitleOrigin = titleOrigin
 	_, err := r.db.ExecContext(ctx, `INSERT INTO sessions (id, title, title_origin, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`, session.SessionID, nullableString(session.Title), titleOrigin, createdAt, createdAt)
 	return session, err
 }
@@ -233,8 +278,18 @@ func (r *Repository) ListSessions(ctx context.Context, limit int) ([]Session, er
 	if limit <= 0 {
 		limit = 50
 	}
-	query := `SELECT id, title, status, created_at, updated_at FROM sessions ORDER BY ` + sqliteTimestampNanos("updated_at") + ` DESC, id DESC LIMIT ?`
-	rows, err := r.db.QueryContext(ctx, query, limit)
+	return r.ListSessionsPage(ctx, ListSessionsInput{
+		Filter: SessionListActive,
+		Limit:  limit,
+	})
+}
+
+func (r *Repository) ListSessionsPage(ctx context.Context, input ListSessionsInput) ([]Session, error) {
+	query, args, err := listSessionsQuery(input)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +297,10 @@ func (r *Repository) ListSessions(ctx context.Context, limit int) ([]Session, er
 	var sessions []Session
 	for rows.Next() {
 		var session Session
-		if err := rows.Scan(&session.SessionID, &session.Title, &session.Status, &session.CreatedAt, &session.UpdatedAt); err != nil {
+		if err := rows.Scan(&session.SessionID, &session.Title, &session.TitleOrigin, &session.Status, &session.CreatedAt, &session.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if err := validateSession(session); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, session)
@@ -250,10 +308,97 @@ func (r *Repository) ListSessions(ctx context.Context, limit int) ([]Session, er
 	return sessions, rows.Err()
 }
 
+func listSessionsQuery(input ListSessionsInput) (string, []any, error) {
+	if input.Limit <= 0 {
+		return "", nil, ErrInvalidSessionPage
+	}
+
+	var query string
+	var args []any
+	switch input.Filter {
+	case SessionListActive, SessionListArchived:
+		query = `
+			SELECT id, title, title_origin, status, created_at, updated_at
+			FROM sessions INDEXED BY idx_sessions_status_updated
+			WHERE deletion_state = 'active' AND status = ?`
+		args = append(args, string(input.Filter))
+	case SessionListAll:
+		query = `
+			SELECT id, title, title_origin, status, created_at, updated_at
+			FROM sessions INDEXED BY idx_sessions_updated
+			WHERE deletion_state = 'active'`
+	default:
+		return "", nil, ErrInvalidSessionFilter
+	}
+	if input.After != nil {
+		if input.After.SessionID == "" {
+			return "", nil, ErrInvalidSessionPage
+		}
+		if _, err := persisttime.ParseCanonical(input.After.UpdatedAt); err != nil {
+			return "", nil, ErrInvalidSessionPage
+		}
+		query += ` AND (updated_at, id) < (?, ?)`
+		args = append(args, input.After.UpdatedAt, input.After.SessionID)
+	}
+	query += ` ORDER BY updated_at DESC, id DESC LIMIT ?`
+	args = append(args, input.Limit)
+	return query, args, nil
+}
+
 func (r *Repository) GetSession(ctx context.Context, sessionID string) (Session, error) {
 	var session Session
-	err := r.db.QueryRowContext(ctx, `SELECT id, title, status, created_at, updated_at FROM sessions WHERE id = ?`, sessionID).Scan(&session.SessionID, &session.Title, &session.Status, &session.CreatedAt, &session.UpdatedAt)
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, title, title_origin, status, created_at, updated_at
+		FROM sessions
+		WHERE id = ? AND deletion_state = 'active'`,
+		sessionID,
+	).Scan(
+		&session.SessionID,
+		&session.Title,
+		&session.TitleOrigin,
+		&session.Status,
+		&session.CreatedAt,
+		&session.UpdatedAt,
+	)
+	if err == nil {
+		err = validateSession(session)
+	}
 	return session, err
+}
+
+func validateSession(session Session) error {
+	switch session.TitleOrigin {
+	case "unset", "explicit", "derived":
+	default:
+		return ErrInvalidSessionTitleOrigin
+	}
+	switch session.Status {
+	case string(SessionListActive), string(SessionListArchived):
+	default:
+		return ErrInvalidSessionStatus
+	}
+	if _, err := persisttime.ParseCanonical(session.CreatedAt); err != nil {
+		return ErrInvalidSessionTimestamp
+	}
+	if _, err := persisttime.ParseCanonical(session.UpdatedAt); err != nil {
+		return ErrInvalidSessionTimestamp
+	}
+	return nil
+}
+
+func requireActiveSessionTx(ctx context.Context, tx *sql.Tx, sessionID string) error {
+	var deletionState string
+	err := tx.QueryRowContext(ctx, `SELECT deletion_state FROM sessions WHERE id = ?`, sessionID).Scan(&deletionState)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrSessionNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if deletionState != "active" {
+		return ErrSessionDeleting
+	}
+	return nil
 }
 
 func (r *Repository) ListMessages(ctx context.Context, sessionID string, limit int) ([]Message, error) {
@@ -278,8 +423,9 @@ func (r *Repository) ListMessagesBefore(ctx context.Context, sessionID, beforeMe
 	var boundarySequence int64
 	if err := r.db.QueryRowContext(ctx, `
 		SELECT sequence
-		FROM messages
-		WHERE session_id = ? AND id = ?
+		FROM messages m
+		JOIN sessions s ON s.id = m.session_id AND s.deletion_state = 'active'
+		WHERE m.session_id = ? AND m.id = ?
 	`, sessionID, beforeMessageID).Scan(&boundarySequence); err != nil {
 		return nil, err
 	}
@@ -310,6 +456,7 @@ func (r *Repository) SearchMessages(
 		SELECT m.id, m.session_id, COALESCE(m.run_id, ''), m.role, m.content, m.content_type, m.sequence, m.created_at
 		FROM messages_fts
 		JOIN messages m ON m.rowid = messages_fts.rowid
+		JOIN sessions s ON s.id = m.session_id AND s.deletion_state = 'active'
 		WHERE messages_fts MATCH ?`
 	args := []any{fts5Phrase(query)}
 	if sessionID != "" {

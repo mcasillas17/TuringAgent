@@ -53,6 +53,7 @@ func runtimeProducerPairs() map[producerPair]string {
 		{OriginToolExecution, "tool_call_failed"}:             "debug tool execution",
 		{OriginToolGuard, "tool_call_limit_exceeded"}:         "per-run tool call budget",
 		{OriginToolGuard, "tool_result_limit_exceeded"}:       "per-run tool result budget",
+		{OriginToolPolicy, "egress_decision_invalid"}:         "run-owned egress decision mismatch",
 
 		// internal/worker.
 		{OriginDispatch, "worker_busy"}:                       "worker at capacity",

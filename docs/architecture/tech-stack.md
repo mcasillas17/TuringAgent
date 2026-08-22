@@ -151,7 +151,11 @@ Approval-gated file writes use a two-step flow:
    type, orchestrator issuer, audience, subject, tool name, argument hash,
    signature, and expiration (including rejecting `exp == now`).
 5. `mcp-files` calls `ApprovalService.ConsumeApproval` over internal gRPC using `authorization: Bearer ${TURING_APPROVAL_CONSUMER_TOKEN}`.
-6. The file write proceeds only if the consume response is `APPROVAL_STATUS_CONSUMED`.
+6. A file consume response returns `APPROVAL_STATUS_CONSUMED` together with a
+   server-derived artifact reservation bound to the provenance capability.
+7. `mcp-files` finalizes the reservation after durable I/O and checks that the
+   session capability remained active; a deletion race retains the manifest for
+   cleanup but fails the tool call.
 
 Human approve comments and deny reasons are stored with the decision in
 separate nullable columns. Proto3 omission and explicit empty input both become

@@ -12,6 +12,7 @@
 
 import 'dart:core' as $core;
 
+import 'package:fixnum/fixnum.dart' as $fixnum;
 import 'package:protobuf/protobuf.dart' as $pb;
 
 import 'approvals.pbenum.dart';
@@ -166,10 +167,12 @@ class ApprovalResponse extends $pb.GeneratedMessage {
   factory ApprovalResponse({
     $core.String? approvalId,
     ApprovalStatus? status,
+    SandboxArtifactReservation? reservation,
   }) {
     final result = create();
     if (approvalId != null) result.approvalId = approvalId;
     if (status != null) result.status = status;
+    if (reservation != null) result.reservation = reservation;
     return result;
   }
 
@@ -191,6 +194,8 @@ class ApprovalResponse extends $pb.GeneratedMessage {
         defaultOrMaker: ApprovalStatus.APPROVAL_STATUS_UNSPECIFIED,
         valueOf: ApprovalStatus.valueOf,
         enumValues: ApprovalStatus.values)
+    ..aOM<SandboxArtifactReservation>(3, _omitFieldNames ? '' : 'reservation',
+        subBuilder: SandboxArtifactReservation.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -231,6 +236,119 @@ class ApprovalResponse extends $pb.GeneratedMessage {
   $core.bool hasStatus() => $_has(1);
   @$pb.TagNumber(2)
   void clearStatus() => $_clearField(2);
+
+  /// Present only for a consume that reserved a sandbox artifact, which is the
+  /// manifest row the write is allowed to land in.
+  @$pb.TagNumber(3)
+  SandboxArtifactReservation get reservation => $_getN(2);
+  @$pb.TagNumber(3)
+  set reservation(SandboxArtifactReservation value) => $_setField(3, value);
+  @$pb.TagNumber(3)
+  $core.bool hasReservation() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearReservation() => $_clearField(3);
+  @$pb.TagNumber(3)
+  SandboxArtifactReservation ensureReservation() => $_ensure(2);
+}
+
+/// SandboxArtifactReservation is the orchestrator's durable promise that one
+/// file write is accounted for before any bytes exist.
+class SandboxArtifactReservation extends $pb.GeneratedMessage {
+  factory SandboxArtifactReservation({
+    $core.String? artifactId,
+    $core.String? physicalPath,
+    $core.String? policy,
+    $fixnum.Int64? deletionGeneration,
+  }) {
+    final result = create();
+    if (artifactId != null) result.artifactId = artifactId;
+    if (physicalPath != null) result.physicalPath = physicalPath;
+    if (policy != null) result.policy = policy;
+    if (deletionGeneration != null)
+      result.deletionGeneration = deletionGeneration;
+    return result;
+  }
+
+  SandboxArtifactReservation._();
+
+  factory SandboxArtifactReservation.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory SandboxArtifactReservation.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'SandboxArtifactReservation',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'artifactId')
+    ..aOS(2, _omitFieldNames ? '' : 'physicalPath')
+    ..aOS(3, _omitFieldNames ? '' : 'policy')
+    ..aInt64(4, _omitFieldNames ? '' : 'deletionGeneration')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SandboxArtifactReservation clone() =>
+      SandboxArtifactReservation()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SandboxArtifactReservation copyWith(
+          void Function(SandboxArtifactReservation) updates) =>
+      super.copyWith(
+              (message) => updates(message as SandboxArtifactReservation))
+          as SandboxArtifactReservation;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static SandboxArtifactReservation create() => SandboxArtifactReservation._();
+  @$core.override
+  SandboxArtifactReservation createEmptyInstance() => create();
+  static $pb.PbList<SandboxArtifactReservation> createRepeated() =>
+      $pb.PbList<SandboxArtifactReservation>();
+  @$core.pragma('dart2js:noInline')
+  static SandboxArtifactReservation getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<SandboxArtifactReservation>(create);
+  static SandboxArtifactReservation? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get artifactId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set artifactId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasArtifactId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearArtifactId() => $_clearField(1);
+
+  /// Server-derived location the write must land in; mcp-files computes the same
+  /// path independently and refuses to proceed if the two disagree.
+  @$pb.TagNumber(2)
+  $core.String get physicalPath => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set physicalPath($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasPhysicalPath() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearPhysicalPath() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get policy => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set policy($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasPolicy() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearPolicy() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $fixnum.Int64 get deletionGeneration => $_getI64(3);
+  @$pb.TagNumber(4)
+  set deletionGeneration($fixnum.Int64 value) => $_setInt64(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasDeletionGeneration() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearDeletionGeneration() => $_clearField(4);
 }
 
 class GetApprovalForRuntimeRequest extends $pb.GeneratedMessage {
@@ -380,9 +498,13 @@ class RuntimeApprovalState extends $pb.GeneratedMessage {
 class ConsumeApprovalRequest extends $pb.GeneratedMessage {
   factory ConsumeApprovalRequest({
     $core.String? approvalId,
+    $core.String? provenanceToken,
+    $core.String? physicalPath,
   }) {
     final result = create();
     if (approvalId != null) result.approvalId = approvalId;
+    if (provenanceToken != null) result.provenanceToken = provenanceToken;
+    if (physicalPath != null) result.physicalPath = physicalPath;
     return result;
   }
 
@@ -400,6 +522,8 @@ class ConsumeApprovalRequest extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'approvalId')
+    ..aOS(2, _omitFieldNames ? '' : 'provenanceToken')
+    ..aOS(3, _omitFieldNames ? '' : 'physicalPath')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -433,6 +557,330 @@ class ConsumeApprovalRequest extends $pb.GeneratedMessage {
   $core.bool hasApprovalId() => $_has(0);
   @$pb.TagNumber(1)
   void clearApprovalId() => $_clearField(1);
+
+  /// The server-issued provenance capability for the same tool call. It is what
+  /// ties the consume to a session, run and path, so the reservation cannot be
+  /// taken for work nobody authorised.
+  @$pb.TagNumber(2)
+  $core.String get provenanceToken => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set provenanceToken($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasProvenanceToken() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearProvenanceToken() => $_clearField(2);
+
+  /// Where the caller resolved the write to. It must equal either the run-scoped
+  /// location the server derives or the legacy root path the capability already
+  /// names; anything else is refused.
+  @$pb.TagNumber(3)
+  $core.String get physicalPath => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set physicalPath($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasPhysicalPath() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearPhysicalPath() => $_clearField(3);
+}
+
+/// FinalizeSandboxArtifactRequest reports the outcome of a reserved write over
+/// the same authenticated internal channel that consumed the approval.
+class FinalizeSandboxArtifactRequest extends $pb.GeneratedMessage {
+  factory FinalizeSandboxArtifactRequest({
+    $core.String? artifactId,
+    $core.String? provenanceToken,
+    $core.bool? committed,
+  }) {
+    final result = create();
+    if (artifactId != null) result.artifactId = artifactId;
+    if (provenanceToken != null) result.provenanceToken = provenanceToken;
+    if (committed != null) result.committed = committed;
+    return result;
+  }
+
+  FinalizeSandboxArtifactRequest._();
+
+  factory FinalizeSandboxArtifactRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory FinalizeSandboxArtifactRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'FinalizeSandboxArtifactRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'artifactId')
+    ..aOS(2, _omitFieldNames ? '' : 'provenanceToken')
+    ..aOB(3, _omitFieldNames ? '' : 'committed')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  FinalizeSandboxArtifactRequest clone() =>
+      FinalizeSandboxArtifactRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  FinalizeSandboxArtifactRequest copyWith(
+          void Function(FinalizeSandboxArtifactRequest) updates) =>
+      super.copyWith(
+              (message) => updates(message as FinalizeSandboxArtifactRequest))
+          as FinalizeSandboxArtifactRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static FinalizeSandboxArtifactRequest create() =>
+      FinalizeSandboxArtifactRequest._();
+  @$core.override
+  FinalizeSandboxArtifactRequest createEmptyInstance() => create();
+  static $pb.PbList<FinalizeSandboxArtifactRequest> createRepeated() =>
+      $pb.PbList<FinalizeSandboxArtifactRequest>();
+  @$core.pragma('dart2js:noInline')
+  static FinalizeSandboxArtifactRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<FinalizeSandboxArtifactRequest>(create);
+  static FinalizeSandboxArtifactRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get artifactId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set artifactId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasArtifactId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearArtifactId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get provenanceToken => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set provenanceToken($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasProvenanceToken() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearProvenanceToken() => $_clearField(2);
+
+  /// True once the bytes are durably on the file system. False withdraws a
+  /// reservation whose write never happened; it never removes a finalized
+  /// artifact.
+  @$pb.TagNumber(3)
+  $core.bool get committed => $_getBF(2);
+  @$pb.TagNumber(3)
+  set committed($core.bool value) => $_setBool(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasCommitted() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearCommitted() => $_clearField(3);
+}
+
+class FinalizeSandboxArtifactResponse extends $pb.GeneratedMessage {
+  factory FinalizeSandboxArtifactResponse({
+    $core.String? artifactId,
+    $core.String? state,
+  }) {
+    final result = create();
+    if (artifactId != null) result.artifactId = artifactId;
+    if (state != null) result.state = state;
+    return result;
+  }
+
+  FinalizeSandboxArtifactResponse._();
+
+  factory FinalizeSandboxArtifactResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory FinalizeSandboxArtifactResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'FinalizeSandboxArtifactResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'artifactId')
+    ..aOS(2, _omitFieldNames ? '' : 'state')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  FinalizeSandboxArtifactResponse clone() =>
+      FinalizeSandboxArtifactResponse()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  FinalizeSandboxArtifactResponse copyWith(
+          void Function(FinalizeSandboxArtifactResponse) updates) =>
+      super.copyWith(
+              (message) => updates(message as FinalizeSandboxArtifactResponse))
+          as FinalizeSandboxArtifactResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static FinalizeSandboxArtifactResponse create() =>
+      FinalizeSandboxArtifactResponse._();
+  @$core.override
+  FinalizeSandboxArtifactResponse createEmptyInstance() => create();
+  static $pb.PbList<FinalizeSandboxArtifactResponse> createRepeated() =>
+      $pb.PbList<FinalizeSandboxArtifactResponse>();
+  @$core.pragma('dart2js:noInline')
+  static FinalizeSandboxArtifactResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<FinalizeSandboxArtifactResponse>(
+          create);
+  static FinalizeSandboxArtifactResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get artifactId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set artifactId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasArtifactId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearArtifactId() => $_clearField(1);
+
+  /// "ready" when the artifact is recorded, "released" when an unwritten
+  /// reservation was withdrawn.
+  @$pb.TagNumber(2)
+  $core.String get state => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set state($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasState() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearState() => $_clearField(2);
+}
+
+/// CheckSessionCapabilityRequest asks whether a capability's session is still
+/// accepting work. It is how a read-only tool gets a server-side answer, since
+/// nothing about a read touches the artifact manifest.
+class CheckSessionCapabilityRequest extends $pb.GeneratedMessage {
+  factory CheckSessionCapabilityRequest({
+    $core.String? provenanceToken,
+  }) {
+    final result = create();
+    if (provenanceToken != null) result.provenanceToken = provenanceToken;
+    return result;
+  }
+
+  CheckSessionCapabilityRequest._();
+
+  factory CheckSessionCapabilityRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory CheckSessionCapabilityRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'CheckSessionCapabilityRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'provenanceToken')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CheckSessionCapabilityRequest clone() =>
+      CheckSessionCapabilityRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CheckSessionCapabilityRequest copyWith(
+          void Function(CheckSessionCapabilityRequest) updates) =>
+      super.copyWith(
+              (message) => updates(message as CheckSessionCapabilityRequest))
+          as CheckSessionCapabilityRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static CheckSessionCapabilityRequest create() =>
+      CheckSessionCapabilityRequest._();
+  @$core.override
+  CheckSessionCapabilityRequest createEmptyInstance() => create();
+  static $pb.PbList<CheckSessionCapabilityRequest> createRepeated() =>
+      $pb.PbList<CheckSessionCapabilityRequest>();
+  @$core.pragma('dart2js:noInline')
+  static CheckSessionCapabilityRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<CheckSessionCapabilityRequest>(create);
+  static CheckSessionCapabilityRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get provenanceToken => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set provenanceToken($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasProvenanceToken() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearProvenanceToken() => $_clearField(1);
+}
+
+class SessionCapabilityState extends $pb.GeneratedMessage {
+  factory SessionCapabilityState({
+    $core.bool? active,
+    $fixnum.Int64? deletionGeneration,
+  }) {
+    final result = create();
+    if (active != null) result.active = active;
+    if (deletionGeneration != null)
+      result.deletionGeneration = deletionGeneration;
+    return result;
+  }
+
+  SessionCapabilityState._();
+
+  factory SessionCapabilityState.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory SessionCapabilityState.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'SessionCapabilityState',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOB(1, _omitFieldNames ? '' : 'active')
+    ..aInt64(2, _omitFieldNames ? '' : 'deletionGeneration')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SessionCapabilityState clone() =>
+      SessionCapabilityState()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SessionCapabilityState copyWith(
+          void Function(SessionCapabilityState) updates) =>
+      super.copyWith((message) => updates(message as SessionCapabilityState))
+          as SessionCapabilityState;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static SessionCapabilityState create() => SessionCapabilityState._();
+  @$core.override
+  SessionCapabilityState createEmptyInstance() => create();
+  static $pb.PbList<SessionCapabilityState> createRepeated() =>
+      $pb.PbList<SessionCapabilityState>();
+  @$core.pragma('dart2js:noInline')
+  static SessionCapabilityState getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<SessionCapabilityState>(create);
+  static SessionCapabilityState? _defaultInstance;
+
+  /// True only when the session exists, is not being withdrawn, and is still on
+  /// the withdrawal generation the capability was issued against.
+  @$pb.TagNumber(1)
+  $core.bool get active => $_getBF(0);
+  @$pb.TagNumber(1)
+  set active($core.bool value) => $_setBool(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasActive() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearActive() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $fixnum.Int64 get deletionGeneration => $_getI64(1);
+  @$pb.TagNumber(2)
+  set deletionGeneration($fixnum.Int64 value) => $_setInt64(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasDeletionGeneration() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearDeletionGeneration() => $_clearField(2);
 }
 
 const $core.bool _omitFieldNames =

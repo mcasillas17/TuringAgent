@@ -154,13 +154,26 @@ func (c *Client) ListTools(ctx context.Context) (tools []map[string]any, err err
 	return nil, fmt.Errorf("MCP tools/list exceeded page limit of %d", maxListToolsPages)
 }
 
-func (c *Client) CallTool(ctx context.Context, name string, args map[string]any, approvalToken ...string) (map[string]any, error) {
+// CallTool sends one MCP tools/call. tokens are the server-issued capabilities
+// for this call, in order: the approval token (empty for a safe tool), then the
+// provenance capability (empty for a server that is issued none). They are
+// forwarded verbatim under _meta; the runtime never mints or edits one, and
+// omitting _meta entirely when there is nothing to send keeps servers that
+// reject unknown _meta keys working unchanged.
+func (c *Client) CallTool(ctx context.Context, name string, args map[string]any, tokens ...string) (map[string]any, error) {
 	if args == nil {
 		args = map[string]any{}
 	}
 	params := map[string]any{"name": name, "arguments": args}
-	if len(approvalToken) > 0 && approvalToken[0] != "" {
-		params["_meta"] = map[string]any{"approvalToken": approvalToken[0]}
+	meta := map[string]any{}
+	if len(tokens) > 0 && tokens[0] != "" {
+		meta["approvalToken"] = tokens[0]
+	}
+	if len(tokens) > 1 && tokens[1] != "" {
+		meta["provenanceToken"] = tokens[1]
+	}
+	if len(meta) > 0 {
+		params["_meta"] = meta
 	}
 	result, err := c.request(ctx, "tools/call", params)
 	if err != nil {

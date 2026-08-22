@@ -79,6 +79,9 @@ class TuringEventType extends $pb.ProtobufEnum {
   static const TuringEventType TURING_EVENT_TYPE_SESSION_UPDATED =
       TuringEventType._(
           21, _omitEnumNames ? '' : 'TURING_EVENT_TYPE_SESSION_UPDATED');
+  static const TuringEventType TURING_EVENT_TYPE_SESSION_DELETED =
+      TuringEventType._(
+          22, _omitEnumNames ? '' : 'TURING_EVENT_TYPE_SESSION_DELETED');
   static const TuringEventType TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED =
       TuringEventType._(23,
           _omitEnumNames ? '' : 'TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED');
@@ -106,6 +109,7 @@ class TuringEventType extends $pb.ProtobufEnum {
     TURING_EVENT_TYPE_ERROR,
     TURING_EVENT_TYPE_SYSTEM,
     TURING_EVENT_TYPE_SESSION_UPDATED,
+    TURING_EVENT_TYPE_SESSION_DELETED,
     TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED,
   ];
 

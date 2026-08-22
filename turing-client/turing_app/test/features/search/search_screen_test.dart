@@ -9,6 +9,7 @@ import 'package:turing_flutter_app/features/search/search_screen.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
+import 'package:turing_flutter_app/models/session_deletion.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 import 'package:turing_flutter_app/models/agent_descriptor.dart';
@@ -17,6 +18,7 @@ import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import '../../support/no_audit_api.dart';
 import '../../support/no_external_agents_api.dart';
 import '../../support/no_integrations_api.dart';
+import '../../support/no_session_lifecycle_api.dart';
 import '../../support/no_automations_api.dart';
 import '../../support/no_skills_api.dart';
 import '../../support/no_telemetry_api.dart';
@@ -2453,15 +2455,15 @@ class _SessionCall {
   final Completer<Session> completer;
 }
 
-class _FakeSearchApi
+class _FakeSearchApi extends TuringApi
     with
         NoAuditApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
+        NoSessionLifecycleApi,
         NoAutomationsApi,
-        NoTelemetryApi
-    implements TuringApi {
+        NoTelemetryApi {
   final List<_SearchCall> searchCalls = [];
   final List<_SessionCall> sessionCalls = [];
   final List<String> sessionRequests = [];
@@ -2483,7 +2485,13 @@ class _FakeSearchApi
   }
 
   @override
-  Future<void> deleteSession({required String sessionId}) async {}
+  Future<SessionDeletionReceipt> deleteSession({
+    required String sessionId,
+  }) async => const SessionDeletionReceipt.completed();
+
+  @override
+  Future<List<SessionDeletionReceipt>> listSessionDeletionReceipts() async =>
+      const [];
 
   @override
   Future<Session> getSession({required String sessionId}) async {

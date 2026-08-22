@@ -28,6 +28,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -51,6 +52,7 @@ type Server struct {
 	workerStreams      sync.WaitGroup
 	toolsMu            sync.Mutex
 	toolsets           map[string]workerToolset
+	registryMu         sync.RWMutex
 	dispatch           DispatchConfig
 }
 
@@ -282,6 +284,17 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 		}
 		maxConcurrent = capabilities.maxConcurrentRuns
 	}
+	s.registryMu.RLock()
+	registryLocked := true
+	defer func() {
+		if registryLocked {
+			s.registryMu.RUnlock()
+		}
+	}()
+	capabilities, discovered, err = s.filterRegisteredWorkerTools(ctx, capabilities, discovered)
+	if err != nil {
+		return status.Error(codes.Internal, "filter worker tool capabilities")
+	}
 	s.refreshPendingCapabilityStateAdvisory(ctx, "registry seed", "", false, false)
 	commands := make(chan workerCommand, maxWorkerConcurrentRuns)
 	connectedWorker := &worker{
@@ -348,6 +361,8 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 	if err := s.persistDiscoveredTools(ctx, ready.GetWorkerId(), connectedWorker, discovered); err != nil {
 		return status.Error(codes.Internal, "persist worker tool capabilities")
 	}
+	s.registryMu.RUnlock()
+	registryLocked = false
 	s.refreshPendingCapabilityStateAdvisory(ctx, "worker connected", ready.GetWorkerId(), true, true)
 	acceptedCtx, cancelAccepted := withDefaultTimeout(ctx, commandSendTimeout)
 	err = connectedWorker.commandSender(stream).send(acceptedCtx, &turingv1.RuntimeCommand{
@@ -603,9 +618,35 @@ func (s *Server) persistDiscoveredTools(ctx context.Context, workerID string, ow
 		} else {
 			delete(s.toolsets, workerID)
 		}
+
 		return err
 	}
 	return nil
+}
+
+func (s *Server) filterRegisteredWorkerTools(
+	ctx context.Context,
+	capabilities *registeredWorkerCapabilities,
+	discovered []repository.DiscoveredTool,
+) (*registeredWorkerCapabilities, []repository.DiscoveredTool, error) {
+	filteredCapabilities := cloneRegisteredWorkerCapabilities(capabilities)
+	filtered := make([]repository.DiscoveredTool, 0, len(discovered))
+	for _, tool := range discovered {
+		if tool.ServerName == "skills" {
+			filtered = append(filtered, tool)
+			continue
+		}
+		available, err := s.repo.MCPToolAvailable(ctx, tool.ServerName, tool.ToolName)
+		if err != nil {
+			return nil, nil, err
+		}
+		if available {
+			filtered = append(filtered, tool)
+			continue
+		}
+		delete(filteredCapabilities.tools, tool.ServerName+"/"+tool.ToolName)
+	}
+	return filteredCapabilities, filtered, nil
 }
 
 func (s *Server) removeDiscoveredTools(workerID string, owner *worker) error {
@@ -1529,6 +1570,7 @@ func repositoryRoutingCapabilities(capabilities *registeredWorkerCapabilities) *
 	return &repository.WorkerRoutingCapabilities{
 		Models: models, Tools: tools, MaxConcurrentRuns: capabilities.maxConcurrentRuns,
 		ExternalAgentCredentialRefs: credentialRefs,
+		RemoteEgressDecisionVersion: capabilities.remoteEgressDecisionVersion,
 	}
 }
 
@@ -1542,6 +1584,7 @@ func routingRequirementsForJob(job repository.Job) repository.RoutingRequirement
 		ModelProvider:                  job.ModelProvider,
 		Model:                          job.Model,
 		RequestedTools:                 job.RequestedTools,
+		SelectedTools:                  job.SelectedTools,
 		RequiredContextTokens:          job.RequiredContextTokens,
 		MinimumWorkerMaxConcurrentRuns: job.MinimumWorkerMaxConcurrentRuns,
 		ExternalAgent:                  job.ExternalAgent != nil,
@@ -1562,6 +1605,7 @@ func routingRequirementsForAgentJob(job *turingv1.AgentJob) repository.RoutingRe
 		ModelProvider:                  modelProviderName(job.GetModelProvider()),
 		Model:                          job.GetModel(),
 		RequestedTools:                 append([]string(nil), job.GetRequestedTools()...),
+		SelectedTools:                  append([]string(nil), job.GetSelectedTools()...),
 		RequiredContextTokens:          int(job.GetRequiredContextTokens()),
 		MinimumWorkerMaxConcurrentRuns: int(job.GetMinimumWorkerMaxConcurrentRuns()),
 		ExternalAgent:                  job.GetExternalAgent() != nil,
@@ -1584,6 +1628,20 @@ func (s *Server) CancelRun(ctx context.Context, runID string, reason string) {
 		RunId: runID, Reason: reason, StateVersion: s.committedVersion(ctx, runID, 0),
 	}}}
 	_ = owner.send(sendCtx, command)
+}
+
+// CancelSessionRuns sends the existing cancellation command to every still
+// executing run owned by a deleting session. The repository has already fenced
+// its durable state; this command asks the worker to acknowledge execution
+// exit so finalization can proceed.
+func (s *Server) CancelSessionRuns(ctx context.Context, sessionID string, reason string) {
+	runIDs, err := s.repo.SessionExecutionRunIDs(ctx, sessionID)
+	if err != nil {
+		return
+	}
+	for _, runID := range runIDs {
+		s.CancelRun(ctx, runID, reason)
+	}
 }
 
 func (s *Server) releaseUnownedTerminalRun(ctx context.Context, runID string) {
@@ -2605,7 +2663,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 		}
 		if !recorded.Inserted {
 			if decision, handled := existingToolBeforeDecision(recorded.Record, "tool_denied"); handled {
-				return decision, nil
+				return s.withToolProvenance(ctx, decision, beacon, run, argsHash), nil
 			}
 		}
 		if s.approvals == nil {
@@ -2629,7 +2687,12 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 				))
 			}
 		}
-		return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED, ToolCallId: beacon.ToolCallId, ApprovalId: approvalID}, nil
+		return &turingv1.ToolPolicyDecision{
+			Decision:        turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+			ToolCallId:      beacon.ToolCallId,
+			ApprovalId:      approvalID,
+			ProvenanceToken: s.issueToolProvenance(ctx, beacon, run, argsHash),
+		}, nil
 	}
 	statusValue := "requested"
 	if policy == tools.PolicySafe {
@@ -2648,7 +2711,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 	}
 	if !recorded.Inserted {
 		if decision, handled := existingToolBeforeDecision(recorded.Record, "tool_denied"); handled {
-			return decision, nil
+			return s.withToolProvenance(ctx, decision, beacon, run, argsHash), nil
 		}
 	}
 	if recorded.Inserted {
@@ -2658,7 +2721,11 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 	}
 	switch policy {
 	case tools.PolicySafe:
-		return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: beacon.ToolCallId}, nil
+		return &turingv1.ToolPolicyDecision{
+			Decision:        turingv1.ToolPolicyDecision_DECISION_ALLOW,
+			ToolCallId:      beacon.ToolCallId,
+			ProvenanceToken: s.issueToolProvenance(ctx, beacon, run, argsHash),
+		}, nil
 	default:
 		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "unknown_policy")
 	}
@@ -2706,8 +2773,7 @@ func (s *Server) blockUnattendedTool(ctx context.Context, beacon *turingv1.ToolC
 	// failure: agent_runs.error_message is a public diagnostic column, and a
 	// sentence naming an automation and a tool is exactly the kind of content
 	// TUR-009 stops persisting there. What is published instead is the
-	// policy-denied outcome; rendering that outcome is the planned Task 9/10
-	// client work.
+	// policy-denied outcome, from which Flutter derives localized copy.
 	//
 	// The decision is discarded rather than merged: on a replayed beacon
 	// denyToolBefore reports why the tool call is ALREADY terminal
@@ -2947,6 +3013,7 @@ func (s *Server) NotifyApprovalUpdated(ctx context.Context, runID string, approv
 		if approvalStatus == "denied" || approvalStatus == "expired" {
 			s.releaseUnownedTerminalRun(ctx, runID)
 		}
+
 		return nil
 	}
 	sendCtx, cancel := withDefaultTimeout(ctx, 5*time.Second)
@@ -2964,6 +3031,67 @@ func (s *Server) NotifyApprovalUpdated(ctx context.Context, runID string, approv
 		return err
 	}
 	return nil
+}
+
+func (s *Server) NotifyMCPRegistryChanged(ctx context.Context) error {
+	s.registryMu.Lock()
+	defer s.registryMu.Unlock()
+	enabled, err := s.repo.ListEnabledTools(ctx)
+	if err != nil {
+		return err
+	}
+	enabledTools := make(map[string]struct{}, len(enabled))
+	for _, tool := range enabled {
+		enabledTools[tool.ServerName+"/"+tool.ToolName] = struct{}{}
+	}
+
+	s.toolsMu.Lock()
+	for workerID, toolset := range s.toolsets {
+		filtered := toolset.tools[:0]
+		for _, tool := range toolset.tools {
+			if _, keep := enabledTools[tool.ServerName+"/"+tool.ToolName]; keep {
+				filtered = append(filtered, tool)
+			}
+		}
+		toolset.tools = filtered
+		s.toolsets[workerID] = toolset
+	}
+	s.toolsMu.Unlock()
+
+	s.mu.Lock()
+	workers := make([]*worker, 0, len(s.workers))
+	for _, connected := range s.workers {
+		workers = append(workers, connected)
+	}
+	s.mu.Unlock()
+
+	var notifyErr error
+	for _, connected := range workers {
+		connected.mu.Lock()
+		if connected.capabilities != nil {
+			filtered := cloneRegisteredWorkerCapabilities(connected.capabilities)
+			for tool := range filtered.tools {
+				if _, keep := enabledTools[tool]; !keep {
+					delete(filtered.tools, tool)
+				}
+			}
+			connected.capabilities = filtered
+		}
+		connected.mu.Unlock()
+		sendCtx, cancel := withDefaultTimeout(ctx, 5*time.Second)
+		err := connected.send(sendCtx, &turingv1.RuntimeCommand{
+			Command: &turingv1.RuntimeCommand_McpRegistryChanged{
+				McpRegistryChanged: &turingv1.RuntimeMcpRegistryChanged{
+					RegistrationId: connected.registrationID,
+				},
+			},
+		})
+		cancel()
+		if err != nil {
+			notifyErr = errors.Join(notifyErr, err)
+		}
+	}
+	return notifyErr
 }
 
 func mapToolCallError(err error) error {
@@ -3150,7 +3278,62 @@ func mapJob(job repository.Job) *turingv1.AgentJob {
 		MinimumWorkerMaxConcurrentRuns: int32(job.MinimumWorkerMaxConcurrentRuns),
 		ExpectedStateVersion:           job.ExpectedStateVersion,
 		AssignmentAttemptId:            job.AssignmentAttemptID,
+		EgressDecision:                 toProtoEgressDecision(job.EgressDecision),
+		SelectedTools:                  append([]string(nil), job.SelectedTools...),
 	}
+}
+
+func toProtoEgressDecision(decision *repository.RunEgressDecision) *turingv1.RunEgressDecision {
+	if decision == nil {
+		return nil
+	}
+	categories := make([]turingv1.EgressDataCategory, 0, len(decision.DataCategories))
+	for _, name := range decision.DataCategories {
+		value, ok := turingv1.EgressDataCategory_value[name]
+		if !ok {
+			categories = append(categories, turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_UNSPECIFIED)
+			continue
+		}
+		categories = append(categories, turingv1.EgressDataCategory(value))
+	}
+	consentedAt, _ := time.Parse(time.RFC3339Nano, decision.ConsentGrantedAt)
+	remoteMCPServers := make([]*turingv1.RemoteMcpEgressDestination, len(decision.RemoteMCPServers))
+	for index, destination := range decision.RemoteMCPServers {
+		remoteMCPServers[index] = &turingv1.RemoteMcpEgressDestination{
+			ServerName:   destination.ServerName,
+			Endpoint:     destination.Endpoint,
+			EndpointHost: destination.EndpointHost,
+		}
+	}
+	return &turingv1.RunEgressDecision{
+		DecisionId:                decision.DecisionID,
+		Version:                   int32(decision.Version),
+		Provider:                  providerToProto(decision.Provider),
+		Model:                     decision.Model,
+		Endpoint:                  decision.Endpoint,
+		EndpointHost:              decision.EndpointHost,
+		ExternalAgentId:           decision.ExternalAgentID,
+		DataCategories:            categories,
+		ConsentGrantedAt:          timestamppb.New(consentedAt),
+		ChallengeFingerprint:      decision.ChallengeFingerprint,
+		SelectedTools:             append([]string(nil), decision.SelectedTools...),
+		SkillSnapshotFingerprint:  decision.SkillSnapshotFingerprint,
+		RecallApplicable:          decision.RecallApplicable,
+		MemoryProfileApplicable:   decision.MemoryProfileApplicable,
+		ExternalCredentialRefHash: decision.ExternalCredentialRefHash,
+		RequestDigest:             decision.RequestDigest,
+		RemoteMcpServers:          remoteMCPServers,
+	}
+}
+
+func providerToProto(provider string) turingv1.ModelProvider {
+	if provider == "openai_compatible" {
+		return turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE
+	}
+	if provider == "ollama" {
+		return turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA
+	}
+	return turingv1.ModelProvider_MODEL_PROVIDER_UNSPECIFIED
 }
 
 // toProtoExternalAgent keeps nil as nil. An empty target would look like a
@@ -3161,6 +3344,7 @@ func toProtoExternalAgent(target *repository.ExternalAgentTarget) *turingv1.Exte
 		return nil
 	}
 	return &turingv1.ExternalAgentTarget{
+		AgentId:       target.AgentID,
 		DisplayName:   target.DisplayName,
 		BaseUrl:       target.BaseURL,
 		CredentialRef: target.CredentialRef,

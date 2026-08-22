@@ -22,6 +22,7 @@ type Client struct {
 	runtime   turingv1.RuntimeServiceClient
 	sessions  turingv1.SessionServiceClient
 	approvals turingv1.ApprovalServiceClient
+	mcp       turingv1.McpRegistryServiceClient
 }
 
 const defaultApprovalWaitTimeout = 71 * time.Second
@@ -52,6 +53,7 @@ func New(conn *grpc.ClientConn, token string) *Client {
 		runtime:   turingv1.NewRuntimeServiceClient(conn),
 		sessions:  turingv1.NewSessionServiceClient(conn),
 		approvals: turingv1.NewApprovalServiceClient(conn),
+		mcp:       turingv1.NewMcpRegistryServiceClient(conn),
 	}
 }
 
@@ -215,6 +217,17 @@ func (e terminalApprovalError) RunTerminal() bool { return true }
 func (c *Client) ConsumeApproval(ctx context.Context, approvalID string) error {
 	_, err := c.approvals.ConsumeApproval(c.withAuth(ctx), &turingv1.ConsumeApprovalRequest{ApprovalId: approvalID})
 	return err
+}
+
+func (c *Client) ListMCPServers(ctx context.Context) (*turingv1.ListMcpServersResponse, error) {
+	return c.mcp.ListMcpServers(c.withAuth(ctx), &turingv1.ListMcpServersRequest{})
+}
+
+func (c *Client) CallRegisteredMCPTool(
+	ctx context.Context,
+	request *turingv1.CallRegisteredMcpToolRequest,
+) (*turingv1.CallRegisteredMcpToolResponse, error) {
+	return c.mcp.CallRegisteredMcpTool(c.withAuth(ctx), request)
 }
 
 func (c *Client) withAuth(ctx context.Context) context.Context {

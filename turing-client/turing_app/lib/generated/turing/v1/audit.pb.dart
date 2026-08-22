@@ -46,6 +46,10 @@ class AuditPayload extends $pb.GeneratedMessage {
     $core.bool? decisionCommentTruncated,
     $core.String? denialReason,
     $core.bool? denialReasonTruncated,
+    $core.String? endpointHost,
+    $core.Iterable<$2.EgressDataCategory>? egressDataCategories,
+    $core.int? egressDecisionVersion,
+    $1.Timestamp? egressConsentGrantedAt,
   }) {
     final result = create();
     if (state != null) result.state = state;
@@ -71,6 +75,13 @@ class AuditPayload extends $pb.GeneratedMessage {
     if (denialReason != null) result.denialReason = denialReason;
     if (denialReasonTruncated != null)
       result.denialReasonTruncated = denialReasonTruncated;
+    if (endpointHost != null) result.endpointHost = endpointHost;
+    if (egressDataCategories != null)
+      result.egressDataCategories.addAll(egressDataCategories);
+    if (egressDecisionVersion != null)
+      result.egressDecisionVersion = egressDecisionVersion;
+    if (egressConsentGrantedAt != null)
+      result.egressConsentGrantedAt = egressConsentGrantedAt;
     return result;
   }
 
@@ -112,6 +123,17 @@ class AuditPayload extends $pb.GeneratedMessage {
     ..aOB(19, _omitFieldNames ? '' : 'decisionCommentTruncated')
     ..aOS(20, _omitFieldNames ? '' : 'denialReason')
     ..aOB(21, _omitFieldNames ? '' : 'denialReasonTruncated')
+    ..aOS(22, _omitFieldNames ? '' : 'endpointHost')
+    ..pc<$2.EgressDataCategory>(
+        23, _omitFieldNames ? '' : 'egressDataCategories', $pb.PbFieldType.KE,
+        valueOf: $2.EgressDataCategory.valueOf,
+        enumValues: $2.EgressDataCategory.values,
+        defaultEnumValue:
+            $2.EgressDataCategory.EGRESS_DATA_CATEGORY_UNSPECIFIED)
+    ..a<$core.int>(
+        24, _omitFieldNames ? '' : 'egressDecisionVersion', $pb.PbFieldType.O3)
+    ..aOM<$1.Timestamp>(25, _omitFieldNames ? '' : 'egressConsentGrantedAt',
+        subBuilder: $1.Timestamp.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -338,6 +360,38 @@ class AuditPayload extends $pb.GeneratedMessage {
   $core.bool hasDenialReasonTruncated() => $_has(20);
   @$pb.TagNumber(21)
   void clearDenialReasonTruncated() => $_clearField(21);
+
+  @$pb.TagNumber(22)
+  $core.String get endpointHost => $_getSZ(21);
+  @$pb.TagNumber(22)
+  set endpointHost($core.String value) => $_setString(21, value);
+  @$pb.TagNumber(22)
+  $core.bool hasEndpointHost() => $_has(21);
+  @$pb.TagNumber(22)
+  void clearEndpointHost() => $_clearField(22);
+
+  @$pb.TagNumber(23)
+  $pb.PbList<$2.EgressDataCategory> get egressDataCategories => $_getList(22);
+
+  @$pb.TagNumber(24)
+  $core.int get egressDecisionVersion => $_getIZ(23);
+  @$pb.TagNumber(24)
+  set egressDecisionVersion($core.int value) => $_setSignedInt32(23, value);
+  @$pb.TagNumber(24)
+  $core.bool hasEgressDecisionVersion() => $_has(23);
+  @$pb.TagNumber(24)
+  void clearEgressDecisionVersion() => $_clearField(24);
+
+  @$pb.TagNumber(25)
+  $1.Timestamp get egressConsentGrantedAt => $_getN(24);
+  @$pb.TagNumber(25)
+  set egressConsentGrantedAt($1.Timestamp value) => $_setField(25, value);
+  @$pb.TagNumber(25)
+  $core.bool hasEgressConsentGrantedAt() => $_has(24);
+  @$pb.TagNumber(25)
+  void clearEgressConsentGrantedAt() => $_clearField(25);
+  @$pb.TagNumber(25)
+  $1.Timestamp ensureEgressConsentGrantedAt() => $_ensure(24);
 }
 
 class AuditEntry extends $pb.GeneratedMessage {

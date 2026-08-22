@@ -12,29 +12,31 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/orchestrator"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/worker"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"google.golang.org/grpc"
 )
 
 type WorkerConfig struct {
-	Conn                *grpc.ClientConn
-	RuntimeToken        string
-	WorkerID            string
-	MaxConcurrentRuns   int
-	MaxToolCallsPerRun  int
-	ModelTimeout        time.Duration
-	ToolTimeout         time.Duration
-	ApprovalTimeout     time.Duration
-	TotalToolTimeout    time.Duration
-	OpenAIBaseURL       string
-	OpenAIAPIKey        string
-	OpenAIModel         string
-	ContextWindowTokens int
-	MaxOutputTokens     int
-	MCPSystemBaseURL    string
-	MCPFilesBaseURL     string
-	MCPSystemToken      string
-	MCPFilesToken       string
-	DiscoveredTools     []*turingv1.DiscoveredTool
+	Conn                        *grpc.ClientConn
+	RuntimeToken                string
+	WorkerID                    string
+	MaxConcurrentRuns           int
+	MaxToolCallsPerRun          int
+	ModelTimeout                time.Duration
+	ToolTimeout                 time.Duration
+	ApprovalTimeout             time.Duration
+	TotalToolTimeout            time.Duration
+	OpenAIBaseURL               string
+	OpenAIAPIKey                string
+	OpenAIModel                 string
+	ContextWindowTokens         int
+	MaxOutputTokens             int
+	MCPSystemBaseURL            string
+	MCPFilesBaseURL             string
+	MCPSystemToken              string
+	MCPFilesToken               string
+	DiscoveredTools             []*turingv1.DiscoveredTool
+	RemoteEgressDecisionVersion int32
 }
 
 type WorkerExecutor interface {
@@ -71,15 +73,27 @@ func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 		ModelTimeout:       cfg.modelTimeout(),
 		ToolTimeout:        cfg.toolTimeout(),
 		TotalToolTimeout:   cfg.totalToolTimeout(),
+		RegisteredMCPServers: func(ctx context.Context) (map[string]agent.ToolLister, error) {
+			clients, err := mcp.NewRegistryClients(ctx, client)
+			if err != nil {
+				return nil, err
+			}
+			servers := make(map[string]agent.ToolLister, len(clients))
+			for name, registered := range clients {
+				servers[name] = registered
+			}
+			return servers, nil
+		},
 	}
 	executor := agent.NewGeneralAssistant(providers, client, toolset)
 	runtimeWorker := worker.New(worker.Options{
-		WorkerID:                 cfg.WorkerID,
-		AgentID:                  turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
-		MaxConcurrentRuns:        cfg.MaxConcurrentRuns,
-		DisconnectCleanupTimeout: cfg.totalToolTimeout(),
-		Models:                   cfg.models(),
-		DiscoverTools:            executor.AdvertisedTools,
+		WorkerID:                    cfg.WorkerID,
+		AgentID:                     turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		MaxConcurrentRuns:           cfg.MaxConcurrentRuns,
+		DisconnectCleanupTimeout:    cfg.totalToolTimeout(),
+		Models:                      cfg.models(),
+		RemoteEgressDecisionVersion: int32(backendegress.DecisionVersion),
+		DiscoverTools:               executor.AdvertisedTools,
 	}, runtimeClientAdapter{client: client}, executor)
 	return runtimeWorker.Run(ctx)
 }
@@ -107,12 +121,13 @@ func RunWorkerWithExecutor(ctx context.Context, cfg WorkerConfig, executor Worke
 		}
 	}
 	runtimeWorker := worker.New(worker.Options{
-		WorkerID:                 cfg.WorkerID,
-		AgentID:                  turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
-		MaxConcurrentRuns:        cfg.MaxConcurrentRuns,
-		DisconnectCleanupTimeout: cfg.totalToolTimeout(),
-		Models:                   cfg.models(),
-		DiscoverTools:            discoverTools,
+		WorkerID:                    cfg.WorkerID,
+		AgentID:                     turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		MaxConcurrentRuns:           cfg.MaxConcurrentRuns,
+		DisconnectCleanupTimeout:    cfg.totalToolTimeout(),
+		Models:                      cfg.models(),
+		DiscoverTools:               discoverTools,
+		RemoteEgressDecisionVersion: cfg.RemoteEgressDecisionVersion,
 	}, runtimeClientAdapter{client: client}, executor)
 	return runtimeWorker.Run(ctx)
 }

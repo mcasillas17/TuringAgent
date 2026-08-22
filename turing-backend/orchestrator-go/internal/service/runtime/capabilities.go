@@ -35,6 +35,31 @@ type registeredWorkerCapabilities struct {
 	tools                       map[string]struct{}
 	externalAgentCredentialRefs map[string]struct{}
 	maxConcurrentRuns           int
+	remoteEgressDecisionVersion int
+}
+
+func cloneRegisteredWorkerCapabilities(input *registeredWorkerCapabilities) *registeredWorkerCapabilities {
+	if input == nil {
+		return nil
+	}
+	cloned := &registeredWorkerCapabilities{
+		models:                      append([]registeredModelCapability(nil), input.models...),
+		agentIDs:                    make(map[string]struct{}, len(input.agentIDs)),
+		tools:                       make(map[string]struct{}, len(input.tools)),
+		externalAgentCredentialRefs: make(map[string]struct{}, len(input.externalAgentCredentialRefs)),
+		maxConcurrentRuns:           input.maxConcurrentRuns,
+		remoteEgressDecisionVersion: input.remoteEgressDecisionVersion,
+	}
+	for value := range input.agentIDs {
+		cloned.agentIDs[value] = struct{}{}
+	}
+	for value := range input.tools {
+		cloned.tools[value] = struct{}{}
+	}
+	for value := range input.externalAgentCredentialRefs {
+		cloned.externalAgentCredentialRefs[value] = struct{}{}
+	}
+	return cloned
 }
 
 func decodeWorkerCapabilities(snapshot *turingv1.WorkerCapabilities) (*registeredWorkerCapabilities, []repository.DiscoveredTool, error) {
@@ -120,6 +145,7 @@ func decodeWorkerCapabilities(snapshot *turingv1.WorkerCapabilities) (*registere
 		tools:                       tools,
 		externalAgentCredentialRefs: credentialRefs,
 		maxConcurrentRuns:           int(snapshot.GetMaxConcurrentRuns()),
+		remoteEgressDecisionVersion: int(snapshot.GetRemoteEgressDecisionVersion()),
 	}, discovered, nil
 }
 
@@ -237,6 +263,10 @@ func workerCapabilitiesSupportRoute(capabilities *registeredWorkerCapabilities, 
 	if capabilities == nil {
 		return false
 	}
+	if (route.ModelProvider == "openai_compatible" || route.ExternalAgent) &&
+		capabilities.remoteEgressDecisionVersion < repository.RunEgressDecisionVersion {
+		return false
+	}
 	if _, ok := capabilities.agentIDs[route.AgentID]; !ok {
 		return false
 	}
@@ -264,6 +294,11 @@ func workerCapabilitiesSupportRoute(capabilities *registeredWorkerCapabilities, 
 			return false
 		}
 	}
+	for _, selectedTool := range route.SelectedTools {
+		if _, ok := capabilities.tools[selectedTool]; !ok {
+			return false
+		}
+	}
 	minimumCapacity := route.MinimumWorkerMaxConcurrentRuns
 	if minimumCapacity <= 0 {
 		minimumCapacity = 1
@@ -277,6 +312,8 @@ func (s *Server) replaceWorkerCapabilities(
 	connectedWorker *worker,
 	update *turingv1.RuntimeWorkerCapabilitiesUpdated,
 ) error {
+	s.registryMu.RLock()
+	defer s.registryMu.RUnlock()
 	if update.GetWorkerId() == "" || update.GetRegistrationId() == "" || update.GetCapabilities() == nil {
 		return status.Error(codes.InvalidArgument, "worker_id, registration_id, and capabilities are required")
 	}
@@ -286,6 +323,10 @@ func (s *Server) replaceWorkerCapabilities(
 	capabilities, discovered, err := decodeWorkerCapabilities(update.GetCapabilities())
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "worker capabilities are invalid: %v", err)
+	}
+	capabilities, discovered, err = s.filterRegisteredWorkerTools(ctx, capabilities, discovered)
+	if err != nil {
+		return status.Error(codes.Internal, "filter worker tool capabilities")
 	}
 
 	s.mu.Lock()
@@ -326,6 +367,10 @@ func (s *Server) ProviderCapabilities() map[turingv1.ModelProvider][]*turingv1.M
 		for _, model := range candidate.capabilities.models {
 			provider := modelProviderProto(model.provider)
 			if provider == turingv1.ModelProvider_MODEL_PROVIDER_UNSPECIFIED {
+				continue
+			}
+			if provider == turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE &&
+				candidate.capabilities.remoteEgressDecisionVersion < repository.RunEgressDecisionVersion {
 				continue
 			}
 			key := modelKey{provider: provider, model: model.model}
@@ -378,6 +423,66 @@ func (s *Server) LiveToolNames() []string {
 	}
 	tools := make([]string, 0, len(unique))
 	for tool := range unique {
+		tools = append(tools, tool)
+	}
+	sort.Strings(tools)
+	return tools
+}
+
+func (s *Server) EgressToolNames(route repository.RoutingRequirements) []string {
+	candidates := s.liveRoutingCandidates(time.Now().UTC())
+	candidates = filterRoutingCandidates(candidates, func(capabilities *registeredWorkerCapabilities) bool {
+		if _, ok := capabilities.agentIDs[route.AgentID]; !ok {
+			return false
+		}
+		if (route.ModelProvider == "openai_compatible" || route.ExternalAgent) &&
+			capabilities.remoteEgressDecisionVersion < repository.RunEgressDecisionVersion {
+			return false
+		}
+		if route.ExternalAgent {
+			if _, ok := capabilities.externalAgentCredentialRefs[route.ExternalAgentCredentialRef]; !ok {
+				return false
+			}
+		} else {
+			matched := false
+			for _, model := range capabilities.models {
+				if model.provider == route.ModelProvider && model.model == route.Model &&
+					(route.RequiredContextTokens <= 0 || model.maxContextTokens >= route.RequiredContextTokens) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return false
+			}
+		}
+		for _, requested := range route.RequestedTools {
+			if _, ok := capabilities.tools[requested]; !ok {
+				return false
+			}
+		}
+		minimumCapacity := route.MinimumWorkerMaxConcurrentRuns
+		if minimumCapacity <= 0 {
+			minimumCapacity = 1
+		}
+		return capabilities.maxConcurrentRuns >= minimumCapacity
+	})
+	if len(candidates) == 0 {
+		return nil
+	}
+	common := make(map[string]struct{}, len(candidates[0].capabilities.tools))
+	for tool := range candidates[0].capabilities.tools {
+		common[tool] = struct{}{}
+	}
+	for _, candidate := range candidates[1:] {
+		for tool := range common {
+			if _, ok := candidate.capabilities.tools[tool]; !ok {
+				delete(common, tool)
+			}
+		}
+	}
+	tools := make([]string, 0, len(common))
+	for tool := range common {
 		tools = append(tools, tool)
 	}
 	sort.Strings(tools)
@@ -576,6 +681,7 @@ func routingRequirementsFingerprint(route repository.RoutingRequirements) string
 		route.ModelProvider,
 		route.Model,
 		strings.Join(route.RequestedTools, "\x1f"),
+		strings.Join(route.SelectedTools, "\x1f"),
 		strconv.Itoa(route.RequiredContextTokens),
 		strconv.Itoa(route.MinimumWorkerMaxConcurrentRuns),
 		strconv.FormatBool(route.ExternalAgent),
@@ -615,6 +721,18 @@ func (s *Server) ValidateRouting(ctx context.Context, route repository.RoutingRe
 			route.AgentID,
 			s.availableAgentIDs(),
 		)
+	}
+	if route.ModelProvider == "openai_compatible" || route.ExternalAgent {
+		candidates = filterRoutingCandidates(candidates, func(capabilities *registeredWorkerCapabilities) bool {
+			return capabilities.remoteEgressDecisionVersion >= repository.RunEgressDecisionVersion
+		})
+		if len(candidates) == 0 {
+			return routingUnavailable(
+				turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_PROVIDER,
+				"remote egress decision v1",
+				nil,
+			)
+		}
 	}
 	if route.ExternalAgent {
 		candidates = filterRoutingCandidates(candidates, func(capabilities *registeredWorkerCapabilities) bool {
@@ -695,6 +813,19 @@ func (s *Server) ValidateRouting(ctx context.Context, route repository.RoutingRe
 			return routingUnavailable(
 				turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_TOOL,
 				requestedTool,
+				s.availableTools(),
+			)
+		}
+	}
+	for _, selectedTool := range route.SelectedTools {
+		candidates = filterRoutingCandidates(candidates, func(capabilities *registeredWorkerCapabilities) bool {
+			_, ok := capabilities.tools[selectedTool]
+			return ok
+		})
+		if len(candidates) == 0 {
+			return routingUnavailable(
+				turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_TOOL,
+				selectedTool,
 				s.availableTools(),
 			)
 		}

@@ -22,6 +22,27 @@ message SendMessageRequest {
   repeated string requested_tools = 8;
   int32 required_context_tokens = 9;
   int32 minimum_worker_max_concurrent_runs = 10;
+  RemoteEgressConsent remote_egress_consent = 11;
+}
+
+// Side-effect-free preflight for the exact SendMessage payload that may leave
+// the machine. The exact idempotency_key value is bound, including empty.
+message PrepareRemoteEgressRequest {
+  string session_id = 1;
+  string content = 2;
+  string content_type = 3;
+  AgentId agent_id = 4;
+  ModelProvider model_provider = 5;
+  string model = 6;
+  string idempotency_key = 7;
+  repeated string requested_tools = 8;
+  int32 required_context_tokens = 9;
+  int32 minimum_worker_max_concurrent_runs = 10;
+}
+
+message PrepareRemoteEgressResponse {
+  // Absent for a request whose effective route is local.
+  RemoteEgressDisclosure disclosure = 1;
 }
 
 message RunQueued {
@@ -129,5 +150,6 @@ message ChatStreamEvent {
 }
 
 service ChatService {
+  rpc PrepareRemoteEgress(PrepareRemoteEgressRequest) returns (PrepareRemoteEgressResponse);
   rpc SendMessage(SendMessageRequest) returns (stream ChatStreamEvent);
 }

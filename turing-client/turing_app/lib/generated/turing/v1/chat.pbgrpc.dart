@@ -32,6 +32,13 @@ class ChatServiceClient extends $grpc.Client {
 
   ChatServiceClient(super.channel, {super.options, super.interceptors});
 
+  $grpc.ResponseFuture<$0.PrepareRemoteEgressResponse> prepareRemoteEgress(
+    $0.PrepareRemoteEgressRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$prepareRemoteEgress, request, options: options);
+  }
+
   $grpc.ResponseStream<$0.ChatStreamEvent> sendMessage(
     $0.SendMessageRequest request, {
     $grpc.CallOptions? options,
@@ -43,6 +50,11 @@ class ChatServiceClient extends $grpc.Client {
 
   // method descriptors
 
+  static final _$prepareRemoteEgress = $grpc.ClientMethod<
+          $0.PrepareRemoteEgressRequest, $0.PrepareRemoteEgressResponse>(
+      '/turing.v1.ChatService/PrepareRemoteEgress',
+      ($0.PrepareRemoteEgressRequest value) => value.writeToBuffer(),
+      $0.PrepareRemoteEgressResponse.fromBuffer);
   static final _$sendMessage =
       $grpc.ClientMethod<$0.SendMessageRequest, $0.ChatStreamEvent>(
           '/turing.v1.ChatService/SendMessage',
@@ -55,6 +67,15 @@ abstract class ChatServiceBase extends $grpc.Service {
   $core.String get $name => 'turing.v1.ChatService';
 
   ChatServiceBase() {
+    $addMethod($grpc.ServiceMethod<$0.PrepareRemoteEgressRequest,
+            $0.PrepareRemoteEgressResponse>(
+        'PrepareRemoteEgress',
+        prepareRemoteEgress_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.PrepareRemoteEgressRequest.fromBuffer(value),
+        ($0.PrepareRemoteEgressResponse value) => value.writeToBuffer()));
     $addMethod($grpc.ServiceMethod<$0.SendMessageRequest, $0.ChatStreamEvent>(
         'SendMessage',
         sendMessage_Pre,
@@ -64,6 +85,15 @@ abstract class ChatServiceBase extends $grpc.Service {
             $0.SendMessageRequest.fromBuffer(value),
         ($0.ChatStreamEvent value) => value.writeToBuffer()));
   }
+
+  $async.Future<$0.PrepareRemoteEgressResponse> prepareRemoteEgress_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.PrepareRemoteEgressRequest> $request) async {
+    return prepareRemoteEgress($call, await $request);
+  }
+
+  $async.Future<$0.PrepareRemoteEgressResponse> prepareRemoteEgress(
+      $grpc.ServiceCall call, $0.PrepareRemoteEgressRequest request);
 
   $async.Stream<$0.ChatStreamEvent> sendMessage_Pre($grpc.ServiceCall $call,
       $async.Future<$0.SendMessageRequest> $request) async* {

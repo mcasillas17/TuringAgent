@@ -14,9 +14,8 @@ import (
 	"time"
 )
 
-// layout is deliberately unexported: callers go through Format so no second
-// implementation of the same layout can drift.
-const layout = "2006-01-02T15:04:05.000000000Z"
+// Layout is the fixed-width UTC representation used for persisted timestamps.
+const Layout = "2006-01-02T15:04:05.000000000Z"
 
 var (
 	// ErrInvalidTimestamp names the class of problem without echoing the value.
@@ -70,7 +69,17 @@ func ParseLegacy(value string) (time.Time, error) {
 
 // Format renders an instant as the canonical fixed-width UTC nanosecond value.
 func Format(value time.Time) string {
-	return value.UTC().Format(layout)
+	return value.UTC().Format(Layout)
+}
+
+// ParseCanonical accepts only the exact fixed-width representation emitted by
+// Format.
+func ParseCanonical(value string) (time.Time, error) {
+	parsed, err := ParseLegacy(value)
+	if err != nil || Format(parsed) != value {
+		return time.Time{}, ErrInvalidTimestamp
+	}
+	return parsed, nil
 }
 
 // NextStateTime returns the timestamp a real lifecycle transition must write:

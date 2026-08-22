@@ -294,9 +294,9 @@ func TestParseLegacyAcceptedValuesFormatFixedWidthAndRoundTrip(t *testing.T) {
 				return
 			}
 			canonical := Format(parsed)
-			if len(canonical) != len(layout) {
+			if len(canonical) != len(Layout) {
 				t.Fatalf("Format(ParseLegacy(%q)) = %q with width %d, want the canonical width %d",
-					value, canonical, len(canonical), len(layout))
+					value, canonical, len(canonical), len(Layout))
 			}
 			reparsed, err := ParseLegacy(canonical)
 			if err != nil {

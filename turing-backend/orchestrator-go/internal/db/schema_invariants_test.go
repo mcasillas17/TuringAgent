@@ -35,7 +35,8 @@ type schemaTablePolicy struct {
 }
 
 var approvedScrubbedExceptionTables = map[string]struct{}{
-	"audit_logs": {},
+	"audit_logs":        {},
+	"session_deletions": {},
 }
 
 var ftsProjectionDeleteChecks = map[string]func(context.Context, *DB) error{
@@ -68,12 +69,33 @@ var currentSchemaTablePolicies = []schemaTablePolicy{
 		kind:      schemaTableIndependent,
 		rationale: "Tools are a discovered capability catalog, not user-derived memory.",
 	},
+	{
+		table:     "mcp_servers",
+		kind:      schemaTableIndependent,
+		rationale: "MCP servers are user-managed capability destinations with explicit enablement.",
+	},
+	{table: "mcp_server_status", kind: schemaTableCascadeOwned, sourceTable: "mcp_servers"},
+	{
+		table:     "mcp_import_issues",
+		kind:      schemaTableIndependent,
+		rationale: "Import issues are configuration diagnostics derived only from the local mcp.json file.",
+	},
+	{
+		table:     "mcp_import_tombstones",
+		kind:      schemaTableIndependent,
+		rationale: "Import tombstones preserve an explicit local deletion across future mcp.json startup imports.",
+	},
 	{table: "tool_calls", kind: schemaTableCascadeOwned, sourceTable: "agent_runs"},
 	{table: "approvals", kind: schemaTableCascadeOwned, sourceTable: "agent_runs"},
 	{
 		table:     "audit_logs",
 		kind:      schemaTableScrubbedException,
 		rationale: "Session deletion scrubs payload content before retaining minimal action evidence.",
+	},
+	{
+		table:     "session_deletions",
+		kind:      schemaTableScrubbedException,
+		rationale: "Deletion receipts retain only lifecycle, bounded counts, and opaque failure state for idempotent retries.",
 	},
 	{
 		table:         "messages_fts",
@@ -116,6 +138,8 @@ var currentSchemaTablePolicies = []schemaTablePolicy{
 	{table: "automation_allowed_tools", kind: schemaTableCascadeOwned, sourceTable: "automations"},
 	{table: "automation_runs", kind: schemaTableCascadeOwned, sourceTable: "agent_runs"},
 	{table: "send_message_idempotency", kind: schemaTableCascadeOwned, sourceTable: "sessions"},
+	{table: "run_egress_decisions", kind: schemaTableCascadeOwned, sourceTable: "agent_runs"},
+	{table: "sandbox_artifacts", kind: schemaTableCascadeOwned, sourceTable: "sessions"},
 }
 
 func TestDerivedStateSchemaPoliciesCoverCurrentSchema(t *testing.T) {
@@ -123,6 +147,35 @@ func TestDerivedStateSchemaPoliciesCoverCurrentSchema(t *testing.T) {
 	database := openMigratedInvariantDB(t, ctx)
 	if err := validateDerivedStateSchema(ctx, database, currentSchemaTablePolicies); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDerivedStateSchemaPoliciesRequireDeletionReceiptAndSandboxArtifacts(t *testing.T) {
+	var receipt, artifacts *schemaTablePolicy
+	for index := range currentSchemaTablePolicies {
+		policy := &currentSchemaTablePolicies[index]
+		switch policy.table {
+		case "session_deletions":
+			receipt = policy
+		case "sandbox_artifacts":
+			artifacts = policy
+		}
+	}
+
+	if receipt == nil {
+		t.Fatal("session_deletions must be classified as a content-free deletion receipt")
+	}
+	if receipt.kind != schemaTableScrubbedException {
+		t.Fatalf("session_deletions policy = %q, want scrubbed exception", receipt.kind)
+	}
+	if receipt.rationale == "" {
+		t.Fatal("session_deletions requires an explicit retention rationale")
+	}
+	if artifacts == nil {
+		t.Fatal("sandbox_artifacts must be classified as session-owned state")
+	}
+	if artifacts.kind != schemaTableCascadeOwned || artifacts.sourceTable != "sessions" {
+		t.Fatalf("sandbox_artifacts policy = %+v, want session-owned cascade", *artifacts)
 	}
 }
 

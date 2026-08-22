@@ -1,4 +1,4 @@
--- TUR-009 canonical run outcomes.
+-- TUR-009 canonical run outcomes (0017 after the merged 0016 MCP registry).
 --
 -- This file is executed in named sections rather than as one statement batch.
 -- The runner splits it on the marker comments below, runs each section inside
@@ -17,7 +17,7 @@
 -- COLUMN cannot express. Every pre-existing column, default, nullability,
 -- foreign key, and check is restated verbatim; the only intentional
 -- differences are the widened status set and the appended canonical state.
-CREATE TABLE agent_runs_0016 (
+CREATE TABLE agent_runs_0017 (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   user_message_id TEXT NOT NULL REFERENCES messages(id),
@@ -76,7 +76,7 @@ CREATE TABLE agent_runs_0016 (
 -- LEFT JOIN on purpose. The state columns are NOT NULL with no default, so a
 -- run the Before hook failed to classify aborts the migration here instead of
 -- being silently dropped by an inner join.
-INSERT INTO agent_runs_0016 (
+INSERT INTO agent_runs_0017 (
   id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status,
   model_provider, model_name, error_code, error_message, created_at, started_at, finished_at,
   cancellation_reason, worker_id, execution_active, execution_exit_acknowledged_at,
@@ -97,7 +97,7 @@ LEFT JOIN run_outcomes_backfill b ON b.run_id = r.id;
 
 DROP TABLE agent_runs;
 
-ALTER TABLE agent_runs_0016 RENAME TO agent_runs;
+ALTER TABLE agent_runs_0017 RENAME TO agent_runs;
 
 -- Recreated because dropping the table dropped them with it.
 CREATE INDEX IF NOT EXISTS idx_runs_session_created ON agent_runs(session_id, created_at);
@@ -133,7 +133,7 @@ WHERE error_code IS NOT NULL
     'automation_approval_failed','automation_tool_not_allowlisted','worker_busy','worker_unavailable',
     'tool_policy_decision_failed','tool_policy_decision_invalid','approval_wait_failed',
     'mcp_call_failed','unknown_tool','tool_runner_unavailable','client_cancelled','cancelled',
-    'run_cancelled','approval_denied'
+    'run_cancelled','approval_denied','egress_decision_required','egress_decision_invalid'
   );
 
 UPDATE jobs
@@ -149,7 +149,7 @@ WHERE error_code IS NOT NULL
     'automation_approval_failed','automation_tool_not_allowlisted','worker_busy','worker_unavailable',
     'tool_policy_decision_failed','tool_policy_decision_invalid','approval_wait_failed',
     'mcp_call_failed','unknown_tool','tool_runner_unavailable','client_cancelled','cancelled',
-    'run_cancelled','approval_denied'
+    'run_cancelled','approval_denied','egress_decision_required','egress_decision_invalid'
   );
 
 UPDATE tool_calls

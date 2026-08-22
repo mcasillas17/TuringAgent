@@ -18,6 +18,19 @@ enum ModelProvider {
   MODEL_PROVIDER_OPENAI_COMPATIBLE = 2;
 }
 
+enum EgressDataCategory {
+  EGRESS_DATA_CATEGORY_UNSPECIFIED = 0;
+  EGRESS_DATA_CATEGORY_CURRENT_MESSAGE = 1;
+  EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY = 2;
+  EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL = 3;
+  EGRESS_DATA_CATEGORY_MEMORY_PROFILE = 4;
+  EGRESS_DATA_CATEGORY_SKILL_CONTENT = 5;
+  EGRESS_DATA_CATEGORY_TOOL_SCHEMAS = 6;
+  EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS = 7;
+  EGRESS_DATA_CATEGORY_TOOL_RESULTS = 8;
+  EGRESS_DATA_CATEGORY_ATTACHMENTS = 9;
+}
+
 enum RoutingRequirementKind {
   ROUTING_REQUIREMENT_KIND_UNSPECIFIED = 0;
   ROUTING_REQUIREMENT_KIND_PROVIDER = 1;
@@ -171,6 +184,57 @@ message ProviderConfig {
   bool enabled = 2;
   string default_model = 3;
   repeated ModelCapability models = 4;
+  // Canonical provider base endpoint. Empty for local providers.
+  string remote_endpoint = 5;
+  bool requires_per_run_consent = 6;
+}
+
+message RemoteEgressDisclosure {
+  string challenge = 1;
+  ModelProvider provider = 2;
+  string model = 3;
+  string endpoint = 4;
+  string endpoint_host = 5;
+  string external_agent_id = 6;
+  repeated EgressDataCategory data_categories = 7;
+  google.protobuf.Timestamp expires_at = 8;
+  repeated RemoteMcpEgressDestination remote_mcp_servers = 9;
+  repeated string selected_tools = 10;
+}
+
+message RemoteMcpEgressDestination {
+  string server_name = 1;
+  string endpoint = 2;
+  string endpoint_host = 3;
+}
+
+message RemoteEgressConsent {
+  string challenge = 1;
+  repeated EgressDataCategory acknowledged_data_categories = 2;
+  bool acknowledged = 3;
+}
+
+// The orchestrator-owned decision frozen for one remote run. It contains no
+// challenge, nonce, credential value/reference, or request content; one-way
+// digests bind those inputs without disclosing them.
+message RunEgressDecision {
+  string decision_id = 1;
+  int32 version = 2;
+  ModelProvider provider = 3;
+  string model = 4;
+  string endpoint = 5;
+  string endpoint_host = 6;
+  string external_agent_id = 7;
+  repeated EgressDataCategory data_categories = 8;
+  google.protobuf.Timestamp consent_granted_at = 9;
+  string challenge_fingerprint = 10;
+  repeated string selected_tools = 11;
+  string skill_snapshot_fingerprint = 12;
+  bool recall_applicable = 13;
+  bool memory_profile_applicable = 14;
+  string external_credential_ref_hash = 15;
+  string request_digest = 16;
+  repeated RemoteMcpEgressDestination remote_mcp_servers = 17;
 }
 
 message AgentDescriptor {

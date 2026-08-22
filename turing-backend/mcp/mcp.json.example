@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "vendor": {
+      "url": "http://vendor-mcp:9000/mcp",
+      "headers": {
+        "Authorization": "Bearer replace-with-the-vendor-token"
+      }
+    },
+    "remote-vendor": {
+      "url": "https://vendor.example/mcp",
+      "tools": [
+        {
+          "name": "vendor.lookup",
+          "inputSchema": {
+            "type": "object"
+          }
+        }
+      ]
+    }
+  }
+}

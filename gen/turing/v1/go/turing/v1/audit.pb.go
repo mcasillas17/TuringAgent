@@ -162,10 +162,14 @@ type AuditPayload struct {
 	// The *_truncated flags are present only when the stored audit payload
 	// itself carried that exact boolean; they report the writer's truncation,
 	// and this read path never truncates or repairs a value of its own.
-	DecisionComment          *string `protobuf:"bytes,18,opt,name=decision_comment,json=decisionComment,proto3,oneof" json:"decision_comment,omitempty"`
-	DecisionCommentTruncated *bool   `protobuf:"varint,19,opt,name=decision_comment_truncated,json=decisionCommentTruncated,proto3,oneof" json:"decision_comment_truncated,omitempty"`
-	DenialReason             *string `protobuf:"bytes,20,opt,name=denial_reason,json=denialReason,proto3,oneof" json:"denial_reason,omitempty"`
-	DenialReasonTruncated    *bool   `protobuf:"varint,21,opt,name=denial_reason_truncated,json=denialReasonTruncated,proto3,oneof" json:"denial_reason_truncated,omitempty"`
+	DecisionComment          *string                `protobuf:"bytes,18,opt,name=decision_comment,json=decisionComment,proto3,oneof" json:"decision_comment,omitempty"`
+	DecisionCommentTruncated *bool                  `protobuf:"varint,19,opt,name=decision_comment_truncated,json=decisionCommentTruncated,proto3,oneof" json:"decision_comment_truncated,omitempty"`
+	DenialReason             *string                `protobuf:"bytes,20,opt,name=denial_reason,json=denialReason,proto3,oneof" json:"denial_reason,omitempty"`
+	DenialReasonTruncated    *bool                  `protobuf:"varint,21,opt,name=denial_reason_truncated,json=denialReasonTruncated,proto3,oneof" json:"denial_reason_truncated,omitempty"`
+	EndpointHost             *string                `protobuf:"bytes,22,opt,name=endpoint_host,json=endpointHost,proto3,oneof" json:"endpoint_host,omitempty"`
+	EgressDataCategories     []EgressDataCategory   `protobuf:"varint,23,rep,packed,name=egress_data_categories,json=egressDataCategories,proto3,enum=turing.v1.EgressDataCategory" json:"egress_data_categories,omitempty"`
+	EgressDecisionVersion    *int32                 `protobuf:"varint,24,opt,name=egress_decision_version,json=egressDecisionVersion,proto3,oneof" json:"egress_decision_version,omitempty"`
+	EgressConsentGrantedAt   *timestamppb.Timestamp `protobuf:"bytes,25,opt,name=egress_consent_granted_at,json=egressConsentGrantedAt,proto3,oneof" json:"egress_consent_granted_at,omitempty"`
 	unknownFields            protoimpl.UnknownFields
 	sizeCache                protoimpl.SizeCache
 }
@@ -345,6 +349,34 @@ func (x *AuditPayload) GetDenialReasonTruncated() bool {
 		return *x.DenialReasonTruncated
 	}
 	return false
+}
+
+func (x *AuditPayload) GetEndpointHost() string {
+	if x != nil && x.EndpointHost != nil {
+		return *x.EndpointHost
+	}
+	return ""
+}
+
+func (x *AuditPayload) GetEgressDataCategories() []EgressDataCategory {
+	if x != nil {
+		return x.EgressDataCategories
+	}
+	return nil
+}
+
+func (x *AuditPayload) GetEgressDecisionVersion() int32 {
+	if x != nil && x.EgressDecisionVersion != nil {
+		return *x.EgressDecisionVersion
+	}
+	return 0
+}
+
+func (x *AuditPayload) GetEgressConsentGrantedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.EgressConsentGrantedAt
+	}
+	return nil
 }
 
 type AuditEntry struct {
@@ -590,7 +622,7 @@ var File_turing_v1_audit_proto protoreflect.FileDescriptor
 
 const file_turing_v1_audit_proto_rawDesc = "" +
 	"\n" +
-	"\x15turing/v1/audit.proto\x12\tturing.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x16turing/v1/common.proto\"\xb4\t\n" +
+	"\x15turing/v1/audit.proto\x12\tturing.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x16turing/v1/common.proto\"\x98\f\n" +
 	"\fAuditPayload\x122\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x1c.turing.v1.AuditPayloadStateR\x05state\x12 \n" +
 	"\ttool_name\x18\x02 \x01(\tH\x00R\btoolName\x88\x01\x01\x12$\n" +
@@ -620,7 +652,11 @@ const file_turing_v1_audit_proto_rawDesc = "" +
 	"\x10decision_comment\x18\x12 \x01(\tH\x10R\x0fdecisionComment\x88\x01\x01\x12A\n" +
 	"\x1adecision_comment_truncated\x18\x13 \x01(\bH\x11R\x18decisionCommentTruncated\x88\x01\x01\x12(\n" +
 	"\rdenial_reason\x18\x14 \x01(\tH\x12R\fdenialReason\x88\x01\x01\x12;\n" +
-	"\x17denial_reason_truncated\x18\x15 \x01(\bH\x13R\x15denialReasonTruncated\x88\x01\x01B\f\n" +
+	"\x17denial_reason_truncated\x18\x15 \x01(\bH\x13R\x15denialReasonTruncated\x88\x01\x01\x12(\n" +
+	"\rendpoint_host\x18\x16 \x01(\tH\x14R\fendpointHost\x88\x01\x01\x12S\n" +
+	"\x16egress_data_categories\x18\x17 \x03(\x0e2\x1d.turing.v1.EgressDataCategoryR\x14egressDataCategories\x12;\n" +
+	"\x17egress_decision_version\x18\x18 \x01(\x05H\x15R\x15egressDecisionVersion\x88\x01\x01\x12Z\n" +
+	"\x19egress_consent_granted_at\x18\x19 \x01(\v2\x1a.google.protobuf.TimestampH\x16R\x16egressConsentGrantedAt\x88\x01\x01B\f\n" +
 	"\n" +
 	"_tool_nameB\x0e\n" +
 	"\f_server_nameB\b\n" +
@@ -641,7 +677,10 @@ const file_turing_v1_audit_proto_rawDesc = "" +
 	"\x11_decision_commentB\x1d\n" +
 	"\x1b_decision_comment_truncatedB\x10\n" +
 	"\x0e_denial_reasonB\x1a\n" +
-	"\x18_denial_reason_truncated\"\xe0\x02\n" +
+	"\x18_denial_reason_truncatedB\x10\n" +
+	"\x0e_endpoint_hostB\x1a\n" +
+	"\x18_egress_decision_versionB\x1c\n" +
+	"\x1a_egress_consent_granted_at\"\xe0\x02\n" +
 	"\n" +
 	"AuditEntry\x12\x19\n" +
 	"\baudit_id\x18\x01 \x01(\tR\aauditId\x12*\n" +
@@ -705,27 +744,30 @@ var file_turing_v1_audit_proto_goTypes = []any{
 	(*AuditEntry)(nil),               // 3: turing.v1.AuditEntry
 	(*ListAuditEntriesRequest)(nil),  // 4: turing.v1.ListAuditEntriesRequest
 	(*ListAuditEntriesResponse)(nil), // 5: turing.v1.ListAuditEntriesResponse
-	(*timestamppb.Timestamp)(nil),    // 6: google.protobuf.Timestamp
-	(*PageRequest)(nil),              // 7: turing.v1.PageRequest
-	(*PageResponse)(nil),             // 8: turing.v1.PageResponse
+	(EgressDataCategory)(0),          // 6: turing.v1.EgressDataCategory
+	(*timestamppb.Timestamp)(nil),    // 7: google.protobuf.Timestamp
+	(*PageRequest)(nil),              // 8: turing.v1.PageRequest
+	(*PageResponse)(nil),             // 9: turing.v1.PageResponse
 }
 var file_turing_v1_audit_proto_depIdxs = []int32{
 	1,  // 0: turing.v1.AuditPayload.state:type_name -> turing.v1.AuditPayloadState
-	2,  // 1: turing.v1.AuditEntry.payload:type_name -> turing.v1.AuditPayload
-	6,  // 2: turing.v1.AuditEntry.created_at:type_name -> google.protobuf.Timestamp
-	6,  // 3: turing.v1.ListAuditEntriesRequest.created_at_start:type_name -> google.protobuf.Timestamp
-	6,  // 4: turing.v1.ListAuditEntriesRequest.created_at_end:type_name -> google.protobuf.Timestamp
-	0,  // 5: turing.v1.ListAuditEntriesRequest.order:type_name -> turing.v1.AuditOrder
-	7,  // 6: turing.v1.ListAuditEntriesRequest.page:type_name -> turing.v1.PageRequest
-	3,  // 7: turing.v1.ListAuditEntriesResponse.entries:type_name -> turing.v1.AuditEntry
-	8,  // 8: turing.v1.ListAuditEntriesResponse.page:type_name -> turing.v1.PageResponse
-	4,  // 9: turing.v1.AuditService.ListAuditEntries:input_type -> turing.v1.ListAuditEntriesRequest
-	5,  // 10: turing.v1.AuditService.ListAuditEntries:output_type -> turing.v1.ListAuditEntriesResponse
-	10, // [10:11] is the sub-list for method output_type
-	9,  // [9:10] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	6,  // 1: turing.v1.AuditPayload.egress_data_categories:type_name -> turing.v1.EgressDataCategory
+	7,  // 2: turing.v1.AuditPayload.egress_consent_granted_at:type_name -> google.protobuf.Timestamp
+	2,  // 3: turing.v1.AuditEntry.payload:type_name -> turing.v1.AuditPayload
+	7,  // 4: turing.v1.AuditEntry.created_at:type_name -> google.protobuf.Timestamp
+	7,  // 5: turing.v1.ListAuditEntriesRequest.created_at_start:type_name -> google.protobuf.Timestamp
+	7,  // 6: turing.v1.ListAuditEntriesRequest.created_at_end:type_name -> google.protobuf.Timestamp
+	0,  // 7: turing.v1.ListAuditEntriesRequest.order:type_name -> turing.v1.AuditOrder
+	8,  // 8: turing.v1.ListAuditEntriesRequest.page:type_name -> turing.v1.PageRequest
+	3,  // 9: turing.v1.ListAuditEntriesResponse.entries:type_name -> turing.v1.AuditEntry
+	9,  // 10: turing.v1.ListAuditEntriesResponse.page:type_name -> turing.v1.PageResponse
+	4,  // 11: turing.v1.AuditService.ListAuditEntries:input_type -> turing.v1.ListAuditEntriesRequest
+	5,  // 12: turing.v1.AuditService.ListAuditEntries:output_type -> turing.v1.ListAuditEntriesResponse
+	12, // [12:13] is the sub-list for method output_type
+	11, // [11:12] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_audit_proto_init() }

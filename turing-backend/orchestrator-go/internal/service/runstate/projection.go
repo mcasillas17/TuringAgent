@@ -108,10 +108,8 @@ var allowedOutcomeReasons = map[string][]runoutcome.Reason{
 // against — is returned as absence rather than as a plausible outcome nobody
 // can justify.
 //
-// The Flutter client does not read this state yet: it renders the persisted
-// event payloads, and consuming the projected lifecycle and outcome is the
-// planned Task 9/10 work. What is committed here is the projection, which is
-// what that work will render.
+// Flutter consumes this projection from both message history and live events,
+// then reconciles the two sources by run ID and state version.
 //
 // An unrecognized lifecycle or reason is the opposite case and is projected as
 // the explicit UNKNOWN value: the row is internally consistent as far as this

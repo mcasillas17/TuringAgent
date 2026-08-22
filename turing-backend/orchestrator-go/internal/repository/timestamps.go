@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"context"
+	"database/sql"
 	"strings"
 	"time"
 
@@ -16,6 +18,41 @@ import (
 // they are not going to be rewritten by being read.
 func FormatTimestamp(value time.Time) string {
 	return persisttime.Format(value)
+}
+
+func nextSessionActivityTimeTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID string,
+	candidate time.Time,
+	additionalAnchors ...time.Time,
+) (time.Time, error) {
+	var currentText string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT updated_at FROM sessions WHERE id = ?`,
+		sessionID,
+	).Scan(&currentText); err != nil {
+		return time.Time{}, err
+	}
+	return nextSessionActivityTime(currentText, candidate, additionalAnchors...)
+}
+
+func nextSessionActivityTime(
+	currentText string,
+	candidate time.Time,
+	additionalAnchors ...time.Time,
+) (time.Time, error) {
+	current, err := persisttime.ParseCanonical(currentText)
+	if err != nil {
+		return time.Time{}, ErrInvalidSessionTimestamp
+	}
+	anchors := append([]time.Time{current}, additionalAnchors...)
+	for _, anchor := range anchors {
+		if !candidate.After(anchor) {
+			candidate = anchor.Add(time.Nanosecond)
+		}
+	}
+	return candidate, nil
 }
 
 func sqliteTimestampNanos(column string) string {

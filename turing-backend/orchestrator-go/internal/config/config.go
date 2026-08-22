@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -9,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/secretbox"
 )
 
@@ -29,6 +31,13 @@ type Config struct {
 	RuntimeToken          string
 	ApprovalConsumerToken string
 	ApprovalJWTSecret     string
+	CursorHMACKey         [32]byte
+	MCPFilesCleanupToken  string
+	// MCPFilesBaseURL is a non-secret internal endpoint used only for
+	// signed session-namespace cleanup; the orchestrator never receives the
+	// normal mcp-files bearer token.
+	MCPFilesBaseURL     string
+	EgressSigningSecret string
 	// IntegrationKey seals third-party credentials before they are stored.
 	// Optional: when it is empty, connecting an account is refused with a
 	// reason rather than the credential being stored in the clear.
@@ -37,6 +46,7 @@ type Config struct {
 	InternalPort              int
 	DatabasePath              string
 	SkillsRoot                string
+	MCPConfigRoot             string
 	OllamaBaseURL             string
 	OllamaModel               string
 	OllamaContextWindowTokens int
@@ -45,7 +55,8 @@ type Config struct {
 	// MCP_FILES_ENABLED and OPENAI_ENABLED, which Compose derives from
 	// whether MCP_FILES_TOKEN_GENERAL / OPENAI_API_KEY are set without ever
 	// handing this process either actual secret value. The orchestrator
-	// never calls mcp-files or OpenAI itself: FilesMCPEnabled only feeds
+	// never calls mcp-files through its normal bearer or OpenAI itself:
+	// FilesMCPEnabled only feeds
 	// GetConfig's static "is mcp-files configured" flag, and OpenAIEnabled
 	// only decides whether the legacy per-run capability fallback advertises
 	// OpenAI for a runtime that has not yet reported its own capabilities —
@@ -163,6 +174,11 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if runtimeToken == approvalConsumerToken {
 		return Config{}, errors.New("TURING_RUNTIME_TOKEN and TURING_APPROVAL_CONSUMER_TOKEN must differ")
 	}
+	mcpFilesCleanupToken := env["TURING_MCP_FILES_CLEANUP_TOKEN"]
+	if mcpFilesCleanupToken != "" &&
+		(mcpFilesCleanupToken == runtimeToken || mcpFilesCleanupToken == approvalConsumerToken) {
+		return Config{}, errors.New("TURING_MCP_FILES_CLEANUP_TOKEN must differ from internal service tokens")
+	}
 	// FilesMCPEnabled has no default: this install must say explicitly
 	// whether mcp-files is provisioned, mirroring the previous requirement
 	// that MCP_FILES_TOKEN_GENERAL be set. Only mcp-files and the agent
@@ -184,6 +200,18 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		return Config{}, err
 	}
 	approvalSecret, err := required("TURING_APPROVAL_JWT_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
+	egressSigningSecret, err := required("TURING_EGRESS_SIGNING_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
+	cursorSecret, err := required("TURING_CURSOR_HMAC_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
+	cursorHMACKey, err := parseCursorHMACKey(cursorSecret)
 	if err != nil {
 		return Config{}, err
 	}
@@ -267,25 +295,54 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	openAIBaseURL := stringValue("OPENAI_BASE_URL", "https://api.openai.com/v1")
+	if openAIEnabled {
+		endpoint, parseErr := egress.ParseKeyedEndpoint(openAIBaseURL)
+		if parseErr != nil {
+			return Config{}, fmt.Errorf("OPENAI_BASE_URL: %w", parseErr)
+		}
+		openAIBaseURL = endpoint.Canonical
+	} else {
+		endpoint, parseErr := egress.ParseUnkeyedEndpoint(openAIBaseURL)
+		if parseErr != nil {
+			return Config{}, fmt.Errorf("OPENAI_BASE_URL: %w", parseErr)
+		}
+		openAIBaseURL = endpoint.Canonical
+	}
+	ollamaEndpoint, err := egress.ParseLocalEndpoint(
+		stringValue("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
+	)
+	if err != nil {
+		return Config{}, fmt.Errorf("OLLAMA_BASE_URL: %w", err)
+	}
 
 	skillsRoot := stringValue("SKILLS_ROOT", "/skills")
 	if !filepath.IsAbs(skillsRoot) || filepath.Clean(skillsRoot) != skillsRoot {
 		return Config{}, fmt.Errorf("SKILLS_ROOT must be a clean absolute path")
 	}
+	mcpConfigRoot := stringValue("MCP_CONFIG_ROOT", "/mcp")
+	if !filepath.IsAbs(mcpConfigRoot) || filepath.Clean(mcpConfigRoot) != mcpConfigRoot {
+		return Config{}, fmt.Errorf("MCP_CONFIG_ROOT must be a clean absolute path")
+	}
 	return Config{
 		ClientAPIKey:              clientKey,
 		RuntimeToken:              runtimeToken,
 		ApprovalConsumerToken:     approvalConsumerToken,
+		MCPFilesCleanupToken:      mcpFilesCleanupToken,
+		MCPFilesBaseURL:           stringValue("MCP_FILES_BASE_URL", "http://turing-mcp-files:7110/mcp"),
 		ApprovalJWTSecret:         approvalSecret,
+		EgressSigningSecret:       egressSigningSecret,
+		CursorHMACKey:             cursorHMACKey,
 		IntegrationKey:            integrationKey,
 		PublicPort:                publicPort,
 		InternalPort:              internalPort,
 		DatabasePath:              stringValue("DATABASE_PATH", "/app/data/turing.db"),
 		SkillsRoot:                skillsRoot,
-		OllamaBaseURL:             stringValue("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
+		MCPConfigRoot:             mcpConfigRoot,
+		OllamaBaseURL:             ollamaEndpoint.Canonical,
 		OllamaModel:               stringValue("OLLAMA_MODEL", "qwen2.5:7b"),
 		OllamaContextWindowTokens: ollamaContextWindowTokens,
-		OpenAIBaseURL:             stringValue("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+		OpenAIBaseURL:             openAIBaseURL,
 		FilesMCPEnabled:           filesMCPEnabled,
 		OpenAIEnabled:             openAIEnabled,
 		OpenAIModel:               stringValue("OPENAI_MODEL", "gpt-4o-mini"),
@@ -302,4 +359,23 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		ApprovalTTLMS:             approvalTTL,
 		LogLevel:                  stringValue("LOG_LEVEL", "info"),
 	}, nil
+}
+
+func parseCursorHMACKey(value string) ([32]byte, error) {
+	var key [32]byte
+	if len(value) != hex.EncodedLen(len(key)) {
+		return key, fmt.Errorf("invalid TURING_CURSOR_HMAC_SECRET")
+	}
+	for i := range value {
+		c := value[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return key, fmt.Errorf("invalid TURING_CURSOR_HMAC_SECRET")
+		}
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		return key, fmt.Errorf("invalid TURING_CURSOR_HMAC_SECRET")
+	}
+	copy(key[:], decoded)
+	return key, nil
 }

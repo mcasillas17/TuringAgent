@@ -33,6 +33,25 @@ type Skill struct {
 	FolderPath          string
 }
 
+type grantScopeState int
+
+const (
+	grantScopeStale grantScopeState = iota
+	grantScopeCurrent
+	grantScopeRefresh
+)
+
+func classifyGrantScope(scope, currentScope string, currentRequires []string) grantScopeState {
+	if scope == currentScope {
+		return grantScopeCurrent
+	}
+	previousRequires, validScope := decodeGrantScope(scope)
+	if validScope && !equalStrings(previousRequires, currentRequires) {
+		return grantScopeRefresh
+	}
+	return grantScopeStale
+}
+
 // SkillSnapshot is the immutable skill state carried by a queued job. The
 // JSON tags are a compatibility contract with jobs already persisted in
 // payload_json; changing them would make a waiting job lose its instructions.
@@ -186,6 +205,67 @@ func (r *Repository) enabledSkillSnapshotsTx(ctx context.Context, tx *sql.Tx) ([
 	return enabledSnapshots(skills), nil
 }
 
+func (r *Repository) enabledSkillSnapshotsReadOnlyTx(ctx context.Context, tx *sql.Tx) ([]SkillSnapshot, error) {
+	files, err := r.scanSkills()
+	if err != nil {
+		return nil, err
+	}
+	skills := make([]Skill, 0, len(files))
+	for _, fileSkill := range files {
+		var enabled int
+		err := tx.QueryRowContext(ctx,
+			`SELECT enabled FROM skill_settings WHERE skill_id = ?`, fileSkill.ID).Scan(&enabled)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		rows, err := tx.QueryContext(ctx,
+			`SELECT capability, grant_scope FROM skill_capability_grants WHERE skill_id = ? ORDER BY capability`, fileSkill.ID)
+		if err != nil {
+			return nil, err
+		}
+		currentScope := encodeGrantScope(fileSkill)
+		var effectiveGrants []string
+		for rows.Next() {
+			var capability, scope string
+			if err := rows.Scan(&capability, &scope); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			if !containsString(fileSkill.Requires, capability) {
+				continue
+			}
+			if classifyGrantScope(scope, currentScope, fileSkill.Requires) != grantScopeStale {
+				effectiveGrants = append(effectiveGrants, capability)
+			}
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		missing := make([]string, 0, len(fileSkill.Requires))
+		for _, capability := range fileSkill.Requires {
+			if !containsString(effectiveGrants, capability) {
+				missing = append(missing, capability)
+			}
+		}
+		skills = append(skills, Skill{
+			SkillID: fileSkill.ID, Name: fileSkill.Name,
+			Description: fileSkill.Description, Category: fileSkill.Category,
+			Body: fileSkill.Body, Version: fileSkill.Version,
+			Author: fileSkill.Author, License: fileSkill.License,
+			Requires:   append([]string(nil), fileSkill.Requires...),
+			References: cloneStringMap(fileSkill.References),
+			Enabled:    enabled == 1, GrantedCapabilities: effectiveGrants,
+			MissingCapabilities: missing, ParseError: fileSkill.ParseError,
+			FolderPath: fileSkill.FolderPath,
+		})
+	}
+	sort.Slice(skills, func(i, j int) bool { return skills[i].SkillID < skills[j].SkillID })
+	return enabledSnapshots(skills), nil
+}
+
 func enabledSnapshots(skills []Skill) []SkillSnapshot {
 	var snapshots []SkillSnapshot
 	for _, skill := range skills {
@@ -243,22 +323,18 @@ func reconcileSkillsTx(ctx context.Context, tx *sql.Tx, files []skillfiles.Skill
 				stale = append(stale, capability)
 				continue
 			}
-			if scope == currentScope {
+			switch classifyGrantScope(scope, currentScope, skill.Requires) {
+			case grantScopeCurrent:
 				continue
-			}
-			previousRequires, validScope := decodeGrantScope(scope)
-			if validScope && !equalStrings(previousRequires, skill.Requires) {
+			case grantScopeRefresh:
 				// A declaration that widened or narrowed keeps grants for the
 				// capabilities present on both sides, while removed grants above are
 				// deleted. Refreshing the scope records the declaration now observed.
 				refreshed = append(refreshed, capability)
 				continue
+			default:
+				stale = append(stale, capability)
 			}
-			// The same declaration appearing in a different file revision may
-			// have been dropped and re-added between scans. Requiring fresh
-			// consent is conservative for non-capability edits, but never restores
-			// an old grant silently.
-			stale = append(stale, capability)
 		}
 		if err := rows.Close(); err != nil {
 			return err

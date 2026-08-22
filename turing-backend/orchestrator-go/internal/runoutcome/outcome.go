@@ -249,9 +249,8 @@ func ToolCallFailureCategory(eventType string) (Reason, bool) {
 
 // StepNotice is a failure-like run-step projection: a category plus bounded
 // counters. It accepts no display string, so the sentence a reader shows has to
-// be derived from the category rather than persisted by the backend. Deriving
-// it is the planned Task 9/10 client work; what is committed here is the
-// category the backend is allowed to publish.
+// be derived from the category rather than persisted by the backend. Flutter
+// derives localized notice copy from the category and bounded counters.
 type StepNotice struct {
 	category    NoticeCategory
 	attempt     int32
@@ -323,6 +322,8 @@ var failureReasons = map[failureKey]Reason{
 	{OriginApprovalExpiry, "approval_expired"}:                  ReasonExpired,
 	{OriginAutomationPolicy, "automation_approval_failed"}:      ReasonPolicyDenied,
 	{OriginAutomationPolicy, "automation_tool_not_allowlisted"}: ReasonPolicyDenied,
+	{OriginToolPolicy, "egress_decision_required"}:              ReasonPolicyDenied,
+	{OriginToolPolicy, "egress_decision_invalid"}:               ReasonPolicyDenied,
 	{OriginClientLifecycle, "client_cancelled"}:                 ReasonAbandoned,
 
 	// Nonterminal dispatch conditions: the run keeps outcome none while its

@@ -55,6 +55,59 @@ class ModelProvider extends $pb.ProtobufEnum {
   const ModelProvider._(super.value, super.name);
 }
 
+class EgressDataCategory extends $pb.ProtobufEnum {
+  static const EgressDataCategory EGRESS_DATA_CATEGORY_UNSPECIFIED =
+      EgressDataCategory._(
+          0, _omitEnumNames ? '' : 'EGRESS_DATA_CATEGORY_UNSPECIFIED');
+  static const EgressDataCategory EGRESS_DATA_CATEGORY_CURRENT_MESSAGE =
+      EgressDataCategory._(
+          1, _omitEnumNames ? '' : 'EGRESS_DATA_CATEGORY_CURRENT_MESSAGE');
+  static const EgressDataCategory EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY =
+      EgressDataCategory._(
+          2, _omitEnumNames ? '' : 'EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY');
+  static const EgressDataCategory EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL =
+      EgressDataCategory._(
+          3, _omitEnumNames ? '' : 'EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL');
+  static const EgressDataCategory EGRESS_DATA_CATEGORY_MEMORY_PROFILE =
+      EgressDataCategory._(
+          4, _omitEnumNames ? '' : 'EGRESS_DATA_CATEGORY_MEMORY_PROFILE');
+  static const EgressDataCategory EGRESS_DATA_CATEGORY_SKILL_CONTENT =
+      EgressDataCategory._(
+          5, _omitEnumNames ? '' : 'EGRESS_DATA_CATEGORY_SKILL_CONTENT');
+  static const EgressDataCategory EGRESS_DATA_CATEGORY_TOOL_SCHEMAS =
+      EgressDataCategory._(
+          6, _omitEnumNames ? '' : 'EGRESS_DATA_CATEGORY_TOOL_SCHEMAS');
+  static const EgressDataCategory EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS =
+      EgressDataCategory._(
+          7, _omitEnumNames ? '' : 'EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS');
+  static const EgressDataCategory EGRESS_DATA_CATEGORY_TOOL_RESULTS =
+      EgressDataCategory._(
+          8, _omitEnumNames ? '' : 'EGRESS_DATA_CATEGORY_TOOL_RESULTS');
+  static const EgressDataCategory EGRESS_DATA_CATEGORY_ATTACHMENTS =
+      EgressDataCategory._(
+          9, _omitEnumNames ? '' : 'EGRESS_DATA_CATEGORY_ATTACHMENTS');
+
+  static const $core.List<EgressDataCategory> values = <EgressDataCategory>[
+    EGRESS_DATA_CATEGORY_UNSPECIFIED,
+    EGRESS_DATA_CATEGORY_CURRENT_MESSAGE,
+    EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY,
+    EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL,
+    EGRESS_DATA_CATEGORY_MEMORY_PROFILE,
+    EGRESS_DATA_CATEGORY_SKILL_CONTENT,
+    EGRESS_DATA_CATEGORY_TOOL_SCHEMAS,
+    EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS,
+    EGRESS_DATA_CATEGORY_TOOL_RESULTS,
+    EGRESS_DATA_CATEGORY_ATTACHMENTS,
+  ];
+
+  static final $core.List<EgressDataCategory?> _byValue =
+      $pb.ProtobufEnum.$_initByValueList(values, 9);
+  static EgressDataCategory? valueOf($core.int value) =>
+      value < 0 || value >= _byValue.length ? null : _byValue[value];
+
+  const EgressDataCategory._(super.value, super.name);
+}
+
 class RoutingRequirementKind extends $pb.ProtobufEnum {
   static const RoutingRequirementKind ROUTING_REQUIREMENT_KIND_UNSPECIFIED =
       RoutingRequirementKind._(

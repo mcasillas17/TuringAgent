@@ -71,14 +71,18 @@ message AgentJob {
   ExternalAgentTarget external_agent = 14;
   int32 required_context_tokens = 15;
   int32 minimum_worker_max_concurrent_runs = 16;
+  RunEgressDecision egress_decision = 17;
+  // Exact tool names frozen by the orchestrator for this run. The runtime may
+  // expose a subset after context budgeting, never tools outside this set.
+  repeated string selected_tools = 18;
   // The run's state version at assignment. The worker echoes it on later
   // reports so the orchestrator can reject anything computed against a state it
   // has already moved past.
-  int64 expected_state_version = 17;
+  int64 expected_state_version = 19;
   // Durable identity of this assignment attempt. It is what proves a later
   // report or resume came from the attempt that still owns the run, rather than
   // from a fenced predecessor; the worker must echo it unchanged.
-  string assignment_attempt_id = 18;
+  string assignment_attempt_id = 20;
 }
 
 // Where to send a run that the user routed off this machine.
@@ -97,6 +101,7 @@ message ExternalAgentTarget {
   string display_name = 1;
   string base_url = 2;
   string credential_ref = 3;
+  string agent_id = 4;
 }
 
 // A frozen skill snapshot as the runtime sees it. instructions retains field 2
@@ -134,6 +139,9 @@ message WorkerCapabilities {
   // Credential names only, never API keys. This complete set authorizes which
   // frozen external-agent destinations this worker can execute.
   repeated string external_agent_credential_refs = 6;
+  // Highest run-egress decision version this worker enforces before provider
+  // I/O. Zero means it predates explicit remote-egress enforcement.
+  int32 remote_egress_decision_version = 7;
 }
 
 enum ToolDiscoveryStatus {
@@ -286,6 +294,10 @@ message RuntimeShutdownRequested {
   string reason = 1;
 }
 
+message RuntimeMcpRegistryChanged {
+  string registration_id = 1;
+}
+
 message RuntimeCommand {
   oneof command {
     RuntimeWorkerAccepted worker_accepted = 1;
@@ -294,7 +306,8 @@ message RuntimeCommand {
     RuntimeApprovalUpdated approval_updated = 4;
     RuntimeShutdownRequested shutdown_requested = 5;
     ToolPolicyDecision tool_policy_decision = 6;
-    RuntimeApprovalResumeAccepted approval_resume_accepted = 7;
+    RuntimeMcpRegistryChanged mcp_registry_changed = 7;
+    RuntimeApprovalResumeAccepted approval_resume_accepted = 8;
   }
 }
 

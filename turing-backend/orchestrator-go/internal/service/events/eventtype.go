@@ -44,6 +44,7 @@ var eventTypes = map[string]turingv1.TuringEventType{
 	"error":                   turingv1.TuringEventType_TURING_EVENT_TYPE_ERROR,
 	"system":                  turingv1.TuringEventType_TURING_EVENT_TYPE_SYSTEM,
 	"session.updated":         turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_UPDATED,
+	"session.deleted":         turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_DELETED,
 }
 
 // canonicalByFoldedType indexes the same table by the spelling-insensitive form

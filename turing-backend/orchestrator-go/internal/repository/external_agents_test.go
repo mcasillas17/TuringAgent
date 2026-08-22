@@ -88,6 +88,7 @@ func TestCreateExternalAgentValidatesEveryField(t *testing.T) {
 		{"long model", func(in *ExternalAgentInput) { in.Model = strings.Repeat("m", maxExternalAgentModelRunes+1) }, ErrExternalAgentModelTooLong},
 		{"blank base URL", func(in *ExternalAgentInput) { in.BaseURL = "" }, ErrExternalAgentBaseURLEmpty},
 		{"relative base URL", func(in *ExternalAgentInput) { in.BaseURL = "/v1" }, ErrExternalAgentBaseURLInvalid},
+		{"malformed IPv6 base URL", func(in *ExternalAgentInput) { in.BaseURL = "http://[::1" }, ErrExternalAgentBaseURLInvalid},
 		{"non-http scheme", func(in *ExternalAgentInput) { in.BaseURL = "ftp://example.com/v1" }, ErrExternalAgentBaseURLInvalid},
 		{"query string", func(in *ExternalAgentInput) { in.BaseURL = "https://example.com/v1?key=abc" }, ErrExternalAgentBaseURLInvalid},
 		// The whole conversation travels over this URL. Plaintext to somewhere
@@ -169,12 +170,9 @@ func TestUpdateExternalAgentRejectsRenamingOntoAnotherName(t *testing.T) {
 	}
 }
 
-// A gateway on this machine is still on this machine, so plaintext there has
-// not left anywhere. Refusing it would make a local OpenAI-compatible proxy
-// unusable for no privacy gain.
-func TestCreateExternalAgentAllowsPlaintextOnlyForThisMachine(t *testing.T) {
+func TestCreateExternalAgentAllowsPlaintextOnlyForLiteralLoopback(t *testing.T) {
 	repo, ctx := newTitleTestRepo(t)
-	for index, host := range []string{"localhost", "127.0.0.1", "host.docker.internal"} {
+	for index, host := range []string{"localhost", "127.0.0.1", "[::1]"} {
 		input := anthropicAgent()
 		input.DisplayName = host
 		input.Provider = "other"
@@ -182,6 +180,15 @@ func TestCreateExternalAgentAllowsPlaintextOnlyForThisMachine(t *testing.T) {
 		if _, err := repo.CreateExternalAgent(ctx, input); err != nil {
 			t.Fatalf("case %d: create with %s: %v", index, input.BaseURL, err)
 		}
+	}
+}
+
+func TestCreateExternalAgentRejectsPlaintextDockerHostAlias(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	input := anthropicAgent()
+	input.BaseURL = "http://host.docker.internal:4000/v1"
+	if _, err := repo.CreateExternalAgent(ctx, input); !errors.Is(err, ErrExternalAgentBaseURLInsecure) {
+		t.Fatalf("create with Docker host alias = %v, want ErrExternalAgentBaseURLInsecure", err)
 	}
 }
 
@@ -416,11 +423,12 @@ func TestEnqueueUserMessageRoutesToTheConversationsAgent(t *testing.T) {
 	// The request asks for the local model. The conversation's configured
 	// destination wins, or the bar above the messages would be lying.
 	result, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
-		SessionID:     session.SessionID,
-		Content:       "hello",
-		AgentID:       "general_assistant",
-		ModelProvider: "ollama",
-		Model:         "qwen2.5:7b",
+		SessionID:      session.SessionID,
+		Content:        "hello",
+		AgentID:        "general_assistant",
+		ModelProvider:  "ollama",
+		Model:          "qwen2.5:7b",
+		EgressDecision: testRemoteEgressDecision(t, agent.Model, agent.BaseURL, agent.AgentID, agent.CredentialRef),
 	})
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
@@ -504,6 +512,7 @@ func TestEnqueueUserMessageRecordsThatTheMessageLeftTheMachine(t *testing.T) {
 	result, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
 		SessionID: session.SessionID, Content: "hello",
 		AgentID: "general_assistant", ModelProvider: "ollama", Model: "qwen2.5:7b",
+		EgressDecision: testRemoteEgressDecision(t, agent.Model, agent.BaseURL, agent.AgentID, agent.CredentialRef),
 	})
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
@@ -563,6 +572,7 @@ func TestQueuedJobKeepsTheAgentItWasEnqueuedWith(t *testing.T) {
 	result, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
 		SessionID: session.SessionID, Content: "hello",
 		AgentID: "general_assistant", ModelProvider: "ollama", Model: "qwen2.5:7b",
+		EgressDecision: testRemoteEgressDecision(t, agent.Model, agent.BaseURL, agent.AgentID, agent.CredentialRef),
 	})
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
@@ -602,6 +612,7 @@ func TestClaimNextJobCarriesTheRoutedAgent(t *testing.T) {
 	if _, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
 		SessionID: session.SessionID, Content: "hello",
 		AgentID: "general_assistant", ModelProvider: "ollama", Model: "qwen2.5:7b",
+		EgressDecision: testRemoteEgressDecision(t, agent.Model, agent.BaseURL, agent.AgentID, agent.CredentialRef),
 	}); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -634,12 +645,17 @@ func TestARequeuedRoutedJobIsStillRoutedOnItsNextAttempt(t *testing.T) {
 	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
 		SessionID: session.SessionID, Content: "hello",
 		AgentID: "general_assistant", ModelProvider: "ollama", Model: "qwen2.5:7b",
+		EgressDecision: testRemoteEgressDecision(t, agent.Model, agent.BaseURL, agent.AgentID, agent.CredentialRef),
 	})
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
-	if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-1"); err != nil {
+	first, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-1")
+	if err != nil {
 		t.Fatalf("first claim: %v", err)
+	}
+	if first.EgressDecision == nil {
+		t.Fatal("first claim lost egress decision")
 	}
 
 	decision, err := repo.RequeueOrFailRetryableRun(ctx, RetryableRunFailureInput{
@@ -664,6 +680,19 @@ func TestARequeuedRoutedJobIsStillRoutedOnItsNextAttempt(t *testing.T) {
 	}
 	if retried.ModelProvider != "openai_compatible" || retried.Model != "claude-sonnet-4-5" {
 		t.Fatalf("retried job = %q/%q, want the routed provider and model", retried.ModelProvider, retried.Model)
+	}
+	if retried.EgressDecision == nil ||
+		retried.EgressDecision.DecisionID != first.EgressDecision.DecisionID ||
+		retried.EgressDecision.ChallengeFingerprint != first.EgressDecision.ChallengeFingerprint {
+		t.Fatalf("retry decision = %+v, want original %+v", retried.EgressDecision, first.EgressDecision)
+	}
+	var decisions int
+	if err := repo.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM run_egress_decisions WHERE run_id = ?`, enqueued.RunID).Scan(&decisions); err != nil {
+		t.Fatal(err)
+	}
+	if decisions != 1 {
+		t.Fatalf("run egress decisions = %d, want 1", decisions)
 	}
 }
 

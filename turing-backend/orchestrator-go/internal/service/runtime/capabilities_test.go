@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -12,6 +13,61 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
+
+func TestEgressToolNamesUsesIntersectionAcrossEligibleWorkers(t *testing.T) {
+	h := newHarness(t)
+	firstCapabilities := modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
+		"gpt-4o-mini",
+		8192,
+		1,
+	)
+	firstCapabilities.Tools = []*turingv1.DiscoveredTool{
+		{ServerName: "system", ToolName: "common", Schema: &structpb.Struct{}},
+		{ServerName: "system", ToolName: "first_only", Schema: &structpb.Struct{}},
+	}
+
+	first := connectWorkerCapabilities(t, h, "worker-egress-first", "registration-egress-first", firstCapabilities)
+	defer func() { _ = first.CloseSend() }()
+	secondCapabilities := modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
+		"gpt-4o-mini",
+		8192,
+		1,
+	)
+	secondCapabilities.Tools = []*turingv1.DiscoveredTool{
+		{ServerName: "system", ToolName: "common", Schema: &structpb.Struct{}},
+		{ServerName: "system", ToolName: "second_only", Schema: &structpb.Struct{}},
+	}
+	second := connectWorkerCapabilities(t, h, "worker-egress-second", "registration-egress-second", secondCapabilities)
+	defer func() { _ = second.CloseSend() }()
+
+	got := h.service.EgressToolNames(repository.RoutingRequirements{
+		AgentID: "general_assistant", ModelProvider: "openai_compatible",
+		Model: "gpt-4o-mini",
+	})
+	if !slices.Equal(got, []string{"system/common"}) {
+		t.Fatalf("egress tools = %v, want common intersection", got)
+	}
+}
+
+func TestSelectedToolsAloneGateWorkerCompatibility(t *testing.T) {
+	decoded, _, err := decodeWorkerCapabilities(modelCapabilities(
+		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
+		"gpt-4o-mini",
+		8192,
+		1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workerCapabilitiesSupportRoute(decoded, repository.RoutingRequirements{
+		AgentID: "general_assistant", ModelProvider: "openai_compatible",
+		Model: "gpt-4o-mini", SelectedTools: []string{"files/files.read"},
+	}) {
+		t.Fatal("worker without frozen selected tool was considered compatible")
+	}
+}
 
 func TestValidateRoutingRejectsEachUnavailableCapability(t *testing.T) {
 	h := newHarness(t)
@@ -189,7 +245,7 @@ func TestLegacyWorkerDoesNotSynthesizeUnadvertisedToolCapabilities(t *testing.T)
 	}
 }
 
-func TestLegacyWorkerRequiresExplicitExternalCredentialRefs(t *testing.T) {
+func TestLegacyWorkerCannotAuthorizeRemoteEgress(t *testing.T) {
 	ready := &turingv1.RuntimeWorkerReady{
 		WorkerId: "legacy-external", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1,
 	}
@@ -216,8 +272,8 @@ func TestLegacyWorkerRequiresExplicitExternalCredentialRefs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !workerCapabilitiesSupportRoute(capabilities, route) {
-		t.Fatal("explicit legacy credential ref did not authorize its matching route")
+	if workerCapabilitiesSupportRoute(capabilities, route) {
+		t.Fatal("legacy credential ref authorized remote egress without decision enforcement")
 	}
 	route.ExternalAgentCredentialRef = "openai"
 	if workerCapabilitiesSupportRoute(capabilities, route) {
@@ -276,6 +332,7 @@ func TestProviderAndAgentAvailabilityReflectLiveWorkerUnion(t *testing.T) {
 			{Provider: turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, Model: "gpt-4o-mini", MaxContextTokens: 16384},
 		},
 		AgentIds: []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT}, MaxConcurrentRuns: 1,
+		RemoteEgressDecisionVersion: 1,
 	})
 	defer func() { _ = second.CloseSend() }()
 
@@ -314,6 +371,7 @@ func TestExternalAgentRouteRejectsPositiveContextRequirement(t *testing.T) {
 		MaxConcurrentRuns:           1,
 		SupportsExternalAgents:      true,
 		ExternalAgentCredentialRefs: []string{"claude"},
+		RemoteEgressDecisionVersion: 1,
 	})
 	defer func() { _ = stream.CloseSend() }()
 	route := repository.RoutingRequirements{
@@ -345,6 +403,7 @@ func TestExternalAgentRouteRequiresExactCredentialRef(t *testing.T) {
 		MaxConcurrentRuns:           1,
 		SupportsExternalAgents:      true,
 		ExternalAgentCredentialRefs: []string{"claude"},
+		RemoteEgressDecisionVersion: 1,
 	})
 	defer func() { _ = stream.CloseSend() }()
 

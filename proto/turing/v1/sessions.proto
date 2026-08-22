@@ -24,8 +24,16 @@ message CreateSessionResponse {
   google.protobuf.Timestamp created_at = 2;
 }
 
+enum SessionListFilter {
+  SESSION_LIST_FILTER_UNSPECIFIED = 0;
+  SESSION_LIST_FILTER_ACTIVE = 1;
+  SESSION_LIST_FILTER_ARCHIVED = 2;
+  SESSION_LIST_FILTER_ALL = 3;
+}
+
 message ListSessionsRequest {
   PageRequest page = 1;
+  SessionListFilter filter = 2;
 }
 
 message ListSessionsResponse {
@@ -41,8 +49,59 @@ message DeleteSessionRequest {
   string session_id = 1;
 }
 
+enum SessionDeletionState {
+  SESSION_DELETION_STATE_UNSPECIFIED = 0;
+  SESSION_DELETION_STATE_IN_PROGRESS = 1;
+  SESSION_DELETION_STATE_FAILED_EXTERNAL = 2;
+  SESSION_DELETION_STATE_COMPLETED = 3;
+}
+
+message SessionDeletionReceipt {
+  string session_id = 1;
+  SessionDeletionState state = 2;
+  int64 lifecycle_version = 3;
+  bool retryable = 4;
+  string error_code = 5;
+  int64 terminal_sequence = 6;
+  int32 run_count = 7;
+  int32 message_count = 8;
+  int32 retained_legacy_artifact_count = 9;
+}
+
+message ListSessionDeletionReceiptsRequest {}
+
+message ListSessionDeletionReceiptsResponse {
+  repeated SessionDeletionReceipt deletions = 1;
+}
+
 message DeleteSessionResponse {
   string session_id = 1;
+  SessionDeletionReceipt deletion = 2;
+}
+
+message RenameSessionRequest {
+  string session_id = 1;
+  string title = 2;
+}
+
+message RenameSessionResponse {
+  Session session = 1;
+}
+
+message ArchiveSessionRequest {
+  string session_id = 1;
+}
+
+message ArchiveSessionResponse {
+  Session session = 1;
+}
+
+message RestoreSessionRequest {
+  string session_id = 1;
+}
+
+message RestoreSessionResponse {
+  Session session = 1;
 }
 
 message ListMessagesRequest {
@@ -97,9 +156,13 @@ service SessionService {
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   rpc GetSession(GetSessionRequest) returns (Session);
   rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
+  rpc ListSessionDeletionReceipts(ListSessionDeletionReceiptsRequest) returns (ListSessionDeletionReceiptsResponse);
   rpc ListMessages(ListMessagesRequest) returns (ListMessagesResponse);
   rpc SearchMessages(SearchMessagesRequest) returns (SearchMessagesResponse);
   rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
   rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
   rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+  rpc RenameSession(RenameSessionRequest) returns (RenameSessionResponse);
+  rpc ArchiveSession(ArchiveSessionRequest) returns (ArchiveSessionResponse);
+  rpc RestoreSession(RestoreSessionRequest) returns (RestoreSessionResponse);
 }

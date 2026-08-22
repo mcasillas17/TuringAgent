@@ -17,6 +17,8 @@ class Automation {
     this.lastRunId = '',
     this.lastRunStatus = '',
     this.lastRunError = '',
+    this.lastOccurrenceFailureCode = '',
+    this.lastOccurrenceFailedAt,
   });
 
   final String automationId;
@@ -42,6 +44,8 @@ class Automation {
   final String lastRunId;
   final String lastRunStatus;
   final String lastRunError;
+  final String lastOccurrenceFailureCode;
+  final DateTime? lastOccurrenceFailedAt;
 
   bool get hasRun => lastRunAt != null;
   bool get lastRunFailed => lastRunStatus == 'failed';

@@ -2835,6 +2835,7 @@ func testJob() *turingv1.AgentJob {
 type scriptedProvider struct {
 	events   []llm.StreamEvent
 	requests []llm.ChatRequest
+	endpoint string
 	// endsWithoutTerminalEvent models a stream that is cut off: the channel
 	// closes having sent neither a completed nor an error event. Every real
 	// provider in this codebase converts that into an explicit error before the
@@ -2843,7 +2844,14 @@ type scriptedProvider struct {
 	endsWithoutTerminalEvent bool
 }
 
-func (p *scriptedProvider) ID() string { return "ollama" }
+func (p *scriptedProvider) ID() string {
+	if p.endpoint != "" {
+		return "openai_compatible"
+	}
+	return "ollama"
+}
+
+func (p *scriptedProvider) EgressEndpoint() string { return p.endpoint }
 
 func (p *scriptedProvider) ContextWindowTokens() int { return llm.DefaultContextWindowTokens }
 func (p *scriptedProvider) MaxOutputTokens() int     { return llm.DefaultMaxOutputTokens }
@@ -2900,9 +2908,17 @@ type queuedProvider struct {
 	responses     [][]llm.StreamEvent
 	requests      []llm.ChatRequest
 	contextWindow int
+	endpoint      string
 }
 
-func (p *queuedProvider) ID() string { return "queued" }
+func (p *queuedProvider) ID() string {
+	if p.endpoint != "" {
+		return "openai_compatible"
+	}
+	return "queued"
+}
+
+func (p *queuedProvider) EgressEndpoint() string { return p.endpoint }
 
 func (p *queuedProvider) ContextWindowTokens() int {
 	if p.contextWindow > 0 {
@@ -3628,14 +3644,24 @@ func TestGeneralAssistantTypedFailureOriginAtEveryReportingSite(t *testing.T) {
 				return NewGeneralAssistant(nil, fakeMessageClient{}, nil)
 			},
 			job: func() *turingv1.AgentJob {
-				job := testJob()
-				job.ExternalAgent = &turingv1.ExternalAgentTarget{
-					DisplayName: "Claude", BaseUrl: "https://example.invalid", CredentialRef: "MISSING_KEY",
-				}
-				return job
+				return routedJob()
 			},
 			wantCode:   "external_agent_unavailable",
 			wantOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_EXTERNAL_PROVIDER,
+			wantRetry:  turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_NEVER,
+		},
+		{
+			name: "egress_decision_invalid_is_tool_policy",
+			assistant: func(*testing.T) *GeneralAssistant {
+				return NewGeneralAssistant(nil, fakeMessageClient{}, nil)
+			},
+			job: func() *turingv1.AgentJob {
+				job := routedJob()
+				job.EgressDecision = nil
+				return job
+			},
+			wantCode:   "egress_decision_invalid",
+			wantOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_POLICY,
 			wantRetry:  turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_NEVER,
 		},
 		{

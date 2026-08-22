@@ -6,27 +6,51 @@ import '../models/external_agent.dart';
 import '../models/integration.dart';
 import '../models/automation.dart';
 import '../models/message.dart';
+import '../models/mcp_server.dart';
+import '../models/remote_egress.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
+import '../models/session_page.dart';
+import '../models/session_deletion.dart';
 import '../models/skill.dart';
 import '../models/telemetry.dart';
 import '../models/tool_descriptor.dart';
 import '../models/turing_event.dart';
 
-abstract class TuringApi {
+abstract class TuringApi implements RemoteEgressApi {
   Future<Map<String, dynamic>> getConfig();
 
   Future<Map<String, dynamic>> createSession({String? title});
 
   Future<List<Session>> listSessions({int limit = 50, String? after});
 
+  Future<SessionPage> listSessionPage({
+    int limit = 50,
+    String? cursor,
+    SessionListFilter filter = SessionListFilter.active,
+  });
+
   Future<Session> getSession({required String sessionId});
 
-  /// Removes a session, its messages and its run history. Permanent: there is
-  /// no undo, and the content also leaves the search index. Note this does NOT
-  /// remove files the session wrote into the sandbox — mcp-files has no notion
-  /// of a session, so those outlive it.
-  Future<void> deleteSession({required String sessionId});
+  Future<Session> renameSession({
+    required String sessionId,
+    required String title,
+  });
+
+  Future<Session> archiveSession({required String sessionId});
+
+  Future<Session> restoreSession({required String sessionId});
+
+  /// Starts or advances an idempotent session withdrawal. The caller removes
+  /// local state only after a completed receipt; an in-progress or
+  /// failed-external receipt remains visible for retry.
+  Future<SessionDeletionReceipt> deleteSession({required String sessionId});
+
+  /// Content-free receipts for withdrawals that have not completed yet. This
+  /// lets the client preserve a retryable placeholder after restart without
+  /// redisclosing the session title or transcript.
+  Future<List<SessionDeletionReceipt>> listSessionDeletionReceipts() async =>
+      const [];
 
   Future<List<Message>> listMessages({
     required String sessionId,
@@ -52,6 +76,34 @@ abstract class TuringApi {
     String? idempotencyKey,
   });
 
+  @override
+  Future<RemoteEgressDisclosure?> prepareRemoteEgress({
+    required String sessionId,
+    required String content,
+    String modelProvider = 'ollama',
+    required String idempotencyKey,
+  }) async {
+    if (modelProvider == 'ollama') return null;
+    throw const TuringApiException(
+      code: 'remote_egress_unsupported',
+      message: 'This client cannot prepare remote egress consent',
+    );
+  }
+
+  @override
+  Future<Map<String, dynamic>> sendMessageWithRemoteEgressConsent({
+    required String sessionId,
+    required String content,
+    String modelProvider = 'ollama',
+    required String idempotencyKey,
+    required RemoteEgressConsent consent,
+  }) {
+    throw const TuringApiException(
+      code: 'remote_egress_unsupported',
+      message: 'This client cannot send remote egress consent',
+    );
+  }
+
   Future<Map<String, dynamic>> approveApproval(
     String approvalId, {
     String? comment,
@@ -65,6 +117,60 @@ abstract class TuringApi {
   /// Every tool the backend has discovered from its MCP servers, with the
   /// approval policy currently attached to each.
   Future<List<ToolDescriptor>> listTools();
+
+  Future<McpRegistrySnapshot> listMcpServers() async {
+    final tools = await listTools();
+    final grouped = <String, List<ToolDescriptor>>{};
+    for (final tool in tools) {
+      grouped.putIfAbsent(tool.serverName, () => []).add(tool);
+    }
+    return McpRegistrySnapshot(
+      servers: [
+        for (final entry in grouped.entries)
+          McpServer(
+            serverId: entry.key,
+            name: entry.key,
+            transport: 'http',
+            url: '',
+            tier: McpServerTier.unspecified,
+            enabled: true,
+            liveness: McpServerLiveness.unknown,
+            statusMessage: '',
+            sandboxConfined: false,
+            tools: entry.value,
+          ),
+      ],
+      unsupported: const [],
+    );
+  }
+
+  Future<McpServer> setMcpServerEnabled({
+    required String serverId,
+    required bool enabled,
+  }) {
+    throw const TuringApiException(
+      code: 'mcp_registry_unsupported',
+      message: 'This client cannot update MCP servers',
+    );
+  }
+
+  Future<ToolDescriptor> updateMcpToolPolicy({
+    required String serverId,
+    required String toolName,
+    required ToolPolicy policy,
+  }) {
+    throw const TuringApiException(
+      code: 'mcp_registry_unsupported',
+      message: 'This client cannot update MCP tool policy',
+    );
+  }
+
+  Future<void> deleteMcpServer({required String serverId}) {
+    throw const TuringApiException(
+      code: 'mcp_registry_unsupported',
+      message: 'This client cannot delete MCP servers',
+    );
+  }
 
   /// The agents the backend can route a run to.
   Future<List<AgentDescriptor>> listAgents();
@@ -224,6 +330,23 @@ abstract class TuringApi {
     AuditOrder order = AuditOrder.descending,
     int limit = 50,
     String? cursor,
+  });
+}
+
+abstract interface class RemoteEgressApi {
+  Future<RemoteEgressDisclosure?> prepareRemoteEgress({
+    required String sessionId,
+    required String content,
+    String modelProvider = 'ollama',
+    required String idempotencyKey,
+  });
+
+  Future<Map<String, dynamic>> sendMessageWithRemoteEgressConsent({
+    required String sessionId,
+    required String content,
+    String modelProvider = 'ollama',
+    required String idempotencyKey,
+    required RemoteEgressConsent consent,
   });
 }
 

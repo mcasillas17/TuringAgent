@@ -38,11 +38,13 @@ func TestSendMessagePublishesTheEgressNoticeToOtherSubscribers(t *testing.T) {
 	subscription, unsubscribe := h.bus.Subscribe(sessionID)
 	defer unsubscribe()
 
-	stream, err := h.chatClient.SendMessage(h.clientContext(), &turingv1.SendMessageRequest{
+	request := &turingv1.SendMessageRequest{
 		SessionId:     sessionID,
 		Content:       "hello",
 		ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
-	})
+	}
+	consentRemoteRequest(t, h, request)
+	stream, err := h.chatClient.SendMessage(h.clientContext(), request)
 	if err != nil {
 		t.Fatal(err)
 	}

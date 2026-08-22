@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 )
 
 const (
@@ -52,7 +54,7 @@ func NewOpenAICompatible(baseURL string, apiKey string, client *http.Client) *Op
 	return &OpenAICompatible{
 		baseURL:             strings.TrimRight(baseURL, "/"),
 		apiKey:              apiKey,
-		client:              client,
+		client:              egress.NoRedirectClient(client),
 		contextWindowTokens: DefaultContextWindowTokens,
 		maxOutputTokens:     DefaultMaxOutputTokens,
 		usageDrainTimeout:   defaultOpenAIUsageDrainTimeout,
@@ -77,6 +79,8 @@ func NewOpenAICompatibleWithLimits(
 
 func (p *OpenAICompatible) ID() string { return "openai_compatible" }
 
+func (p *OpenAICompatible) EgressEndpoint() string { return p.baseURL }
+
 func (p *OpenAICompatible) ContextWindowTokens() int { return p.contextWindowTokens }
 
 func (p *OpenAICompatible) MaxOutputTokens() int { return p.maxOutputTokens }
@@ -90,7 +94,11 @@ func (p *OpenAICompatible) post(ctx context.Context, body []byte) (*http.Respons
 	if p.apiKey != "" {
 		httpReq.Header.Set("authorization", "Bearer "+p.apiKey)
 	}
-	return p.client.Do(httpReq)
+	response, err := p.client.Do(httpReq)
+	if err != nil {
+		return nil, egress.RedactRedirectError(err)
+	}
+	return response, nil
 }
 
 // isOpenAIMalformedRequestStatus reports the two statuses a server uses to say
@@ -997,7 +1005,7 @@ func parseOpenAIErrorEnvelope(data []byte) (StreamEvent, error) {
 		message += fmt.Sprintf(" (%s)", providerCode)
 	}
 	message += ": " + envelope.Message
-	return providerError(classifyOpenAIError(providerType, providerCode, envelope.Message), message), nil
+	return providerError(classifyOpenAIError(providerType, providerCode), message), nil
 }
 
 func openAIErrorString(raw json.RawMessage, field string) (string, error) {
@@ -1011,11 +1019,11 @@ func openAIErrorString(raw json.RawMessage, field string) (string, error) {
 	return value, nil
 }
 
-func classifyOpenAIError(errorType string, errorCode string, message string) string {
+func classifyOpenAIError(errorType string, errorCode string) string {
 	if isOpenAIQuotaError(errorType, errorCode) {
 		return "model_quota_exceeded"
 	}
-	details := normalizeOpenAIErrorDetails(errorType + " " + errorCode + " " + message)
+	details := normalizeOpenAIErrorDetails(errorType + " " + errorCode)
 	if containsOpenAIErrorIndicator(details,
 		"authentication", "unauthorized", "api key", "permission", "forbidden",
 		"access denied", "account deactivated", "organization deactivated",

@@ -15,6 +15,8 @@ import '../../features/workspace/telemetry_page.dart';
 import '../../features/workspace/workspace_pages.dart';
 import '../../logic/theme_logic.dart';
 import '../../models/session.dart';
+import '../../models/session_page.dart';
+import '../../models/session_deletion.dart';
 import '../../models/session_title.dart';
 import '../../models/turing_event.dart';
 import '../../networking/api_client.dart';
@@ -100,13 +102,23 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   // which the compact app bar needs and a FutureBuilder cannot be asked.
   List<Session> _sessions = const [];
   bool _sessionsLoading = true;
+  bool _sessionsLoadingMore = false;
   bool _sessionsFailed = false;
+  String? _nextSessionsCursor;
+  int _loadedSessionPageCount = 1;
+  Set<String> _listedSessionIds = const {};
+  final Set<String> _eventOnlySessionIds = {};
   ShellDestination _destination = ShellDestination.chats;
   String? _activeSessionId;
   String _modelProvider = 'ollama';
   bool _creating = false;
   final Set<String> _deleting = {};
+  final Set<String> _lifecycleMutating = {};
+  final Set<String> _withdrawingSessionIds = {};
   final Set<String> _locallyDeletedSessionIds = {};
+  final StreamController<String> _sessionDeletionEvents =
+      StreamController<String>.broadcast();
+  final Map<String, int> _sessionDeletionGenerations = {};
   final Map<String, _SessionSnapshot> _sessionSnapshots = {};
   int _sessionStateRevision = 0;
   int _sessionRefreshRequest = 0;
@@ -175,6 +187,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     _sessionUpdateStabilityTimer?.cancel();
     unawaited(_sessionUpdateSubscription?.cancel());
     _sessionUpdateSource?.close();
+    unawaited(_sessionDeletionEvents.close());
     super.dispose();
   }
 
@@ -188,11 +201,57 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   Future<void> _refreshSessions() async {
     final request = ++_sessionRefreshRequest;
     final startingRevision = _sessionStateRevision;
+    final pagesToRefresh = _loadedSessionPageCount;
+    final inferableDeletionIds = Set<String>.of(_withdrawingSessionIds);
     try {
-      final sessions = await widget.apiClient.listSessions();
+      final Future<List<SessionDeletionReceipt>?> pendingReceiptsFuture = widget
+          .apiClient
+          .listSessionDeletionReceipts()
+          .then<List<SessionDeletionReceipt>?>(
+            (receipts) => receipts,
+            onError: (Object _) => null,
+          );
+      final refreshed = <String, Session>{};
+      String? cursor;
+      for (var pageIndex = 0; pageIndex < pagesToRefresh; pageIndex++) {
+        final page = await widget.apiClient.listSessionPage(cursor: cursor);
+        if (!mounted || request != _sessionRefreshRequest) return;
+        for (final session in page.sessions) {
+          refreshed[session.sessionId] = session;
+        }
+        cursor = page.nextCursor;
+        if (cursor == null) break;
+      }
+      final pendingReceipts = await pendingReceiptsFuture;
+      if (pendingReceipts == null) {
+        throw Exception('list session deletion receipts failed');
+      }
       if (!mounted || request != _sessionRefreshRequest) return;
+      final pendingSessions = pendingReceipts
+          .where((receipt) => receipt.state != SessionDeletionState.completed)
+          .map(
+            (receipt) => Session(
+              sessionId: receipt.sessionId,
+              title: 'Deletion pending',
+              updatedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+            ),
+          )
+          .toList(growable: false);
+
       setState(() {
-        _sessions = _reconcileSessionRefresh(sessions, startingRevision);
+        _recordPendingDeletionReceipts(
+          pendingReceipts,
+          inferableDeletionIds: inferableDeletionIds,
+        );
+        _sessions = _reconcileSessionRefresh([
+          ...refreshed.values,
+          ...pendingSessions,
+        ], startingRevision);
+        _listedSessionIds = {
+          ...refreshed.keys,
+          ...pendingSessions.map((session) => session.sessionId),
+        };
+        _nextSessionsCursor = cursor;
         _sessionsLoading = false;
         _sessionsFailed = false;
       });
@@ -207,19 +266,164 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     }
   }
 
+  Future<void> _loadMoreSessions() async {
+    final cursor = _nextSessionsCursor;
+    if (cursor == null || _sessionsLoadingMore) return;
+    final refreshRequest = _sessionRefreshRequest;
+    setState(() => _sessionsLoadingMore = true);
+    try {
+      final page = await widget.apiClient.listSessionPage(cursor: cursor);
+      if (!mounted ||
+          _sessionRefreshRequest != refreshRequest ||
+          _nextSessionsCursor != cursor) {
+        return;
+      }
+      setState(() {
+        final merged = List<Session>.of(_sessions);
+        for (final session in page.sessions) {
+          if (_withdrawingSessionIds.contains(session.sessionId)) continue;
+          final authoritative = _resolveSessionSnapshot(
+            session,
+            observedByList: true,
+          );
+          _eventOnlySessionIds.remove(authoritative.sessionId);
+          merged.removeWhere(
+            (candidate) => candidate.sessionId == authoritative.sessionId,
+          );
+          if (authoritative.status == SessionStatus.active &&
+              !_locallyDeletedSessionIds.contains(authoritative.sessionId)) {
+            _insertSessionByRecency(merged, authoritative);
+          }
+        }
+        _removeArchivedSessions(merged);
+        _sessions = merged;
+        _listedSessionIds = {
+          ..._listedSessionIds,
+          ...page.sessions.map((session) => session.sessionId),
+        };
+        _nextSessionsCursor = page.nextCursor;
+        _loadedSessionPageCount++;
+        _sessionsFailed = false;
+      });
+    } on Exception {
+      if (!mounted) return;
+      setState(() => _sessionsFailed = true);
+    } finally {
+      if (mounted) setState(() => _sessionsLoadingMore = false);
+    }
+  }
+
+  void _recordPendingDeletionReceipts(
+    Iterable<SessionDeletionReceipt> receipts, {
+    required Set<String> inferableDeletionIds,
+  }) {
+    final observed = <String>{};
+    for (final receipt in receipts) {
+      final sessionId = receipt.sessionId;
+      if (sessionId.isEmpty) continue;
+      final previousGeneration = _sessionDeletionGenerations[sessionId] ?? -1;
+      if (receipt.lifecycleVersion < previousGeneration) {
+        if (receipt.state != SessionDeletionState.completed) {
+          observed.add(sessionId);
+        }
+        continue;
+      }
+      _sessionDeletionGenerations[sessionId] = receipt.lifecycleVersion;
+      if (receipt.state == SessionDeletionState.completed) {
+        _withdrawingSessionIds.remove(sessionId);
+        _recordDeletionTombstone(sessionId);
+        _sessionSnapshots.remove(sessionId);
+        _sessions = _sessions
+            .where((session) => session.sessionId != sessionId)
+            .toList();
+        if (_activeSessionId == sessionId) {
+          _releaseChatEventSource();
+          _activeSessionId = null;
+        }
+        continue;
+      }
+      observed.add(sessionId);
+      _withdrawingSessionIds.add(sessionId);
+      if (_activeSessionId == sessionId) {
+        _releaseChatEventSource();
+        _activeSessionId = null;
+      }
+    }
+    for (final sessionId in inferableDeletionIds) {
+      if (!_withdrawingSessionIds.contains(sessionId)) continue;
+      if (observed.contains(sessionId)) continue;
+      _withdrawingSessionIds.remove(sessionId);
+      _recordDeletionTombstone(sessionId);
+      _sessionSnapshots.remove(sessionId);
+      _sessions = _sessions
+          .where((session) => session.sessionId != sessionId)
+          .toList();
+      if (_activeSessionId == sessionId) {
+        _releaseChatEventSource();
+        _activeSessionId = null;
+      }
+    }
+  }
+
   void _applyGlobalSessionUpdated(TuringEvent event) {
+    if (event.type == 'session.deleted') {
+      _applySessionDeleted(event.sessionId);
+      return;
+    }
     _applySessionUpdated(event);
+  }
+
+  void _applySessionDeleted(String sessionId) {
+    if (!mounted) return;
+    if (_chatEventSourceSessionId == sessionId) {
+      _releaseChatEventSource();
+    }
+    setState(() {
+      _recordDeletionTombstone(sessionId);
+      _withdrawingSessionIds.remove(sessionId);
+      _sessionSnapshots.remove(sessionId);
+      _sessions = _sessions
+          .where((session) => session.sessionId != sessionId)
+          .toList();
+      if (_activeSessionId == sessionId) {
+        _activeSessionId = null;
+      }
+    });
+  }
+
+  void _recordDeletionTombstone(String sessionId) {
+    if (_locallyDeletedSessionIds.add(sessionId)) {
+      _sessionDeletionEvents.add(sessionId);
+    }
   }
 
   void _applySessionUpdated(TuringEvent event) {
     if (!mounted) return;
-    if (_locallyDeletedSessionIds.contains(event.sessionId)) return;
+    if (_locallyDeletedSessionIds.contains(event.sessionId) ||
+        _withdrawingSessionIds.contains(event.sessionId)) {
+      return;
+    }
     final title = event.payload['title'];
     final updatedAtValue = event.payload['updatedAt'];
     if (title is! String || updatedAtValue is! String) return;
     final updatedAt = DateTime.tryParse(updatedAtValue);
     final updatedAtNanoseconds = _parseTimestampNanoseconds(updatedAtValue);
     if (updatedAt == null || updatedAtNanoseconds == null) return;
+    final previousSnapshot = _sessionSnapshots[event.sessionId];
+    final statusValue = event.payload['status'];
+    final status = switch (statusValue) {
+      'active' => SessionStatus.active,
+      'archived' => SessionStatus.archived,
+      null when previousSnapshot?.session.status == SessionStatus.archived =>
+        null,
+      null => SessionStatus.active,
+      _ => null,
+    };
+    if (status == null) return;
+    if (previousSnapshot != null &&
+        previousSnapshot.session.updatedAtNanoseconds >= updatedAtNanoseconds) {
+      return;
+    }
     final index = _sessions.indexWhere(
       (session) => session.sessionId == event.sessionId,
     );
@@ -232,18 +436,33 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       title: title.isEmpty ? null : title,
       updatedAt: updatedAt.toUtc(),
       updatedAtNanoseconds: updatedAtNanoseconds,
+      status: status,
     );
+    if (updated.status == SessionStatus.archived &&
+        _activeSessionId == updated.sessionId) {
+      _releaseChatEventSource();
+    }
     setState(() {
       final next = List<Session>.of(_sessions);
       if (index >= 0) {
         final previous = next.removeAt(index);
-        if (previous.updatedAtNanoseconds == updated.updatedAtNanoseconds) {
+        if (updated.status == SessionStatus.archived) {
+          if (_activeSessionId == updated.sessionId) {
+            _activeSessionId = null;
+          }
+        } else if (previous.updatedAtNanoseconds ==
+            updated.updatedAtNanoseconds) {
           next.insert(index, updated);
         } else {
           _insertSessionByRecency(next, updated);
         }
-      } else {
+      } else if (updated.status == SessionStatus.active) {
         _insertSessionByRecency(next, updated);
+        _eventOnlySessionIds.add(updated.sessionId);
+      }
+      if (updated.status == SessionStatus.archived &&
+          _activeSessionId == updated.sessionId) {
+        _activeSessionId = null;
       }
       _sessions = next;
       _recordSessionSnapshot(
@@ -276,23 +495,40 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     int startingRevision,
   ) {
     final refreshedSessions = refreshed.toList();
-    final merged = refreshedSessions
+    final merged = _sessions
         .where(
-          (session) => !_locallyDeletedSessionIds.contains(session.sessionId),
+          (session) =>
+              !_listedSessionIds.contains(session.sessionId) &&
+              !_eventOnlySessionIds.contains(session.sessionId) &&
+              !_locallyDeletedSessionIds.contains(session.sessionId),
         )
         .toList();
+    for (final session in refreshedSessions) {
+      final authoritative = _resolveSessionSnapshot(
+        session,
+        observedByList: true,
+      );
+      _eventOnlySessionIds.remove(authoritative.sessionId);
+      merged.removeWhere(
+        (candidate) => candidate.sessionId == authoritative.sessionId,
+      );
+      if (authoritative.status == SessionStatus.active &&
+          !_locallyDeletedSessionIds.contains(authoritative.sessionId)) {
+        merged.add(authoritative);
+      }
+    }
     for (final entry in _sessionSnapshots.entries.toList()) {
       final snapshot = entry.value;
       final current = snapshot.session;
+      if (_locallyDeletedSessionIds.contains(current.sessionId)) continue;
       final index = merged.indexWhere(
         (session) => session.sessionId == current.sessionId,
       );
       if (index < 0) {
-        if (snapshot.retainUntilObserved ||
-            snapshot.revision > startingRevision) {
+        if (current.status == SessionStatus.active &&
+            (snapshot.retainUntilObserved ||
+                snapshot.revision > startingRevision)) {
           _insertSessionByRecency(merged, current);
-        } else {
-          _sessionSnapshots.remove(entry.key);
         }
         continue;
       }
@@ -304,9 +540,58 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
           replacement.updatedAtNanoseconds) {
         merged[index] = current;
       }
-      _sessionSnapshots.remove(entry.key);
     }
+    _removeArchivedSessions(merged);
+    merged.sort(_compareSessionsByRecency);
     return merged;
+  }
+
+  Session _resolveSessionSnapshot(
+    Session session, {
+    required bool observedByList,
+  }) {
+    final previous = _sessionSnapshots[session.sessionId];
+    if (_withdrawingSessionIds.contains(session.sessionId) &&
+        session.title == 'Deletion pending') {
+      _recordSessionSnapshot(session, retainUntilObserved: false);
+      return session;
+    }
+    if (previous == null ||
+        session.updatedAtNanoseconds > previous.session.updatedAtNanoseconds) {
+      _recordSessionSnapshot(
+        session,
+        retainUntilObserved: observedByList
+            ? false
+            : previous?.retainUntilObserved ?? false,
+      );
+      return session;
+    }
+    if (observedByList &&
+        session.updatedAtNanoseconds == previous.session.updatedAtNanoseconds &&
+        previous.retainUntilObserved) {
+      _sessionSnapshots[session.sessionId] = _SessionSnapshot(
+        session: previous.session,
+        revision: previous.revision,
+        retainUntilObserved: false,
+      );
+    }
+    return previous.session;
+  }
+
+  void _removeArchivedSessions(List<Session> sessions) {
+    sessions.removeWhere(
+      (session) =>
+          _sessionSnapshots[session.sessionId]?.session.status ==
+          SessionStatus.archived,
+    );
+  }
+
+  static int _compareSessionsByRecency(Session left, Session right) {
+    final timestampOrder = right.updatedAtNanoseconds.compareTo(
+      left.updatedAtNanoseconds,
+    );
+    if (timestampOrder != 0) return timestampOrder;
+    return right.sessionId.compareTo(left.sessionId);
   }
 
   void _recordSessionSnapshot(
@@ -403,8 +688,9 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
           title: Text('Delete "${sessionDisplayTitle(session)}"?'),
           content: const Text(
             'This permanently removes the conversation, its messages and its '
-            'run history, and it will no longer appear in search. Files '
-            'written into the sandbox are not removed. This cannot be undone.',
+            'run history, and it will no longer appear in search. '
+            'Session-owned sandbox files are removed; legacy sandbox files '
+            'that predate session ownership are retained. This cannot be undone.',
           ),
           actions: [
             TextButton(
@@ -419,18 +705,19 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
         ),
       );
       if (confirmed != true) return;
-      await widget.apiClient.deleteSession(sessionId: session.sessionId);
+      final receipt = await widget.apiClient.deleteSession(
+        sessionId: session.sessionId,
+      );
       if (!mounted) return;
-      setState(() {
-        _locallyDeletedSessionIds.add(session.sessionId);
-        _sessionSnapshots.remove(session.sessionId);
-        _sessions = _sessions
-            .where((candidate) => candidate.sessionId != session.sessionId)
-            .toList();
-        if (_activeSessionId == session.sessionId) {
-          _activeSessionId = null;
-        }
-      });
+      _applyDeletionReceipt(session, receipt);
+      if (receipt.state != SessionDeletionState.completed) {
+        _toast(
+          receipt.state == SessionDeletionState.failedExternal
+              ? 'This chat could not be fully withdrawn yet. Retry deletion.'
+              : 'This chat is still being withdrawn. Retry deletion shortly.',
+        );
+        return;
+      }
       unawaited(_refreshSessions());
     } catch (error) {
       if (!mounted) return;
@@ -442,6 +729,97 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     } finally {
       _deleting.remove(session.sessionId);
     }
+  }
+
+  void _applyDeletionReceipt(Session session, SessionDeletionReceipt receipt) {
+    final sessionId = session.sessionId;
+    if (_locallyDeletedSessionIds.contains(sessionId)) return;
+    final previousGeneration = _sessionDeletionGenerations[sessionId] ?? -1;
+    if (receipt.lifecycleVersion < previousGeneration) return;
+    _sessionDeletionGenerations[sessionId] = receipt.lifecycleVersion;
+    if (receipt.state == SessionDeletionState.completed) {
+      _applySessionDeleted(sessionId);
+      return;
+    }
+    if (_activeSessionId == sessionId) {
+      _releaseChatEventSource();
+    }
+    setState(() {
+      _withdrawingSessionIds.add(sessionId);
+      _recordSessionSnapshot(session, retainUntilObserved: true);
+      if (_activeSessionId == sessionId) {
+        _activeSessionId = null;
+      }
+    });
+  }
+
+  Future<void> _renameConversation(Session session) async {
+    if (_withdrawingSessionIds.contains(session.sessionId)) {
+      _toast('This chat is being withdrawn and cannot be renamed.');
+      return;
+    }
+    if (!_lifecycleMutating.add(session.sessionId)) return;
+    try {
+      final title = await _showRenameSessionDialog(context, session);
+      if (title == null) return;
+      final updated = await widget.apiClient.renameSession(
+        sessionId: session.sessionId,
+        title: title,
+      );
+      _applyAuthoritativeSession(updated);
+      unawaited(_refreshSessions());
+    } catch (error) {
+      if (mounted) _toast('Could not rename this chat: $error');
+    } finally {
+      _lifecycleMutating.remove(session.sessionId);
+    }
+  }
+
+  Future<void> _archiveConversation(Session session) async {
+    if (_withdrawingSessionIds.contains(session.sessionId)) {
+      _toast('This chat is being withdrawn and cannot be archived.');
+      return;
+    }
+    if (!_lifecycleMutating.add(session.sessionId)) return;
+    try {
+      final updated = await widget.apiClient.archiveSession(
+        sessionId: session.sessionId,
+      );
+      _applyAuthoritativeSession(updated);
+      unawaited(_refreshSessions());
+    } catch (error) {
+      if (mounted) _toast('Could not archive this chat: $error');
+    } finally {
+      _lifecycleMutating.remove(session.sessionId);
+    }
+  }
+
+  void _applyAuthoritativeSession(Session session) {
+    if (!mounted ||
+        _locallyDeletedSessionIds.contains(session.sessionId) ||
+        _withdrawingSessionIds.contains(session.sessionId)) {
+      return;
+    }
+    final previous = _sessionSnapshots[session.sessionId];
+    if (previous != null &&
+        previous.session.updatedAtNanoseconds > session.updatedAtNanoseconds) {
+      return;
+    }
+    if (session.status == SessionStatus.archived &&
+        _activeSessionId == session.sessionId) {
+      _releaseChatEventSource();
+    }
+    setState(() {
+      _recordSessionSnapshot(session, retainUntilObserved: false);
+      final next = List<Session>.of(_sessions)
+        ..removeWhere((candidate) => candidate.sessionId == session.sessionId);
+      if (session.status == SessionStatus.active) {
+        _insertSessionByRecency(next, session);
+      } else if (_activeSessionId == session.sessionId) {
+        _activeSessionId = null;
+      }
+      _sessions = next;
+    });
   }
 
   static bool _isRunInProgress(Object error) =>
@@ -463,6 +841,10 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   }
 
   void _selectSession(String sessionId) {
+    if (_withdrawingSessionIds.contains(sessionId)) {
+      _toast('This chat is being withdrawn.');
+      return;
+    }
     if (sessionId != _activeSessionId) _releaseChatEventSource();
     setState(() {
       _activeSessionId = sessionId;
@@ -497,6 +879,38 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     );
   }
 
+  Future<void> _openArchivedSessions() async {
+    _closeDrawerIfOpen();
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Archived conversations'),
+        content: SizedBox(
+          width: 480,
+          height: 440,
+          child: _ArchivedSessionsList(
+            apiClient: widget.apiClient,
+            onArchivedSnapshot: _applyAuthoritativeSession,
+            onRestored: _applyAuthoritativeSession,
+            onDeletionPending: (session, receipt) {
+              _applyDeletionReceipt(session, receipt);
+              unawaited(_refreshSessions());
+            },
+            onDeleted: _applySessionDeleted,
+            deletedSessionIds: _locallyDeletedSessionIds,
+            deletionEvents: _sessionDeletionEvents.stream,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _openSettings() async {
     final authStorage = widget.authStorage;
     if (authStorage == null) return;
@@ -527,6 +941,8 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
           sessions: _sessions,
           sessionsLoading: _sessionsLoading,
           sessionsFailed: _sessionsFailed,
+          nextCursor: _nextSessionsCursor,
+          loadingMore: _sessionsLoadingMore,
           activeSessionId: _activeSessionId,
           destination: _destination,
           creating: _creating,
@@ -534,7 +950,11 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
           onSelect: _selectSession,
           onSelectDestination: _selectDestination,
           onDelete: _deleteConversation,
+          onRename: _renameConversation,
+          onArchive: _archiveConversation,
+          onLoadMore: _loadMoreSessions,
           onSearch: _openSearch,
+          onArchived: _openArchivedSessions,
           onSettings: widget.authStorage == null ? null : _openSettings,
         );
 
@@ -659,6 +1079,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
             embedded: true,
             modelProvider: _modelProvider,
             onSessionUpdated: (event) => _applySessionUpdated(event),
+            onSessionDeleted: _applySessionDeleted,
           ),
         ),
       ],
@@ -673,6 +1094,8 @@ class _Sidebar extends StatelessWidget {
     required this.sessions,
     required this.sessionsLoading,
     required this.sessionsFailed,
+    required this.nextCursor,
+    required this.loadingMore,
     required this.activeSessionId,
     required this.destination,
     required this.creating,
@@ -680,7 +1103,11 @@ class _Sidebar extends StatelessWidget {
     required this.onSelect,
     required this.onSelectDestination,
     required this.onDelete,
+    required this.onRename,
+    required this.onArchive,
+    required this.onLoadMore,
     required this.onSearch,
+    required this.onArchived,
     required this.onSettings,
   });
 
@@ -689,6 +1116,8 @@ class _Sidebar extends StatelessWidget {
   final List<Session> sessions;
   final bool sessionsLoading;
   final bool sessionsFailed;
+  final String? nextCursor;
+  final bool loadingMore;
   final String? activeSessionId;
   final ShellDestination destination;
   final bool creating;
@@ -696,7 +1125,11 @@ class _Sidebar extends StatelessWidget {
   final ValueChanged<String> onSelect;
   final ValueChanged<ShellDestination> onSelectDestination;
   final ValueChanged<Session> onDelete;
+  final ValueChanged<Session> onRename;
+  final ValueChanged<Session> onArchive;
+  final VoidCallback onLoadMore;
   final VoidCallback onSearch;
+  final VoidCallback onArchived;
   final VoidCallback? onSettings;
 
   /// Below this the sidebar cannot hold the destinations, the conversation
@@ -792,6 +1225,7 @@ class _Sidebar extends StatelessWidget {
                 selected: showingChats,
                 onTap: () => onSelectDestination(ShellDestination.chats),
                 onSearch: onSearch,
+                onArchived: onArchived,
               ),
               if (sessionsLoading)
                 const Padding(
@@ -829,8 +1263,18 @@ class _Sidebar extends StatelessWidget {
                           showingChats && session.sessionId == activeSessionId,
                       onTap: () => onSelect(session.sessionId),
                       onDelete: () => onDelete(session),
+                      onRename: () => onRename(session),
+                      onArchive: () => onArchive(session),
                     ),
                   ),
+              if (nextCursor != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: TextButton(
+                    onPressed: loadingMore ? null : onLoadMore,
+                    child: Text(loadingMore ? 'Loading...' : 'Load more'),
+                  ),
+                ),
             ],
           ),
         ),
@@ -851,12 +1295,14 @@ class _ChatsHeader extends StatelessWidget {
     required this.selected,
     required this.onTap,
     required this.onSearch,
+    required this.onArchived,
   });
 
   final AppPalette palette;
   final bool selected;
   final VoidCallback onTap;
   final VoidCallback onSearch;
+  final VoidCallback onArchived;
 
   @override
   Widget build(BuildContext context) {
@@ -881,6 +1327,13 @@ class _ChatsHeader extends StatelessWidget {
                 ),
               ),
             ),
+          ),
+          _IconAction(
+            icon: Icons.archive_outlined,
+            tooltip: 'Archived conversations',
+            onPressed: onArchived,
+            palette: palette,
+            size: 16,
           ),
           _IconAction(
             icon: Icons.search,
@@ -956,6 +1409,8 @@ class _SessionTile extends StatefulWidget {
     required this.selected,
     required this.onTap,
     required this.onDelete,
+    required this.onRename,
+    required this.onArchive,
   });
 
   final Session session;
@@ -963,6 +1418,8 @@ class _SessionTile extends StatefulWidget {
   final bool selected;
   final VoidCallback onTap;
   final VoidCallback onDelete;
+  final VoidCallback onRename;
+  final VoidCallback onArchive;
 
   @override
   State<_SessionTile> createState() => _SessionTileState();
@@ -1012,6 +1469,22 @@ class _SessionTileState extends State<_SessionTile> {
                   // them; a delete icon on every row invites accidents.
                   if (_hovered || widget.selected)
                     _IconAction(
+                      icon: Icons.edit_outlined,
+                      tooltip: 'Rename chat',
+                      onPressed: widget.onRename,
+                      palette: palette,
+                      size: 16,
+                    ),
+                  if (_hovered || widget.selected)
+                    _IconAction(
+                      icon: Icons.archive_outlined,
+                      tooltip: 'Archive chat',
+                      onPressed: widget.onArchive,
+                      palette: palette,
+                      size: 16,
+                    ),
+                  if (_hovered || widget.selected)
+                    _IconAction(
                       icon: Icons.delete_outline,
                       tooltip: 'Delete chat',
                       onPressed: widget.onDelete,
@@ -1024,6 +1497,346 @@ class _SessionTileState extends State<_SessionTile> {
           ),
         ),
       ),
+    );
+  }
+}
+
+String? _validateSessionTitle(String value) {
+  final normalized = value.trim();
+  if (normalized.isEmpty) return 'Enter a title.';
+  if (normalized.runes.length > 120) {
+    return 'Use 120 characters or fewer.';
+  }
+  return null;
+}
+
+Future<String?> _showRenameSessionDialog(
+  BuildContext context,
+  Session session,
+) {
+  var pendingTitle = session.title ?? '';
+  var validation = _validateSessionTitle(pendingTitle);
+  return showDialog<String>(
+    context: context,
+    builder: (dialogContext) => StatefulBuilder(
+      builder: (context, setDialogState) => AlertDialog(
+        title: const Text('Rename chat'),
+        content: TextFormField(
+          autofocus: true,
+          initialValue: pendingTitle,
+          decoration: InputDecoration(
+            labelText: 'Title',
+            errorText: validation,
+          ),
+          onChanged: (value) {
+            setDialogState(() {
+              pendingTitle = value;
+              validation = _validateSessionTitle(value);
+            });
+          },
+          onFieldSubmitted: (value) {
+            if (_validateSessionTitle(value) == null) {
+              Navigator.of(dialogContext).pop(value.trim());
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: validation == null
+                ? () => Navigator.of(dialogContext).pop(pendingTitle.trim())
+                : null,
+            child: const Text('Rename'),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _ArchivedSessionsList extends StatefulWidget {
+  const _ArchivedSessionsList({
+    required this.apiClient,
+    required this.onArchivedSnapshot,
+    required this.onRestored,
+    required this.onDeletionPending,
+    required this.onDeleted,
+    required this.deletedSessionIds,
+    required this.deletionEvents,
+  });
+
+  final TuringApi apiClient;
+  final ValueChanged<Session> onArchivedSnapshot;
+  final ValueChanged<Session> onRestored;
+  final void Function(Session, SessionDeletionReceipt) onDeletionPending;
+  final ValueChanged<String> onDeleted;
+  final Set<String> deletedSessionIds;
+  final Stream<String> deletionEvents;
+
+  @override
+  State<_ArchivedSessionsList> createState() => _ArchivedSessionsListState();
+}
+
+class _ArchivedSessionsListState extends State<_ArchivedSessionsList> {
+  List<Session> _sessions = const [];
+  String? _nextCursor;
+  bool _loading = true;
+  bool _loadingMore = false;
+  Object? _error;
+  final Set<String> _mutating = {};
+  final Set<String> _removedSessionIds = {};
+  late final StreamSubscription<String> _deletionSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _removedSessionIds.addAll(widget.deletedSessionIds);
+    _deletionSubscription = widget.deletionEvents.listen(_removeSession);
+    unawaited(_load());
+  }
+
+  @override
+  void dispose() {
+    unawaited(_deletionSubscription.cancel());
+    super.dispose();
+  }
+
+  Future<void> _load({String? cursor}) async {
+    if (cursor != null) {
+      if (_loadingMore) return;
+      setState(() => _loadingMore = true);
+    }
+    try {
+      final page = await widget.apiClient.listSessionPage(
+        cursor: cursor,
+        filter: SessionListFilter.archived,
+      );
+      if (!mounted) return;
+      final accepted = page.sessions
+          .where((session) => !_removedSessionIds.contains(session.sessionId))
+          .toList(growable: false);
+      for (final session in accepted) {
+        widget.onArchivedSnapshot(session);
+      }
+      setState(() {
+        if (cursor == null) {
+          _sessions = List<Session>.of(accepted);
+        } else {
+          final merged = <String, Session>{
+            for (final session in _sessions) session.sessionId: session,
+          };
+          for (final session in accepted) {
+            final previous = merged[session.sessionId];
+            if (previous == null ||
+                session.updatedAtNanoseconds > previous.updatedAtNanoseconds) {
+              merged[session.sessionId] = session;
+            }
+          }
+          _sessions = merged.values.toList()
+            ..sort(_ResponsiveShellState._compareSessionsByRecency);
+        }
+        _nextCursor = page.nextCursor;
+        _loading = false;
+        _error = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error;
+      });
+    } finally {
+      if (mounted) setState(() => _loadingMore = false);
+    }
+  }
+
+  Future<void> _restore(Session session) async {
+    if (!_mutating.add(session.sessionId)) return;
+    setState(() {});
+    try {
+      final restored = await widget.apiClient.restoreSession(
+        sessionId: session.sessionId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _removedSessionIds.add(session.sessionId);
+        _sessions = _sessions
+            .where((candidate) => candidate.sessionId != session.sessionId)
+            .toList();
+      });
+      widget.onRestored(restored);
+    } catch (error) {
+      if (mounted) _showError('Could not restore this chat: $error');
+    } finally {
+      _mutating.remove(session.sessionId);
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _rename(Session session) async {
+    if (!_mutating.add(session.sessionId)) return;
+    setState(() {});
+    try {
+      final title = await _showRenameSessionDialog(context, session);
+      if (title == null) return;
+      final renamed = await widget.apiClient.renameSession(
+        sessionId: session.sessionId,
+        title: title,
+      );
+      if (!mounted) return;
+      final becameActive = renamed.status == SessionStatus.active;
+      setState(() {
+        final index = _sessions.indexWhere(
+          (candidate) => candidate.sessionId == session.sessionId,
+        );
+        if (index >= 0) {
+          if (renamed.status == SessionStatus.archived) {
+            _sessions[index] = renamed;
+          } else {
+            _removedSessionIds.add(session.sessionId);
+            _sessions.removeAt(index);
+          }
+        }
+        _sessions.sort(_ResponsiveShellState._compareSessionsByRecency);
+      });
+      if (becameActive) {
+        widget.onRestored(renamed);
+      } else {
+        widget.onArchivedSnapshot(renamed);
+      }
+    } catch (error) {
+      if (mounted) _showError('Could not rename this chat: $error');
+    } finally {
+      _mutating.remove(session.sessionId);
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _delete(Session session) async {
+    if (!_mutating.add(session.sessionId)) return;
+    setState(() {});
+    try {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text('Delete "${sessionDisplayTitle(session)}"?'),
+          content: const Text(
+            'This permanently removes the conversation, its messages and its '
+            'run history, and it will no longer appear in search. '
+            'Session-owned sandbox files are removed; legacy sandbox files '
+            'that predate session ownership are retained. This cannot be undone.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Delete'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+      final receipt = await widget.apiClient.deleteSession(
+        sessionId: session.sessionId,
+      );
+      if (!mounted) return;
+      if (receipt.state == SessionDeletionState.completed) {
+        setState(() {
+          _removedSessionIds.add(session.sessionId);
+          _sessions = _sessions
+              .where((candidate) => candidate.sessionId != session.sessionId)
+              .toList();
+        });
+        widget.onDeleted(session.sessionId);
+      } else {
+        widget.onDeletionPending(session, receipt);
+        _showError(
+          receipt.state == SessionDeletionState.failedExternal
+              ? 'This chat could not be fully withdrawn yet. Retry deletion.'
+              : 'This chat is still being withdrawn. Retry deletion shortly.',
+        );
+      }
+    } catch (error) {
+      if (mounted) _showError('Could not delete this chat: $error');
+    } finally {
+      _mutating.remove(session.sessionId);
+      if (mounted) setState(() {});
+    }
+  }
+
+  void _showError(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _removeSession(String sessionId) {
+    if (!mounted) return;
+    setState(() {
+      _removedSessionIds.add(sessionId);
+      _sessions = _sessions
+          .where((session) => session.sessionId != sessionId)
+          .toList();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null && _sessions.isEmpty) {
+      return Center(
+        child: FilledButton(onPressed: _load, child: const Text('Retry')),
+      );
+    }
+    if (_sessions.isEmpty) {
+      return const Center(child: Text('No archived conversations.'));
+    }
+    return ListView(
+      children: [
+        for (final session in _sessions)
+          ListTile(
+            title: Text(sessionDisplayTitle(session)),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  tooltip: 'Rename archived chat',
+                  onPressed: _mutating.contains(session.sessionId)
+                      ? null
+                      : () => _rename(session),
+                  icon: const Icon(Icons.edit_outlined),
+                ),
+                IconButton(
+                  tooltip: 'Restore chat',
+                  onPressed: _mutating.contains(session.sessionId)
+                      ? null
+                      : () => _restore(session),
+                  icon: const Icon(Icons.unarchive_outlined),
+                ),
+                IconButton(
+                  tooltip: 'Delete archived chat',
+                  onPressed: _mutating.contains(session.sessionId)
+                      ? null
+                      : () => _delete(session),
+                  icon: const Icon(Icons.delete_outline),
+                ),
+              ],
+            ),
+          ),
+        if (_nextCursor != null)
+          TextButton(
+            onPressed: _loadingMore ? null : () => _load(cursor: _nextCursor),
+            child: Text(_loadingMore ? 'Loading...' : 'Load more'),
+          ),
+      ],
     );
   }
 }

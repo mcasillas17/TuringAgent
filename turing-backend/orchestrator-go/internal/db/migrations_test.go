@@ -197,10 +197,153 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 		"0012_worker_capability_routing",
 		"0013_internal_service_identities",
 		"0013_send_message_idempotency",
-		"0016_run_outcomes",
+		"0014_run_egress_decisions",
+		"0014_session_deletion_withdrawal",
+		"0015_session_lifecycle",
+		"0016_mcp_registry",
+		"0017_run_outcomes",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("applied migrations = %v, want %v", got, want)
+	}
+}
+
+func TestMCPRegistryMigrationRegistersServersAndLinksTools(t *testing.T) {
+	ctx := context.Background()
+	database := databaseBeforeMigration(t, ctx, "0016_mcp_registry.sql")
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO tools (id, server_name, tool_name, policy, schema_json, enabled, discovered_at)
+		VALUES
+			('tool_system', 'system', 'system.time', 'safe', '{}', 1, '2026-08-21T00:00:00Z'),
+			('tool_vendor', 'legacy-vendor', 'vendor.lookup', 'safe', '{}', 1, '2026-08-21T00:00:00Z')
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := database.QueryContext(ctx, `
+		SELECT s.name, s.tier, s.enabled, t.tool_name, t.enabled
+		FROM mcp_servers s
+		LEFT JOIN tools t ON t.mcp_server_id = s.id
+		ORDER BY s.name, t.tool_name
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var got []string
+	for rows.Next() {
+		var name, tier string
+		var serverEnabled int
+		var toolName sql.NullString
+		var toolEnabled sql.NullInt64
+		if err := rows.Scan(&name, &tier, &serverEnabled, &toolName, &toolEnabled); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, fmt.Sprintf("%s:%s:%d:%s:%d", name, tier, serverEnabled, toolName.String, toolEnabled.Int64))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"files:bundled:1::0",
+		"legacy-vendor:local_container:0:vendor.lookup:0",
+		"system:bundled:1:system.time:1",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("registry rows = %v, want %v", got, want)
+	}
+}
+
+func TestRunEgressMigrationFailsQueuedRemoteWorkWithoutConsent(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	names, err := migrationNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if name == "0014_run_egress_decisions.sql" {
+			break
+		}
+		applyMigration(t, ctx, database, name)
+	}
+	const createdAt = "2026-08-20T01:02:03.000000000Z"
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO sessions (id, title, status, created_at, updated_at)
+		VALUES ('sess_remote_legacy', 'Legacy remote', 'active', ?, ?);
+		INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at)
+		VALUES
+			('msg_remote_user', 'sess_remote_legacy', 'user', 'legacy remote', 'text', 1, ?),
+			('msg_remote_assistant', 'sess_remote_legacy', 'assistant', '', 'text', 2, ?);
+		INSERT INTO agent_runs (
+			id, session_id, user_message_id, assistant_message_id, agent_id,
+			trace_id, status, model_provider, model_name, created_at
+		) VALUES (
+			'run_remote_legacy', 'sess_remote_legacy', 'msg_remote_user',
+			'msg_remote_assistant', 'general_assistant', 'trace_remote_legacy',
+			'queued', 'openai_compatible', 'legacy-model', ?
+		);
+		INSERT INTO jobs (
+			id, run_id, agent_id, status, payload_json, created_at, created_at_ns
+		) VALUES (
+			'job_remote_legacy', 'run_remote_legacy', 'general_assistant',
+			'pending', '{}', ?, 1
+		);
+		INSERT INTO send_message_idempotency (
+			idempotency_key, session_id, request_fingerprint, user_message_id,
+			assistant_message_id, run_id, job_id, trace_id,
+			queued_event_sequence, created_at
+		) VALUES (
+			'legacy-remote-key', 'sess_remote_legacy', 'legacy-fingerprint',
+			'msg_remote_user', 'msg_remote_assistant', 'run_remote_legacy',
+			'job_remote_legacy', 'trace_remote_legacy', 1, ?
+		)
+	`, createdAt, createdAt, createdAt, createdAt, createdAt, createdAt, createdAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	var runStatus, runCode, jobStatus, jobCode string
+	if err := database.QueryRowContext(ctx, `
+		SELECT r.status, r.error_code, j.status, j.error_code
+		FROM agent_runs r JOIN jobs j ON j.run_id = r.id
+		WHERE r.id = 'run_remote_legacy'
+	`).Scan(&runStatus, &runCode, &jobStatus, &jobCode); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus != "failed" || jobStatus != "failed" ||
+		runCode != "egress_decision_required" || jobCode != "egress_decision_required" {
+		t.Fatalf("legacy remote statuses = run %s/%s job %s/%s", runStatus, runCode, jobStatus, jobCode)
+	}
+	var eventType, payload string
+	if err := database.QueryRowContext(ctx, `
+		SELECT type, payload_json FROM events WHERE run_id = 'run_remote_legacy'
+	`).Scan(&eventType, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if eventType != "agent.run.failed" ||
+		!strings.Contains(payload, `"outcomeReason":"policy_denied"`) ||
+		strings.Contains(payload, "egress_decision_required") ||
+		strings.Contains(payload, "remote run was queued before explicit egress consent") {
+		t.Fatalf("legacy remote failure event = %s %s", eventType, payload)
+	}
+	var idempotencyRows int
+	if err := database.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM send_message_idempotency WHERE run_id = 'run_remote_legacy'`).
+		Scan(&idempotencyRows); err != nil {
+		t.Fatal(err)
+	}
+	if idempotencyRows != 0 {
+		t.Fatalf("legacy remote idempotency rows = %d, want 0", idempotencyRows)
 	}
 }
 
@@ -379,8 +522,8 @@ func TestCurrentSchemaVersionUsesLatestEmbeddedMigrationPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "0016" {
-		t.Fatalf("CurrentSchemaVersion = %q, want 0016", got)
+	if got != "0017" {
+		t.Fatalf("CurrentSchemaVersion = %q, want 0017", got)
 	}
 }
 
@@ -675,6 +818,7 @@ func TestAuditReadMigrationNormalizesLegacyVariableWidthCreatedAt(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	defer database.Close()
 	names, err := migrationNames()
 	if err != nil {
@@ -729,6 +873,185 @@ func TestAuditReadMigrationNormalizesLegacyVariableWidthCreatedAt(t *testing.T) 
 	}
 	if !reflect.DeepEqual(gotCreatedAt, wantCreatedAt) {
 		t.Fatalf("normalized created_at = %v, want %v (fixed 9-digit fraction, matching repository.FormatTimestamp)", gotCreatedAt, wantCreatedAt)
+	}
+}
+
+func TestSessionLifecycleMigrationNormalizesTimestampsAndAddsIndexes(t *testing.T) {
+	ctx := context.Background()
+	database := databaseBeforeMigration(t, ctx, "0015_session_lifecycle.sql")
+
+	testCases := []struct {
+		id        string
+		createdAt string
+		updatedAt string
+		want      string
+	}{
+		{
+			id:        "canonical",
+			createdAt: "2026-08-20T04:00:00.000000001Z",
+			updatedAt: "2026-08-20T04:00:00.000000001Z",
+			want:      "2026-08-20T04:00:00.000000001Z",
+		},
+		{
+			id:        "trimmed",
+			createdAt: "2026-08-20T04:00:00.12Z",
+			updatedAt: "2026-08-20T04:00:00.12Z",
+			want:      "2026-08-20T04:00:00.120000000Z",
+		},
+		{
+			id:        "whole-second",
+			createdAt: "2026-08-20T04:00:00Z",
+			updatedAt: "2026-08-20T04:00:00Z",
+			want:      "2026-08-20T04:00:00.000000000Z",
+		},
+		{
+			id:        "offset",
+			createdAt: "2026-08-19T21:00:00-07:00",
+			updatedAt: "2026-08-19T21:00:00-07:00",
+			want:      "2026-08-20T04:00:00.000000000Z",
+		},
+	}
+	for _, testCase := range testCases {
+		if _, err := database.ExecContext(ctx, `
+			INSERT INTO sessions (id, status, created_at, updated_at)
+			VALUES (?, 'active', ?, ?)`,
+			testCase.id,
+			testCase.createdAt,
+			testCase.updatedAt,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 300; i++ {
+		id := fmt.Sprintf("batch-%03d", i)
+		if _, err := database.ExecContext(ctx, `
+			INSERT INTO sessions (id, status, created_at, updated_at)
+			VALUES (?, 'active', '2026-08-20T04:00:00Z', '2026-08-20T04:00:00Z')`,
+			id,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, testCase := range testCases {
+		var createdAt, updatedAt string
+		if err := database.QueryRowContext(ctx, `
+			SELECT created_at, updated_at FROM sessions WHERE id = ?`,
+			testCase.id,
+		).Scan(&createdAt, &updatedAt); err != nil {
+			t.Fatal(err)
+		}
+		if createdAt != testCase.want || updatedAt != testCase.want {
+			t.Fatalf(
+				"session %q timestamps = (%q, %q), want %q",
+				testCase.id,
+				createdAt,
+				updatedAt,
+				testCase.want,
+			)
+		}
+	}
+	assertIndexColumns(t, ctx, database, "idx_sessions_updated", []indexColumn{
+		{name: "updated_at", descending: true},
+		{name: "id", descending: true},
+	})
+	assertIndexColumns(t, ctx, database, "idx_sessions_status_updated", []indexColumn{
+		{name: "status"},
+		{name: "updated_at", descending: true},
+		{name: "id", descending: true},
+	})
+}
+
+func TestSessionLifecycleMigrationUpgradesDatabaseThatAppliedOldVersion(t *testing.T) {
+	ctx := context.Background()
+	database := databaseBeforeMigration(t, ctx, "0015_session_lifecycle.sql")
+	if _, err := database.ExecContext(ctx, `
+		DROP INDEX IF EXISTS idx_sessions_updated;
+		CREATE INDEX idx_sessions_updated
+			ON sessions(updated_at DESC, id DESC);
+		CREATE INDEX idx_sessions_status_updated
+			ON sessions(status, updated_at DESC, id DESC);
+		INSERT INTO schema_migrations (version, applied_at)
+			VALUES ('0014_session_lifecycle', datetime('now'));
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatalf("upgrade old session lifecycle migration: %v", err)
+	}
+	assertIndexColumns(t, ctx, database, "idx_sessions_updated", []indexColumn{
+		{name: "updated_at", descending: true},
+		{name: "id", descending: true},
+	})
+	assertIndexColumns(t, ctx, database, "idx_sessions_status_updated", []indexColumn{
+		{name: "status"},
+		{name: "updated_at", descending: true},
+		{name: "id", descending: true},
+	})
+}
+
+func TestSessionLifecycleMigrationRollsBackMalformedTimestamp(t *testing.T) {
+	ctx := context.Background()
+	database := databaseBeforeMigration(t, ctx, "0015_session_lifecycle.sql")
+	const original = "2026-08-20T04:00:00Z"
+	for i := 0; i < 256; i++ {
+		id := fmt.Sprintf("valid-%03d", i)
+		if _, err := database.ExecContext(ctx, `
+			INSERT INTO sessions (id, status, created_at, updated_at)
+			VALUES (?, 'active', ?, ?)`,
+			id,
+			original,
+			original,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO sessions (id, status, created_at, updated_at)
+		VALUES ('z-malformed', 'active', 'not-a-time', '2026-08-20T04:00:00Z')`,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ApplyMigrations(ctx, database); err == nil {
+		t.Fatal("ApplyMigrations accepted malformed session timestamp")
+	}
+
+	var createdAt, updatedAt string
+	if err := database.QueryRowContext(ctx, `
+		SELECT created_at, updated_at FROM sessions WHERE id = 'valid-000'`,
+	).Scan(&createdAt, &updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if createdAt != original || updatedAt != original {
+		t.Fatalf("valid row changed despite rollback: (%q, %q)", createdAt, updatedAt)
+	}
+	assertIndexColumns(t, ctx, database, "idx_sessions_updated", []indexColumn{
+		{name: "updated_at"},
+	})
+	var statusIndexExists int
+	if err := database.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sqlite_master
+		WHERE type = 'index' AND name = 'idx_sessions_status_updated'`,
+	).Scan(&statusIndexExists); err != nil {
+		t.Fatal(err)
+	}
+	if statusIndexExists != 0 {
+		t.Fatal("status index exists after failed migration")
+	}
+	var applied int
+	if err := database.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM schema_migrations WHERE version = '0015_session_lifecycle'`,
+	).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if applied != 0 {
+		t.Fatal("failed session lifecycle migration was recorded as applied")
 	}
 }
 
@@ -902,6 +1225,7 @@ func applyMigration(t *testing.T, ctx context.Context, database *DB, name string
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := database.ExecContext(ctx, string(sqlText)); err != nil {
 		t.Fatal(err)
 	}
@@ -912,11 +1236,63 @@ func applyMigration(t *testing.T, ctx context.Context, database *DB, name string
 	}
 }
 
+func databaseBeforeMigration(t *testing.T, ctx context.Context, target string) *DB {
+	t.Helper()
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	names, err := migrationNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if name == target {
+			return database
+		}
+		applyMigration(t, ctx, database, name)
+	}
+	t.Fatalf("migration %q not found", target)
+	return nil
+}
+
+type indexColumn struct {
+	name       string
+	descending bool
+}
+
+func assertIndexColumns(t *testing.T, ctx context.Context, database *DB, indexName string, want []indexColumn) {
+	t.Helper()
+	rows, err := database.QueryContext(ctx, `PRAGMA index_xinfo(`+indexName+`)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var got []indexColumn
+	for rows.Next() {
+		var seqno, cid, descending, key int
+		var name, collation sql.NullString
+		if err := rows.Scan(&seqno, &cid, &name, &descending, &collation, &key); err != nil {
+			t.Fatal(err)
+		}
+		if key == 1 {
+			got = append(got, indexColumn{name: name.String, descending: descending == 1})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("index %q columns = %#v, want %#v", indexName, got, want)
+	}
+}
+
 func insertTestSession(t *testing.T, ctx context.Context, database *DB, id string) {
 	t.Helper()
 	if _, err := database.ExecContext(ctx, `
 		INSERT INTO sessions (id, created_at, updated_at)
-		VALUES (?, datetime('now'), datetime('now'))`, id); err != nil {
+		VALUES (?, '2026-01-01T00:00:00.000000000Z', '2026-01-01T00:00:00.000000000Z')`, id); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -2,6 +2,7 @@ package testkit
 
 import (
 	"context"
+	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/app"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
@@ -14,8 +15,10 @@ type Config struct {
 	RuntimeToken             string
 	ApprovalConsumerToken    string
 	ApprovalJWTSecret        string
+	EgressSigningSecret      string
 	DatabasePath             string
 	OllamaModel              string
+	OpenAIBaseURL            string
 	OpenAIModel              string
 	OpenAIEnabled            bool
 	FilesMCPEnabled          bool
@@ -38,14 +41,31 @@ type Run struct {
 	ExecutionActive bool
 }
 
+func (r *Repository) RegisterLocalMCPServer(ctx context.Context, name string) error {
+	server, err := r.inner.UpsertImportedMCPServer(ctx, repository.ImportedMCPServer{
+		Name: name, URL: "http://" + name + ":9000/mcp", Tier: repository.MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		return err
+	}
+	if err := r.inner.SetMCPServerEnabled(ctx, server.ID, true); err != nil {
+		return err
+	}
+	return r.inner.ReplaceMCPServerTools(ctx, server.ID, []repository.MCPServerTool{{
+		Name: name + ".inspect", Policy: "approval_required", SchemaJSON: `{"type":"object"}`,
+	}})
+}
+
 func NewApp(cfg Config) (*App, error) {
 	inner, err := app.New(config.Config{
 		ClientAPIKey:             cfg.ClientAPIKey,
 		RuntimeToken:             cfg.RuntimeToken,
 		ApprovalConsumerToken:    cfg.ApprovalConsumerToken,
 		ApprovalJWTSecret:        cfg.ApprovalJWTSecret,
+		EgressSigningSecret:      cfg.EgressSigningSecret,
 		DatabasePath:             cfg.DatabasePath,
 		OllamaModel:              cfg.OllamaModel,
+		OpenAIBaseURL:            cfg.OpenAIBaseURL,
 		OpenAIModel:              cfg.OpenAIModel,
 		OpenAIEnabled:            cfg.OpenAIEnabled,
 		FilesMCPEnabled:          cfg.FilesMCPEnabled,
@@ -62,6 +82,21 @@ func NewApp(cfg Config) (*App, error) {
 func (a *App) Stop() {
 	if a != nil && a.inner != nil {
 		a.inner.Stop()
+	}
+}
+
+func (a *App) WaitForSessionEventSubscriber(ctx context.Context, sessionID string) error {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if a != nil && a.inner != nil && a.inner.EventBus.SessionSubscriberCount(sessionID) > 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
 	}
 }
 

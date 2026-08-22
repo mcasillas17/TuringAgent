@@ -258,7 +258,7 @@ func TestTickPublishesSessionUpdatedBeforeQueued(t *testing.T) {
 	}
 }
 
-func TestTickPublishesExternalRoutingEventAfterQueued(t *testing.T) {
+func TestTickDoesNotDispatchOrPublishBlockedRemoteAutomation(t *testing.T) {
 	h := newSchedulerHarness(t)
 	automation := createEnabled(t, h.repo, h.ctx, "External digest", repository.Schedule{Kind: repository.ScheduleInterval, Interval: 5 * time.Minute})
 	session, err := h.repo.CreateSession(h.ctx, automation.Name)
@@ -287,16 +287,13 @@ func TestTickPublishesExternalRoutingEventAfterQueued(t *testing.T) {
 	if err := h.scheduler.Tick(h.ctx); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"session.updated", "agent.run.queued", "agent.run.step"}
-	for index, wantType := range want {
-		select {
-		case event := <-published:
-			if event.Type != wantType {
-				t.Fatalf("published event %d = %q, want %q", index, event.Type, wantType)
-			}
-		case <-time.After(time.Second):
-			t.Fatalf("timed out waiting for published event %d (%s)", index, wantType)
-		}
+	select {
+	case event := <-published:
+		t.Fatalf("blocked remote automation published %q", event.Type)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if h.dispatcher.count() != 0 {
+		t.Fatalf("dispatch calls = %d, want 0", h.dispatcher.count())
 	}
 }
 
@@ -461,6 +458,44 @@ func TestOnePoisonedAutomationDoesNotStopTheRest(t *testing.T) {
 	}
 	if got := h.firedRuns(t, poisoned.AutomationID); got != 0 {
 		t.Fatalf("the poisoned automation fired %d times, want 0", got)
+	}
+}
+
+func TestWithdrawingConversationDoesNotStopDueAutomations(t *testing.T) {
+	h := newSchedulerHarness(t)
+	withdrawing := createEnabled(t, h.repo, h.ctx, "Withdrawing", repository.Schedule{Kind: repository.ScheduleInterval, Interval: 5 * time.Minute})
+	firstDue := parseTime(t, withdrawing.NextDueAt)
+	first, found, err := h.repo.ClaimDueAutomation(h.ctx, firstDue, schedulerDefaults)
+	if err != nil || !found {
+		t.Fatalf("first claim = found %v err %v", found, err)
+	}
+	h.finishRuns(t)
+	if _, err := h.repo.BeginSessionDeletion(h.ctx, first.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	healthy := createEnabled(t, h.repo, h.ctx, "Healthy", repository.Schedule{Kind: repository.ScheduleInterval, Interval: 5 * time.Minute})
+	withdrawingDue := firstDue.Add(time.Hour)
+	healthyDue := withdrawingDue.Add(time.Second)
+	if _, err := h.database.ExecContext(h.ctx,
+		`UPDATE automations SET next_due_at = ? WHERE id = ?`,
+		repository.FormatTimestamp(withdrawingDue), withdrawing.AutomationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.database.ExecContext(h.ctx,
+		`UPDATE automations SET next_due_at = ? WHERE id = ?`,
+		repository.FormatTimestamp(healthyDue), healthy.AutomationID); err != nil {
+		t.Fatal(err)
+	}
+	h.scheduler.now = func() time.Time { return healthyDue.Add(time.Second) }
+
+	if err := h.scheduler.Tick(h.ctx); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := h.firedRuns(t, withdrawing.AutomationID); got != 2 {
+		t.Fatalf("withdrawing automation fired %d runs, want 2", got)
+	}
+	if got := h.firedRuns(t, healthy.AutomationID); got != 1 {
+		t.Fatalf("healthy automation fired %d runs, want 1", got)
 	}
 }
 

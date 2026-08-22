@@ -86,6 +86,14 @@ func (*PublicServer) ConsumeApproval(context.Context, *turingv1.ConsumeApprovalR
 	return nil, status.Error(codes.PermissionDenied, "runtime approval method is internal")
 }
 
+func (*PublicServer) FinalizeSandboxArtifact(context.Context, *turingv1.FinalizeSandboxArtifactRequest) (*turingv1.FinalizeSandboxArtifactResponse, error) {
+	return nil, status.Error(codes.PermissionDenied, "sandbox artifact finalization is internal")
+}
+
+func (*PublicServer) CheckSessionCapability(context.Context, *turingv1.CheckSessionCapabilityRequest) (*turingv1.SessionCapabilityState, error) {
+	return nil, status.Error(codes.PermissionDenied, "session capability checks are internal")
+}
+
 func (*InternalServer) ApproveApproval(context.Context, *turingv1.ApproveApprovalRequest) (*turingv1.ApprovalResponse, error) {
 	return nil, status.Error(codes.PermissionDenied, "human approval method is public")
 }
@@ -100,6 +108,14 @@ func (s *InternalServer) GetApprovalForRuntime(ctx context.Context, req *turingv
 
 func (s *InternalServer) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeApprovalRequest) (*turingv1.ApprovalResponse, error) {
 	return s.service.ConsumeApproval(ctx, req)
+}
+
+func (s *InternalServer) FinalizeSandboxArtifact(ctx context.Context, req *turingv1.FinalizeSandboxArtifactRequest) (*turingv1.FinalizeSandboxArtifactResponse, error) {
+	return s.service.FinalizeSandboxArtifact(ctx, req)
+}
+
+func (s *InternalServer) CheckSessionCapability(ctx context.Context, req *turingv1.CheckSessionCapabilityRequest) (*turingv1.SessionCapabilityState, error) {
+	return s.service.CheckSessionCapability(ctx, req)
 }
 
 func (s *Server) SetNotifier(notifier Notifier) {
@@ -493,8 +509,24 @@ func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeAppro
 	if req == nil || req.ApprovalId == "" {
 		return nil, status.Error(codes.InvalidArgument, "approval_id is required")
 	}
+	approval, err := s.repo.GetApproval(ctx, req.ApprovalId)
+	if err != nil {
+		return nil, mapApprovalError(err)
+	}
+	var artifact repository.SandboxArtifact
+	reservedHere := false
+	if strings.HasPrefix(approval.ToolName, "files.") {
+		// Reserved before a file approval is spent, because the reservation is
+		// the only step that can still refuse. Other approval-gated tools have
+		// no sandbox artifact to reserve.
+		artifact, reservedHere, err = s.reserveArtifactForConsume(ctx, approval, req.GetProvenanceToken(), req.GetPhysicalPath())
+		if err != nil {
+			return nil, err
+		}
+	}
 	transition, err := s.repo.ConsumeApprovalWithEvent(ctx, req.ApprovalId, "")
 	if errors.Is(err, repository.ErrApprovalExpired) {
+		s.releaseReservationAfterFailedConsume(ctx, artifact, reservedHere)
 		expiredApproval := transition.Approval
 		if transition.ApprovalEvent.EventID != "" {
 			s.publishEvent(transition.ApprovalEvent)
@@ -509,6 +541,21 @@ func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeAppro
 		return nil, status.Error(codes.FailedPrecondition, "approval expired")
 	}
 	if err != nil {
+		if errors.Is(err, repository.ErrApprovalAlreadyConsumed) &&
+			artifact.ArtifactID != "" &&
+			!reservedHere {
+			return &turingv1.ApprovalResponse{
+				ApprovalId: approval.ApprovalID,
+				Status:     turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED,
+				Reservation: &turingv1.SandboxArtifactReservation{
+					ArtifactId:         artifact.ArtifactID,
+					PhysicalPath:       artifact.PhysicalPath,
+					Policy:             artifact.Policy,
+					DeletionGeneration: artifact.DeletionGeneration,
+				},
+			}, nil
+		}
+		s.releaseReservationAfterFailedConsume(ctx, artifact, reservedHere)
 		return nil, mapApprovalError(err)
 	}
 	consumed := transition.Approval
@@ -516,7 +563,77 @@ func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeAppro
 		s.publishEvent(transition.ApprovalEvent)
 	}
 	_, _ = s.audit.RecordForExistingRun(ctx, consumed.RunID, "mcp", "", "approval.consumed", consumed.ApprovalID, map[string]any{"toolName": consumed.ToolName})
-	return &turingv1.ApprovalResponse{ApprovalId: consumed.ApprovalID, Status: turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED}, nil
+	return &turingv1.ApprovalResponse{
+		ApprovalId: consumed.ApprovalID,
+		Status:     turingv1.ApprovalStatus_APPROVAL_STATUS_CONSUMED,
+		Reservation: &turingv1.SandboxArtifactReservation{
+			ArtifactId:         artifact.ArtifactID,
+			PhysicalPath:       artifact.PhysicalPath,
+			Policy:             artifact.Policy,
+			DeletionGeneration: artifact.DeletionGeneration,
+		},
+	}, nil
+}
+
+// ConsumeApprovalForThirdParty enforces the cooperative approval invariant at
+// the caller when the destination server cannot verify or consume Turing's JWT.
+// The guarantee is intentionally narrower than mcp-files: it holds because the
+// orchestrator is the only component with the registered endpoint and bearer.
+func (s *Server) ConsumeApprovalForThirdParty(
+	ctx context.Context,
+	approvalID string,
+	runID string,
+	serverName string,
+	toolName string,
+	args map[string]any,
+) error {
+	if approvalID == "" {
+		return status.Error(codes.FailedPrecondition, "approval is required")
+	}
+	approval, err := s.repo.GetApproval(ctx, approvalID)
+	if err != nil {
+		return mapApprovalError(err)
+	}
+	_, argsHash, err := canonicalArgs(args)
+	if err != nil {
+		return status.Error(codes.InvalidArgument, "tool args are not valid JSON")
+	}
+	if approval.RunID != runID ||
+		approval.ServerName != serverName ||
+		approval.ToolName != toolName ||
+		approval.ArgsHash != argsHash {
+		return status.Error(codes.FailedPrecondition, "approval does not match this tool call")
+	}
+	transition, err := s.repo.ConsumeApprovalWithEvent(ctx, approvalID, "")
+	if errors.Is(err, repository.ErrApprovalExpired) {
+		if transition.ApprovalEvent.EventID != "" {
+			s.publishEvent(transition.ApprovalEvent)
+		}
+		if transition.ToolEvent.EventID != "" {
+			s.publishEvent(transition.ToolEvent)
+		}
+		if transition.RunFailedEvent.EventID != "" {
+			s.publishEvent(transition.RunFailedEvent)
+		}
+		s.finishPostCommit(transition.Approval, "system", "approval.expired", "expired", "")
+		return status.Error(codes.FailedPrecondition, "approval expired")
+	}
+	if err != nil {
+		return mapApprovalError(err)
+	}
+	if transition.ApprovalEvent.EventID != "" {
+		s.publishEvent(transition.ApprovalEvent)
+	}
+	_, _ = s.audit.RecordForExistingRun(
+		ctx,
+		transition.Approval.RunID,
+		"mcp",
+		"",
+		"approval.consumed",
+		transition.Approval.ApprovalID,
+		map[string]any{"toolName": transition.Approval.ToolName},
+	)
+	return nil
 }
 
 func canonicalArgs(args map[string]any) (string, string, error) {

@@ -122,6 +122,7 @@ func TestWorkerCapabilityRoutingProtoContract(t *testing.T) {
 	assertProtoField(t, capabilities, "max_concurrent_runs", 4, protoreflect.Int32Kind, false, "")
 	assertProtoField(t, capabilities, "supports_external_agents", 5, protoreflect.BoolKind, false, "")
 	assertProtoField(t, capabilities, "external_agent_credential_refs", 6, protoreflect.StringKind, true, "")
+	assertProtoField(t, capabilities, "remote_egress_decision_version", 7, protoreflect.Int32Kind, false, "")
 
 	workerReady := runtimeFile.Messages().ByName("RuntimeWorkerReady")
 	assertProtoField(t, workerReady, "registration_id", 6, protoreflect.StringKind, false, "")
@@ -241,9 +242,10 @@ func TestRunOutcomeProtoContractUsesApprovedAllocations(t *testing.T) {
 		"event_id": 1, "session_id": 2, "run_id": 3, "trace_id": 4, "sequence": 5, "type": 6,
 		"created_at": 7, "payload": 8, "run_state": 9,
 	})
-	assertProtoField(t, turingv1.File_turing_v1_tools_proto.Messages().ByName("ToolPolicyDecision"), "run_state_version", 7, protoreflect.Int64Kind, false, "")
+	assertProtoField(t, turingv1.File_turing_v1_tools_proto.Messages().ByName("ToolPolicyDecision"), "run_state_version", 8, protoreflect.Int64Kind, false, "")
 	assertProtoFieldMembers(t, turingv1.File_turing_v1_tools_proto.Messages().ByName("ToolPolicyDecision"), map[protoreflect.Name]protoreflect.FieldNumber{
-		"decision": 1, "tool_call_id": 2, "approval_id": 3, "reason": 4, "terminal_run": 5, "phase": 6, "run_state_version": 7,
+		"decision": 1, "tool_call_id": 2, "approval_id": 3, "reason": 4, "terminal_run": 5, "phase": 6,
+		"provenance_token": 7, "run_state_version": 8,
 	})
 }
 
@@ -326,8 +328,8 @@ func TestRuntimeApprovalResumeProtoContractUsesApprovedAllocations(t *testing.T)
 		"AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT": 3,
 	})
 
-	assertProtoField(t, runtime.Messages().ByName("AgentJob"), "expected_state_version", 17, protoreflect.Int64Kind, false, "")
-	assertProtoField(t, runtime.Messages().ByName("AgentJob"), "assignment_attempt_id", 18, protoreflect.StringKind, false, "")
+	assertProtoField(t, runtime.Messages().ByName("AgentJob"), "expected_state_version", 19, protoreflect.Int64Kind, false, "")
+	assertProtoField(t, runtime.Messages().ByName("AgentJob"), "assignment_attempt_id", 20, protoreflect.StringKind, false, "")
 	assertProtoField(t, runtime.Messages().ByName("RuntimeRunCompleted"), "expected_state_version", 6, protoreflect.Int64Kind, false, "")
 	assertProtoField(t, runtime.Messages().ByName("RuntimeRunFailed"), "failure_origin", 5, protoreflect.EnumKind, false, "")
 	assertProtoField(t, runtime.Messages().ByName("RuntimeRunFailed"), "automatic_retry_class", 6, protoreflect.EnumKind, false, "")
@@ -337,7 +339,7 @@ func TestRuntimeApprovalResumeProtoContractUsesApprovedAllocations(t *testing.T)
 		"job_id": 1, "run_id": 2, "session_id": 3, "user_message_id": 4, "assistant_message_id": 5, "agent_id": 6,
 		"trace_id": 7, "model_provider": 8, "model": 9, "user_text": 10, "requested_tools": 11, "attempt": 12,
 		"skills": 13, "external_agent": 14, "required_context_tokens": 15, "minimum_worker_max_concurrent_runs": 16,
-		"expected_state_version": 17, "assignment_attempt_id": 18,
+		"egress_decision": 17, "selected_tools": 18, "expected_state_version": 19, "assignment_attempt_id": 20,
 	})
 	assertProtoFieldMembers(t, runtime.Messages().ByName("RuntimeRunCompleted"), map[protoreflect.Name]protoreflect.FieldNumber{
 		"run_id": 1, "assistant_message_id": 2, "content": 3, "usage": 4, "token_usage": 5, "expected_state_version": 6,
@@ -369,7 +371,7 @@ func TestRuntimeApprovalResumeProtoContractUsesApprovedAllocations(t *testing.T)
 	assertProtoField(t, resumeAccepted, "approval_id", 2, protoreflect.StringKind, false, "")
 	assertProtoField(t, resumeAccepted, "state_version", 3, protoreflect.Int64Kind, false, "")
 	assertProtoField(t, resumeAccepted, "assignment_attempt_id", 4, protoreflect.StringKind, false, "")
-	assertProtoField(t, runtime.Messages().ByName("RuntimeCommand"), "approval_resume_accepted", 7, protoreflect.MessageKind, false, "turing.v1.RuntimeApprovalResumeAccepted")
+	assertProtoField(t, runtime.Messages().ByName("RuntimeCommand"), "approval_resume_accepted", 8, protoreflect.MessageKind, false, "turing.v1.RuntimeApprovalResumeAccepted")
 	assertProtoOneofMember(t, runtime.Messages().ByName("RuntimeCommand"), "approval_resume_accepted", "command")
 	assertProtoField(t, runtime.Messages().ByName("RuntimeRunCancelled"), "state_version", 3, protoreflect.Int64Kind, false, "")
 	assertProtoField(t, runtime.Messages().ByName("RuntimeApprovalUpdated"), "state_version", 4, protoreflect.Int64Kind, false, "")
@@ -378,7 +380,7 @@ func TestRuntimeApprovalResumeProtoContractUsesApprovedAllocations(t *testing.T)
 	})
 	assertProtoFieldMembers(t, runtime.Messages().ByName("RuntimeCommand"), map[protoreflect.Name]protoreflect.FieldNumber{
 		"worker_accepted": 1, "run_assigned": 2, "run_cancelled": 3, "approval_updated": 4,
-		"shutdown_requested": 5, "tool_policy_decision": 6, "approval_resume_accepted": 7,
+		"shutdown_requested": 5, "tool_policy_decision": 6, "mcp_registry_changed": 7, "approval_resume_accepted": 8,
 	})
 	assertProtoFieldMembers(t, runtime.Messages().ByName("RuntimeRunCancelled"), map[protoreflect.Name]protoreflect.FieldNumber{
 		"run_id": 1, "reason": 2, "state_version": 3,
@@ -459,6 +461,140 @@ func TestRunFailedRetryableRemainsDeprecatedAtFieldFour(t *testing.T) {
 	if field == nil || field.Number() != 4 || field.Kind() != protoreflect.BoolKind || !field.Options().(*descriptorpb.FieldOptions).GetDeprecated() {
 		t.Fatalf("RunFailed.retryable must remain deprecated bool field 4: %v", field)
 	}
+}
+
+func TestRemoteEgressProtoContract(t *testing.T) {
+	common := turingv1.File_turing_v1_common_proto
+	categories := common.Enums().ByName("EgressDataCategory")
+	for _, name := range []protoreflect.Name{
+		"EGRESS_DATA_CATEGORY_CURRENT_MESSAGE",
+		"EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY",
+		"EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL",
+		"EGRESS_DATA_CATEGORY_MEMORY_PROFILE",
+		"EGRESS_DATA_CATEGORY_SKILL_CONTENT",
+		"EGRESS_DATA_CATEGORY_TOOL_SCHEMAS",
+		"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS",
+		"EGRESS_DATA_CATEGORY_TOOL_RESULTS",
+		"EGRESS_DATA_CATEGORY_ATTACHMENTS",
+	} {
+		if categories == nil || categories.Values().ByName(name) == nil {
+			t.Fatalf("EgressDataCategory is missing %s", name)
+		}
+
+	}
+
+	disclosure := common.Messages().ByName("RemoteEgressDisclosure")
+	assertProtoField(t, disclosure, "challenge", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, disclosure, "provider", 2, protoreflect.EnumKind, false, "")
+	assertProtoField(t, disclosure, "model", 3, protoreflect.StringKind, false, "")
+	assertProtoField(t, disclosure, "endpoint", 4, protoreflect.StringKind, false, "")
+	assertProtoField(t, disclosure, "endpoint_host", 5, protoreflect.StringKind, false, "")
+	assertProtoField(t, disclosure, "external_agent_id", 6, protoreflect.StringKind, false, "")
+	assertProtoField(t, disclosure, "data_categories", 7, protoreflect.EnumKind, true, "")
+	assertProtoField(t, disclosure, "expires_at", 8, protoreflect.MessageKind, false, "google.protobuf.Timestamp")
+	assertProtoField(t, disclosure, "remote_mcp_servers", 9, protoreflect.MessageKind, true, "turing.v1.RemoteMcpEgressDestination")
+	assertProtoField(t, disclosure, "selected_tools", 10, protoreflect.StringKind, true, "")
+
+	remoteMCP := common.Messages().ByName("RemoteMcpEgressDestination")
+	assertProtoField(t, remoteMCP, "server_name", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, remoteMCP, "endpoint", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, remoteMCP, "endpoint_host", 3, protoreflect.StringKind, false, "")
+
+	consent := common.Messages().ByName("RemoteEgressConsent")
+	assertProtoField(t, consent, "challenge", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, consent, "acknowledged_data_categories", 2, protoreflect.EnumKind, true, "")
+	assertProtoField(t, consent, "acknowledged", 3, protoreflect.BoolKind, false, "")
+
+	decision := common.Messages().ByName("RunEgressDecision")
+	assertProtoField(t, decision, "decision_id", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, decision, "version", 2, protoreflect.Int32Kind, false, "")
+	assertProtoField(t, decision, "provider", 3, protoreflect.EnumKind, false, "")
+	assertProtoField(t, decision, "model", 4, protoreflect.StringKind, false, "")
+	assertProtoField(t, decision, "endpoint", 5, protoreflect.StringKind, false, "")
+	assertProtoField(t, decision, "endpoint_host", 6, protoreflect.StringKind, false, "")
+	assertProtoField(t, decision, "external_agent_id", 7, protoreflect.StringKind, false, "")
+	assertProtoField(t, decision, "data_categories", 8, protoreflect.EnumKind, true, "")
+	assertProtoField(t, decision, "consent_granted_at", 9, protoreflect.MessageKind, false, "google.protobuf.Timestamp")
+	assertProtoField(t, decision, "challenge_fingerprint", 10, protoreflect.StringKind, false, "")
+	assertProtoField(t, decision, "selected_tools", 11, protoreflect.StringKind, true, "")
+	assertProtoField(t, decision, "skill_snapshot_fingerprint", 12, protoreflect.StringKind, false, "")
+	assertProtoField(t, decision, "recall_applicable", 13, protoreflect.BoolKind, false, "")
+	assertProtoField(t, decision, "memory_profile_applicable", 14, protoreflect.BoolKind, false, "")
+	assertProtoField(t, decision, "external_credential_ref_hash", 15, protoreflect.StringKind, false, "")
+	assertProtoField(t, decision, "request_digest", 16, protoreflect.StringKind, false, "")
+	assertProtoField(t, decision, "remote_mcp_servers", 17, protoreflect.MessageKind, true, "turing.v1.RemoteMcpEgressDestination")
+
+	provider := common.Messages().ByName("ProviderConfig")
+	assertProtoField(t, provider, "remote_endpoint", 5, protoreflect.StringKind, false, "")
+	assertProtoField(t, provider, "requires_per_run_consent", 6, protoreflect.BoolKind, false, "")
+
+	chatFile := turingv1.File_turing_v1_chat_proto
+	send := chatFile.Messages().ByName("SendMessageRequest")
+	assertProtoField(t, send, "remote_egress_consent", 11, protoreflect.MessageKind, false, "turing.v1.RemoteEgressConsent")
+	prepare := chatFile.Messages().ByName("PrepareRemoteEgressRequest")
+	assertProtoField(t, prepare, "session_id", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, prepare, "content", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, prepare, "idempotency_key", 7, protoreflect.StringKind, false, "")
+	response := chatFile.Messages().ByName("PrepareRemoteEgressResponse")
+	assertProtoField(t, response, "disclosure", 1, protoreflect.MessageKind, false, "turing.v1.RemoteEgressDisclosure")
+	service := chatFile.Services().ByName("ChatService")
+	method := service.Methods().ByName("PrepareRemoteEgress")
+	if method == nil {
+		t.Fatal("ChatService.PrepareRemoteEgress is missing")
+	}
+	if got := string(method.Input().FullName()); got != "turing.v1.PrepareRemoteEgressRequest" {
+		t.Fatalf("PrepareRemoteEgress input = %q", got)
+	}
+	if got := string(method.Output().FullName()); got != "turing.v1.PrepareRemoteEgressResponse" {
+		t.Fatalf("PrepareRemoteEgress output = %q", got)
+	}
+
+	job := turingv1.File_turing_v1_runtime_proto.Messages().ByName("AgentJob")
+	assertProtoField(t, job, "egress_decision", 17, protoreflect.MessageKind, false, "turing.v1.RunEgressDecision")
+	assertProtoField(t, job, "selected_tools", 18, protoreflect.StringKind, true, "")
+	externalTarget := turingv1.File_turing_v1_runtime_proto.Messages().ByName("ExternalAgentTarget")
+	assertProtoField(t, externalTarget, "agent_id", 4, protoreflect.StringKind, false, "")
+
+	auditPayload := turingv1.File_turing_v1_audit_proto.Messages().ByName("AuditPayload")
+	assertProtoField(t, auditPayload, "endpoint_host", 22, protoreflect.StringKind, false, "")
+	assertProtoField(t, auditPayload, "egress_data_categories", 23, protoreflect.EnumKind, true, "")
+	assertProtoField(t, auditPayload, "egress_decision_version", 24, protoreflect.Int32Kind, false, "")
+	assertProtoField(t, auditPayload, "egress_consent_granted_at", 25, protoreflect.MessageKind, false, "google.protobuf.Timestamp")
+}
+
+func TestMCPRegistryProtoContract(t *testing.T) {
+	file := turingv1.File_turing_v1_mcp_proto
+	server := file.Messages().ByName("McpServerDescriptor")
+	assertProtoField(t, server, "server_id", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, server, "name", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, server, "transport", 3, protoreflect.StringKind, false, "")
+	assertProtoField(t, server, "url", 4, protoreflect.StringKind, false, "")
+	assertProtoField(t, server, "tier", 5, protoreflect.EnumKind, false, "")
+	assertProtoField(t, server, "enabled", 6, protoreflect.BoolKind, false, "")
+	assertProtoField(t, server, "liveness", 7, protoreflect.EnumKind, false, "")
+	assertProtoField(t, server, "status_message", 8, protoreflect.StringKind, false, "")
+	assertProtoField(t, server, "sandbox_confined", 9, protoreflect.BoolKind, false, "")
+	assertProtoField(t, server, "tools", 10, protoreflect.MessageKind, true, "turing.v1.McpToolDescriptor")
+	if server.Fields().ByName("token") != nil || server.Fields().ByName("sealed_token") != nil {
+		t.Fatal("McpServerDescriptor must not expose server credentials")
+	}
+	tool := file.Messages().ByName("McpToolDescriptor")
+	assertProtoField(t, tool, "present", 5, protoreflect.BoolKind, false, "")
+
+	service := file.Services().ByName("McpRegistryService")
+	for _, name := range []protoreflect.Name{
+		"ListMcpServers",
+		"SetMcpServerEnabled",
+		"UpdateMcpToolPolicy",
+		"DeleteMcpServer",
+		"CallRegisteredMcpTool",
+	} {
+		if service == nil || service.Methods().ByName(name) == nil {
+			t.Fatalf("McpRegistryService.%s is missing", name)
+		}
+	}
+	command := turingv1.File_turing_v1_runtime_proto.Messages().ByName("RuntimeCommand")
+	assertProtoField(t, command, "mcp_registry_changed", 7, protoreflect.MessageKind, false, "turing.v1.RuntimeMcpRegistryChanged")
 }
 
 func assertProtoField(t *testing.T, message protoreflect.MessageDescriptor, name protoreflect.Name, number protoreflect.FieldNumber, kind protoreflect.Kind, repeated bool, messageType protoreflect.FullName) {

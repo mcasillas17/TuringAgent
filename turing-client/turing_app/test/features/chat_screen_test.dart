@@ -15,10 +15,12 @@ import 'package:turing_flutter_app/features/chat/chat_screen.dart';
 import 'package:turing_flutter_app/features/chat/tool_call_card.dart';
 import 'package:turing_flutter_app/l10n/generated/app_localizations.dart';
 import 'package:turing_flutter_app/models/message.dart';
+import 'package:turing_flutter_app/models/remote_egress.dart';
 import 'package:turing_flutter_app/models/run_lifecycle.dart';
 import 'package:turing_flutter_app/models/run_state.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
+import 'package:turing_flutter_app/models/session_deletion.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 import 'package:turing_flutter_app/networking/event_source.dart';
@@ -28,6 +30,7 @@ import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import '../support/no_audit_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
+import '../support/no_session_lifecycle_api.dart';
 import '../support/no_automations_api.dart';
 import '../support/no_skills_api.dart';
 import '../support/no_telemetry_api.dart';
@@ -191,6 +194,41 @@ void main() {
       unawaited(events.close());
     },
   );
+
+  testWidgets('session.deleted notifies the owner and ignores stale events', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    String? deletedSessionId;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+          onSessionDeleted: (sessionId) => deletedSessionId = sessionId,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(_event(type: 'session.deleted', sequence: 1, payload: const {}));
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 2,
+        payload: {'messageId': 'stale', 'delta': 'must not render'},
+      ),
+    );
+    await tester.pump();
+
+    expect(deletedSessionId, 'sess_1');
+    expect(find.text('must not render'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
 
   testWidgets('agent.run.step renders the runtime note', (tester) async {
     final events = StreamController<TuringEvent>(sync: true);
@@ -1839,6 +1877,98 @@ void main() {
             "drain adjacent to its OWN run's row, never appended past a "
             'later, unrelated row',
       );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'startup buffer overflow coalesces one newest-page resync without detached cards',
+    (tester) async {
+      final apiClient = _FakeApiClient()
+        ..initialMessages = List<Message>.generate(65, (index) {
+          return Message(
+            messageId: 'msg_overflow_$index',
+            runId: 'run_overflow_$index',
+            role: 'assistant',
+            content: 'answer $index',
+            sequence: index + 1,
+            createdAt: _fixedDate,
+          );
+        });
+      final events = List<TuringEvent>.generate(65, (index) {
+        final runId = 'run_overflow_$index';
+        return _event(
+          type: 'agent.run.state_changed',
+          sequence: index + 1,
+          runId: runId,
+          runState: _runState(
+            runId: runId,
+            assistantMessageId: 'msg_overflow_$index',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.completed,
+            hasDisplayableContent: true,
+          ),
+          payload: const {},
+        );
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _SynchronousDeliveryEventSource.events(events),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(apiClient.listMessagesCallCount, 2);
+      expect(find.byType(RunStateCard), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'startup-buffered state for an unloaded run resyncs without a detached card',
+    (tester) async {
+      final apiClient = _FakeApiClient();
+      final state = _runState(
+        runId: 'run_unloaded',
+        assistantMessageId: 'msg_unloaded',
+        stateVersion: 1,
+        lifecycle: RunLifecycle.recovering,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _SynchronousDeliveryEventSource(
+              _event(
+                type: 'agent.run.state_changed',
+                sequence: 1,
+                runId: state.runId,
+                runState: state,
+                payload: const {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(apiClient.listMessagesCallCount, 2);
+      expect(find.byType(RunStateCard), findsNothing);
 
       await tester.pumpWidget(const SizedBox.shrink());
     },
@@ -3730,12 +3860,86 @@ void main() {
 
   // The provider is a preference chosen once in Settings, not a control shown
   // above every conversation. The chat still has to send whatever was chosen.
-  testWidgets('chat sends the configured provider through API client', (
+  testWidgets(
+    'chat confirms every remote send with destination and categories',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient();
+      apiClient.remoteEgressDisclosure = RemoteEgressDisclosure(
+        challenge: 'challenge-1',
+        provider: 'openai_compatible',
+        model: 'gpt-4o-mini',
+        endpoint: 'https://api.openai.com/v1',
+        endpointHost: 'api.openai.com',
+        dataCategories: const [
+          EgressDataCategory.currentMessage,
+          EgressDataCategory.conversationHistory,
+          EgressDataCategory.toolSchemas,
+        ],
+        expiresAt: DateTime.utc(2026, 8, 20),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+            modelProvider: 'openai_compatible',
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // No picker clutters the conversation any more.
+      expect(find.byType(DropdownButton<String>), findsNothing);
+      expect(find.text('Model provider'), findsNothing);
+
+      await tester.enterText(find.byType(TextField), 'Use cloud model');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+
+      expect(find.text('Send data to api.openai.com?'), findsOneWidget);
+      expect(find.text('Current message'), findsOneWidget);
+      expect(find.text('Conversation history'), findsOneWidget);
+      expect(find.text('Tool schemas'), findsOneWidget);
+      expect(apiClient.sendMessageCallCount, 0);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Send'));
+      await tester.pump();
+
+      expect(apiClient.lastSentContent, 'Use cloud model');
+      expect(apiClient.lastModelProvider, 'openai_compatible');
+      expect(apiClient.lastRemoteEgressConsent?.challenge, 'challenge-1');
+      expect(apiClient.prepareRemoteEgressCallCount, 1);
+
+      await tester.enterText(find.byType(TextField), 'Do not send this');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      expect(find.text('Send data to api.openai.com?'), findsOneWidget);
+      expect(apiClient.prepareRemoteEgressCallCount, 2);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pump();
+      expect(apiClient.sendMessageCallCount, 1);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller?.text,
+        'Do not send this',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets('local Ollama send survives unavailable egress preflight', (
     tester,
   ) async {
     final events = StreamController<TuringEvent>(sync: true);
-    final apiClient = _FakeApiClient();
-
+    final apiClient = _FakeApiClient()
+      ..prepareRemoteEgressError = const TuringApiException(
+        code: 'unavailable',
+        message: 'preflight unavailable',
+      );
     await tester.pumpWidget(
       MaterialApp(
         localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -3744,22 +3948,20 @@ void main() {
           sessionId: 'sess_1',
           apiClient: apiClient,
           eventSource: _FakeEventSource(events.stream),
-          modelProvider: 'openai_compatible',
+          modelProvider: 'ollama',
         ),
       ),
     );
     await tester.pump();
 
-    // No picker clutters the conversation any more.
-    expect(find.byType(DropdownButton<String>), findsNothing);
-    expect(find.text('Model provider'), findsNothing);
-
-    await tester.enterText(find.byType(TextField), 'Use cloud model');
+    await tester.enterText(find.byType(TextField), 'stay local');
     await tester.tap(find.byIcon(Icons.send));
     await tester.pump();
 
-    expect(apiClient.lastSentContent, 'Use cloud model');
-    expect(apiClient.lastModelProvider, 'openai_compatible');
+    expect(apiClient.sendMessageCallCount, 1);
+    expect(apiClient.lastSentContent, 'stay local');
+    expect(find.byType(AlertDialog), findsNothing);
+
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());
   });
@@ -7531,6 +7733,157 @@ void main() {
     unawaited(events.close());
   });
 
+  testWidgets(
+    'remote unconfirmed retry reuses consent without preparing again',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..remoteEgressDisclosure = RemoteEgressDisclosure(
+          challenge: 'retry-challenge',
+          provider: 'openai_compatible',
+          model: 'gpt-4o-mini',
+          endpoint: 'https://api.openai.com/v1',
+          endpointHost: 'api.openai.com',
+          dataCategories: const [EgressDataCategory.currentMessage],
+          expiresAt: DateTime.utc(2026, 8, 20),
+        )
+        ..sendMessageErrors.add(
+          const TuringApiException(
+            code: 'unavailable',
+            message: 'unknown outcome',
+          ),
+        );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+            modelProvider: 'openai_compatible',
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'retry remote');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      await tester.tap(find.widgetWithText(FilledButton, 'Send'));
+      await tester.pump();
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+
+      expect(apiClient.prepareRemoteEgressCallCount, 1);
+      expect(apiClient.remoteEgressConsents, hasLength(2));
+      expect(
+        apiClient.remoteEgressConsents[1].challenge,
+        apiClient.remoteEgressConsents[0].challenge,
+      );
+      expect(apiClient.idempotencyKeys[1], apiClient.idempotencyKeys[0]);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets('provider round trip discards retained remote consent', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..remoteEgressDisclosure = RemoteEgressDisclosure(
+        challenge: 'provider-change-challenge',
+        provider: 'openai_compatible',
+        model: 'gpt-4o-mini',
+        endpoint: 'https://api.openai.com/v1',
+        endpointHost: 'api.openai.com',
+        dataCategories: const [EgressDataCategory.currentMessage],
+        expiresAt: DateTime.utc(2026, 8, 20),
+      )
+      ..sendMessageErrors.add(
+        const TuringApiException(
+          code: 'unavailable',
+          message: 'unknown outcome',
+        ),
+      );
+    final eventSource = _FakeEventSource(events.stream);
+    Future<void> pump(String provider) => tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: eventSource,
+          modelProvider: provider,
+        ),
+      ),
+    );
+
+    await pump('openai_compatible');
+    await tester.pump();
+    await tester.enterText(find.byType(TextField), 'provider round trip');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, 'Send'));
+    await tester.pump();
+    await pump('ollama');
+    await tester.pump();
+    await pump('openai_compatible');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+
+    expect(apiClient.prepareRemoteEgressCallCount, 2);
+    expect(find.text('Send data to api.openai.com?'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('failed precondition discards remote consent and re-prepares', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..remoteEgressDisclosure = RemoteEgressDisclosure(
+        challenge: 'stale-challenge',
+        provider: 'openai_compatible',
+        model: 'gpt-4o-mini',
+        endpoint: 'https://api.openai.com/v1',
+        endpointHost: 'api.openai.com',
+        dataCategories: const [EgressDataCategory.currentMessage],
+        expiresAt: DateTime.utc(2026, 8, 20),
+      )
+      ..sendMessageErrors.add(
+        const GrpcError.failedPrecondition('egress context changed'),
+      );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+          modelProvider: 'openai_compatible',
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.enterText(find.byType(TextField), 'stale consent');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, 'Send'));
+    await tester.pump();
+    expect(find.byType(MessageSendFailureCard), findsOneWidget);
+    expect(find.byType(MessageSendUnconfirmedCard), findsNothing);
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    expect(apiClient.prepareRemoteEgressCallCount, 2);
+    expect(find.text('Send data to api.openai.com?'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
   testWidgets('an idempotency conflict discards the stale retry key', (
     tester,
   ) async {
@@ -9932,15 +10285,15 @@ RunState _runState({
   );
 }
 
-class _FakeApiClient
+class _FakeApiClient extends TuringApi
     with
         NoAuditApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
+        NoSessionLifecycleApi,
         NoAutomationsApi,
-        NoTelemetryApi
-    implements TuringApi {
+        NoTelemetryApi {
   String? lastSentContent;
   String? lastModelProvider;
   final List<String?> idempotencyKeys = [];
@@ -10047,7 +10400,13 @@ class _FakeApiClient
   }
 
   @override
-  Future<void> deleteSession({required String sessionId}) async {}
+  Future<SessionDeletionReceipt> deleteSession({
+    required String sessionId,
+  }) async => const SessionDeletionReceipt.completed();
+
+  @override
+  Future<List<SessionDeletionReceipt>> listSessionDeletionReceipts() async =>
+      const [];
 
   @override
   Future<Session> getSession({required String sessionId}) async {
@@ -10124,6 +10483,42 @@ class _FakeApiClient
   /// test has already been disposed, to exercise `_sendMessage`'s `mounted`
   /// guard.
   Completer<Map<String, dynamic>>? sendMessagePending;
+  RemoteEgressDisclosure? remoteEgressDisclosure;
+  Object? prepareRemoteEgressError;
+  int prepareRemoteEgressCallCount = 0;
+  RemoteEgressConsent? lastRemoteEgressConsent;
+  final List<RemoteEgressConsent> remoteEgressConsents = [];
+
+  @override
+  Future<RemoteEgressDisclosure?> prepareRemoteEgress({
+    required String sessionId,
+    required String content,
+    String modelProvider = 'ollama',
+    required String idempotencyKey,
+  }) async {
+    prepareRemoteEgressCallCount++;
+    final error = prepareRemoteEgressError;
+    if (error != null) return Future.error(error);
+    return remoteEgressDisclosure;
+  }
+
+  @override
+  Future<Map<String, dynamic>> sendMessageWithRemoteEgressConsent({
+    required String sessionId,
+    required String content,
+    String modelProvider = 'ollama',
+    required String idempotencyKey,
+    required RemoteEgressConsent consent,
+  }) {
+    lastRemoteEgressConsent = consent;
+    remoteEgressConsents.add(consent);
+    return sendMessage(
+      sessionId: sessionId,
+      content: content,
+      modelProvider: modelProvider,
+      idempotencyKey: idempotencyKey,
+    );
+  }
 
   @override
   Future<Map<String, dynamic>> sendMessage({
@@ -10413,13 +10808,15 @@ class _UncancellableSubscription implements StreamSubscription<TuringEvent> {
 /// `RunStateLoadBuffer` this app wires into `_start` is reachable, not
 /// merely unit-tested in isolation.
 class _SynchronousDeliveryEventSource implements TuringEventSource {
-  _SynchronousDeliveryEventSource(this._event);
+  _SynchronousDeliveryEventSource(TuringEvent event) : _events = [event];
 
-  final TuringEvent _event;
+  _SynchronousDeliveryEventSource.events(this._events);
+
+  final List<TuringEvent> _events;
 
   @override
   Stream<TuringEvent> connect({required String sessionId, int? lastSequence}) {
-    return _SynchronousDeliveryStream(_event);
+    return _SynchronousDeliveryStream(_events);
   }
 
   @override
@@ -10427,9 +10824,9 @@ class _SynchronousDeliveryEventSource implements TuringEventSource {
 }
 
 class _SynchronousDeliveryStream extends Stream<TuringEvent> {
-  _SynchronousDeliveryStream(this._event);
+  _SynchronousDeliveryStream(this._events);
 
-  final TuringEvent _event;
+  final List<TuringEvent> _events;
 
   @override
   StreamSubscription<TuringEvent> listen(
@@ -10447,7 +10844,9 @@ class _SynchronousDeliveryStream extends Stream<TuringEvent> {
     );
     // Delivered synchronously: the listener above is already attached, and
     // this is a `sync: true` controller.
-    controller.add(_event);
+    for (final event in _events) {
+      controller.add(event);
+    }
     return subscription;
   }
 }

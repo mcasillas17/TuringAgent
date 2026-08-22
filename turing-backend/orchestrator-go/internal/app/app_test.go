@@ -325,6 +325,7 @@ func TestApprovalRPCsAreSeparatedAcrossPublicAndInternalServers(t *testing.T) {
 	if _, err := publicClient.GetApprovalForRuntime(publicContext, &turingv1.GetApprovalForRuntimeRequest{ApprovalId: "missing"}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("public GetApprovalForRuntime error = %v, want PermissionDenied", err)
 	}
+
 	if _, err := publicClient.ConsumeApproval(publicContext, &turingv1.ConsumeApprovalRequest{ApprovalId: "missing"}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("public ConsumeApproval error = %v, want PermissionDenied", err)
 	}
@@ -336,6 +337,31 @@ func TestApprovalRPCsAreSeparatedAcrossPublicAndInternalServers(t *testing.T) {
 	}
 	if _, err := internalClient.DenyApproval(internalContext, &turingv1.DenyApprovalRequest{ApprovalId: "missing"}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("internal DenyApproval error = %v, want PermissionDenied", err)
+	}
+}
+
+func TestMCPRegistryRPCsAreSeparatedAcrossPublicAndInternalServers(t *testing.T) {
+	app := newTestApp(t)
+	publicClient := turingv1.NewMcpRegistryServiceClient(newBufconnClient(t, app.PublicServer))
+	publicContext := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+"client"))
+	if _, err := publicClient.CallRegisteredMcpTool(publicContext, &turingv1.CallRegisteredMcpToolRequest{
+		ServerId: "missing", RunId: "run", ToolName: "tool",
+	}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("public CallRegisteredMcpTool error = %v, want PermissionDenied", err)
+	}
+	if _, err := publicClient.ListMcpServers(publicContext, &turingv1.ListMcpServersRequest{}); err != nil {
+		t.Fatalf("public ListMcpServers: %v", err)
+	}
+
+	internalClient := turingv1.NewMcpRegistryServiceClient(newBufconnClient(t, app.InternalServer))
+	internalContext := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+"internal"))
+	if _, err := internalClient.SetMcpServerEnabled(internalContext, &turingv1.SetMcpServerEnabledRequest{
+		ServerId: "missing", Enabled: true,
+	}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("internal SetMcpServerEnabled error = %v, want PermissionDenied", err)
+	}
+	if _, err := internalClient.ListMcpServers(internalContext, &turingv1.ListMcpServersRequest{}); err != nil {
+		t.Fatalf("internal ListMcpServers: %v", err)
 	}
 }
 
@@ -405,10 +431,10 @@ func TestConcurrentConsumeApprovalOverInternalServerConsumesExactlyOnce(t *testi
 	if err := app.Repository.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.Repository.RecordToolCallBefore(ctx, repository.ToolCallRecord{ToolCallID: "call_concurrent", RunID: enqueued.RunID}, "general_assistant", "files", "files.update", `{}`, "sha256:concurrent"); err != nil {
+	if err := app.Repository.RecordToolCallBefore(ctx, repository.ToolCallRecord{ToolCallID: "call_concurrent", RunID: enqueued.RunID}, "general_assistant", "custom", "custom.write", `{}`, "sha256:concurrent"); err != nil {
 		t.Fatal(err)
 	}
-	approvalID, err := app.ApprovalService.CreateApprovalForTool(ctx, enqueued.RunID, "call_concurrent", "general_assistant", "files.update", map[string]any{})
+	approvalID, err := app.ApprovalService.CreateApprovalForTool(ctx, enqueued.RunID, "call_concurrent", "general_assistant", "custom.write", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,9 +7,12 @@ import 'package:turing_flutter_app/models/telemetry.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 
 import '../support/no_audit_api.dart';
+import '../support/no_mcp_registry_api.dart';
 import '../support/no_automations_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
+import '../support/no_remote_egress_api.dart';
+import '../support/no_session_lifecycle_api.dart';
 import '../support/no_skills_api.dart';
 
 void main() {
@@ -604,9 +607,12 @@ TelemetrySummary _busySummary() => _summary(
 class _FakeApi
     with
         NoAuditApi,
+        NoMcpRegistryApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
+        NoRemoteEgressApi,
+        NoSessionLifecycleApi,
         NoAutomationsApi
     implements TuringApi {
   TelemetrySummary? summary;
