@@ -2197,6 +2197,15 @@ func (s *Server) handleRunCancelledAck(ctx context.Context, ack *turingv1.Runtim
 	if !isTerminalRunStatus(run.Status) {
 		return status.Error(codes.FailedPrecondition, "run is not cancelled")
 	}
+	// Normal dispatch never reaches this check: a real ack always arrives
+	// through reconcileLateAssignedUpdate first, which — by the time a worker
+	// acknowledges a cancellation — finds the run already terminal and
+	// enforces this same version rule itself before this function is ever
+	// called. This copy only matters for the race window between the two
+	// GetRun calls: if the run terminalizes after reconcileLateAssignedUpdate
+	// read it as still non-terminal but before this handler's own GetRun
+	// above, its fallthrough reaches here with no version check yet applied,
+	// and this is the only thing left to enforce it.
 	if !acknowledgedVersionMatches(ack.GetObservedStateVersion(), run) {
 		return status.Error(codes.FailedPrecondition, "run_cancelled_ack observed_state_version does not match run")
 	}
