@@ -61,6 +61,23 @@ Future<bool> showRemoteEgressDialog(
                       ),
                     const SizedBox(height: 8),
                   ],
+                  if (disclosure.integrationEndpoints.isNotEmpty) ...[
+                    const Text(
+                      'Connected-account destinations:',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    for (final destination in disclosure.integrationEndpoints)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Text(
+                          '${destination.displayName} · '
+                          '${destination.endpointHost}\n'
+                          '${destination.connectionId}',
+                        ),
+                      ),
+                    const SizedBox(height: 8),
+                  ],
                   for (final category in disclosure.dataCategories)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 6),

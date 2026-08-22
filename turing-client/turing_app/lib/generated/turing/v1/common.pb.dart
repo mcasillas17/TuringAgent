@@ -592,6 +592,7 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
     $1.Timestamp? expiresAt,
     $core.Iterable<RemoteMcpEgressDestination>? remoteMcpServers,
     $core.Iterable<$core.String>? selectedTools,
+    $core.Iterable<IntegrationEgressDestination>? integrationEndpoints,
   }) {
     final result = create();
     if (challenge != null) result.challenge = challenge;
@@ -605,6 +606,8 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
     if (remoteMcpServers != null)
       result.remoteMcpServers.addAll(remoteMcpServers);
     if (selectedTools != null) result.selectedTools.addAll(selectedTools);
+    if (integrationEndpoints != null)
+      result.integrationEndpoints.addAll(integrationEndpoints);
     return result;
   }
 
@@ -641,6 +644,9 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
         9, _omitFieldNames ? '' : 'remoteMcpServers', $pb.PbFieldType.PM,
         subBuilder: RemoteMcpEgressDestination.create)
     ..pPS(10, _omitFieldNames ? '' : 'selectedTools')
+    ..pc<IntegrationEgressDestination>(
+        11, _omitFieldNames ? '' : 'integrationEndpoints', $pb.PbFieldType.PM,
+        subBuilder: IntegrationEgressDestination.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -739,6 +745,10 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
 
   @$pb.TagNumber(10)
   $pb.PbList<$core.String> get selectedTools => $_getList(9);
+
+  @$pb.TagNumber(11)
+  $pb.PbList<IntegrationEgressDestination> get integrationEndpoints =>
+      $_getList(10);
 }
 
 class RemoteMcpEgressDestination extends $pb.GeneratedMessage {
@@ -822,6 +832,108 @@ class RemoteMcpEgressDestination extends $pb.GeneratedMessage {
   $core.bool hasEndpointHost() => $_has(2);
   @$pb.TagNumber(3)
   void clearEndpointHost() => $_clearField(3);
+}
+
+class IntegrationEgressDestination extends $pb.GeneratedMessage {
+  factory IntegrationEgressDestination({
+    $core.String? endpoint,
+    $core.String? endpointHost,
+    $core.String? connectionId,
+    $core.String? displayName,
+    $core.Iterable<$core.String>? tools,
+  }) {
+    final result = create();
+    if (endpoint != null) result.endpoint = endpoint;
+    if (endpointHost != null) result.endpointHost = endpointHost;
+    if (connectionId != null) result.connectionId = connectionId;
+    if (displayName != null) result.displayName = displayName;
+    if (tools != null) result.tools.addAll(tools);
+    return result;
+  }
+
+  IntegrationEgressDestination._();
+
+  factory IntegrationEgressDestination.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory IntegrationEgressDestination.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'IntegrationEgressDestination',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'endpoint')
+    ..aOS(2, _omitFieldNames ? '' : 'endpointHost')
+    ..aOS(3, _omitFieldNames ? '' : 'connectionId')
+    ..aOS(4, _omitFieldNames ? '' : 'displayName')
+    ..pPS(5, _omitFieldNames ? '' : 'tools')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  IntegrationEgressDestination clone() =>
+      IntegrationEgressDestination()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  IntegrationEgressDestination copyWith(
+          void Function(IntegrationEgressDestination) updates) =>
+      super.copyWith(
+              (message) => updates(message as IntegrationEgressDestination))
+          as IntegrationEgressDestination;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static IntegrationEgressDestination create() =>
+      IntegrationEgressDestination._();
+  @$core.override
+  IntegrationEgressDestination createEmptyInstance() => create();
+  static $pb.PbList<IntegrationEgressDestination> createRepeated() =>
+      $pb.PbList<IntegrationEgressDestination>();
+  @$core.pragma('dart2js:noInline')
+  static IntegrationEgressDestination getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<IntegrationEgressDestination>(create);
+  static IntegrationEgressDestination? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get endpoint => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set endpoint($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasEndpoint() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearEndpoint() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get endpointHost => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set endpointHost($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasEndpointHost() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearEndpointHost() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get connectionId => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set connectionId($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasConnectionId() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearConnectionId() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get displayName => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set displayName($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasDisplayName() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearDisplayName() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $pb.PbList<$core.String> get tools => $_getList(4);
 }
 
 class RemoteEgressConsent extends $pb.GeneratedMessage {
@@ -925,6 +1037,7 @@ class RunEgressDecision extends $pb.GeneratedMessage {
     $core.String? externalCredentialRefHash,
     $core.String? requestDigest,
     $core.Iterable<RemoteMcpEgressDestination>? remoteMcpServers,
+    $core.Iterable<IntegrationEgressDestination>? integrationEndpoints,
   }) {
     final result = create();
     if (decisionId != null) result.decisionId = decisionId;
@@ -949,6 +1062,8 @@ class RunEgressDecision extends $pb.GeneratedMessage {
     if (requestDigest != null) result.requestDigest = requestDigest;
     if (remoteMcpServers != null)
       result.remoteMcpServers.addAll(remoteMcpServers);
+    if (integrationEndpoints != null)
+      result.integrationEndpoints.addAll(integrationEndpoints);
     return result;
   }
 
@@ -992,6 +1107,9 @@ class RunEgressDecision extends $pb.GeneratedMessage {
     ..pc<RemoteMcpEgressDestination>(
         17, _omitFieldNames ? '' : 'remoteMcpServers', $pb.PbFieldType.PM,
         subBuilder: RemoteMcpEgressDestination.create)
+    ..pc<IntegrationEgressDestination>(
+        18, _omitFieldNames ? '' : 'integrationEndpoints', $pb.PbFieldType.PM,
+        subBuilder: IntegrationEgressDestination.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1151,6 +1269,10 @@ class RunEgressDecision extends $pb.GeneratedMessage {
 
   @$pb.TagNumber(17)
   $pb.PbList<RemoteMcpEgressDestination> get remoteMcpServers => $_getList(16);
+
+  @$pb.TagNumber(18)
+  $pb.PbList<IntegrationEgressDestination> get integrationEndpoints =>
+      $_getList(17);
 }
 
 class AgentDescriptor extends $pb.GeneratedMessage {

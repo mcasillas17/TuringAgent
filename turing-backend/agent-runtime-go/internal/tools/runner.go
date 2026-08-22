@@ -123,7 +123,7 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 		}
 		return RunOutcome{}, ToolRejectedError{Reason: reason}
 	case turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED:
-		sideEffecting = true
+		sideEffecting = !decision.GetReadOnly()
 		if r.WaitApproval == nil {
 			err = ApprovalWaitError{err: errors.New("approval waiter is not configured")}
 			if reportErr := r.postAfter(ctx, input, toolCallID, turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED, "", &turingv1.ToolCallError{Code: "approval_wait_failed", Message: err.Error()}, started); reportErr != nil {
@@ -181,7 +181,7 @@ func (r *Runner) RunWithOutcome(ctx context.Context, input RunInput) (RunOutcome
 		if sideEffecting {
 			return outcome, SideEffectCommittedError{err: err}
 		}
-		return outcome, ReportingFailureError{operationErr: errors.New("safe tool call completed"), reportErr: err}
+		return outcome, ReportingFailureError{operationErr: errors.New("tool call completed under a non-side-effecting decision"), reportErr: err}
 	}
 	return outcome, nil
 }

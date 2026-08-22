@@ -591,11 +591,13 @@ func (s *Server) filterRegisteredWorkerTools(
 	filteredCapabilities := cloneRegisteredWorkerCapabilities(capabilities)
 	filtered := make([]repository.DiscoveredTool, 0, len(discovered))
 	for _, tool := range discovered {
-		if tool.ServerName == "skills" {
-			filtered = append(filtered, tool)
-			continue
+		var available bool
+		var err error
+		if tool.ServerName == "skills" || tool.ServerName == "integrations" {
+			available, err = s.repo.PseudoServerToolAvailable(ctx, tool.ServerName, tool.ToolName)
+		} else {
+			available, err = s.repo.MCPToolAvailable(ctx, tool.ServerName, tool.ToolName)
 		}
-		available, err := s.repo.MCPToolAvailable(ctx, tool.ServerName, tool.ToolName)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1901,6 +1903,15 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 	if policy == tools.PolicyApprovalRequired && beacon.Args == nil {
 		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "approval_args_missing")
 	}
+	if policy == tools.PolicyApprovalRequired && beaconServerName(beacon) == "integrations" && !tools.ToolReadOnly("integrations", beacon.ToolName) {
+		render, renderErr := s.repo.IntegrationApprovalRender(ctx, beacon.ToolName, args)
+		if renderErr != nil {
+			return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "integration_approval_render_invalid")
+		}
+		if len([]byte(render)) > repository.MaxIntegrationApprovalRenderBytes {
+			return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "integration_approval_render_too_large")
+		}
+	}
 	if policy == tools.PolicyDisabled {
 		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "tool_disabled")
 	}
@@ -1927,7 +1938,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 			s.publishEvent(event)
 		}
 		if !recorded.Inserted {
-			if decision, handled := existingToolBeforeDecision(recorded.Record, "tool_denied"); handled {
+			if decision, handled := existingToolBeforeDecision(recorded.Record, "tool_denied", beaconServerName(beacon), beacon.ToolName); handled {
 				return s.withToolProvenance(ctx, decision, beacon, run, argsHash), nil
 			}
 		}
@@ -1956,6 +1967,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 			ToolCallId:      beacon.ToolCallId,
 			ApprovalId:      approvalID,
 			ProvenanceToken: s.issueToolProvenance(ctx, beacon, run, argsHash),
+			ReadOnly:        tools.ToolReadOnly(beaconServerName(beacon), beacon.ToolName),
 		}, nil
 	}
 	statusValue := "requested"
@@ -1974,7 +1986,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 		s.publishEvent(event)
 	}
 	if !recorded.Inserted {
-		if decision, handled := existingToolBeforeDecision(recorded.Record, "tool_denied"); handled {
+		if decision, handled := existingToolBeforeDecision(recorded.Record, "tool_denied", beaconServerName(beacon), beacon.ToolName); handled {
 			return s.withToolProvenance(ctx, decision, beacon, run, argsHash), nil
 		}
 	}
@@ -1989,6 +2001,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 			Decision:        turingv1.ToolPolicyDecision_DECISION_ALLOW,
 			ToolCallId:      beacon.ToolCallId,
 			ProvenanceToken: s.issueToolProvenance(ctx, beacon, run, argsHash),
+			ReadOnly:        tools.ToolReadOnly(beaconServerName(beacon), beacon.ToolName),
 		}, nil
 	default:
 		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "unknown_policy")
@@ -2138,7 +2151,7 @@ func (s *Server) denyToolBefore(ctx context.Context, beacon *turingv1.ToolCallBe
 		s.publishEvent(event)
 	}
 	if !recorded.Inserted {
-		if decision, handled := existingToolBeforeDecision(recorded.Record, reason); handled {
+		if decision, handled := existingToolBeforeDecision(recorded.Record, reason, beaconServerName(beacon), beacon.ToolName); handled {
 			return decision, nil
 		}
 	}
@@ -2150,8 +2163,8 @@ func (s *Server) denyToolBefore(ctx context.Context, beacon *turingv1.ToolCallBe
 	return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_DENY, ToolCallId: beacon.ToolCallId, Reason: reason}, nil
 }
 
-func existingToolBeforeDecision(record repository.ToolCallRecord, deniedReason string) (*turingv1.ToolPolicyDecision, bool) {
-	decision := &turingv1.ToolPolicyDecision{ToolCallId: record.ToolCallID}
+func existingToolBeforeDecision(record repository.ToolCallRecord, deniedReason, serverName, toolName string) (*turingv1.ToolPolicyDecision, bool) {
+	decision := &turingv1.ToolPolicyDecision{ToolCallId: record.ToolCallID, ReadOnly: tools.ToolReadOnly(serverName, toolName)}
 	switch record.Status {
 	case "allowed":
 		decision.Decision = turingv1.ToolPolicyDecision_DECISION_ALLOW
@@ -2373,6 +2386,9 @@ func beaconServerName(beacon *turingv1.ToolCallBeacon) string {
 	if beacon.ServerName != "" {
 		return beacon.ServerName
 	}
+	if strings.HasPrefix(beacon.ToolName, "github.") {
+		return "integrations"
+	}
 	for i, r := range beacon.ToolName {
 		if r == '.' {
 			return beacon.ToolName[:i]
@@ -2495,6 +2511,14 @@ func toProtoEgressDecision(decision *repository.RunEgressDecision) *turingv1.Run
 			EndpointHost: destination.EndpointHost,
 		}
 	}
+	integrationEndpoints := make([]*turingv1.IntegrationEgressDestination, len(decision.IntegrationEndpoints))
+	for index, destination := range decision.IntegrationEndpoints {
+		integrationEndpoints[index] = &turingv1.IntegrationEgressDestination{
+			Endpoint: destination.Endpoint, EndpointHost: destination.EndpointHost,
+			ConnectionId: destination.ConnectionID, DisplayName: destination.DisplayName,
+			Tools: append([]string(nil), destination.Tools...),
+		}
+	}
 	return &turingv1.RunEgressDecision{
 		DecisionId:                decision.DecisionID,
 		Version:                   int32(decision.Version),
@@ -2513,6 +2537,7 @@ func toProtoEgressDecision(decision *repository.RunEgressDecision) *turingv1.Run
 		ExternalCredentialRefHash: decision.ExternalCredentialRefHash,
 		RequestDigest:             decision.RequestDigest,
 		RemoteMcpServers:          remoteMCPServers,
+		IntegrationEndpoints:      integrationEndpoints,
 	}
 }
 

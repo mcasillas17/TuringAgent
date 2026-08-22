@@ -142,6 +142,52 @@ func TestUpsertToolsDropsAnUnregisteredServerFromTheSnapshot(t *testing.T) {
 	}
 }
 
+func TestPseudoServerPolicyAvailabilityBootstrapsAndReEnables(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+
+	for _, serverName := range []string{"skills", "integrations"} {
+		t.Run(serverName, func(t *testing.T) {
+			toolName := serverName + ".probe"
+			available, err := repo.PseudoServerToolAvailable(ctx, serverName, toolName)
+			if err != nil || !available {
+				t.Fatalf("missing tool availability = %v, err=%v; want bootstrap availability", available, err)
+			}
+			if err := repo.UpsertTools(ctx, []DiscoveredTool{{ServerName: serverName, ToolName: toolName, SchemaJSON: `{}`, Policy: "approval_required"}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.SetToolPolicyByName(ctx, serverName, toolName, "disabled"); err != nil {
+				t.Fatal(err)
+			}
+			available, err = repo.PseudoServerToolAvailable(ctx, serverName, toolName)
+			if err != nil || available {
+				t.Fatalf("disabled tool availability = %v, err=%v; want false", available, err)
+			}
+			if err := repo.SetToolPolicyByName(ctx, serverName, toolName, "approval_required"); err != nil {
+				t.Fatal(err)
+			}
+			available, err = repo.PseudoServerToolAvailable(ctx, serverName, toolName)
+			if err != nil || !available {
+				t.Fatalf("re-enabled tool availability = %v, err=%v; want true", available, err)
+			}
+		})
+	}
+}
+
+func TestUpsertToolsRegistersIntegrationsWithoutAnMCPServerRow(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	if err := repo.UpsertTools(ctx, []DiscoveredTool{{
+		ServerName: "integrations", ToolName: "github.list_issues", SchemaJSON: `{}`, Policy: "approval_required",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	policy, enabled, found, err := repo.GetToolPolicy(ctx, "integrations", "github.list_issues")
+	if err != nil || !found || !enabled || policy != "approval_required" {
+		t.Fatalf("integration tool = policy %q enabled %v found %v err %v", policy, enabled, found, err)
+	}
+}
+
 func registerRepositoryTestServer(t *testing.T, ctx context.Context, database *db.DB, name string) {
 	t.Helper()
 	if _, err := database.ExecContext(ctx, `

@@ -159,6 +159,7 @@ const ToolPolicyDecision$json = {
       '10': 'phase'
     },
     {'1': 'provenance_token', '3': 7, '4': 1, '5': 9, '10': 'provenanceToken'},
+    {'1': 'read_only', '3': 8, '4': 1, '5': 8, '10': 'readOnly'},
   ],
   '4': [ToolPolicyDecision_Decision$json],
 };
@@ -181,6 +182,6 @@ final $typed_data.Uint8List toolPolicyDecisionDescriptor = $convert.base64Decode
     'CnRvb2xDYWxsSWQSHwoLYXBwcm92YWxfaWQYAyABKAlSCmFwcHJvdmFsSWQSFgoGcmVhc29uGA'
     'QgASgJUgZyZWFzb24SIQoMdGVybWluYWxfcnVuGAUgASgIUgt0ZXJtaW5hbFJ1bhIuCgVwaGFz'
     'ZRgGIAEoDjIYLnR1cmluZy52MS5Ub29sQ2FsbFBoYXNlUgVwaGFzZRIpChBwcm92ZW5hbmNlX3'
-    'Rva2VuGAcgASgJUg9wcm92ZW5hbmNlVG9rZW4iawoIRGVjaXNpb24SGAoUREVDSVNJT05fVU5T'
-    'UEVDSUZJRUQQABISCg5ERUNJU0lPTl9BTExPVxABEhEKDURFQ0lTSU9OX0RFTlkQAhIeChpERU'
-    'NJU0lPTl9BUFBST1ZBTF9SRVFVSVJFRBAD');
+    'Rva2VuGAcgASgJUg9wcm92ZW5hbmNlVG9rZW4SGwoJcmVhZF9vbmx5GAggASgIUghyZWFkT25s'
+    'eSJrCghEZWNpc2lvbhIYChRERUNJU0lPTl9VTlNQRUNJRklFRBAAEhIKDkRFQ0lTSU9OX0FMTE'
+    '9XEAESEQoNREVDSVNJT05fREVOWRACEh4KGkRFQ0lTSU9OX0FQUFJPVkFMX1JFUVVJUkVEEAM=');

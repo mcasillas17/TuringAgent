@@ -58,4 +58,7 @@ message ToolPolicyDecision {
   // session, run, deletion generation, tool, arguments and path scope. The
   // runtime forwards it verbatim; it never mints or edits one.
   string provenance_token = 7;
+  // Authored by the orchestrator. Approval waiting is still policy-driven;
+  // this bit only controls failure/side-effect classification.
+  bool read_only = 8;
 }

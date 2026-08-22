@@ -8,10 +8,32 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 )
+
+const (
+	GitHubIntegrationEndpoint        = "https://api.github.com"
+	GitHubIntegrationEndpointHost    = "api.github.com"
+	MaxIntegrationEndpoints          = 16
+	MaxIntegrationEndpointEntryBytes = 768
+	maxIntegrationDisplayNameRunes   = 64
+)
+
+type IntegrationEndpointEgress struct {
+	Endpoint     string   `json:"endpoint"`
+	EndpointHost string   `json:"endpoint_host"`
+	ConnectionID string   `json:"connection_id"`
+	DisplayName  string   `json:"display_name"`
+	Tools        []string `json:"tools"`
+}
+
+func IntegrationEndpointEntrySize(entry IntegrationEndpointEgress) (int, error) {
+	encoded, err := json.Marshal(entry)
+	return len(encoded), err
+}
 
 const RunEgressDecisionVersion = backendegress.DecisionVersion
 
@@ -52,28 +74,30 @@ type PendingEgressDecision struct {
 	MemoryProfileApplicable   bool
 	ConsentGrantedAt          string
 	RemoteMCPServers          []RemoteMCPServerEgress
+	IntegrationEndpoints      []IntegrationEndpointEgress
 }
 
 type RunEgressDecision struct {
-	DecisionID                string                  `json:"decisionId"`
-	RunID                     string                  `json:"runId"`
-	Version                   int                     `json:"version"`
-	ChallengeNonce            string                  `json:"challengeNonce"`
-	ChallengeFingerprint      string                  `json:"challengeFingerprint"`
-	RequestDigest             string                  `json:"requestDigest"`
-	Provider                  string                  `json:"provider"`
-	Model                     string                  `json:"model"`
-	ExternalAgentID           string                  `json:"externalAgentId,omitempty"`
-	ExternalCredentialRefHash string                  `json:"externalCredentialRefHash,omitempty"`
-	Endpoint                  string                  `json:"endpoint"`
-	EndpointHost              string                  `json:"endpointHost"`
-	DataCategories            []string                `json:"dataCategories"`
-	SelectedTools             []string                `json:"selectedTools"`
-	SkillSnapshotFingerprint  string                  `json:"skillSnapshotFingerprint"`
-	RecallApplicable          bool                    `json:"recallApplicable"`
-	MemoryProfileApplicable   bool                    `json:"memoryProfileApplicable"`
-	ConsentGrantedAt          string                  `json:"consentGrantedAt"`
-	RemoteMCPServers          []RemoteMCPServerEgress `json:"remoteMcpServers"`
+	DecisionID                string                      `json:"decisionId"`
+	RunID                     string                      `json:"runId"`
+	Version                   int                         `json:"version"`
+	ChallengeNonce            string                      `json:"challengeNonce"`
+	ChallengeFingerprint      string                      `json:"challengeFingerprint"`
+	RequestDigest             string                      `json:"requestDigest"`
+	Provider                  string                      `json:"provider"`
+	Model                     string                      `json:"model"`
+	ExternalAgentID           string                      `json:"externalAgentId,omitempty"`
+	ExternalCredentialRefHash string                      `json:"externalCredentialRefHash,omitempty"`
+	Endpoint                  string                      `json:"endpoint"`
+	EndpointHost              string                      `json:"endpointHost"`
+	DataCategories            []string                    `json:"dataCategories"`
+	SelectedTools             []string                    `json:"selectedTools"`
+	SkillSnapshotFingerprint  string                      `json:"skillSnapshotFingerprint"`
+	RecallApplicable          bool                        `json:"recallApplicable"`
+	MemoryProfileApplicable   bool                        `json:"memoryProfileApplicable"`
+	ConsentGrantedAt          string                      `json:"consentGrantedAt"`
+	RemoteMCPServers          []RemoteMCPServerEgress     `json:"remoteMcpServers"`
+	IntegrationEndpoints      []IntegrationEndpointEgress `json:"integrationEndpoints"`
 }
 
 func normalizePendingEgressDecision(input *PendingEgressDecision) (*PendingEgressDecision, error) {
@@ -84,10 +108,12 @@ func normalizePendingEgressDecision(input *PendingEgressDecision) (*PendingEgres
 	normalized.DataCategories = append([]string(nil), input.DataCategories...)
 	normalized.SelectedTools = append([]string(nil), input.SelectedTools...)
 	normalized.RemoteMCPServers = append([]RemoteMCPServerEgress{}, input.RemoteMCPServers...)
+	normalized.IntegrationEndpoints = cloneIntegrationEndpoints(input.IntegrationEndpoints)
 	slices.Sort(normalized.SelectedTools)
 	slices.SortFunc(normalized.RemoteMCPServers, func(left, right RemoteMCPServerEgress) int {
 		return strings.Compare(left.ServerName, right.ServerName)
 	})
+	sortIntegrationEndpoints(normalized.IntegrationEndpoints)
 	if normalized.Version != RunEgressDecisionVersion ||
 		normalized.ChallengeNonce == "" ||
 		normalized.ChallengeFingerprint == "" ||
@@ -107,7 +133,7 @@ func normalizePendingEgressDecision(input *PendingEgressDecision) (*PendingEgres
 		}
 	} else if normalized.Endpoint != "" || normalized.EndpointHost != "" ||
 		normalized.ExternalAgentID != "" || normalized.ExternalCredentialRefHash != "" ||
-		len(normalized.RemoteMCPServers) == 0 {
+		len(normalized.RemoteMCPServers) == 0 && len(normalized.IntegrationEndpoints) == 0 {
 		return nil, ErrEgressDecisionInvalid
 	}
 	if len(normalized.DataCategories) == 0 {
@@ -141,6 +167,19 @@ func normalizePendingEgressDecision(input *PendingEgressDecision) (*PendingEgres
 			return nil, ErrEgressDecisionInvalid
 		}
 	}
+	if len(normalized.IntegrationEndpoints) > MaxIntegrationEndpoints {
+		return nil, ErrEgressDecisionInvalid
+	}
+	for index, destination := range normalized.IntegrationEndpoints {
+		if !validIntegrationEndpoint(destination) ||
+			(index > 0 && compareIntegrationEndpoint(normalized.IntegrationEndpoints[index-1], destination) >= 0) {
+			return nil, ErrEgressDecisionInvalid
+		}
+		size, err := IntegrationEndpointEntrySize(destination)
+		if err != nil || size > MaxIntegrationEndpointEntryBytes {
+			return nil, ErrEgressDecisionInvalid
+		}
+	}
 	if _, err := time.Parse(time.RFC3339Nano, normalized.ConsentGrantedAt); err != nil {
 		return nil, ErrEgressDecisionInvalid
 	}
@@ -164,10 +203,12 @@ func clonePendingEgressDecision(input *PendingEgressDecision) *PendingEgressDeci
 	cloned.DataCategories = append([]string(nil), input.DataCategories...)
 	cloned.SelectedTools = append([]string(nil), input.SelectedTools...)
 	cloned.RemoteMCPServers = append([]RemoteMCPServerEgress{}, input.RemoteMCPServers...)
+	cloned.IntegrationEndpoints = cloneIntegrationEndpoints(input.IntegrationEndpoints)
 	slices.Sort(cloned.SelectedTools)
 	slices.SortFunc(cloned.RemoteMCPServers, func(left, right RemoteMCPServerEgress) int {
 		return strings.Compare(left.ServerName, right.ServerName)
 	})
+	sortIntegrationEndpoints(cloned.IntegrationEndpoints)
 	return &cloned
 }
 
@@ -233,6 +274,10 @@ func insertRunEgressDecisionTx(ctx context.Context, tx *sql.Tx, runID string, pe
 	if err != nil {
 		return RunEgressDecision{}, err
 	}
+	integrationEndpointsJSON, err := json.Marshal(pending.IntegrationEndpoints)
+	if err != nil {
+		return RunEgressDecision{}, err
+	}
 	decision := RunEgressDecision{
 		DecisionID:                ids.New("egress"),
 		RunID:                     runID,
@@ -253,6 +298,7 @@ func insertRunEgressDecisionTx(ctx context.Context, tx *sql.Tx, runID string, pe
 		MemoryProfileApplicable:   pending.MemoryProfileApplicable,
 		ConsentGrantedAt:          pending.ConsentGrantedAt,
 		RemoteMCPServers:          append([]RemoteMCPServerEgress{}, pending.RemoteMCPServers...),
+		IntegrationEndpoints:      cloneIntegrationEndpoints(pending.IntegrationEndpoints),
 	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO run_egress_decisions (
@@ -261,8 +307,9 @@ func insertRunEgressDecisionTx(ctx context.Context, tx *sql.Tx, runID string, pe
 			external_credential_ref_hash,
 			endpoint, endpoint_host, data_categories_json, selected_tools_json,
 			skill_snapshot_fingerprint, recall_applicable,
-			memory_profile_applicable, consent_granted_at, remote_mcp_servers_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			memory_profile_applicable, consent_granted_at, remote_mcp_servers_json,
+			integration_endpoints_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		decision.DecisionID,
 		decision.Version,
@@ -283,6 +330,7 @@ func insertRunEgressDecisionTx(ctx context.Context, tx *sql.Tx, runID string, pe
 		decision.MemoryProfileApplicable,
 		decision.ConsentGrantedAt,
 		string(remoteMCPServersJSON),
+		string(integrationEndpointsJSON),
 	)
 	if err != nil {
 		if isUniqueViolation(err) &&
@@ -297,14 +345,15 @@ func insertRunEgressDecisionTx(ctx context.Context, tx *sql.Tx, runID string, pe
 func (r *Repository) GetRunEgressDecision(ctx context.Context, runID string) (RunEgressDecision, error) {
 	var decision RunEgressDecision
 	var externalAgentID sql.NullString
-	var categoriesJSON, toolsJSON, remoteMCPServersJSON string
+	var categoriesJSON, toolsJSON, remoteMCPServersJSON, integrationEndpointsJSON string
 	err := r.db.QueryRowContext(ctx, `
 		SELECT decision_id, run_id, decision_version, challenge_nonce,
 			challenge_fingerprint, request_digest, provider, model_name, external_agent_id,
 			external_credential_ref_hash,
 			endpoint, endpoint_host, data_categories_json, selected_tools_json,
 			skill_snapshot_fingerprint, recall_applicable,
-			memory_profile_applicable, consent_granted_at, remote_mcp_servers_json
+			memory_profile_applicable, consent_granted_at, remote_mcp_servers_json,
+			integration_endpoints_json
 		FROM run_egress_decisions
 		WHERE run_id = ?
 	`, runID).Scan(
@@ -327,6 +376,7 @@ func (r *Repository) GetRunEgressDecision(ctx context.Context, runID string) (Ru
 		&decision.MemoryProfileApplicable,
 		&decision.ConsentGrantedAt,
 		&remoteMCPServersJSON,
+		&integrationEndpointsJSON,
 	)
 	if err != nil {
 		return RunEgressDecision{}, err
@@ -344,7 +394,142 @@ func (r *Repository) GetRunEgressDecision(ctx context.Context, runID string) (Ru
 	if err := json.Unmarshal([]byte(remoteMCPServersJSON), &decision.RemoteMCPServers); err != nil {
 		return RunEgressDecision{}, err
 	}
+	if err := json.Unmarshal([]byte(integrationEndpointsJSON), &decision.IntegrationEndpoints); err != nil {
+		return RunEgressDecision{}, err
+	}
 	return decision, nil
+}
+
+func (r *Repository) RunAllowsIntegration(ctx context.Context, runID, endpoint, connectionID, toolName string) (bool, error) {
+	decision, err := r.GetRunEgressDecision(ctx, runID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !slices.Contains(decision.SelectedTools, "integrations/"+toolName) ||
+		!slices.Contains(decision.DataCategories, "EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS") ||
+		!slices.Contains(decision.DataCategories, "EGRESS_DATA_CATEGORY_TOOL_RESULTS") {
+		return false, nil
+	}
+	for _, destination := range decision.IntegrationEndpoints {
+		if destination.Endpoint == endpoint && destination.ConnectionID == connectionID && slices.Contains(destination.Tools, toolName) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (r *Repository) IntegrationEndpointsForTools(ctx context.Context, selectedTools []string) ([]IntegrationEndpointEgress, error) {
+	toolNames := make([]string, 0)
+	for _, selected := range selectedTools {
+		serverName, toolName, ok := strings.Cut(selected, "/")
+		if !ok || serverName != "integrations" || toolName == "" {
+			continue
+		}
+		available, err := r.PseudoServerToolAvailable(ctx, serverName, toolName)
+		if err != nil {
+			return nil, err
+		}
+		if available {
+			toolNames = append(toolNames, toolName)
+		}
+	}
+	slices.Sort(toolNames)
+	toolNames = slices.Compact(toolNames)
+	if len(toolNames) == 0 {
+		return []IntegrationEndpointEgress{}, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, display_name FROM integration_connections
+		WHERE provider = 'github' AND status = 'connected' AND credential_ciphertext IS NOT NULL
+		ORDER BY id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	result := make([]IntegrationEndpointEgress, 0)
+	for rows.Next() {
+		var connectionID, displayName string
+		if err := rows.Scan(&connectionID, &displayName); err != nil {
+			return nil, err
+		}
+		result = append(result, IntegrationEndpointEgress{
+			Endpoint: GitHubIntegrationEndpoint, EndpointHost: GitHubIntegrationEndpointHost,
+			ConnectionID: connectionID, DisplayName: integrationDisplayName(displayName, connectionID),
+			Tools: append([]string{}, toolNames...),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sortIntegrationEndpoints(result)
+	return result, nil
+}
+
+func (r *Repository) IntegrationDispatchActive(ctx context.Context, runID, toolName, expectedPolicy string) (bool, error) {
+	var active bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM tools tool
+			JOIN agent_runs run ON run.id = ?
+			JOIN sessions session ON session.id = run.session_id
+			WHERE tool.server_name = 'integrations' AND tool.tool_name = ?
+				AND tool.policy = ? AND tool.mcp_server_id IS NULL
+				AND run.execution_active = 1 AND run.status = 'running'
+				AND session.deletion_state = 'active'
+		)
+	`, runID, toolName, expectedPolicy).Scan(&active)
+	return active, err
+}
+
+func cloneIntegrationEndpoints(input []IntegrationEndpointEgress) []IntegrationEndpointEgress {
+	result := make([]IntegrationEndpointEgress, len(input))
+	for index := range input {
+		result[index] = input[index]
+		result[index].Tools = append([]string{}, input[index].Tools...)
+		slices.Sort(result[index].Tools)
+	}
+	return result
+}
+
+func sortIntegrationEndpoints(input []IntegrationEndpointEgress) {
+	slices.SortFunc(input, compareIntegrationEndpoint)
+}
+
+func compareIntegrationEndpoint(left, right IntegrationEndpointEgress) int {
+	if compared := strings.Compare(left.Endpoint, right.Endpoint); compared != 0 {
+		return compared
+	}
+	return strings.Compare(left.ConnectionID, right.ConnectionID)
+}
+
+func validIntegrationEndpoint(destination IntegrationEndpointEgress) bool {
+	if destination.Endpoint != GitHubIntegrationEndpoint || destination.EndpointHost != GitHubIntegrationEndpointHost ||
+		destination.ConnectionID == "" || destination.DisplayName == "" || len(destination.Tools) == 0 ||
+		hasEmptyOrDuplicate(destination.Tools) || !slices.IsSorted(destination.Tools) {
+		return false
+	}
+	return utf8.RuneCountInString(destination.DisplayName) <= maxIntegrationDisplayNameRunes
+}
+
+func integrationDisplayName(displayName, connectionID string) string {
+	runes := []rune(displayName)
+	if len(runes) <= maxIntegrationDisplayNameRunes {
+		return displayName
+	}
+	discriminator := connectionID
+	if len(discriminator) > 8 {
+		discriminator = discriminator[len(discriminator)-8:]
+	}
+	suffix := []rune("… (" + discriminator + ")")
+	keep := maxIntegrationDisplayNameRunes - len(suffix)
+	if keep < 0 {
+		keep = 0
+	}
+	return string(runes[:keep]) + string(suffix)
 }
 
 func (r *Repository) RunAllowsRemoteMCP(

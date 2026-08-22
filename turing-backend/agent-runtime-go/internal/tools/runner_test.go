@@ -741,14 +741,38 @@ func TestRunMarksSuccessfulMCPCallWhenCompletedBeaconFails(t *testing.T) {
 	}
 }
 
+func TestRunClassifiesApprovedReadReportFailureAsReportingFailure(t *testing.T) {
+	reportErr := errors.New("completed read beacon failed")
+	runner := &Runner{
+		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+			if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
+				return nil, reportErr
+			}
+			return &turingv1.ToolPolicyDecision{
+				Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+				ApprovalId: "approval_read", ToolCallId: beacon.GetToolCallId(), ReadOnly: true,
+			}, nil
+		},
+		WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+	}
+
+	_, err := runner.Run(context.Background(), RunInput{ToolName: "github.list_issues", MCPClient: fakeMCPClient{}})
+	var reporting ReportingFailureError
+	if !errors.As(err, &reporting) || !errors.Is(err, reportErr) || SideEffectWasCommitted(err) {
+		t.Fatalf("Run error = %T %v, want reporting failure without committed-side-effect classification", err, err)
+	}
+}
+
 func TestRunWithOutcomeDistinguishesSafeAndApprovalGatedSuccess(t *testing.T) {
 	for _, test := range []struct {
 		name          string
 		decision      turingv1.ToolPolicyDecision_Decision
+		readOnly      bool
 		sideEffecting bool
 	}{
 		{name: "allow is safe", decision: turingv1.ToolPolicyDecision_DECISION_ALLOW},
 		{name: "approval required is side effecting", decision: turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED, sideEffecting: true},
+		{name: "approval required read is recoverable", decision: turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED, readOnly: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runner := &Runner{
@@ -761,6 +785,7 @@ func TestRunWithOutcomeDistinguishesSafeAndApprovalGatedSuccess(t *testing.T) {
 						Decision:   decision,
 						ApprovalId: "approval_1",
 						ToolCallId: beacon.GetToolCallId(),
+						ReadOnly:   test.readOnly,
 					}, nil
 				},
 				WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
@@ -786,10 +811,12 @@ func TestRunWithOutcomeMakesOnlyApprovalGatedMCPFailureUncertain(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		decision  turingv1.ToolPolicyDecision_Decision
+		readOnly  bool
 		uncertain bool
 	}{
 		{name: "allow is recoverable", decision: turingv1.ToolPolicyDecision_DECISION_ALLOW},
 		{name: "approval required is uncertain", decision: turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED, uncertain: true},
+		{name: "approval required read is recoverable", decision: turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED, readOnly: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runner := &Runner{
@@ -801,6 +828,7 @@ func TestRunWithOutcomeMakesOnlyApprovalGatedMCPFailureUncertain(t *testing.T) {
 						Decision:   test.decision,
 						ApprovalId: "approval_1",
 						ToolCallId: beacon.GetToolCallId(),
+						ReadOnly:   test.readOnly,
 					}, nil
 				},
 				WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
