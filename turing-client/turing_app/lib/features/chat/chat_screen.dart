@@ -2514,8 +2514,13 @@ class _RunCancelledEntry extends _ChatEntry {
 /// The one adjacent card [_ChatScreenState._upsertRunStateCard] maintains
 /// per run ID for a [RunState] that wants one — see
 /// [_ChatScreenState._wantsAdjacentCard]. A [ValueNotifier] so an in-place
-/// update (a new, still-card-worthy state for the same run) re-renders
-/// without recreating or repositioning the entry.
+/// update (a new, still-card-worthy state for the same run) re-renders the
+/// SAME entry instance and payload rather than recreating it — but that
+/// stable identity does not mean a fixed position in the message list:
+/// [_ChatScreenState._upsertRunStateCard] may still remove and reinsert this
+/// same entry elsewhere in [_ChatScreenState._messages], to keep it
+/// positioned relative to its turn's other entries (see
+/// [_ChatScreenState._runStateCardInsertionIndex]).
 class _RunStateCardEntry extends _ChatEntry {
   _RunStateCardEntry(RunState state, {required this.responseContentUnavailable})
     : state = ValueNotifier(state);

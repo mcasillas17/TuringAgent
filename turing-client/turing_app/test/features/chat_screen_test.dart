@@ -3129,23 +3129,29 @@ void main() {
     },
   );
 
-  // Coverage (F10): unlike every `_ingestMessagePage`-sourced test above —
-  // whose resync always ADVANCES the run's state (v1 -> v2, genuinely
-  // `accepted`) and so is positioned via the unconditional `pageResults`
-  // loop at the end of `_ingestMessagePage`, never via the duplicate-row
-  // branch's own `_syncRunStateCardPresenceForContent` call — this resync's
-  // own row offers back the SAME version, byte-for-byte identical state
-  // already held (a `duplicate` outcome, `isAccepted == false`). That is
-  // the one condition under which `pageResult.stateResult?.isAccepted !=
-  // true` is true with a NON-null `stateResult`, taking the
-  // `_syncRunStateCardPresenceForContent` branch instead of the accepted
-  // loop. The card was already correctly positioned by an earlier LIVE
-  // acceptance; this duplicate, not-accepted resync round must leave it
-  // exactly where it was — after run_1's own tool artifact — rather than
-  // disturbing it.
+  // Structural coverage (GREEN before and after — not a RED-then-fixed
+  // regression case): a non-null, not-accepted `stateResult` can mean
+  // `duplicate`, `stale`, or `inconsistent` — unlike every
+  // `_ingestMessagePage`-sourced test above, whose resync always ADVANCES
+  // the run's state (v1 -> v2, genuinely `accepted`) and so is positioned
+  // via the unconditional `pageResults` loop at the end of
+  // `_ingestMessagePage`, this resync's own row offers back the SAME
+  // version, byte-for-byte identical state already held: the `duplicate`
+  // outcome specifically, taking the duplicate-row branch's own
+  // `_syncRunStateCardPresenceForContent` call instead of the accepted
+  // loop. Because a duplicate row's synced content can only ADD
+  // displayable content, never remove it, that call can only remove an
+  // existing card or no-op — never newly create one. Here the run is
+  // `failed`, so `_wantsAdjacentCard` always wants a card regardless of
+  // content: presence already matches, so the call early-returns before
+  // ever reaching `_upsertRunStateCard`'s reposition logic. This test does
+  // not exercise that reposition logic; it guards that the early-return
+  // no-op leaves the card — already correctly positioned by the earlier
+  // LIVE acceptance — undisturbed after run_1's own tool artifact, rather
+  // than the duplicate-row branch quietly moving or dropping it.
   testWidgets(
-    'a duplicate, not-accepted resync leaves an already-correct card after '
-    "its run's own tool artifact",
+    'a duplicate, not-accepted resync is a no-op that leaves an '
+    "already-correct card undisturbed after its run's own tool artifact",
     (tester) async {
       final events = StreamController<TuringEvent>(sync: true);
       final apiClient = _FakeApiClient()
@@ -3223,10 +3229,11 @@ void main() {
 
       // A coalesced resync whose own row offers back the IDENTICAL v2/
       // failed state (same object) alongside the same already-displayed
-      // content — a `duplicate` outcome, not accepted, exercising
+      // content — a `duplicate` outcome, not accepted: one of the three
+      // non-accepted outcomes (`duplicate`, `stale`, `inconsistent`) a
+      // non-null `stateResult` can carry, exercising
       // `_ingestMessagePage`'s duplicate-row `_syncRunStateCardPresenceForContent`
-      // call with a non-null `stateResult` for the first time in this
-      // suite.
+      // call for the `duplicate` case.
       apiClient.initialMessages = [
         Message(
           messageId: 'msg_asst',
