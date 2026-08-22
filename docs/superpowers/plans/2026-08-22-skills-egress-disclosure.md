@@ -82,6 +82,19 @@ the run is refused — the user re-sends and gets a fresh, honest decision.
 Consent freshness beats replay convenience; the plan states this rather than
 pretending the mirrors move atomically across queued state.
 
+**And the runtime *binary* skew is handled by a version bump, because the
+default configuration otherwise breaks.** Dispatch gates on
+`capabilities.RemoteEgressDecisionVersion >= RunEgressDecisionVersion`;
+without a bump, a stale runtime still counts as egress-aware, still
+enforces the *unconditional* required set, and refuses **every remote run
+with zero enabled skills** — the common case — with a baffling
+missing-category error. `backendegress.DecisionVersion` is therefore
+bumped: a stale runtime stops being egress-aware for new decisions and
+fails closed at dispatch (it cannot claim the run) until upgraded, which
+is the same restart-both-sides story every compose deployment already
+has. The mirror direction (new runtime, stale orchestrator) fails closed
+symmetrically.
+
 **Names are derived, displayed, and bound by the fingerprint that already
 exists — they do not join the signed payload.** Prepare derives the skill
 list and the fingerprint from the *same* snapshot read; the signature binds
@@ -144,13 +157,23 @@ is **not importable anyway**: it lives under `agent-runtime-go/internal/`,
 which `orchestrator-go` cannot reach. The sanitizer therefore lives in
 `turing-backend/internal/egress` (the shared package both modules already
 import): whitespace-flatten, strip `unicode.Cf` and control runes, cap at
-`maxSkillDisplayNameRunes = 80` with ellipsis — and it is applied on
-**both** paths, the disclosure (`SkillEgressInfo`) and the run notice
-(`jobs.go` builds the notice from raw `SkillSnapshot.Name` today; the
-notice goes through the same helper, or an unflattened untrusted string
-lands in the transcript event payload while every test passes). The
-loader already caps names at 120 runes at parse, so the cap only bites in
-the 81–120 range end to end; the wilder inputs are unit territory. The
+`maxSkillDisplayNameRunes = 80` with ellipsis on a **rune** boundary (a
+byte-based cap can split a multibyte rune and produce invalid UTF-8 in a
+proto string field, which fails marshaling of the entire prepare
+response), and — the clause whose omission would restate the very bug
+this paragraph cites — **when sanitizing leaves an empty string, fall
+back to the `skill_id`**, which is a validated relative path and always
+renderable; the `oneLine` precedent's `"(unnamed)"` fallback exists for
+exactly this reason and must not be silently dropped. The sanitizer is
+applied on **both** paths: the disclosure (`SkillEgressInfo`) and the
+skill-name line this plan adds to the run notice — the notice code is
+new, and it uses the same helper or an unflattened untrusted string lands
+in the transcript event payload while every test passes. Reachability,
+stated correctly: the loader caps name *length* at 120 runes but not
+*content* — `strings.TrimSpace` does not strip Cf runes, so a name made
+of zero-width or direction-control characters parses fine and reaches
+the disclosure end to end; only the over-120-rune inputs are confined to
+unit territory. The
 list itself is bounded: `maxEgressSkills = 256` (the `maxEgressTools`
 mold), refused at `resolveEgressContext` with a legible
 `FailedPrecondition` naming the remedy (disable skills) — **conditioned on
@@ -171,7 +194,10 @@ message gains the specific cause when the fingerprint is the mismatched
 field — mechanically: `payloadMatchesEgressContext` returns a bare `bool`
 and stays that way; the call site adds a separate
 `payload.SkillSnapshotFingerprint != resolved.SkillSnapshotFingerprint`
-comparison to pick the wording — "the skill snapshot changed since consent
+comparison to pick the wording — **guarded by `resolved != nil`**, because
+the branch it joins is `resolved == nil || !payloadMatches...`, and
+`resolved` is nil on a live path (a remote prepare followed by a send
+that stopped being an egress run), which keeps the generic wording — "the skill snapshot changed since consent
 was prepared; prepare the send again", worded for *any* snapshot change
 (set membership, body edit, grant change) because the fingerprint covers
 all of them. Non-skill drift (tools, endpoints, categories) keeps the
@@ -180,9 +206,13 @@ implementation that swaps the skill message onto every mismatch mislabels
 every kind of drift. The `jobs.go` check guards only the narrow race between
 `applyRemoteEgress`'s read and the enqueue transaction; it gets a distinct
 sentinel (`ErrEgressSkillSnapshotChanged`) plus a new arm in
-`mapEnqueueError` (`service/chat/service.go`) — without that arm the
-sentinel collapses into the generic "decision is invalid" status and the
-wording never reaches a client. Stated for the test-writer: that window is
+`mapEnqueueError` (`service/chat/service.go`). The sentinel **wraps**
+`ErrEgressDecisionInvalid` (`fmt.Errorf("...%w...")`), so the existing
+`errors.Is` arm still matches and the status class stays
+`FailedPrecondition` even if the new arm is ever dropped — a bare
+`errors.New` sentinel with no arm would degrade to the `Internal`
+catch-all, which is worse than today. The new arm checks the specific
+sentinel before the general one. Stated for the test-writer: that window is
 single-threaded with no seam, so it is **not reachable through
 `SendMessage`** — it is pinned by two direct unit assertions (the
 repository check returns the sentinel; `mapEnqueueError` maps the sentinel
@@ -245,19 +275,35 @@ nothing new leaves the machine because of this plan.
   may-be-sent tags; `models/remote_egress.dart` + `grpc_client.dart`
   mapping.
 - **`turing-backend/internal/egress`** — the shared name sanitizer (both
-  modules and both call sites use this one function).
-- **Existing fixtures** — a real, budgeted cost, not collateral: at least
+  modules and both call sites use this one function); the
+  `DecisionVersion` bump.
+- **Existing fixtures** — a real, budgeted cost, not collateral:
   `agent-runtime-go/internal/agent/external_agent_test.go` (`routedJob`,
-  `authorizeDirectRemoteJob`), `service/runtime/service_test.go`, and
-  `service/chat/egress_test.go`'s exact-category assertions all encode the
-  unconditional rule and must move to the conditional one.
-  (`egress_mcp_test.go` needs **no** repair — its local-provider decision
-  never carried `SKILL_CONTENT`; it is instead the natural home for the
-  new divergence test.)
+  `authorizeDirectRemoteJob`) and `service/chat/egress_test.go`'s
+  exact-category assertions encode the unconditional rule and must move
+  to the conditional one; the two `repository/egress_test.go` callers of
+  `EgressSkillSnapshotFingerprint`
+  (`TestEgressSkillFingerprintMatchesEnqueueAfterSkillEditWithoutPrepareWrites`,
+  `TestEgressSkillFingerprintTreatsNewUnreconciledSkillAsDisabled`) break
+  on the signature change and are updated. (`egress_mcp_test.go` needs
+  **no** repair — its local-provider decision never carried
+  `SKILL_CONTENT`; it is the natural home for the new divergence test.
+  `service/runtime/service_test.go`'s fixture *mentions* the category but
+  nothing in that service composes or validates category sets — no change
+  required.)
+- **The chat service test harness** — `newHarnessWithDatabase` never calls
+  `SetSkillStore`, so no skill can be enabled in any `service/chat` test
+  today; tests 2, 4, and 6's service-layer legs need the harness to gain
+  the skill-store wiring the repository tests already have. And test 4's
+  non-skill drift lever, named so nobody hunts: mutate the service's
+  OpenAI base URL between prepare and send (the test file is in
+  `package chat`; endpoint drift changes the resolved context without
+  touching skills).
 
 ## The tests that gate the merge
 
-For 1–5, break the production gate, watch the right test fail, restore.
+For 1–6 and 8, break the production gate, watch the right test fail,
+restore.
 
 1. **Preimage coverage, per displayed field.** For each of `SkillID`,
    `Name`, `Withheld`: mutate it in a snapshot, assert the fingerprint
@@ -298,7 +344,10 @@ For 1–5, break the production gate, watch the right test fail, restore.
    skill-snapshot-changed wording from `applyRemoteEgress`. The negative
    boundary: change something *other* than skills between prepare and
    send ⇒ the existing generic context-changed wording, not the skill
-   message. The enqueue-window sentinel is pinned by its two direct unit
+   message. And the nil leg: a remote prepare followed by a send that is
+   no longer an egress run (`resolved == nil`) keeps the generic wording
+   without panicking — the path the unguarded fingerprint comparison
+   dereferences. The enqueue-window sentinel is pinned by its two direct unit
    assertions (repository returns it; `mapEnqueueError` maps it) — that
    window has no `SendMessage`-reachable seam. Pure-function leg: two
    snapshots differing only in set membership produce different
@@ -315,13 +364,22 @@ For 1–5, break the production gate, watch the right test fail, restore.
    skill refuses at prepare with the legible message — and an MCP-only
    local run with 257 skills is *not* refused; a ~100-rune name with
    embedded newlines arrives flattened and capped end to end in **both**
-   the disclosure and the notice; the wilder inputs (300 runes, RLO/bidi
-   isolates, zero-width-only names) are unit tests on the shared
-   sanitizer, which must strip `unicode.Cf` and control runes — the
-   loader's 120-rune parse cap makes them unreachable end to end.
-7. **The dialog renders the distinction.** Flutter: one may-be-sent and one
-   metadata-only skill render with correct tags inside the existing
-   scrolling dialog.
+   the disclosure and the notice; **a zero-width-only name arrives end to
+   end as the `skill_id` fallback, never a blank row** (Cf content passes
+   the loader — only over-length inputs don't); and the sanitizer unit
+   tests cover 300 runes, RLO/bidi isolates, the empty-after-stripping
+   fallback, and a multibyte name truncated on a rune boundary (a byte
+   cap that splits a rune breaks proto marshaling of the whole prepare
+   response).
+7. **The dialog renders the distinction — and the mapping actually maps.**
+   Flutter: one may-be-sent and one metadata-only skill render with
+   correct tags inside the existing scrolling dialog; and the
+   proto→model mapping in `grpc_client.dart` is asserted to populate the
+   skills list — the one line whose omission leaves backend and dialog
+   both individually correct while the feature does nothing.
+8. **Version skew fails closed at dispatch.** A worker advertising the
+   pre-bump `RemoteEgressDecisionVersion` cannot claim a run carrying a
+   post-bump decision.
 
 ## Documentation the implementation PR must update
 
