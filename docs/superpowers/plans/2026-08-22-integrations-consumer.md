@@ -205,16 +205,23 @@ mutation.
 drives approval-waiting *and* every downstream side-effect consequence.
 Those meanings are decoupled: `ToolPolicyDecision` gains a `read_only`
 field, set by the orchestrator from the integrations service's own per-tool
-table (the three GET tools), and when it is true the runner suppresses the
-side-effect consequences at **all three** of their sites while
-approval-waiting is unchanged: a failed call is a recoverable tool error,
-not `SideEffectUnknownError`; a *successful* call whose after-report to the
-orchestrator fails is likewise recoverable, not `SideEffectCommittedError`
-(the GET's result is already in hand — halting the run there would
-reintroduce the bug for the other branch); and `RunOutcome.SideEffecting`
-stays false, so run-level retryability is unaffected by reads. Named
-consequence, intended: a run whose last tool call was a `read_only` GET
-stays retryable and may re-issue the GET. Write tools keep the existing
+table (the three GET tools), and when it is true the runner changes the
+side-effect handling at its three sites while approval-waiting is
+unchanged — with the three sites claimed honestly, because they do not all
+deliver the same thing: a failed **call** is a recoverable tool error, not
+`SideEffectUnknownError`, and the run continues; `RunOutcome.SideEffecting`
+stays false, so run-level retryability is unaffected by reads; and a
+*successful* call whose after-report to the orchestrator fails is
+**classified** as a reporting failure rather than
+`SideEffectCommittedError` — the run still ends there, deliberately,
+because continuing when the orchestrator has lost track of a tool call's
+state is wrong for reads and writes alike; what changes is that the failure
+is not recorded as a committed side effect. Two named consequences,
+intended: a run whose last tool call was a `read_only` GET stays retryable
+and may re-issue the GET; and on the crash/lease-expiry path the stale-
+assignment sweep still marks any open tool call `side_effect_uncertain`
+regardless of `read_only` — a coarse edge this plan accepts rather than
+touching the reconciliation machinery. Write tools keep the existing
 behavior at every site; "we don't know whether the comment posted" *should*
 halt the run.
 
@@ -236,17 +243,33 @@ signed challenge, not just the database row.** PR #73's pattern, all of it:
   byte difference that silently voids valid challenges), and the entry
   struct is not `comparable` (it holds a slice), so
   `payloadMatchesEgressContext` compares these with `slices.EqualFunc`,
-  not `slices.Equal`. Exceeding the entry cap is refused at
-  `resolveEgressContext` with a legible `FailedPrecondition` naming the
-  remedy (revoke connections or disable tools) — the alternative is an
-  opaque `Internal` on **every send on every provider**, and unlike
-  `maxEgressTools`, sixteen connections is a reachable number once the
-  deferred providers land.
+  not `slices.Equal`. Exceeding **any** of the caps — entry count,
+  per-entry bytes, or the pre-existing total challenge bytes — is refused
+  at `resolveEgressContext` with a legible `FailedPrecondition` naming the
+  remedy (revoke connections or disable tools), not left to surface from
+  `signEgressChallenge` as the opaque `Internal` that would then appear on
+  **every send on every provider**. These caps are reachable, unlike
+  `maxEgressTools`: sixteen connections is plausible once the deferred
+  providers land, and a 120-rune display name JSON-escapes toward the
+  1 KiB entry bound on its own.
 - Those entries ride inside the HMAC-signed `egressChallengePayload`, are
   covered by the structural validation and by
   `payloadMatchesEgressContext`, and are frozen at enqueue — so the list the
   user acknowledged is the list the signature binds, and a connection set
-  that changes between prepare and send is detected, not absorbed.
+  that changes between prepare and send is detected, not absorbed. They
+  also join the enqueue idempotency fingerprint
+  (`EnqueueRequestFingerprint`, with its version bumped) — `RemoteMCPServers`
+  earned a dedicated regression test when it was added there, and
+  integration endpoints get the sibling: a resend under the same
+  idempotency key whose only difference is the acknowledged connection set
+  must not be absorbed as a replay of the earlier consent.
+- The transcript run notice and the consent audit row name the
+  destinations: `enqueueUserMessageTx` builds its destination list from the
+  provider endpoint host and the remote MCP hosts today, which the widened
+  CHECK makes emptiable — integration endpoint hosts join it,
+  deduplicated, or an integration-only local run ships the one blank
+  disclosure line in the one place the project insists disclosure must
+  appear.
 - The disclosure carries the connection's **display name**, and the egress
   dialog renders one line per connection — `conn_9f3a…` is not consent to an
   account, and consent for the personal account must not read as consent for
@@ -260,10 +283,13 @@ signed challenge, not just the database row.** PR #73's pattern, all of it:
   present in that entry's `tools` list, so the array is load-bearing, not
   decorative data inside a signed payload.
 - Revalidation happens again after the approval wait, and a liveness check
-  equivalent to `MCPDispatchActive` (run executing, not cancelled, session
-  not mid-deletion) runs immediately before the network call — integration
-  tools bypass the `mcp_servers` join that query uses, so they need their
-  own (`IntegrationDispatchActive`), along with an
+  equivalent to `MCPDispatchActive` runs immediately before the network
+  call — equivalence includes everything its precedent checks: run
+  executing, not cancelled, session not mid-deletion, **and the tool's
+  live policy and enabled state**, which is what catches a tool disabled
+  after enqueue, since the frozen decision cannot. Integration tools bypass
+  the `mcp_servers` join that query uses, so they need their own
+  (`IntegrationDispatchActive`), along with an
   `IntegrationEndpointsForTools` resolver analogous to
   `RemoteMCPServersForTools`.
 - The "local provider needs no decision" rule is mirrored in Go in four
@@ -320,15 +346,24 @@ rendering; there is no proto field to add. And the size refusal cannot live
 in `internal/service/integrations`, which only runs *after* the approval is
 granted — it is a new deny branch in the beacon path
 (`runtime/service.go`, beside the existing `denyToolBefore` reasons) with
-its own reason string, so no truncated approval is ever created. The bound
-gets a name and a number: `maxIntegrationApprovalRenderBytes = 32 KiB`.
+its own reason string, so no truncated approval is ever created. The render
+is built by **one shared function used by both sites** — the beacon-path
+size check and the payload key — or the two drift and the no-truncated-
+approval invariant fails silently; and since `repository` imports no
+`service/*` package, that function lives in `repository` (or a leaf
+package), not in `service/integrations`, which an implementer would
+otherwise discover as an import cycle. The bound gets a name and a number:
+`maxIntegrationApprovalRenderBytes = 32 KiB`.
 
 **Retrieved content is data.** Results come back bounded
 (`maxIntegrationResultBytes = 16 KiB` per call, named constant, truncated on
 a UTF-8 rune boundary, truncation announced to the model in the result
 rather than silent), framed as retrieved third-party content, with the
-framing spoof-resistant: a response body that reproduces the framing
-delimiters must not be able to close the frame. The framing is hygiene, not
+framing spoof-resistant by a named mechanism, since no in-repo precedent
+exists to imitate: the delimiters carry a per-call random nonce, so a
+response body that reproduces the delimiter text cannot close the frame —
+guessing the nonce is the only way, and the nonce never appears in
+anything the provider can see. The framing is hygiene, not
 a security boundary — the boundary is that anything the model *does* in
 response still passes the same approval and egress gates as ever. The plan
 claims nothing stronger, in the code or the docs.
@@ -384,11 +419,15 @@ The honest file-level list:
   accessor; rewritten `Connection` doc comment.
 - **`internal/repository/approvals.go`** — the full-render key in the
   approval event payload map, joined with the connection display name.
-- **`internal/app/app.go` and `internal/auth`** — the
+- **`internal/app/app.go` and `internal/app/app_test.go`** — the
   `IntegrationService` public/internal facet split and its registrations;
-  the two new full-method names on the `runtime` service identity; the
+  the two new full-method names on the `runtime` service identity (the
+  identity list is a literal in `app.go`; `internal/auth` itself needs no
+  change, and the facet refusals are asserted in `app_test.go`); the
   integrations registry-change notifier wiring; the rewritten
-  "nothing internal reads a connection" comment.
+  "nothing internal reads a connection" comment. A third comment falsified
+  by this work is named with the other two: `service/integrations`' package
+  doc rule that the package "never reads the sealed column back".
 - **`internal/repository/tools.go`** — the `integrations` branch in
   `UpsertTools`; the by-name policy method with the pseudo-server `enabled`
   derivation.
@@ -400,6 +439,8 @@ The honest file-level list:
   `integration_endpoints_json` through the signed challenge payload with its
   canonical ordering, structural validation,
   `payloadMatchesEgressContext`, and the enqueue freeze;
+  `EnqueueRequestFingerprint` widened with its version bump; the run-notice
+  destination list gaining integration endpoint hosts;
   `IntegrationEndpointsForTools`.
 - **`internal/service/integrations`** (extended) — the GitHub provider
   client on `NoRedirectClient`/`RedactRedirectError` and the shared guarded
@@ -434,8 +475,8 @@ The honest file-level list:
 
 ## The tests that gate the merge
 
-Adapt names to the implementation; every assertion must survive. For 1–8
-and 16, break the production gate, watch the right test fail, restore.
+Adapt names to the implementation; every assertion must survive. For 1–8,
+16 and 17, break the production gate, watch the right test fail, restore.
 
 1. **Credential hygiene, including transport failure.** After a full call
    cycle — an HTTP-status failure *and* a dial/TLS-level failure (the
@@ -454,11 +495,17 @@ and 16, break the production gate, watch the right test fail, restore.
    `tools` list.
 4. **The signed challenge binds the endpoints — tested by changing the
    world, not the token.** Tampering with the challenge fails the HMAC and
-   proves nothing about the match check. The test that isolates
-   `payloadMatchesEgressContext`: prepare, then revoke (or create) a
-   connection, then send — refused as "context changed; prepare again". An
-   implementation that threads endpoints everywhere except the match check
-   passes a tamper test and fails this one.
+   proves nothing about the match check. The variant is pinned, because
+   the obvious one accidentally tests the wrong comparison: with **two**
+   live connections, prepare, revoke one, and send — `SelectedTools` is
+   unchanged (the tools are still advertised via the survivor), so the
+   refusal can only come from the endpoint comparison in
+   `payloadMatchesEgressContext`, and it must be the context-changed one.
+   Revoking an *only* connection instead changes `SelectedTools` and the
+   pre-existing comparison catches it, proving nothing. And the enqueue
+   idempotency fingerprint is exercised the way `RemoteMCPServers` was
+   when it joined: a resend under the same idempotency key whose only
+   difference is the connection set is a new consent, not a replay.
 5. **Approval-required calls consume exactly once, reads included, bound to
    the connection.** A write without a valid unconsumed approval is
    refused; with one, consumed exactly once; an args mismatch — including
@@ -482,18 +529,20 @@ and 16, break the production gate, watch the right test fail, restore.
    disable the pseudo-server tool it edits, and fires the registry-changed
    notification — a disabled tool leaves `EgressToolNames` and the next
    disclosure without a restart.
-9. **The happy path exists, connection id included.** A local-Ollama run
-   offered GitHub tools gets a non-empty egress disclosure whose entries
-   carry display names; the advertised tool description enumerates the live
-   `(connection_id, display name)` pairs; with consent granted, a mocked
-   `github.list_issues` completes end to end using an id taken from the
-   description, not hardcoded.
-10. **A failed read is not a dead run — at both failure sites.** A provider
-    500 on an approved read returns a bounded tool error to the model and
-    the run continues; a *successful* read whose after-report to the
-    orchestrator fails is likewise recoverable, not
-    `SideEffectCommittedError`. A transport failure on a write still halts
-    the run.
+9. **The happy path exists, connection id included, disclosure legible.**
+   A local-Ollama run offered GitHub tools gets a non-empty egress
+   disclosure whose entries carry display names; the advertised tool
+   description enumerates the live `(connection_id, display name)` pairs;
+   with consent granted, a mocked `github.list_issues` completes end to
+   end using an id taken from the description, not hardcoded — and the
+   transcript run notice and consent audit row name `api.github.com`,
+   never an empty destination.
+10. **A failed read is not a dead run — with each site asserting what is
+    actually true.** A provider 500 on an approved read returns a bounded
+    tool error to the model and the run continues; a *successful* read
+    whose after-report to the orchestrator fails still ends the run but is
+    classified as a reporting failure, not `SideEffectCommittedError`. A
+    transport failure on a write still halts the run.
 11. **Transport hardening.** A 30x from the provider is refused before the
     redirect is followed and the resulting error is redacted; a resolver
     answer mapping the provider host to a private address is refused.
@@ -520,6 +569,12 @@ and 16, break the production gate, watch the right test fail, restore.
     `Authorization` header carries B's credential, not A's — the test that
     kills a resolver which validates `connection_id` against the decision
     and then unseals `connections[0]`.
+17. **The name-collision guards hold.** An `mcp.json` server named
+    `integrations` is reported unsupported, not imported; a third-party
+    MCP server exporting a `github.*` tool is refused at discovery as a
+    collision — the two audited edits (`import.go` reserved names,
+    `BundledServerForTool`) that no other test reaches, and whose failure
+    mode is permanently broken discovery.
 
 ## Deferred, deliberately
 
