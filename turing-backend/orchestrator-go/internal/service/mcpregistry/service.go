@@ -155,7 +155,12 @@ func (s *Server) SetMcpServerEnabled(ctx context.Context, req *turingv1.SetMcpSe
 		if err := s.repo.SetMCPServerStatus(ctx, server.ID, "unknown", ""); err != nil {
 			return nil, status.Error(codes.Internal, "update MCP server status failed")
 		}
-	} else if server.Tier == repository.MCPServerTierLocalContainer {
+	} else if server.Tier == repository.MCPServerTierLocalContainer || server.Tier == repository.MCPServerTierRemoteURL {
+		// The user's explicit enable action is the first liveness contact
+		// for a directly registered server of either non-bundled tier:
+		// registration itself stays zero-network (see RegisterMcpServer),
+		// so a remote-URL server discovers its tools here for the first
+		// time exactly like a local-container one always has.
 		if err := s.discover(ctx, server.ID); err != nil {
 			if statusErr := s.repo.SetMCPServerStatus(ctx, server.ID, "down", boundedStatusMessage(err.Error())); statusErr != nil {
 				return nil, status.Error(codes.Internal, "record MCP discovery failure failed")
@@ -276,8 +281,9 @@ func mapMCPValidationError(err error) error {
 // It runs the same name/URL/token validation as a file import so the two
 // paths can never diverge, seals the token with the same sealer, and never
 // contacts the endpoint: "tools discovered on first liveness contact" is
-// satisfied by the existing local-container enablement path, not by a side
-// effect of registration.
+// satisfied by SetMcpServerEnabled (the user's explicit enable action, for
+// both local-container and remote-url tiers), not by a side effect of
+// registration.
 func (s *Server) RegisterMcpServer(ctx context.Context, req *turingv1.RegisterMcpServerRequest) (*turingv1.McpServerDescriptor, error) {
 	if req == nil || req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "name is required")

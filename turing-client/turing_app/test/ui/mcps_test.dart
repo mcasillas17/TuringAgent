@@ -1075,6 +1075,32 @@ void main() {
     );
   });
 
+  group('the page subtitle', () {
+    testWidgets(
+      'says enabling a remote server contacts it to discover tools, '
+      'separately from the per-run consent for tool arguments/results',
+      (tester) async {
+        await _pumpMcps(tester, _McpApi());
+
+        expect(
+          find.textContaining('contacts its endpoint to discover its tools'),
+          findsOneWidget,
+          reason:
+              'enabling a remote server is a real network contact for '
+              'discovery, not a no-op — the copy must say so honestly',
+        );
+        expect(
+          find.textContaining('every run still asks before sending'),
+          findsOneWidget,
+          reason:
+              'discovery happening on enable must not be confused with '
+              'the separate, still-required per-run consent before a '
+              'tool call actually sends arguments/results',
+        );
+      },
+    );
+  });
+
   group('the empty state', () {
     testWidgets(
       'says a server can be added here, mcp.json is bulk, no restart',

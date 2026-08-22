@@ -195,10 +195,10 @@ class _McpsPageState extends State<McpsPage> {
       subtitle:
           'Registered tool servers and their policies. Registering a server '
           'here does not turn it on — every server, added or imported, stays '
-          'disabled until you enable it. Remote tools require the same '
-          'per-run egress confirmation as any other destination off this '
-          'machine; while a remote tool is enabled and offered to the model, '
-          'every run asks before sending.',
+          'disabled until you enable it. Enabling a remote server contacts '
+          'its endpoint to discover its tools; every run still asks before '
+          'sending a tool call\'s arguments/results, the same per-run '
+          'egress confirmation as any other destination off this machine.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
