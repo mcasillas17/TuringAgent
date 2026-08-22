@@ -4385,7 +4385,9 @@ func TestUnknownOriginAndRetryClassFailClosed(t *testing.T) {
 // worker shape: retryable=true with no typed failure_origin and no typed
 // automatic_retry_class at all, reporting a code that looks transient
 // (worker_busy, the one dispatch code that is genuinely requeued when typed
-// correctly, and tool_discovery_failed, a terminal tool code). Both must fail
+// correctly, and tool_discovery_failed, a tool code that may be requeued when
+// a trusted typed transient origin/class is present, but fails closed when
+// untyped). Both must fail
 // closed to unknown/internal_failure and terminalize the run rather than
 // requeue it: the legacy bool is untrusted and the proto/design contract says
 // it is ignored outright, never translated into a retry request.
