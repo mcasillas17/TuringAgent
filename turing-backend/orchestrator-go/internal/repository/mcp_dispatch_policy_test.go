@@ -8,7 +8,7 @@ import (
 func TestMCPDispatchActiveRequiresUnchangedPolicy(t *testing.T) {
 	repo := New(openTestDB(t))
 	ctx := context.Background()
-	server, err := repo.UpsertImportedMCPServer(ctx, ImportedMCPServer{
+	server, err := repo.RegisterMCPServer(ctx, ImportedMCPServer{
 		Name: "vendor", URL: "http://vendor:9000/mcp", Tier: MCPServerTierLocalContainer,
 	})
 	if err != nil {

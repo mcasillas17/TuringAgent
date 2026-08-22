@@ -52,7 +52,7 @@ func TestThirdPartyDiscoveryRejectsReservedBundledNamespaces(t *testing.T) {
 		{serverName: "vendor-skills", toolName: "skill_view"},
 	} {
 		t.Run(test.toolName, func(t *testing.T) {
-			server, err := repo.UpsertImportedMCPServer(context.Background(), repository.ImportedMCPServer{
+			server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
 				Name: test.serverName, URL: "http://" + test.serverName + ":9000/mcp",
 				Tier: repository.MCPServerTierLocalContainer,
 			})

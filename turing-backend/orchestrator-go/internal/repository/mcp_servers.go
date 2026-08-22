@@ -75,87 +75,21 @@ type MCPImportIssue struct {
 	Reason string
 }
 
-func (r *Repository) UpsertImportedMCPServer(ctx context.Context, input ImportedMCPServer) (MCPServerRecord, error) {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return MCPServerRecord{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	var suppressed int
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM mcp_import_tombstones WHERE name = ?
-	`, input.Name).Scan(&suppressed); err != nil {
-		return MCPServerRecord{}, err
-	}
-	if suppressed != 0 {
-		return MCPServerRecord{}, ErrMCPServerImportSuppressed
-	}
-
-	var existingID, existingTier, existingURL string
-	err = tx.QueryRowContext(ctx, `SELECT id, tier, url FROM mcp_servers WHERE name = ?`, input.Name).
-		Scan(&existingID, &existingTier, &existingURL)
-	switch {
-	case err == nil && MCPServerTier(existingTier) == MCPServerTierBundled:
-		return MCPServerRecord{}, ErrMCPServerBundled
-	case err != nil && !errors.Is(err, sql.ErrNoRows):
-		return MCPServerRecord{}, err
-	}
-
-	serverID := existingID
-	if serverID == "" {
-		serverID = ids.New("mcp")
-	}
-	createdAt := now()
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO mcp_servers (
-			id, name, transport, url, sealed_token, tier, enabled, created_at
-		) VALUES (?, ?, 'http', ?, ?, ?, 0, ?)
-		ON CONFLICT(name) DO UPDATE SET
-			url = excluded.url,
-			sealed_token = excluded.sealed_token,
-			tier = excluded.tier
-	`, serverID, input.Name, input.URL, nullableBytes(input.SealedToken), string(input.Tier), createdAt); err != nil {
-		return MCPServerRecord{}, err
-	}
-	if existingID != "" && (existingURL != input.URL || MCPServerTier(existingTier) != input.Tier) {
-		if _, err := tx.ExecContext(ctx, `UPDATE mcp_servers SET enabled = 0 WHERE id = ?`, serverID); err != nil {
-			return MCPServerRecord{}, err
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE tools SET present = 0, enabled = 0 WHERE mcp_server_id = ?`, serverID); err != nil {
-			return MCPServerRecord{}, err
-		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE mcp_server_status
-			SET status = 'unknown', error = '', checked_at = NULL
-			WHERE mcp_server_id = ?
-		`, serverID); err != nil {
-			return MCPServerRecord{}, err
-		}
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO mcp_server_status (mcp_server_id, status)
-		VALUES (?, 'unknown')
-		ON CONFLICT(mcp_server_id) DO NOTHING
-	`, serverID); err != nil {
-		return MCPServerRecord{}, err
-	}
-	record, err := mcpServerByName(ctx, tx, input.Name)
-	if err != nil {
-		return MCPServerRecord{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return MCPServerRecord{}, err
-	}
-	return record, nil
-}
-
-// ImportMCPServer registers a server discovered from an mcp.json import.
-// Unlike UpsertImportedMCPServer, it is create-only: if a row of that name
-// already exists (and is not bundled), it is left completely untouched and
+// ImportMCPServer registers a server discovered from an mcp.json import. It
+// is create-only: if a row of that name already exists (and is not
+// bundled) with a real, non-empty URL, it is left completely untouched and
 // Created is reported false, so a reimport never disturbs an operator's
 // enablement, endpoint, sealed token, liveness, or tool policies. Bundled
 // and tombstoned names are refused so the caller can decide how to surface
 // that as unsupported without needing a separate lookup call.
+//
+// The one narrow exception is a legacy placeholder from migration 0016: a
+// non-bundled row with url == "", seeded disabled so a pre-registry
+// runtime's tool policy and schema survived until an operator imports a
+// real endpoint. That row is adopted in place (its id is preserved, and
+// only url, sealed_token, and tier are updated) rather than skipped
+// forever, and Created is reported true so the caller classifies it as
+// imported.
 func (r *Repository) ImportMCPServer(ctx context.Context, input ImportedMCPServer) (MCPImportResult, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -173,13 +107,13 @@ func (r *Repository) ImportMCPServer(ctx context.Context, input ImportedMCPServe
 		return MCPImportResult{}, ErrMCPServerImportSuppressed
 	}
 
-	var existingID, existingTier string
-	err = tx.QueryRowContext(ctx, `SELECT id, tier FROM mcp_servers WHERE name = ?`, input.Name).
-		Scan(&existingID, &existingTier)
+	var existingID, existingTier, existingURL string
+	err = tx.QueryRowContext(ctx, `SELECT id, tier, url FROM mcp_servers WHERE name = ?`, input.Name).
+		Scan(&existingID, &existingTier, &existingURL)
 	switch {
 	case err == nil && MCPServerTier(existingTier) == MCPServerTierBundled:
 		return MCPImportResult{}, ErrMCPServerBundled
-	case err == nil:
+	case err == nil && existingURL != "":
 		record, ferr := mcpServerByName(ctx, tx, input.Name)
 		if ferr != nil {
 			return MCPImportResult{}, ferr
@@ -188,6 +122,25 @@ func (r *Repository) ImportMCPServer(ctx context.Context, input ImportedMCPServe
 			return MCPImportResult{}, cerr
 		}
 		return MCPImportResult{Server: record, Created: false}, nil
+	case err == nil:
+		// Legacy placeholder: adopt it in place. Only url, sealed_token,
+		// and tier change; enabled, tools, and mcp_server_status are left
+		// exactly as they were.
+		if _, uerr := tx.ExecContext(ctx, `
+			UPDATE mcp_servers
+			SET url = ?, sealed_token = ?, tier = ?
+			WHERE id = ?
+		`, input.URL, nullableBytes(input.SealedToken), string(input.Tier), existingID); uerr != nil {
+			return MCPImportResult{}, uerr
+		}
+		record, ferr := mcpServerByName(ctx, tx, input.Name)
+		if ferr != nil {
+			return MCPImportResult{}, ferr
+		}
+		if cerr := tx.Commit(); cerr != nil {
+			return MCPImportResult{}, cerr
+		}
+		return MCPImportResult{Server: record, Created: true}, nil
 	case !errors.Is(err, sql.ErrNoRows):
 		return MCPImportResult{}, err
 	}

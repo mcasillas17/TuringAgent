@@ -42,7 +42,7 @@ type Run struct {
 }
 
 func (r *Repository) RegisterLocalMCPServer(ctx context.Context, name string) error {
-	server, err := r.inner.UpsertImportedMCPServer(ctx, repository.ImportedMCPServer{
+	server, err := r.inner.RegisterMCPServer(ctx, repository.ImportedMCPServer{
 		Name: name, URL: "http://" + name + ":9000/mcp", Tier: repository.MCPServerTierLocalContainer,
 	})
 	if err != nil {

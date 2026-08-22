@@ -9,7 +9,7 @@ import (
 
 func TestWithdrawnToolCannotBeReenabledByServerOrPolicyToggle(t *testing.T) {
 	service, repo := newRegistryTestService(t)
-	server, err := repo.UpsertImportedMCPServer(context.Background(), repository.ImportedMCPServer{
+	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
 		Name: "vendor", URL: "http://vendor:9000/mcp", Tier: repository.MCPServerTierLocalContainer,
 	})
 	if err != nil {

@@ -690,7 +690,7 @@ func TestSessionServiceServesPublicReadEndpoints(t *testing.T) {
 		t.Fatalf("agents = %+v", agents.Agents)
 	}
 
-	customServer, err := h.repo.UpsertImportedMCPServer(ctx, repository.ImportedMCPServer{
+	customServer, err := h.repo.RegisterMCPServer(ctx, repository.ImportedMCPServer{
 		Name: "custom", URL: "http://custom:9000/mcp", Tier: repository.MCPServerTierLocalContainer,
 	})
 	if err != nil {

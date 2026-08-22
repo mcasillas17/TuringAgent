@@ -210,7 +210,7 @@ func newRegistryCallHarness(t *testing.T) *registryCallHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := repo.UpsertImportedMCPServer(context.Background(), repository.ImportedMCPServer{
+	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
 		Name:        "vendor",
 		URL:         vendor.URL,
 		SealedToken: sealed,

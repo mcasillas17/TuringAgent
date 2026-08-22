@@ -233,8 +233,8 @@ func TestTombstonedNameRemainsRefusedByFileReimport(t *testing.T) {
 	}
 }
 
-// A reimport must never reset a server's observed liveness. The old
-// UpsertImportedMCPServer path reset mcp_server_status to 'unknown'
+// A reimport must never reset a server's observed liveness. The removed
+// clobbering upsert path used to reset mcp_server_status to 'unknown'
 // whenever the URL or tier changed; ImportJSON's create-only path must
 // leave a healthy server's status and status message untouched even when
 // the incoming mcp.json points at a different, still-valid endpoint.

@@ -90,7 +90,7 @@ func newHarnessWithDispatch(t *testing.T, dispatch DispatchConfig) *harness {
 	}
 	database := openRuntimeTestDB(t)
 	repo := repository.New(database)
-	customServer, err := repo.UpsertImportedMCPServer(context.Background(), repository.ImportedMCPServer{
+	customServer, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
 		Name: "custom", URL: "http://custom:9000/mcp", Tier: repository.MCPServerTierLocalContainer,
 	})
 	if err != nil {

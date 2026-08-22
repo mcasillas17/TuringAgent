@@ -133,7 +133,13 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 		// Reimport is create-only: detect an existing (or tombstoned)
 		// name before sealing anything, so a reimport of a server that
 		// already exists never needs a sealer at all, and never touches
-		// its enabled state, endpoint, token, or tools snapshot.
+		// its enabled state, endpoint, token, or tools snapshot. The one
+		// narrow exception is a legacy placeholder from migration 0016
+		// (non-bundled, url == ""): it was seeded disabled with no real
+		// endpoint solely so a pre-registry runtime's tool policy and
+		// schema survived, and it must be adoptable rather than skipped
+		// forever, so it falls through to sealing/import below like a
+		// brand-new name.
 		existing, err := s.repo.GetMCPServerByName(ctx, name)
 		switch {
 		case err == nil:
@@ -141,8 +147,10 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 				report.Unsupported[name] = "bundled server registration is managed by TuringAgent"
 				continue
 			}
-			skipped = append(skipped, name)
-			continue
+			if existing.URL != "" {
+				skipped = append(skipped, name)
+				continue
+			}
 		case errors.Is(err, repository.ErrMCPServerNotFound):
 			tombstoned, terr := s.repo.MCPServerTombstoned(ctx, name)
 			if terr != nil {

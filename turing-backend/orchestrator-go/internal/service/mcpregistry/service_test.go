@@ -38,7 +38,7 @@ func TestEnablingLocalContainerDiscoversToolsAndShowsLiveness(t *testing.T) {
 	}))
 	t.Cleanup(vendor.Close)
 	service.httpClient = vendor.Client()
-	server, err := repo.UpsertImportedMCPServer(context.Background(), repository.ImportedMCPServer{
+	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
 		Name: "vendor", URL: vendor.URL, Tier: repository.MCPServerTierLocalContainer,
 	})
 	if err != nil {
@@ -68,7 +68,7 @@ func TestEnablingRemoteServerDoesNotReachItBeforePerRunConsent(t *testing.T) {
 	}))
 	t.Cleanup(vendor.Close)
 	service.httpClient = vendor.Client()
-	server, err := repo.UpsertImportedMCPServer(context.Background(), repository.ImportedMCPServer{
+	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
 		Name: "remote", URL: vendor.URL, Tier: repository.MCPServerTierRemoteURL,
 	})
 	if err != nil {
@@ -110,7 +110,7 @@ func TestDiscoveryRejectsToolNameThatShadowsBundledTool(t *testing.T) {
 	}))
 	t.Cleanup(vendor.Close)
 	service.httpClient = vendor.Client()
-	server, err := repo.UpsertImportedMCPServer(context.Background(), repository.ImportedMCPServer{
+	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
 		Name: "stranger", URL: vendor.URL, Tier: repository.MCPServerTierLocalContainer,
 	})
 	if err != nil {
@@ -147,7 +147,7 @@ func TestMalformedToolsListRemainsVisibleAsDown(t *testing.T) {
 		})
 	}))
 	t.Cleanup(vendor.Close)
-	server, err := repo.UpsertImportedMCPServer(context.Background(), repository.ImportedMCPServer{
+	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
 		Name: "malformed", URL: vendor.URL, Tier: repository.MCPServerTierLocalContainer,
 	})
 	if err != nil {

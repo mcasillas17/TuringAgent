@@ -11,7 +11,7 @@ import (
 
 func TestDisabledRemoteMCPToolDoesNotRequireEgressConsent(t *testing.T) {
 	h := newHarness(t)
-	server, err := h.repo.UpsertImportedMCPServer(context.Background(), repository.ImportedMCPServer{
+	server, err := h.repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
 		Name: "vendor", URL: "https://vendor.example/mcp", Tier: repository.MCPServerTierRemoteURL,
 	})
 	if err != nil {
