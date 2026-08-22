@@ -6,7 +6,7 @@ accounts, the credential is AES-256-GCM-sealed under `TURING_INTEGRATION_KEY`,
 consent is recorded, revocation works — and no code path ever *opens* a
 credential to do anything. The consent screen tells the user what the
 credential grants; nothing exercises a single grant. `docs/VISION.md` even
-leans on this: its Integrations section currently argues the feature is safe
+leans on this: deferred-list item 6 currently argues the feature is safe
 *because* "no tool consumes a connection" and "nothing dials anywhere." This
 plan makes that sentence false on purpose, and rewrites it.
 
@@ -20,10 +20,10 @@ existing gate covers each of those, and adds no new gate.
 `schema/0008_integrations.sql` stores sealed credentials.
 `internal/repository/integrations.go` can create, list, revoke, and delete a
 connection — and deliberately exposes at most five header bytes of the
-ciphertext on any read path (`credentialHeaderBytes`), with a file comment
-promising the sealed secret is read by nothing in the file. The sealing
-service (`internal/service/integrations`) already exists; it seals and never
-opens.
+ciphertext on any read path (`credentialHeaderBytes`), with the `Connection`
+struct's doc comment promising the sealed secret is read by nothing in the
+file. The sealing service (`internal/service/integrations`) already exists;
+it seals and never opens.
 
 The moment something opens, three things are at stake:
 
@@ -45,49 +45,61 @@ The moment something opens, three things are at stake:
 **The consumer lives in the orchestrator. Not an MCP container, not the
 runtime.** Precisely why: `TURING_INTEGRATION_KEY` is scoped to the
 orchestrator alone in compose, and stays that way — the runtime never holds
-credentials. The bundled MCP servers keep no egress as a property of their
-code and of never being published; the third-party MCP network
-(`net-mcp-registry`) is `internal: true`. An integrations container would
-need real internet egress, which no MCP container has today — adding one
-would put a credentialed, internet-dialing process outside the only component
-that enforces egress decisions. The orchestrator already dispatches
-third-party calls on the runtime's behalf (`CallRegisteredMcpTool`, PR #73);
-integration tools take the same shape over a new `CallIntegrationTool` RPC.
-This *extends* the existing `internal/service/integrations` package — it does
-not create it.
+credentials. (The network claim, stated honestly: only `net-mcp-registry` is
+`internal: true`; the bundled servers sit on ordinary bridge networks and
+keep no egress as a property of their code and of never being published. The
+credential-scoping argument is the load-bearing one.) The orchestrator
+already dispatches third-party calls on the runtime's behalf
+(`CallRegisteredMcpTool`, PR #73); integration tools take the same shape over
+a new `CallIntegrationTool` RPC. This *extends* the existing
+`internal/service/integrations` package — it does not create it.
 
 **The plaintext credential exists in one stack frame, and the repository
 changes to allow exactly that.** A single new repository method returns the
 sealed blob *and* the connection status in one statement, so a revoked row
 can never be read as live. It is the only method that touches full
-ciphertext; the file's header comment is rewritten to name it rather than
+ciphertext; the `Connection` doc comment is rewritten to name it rather than
 quietly falsified. The service unseals per call, inside the provider-client
 call; no provider client, cache, or struct field holds the plaintext between
-calls. The token travels in the `Authorization` header only — never in a URL,
-because Go transport errors (`*url.Error`) embed the full URL in error
-strings, which would put a query-string token into logs on a mere dial
-failure.
+calls. The opener sits behind a small interface in the service (today it is
+a concrete `*secretbox.Sealer` field) so the once-per-call property is
+testable with a counting fake. The token travels in the `Authorization`
+header only — never in a URL, because Go transport errors (`*url.Error`)
+embed the full URL in error strings, which would put a query-string token
+into logs on a mere dial failure.
 
-**The provider client reuses the registry's transport hardening.** The GitHub
-client dials through the same guarded resolution as remote MCP
-(`resolvePublicMCPAddress` — refuses loopback, private, link-local,
-multicast, unspecified) and rejects all redirects before they are followed
-(`rejectMCPRedirect`), factored to be shareable rather than copied. Without
-both, a 30x from the provider or a hostile DNS answer for `api.github.com`
-sends the PAT somewhere the egress decision never named. Phase one pins the
-GitHub host as a constant (`https://api.github.com`); GitHub Enterprise —
-whose whole point is a different host — is explicitly out of scope, as is
-every use of the `endpoint` column, whose current `isPlausibleHost`
-validation accepts loopback and link-local values and must be tightened
-before any provider ever dials it.
+**The provider client reuses the transport hardening that already exists —
+without inventing a third mechanism.** `turing-backend/internal/egress`
+already has `NoRedirectClient` and `RedactRedirectError`, used by both LLM
+provider clients; the GitHub client uses those, and `RedactRedirectError` is
+directly load-bearing for the credential-hygiene test (a raw redirect error
+carries the full URL). Guarded address resolution (refusing loopback,
+private, link-local, multicast, unspecified) currently lives in
+`mcpregistry/transport.go` (`resolvePublicMCPAddress`); it moves to (or is
+wrapped from) the shared egress package so both callers use one
+implementation. Phase one pins the GitHub host as a constant
+(`https://api.github.com`); GitHub Enterprise — whose whole point is a
+different host — is explicitly out of scope, as is every use of the
+`endpoint` column. Two latent holes are named now for the deferred
+endpoint-bearing providers: `isPlausibleHost` accepts loopback and
+link-local values, and `ParseKeyedEndpoint` permits `http://` for loopback
+hosts — the future rule is "keyed HTTPS endpoint + the shared public-address
+class check", and nothing dials a stored endpoint until that lands.
 
 **`integrations` is a pseudo-server like `skills`, and every mechanism that
 special-cases `skills` is updated in the same commit.** Tools carry
-`server_name = 'integrations'`, `mcp_server_id IS NULL`. That touches, at
-minimum:
+`server_name = 'integrations'`, `mcp_server_id IS NULL`. The audited list —
+each verified against the code, and the first one decides whether the
+feature exists at all:
 
-- the 0016 triggers (`0017` widens the carve-out to `('skills',
-  'integrations')`);
+- `service/runtime/service.go` `filterRegisteredWorkerTools`, which passes
+  `"skills"` through and asks `MCPToolAvailable` (an `mcp_servers` join)
+  about everything else — without an `integrations` case, reported
+  integration tools are dropped before registration *and* pruned from the
+  worker's capabilities, so they never reach the `tools` table, never appear
+  in `EgressToolNames`, and every beacon dies as `unknown_tool`;
+- the 0016 triggers — `0017` drops and recreates both (SQLite has no `ALTER
+  TRIGGER`) widening the carve-out to `('skills','integrations')`;
 - `repository/tools.go` `UpsertTools`, which branches on the literal
   `"skills"` — without a matching branch, integration tools are *silently
   never registered* (the non-skills path inserts via a `SELECT` from
@@ -97,6 +109,10 @@ minimum:
   registered third-party MCP server from exporting a colliding `github.*`
   tool and taking down all tool discovery at `BuildToolRegistry`'s duplicate
   check;
+- `mcpregistry/import.go`'s reserved-name check (`system`/`files`/`skills`),
+  which gains `integrations` — otherwise an `mcp.json` server named
+  `integrations` imports cleanly and then the runtime's shadow check fails
+  discovery permanently;
 - `runtime/service.go` `beaconServerName`, whose dot-prefix fallback would
   resolve a server-nameless `github.list_issues` beacon to server `"github"`
   — the runtime always stamps `integrations` on these beacons, and the
@@ -105,55 +121,96 @@ minimum:
 Tool names stay `github.*`: shadow-protection and beacon routing are fixed at
 the mechanisms above, not by contorting the names.
 
-**Per-tool policy editing must actually work, which today it does not for any
-pseudo-server.** `UpdateMcpToolPolicy` and the Flutter editor are keyed on
-`mcp_servers.id` end to end; `skills_list`/`skill_view` are uneditable today
-for exactly this reason. This plan adds a server-name-keyed policy RPC
+**The runtime's lister is dynamic and orchestrator-sourced — and it is how
+the model learns its connections.** Not a static lister like
+`newSkillToolLister()`: a static lister advertises the tools with zero
+connections and can never carry connection identity. The runtime calls a new
+`ListIntegrationTools` RPC at discovery (the same pattern as
+`mcp.NewRegistryClients`), which returns tool definitions only while at
+least one live connection for the provider exists — and whose tool
+*descriptions* enumerate the current live connections as `(connection_id,
+display name)` pairs. That is the answer to "how does the model obtain a
+valid `connection_id`": it reads it from the tool description, which is
+refreshed — along with advertisement itself — by firing the existing
+registry-changed notification (`NotifyMCPRegistryChanged` → worker
+re-discovery) whenever a connection is created, revoked, or deleted. Without
+that wiring the tool set and the id list are stale until restart.
+
+**Per-tool policy editing must actually work, which today it does not for
+any pseudo-server.** `UpdateMcpToolPolicy` and the Flutter editor are keyed
+on `mcp_servers.id` end to end; `skills_list`/`skill_view` are uneditable
+today for exactly this reason. This plan adds a server-name-keyed policy RPC
 (`UpdateToolPolicyByName(server_name, tool_name, policy)`) plus repository
 method and client wiring, used by the Integrations page — and incidentally
-making skills tools editable. Without it, "the user relaxes reads per-tool"
-is a claim about a control that does not exist.
+making skills tools editable. Three properties the by-name RPC must carry,
+each a trap if dropped:
+
+- **the same bundled-mutating-tool guard** as `UpdateMcpToolPolicy`
+  (`BundledToolRequiresApproval`) — a by-name RPC without it is a privilege
+  escalation that sets `files.create` to `safe`;
+- **the same `notifyRegistryChanged()` call** on success;
+- **a pseudo-server-aware `enabled` derivation** in the repository — the
+  existing `SetMCPToolPolicy` SQL derives `enabled` from an `EXISTS` against
+  `mcp_servers`, which is false for `mcp_server_id IS NULL` and would
+  disable the very tool being edited; NULL-server rows are enabled the way
+  the skills insert already enables them.
 
 **Everything defaults to `approval_required`, reads included, and the policy
 comes from the `tools` table.** `DefaultPolicyFor` seeds nothing for
-`integrations`; unknown tools already fall to `approval_required`, and no new
-defaulting logic is added. The dispatch path reads the stored policy — `safe`
-genuinely skips the approval gate, `disabled` genuinely refuses — asserted by
-a round-trip test, so an implementation that hardcodes `approval_required`
-and never registers the tools cannot pass.
+`integrations`; unknown tools already fall to `approval_required`, and no
+new defaulting logic is added. The dispatch path reads the stored policy —
+`safe` genuinely skips the approval gate, `disabled` genuinely refuses — and
+**an `approval_required` call waits for and consumes an approval whether it
+is a read or a write**; consumption is a property of the policy, not of
+mutation.
 
-**A failed read is a tool error, not a dead run.** Today an
-`approval_required` decision marks the call side-effecting, and a call error
-becomes `SideEffectUnknownError`, which fails the whole run — correct for
-mutations, absurd for a GitHub 500 on `list_issues`. The read tools are
-declared side-effect-free at the runner level: once past their gates, a
-provider error returns to the model as a bounded tool error. Write tools keep
-the existing behavior; "we don't know whether the comment posted" *should*
-halt the run.
+**A failed read is a tool error, not a dead run — via an explicit
+`read_only` bit authored by the orchestrator.** Today the runner derives
+`sideEffecting` solely from `DECISION_APPROVAL_REQUIRED`, and that one bit
+drives both approval-waiting and error classification
+(`SideEffectUnknownError` fails the run). Those two meanings are decoupled:
+`ToolPolicyDecision` gains a `read_only` field, set by the orchestrator from
+the integrations service's own per-tool table (the three GET tools), and the
+runner classifies errors as recoverable when `read_only` is true while
+approval-waiting is unchanged. Named consequence, intended: a run whose last
+tool call was a `read_only` GET stays retryable and may re-issue the GET.
+Write tools keep the existing behavior; "we don't know whether the comment
+posted" *should* halt the run.
 
 **Every integration call joins the per-run egress decision — through the
 signed challenge, not just the database row.** PR #73's pattern, all of it:
 
 - The decision gains `integration_endpoints_json`: an array of
-  `{endpoint, connection_id, tools}` where `endpoint` is a canonical keyed
-  endpoint (`backendegress.ParseKeyedEndpoint`, HTTPS only).
-- Those entries ride inside the HMAC-signed `egressChallengePayload`
-  alongside `RemoteMCPServers`, are covered by the structural validation and
-  by `payloadMatchesEgressContext`, and are frozen at enqueue — so the list
-  the user acknowledged is the list the signature binds, and a connection
-  set that changes between prepare and send is detected, not absorbed.
-- Validation before dispatch checks all three legs of `RunAllowsRemoteMCP`'s
-  shape, plus one: `integrations/<tool>` present in the decision's
-  `selected_tools`; `TOOL_ARGUMENTS` and `TOOL_RESULTS` present in the data
-  categories; and the `(endpoint, connection_id)` *pair* present in the
-  decision's integration endpoints. Matching on host alone is refused as a
-  design: two GitHub connections share `api.github.com`, and consent for
-  connection A must not authorize connection B.
+  `{endpoint, connection_id, display_name, tools}` where `endpoint` is a
+  canonical keyed endpoint. Canonicality is specified because the signed
+  challenge requires it: entries sorted by `(endpoint, connection_id)`,
+  deduplicated, at most 16 entries, each entry's serialized form bounded —
+  mirroring the sortedness and strict-ordering rules `validChallengePayload`
+  already enforces for `SelectedTools` and `RemoteMCPServers`.
+- Those entries ride inside the HMAC-signed `egressChallengePayload`, are
+  covered by the structural validation and by
+  `payloadMatchesEgressContext`, and are frozen at enqueue — so the list the
+  user acknowledged is the list the signature binds, and a connection set
+  that changes between prepare and send is detected, not absorbed.
+- The disclosure carries the connection's **display name**, and the egress
+  dialog renders one line per connection — `conn_9f3a…` is not consent to an
+  account, and consent for the personal account must not read as consent for
+  the work account.
+- Validation before dispatch checks four legs:
+  `integrations/<tool>` present in the decision's `selected_tools`;
+  `TOOL_ARGUMENTS` and `TOOL_RESULTS` present in the data categories; the
+  `(endpoint, connection_id)` *pair* present in the decision's integration
+  endpoints — two GitHub connections share `api.github.com`, and consent
+  for connection A must not authorize connection B; and the called tool
+  present in that entry's `tools` list, so the array is load-bearing, not
+  decorative data inside a signed payload.
 - Revalidation happens again after the approval wait, and a liveness check
   equivalent to `MCPDispatchActive` (run executing, not cancelled, session
   not mid-deletion) runs immediately before the network call — integration
   tools bypass the `mcp_servers` join that query uses, so they need their
-  own.
+  own (`IntegrationDispatchActive`), along with an
+  `IntegrationEndpointsForTools` resolver analogous to
+  `RemoteMCPServersForTools`.
 - The "local provider needs no decision" rule is mirrored in Go in four
   places, and every one widens from "has remote MCP servers" to "has remote
   MCP servers or integration endpoints": `normalizePendingEgressDecision`
@@ -161,46 +218,57 @@ signed challenge, not just the database row.** PR #73's pattern, all of it:
   `repository/jobs.go`, the early return in `resolveEgressContext`
   (`service/chat/egress.go` — miss this one and a local-Ollama run never
   gets a consent dialog and the feature silently does not exist for local
-  models), and the challenge-payload validation in the same file. The 0016
-  CHECK widens to match.
+  models), and the challenge-payload validation in the same file. **A fifth
+  edit in `resolveEgressContext` is separate from the early return:** the
+  data-category attachment currently adds `TOOL_ARGUMENTS`/`TOOL_RESULTS`
+  only for provider egress with selected tools or for remote MCP servers —
+  a local run with only integration endpoints would get neither category
+  and refuse its own calls at the second leg. The 0016 CHECK widens to
+  match, and `CurrentSchemaVersion` moves to `0017` (a second pin beside
+  the migration list).
 
-**A call names its connection; the decision is authoritative; the tool is as
-static as its snapshot.** `connection_id` is a required string argument,
-validated by the orchestrator against the frozen decision — not an enum baked
-into the schema, so the runtime needs no connection list and there is no
-prepare-vs-schema TOCTOU: a connection created after the decision is simply
-not in it and is refused; the user re-sends to include it. Because
-`connection_id` is an argument, the approval's existing `ArgsHash` binding
-covers it for free — approve against connection A, dispatch against B, and
-`ConsumeApprovalForThirdParty`'s args-hash check refuses. Integration tools
-are advertised while at least one live connection for the provider exists;
-connecting or revoking fires the same registry-changed notification the MCP
-registry uses (`NotifyMCPRegistryChanged` → worker re-discovery), so the tool
-set is never stale until restart. Revoking or deleting a connection fails the
-*call* closed (the unseal path sees status in the same read). Revoking the
-**last** connection additionally un-advertises the tools, and a run already
-frozen with them in `selected_tools` fails at the run level with a clear
-notice — that is the honest consequence of the frozen-snapshot design, and
-this plan states it rather than promising per-call granularity it cannot
-deliver.
+**A call names its connection; the decision is authoritative.**
+`connection_id` is a required string argument — the model reads valid ids
+from the tool description above — validated by the orchestrator against the
+frozen decision. There is no prepare-vs-schema TOCTOU: a connection created
+after the decision is simply not in it and is refused; the user re-sends to
+include it. Because `connection_id` is an argument, the approval's existing
+`ArgsHash` binding covers it for free — approve against connection A,
+dispatch against B, and `ConsumeApprovalForThirdParty`'s args-hash check
+refuses. Revoking or deleting a connection fails the *call* closed (the
+unseal path sees status in the same read). Revoking the **last** connection
+additionally un-advertises the tools, and a run already frozen with them in
+`selected_tools` fails at the run level (`DefinitionsFor`'s
+snapshot-unavailable error path) with a clear notice — the honest
+consequence of the frozen-snapshot design, stated rather than promising
+per-call granularity it cannot deliver.
 
-**Writes are enforced caller-side, and it is almost entirely reuse.**
+**Approval consumption is caller-side, and the approval must be legible.**
 `ConsumeApprovalForThirdParty` already binds `RunID`, `ServerName`,
-`ToolName`, and `ArgsHash`; the write path needs the right `server_name` on
-the beacon and no new approval code. What *is* new: the approval the human
-sees must show the full destination (owner/repo/issue) and the full body —an
-approval showing a truncated body is an approval for something the user did
-not read. A write whose rendered arguments exceed the approval display bound
-is refused before the approval is ever created, rather than truncated.
+`ToolName`, and `ArgsHash`; the consumption path needs the right
+`server_name` on the beacon and no new approval code. The legibility half is
+real work the current system cannot do: today's approval event carries only
+a one-line `args_summary` ("Requested tool use"), and that is all the
+Flutter approval card renders. An integration write approval must show the
+acting **connection's display name**, the full destination
+(owner/repo/issue), and the full body — an approval showing a truncated
+body is an approval for something the user did not read. That means a new
+full-arguments rendering field on the approval payload (proto), the
+repository populating it for integration writes, and approval-card rendering
+work. The bound gets a name and a number:
+`maxIntegrationApprovalRenderBytes = 32 KiB`; a write whose rendered
+arguments exceed it is refused before the approval is ever created, rather
+than truncated.
 
 **Retrieved content is data.** Results come back bounded
-(`maxIntegrationResultBytes = 16 KiB` per call, named constant, truncation
-announced to the model in the result rather than silent), framed as retrieved
-third-party content, with the framing spoof-resistant: a response body that
-reproduces the framing delimiters must not be able to close the frame. The
-framing is hygiene, not a security boundary — the boundary is that anything
-the model *does* in response still passes the same approval and egress gates
-as ever. The plan claims nothing stronger, in the code or the docs.
+(`maxIntegrationResultBytes = 16 KiB` per call, named constant, truncated on
+a UTF-8 rune boundary, truncation announced to the model in the result
+rather than silent), framed as retrieved third-party content, with the
+framing spoof-resistant: a response body that reproduces the framing
+delimiters must not be able to close the frame. The framing is hygiene, not
+a security boundary — the boundary is that anything the model *does* in
+response still passes the same approval and egress gates as ever. The plan
+claims nothing stronger, in the code or the docs.
 
 **Automations are excluded, twice, and the exclusion is written down.** A
 local-model automation run enqueues with no egress decision, so every
@@ -208,11 +276,12 @@ integration call from one is refused — the right failure, but it must be
 documented and surfaced in the automations editor ("integrations are not
 available to automations"), not discovered by a user whose nightly
 "check my GitHub issues" automation silently never works. And integration
-tools are refused on automation allowlists in phase one: the allowlist
-pre-authorizes approvals, and an unattended, pre-authorized write to an
-external account is exactly what the approval model's assume-a-human-present
-stance exists to prevent. Lifting either half is future work with its own
-consent design.
+tools are refused on automation allowlists at save — the allowlist check in
+`repository/automations.go` is purely syntactic today, so this is a new
+check, not a filter tweak. The allowlist pre-authorizes approvals, and an
+unattended, pre-authorized write to an external account is exactly what the
+approval model's assume-a-human-present stance exists to prevent. Lifting
+either half is future work with its own consent design.
 
 **The product consequence is named: connecting an account makes local sends
 ask.** The egress policy's existing rule for remote MCP tools applies
@@ -224,8 +293,8 @@ RPC above is a prerequisite, not a nicety. The Integrations page says this at
 connect time.
 
 **Phase one is GitHub, alone.** One provider proves the entire path:
-unseal-per-call, signed-challenge egress coverage, read tools, one write tool
-through the caller-side approval flow. Four tools: `github.list_issues`,
+unseal-per-call, signed-challenge egress coverage, read tools, one write
+tool through the caller-side approval flow. Four tools: `github.list_issues`,
 `github.get_issue`, `github.get_file`, `github.create_comment`. Coverage is
 endpoint-granular, not repo-granular — consent for `api.github.com` under a
 PAT covers every repository that PAT reaches, and
@@ -237,46 +306,59 @@ mechanical after GitHub.
 
 ## What gets built
 
-The honest file-level list — this is about twelve sites, not five:
+The honest file-level list:
 
-- **Migration `0017`** — widen the 0016 tool triggers to
-  `NOT IN ('skills','integrations')`; rebuild `run_egress_decisions` (0016's
+- **Migration `0017`** — drop and recreate the two 0016 tool triggers with
+  the widened carve-out; rebuild `run_egress_decisions` (0016's
   rename-copy-drop) adding `integration_endpoints_json` with
   `json_valid`/`json_type` CHECKs, the widened local-provider CHECK, the
   preserved `run_id … REFERENCES agent_runs(id) ON DELETE CASCADE` (the
   schema-invariants test pins cascade ownership), and the recreated
-  provider/consent index. `internal/db/migrations_test.go` pins the list;
-  update it.
+  provider/consent index. `internal/db/migrations_test.go` pins both the
+  list and `CurrentSchemaVersion`; update both.
 - **`internal/repository/integrations.go`** — the single sealed-blob+status
-  accessor; tightened endpoint validation; rewritten header comment.
+  accessor; rewritten `Connection` doc comment.
 - **`internal/repository/tools.go`** — the `integrations` branch in
-  `UpsertTools`.
+  `UpsertTools`; the by-name policy method with the pseudo-server `enabled`
+  derivation.
+- **`internal/repository/automations.go`** — the integrations refusal in
+  allowlist validation.
 - **`internal/repository/egress.go`, `internal/repository/jobs.go`,
   `internal/service/chat/egress.go`** — the four widened local-provider
-  mirrors; `integration_endpoints_json` through the signed challenge payload,
-  structural validation, `payloadMatchesEgressContext`, and the enqueue
-  freeze.
+  mirrors plus the data-category attachment for integration-only runs;
+  `integration_endpoints_json` through the signed challenge payload with its
+  canonical ordering, structural validation,
+  `payloadMatchesEgressContext`, and the enqueue freeze;
+  `IntegrationEndpointsForTools`.
 - **`internal/service/integrations`** (extended) — the GitHub provider
-  client on the shared hardened transport; three-leg-plus-connection
-  decision validation; post-approval revalidation and the
-  dispatch-liveness check; caller-side approval consumption for writes;
-  result bounding and framing.
+  client on `NoRedirectClient`/`RedactRedirectError` and the shared guarded
+  resolver; the per-tool `read_only` table; four-leg decision validation;
+  post-approval revalidation and `IntegrationDispatchActive`; caller-side
+  approval consumption; the approval render and its bound; result bounding
+  and framing; the sealer interface seam.
 - **`internal/service/tools/defaults.go`** — the `github.` case in
   `BundledServerForTool`.
-- **`proto/turing/v1`** — `CallIntegrationTool`; `UpdateToolPolicyByName`;
-  `integration_endpoints` on the egress disclosure and decision messages
-  (pinned field numbers, `tools/proto/check.sh` compares bytes).
-- **Runtime (`agent-runtime-go`)** — an `integrationsToolLister` synthesized
-  like `newSkillToolLister()` (nothing arrives via the MCP registry path,
-  which skips serverless tools); read tools declared side-effect-free;
-  beacons stamped `integrations`; forwarding over `CallIntegrationTool`.
-- **Orchestrator runtime service** — connection-change notifications reusing
-  the MCP registry-changed path; `beaconServerName` mapping.
+- **`internal/service/mcpregistry/import.go`** — `integrations` added to
+  the reserved server names.
+- **`proto/turing/v1`** — `CallIntegrationTool`, `ListIntegrationTools`,
+  `UpdateToolPolicyByName`; `integration_endpoints` on the egress
+  disclosure and decision messages; `read_only` on `ToolPolicyDecision`;
+  the approval full-render field (pinned field numbers,
+  `tools/proto/check.sh` compares bytes).
+- **Runtime (`agent-runtime-go`)** — the dynamic integrations lister over
+  `ListIntegrationTools`; beacons stamped `integrations`; forwarding over
+  `CallIntegrationTool`; `read_only`-aware error classification in
+  `tools/runner.go`.
+- **Orchestrator runtime service** — `filterRegisteredWorkerTools`'s
+  `integrations` case; connection-change notifications reusing the MCP
+  registry-changed path; `beaconServerName` mapping;
+  `UpdateToolPolicyByName` with the bundled-mutating-tool guard and
+  registry-changed notification.
 - **Client** — the Integrations page shows each connection's tools with the
-  new policy editor and the connect-time "sends will ask" notice; the egress
-  dialog lists integration endpoints beside remote MCP servers; the
-  automations editor states integrations are unavailable. Compact layout
-  (<840px) included.
+  new policy editor and the connect-time "sends will ask" notice; the
+  egress dialog renders one labeled line per connection; the approval card
+  renders the full-arguments field; the automations editor states
+  integrations are unavailable. Compact layout (<840px) included.
 
 ## The tests that gate the merge
 
@@ -286,57 +368,79 @@ break the production gate, watch the right test fail, restore.
 1. **Credential hygiene, including transport failure.** After a full call
    cycle — an HTTP-status failure *and* a dial/TLS-level failure (the
    `*url.Error` path that embeds URLs in error strings) — the plaintext
-   credential appears in no event payload, audit row, log line, tool result,
-   or error string.
-2. **One stack frame.** The unseal happens exactly once per call (counter on
-   the sealer) and no long-lived structure retains the plaintext between
-   calls.
-3. **No decision, no dial — on all legs.** Refused before any network I/O,
-   asserted with a transport that fails the test if touched: a tool name
-   absent from the decision's `selected_tools`; a decision missing
-   `TOOL_ARGUMENTS` or `TOOL_RESULTS`; an `(endpoint, connection_id)` pair
-   absent — specifically, a decision naming connection A refuses a call
-   naming connection B on the same host.
+   credential appears in no event payload, audit row, log line, tool
+   result, or error string.
+2. **One stack frame.** The unseal happens exactly once per call (counting
+   fake behind the sealer interface) and no long-lived structure retains
+   the plaintext between calls.
+3. **No decision, no dial — on all four legs.** Refused before any network
+   I/O, asserted with a transport that fails the test if touched: a tool
+   name absent from `selected_tools`; a decision missing `TOOL_ARGUMENTS`
+   or `TOOL_RESULTS`; an `(endpoint, connection_id)` pair absent —
+   specifically, a decision naming connection A refuses a call naming
+   connection B on the same host; a tool absent from the matched entry's
+   `tools` list.
 4. **The signed challenge binds the endpoints.** A prepared challenge whose
    integration endpoints are altered between prepare and send is refused by
    the payload-match check.
-5. **Writes consume exactly once, bound to the connection.**
-   `github.create_comment` without a valid unconsumed approval is refused;
-   with one, consumed exactly once; an args mismatch — including only
-   `connection_id` differing — is refused.
+5. **Approval-required calls consume exactly once, reads included, bound to
+   the connection.** A write without a valid unconsumed approval is
+   refused; with one, consumed exactly once; an args mismatch — including
+   only `connection_id` differing — is refused. An `approval_required`
+   *read* also waits for and consumes an approval bound to its args.
 6. **Revalidation and liveness.** The run is cancelled (or the tool
    disabled, or the session enters deletion) during the approval wait ⇒ no
    dispatch, transport untouched.
-7. **Revocation and deletion mean now.** A connection revoked after consent
-   fails the next call closed; a connection *deleted* (the separate code
-   path) likewise; the sealed-blob accessor returns status in the same read.
-8. **Policy round-trip.** Tools registered through `UpsertTools` land
-   `approval_required`; set `safe` ⇒ a read dispatches with no approval; set
-   `disabled` ⇒ refused. This is the test that a
-   hardcoded-policy, never-registered implementation cannot pass.
-9. **The happy path exists.** A local-Ollama run offered GitHub tools gets a
-   non-empty egress disclosure, and with consent granted completes a mocked
-   `github.list_issues` end to end. Every other test is refusal-shaped; this
-   is the one that proves the feature works for local models at all.
+7. **Revocation and deletion mean now — at both granularities.** A
+   connection revoked after consent fails the next call closed; a
+   connection *deleted* (the separate code path) likewise. Revoking the
+   last connection un-advertises the tools, fires the registry-changed
+   notification, and a run frozen with the tool in `selected_tools` fails
+   at the run level via the snapshot-unavailable path.
+8. **Policy round-trip, with the guard.** Tools registered through
+   `UpsertTools` land `approval_required`; `UpdateToolPolicyByName` set
+   `safe` ⇒ a read dispatches with no approval; set `disabled` ⇒ refused —
+   and the same RPC **refuses** to set a bundled mutating tool
+   (`files.create`) to `safe`, and does not disable the pseudo-server tool
+   it edits.
+9. **The happy path exists, connection id included.** A local-Ollama run
+   offered GitHub tools gets a non-empty egress disclosure whose entries
+   carry display names; the advertised tool description enumerates the live
+   `(connection_id, display name)` pairs; with consent granted, a mocked
+   `github.list_issues` completes end to end using an id taken from the
+   description, not hardcoded.
 10. **A failed read is not a dead run.** A provider 500 on an approved read
     returns a bounded tool error to the model; the run continues. A
     transport failure on a write still halts the run.
 11. **Transport hardening.** A 30x from the provider is refused before the
-    redirect is followed; a resolver answer mapping the provider host to a
-    private address is refused.
+    redirect is followed and the resulting error is redacted; a resolver
+    answer mapping the provider host to a private address is refused.
 12. **No ambient egress, automations included.** A run offered no
     integration tools has no integration endpoints in its decision; an
     automation run's integration call is refused (no decision exists); an
     integration tool on an automation allowlist is rejected at save.
-13. **Bounded, framed, spoof-resistant results.** An oversized response is
-    truncated to `maxIntegrationResultBytes` with the truncation announced;
-    a body containing the framing delimiters cannot close the frame.
+13. **The approval is legible, or the write is refused.** An integration
+    write approval event carries the full render — connection display name,
+    destination, complete body; a write whose render exceeds
+    `maxIntegrationApprovalRenderBytes` is refused before any approval is
+    created, with no truncated approval ever emitted.
+14. **Bounded, framed, spoof-resistant results.** An oversized response is
+    truncated to `maxIntegrationResultBytes` on a rune boundary with the
+    truncation announced; a body containing the framing delimiters cannot
+    close the frame.
+15. **Zero connections, zero surface.** With no live connections the tools
+    are absent from the registry and from `EgressToolNames`, prepare
+    returns no integration endpoints, and connecting one fires the
+    registry-changed notification that makes them appear without a
+    restart.
 
 ## Deferred, deliberately
 
 - **IMAP, CalDAV, Notion providers** — after GitHub proves the path. The
   endpoint-bearing providers additionally wait on the tightened endpoint
-  validation being exercised for real.
+  rule (keyed HTTPS endpoint + the shared public-address class check;
+  today's `isPlausibleHost` accepts loopback and `ParseKeyedEndpoint`
+  permits loopback `http://`).
 - **GitHub Enterprise** — a different host is exactly what the pinned-host
   decision refuses in phase one.
 - **OAuth flows** — Integrations takes credentials the user minted at the
@@ -349,17 +453,17 @@ break the production gate, watch the right test fail, restore.
 
 ## Documentation the implementation PR must update
 
-- `docs/mcp-security-and-integration.md` — integrations join the caller-side
-  enforcement section; the credential-handling story (sealed at rest, one
-  stack frame in flight, header-only transport, hardened dialer, never in
-  events or logs) written down.
+- `docs/mcp-security-and-integration.md` — integrations join the
+  caller-side enforcement section; the credential-handling story (sealed at
+  rest, one stack frame in flight, header-only transport, hardened
+  no-redirect dialer, never in events or logs) written down.
 - `docs/architecture/remote-egress-policy.md` — integration endpoints named
   as the third egress path beside remote model providers and remote MCP
   servers; the every-send-asks consequence and the endpoint-not-repo
   granularity sentence.
-- `docs/VISION.md` — three edits, no invariant weakened: the Integrations
-  section's "no tool consumes a connection … nothing dials anywhere"
-  rationale is rewritten to describe the gates that replaced it; the
-  caller-side qualification on the approval invariant, added for the MCP
-  registry, extends to integrations; and the untrusted-input invariant gains
+- `docs/VISION.md` — three edits, no invariant weakened: deferred-list item
+  6's "no tool consumes a connection … nothing dials anywhere" rationale is
+  rewritten to describe the gates that replaced it; the caller-side
+  qualification on the approval invariant, added for the MCP registry,
+  extends to integrations; and the untrusted-input invariant gains
   retrieved integration content as the sibling of skill text.
