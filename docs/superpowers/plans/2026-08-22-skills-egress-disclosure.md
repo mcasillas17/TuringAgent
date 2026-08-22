@@ -334,7 +334,7 @@ nothing new leaves the machine because of this plan.
   `decisionVersion != float64(1)`; `mcp_egress_notice_test.go`;
   `mcp_egress_fingerprint_test.go`;
   `service/runtime/external_agent_mapping_test.go`; and
-  `external_agent_test.go`'s — where the version break fires *before*
+  `external_agent_test.go`'s two — where the version break fires *before*
   the category break, with a different message, so gate-breaking
   discipline reads a misleading signal if run naively) and
   worker-advertisement literals that silently un-egress-aware the test
