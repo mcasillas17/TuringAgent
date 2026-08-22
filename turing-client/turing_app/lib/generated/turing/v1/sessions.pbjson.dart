@@ -49,6 +49,23 @@ final $typed_data.Uint8List sessionDeletionStateDescriptor = $convert.base64Deco
     'T05fREVMRVRJT05fU1RBVEVfRkFJTEVEX0VYVEVSTkFMEAISJAogU0VTU0lPTl9ERUxFVElPTl'
     '9TVEFURV9DT01QTEVURUQQAw==');
 
+@$core.Deprecated('Use searchMessagesResponseFormatDescriptor instead')
+const SearchMessagesResponseFormat$json = {
+  '1': 'SearchMessagesResponseFormat',
+  '2': [
+    {'1': 'SEARCH_MESSAGES_RESPONSE_FORMAT_UNSPECIFIED', '2': 0},
+    {'1': 'SEARCH_MESSAGES_RESPONSE_FORMAT_LEGACY_MESSAGES', '2': 1},
+    {'1': 'SEARCH_MESSAGES_RESPONSE_FORMAT_HITS', '2': 2},
+  ],
+};
+
+/// Descriptor for `SearchMessagesResponseFormat`. Decode as a `google.protobuf.EnumDescriptorProto`.
+final $typed_data.Uint8List searchMessagesResponseFormatDescriptor = $convert.base64Decode(
+    'ChxTZWFyY2hNZXNzYWdlc1Jlc3BvbnNlRm9ybWF0Ei8KK1NFQVJDSF9NRVNTQUdFU19SRVNQT0'
+    '5TRV9GT1JNQVRfVU5TUEVDSUZJRUQQABIzCi9TRUFSQ0hfTUVTU0FHRVNfUkVTUE9OU0VfRk9S'
+    'TUFUX0xFR0FDWV9NRVNTQUdFUxABEigKJFNFQVJDSF9NRVNTQUdFU19SRVNQT05TRV9GT1JNQV'
+    'RfSElUUxAC');
+
 @$core.Deprecated('Use sessionDescriptor instead')
 const Session$json = {
   '1': 'Session',
@@ -439,6 +456,28 @@ final $typed_data.Uint8List listMessagesResponseDescriptor = $convert.base64Deco
     'ChRMaXN0TWVzc2FnZXNSZXNwb25zZRIuCghtZXNzYWdlcxgBIAMoCzISLnR1cmluZy52MS5NZX'
     'NzYWdlUghtZXNzYWdlcw==');
 
+@$core.Deprecated('Use searchHitDescriptor instead')
+const SearchHit$json = {
+  '1': 'SearchHit',
+  '2': [
+    {
+      '1': 'message',
+      '3': 1,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.Message',
+      '10': 'message'
+    },
+    {'1': 'score', '3': 2, '4': 1, '5': 1, '10': 'score'},
+    {'1': 'snippet', '3': 3, '4': 1, '5': 9, '10': 'snippet'},
+  ],
+};
+
+/// Descriptor for `SearchHit`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List searchHitDescriptor = $convert.base64Decode(
+    'CglTZWFyY2hIaXQSLAoHbWVzc2FnZRgBIAEoCzISLnR1cmluZy52MS5NZXNzYWdlUgdtZXNzYW'
+    'dlEhQKBXNjb3JlGAIgASgBUgVzY29yZRIYCgdzbmlwcGV0GAMgASgJUgdzbmlwcGV0');
+
 @$core.Deprecated('Use searchMessagesRequestDescriptor instead')
 const SearchMessagesRequest$json = {
   '1': 'SearchMessagesRequest',
@@ -453,6 +492,14 @@ const SearchMessagesRequest$json = {
       '5': 9,
       '10': 'excludeSessionId'
     },
+    {
+      '1': 'response_format',
+      '3': 5,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.SearchMessagesResponseFormat',
+      '10': 'responseFormat'
+    },
   ],
 };
 
@@ -460,7 +507,9 @@ const SearchMessagesRequest$json = {
 final $typed_data.Uint8List searchMessagesRequestDescriptor = $convert.base64Decode(
     'ChVTZWFyY2hNZXNzYWdlc1JlcXVlc3QSFAoFcXVlcnkYASABKAlSBXF1ZXJ5Eh0KCnNlc3Npb2'
     '5faWQYAiABKAlSCXNlc3Npb25JZBIUCgVsaW1pdBgDIAEoBVIFbGltaXQSLAoSZXhjbHVkZV9z'
-    'ZXNzaW9uX2lkGAQgASgJUhBleGNsdWRlU2Vzc2lvbklk');
+    'ZXNzaW9uX2lkGAQgASgJUhBleGNsdWRlU2Vzc2lvbklkElAKD3Jlc3BvbnNlX2Zvcm1hdBgFIA'
+    'EoDjInLnR1cmluZy52MS5TZWFyY2hNZXNzYWdlc1Jlc3BvbnNlRm9ybWF0Ug5yZXNwb25zZUZv'
+    'cm1hdA==');
 
 @$core.Deprecated('Use searchMessagesResponseDescriptor instead')
 const SearchMessagesResponse$json = {
@@ -474,14 +523,22 @@ const SearchMessagesResponse$json = {
       '6': '.turing.v1.Message',
       '10': 'messages'
     },
+    {
+      '1': 'hits',
+      '3': 2,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.SearchHit',
+      '10': 'hits'
+    },
   ],
 };
 
 /// Descriptor for `SearchMessagesResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List searchMessagesResponseDescriptor =
-    $convert.base64Decode(
-        'ChZTZWFyY2hNZXNzYWdlc1Jlc3BvbnNlEi4KCG1lc3NhZ2VzGAEgAygLMhIudHVyaW5nLnYxLk'
-        '1lc3NhZ2VSCG1lc3NhZ2Vz');
+final $typed_data.Uint8List searchMessagesResponseDescriptor = $convert.base64Decode(
+    'ChZTZWFyY2hNZXNzYWdlc1Jlc3BvbnNlEi4KCG1lc3NhZ2VzGAEgAygLMhIudHVyaW5nLnYxLk'
+    '1lc3NhZ2VSCG1lc3NhZ2VzEigKBGhpdHMYAiADKAsyFC50dXJpbmcudjEuU2VhcmNoSGl0UgRo'
+    'aXRz');
 
 @$core.Deprecated('Use getConfigRequestDescriptor instead')
 const GetConfigRequest$json = {

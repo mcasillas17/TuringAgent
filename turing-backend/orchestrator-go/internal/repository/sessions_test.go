@@ -422,6 +422,120 @@ func TestSearchMessagesReturnsQueryErrors(t *testing.T) {
 	}
 }
 
+// TestSearchMessagesIncludeArchivedAndExcludeDeletingSessions pins the legacy
+// projection's lifecycle visibility: archived conversations stay searchable and
+// a deleting session's messages do not. The shared predicate's explicit status
+// clause is redundant against today's schema, so it is pinned by the fragment
+// and DDL-domain tests rather than by this behavioral one.
+func TestSearchMessagesIncludeArchivedAndExcludeDeletingSessions(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	insertListSession(t, ctx, database, "s-active", "active", "2026-08-20T04:00:00.000000000Z")
+	insertListSession(t, ctx, database, "s-archived", "archived", "2026-08-20T04:00:01.000000000Z")
+	insertListSession(t, ctx, database, "s-deleting", "active", "2026-08-20T04:00:02.000000000Z")
+	insertSearchMessage(t, ctx, database, "m-visible-1-active", "s-active", "visibilityterm", 1)
+	insertSearchMessage(t, ctx, database, "m-visible-2-archived", "s-archived", "visibilityterm", 1)
+	insertSearchMessage(t, ctx, database, "m-visible-3-deleting", "s-deleting", "visibilityterm", 1)
+	if _, err := database.ExecContext(ctx,
+		`UPDATE sessions SET deletion_state = 'deleting' WHERE id = 's-deleting'`,
+	); err != nil {
+		t.Fatalf("mark session deleting: %v", err)
+	}
+
+	results, err := repo.SearchMessages(ctx, "", "", "visibilityterm", 10)
+	if err != nil {
+		t.Fatalf("SearchMessages: %v", err)
+	}
+	assertSearchMessageIDs(t, results, []string{"m-visible-1-active", "m-visible-2-archived"})
+}
+
+// TestSearchMessagesPredicateBuildsOneSharedFragment pins the fragment and
+// argument order both projections depend on. The hit projection prepends its
+// own marker arguments, so a reordered predicate argument would bind a marker
+// to the phrase or the limit.
+func TestSearchMessagesPredicateBuildsOneSharedFragment(t *testing.T) {
+	predicate, args, ok := searchMessagesPredicate(searchMessagesInput{
+		sessionID:         "s1",
+		excludedSessionID: "s2",
+		query:             `alpha"beta` + "\x00gamma",
+		limit:             7,
+	})
+	if !ok {
+		t.Fatal("predicate reported tokenless input for a tokenized query")
+	}
+	normalized := strings.Join(strings.Fields(predicate), " ")
+	for _, want := range []string{
+		"FROM messages_fts",
+		"JOIN messages m ON m.rowid = messages_fts.rowid",
+		"JOIN sessions s ON s.id = m.session_id AND s.deletion_state = 'active' AND s.status IN ('active', 'archived')",
+		"WHERE messages_fts MATCH ?",
+		"AND m.session_id = ?",
+		"AND m.session_id <> ?",
+		"ORDER BY bm25(messages_fts), m.id LIMIT ?",
+	} {
+		if !strings.Contains(normalized, want) {
+			t.Fatalf("predicate = %q, want it to contain %q", normalized, want)
+		}
+	}
+	if !reflect.DeepEqual(args, []any{`"alpha""beta gamma"`, "s1", "s2", 7}) {
+		t.Fatalf("predicate args = %#v", args)
+	}
+
+	scopeless, scopelessArgs, ok := searchMessagesPredicate(searchMessagesInput{
+		query: "alpha",
+		limit: 5,
+	})
+	if !ok {
+		t.Fatal("predicate reported tokenless input for a tokenized query")
+	}
+	if strings.Contains(scopeless, "AND m.session_id = ?") ||
+		strings.Contains(scopeless, "AND m.session_id <> ?") {
+		t.Fatalf("predicate = %q, want no scope or exclusion clause", scopeless)
+	}
+	if !reflect.DeepEqual(scopelessArgs, []any{`"alpha"`, 5}) {
+		t.Fatalf("scopeless args = %#v", scopelessArgs)
+	}
+}
+
+func TestSearchMessagesPredicateAppliesLimitAndTokenRules(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		query     string
+		limit     int
+		wantOK    bool
+		wantLimit int
+	}{
+		{name: "valid limit", query: "alpha", limit: 1, wantOK: true, wantLimit: 1},
+		{name: "maximum limit", query: "alpha", limit: 100, wantOK: true, wantLimit: 100},
+		{name: "zero limit defaults", query: "alpha", limit: 0, wantOK: true, wantLimit: 20},
+		{name: "negative limit defaults", query: "alpha", limit: -1, wantOK: true, wantLimit: 20},
+		{name: "oversized limit defaults", query: "alpha", limit: 101, wantOK: true, wantLimit: 20},
+		{name: "punctuation only", query: "...", limit: 10},
+		{name: "nul only", query: "\x00", limit: 10},
+		{name: "empty", query: "", limit: 10},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			predicate, args, ok := searchMessagesPredicate(searchMessagesInput{
+				query: testCase.query,
+				limit: testCase.limit,
+			})
+			if ok != testCase.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, testCase.wantOK)
+			}
+			if !testCase.wantOK {
+				if predicate != "" || args != nil {
+					t.Fatalf("tokenless predicate = %q, args = %#v", predicate, args)
+				}
+				return
+			}
+			if got := args[len(args)-1]; got != testCase.wantLimit {
+				t.Fatalf("limit arg = %v, want %v", got, testCase.wantLimit)
+			}
+		})
+	}
+}
+
 func insertSearchSession(t *testing.T, ctx context.Context, database *db.DB, id string) {
 	t.Helper()
 	_, err := database.ExecContext(ctx, `INSERT INTO sessions (id, created_at, updated_at) VALUES (?, '2026-08-10T00:00:00Z', '2026-08-10T00:00:00Z')`, id)

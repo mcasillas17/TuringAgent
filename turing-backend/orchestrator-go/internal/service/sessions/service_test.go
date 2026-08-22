@@ -1,15 +1,19 @@
 package sessions
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
@@ -21,6 +25,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 )
 
 type sessionHarness struct {
@@ -73,7 +78,15 @@ func (s *sessionCapabilitySource) CancelSessionRuns(_ context.Context, sessionID
 
 func newSessionHarness(t *testing.T) *sessionHarness {
 	t.Helper()
-	database := openSessionTestDB(t)
+	return newSessionHarnessWithDB(t, openSessionTestDB(t))
+}
+
+// newSessionHarnessWithDB builds the service under test over a caller-supplied
+// database. It deliberately does not own that database's lifetime: tests that
+// need to prove something survives a process restart close and reopen the same
+// file themselves, and a second owner would close it out from under them.
+func newSessionHarnessWithDB(t *testing.T, database *db.DB) *sessionHarness {
+	t.Helper()
 	repo := repository.New(database)
 	capabilities := &sessionCapabilitySource{
 		providers: map[turingv1.ModelProvider][]*turingv1.ModelCapability{
@@ -140,6 +153,26 @@ func openSessionTestDB(t *testing.T) *db.DB {
 	}
 	sqlDB.SetMaxOpenConns(1)
 	database := &db.DB{DB: sqlDB}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := db.ApplyMigrations(context.Background(), database); err != nil {
+		t.Fatalf("apply migrations: %v", err)
+	}
+	return database
+}
+
+// openSessionTestDBAt opens a real on-disk database so a test can close it and
+// reopen the same path. The shared in-memory helper cannot do that: its store
+// disappears with the last connection, so "the sentinel is gone after a
+// restart" would pass against an empty database.
+//
+// The cleanup close is a backstop for an early t.Fatalf; database/sql makes
+// Close idempotent, so a test that closes the same handle first is fine.
+func openSessionTestDBAt(t *testing.T, path string) *db.DB {
+	t.Helper()
+	database, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
 	t.Cleanup(func() { _ = database.Close() })
 	if err := db.ApplyMigrations(context.Background(), database); err != nil {
 		t.Fatalf("apply migrations: %v", err)
@@ -1005,6 +1038,20 @@ func TestSessionServiceSearchMessagesValidatesQuery(t *testing.T) {
 	if len(response.Messages) != 0 {
 		t.Fatalf("SearchMessages punctuation-only results = %+v, want none", response.Messages)
 	}
+	if len(response.GetHits()) != 0 {
+		t.Fatalf("SearchMessages punctuation-only hits = %+v, want none", response.GetHits())
+	}
+
+	hits, err := client.SearchMessages(ctx, &turingv1.SearchMessagesRequest{
+		Query:          "...",
+		ResponseFormat: turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_HITS,
+	})
+	if err != nil {
+		t.Fatalf("SearchMessages punctuation-only hit query: %v", err)
+	}
+	if len(hits.GetHits()) != 0 || len(hits.GetMessages()) != 0 {
+		t.Fatalf("SearchMessages punctuation-only hit response = %+v, want empty", hits)
+	}
 }
 
 func TestSessionServiceSearchMessagesReturnsGlobalAndScopedResults(t *testing.T) {
@@ -1094,6 +1141,721 @@ func TestSessionServiceSearchMessagesHidesDatabaseErrors(t *testing.T) {
 	lower := strings.ToLower(err.Error())
 	if strings.Contains(lower, "sqlite") || strings.Contains(lower, "database is closed") {
 		t.Fatalf("SearchMessages leaked database details: %v", err)
+	}
+}
+
+// The zero value of the response format enum is the legacy projection, so a
+// client built before hits existed keeps getting whole messages and nothing
+// else.
+func TestSessionServiceSearchMessagesDefaultsToLegacyMessages(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	insertServiceSearchSession(t, ctx, h.database, "session-legacy")
+	insertServiceSearchMessage(t, ctx, h.database, "message-legacy", "session-legacy", "user", "legacyneedle alpha", 1)
+
+	for name, format := range map[string]turingv1.SearchMessagesResponseFormat{
+		"unspecified": turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_UNSPECIFIED,
+		"legacy":      turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_LEGACY_MESSAGES,
+	} {
+		t.Run(name, func(t *testing.T) {
+			response, err := client.SearchMessages(ctx, &turingv1.SearchMessagesRequest{
+				Query:          "legacyneedle",
+				Limit:          10,
+				ResponseFormat: format,
+			})
+			if err != nil {
+				t.Fatalf("SearchMessages: %v", err)
+			}
+			if len(response.GetMessages()) != 1 || response.GetMessages()[0].GetMessageId() != "message-legacy" {
+				t.Fatalf("messages = %+v, want only message-legacy", response.GetMessages())
+			}
+			if len(response.GetHits()) != 0 {
+				t.Fatalf("hits = %+v, want none for the legacy projection", response.GetHits())
+			}
+		})
+	}
+}
+
+// A hit response carries the repository's own score and snippet. The service is
+// a mapper here: it may not round, rescale, or regenerate metadata, because a
+// second opinion about a match is not the match.
+func TestSessionServiceSearchMessagesReturnsOnlyHitsWhenRequested(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	insertServiceSearchSession(t, ctx, h.database, "session-hit-a")
+	insertServiceSearchSession(t, ctx, h.database, "session-hit-b")
+	insertServiceSearchMessage(t, ctx, h.database, "message-hit-a", "session-hit-a", "assistant", "hitneedle", 1)
+	insertServiceSearchMessage(t, ctx, h.database, "message-hit-b", "session-hit-b", "user", "hitneedle with a longer tail of unrelated words", 1)
+	if _, err := h.database.ExecContext(ctx, `UPDATE messages SET run_id = 'run-hit-a' WHERE id = 'message-hit-a'`); err != nil {
+		t.Fatalf("set message run_id: %v", err)
+	}
+
+	want, err := h.repo.SearchMessageHits(ctx, "", "", "hitneedle", 10)
+	if err != nil {
+		t.Fatalf("repository SearchMessageHits: %v", err)
+	}
+	if len(want) != 2 {
+		t.Fatalf("repository hits = %d, want 2", len(want))
+	}
+
+	response, err := client.SearchMessages(ctx, &turingv1.SearchMessagesRequest{
+		Query:          "hitneedle",
+		Limit:          10,
+		ResponseFormat: turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_HITS,
+	})
+	if err != nil {
+		t.Fatalf("SearchMessages: %v", err)
+	}
+	if len(response.GetMessages()) != 0 {
+		t.Fatalf("messages = %+v, want none for the hit projection", response.GetMessages())
+	}
+	if len(response.GetHits()) != len(want) {
+		t.Fatalf("hits = %d, want %d", len(response.GetHits()), len(want))
+	}
+	for index, hit := range response.GetHits() {
+		wantHit := want[index]
+		wantMessage := mapMessage(wantHit.Message.SessionID, wantHit.Message)
+		if !proto.Equal(hit.GetMessage(), wantMessage) {
+			t.Fatalf("hits[%d].message = %+v, want %+v", index, hit.GetMessage(), wantMessage)
+		}
+		// Scores are only comparable if the repository actually produced one:
+		// against an all-zero fixture the equality below would hold no matter
+		// what the service did with the value.
+		if !(wantHit.Score > 0) { // NaN fails this too, which `<= 0` would let through
+			t.Fatalf("repository hits[%d].score = %v, want a positive score so equality proves something", index, wantHit.Score)
+		}
+		if hit.GetScore() != wantHit.Score {
+			t.Fatalf("hits[%d].score = %v, want the repository score %v", index, hit.GetScore(), wantHit.Score)
+		}
+		if hit.GetSnippet() != wantHit.Snippet {
+			t.Fatalf("hits[%d].snippet = %q, want the repository snippet %q", index, hit.GetSnippet(), wantHit.Snippet)
+		}
+		if hit.GetSnippet() == "" {
+			t.Fatalf("hits[%d] carries no snippet, so snippet equality proved nothing", index)
+		}
+	}
+}
+
+// An unknown format is a client the server does not understand, not a client to
+// guess at: guessing would silently answer a future "hits only" request with
+// legacy messages. The rejection names the field and nothing else, so a probe
+// cannot use it to enumerate values.
+func TestSessionServiceSearchMessagesRejectsUnknownResponseFormat(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	insertServiceSearchSession(t, ctx, h.database, "session-unknown")
+	insertServiceSearchMessage(t, ctx, h.database, "message-unknown", "session-unknown", "user", "unknownneedle", 1)
+
+	response, err := client.SearchMessages(ctx, &turingv1.SearchMessagesRequest{
+		Query:          "unknownneedle",
+		Limit:          10,
+		ResponseFormat: turingv1.SearchMessagesResponseFormat(99),
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("SearchMessages error = %v (response %+v), want InvalidArgument", err, response)
+	}
+	message := status.Convert(err).Message()
+	// Exact equality is the echo check: any rendering of the rejected value
+	// would change this string, so a separate "does it contain 99" assertion
+	// could never fail on its own.
+	if message != "response_format is invalid" {
+		t.Fatalf("SearchMessages message = %q, want %q", message, "response_format is invalid")
+	}
+}
+
+// The two projections answer the same question and must never disagree about
+// which messages a query can see. Each case runs both formats against the same
+// unchanged fixture and compares the messages themselves, in order.
+func TestSessionServiceSearchMessagesFormatsHaveMessageParity(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	insertServiceSearchSession(t, ctx, h.database, "parity-a")
+	insertServiceSearchSession(t, ctx, h.database, "parity-b")
+	insertServiceSearchSession(t, ctx, h.database, "parity-archived")
+	if _, err := h.database.ExecContext(ctx, `UPDATE sessions SET status = 'archived' WHERE id = 'parity-archived'`); err != nil {
+		t.Fatalf("archive session: %v", err)
+	}
+	insertServiceSearchMessage(t, ctx, h.database, "parity-1", "parity-a", "user", "parityneedle tiedcontent", 1)
+	insertServiceSearchMessage(t, ctx, h.database, "parity-2", "parity-a", "assistant", "parityneedle with several additional trailing words that dilute the score", 2)
+	insertServiceSearchMessage(t, ctx, h.database, "parity-3", "parity-b", "user", "parityneedle tiedcontent", 1)
+	insertServiceSearchMessage(t, ctx, h.database, "parity-4", "parity-archived", "user", "parityneedle archivedmarker", 1)
+	insertServiceSearchMessage(t, ctx, h.database, "parity-5", "parity-a", "tool", "unrelated content", 3)
+
+	for _, testCase := range []struct {
+		name      string
+		request   *turingv1.SearchMessagesRequest
+		wantCount int
+	}{
+		{
+			name:      "ranked",
+			request:   &turingv1.SearchMessagesRequest{Query: "parityneedle", Limit: 10},
+			wantCount: 4,
+		},
+		{
+			name:      "tied",
+			request:   &turingv1.SearchMessagesRequest{Query: "tiedcontent", Limit: 10},
+			wantCount: 2,
+		},
+		{
+			name:      "scoped",
+			request:   &turingv1.SearchMessagesRequest{Query: "parityneedle", SessionId: "parity-a", Limit: 10},
+			wantCount: 2,
+		},
+		{
+			name:      "excluded",
+			request:   &turingv1.SearchMessagesRequest{Query: "parityneedle", ExcludeSessionId: "parity-a", Limit: 10},
+			wantCount: 2,
+		},
+		{
+			name:      "archived",
+			request:   &turingv1.SearchMessagesRequest{Query: "archivedmarker", Limit: 10},
+			wantCount: 1,
+		},
+		{
+			name:      "limited",
+			request:   &turingv1.SearchMessagesRequest{Query: "parityneedle", Limit: 1},
+			wantCount: 1,
+		},
+		{
+			name:      "empty",
+			request:   &turingv1.SearchMessagesRequest{Query: "absentneedle", Limit: 10},
+			wantCount: 0,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			legacyRequest := proto.Clone(testCase.request).(*turingv1.SearchMessagesRequest)
+			legacyRequest.ResponseFormat = turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_LEGACY_MESSAGES
+			legacy, err := client.SearchMessages(ctx, legacyRequest)
+			if err != nil {
+				t.Fatalf("SearchMessages legacy: %v", err)
+			}
+			hitRequest := proto.Clone(testCase.request).(*turingv1.SearchMessagesRequest)
+			hitRequest.ResponseFormat = turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_HITS
+			hits, err := client.SearchMessages(ctx, hitRequest)
+			if err != nil {
+				t.Fatalf("SearchMessages hits: %v", err)
+			}
+
+			if len(legacy.GetMessages()) != testCase.wantCount {
+				t.Fatalf("legacy messages = %d, want %d: %+v", len(legacy.GetMessages()), testCase.wantCount, legacy.GetMessages())
+			}
+			if len(hits.GetHits()) != testCase.wantCount {
+				t.Fatalf("hits = %d, want %d: %+v", len(hits.GetHits()), testCase.wantCount, hits.GetHits())
+			}
+			for index, message := range legacy.GetMessages() {
+				if !proto.Equal(hits.GetHits()[index].GetMessage(), message) {
+					t.Fatalf("hits[%d].message = %+v, want the legacy message %+v", index, hits.GetHits()[index].GetMessage(), message)
+				}
+			}
+		})
+	}
+}
+
+// A phrase longer than FTS5's 32-token snippet window has no in-window
+// occurrence for `snippet()` to mark, so the marked projection comes back
+// without markers. That is a windowing outcome, not a broken invariant: both
+// formats must still answer with the same message, and the hit format must
+// carry a bounded excerpt instead of an opaque Internal error.
+func TestSessionServiceSearchMessagesReturnsBoundedSnippetForOverWindowPhrase(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	words := func(format string, count int) []string {
+		out := make([]string, 0, count)
+		for i := 0; i < count; i++ {
+			out = append(out, fmt.Sprintf(format, i))
+		}
+		return out
+	}
+	phrase := strings.Join(words("overwindowword%02d", 40), " ")
+	content := strings.Join(words("overwindowfiller%03d", 100), " ") +
+		" " + phrase + " " + strings.Join(words("overwindowtail%02d", 20), " ")
+	insertServiceSearchSession(t, ctx, h.database, "session-over-window")
+	insertServiceSearchMessage(t, ctx, h.database, "message-over-window", "session-over-window", "user", content, 1)
+
+	legacy, err := client.SearchMessages(ctx, &turingv1.SearchMessagesRequest{
+		Query:          phrase,
+		Limit:          10,
+		ResponseFormat: turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_LEGACY_MESSAGES,
+	})
+	if err != nil {
+		t.Fatalf("SearchMessages legacy: %v", err)
+	}
+	if len(legacy.GetMessages()) != 1 {
+		t.Fatalf("legacy messages = %+v, want exactly the buried-phrase message", legacy.GetMessages())
+	}
+
+	hits, err := client.SearchMessages(ctx, &turingv1.SearchMessagesRequest{
+		Query:          phrase,
+		Limit:          10,
+		ResponseFormat: turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_HITS,
+	})
+	if err != nil {
+		t.Fatalf("SearchMessages hits: %v (code %v)", err, status.Code(err))
+	}
+	if len(hits.GetHits()) != 1 {
+		t.Fatalf("hits = %+v, want exactly one", hits.GetHits())
+	}
+	if !proto.Equal(hits.GetHits()[0].GetMessage(), legacy.GetMessages()[0]) {
+		t.Fatalf("hit message = %+v, want the legacy message %+v",
+			hits.GetHits()[0].GetMessage(), legacy.GetMessages()[0])
+	}
+	snippet := hits.GetHits()[0].GetSnippet()
+	if snippet == "" {
+		t.Fatal("hit carries no snippet for an over-window phrase")
+	}
+	if utf8.RuneCountInString(snippet) > 200 || len(snippet) > 800 {
+		t.Fatalf("snippet bounds: runes=%d bytes=%d", utf8.RuneCountInString(snippet), len(snippet))
+	}
+	if strings.Contains(snippet, "TURING-FTS5-SNIPPET") {
+		t.Fatalf("snippet = %q leaks internal markers", snippet)
+	}
+	excerpt := strings.TrimSpace(strings.Trim(snippet, "…"))
+	if excerpt == "" || !strings.Contains(content, excerpt) {
+		t.Fatalf("snippet = %q is not a fragment of its own message", snippet)
+	}
+}
+
+// A metadata invariant failure is a bug report the operator needs, and the row
+// that triggered it is the user's private conversation. The log records which
+// invariant broke and nothing about what broke it.
+func TestSessionServiceSearchMessagesLogsOnlyInvariantClass(t *testing.T) {
+	const (
+		sessionSentinel = "sessionsentinel"
+		querySentinel   = "querysentinel"
+		messageSentinel = "messagesentinel"
+		snippetSentinel = "snippetsentinel"
+		markerSentinel  = "markersentinel"
+		scoreSentinel   = "13.75"
+	)
+	contextual := func(cause error) error {
+		return fmt.Errorf(
+			"session %s query %s message %s snippet %s marker %s score %s: %w",
+			sessionSentinel, querySentinel, messageSentinel, snippetSentinel, markerSentinel, scoreSentinel, cause,
+		)
+	}
+
+	for _, testCase := range []struct {
+		name  string
+		cause error
+		class string
+	}{
+		{name: "entropy", cause: repository.ErrSearchMarkerEntropy, class: "marker_entropy"},
+		{name: "score", cause: repository.ErrInvalidSearchScore, class: "invalid_score"},
+		{name: "collision", cause: repository.ErrSearchSnippetMarkerCollision, class: "marker_collision"},
+		{name: "markers", cause: repository.ErrInvalidSearchSnippetMarkers, class: "marker_structure"},
+		{name: "snippet", cause: repository.ErrInvalidSearchSnippet, class: "invalid_snippet"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			logged := captureSessionLog(t, func() {
+				err := searchMessagesError(contextual(testCase.cause))
+				if status.Code(err) != codes.Internal {
+					t.Fatalf("searchMessagesError code = %v, want Internal", status.Code(err))
+				}
+				if got := status.Convert(err).Message(); got != "search messages failed" {
+					t.Fatalf("searchMessagesError message = %q, want %q", got, "search messages failed")
+				}
+			})
+
+			if !strings.Contains(logged, "search_messages") {
+				t.Fatalf("log = %q, want the operation name", logged)
+			}
+			if !strings.Contains(logged, testCase.class) {
+				t.Fatalf("log = %q, want the invariant class %q", logged, testCase.class)
+			}
+			for _, secret := range []string{
+				sessionSentinel, querySentinel, messageSentinel, snippetSentinel,
+				markerSentinel, scoreSentinel, testCase.cause.Error(),
+			} {
+				if strings.Contains(logged, secret) {
+					t.Fatalf("log = %q leaked %q", logged, secret)
+				}
+			}
+		})
+	}
+
+	t.Run("ordinary database error", func(t *testing.T) {
+		logged := captureSessionLog(t, func() {
+			err := searchMessagesError(errors.New("no such table: messages_fts"))
+			if status.Code(err) != codes.Internal {
+				t.Fatalf("searchMessagesError code = %v, want Internal", status.Code(err))
+			}
+			if got := status.Convert(err).Message(); got != "search messages failed" {
+				t.Fatalf("searchMessagesError message = %q, want %q", got, "search messages failed")
+			}
+		})
+		if logged != "" {
+			t.Fatalf("log = %q, want nothing for an ordinary database error", logged)
+		}
+	})
+}
+
+// A metadata invariant failure has to survive the whole handler path, not just
+// the mapper: the RPC answers with the same opaque status any other failure
+// gets, and the only trace is the invariant's class name. A real database
+// cannot be made to break its own score invariant on demand, so the search
+// seam is replaced with a repository that fails that way, wrapped in the kind
+// of context an error usually accumulates.
+func TestSessionServiceSearchMessagesHitFormatLogsOnlyInvariantClassOverRPC(t *testing.T) {
+	const (
+		secretQuery   = "hitinvariantquerysecret"
+		secretContent = "hitinvariantcontentsecret"
+	)
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	stub := &failingMessageSearcher{
+		err: fmt.Errorf(
+			"search %q matched %q: %w",
+			secretQuery, secretContent, repository.ErrInvalidSearchScore,
+		),
+	}
+	h.service.search = stub
+
+	var err error
+	logged := captureSessionLog(t, func() {
+		_, err = client.SearchMessages(context.Background(), &turingv1.SearchMessagesRequest{
+			Query:          secretQuery,
+			Limit:          10,
+			ResponseFormat: turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_HITS,
+		})
+	})
+
+	if stub.hitCalls != 1 {
+		t.Fatalf("SearchMessageHits calls = %d, want 1", stub.hitCalls)
+	}
+	if stub.legacyCalls != 0 {
+		t.Fatalf("SearchMessages legacy calls = %d, want none for the hit projection", stub.legacyCalls)
+	}
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("SearchMessages error = %v, want Internal", err)
+	}
+	if got := status.Convert(err).Message(); got != "search messages failed" {
+		t.Fatalf("SearchMessages message = %q, want %q", got, "search messages failed")
+	}
+	if !strings.Contains(logged, "search_messages invariant=invalid_score") {
+		t.Fatalf("log = %q, want the invariant class for a rejected score", logged)
+	}
+	for _, secret := range []string{secretQuery, secretContent, stub.err.Error()} {
+		if strings.Contains(logged, secret) {
+			t.Fatalf("log = %q leaked %q", logged, secret)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("status = %v leaked %q", err, secret)
+		}
+	}
+}
+
+// failingMessageSearcher answers both projections with one prepared failure.
+// It satisfies messageSearcher, so it can only stand in for the repository as
+// long as the handler asks the repository exactly what production asks it.
+type failingMessageSearcher struct {
+	err         error
+	legacyCalls int
+	hitCalls    int
+}
+
+func (f *failingMessageSearcher) SearchMessages(
+	context.Context, string, string, string, int,
+) ([]repository.Message, error) {
+	f.legacyCalls++
+	return nil, f.err
+}
+
+func (f *failingMessageSearcher) SearchMessageHits(
+	context.Context, string, string, string, int,
+) ([]repository.SearchHit, error) {
+	f.hitCalls++
+	return nil, f.err
+}
+
+// The hit projection must route its failures through the same content-free
+// mapper the legacy projection uses, rather than growing its own error path.
+func TestSessionServiceSearchMessagesHidesDatabaseErrorsInHitFormat(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	if err := h.database.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+
+	var err error
+	logged := captureSessionLog(t, func() {
+		_, err = client.SearchMessages(context.Background(), &turingv1.SearchMessagesRequest{
+			Query:          "needle",
+			ResponseFormat: turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_HITS,
+		})
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("SearchMessages error = %v, want Internal", err)
+	}
+	if got := status.Convert(err).Message(); got != "search messages failed" {
+		t.Fatalf("SearchMessages message = %q, want %q", got, "search messages failed")
+	}
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "sqlite") || strings.Contains(lower, "database is closed") {
+		t.Fatalf("SearchMessages leaked database details: %v", err)
+	}
+	// An ordinary database failure is not an invariant report, so it produces
+	// no log line at all. Requiring emptiness rather than the absence of a few
+	// keywords also catches a future line that leaks content this test never
+	// thought to name.
+	if logged != "" {
+		t.Fatalf("log = %q, want nothing for an ordinary database error in the hit projection", logged)
+	}
+}
+
+// A legacy response near the transport's own size ceiling proves the two
+// projections are exclusive rather than additive: answering it with messages
+// and hits together would double the payload past what a client can receive.
+func TestSessionServiceSearchMessagesDoesNotDuplicateLargeLegacyPayload(t *testing.T) {
+	h := newSessionHarness(t)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+	insertServiceSearchSession(t, ctx, h.database, "session-large")
+	const (
+		largeMessages = 8
+		filler        = "padding "
+		fillerRepeats = 55000
+	)
+	content := "hugeneedle " + strings.Repeat(filler, fillerRepeats)
+	for index := 1; index <= largeMessages; index++ {
+		insertServiceSearchMessage(
+			t, ctx, h.database,
+			fmt.Sprintf("message-large-%d", index), "session-large", "user", content, int64(index),
+		)
+	}
+
+	response, err := client.SearchMessages(ctx, &turingv1.SearchMessagesRequest{Query: "hugeneedle", Limit: 10})
+	if err != nil {
+		t.Fatalf("SearchMessages: %v", err)
+	}
+	if len(response.GetMessages()) != largeMessages {
+		t.Fatalf("messages = %d, want %d", len(response.GetMessages()), largeMessages)
+	}
+	if len(response.GetHits()) != 0 {
+		t.Fatalf("hits = %d, want none alongside a large legacy payload", len(response.GetHits()))
+	}
+	for index, message := range response.GetMessages() {
+		if got := message.GetContent(); got != content {
+			t.Fatalf(
+				"messages[%d] content mismatch: got %d bytes, want %d bytes, first difference at byte %d",
+				index, len(got), len(content), firstByteDifference(got, content),
+			)
+		}
+	}
+	size := proto.Size(response)
+	const maxReceiveBytes = 4 * 1024 * 1024
+	if size <= maxReceiveBytes/2 {
+		t.Fatalf("response size = %d bytes, want a payload large enough that duplication would exceed %d", size, maxReceiveBytes)
+	}
+	if size >= maxReceiveBytes {
+		t.Fatalf("response size = %d bytes, want it under the %d receive limit", size, maxReceiveBytes)
+	}
+}
+
+// firstByteDifference locates where two payloads diverge. Reporting only the
+// lengths is useless when they are equal, which is exactly the case where a
+// mismatch is hardest to explain. It reports an offset, never the bytes.
+func firstByteDifference(got, want string) int {
+	limit := min(len(got), len(want))
+	for index := 0; index < limit; index++ {
+		if got[index] != want[index] {
+			return index
+		}
+	}
+	return limit
+}
+
+// TUR-004: deletion is the only way a person can take back what they said, so a
+// withdrawn conversation must be unreachable through every search projection,
+// and must stay unreachable after the process that served the request is gone.
+func TestSessionServiceSearchMessagesCannotReturnWithdrawnContentInEitherFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "turing.db")
+	first := openSessionTestDBAt(t, path)
+	h := newSessionHarnessWithDB(t, first)
+	client := turingv1.NewSessionServiceClient(h.conn)
+	ctx := context.Background()
+
+	control, err := h.repo.CreateSession(ctx, "Withdrawal control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	insertServiceSearchMessage(t, ctx, h.database, "message-control", control.SessionID, "user", "withdrawneedle controlmarker", 1)
+	sentinel, err := h.repo.CreateSession(ctx, "Withdrawal sentinel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: sentinel.SessionID, Content: "withdrawneedle sentinelmarker", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A claimed job keeps the withdrawal in progress, so the sentinel row stays
+	// on disk and is hidden by the search predicate rather than by having been
+	// physically removed. That is the case a leak would actually come from.
+	if _, err := h.repo.ClaimNextJob(ctx, "general_assistant", "worker-withdrawal"); err != nil {
+		t.Fatal(err)
+	}
+	assertSearchSentinelVisibility(t, ctx, client, true)
+
+	deletion, err := client.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: sentinel.SessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if deletion.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_IN_PROGRESS {
+		t.Fatalf("deletion receipt = %+v, want in-progress", deletion.GetDeletion())
+	}
+	assertSearchSentinelVisibility(t, ctx, client, false)
+	// The row is hidden, not gone: a purge would make the visibility assertion
+	// above pass for the wrong reason and would not prove the search predicate
+	// excludes rows that are still on disk.
+	assertSessionMessageRowCount(t, ctx, first, sentinel.SessionID, "sentinelmarker", 1)
+
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first database: %v", err)
+	}
+	second := openSessionTestDBAt(t, path)
+	restarted := newSessionHarnessWithDB(t, second)
+	assertSearchSentinelVisibility(t, ctx, turingv1.NewSessionServiceClient(restarted.conn), false)
+	assertSessionMessageRowCount(t, ctx, second, sentinel.SessionID, "sentinelmarker", 1)
+}
+
+// assertSessionMessageRowCount reads the stored rows directly, underneath every
+// search predicate, so a test can tell "hidden" apart from "deleted". It counts
+// only the rows carrying the marker: enqueuing a turn also writes an empty
+// assistant placeholder, which says nothing about whether the withdrawn text
+// survived.
+func assertSessionMessageRowCount(
+	t *testing.T,
+	ctx context.Context,
+	database *db.DB,
+	sessionID string,
+	marker string,
+	want int,
+) {
+	t.Helper()
+	var got int
+	if err := database.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM messages WHERE session_id = ? AND instr(content, ?) > 0`,
+		sessionID, marker,
+	).Scan(&got); err != nil {
+		t.Fatalf("count %s messages for %s: %v", marker, sessionID, err)
+	}
+	if got != want {
+		t.Fatalf("stored %s messages for %s = %d, want %d", marker, sessionID, got, want)
+	}
+}
+
+// assertSearchSentinelVisibility checks both response formats at once. The
+// control message must always come back: without it, "the sentinel is absent"
+// would also pass against a search that returns nothing at all.
+func assertSearchSentinelVisibility(
+	t *testing.T,
+	ctx context.Context,
+	client turingv1.SessionServiceClient,
+	wantSentinel bool,
+) {
+	t.Helper()
+	legacy, err := client.SearchMessages(ctx, &turingv1.SearchMessagesRequest{Query: "withdrawneedle", Limit: 50})
+	if err != nil {
+		t.Fatalf("SearchMessages legacy: %v", err)
+	}
+	hits, err := client.SearchMessages(ctx, &turingv1.SearchMessagesRequest{
+		Query:          "withdrawneedle",
+		Limit:          50,
+		ResponseFormat: turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_HITS,
+	})
+	if err != nil {
+		t.Fatalf("SearchMessages hits: %v", err)
+	}
+
+	for _, projection := range []struct {
+		name     string
+		contents []string
+	}{
+		{name: "legacy", contents: searchMessageContents(legacy.GetMessages())},
+		{name: "hits", contents: searchHitContents(hits.GetHits())},
+	} {
+		foundControl, foundSentinel := false, false
+		for _, content := range projection.contents {
+			if strings.Contains(content, "controlmarker") {
+				foundControl = true
+			}
+			if strings.Contains(content, "sentinelmarker") {
+				foundSentinel = true
+			}
+		}
+		if !foundControl {
+			t.Fatalf("%s projection lost the control message: %+v", projection.name, projection.contents)
+		}
+		if foundSentinel != wantSentinel {
+			t.Fatalf("%s projection sentinel present = %t, want %t: %+v",
+				projection.name, foundSentinel, wantSentinel, projection.contents)
+		}
+	}
+}
+
+func searchMessageContents(messages []*turingv1.Message) []string {
+	out := make([]string, 0, len(messages))
+	for _, message := range messages {
+		out = append(out, message.GetContent())
+	}
+	return out
+}
+
+func searchHitContents(hits []*turingv1.SearchHit) []string {
+	out := make([]string, 0, len(hits))
+	for _, hit := range hits {
+		out = append(out, hit.GetMessage().GetContent()+" "+hit.GetSnippet())
+	}
+	return out
+}
+
+// captureSessionLog redirects the standard logger for the duration of run and
+// returns what was written. It restores whatever writer was installed before,
+// not os.Stderr: a caller that nests captures, or a harness that already
+// redirected the logger, would otherwise silently lose its own output.
+func captureSessionLog(t *testing.T, run func()) string {
+	t.Helper()
+	var buffer bytes.Buffer
+	writer := log.Writer()
+	flags := log.Flags()
+	log.SetOutput(&buffer)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(writer)
+		log.SetFlags(flags)
+	})
+	run()
+	return buffer.String()
+}
+
+// Tests that assert on what a failure logs share one capture helper, so it has
+// to leave the logger exactly as it found it. Restoring a hardcoded os.Stderr
+// would send a still-running outer capture's output to the terminal, and every
+// assertion that outer capture makes would then read an empty log.
+func TestCaptureSessionLogRestoresTheWriterItFound(t *testing.T) {
+	outer := captureSessionLog(t, func() {
+		t.Run("inner", func(t *testing.T) {
+			inner := captureSessionLog(t, func() { log.Print("inner-line") })
+			if !strings.Contains(inner, "inner-line") {
+				t.Fatalf("inner log = %q, want the inner line", inner)
+			}
+		})
+		// The inner capture's restore ran when the subtest ended, so this line
+		// belongs to the outer capture again.
+		log.Print("outer-line")
+	})
+	if !strings.Contains(outer, "outer-line") {
+		t.Fatalf("outer log = %q, want the line written after the nested capture ended", outer)
+	}
+	if strings.Contains(outer, "inner-line") {
+		t.Fatalf("outer log = %q, want the nested capture to have kept its own line", outer)
 	}
 }
 

@@ -71,5 +71,43 @@ class SessionDeletionState extends $pb.ProtobufEnum {
   const SessionDeletionState._(super.value, super.name);
 }
 
+/// Selects one response representation so hit metadata does not duplicate
+/// unbounded message bodies.
+class SearchMessagesResponseFormat extends $pb.ProtobufEnum {
+  /// Resolves to LEGACY_MESSAGES for old callers.
+  static const SearchMessagesResponseFormat
+      SEARCH_MESSAGES_RESPONSE_FORMAT_UNSPECIFIED =
+      SearchMessagesResponseFormat._(0,
+          _omitEnumNames ? '' : 'SEARCH_MESSAGES_RESPONSE_FORMAT_UNSPECIFIED');
+
+  /// Returns only SearchMessagesResponse.messages.
+  static const SearchMessagesResponseFormat
+      SEARCH_MESSAGES_RESPONSE_FORMAT_LEGACY_MESSAGES =
+      SearchMessagesResponseFormat._(
+          1,
+          _omitEnumNames
+              ? ''
+              : 'SEARCH_MESSAGES_RESPONSE_FORMAT_LEGACY_MESSAGES');
+
+  /// Returns only SearchMessagesResponse.hits.
+  static const SearchMessagesResponseFormat
+      SEARCH_MESSAGES_RESPONSE_FORMAT_HITS = SearchMessagesResponseFormat._(
+          2, _omitEnumNames ? '' : 'SEARCH_MESSAGES_RESPONSE_FORMAT_HITS');
+
+  static const $core.List<SearchMessagesResponseFormat> values =
+      <SearchMessagesResponseFormat>[
+    SEARCH_MESSAGES_RESPONSE_FORMAT_UNSPECIFIED,
+    SEARCH_MESSAGES_RESPONSE_FORMAT_LEGACY_MESSAGES,
+    SEARCH_MESSAGES_RESPONSE_FORMAT_HITS,
+  ];
+
+  static final $core.List<SearchMessagesResponseFormat?> _byValue =
+      $pb.ProtobufEnum.$_initByValueList(values, 2);
+  static SearchMessagesResponseFormat? valueOf($core.int value) =>
+      value < 0 || value >= _byValue.length ? null : _byValue[value];
+
+  const SearchMessagesResponseFormat._(super.value, super.name);
+}
+
 const $core.bool _omitEnumNames =
     $core.bool.fromEnvironment('protobuf.omit_enum_names');
