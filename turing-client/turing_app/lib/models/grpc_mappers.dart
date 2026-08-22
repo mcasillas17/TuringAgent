@@ -492,23 +492,24 @@ class GrpcMappers {
     );
   }
 
-  // state_version is the sole reconciliation ordering authority — the guard
-  // at the top of this method already rejects a stale write by comparing
-  // versions, and callers order snapshots by state_version, never by wall
-  // clock. state_updated_at instead carries the required durable, public
-  // evidence of *when* that version was recorded: it is exposed to clients
-  // and persisted, so an absent field must not silently become epoch —
-  // which is exactly the instant _timestampToDateTime returns for a
-  // genuinely-set all-zero Timestamp. hasStateUpdatedAt() distinguishes a
-  // submessage this build never populated from one that was populated with
-  // all-default values, and a populated one whose seconds or nanos escape
-  // the documented ranges (see google.protobuf.Timestamp: seconds must be
-  // from 0001-01-01T00:00:00Z to 9999-12-31T23:59:59Z inclusive, i.e.
-  // -62135596800..253402300799, and nanos from 0 to 999999999) is rejected
-  // before conversion, the same bounds the well-known type's own JSON codec
-  // enforces. Either failure omits the whole snapshot instead of
-  // fabricating a fallback field value: the same fail-closed pattern used
-  // above for a missing run id or a nonpositive version.
+  // state_version is the sole reconciliation ordering authority: callers
+  // order snapshots by state_version, never by wall clock, and
+  // RunStateReconciler is what rejects a snapshot that is not newer.
+  // runStateToModel and _validatedTimestamp only validate that
+  // state_updated_at is present and losslessly representable as a positive
+  // DateTime — they do not decide ordering. state_updated_at instead
+  // carries the required durable, public evidence of *when* that version
+  // was recorded: it is exposed to clients and persisted, so an absent
+  // field must not silently become epoch — which is exactly the instant
+  // _timestampToDateTime returns for a genuinely-set all-zero Timestamp.
+  // hasStateUpdatedAt() distinguishes a submessage this build never
+  // populated from one that was populated with all-default values, and a
+  // populated one whose seconds or nanos escape the documented ranges (see
+  // google.protobuf.Timestamp: seconds must be from 0001-01-01T00:00:00Z to
+  // 9999-12-31T23:59:59Z inclusive, i.e. -62135596800..253402300799, and
+  // nanos from 0 to 999999999) is rejected before conversion, the same
+  // bounds the well-known type's own JSON codec enforces. Either failure
+  // omits the whole snapshot instead of fabricating a fallback field value.
   static const int _timestampMinSeconds = -62135596800;
   static const int _timestampMaxSeconds = 253402300799;
   static const int _timestampMaxNanos = 999999999;
