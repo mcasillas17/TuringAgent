@@ -677,6 +677,80 @@ void main() {
     unawaited(events.close());
   });
 
+  // Live-path baseline (F10): the modern `RunState`-bearing terminal event
+  // itself carries no post-tool delta — the assistant bubble's last content
+  // arrived BEFORE the tool card, so the same, single assistant row is what
+  // `_assistantEntryIndexForRun` resolves to. `_upsertRunStateCard` always
+  // walks past contiguous same-run artifacts via
+  // `_runStateCardInsertionIndex`, so this must pass regardless of path — it
+  // is the parity target the page/resync, duplicate-row, and
+  // startup-buffer-drain paths below are held to.
+  testWidgets(
+    'a live terminal state with no post-tool delta still renders below the '
+    'tool card',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: _FakeApiClient(),
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: const {'messageId': 'msg_asst', 'delta': 'Before tool.'},
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'tool.call.completed',
+          sequence: 2,
+          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+      // Deliberately no further `message.delta` here: this is the exact
+      // "production shape" from the defect report — content, then a
+      // same-run artifact, then straight to the terminal report below.
+      events.add(
+        _event(
+          type: 'agent.run.failed',
+          sequence: 3,
+          runState: _runState(
+            stateVersion: 1,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.toolFailure,
+            hasDisplayableContent: true,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('Before tool.'), findsOneWidget);
+      expect(find.byType(ToolCallCard), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
   testWidgets('failed content renders content before adjacent failure card', (
     tester,
   ) async {
@@ -1882,6 +1956,88 @@ void main() {
     },
   );
 
+  // Production shape (F10): the run's own tool artifact is already live on
+  // screen — created while `_initializing` is still true, since only
+  // `RunState` snapshots buffer during that window (see
+  // `_handleIncomingRunState`), not tool events — by the time the buffered
+  // terminal state drains. With NO later delta to open a fresh assistant
+  // bubble below that artifact, the drain must still walk past it rather
+  // than reinserting the card at the assistant row's OWN index (which sat
+  // there before the artifact existed), or it lands above the artifact —
+  // exactly backward from the live path's own ordering.
+  testWidgets(
+    'a startup-buffered terminal state drains after a same-run tool '
+    'artifact, not above it',
+    (tester) async {
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst_a',
+            runId: 'run_a',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+          ),
+        ];
+      final terminalState = _runState(
+        runId: 'run_a',
+        assistantMessageId: 'msg_asst_a',
+        stateVersion: 1,
+        lifecycle: RunLifecycle.cancelled,
+      );
+      final syncEvents = [
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: const {'messageId': 'msg_asst_a', 'delta': 'Before tool.'},
+        ),
+        _event(
+          type: 'tool.call.completed',
+          sequence: 2,
+          runId: 'run_a',
+          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+        _event(
+          type: 'agent.run.cancelled',
+          sequence: 3,
+          runId: 'run_a',
+          runState: terminalState,
+          payload: const {},
+        ),
+      ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _SynchronousDeliveryEventSource.events(syncEvents),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Before tool.'), findsOneWidget);
+      expect(find.byType(ToolCallCard), findsOneWidget);
+      expect(find.byType(RunCancelledCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunCancelledCard)).dy,
+        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+        reason:
+            'the tool artifact was already live on screen by the time the '
+            'startup buffer drained; the drained card must land after it, '
+            'not immediately after the assistant row at the index the '
+            'artifact did not yet occupy when the row was first inserted',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   testWidgets(
     'startup buffer overflow coalesces one newest-page resync without detached cards',
     (tester) async {
@@ -2453,6 +2609,350 @@ void main() {
         reason:
             'the page-sourced terminal card belongs after every live segment '
             'and tool artifact for that run',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // Production shape (F10 defect): unlike the sibling test above, there is
+  // deliberately NO post-tool delta here. The turn's only assistant bubble
+  // is the one BEFORE the tool card, so `_assistantEntryIndexForRun` (which
+  // scans backward for the run's LAST bubble) resolves to that same
+  // pre-tool row both before and after the resync. A page/resync-sourced
+  // card that reinserts itself immediately after that row — rather than
+  // walking forward past the already-live tool artifact — lands ABOVE the
+  // artifact, breaking parity with the live path (see the baseline test
+  // above, "a live terminal state with no post-tool delta still renders
+  // below the tool card"). This also exercises the DUPLICATE-ROW path:
+  // `msg_asst` is already loaded before the resync returns it again.
+  testWidgets(
+    'coalesced resync keeps the terminal card after a tool artifact with no '
+    'post-tool delta',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: const {'messageId': 'msg_asst', 'delta': 'Before tool.'},
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'tool.call.completed',
+          sequence: 2,
+          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+      // No further delta: the exact "no post-tool delta" production shape.
+
+      apiClient.initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'Before tool.',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.toolFailure,
+            hasDisplayableContent: true,
+          ),
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 3,
+          runId: 'run_unloaded',
+          runState: _runState(
+            runId: 'run_unloaded',
+            assistantMessageId: 'msg_unloaded',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Before tool.'), findsOneWidget);
+      expect(find.byType(ToolCallCard), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+        reason:
+            'with no post-tool delta the last assistant bubble sits above '
+            'the tool artifact, so a page/resync-sourced card must still '
+            'land after that artifact — never immediately after the '
+            'bubble, which would place it above the tool card and break '
+            'parity with the live path',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // Notice-artifact variant of the test above: the same
+  // `_upsertRunStateCard`/`_runStateCardInsertionIndex` path also has to
+  // walk past a contiguous `_RunNoticeEntry`, not only a `_ToolCallEntry`.
+  testWidgets(
+    'coalesced resync keeps the terminal card after a run notice artifact '
+    'with no post-notice delta',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: const {
+            'messageId': 'msg_asst',
+            'delta': 'Before notice.',
+          },
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'agent.run.step',
+          sequence: 2,
+          payload: const {'note': 'maximum tool iterations reached'},
+        ),
+      );
+      await tester.pump();
+      // No further delta: the exact "no post-artifact delta" shape.
+
+      apiClient.initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'Before notice.',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.toolFailure,
+            hasDisplayableContent: true,
+          ),
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 3,
+          runId: 'run_unloaded',
+          runState: _runState(
+            runId: 'run_unloaded',
+            assistantMessageId: 'msg_unloaded',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Before notice.'), findsOneWidget);
+      expect(find.byType(RunNoticeCard), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.byType(RunNoticeCard)).dy),
+        reason:
+            'a page/resync-sourced card must land after a same-run notice '
+            'artifact too, not only after a tool card',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // Boundary (F10 contract): a LATER, OTHER-run artifact must not be leaped
+  // over. The fix must walk past exactly the requesting run's own
+  // contiguous artifacts and stop the instant it reaches one that belongs
+  // to a different run — proving the insertion is turn-scoped, not "insert
+  // at the very end of same-type artifacts regardless of owner".
+  testWidgets(
+    'coalesced resync does not leap a card past a later, other-run tool '
+    'artifact',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: const {'messageId': 'msg_asst', 'delta': 'Before tool.'},
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'tool.call.completed',
+          sequence: 2,
+          runId: 'run_1',
+          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+      // A different run's tool call, interleaved right after run_1's own —
+      // the boundary this insertion must never cross.
+      events.add(
+        _event(
+          type: 'tool.call.completed',
+          sequence: 3,
+          runId: 'run_2',
+          payload: const {'toolCallId': 'call_2', 'toolName': 'other.tool'},
+        ),
+      );
+      await tester.pump();
+
+      apiClient.initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'Before tool.',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.toolFailure,
+            hasDisplayableContent: true,
+          ),
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 4,
+          runId: 'run_unloaded',
+          runState: _runState(
+            runId: 'run_unloaded',
+            assistantMessageId: 'msg_unloaded',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('system.time'), findsOneWidget);
+      expect(find.text('other.tool'), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.text('system.time')).dy),
+        reason: "the card belongs after run_1's own tool artifact",
+      );
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        lessThan(tester.getTopLeft(find.text('other.tool')).dy),
+        reason:
+            "the card must not leap past run_2's later, unrelated tool "
+            'artifact merely because run_1 finally advanced its own state',
       );
 
       await tester.pumpWidget(const SizedBox.shrink());

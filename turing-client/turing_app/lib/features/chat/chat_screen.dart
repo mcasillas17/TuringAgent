@@ -358,15 +358,19 @@ class _ChatScreenState extends State<ChatScreen> {
         }
         if (assistantIndex == null) continue;
         if (result.isAccepted) {
-          // `true`, not `false`: by this point `_loadInitialMessages` has
-          // already fully seeded `_messages`, so this is exactly the same
-          // "reconstructing a row already placed as part of a batch" shape
-          // `_ingestMessagePage` handles — the buffered run's own row can
-          // sit anywhere in that batch, not only at its current end.
+          // By this point `_loadInitialMessages` has already fully seeded
+          // `_messages`, so this is exactly the same "reconstructing a row
+          // already placed as part of a batch" shape `_ingestMessagePage`
+          // handles — the buffered run's own row can sit anywhere in that
+          // batch, not only at its current end. `_upsertRunStateCard`
+          // itself resolves the correct position: right after every
+          // contiguous same-run tool/notice artifact this run already has
+          // on screen, which a live tool event delivered during this exact
+          // startup window (not buffered — only `RunState` is) can already
+          // have created.
           _upsertRunStateCard(
             result.current!,
             _messages[assistantIndex] as _MessageEntry,
-            insertAdjacent: true,
           );
         }
       }
@@ -769,7 +773,7 @@ class _ChatScreenState extends State<ChatScreen> {
         if (runId != null && pageResult.stateResult?.isAccepted != true) {
           final state = _runStateReconciler.stateFor(runId);
           if (state != null) {
-            _syncRunStateCardPresenceForContent(state, insertAdjacent: true);
+            _syncRunStateCardPresenceForContent(state);
           }
         }
         continue;
@@ -820,11 +824,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final state = stateResult.current!;
       final assistantIndex = _assistantEntryIndexForRun(state.runId);
       if (assistantIndex == null) continue;
-      _upsertRunStateCard(
-        state,
-        _messages[assistantIndex] as _MessageEntry,
-        insertAdjacent: true,
-      );
+      _upsertRunStateCard(state, _messages[assistantIndex] as _MessageEntry);
     }
   }
 
@@ -911,10 +911,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// switch. During the narrow startup window before [_initializing]
   /// settles, snapshots are held in [_runStateLoadBuffer] instead of acted
   /// on immediately (see [_start]'s drain).
-  void _handleIncomingRunState(
-    RunState incoming, {
-    required bool insertAdjacent,
-  }) {
+  void _handleIncomingRunState(RunState incoming) {
     if (_initializing) {
       _runStateLoadBuffer.offer(incoming);
       return;
@@ -940,7 +937,6 @@ class _ChatScreenState extends State<ChatScreen> {
     _upsertRunStateCard(
       result.current!,
       _messages[assistantIndex] as _MessageEntry,
-      insertAdjacent: insertAdjacent,
     );
   }
 
@@ -1057,17 +1053,18 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Creates, updates, or removes [state.runId]'s ONE adjacent
   /// [_RunStateCardEntry] beside [assistantEntry] — never a second one, and
-  /// never a detached one. [insertAdjacent] places a page-sourced card
-  /// immediately beside the page row. A live card instead follows any
-  /// contiguous tool/notice artifacts for that run, but never crosses into a
-  /// later turn merely because its state update arrived late.
+  /// never a detached one. Positioned via [_runStateCardInsertionIndex],
+  /// which always follows any contiguous tool/notice artifacts for that run
+  /// — live, replayed, page-loaded, or startup-buffer-drained alike, so a
+  /// page/resync-sourced or duplicate-row update never reinserts the card
+  /// immediately beside the assistant row while a same-run artifact this
+  /// screen already rendered (typically live, before the reconciled state
+  /// itself arrived) sits below it. It never crosses into a later turn
+  /// merely because its own state update arrived late — insertion always
+  /// stops at the first entry belonging to a different run.
   ///
   /// Must be called from inside a `setState`.
-  void _upsertRunStateCard(
-    RunState state,
-    _MessageEntry assistantEntry, {
-    required bool insertAdjacent,
-  }) {
+  void _upsertRunStateCard(RunState state, _MessageEntry assistantEntry) {
     // A genuine, reconciled `RunState` is now known for this exact row —
     // any neutral "no response recorded" fallback beside it (rendered
     // because the row was originally loaded with no `RunState` at all; see
@@ -1110,11 +1107,7 @@ class _ChatScreenState extends State<ChatScreen> {
       existing.responseContentUnavailable = responseContentUnavailable;
       _messages.remove(existing);
       _messages.insert(
-        _runStateCardInsertionIndex(
-          state.runId,
-          assistantEntry,
-          includeRunArtifacts: !insertAdjacent,
-        ),
+        _runStateCardInsertionIndex(state.runId, assistantEntry),
         existing,
       );
       return;
@@ -1125,22 +1118,19 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     _runStateEntries[state.runId] = entry;
     _messages.insert(
-      _runStateCardInsertionIndex(
-        state.runId,
-        assistantEntry,
-        includeRunArtifacts: !insertAdjacent,
-      ),
+      _runStateCardInsertionIndex(state.runId, assistantEntry),
       entry,
     );
   }
 
-  int _runStateCardInsertionIndex(
-    String runId,
-    _MessageEntry assistantEntry, {
-    required bool includeRunArtifacts,
-  }) {
+  /// The index right after every contiguous tool/notice artifact [runId]
+  /// already has directly beneath [assistantEntry] — or immediately beneath
+  /// [assistantEntry] itself if it has none. Stops at the first entry that
+  /// does not belong to [runId] (including one belonging to a different
+  /// run), so a run's own card can never leap past a later, unrelated
+  /// turn's artifact.
+  int _runStateCardInsertionIndex(String runId, _MessageEntry assistantEntry) {
     var index = _messages.indexOf(assistantEntry) + 1;
-    if (!includeRunArtifacts) return index;
     while (index < _messages.length) {
       final entry = _messages[index];
       final belongsToRun =
@@ -1164,18 +1154,11 @@ class _ChatScreenState extends State<ChatScreen> {
   /// mutate the timeline when that changes whether the run needs a card;
   /// otherwise streaming remains notifier-only and does not rebuild/reposition
   /// the list for every token.
-  void _syncRunStateCardPresenceForContent(
-    RunState state, {
-    required bool insertAdjacent,
-  }) {
+  void _syncRunStateCardPresenceForContent(RunState state) {
     if (_runStateCardPresenceMatchesContent(state)) return;
     final assistantIndex = _assistantEntryIndexForRun(state.runId);
     if (assistantIndex == null) return;
-    _upsertRunStateCard(
-      state,
-      _messages[assistantIndex] as _MessageEntry,
-      insertAdjacent: insertAdjacent,
-    );
+    _upsertRunStateCard(state, _messages[assistantIndex] as _MessageEntry);
   }
 
   bool _runStateCardPresenceMatchesContent(RunState state) {
@@ -1207,12 +1190,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // its own safe legacy mapping instead.
     final runState = event.runState;
     if (runState != null) {
-      setState(
-        () => _handleIncomingRunState(
-          runState,
-          insertAdjacent: _isHistoricalRunEvent(event),
-        ),
-      );
+      setState(() => _handleIncomingRunState(runState));
     }
     switch (event.type) {
       case 'message.delta':
@@ -1575,9 +1553,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (state != null &&
         hasDisplayableContent(entry.content.value) &&
         !_runStateCardPresenceMatchesContent(state)) {
-      setState(
-        () => _syncRunStateCardPresenceForContent(state, insertAdjacent: false),
-      );
+      setState(() => _syncRunStateCardPresenceForContent(state));
     }
     _scrollToBottom();
   }
