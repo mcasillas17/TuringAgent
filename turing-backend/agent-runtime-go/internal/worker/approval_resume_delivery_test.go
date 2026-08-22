@@ -1360,3 +1360,199 @@ func TestAcceptanceDeliveryRacingTheFailureCommitNeverProducesAMixedOutcome(t *t
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// deliverResumeAcceptance's own guards, proven directly and synchronously.
+//
+// deliverResumeAcceptance refuses an acceptance that names the wrong run, the
+// wrong nonempty assignment attempt, or a state version this assignment has
+// already moved past — see its own doc comment above. Each guard is
+// exercised in isolation below: every OTHER field on the delivered message
+// matches this run's pending resume exactly, so the single guard the test
+// names is the only thing standing between it and a committed win. Deleting
+// that one guard — leaving the other two intact — is what flips the test's
+// outcome from "nothing was recorded" to "the acceptance was claimed", which
+// is what makes each test kill the deletion of its own guard independently of
+// the other two, rather than all three collapsing into one pass/fail signal.
+//
+// None of this drives resumeApproval or a clock. beginReadySend is called
+// directly on the pending resume — exactly the state resumeApproval itself
+// would already be in by the time an acceptance can legally be recorded, per
+// recordAccepted's own readyStarted gate, which a separate test above already
+// covers on its own — and the proof that nothing was recorded is
+// abandonOrClaim's own synchronous, single-commit-point answer: never a
+// sleep, and never a peek at a background goroutine's progress.
+// ---------------------------------------------------------------------------
+
+// TestDeliverResumeAcceptanceRejectsEachGuardIndividually drives a mismatched
+// acceptance straight into deliverResumeAcceptance for each of its three
+// identity/version guards in turn, and proves synchronously — via
+// abandonOrClaim, the resume's single commit point — that nothing was ever
+// recorded for it: the run's observed version and outbound pause are both
+// left exactly where they started, and there is no false success to report.
+func TestDeliverResumeAcceptanceRejectsEachGuardIndividually(t *testing.T) {
+	cases := []struct {
+		name         string
+		runID        string
+		attemptID    string
+		stateVersion int64
+	}{
+		{
+			name:         "wrong run ID",
+			runID:        resumeDeliveryRunID + "_impostor",
+			attemptID:    resumeDeliveryAttempt,
+			stateVersion: resumeDeliveryVersion + 1,
+		},
+		{
+			name:         "wrong nonempty assignment attempt ID",
+			runID:        resumeDeliveryRunID,
+			attemptID:    resumeDeliveryAttempt + "_impostor",
+			stateVersion: resumeDeliveryVersion + 1,
+		},
+		{
+			name:         "stale state version",
+			runID:        resumeDeliveryRunID,
+			attemptID:    resumeDeliveryAttempt,
+			stateVersion: resumeDeliveryVersion - 1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			harness := newResumeDeliveryHarness(t)
+			// The exact precondition recordAccepted requires before it will
+			// ever commit anything. Setting it directly here isolates the
+			// guard under test from the readyStarted gate, which is a
+			// separate, already-covered concern.
+			harness.pending.beginReadySend()
+			beforeVersion := harness.entry.expectedVersion()
+			beforePaused := harness.entry.outboundPaused()
+
+			bad := &turingv1.RuntimeApprovalResumeAccepted{
+				RunId: tc.runID, ApprovalId: resumeDeliveryApproval,
+				StateVersion: tc.stateVersion, AssignmentAttemptId: tc.attemptID,
+			}
+			harness.worker.deliverResumeAcceptance(bad)
+
+			// The synchronous proof: abandonOrClaim is recordAccepted's own
+			// commit-point counterpart, so calling it right here — no
+			// goroutine, no clock, no timing peek — answers definitively
+			// whether deliverResumeAcceptance committed anything for this
+			// resume. A guard actually deleted here would make this call
+			// claim the mismatched acceptance instead of finding nothing.
+			if accepted, ok := harness.pending.abandonOrClaim(); ok {
+				t.Fatalf("%s: a mismatched acceptance was still claimable: %v", tc.name, accepted)
+			}
+			if got := harness.entry.expectedVersion(); got != beforeVersion {
+				t.Fatalf("%s: run version after a rejected acceptance = %d, want unchanged %d", tc.name, got, beforeVersion)
+			}
+			if got := harness.entry.outboundPaused(); got != beforePaused {
+				t.Fatalf("%s: run pause after a rejected acceptance = %v, want unchanged %v", tc.name, got, beforePaused)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The version-adoption compatibility rule, pinned on both sides of the
+// boundary that enforces it.
+//
+// deliverResumeAcceptance's own version guard (proven directly above) never
+// lets a genuinely stale, positive version reach recordAccepted in the first
+// place. But completeAcceptedResume — and the unpauseAfterAcceptedResume call
+// it makes — is reached asynchronously, once resumeApproval's own wait
+// settles, and nothing stops this run's version from moving further forward
+// in the meantime via a same-attempt refreshAssignment racing it. So the
+// adoption step itself must independently be forward-only: a claimed
+// acceptance is always allowed to unpause the run, but it may only ever move
+// the observed version ahead, never behind — and a version that was never
+// actually asserted (the zero-value compatibility case deliverResumeAcceptance
+// deliberately lets through unconditionally) must unpause without being
+// adopted as if it were a real one.
+// ---------------------------------------------------------------------------
+
+// TestUnpauseAfterAcceptedResumeNeverMovesVersionBackward pins the
+// forward-only half of the rule directly on the helper itself: a version
+// lower than what this entry already has must still clear the pause, but must
+// never drag the observed version backward. A version this run has already
+// reported past can still be trusted; adopting an older one would make the
+// next terminal report stale.
+func TestUnpauseAfterAcceptedResumeNeverMovesVersionBackward(t *testing.T) {
+	entry := &activeRun{version: resumeDeliveryVersion}
+	entry.pauseOutbound()
+
+	entry.unpauseAfterAcceptedResume(resumeDeliveryVersion - 1)
+
+	if entry.outboundPaused() {
+		t.Fatal("a claimed acceptance with a lower version left the run's outbound narration paused")
+	}
+	if got := entry.expectedVersion(); got != resumeDeliveryVersion {
+		t.Fatalf("version after a lower-versioned acceptance = %d, want unchanged %d", got, resumeDeliveryVersion)
+	}
+}
+
+// TestClaimedAcceptanceWithLowerVersionUnpausesWithoutRewindingTheVersion is
+// the end-to-end companion to the direct test above: it drives the exact call
+// completeAcceptedResume makes in production — every winning resume path
+// returns through it — rather than calling unpauseAfterAcceptedResume itself,
+// so it also pins that completeAcceptedResume forwards the accepted version
+// through unmodified rather than re-deriving or clamping it before this
+// point.
+func TestClaimedAcceptanceWithLowerVersionUnpausesWithoutRewindingTheVersion(t *testing.T) {
+	harness := newResumeDeliveryHarness(t)
+	harness.entry.pauseOutbound()
+	stale := &turingv1.RuntimeApprovalResumeAccepted{
+		RunId: resumeDeliveryRunID, ApprovalId: resumeDeliveryApproval,
+		StateVersion: resumeDeliveryVersion - 1, AssignmentAttemptId: resumeDeliveryAttempt,
+	}
+
+	if err := harness.worker.completeAcceptedResume(harness.entry, stale); err != nil {
+		t.Fatalf("completeAcceptedResume with a lower-versioned claimed acceptance = %v, want nil", err)
+	}
+
+	if harness.entry.outboundPaused() {
+		t.Fatal("a claimed lower-versioned acceptance left the run's outbound narration paused")
+	}
+	if got := harness.entry.expectedVersion(); got != resumeDeliveryVersion {
+		t.Fatalf("version after a claimed lower-versioned acceptance = %d, want unchanged %d", got, resumeDeliveryVersion)
+	}
+}
+
+// TestDeliverResumeAcceptanceZeroVersionStillSatisfiesWithoutOverwriting pins
+// the zero-version half of the compatibility rule from the delivery side: an
+// otherwise-matching acceptance whose StateVersion is the zero value —
+// omitted, exactly as an orchestrator build that predates the field, or one
+// that simply leaves it unset, would send — must still be recorded rather
+// than refused as stale. deliverResumeAcceptance's version guard is
+// `version > 0 && !entry.versionAcceptable(version)`: a zero version makes the
+// left side false and short-circuits the whole check, so it is never run
+// through entry.versionAcceptable at all — which would otherwise refuse ANY
+// version at or below the run's current one, zero included. Once claimed,
+// completeAcceptedResume forwards that same zero straight through to
+// unpauseAfterAcceptedResume, which is what proves the second half: the win
+// still clears the pause, but a version that was never actually asserted is
+// not adopted as if it were.
+func TestDeliverResumeAcceptanceZeroVersionStillSatisfiesWithoutOverwriting(t *testing.T) {
+	harness := newResumeDeliveryHarness(t)
+	harness.pending.beginReadySend()
+	harness.entry.pauseOutbound()
+	zeroVersion := &turingv1.RuntimeApprovalResumeAccepted{
+		RunId: resumeDeliveryRunID, ApprovalId: resumeDeliveryApproval,
+		StateVersion: 0, AssignmentAttemptId: resumeDeliveryAttempt,
+	}
+
+	harness.worker.deliverResumeAcceptance(zeroVersion)
+
+	accepted, ok := harness.pending.abandonOrClaim()
+	if !ok || accepted != zeroVersion {
+		t.Fatalf("deliverResumeAcceptance did not record a matching zero-version acceptance: (%v, %v), want (%v, true)", accepted, ok, zeroVersion)
+	}
+	if err := harness.worker.completeAcceptedResume(harness.entry, accepted); err != nil {
+		t.Fatalf("completeAcceptedResume with a claimed zero-version acceptance = %v, want nil", err)
+	}
+	if harness.entry.outboundPaused() {
+		t.Fatal("a matching zero-version acceptance left the run's outbound narration paused")
+	}
+	if got := harness.entry.expectedVersion(); got != resumeDeliveryVersion {
+		t.Fatalf("version after a matching zero-version acceptance = %d, want unchanged %d", got, resumeDeliveryVersion)
+	}
+}

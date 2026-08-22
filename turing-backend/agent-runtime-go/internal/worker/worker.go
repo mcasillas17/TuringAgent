@@ -2007,10 +2007,14 @@ func (r *activeRun) acceptVersion(version int64) bool {
 // completeAcceptedResume — reached once recordAccepted or abandonOrClaim has
 // actually claimed the outcome — is allowed to adopt it, via
 // unpauseAfterAcceptedResume.
+//
+// There is no version<=0 guard here: deliverResumeAcceptance is this
+// method's only caller, and it only ever calls in with a version > 0 in the
+// first place — a zero or absent StateVersion is the orchestrator's
+// compatibility case and is never routed through this check at all. Adding
+// the guard back would be dead code, not a second safety net, because
+// nothing ever reaches it with a non-positive version.
 func (r *activeRun) versionAcceptable(version int64) bool {
-	if version <= 0 {
-		return false
-	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return version >= r.version
@@ -2047,13 +2051,20 @@ func (r *activeRun) refreshAssignment(attemptID string, version int64) bool {
 //
 // That re-validation is deliberately skipped here: an accepted resume only
 // ever reaches this call after deliverResumeAcceptance has already matched it
-// to this exact run, attempt, and version — including the case where neither
-// the accepted message nor this entry carries an attempt ID at all, which
-// deliverResumeAcceptance treats as a match. Routing through refreshAssignment
-// instead would silently refuse to unpause exactly that case, because it
-// requires a non-empty attempt ID on both sides to prove the wire message it
-// is built for is naming the same attempt — a proof this call does not need
-// to redo.
+// according to its own compatibility rules, not because every field is
+// necessarily present or forward-moving. The accepted message may omit the
+// attempt ID entirely — deliverResumeAcceptance treats that the same as an
+// entry with no attempt ID of its own, and still calls it a match — and its
+// StateVersion may likewise be absent or zero, which deliverResumeAcceptance
+// also lets through rather than fencing on. So version here is not
+// guaranteed to be a genuine forward move: only a positive version that is
+// still at or ahead of what this entry already has is actually adopted;
+// anything else — zero, absent, or a stale duplicate racing a later
+// commit — still unpauses the run without moving its observed version at
+// all, forward or back. Routing this through refreshAssignment instead would
+// silently refuse to unpause the no-attempt-ID case, because it requires a
+// non-empty attempt ID on both sides to prove the wire message it is built
+// for is naming the same attempt — a proof this call does not need to redo.
 func (r *activeRun) unpauseAfterAcceptedResume(version int64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
