@@ -790,6 +790,10 @@ class _RotateTokenDialogState extends State<_RotateTokenDialog> {
       Navigator.of(context).pop(true);
     } catch (error) {
       if (!mounted) return;
+      // Cleared even on failure, matching the add-server form: once a
+      // token has been sent for an attempt, this app does not hold onto it
+      // or offer it back — the user retypes it if they retry.
+      _token.clear();
       setState(() {
         _submitting = false;
         _error = '$error';

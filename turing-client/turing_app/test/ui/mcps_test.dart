@@ -114,6 +114,25 @@ void main() {
       },
     );
 
+    testWidgets('the token field has an honest accessible label and no masked '
+        'placeholder while empty', (tester) async {
+      await _pumpMcps(tester, _McpApi());
+
+      // The label describes what the field is for in plain language —
+      // no bullet/asterisk masking stands in for a real label. Checked
+      // both as rendered text and as the field's accessible semantics.
+      expect(find.text('Bearer token (optional)'), findsOneWidget);
+      expect(
+        find.bySemanticsLabel(RegExp(r'Bearer token \(optional\)')),
+        findsOneWidget,
+      );
+
+      // The old masked-placeholder label must not appear anywhere, and
+      // the (empty) field renders no masking characters as text either.
+      expect(find.textContaining('******'), findsNothing);
+      expect(find.textContaining('••••••'), findsNothing);
+    });
+
     testWidgets('defaults to local container and never offers bundled', (
       tester,
     ) async {
@@ -162,6 +181,7 @@ void main() {
         find.byKey(const Key('mcpsAddUrl')),
         'https://vendor.example/mcp',
       );
+      await _selectTier(tester, 'Remote URL');
       await tester.enterText(
         find.byKey(const Key('mcpsAddToken')),
         'super-secret-value',
@@ -173,7 +193,8 @@ void main() {
         find.textContaining('a server with that name already exists'),
         findsOneWidget,
       );
-      // Form state is retained, so the user is not forced to retype it.
+      // Non-secret form state is retained, so the user is not forced to
+      // retype it to correct and retry.
       expect(
         tester
             .widget<TextField>(find.byKey(const Key('mcpsAddName')))
@@ -181,8 +202,28 @@ void main() {
             .text,
         'Vendor',
       );
-      // The error text never contains the token.
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('mcpsAddUrl')))
+            .controller!
+            .text,
+        'https://vendor.example/mcp',
+      );
+      // The previously selected tier is still shown, not reset to the
+      // default.
+      expect(find.text('Remote URL'), findsOneWidget);
+      expect(find.text('Local container'), findsNothing);
+      // Only the token is cleared — it is never retained or resubmitted
+      // silently, and the actual sentinel/value never renders anywhere.
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('mcpsAddToken')))
+            .controller!
+            .text,
+        '',
+      );
       expect(find.textContaining('super-secret-value'), findsNothing);
+      expect(find.textContaining('******'), findsNothing);
     });
 
     testWidgets('a busy submission cannot be duplicated', (tester) async {
@@ -354,6 +395,97 @@ void main() {
     );
   });
 
+  group('managing an existing server in the list', () {
+    testWidgets(
+      'toggling a non-bundled server calls setMcpServerEnabled with the '
+      'exact id and value, then reloads',
+      (tester) async {
+        final api = _McpApi()..servers.add(_localServer());
+        await _pumpMcps(tester, api);
+        final listCallsBefore = api.listCalls;
+
+        await tester.tap(find.byType(Switch));
+        await tester.pumpAndSettle();
+
+        expect(api.enabledCalls, hasLength(1));
+        expect(api.enabledCalls.single, {
+          'serverId': 'mcp_vendor',
+          'enabled': true,
+        });
+        expect(api.listCalls, greaterThan(listCallsBefore));
+      },
+    );
+
+    testWidgets('choosing Remove from the popup calls deleteMcpServer with the '
+        'exact id, then reloads', (tester) async {
+      final api = _McpApi()..servers.add(_localServer());
+      await _pumpMcps(tester, api);
+      final listCallsBefore = api.listCalls;
+
+      await tester.tap(find.byTooltip('Actions for vendor'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Remove'));
+      await tester.pumpAndSettle();
+
+      expect(api.deleteCalls, ['mcp_vendor']);
+      expect(api.listCalls, greaterThan(listCallsBefore));
+      expect(find.text('vendor'), findsNothing);
+    });
+
+    testWidgets(
+      'a bundled server has no actions popup, no rotate, no delete, and '
+      'its switch is disabled',
+      (tester) async {
+        final api = _McpApi()..servers.add(_bundledServer());
+        await _pumpMcps(tester, api);
+
+        expect(find.byTooltip('Actions for files'), findsNothing);
+        expect(find.byType(PopupMenuButton<String>), findsNothing);
+        expect(find.text('Rotate token'), findsNothing);
+        expect(find.text('Remove'), findsNothing);
+
+        final toggle = tester.widget<Switch>(find.byType(Switch));
+        expect(toggle.onChanged, isNull);
+      },
+    );
+
+    testWidgets('choosing Remove from the popup never invokes rotate', (
+      tester,
+    ) async {
+      final api = _McpApi()..servers.add(_localServer());
+      await _pumpMcps(tester, api);
+
+      await tester.tap(find.byTooltip('Actions for vendor'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Remove'));
+      await tester.pumpAndSettle();
+
+      expect(api.deleteCalls, hasLength(1));
+      expect(api.rotateCalls, isEmpty);
+    });
+
+    testWidgets('choosing Rotate token from the popup never invokes delete', (
+      tester,
+    ) async {
+      final api = _McpApi()..servers.add(_localServer());
+      await _pumpMcps(tester, api);
+
+      await tester.tap(find.byTooltip('Actions for vendor'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Rotate token'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('mcpsRotateToken')),
+        'new-token',
+      );
+      await tester.tap(find.text('Rotate token').last);
+      await tester.pumpAndSettle();
+
+      expect(api.rotateCalls, hasLength(1));
+      expect(api.deleteCalls, isEmpty);
+    });
+  });
+
   group('rotating a server token', () {
     testWidgets('rotate sends the entered token, and clear sends empty', (
       tester,
@@ -466,6 +598,54 @@ void main() {
           findsOneWidget,
         );
         expect(api.listCalls, listCallsBefore);
+      },
+    );
+
+    testWidgets(
+      'a rotate failure clears the token field so the failed value is '
+      'never retained, matching the add form, and the user can retype',
+      (tester) async {
+        final api = _McpApi()
+          ..servers.add(_localServer())
+          ..rotateError = StateError('server rejected the token');
+        await _pumpMcps(tester, api);
+
+        await tester.tap(find.byTooltip('Actions for vendor'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Rotate token'));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('mcpsRotateToken')),
+          'will-fail',
+        );
+        await tester.tap(find.text('Rotate token').last);
+        await tester.pumpAndSettle();
+
+        // Write-only/minimal-retention: the rejected token is not left in
+        // the controller, is never rendered, and no masked sentinel stands
+        // in for it either.
+        expect(
+          tester
+              .widget<TextField>(find.byKey(const Key('mcpsRotateToken')))
+              .controller!
+              .text,
+          '',
+        );
+        expect(find.textContaining('will-fail'), findsNothing);
+        expect(find.textContaining('******'), findsNothing);
+
+        // The user can retype and retry without reopening the dialog.
+        api.rotateError = null;
+        await tester.enterText(
+          find.byKey(const Key('mcpsRotateToken')),
+          'second-attempt',
+        );
+        await tester.tap(find.text('Rotate token').last);
+        await tester.pumpAndSettle();
+
+        expect(api.rotateCalls, hasLength(2));
+        expect(api.rotateCalls.last['token'], 'second-attempt');
       },
     );
 
@@ -660,6 +840,9 @@ class _McpApi
   Completer<void>? registerGate;
   int _nextId = 1;
 
+  final List<Map<String, Object?>> enabledCalls = [];
+  final List<String> deleteCalls = [];
+
   McpImportReport? importReport;
   Object? importError;
   Completer<McpImportReport>? reimportGate;
@@ -684,6 +867,7 @@ class _McpApi
     required String serverId,
     required bool enabled,
   }) async {
+    enabledCalls.add({'serverId': serverId, 'enabled': enabled});
     final index = servers.indexWhere((s) => s.serverId == serverId);
     final updated = _withEnabled(servers[index], enabled);
     servers[index] = updated;
@@ -692,6 +876,7 @@ class _McpApi
 
   @override
   Future<void> deleteMcpServer({required String serverId}) async {
+    deleteCalls.add(serverId);
     servers.removeWhere((s) => s.serverId == serverId);
   }
 
