@@ -1055,19 +1055,22 @@ class _ChatScreenState extends State<ChatScreen> {
   /// [_RunStateCardEntry] beside [assistantEntry] — never a second one, and
   /// never a detached one. An update to an already-present card removes and
   /// reinserts that same entry at [_runStateCardInsertionIndex], which
-  /// always follows any contiguous tool/notice artifacts for that run. Those
-  /// artifacts are only ever live or replayed — a page load or
-  /// startup-buffer drain carries `RunState`/message rows, never a tool call
-  /// or notice of its own — but the run-state update that reaches THIS
-  /// method can be live, replayed, page-loaded, or startup-buffer-drained
-  /// alike, so the card never lands immediately beside the assistant row
-  /// while a same-run artifact this screen already rendered (typically
-  /// live, before the reconciled state itself arrived) sits below it. The
-  /// duplicate-row sync call ([_syncRunStateCardPresenceForContent]) reaches
-  /// this method only when a run's card-wanted presence itself flips, so it
-  /// can only CREATE a card that did not exist or REMOVE one that no longer
-  /// wants to exist — never reinsert an already-present card purely to
-  /// reposition it. This method itself never crosses into a later turn
+  /// always follows the contiguous same-run tool/notice artifacts
+  /// immediately following [assistantEntry] — the run's anchor row. Those
+  /// artifacts are live-only: [_isHistoricalRunEvent] suppresses a tool
+  /// call or notice replayed from history before it ever renders, so
+  /// nothing beneath the anchor is ever a replayed artifact. The run-state
+  /// update that reaches THIS method, by contrast, may be live, replayed,
+  /// page-loaded, or startup-buffer-drained alike, so the card never lands
+  /// immediately beside the assistant row while a same-run artifact this
+  /// screen already rendered (typically live, before the reconciled state
+  /// itself arrived) sits below it. The presence-sync callers of
+  /// [_syncRunStateCardPresenceForContent] — the duplicate-row page path
+  /// and the live `message.delta` path alike — reach this method only when
+  /// a run's card-wanted presence itself flips, so either one can only
+  /// CREATE a card that did not exist or REMOVE one that no longer wants to
+  /// exist — never reinsert an already-present card purely to reposition
+  /// it. This method itself never crosses into a later turn
   /// merely because its own state update arrived late — insertion only ever
   /// walks over contiguous same-run tool/notice entries and stops at any
   /// other entry, including one belonging to a different run or turn, not
