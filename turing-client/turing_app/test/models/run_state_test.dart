@@ -274,6 +274,28 @@ void main() {
     expect(mapped?.finishedAt, isNull);
   });
 
+  // Mirrors the state_updated_at epoch test above: an explicitly present,
+  // all-zero finished_at Timestamp (a run that genuinely finished exactly at
+  // the Unix epoch) must still be distinguished from an absent finished_at
+  // (a still-running run). hasFinishedAt() is what draws that line — a
+  // seconds/nanos-nonzero check would instead treat this real, present
+  // zero-valued Timestamp the same as "not yet finished".
+  test(
+    'accepts an explicitly present zero-valued finished_at as the real epoch',
+    () {
+      final state = protoState();
+      state.finishedAt = timestamppb.Timestamp();
+
+      final mapped = GrpcMappers.runStateToModel(state);
+
+      expect(mapped, isNotNull);
+      expect(
+        mapped?.finishedAt,
+        DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      );
+    },
+  );
+
   test(
     'rejects a run state whose finished_at nanos escape the valid range',
     () {
