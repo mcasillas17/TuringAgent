@@ -88,9 +88,10 @@ into logs on a mere dial failure.
 **The provider client reuses the transport hardening that already exists —
 without inventing a third mechanism.** `turing-backend/internal/egress`
 already has `NoRedirectClient` and `RedactRedirectError`, used by both LLM
-provider clients; the GitHub client uses those, and `RedactRedirectError` is
-directly load-bearing for the credential-hygiene test (a raw redirect error
-carries the full URL). Guarded address resolution currently lives in
+provider clients; the GitHub client uses those. (`RedactRedirectError` protects the request *path* —
+owner/repo — in redirect errors; the credential itself cannot appear there
+with a header-only token, so the hygiene test's raw-URL leg is about
+dial/TLS `*url.Error`s, not this helper.) Guarded address resolution currently lives in
 `mcpregistry/transport.go` (`resolvePublicMCPAddress` — refusing loopback,
 private, link-local, multicast and unspecified addresses, requiring global
 unicast, and screening the special-use networks list; the shared version
@@ -164,19 +165,25 @@ the model learns its connections.** Not a static lister like
 connections and can never carry connection identity. The runtime calls a new
 `ListIntegrationTools` RPC at discovery (the same pattern as
 `mcp.NewRegistryClients`), which returns tool definitions only while at
-least one live connection for the provider exists, **filtered on policy
-and enabled state exactly as its precedent filters**
-(`RegistryClient.ListTools` skips `!enabled` and disabled-policy
-descriptors — that is how a disabled tool leaves the model's registry
-rather than lingering as an offer whose every call dies `unknown_tool`),
-**with the same missing-row rule as the availability check**: the
-precedent never faces a missing row because import seeds its `tools` rows
-before discovery, but integrations have no seeding step, so a literal
-"missing ⇒ not enabled" reading deadlocks the bootstrap (never listed ⇒
-never reported ⇒ never inserted ⇒ never listed) — a tool with no row yet
-is listed, and lands `approval_required` on first registration as always —
-and whose tool *descriptions* enumerate the current live connections as
-`(connection_id, display name)` pairs. That is the answer to "how does the model obtain a
+least one live connection for the provider exists, filtered by the same
+**policy-only** predicate as the availability check: `policy !=
+'disabled'`, missing row ⇒ listed (integrations have no seeding step, so
+a "missing ⇒ not enabled" reading deadlocks the bootstrap: never listed ⇒
+never reported ⇒ never inserted ⇒ never listed). The obvious precedent —
+`RegistryClient.ListTools` skips `!enabled` and disabled-policy
+descriptors — is **half right and half a trap**: skipping on *policy* is
+how a disabled tool leaves the model's registry rather than lingering as
+an offer whose every call dies `unknown_tool`, but its `enabled` leg is
+not transferable, because the precedent's rows come from
+`ReplaceMCPServerTools`, where `enabled` tracks server state, while
+pseudo-server `enabled` is a reporting artifact `UpsertTools` zeroes on
+every upsert. Filter on it and revoke-last-then-reconnect bricks the
+tools permanently, one hop upstream of where the availability check's
+policy-only predicate can save them: the zeroed row makes the lister
+skip, so the tool never re-enters a report and the zeroing never gets
+undone. **No pseudo-server predicate anywhere in this plan reads
+`present` or `enabled`.** The tool *descriptions* enumerate the current
+live connections as `(connection_id, display name)` pairs. That is the answer to "how does the model obtain a
 valid `connection_id`": it reads it from the tool description, which is
 refreshed — along with advertisement itself — by firing the existing
 registry-changed notification (`NotifyMCPRegistryChanged` → worker
@@ -354,9 +361,11 @@ signed challenge, not just the database row.** PR #73's pattern, all of it:
   dialog renders one line per connection — `conn_9f3a…` is not consent to an
   account, and consent for the personal account must not read as consent for
   the work account. Uniqueness lives on the *full* name (120 runes) while
-  the entry truncates at 64, so when a rendered name was truncated the
-  dialog appends a short id discriminator — two accounts sharing a 64-rune
-  prefix must not render identical consent lines.
+  the entry truncates at 64, so when a name is truncated a short id
+  discriminator is appended **server-side, in the disclosure entry
+  itself** — not in Flutter — both so two accounts sharing a 64-rune
+  prefix cannot render identical consent lines and so the property is
+  backend-visible for test 9 to assert.
 - Validation before dispatch checks four legs:
   `integrations/<tool>` present in the decision's `selected_tools`;
   `TOOL_ARGUMENTS` and `TOOL_RESULTS` present in the data categories; the
@@ -367,10 +376,11 @@ signed challenge, not just the database row.** PR #73's pattern, all of it:
   decorative data inside a signed payload.
 - Revalidation happens again after the approval wait, and a liveness check
   equivalent to `MCPDispatchActive` runs immediately before the network
-  call — equivalence includes everything its precedent checks: run
-  executing, not cancelled, session not mid-deletion, **and the tool's
-  live policy and enabled state**, which is what catches a tool disabled
-  after enqueue, since the frozen decision cannot. Integration tools bypass
+  call — equivalence means: run executing, not cancelled, session not
+  mid-deletion, and the tool's live **policy**, which is what catches a
+  tool disabled after enqueue, since the frozen decision cannot. Not a
+  literal copy: the precedent also checks `present = 1` and `enabled = 1`,
+  and per the rule above, no pseudo-server predicate reads either. Integration tools bypass
   the `mcp_servers` join that query uses, so they need their own
   (`IntegrationDispatchActive`), along with an
   `IntegrationEndpointsForTools` resolver analogous to
@@ -605,10 +615,13 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
    pre-existing comparison catches it, proving nothing. **Both** sub-budgets
    get the boundary probe test 13 gives the approval render: an entry
    rendering to exactly `maxIntegrationEndpointEntryBytes` prepares,
-   signs, and verifies, one byte over is refused; exactly
-   `maxIntegrationEndpoints` entries prepare and sign, one more is
-   refused — each refusal at `resolveEgressContext` with the legible
-   `FailedPrecondition`, never at signing. These are the legs that catch
+   signs, and verifies, one byte over is refused (this leg needs a
+   stubbed endpoint resolver or a direct test of the shared helper —
+   phase one's real entries, with a 64-rune name cap and a pinned host,
+   cannot reach 768 bytes); exactly `maxIntegrationEndpoints` entries
+   prepare and sign, one more is refused (reachable with real
+   connections, no seam needed) — each refusal at `resolveEgressContext`
+   with the legible `FailedPrecondition`, never at signing. These are the legs that catch
    two check sites measuring with different arithmetic, and a count cap
    enforced only inside the signer. And the
    enqueue idempotency fingerprint is exercised the way `RemoteMCPServers` was
@@ -642,7 +655,9 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
    plan does not re-architect it — leaves the *offered definitions*
    (`selected_tools` / `DefinitionsFor`) via the capabilities prune; then
    **re-enabled ⇒ works again** — the leg that catches a `present = 1`
-   predicate making disable a one-way door. The
+   predicate making disable a one-way door — with each policy state read
+   back through `ListPseudoServerTools`, so the read RPC the editor
+   depends on is exercised and current, not a blank page nobody tested. The
    same RPC **refuses** to set a bundled mutating tool (`files.create`) to
    `safe`, **refuses** to set an integration write (`github.create_comment`)
    to `safe`, **allows** a skills tool to be set `safe` (the unscoped
@@ -663,9 +678,11 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
    with consent granted, a mocked `github.list_issues` completes end to
    end **through the agent's `Execute`** — the leg that fails if the
    runtime's own decision-shape validation was not widened — using an id
-   taken from the description, not hardcoded; and the transcript run
-   notice and consent audit row name `api.github.com`, never an empty
-   destination.
+   taken from the description, not hardcoded; the transcript run notice
+   and consent audit row name `api.github.com`, never an empty
+   destination; and two connections whose names share a 64-rune prefix
+   produce distinguishable disclosure entries (the server-side
+   discriminator).
 10. **A failed read is not a dead run — with each site asserting what is
     actually true, including the re-delivery rebuild.** A provider 500 on
     an approved read returns a bounded tool error to the model and the run
@@ -702,11 +719,15 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
     assertion that kills a process-wide constant nonce (which the model,
     and therefore anything the model writes to a provider, eventually
     reveals).
-15. **Zero connections, zero surface.** With no live connections the tools
-    are absent from the registry and from `EgressToolNames`, prepare
-    returns no integration endpoints, and connecting one fires the
-    registry-changed notification that makes them appear without a
-    restart.
+15. **Zero connections, zero surface — and back again.** With no live
+    connections the tools are absent from the registry and from
+    `EgressToolNames`, prepare returns no integration endpoints, and
+    connecting one fires the registry-changed notification that makes
+    them appear without a restart. Then the full cycle: **connect →
+    revoke the last connection → reconnect ⇒ the tools return** — the
+    sibling of test 8's re-enable leg, and the one that catches an
+    `enabled`-reading lister predicate, which bricks the tools at exactly
+    this step and which no shorter test reaches.
 16. **The credential used is the credential named.** Two live GitHub
     connections; an approved call naming connection B; the outbound
     `Authorization` header carries B's credential, not A's — the test that
