@@ -3129,6 +3129,128 @@ void main() {
     },
   );
 
+  // Reachable regression coverage (F10): the "duplicate, not-accepted
+  // resync" test below reaches this same production shape but explicitly
+  // does NOT exercise `_upsertRunStateCard`'s existing-entry
+  // remove-then-reinsert branch — its own comment says so. This test
+  // isolates exactly that branch. The initial PAGE load already carries a
+  // v1/running `RunState` for an assistant row with no displayable
+  // content, so `_ingestMessagePage`'s unconditional `pageResults` loop
+  // creates run_1's ONE adjacent card immediately, before any event at all
+  // — the `existing == null` create branch, not the one under test. Only
+  // THEN does a live, same-run tool artifact land below that
+  // already-present card, and only THEN does a live v2/failed `RunState`
+  // arrive through `_handleIncomingRunState` — reaching
+  // `_upsertRunStateCard` with `existing != null` for the first and only
+  // time in this test, forcing it through the remove-then-reinsert-at-
+  // `_runStateCardInsertionIndex` path. Deleting or no-op'ing that block
+  // leaves the already-present card pinned at the index it occupied
+  // BEFORE the tool artifact existed — immediately after the assistant
+  // row, above the artifact the block exists to walk past — so this test
+  // must fail the instant that block is removed.
+  testWidgets(
+    'a live state update repositions an existing page-created card below a '
+    'later same-run tool artifact',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // The page-loaded v1/running state alone already produced run_1's
+      // one adjacent card, before any event has been delivered at all.
+      expect(
+        find.byType(RunStateCard),
+        findsOneWidget,
+        reason:
+            'a no-displayable-content row with a v1/running RunState wants '
+            'its own adjacent card straight from the initial page load',
+      );
+
+      events.add(
+        _event(
+          type: 'tool.call.completed',
+          sequence: 1,
+          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byType(ToolCallCard), findsOneWidget);
+      expect(
+        find.byType(RunStateCard),
+        findsOneWidget,
+        reason:
+            'the same card must still be the only one on screen once a '
+            'live, same-run tool artifact lands beside it — it is not '
+            'recreated or duplicated merely because a sibling artifact '
+            'appeared',
+      );
+
+      events.add(
+        _event(
+          type: 'agent.run.failed',
+          sequence: 2,
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.toolFailure,
+            hasDisplayableContent: true,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.byType(RunStateCard),
+        findsOneWidget,
+        reason:
+            'the v2/failed update must reuse the SAME card — one adjacent '
+            'card per run, never a second one appended alongside it',
+      );
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(find.byType(ToolCallCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+        reason:
+            'the existing card must reposition itself after the tool '
+            'artifact that landed below it while the card was still '
+            "running — not stay pinned at the index it occupied before "
+            'that artifact existed',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
   // Structural coverage (GREEN before and after — not a RED-then-fixed
   // regression case): a non-null, not-accepted `stateResult` can mean
   // `duplicate`, `stale`, or `inconsistent` — unlike every

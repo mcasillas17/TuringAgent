@@ -1053,13 +1053,21 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Creates, updates, or removes [state.runId]'s ONE adjacent
   /// [_RunStateCardEntry] beside [assistantEntry] — never a second one, and
-  /// never a detached one. Positioned via [_runStateCardInsertionIndex],
-  /// which always follows any contiguous tool/notice artifacts for that run
-  /// — live, replayed, page-loaded, or startup-buffer-drained alike, so a
-  /// page/resync-sourced or duplicate-row update never reinserts the card
-  /// immediately beside the assistant row while a same-run artifact this
-  /// screen already rendered (typically live, before the reconciled state
-  /// itself arrived) sits below it. It never crosses into a later turn
+  /// never a detached one. An update to an already-present card removes and
+  /// reinserts that same entry at [_runStateCardInsertionIndex], which
+  /// always follows any contiguous tool/notice artifacts for that run. Those
+  /// artifacts are only ever live or replayed — a page load or
+  /// startup-buffer drain carries `RunState`/message rows, never a tool call
+  /// or notice of its own — but the run-state update that reaches THIS
+  /// method can be live, replayed, page-loaded, or startup-buffer-drained
+  /// alike, so the card never lands immediately beside the assistant row
+  /// while a same-run artifact this screen already rendered (typically
+  /// live, before the reconciled state itself arrived) sits below it. The
+  /// duplicate-row sync call ([_syncRunStateCardPresenceForContent]) reaches
+  /// this method only when a run's card-wanted presence itself flips, so it
+  /// can only CREATE a card that did not exist or REMOVE one that no longer
+  /// wants to exist — never reinsert an already-present card purely to
+  /// reposition it. This method itself never crosses into a later turn
   /// merely because its own state update arrived late — insertion always
   /// stops at the first entry belonging to a different run.
   ///
