@@ -337,3 +337,43 @@ func TestRunStateProjectionPublishesFinishedAtOnlyForTerminalLifecycles(t *testi
 		t.Fatalf("a NULL finished_at column published %v", finished)
 	}
 }
+
+// TestRunStateProjectionOmitsUnreadableFinishedAtButKeepsSnapshot covers a
+// present-but-unreadable finished_at: Valid is true, so the database says a
+// value was written, but the string is not one persisttime can parse (or is
+// empty). state_updated_at is the field the whole snapshot's existence turns
+// on; finished_at is not. So this must still publish the run's identity and
+// lifecycle, and it must resolve the bad column to no finish time rather than
+// inventing one — a fabricated instant here would tell a client a run finished
+// at a moment nobody recorded.
+func TestRunStateProjectionOmitsUnreadableFinishedAtButKeepsSnapshot(t *testing.T) {
+	tests := []struct {
+		name       string
+		finishedAt string
+	}{
+		{name: "malformed_finished_at", finishedAt: "not a timestamp"},
+		{name: "malformed_finished_at_wrong_separator", finishedAt: "2026-08-20 10:11:12Z"},
+		{name: "malformed_finished_at_out_of_range_offset", finishedAt: "2026-08-20T10:11:12+24:00"},
+		{name: "empty_finished_at", finishedAt: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := canonicalState("completed", "none")
+			state.FinishedAt = sql.NullString{String: test.finishedAt, Valid: true}
+
+			projected := Project(state)
+			if projected == nil {
+				t.Fatalf("unreadable finished_at %q dropped the whole snapshot, want the snapshot published without a finish time", test.finishedAt)
+			}
+			if projected.GetLifecycle() != turingv1.RunLifecycle_RUN_LIFECYCLE_COMPLETED {
+				t.Fatalf("lifecycle = %v, want RUN_LIFECYCLE_COMPLETED", projected.GetLifecycle())
+			}
+			if projected.GetOutcomeReason() != turingv1.RunOutcomeReason_RUN_OUTCOME_REASON_NONE {
+				t.Fatalf("reason = %v, want RUN_OUTCOME_REASON_NONE", projected.GetOutcomeReason())
+			}
+			if finished := projected.GetFinishedAt(); finished != nil {
+				t.Fatalf("unreadable finished_at %q published a fabricated finish time %v", test.finishedAt, finished)
+			}
+		})
+	}
+}
