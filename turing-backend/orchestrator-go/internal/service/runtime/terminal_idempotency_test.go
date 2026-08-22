@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"testing"
+	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
@@ -433,10 +434,23 @@ func TestDuplicateCancelledAckWithImpossibleVersionAfterReleaseClosesWorkerStrea
 		t.Fatal(err)
 	}
 
-	if _, recvErr := stream.Recv(); recvErr == nil {
-		t.Fatal("duplicate ack naming an impossible version did not close the worker stream")
-	} else if status.Code(recvErr) != codes.PermissionDenied {
-		t.Fatalf("stream close code = %v, want PermissionDenied", recvErr)
+	// Bound the close on a goroutine/channel/timer, the same pattern recvUntil
+	// uses: if the version guard regresses and the ack is silently accepted,
+	// this Recv would block forever instead of observing the closed stream.
+	closed := make(chan error, 1)
+	go func() {
+		_, recvErr := stream.Recv()
+		closed <- recvErr
+	}()
+	select {
+	case recvErr := <-closed:
+		if recvErr == nil {
+			t.Fatal("duplicate ack naming an impossible version did not close the worker stream")
+		} else if status.Code(recvErr) != codes.PermissionDenied {
+			t.Fatalf("stream close code = %v, want PermissionDenied", recvErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the worker stream to close after the impossible duplicate ack")
 	}
 
 	firstRun, err := h.repo.GetRun(context.Background(), first.RunID)
