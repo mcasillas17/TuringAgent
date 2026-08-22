@@ -296,6 +296,27 @@ preview/diff UX, and no approval viewer UI ships here.
 **Acceptance:** File writes show a bounded before/after preview; secrets and oversized content are redacted; the preview is bound to the same argument hash that approval authorizes.
 **Dependencies:** TUR-013.
 
+#### TUR-023 — Harden legacy event payloads
+
+**Outcome:** Public history cannot expose arbitrary sensitive fields retained in legacy system, error, or unknown event payloads.
+**Scope:** Inventory legacy event shapes, define strict per-type public projections, and add a bounded, idempotent migration or read-time scrub for raw provider errors, credentials, tool arguments/results, approval tokens, paths, stacks, and other non-public fields while preserving explicitly allowlisted user-visible content. Deliver this as a separate PR after TUR-010; it is outside TUR-009 implementation scope.
+**Acceptance:** Seeded pre-hardening rows cannot disclose denylisted fields through list, subscribe, chat replay, or restart paths; allowlisted fields survive unchanged; migration and read sanitization are value-free on failure, bounded, idempotent, and covered across known and unknown legacy types.
+**Dependencies:** TUR-009, TUR-010.
+
+#### TUR-024 — Recover lost approval notifications
+
+**Outcome:** A durable approval decision reaches the matching waiting worker even when the original post-commit notification is lost.
+**Scope:** Add an idempotent durable delivery or re-delivery mechanism bound to approval, run, assignment attempt, and state version for approved, denied, expired, and unattended decisions; preserve one audit/event transition and prevent duplicate resume or tool execution. Deliver this as a separate PR before TUR-012; it is outside TUR-009 implementation scope.
+**Acceptance:** Deterministic loss, reconnect, repeated-decision, and timeout tests prove a committed decision is re-delivered only to the matching waiter, duplicate delivery is harmless, stale attempts stay fenced, denial never resumes a tool, and unrecoverable delivery still produces the bounded typed failure.
+**Dependencies:** TUR-009, TUR-011.
+
+#### TUR-025 — Fence tool authorization cancellation
+
+**Outcome:** A tool cannot be authorized or recorded after its run has durably left an active lifecycle.
+**Scope:** Make the active-run/version premise and pre-tool record or approval creation one guarded transaction; map a lost cancellation race to a fenced denial without creating a tool call, event, or pending approval. Deliver this as a separate PR after TUR-021; it is outside TUR-009 implementation scope.
+**Acceptance:** Deterministic cancellation-versus-beacon tests prove that cancellation winning the transaction creates no authorization artifacts or side effect, authorization winning records exactly once under the active version, later cancellation remains effective, and duplicate beacons preserve existing idempotency.
+**Dependencies:** TUR-009, TUR-010, TUR-021.
+
 #### TUR-003 — Enforce explicit remote-provider egress policy
 
 **Outcome:** Users know and control when conversation, recall, memory, and tool data leave the machine.
@@ -813,6 +834,9 @@ Every edge in this table appears in the corresponding task's `Dependencies` line
 | TUR-020 | None |
 | TUR-021 | TUR-013 |
 | TUR-022 | TUR-004, TUR-016 |
+| TUR-023 | TUR-009, TUR-010 |
+| TUR-024 | TUR-009, TUR-011 |
+| TUR-025 | TUR-009, TUR-010, TUR-021 |
 | MEM-001 | None |
 | MEM-002 | None |
 | MEM-003 | MEM-002 |
@@ -839,7 +863,7 @@ Every edge in this table appears in the corresponding task's `Dependencies` line
 
 1. **Fix user-visible falsehoods and context loss:** TUR-002, TUR-007, TUR-020.
 2. **Install preventative contracts:** TUR-013, TUR-018, TUR-019, MEM-001.
-3. **Close existing correctness, consent, and operability gaps:** TUR-001, TUR-003, TUR-005, TUR-006, TUR-008 through TUR-012, TUR-014, TUR-021, then TUR-004.
+3. **Close existing correctness, consent, and operability gaps:** TUR-001, TUR-003, TUR-005, TUR-006, TUR-008 through TUR-010, TUR-023, TUR-011, TUR-024, TUR-014, TUR-021, TUR-025, TUR-012, then TUR-004.
 4. **Measure and improve lexical recall:** MEM-002, MEM-003, MEM-004, MEM-016.
 5. **Ship minimum lovable memory:** MEM-005, MEM-006, MEM-007, MEM-008, MEM-011.
 6. **Add safe learning and explainability:** MEM-009, MEM-010, MEM-012, MEM-015.
