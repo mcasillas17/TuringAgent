@@ -355,8 +355,8 @@ func TestRunStepWithoutReservedKeysStaysPassThrough(t *testing.T) {
 // half of a retry notice's counters: an attempt (or attempts) with no
 // maxAttempts budget, or a maxAttempts budget with no attempt/attempts
 // counter. Neither reserved key here is malformed — one of them is simply
-// missing. hasReservedRetryNoticeKey recognizes the row as a retry-notice
-// attempt from the presence of any one reserved key, not from every counter
+// missing. runoutcome.HasReservedRetryNoticeKey recognizes the row as a
+// retry-notice attempt from the presence of any one reserved key, not from every counter
 // being present together, so the row must still resolve to a bounded,
 // category-only notice: NewStepNotice rejects a zero attempt or a zero
 // maxAttempts, so the counters are dropped, but the category the row named
@@ -414,6 +414,126 @@ func TestRunStepFailsClosedOnIncompleteRetryCounters(t *testing.T) {
 			}
 			if len(fields) != 1 {
 				t.Fatalf("public payload = %s, want only the bounded category", public.GetPayload())
+			}
+		})
+	}
+}
+
+// TestRunStepFailsClosedOnCategoryOnlyNotice covers a row that carries only
+// the "category" reserved key — no attempt, attempts, or maxAttempts at all —
+// with a category value that is either unrecognized or the wrong JSON type.
+// runoutcome.HasReservedRetryNoticeKey must still recognize this row as a
+// retry-notice attempt from "category" alone: the recognized-category branch
+// above rejects an unrecognized or wrong-typed value and falls through, but
+// the row still named a reserved key, so it must still resolve to the bounded
+// default category rather than pass its raw note and reason through. This
+// pins "category" specifically in the reserved-key vocabulary: a mutation
+// that dropped "category" from that list (leaving only
+// attempt/attempts/maxAttempts/stateVersion) would let this row fall through
+// to the pass-through arm and publish its raw payload.
+func TestRunStepFailsClosedOnCategoryOnlyNotice(t *testing.T) {
+	tests := []struct {
+		name         string
+		payload      string
+		wantCategory string
+	}{
+		{
+			name:         "unrecognized category value, no counters",
+			payload:      `{"note":"retrying after connection refused by ollama at 127.0.0.1:11434","reason":"model_error","category":"not_a_real_category"}`,
+			wantCategory: "dispatch_retry",
+		},
+		{
+			name:         "wrong-typed category value, no counters",
+			payload:      `{"note":"retrying","reason":"worker_unavailable","category":42}`,
+			wantCategory: "recovery_retry",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newEventHarness(t)
+			run := seedEventRun(t, h, test.name)
+			seeded := appendLegacyEvent(t, h, run, "agent.run.step", test.payload)
+			public := listedEvent(t, h, run.sessionID, seeded.EventID)
+			assertNoRawDiagnostics(t, public.GetPayload())
+			fields := public.GetPayload().GetFields()
+			if got := fields["category"].GetStringValue(); got != test.wantCategory {
+				t.Fatalf("category = %q, want %q (%s)", got, test.wantCategory, public.GetPayload())
+			}
+			for _, leaked := range []string{"attempt", "attempts", "maxAttempts", "note", "reason", "stateVersion"} {
+				if _, exists := fields[leaked]; exists {
+					t.Fatalf("public payload carries %q from a category-only notice: %s", leaked, public.GetPayload())
+				}
+			}
+			if len(fields) != 1 {
+				t.Fatalf("public payload = %s, want only the bounded category", public.GetPayload())
+			}
+		})
+	}
+}
+
+// TestRunStepFailsClosedOnBareStateVersionNotice is the "stateVersion"
+// counterpart to the category-only test above: a row that carries only the
+// "stateVersion" reserved key — no category, attempt, attempts, or
+// maxAttempts — with its raw note and reason still attached. This pins
+// "stateVersion" specifically in the reserved-key vocabulary: a mutation that
+// dropped it from that list would leave this row unrecognized as a
+// retry-notice attempt and publish its raw note and reason as if it were
+// legitimate non-retry content. A stateVersion that does parse as a valid
+// published version still survives onto the bounded output — recognizing the
+// row does not mean discarding the one field this build actually vouches
+// for — but a stateVersion that fails to parse contributes nothing beyond
+// marking the row as reserved.
+func TestRunStepFailsClosedOnBareStateVersionNotice(t *testing.T) {
+	tests := []struct {
+		name             string
+		payload          string
+		wantCategory     string
+		wantStateVersion int64
+		wantHasVersion   bool
+	}{
+		{
+			name:             "numeric stateVersion, no counters or category",
+			payload:          `{"note":"retrying after connection refused by ollama at 127.0.0.1:11434","reason":"model_error","stateVersion":7}`,
+			wantCategory:     "dispatch_retry",
+			wantStateVersion: 7,
+			wantHasVersion:   true,
+		},
+		{
+			name:           "wrong-typed stateVersion, no counters or category",
+			payload:        `{"note":"retrying","reason":"worker_unavailable","stateVersion":"not-a-number"}`,
+			wantCategory:   "recovery_retry",
+			wantHasVersion: false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newEventHarness(t)
+			run := seedEventRun(t, h, test.name)
+			seeded := appendLegacyEvent(t, h, run, "agent.run.step", test.payload)
+			public := listedEvent(t, h, run.sessionID, seeded.EventID)
+			assertNoRawDiagnostics(t, public.GetPayload())
+			fields := public.GetPayload().GetFields()
+			if got := fields["category"].GetStringValue(); got != test.wantCategory {
+				t.Fatalf("category = %q, want %q (%s)", got, test.wantCategory, public.GetPayload())
+			}
+			for _, leaked := range []string{"attempt", "attempts", "maxAttempts", "note", "reason"} {
+				if _, exists := fields[leaked]; exists {
+					t.Fatalf("public payload carries %q from a bare stateVersion notice: %s", leaked, public.GetPayload())
+				}
+			}
+			version, hasVersion := fields["stateVersion"]
+			if hasVersion != test.wantHasVersion {
+				t.Fatalf("stateVersion present = %t, want %t (%s)", hasVersion, test.wantHasVersion, public.GetPayload())
+			}
+			wantFieldCount := 1
+			if test.wantHasVersion {
+				wantFieldCount = 2
+				if got := int64(version.GetNumberValue()); got != test.wantStateVersion {
+					t.Fatalf("stateVersion = %d, want %d", got, test.wantStateVersion)
+				}
+			}
+			if len(fields) != wantFieldCount {
+				t.Fatalf("public payload = %s, want only category and, when parseable, stateVersion", public.GetPayload())
 			}
 		})
 	}

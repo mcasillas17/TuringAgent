@@ -61,10 +61,13 @@ var ToolCallIdentityKeys = []string{"toolCallId", "toolName", "serverName", "mod
 // them for recovery, so they are dropped on the way out.
 var executionOnlyKeys = []string{"assignmentAttemptId", "workerId", "leaseOwner", "executionState"}
 
-// repositoryAuthoredStepKeys form the bounded retry/recovery projection. A
-// generic worker step may carry its own note and reason, but only the repository
-// can anchor retry counters or a category to a committed state version.
-var repositoryAuthoredStepKeys = []string{"category", "attempt", "attempts", "maxAttempts", "stateVersion"}
+// The bounded retry/recovery projection's keys — category, attempt, attempts,
+// maxAttempts, stateVersion — form the vocabulary only the repository can
+// anchor to a committed state version. A generic worker step may carry its
+// own note and reason, but never those. That vocabulary lives once in
+// runoutcome (HasReservedRetryNoticeKey, DeleteReservedRetryNoticeKeys) so
+// this boundary and the migration's rewrite ask the identical question
+// instead of keeping two copies of the same list.
 
 // Decode reads one durable event row as the public contract allows it to be
 // read.
@@ -112,9 +115,7 @@ func StripRepositoryAuthoredEventFields(event *turingv1.TuringEvent) {
 	if event.GetType() != turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
 		return
 	}
-	for _, key := range repositoryAuthoredStepKeys {
-		delete(payload.GetFields(), key)
-	}
+	runoutcome.DeleteReservedRetryNoticeKeys(payload.GetFields())
 }
 
 func decodeEventPayload(payloadJSON string) (map[string]any, error) {
@@ -229,16 +230,16 @@ func publicRunStep(payload map[string]any) map[string]any {
 // normalized one this build writes, and the legacy one a row written before the
 // migration still has.
 //
-// Which of these two shapes a row is attempting is decided by which of
-// repositoryAuthoredStepKeys it carries at all, never by whether those keys
-// happen to parse. Gating on a successful parse used to mean a malformed
-// counter — a string, or a value outside this build's vocabulary — read as
-// "this key was never here", and a row that named itself a retry fell through
-// to the pass-through arm below with its raw note and reason intact. A row
-// carrying any reserved key is claiming to be a repository-authored notice,
-// and only the repository ever writes them, so that claim is honored by
-// resolving to a bounded typed notice — never by republishing what came with
-// it.
+// Which of these two shapes a row is attempting is decided by which reserved
+// retry/recovery notice key (runoutcome.HasReservedRetryNoticeKey) it carries
+// at all, never by whether those keys happen to parse. Gating on a successful
+// parse used to mean a malformed counter — a string, or a value outside this
+// build's vocabulary — read as "this key was never here", and a row that
+// named itself a retry fell through to the pass-through arm below with its
+// raw note and reason intact. A row carrying any reserved key is claiming to
+// be a repository-authored notice, and only the repository ever writes them,
+// so that claim is honored by resolving to a bounded typed notice — never by
+// republishing what came with it.
 func runStepNotice(payload map[string]any) (runoutcome.NoticeCategory, int32, int32, bool) {
 	maxAttempts, _ := payloadInt32(payload, "maxAttempts")
 	if stored, ok := payload["category"].(string); ok {
@@ -249,7 +250,7 @@ func runStepNotice(payload map[string]any) (runoutcome.NoticeCategory, int32, in
 			return category, attempt, maxAttempts, true
 		}
 	}
-	if !hasReservedRetryNoticeKey(payload) {
+	if !runoutcome.HasReservedRetryNoticeKey(payload) {
 		return "", 0, 0, false
 	}
 	_, hasAttempts := payload["attempts"]
@@ -263,21 +264,6 @@ func runStepNotice(payload map[string]any) (runoutcome.NoticeCategory, int32, in
 	default:
 		return runoutcome.NoticeDispatchRetry, attempt, maxAttempts, true
 	}
-}
-
-// hasReservedRetryNoticeKey reports whether payload carries any key only the
-// repository's retry/recovery notice writer ever sets. Presence, not parse
-// success, is the signal: a worker's generic step content never carries these
-// keys (StripRepositoryAuthoredEventFields removes them at ingress), so seeing
-// one at all — with a valid value or a corrupted one — means the row is
-// claiming to be a repository-authored notice.
-func hasReservedRetryNoticeKey(payload map[string]any) bool {
-	for _, key := range repositoryAuthoredStepKeys {
-		if _, ok := payload[key]; ok {
-			return true
-		}
-	}
-	return false
 }
 
 // runStateFrom projects the committed snapshot a lifecycle event carries.

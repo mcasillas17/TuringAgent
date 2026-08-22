@@ -3160,8 +3160,8 @@ func TestRunOutcomeMigrationFailsClosedOnMalformedRetryCounters(t *testing.T) {
 // that carries only half of a retry notice's counters: an attempt (or
 // attempts) with no maxAttempts budget at all, or a maxAttempts budget with
 // no attempt/attempts counter at all. Neither key is malformed here — one of
-// them is simply absent. hasReservedRetryNoticeKey still recognizes the row
-// as a retry-notice attempt because it is gated on presence of *any* reserved
+// them is simply absent. runoutcome.HasReservedRetryNoticeKey still recognizes
+// the row as a retry-notice attempt because it is gated on presence of *any* reserved
 // key, not on every counter being present together, so the row must still be
 // rewritten to a bounded, category-only notice rather than left with its raw
 // note and reason durable. The pre-fix rewrite required both a parsed
@@ -3235,6 +3235,128 @@ func TestRunOutcomeMigrationFailsClosedOnIncompleteRetryCounters(t *testing.T) {
 			}
 			if _, leaked := payload["maxAttempts"]; leaked {
 				t.Fatalf("payload published a maxAttempts counter with no attempt count to pair it with: %#v", payload)
+			}
+		})
+	}
+}
+
+// TestRunOutcomeMigrationFailsClosedOnCategoryOnlyNotice covers a row that
+// carries only the "category" reserved key — no attempt, attempts, or
+// maxAttempts at all — and whose category value is either unrecognized or the
+// wrong JSON type. runoutcome.HasReservedRetryNoticeKey must still recognize
+// this row as a retry-notice attempt from "category" alone, because the
+// migration's rewrite never reads the raw category value anyway (it always
+// derives the category itself from the reason/attempts shape); what matters
+// here is that the row is not left untouched with its raw note and reason
+// durable. This pins "category" specifically in the reserved-key list: a
+// mutation that dropped "category" from that list (leaving only
+// attempt/attempts/maxAttempts/stateVersion) would let this row fall through
+// to the "not a retry notice" branch and keep its raw payload forever.
+func TestRunOutcomeMigrationFailsClosedOnCategoryOnlyNotice(t *testing.T) {
+	testCases := []struct {
+		name    string
+		payload string
+		want    map[string]any
+	}{
+		{
+			name:    "unrecognized category value, no counters",
+			payload: `{"note":"retrying after connection refused by ollama at 127.0.0.1:11434","reason":"model_error","category":"not_a_real_category"}`,
+			want:    map[string]any{"category": "dispatch_retry"},
+		},
+		{
+			name:    "wrong-typed category value, no counters",
+			payload: `{"note":"retrying","reason":"worker_unavailable","category":42}`,
+			want:    map[string]any{"category": "recovery_retry"},
+		},
+	}
+
+	ctx := context.Background()
+	database := openMigratedThroughLegacy(t, ctx, filepath.Join(t.TempDir(), "category-only.db"))
+	defer database.Close()
+	seedLegacySession(t, ctx, database, "sess_category_only")
+	for index, testCase := range testCases {
+		seedLegacyEvent(t, ctx, database, "sess_category_only", "", index+1, "agent.run.step", testCase.payload)
+	}
+
+	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	for index, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			payload := readEventPayload(t, ctx, database, "sess_category_only", index+1)
+			if !reflect.DeepEqual(payload, testCase.want) {
+				t.Fatalf("payload = %#v, want %#v (row left carrying more than the bounded category)", payload, testCase.want)
+			}
+			if _, leaked := payload["note"]; leaked {
+				t.Fatalf("payload retained the raw note: %#v", payload)
+			}
+			if _, leaked := payload["reason"]; leaked {
+				t.Fatalf("payload retained the raw reason: %#v", payload)
+			}
+			if _, leaked := payload["stateVersion"]; leaked {
+				t.Fatalf("payload published stateVersion with no run to cite: %#v", payload)
+			}
+		})
+	}
+}
+
+// TestRunOutcomeMigrationFailsClosedOnBareStateVersionNotice is the
+// "stateVersion" counterpart to the category-only test above: a row that
+// carries only the "stateVersion" reserved key — no category, attempt,
+// attempts, or maxAttempts — with its raw note and reason still attached.
+// The migration never reads this legacy stateVersion value (the rewritten
+// stateVersion, when published at all, always comes from the row's own
+// correlated run state), so a malformed or wrong-typed stored value must not
+// matter to whether the row is recognized. This pins "stateVersion"
+// specifically: a mutation that dropped it from the reserved-key list would
+// leave this row unrecognized as a retry-notice attempt and keep its raw
+// note/reason durable forever.
+func TestRunOutcomeMigrationFailsClosedOnBareStateVersionNotice(t *testing.T) {
+	testCases := []struct {
+		name    string
+		payload string
+		want    map[string]any
+	}{
+		{
+			name:    "numeric stateVersion, no counters or category",
+			payload: `{"note":"retrying after connection refused by ollama at 127.0.0.1:11434","reason":"model_error","stateVersion":7}`,
+			want:    map[string]any{"category": "dispatch_retry"},
+		},
+		{
+			name:    "wrong-typed stateVersion, no counters or category",
+			payload: `{"note":"retrying","reason":"worker_unavailable","stateVersion":"not-a-number"}`,
+			want:    map[string]any{"category": "recovery_retry"},
+		},
+	}
+
+	ctx := context.Background()
+	database := openMigratedThroughLegacy(t, ctx, filepath.Join(t.TempDir(), "bare-state-version.db"))
+	defer database.Close()
+	seedLegacySession(t, ctx, database, "sess_bare_state_version")
+	for index, testCase := range testCases {
+		seedLegacyEvent(t, ctx, database, "sess_bare_state_version", "", index+1, "agent.run.step", testCase.payload)
+	}
+
+	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	for index, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			payload := readEventPayload(t, ctx, database, "sess_bare_state_version", index+1)
+			if !reflect.DeepEqual(payload, testCase.want) {
+				t.Fatalf("payload = %#v, want %#v (row left carrying more than the bounded category)", payload, testCase.want)
+			}
+			if _, leaked := payload["note"]; leaked {
+				t.Fatalf("payload retained the raw note: %#v", payload)
+			}
+			if _, leaked := payload["reason"]; leaked {
+				t.Fatalf("payload retained the raw reason: %#v", payload)
+			}
+			// The legacy row is unattached to any run, so the rewrite has no
+			// correlated state to cite; a raw stateVersion the row itself
+			// carried must not leak through as if it were that citation.
+			if got, leaked := payload["stateVersion"]; leaked {
+				t.Fatalf("payload published stateVersion = %#v derived from the raw stored value with no run to cite", got)
 			}
 		})
 	}

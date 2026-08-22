@@ -1060,26 +1060,6 @@ var approvalEventIdentityKeys = []string{"approvalId", "toolCallId", "toolName",
 
 var toolCallEventIdentityKeys = []string{"toolCallId", "toolName", "serverName", "modelToolCallId"}
 
-// reservedRetryNoticeKeys are the payload keys only the repository's retry and
-// recovery notice writer ever sets on an agent.run.step row (see
-// repositoryAuthoredStepKeys in the events package's public-read boundary,
-// which this list mirrors so the two boundaries answer the same question
-// identically). Their presence — not whether their values still parse — is
-// what marks a legacy row as a retry-notice attempt rather than a governed
-// non-retry step, so a value this build cannot trust must still resolve to a
-// bounded typed notice instead of being left as an unrewritten row that keeps
-// republishing its raw note and reason forever.
-var reservedRetryNoticeKeys = []string{"category", "attempt", "attempts", "maxAttempts", "stateVersion"}
-
-func hasReservedRetryNoticeKey(payload map[string]any) bool {
-	for _, key := range reservedRetryNoticeKeys {
-		if _, ok := payload[key]; ok {
-			return true
-		}
-	}
-	return false
-}
-
 func rewriteFailureEventPayload(row legacyEventRow) (string, bool, error) {
 	switch row.eventType {
 	case "agent.run.failed", "agent.run.cancelled":
@@ -1139,9 +1119,9 @@ func rewriteIdentityEvent(row legacyEventRow, identityKeys []string, category ru
 }
 
 // rewriteRunStepNotice rewrites only the failure-like notices. A run-step
-// payload that carries none of reservedRetryNoticeKeys is a redacted-egress or
-// model-limit projection, which is governed elsewhere and is left exactly as
-// it was.
+// payload that carries none of the reserved retry/recovery notice keys (see
+// runoutcome.HasReservedRetryNoticeKey) is a redacted-egress or model-limit
+// projection, which is governed elsewhere and is left exactly as it was.
 //
 // A payload that does carry one of those keys is claiming to be a
 // repository-authored retry or recovery notice, and that claim is resolved to
@@ -1154,7 +1134,7 @@ func rewriteRunStepNotice(row legacyEventRow) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	if !hasReservedRetryNoticeKey(legacy) {
+	if !runoutcome.HasReservedRetryNoticeKey(legacy) {
 		return "", false, nil
 	}
 	maxAttempts, _ := payloadInt32(legacy, "maxAttempts")
@@ -1212,20 +1192,20 @@ func marshalEventPayload(payload any) (string, bool, error) {
 }
 
 // payloadInt32 accepts only an exact integral value in the supported int32
-// range. A stored counter this build ever wrote is always a whole number, so a
-// fractional value (2.9) is not a counter that lost precision — it is a value
-// no writer here produced, and truncating it would fabricate a
-// plausible-looking count. Out of range and fractional are both reported as
-// present-but-unusable (ok=true, value=0) rather than absent, so a caller can
-// still tell "this key was never here" apart from "this key was here but
-// broken".
+// range. Out of range is reported as present-but-unusable (ok=true, value=0)
+// so a caller could tell "this key was never here" apart from "this key was
+// here but broken" — though none of this function's three call sites in
+// rewriteRunStepNotice actually inspect ok, because presence is already
+// decided upstream by runoutcome.HasReservedRetryNoticeKey before any of
+// these counters are read. A stored counter this build ever wrote is always a
+// whole number, so a fractional value (2.9) is not a counter that lost
+// precision — it is a value no writer here produced, and truncating it would
+// fabricate a plausible-looking count. It is reported the same as an absent
+// key (ok=false, value=0), matching the events package's own payloadInt32.
 func payloadInt32(payload map[string]any, key string) (int32, bool) {
 	number, ok := payload[key].(float64)
-	if !ok {
+	if !ok || number != math.Trunc(number) {
 		return 0, false
-	}
-	if number != math.Trunc(number) {
-		return 0, true
 	}
 	if number < math.MinInt32 || number > math.MaxInt32 {
 		return 0, true
