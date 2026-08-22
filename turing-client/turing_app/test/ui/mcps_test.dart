@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/features/workspace/workspace_pages.dart';
 import 'package:turing_flutter_app/models/mcp_server.dart';
+import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 
 import '../support/no_audit_api.dart';
@@ -193,6 +194,17 @@ void main() {
         find.textContaining('a server with that name already exists'),
         findsOneWidget,
       );
+      // The call is recorded even though it failed, so a failure test can
+      // assert on exactly what was sent — the fake records args before
+      // consulting its gate/error, mirroring what a real API call sends
+      // over the wire before the response comes back.
+      expect(api.registerCalls, hasLength(1));
+      expect(api.registerCalls.single, {
+        'name': 'Vendor',
+        'url': 'https://vendor.example/mcp',
+        'tier': McpServerTier.remoteUrl,
+        'token': 'super-secret-value',
+      });
       // Non-secret form state is retained, so the user is not forced to
       // retype it to correct and retry.
       expect(
@@ -224,6 +236,33 @@ void main() {
       );
       expect(find.textContaining('super-secret-value'), findsNothing);
       expect(find.textContaining('******'), findsNothing);
+    });
+
+    testWidgets('a backend error is announced as a semantic live region', (
+      tester,
+    ) async {
+      final api = _McpApi()
+        ..registerError = const TuringApiException(
+          code: 'mcp_server_conflict',
+          message: 'a server with that name already exists',
+        );
+      await _pumpMcps(tester, api);
+
+      await tester.enterText(find.byKey(const Key('mcpsAddName')), 'Vendor');
+      await tester.enterText(
+        find.byKey(const Key('mcpsAddUrl')),
+        'https://vendor.example/mcp',
+      );
+      await tester.tap(find.byKey(const Key('mcpsAddSubmit')));
+      await tester.pumpAndSettle();
+
+      expect(
+        _isAnnouncedAsLiveRegion(
+          tester,
+          find.textContaining('a server with that name already exists'),
+        ),
+        isTrue,
+      );
     });
 
     testWidgets('a busy submission cannot be duplicated', (tester) async {
@@ -416,6 +455,166 @@ void main() {
       },
     );
 
+    testWidgets(
+      'a busy enable/disable toggle disables the switch and cannot be '
+      'duplicated by rapid taps',
+      (tester) async {
+        final gate = Completer<void>();
+        final api = _McpApi()
+          ..servers.add(_localServer())
+          ..enabledGates['mcp_vendor'] = gate;
+        await _pumpMcps(tester, api);
+        final listCallsBefore = api.listCalls;
+
+        await tester.tap(find.byType(Switch));
+        await tester.pump();
+
+        // Second rapid tap while the first request is still pending must
+        // not fire a second call — the switch itself should be disabled.
+        final toggle = tester.widget<Switch>(find.byType(Switch));
+        expect(toggle.onChanged, isNull);
+        await tester.tap(find.byType(Switch), warnIfMissed: false);
+        await tester.pump();
+
+        expect(api.enabledCalls, hasLength(1));
+
+        gate.complete();
+        await tester.pumpAndSettle();
+
+        expect(api.enabledCalls, hasLength(1));
+        expect(api.listCalls, greaterThan(listCallsBefore));
+      },
+    );
+
+    testWidgets(
+      'a busy mutation on one server does not disable another server\'s '
+      'switch or popup',
+      (tester) async {
+        final gate = Completer<void>();
+        final api = _McpApi()
+          ..servers.add(_localServer(serverId: 'mcp_a', name: 'alpha'))
+          ..servers.add(_localServer(serverId: 'mcp_b', name: 'beta'))
+          ..enabledGates['mcp_a'] = gate;
+        await _pumpMcps(tester, api);
+
+        await tester.tap(find.byType(Switch).first);
+        await tester.pump();
+
+        // alpha sorts before beta, so the first switch is alpha's — busy —
+        // and the second is beta's, which must remain interactive.
+        final switches = tester.widgetList<Switch>(find.byType(Switch));
+        expect(switches.first.onChanged, isNull);
+        expect(switches.last.onChanged, isNotNull);
+
+        await tester.ensureVisible(find.byType(Switch).last);
+        await tester.pump();
+        await tester.tap(find.byType(Switch).last);
+        await tester.pump();
+        expect(api.enabledCalls, hasLength(2));
+        expect(
+          api.enabledCalls.map((c) => c['serverId']),
+          containsAll(['mcp_a', 'mcp_b']),
+        );
+
+        gate.complete();
+        await tester.pumpAndSettle();
+      },
+    );
+
+    testWidgets(
+      'a failed enable/disable toggle re-enables the switch and surfaces '
+      'the error',
+      (tester) async {
+        final api = _McpApi()
+          ..servers.add(_localServer())
+          ..enabledError = StateError('vendor is unreachable');
+        await _pumpMcps(tester, api);
+        final listCallsBefore = api.listCalls;
+
+        await tester.tap(find.byType(Switch));
+        await tester.pumpAndSettle();
+
+        expect(api.enabledCalls, hasLength(1));
+        expect(find.textContaining('vendor is unreachable'), findsOneWidget);
+        // The busy flag must be cleared on failure too, or the switch would
+        // stay disabled forever after a transient error.
+        final toggle = tester.widget<Switch>(find.byType(Switch));
+        expect(toggle.onChanged, isNotNull);
+        // A failed mutation must not trigger a reload.
+        expect(api.listCalls, listCallsBefore);
+
+        // The switch works again on the next attempt.
+        await tester.tap(find.byType(Switch));
+        await tester.pump();
+        expect(api.enabledCalls, hasLength(2));
+      },
+    );
+
+    testWidgets(
+      'a busy delete disables the popup menu and cannot be duplicated by '
+      'rapid taps',
+      (tester) async {
+        final gate = Completer<void>();
+        final api = _McpApi()
+          ..servers.add(_localServer())
+          ..deleteGates['mcp_vendor'] = gate;
+        await _pumpMcps(tester, api);
+        final listCallsBefore = api.listCalls;
+
+        await tester.tap(find.byTooltip('Actions for vendor'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Remove'));
+        await tester.pump();
+
+        expect(api.deleteCalls, hasLength(1));
+
+        // The popup itself must be disabled while the delete is pending —
+        // a second rapid open-and-remove must not fire a duplicate call.
+        final popup = tester.widget<PopupMenuButton<String>>(
+          find.byType(PopupMenuButton<String>),
+        );
+        expect(popup.enabled, isFalse);
+
+        gate.complete();
+        await tester.pumpAndSettle();
+
+        expect(api.deleteCalls, hasLength(1));
+        expect(api.listCalls, greaterThan(listCallsBefore));
+      },
+    );
+
+    testWidgets(
+      'a failed delete re-enables the popup menu and surfaces the error',
+      (tester) async {
+        final api = _McpApi()
+          ..servers.add(_localServer())
+          ..deleteError = StateError('vendor cannot be removed right now');
+        await _pumpMcps(tester, api);
+        final listCallsBefore = api.listCalls;
+
+        await tester.tap(find.byTooltip('Actions for vendor'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Remove'));
+        await tester.pumpAndSettle();
+
+        expect(api.deleteCalls, hasLength(1));
+        expect(
+          find.textContaining('vendor cannot be removed right now'),
+          findsOneWidget,
+        );
+        // The busy flag must be cleared on failure too, or the popup would
+        // stay disabled forever after a transient error.
+        final popup = tester.widget<PopupMenuButton<String>>(
+          find.byType(PopupMenuButton<String>),
+        );
+        expect(popup.enabled, isTrue);
+        // A failed mutation must not trigger a reload, and the server must
+        // still be in the list.
+        expect(api.listCalls, listCallsBefore);
+        expect(find.text('vendor'), findsOneWidget);
+      },
+    );
+
     testWidgets('choosing Remove from the popup calls deleteMcpServer with the '
         'exact id, then reloads', (tester) async {
       final api = _McpApi()..servers.add(_localServer());
@@ -478,12 +677,143 @@ void main() {
         find.byKey(const Key('mcpsRotateToken')),
         'new-token',
       );
-      await tester.tap(find.text('Rotate token').last);
+      await tester.tap(find.byKey(const Key('mcpsRotateSubmit')));
       await tester.pumpAndSettle();
 
       expect(api.rotateCalls, hasLength(1));
       expect(api.deleteCalls, isEmpty);
     });
+  });
+
+  group('changing a tool policy', () {
+    testWidgets(
+      'choosing a different policy calls updateMcpToolPolicy with the exact '
+      'serverId/toolName/policy, disables the picker while busy, and '
+      'reloads on success',
+      (tester) async {
+        final gate = Completer<void>();
+        final api = _McpApi()
+          ..servers.add(
+            _localServer(
+              tools: const [
+                ToolDescriptor(
+                  serverName: 'vendor',
+                  toolName: 'search',
+                  policy: ToolPolicy.safe,
+                ),
+              ],
+            ),
+          )
+          ..policyGate = gate;
+        await _pumpMcps(tester, api);
+        final listCallsBefore = api.listCalls;
+
+        await tester.tap(find.byType(DropdownButton<ToolPolicy>));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Disabled').last);
+        await tester.pump();
+
+        expect(api.policyCalls, hasLength(1));
+        expect(api.policyCalls.single, {
+          'serverId': 'mcp_vendor',
+          'toolName': 'search',
+          'policy': ToolPolicy.disabled,
+        });
+
+        // While the request is in flight, the picker must be disabled so a
+        // second selection cannot fire a duplicate call.
+        final picker = tester.widget<DropdownButton<ToolPolicy>>(
+          find.byType(DropdownButton<ToolPolicy>),
+        );
+        expect(picker.onChanged, isNull);
+
+        gate.complete();
+        await tester.pumpAndSettle();
+
+        expect(api.policyCalls, hasLength(1));
+        expect(api.listCalls, greaterThan(listCallsBefore));
+      },
+    );
+
+    testWidgets(
+      'a busy policy change for one tool does not disable a different '
+      "tool's picker on the same server",
+      (tester) async {
+        final gate = Completer<void>();
+        final api = _McpApi()
+          ..servers.add(
+            _localServer(
+              tools: const [
+                ToolDescriptor(
+                  serverName: 'vendor',
+                  toolName: 'ls',
+                  policy: ToolPolicy.safe,
+                ),
+                ToolDescriptor(
+                  serverName: 'vendor',
+                  toolName: 'search',
+                  policy: ToolPolicy.safe,
+                ),
+              ],
+            ),
+          )
+          ..policyGate = gate;
+        await _pumpMcps(tester, api);
+
+        await tester.tap(find.byType(DropdownButton<ToolPolicy>).first);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Disabled').last);
+        await tester.pump();
+
+        final pickers = tester.widgetList<DropdownButton<ToolPolicy>>(
+          find.byType(DropdownButton<ToolPolicy>),
+        );
+        // ls comes before search alphabetically, so the busy picker is the
+        // first one — the second tool's picker must stay enabled.
+        expect(pickers.first.onChanged, isNull);
+        expect(pickers.last.onChanged, isNotNull);
+
+        gate.complete();
+        await tester.pumpAndSettle();
+      },
+    );
+
+    testWidgets(
+      'a failed policy change re-enables the picker and surfaces the error',
+      (tester) async {
+        final api = _McpApi()
+          ..servers.add(
+            _localServer(
+              tools: const [
+                ToolDescriptor(
+                  serverName: 'vendor',
+                  toolName: 'search',
+                  policy: ToolPolicy.safe,
+                ),
+              ],
+            ),
+          )
+          ..policyError = StateError('policy update rejected');
+        await _pumpMcps(tester, api);
+        final listCallsBefore = api.listCalls;
+
+        await tester.tap(find.byType(DropdownButton<ToolPolicy>));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Disabled').last);
+        await tester.pumpAndSettle();
+
+        expect(api.policyCalls, hasLength(1));
+        expect(find.textContaining('policy update rejected'), findsOneWidget);
+        // The busy flag must be cleared on failure too, or the picker would
+        // stay disabled forever after a transient error.
+        final picker = tester.widget<DropdownButton<ToolPolicy>>(
+          find.byType(DropdownButton<ToolPolicy>),
+        );
+        expect(picker.onChanged, isNotNull);
+        // A failed mutation must not trigger a reload.
+        expect(api.listCalls, listCallsBefore);
+      },
+    );
   });
 
   group('rotating a server token', () {
@@ -503,7 +833,7 @@ void main() {
         find.byKey(const Key('mcpsRotateToken')),
         'new-rotated-token',
       );
-      await tester.tap(find.text('Rotate token').last);
+      await tester.tap(find.byKey(const Key('mcpsRotateSubmit')));
       await tester.pumpAndSettle();
 
       expect(api.rotateCalls, hasLength(1));
@@ -530,7 +860,7 @@ void main() {
       );
       expect(find.text('new-rotated-token'), findsNothing);
 
-      await tester.tap(find.text('Rotate token').last);
+      await tester.tap(find.byKey(const Key('mcpsRotateSubmit')));
       await tester.pumpAndSettle();
 
       expect(api.rotateCalls, hasLength(2));
@@ -586,7 +916,7 @@ void main() {
           find.byKey(const Key('mcpsRotateToken')),
           'will-fail',
         );
-        await tester.tap(find.text('Rotate token').last);
+        await tester.tap(find.byKey(const Key('mcpsRotateSubmit')));
         await tester.pumpAndSettle();
 
         expect(api.rotateCalls, hasLength(1));
@@ -598,6 +928,13 @@ void main() {
           findsOneWidget,
         );
         expect(api.listCalls, listCallsBefore);
+        expect(
+          _isAnnouncedAsLiveRegion(
+            tester,
+            find.textContaining('server rejected the token'),
+          ),
+          isTrue,
+        );
       },
     );
 
@@ -619,7 +956,7 @@ void main() {
           find.byKey(const Key('mcpsRotateToken')),
           'will-fail',
         );
-        await tester.tap(find.text('Rotate token').last);
+        await tester.tap(find.byKey(const Key('mcpsRotateSubmit')));
         await tester.pumpAndSettle();
 
         // Write-only/minimal-retention: the rejected token is not left in
@@ -641,7 +978,7 @@ void main() {
           find.byKey(const Key('mcpsRotateToken')),
           'second-attempt',
         );
-        await tester.tap(find.text('Rotate token').last);
+        await tester.tap(find.byKey(const Key('mcpsRotateSubmit')));
         await tester.pumpAndSettle();
 
         expect(api.rotateCalls, hasLength(2));
@@ -681,6 +1018,61 @@ void main() {
       await tester.pumpAndSettle();
       expect(api.rotateCalls, hasLength(1));
     });
+
+    testWidgets(
+      'the barrier and back navigation cannot dismiss the dialog while a '
+      'rotation is pending, but it closes and reloads once it completes',
+      (tester) async {
+        final gate = Completer<McpServer>();
+        final api = _McpApi()
+          ..servers.add(_localServer())
+          ..rotateGate = gate;
+        await _pumpMcps(tester, api);
+        final listCallsBefore = api.listCalls;
+
+        await tester.tap(find.byTooltip('Actions for vendor'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Rotate token'));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('mcpsRotateToken')),
+          'still-in-flight',
+        );
+        await tester.tap(find.byKey(const Key('mcpsRotateSubmit')));
+        await tester.pump();
+
+        // Tapping the modal barrier must not dismiss the dialog while the
+        // rotation is in flight. `pumpAndSettle` lets any dismiss
+        // transition fully play out so a would-be dismissal is not missed.
+        await tester.tapAt(const Offset(5, 5));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('mcpsRotateToken')), findsOneWidget);
+
+        // Nor can the platform back gesture/button. `handlePopRoute`
+        // resolves true because PopScope reports the request as handled —
+        // the important thing is it did not actually close the dialog.
+        final dynamic backResult = await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(backResult, isTrue);
+        expect(find.byKey(const Key('mcpsRotateToken')), findsOneWidget);
+
+        // Cancel must still be disabled while pending — the only way out
+        // is for the request to finish.
+        expect(
+          tester
+              .widget<TextButton>(find.widgetWithText(TextButton, 'Cancel'))
+              .onPressed,
+          isNull,
+        );
+
+        gate.complete(_localServer());
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('mcpsRotateToken')), findsNothing);
+        expect(api.listCalls, greaterThan(listCallsBefore));
+      },
+    );
   });
 
   group('the empty state', () {
@@ -759,6 +1151,47 @@ void main() {
           expect(tester.takeException(), isNull);
         },
       );
+
+      testWidgets(
+        'a server card with short and long tool names/policies fits at '
+        '${size.width}x${size.height} with a working policy dropdown',
+        (tester) async {
+          final api = _McpApi()
+            ..servers.add(
+              _localServer(
+                tools: const [
+                  ToolDescriptor(
+                    serverName: 'vendor',
+                    toolName: 'ls',
+                    policy: ToolPolicy.safe,
+                  ),
+                  ToolDescriptor(
+                    serverName: 'vendor',
+                    toolName:
+                        'a_very_long_tool_name_that_could_overflow_a_narrow_row',
+                    policy: ToolPolicy.approvalRequired,
+                  ),
+                ],
+              ),
+            );
+          await _pumpMcps(tester, api, size: size);
+
+          expect(tester.takeException(), isNull);
+
+          // The dropdown must still open and show readable policy options.
+          await tester.ensureVisible(
+            find.byType(DropdownButton<ToolPolicy>).first,
+          );
+          await tester.pumpAndSettle();
+          await tester.tap(find.byType(DropdownButton<ToolPolicy>).first);
+          await tester.pumpAndSettle();
+
+          expect(tester.takeException(), isNull);
+          expect(find.text('Runs freely'), findsWidgets);
+          expect(find.text('Asks first'), findsWidgets);
+          expect(find.text('Disabled'), findsWidgets);
+        },
+      );
     }
   });
 }
@@ -770,9 +1203,24 @@ Future<void> _selectTier(WidgetTester tester, String label) async {
   await tester.pumpAndSettle();
 }
 
+/// Whether a `Semantics(liveRegion: true)` ancestor wraps the widget found
+/// by [finder], meaning assistive tech announces it without focus moving —
+/// as opposed to merely being present as visible text.
+bool _isAnnouncedAsLiveRegion(WidgetTester tester, Finder finder) {
+  final ancestors = find.ancestor(of: finder, matching: find.byType(Semantics));
+  for (final element in ancestors.evaluate()) {
+    final widget = element.widget;
+    if (widget is Semantics && widget.properties.liveRegion == true) {
+      return true;
+    }
+  }
+  return false;
+}
+
 McpServer _localServer({
   String serverId = 'mcp_vendor',
   String name = 'vendor',
+  List<ToolDescriptor> tools = const [],
 }) => McpServer(
   serverId: serverId,
   name: name,
@@ -783,7 +1231,7 @@ McpServer _localServer({
   liveness: McpServerLiveness.unknown,
   statusMessage: '',
   sandboxConfined: true,
-  tools: const [],
+  tools: tools,
 );
 
 McpServer _bundledServer() => McpServer(
@@ -841,7 +1289,15 @@ class _McpApi
   int _nextId = 1;
 
   final List<Map<String, Object?>> enabledCalls = [];
+  Object? enabledError;
+  // Keyed by serverId so tests can gate one server's mutation without
+  // blocking another's — mirrors the production dedupe, which must not be
+  // global across servers.
+  final Map<String, Completer<void>> enabledGates = {};
+
   final List<String> deleteCalls = [];
+  Object? deleteError;
+  final Map<String, Completer<void>> deleteGates = {};
 
   McpImportReport? importReport;
   Object? importError;
@@ -851,6 +1307,10 @@ class _McpApi
   final List<Map<String, String>> rotateCalls = [];
   Object? rotateError;
   Completer<McpServer>? rotateGate;
+
+  final List<Map<String, Object?>> policyCalls = [];
+  Object? policyError;
+  Completer<void>? policyGate;
 
   @override
   Future<McpRegistrySnapshot> listMcpServers() async {
@@ -868,6 +1328,10 @@ class _McpApi
     required bool enabled,
   }) async {
     enabledCalls.add({'serverId': serverId, 'enabled': enabled});
+    final gate = enabledGates[serverId];
+    if (gate != null) await gate.future;
+    final error = enabledError;
+    if (error != null) throw error;
     final index = servers.indexWhere((s) => s.serverId == serverId);
     final updated = _withEnabled(servers[index], enabled);
     servers[index] = updated;
@@ -877,6 +1341,10 @@ class _McpApi
   @override
   Future<void> deleteMcpServer({required String serverId}) async {
     deleteCalls.add(serverId);
+    final gate = deleteGates[serverId];
+    if (gate != null) await gate.future;
+    final error = deleteError;
+    if (error != null) throw error;
     servers.removeWhere((s) => s.serverId == serverId);
   }
 
@@ -888,16 +1356,19 @@ class _McpApi
     String bearerToken = '',
   }) async {
     registerCallCount++;
-    final gate = registerGate;
-    if (gate != null) await gate.future;
-    final error = registerError;
-    if (error != null) throw error;
+    // Recorded before the gate/error so failure and busy-dedupe tests can
+    // assert on exactly what was sent, even when the call never resolves
+    // successfully.
     registerCalls.add({
       'name': name,
       'url': url,
       'tier': tier,
       'token': bearerToken,
     });
+    final gate = registerGate;
+    if (gate != null) await gate.future;
+    final error = registerError;
+    if (error != null) throw error;
     final server = McpServer(
       serverId: 'mcp_new_${_nextId++}',
       name: name,
@@ -943,6 +1414,40 @@ class _McpApi
     return servers[index];
   }
 
+  @override
+  Future<ToolDescriptor> updateMcpToolPolicy({
+    required String serverId,
+    required String toolName,
+    required ToolPolicy policy,
+  }) async {
+    policyCalls.add({
+      'serverId': serverId,
+      'toolName': toolName,
+      'policy': policy,
+    });
+    final gate = policyGate;
+    if (gate != null) await gate.future;
+    final error = policyError;
+    if (error != null) throw error;
+    final serverIndex = servers.indexWhere((s) => s.serverId == serverId);
+    final server = servers[serverIndex];
+    final tools = [
+      for (final tool in server.tools)
+        if (tool.toolName == toolName)
+          ToolDescriptor(
+            serverName: tool.serverName,
+            toolName: tool.toolName,
+            policy: policy,
+            enabled: tool.enabled,
+            present: tool.present,
+          )
+        else
+          tool,
+    ];
+    servers[serverIndex] = _withTools(server, tools);
+    return tools.firstWhere((tool) => tool.toolName == toolName);
+  }
+
   McpServer _withEnabled(McpServer server, bool enabled) => McpServer(
     serverId: server.serverId,
     name: server.name,
@@ -955,6 +1460,20 @@ class _McpApi
     sandboxConfined: server.sandboxConfined,
     tools: server.tools,
   );
+
+  McpServer _withTools(McpServer server, List<ToolDescriptor> tools) =>
+      McpServer(
+        serverId: server.serverId,
+        name: server.name,
+        transport: server.transport,
+        url: server.url,
+        tier: server.tier,
+        enabled: server.enabled,
+        liveness: server.liveness,
+        statusMessage: server.statusMessage,
+        sandboxConfined: server.sandboxConfined,
+        tools: tools,
+      );
 
   @override
   dynamic noSuchMethod(Invocation invocation) =>

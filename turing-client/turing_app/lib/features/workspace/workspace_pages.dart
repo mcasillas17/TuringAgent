@@ -71,6 +71,9 @@ class McpsPage extends StatefulWidget {
 class _McpsPageState extends State<McpsPage> {
   late Future<McpRegistrySnapshot> _registry;
   final Set<String> _pendingToolPolicies = {};
+  // Keyed by serverId so a pending enable/disable or delete for one server
+  // disables only that server's Switch/popup, never a different server's.
+  final Set<String> _pendingServerMutations = {};
   bool _reimporting = false;
 
   @override
@@ -109,6 +112,9 @@ class _McpsPageState extends State<McpsPage> {
   Future<void> _rotateToken(McpServer server) async {
     final rotated = await showDialog<bool>(
       context: context,
+      // The dialog manages its own dismissal via PopScope so it cannot be
+      // dismissed by the barrier while a rotation is in flight.
+      barrierDismissible: false,
       builder: (_) =>
           _RotateTokenDialog(apiClient: widget.apiClient, server: server),
     );
@@ -116,6 +122,8 @@ class _McpsPageState extends State<McpsPage> {
   }
 
   Future<void> _setServerEnabled(McpServer server, bool enabled) async {
+    if (_pendingServerMutations.contains(server.serverId)) return;
+    setState(() => _pendingServerMutations.add(server.serverId));
     try {
       await widget.apiClient.setMcpServerEnabled(
         serverId: server.serverId,
@@ -127,6 +135,10 @@ class _McpsPageState extends State<McpsPage> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('$error')));
+    } finally {
+      if (mounted) {
+        setState(() => _pendingServerMutations.remove(server.serverId));
+      }
     }
   }
 
@@ -158,6 +170,8 @@ class _McpsPageState extends State<McpsPage> {
   }
 
   Future<void> _deleteServer(McpServer server) async {
+    if (_pendingServerMutations.contains(server.serverId)) return;
+    setState(() => _pendingServerMutations.add(server.serverId));
     try {
       await widget.apiClient.deleteMcpServer(serverId: server.serverId);
       if (mounted) _reload();
@@ -166,6 +180,10 @@ class _McpsPageState extends State<McpsPage> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('$error')));
+    } finally {
+      if (mounted) {
+        setState(() => _pendingServerMutations.remove(server.serverId));
+      }
     }
   }
 
@@ -253,6 +271,7 @@ class _McpsPageState extends State<McpsPage> {
                       onPolicyChanged: (tool, policy) =>
                           _setToolPolicy(server, tool, policy),
                       pendingToolPolicies: _pendingToolPolicies,
+                      busy: _pendingServerMutations.contains(server.serverId),
                     ),
                     const SizedBox(height: 12),
                   ],
@@ -275,6 +294,7 @@ class _ServerCard extends StatelessWidget {
     required this.onRotateToken,
     required this.onPolicyChanged,
     required this.pendingToolPolicies,
+    required this.busy,
   });
 
   final McpServer server;
@@ -284,6 +304,10 @@ class _ServerCard extends StatelessWidget {
   final VoidCallback? onRotateToken;
   final void Function(ToolDescriptor tool, ToolPolicy policy) onPolicyChanged;
   final Set<String> pendingToolPolicies;
+  // True while an enable/disable or delete for this server is in flight, so
+  // the Switch and popup can be disabled and a rapid second tap cannot
+  // submit a duplicate write.
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
@@ -347,10 +371,11 @@ class _ServerCard extends StatelessWidget {
                       children: [
                         Switch(
                           value: server.enabled,
-                          onChanged: onEnabledChanged,
+                          onChanged: busy ? null : onEnabledChanged,
                         ),
                         if (onRotateToken != null || onDelete != null)
                           PopupMenuButton<String>(
+                            enabled: !busy,
                             tooltip: 'Actions for ${server.name}',
                             icon: const Icon(Icons.more_vert, size: 18),
                             onSelected: (value) {
@@ -416,12 +441,20 @@ class _ServerCard extends StatelessWidget {
                 alignment: WrapAlignment.spaceBetween,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  Text(
-                    tool.toolName,
-                    style: TextStyle(
-                      fontSize: 13.5,
-                      fontFamily: 'monospace',
-                      color: palette.text,
+                  ConstrainedBox(
+                    // Bounded so a long tool name ellipsizes instead of
+                    // pushing the policy picker off the card at compact
+                    // widths, matching the name treatment in the header.
+                    constraints: const BoxConstraints(maxWidth: 150),
+                    child: Text(
+                      tool.toolName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontFamily: 'monospace',
+                        color: palette.text,
+                      ),
                     ),
                   ),
                   _PolicyPicker(
@@ -623,9 +656,12 @@ class _AddServerCardState extends State<_AddServerCard> {
           ),
           if (_error != null) ...[
             const SizedBox(height: 10),
-            Text(
-              _error!,
-              style: TextStyle(fontSize: 12.5, color: AppColors.danger),
+            Semantics(
+              liveRegion: true,
+              child: Text(
+                _error!,
+                style: TextStyle(fontSize: 12.5, color: AppColors.danger),
+              ),
             ),
           ],
           if (_status != null) ...[
@@ -646,8 +682,26 @@ class _AddServerCardState extends State<_AddServerCard> {
 
 /// Bounds dialog content to a sane width on desktop while staying scrollable
 /// and shrinking down safely on compact/mobile viewports.
+///
+/// The subtracted amount is derived from what [AlertDialog] itself actually
+/// reserves outside the content area — its `insetPadding` (dialog margin
+/// from the screen edges) plus the default `contentPadding` it applies
+/// around content (see `AlertDialog`'s defaults in the Flutter SDK) — rather
+/// than a single opaque constant, so it tracks the dialog's real chrome
+/// instead of an estimate that can drift out of sync with it.
 double _dialogWidth(BuildContext context, double preferred) {
-  final available = MediaQuery.of(context).size.width - 160;
+  final theme = Theme.of(context);
+  final insetPadding =
+      theme.dialogTheme.insetPadding ??
+      const EdgeInsets.symmetric(horizontal: 40, vertical: 24);
+  final contentPadding = EdgeInsets.only(
+    left: 24,
+    top: theme.useMaterial3 ? 16 : 20,
+    right: 24,
+    bottom: 24,
+  );
+  final horizontalChrome = insetPadding.horizontal + contentPadding.horizontal;
+  final available = MediaQuery.of(context).size.width - horizontalChrome;
   final width = available < 0 ? 0.0 : available;
   return width < preferred ? width : preferred;
 }
@@ -803,49 +857,59 @@ class _RotateTokenDialogState extends State<_RotateTokenDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text('Rotate token for ${widget.server.name}'),
-      content: SizedBox(
-        width: _dialogWidth(context, 420),
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'Enter a new bearer token, or leave it empty to clear the '
-                'token for this server.',
-              ),
-              const SizedBox(height: 12),
-              _ObscuredTokenField(
-                fieldKey: const Key('mcpsRotateToken'),
-                controller: _token,
-                labelText: 'New bearer token',
-              ),
-              if (_error != null) ...[
-                const SizedBox(height: 10),
+    return PopScope(
+      // Blocks the platform back gesture/button while a rotation is in
+      // flight, matching the barrier (`barrierDismissible: false`, set by
+      // the caller) and the disabled Cancel button below — the only way
+      // out while pending is for the request to finish.
+      canPop: !_submitting,
+      child: AlertDialog(
+        title: Text('Rotate token for ${widget.server.name}'),
+        content: SizedBox(
+          width: _dialogWidth(context, 420),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
                 Text(
-                  _error!,
-                  style: TextStyle(fontSize: 12.5, color: AppColors.danger),
+                  'Enter a new bearer token, or leave it empty to clear the '
+                  'token for this server.',
                 ),
+                const SizedBox(height: 12),
+                _ObscuredTokenField(
+                  fieldKey: const Key('mcpsRotateToken'),
+                  controller: _token,
+                  labelText: 'New bearer token',
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 10),
+                  Semantics(
+                    liveRegion: true,
+                    child: Text(
+                      _error!,
+                      style: TextStyle(fontSize: 12.5, color: AppColors.danger),
+                    ),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
+        actions: [
+          TextButton(
+            onPressed: _submitting
+                ? null
+                : () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('mcpsRotateSubmit'),
+            onPressed: _submitting ? null : _submit,
+            child: Text(_submitting ? 'Rotating…' : 'Rotate token'),
+          ),
+        ],
       ),
-      actions: [
-        TextButton(
-          onPressed: _submitting
-              ? null
-              : () => Navigator.of(context).pop(false),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          key: const Key('mcpsRotateSubmit'),
-          onPressed: _submitting ? null : _submit,
-          child: Text(_submitting ? 'Rotating…' : 'Rotate token'),
-        ),
-      ],
     );
   }
 }
@@ -863,37 +927,48 @@ class _PolicyPicker extends StatelessWidget {
   final bool busy;
   final ValueChanged<ToolPolicy?> onChanged;
 
+  // A bounded max width so the dropdown row (item text + arrow icon) never
+  // has to size itself to more than this, even at very narrow card widths.
+  // `isExpanded` then lets the selected/hint text shrink to whatever's left
+  // and ellipsize instead of overflowing the row.
+  static const double _maxWidth = 168;
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9),
-      decoration: BoxDecoration(
-        color: _policyColor(policy).withValues(alpha: 0.13),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<ToolPolicy>(
-          value: !present || policy == ToolPolicy.unspecified ? null : policy,
-          hint: Text(
-            present ? 'Unknown policy' : 'Unavailable',
-            style: TextStyle(color: AppColors.warning, fontSize: 11.5),
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: _maxWidth),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9),
+        decoration: BoxDecoration(
+          color: _policyColor(policy).withValues(alpha: 0.13),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: DropdownButtonHideUnderline(
+          child: DropdownButton<ToolPolicy>(
+            value: !present || policy == ToolPolicy.unspecified ? null : policy,
+            hint: Text(
+              present ? 'Unknown policy' : 'Unavailable',
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: AppColors.warning, fontSize: 11.5),
+            ),
+            isDense: true,
+            isExpanded: true,
+            onChanged: present && !busy ? onChanged : null,
+            items: const [
+              DropdownMenuItem(
+                value: ToolPolicy.safe,
+                child: Text('Runs freely', overflow: TextOverflow.ellipsis),
+              ),
+              DropdownMenuItem(
+                value: ToolPolicy.approvalRequired,
+                child: Text('Asks first', overflow: TextOverflow.ellipsis),
+              ),
+              DropdownMenuItem(
+                value: ToolPolicy.disabled,
+                child: Text('Disabled', overflow: TextOverflow.ellipsis),
+              ),
+            ],
           ),
-          isDense: true,
-          onChanged: present && !busy ? onChanged : null,
-          items: const [
-            DropdownMenuItem(
-              value: ToolPolicy.safe,
-              child: Text('Runs freely'),
-            ),
-            DropdownMenuItem(
-              value: ToolPolicy.approvalRequired,
-              child: Text('Asks first'),
-            ),
-            DropdownMenuItem(
-              value: ToolPolicy.disabled,
-              child: Text('Disabled'),
-            ),
-          ],
         ),
       ),
     );
