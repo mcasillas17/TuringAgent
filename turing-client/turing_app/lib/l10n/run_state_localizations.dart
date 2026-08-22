@@ -38,10 +38,10 @@ LocalizedRunCopy localizedRunStateCopy(AppLocalizations l10n, RunState state) {
       // specific completedNoContent outcome just because there is no
       // displayable content — that would fabricate a truthful-sounding
       // explanation this client does not actually have. Consult
-      // outcomeReason for that case before inferring completedNoContent.
+      // outcomeReason.hasUnavailableCopy for that case before inferring
+      // completedNoContent.
       if (!state.hasDisplayableContent &&
-          (state.outcomeReason == RunOutcomeReason.unknown ||
-              state.outcomeReason == RunOutcomeReason.legacyUnknown)) {
+          state.outcomeReason.hasUnavailableCopy) {
         return localizedRunOutcomeCopy(l10n, state.outcomeReason);
       }
       if (!state.hasDisplayableContent ||
@@ -117,6 +117,16 @@ LocalizedRunCopy localizedRunOutcomeCopy(
   AppLocalizations l10n,
   RunOutcomeReason outcome,
 ) {
+  // Route every outcome this client cannot name to the same generic
+  // "unavailable" copy up front, keyed off the shared hasUnavailableCopy
+  // predicate so this grouping and the completed-outcome guard in
+  // localizedRunStateCopy can never drift apart.
+  if (outcome.hasUnavailableCopy) {
+    return LocalizedRunCopy(
+      title: l10n.runOutcomeUnavailableTitle,
+      detail: l10n.runOutcomeUnavailableDetail,
+    );
+  }
   switch (outcome) {
     case RunOutcomeReason.none:
       return LocalizedRunCopy(
@@ -190,6 +200,11 @@ LocalizedRunCopy localizedRunOutcomeCopy(
       );
     case RunOutcomeReason.unknown:
     case RunOutcomeReason.legacyUnknown:
+      // Unreachable: hasUnavailableCopy routes these above. Kept as an
+      // explicit case (not a `default`) so the switch stays exhaustive —
+      // a future RunOutcomeReason member still forces a deliberate case
+      // here, and in RunOutcomeReasonCopyAvailability.hasUnavailableCopy,
+      // instead of silently falling through.
       return LocalizedRunCopy(
         title: l10n.runOutcomeUnavailableTitle,
         detail: l10n.runOutcomeUnavailableDetail,
