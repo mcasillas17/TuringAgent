@@ -2020,25 +2020,46 @@ func (s *Server) normalizeRuntimeEvent(ctx context.Context, event *turingv1.Turi
 	case turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_QUEUED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STARTED:
 		return nil, status.Error(codes.InvalidArgument, "run lifecycle projections are repository-authored")
-	case turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED,
-		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED,
-		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED,
+	case turingv1.TuringEventType_TURING_EVENT_TYPE_SYSTEM,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_ERROR:
+		// Neither type has a dedicated writer anywhere in this product: every
+		// real condition already has a typed, bounded event of its own — a
+		// worker's own narration is agent.run.step, a tool outcome is
+		// tool.call.failed, a terminal run outcome is agent.run.failed. A
+		// generic SYSTEM or ERROR event exists to carry whatever free-form
+		// shape a caller invents — message, error, stack, a token, tool args,
+		// a tool result, a path — and unlike TOOL_CALL_STARTED/
+		// TOOL_CALL_FAILED below, there is no bounded identity to normalize
+		// it into: the type itself promises nothing a client should trust.
+		// So both are refused before the run is even read, and before
+		// anything is persisted.
+		return nil, status.Error(codes.InvalidArgument, "system and error events have no dedicated writer on the generic channel")
+	case turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_DENIED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_REQUESTED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_APPROVED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_DENIED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_EXPIRED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_CONSUMED:
-		// Tool call and approval outcomes are settled by their own guarded
-		// flows — handleToolBeacon for a tool call, the approval service for a
-		// decision — each of which proves the run it acts on and writes a
-		// payload that flow controls. The generic channel is a worker
-		// narrating its own run; it proves nothing about a tool policy
-		// decision or an approval outcome. Accepting one of these types here
-		// would let a worker's own payload — a token, tool args, a tool
-		// result, a path, free-form prose — stand in for a decision only the
-		// dedicated flow may author, republished by every public reader that
-		// trusts the type to say what it claims.
+		// Tool call completion/denial and every approval outcome are settled
+		// by their own guarded flows — handleToolBeacon for a tool call, the
+		// approval service for a decision — each of which proves the run it
+		// acts on and writes a payload that flow controls. The generic
+		// channel is a worker narrating its own run; it proves nothing about
+		// a tool policy decision or an approval outcome. Accepting one of
+		// these types here would let a worker's own payload — a token, tool
+		// args, a tool result, a path, free-form prose — stand in for a
+		// decision only the dedicated flow may author, republished by every
+		// public reader that trusts the type to say what it claims.
+		//
+		// TOOL_CALL_STARTED and TOOL_CALL_FAILED are deliberately not refused
+		// here: agent-runtime's emitAssistantToolCallFailed is a legitimate
+		// producer of both on this same generic channel, reporting a tool
+		// failure that happens before any beacon exists (an unknown tool, no
+		// tool runner, or a non-beacon execution error). Refusing them
+		// outright would tear down the whole AgentStream over that
+		// legitimate report, so instead their payload is rebuilt onto a
+		// bounded safe shape further down rather than accepted verbatim.
 		return nil, status.Error(codes.InvalidArgument, "tool call and approval events are authored by dedicated beacon and approval flows")
 	}
 	run, err := s.repo.GetRun(ctx, event.RunId)
@@ -2061,7 +2082,46 @@ func (s *Server) normalizeRuntimeEvent(ctx context.Context, event *turingv1.Turi
 	// repository-owned retry projections. Drop both before anything durable
 	// exists rather than leaving every reader to defend itself.
 	events.StripRepositoryAuthoredEventFields(out)
+	if event.Type == turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED ||
+		event.Type == turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED {
+		safePayload, err := sanitizeGenericToolCallPayload(event.Type, out.GetPayload())
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "runtime event payload is invalid")
+		}
+		out.Payload = safePayload
+	}
 	return out, nil
+}
+
+// sanitizeGenericToolCallPayload builds the durable payload for the two
+// TOOL_CALL_* types the generic channel still accepts from a worker:
+// TOOL_CALL_STARTED and TOOL_CALL_FAILED, as emitted by agent-runtime's
+// emitAssistantToolCallFailed before any tool beacon exists. Every other
+// TOOL_CALL_* and APPROVAL_* type stays refused above; this only narrows what
+// these two may carry.
+//
+// The payload is rebuilt from an allowlist rather than filtered from a
+// denylist, so a hostile field survives only by first being added to the
+// allowlist. It reuses events.ToolCallIdentityKeys — the same bounded identity
+// the public read boundary already grants a dedicated tool.call.failed or
+// tool.call.denied row — so a worker-authored row and a beacon-authored row
+// are held to one contract instead of two that could drift apart. A
+// TOOL_CALL_FAILED event's category is always the server's own
+// runoutcome.ReasonToolFailure, never whatever the worker's payload named,
+// because the worker's own account of why is exactly the free-form narration
+// this boundary exists to keep off the durable log and the public wire.
+func sanitizeGenericToolCallPayload(eventType turingv1.TuringEventType, payload *structpb.Struct) (*structpb.Struct, error) {
+	source := payload.AsMap()
+	safe := make(map[string]any, len(events.ToolCallIdentityKeys)+1)
+	for _, key := range events.ToolCallIdentityKeys {
+		if text, ok := source[key].(string); ok && text != "" {
+			safe[key] = text
+		}
+	}
+	if eventType == turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED {
+		safe["category"] = string(runoutcome.ReasonToolFailure)
+	}
+	return structpb.NewStruct(safe)
 }
 
 func isKnownRuntimeEventType(eventType turingv1.TuringEventType) bool {

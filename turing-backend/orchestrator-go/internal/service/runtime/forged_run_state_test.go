@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -29,14 +31,14 @@ import (
 // worker's own fields survive untouched, and the forged snapshot never reaches
 // a row that a reader would have to defend itself against.
 //
-// TOOL_CALL_* and APPROVAL_* are deliberately not exercised here: those types
-// are refused outright on the generic channel (see
-// TestRuntimeGenericEventRejectsForgedToolAndApprovalTypes), so there is no
-// "accepted with the snapshot stripped" case left to pin for them.
+// TOOL_CALL_COMPLETED, TOOL_CALL_DENIED, APPROVAL_*, SYSTEM, and ERROR are
+// deliberately not exercised here: those types are refused outright on the
+// generic channel (see TestRuntimeGenericEventRejectsForgedToolAndApprovalTypes
+// and TestRuntimeGenericEventRejectsGenericSystemAndErrorEvents), so there is
+// no "accepted with the snapshot stripped" case left to pin for them.
 func TestRuntimeGenericEventStripsForgedRunState(t *testing.T) {
 	forgedTypes := []turingv1.TuringEventType{
 		turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP,
-		turingv1.TuringEventType_TURING_EVENT_TYPE_ERROR,
 	}
 	for _, eventType := range forgedTypes {
 		t.Run(eventType.String(), func(t *testing.T) {
@@ -232,28 +234,39 @@ func TestRuntimeGenericEventRejectsRepositoryLifecycleProjections(t *testing.T) 
 }
 
 // TestRuntimeGenericEventRejectsForgedToolAndApprovalTypes pins who is allowed
-// to author a tool call or an approval decision.
+// to author a tool call outcome or an approval decision.
 //
 // Both are settled through their own guarded flows — handleToolBeacon for a
-// tool call, the approval service for a decision — each of which proves the
-// run it is acting on and writes a payload that flow controls. The generic
-// event channel is a worker narrating its own run; it proves nothing about a
-// tool policy decision or an approval outcome. If it could still name one of
-// these types, a forged event would carry whatever raw fields the worker chose
-// — a token, tool args, a tool result, a path, free-form prose — straight past
-// every allowlist those dedicated flows exist to enforce, because the generic
-// path never built one for types it was never meant to author.
+// tool call's completion or denial, the approval service for a decision —
+// each of which proves the run it is acting on and writes a payload that flow
+// controls. The generic event channel is a worker narrating its own run; it
+// proves nothing about a tool policy decision or an approval outcome. If it
+// could still name one of these types, a forged event would carry whatever
+// raw fields the worker chose — a token, tool args, a tool result, a path,
+// free-form prose — straight past every allowlist those dedicated flows exist
+// to enforce, because the generic path never built one for types it was never
+// meant to author.
 //
-// So every TOOL_CALL_* and APPROVAL_* type is refused outright at the same
-// ingress point that already refuses a repository-authored lifecycle
-// projection: before the run is even read, and before anything is persisted.
-// A worker that narrates its own progress under a type it does own — an
-// agent.run.step, a message delta — is unaffected.
+// So TOOL_CALL_COMPLETED, TOOL_CALL_DENIED, and every APPROVAL_* type are
+// refused outright at the same ingress point that already refuses a
+// repository-authored lifecycle projection: before the run is even read, and
+// before anything is persisted. This deliberately excludes TOOL_CALL_STARTED
+// and TOOL_CALL_FAILED: agent-runtime's emitAssistantToolCallFailed is a
+// legitimate producer of both — narrating an unknown tool, an unavailable
+// runner, or a non-beacon failure before any beacon exists — and normalizes
+// its payload to a safe shape instead of being refused (see
+// TestRuntimeSanitizesGenericToolCallStartedAndFailed). A worker that narrates
+// its own progress under a type it does own — an agent.run.step, a message
+// delta — is unaffected either way.
+//
+// The public-payload leak check that used to live here only ran over rows this
+// test had just proven were never appended, so it never actually exercised
+// anything; TestRuntimeGenericEventRejectsGenericSystemAndErrorEvents and
+// TestRuntimeSanitizesGenericToolCallStartedAndFailed cover the "what if a row
+// existed" question directly, against real rows and the real public decoder.
 func TestRuntimeGenericEventRejectsForgedToolAndApprovalTypes(t *testing.T) {
 	forgedTypes := []turingv1.TuringEventType{
-		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED,
-		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_DENIED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_REQUESTED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_APPROVED,
@@ -302,23 +315,255 @@ func TestRuntimeGenericEventRejectsForgedToolAndApprovalTypes(t *testing.T) {
 			if len(after) != len(before) {
 				t.Fatalf("forged %s appended an event: before=%d after=%d", eventType, len(before), len(after))
 			}
-
-			// Defense in depth: even if the row had somehow been persisted,
-			// the public read boundary must never republish the raw fields a
-			// forged event tried to carry.
-			for _, row := range after {
-				if !row.RunID.Valid || row.RunID.String != enqueued.RunID {
-					continue
-				}
-				safe := events.Decode(row.Type, enqueued.RunID, row.PayloadJSON)
-				for _, leaked := range []string{"token", "args", "result", "path", "message"} {
-					if _, ok := safe.Payload[leaked]; ok {
-						t.Fatalf("public payload for %s carried raw field %q: %#v", row.Type, leaked, safe.Payload)
-					}
-				}
-			}
 		})
 	}
+}
+
+// TestRuntimeGenericEventRejectsGenericSystemAndErrorEvents pins that SYSTEM
+// and ERROR have no legitimate producer on the generic channel.
+//
+// Every real condition this product reports already has a typed, bounded
+// event: a worker's own narration is agent.run.step, a tool outcome is
+// tool.call.failed, a terminal run outcome is agent.run.failed. Nothing
+// legitimately needs the generic, free-form SYSTEM or ERROR type, and their
+// payload was passed through verbatim — message, error, stack, token, args,
+// result, path, whatever a caller chose to put there. There is no allowlist to
+// normalize them into, unlike TOOL_CALL_STARTED/TOOL_CALL_FAILED, so both are
+// refused outright, before the run is even read and before anything is
+// persisted — the same fixed rejection already given to a forged lifecycle,
+// tool, or approval type.
+func TestRuntimeGenericEventRejectsGenericSystemAndErrorEvents(t *testing.T) {
+	forgedTypes := []turingv1.TuringEventType{
+		turingv1.TuringEventType_TURING_EVENT_TYPE_SYSTEM,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_ERROR,
+	}
+	hostilePayloads := []map[string]any{
+		{
+			"message": "a forged authoritative narration",
+			"error":   "panic: forged",
+			"stack":   "goroutine 1 [running]:\nforged.Stack()",
+			"token":   "secret-approval-token",
+			"args":    map[string]any{"path": "/etc/passwd"},
+			"result":  "root:$6$forgedhash:0:0:root:/root:/bin/bash",
+			"path":    "/etc/shadow",
+		},
+		{
+			// A second, differently-shaped hostile variant: minimal identity
+			// dressed up as if it belonged to a dedicated writer, plus a
+			// forged canonical snapshot.
+			"note": "looks legitimate",
+			"runState": map[string]any{
+				"runId":        "run_someone_elses",
+				"lifecycle":    "failed",
+				"stateVersion": 9999,
+			},
+		},
+	}
+	for _, eventType := range forgedTypes {
+		for i, hostile := range hostilePayloads {
+			t.Run(fmt.Sprintf("%s/variant_%d", eventType, i), func(t *testing.T) {
+				h := newHarness(t)
+				enqueued := h.createRunningRunResult(t, "forged system/error event")
+				before, _, err := h.repo.ReplayEvents(context.Background(), enqueued.SessionID, 0, 500)
+				if err != nil {
+					t.Fatalf("ReplayEvents before update: %v", err)
+				}
+				payload, err := structpb.NewStruct(hostile)
+				if err != nil {
+					t.Fatalf("build payload: %v", err)
+				}
+
+				err = h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{
+					Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
+						RunId:   enqueued.RunID,
+						Type:    eventType,
+						Payload: payload,
+					}},
+				})
+				if status.Code(err) != codes.InvalidArgument {
+					t.Fatalf("applyUpdate error = %v, want InvalidArgument", err)
+				}
+
+				after, _, replayErr := h.repo.ReplayEvents(context.Background(), enqueued.SessionID, 0, 500)
+				if replayErr != nil {
+					t.Fatalf("ReplayEvents after update: %v", replayErr)
+				}
+				if len(after) != len(before) {
+					t.Fatalf("forged %s appended an event: before=%d after=%d", eventType, len(before), len(after))
+				}
+			})
+		}
+	}
+}
+
+// TestRuntimeSanitizesGenericToolCallStartedAndFailed pins the one carve-out
+// from the blanket TOOL_CALL_* rejection above: agent-runtime's
+// emitAssistantToolCallFailed emits a generic TOOL_CALL_STARTED followed by a
+// generic TOOL_CALL_FAILED for a failure that happens before any tool beacon
+// exists — an unknown tool name, no tool runner configured, or a non-beacon
+// execution error. Rejecting these outright (as the blanket TOOL_CALL_*
+// refusal briefly did) would tear down the whole AgentStream over a worker
+// reporting its own, legitimate, non-authoritative failure.
+//
+// So both types are accepted, but never verbatim: ingress rebuilds the payload
+// from the same bounded identity the public boundary already grants a
+// dedicated tool.call.failed/tool.call.denied row (events.ToolCallIdentityKeys
+// — toolCallId, toolName, serverName, modelToolCallId), and a
+// TOOL_CALL_FAILED's category is always the server's own tool_failure,
+// regardless of what the worker's payload said. Everything else a hostile
+// payload might carry — a token, tool args, a tool result, a path, free-form
+// prose, a forged category, a forged canonical snapshot — is dropped before
+// the row is ever written, so persistence and the public projection agree
+// there is nothing left to leak.
+func TestRuntimeSanitizesGenericToolCallStartedAndFailed(t *testing.T) {
+	t.Run("production shape from emitAssistantToolCallFailed persists untouched", func(t *testing.T) {
+		h := newHarness(t)
+		enqueued := h.createRunningRunResult(t, "legitimate non-beacon tool failure")
+
+		// Exactly the shape agent-runtime's messageEvent/emitAssistantToolCallFailed
+		// builds: TOOL_CALL_STARTED carries only toolName/toolCallId, then
+		// TOOL_CALL_FAILED carries toolName/toolCallId/category.
+		started, err := structpb.NewStruct(map[string]any{
+			"toolName": "shell.exec", "toolCallId": "call_1",
+		})
+		if err != nil {
+			t.Fatalf("build started payload: %v", err)
+		}
+		if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{
+			Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
+				RunId: enqueued.RunID, Type: turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED, Payload: started,
+			}},
+		}); err != nil {
+			t.Fatalf("applyUpdate TOOL_CALL_STARTED: %v", err)
+		}
+		startedRow := latestRunEvent(t, h, enqueued.SessionID, enqueued.RunID)
+		var storedStarted map[string]any
+		if err := json.Unmarshal([]byte(startedRow.PayloadJSON), &storedStarted); err != nil {
+			t.Fatalf("unmarshal durable TOOL_CALL_STARTED payload: %v", err)
+		}
+		if len(storedStarted) != 2 || storedStarted["toolName"] != "shell.exec" || storedStarted["toolCallId"] != "call_1" {
+			t.Fatalf("TOOL_CALL_STARTED payload was not the intended safe shape: %#v", storedStarted)
+		}
+
+		failed, err := structpb.NewStruct(map[string]any{
+			"toolName": "shell.exec", "toolCallId": "call_1", "category": "tool_failure",
+		})
+		if err != nil {
+			t.Fatalf("build failed payload: %v", err)
+		}
+		if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{
+			Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
+				RunId: enqueued.RunID, Type: turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED, Payload: failed,
+			}},
+		}); err != nil {
+			t.Fatalf("applyUpdate TOOL_CALL_FAILED: %v", err)
+		}
+		failedRow := latestRunEvent(t, h, enqueued.SessionID, enqueued.RunID)
+		var storedFailed map[string]any
+		if err := json.Unmarshal([]byte(failedRow.PayloadJSON), &storedFailed); err != nil {
+			t.Fatalf("unmarshal durable TOOL_CALL_FAILED payload: %v", err)
+		}
+		if len(storedFailed) != 3 || storedFailed["toolName"] != "shell.exec" || storedFailed["toolCallId"] != "call_1" || storedFailed["category"] != "tool_failure" {
+			t.Fatalf("TOOL_CALL_FAILED payload was not the intended safe shape: %#v", storedFailed)
+		}
+
+		safeFailed := events.Decode(failedRow.Type, enqueued.RunID, failedRow.PayloadJSON)
+		if safeFailed.Payload["toolCallId"] != "call_1" || safeFailed.Payload["toolName"] != "shell.exec" || safeFailed.Payload["category"] != "tool_failure" {
+			t.Fatalf("public projection of legitimate TOOL_CALL_FAILED lost its identity: %#v", safeFailed.Payload)
+		}
+	})
+
+	t.Run("hostile extra fields are dropped from persistence and public projection", func(t *testing.T) {
+		h := newHarness(t)
+		enqueued := h.createRunningRunResult(t, "hostile tool call payload")
+
+		hostileStarted, err := structpb.NewStruct(map[string]any{
+			"toolName":        "shell.exec",
+			"toolCallId":      "call_hostile",
+			"serverName":      "files",
+			"modelToolCallId": "model_call_1",
+			"token":           "secret-approval-token",
+			"args":            map[string]any{"path": "/etc/passwd", "cmd": "cat /etc/shadow"},
+			"result":          "root:$6$forgedhash:0:0:root:/root:/bin/bash",
+			"path":            "/etc/shadow",
+			"message":         "a forged authoritative narration",
+			"runState": map[string]any{
+				"runId": "run_someone_elses", "lifecycle": "failed", "stateVersion": 9999,
+			},
+		})
+		if err != nil {
+			t.Fatalf("build hostile started payload: %v", err)
+		}
+		if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{
+			Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
+				RunId: enqueued.RunID, Type: turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED, Payload: hostileStarted,
+			}},
+		}); err != nil {
+			t.Fatalf("applyUpdate hostile TOOL_CALL_STARTED: %v", err)
+		}
+		startedRow := latestRunEvent(t, h, enqueued.SessionID, enqueued.RunID)
+		var storedStarted map[string]any
+		if err := json.Unmarshal([]byte(startedRow.PayloadJSON), &storedStarted); err != nil {
+			t.Fatalf("unmarshal durable hostile TOOL_CALL_STARTED payload: %v", err)
+		}
+		wantStarted := map[string]any{"toolName": "shell.exec", "toolCallId": "call_hostile", "serverName": "files", "modelToolCallId": "model_call_1"}
+		if !reflect.DeepEqual(storedStarted, wantStarted) {
+			t.Fatalf("hostile TOOL_CALL_STARTED payload was not reduced to the safe identity shape: got %#v, want %#v", storedStarted, wantStarted)
+		}
+
+		hostileFailed, err := structpb.NewStruct(map[string]any{
+			"toolName":   "shell.exec",
+			"toolCallId": "call_hostile",
+			"serverName": "files",
+			"category":   "a_lie_the_worker_chose",
+			"token":      "secret-approval-token",
+			"args":       map[string]any{"path": "/etc/passwd"},
+			"result":     "leaked result",
+			"path":       "/etc/shadow",
+			"message":    "a forged authoritative narration",
+			"approvalId": "approval_forged",
+		})
+		if err != nil {
+			t.Fatalf("build hostile failed payload: %v", err)
+		}
+		if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{
+			Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
+				RunId: enqueued.RunID, Type: turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED, Payload: hostileFailed,
+			}},
+		}); err != nil {
+			t.Fatalf("applyUpdate hostile TOOL_CALL_FAILED: %v", err)
+		}
+		failedRow := latestRunEvent(t, h, enqueued.SessionID, enqueued.RunID)
+		var storedFailed map[string]any
+		if err := json.Unmarshal([]byte(failedRow.PayloadJSON), &storedFailed); err != nil {
+			t.Fatalf("unmarshal durable hostile TOOL_CALL_FAILED payload: %v", err)
+		}
+		wantFailed := map[string]any{"toolName": "shell.exec", "toolCallId": "call_hostile", "serverName": "files", "category": "tool_failure"}
+		if !reflect.DeepEqual(storedFailed, wantFailed) {
+			t.Fatalf("hostile TOOL_CALL_FAILED payload was not reduced to the safe identity shape: got %#v, want %#v", storedFailed, wantFailed)
+		}
+		for _, forged := range []string{"secret-approval-token", "cat /etc/shadow", "leaked result", "/etc/shadow", "forged authoritative narration", "approval_forged", "a_lie_the_worker_chose", "run_someone_elses"} {
+			if strings.Contains(failedRow.PayloadJSON, forged) {
+				t.Fatalf("durable hostile TOOL_CALL_FAILED payload leaked %q: %s", forged, failedRow.PayloadJSON)
+			}
+		}
+
+		safeStarted := events.Decode(startedRow.Type, enqueued.RunID, startedRow.PayloadJSON)
+		safeFailed := events.Decode(failedRow.Type, enqueued.RunID, failedRow.PayloadJSON)
+		for _, safe := range []events.SafeEvent{safeStarted, safeFailed} {
+			for _, leaked := range []string{"token", "args", "result", "path", "message", "approvalId", "runState"} {
+				if _, ok := safe.Payload[leaked]; ok {
+					t.Fatalf("public projection carried raw hostile field %q: %#v", leaked, safe.Payload)
+				}
+			}
+			if safe.RunState != nil {
+				t.Fatalf("public projection carried a forged canonical run state: %+v", safe.RunState)
+			}
+		}
+		if safeFailed.Payload["category"] != "tool_failure" {
+			t.Fatalf("public projection did not force the server-chosen category: %#v", safeFailed.Payload)
+		}
+	})
 }
 
 // TestRuntimeGenericStepAndMessageEventsStillSucceed pins the legitimate

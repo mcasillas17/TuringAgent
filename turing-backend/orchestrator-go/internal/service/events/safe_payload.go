@@ -41,7 +41,7 @@ type SafeEvent struct {
 // the stored strings are this server's internal words for the same thing.
 const runStatePayloadKey = "runState"
 
-// approvalIdentityKeys and toolCallIdentityKeys are the only payload keys a
+// approvalIdentityKeys and ToolCallIdentityKeys are the only payload keys a
 // public failure event may carry besides its allowlisted category. They are the
 // identities the contract already promises a client — the approval it was asked
 // to decide, the tool call it watched start. Everything else is dropped rather
@@ -49,7 +49,11 @@ const runStatePayloadKey = "runState"
 // new name.
 var approvalIdentityKeys = []string{"approvalId", "toolCallId", "toolName", "runId", "traceId", "modelToolCallId"}
 
-var toolCallIdentityKeys = []string{"toolCallId", "toolName", "serverName", "modelToolCallId"}
+// ToolCallIdentityKeys is exported so runtime ingress can build the same
+// bounded identity into a worker-authored TOOL_CALL_STARTED/TOOL_CALL_FAILED
+// payload before it is ever persisted, rather than keeping a second copy of
+// this list that could drift from what the public boundary allows.
+var ToolCallIdentityKeys = []string{"toolCallId", "toolName", "serverName", "modelToolCallId"}
 
 // executionOnlyKeys are payload keys that identify who is executing a run
 // rather than what happened to it. A client has no business knowing which
@@ -140,7 +144,7 @@ func publicPayload(canonicalType string, payload map[string]any) map[string]any 
 	case "approval.denied", "approval.expired":
 		return identityPayload(payload, approvalIdentityKeys, approvalCategory(canonicalType))
 	case "tool.call.failed", "tool.call.denied":
-		return identityPayload(payload, toolCallIdentityKeys, toolCallCategory(canonicalType))
+		return identityPayload(payload, ToolCallIdentityKeys, toolCallCategory(canonicalType))
 	default:
 		return withoutInternalKeys(payload)
 	}
