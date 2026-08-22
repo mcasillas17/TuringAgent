@@ -521,10 +521,12 @@ func recordRunOutcomeBatches(t *testing.T) *[]runOutcomeBatch {
 	return &batches
 }
 
-func runBatches(batches []runOutcomeBatch) []runOutcomeBatch {
+// batchesForScan filters the recorded batches down to those from one named
+// scan, so each keyset pass's row/byte bounds can be asserted independently.
+func batchesForScan(batches []runOutcomeBatch, scan string) []runOutcomeBatch {
 	filtered := make([]runOutcomeBatch, 0, len(batches))
 	for _, batch := range batches {
-		if batch.Scan == runOutcomesRunScan {
+		if batch.Scan == scan {
 			filtered = append(filtered, batch)
 		}
 	}
@@ -546,7 +548,7 @@ func TestRunOutcomeMigrationAllowsExactlySixteenMiBSelectedData(t *testing.T) {
 	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
 		t.Fatalf("ApplyMigrations rejected a batch of exactly the byte budget: %v", err)
 	}
-	got := runBatches(*batches)
+	got := batchesForScan(*batches, runOutcomesRunScan)
 	if len(got) != 1 || got[0].Rows != 1 || got[0].Bytes != runOutcomesByteBudget {
 		t.Fatalf("run batches = %#v, want one batch of one row at exactly %d bytes", got, runOutcomesByteBudget)
 	}
@@ -592,7 +594,7 @@ func TestRunOutcomeMigrationSplitsAtOneHundredTwentyEightRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	var gotRows []int
-	for _, batch := range runBatches(*batches) {
+	for _, batch := range batchesForScan(*batches, runOutcomesRunScan) {
 		gotRows = append(gotRows, batch.Rows)
 	}
 	if want := []int{128, 128, 44}; !reflect.DeepEqual(gotRows, want) {
@@ -619,7 +621,7 @@ func TestRunOutcomeMigrationSplitsBeforeExceedingSixteenMiB(t *testing.T) {
 	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
 		t.Fatal(err)
 	}
-	got := runBatches(*batches)
+	got := batchesForScan(*batches, runOutcomesRunScan)
 	var gotRows []int
 	for _, batch := range got {
 		if batch.Bytes > runOutcomesByteBudget {
@@ -1646,16 +1648,6 @@ func TestRunOutcomeMigrationAfterHookValidatesCanonicalStateWithoutTheSchemaChec
 	}
 }
 
-func stateTimestampBatches(batches []runOutcomeBatch) []runOutcomeBatch {
-	filtered := make([]runOutcomeBatch, 0, len(batches))
-	for _, batch := range batches {
-		if batch.Scan == runOutcomesStateTimestampScan {
-			filtered = append(filtered, batch)
-		}
-	}
-	return filtered
-}
-
 // TestRunOutcomeMigrationSplitsStateTimestampScanAtOneHundredTwentyEightRows
 // proves the After hook's canonical-timestamp pass is itself a bounded keyset
 // scan over the rebuilt table, not an unbounded read of it: it is a third,
@@ -1681,7 +1673,7 @@ func TestRunOutcomeMigrationSplitsStateTimestampScanAtOneHundredTwentyEightRows(
 		t.Fatal(err)
 	}
 	var gotRows []int
-	for _, batch := range stateTimestampBatches(*batches) {
+	for _, batch := range batchesForScan(*batches, runOutcomesStateTimestampScan) {
 		gotRows = append(gotRows, batch.Rows)
 	}
 	if want := []int{128, 128, 44}; !reflect.DeepEqual(gotRows, want) {
@@ -3742,16 +3734,6 @@ func sqliteObjectExists(t *testing.T, ctx context.Context, database *DB, objectT
 	return count > 0
 }
 
-func eventBatches(batches []runOutcomeBatch) []runOutcomeBatch {
-	filtered := make([]runOutcomeBatch, 0, len(batches))
-	for _, batch := range batches {
-		if batch.Scan == runOutcomesEventScan {
-			filtered = append(filtered, batch)
-		}
-	}
-	return filtered
-}
-
 // legacyEventBytesExpr is the production event measurement minus the two
 // columns the migration is about to add. It is therefore a lower bound on what
 // the migration will measure, which is all the byte-bound tests need: padding a
@@ -3822,7 +3804,7 @@ func TestRunOutcomeMigrationSplitsEventScanAtOneHundredTwentyEightRows(t *testin
 		t.Fatal(err)
 	}
 	var gotRows []int
-	for _, batch := range eventBatches(*batches) {
+	for _, batch := range batchesForScan(*batches, runOutcomesEventScan) {
 		gotRows = append(gotRows, batch.Rows)
 	}
 	if want := []int{128, 128, 44}; !reflect.DeepEqual(gotRows, want) {
@@ -3848,7 +3830,7 @@ func TestRunOutcomeMigrationSplitsEventScanBeforeExceedingSixteenMiB(t *testing.
 		t.Fatal(err)
 	}
 	var gotRows []int
-	for _, batch := range eventBatches(*batches) {
+	for _, batch := range batchesForScan(*batches, runOutcomesEventScan) {
 		if batch.Bytes > runOutcomesByteBudget {
 			t.Fatalf("event batch selected %d bytes, want at most %d", batch.Bytes, runOutcomesByteBudget)
 		}

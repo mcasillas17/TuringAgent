@@ -442,7 +442,12 @@ class GrpcMappers {
         Int64(version) != runState.stateVersion) {
       return null;
     }
-    final stateUpdatedAt = _validStateUpdatedAt(runState);
+    // state_updated_at absence is fail-closed (see the constant block
+    // below), so it is checked before conversion is even attempted.
+    if (!runState.hasStateUpdatedAt()) {
+      return null;
+    }
+    final stateUpdatedAt = _validatedTimestamp(runState.stateUpdatedAt);
     if (stateUpdatedAt == null) {
       return null;
     }
@@ -455,10 +460,10 @@ class GrpcMappers {
     // state_updated_at above.
     DateTime? finishedAt;
     if (runState.hasFinishedAt()) {
-      if (!_isValidTimestamp(runState.finishedAt)) {
+      finishedAt = _validatedTimestamp(runState.finishedAt);
+      if (finishedAt == null) {
         return null;
       }
-      finishedAt = _timestampToDateTime(runState.finishedAt);
     }
     return model_run_state.RunState(
       runId: runState.runId,
@@ -506,6 +511,7 @@ class GrpcMappers {
   // above for a missing run id or a nonpositive version.
   static const int _timestampMinSeconds = -62135596800;
   static const int _timestampMaxSeconds = 253402300799;
+  static const int _timestampMaxNanos = 999999999;
 
   static bool _isValidTimestamp(timestamppb.Timestamp timestamp) {
     final seconds = timestamp.seconds;
@@ -514,17 +520,21 @@ class GrpcMappers {
       return false;
     }
     final nanos = timestamp.nanos;
-    return nanos >= 0 && nanos <= 999999999;
+    return nanos >= 0 && nanos <= _timestampMaxNanos;
   }
 
-  static DateTime? _validStateUpdatedAt(commonpb.RunState runState) {
-    if (!runState.hasStateUpdatedAt()) {
+  // _validatedTimestamp converts one *present* Timestamp submessage to
+  // DateTime, or returns null if its seconds/nanos escape the ranges
+  // google.protobuf.Timestamp documents. It is field-agnostic: whether an
+  // absent submessage means "not yet finished" or "reject the whole
+  // snapshot" is a caller decision (see the hasStateUpdatedAt()/
+  // hasFinishedAt() presence checks above), so this helper only judges the
+  // validity of a value that is already known to be present.
+  static DateTime? _validatedTimestamp(timestamppb.Timestamp timestamp) {
+    if (!_isValidTimestamp(timestamp)) {
       return null;
     }
-    if (!_isValidTimestamp(runState.stateUpdatedAt)) {
-      return null;
-    }
-    return _timestampToDateTime(runState.stateUpdatedAt);
+    return _timestampToDateTime(timestamp);
   }
 
   static model_run_lifecycle.RunLifecycle runLifecycleToModel(

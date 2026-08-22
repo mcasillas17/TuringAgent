@@ -1325,7 +1325,7 @@ func readRunStateUpdatedAtBatch(ctx context.Context, tx *sql.Tx, cursor int64, l
 	if err != nil {
 		return nil, err
 	}
-	values := make([]string, 0)
+	values := make([]string, 0, runOutcomesBatchRows)
 	for rows.Next() {
 		var value string
 		if err := rows.Scan(&value); err != nil {
