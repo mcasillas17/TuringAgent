@@ -89,11 +89,26 @@ without a bump, a stale runtime still counts as egress-aware, still
 enforces the *unconditional* required set, and refuses **every remote run
 with zero enabled skills** — the common case — with a baffling
 missing-category error. `backendegress.DecisionVersion` is therefore
-bumped: a stale runtime stops being egress-aware for new decisions and
-fails closed at dispatch (it cannot claim the run) until upgraded, which
-is the same restart-both-sides story every compose deployment already
-has. The mirror direction (new runtime, stale orchestrator) fails closed
-symmetrically.
+bumped — **and it does not travel alone**: the signed payload's version
+comes from a *second* constant, `egressChallengeVersion` in
+`service/chat/egress.go`, and `normalizePendingEgressDecision` requires
+the payload's version to equal `RunEgressDecisionVersion` — bump one
+constant without the other and **every remote send fails**. Both move in
+lockstep, named here so neither is discovered in production. A stale
+runtime then stops being egress-aware for new decisions and fails closed
+at dispatch (it cannot claim the run) until upgraded — the same
+restart-both-sides story every compose deployment already has; the
+mirror direction fails closed symmetrically. Two knock-on consequences,
+stated: a consent **prepared before the upgrade** fails
+`validChallengePayload` after it and surfaces "remote egress challenge is
+invalid" — not the drift wording — so the retry-path claim below holds
+for same-version challenges only, and a user upgrading mid-conversation
+re-prepares once; and the queued-job skew above is now refused by the
+runtime's *version equality* check before the category set is ever
+compared — same fail-closed outcome, different error string, which
+matters to whoever writes the expected-message assertion. One production
+string also moves: the routing-unavailable detail hardcodes
+"remote egress decision v1".
 
 **Names are derived, displayed, and bound by the fingerprint that already
 exists — they do not join the signed payload.** Prepare derives the skill
@@ -162,13 +177,21 @@ byte-based cap can split a multibyte rune and produce invalid UTF-8 in a
 proto string field, which fails marshaling of the entire prepare
 response), and — the clause whose omission would restate the very bug
 this paragraph cites — **when sanitizing leaves an empty string, fall
-back to the `skill_id`**, which is a validated relative path and always
-renderable; the `oneLine` precedent's `"(unnamed)"` fallback exists for
-exactly this reason and must not be silently dropped. The sanitizer is
-applied on **both** paths: the disclosure (`SkillEgressInfo`) and the
-skill-name line this plan adds to the run notice — the notice code is
-new, and it uses the same helper or an unflattened untrusted string lands
-in the transcript event payload while every test passes. Reachability,
+back to `sanitize(skill_id)`, and to the literal `"(unnamed)"` if that is
+also empty**. The id is *not* inherently safe: `skillID` validation
+constrains path *shape* only (no `.`/`..`, exactly one separator), never
+rune content, and the id derives from directory names on a
+read/write-mounted `/skills` — a folder named in zero-width or RLO runes
+produces an id carrying exactly what the sanitizer strips, reproducing
+the blank consent row one level down. The `oneLine` precedent's
+`"(unnamed)"` terminal exists for exactly this reason and must not be
+silently dropped. The sanitizer is
+applied on **both surfaces** (both in orchestrator-go — the runtime's
+`oneLine` is precedent, not a call site, and stays untouched): the
+disclosure (`SkillEgressInfo`) and the skill-name line this plan adds to
+the run notice — the notice code is new, and it uses the same helper or
+an unflattened untrusted string lands in the transcript event payload
+while every test passes. Reachability,
 stated correctly: the loader caps name *length* at 120 runes but not
 *content* — `strings.TrimSpace` does not strip Cf runes, so a name made
 of zero-width or direction-control characters parses fine and reaches
@@ -291,6 +314,23 @@ nothing new leaves the machine because of this plan.
   `service/runtime/service_test.go`'s fixture *mentions* the category but
   nothing in that service composes or validates category sets — no change
   required.)
+- **The version bump's fixture sweep** — the largest single cost in this
+  plan, roughly fifteen sites in ten files, split by failure mode:
+  decision-version literals (`repository/egress_test.go`,
+  `mcp_egress_notice_test.go`, `mcp_egress_fingerprint_test.go`,
+  `service/runtime/external_agent_mapping_test.go`,
+  `service/audit/service_test.go`'s `!= 1`, and
+  `external_agent_test.go`'s two — where the version break fires *before*
+  the category break, with a different message, so gate-breaking
+  discipline reads a misleading signal if run naively) and
+  worker-advertisement literals that silently un-egress-aware the test
+  worker (`repository/job_routing_test.go`,
+  `service/runtime/capabilities_test.go`, `capability_lifecycle_test.go`,
+  `service/chat/service_test.go:~1010`, `tests/grpc_harness_test.go`).
+  The repair pattern is the one the surviving fixtures already use:
+  reference the constants symbolically
+  (`repository.RunEgressDecisionVersion`, `backendegress.DecisionVersion`)
+  instead of the literal `1`.
 - **The chat service test harness** — `newHarnessWithDatabase` never calls
   `SetSkillStore`, so no skill can be enabled in any `service/chat` test
   today; tests 2, 4, and 6's service-layer legs need the harness to gain
@@ -344,10 +384,14 @@ restore.
    skill-snapshot-changed wording from `applyRemoteEgress`. The negative
    boundary: change something *other* than skills between prepare and
    send ⇒ the existing generic context-changed wording, not the skill
-   message. And the nil leg: a remote prepare followed by a send that is
-   no longer an egress run (`resolved == nil`) keeps the generic wording
-   without panicking — the path the unguarded fingerprint comparison
-   dereferences. The enqueue-window sentinel is pinned by its two direct unit
+   message. And the nil leg, with its lever named because every obvious
+   one is blocked by the request digest firing first: prepare with the
+   session **bound to an external agent** (request provider `ollama`, so
+   routing supplies the remoteness), then unbind the agent before the
+   send — the digest does not cover the session's agent binding, so this
+   is the input that flips `providerEgress` without tripping the
+   digest-mismatch check, reaching `resolved == nil` with the generic
+   wording and no panic. The enqueue-window sentinel is pinned by its two direct unit
    assertions (repository returns it; `mapEnqueueError` maps it) — that
    window has no `SendMessage`-reachable seam. Pure-function leg: two
    snapshots differing only in set membership produce different
@@ -368,9 +412,11 @@ restore.
    end as the `skill_id` fallback, never a blank row** (Cf content passes
    the loader — only over-length inputs don't); and the sanitizer unit
    tests cover 300 runes, RLO/bidi isolates, the empty-after-stripping
-   fallback, and a multibyte name truncated on a rune boundary (a byte
-   cap that splits a rune breaks proto marshaling of the whole prepare
-   response).
+   fallback **including a Cf-runed skill *folder* name** (the leg that
+   catches an unsanitized `skill_id` fallback — perturbing only the
+   frontmatter name under a normal folder misses it), and a multibyte
+   name truncated on a rune boundary (a byte cap that splits a rune
+   breaks proto marshaling of the whole prepare response).
 7. **The dialog renders the distinction — and the mapping actually maps.**
    Flutter: one may-be-sent and one metadata-only skill render with
    correct tags inside the existing scrolling dialog; and the
@@ -378,8 +424,9 @@ restore.
    skills list — the one line whose omission leaves backend and dialog
    both individually correct while the feature does nothing.
 8. **Version skew fails closed at dispatch.** A worker advertising the
-   pre-bump `RemoteEgressDecisionVersion` cannot claim a run carrying a
-   post-bump decision.
+   **literal `1`** — not `RunEgressDecisionVersion - 1`, which stays
+   green forever and merely re-tests the pre-existing legacy gate —
+   cannot claim a run carrying a post-bump decision.
 
 ## Documentation the implementation PR must update
 
