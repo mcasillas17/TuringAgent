@@ -414,9 +414,6 @@ func TestMCPRegistryProtoContract(t *testing.T) {
 	assertProtoField(t, server, "status_message", 8, protoreflect.StringKind, false, "")
 	assertProtoField(t, server, "sandbox_confined", 9, protoreflect.BoolKind, false, "")
 	assertProtoField(t, server, "tools", 10, protoreflect.MessageKind, true, "turing.v1.McpToolDescriptor")
-	if server.Fields().ByName("token") != nil || server.Fields().ByName("sealed_token") != nil {
-		t.Fatal("McpServerDescriptor must not expose server credentials")
-	}
 	tool := file.Messages().ByName("McpToolDescriptor")
 	assertProtoField(t, tool, "present", 5, protoreflect.BoolKind, false, "")
 
@@ -427,13 +424,66 @@ func TestMCPRegistryProtoContract(t *testing.T) {
 		"UpdateMcpToolPolicy",
 		"DeleteMcpServer",
 		"CallRegisteredMcpTool",
+		"RegisterMcpServer",
+		"ReimportMcpJson",
+		"RotateMcpServerToken",
 	} {
 		if service == nil || service.Methods().ByName(name) == nil {
 			t.Fatalf("McpRegistryService.%s is missing", name)
 		}
 	}
+	if service.Methods().ByName("RegisterMcpServer").Input().FullName() != "turing.v1.RegisterMcpServerRequest" ||
+		service.Methods().ByName("RegisterMcpServer").Output().FullName() != "turing.v1.McpServerDescriptor" {
+		t.Fatal("McpRegistryService.RegisterMcpServer must accept RegisterMcpServerRequest and return McpServerDescriptor")
+	}
+	if service.Methods().ByName("ReimportMcpJson").Input().FullName() != "turing.v1.ReimportMcpJsonRequest" ||
+		service.Methods().ByName("ReimportMcpJson").Output().FullName() != "turing.v1.ReimportMcpJsonResponse" {
+		t.Fatal("McpRegistryService.ReimportMcpJson must accept ReimportMcpJsonRequest and return ReimportMcpJsonResponse")
+	}
+	if service.Methods().ByName("RotateMcpServerToken").Input().FullName() != "turing.v1.RotateMcpServerTokenRequest" ||
+		service.Methods().ByName("RotateMcpServerToken").Output().FullName() != "turing.v1.McpServerDescriptor" {
+		t.Fatal("McpRegistryService.RotateMcpServerToken must accept RotateMcpServerTokenRequest and return McpServerDescriptor")
+	}
 	command := turingv1.File_turing_v1_runtime_proto.Messages().ByName("RuntimeCommand")
 	assertProtoField(t, command, "mcp_registry_changed", 7, protoreflect.MessageKind, false, "turing.v1.RuntimeMcpRegistryChanged")
+
+	registerReq := file.Messages().ByName("RegisterMcpServerRequest")
+	assertProtoField(t, registerReq, "name", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, registerReq, "url", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, registerReq, "tier", 3, protoreflect.EnumKind, false, "")
+	assertProtoField(t, registerReq, "bearer_token", 4, protoreflect.StringKind, false, "")
+
+	reimportReq := file.Messages().ByName("ReimportMcpJsonRequest")
+	if reimportReq == nil {
+		t.Fatal("ReimportMcpJsonRequest is missing")
+	}
+	if reimportReq.Fields().Len() != 0 {
+		t.Fatal("ReimportMcpJsonRequest must remain empty")
+	}
+
+	reimportResp := file.Messages().ByName("ReimportMcpJsonResponse")
+	assertProtoField(t, reimportResp, "imported", 1, protoreflect.StringKind, true, "")
+	assertProtoField(t, reimportResp, "skipped", 2, protoreflect.StringKind, true, "")
+	assertProtoField(t, reimportResp, "refused", 3, protoreflect.MessageKind, true, "turing.v1.UnsupportedMcpServer")
+
+	rotateReq := file.Messages().ByName("RotateMcpServerTokenRequest")
+	assertProtoField(t, rotateReq, "server_id", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, rotateReq, "bearer_token", 2, protoreflect.StringKind, false, "")
+
+	// No MCP management response message may leak the bearer token or any
+	// sealed/ciphertext form of it back to the client.
+	forbiddenCredentialFields := []protoreflect.Name{"bearer_token", "sealed_token", "ciphertext", "token"}
+	for _, respName := range []string{"McpServerDescriptor", "ReimportMcpJsonResponse"} {
+		resp := file.Messages().ByName(protoreflect.Name(respName))
+		if resp == nil {
+			t.Fatalf("%s is missing", respName)
+		}
+		for _, forbidden := range forbiddenCredentialFields {
+			if resp.Fields().ByName(forbidden) != nil {
+				t.Fatalf("%s must not expose a %s field", respName, forbidden)
+			}
+		}
+	}
 }
 
 func assertProtoField(t *testing.T, message protoreflect.MessageDescriptor, name protoreflect.Name, number protoreflect.FieldNumber, kind protoreflect.Kind, repeated bool, messageType protoreflect.FullName) {
