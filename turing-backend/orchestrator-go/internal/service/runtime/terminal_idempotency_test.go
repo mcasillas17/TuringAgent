@@ -7,6 +7,8 @@ import (
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -347,6 +349,82 @@ func TestLateTerminalUpdatesForReleasedRunKeepWorkerStreamUsable(t *testing.T) {
 				return command.GetRunAssigned() != nil && command.GetRunAssigned().GetRunId() == third.RunID
 			})
 		})
+	}
+}
+
+// TestDuplicateCancelledAckWithImpossibleVersionAfterReleaseClosesWorkerStream
+// pins the consequence of holding a run_cancelled_ack's version to
+// acknowledgedVersionMatches once the worker no longer holds the assignment at
+// all.
+//
+// The first ack here is the legitimate one: it names no version, matches, and
+// releases the fence — moving the worker on to a second run. A second ack for
+// the same, now-unassigned run that names a version the run never reached is
+// no longer a report reconcileLateAssignedUpdate's ownership check can filter
+// out (the worker has nothing to check ownership against, since the
+// assignment is gone) — it falls to isLateMatchingTerminalUpdate instead,
+// which this fix also holds to the same version rule. That makes it behave
+// exactly like an equally impossible late RunCompleted or RunFailed already
+// does today: a report about a run this stream cannot back up is a protocol
+// violation, not silent noise, and it takes the whole stream down with it —
+// including every other run the worker was still holding.
+func TestDuplicateCancelledAckWithImpossibleVersionAfterReleaseClosesWorkerStream(t *testing.T) {
+	h := newHarness(t)
+	first := h.enqueueRun(t, "released before the impossible duplicate")
+	second := h.enqueueRun(t, "still held when the stream closes")
+	client := h.runtimeClient(t)
+	stream, err := client.ConnectWorker(h.internalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.CloseSend() }()
+	if err := stream.Send(workerReady("worker-impossible-duplicate-ack")); err != nil {
+		t.Fatal(err)
+	}
+	recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetRunAssigned() != nil && command.GetRunAssigned().GetRunId() == first.RunID
+	})
+
+	cancelRunFixture(t, h, first.RunID)
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{
+		RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: first.RunID},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	// The worker only has capacity for one run, so this proves the legitimate
+	// ack above already released first and freed the worker for second.
+	recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetRunAssigned() != nil && command.GetRunAssigned().GetRunId() == second.RunID
+	})
+
+	committed := h.runState(t, first.RunID).StateVersion
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{
+		RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: first.RunID, ObservedStateVersion: committed + 99},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, recvErr := stream.Recv(); recvErr == nil {
+		t.Fatal("duplicate ack naming an impossible version did not close the worker stream")
+	} else if status.Code(recvErr) != codes.PermissionDenied {
+		t.Fatalf("stream close code = %v, want PermissionDenied", recvErr)
+	}
+
+	firstRun, err := h.repo.GetRun(context.Background(), first.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstRun.ExecutionActive || firstRun.ExecutionState != "exited" {
+		t.Fatalf("the already-settled release was disturbed: %+v", firstRun)
+	}
+	// second was still held by the worker whose stream just closed, so its
+	// ownership becomes uncertain the same way any other disconnect does.
+	secondRun, err := h.repo.GetRun(context.Background(), second.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondRun.Status != "recovering" {
+		t.Fatalf("second run status = %q, want recovering after the stream closed under it", secondRun.Status)
 	}
 }
 

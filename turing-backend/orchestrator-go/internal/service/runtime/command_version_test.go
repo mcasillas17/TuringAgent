@@ -6,8 +6,6 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // ---------------------------------------------------------------------------
@@ -113,6 +111,17 @@ func TestApprovalUpdatedCommandCarriesTheResultingStateVersion(t *testing.T) {
 // old version, so an acknowledgement naming one has to be refused — otherwise
 // the attempt that lost the run gets to declare its execution finished on
 // behalf of the attempt that owns it.
+//
+// This drives the acknowledgement through the real ConnectWorker stream
+// rather than calling applyUpdate directly. Production dispatch always routes
+// a terminalRunID update — which a run_cancelled_ack always is — through
+// reconcileLateAssignedUpdate first, and that path only ever falls through to
+// applyUpdate (and so to handleRunCancelledAck's own version check) while the
+// run is not yet terminal. By the time a worker acknowledges a cancellation
+// the run is already cancelled, so reconcileLateAssignedUpdate is the only
+// path a real ack ever takes: a test that calls applyUpdate straight through
+// exercises code the dispatch loop never reaches for this message and proves
+// nothing about what production actually enforces.
 func TestRunCancelledAckMustNameAVersionTheRunReached(t *testing.T) {
 	for _, test := range []struct {
 		name     string
@@ -149,8 +158,9 @@ func TestRunCancelledAckMustNameAVersionTheRunReached(t *testing.T) {
 			h := newHarness(t)
 			enqueued := h.enqueueRun(t, "ack "+test.name)
 			// A real dispatch, so the execution fence this acknowledgement
-			// releases is genuinely held rather than absent from the start.
-			_, assigned := h.connectAssignedWorker(t, "worker-ack-version", enqueued.RunID)
+			// releases is genuinely held by a live ConnectWorker assignment
+			// rather than one this test built by hand.
+			stream, assigned := h.connectAssignedWorker(t, "worker-ack-version", enqueued.RunID)
 			// Two committed transitions before the terminal one, so
 			// "committed-2" is a version the run genuinely held and genuinely
 			// left rather than an impossible number.
@@ -162,27 +172,41 @@ func TestRunCancelledAckMustNameAVersionTheRunReached(t *testing.T) {
 				t.Fatalf("committed version %d is too small for this fixture", committed)
 			}
 
-			err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{
+			if err := stream.Send(&turingv1.RuntimeUpdate{
 				Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{
 					RunId:                enqueued.RunID,
 					ObservedStateVersion: test.observed(committed),
 				}},
+			}); err != nil {
+				t.Fatalf("send run_cancelled_ack: %v", err)
+			}
+			// The ack itself has no reply. ConnectWorker serializes every
+			// update from one worker through a single receive loop, so a
+			// probe sent right behind it cannot be answered until the ack
+			// ahead of it has finished being applied — ignored outright, or
+			// used to release the fence — whichever this run does with it.
+			probeID := "sync-probe-" + test.name
+			if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: &turingv1.ToolCallBeacon{
+				RunId: enqueued.RunID, TraceId: enqueued.TraceID, ToolCallId: probeID,
+				AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ServerName: "system", ToolName: "system.time",
+				Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+				Args:  mustStruct(t, map[string]any{"timezone": "UTC"}),
+			}}}); err != nil {
+				t.Fatalf("send sync probe: %v", err)
+			}
+			recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+				return cmd.GetToolPolicyDecision() != nil && cmd.GetToolPolicyDecision().GetToolCallId() == probeID
 			})
+
 			run, getErr := h.repo.GetRun(context.Background(), enqueued.RunID)
 			if getErr != nil {
 				t.Fatalf("GetRun: %v", getErr)
 			}
 			if test.accepted {
-				if err != nil {
-					t.Fatalf("acknowledgement rejected: %v", err)
-				}
 				if run.ExecutionActive {
 					t.Fatal("accepted acknowledgement left the execution fence held")
 				}
 				return
-			}
-			if status.Code(err) != codes.FailedPrecondition {
-				t.Fatalf("acknowledgement error = %v, want FailedPrecondition", err)
 			}
 			if !run.ExecutionActive {
 				t.Fatal("refused acknowledgement released the execution fence anyway")

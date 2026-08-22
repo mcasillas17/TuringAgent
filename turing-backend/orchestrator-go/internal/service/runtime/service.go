@@ -2255,7 +2255,10 @@ func (s *Server) isLateMatchingTerminalUpdate(ctx context.Context, update *turin
 // conflicting outcome is meant to keep. That means the version the report was
 // computed against, the terminal lifecycle and its outcome reason, the
 // assistant message the content belongs to, and, for a completion, the exact
-// bytes together with the hash and displayability derived from them.
+// bytes together with the hash and displayability derived from them. A
+// cancellation ack has no outcome of its own to compare against — the run's
+// terminal identity was decided independently of it — so its identity is the
+// version it observed, held to acknowledgedVersionMatches.
 func isMatchingTerminalUpdate(run repository.Run, update *turingv1.RuntimeUpdate) bool {
 	switch {
 	case update.GetRunCompleted() != nil:
@@ -2288,7 +2291,16 @@ func isMatchingTerminalUpdate(run repository.Run, update *turingv1.RuntimeUpdate
 				"runId": failed.RunId, "code": failure.Code(), "retryable": false,
 			})
 	case update.GetRunCancelledAck() != nil:
-		return isTerminalRunStatus(run.Status)
+		// A cancellation ack carries no outcome of its own to compare — the
+		// run's terminal identity was already decided independently of
+		// anything the worker reports. What it does carry is the version it
+		// observed, and that has to be held to the same rule
+		// acknowledgedVersionMatches already applies for handleRunCancelledAck:
+		// a fenced predecessor of the very same attempt can still be carrying a
+		// version from before it was fenced, and treating that as a match would
+		// let it release a fence the current attempt is still holding.
+		return isTerminalRunStatus(run.Status) &&
+			acknowledgedVersionMatches(update.GetRunCancelledAck().GetObservedStateVersion(), run)
 	default:
 		return false
 	}
@@ -2359,7 +2371,17 @@ func (s *Server) reconcileLateAssignedUpdate(ctx context.Context, connectedWorke
 	if terminalRunID(update) == "" {
 		return true, nil
 	}
-	if run.Status != "cancelled" && !isMatchingTerminalUpdate(run, update) {
+	// A cancellation is decided independently of anything a worker reports, so
+	// once the run is already cancelled, any OTHER terminal-shaped report — a
+	// completion, a failure — is accepted as exit proof without comparing its
+	// content: that outcome already lost, and content it disagrees on cannot
+	// still be the persisted one. A cancellation ack is different: its whole
+	// identity is the version it observed, so it stays behind
+	// isMatchingTerminalUpdate even when the run is cancelled — otherwise a
+	// fenced predecessor of the very same attempt, still carrying a version
+	// from before it was fenced, would release a fence the current attempt is
+	// still holding.
+	if (run.Status != "cancelled" || update.GetRunCancelledAck() != nil) && !isMatchingTerminalUpdate(run, update) {
 		return true, nil
 	}
 	assignment, assigned := connectedWorker.assignmentForRun(runID)
