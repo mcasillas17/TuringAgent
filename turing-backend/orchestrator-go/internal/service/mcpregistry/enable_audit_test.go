@@ -77,9 +77,10 @@ func onlyExpectedAuditKeys(t *testing.T, payload map[string]any, allowed ...stri
 
 // TestEnablingRemoteServerAuditsSuccessWithNameTierAndRemoteContact proves a
 // successful remote-URL enable is audited exactly once, targeted at the
-// server id, with a payload limited to name/tier/remoteContact — no token,
-// no URL, no status/error text — and remoteContact true because enabling a
-// remote-url server really did contact it.
+// server id, with a payload limited to
+// name/tier/remoteDiscoveryAttempted/discoverySucceeded — no token, no URL,
+// no status/error text — and both booleans true because enabling a
+// remote-url server really did attempt discovery and it succeeded.
 func TestEnablingRemoteServerAuditsSuccessWithNameTierAndRemoteContact(t *testing.T) {
 	service, repo := newRegistryTestService(t)
 	recorder := &recordingAuditRecorder{}
@@ -119,10 +120,13 @@ func TestEnablingRemoteServerAuditsSuccessWithNameTierAndRemoteContact(t *testin
 	if record.payload["tier"] != string(repository.MCPServerTierRemoteURL) {
 		t.Fatalf("payload tier = %v, want remote_url", record.payload["tier"])
 	}
-	if record.payload["remoteContact"] != true {
-		t.Fatalf("payload remoteContact = %v, want true", record.payload["remoteContact"])
+	if record.payload["remoteDiscoveryAttempted"] != true {
+		t.Fatalf("payload remoteDiscoveryAttempted = %v, want true", record.payload["remoteDiscoveryAttempted"])
 	}
-	onlyExpectedAuditKeys(t, record.payload, "name", "tier", "remoteContact")
+	if record.payload["discoverySucceeded"] != true {
+		t.Fatalf("payload discoverySucceeded = %v, want true", record.payload["discoverySucceeded"])
+	}
+	onlyExpectedAuditKeys(t, record.payload, "name", "tier", "remoteDiscoveryAttempted", "discoverySucceeded")
 }
 
 // TestEnablingRemoteServerAuditsFailureWithoutStatusOrToken proves that even
@@ -130,7 +134,8 @@ func TestEnablingRemoteServerAuditsSuccessWithNameTierAndRemoteContact(t *testin
 // descriptor (down, still enabled) and the state change is still audited —
 // the audit/notify step happens before descriptor mapping so a real,
 // committed state change is never left unaudited — with a payload that
-// still carries no status/error text and no token.
+// still carries no status/error text and no token, and
+// discoverySucceeded=false since the attempt itself failed.
 func TestEnablingRemoteServerAuditsFailureWithoutStatusOrToken(t *testing.T) {
 	const sentinel = "enable-failure-sentinel-4b8f2a91-do-not-leak"
 	service, repo := newRegistryTestService(t)
@@ -172,16 +177,20 @@ func TestEnablingRemoteServerAuditsFailureWithoutStatusOrToken(t *testing.T) {
 	if record.target != server.ID {
 		t.Fatalf("target = %q, want the server id %q", record.target, server.ID)
 	}
-	if record.payload["remoteContact"] != true {
-		t.Fatalf("payload remoteContact = %v, want true", record.payload["remoteContact"])
+	if record.payload["remoteDiscoveryAttempted"] != true {
+		t.Fatalf("payload remoteDiscoveryAttempted = %v, want true", record.payload["remoteDiscoveryAttempted"])
 	}
-	onlyExpectedAuditKeys(t, record.payload, "name", "tier", "remoteContact")
+	if record.payload["discoverySucceeded"] != false {
+		t.Fatalf("payload discoverySucceeded = %v, want false: the discovery attempt failed", record.payload["discoverySucceeded"])
+	}
+	onlyExpectedAuditKeys(t, record.payload, "name", "tier", "remoteDiscoveryAttempted", "discoverySucceeded")
 	assertStringSentinelFree(t, "audit payload", fmt.Sprintf("%+v", record.payload), sentinel)
 }
 
 // TestDisablingServerAuditsWithoutRemoteContact proves disabling any
 // non-bundled server is audited as mcp.server.disabled with
-// remoteContact=false — disabling never contacts anything.
+// remoteDiscoveryAttempted=false and discoverySucceeded=false — disabling
+// never contacts anything or attempts discovery.
 func TestDisablingServerAuditsWithoutRemoteContact(t *testing.T) {
 	service, repo := newRegistryTestService(t)
 	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
@@ -216,10 +225,58 @@ func TestDisablingServerAuditsWithoutRemoteContact(t *testing.T) {
 	if record.target != server.ID {
 		t.Fatalf("target = %q, want the server id %q", record.target, server.ID)
 	}
-	if record.payload["remoteContact"] != false {
-		t.Fatalf("payload remoteContact = %v, want false", record.payload["remoteContact"])
+	if record.payload["remoteDiscoveryAttempted"] != false {
+		t.Fatalf("payload remoteDiscoveryAttempted = %v, want false", record.payload["remoteDiscoveryAttempted"])
 	}
-	onlyExpectedAuditKeys(t, record.payload, "name", "tier", "remoteContact")
+	if record.payload["discoverySucceeded"] != false {
+		t.Fatalf("payload discoverySucceeded = %v, want false", record.payload["discoverySucceeded"])
+	}
+	onlyExpectedAuditKeys(t, record.payload, "name", "tier", "remoteDiscoveryAttempted", "discoverySucceeded")
+}
+
+// TestEnablingLocalContainerAuditsDiscoverySucceededWithoutRemoteDiscoveryAttempted
+// pins the local-container success semantics: enabling a local-container
+// server does call discover() and it can succeed, but
+// remoteDiscoveryAttempted only describes a remote-url enable, so it must
+// stay false even though discoverySucceeded is true. This disambiguates
+// "discovery ran and worked" from "we reached out to a remote vendor".
+func TestEnablingLocalContainerAuditsDiscoverySucceededWithoutRemoteDiscoveryAttempted(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	recorder := &recordingAuditRecorder{}
+	service.SetAuditRecorder(recorder)
+	vendor := toolsListVendor(t)
+	service.httpClient = vendor.Client()
+	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
+		Name: "local", URL: vendor.URL, Tier: repository.MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	descriptor, err := service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
+		ServerId: server.ID, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor.GetLiveness() != turingv1.McpServerLiveness_MCP_SERVER_LIVENESS_UP {
+		t.Fatalf("liveness = %v, want up", descriptor.GetLiveness())
+	}
+
+	if len(recorder.records) != 1 {
+		t.Fatalf("records = %+v, want exactly one", recorder.records)
+	}
+	record := recorder.records[0]
+	if record.payload["tier"] != string(repository.MCPServerTierLocalContainer) {
+		t.Fatalf("payload tier = %v, want local_container", record.payload["tier"])
+	}
+	if record.payload["remoteDiscoveryAttempted"] != false {
+		t.Fatalf("payload remoteDiscoveryAttempted = %v, want false: local-container is not a remote enable", record.payload["remoteDiscoveryAttempted"])
+	}
+	if record.payload["discoverySucceeded"] != true {
+		t.Fatalf("payload discoverySucceeded = %v, want true: local-container discovery still ran and succeeded", record.payload["discoverySucceeded"])
+	}
+	onlyExpectedAuditKeys(t, record.payload, "name", "tier", "remoteDiscoveryAttempted", "discoverySucceeded")
 }
 
 // TestSetMcpServerEnabledNotifiesAndAuditsBeforeADescriptorFailure is the

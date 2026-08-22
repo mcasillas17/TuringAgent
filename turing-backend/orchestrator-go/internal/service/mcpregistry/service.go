@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
@@ -18,6 +19,15 @@ import (
 )
 
 const maxMCPStatusMessageBytes = 512
+
+// enableDiscoveryTimeout bounds the entire enable-time discovery operation
+// (every tools/list page, not just a single HTTP request) so a vendor that
+// never stops paginating cannot force SetMcpServerEnabled to hang for up to
+// maxMCPToolPages times the HTTP client's own 30s timeout. It matches that
+// existing per-request timeout, since one bounded round trip's worth of
+// budget for the whole operation is the intended behavior, not an
+// additional allowance on top of it.
+const enableDiscoveryTimeout = 30 * time.Second
 
 type RegistryChangeNotifier interface {
 	NotifyMCPRegistryChanged(context.Context) error
@@ -151,48 +161,79 @@ func (s *Server) SetMcpServerEnabled(ctx context.Context, req *turingv1.SetMcpSe
 	if err := s.repo.SetMCPServerEnabled(ctx, server.ID, req.GetEnabled()); err != nil {
 		return nil, status.Error(codes.Internal, "update MCP server failed")
 	}
-	// remoteContact records whether this call actually reached the
-	// server: true only when enabling a remote-url server, since that is
-	// the one case where the user's explicit action is a real network
-	// contact rather than a purely local state flip (disabling never
-	// contacts anything, and a local-container server is already
-	// reached over the sandboxed internal network rather than egress).
-	remoteContact := req.GetEnabled() && server.Tier == repository.MCPServerTierRemoteURL
-	if !req.GetEnabled() {
-		if err := s.repo.SetMCPServerStatus(ctx, server.ID, "unknown", ""); err != nil {
-			return nil, status.Error(codes.Internal, "update MCP server status failed")
-		}
-	} else if server.Tier == repository.MCPServerTierLocalContainer || server.Tier == repository.MCPServerTierRemoteURL {
+	// remoteDiscoveryAttempted records whether this call attempted to
+	// contact the server for live discovery: true only when enabling a
+	// remote-url server, since that is the one case where the user's
+	// explicit action is a real network contact rather than a purely
+	// local state flip (disabling never contacts anything, and a
+	// local-container server is already reached over the sandboxed
+	// internal network rather than egress). It records that discovery
+	// was *attempted*, not that a response packet actually arrived —
+	// discoverySucceeded is the separate, narrower signal for that.
+	remoteDiscoveryAttempted := req.GetEnabled() && server.Tier == repository.MCPServerTierRemoteURL
+	discoverySucceeded := false
+	// statusErr captures a failure to persist the post-commit liveness
+	// status (disabled -> "unknown", or a failed discovery -> "down").
+	// It is deliberately not returned immediately: the enable/disable
+	// mutation above already committed, so the notify/audit steps below
+	// must still run for it before the caller ever sees an error.
+	var statusErr error
+	switch {
+	case !req.GetEnabled():
+		// Detached from ctx (same principle as auditMCPEvent): a client
+		// that cancels after the enable/disable already committed must
+		// not be able to suppress the status write that describes it.
+		disableCtx, cancel := detachedBoundedContext(ctx, postCommitStatusTimeout)
+		statusErr = s.repo.SetMCPServerStatus(disableCtx, server.ID, "unknown", "")
+		cancel()
+	case server.Tier == repository.MCPServerTierLocalContainer || server.Tier == repository.MCPServerTierRemoteURL:
 		// The user's explicit enable action is the first liveness contact
 		// for a directly registered server of either non-bundled tier:
 		// registration itself stays zero-network (see RegisterMcpServer),
 		// so a remote-URL server discovers its tools here for the first
-		// time exactly like a local-container one always has.
-		if err := s.discover(ctx, server.ID); err != nil {
-			if statusErr := s.repo.SetMCPServerStatus(ctx, server.ID, "down", boundedStatusMessage(err.Error())); statusErr != nil {
-				return nil, status.Error(codes.Internal, "record MCP discovery failure failed")
-			}
+		// time exactly like a local-container one always has. The whole
+		// operation — not each individual HTTP request — is bounded by
+		// enableDiscoveryTimeout so a vendor cannot force up to
+		// maxMCPToolPages x the HTTP client's own timeout.
+		discoverCtx, cancel := context.WithTimeout(ctx, s.discoveryTimeout())
+		discoverErr := s.discover(discoverCtx, server.ID)
+		cancel()
+		if discoverErr != nil {
+			// Detached from ctx for the same reason as the disable case
+			// above: discovery failing (including via context
+			// cancellation) must not suppress recording that the server
+			// is now down.
+			statusCtx, statusCancel := detachedBoundedContext(ctx, postCommitStatusTimeout)
+			statusErr = s.repo.SetMCPServerStatus(statusCtx, server.ID, "down", boundedStatusMessage(discoverErr.Error()))
+			statusCancel()
+		} else {
+			discoverySucceeded = true
 		}
 	}
 	// Notify and audit immediately once every repository mutation above
-	// has committed — before building the response descriptor — so an
-	// unexpected descriptor/schema failure below can never leave a real,
+	// has been attempted — before checking statusErr and before building
+	// the response descriptor — so neither an unrecorded status nor an
+	// unexpected descriptor/schema failure below can ever leave a real,
 	// already-persisted enable/disable unannounced or unaudited. This
-	// also means a discovery failure (handled above, not returned) still
-	// produces an audit record: the enable itself succeeded and
-	// committed even though the server came back down. The payload never
-	// carries a token, URL, or status/error text — only the name, tier,
-	// and whether this call made real remote contact.
+	// also means a discovery failure still produces an audit record: the
+	// enable itself succeeded and committed even though the server came
+	// back down. The payload never carries a token, URL, or status/error
+	// text — only the name, tier, and whether discovery was attempted and
+	// whether it succeeded.
 	s.notifyRegistryChanged()
 	action := "mcp.server.disabled"
 	if req.GetEnabled() {
 		action = "mcp.server.enabled"
 	}
 	s.auditMCPEvent(ctx, action, server.ID, map[string]any{
-		"name":          server.Name,
-		"tier":          string(server.Tier),
-		"remoteContact": remoteContact,
+		"name":                     server.Name,
+		"tier":                     string(server.Tier),
+		"remoteDiscoveryAttempted": remoteDiscoveryAttempted,
+		"discoverySucceeded":       discoverySucceeded,
 	})
+	if statusErr != nil {
+		return nil, status.Error(codes.Internal, "record MCP server status failed")
+	}
 	updated, err := s.repo.GetMCPServer(ctx, server.ID)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "read MCP server failed")

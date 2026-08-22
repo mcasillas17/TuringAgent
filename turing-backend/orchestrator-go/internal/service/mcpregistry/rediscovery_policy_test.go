@@ -219,4 +219,14 @@ func TestImportedRemoteServerDiscoveryFailurePreservesSnapshotAndPolicy(t *testi
 	if tool.Name != "vendor.lookup" || tool.Policy != "safe" || tool.SchemaJSON != snapshotSchema || !tool.Present {
 		t.Fatalf("tool = %+v, want the prior snapshot and edited policy fully preserved", tool)
 	}
+	// Pinning the snapshot-failure semantics: the server itself is enabled
+	// (asserted above), so the tool becomes enabled too even though live
+	// rediscovery never ran to reconfirm it — the descriptor's liveness
+	// (down, asserted above) is what tells an operator the server's
+	// availability is stale/unknown, not the tool's enabled bit. A tool
+	// that survives from a prior snapshot must never be silently disabled
+	// just because this enable's discovery attempt failed.
+	if !tool.Enabled {
+		t.Fatal("tool must be enabled: the server is enabled and the tool is present with a non-disabled policy, even though live rediscovery failed")
+	}
 }

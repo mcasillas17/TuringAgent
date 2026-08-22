@@ -95,6 +95,13 @@ type Server struct {
 	clientMu     sync.Mutex
 	localClient  *http.Client
 	remoteClient *http.Client
+	// enableDiscoveryTimeoutOverride replaces enableDiscoveryTimeout when
+	// set (test-only, zero value unused in production): it lets a test
+	// prove the whole-operation timeout wrapper itself bounds discovery,
+	// with a caller context that carries no deadline of its own, instead
+	// of relying on a short caller-supplied deadline that would pass even
+	// without the wrapper.
+	enableDiscoveryTimeoutOverride time.Duration
 }
 
 // AuditRecorder is the audit service, narrowed to the one method this
@@ -125,6 +132,32 @@ func (s *Server) SetMCPConfigRoot(root string) {
 // is recording has already committed.
 const auditRecordTimeout = 5 * time.Second
 
+// postCommitStatusTimeout bounds the detached context SetMcpServerEnabled
+// derives for a liveness-status write that happens after the enable/disable
+// mutation has already committed. It uses the same duration as
+// auditRecordTimeout for the same reason: a slow or wedged store must not
+// hang indefinitely after the change it is recording already happened.
+const postCommitStatusTimeout = auditRecordTimeout
+
+// detachedBoundedContext derives a context for work that must run after an
+// earlier mutation has already committed: it is detached from the caller's
+// cancellation/deadline via context.WithoutCancel and given its own small
+// bounded timeout, so a client that cancels (or any downstream cancellation
+// racing the request, such as the registry-change notifier) can never skip
+// or race a durable record of a change that already happened.
+func detachedBoundedContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), timeout)
+}
+
+// discoveryTimeout returns enableDiscoveryTimeout, or
+// enableDiscoveryTimeoutOverride when a test has set one.
+func (s *Server) discoveryTimeout() time.Duration {
+	if s.enableDiscoveryTimeoutOverride > 0 {
+		return s.enableDiscoveryTimeoutOverride
+	}
+	return enableDiscoveryTimeout
+}
+
 // auditMCPEvent records a registry mutation and never lets a failure to
 // record it fail the mutation that already happened: the change is real
 // either way, and refusing to report it would just be a second problem. A
@@ -136,13 +169,12 @@ const auditRecordTimeout = 5 * time.Second
 // cancels (or a post-commit side effect, such as the registry-change
 // notifier, that ends up cancelling it) must never race or skip a durable
 // record of a change that already happened. The context is therefore
-// detached from cancellation/deadline via context.WithoutCancel and given
-// its own small bounded timeout instead.
+// detached from cancellation/deadline via detachedBoundedContext instead.
 func (s *Server) auditMCPEvent(ctx context.Context, action, target string, payload map[string]any) {
 	if s.audit == nil {
 		return
 	}
-	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), auditRecordTimeout)
+	auditCtx, cancel := detachedBoundedContext(ctx, auditRecordTimeout)
 	defer cancel()
 	if err := s.audit.Record(auditCtx, "", "client", "", action, target, payload); err != nil {
 		log.Printf("record %s for %s failed", action, target)
