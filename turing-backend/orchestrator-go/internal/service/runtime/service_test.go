@@ -4387,10 +4387,17 @@ func TestUnknownOriginAndRetryClassFailClosed(t *testing.T) {
 // (worker_busy, the one dispatch code that is genuinely requeued when typed
 // correctly, and tool_discovery_failed, a tool code that may be requeued when
 // a trusted typed transient origin/class is present, but fails closed when
-// untyped). Both must fail
-// closed to unknown/internal_failure and terminalize the run rather than
-// requeue it: the legacy bool is untrusted and the proto/design contract says
-// it is ignored outright, never translated into a retry request.
+// untyped). Both must fail closed to unknown/internal_failure and terminalize
+// the run rather than requeue it: the legacy bool is untrusted and the
+// proto/design contract says it is ignored outright, never translated into a
+// retry request.
+//
+// This is end-to-end characterization/regression coverage for the untyped
+// legacy shape, not load-bearing proof that the dead fallback in
+// normalizeRuntimeFailure can be removed: origin validation already fails
+// closed for an absent origin regardless of that fallback. See
+// TestTypedOriginWithMissingRetryClassIgnoresLegacyRetryableBool for the
+// shape that fallback actually reached and the load-bearing removal proof.
 func TestLegacyRetryableBoolNeverBuysARequeueForAbsentOrigin(t *testing.T) {
 	tests := []struct {
 		name string
