@@ -548,6 +548,20 @@ func TestNoAcceptanceLeavesTheRunsVersionUnchanged(t *testing.T) {
 // requiring the Ready to have ever been sent. That branch is what let a
 // premature acceptance recorded here — dropped now, by recordAccepted's
 // readyStarted gate — resume the run anyway once the deadline fired.
+//
+// The final assertion below pins where beginReadySend runs relative to the
+// decision select, synchronously and without racing a goroutine against it.
+// resumeApproval has already returned by this point, having taken the
+// decision-select's failing branch — the branch that, per its own comment,
+// never calls beginReadySend at all, because that call sits AFTER the select
+// in source order, reached only once it returns via the decided arm. So
+// readyStarted must still be false here, and a fresh acceptance offered
+// after the resume gave up must be refused for that reason alone. If
+// beginReadySend were ever moved ahead of the decision select — so that it
+// ran the instant resumeApproval was entered, before waiting on either arm —
+// it would already have set readyStarted true by the time this failing
+// branch returned, regardless of decided never having fired, and this same
+// acceptance would be wrongly recorded instead.
 func TestAcceptanceDeliveredBeforeTheDecisionCannotResumeTheRun(t *testing.T) {
 	harness := newUndecidedResumeDeliveryHarness(t)
 	premature := &turingv1.RuntimeApprovalResumeAccepted{
@@ -568,6 +582,13 @@ func TestAcceptanceDeliveredBeforeTheDecisionCannotResumeTheRun(t *testing.T) {
 	}
 	if fatal := harness.fatalErr(); fatal != nil {
 		t.Fatalf("a premature acceptance dropped the whole worker stream instead of failing the resume alone: %v", fatal)
+	}
+	stillUnstarted := &turingv1.RuntimeApprovalResumeAccepted{
+		RunId: resumeDeliveryRunID, ApprovalId: resumeDeliveryApproval,
+		StateVersion: resumeDeliveryVersion + 1, AssignmentAttemptId: resumeDeliveryAttempt,
+	}
+	if harness.pending.recordAccepted(stillUnstarted) {
+		t.Fatal("recordAccepted succeeded after resumeApproval gave up on the decision it never saw: the Ready send was never even attempted, so readyStarted must still be false")
 	}
 }
 
@@ -1554,5 +1575,42 @@ func TestDeliverResumeAcceptanceZeroVersionStillSatisfiesWithoutOverwriting(t *t
 	}
 	if got := harness.entry.expectedVersion(); got != resumeDeliveryVersion {
 		t.Fatalf("version after a matching zero-version acceptance = %d, want unchanged %d", got, resumeDeliveryVersion)
+	}
+}
+
+// TestDeliverResumeAcceptanceEqualVersionIsAcceptable pins the equality
+// boundary of versionAcceptable's forward-only rule directly: `version >=
+// r.version`, not `version > r.version`. An otherwise-matching acceptance
+// whose positive StateVersion is exactly equal to this entry's current
+// expectedVersion is a decision the orchestrator computed against the exact
+// state this run is already at — neither stale nor a genuine forward move,
+// but still acceptable, because it names the version this run is actually
+// sitting at right now. Tightening the comparison to `>` would make this
+// exact, otherwise-matching acceptance indistinguishable from the "stale
+// state version" case TestDeliverResumeAcceptanceRejectsEachGuardIndividually
+// already pins one version below this one, wrongly refusing it as stale
+// too.
+func TestDeliverResumeAcceptanceEqualVersionIsAcceptable(t *testing.T) {
+	harness := newResumeDeliveryHarness(t)
+	harness.pending.beginReadySend()
+	equalVersion := &turingv1.RuntimeApprovalResumeAccepted{
+		RunId: resumeDeliveryRunID, ApprovalId: resumeDeliveryApproval,
+		StateVersion: resumeDeliveryVersion, AssignmentAttemptId: resumeDeliveryAttempt,
+	}
+
+	harness.worker.deliverResumeAcceptance(equalVersion)
+
+	accepted, ok := harness.pending.abandonOrClaim()
+	if !ok || accepted != equalVersion {
+		t.Fatalf("deliverResumeAcceptance did not record a matching equal-version acceptance: (%v, %v), want (%v, true)", accepted, ok, equalVersion)
+	}
+	if err := harness.worker.completeAcceptedResume(harness.entry, accepted); err != nil {
+		t.Fatalf("completeAcceptedResume with a claimed equal-version acceptance = %v, want nil", err)
+	}
+	if harness.entry.outboundPaused() {
+		t.Fatal("a matching equal-version acceptance left the run's outbound narration paused")
+	}
+	if got := harness.entry.expectedVersion(); got != resumeDeliveryVersion {
+		t.Fatalf("version after a matching equal-version acceptance = %d, want unchanged %d", got, resumeDeliveryVersion)
 	}
 }
