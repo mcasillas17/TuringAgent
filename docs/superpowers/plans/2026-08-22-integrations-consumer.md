@@ -192,8 +192,17 @@ method and client wiring, used by the Integrations page — and incidentally
 making skills tools editable. It lives on `McpRegistryService`'s public
 facet, beside `UpdateMcpToolPolicy` — that is where the guard and the
 notification already live, and where the client's API key can reach — and
-is refused on the internal facet like the other management RPCs. Four
-properties the RPC must carry, each a trap if dropped:
+is refused on the internal facet like the other management RPCs. The
+write RPC needs a **read** companion the current API cannot provide:
+`ListMcpServers` is a plain `SELECT FROM mcp_servers`, so
+`mcp_server_id IS NULL` tool rows are invisible to the client and the
+policy editor would be editing state it cannot render. A public
+`ListPseudoServerTools(server_name)` on the same facet returns the tools
+and current policies for `skills` and `integrations` — deliberately a new
+RPC rather than widening `ListMcpServers`, whose response the runtime also
+consumes (`NewRegistryClients` iterates it), so synthesizing pseudo-server
+descriptors there would ripple into discovery. Four properties the write
+RPC must carry, each a trap if dropped:
 
 - **the same bundled-mutating-tool guard** as `UpdateMcpToolPolicy`
   (`BundledToolRequiresApproval`) — a by-name RPC without it is a privilege
@@ -344,7 +353,10 @@ signed challenge, not just the database row.** PR #73's pattern, all of it:
 - The disclosure carries the connection's **display name**, and the egress
   dialog renders one line per connection — `conn_9f3a…` is not consent to an
   account, and consent for the personal account must not read as consent for
-  the work account.
+  the work account. Uniqueness lives on the *full* name (120 runes) while
+  the entry truncates at 64, so when a rendered name was truncated the
+  dialog appends a short id discriminator — two accounts sharing a 64-rune
+  prefix must not render identical consent lines.
 - Validation before dispatch checks four legs:
   `integrations/<tool>` present in the decision's `selected_tools`;
   `TOOL_ARGUMENTS` and `TOOL_RESULTS` present in the data categories; the
@@ -382,8 +394,8 @@ signed challenge, not just the database row.** PR #73's pattern, all of it:
   `egress_decision_invalid` before the first model call. Feeding that
   check also means `toProtoEgressDecision` (`runtime/service.go`)
   populates the new `integration_endpoints` field on the job-side
-  `RunEgressDecision`. **A fifth
-  edit in `resolveEgressContext` is separate from the early return:** the
+  `RunEgressDecision`. **A sixth
+  edit, in `resolveEgressContext`, is separate from its early return:** the
   data-category attachment currently adds `TOOL_ARGUMENTS`/`TOOL_RESULTS`
   only for provider egress with selected tools or for remote MCP servers —
   a local run with only integration endpoints would get neither category
@@ -536,10 +548,11 @@ The honest file-level list:
 - **`internal/service/mcpregistry/import.go`** — `integrations` added to
   the reserved server names.
 - **`proto/turing/v1`** — `CallIntegrationTool`, `ListIntegrationTools`,
-  `UpdateToolPolicyByName`; `integration_endpoints` on the egress
-  disclosure and decision messages; `read_only` on `ToolPolicyDecision`
-  (pinned field numbers, `tools/proto/check.sh` compares bytes). The
-  approval render is deliberately **not** here — see above.
+  `UpdateToolPolicyByName`, `ListPseudoServerTools`;
+  `integration_endpoints` on the egress disclosure and decision messages;
+  `read_only` on `ToolPolicyDecision` (pinned field numbers,
+  `tools/proto/check.sh` compares bytes). The approval render is
+  deliberately **not** here — see above.
 - **Runtime (`agent-runtime-go`)** — the dynamic integrations lister over
   `ListIntegrationTools`; beacons stamped `integrations`; forwarding over
   `CallIntegrationTool`; `read_only`-aware error classification in
@@ -550,7 +563,8 @@ The honest file-level list:
   render-size deny branch beside `denyToolBefore` with its own reason
   string.
 - **`internal/service/mcpregistry/service.go`** — `UpdateToolPolicyByName`
-  on the public facet, with all four properties above.
+  and `ListPseudoServerTools` on the public facet, the former with all
+  four properties above.
 - **Client** — the Integrations page shows each connection's tools with the
   new policy editor and the connect-time "sends will ask" notice; the
   egress dialog renders one labeled line per connection; the approval card
@@ -588,12 +602,15 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
    refusal can only come from the endpoint comparison in
    `payloadMatchesEgressContext`, and it must be the context-changed one.
    Revoking an *only* connection instead changes `SelectedTools` and the
-   pre-existing comparison catches it, proving nothing. The per-entry byte
-   bound gets the boundary probe test 13 gives the approval render: an
-   entry rendering to exactly `maxIntegrationEndpointEntryBytes` prepares,
-   signs, and verifies; one byte over is refused at `resolveEgressContext`
-   with the legible `FailedPrecondition`, never at signing — the leg that
-   catches two check sites measuring with different arithmetic. And the
+   pre-existing comparison catches it, proving nothing. **Both** sub-budgets
+   get the boundary probe test 13 gives the approval render: an entry
+   rendering to exactly `maxIntegrationEndpointEntryBytes` prepares,
+   signs, and verifies, one byte over is refused; exactly
+   `maxIntegrationEndpoints` entries prepare and sign, one more is
+   refused — each refusal at `resolveEgressContext` with the legible
+   `FailedPrecondition`, never at signing. These are the legs that catch
+   two check sites measuring with different arithmetic, and a count cap
+   enforced only inside the signer. And the
    enqueue idempotency fingerprint is exercised the way `RemoteMCPServers` was
    when it joined — as a pure-function test (two decisions differing only
    in the connection set produce different fingerprints); the live
@@ -650,11 +667,15 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
    notice and consent audit row name `api.github.com`, never an empty
    destination.
 10. **A failed read is not a dead run — with each site asserting what is
-    actually true.** A provider 500 on an approved read returns a bounded
-    tool error to the model and the run continues; a *successful* read
-    whose after-report to the orchestrator fails still ends the run but is
-    classified as a reporting failure, not `SideEffectCommittedError`. A
-    transport failure on a write still halts the run.
+    actually true, including the re-delivery rebuild.** A provider 500 on
+    an approved read returns a bounded tool error to the model and the run
+    continues; the same holds when the before-beacon is **re-delivered for
+    the same `tool_call_id`** — the leg that pins `read_only` at
+    `existingToolBeforeDecision`, which the fresh-beacon path never
+    exercises; a *successful* read whose after-report to the orchestrator
+    fails still ends the run but is classified as a reporting failure, not
+    `SideEffectCommittedError`. A transport failure on a write still halts
+    the run.
 11. **Transport hardening.** A 30x from the provider is refused before the
     redirect is followed and the resulting error is redacted; a resolver
     answer mapping the provider host to a private address is refused.
