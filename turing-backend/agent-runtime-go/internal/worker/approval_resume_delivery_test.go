@@ -725,6 +725,67 @@ func TestBufferedAcceptanceOutranksReadySendError(t *testing.T) {
 	}
 }
 
+// TestAcceptanceWithoutAttemptIDStillMatchesTheCurrentResume proves the
+// compatibility case deliverResumeAcceptance deliberately keeps: an acceptance
+// that carries no AssignmentAttemptId at all still matches this run's current
+// pending resume rather than being refused as a mismatch. deliverResumeAcceptance
+// only rejects on a mismatched attempt when the acceptance actually names one
+// ("accepted.GetAssignmentAttemptId() != "" && ... != attemptID"); an empty
+// field skips that check entirely, exactly as an orchestrator build that
+// predates the field, or one that simply omits it, would send.
+//
+// The Ready send is made to fail here so this test also demonstrates the
+// consequence through completeAcceptedResume: the win must still clear the
+// outbound pause sendRunUpdateReportingPause just set, and it must do that via
+// unpauseAfterAcceptedResume, not refreshAssignment. refreshAssignment
+// requires a non-empty attempt ID on both the incoming message and the run
+// before it will touch either the pause or the version — a requirement this
+// exact acceptance fails by construction — so routing this win through it
+// instead would leave the run's narration muted forever. The pause and
+// version assertions below are what would fail if completeAcceptedResume were
+// changed to make that substitution.
+func TestAcceptanceWithoutAttemptIDStillMatchesTheCurrentResume(t *testing.T) {
+	harness := newResumeDeliveryHarness(t)
+	accepted := &turingv1.RuntimeApprovalResumeAccepted{
+		RunId: resumeDeliveryRunID, ApprovalId: resumeDeliveryApproval,
+		StateVersion: resumeDeliveryVersion + 1,
+		// AssignmentAttemptId deliberately left empty: the compatibility case
+		// this test is about.
+	}
+	// The barrier: deliverResumeAcceptance runs from inside the Ready's own
+	// send, before the send's error is ever returned to resumeApproval, the
+	// same shape TestBufferedAcceptanceOutranksReadySendError above uses —
+	// except this goes through deliverResumeAcceptance itself, the only place
+	// that runs the AssignmentAttemptId compatibility check this test targets,
+	// rather than calling pending.recordAccepted directly and bypassing it.
+	harness.stream.sendFn = func(update *turingv1.RuntimeUpdate) error {
+		harness.started <- update
+		if update.GetApprovalResumeReady() != nil {
+			harness.worker.deliverResumeAcceptance(accepted)
+			return context.DeadlineExceeded
+		}
+		return nil
+	}
+
+	err := harness.resume(time.Now().Add(5 * time.Second))
+
+	if err != nil {
+		t.Fatalf("resume error = %v, want nil: an acceptance without an AssignmentAttemptId must still match this run's current resume", err)
+	}
+	if fatal := harness.fatalErr(); fatal != nil {
+		t.Fatalf("a matching acceptance still dropped the whole worker stream: %v", fatal)
+	}
+	if entry := harness.worker.activeRun(resumeDeliveryRunID); entry == nil {
+		t.Fatal("a matching acceptance forced the durably running run into recovery")
+	}
+	if harness.entry.outboundPaused() {
+		t.Fatal("a winning acceptance left the resumed run's outbound narration paused")
+	}
+	if got := harness.entry.expectedVersion(); got != resumeDeliveryVersion+1 {
+		t.Fatalf("run version after a winning acceptance = %d, want the accepted %d", got, resumeDeliveryVersion+1)
+	}
+}
+
 // TestAcceptedRecordedBeforeTheWaitBeginsIsClaimedWithoutBlocking is the
 // "pre-select" case a separate nonblocking peek used to exist for: an
 // acceptance recorded while the Ready's send was still in flight, with nothing
@@ -908,31 +969,34 @@ func TestAcceptanceRaceWithTheDeadlineIsLinearizedNeverMixed(t *testing.T) {
 // about. A mutation confined to the final select would go completely
 // unexercised by a test that never reliably reaches it with a nil error.
 //
-// So this test establishes the ordering through an explicit, un-raced
-// happens-before instead of timing:
+// An earlier version of THIS test established that ordering indirectly, via a
+// sentinel update sent through the same writer and reasoned about through the
+// writer's FIFO order — proof that the Ready's own send had already returned
+// by the time the sentinel completed, and so that resumeApproval must already
+// be at (or past) its final select. That was correct but roundabout: it
+// proved something about the writer to infer something about resumeApproval,
+// rather than asking resumeApproval directly. This version uses
+// pending.testBeforeFinalSelect instead — the narrow test-only seam
+// resumeApproval calls, synchronously and on its own goroutine, immediately
+// before that select and nowhere else. Installing a hook there is a direct,
+// single-threaded barrier: resumeApproval cannot reach the select until the
+// hook returns, so recording the acceptance and cancelling the wait inside it
+// deterministically leaves both arms ready before the select is ever
+// evaluated — on every iteration, not merely in expectation.
 //
-//  1. Wait for the Ready to actually leave the writer (the default fakeStream
-//     Send, unmodified, so nothing here can itself return an error).
-//  2. Send a second, sentinel update through the SAME outbound writer and
-//     wait for it to complete. The writer is single-threaded and strictly
-//     FIFO — begin, Send, complete, only then does it loop back to dequeue
-//     the next request — so this sentinel cannot finish before the Ready's
-//     own request.complete has already run. That is what proves, without any
-//     clock, that the Ready's send has already durably succeeded and
-//     resumeApproval's own blocked receive on request.result has already been
-//     resolved with a nil error — while sendCtx was still live, because
-//     nothing has cancelled anything yet at this point.
-//  3. Only now record the acceptance and cancel the wait. Neither action can
-//     any longer race the send's own completion — that already happened in
-//     step 2 — so the only thing left for either of them to affect is exactly
-//     the final select this test targets.
-//
-// Repeated so that, under a regression that lets the deadline arm win
-// outright instead of deferring to abandonOrClaim, the run of iterations is
-// exceedingly unlikely to have Go's select land on the signal arm every
-// single time and mask the bug.
+// What is NOT deterministic, and is not supposed to be: which of the two
+// already-ready cases Go's own select statement picks. That is the actual
+// thing under test — abandonOrClaim must answer the acceptance regardless of
+// which case fires — so the loop below is sized only to make it exceedingly
+// unlikely that every iteration happens to land on the signal case and mask a
+// regression that only fails the deadline arm.
 func TestAcceptanceRecordedBeforeFinalSelectAlwaysWins(t *testing.T) {
-	const iterations = 200
+	// 40 iterations makes the odds of a real mutation going unnoticed
+	// (every single iteration landing on the case that happens to still work)
+	// 0.5^40 — no realistic flake budget needs more than that once the "both
+	// arms ready" setup itself is a deterministic barrier rather than a timing
+	// assumption.
+	const iterations = 40
 	for attempt := 0; attempt < iterations; attempt++ {
 		harness := newResumeDeliveryHarness(t)
 		ctx, cancel := context.WithCancel(context.Background())
@@ -941,45 +1005,23 @@ func TestAcceptanceRecordedBeforeFinalSelectAlwaysWins(t *testing.T) {
 			StateVersion: resumeDeliveryVersion + 1, AssignmentAttemptId: resumeDeliveryAttempt,
 		}
 
+		// The barrier: resumeApproval calls this, on its own goroutine,
+		// immediately before its final select — after the Ready has already
+		// been sent (readyStarted is already true by construction; nothing
+		// else calls this hook). Recording the acceptance and cancelling the
+		// wait here, before returning, is what makes both arms ready before
+		// resumeApproval's select is ever entered, deterministically, with no
+		// reliance on scheduling. t.Errorf rather than t.Fatalf: this runs on
+		// resumeApproval's goroutine, not the test's own.
+		harness.pending.testBeforeFinalSelect = func() {
+			if !harness.pending.recordAccepted(accepted) {
+				t.Errorf("attempt %d: recordAccepted refused an acceptance for a Ready send already durably sent", attempt)
+			}
+			cancel()
+		}
+
 		result := make(chan error, 1)
 		go func() { result <- harness.resumeWithContext(ctx, time.Time{}) }()
-
-		// Step 1: the Ready reaches the stream via the default, unmodified
-		// Send — nothing here can produce a send error.
-		select {
-		case update := <-harness.stream.sent:
-			if update.GetApprovalResumeReady() == nil {
-				t.Fatalf("attempt %d: first update sent = %+v, want the approval Ready", attempt, update)
-			}
-		case <-time.After(5 * time.Second):
-			t.Fatalf("attempt %d: the Ready never reached the stream", attempt)
-		}
-
-		// Step 2: a sentinel update through the same writer, proving by FIFO
-		// order alone — not by timing — that the Ready's own request.complete
-		// has already run and resumeApproval has already been handed a nil
-		// error for its send.
-		sentinelErr := harness.worker.send(context.Background(), harness.stream, &turingv1.RuntimeUpdate{
-			Update: &turingv1.RuntimeUpdate_Heartbeat{Heartbeat: &turingv1.RuntimeHeartbeat{WorkerId: "worker-resume-delivery"}},
-		})
-		if sentinelErr != nil {
-			t.Fatalf("attempt %d: sentinel send after the Ready = %v, want nil", attempt, sentinelErr)
-		}
-		select {
-		case <-harness.stream.sent:
-		case <-time.After(5 * time.Second):
-			t.Fatalf("attempt %d: the sentinel never reached the stream", attempt)
-		}
-
-		// Step 3: the barrier. Both actions run sequentially on THIS
-		// goroutine — recordAccepted first, so its commit is visible to any
-		// concurrent abandonOrClaim before cancel can possibly make one run —
-		// and both only after step 2 proved the send itself is already
-		// settled, so neither can land anywhere but the final select.
-		if !harness.pending.recordAccepted(accepted) {
-			t.Fatalf("attempt %d: recordAccepted refused an acceptance for a Ready send already durably sent", attempt)
-		}
-		cancel()
 
 		err := <-result
 		cancel()

@@ -171,6 +171,18 @@ type approvalResume struct {
 	// closes it, and it only ever reaches that close once, on the single call
 	// that wins the transition out of resumeOutcomePending under outcomeMu.
 	signal chan struct{}
+	// testBeforeFinalSelect, when non-nil, is called by resumeApproval
+	// synchronously, on resumeApproval's own goroutine, immediately before its
+	// final select on signal/waitCtx.Done() — nowhere else. It exists purely
+	// as a test synchronization seam: a test can install a hook here that
+	// deterministically puts both arms of that select into a ready state
+	// (record a matching acceptance and cancel the wait) and then return,
+	// which is what "releases" resumeApproval into the select it was about to
+	// enter. That replaces reasoning indirectly about a writer's FIFO order,
+	// or racing two goroutines against each other, with a single-threaded,
+	// un-raced barrier. Production never sets this field, so it is always nil
+	// there and this check is a zero-cost no-op outside tests.
+	testBeforeFinalSelect func()
 }
 
 // resumeOutcome is the one durable fact a pending resume ever settles into.
@@ -1436,6 +1448,9 @@ func (w *Worker) resumeApproval(ctx context.Context, stream RuntimeStream, resum
 	// immediately rather than blocking — a channel that is already closed is
 	// always the ready case, which is what makes a separate non-blocking peek
 	// before this select redundant rather than merely equivalent.
+	if pending.testBeforeFinalSelect != nil {
+		pending.testBeforeFinalSelect()
+	}
 	select {
 	case <-pending.signal:
 	case <-waitCtx.Done():
