@@ -67,6 +67,27 @@ class McpRegistryServiceClient extends $grpc.Client {
     return $createUnaryCall(_$callRegisteredMcpTool, request, options: options);
   }
 
+  $grpc.ResponseFuture<$0.McpServerDescriptor> registerMcpServer(
+    $0.RegisterMcpServerRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$registerMcpServer, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.ReimportMcpJsonResponse> reimportMcpJson(
+    $0.ReimportMcpJsonRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$reimportMcpJson, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.McpServerDescriptor> rotateMcpServerToken(
+    $0.RotateMcpServerTokenRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$rotateMcpServerToken, request, options: options);
+  }
+
   // method descriptors
 
   static final _$listMcpServers =
@@ -94,6 +115,21 @@ class McpRegistryServiceClient extends $grpc.Client {
       '/turing.v1.McpRegistryService/CallRegisteredMcpTool',
       ($0.CallRegisteredMcpToolRequest value) => value.writeToBuffer(),
       $0.CallRegisteredMcpToolResponse.fromBuffer);
+  static final _$registerMcpServer =
+      $grpc.ClientMethod<$0.RegisterMcpServerRequest, $0.McpServerDescriptor>(
+          '/turing.v1.McpRegistryService/RegisterMcpServer',
+          ($0.RegisterMcpServerRequest value) => value.writeToBuffer(),
+          $0.McpServerDescriptor.fromBuffer);
+  static final _$reimportMcpJson =
+      $grpc.ClientMethod<$0.ReimportMcpJsonRequest, $0.ReimportMcpJsonResponse>(
+          '/turing.v1.McpRegistryService/ReimportMcpJson',
+          ($0.ReimportMcpJsonRequest value) => value.writeToBuffer(),
+          $0.ReimportMcpJsonResponse.fromBuffer);
+  static final _$rotateMcpServerToken = $grpc.ClientMethod<
+          $0.RotateMcpServerTokenRequest, $0.McpServerDescriptor>(
+      '/turing.v1.McpRegistryService/RotateMcpServerToken',
+      ($0.RotateMcpServerTokenRequest value) => value.writeToBuffer(),
+      $0.McpServerDescriptor.fromBuffer);
 }
 
 @$pb.GrpcServiceName('turing.v1.McpRegistryService')
@@ -146,6 +182,33 @@ abstract class McpRegistryServiceBase extends $grpc.Service {
         ($core.List<$core.int> value) =>
             $0.CallRegisteredMcpToolRequest.fromBuffer(value),
         ($0.CallRegisteredMcpToolResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.RegisterMcpServerRequest,
+            $0.McpServerDescriptor>(
+        'RegisterMcpServer',
+        registerMcpServer_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.RegisterMcpServerRequest.fromBuffer(value),
+        ($0.McpServerDescriptor value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.ReimportMcpJsonRequest,
+            $0.ReimportMcpJsonResponse>(
+        'ReimportMcpJson',
+        reimportMcpJson_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.ReimportMcpJsonRequest.fromBuffer(value),
+        ($0.ReimportMcpJsonResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.RotateMcpServerTokenRequest,
+            $0.McpServerDescriptor>(
+        'RotateMcpServerToken',
+        rotateMcpServerToken_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.RotateMcpServerTokenRequest.fromBuffer(value),
+        ($0.McpServerDescriptor value) => value.writeToBuffer()));
   }
 
   $async.Future<$0.ListMcpServersResponse> listMcpServers_Pre(
@@ -192,4 +255,31 @@ abstract class McpRegistryServiceBase extends $grpc.Service {
 
   $async.Future<$0.CallRegisteredMcpToolResponse> callRegisteredMcpTool(
       $grpc.ServiceCall call, $0.CallRegisteredMcpToolRequest request);
+
+  $async.Future<$0.McpServerDescriptor> registerMcpServer_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.RegisterMcpServerRequest> $request) async {
+    return registerMcpServer($call, await $request);
+  }
+
+  $async.Future<$0.McpServerDescriptor> registerMcpServer(
+      $grpc.ServiceCall call, $0.RegisterMcpServerRequest request);
+
+  $async.Future<$0.ReimportMcpJsonResponse> reimportMcpJson_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.ReimportMcpJsonRequest> $request) async {
+    return reimportMcpJson($call, await $request);
+  }
+
+  $async.Future<$0.ReimportMcpJsonResponse> reimportMcpJson(
+      $grpc.ServiceCall call, $0.ReimportMcpJsonRequest request);
+
+  $async.Future<$0.McpServerDescriptor> rotateMcpServerToken_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.RotateMcpServerTokenRequest> $request) async {
+    return rotateMcpServerToken($call, await $request);
+  }
+
+  $async.Future<$0.McpServerDescriptor> rotateMcpServerToken(
+      $grpc.ServiceCall call, $0.RotateMcpServerTokenRequest request);
 }

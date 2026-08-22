@@ -729,6 +729,283 @@ class DeleteMcpServerResponse extends $pb.GeneratedMessage {
   static DeleteMcpServerResponse? _defaultInstance;
 }
 
+class RegisterMcpServerRequest extends $pb.GeneratedMessage {
+  factory RegisterMcpServerRequest({
+    $core.String? name,
+    $core.String? url,
+    McpServerTier? tier,
+    $core.String? bearerToken,
+  }) {
+    final result = create();
+    if (name != null) result.name = name;
+    if (url != null) result.url = url;
+    if (tier != null) result.tier = tier;
+    if (bearerToken != null) result.bearerToken = bearerToken;
+    return result;
+  }
+
+  RegisterMcpServerRequest._();
+
+  factory RegisterMcpServerRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RegisterMcpServerRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RegisterMcpServerRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'name')
+    ..aOS(2, _omitFieldNames ? '' : 'url')
+    ..e<McpServerTier>(3, _omitFieldNames ? '' : 'tier', $pb.PbFieldType.OE,
+        defaultOrMaker: McpServerTier.MCP_SERVER_TIER_UNSPECIFIED,
+        valueOf: McpServerTier.valueOf,
+        enumValues: McpServerTier.values)
+    ..aOS(4, _omitFieldNames ? '' : 'bearerToken')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RegisterMcpServerRequest clone() =>
+      RegisterMcpServerRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RegisterMcpServerRequest copyWith(
+          void Function(RegisterMcpServerRequest) updates) =>
+      super.copyWith((message) => updates(message as RegisterMcpServerRequest))
+          as RegisterMcpServerRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RegisterMcpServerRequest create() => RegisterMcpServerRequest._();
+  @$core.override
+  RegisterMcpServerRequest createEmptyInstance() => create();
+  static $pb.PbList<RegisterMcpServerRequest> createRepeated() =>
+      $pb.PbList<RegisterMcpServerRequest>();
+  @$core.pragma('dart2js:noInline')
+  static RegisterMcpServerRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RegisterMcpServerRequest>(create);
+  static RegisterMcpServerRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get name => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set name($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasName() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearName() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get url => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set url($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasUrl() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearUrl() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  McpServerTier get tier => $_getN(2);
+  @$pb.TagNumber(3)
+  set tier(McpServerTier value) => $_setField(3, value);
+  @$pb.TagNumber(3)
+  $core.bool hasTier() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearTier() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get bearerToken => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set bearerToken($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasBearerToken() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearBearerToken() => $_clearField(4);
+}
+
+class ReimportMcpJsonRequest extends $pb.GeneratedMessage {
+  factory ReimportMcpJsonRequest() => create();
+
+  ReimportMcpJsonRequest._();
+
+  factory ReimportMcpJsonRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ReimportMcpJsonRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ReimportMcpJsonRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ReimportMcpJsonRequest clone() =>
+      ReimportMcpJsonRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ReimportMcpJsonRequest copyWith(
+          void Function(ReimportMcpJsonRequest) updates) =>
+      super.copyWith((message) => updates(message as ReimportMcpJsonRequest))
+          as ReimportMcpJsonRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ReimportMcpJsonRequest create() => ReimportMcpJsonRequest._();
+  @$core.override
+  ReimportMcpJsonRequest createEmptyInstance() => create();
+  static $pb.PbList<ReimportMcpJsonRequest> createRepeated() =>
+      $pb.PbList<ReimportMcpJsonRequest>();
+  @$core.pragma('dart2js:noInline')
+  static ReimportMcpJsonRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ReimportMcpJsonRequest>(create);
+  static ReimportMcpJsonRequest? _defaultInstance;
+}
+
+class ReimportMcpJsonResponse extends $pb.GeneratedMessage {
+  factory ReimportMcpJsonResponse({
+    $core.Iterable<$core.String>? imported,
+    $core.Iterable<$core.String>? skipped,
+    $core.Iterable<UnsupportedMcpServer>? refused,
+  }) {
+    final result = create();
+    if (imported != null) result.imported.addAll(imported);
+    if (skipped != null) result.skipped.addAll(skipped);
+    if (refused != null) result.refused.addAll(refused);
+    return result;
+  }
+
+  ReimportMcpJsonResponse._();
+
+  factory ReimportMcpJsonResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ReimportMcpJsonResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ReimportMcpJsonResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..pPS(1, _omitFieldNames ? '' : 'imported')
+    ..pPS(2, _omitFieldNames ? '' : 'skipped')
+    ..pc<UnsupportedMcpServer>(
+        3, _omitFieldNames ? '' : 'refused', $pb.PbFieldType.PM,
+        subBuilder: UnsupportedMcpServer.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ReimportMcpJsonResponse clone() =>
+      ReimportMcpJsonResponse()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ReimportMcpJsonResponse copyWith(
+          void Function(ReimportMcpJsonResponse) updates) =>
+      super.copyWith((message) => updates(message as ReimportMcpJsonResponse))
+          as ReimportMcpJsonResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ReimportMcpJsonResponse create() => ReimportMcpJsonResponse._();
+  @$core.override
+  ReimportMcpJsonResponse createEmptyInstance() => create();
+  static $pb.PbList<ReimportMcpJsonResponse> createRepeated() =>
+      $pb.PbList<ReimportMcpJsonResponse>();
+  @$core.pragma('dart2js:noInline')
+  static ReimportMcpJsonResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ReimportMcpJsonResponse>(create);
+  static ReimportMcpJsonResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $pb.PbList<$core.String> get imported => $_getList(0);
+
+  @$pb.TagNumber(2)
+  $pb.PbList<$core.String> get skipped => $_getList(1);
+
+  @$pb.TagNumber(3)
+  $pb.PbList<UnsupportedMcpServer> get refused => $_getList(2);
+}
+
+class RotateMcpServerTokenRequest extends $pb.GeneratedMessage {
+  factory RotateMcpServerTokenRequest({
+    $core.String? serverId,
+    $core.String? bearerToken,
+  }) {
+    final result = create();
+    if (serverId != null) result.serverId = serverId;
+    if (bearerToken != null) result.bearerToken = bearerToken;
+    return result;
+  }
+
+  RotateMcpServerTokenRequest._();
+
+  factory RotateMcpServerTokenRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RotateMcpServerTokenRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RotateMcpServerTokenRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'serverId')
+    ..aOS(2, _omitFieldNames ? '' : 'bearerToken')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RotateMcpServerTokenRequest clone() =>
+      RotateMcpServerTokenRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RotateMcpServerTokenRequest copyWith(
+          void Function(RotateMcpServerTokenRequest) updates) =>
+      super.copyWith(
+              (message) => updates(message as RotateMcpServerTokenRequest))
+          as RotateMcpServerTokenRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RotateMcpServerTokenRequest create() =>
+      RotateMcpServerTokenRequest._();
+  @$core.override
+  RotateMcpServerTokenRequest createEmptyInstance() => create();
+  static $pb.PbList<RotateMcpServerTokenRequest> createRepeated() =>
+      $pb.PbList<RotateMcpServerTokenRequest>();
+  @$core.pragma('dart2js:noInline')
+  static RotateMcpServerTokenRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RotateMcpServerTokenRequest>(create);
+  static RotateMcpServerTokenRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get serverId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set serverId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasServerId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearServerId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get bearerToken => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set bearerToken($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasBearerToken() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearBearerToken() => $_clearField(2);
+}
+
 class CallRegisteredMcpToolRequest extends $pb.GeneratedMessage {
   factory CallRegisteredMcpToolRequest({
     $core.String? serverId,

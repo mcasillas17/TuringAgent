@@ -650,6 +650,222 @@ func (*DeleteMcpServerResponse) Descriptor() ([]byte, []int) {
 	return file_turing_v1_mcp_proto_rawDescGZIP(), []int{8}
 }
 
+type RegisterMcpServerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Url           string                 `protobuf:"bytes,2,opt,name=url,proto3" json:"url,omitempty"`
+	Tier          McpServerTier          `protobuf:"varint,3,opt,name=tier,proto3,enum=turing.v1.McpServerTier" json:"tier,omitempty"`
+	BearerToken   string                 `protobuf:"bytes,4,opt,name=bearer_token,json=bearerToken,proto3" json:"bearer_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RegisterMcpServerRequest) Reset() {
+	*x = RegisterMcpServerRequest{}
+	mi := &file_turing_v1_mcp_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegisterMcpServerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegisterMcpServerRequest) ProtoMessage() {}
+
+func (x *RegisterMcpServerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_mcp_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegisterMcpServerRequest.ProtoReflect.Descriptor instead.
+func (*RegisterMcpServerRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_mcp_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *RegisterMcpServerRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *RegisterMcpServerRequest) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *RegisterMcpServerRequest) GetTier() McpServerTier {
+	if x != nil {
+		return x.Tier
+	}
+	return McpServerTier_MCP_SERVER_TIER_UNSPECIFIED
+}
+
+func (x *RegisterMcpServerRequest) GetBearerToken() string {
+	if x != nil {
+		return x.BearerToken
+	}
+	return ""
+}
+
+type ReimportMcpJsonRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReimportMcpJsonRequest) Reset() {
+	*x = ReimportMcpJsonRequest{}
+	mi := &file_turing_v1_mcp_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReimportMcpJsonRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReimportMcpJsonRequest) ProtoMessage() {}
+
+func (x *ReimportMcpJsonRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_mcp_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReimportMcpJsonRequest.ProtoReflect.Descriptor instead.
+func (*ReimportMcpJsonRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_mcp_proto_rawDescGZIP(), []int{10}
+}
+
+type ReimportMcpJsonResponse struct {
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	Imported      []string                `protobuf:"bytes,1,rep,name=imported,proto3" json:"imported,omitempty"`
+	Skipped       []string                `protobuf:"bytes,2,rep,name=skipped,proto3" json:"skipped,omitempty"`
+	Refused       []*UnsupportedMcpServer `protobuf:"bytes,3,rep,name=refused,proto3" json:"refused,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReimportMcpJsonResponse) Reset() {
+	*x = ReimportMcpJsonResponse{}
+	mi := &file_turing_v1_mcp_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReimportMcpJsonResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReimportMcpJsonResponse) ProtoMessage() {}
+
+func (x *ReimportMcpJsonResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_mcp_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReimportMcpJsonResponse.ProtoReflect.Descriptor instead.
+func (*ReimportMcpJsonResponse) Descriptor() ([]byte, []int) {
+	return file_turing_v1_mcp_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ReimportMcpJsonResponse) GetImported() []string {
+	if x != nil {
+		return x.Imported
+	}
+	return nil
+}
+
+func (x *ReimportMcpJsonResponse) GetSkipped() []string {
+	if x != nil {
+		return x.Skipped
+	}
+	return nil
+}
+
+func (x *ReimportMcpJsonResponse) GetRefused() []*UnsupportedMcpServer {
+	if x != nil {
+		return x.Refused
+	}
+	return nil
+}
+
+type RotateMcpServerTokenRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ServerId      string                 `protobuf:"bytes,1,opt,name=server_id,json=serverId,proto3" json:"server_id,omitempty"`
+	BearerToken   string                 `protobuf:"bytes,2,opt,name=bearer_token,json=bearerToken,proto3" json:"bearer_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RotateMcpServerTokenRequest) Reset() {
+	*x = RotateMcpServerTokenRequest{}
+	mi := &file_turing_v1_mcp_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RotateMcpServerTokenRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RotateMcpServerTokenRequest) ProtoMessage() {}
+
+func (x *RotateMcpServerTokenRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_mcp_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RotateMcpServerTokenRequest.ProtoReflect.Descriptor instead.
+func (*RotateMcpServerTokenRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_mcp_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *RotateMcpServerTokenRequest) GetServerId() string {
+	if x != nil {
+		return x.ServerId
+	}
+	return ""
+}
+
+func (x *RotateMcpServerTokenRequest) GetBearerToken() string {
+	if x != nil {
+		return x.BearerToken
+	}
+	return ""
+}
+
 type CallRegisteredMcpToolRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ServerId      string                 `protobuf:"bytes,1,opt,name=server_id,json=serverId,proto3" json:"server_id,omitempty"`
@@ -663,7 +879,7 @@ type CallRegisteredMcpToolRequest struct {
 
 func (x *CallRegisteredMcpToolRequest) Reset() {
 	*x = CallRegisteredMcpToolRequest{}
-	mi := &file_turing_v1_mcp_proto_msgTypes[9]
+	mi := &file_turing_v1_mcp_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -675,7 +891,7 @@ func (x *CallRegisteredMcpToolRequest) String() string {
 func (*CallRegisteredMcpToolRequest) ProtoMessage() {}
 
 func (x *CallRegisteredMcpToolRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_mcp_proto_msgTypes[9]
+	mi := &file_turing_v1_mcp_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -688,7 +904,7 @@ func (x *CallRegisteredMcpToolRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CallRegisteredMcpToolRequest.ProtoReflect.Descriptor instead.
 func (*CallRegisteredMcpToolRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_mcp_proto_rawDescGZIP(), []int{9}
+	return file_turing_v1_mcp_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *CallRegisteredMcpToolRequest) GetServerId() string {
@@ -735,7 +951,7 @@ type CallRegisteredMcpToolResponse struct {
 
 func (x *CallRegisteredMcpToolResponse) Reset() {
 	*x = CallRegisteredMcpToolResponse{}
-	mi := &file_turing_v1_mcp_proto_msgTypes[10]
+	mi := &file_turing_v1_mcp_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -747,7 +963,7 @@ func (x *CallRegisteredMcpToolResponse) String() string {
 func (*CallRegisteredMcpToolResponse) ProtoMessage() {}
 
 func (x *CallRegisteredMcpToolResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_mcp_proto_msgTypes[10]
+	mi := &file_turing_v1_mcp_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -760,7 +976,7 @@ func (x *CallRegisteredMcpToolResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CallRegisteredMcpToolResponse.ProtoReflect.Descriptor instead.
 func (*CallRegisteredMcpToolResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_mcp_proto_rawDescGZIP(), []int{10}
+	return file_turing_v1_mcp_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *CallRegisteredMcpToolResponse) GetResult() *structpb.Struct {
@@ -781,7 +997,7 @@ type McpRequest struct {
 
 func (x *McpRequest) Reset() {
 	*x = McpRequest{}
-	mi := &file_turing_v1_mcp_proto_msgTypes[11]
+	mi := &file_turing_v1_mcp_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -793,7 +1009,7 @@ func (x *McpRequest) String() string {
 func (*McpRequest) ProtoMessage() {}
 
 func (x *McpRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_mcp_proto_msgTypes[11]
+	mi := &file_turing_v1_mcp_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -806,7 +1022,7 @@ func (x *McpRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use McpRequest.ProtoReflect.Descriptor instead.
 func (*McpRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_mcp_proto_rawDescGZIP(), []int{11}
+	return file_turing_v1_mcp_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *McpRequest) GetServerName() string {
@@ -839,7 +1055,7 @@ type McpResult struct {
 
 func (x *McpResult) Reset() {
 	*x = McpResult{}
-	mi := &file_turing_v1_mcp_proto_msgTypes[12]
+	mi := &file_turing_v1_mcp_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -851,7 +1067,7 @@ func (x *McpResult) String() string {
 func (*McpResult) ProtoMessage() {}
 
 func (x *McpResult) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_mcp_proto_msgTypes[12]
+	mi := &file_turing_v1_mcp_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -864,7 +1080,7 @@ func (x *McpResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use McpResult.ProtoReflect.Descriptor instead.
 func (*McpResult) Descriptor() ([]byte, []int) {
-	return file_turing_v1_mcp_proto_rawDescGZIP(), []int{12}
+	return file_turing_v1_mcp_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *McpResult) GetResult() *structpb.Struct {
@@ -913,7 +1129,20 @@ const file_turing_v1_mcp_proto_rawDesc = "" +
 	"\x06policy\x18\x03 \x01(\x0e2\x15.turing.v1.ToolPolicyR\x06policy\"5\n" +
 	"\x16DeleteMcpServerRequest\x12\x1b\n" +
 	"\tserver_id\x18\x01 \x01(\tR\bserverId\"\x19\n" +
-	"\x17DeleteMcpServerResponse\"\xbd\x01\n" +
+	"\x17DeleteMcpServerResponse\"\x91\x01\n" +
+	"\x18RegisterMcpServerRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
+	"\x03url\x18\x02 \x01(\tR\x03url\x12,\n" +
+	"\x04tier\x18\x03 \x01(\x0e2\x18.turing.v1.McpServerTierR\x04tier\x12!\n" +
+	"\fbearer_token\x18\x04 \x01(\tR\vbearerToken\"\x18\n" +
+	"\x16ReimportMcpJsonRequest\"\x8a\x01\n" +
+	"\x17ReimportMcpJsonResponse\x12\x1a\n" +
+	"\bimported\x18\x01 \x03(\tR\bimported\x12\x18\n" +
+	"\askipped\x18\x02 \x03(\tR\askipped\x129\n" +
+	"\arefused\x18\x03 \x03(\v2\x1f.turing.v1.UnsupportedMcpServerR\arefused\"]\n" +
+	"\x1bRotateMcpServerTokenRequest\x12\x1b\n" +
+	"\tserver_id\x18\x01 \x01(\tR\bserverId\x12!\n" +
+	"\fbearer_token\x18\x02 \x01(\tR\vbearerToken\"\xbd\x01\n" +
 	"\x1cCallRegisteredMcpToolRequest\x12\x1b\n" +
 	"\tserver_id\x18\x01 \x01(\tR\bserverId\x12\x15\n" +
 	"\x06run_id\x18\x02 \x01(\tR\x05runId\x12\x1f\n" +
@@ -940,13 +1169,16 @@ const file_turing_v1_mcp_proto_rawDesc = "" +
 	"\x1fMCP_SERVER_LIVENESS_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bMCP_SERVER_LIVENESS_UNKNOWN\x10\x01\x12\x1a\n" +
 	"\x16MCP_SERVER_LIVENESS_UP\x10\x02\x12\x1c\n" +
-	"\x18MCP_SERVER_LIVENESS_DOWN\x10\x032\xeb\x03\n" +
+	"\x18MCP_SERVER_LIVENESS_DOWN\x10\x032\xff\x05\n" +
 	"\x12McpRegistryService\x12U\n" +
 	"\x0eListMcpServers\x12 .turing.v1.ListMcpServersRequest\x1a!.turing.v1.ListMcpServersResponse\x12\\\n" +
 	"\x13SetMcpServerEnabled\x12%.turing.v1.SetMcpServerEnabledRequest\x1a\x1e.turing.v1.McpServerDescriptor\x12Z\n" +
 	"\x13UpdateMcpToolPolicy\x12%.turing.v1.UpdateMcpToolPolicyRequest\x1a\x1c.turing.v1.McpToolDescriptor\x12X\n" +
 	"\x0fDeleteMcpServer\x12!.turing.v1.DeleteMcpServerRequest\x1a\".turing.v1.DeleteMcpServerResponse\x12j\n" +
-	"\x15CallRegisteredMcpTool\x12'.turing.v1.CallRegisteredMcpToolRequest\x1a(.turing.v1.CallRegisteredMcpToolResponseB>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
+	"\x15CallRegisteredMcpTool\x12'.turing.v1.CallRegisteredMcpToolRequest\x1a(.turing.v1.CallRegisteredMcpToolResponse\x12X\n" +
+	"\x11RegisterMcpServer\x12#.turing.v1.RegisterMcpServerRequest\x1a\x1e.turing.v1.McpServerDescriptor\x12X\n" +
+	"\x0fReimportMcpJson\x12!.turing.v1.ReimportMcpJsonRequest\x1a\".turing.v1.ReimportMcpJsonResponse\x12^\n" +
+	"\x14RotateMcpServerToken\x12&.turing.v1.RotateMcpServerTokenRequest\x1a\x1e.turing.v1.McpServerDescriptorB>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
 
 var (
 	file_turing_v1_mcp_proto_rawDescOnce sync.Once
@@ -961,7 +1193,7 @@ func file_turing_v1_mcp_proto_rawDescGZIP() []byte {
 }
 
 var file_turing_v1_mcp_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_turing_v1_mcp_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_turing_v1_mcp_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_turing_v1_mcp_proto_goTypes = []any{
 	(McpServerTier)(0),                    // 0: turing.v1.McpServerTier
 	(McpServerLiveness)(0),                // 1: turing.v1.McpServerLiveness
@@ -974,41 +1206,53 @@ var file_turing_v1_mcp_proto_goTypes = []any{
 	(*UpdateMcpToolPolicyRequest)(nil),    // 8: turing.v1.UpdateMcpToolPolicyRequest
 	(*DeleteMcpServerRequest)(nil),        // 9: turing.v1.DeleteMcpServerRequest
 	(*DeleteMcpServerResponse)(nil),       // 10: turing.v1.DeleteMcpServerResponse
-	(*CallRegisteredMcpToolRequest)(nil),  // 11: turing.v1.CallRegisteredMcpToolRequest
-	(*CallRegisteredMcpToolResponse)(nil), // 12: turing.v1.CallRegisteredMcpToolResponse
-	(*McpRequest)(nil),                    // 13: turing.v1.McpRequest
-	(*McpResult)(nil),                     // 14: turing.v1.McpResult
-	(ToolPolicy)(0),                       // 15: turing.v1.ToolPolicy
-	(*structpb.Struct)(nil),               // 16: google.protobuf.Struct
+	(*RegisterMcpServerRequest)(nil),      // 11: turing.v1.RegisterMcpServerRequest
+	(*ReimportMcpJsonRequest)(nil),        // 12: turing.v1.ReimportMcpJsonRequest
+	(*ReimportMcpJsonResponse)(nil),       // 13: turing.v1.ReimportMcpJsonResponse
+	(*RotateMcpServerTokenRequest)(nil),   // 14: turing.v1.RotateMcpServerTokenRequest
+	(*CallRegisteredMcpToolRequest)(nil),  // 15: turing.v1.CallRegisteredMcpToolRequest
+	(*CallRegisteredMcpToolResponse)(nil), // 16: turing.v1.CallRegisteredMcpToolResponse
+	(*McpRequest)(nil),                    // 17: turing.v1.McpRequest
+	(*McpResult)(nil),                     // 18: turing.v1.McpResult
+	(ToolPolicy)(0),                       // 19: turing.v1.ToolPolicy
+	(*structpb.Struct)(nil),               // 20: google.protobuf.Struct
 }
 var file_turing_v1_mcp_proto_depIdxs = []int32{
-	15, // 0: turing.v1.McpToolDescriptor.policy:type_name -> turing.v1.ToolPolicy
-	16, // 1: turing.v1.McpToolDescriptor.schema:type_name -> google.protobuf.Struct
+	19, // 0: turing.v1.McpToolDescriptor.policy:type_name -> turing.v1.ToolPolicy
+	20, // 1: turing.v1.McpToolDescriptor.schema:type_name -> google.protobuf.Struct
 	0,  // 2: turing.v1.McpServerDescriptor.tier:type_name -> turing.v1.McpServerTier
 	1,  // 3: turing.v1.McpServerDescriptor.liveness:type_name -> turing.v1.McpServerLiveness
 	2,  // 4: turing.v1.McpServerDescriptor.tools:type_name -> turing.v1.McpToolDescriptor
 	3,  // 5: turing.v1.ListMcpServersResponse.servers:type_name -> turing.v1.McpServerDescriptor
 	4,  // 6: turing.v1.ListMcpServersResponse.unsupported:type_name -> turing.v1.UnsupportedMcpServer
-	15, // 7: turing.v1.UpdateMcpToolPolicyRequest.policy:type_name -> turing.v1.ToolPolicy
-	16, // 8: turing.v1.CallRegisteredMcpToolRequest.args:type_name -> google.protobuf.Struct
-	16, // 9: turing.v1.CallRegisteredMcpToolResponse.result:type_name -> google.protobuf.Struct
-	16, // 10: turing.v1.McpRequest.params:type_name -> google.protobuf.Struct
-	16, // 11: turing.v1.McpResult.result:type_name -> google.protobuf.Struct
-	5,  // 12: turing.v1.McpRegistryService.ListMcpServers:input_type -> turing.v1.ListMcpServersRequest
-	7,  // 13: turing.v1.McpRegistryService.SetMcpServerEnabled:input_type -> turing.v1.SetMcpServerEnabledRequest
-	8,  // 14: turing.v1.McpRegistryService.UpdateMcpToolPolicy:input_type -> turing.v1.UpdateMcpToolPolicyRequest
-	9,  // 15: turing.v1.McpRegistryService.DeleteMcpServer:input_type -> turing.v1.DeleteMcpServerRequest
-	11, // 16: turing.v1.McpRegistryService.CallRegisteredMcpTool:input_type -> turing.v1.CallRegisteredMcpToolRequest
-	6,  // 17: turing.v1.McpRegistryService.ListMcpServers:output_type -> turing.v1.ListMcpServersResponse
-	3,  // 18: turing.v1.McpRegistryService.SetMcpServerEnabled:output_type -> turing.v1.McpServerDescriptor
-	2,  // 19: turing.v1.McpRegistryService.UpdateMcpToolPolicy:output_type -> turing.v1.McpToolDescriptor
-	10, // 20: turing.v1.McpRegistryService.DeleteMcpServer:output_type -> turing.v1.DeleteMcpServerResponse
-	12, // 21: turing.v1.McpRegistryService.CallRegisteredMcpTool:output_type -> turing.v1.CallRegisteredMcpToolResponse
-	17, // [17:22] is the sub-list for method output_type
-	12, // [12:17] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	19, // 7: turing.v1.UpdateMcpToolPolicyRequest.policy:type_name -> turing.v1.ToolPolicy
+	0,  // 8: turing.v1.RegisterMcpServerRequest.tier:type_name -> turing.v1.McpServerTier
+	4,  // 9: turing.v1.ReimportMcpJsonResponse.refused:type_name -> turing.v1.UnsupportedMcpServer
+	20, // 10: turing.v1.CallRegisteredMcpToolRequest.args:type_name -> google.protobuf.Struct
+	20, // 11: turing.v1.CallRegisteredMcpToolResponse.result:type_name -> google.protobuf.Struct
+	20, // 12: turing.v1.McpRequest.params:type_name -> google.protobuf.Struct
+	20, // 13: turing.v1.McpResult.result:type_name -> google.protobuf.Struct
+	5,  // 14: turing.v1.McpRegistryService.ListMcpServers:input_type -> turing.v1.ListMcpServersRequest
+	7,  // 15: turing.v1.McpRegistryService.SetMcpServerEnabled:input_type -> turing.v1.SetMcpServerEnabledRequest
+	8,  // 16: turing.v1.McpRegistryService.UpdateMcpToolPolicy:input_type -> turing.v1.UpdateMcpToolPolicyRequest
+	9,  // 17: turing.v1.McpRegistryService.DeleteMcpServer:input_type -> turing.v1.DeleteMcpServerRequest
+	15, // 18: turing.v1.McpRegistryService.CallRegisteredMcpTool:input_type -> turing.v1.CallRegisteredMcpToolRequest
+	11, // 19: turing.v1.McpRegistryService.RegisterMcpServer:input_type -> turing.v1.RegisterMcpServerRequest
+	12, // 20: turing.v1.McpRegistryService.ReimportMcpJson:input_type -> turing.v1.ReimportMcpJsonRequest
+	14, // 21: turing.v1.McpRegistryService.RotateMcpServerToken:input_type -> turing.v1.RotateMcpServerTokenRequest
+	6,  // 22: turing.v1.McpRegistryService.ListMcpServers:output_type -> turing.v1.ListMcpServersResponse
+	3,  // 23: turing.v1.McpRegistryService.SetMcpServerEnabled:output_type -> turing.v1.McpServerDescriptor
+	2,  // 24: turing.v1.McpRegistryService.UpdateMcpToolPolicy:output_type -> turing.v1.McpToolDescriptor
+	10, // 25: turing.v1.McpRegistryService.DeleteMcpServer:output_type -> turing.v1.DeleteMcpServerResponse
+	16, // 26: turing.v1.McpRegistryService.CallRegisteredMcpTool:output_type -> turing.v1.CallRegisteredMcpToolResponse
+	3,  // 27: turing.v1.McpRegistryService.RegisterMcpServer:output_type -> turing.v1.McpServerDescriptor
+	13, // 28: turing.v1.McpRegistryService.ReimportMcpJson:output_type -> turing.v1.ReimportMcpJsonResponse
+	3,  // 29: turing.v1.McpRegistryService.RotateMcpServerToken:output_type -> turing.v1.McpServerDescriptor
+	22, // [22:30] is the sub-list for method output_type
+	14, // [14:22] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_mcp_proto_init() }
@@ -1023,7 +1267,7 @@ func file_turing_v1_mcp_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_mcp_proto_rawDesc), len(file_turing_v1_mcp_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   13,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

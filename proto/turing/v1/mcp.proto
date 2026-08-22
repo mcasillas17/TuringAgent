@@ -71,6 +71,26 @@ message DeleteMcpServerRequest {
 
 message DeleteMcpServerResponse {}
 
+message RegisterMcpServerRequest {
+  string name = 1;
+  string url = 2;
+  McpServerTier tier = 3;
+  string bearer_token = 4;
+}
+
+message ReimportMcpJsonRequest {}
+
+message ReimportMcpJsonResponse {
+  repeated string imported = 1;
+  repeated string skipped = 2;
+  repeated UnsupportedMcpServer refused = 3;
+}
+
+message RotateMcpServerTokenRequest {
+  string server_id = 1;
+  string bearer_token = 2;
+}
+
 message CallRegisteredMcpToolRequest {
   string server_id = 1;
   string run_id = 2;
@@ -99,4 +119,7 @@ service McpRegistryService {
   rpc UpdateMcpToolPolicy(UpdateMcpToolPolicyRequest) returns (McpToolDescriptor);
   rpc DeleteMcpServer(DeleteMcpServerRequest) returns (DeleteMcpServerResponse);
   rpc CallRegisteredMcpTool(CallRegisteredMcpToolRequest) returns (CallRegisteredMcpToolResponse);
+  rpc RegisterMcpServer(RegisterMcpServerRequest) returns (McpServerDescriptor);
+  rpc ReimportMcpJson(ReimportMcpJsonRequest) returns (ReimportMcpJsonResponse);
+  rpc RotateMcpServerToken(RotateMcpServerTokenRequest) returns (McpServerDescriptor);
 }
