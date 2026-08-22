@@ -61,6 +61,18 @@ func (s *PublicServer) DeleteMcpServer(ctx context.Context, req *turingv1.Delete
 	return s.service.DeleteMcpServer(ctx, req)
 }
 
+func (s *PublicServer) RegisterMcpServer(ctx context.Context, req *turingv1.RegisterMcpServerRequest) (*turingv1.McpServerDescriptor, error) {
+	return s.service.RegisterMcpServer(ctx, req)
+}
+
+func (s *PublicServer) RotateMcpServerToken(ctx context.Context, req *turingv1.RotateMcpServerTokenRequest) (*turingv1.McpServerDescriptor, error) {
+	return s.service.RotateMcpServerToken(ctx, req)
+}
+
+func (s *PublicServer) ReimportMcpJson(ctx context.Context, req *turingv1.ReimportMcpJsonRequest) (*turingv1.ReimportMcpJsonResponse, error) {
+	return s.service.ReimportMcpJson(ctx, req)
+}
+
 func (*PublicServer) CallRegisteredMcpTool(context.Context, *turingv1.CallRegisteredMcpToolRequest) (*turingv1.CallRegisteredMcpToolResponse, error) {
 	return nil, status.Error(codes.PermissionDenied, "MCP tool dispatch is internal")
 }
@@ -78,6 +90,18 @@ func (*InternalServer) UpdateMcpToolPolicy(context.Context, *turingv1.UpdateMcpT
 }
 
 func (*InternalServer) DeleteMcpServer(context.Context, *turingv1.DeleteMcpServerRequest) (*turingv1.DeleteMcpServerResponse, error) {
+	return nil, status.Error(codes.PermissionDenied, "MCP server management is public")
+}
+
+func (*InternalServer) RegisterMcpServer(context.Context, *turingv1.RegisterMcpServerRequest) (*turingv1.McpServerDescriptor, error) {
+	return nil, status.Error(codes.PermissionDenied, "MCP server management is public")
+}
+
+func (*InternalServer) RotateMcpServerToken(context.Context, *turingv1.RotateMcpServerTokenRequest) (*turingv1.McpServerDescriptor, error) {
+	return nil, status.Error(codes.PermissionDenied, "MCP server management is public")
+}
+
+func (*InternalServer) ReimportMcpJson(context.Context, *turingv1.ReimportMcpJsonRequest) (*turingv1.ReimportMcpJsonResponse, error) {
 	return nil, status.Error(codes.PermissionDenied, "MCP server management is public")
 }
 
@@ -219,6 +243,168 @@ func (s *Server) notifyRegistryChanged() {
 	if err := s.notifier.NotifyMCPRegistryChanged(context.Background()); err != nil {
 		log.Printf("notify runtime of MCP registry change: %v", err)
 	}
+}
+
+// tierFromProto validates that a RegisterMcpServerRequest names one of the
+// two tiers an operator may explicitly request. BUNDLED is TuringAgent's
+// own tier and UNSPECIFIED leaves the caller not actually deciding, so both
+// are refused rather than defaulted to something else.
+func tierFromProto(tier turingv1.McpServerTier) (repository.MCPServerTier, error) {
+	switch tier {
+	case turingv1.McpServerTier_MCP_SERVER_TIER_LOCAL_CONTAINER:
+		return repository.MCPServerTierLocalContainer, nil
+	case turingv1.McpServerTier_MCP_SERVER_TIER_REMOTE_URL:
+		return repository.MCPServerTierRemoteURL, nil
+	default:
+		return "", status.Error(codes.InvalidArgument, "tier must be local-container or remote-url")
+	}
+}
+
+// mapMCPValidationError maps the errors validateServerDefinition can return
+// to a gRPC status: a reserved bundled name is FailedPrecondition (it names
+// a real, if narrower, precondition about who owns that name), and every
+// other validation failure (bad name shape, bad URL, tier/URL mismatch, a
+// malformed bearer) is InvalidArgument.
+func mapMCPValidationError(err error) error {
+	if errors.Is(err, errMCPServerNameReserved) {
+		return status.Error(codes.FailedPrecondition, err.Error())
+	}
+	return status.Error(codes.InvalidArgument, err.Error())
+}
+
+// RegisterMcpServer registers a server directly, without an mcp.json file.
+// It runs the same name/URL/token validation as a file import so the two
+// paths can never diverge, seals the token with the same sealer, and never
+// contacts the endpoint: "tools discovered on first liveness contact" is
+// satisfied by the existing local-container enablement path, not by a side
+// effect of registration.
+func (s *Server) RegisterMcpServer(ctx context.Context, req *turingv1.RegisterMcpServerRequest) (*turingv1.McpServerDescriptor, error) {
+	if req == nil || req.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+	tier, err := tierFromProto(req.GetTier())
+	if err != nil {
+		return nil, err
+	}
+	validated, err := validateServerDefinition(req.GetName(), req.GetUrl(), &tier, req.GetBearerToken())
+	if err != nil {
+		return nil, mapMCPValidationError(err)
+	}
+	sealed, err := s.sealServerToken(validated.Name, validated.Token)
+	if err != nil {
+		return nil, err
+	}
+	server, err := s.repo.RegisterMCPServer(ctx, repository.ImportedMCPServer{
+		Name:        validated.Name,
+		URL:         validated.URL,
+		SealedToken: sealed,
+		Tier:        validated.Tier,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, repository.ErrMCPServerBundled):
+			return nil, status.Error(codes.FailedPrecondition, bundledServerRegistrationMessage)
+		case errors.Is(err, repository.ErrMCPServerNameTaken):
+			return nil, status.Error(codes.AlreadyExists, "MCP server name is already registered")
+		default:
+			return nil, status.Error(codes.Internal, "register MCP server failed")
+		}
+	}
+	descriptor, err := s.serverDescriptor(ctx, server)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "read MCP server failed")
+	}
+	s.notifyRegistryChanged()
+	s.auditMCPEvent(ctx, "mcp.server.registered", server.ID, map[string]any{
+		"name": server.Name,
+		"tier": string(server.Tier),
+		"url":  server.URL,
+	})
+	return descriptor, nil
+}
+
+// RotateMcpServerToken replaces (or, given an empty bearer_token, clears)
+// the sealed token stored for a server, using the server's own name as the
+// sealing AAD the same way registration and import do.
+func (s *Server) RotateMcpServerToken(ctx context.Context, req *turingv1.RotateMcpServerTokenRequest) (*turingv1.McpServerDescriptor, error) {
+	if req == nil || req.GetServerId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "server_id is required")
+	}
+	server, err := s.repo.GetMCPServer(ctx, req.GetServerId())
+	if err != nil {
+		if errors.Is(err, repository.ErrMCPServerNotFound) {
+			return nil, status.Error(codes.NotFound, "MCP server not found")
+		}
+		return nil, status.Error(codes.Internal, "read MCP server failed")
+	}
+	if server.Tier == repository.MCPServerTierBundled {
+		return nil, status.Error(codes.FailedPrecondition, bundledServerRegistrationMessage)
+	}
+	token, err := normalizeBearerToken(req.GetBearerToken())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	sealed, err := s.sealServerToken(server.Name, token)
+	if err != nil {
+		return nil, err
+	}
+	updated, err := s.repo.ReplaceMCPServerToken(ctx, server.ID, sealed)
+	if err != nil {
+		switch {
+		case errors.Is(err, repository.ErrMCPServerNotFound):
+			return nil, status.Error(codes.NotFound, "MCP server not found")
+		case errors.Is(err, repository.ErrMCPServerBundled):
+			return nil, status.Error(codes.FailedPrecondition, bundledServerRegistrationMessage)
+		default:
+			return nil, status.Error(codes.Internal, "rotate MCP server token failed")
+		}
+	}
+	descriptor, err := s.serverDescriptor(ctx, updated)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "read MCP server failed")
+	}
+	s.notifyRegistryChanged()
+	action := "mcp.server.token_cleared"
+	if token != "" {
+		action = "mcp.server.token_rotated"
+	}
+	s.auditMCPEvent(ctx, action, updated.ID, map[string]any{
+		"name":            updated.Name,
+		"tokenConfigured": token != "",
+	})
+	return descriptor, nil
+}
+
+// ReimportMcpJson re-reads mcp.json from the configured config root the
+// same way app startup does, and reports what happened the same way
+// ListMcpServers reports Unsupported entries: sorted by name, from the
+// mcp_import_issues table rather than from ImportReport's map so ordering
+// stays consistent with the rest of the registry surface.
+func (s *Server) ReimportMcpJson(ctx context.Context, _ *turingv1.ReimportMcpJsonRequest) (*turingv1.ReimportMcpJsonResponse, error) {
+	report, err := s.ReimportConfiguredJSON(ctx)
+	if err != nil {
+		if errors.Is(err, errMCPConfigRootNotConfigured) {
+			return nil, status.Error(codes.FailedPrecondition, "MCP config root is not configured")
+		}
+		return nil, status.Error(codes.Internal, "reimport mcp.json failed")
+	}
+	issues, err := s.repo.ListMCPImportIssues(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "list MCP import issues failed")
+	}
+	response := &turingv1.ReimportMcpJsonResponse{
+		Imported: report.Imported,
+		Skipped:  report.Skipped,
+	}
+	for _, issue := range issues {
+		response.Refused = append(response.Refused, &turingv1.UnsupportedMcpServer{
+			Name: issue.Name, Reason: issue.Reason,
+		})
+	}
+	if len(report.Imported) > 0 {
+		s.notifyRegistryChanged()
+	}
+	return response, nil
 }
 
 func (s *Server) CallRegisteredMcpTool(ctx context.Context, req *turingv1.CallRegisteredMcpToolRequest) (*turingv1.CallRegisteredMcpToolResponse, error) {
