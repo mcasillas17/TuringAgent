@@ -178,7 +178,11 @@ proto string field, which fails marshaling of the entire prepare
 response), and — the clause whose omission would restate the very bug
 this paragraph cites — **when sanitizing leaves an empty string, fall
 back to `sanitize(skill_id)`, and to the literal `"(unnamed)"` if that is
-also empty**. The id is *not* inherently safe: `skillID` validation
+also empty — where "empty" includes a result consisting solely of path
+separators**: a skill id always contains `/`, which is neither
+whitespace, Cf, nor a control rune, so without the separators-only rule a
+Cf-named folder pair sanitizes to the puzzling display name `"/"` and the
+`"(unnamed)"` terminal is unreachable on the real path. The id is *not* inherently safe: `skillID` validation
 constrains path *shape* only (no `.`/`..`, exactly one separator), never
 rune content, and the id derives from directory names on a
 read/write-mounted `/skills` — a folder named in zero-width or RLO runes
@@ -302,9 +306,18 @@ nothing new leaves the machine because of this plan.
   `DecisionVersion` bump.
 - **Existing fixtures** — a real, budgeted cost, not collateral:
   `agent-runtime-go/internal/agent/external_agent_test.go` (`routedJob`,
-  `authorizeDirectRemoteJob`) and `service/chat/egress_test.go`'s
-  exact-category assertions encode the unconditional rule and must move
-  to the conditional one; the two `repository/egress_test.go` callers of
+  `authorizeDirectRemoteJob`, **and
+  `TestRemoteRunWithoutToolResultConsentDoesNotSendUnknownToolResult`,
+  whose inline category list breaks deceptively** — its skills-free job
+  fails the new exact-set check at shape validation, so the symptom is
+  `len(remote.requests) == 0` reading as a tool-consent regression, not
+  a category error) and `service/chat/egress_test.go`'s exact-category
+  assertions encode the unconditional rule and must move to the
+  conditional one — for the skills-free helpers, "move" means **drop
+  `SKILL_CONTENT` from the fixture**, not make the helpers conditional;
+  `TestRemoteRunRejectsSkillSnapshotFingerprintMismatch` looks like it
+  should break but stays green either way (its fingerprint check
+  precedes the category comparison); the two `repository/egress_test.go` callers of
   `EgressSkillSnapshotFingerprint`
   (`TestEgressSkillFingerprintMatchesEnqueueAfterSkillEditWithoutPrepareWrites`,
   `TestEgressSkillFingerprintTreatsNewUnreconciledSkillAsDisabled`) break
@@ -316,11 +329,12 @@ nothing new leaves the machine because of this plan.
   required.)
 - **The version bump's fixture sweep** — the largest single cost in this
   plan, roughly fifteen sites in ten files, split by failure mode:
-  decision-version literals (`repository/egress_test.go`,
-  `mcp_egress_notice_test.go`, `mcp_egress_fingerprint_test.go`,
-  `service/runtime/external_agent_mapping_test.go`,
-  `service/audit/service_test.go`'s `!= 1`, and
-  `external_agent_test.go`'s two — where the version break fires *before*
+  decision-version literals (`repository/egress_test.go` — both the
+  fixture `Version: 1` **and** its chained audit assertion
+  `decisionVersion != float64(1)`; `mcp_egress_notice_test.go`;
+  `mcp_egress_fingerprint_test.go`;
+  `service/runtime/external_agent_mapping_test.go`; and
+  `external_agent_test.go`'s — where the version break fires *before*
   the category break, with a different message, so gate-breaking
   discipline reads a misleading signal if run naively) and
   worker-advertisement literals that silently un-egress-aware the test
@@ -330,7 +344,10 @@ nothing new leaves the machine because of this plan.
   The repair pattern is the one the surviving fixtures already use:
   reference the constants symbolically
   (`repository.RunEgressDecisionVersion`, `backendegress.DecisionVersion`)
-  instead of the literal `1`.
+  instead of the literal `1` — with one named exception where that
+  pattern is actively wrong: `service/audit/service_test.go`'s `!= 1` is
+  asserted against a **hardcoded stored-payload JSON fixture** that
+  nothing re-derives; it does not break on the bump and needs no repair.
 - **The chat service test harness** — `newHarnessWithDatabase` never calls
   `SetSkillStore`, so no skill can be enabled in any `service/chat` test
   today; tests 2, 4, and 6's service-layer legs need the harness to gain
