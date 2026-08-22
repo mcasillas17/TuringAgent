@@ -2633,18 +2633,16 @@ void main() {
   // above, "a live terminal state with no post-tool delta still renders
   // below the tool card").
   //
-  // Correction: `msg_asst` IS already loaded before the resync returns it
-  // again (`pageResult.isDuplicateMessage` is true), but the resync's own
-  // row here advances the run from v1/running to v2/failed — a genuinely
+  // `msg_asst` IS already loaded before the resync returns it again
+  // (`pageResult.isDuplicateMessage` is true), but the resync's own row
+  // here advances the run from v1/running to v2/failed — a genuinely
   // `accepted` state update — so this row's card is positioned by the
   // unconditional `pageResults` loop at the end of `_ingestMessagePage`,
   // never by the duplicate-row branch's own, separate
   // `_syncRunStateCardPresenceForContent` call (that call only runs when
   // `pageResult.stateResult?.isAccepted != true`, which does not hold
-  // here). "Exercises the DUPLICATE-ROW path" was accurate only about
-  // message-id dedup, not about which of the two card-positioning call
-  // sites this test reaches — see the "duplicate, not-accepted resync"
-  // test below for one that actually takes the other branch.
+  // here). See the "duplicate, not-accepted resync" test below for one
+  // that actually takes that other branch.
   testWidgets(
     'coalesced resync keeps the terminal card after a tool artifact with no '
     'post-tool delta',
@@ -3112,10 +3110,10 @@ void main() {
         reason:
             'a live event this screen itself classifies as historical must '
             'still position its card via the same unconditional artifact '
-            'walk as any other caller — reviving insertAdjacent: '
-            '_isHistoricalRunEvent(event) here would place the card above '
-            'the tool artifact the instant a run happens to already be '
-            'historical for an unrelated reason',
+            'walk as any other caller — conditional historical placement '
+            'must not put the card before the same-run tool artifact just '
+            'because a run happens to already be historical for an '
+            'unrelated reason',
       );
 
       await tester.pumpWidget(const SizedBox.shrink());
