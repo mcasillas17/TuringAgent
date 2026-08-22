@@ -371,9 +371,11 @@ signed challenge, not just the database row.** PR #73's pattern, all of it:
   must match *per function*: `normalizePendingEgressDecision` (the
   persisted decision) clones, sorts, and per-entry-validates;
   `clonePendingEgressDecision` (the fingerprint path) clones and sorts
-  only — its input already passed normalize, so it validates nothing and
-  has no error return. Skip the integration slice in either and it rides
-  through aliased and unsorted. These caps are reachable, unlike `maxEgressTools`:
+  only — it runs *before* `normalizePendingEgressDecision`, and on the
+  standalone fingerprint path that validator never runs at all, which is
+  safe because the entries there already passed `validChallengePayload`;
+  hence no validation loop and no error return. Skip the integration
+  slice in either and it rides through aliased and unsorted. These caps are reachable, unlike `maxEgressTools`:
   sixteen connections is plausible once the deferred providers land.
 - Those entries ride inside the HMAC-signed `egressChallengePayload`, are
   covered by the structural validation and by
