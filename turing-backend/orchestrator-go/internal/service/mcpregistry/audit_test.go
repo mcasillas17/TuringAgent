@@ -116,29 +116,64 @@ func TestRotateMcpServerTokenIsAuditedAsRotatedOrCleared(t *testing.T) {
 }
 
 // An audit failure must not fail the mutation that already happened, and
-// whatever gets logged about the failure must never contain the token.
+// whatever gets logged about the failure must never contain the token —
+// even when the dependency's own returned error is the thing carrying the
+// token, which is the realistic way a token could leak through
+// auditMCPEvent's error handling if it ever logged err.Error() instead of
+// just the action/target. This exercises both a register and a
+// rotate/clear so both auditMCPEvent call sites are covered.
 func TestAuditFailureDoesNotFailMutationAndStaysTokenFree(t *testing.T) {
 	service, _ := newRegistryTestService(t)
-	recorder := &recordingAuditRecorder{fail: errors.New("audit sink is unavailable")}
+
+	const token = "vendor-secret-should-never-be-logged-0123456789ab"
+	const rotatedToken = token + "-rotated"
+	recorder := &recordingAuditRecorder{
+		fail: errors.New("audit sink rejected token " + token + " and " + rotatedToken),
+	}
 	service.SetAuditRecorder(recorder)
 
 	var logged bytes.Buffer
 	previous := log.Writer()
 	log.SetOutput(&logged)
+	// Restored via Cleanup (run after every assertion below), not an
+	// early defer/restore, so the buffer captured here still reflects
+	// every log line by the time it is inspected.
 	t.Cleanup(func() { log.SetOutput(previous) })
 
-	const token = "vendor-secret-should-never-be-logged"
 	descriptor, err := service.RegisterMcpServer(context.Background(), &turingv1.RegisterMcpServerRequest{
 		Name: "vendor", Url: "https://vendor.example/mcp", Tier: turingv1.McpServerTier_MCP_SERVER_TIER_REMOTE_URL,
 		BearerToken: token,
 	})
 	if err != nil {
-		t.Fatalf("an audit failure must not fail the mutation: %v", err)
+		t.Fatalf("an audit failure must not fail registration: %v", err)
 	}
 	if descriptor.GetName() != "vendor" {
 		t.Fatalf("descriptor = %+v, want the registered server despite the audit failure", descriptor)
 	}
-	if strings.Contains(logged.String(), token) {
-		t.Fatalf("audit failure log carries the bearer token: %s", logged.String())
+
+	rotated, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
+		ServerId: descriptor.GetServerId(), BearerToken: rotatedToken,
+	})
+	if err != nil {
+		t.Fatalf("an audit failure must not fail rotation: %v", err)
 	}
+	if rotated.GetServerId() != descriptor.GetServerId() {
+		t.Fatalf("rotated = %+v, want the same server despite the audit failure", rotated)
+	}
+
+	cleared, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
+		ServerId: descriptor.GetServerId(), BearerToken: "",
+	})
+	if err != nil {
+		t.Fatalf("an audit failure must not fail clearing the token: %v", err)
+	}
+	if cleared.GetServerId() != descriptor.GetServerId() {
+		t.Fatalf("cleared = %+v, want the same server despite the audit failure", cleared)
+	}
+
+	if len(recorder.records) != 3 {
+		t.Fatalf("records = %+v, want three attempted audit calls (register, rotate, clear) despite each failing", recorder.records)
+	}
+
+	assertStringSentinelFree(t, "audit failure log", logged.String(), token, rotatedToken)
 }

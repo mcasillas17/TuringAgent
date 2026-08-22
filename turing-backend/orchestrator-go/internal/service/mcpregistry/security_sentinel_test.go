@@ -3,6 +3,7 @@ package mcpregistry
 import (
 	"bytes"
 	"context"
+	"log"
 	"strings"
 	"testing"
 
@@ -41,6 +42,15 @@ func TestBearerTokenNeverLeaksAcrossRegisterAndRotate(t *testing.T) {
 	service.SetAuditRecorder(auditService)
 	ctx := context.Background()
 
+	var logged bytes.Buffer
+	previousLogOutput := log.Writer()
+	log.SetOutput(&logged)
+	// Restored via Cleanup, which runs after every assertion in this test
+	// (including the process-log check near the end) rather than being
+	// swapped back early, so nothing logged by Register/Rotate escapes
+	// the captured buffer before it is inspected.
+	t.Cleanup(func() { log.SetOutput(previousLogOutput) })
+
 	registered, err := service.RegisterMcpServer(ctx, &turingv1.RegisterMcpServerRequest{
 		Name:        "vendor",
 		Url:         "https://vendor.example/mcp",
@@ -61,6 +71,29 @@ func TestBearerTokenNeverLeaksAcrossRegisterAndRotate(t *testing.T) {
 		t.Fatalf("rotate: %v", err)
 	}
 	assertNoSentinel(t, "rotate response", rotated)
+
+	// A validation failure is the other realistic way a token-bearing
+	// request could leak it: the returned error string must stay
+	// sentinel-free too, not just the happy-path responses above.
+	invalidTokenSentinel := mcpTokenSentinel + "\ncontains-a-line-break-so-validation-fails"
+	if _, err := service.RegisterMcpServer(ctx, &turingv1.RegisterMcpServerRequest{
+		Name:        "vendor-invalid",
+		Url:         "https://vendor-invalid.example/mcp",
+		Tier:        turingv1.McpServerTier_MCP_SERVER_TIER_REMOTE_URL,
+		BearerToken: invalidTokenSentinel,
+	}); err == nil {
+		t.Fatal("register with a bearer token containing a line break must fail validation")
+	} else {
+		assertStringSentinelFree(t, "register validation error", err.Error(), mcpTokenSentinel, rotatedSentinel)
+	}
+	if _, err := service.RotateMcpServerToken(ctx, &turingv1.RotateMcpServerTokenRequest{
+		ServerId:    registered.GetServerId(),
+		BearerToken: invalidTokenSentinel,
+	}); err == nil {
+		t.Fatal("rotate with a bearer token containing a line break must fail validation")
+	} else {
+		assertStringSentinelFree(t, "rotate validation error", err.Error(), mcpTokenSentinel, rotatedSentinel)
+	}
 
 	var auditCount int
 	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_logs`).Scan(&auditCount); err != nil {
@@ -86,24 +119,24 @@ func TestBearerTokenNeverLeaksAcrossRegisterAndRotate(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// MCP registry management is audited (checked above), not emitted as a
+	// session event — wiring management calls into session events is
+	// explicitly Task 4's job, not this one. Asserting the count is zero
+	// here (rather than conditionally inspecting rows only if any exist)
+	// is itself the useful assertion: it fails the moment something
+	// starts writing to `events` from this package without a matching
+	// test deciding that on purpose.
 	var eventCount int
 	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM events`).Scan(&eventCount); err != nil {
 		t.Fatal(err)
 	}
 	if eventCount != 0 {
-		eventRows, err := database.QueryContext(ctx, `SELECT payload_json FROM events`)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = eventRows.Close() }()
-		for eventRows.Next() {
-			var payload string
-			if err := eventRows.Scan(&payload); err != nil {
-				t.Fatal(err)
-			}
-			assertStringSentinelFree(t, "event payload", payload, mcpTokenSentinel, rotatedSentinel)
-		}
+		t.Fatalf("event count = %d, want 0: MCP management must not emit session events", eventCount)
 	}
+
+	// The token must never reach the process log either, across both the
+	// successful register/rotate calls and the validation failures above.
+	assertStringSentinelFree(t, "process log", logged.String(), mcpTokenSentinel, rotatedSentinel)
 }
 
 func assertNoSentinel(t *testing.T, what string, descriptor *turingv1.McpServerDescriptor) {
