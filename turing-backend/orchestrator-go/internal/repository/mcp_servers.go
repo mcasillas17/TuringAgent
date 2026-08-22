@@ -24,6 +24,7 @@ var (
 	ErrMCPServerNotFound         = errors.New("MCP server not found")
 	ErrMCPServerBundled          = errors.New("bundled MCP server cannot be imported")
 	ErrMCPServerImportSuppressed = errors.New("MCP server import is suppressed after deletion")
+	ErrMCPServerNameTaken        = errors.New("MCP server name is already registered")
 	ErrMCPToolNameCollision      = errors.New("MCP tool name collides with another server")
 	ErrMCPToolNotFound           = errors.New("MCP tool not found")
 )
@@ -54,6 +55,13 @@ type ImportedMCPServer struct {
 	URL         string
 	SealedToken []byte
 	Tier        MCPServerTier
+}
+
+// MCPImportResult reports what ImportMCPServer did: Created is false when an
+// entry of that name already existed and the row was left untouched.
+type MCPImportResult struct {
+	Server  MCPServerRecord
+	Created bool
 }
 
 type RemoteMCPServerEgress struct {
@@ -139,6 +147,182 @@ func (r *Repository) UpsertImportedMCPServer(ctx context.Context, input Imported
 		return MCPServerRecord{}, err
 	}
 	return record, nil
+}
+
+// ImportMCPServer registers a server discovered from an mcp.json import.
+// Unlike UpsertImportedMCPServer, it is create-only: if a row of that name
+// already exists (and is not bundled), it is left completely untouched and
+// Created is reported false, so a reimport never disturbs an operator's
+// enablement, endpoint, sealed token, liveness, or tool policies. Bundled
+// and tombstoned names are refused so the caller can decide how to surface
+// that as unsupported without needing a separate lookup call.
+func (r *Repository) ImportMCPServer(ctx context.Context, input ImportedMCPServer) (MCPImportResult, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return MCPImportResult{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var suppressed int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM mcp_import_tombstones WHERE name = ?
+	`, input.Name).Scan(&suppressed); err != nil {
+		return MCPImportResult{}, err
+	}
+	if suppressed != 0 {
+		return MCPImportResult{}, ErrMCPServerImportSuppressed
+	}
+
+	var existingID, existingTier string
+	err = tx.QueryRowContext(ctx, `SELECT id, tier FROM mcp_servers WHERE name = ?`, input.Name).
+		Scan(&existingID, &existingTier)
+	switch {
+	case err == nil && MCPServerTier(existingTier) == MCPServerTierBundled:
+		return MCPImportResult{}, ErrMCPServerBundled
+	case err == nil:
+		record, ferr := mcpServerByName(ctx, tx, input.Name)
+		if ferr != nil {
+			return MCPImportResult{}, ferr
+		}
+		if cerr := tx.Commit(); cerr != nil {
+			return MCPImportResult{}, cerr
+		}
+		return MCPImportResult{Server: record, Created: false}, nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return MCPImportResult{}, err
+	}
+
+	serverID := ids.New("mcp")
+	createdAt := now()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO mcp_servers (
+			id, name, transport, url, sealed_token, tier, enabled, created_at
+		) VALUES (?, ?, 'http', ?, ?, ?, 0, ?)
+	`, serverID, input.Name, input.URL, nullableBytes(input.SealedToken), string(input.Tier), createdAt); err != nil {
+		return MCPImportResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO mcp_server_status (mcp_server_id, status)
+		VALUES (?, 'unknown')
+	`, serverID); err != nil {
+		return MCPImportResult{}, err
+	}
+	record, err := mcpServerByName(ctx, tx, input.Name)
+	if err != nil {
+		return MCPImportResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return MCPImportResult{}, err
+	}
+	return MCPImportResult{Server: record, Created: true}, nil
+}
+
+// RegisterMCPServer explicitly (re)registers a server: it atomically clears
+// any matching import tombstone and inserts a new disabled row. Any existing
+// name is refused (bundled names return ErrMCPServerBundled; anything else
+// returns ErrMCPServerNameTaken), and a refusal never clears the tombstone —
+// the existing-name check runs, and fails, before the tombstone delete.
+func (r *Repository) RegisterMCPServer(ctx context.Context, input ImportedMCPServer) (MCPServerRecord, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return MCPServerRecord{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var existingTier string
+	err = tx.QueryRowContext(ctx, `SELECT tier FROM mcp_servers WHERE name = ?`, input.Name).Scan(&existingTier)
+	switch {
+	case err == nil && MCPServerTier(existingTier) == MCPServerTierBundled:
+		return MCPServerRecord{}, ErrMCPServerBundled
+	case err == nil:
+		return MCPServerRecord{}, ErrMCPServerNameTaken
+	case !errors.Is(err, sql.ErrNoRows):
+		return MCPServerRecord{}, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM mcp_import_tombstones WHERE name = ?`, input.Name); err != nil {
+		return MCPServerRecord{}, err
+	}
+
+	serverID := ids.New("mcp")
+	createdAt := now()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO mcp_servers (
+			id, name, transport, url, sealed_token, tier, enabled, created_at
+		) VALUES (?, ?, 'http', ?, ?, ?, 0, ?)
+	`, serverID, input.Name, input.URL, nullableBytes(input.SealedToken), string(input.Tier), createdAt); err != nil {
+		return MCPServerRecord{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO mcp_server_status (mcp_server_id, status)
+		VALUES (?, 'unknown')
+	`, serverID); err != nil {
+		return MCPServerRecord{}, err
+	}
+	record, err := mcpServerByName(ctx, tx, input.Name)
+	if err != nil {
+		return MCPServerRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return MCPServerRecord{}, err
+	}
+	return record, nil
+}
+
+// ReplaceMCPServerToken replaces a non-bundled server's sealed credential in
+// place and returns the updated record. Passing empty bytes clears the
+// column to SQL NULL rather than storing a zero-length blob.
+func (r *Repository) ReplaceMCPServerToken(ctx context.Context, serverID string, sealedToken []byte) (MCPServerRecord, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return MCPServerRecord{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	server, err := mcpServerByID(ctx, tx, serverID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return MCPServerRecord{}, ErrMCPServerNotFound
+	}
+	if err != nil {
+		return MCPServerRecord{}, err
+	}
+	if server.Tier == MCPServerTierBundled {
+		return MCPServerRecord{}, ErrMCPServerBundled
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE mcp_servers SET sealed_token = ? WHERE id = ?
+	`, nullableBytes(sealedToken), serverID); err != nil {
+		return MCPServerRecord{}, err
+	}
+	record, err := mcpServerByID(ctx, tx, serverID)
+	if err != nil {
+		return MCPServerRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return MCPServerRecord{}, err
+	}
+	return record, nil
+}
+
+// GetMCPServerByName looks up a server's current disposition by name so a
+// caller (such as an import routine) can decide whether it is genuinely new
+// before doing more expensive work, without mutating anything.
+func (r *Repository) GetMCPServerByName(ctx context.Context, name string) (MCPServerRecord, error) {
+	record, err := mcpServerByName(ctx, r.db, name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return MCPServerRecord{}, ErrMCPServerNotFound
+	}
+	return record, err
+}
+
+// MCPServerTombstoned reports whether name was deleted and remains
+// suppressed from reimport.
+func (r *Repository) MCPServerTombstoned(ctx context.Context, name string) (bool, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM mcp_import_tombstones WHERE name = ?
+	`, name).Scan(&count)
+	return count != 0, err
 }
 
 func (r *Repository) ListMCPServers(ctx context.Context) ([]MCPServerRecord, error) {

@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 
@@ -40,6 +41,8 @@ type Server struct {
 }
 
 type ImportReport struct {
+	Imported    []string
+	Skipped     []string
 	Unsupported map[string]string
 }
 
@@ -88,6 +91,8 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 	}
 
 	report := ImportReport{Unsupported: make(map[string]string)}
+	imported := make([]string, 0)
+	skipped := make([]string, 0)
 	for name, raw := range document.Servers {
 		if !mcpServerNamePattern.MatchString(name) {
 			report.Unsupported[name] = "server name is invalid"
@@ -124,6 +129,33 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 			report.Unsupported[name] = err.Error()
 			continue
 		}
+
+		// Reimport is create-only: detect an existing (or tombstoned)
+		// name before sealing anything, so a reimport of a server that
+		// already exists never needs a sealer at all, and never touches
+		// its enabled state, endpoint, token, or tools snapshot.
+		existing, err := s.repo.GetMCPServerByName(ctx, name)
+		switch {
+		case err == nil:
+			if existing.Tier == repository.MCPServerTierBundled {
+				report.Unsupported[name] = "bundled server registration is managed by TuringAgent"
+				continue
+			}
+			skipped = append(skipped, name)
+			continue
+		case errors.Is(err, repository.ErrMCPServerNotFound):
+			tombstoned, terr := s.repo.MCPServerTombstoned(ctx, name)
+			if terr != nil {
+				return ImportReport{}, fmt.Errorf("check MCP server %q tombstone: %w", name, terr)
+			}
+			if tombstoned {
+				report.Unsupported[name] = "server was removed locally and remains suppressed; use a new name to import it again"
+				continue
+			}
+		default:
+			return ImportReport{}, fmt.Errorf("look up MCP server %q: %w", name, err)
+		}
+
 		var sealed []byte
 		if token != "" {
 			sealed, err = s.sealer.Seal([]byte(token), []byte(name))
@@ -135,7 +167,7 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 				return ImportReport{}, errors.New("seal MCP server token")
 			}
 		}
-		server, err := s.repo.UpsertImportedMCPServer(ctx, repository.ImportedMCPServer{
+		result, err := s.repo.ImportMCPServer(ctx, repository.ImportedMCPServer{
 			Name:        name,
 			URL:         canonicalURL,
 			SealedToken: sealed,
@@ -152,6 +184,15 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 			}
 			return ImportReport{}, fmt.Errorf("import MCP server %q: %w", name, err)
 		}
+		if !result.Created {
+			// Lost a race with a concurrent import/registration between
+			// the disposition check above and this call: treat it like
+			// the ordinary skip path rather than surfacing an error.
+			skipped = append(skipped, name)
+			continue
+		}
+		imported = append(imported, name)
+		server := result.Server
 		if toolsPresent {
 			discovered := make([]DiscoveredTool, 0, len(entry.Tools))
 			valid := true
@@ -186,6 +227,10 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 			}
 		}
 	}
+	sort.Strings(imported)
+	sort.Strings(skipped)
+	report.Imported = imported
+	report.Skipped = skipped
 	if err := s.repo.ReplaceMCPImportIssues(ctx, report.Unsupported); err != nil {
 		return ImportReport{}, fmt.Errorf("record mcp.json import issues: %w", err)
 	}
