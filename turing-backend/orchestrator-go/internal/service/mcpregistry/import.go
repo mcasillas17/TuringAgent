@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
@@ -45,6 +46,25 @@ var reservedMCPServerNames = map[string]struct{}{
 func isReservedMCPServerName(name string) bool {
 	_, reserved := reservedMCPServerNames[name]
 	return reserved
+}
+
+// validateMCPServerName is the one name check every entry point into the
+// registry runs: the name must match mcpServerNamePattern and must not be
+// one of the names TuringAgent reserves for its bundled servers. Both
+// ImportJSON (applied per mcp.json entry, before that entry's body is even
+// decoded, so a malformed body under a reserved/invalid key is still
+// refused for the name rather than a decode error) and
+// validateServerDefinition (used by RegisterMcpServer/RotateMcpServerToken)
+// call this one implementation, so there is exactly one place either path
+// could diverge from.
+func validateMCPServerName(name string) error {
+	if !mcpServerNamePattern.MatchString(name) {
+		return errors.New("server name is invalid")
+	}
+	if isReservedMCPServerName(name) {
+		return errMCPServerNameReserved
+	}
+	return nil
 }
 
 // errMCPServerNameReserved is the one message used for a reserved name
@@ -100,16 +120,31 @@ func (s *Server) SetMCPConfigRoot(root string) {
 	s.configRoot = root
 }
 
+// auditRecordTimeout bounds the detached context auditMCPEvent derives so a
+// slow or wedged audit sink cannot hang indefinitely after the mutation it
+// is recording has already committed.
+const auditRecordTimeout = 5 * time.Second
+
 // auditMCPEvent records a registry mutation and never lets a failure to
 // record it fail the mutation that already happened: the change is real
 // either way, and refusing to report it would just be a second problem. A
 // failure logs only the action and target/server id — never the payload,
 // which is the one place a token could otherwise reach a log.
+//
+// The write happens after the mutation it describes has already committed,
+// so it must not inherit the client's request context as-is: a client that
+// cancels (or a post-commit side effect, such as the registry-change
+// notifier, that ends up cancelling it) must never race or skip a durable
+// record of a change that already happened. The context is therefore
+// detached from cancellation/deadline via context.WithoutCancel and given
+// its own small bounded timeout instead.
 func (s *Server) auditMCPEvent(ctx context.Context, action, target string, payload map[string]any) {
 	if s.audit == nil {
 		return
 	}
-	if err := s.audit.Record(ctx, "", "client", "", action, target, payload); err != nil {
+	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), auditRecordTimeout)
+	defer cancel()
+	if err := s.audit.Record(auditCtx, "", "client", "", action, target, payload); err != nil {
 		log.Printf("record %s for %s failed", action, target)
 	}
 }
@@ -118,6 +153,16 @@ type ImportReport struct {
 	Imported    []string
 	Skipped     []string
 	Unsupported map[string]string
+}
+
+// recordUnsupported is the one place ImportJSON writes an unsupported
+// reason, so every reason — whether a fixed short message or one built
+// from attacker-controlled input such as a header name or a tool name — is
+// bounded and valid UTF-8 the same way boundedStatusMessage already bounds
+// a discovery/status error, rather than some call sites bounding it and
+// others writing raw, unbounded strings.
+func recordUnsupported(unsupported map[string]string, name, reason string) {
+	unsupported[name] = boundedStatusMessage(reason)
 }
 
 type DiscoveredTool struct {
@@ -168,33 +213,42 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 	imported := make([]string, 0)
 	skipped := make([]string, 0)
 	for name, raw := range document.Servers {
+		// The name check runs before the entry's body is even decoded:
+		// a reserved or pattern-invalid name is refused for that reason
+		// regardless of whether its body would otherwise fail strict
+		// decoding, sharing the exact validateServerDefinition also
+		// uses so the two paths can never independently drift apart.
+		if err := validateMCPServerName(name); err != nil {
+			recordUnsupported(report.Unsupported, name, err.Error())
+			continue
+		}
 		var entry mcpJSONServer
 		entryDecoder := json.NewDecoder(bytes.NewReader(raw))
 		entryDecoder.DisallowUnknownFields()
 		if err := entryDecoder.Decode(&entry); err != nil {
-			report.Unsupported[name] = "entry is invalid: " + err.Error()
+			recordUnsupported(report.Unsupported, name, "entry is invalid: "+err.Error())
 			continue
 		}
 		var entryFields map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &entryFields); err != nil {
-			report.Unsupported[name] = "entry is invalid"
+			recordUnsupported(report.Unsupported, name, "entry is invalid")
 			continue
 		}
 		_, toolsPresent := entryFields["tools"]
 		if entry.Command != "" {
-			report.Unsupported[name] = "stdio/command MCP servers are unsupported; run the server in a container or use an HTTPS URL"
+			recordUnsupported(report.Unsupported, name, "stdio/command MCP servers are unsupported; run the server in a container or use an HTTPS URL")
 			continue
 		}
 		rawToken, err := bearerFromHeaders(entry.Headers)
 		if err != nil {
-			report.Unsupported[name] = err.Error()
+			recordUnsupported(report.Unsupported, name, err.Error())
 			continue
 		}
 		// A file import never asks for a particular tier: whichever tier
 		// the URL classifies as is the tier used.
 		validated, err := validateServerDefinition(name, entry.URL, nil, rawToken)
 		if err != nil {
-			report.Unsupported[name] = err.Error()
+			recordUnsupported(report.Unsupported, name, err.Error())
 			continue
 		}
 		tier, canonicalURL, token := validated.Tier, validated.URL, validated.Token
@@ -213,7 +267,7 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 		switch {
 		case err == nil:
 			if existing.Tier == repository.MCPServerTierBundled {
-				report.Unsupported[name] = bundledServerRegistrationMessage
+				recordUnsupported(report.Unsupported, name, bundledServerRegistrationMessage)
 				continue
 			}
 			if existing.URL != "" {
@@ -226,7 +280,7 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 				return ImportReport{}, fmt.Errorf("check MCP server %q tombstone: %w", name, terr)
 			}
 			if tombstoned {
-				report.Unsupported[name] = "server was removed locally and remains suppressed; use a new name to import it again"
+				recordUnsupported(report.Unsupported, name, "server was removed locally and remains suppressed; use a new name to import it again")
 				continue
 			}
 		default:
@@ -236,7 +290,7 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 		sealed, err := sealMCPServerToken(s.sealer, name, token)
 		if err != nil {
 			if errors.Is(err, secretbox.ErrNoKey) {
-				report.Unsupported[name] = mcpMissingIntegrationKeyMessage
+				recordUnsupported(report.Unsupported, name, mcpMissingIntegrationKeyMessage)
 				continue
 			}
 			return ImportReport{}, errors.New("seal MCP server token")
@@ -249,11 +303,11 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 		})
 		if err != nil {
 			if errors.Is(err, repository.ErrMCPServerBundled) {
-				report.Unsupported[name] = bundledServerRegistrationMessage
+				recordUnsupported(report.Unsupported, name, bundledServerRegistrationMessage)
 				continue
 			}
 			if errors.Is(err, repository.ErrMCPServerImportSuppressed) {
-				report.Unsupported[name] = "server was removed locally and remains suppressed; use a new name to import it again"
+				recordUnsupported(report.Unsupported, name, "server was removed locally and remains suppressed; use a new name to import it again")
 				continue
 			}
 			return ImportReport{}, fmt.Errorf("import MCP server %q: %w", name, err)
@@ -272,7 +326,7 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 			valid := true
 			for index, tool := range entry.Tools {
 				if strings.TrimSpace(tool.Name) == "" {
-					report.Unsupported[name] = fmt.Sprintf("tool %d has an invalid name", index)
+					recordUnsupported(report.Unsupported, name, fmt.Sprintf("tool %d has an invalid name", index))
 					valid = false
 					break
 				}
@@ -281,14 +335,14 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 					schema = map[string]any{"type": "object"}
 				}
 				if rootType, present := schema["type"]; present && rootType != "object" {
-					report.Unsupported[name] = fmt.Sprintf("tool %q inputSchema root type must be object", tool.Name)
+					recordUnsupported(report.Unsupported, name, fmt.Sprintf("tool %q inputSchema root type must be object", tool.Name))
 					valid = false
 					break
 				}
 				schema["type"] = "object"
 				encoded, err := json.Marshal(schema)
 				if err != nil {
-					report.Unsupported[name] = fmt.Sprintf("tool %q inputSchema is invalid", tool.Name)
+					recordUnsupported(report.Unsupported, name, fmt.Sprintf("tool %q inputSchema is invalid", tool.Name))
 					valid = false
 					break
 				}
@@ -296,7 +350,7 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 			}
 			if valid {
 				if err := s.RecordDiscovery(ctx, server.ID, discovered); err != nil {
-					report.Unsupported[name] = boundedStatusMessage(err.Error())
+					recordUnsupported(report.Unsupported, name, err.Error())
 				}
 			}
 		}
@@ -432,6 +486,18 @@ type validatedMCPServer struct {
 	Tier  repository.MCPServerTier
 }
 
+// String and GoString redact Token so that %v, %+v, %#v, or %s on a
+// validatedMCPServer — via a stray log.Printf, an error wrap, or a test
+// failure message — can never print the plaintext bearer it carries before
+// the caller seals it.
+func (v validatedMCPServer) String() string {
+	return fmt.Sprintf("validatedMCPServer{Name:%q, URL:%q, Tier:%q, Token:REDACTED}", v.Name, v.URL, v.Tier)
+}
+
+func (v validatedMCPServer) GoString() string {
+	return v.String()
+}
+
 // validateServerDefinition applies the one set of rules a server definition
 // must satisfy regardless of whether it arrived through an mcp.json import
 // or a direct RegisterMcpServer call: the name must match
@@ -443,11 +509,8 @@ type validatedMCPServer struct {
 // rather than silently overriding it. The bearer token, if any, is
 // normalized the same way for both callers.
 func validateServerDefinition(name, rawURL string, requestedTier *repository.MCPServerTier, token string) (validatedMCPServer, error) {
-	if !mcpServerNamePattern.MatchString(name) {
-		return validatedMCPServer{}, errors.New("server name is invalid")
-	}
-	if isReservedMCPServerName(name) {
-		return validatedMCPServer{}, errMCPServerNameReserved
+	if err := validateMCPServerName(name); err != nil {
+		return validatedMCPServer{}, err
 	}
 	tier, canonicalURL, err := classifyImportedURL(rawURL)
 	if err != nil {

@@ -280,6 +280,51 @@ func TestRegisterMcpServerDoesNotNotifyOnFailure(t *testing.T) {
 	}
 }
 
+// RegisterMcpServer has no pre-existing row to corrupt the way the rotate
+// equivalent test does (the server doesn't exist until the repository
+// mutation itself creates it), so this uses the same mechanism as
+// TestAuditContextIsDetachedFromClientCancellationAfterCommit — a registry
+// change notifier that cancels the caller's own context — but, unlike that
+// test, asserts on the RPC's outcome: with the fix, notify+audit already
+// happened before the notifier cancels ctx, so the *later* serverDescriptor
+// call observes a cancelled context and deterministically fails, and the
+// RPC must still report that the mutation, notification, and audit all
+// happened. Reverting the reorder (descriptor built before notify/audit)
+// would make serverDescriptor run first, while ctx is still live, so it
+// would succeed and the RPC would return no error at all — the opposite of
+// what this test requires — which is what makes this discriminating.
+func TestRegisterMcpServerNotifiesAndAuditsBeforeADescriptorFailure(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	service.SetRegistryChangeNotifier(&cancelingRegistryChangeNotifier{cancel: cancel})
+	recorder := &recordingAuditRecorder{}
+	service.SetAuditRecorder(recorder)
+
+	_, err := service.RegisterMcpServer(ctx, &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp", Tier: turingv1.McpServerTier_MCP_SERVER_TIER_REMOTE_URL,
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("code = %v, want Internal from serverDescriptor observing the notifier's own context cancellation", status.Code(err))
+	}
+	if ctx.Err() == nil {
+		t.Fatal("test setup failed: the notifier never cancelled the original request context")
+	}
+
+	stored, err := repo.GetMCPServerByName(context.Background(), "vendor")
+	if err != nil {
+		t.Fatalf("the repository mutation must have committed despite the later descriptor failure: %v", err)
+	}
+	if stored.Name != "vendor" {
+		t.Fatalf("stored server = %+v, want name=vendor", stored)
+	}
+	if len(recorder.records) != 1 {
+		t.Fatalf("records = %+v, want one audit row despite the later descriptor failure", recorder.records)
+	}
+	if recorder.records[0].action != "mcp.server.registered" {
+		t.Fatalf("action = %q, want mcp.server.registered", recorder.records[0].action)
+	}
+}
+
 // seedBundledMCPServer inserts a bundled-tier row directly, bypassing the
 // reserved-name list, so tests can exercise the repository's own
 // bundled-collision refusal independently of the service-level reserved

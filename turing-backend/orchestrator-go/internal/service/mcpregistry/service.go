@@ -310,16 +310,20 @@ func (s *Server) RegisterMcpServer(ctx context.Context, req *turingv1.RegisterMc
 			return nil, status.Error(codes.Internal, "register MCP server failed")
 		}
 	}
-	descriptor, err := s.serverDescriptor(ctx, server)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "read MCP server failed")
-	}
+	// Notify and audit immediately once the repository mutation has
+	// committed — before building the response descriptor — so an
+	// unexpected descriptor/schema failure below can never leave a real,
+	// already-persisted registration unannounced or unaudited.
 	s.notifyRegistryChanged()
 	s.auditMCPEvent(ctx, "mcp.server.registered", server.ID, map[string]any{
 		"name": server.Name,
 		"tier": string(server.Tier),
 		"url":  server.URL,
 	})
+	descriptor, err := s.serverDescriptor(ctx, server)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "read MCP server failed")
+	}
 	return descriptor, nil
 }
 
@@ -359,10 +363,10 @@ func (s *Server) RotateMcpServerToken(ctx context.Context, req *turingv1.RotateM
 			return nil, status.Error(codes.Internal, "rotate MCP server token failed")
 		}
 	}
-	descriptor, err := s.serverDescriptor(ctx, updated)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "read MCP server failed")
-	}
+	// Notify and audit immediately once the repository mutation has
+	// committed — before building the response descriptor — so an
+	// unexpected descriptor/schema failure below can never leave a real,
+	// already-persisted rotation unannounced or unaudited.
 	s.notifyRegistryChanged()
 	action := "mcp.server.token_cleared"
 	if token != "" {
@@ -372,6 +376,10 @@ func (s *Server) RotateMcpServerToken(ctx context.Context, req *turingv1.RotateM
 		"name":            updated.Name,
 		"tokenConfigured": token != "",
 	})
+	descriptor, err := s.serverDescriptor(ctx, updated)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "read MCP server failed")
+	}
 	return descriptor, nil
 }
 
@@ -388,6 +396,19 @@ func (s *Server) ReimportMcpJson(ctx context.Context, _ *turingv1.ReimportMcpJso
 		}
 		return nil, status.Error(codes.Internal, "reimport mcp.json failed")
 	}
+	// The mutation is already complete at this point: report.Unsupported
+	// is the same map ReimportConfiguredJSON just wrote to the
+	// mcp_import_issues table, so its length is exactly the refused
+	// count without a second (fallible) repository read. Auditing here,
+	// before the ListMCPImportIssues call below that only re-derives the
+	// response's Refused list, means a later failure to read that table
+	// back can never cause a real, already-committed reimport to go
+	// unaudited. Only counts are recorded — never names or reasons.
+	s.auditMCPEvent(ctx, "mcp.server.reimported", "mcp.json", map[string]any{
+		"imported": len(report.Imported),
+		"skipped":  len(report.Skipped),
+		"refused":  len(report.Unsupported),
+	})
 	issues, err := s.repo.ListMCPImportIssues(ctx)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "list MCP import issues failed")
