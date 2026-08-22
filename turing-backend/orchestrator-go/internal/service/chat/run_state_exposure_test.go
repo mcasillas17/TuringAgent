@@ -339,34 +339,54 @@ func TestChatLivePassThroughPayloadsDropExecutionIdentity(t *testing.T) {
 	}
 }
 
+// hostileSelfNamingRunState builds the payload shape a newer server, a
+// restored backup, or a hand edit could leave behind: a writer's own keys
+// alongside a runState snapshot that correctly names this run's own row and
+// assistant message, but whose lifecycle/outcome words ("hibernating" /
+// "sunspots") this build has never heard of.
+func hostileSelfNamingRunState(runID string, assistantMessageID string, version string) string {
+	return `{"jobId":"job_1","runState":{` +
+		`"runId":"` + runID + `",` +
+		`"userMessageId":"msg_user",` +
+		`"assistantMessageId":"` + assistantMessageID + `",` +
+		`"lifecycle":"hibernating",` +
+		`"outcomeReason":"sunspots",` +
+		`"stateVersion":` + version + `,` +
+		`"stateUpdatedAt":"2026-08-20T00:00:00.000000000Z",` +
+		`"hasDisplayableContent":true}}`
+}
+
 // TestChatLiveHostileRunStateSnapshotsBecomeUnknownOrNothing walks the rows a
-// newer server, a restored backup or a hand edit could leave behind. The typed
-// state is either the honest unknown or absent, and the stored words never
-// reach the wire in any form.
+// newer server, a restored backup or a hand edit could leave behind, restricted
+// to the exact set of canonical types this repository's own writers ever
+// commit a RunState under (the carriers: the dedicated agent.run.started/
+// state_changed unions and the persisted-arm approval.requested and
+// agent.run.queued). For a carrier, the typed state is either the honest
+// unknown or absent, and the stored words never reach the wire in any form.
+// TestChatLiveNonCarrierHostileRunStateSnapshotsNeverProjectState below is the
+// same setup run against every OTHER type, where the rule is stricter: no
+// typed state at all, not even the honest unknown, however well-formed the
+// snapshot looks.
 func TestChatLiveHostileRunStateSnapshotsBecomeUnknownOrNothing(t *testing.T) {
 	live := startLiveChatRun(t, "hostile snapshots")
 	hostile := func(version string) string {
-		return `{"jobId":"job_1","attempt":1,"runState":{` +
-			`"runId":"` + live.run.runID + `",` +
-			`"userMessageId":"msg_user",` +
-			`"assistantMessageId":"` + live.run.assistantMessageID + `",` +
-			`"lifecycle":"hibernating",` +
-			`"outcomeReason":"sunspots",` +
-			`"stateVersion":` + version + `,` +
-			`"stateUpdatedAt":"2026-08-20T00:00:00.000000000Z",` +
-			`"hasDisplayableContent":true}}`
+		return hostileSelfNamingRunState(live.run.runID, live.run.assistantMessageID, version)
 	}
 	// A pass-through lifecycle type keeps its writer's payload, so it is the
 	// arm where the snapshot has to be dropped rather than merely ignored, and
 	// the arm where a stored word could still be republished verbatim. The
-	// dedicated unions carry no payload at all, so the types without one —
-	// approvals, tool calls, notices — are where that drop is observable to a
-	// chat client.
+	// dedicated unions carry no payload at all, so the carrier types without
+	// one — approval.requested, agent.run.queued — are where that drop is
+	// observable to a chat client.
 	firstSeeded := live.appendLegacy(t, "agent.run.started", hostile("7")).Sequence
 	live.appendLegacy(t, "agent.run.state_changed", hostile("7"))
 	live.appendLegacy(t, "agent.run.started", hostile("0"))
 	live.appendLegacy(t, "agent.run.state_changed", hostile("0"))
-	persistedArm := []string{"approval.requested", "tool.call.started", "system", "agent.run.queued"}
+	// Only carriers here: approval.approved is the same writer
+	// (appendApprovalRunStateEventTx) as approval.requested, so it is not
+	// separately exercised, but every type in this arm really is one whose
+	// committer merges a RunState in.
+	persistedArm := []string{"approval.requested", "agent.run.queued"}
 	for _, eventType := range persistedArm {
 		live.appendLegacy(t, eventType, hostile("7"))
 	}
@@ -414,13 +434,63 @@ func TestChatLiveHostileRunStateSnapshotsBecomeUnknownOrNothing(t *testing.T) {
 		}
 	}
 	// Two rows carry a version this build can reconcile and two carry protobuf
-	// absence, so both halves of the rule are exercised, and every type without
-	// a dedicated union went through the arm that publishes a payload.
+	// absence, so both halves of the rule are exercised, and every carrier
+	// type without a dedicated union went through the arm that publishes a
+	// payload.
 	if namedStates != 2+len(persistedArm) || absentStates != 2 {
 		t.Fatalf("named=%d absent=%d, want %d and 2", namedStates, absentStates, 2+len(persistedArm))
 	}
 	if persistedStates != len(persistedArm) {
 		t.Fatalf("persisted arm saw %d rows, want %d", persistedStates, len(persistedArm))
+	}
+}
+
+// TestChatLiveNonCarrierHostileRunStateSnapshotsNeverProjectState is the other
+// half of the split: the exact same hostile, self-naming, version-7 snapshot
+// attached instead to types this repository's writers never commit a
+// RunState under — a tool call, a generic system notice, a message event, a
+// worker's own run-step narration. None of these may project a typed state at
+// all, honest-unknown or otherwise, because nothing about their own writer
+// ever committed one; the only thing that would have made this snapshot
+// believable is which event type carries it, not how well-formed it looks.
+// The writer's own (non-runState) payload content still has to survive —
+// this is a narrower gate, not a blanket scrub of legacy payload content.
+func TestChatLiveNonCarrierHostileRunStateSnapshotsNeverProjectState(t *testing.T) {
+	live := startLiveChatRun(t, "non-carrier hostile snapshots")
+	hostile := hostileSelfNamingRunState(live.run.runID, live.run.assistantMessageID, "7")
+	nonCarrierArm := []string{"tool.call.started", "system", "message.started", "agent.run.step"}
+	var firstSeeded int64
+	for _, eventType := range nonCarrierArm {
+		seeded := live.appendLegacy(t, eventType, hostile)
+		if firstSeeded == 0 {
+			firstSeeded = seeded.Sequence
+		}
+	}
+	live.cancelNow(t, runoutcome.AbandonedCancellation())
+
+	var checked int
+	for _, event := range live.drain(t) {
+		assertChatEventCarriesNoStoredRunStateWords(t, event)
+		if event.GetSequence() < firstSeeded {
+			continue
+		}
+		persisted := event.GetPersistedEvent()
+		if persisted == nil {
+			continue
+		}
+		if _, republished := persisted.GetPayload().AsMap()["runState"]; republished {
+			t.Fatalf("a non-carrier row republished the stored snapshot: %s", persisted.GetPayload())
+		}
+		if got := persisted.GetPayload().GetFields()["jobId"].GetStringValue(); got != "job_1" {
+			t.Fatalf("the drop took the writer's own payload with it: %s", persisted.GetPayload())
+		}
+		if state := persisted.GetRunState(); state != nil {
+			t.Fatalf("a non-carrier type projected a typed RunState from a self-naming snapshot it never authored: %+v", state)
+		}
+		checked++
+	}
+	if checked != len(nonCarrierArm) {
+		t.Fatalf("checked %d non-carrier rows, want every seeded one (%d)", checked, len(nonCarrierArm))
 	}
 }
 

@@ -41,6 +41,58 @@ type SafeEvent struct {
 // the stored strings are this server's internal words for the same thing.
 const runStatePayloadKey = "runState"
 
+// runStateCarrierTypes is the exact, closed set of canonical event types whose
+// writer is the repository's own guarded transition core — the only code that
+// ever merges a genuinely committed RunState into an event's payload under
+// runStatePayloadKey.
+//
+//   - agent.run.queued, agent.run.started, agent.run.state_changed,
+//     agent.run.completed, agent.run.failed, and agent.run.cancelled are the
+//     event types the single generic transition committer
+//     (repository's runTransition, via marshalRunStatePayload) ever appends.
+//   - approval.requested carries a RunState through two different writers,
+//     never through neither: its primary path IS the running ->
+//     waiting_approval transition itself (awaitApprovalTransitionTx, through
+//     the same generic transition committer above), and
+//     appendApprovalRunStateEventTx is only its fallback — used when the run
+//     was already waiting on an earlier approval, so this request does not
+//     itself move the lifecycle but still owes the same announcement.
+//     approval.approved never moves a run's lifecycle at all (approving only
+//     records a decision; ResumeApprovedRun is what resumes the run), so
+//     appendApprovalRunStateEventTx is its only writer.
+//   - approval.denied, approval.expired, and approval.consumed are
+//     deliberately absent: every one of them is written by
+//     appendApprovalLifecycleEventTx (or its terminal-projection sibling)
+//     instead, which never merges a RunState in at all.
+//
+// Every other type — every message.*, every tool.call.*, agent.run.step,
+// system, error, session.*, and anything this build does not recognize — is
+// not a carrier. A row of one of those types may still contain a
+// self-naming, valid-shaped value under runStatePayloadKey (a worker that
+// tried to forge one, a hand edit, a restored backup, a future build's own
+// convention), but nothing about its own writer ever committed it, so it is
+// never projected into the typed field below — no matter how well-formed it
+// looks.
+var runStateCarrierTypes = map[string]bool{
+	"agent.run.queued":        true,
+	"agent.run.started":       true,
+	"agent.run.state_changed": true,
+	"agent.run.completed":     true,
+	"agent.run.failed":        true,
+	"agent.run.cancelled":     true,
+	"approval.requested":      true,
+	"approval.approved":       true,
+}
+
+// isRunStateCarrier reports whether canonicalType is one this build's own
+// repository writers ever commit a RunState snapshot under. It takes the
+// already-resolved canonical name — never the stored string — for the same
+// reason publicPayload does: a row cannot dodge, or wrongly gain, this gate by
+// which spelling of its type it happens to carry.
+func isRunStateCarrier(canonicalType string) bool {
+	return runStateCarrierTypes[canonicalType]
+}
+
 // approvalIdentityKeys and ToolCallIdentityKeys are the only payload keys a
 // public failure event may carry besides its allowlisted category. They are the
 // identities the contract already promises a client — the approval it was asked
@@ -77,21 +129,32 @@ var executionOnlyKeys = []string{"assignmentAttemptId", "workerId", "leaseOwner"
 // message is built from the bytes it failed on — which is precisely the content
 // this boundary exists to keep in the database.
 //
-// The type is resolved through CanonicalType first, so the allowlist below and
-// the public type a client is told are two consequences of one answer. Deciding
-// them separately is how a row stored as AGENT_RUN_FAILED came to be published
-// as a failure whose payload had never seen the failure allowlist.
+// The type is resolved through CanonicalType exactly once, so the allowlist
+// below, the carrier gate, and the public type a client is told are three
+// consequences of one answer. Deciding them separately is how a row stored as
+// AGENT_RUN_FAILED came to be published as a failure whose payload had never
+// seen the failure allowlist.
 //
 // eventRunID is the run the row itself belongs to, and a snapshot is only read
 // when it names that run. The identity is taken from the row rather than from
-// the payload because the payload is the part a writer controls.
+// the payload because the payload is the part a writer controls. But naming
+// the right run is not enough on its own: only isRunStateCarrier's types ever
+// have a writer that actually commits a RunState, so every other type's
+// payload is never even offered to runStateFrom, regardless of what it
+// contains under runStatePayloadKey. A non-carrier row that names the right
+// run with a perfectly well-formed snapshot is still not proof anyone
+// authoritative wrote it.
 func Decode(eventType string, eventRunID string, payloadJSON string) SafeEvent {
 	payload, err := decodeEventPayload(payloadJSON)
 	if err != nil {
 		return SafeEvent{Payload: map[string]any{}}
 	}
-	state := runStateFrom(eventRunID, payload)
-	return SafeEvent{Payload: publicPayload(CanonicalType(eventType), payload), RunState: state}
+	canonicalType := CanonicalType(eventType)
+	var state *turingv1.RunState
+	if isRunStateCarrier(canonicalType) {
+		state = runStateFrom(eventRunID, payload)
+	}
+	return SafeEvent{Payload: publicPayload(canonicalType, payload), RunState: state}
 }
 
 // StripRepositoryAuthoredEventFields removes projections from an event whose

@@ -25,10 +25,31 @@ Internal worker, attempt, execution, lease, token, diagnostic, and content-diges
 fields never appear in public `RunState`.
 
 `SessionService.ListMessages` attaches `RunState` to the correlated assistant
-message with one zero-or-one join. Every lifecycle event carries the same
-snapshot. The public snapshot contains run, user-message, and assistant-message
-IDs; lifecycle; outcome reason; version; state-update time; terminal time when
-applicable; and whether the canonical assistant content is displayable.
+message with one zero-or-one join. The public snapshot contains run,
+user-message, and assistant-message IDs; lifecycle; outcome reason; version;
+state-update time; terminal time when applicable; and whether the canonical
+assistant content is displayable.
+
+Only the event types whose own repository writer commits that snapshot may
+ever carry a typed `RunState`: `agent.run.queued`, `agent.run.started`,
+`agent.run.state_changed`, `agent.run.completed`, `agent.run.failed`,
+`agent.run.cancelled`, `approval.requested`, and `approval.approved`.
+`approval.requested` carries it through two writers: primarily the
+`running -> waiting_approval` transition itself, and as a fallback — carrying
+the same run state as it stands — when the run was already waiting on an
+earlier approval and this request does not itself move the lifecycle.
+`approval.approved` never moves a run's lifecycle (approving only records a
+decision; a separate resume is what moves the run), so its snapshot always
+comes through that same fallback. Every other type — every `message.*` and
+`tool.call.*` event, `agent.run.step`, `system`, `error`, `session.*`, and any
+type this build does not recognize — never projects a typed `RunState`, even
+when its stored payload contains a well-formed value under a `runState` key
+that correctly names the row's own run. `events.Decode` is the one place that
+gate is enforced: it resolves the row's canonical type once and only offers
+the payload to the RunState projection when that type is one of the eight
+carriers above, so ChatService and EventService cannot come to different
+answers about the same row, and a pre-migration row of a non-carrier type
+cannot smuggle a forged, high-version snapshot in as canonical truth.
 
 ## Lifecycle, reasons, and content
 
