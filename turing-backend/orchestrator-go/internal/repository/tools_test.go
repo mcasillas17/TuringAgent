@@ -237,4 +237,37 @@ func TestSetToolPolicyByNameDoesNotResurrectAbsentThirdPartyTool(t *testing.T) {
 	if enabled != 0 || present != 0 {
 		t.Fatalf("enabled=%d present=%d after by-name policy write, want the absent tool to stay dark", enabled, present)
 	}
+	var policy string
+	if err := database.QueryRowContext(ctx, `
+		SELECT policy FROM tools WHERE server_name = 'vendor' AND tool_name = 'vendor.write'
+	`).Scan(&policy); err != nil || policy != "safe" {
+		t.Fatalf("policy=%q err=%v, want the policy write itself to land", policy, err)
+	}
+
+	// The bundled half of the derivation: a bundled tool pruned to present = 0
+	// (its server was down during a discovery cycle) is restored by the policy
+	// write, exactly as SetMCPToolPolicy does — without the write-back it would
+	// be advertised (enabled = 1) and then refused at dispatch by
+	// MCPDispatchActive's present = 1 requirement.
+	if err := repo.UpsertTools(ctx, []DiscoveredTool{{
+		ServerName: "system", ToolName: "system.time", SchemaJSON: `{}`, Policy: "safe",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		UPDATE tools SET present = 0 WHERE server_name = 'system' AND tool_name = 'system.time'
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetToolPolicyByName(ctx, "system", "system.time", "safe"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `
+		SELECT enabled, present FROM tools WHERE server_name = 'system' AND tool_name = 'system.time'
+	`).Scan(&enabled, &present); err != nil {
+		t.Fatal(err)
+	}
+	if enabled != 1 || present != 1 {
+		t.Fatalf("bundled enabled=%d present=%d, want the write-back to restore both", enabled, present)
+	}
 }

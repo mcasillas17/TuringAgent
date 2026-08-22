@@ -294,8 +294,11 @@ func TestIntegrationDispatchRequiresAllFourDecisionLegsBeforeNetwork(t *testing.
 				return c == "EGRESS_DATA_CATEGORY_TOOL_RESULTS"
 			})
 		}},
-		{"endpoint and connection pair", func(d *repository.RunEgressDecision, _ string) {
+		{"connection half of the pair", func(d *repository.RunEgressDecision, _ string) {
 			d.IntegrationEndpoints[0].ConnectionID = "conn_other_on_same_host"
+		}},
+		{"endpoint half of the pair", func(d *repository.RunEgressDecision, _ string) {
+			d.IntegrationEndpoints[0].Endpoint = "https://ghe.example.com"
 		}},
 		{"tool in endpoint entry", func(d *repository.RunEgressDecision, _ string) {
 			d.IntegrationEndpoints[0].Tools = []string{"github.get_issue"}
@@ -900,15 +903,28 @@ func TestListIntegrationToolsNamesConnectionsAndOmitsDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	personal, err := server.ConnectAccount(ctx, &turingv1.ConnectAccountRequest{
+		Provider: turingv1.IntegrationProvider_INTEGRATION_PROVIDER_GITHUB,
+		DisplayName: "Personal GitHub", Credential: "personal-token", ConsentAcknowledged: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	listed, err := server.ListIntegrationTools(ctx, &turingv1.ListIntegrationToolsRequest{})
 	if err != nil || len(listed.GetTools()) != 4 {
 		t.Fatalf("tools=%+v err=%v", listed, err)
 	}
-	want := "Available connections: (" + connected.GetConnectionId() + ", Work GitHub)"
-	for _, tool := range listed.GetTools() {
-		if !strings.Contains(tool.GetDescription(), want) {
-			t.Fatalf("tool %s description %q does not enumerate the live connection (%q)",
-				tool.GetToolName(), tool.GetDescription(), want)
+	// Two connections, so a lister that emits only pairs[0] fails.
+	for _, want := range []string{
+		"(" + connected.GetConnectionId() + ", Work GitHub)",
+		"(" + personal.GetConnectionId() + ", Personal GitHub)",
+	} {
+		for _, tool := range listed.GetTools() {
+			if !strings.Contains(tool.GetDescription(), "Available connections: ") ||
+				!strings.Contains(tool.GetDescription(), want) {
+				t.Fatalf("tool %s description %q does not enumerate %q",
+					tool.GetToolName(), tool.GetDescription(), want)
+			}
 		}
 	}
 	if err := repo.UpsertTools(ctx, []repository.DiscoveredTool{{
