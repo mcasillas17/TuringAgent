@@ -126,6 +126,60 @@ func (SessionDeletionState) EnumDescriptor() ([]byte, []int) {
 	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{1}
 }
 
+// Selects one response representation so hit metadata does not duplicate
+// unbounded message bodies.
+type SearchMessagesResponseFormat int32
+
+const (
+	// Resolves to LEGACY_MESSAGES for old callers.
+	SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_UNSPECIFIED SearchMessagesResponseFormat = 0
+	// Returns only SearchMessagesResponse.messages.
+	SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_LEGACY_MESSAGES SearchMessagesResponseFormat = 1
+	// Returns only SearchMessagesResponse.hits.
+	SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_HITS SearchMessagesResponseFormat = 2
+)
+
+// Enum value maps for SearchMessagesResponseFormat.
+var (
+	SearchMessagesResponseFormat_name = map[int32]string{
+		0: "SEARCH_MESSAGES_RESPONSE_FORMAT_UNSPECIFIED",
+		1: "SEARCH_MESSAGES_RESPONSE_FORMAT_LEGACY_MESSAGES",
+		2: "SEARCH_MESSAGES_RESPONSE_FORMAT_HITS",
+	}
+	SearchMessagesResponseFormat_value = map[string]int32{
+		"SEARCH_MESSAGES_RESPONSE_FORMAT_UNSPECIFIED":     0,
+		"SEARCH_MESSAGES_RESPONSE_FORMAT_LEGACY_MESSAGES": 1,
+		"SEARCH_MESSAGES_RESPONSE_FORMAT_HITS":            2,
+	}
+)
+
+func (x SearchMessagesResponseFormat) Enum() *SearchMessagesResponseFormat {
+	p := new(SearchMessagesResponseFormat)
+	*p = x
+	return p
+}
+
+func (x SearchMessagesResponseFormat) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SearchMessagesResponseFormat) Descriptor() protoreflect.EnumDescriptor {
+	return file_turing_v1_sessions_proto_enumTypes[2].Descriptor()
+}
+
+func (SearchMessagesResponseFormat) Type() protoreflect.EnumType {
+	return &file_turing_v1_sessions_proto_enumTypes[2]
+}
+
+func (x SearchMessagesResponseFormat) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SearchMessagesResponseFormat.Descriptor instead.
+func (SearchMessagesResponseFormat) EnumDescriptor() ([]byte, []int) {
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{2}
+}
+
 type Session struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
@@ -1106,19 +1160,87 @@ func (x *ListMessagesResponse) GetMessages() []*Message {
 	return nil
 }
 
+type SearchHit struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Message *Message               `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
+	// Finite and non-negative. Higher means a more relevant match within the
+	// same SearchMessages response. Not comparable across queries or snapshots.
+	Score float64 `protobuf:"fixed64,2,opt,name=score,proto3" json:"score,omitempty"`
+	// Bounded single-line plain text selected from message.content. It is
+	// centered on the match when one fits FTS5's snippet window, and is
+	// otherwise a bounded unhighlighted excerpt of the same message. Contains
+	// no server-added markup and must not be treated as HTML.
+	Snippet       string `protobuf:"bytes,3,opt,name=snippet,proto3" json:"snippet,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SearchHit) Reset() {
+	*x = SearchHit{}
+	mi := &file_turing_v1_sessions_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SearchHit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SearchHit) ProtoMessage() {}
+
+func (x *SearchHit) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_sessions_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SearchHit.ProtoReflect.Descriptor instead.
+func (*SearchHit) Descriptor() ([]byte, []int) {
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *SearchHit) GetMessage() *Message {
+	if x != nil {
+		return x.Message
+	}
+	return nil
+}
+
+func (x *SearchHit) GetScore() float64 {
+	if x != nil {
+		return x.Score
+	}
+	return 0
+}
+
+func (x *SearchHit) GetSnippet() string {
+	if x != nil {
+		return x.Snippet
+	}
+	return ""
+}
+
 type SearchMessagesRequest struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	Query            string                 `protobuf:"bytes,1,opt,name=query,proto3" json:"query,omitempty"`
 	SessionId        string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"` // optional scope; empty = all sessions
 	Limit            int32                  `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
 	ExcludeSessionId string                 `protobuf:"bytes,4,opt,name=exclude_session_id,json=excludeSessionId,proto3" json:"exclude_session_id,omitempty"` // optional exclusion; applied after session_id scope
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Unsupported numeric values are rejected with InvalidArgument.
+	ResponseFormat SearchMessagesResponseFormat `protobuf:"varint,5,opt,name=response_format,json=responseFormat,proto3,enum=turing.v1.SearchMessagesResponseFormat" json:"response_format,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *SearchMessagesRequest) Reset() {
 	*x = SearchMessagesRequest{}
-	mi := &file_turing_v1_sessions_proto_msgTypes[19]
+	mi := &file_turing_v1_sessions_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1130,7 +1252,7 @@ func (x *SearchMessagesRequest) String() string {
 func (*SearchMessagesRequest) ProtoMessage() {}
 
 func (x *SearchMessagesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_sessions_proto_msgTypes[19]
+	mi := &file_turing_v1_sessions_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1143,7 +1265,7 @@ func (x *SearchMessagesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchMessagesRequest.ProtoReflect.Descriptor instead.
 func (*SearchMessagesRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{19}
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *SearchMessagesRequest) GetQuery() string {
@@ -1174,16 +1296,25 @@ func (x *SearchMessagesRequest) GetExcludeSessionId() string {
 	return ""
 }
 
+func (x *SearchMessagesRequest) GetResponseFormat() SearchMessagesResponseFormat {
+	if x != nil {
+		return x.ResponseFormat
+	}
+	return SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_UNSPECIFIED
+}
+
 type SearchMessagesResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Messages      []*Message             `protobuf:"bytes,1,rep,name=messages,proto3" json:"messages,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Legacy compatibility field. New consumers request HITS.
+	Messages      []*Message   `protobuf:"bytes,1,rep,name=messages,proto3" json:"messages,omitempty"`
+	Hits          []*SearchHit `protobuf:"bytes,2,rep,name=hits,proto3" json:"hits,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SearchMessagesResponse) Reset() {
 	*x = SearchMessagesResponse{}
-	mi := &file_turing_v1_sessions_proto_msgTypes[20]
+	mi := &file_turing_v1_sessions_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1195,7 +1326,7 @@ func (x *SearchMessagesResponse) String() string {
 func (*SearchMessagesResponse) ProtoMessage() {}
 
 func (x *SearchMessagesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_sessions_proto_msgTypes[20]
+	mi := &file_turing_v1_sessions_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1208,12 +1339,19 @@ func (x *SearchMessagesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchMessagesResponse.ProtoReflect.Descriptor instead.
 func (*SearchMessagesResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{20}
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *SearchMessagesResponse) GetMessages() []*Message {
 	if x != nil {
 		return x.Messages
+	}
+	return nil
+}
+
+func (x *SearchMessagesResponse) GetHits() []*SearchHit {
+	if x != nil {
+		return x.Hits
 	}
 	return nil
 }
@@ -1226,7 +1364,7 @@ type GetConfigRequest struct {
 
 func (x *GetConfigRequest) Reset() {
 	*x = GetConfigRequest{}
-	mi := &file_turing_v1_sessions_proto_msgTypes[21]
+	mi := &file_turing_v1_sessions_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1238,7 +1376,7 @@ func (x *GetConfigRequest) String() string {
 func (*GetConfigRequest) ProtoMessage() {}
 
 func (x *GetConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_sessions_proto_msgTypes[21]
+	mi := &file_turing_v1_sessions_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1251,7 +1389,7 @@ func (x *GetConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConfigRequest.ProtoReflect.Descriptor instead.
 func (*GetConfigRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{21}
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{22}
 }
 
 type GetConfigResponse struct {
@@ -1265,7 +1403,7 @@ type GetConfigResponse struct {
 
 func (x *GetConfigResponse) Reset() {
 	*x = GetConfigResponse{}
-	mi := &file_turing_v1_sessions_proto_msgTypes[22]
+	mi := &file_turing_v1_sessions_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1277,7 +1415,7 @@ func (x *GetConfigResponse) String() string {
 func (*GetConfigResponse) ProtoMessage() {}
 
 func (x *GetConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_sessions_proto_msgTypes[22]
+	mi := &file_turing_v1_sessions_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1290,7 +1428,7 @@ func (x *GetConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConfigResponse.ProtoReflect.Descriptor instead.
 func (*GetConfigResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{22}
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *GetConfigResponse) GetProviders() []*ProviderConfig {
@@ -1322,7 +1460,7 @@ type ListAgentsRequest struct {
 
 func (x *ListAgentsRequest) Reset() {
 	*x = ListAgentsRequest{}
-	mi := &file_turing_v1_sessions_proto_msgTypes[23]
+	mi := &file_turing_v1_sessions_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1334,7 +1472,7 @@ func (x *ListAgentsRequest) String() string {
 func (*ListAgentsRequest) ProtoMessage() {}
 
 func (x *ListAgentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_sessions_proto_msgTypes[23]
+	mi := &file_turing_v1_sessions_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1347,7 +1485,7 @@ func (x *ListAgentsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAgentsRequest.ProtoReflect.Descriptor instead.
 func (*ListAgentsRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{23}
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{24}
 }
 
 type ListAgentsResponse struct {
@@ -1359,7 +1497,7 @@ type ListAgentsResponse struct {
 
 func (x *ListAgentsResponse) Reset() {
 	*x = ListAgentsResponse{}
-	mi := &file_turing_v1_sessions_proto_msgTypes[24]
+	mi := &file_turing_v1_sessions_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1371,7 +1509,7 @@ func (x *ListAgentsResponse) String() string {
 func (*ListAgentsResponse) ProtoMessage() {}
 
 func (x *ListAgentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_sessions_proto_msgTypes[24]
+	mi := &file_turing_v1_sessions_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1384,7 +1522,7 @@ func (x *ListAgentsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAgentsResponse.ProtoReflect.Descriptor instead.
 func (*ListAgentsResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{24}
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ListAgentsResponse) GetAgents() []*AgentDescriptor {
@@ -1405,7 +1543,7 @@ type ToolDescriptor struct {
 
 func (x *ToolDescriptor) Reset() {
 	*x = ToolDescriptor{}
-	mi := &file_turing_v1_sessions_proto_msgTypes[25]
+	mi := &file_turing_v1_sessions_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1417,7 +1555,7 @@ func (x *ToolDescriptor) String() string {
 func (*ToolDescriptor) ProtoMessage() {}
 
 func (x *ToolDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_sessions_proto_msgTypes[25]
+	mi := &file_turing_v1_sessions_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1430,7 +1568,7 @@ func (x *ToolDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolDescriptor.ProtoReflect.Descriptor instead.
 func (*ToolDescriptor) Descriptor() ([]byte, []int) {
-	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{25}
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ToolDescriptor) GetServerName() string {
@@ -1462,7 +1600,7 @@ type ListToolsRequest struct {
 
 func (x *ListToolsRequest) Reset() {
 	*x = ListToolsRequest{}
-	mi := &file_turing_v1_sessions_proto_msgTypes[26]
+	mi := &file_turing_v1_sessions_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1474,7 +1612,7 @@ func (x *ListToolsRequest) String() string {
 func (*ListToolsRequest) ProtoMessage() {}
 
 func (x *ListToolsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_sessions_proto_msgTypes[26]
+	mi := &file_turing_v1_sessions_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1487,7 +1625,7 @@ func (x *ListToolsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListToolsRequest.ProtoReflect.Descriptor instead.
 func (*ListToolsRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{26}
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{27}
 }
 
 type ListToolsResponse struct {
@@ -1499,7 +1637,7 @@ type ListToolsResponse struct {
 
 func (x *ListToolsResponse) Reset() {
 	*x = ListToolsResponse{}
-	mi := &file_turing_v1_sessions_proto_msgTypes[27]
+	mi := &file_turing_v1_sessions_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1511,7 +1649,7 @@ func (x *ListToolsResponse) String() string {
 func (*ListToolsResponse) ProtoMessage() {}
 
 func (x *ListToolsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_sessions_proto_msgTypes[27]
+	mi := &file_turing_v1_sessions_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1524,7 +1662,7 @@ func (x *ListToolsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListToolsResponse.ProtoReflect.Descriptor instead.
 func (*ListToolsResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{27}
+	return file_turing_v1_sessions_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ListToolsResponse) GetTools() []*ToolDescriptor {
@@ -1608,15 +1746,21 @@ const file_turing_v1_sessions_proto_rawDesc = "" +
 	"\x05limit\x18\x02 \x01(\x05R\x05limit\x12*\n" +
 	"\x11before_message_id\x18\x03 \x01(\tR\x0fbeforeMessageId\"F\n" +
 	"\x14ListMessagesResponse\x12.\n" +
-	"\bmessages\x18\x01 \x03(\v2\x12.turing.v1.MessageR\bmessages\"\x90\x01\n" +
+	"\bmessages\x18\x01 \x03(\v2\x12.turing.v1.MessageR\bmessages\"i\n" +
+	"\tSearchHit\x12,\n" +
+	"\amessage\x18\x01 \x01(\v2\x12.turing.v1.MessageR\amessage\x12\x14\n" +
+	"\x05score\x18\x02 \x01(\x01R\x05score\x12\x18\n" +
+	"\asnippet\x18\x03 \x01(\tR\asnippet\"\xe2\x01\n" +
 	"\x15SearchMessagesRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x14\n" +
 	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12,\n" +
-	"\x12exclude_session_id\x18\x04 \x01(\tR\x10excludeSessionId\"H\n" +
+	"\x12exclude_session_id\x18\x04 \x01(\tR\x10excludeSessionId\x12P\n" +
+	"\x0fresponse_format\x18\x05 \x01(\x0e2'.turing.v1.SearchMessagesResponseFormatR\x0eresponseFormat\"r\n" +
 	"\x16SearchMessagesResponse\x12.\n" +
-	"\bmessages\x18\x01 \x03(\v2\x12.turing.v1.MessageR\bmessages\"\x12\n" +
+	"\bmessages\x18\x01 \x03(\v2\x12.turing.v1.MessageR\bmessages\x12(\n" +
+	"\x04hits\x18\x02 \x03(\v2\x14.turing.v1.SearchHitR\x04hits\"\x12\n" +
 	"\x10GetConfigRequest\"\xa5\x01\n" +
 	"\x11GetConfigResponse\x127\n" +
 	"\tproviders\x18\x01 \x03(\v2\x19.turing.v1.ProviderConfigR\tproviders\x12+\n" +
@@ -1642,7 +1786,11 @@ const file_turing_v1_sessions_proto_rawDesc = "" +
 	"\"SESSION_DELETION_STATE_UNSPECIFIED\x10\x00\x12&\n" +
 	"\"SESSION_DELETION_STATE_IN_PROGRESS\x10\x01\x12*\n" +
 	"&SESSION_DELETION_STATE_FAILED_EXTERNAL\x10\x02\x12$\n" +
-	" SESSION_DELETION_STATE_COMPLETED\x10\x032\xcc\b\n" +
+	" SESSION_DELETION_STATE_COMPLETED\x10\x03*\xae\x01\n" +
+	"\x1cSearchMessagesResponseFormat\x12/\n" +
+	"+SEARCH_MESSAGES_RESPONSE_FORMAT_UNSPECIFIED\x10\x00\x123\n" +
+	"/SEARCH_MESSAGES_RESPONSE_FORMAT_LEGACY_MESSAGES\x10\x01\x12(\n" +
+	"$SEARCH_MESSAGES_RESPONSE_FORMAT_HITS\x10\x022\xcc\b\n" +
 	"\x0eSessionService\x12R\n" +
 	"\rCreateSession\x12\x1f.turing.v1.CreateSessionRequest\x1a .turing.v1.CreateSessionResponse\x12O\n" +
 	"\fListSessions\x12\x1e.turing.v1.ListSessionsRequest\x1a\x1f.turing.v1.ListSessionsResponse\x12>\n" +
@@ -1672,98 +1820,103 @@ func file_turing_v1_sessions_proto_rawDescGZIP() []byte {
 	return file_turing_v1_sessions_proto_rawDescData
 }
 
-var file_turing_v1_sessions_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_turing_v1_sessions_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+var file_turing_v1_sessions_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_turing_v1_sessions_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
 var file_turing_v1_sessions_proto_goTypes = []any{
 	(SessionListFilter)(0),                      // 0: turing.v1.SessionListFilter
 	(SessionDeletionState)(0),                   // 1: turing.v1.SessionDeletionState
-	(*Session)(nil),                             // 2: turing.v1.Session
-	(*CreateSessionRequest)(nil),                // 3: turing.v1.CreateSessionRequest
-	(*CreateSessionResponse)(nil),               // 4: turing.v1.CreateSessionResponse
-	(*ListSessionsRequest)(nil),                 // 5: turing.v1.ListSessionsRequest
-	(*ListSessionsResponse)(nil),                // 6: turing.v1.ListSessionsResponse
-	(*GetSessionRequest)(nil),                   // 7: turing.v1.GetSessionRequest
-	(*DeleteSessionRequest)(nil),                // 8: turing.v1.DeleteSessionRequest
-	(*SessionDeletionReceipt)(nil),              // 9: turing.v1.SessionDeletionReceipt
-	(*ListSessionDeletionReceiptsRequest)(nil),  // 10: turing.v1.ListSessionDeletionReceiptsRequest
-	(*ListSessionDeletionReceiptsResponse)(nil), // 11: turing.v1.ListSessionDeletionReceiptsResponse
-	(*DeleteSessionResponse)(nil),               // 12: turing.v1.DeleteSessionResponse
-	(*RenameSessionRequest)(nil),                // 13: turing.v1.RenameSessionRequest
-	(*RenameSessionResponse)(nil),               // 14: turing.v1.RenameSessionResponse
-	(*ArchiveSessionRequest)(nil),               // 15: turing.v1.ArchiveSessionRequest
-	(*ArchiveSessionResponse)(nil),              // 16: turing.v1.ArchiveSessionResponse
-	(*RestoreSessionRequest)(nil),               // 17: turing.v1.RestoreSessionRequest
-	(*RestoreSessionResponse)(nil),              // 18: turing.v1.RestoreSessionResponse
-	(*ListMessagesRequest)(nil),                 // 19: turing.v1.ListMessagesRequest
-	(*ListMessagesResponse)(nil),                // 20: turing.v1.ListMessagesResponse
-	(*SearchMessagesRequest)(nil),               // 21: turing.v1.SearchMessagesRequest
-	(*SearchMessagesResponse)(nil),              // 22: turing.v1.SearchMessagesResponse
-	(*GetConfigRequest)(nil),                    // 23: turing.v1.GetConfigRequest
-	(*GetConfigResponse)(nil),                   // 24: turing.v1.GetConfigResponse
-	(*ListAgentsRequest)(nil),                   // 25: turing.v1.ListAgentsRequest
-	(*ListAgentsResponse)(nil),                  // 26: turing.v1.ListAgentsResponse
-	(*ToolDescriptor)(nil),                      // 27: turing.v1.ToolDescriptor
-	(*ListToolsRequest)(nil),                    // 28: turing.v1.ListToolsRequest
-	(*ListToolsResponse)(nil),                   // 29: turing.v1.ListToolsResponse
-	(*timestamppb.Timestamp)(nil),               // 30: google.protobuf.Timestamp
-	(*PageRequest)(nil),                         // 31: turing.v1.PageRequest
-	(*PageResponse)(nil),                        // 32: turing.v1.PageResponse
-	(*Message)(nil),                             // 33: turing.v1.Message
-	(*ProviderConfig)(nil),                      // 34: turing.v1.ProviderConfig
-	(*AgentDescriptor)(nil),                     // 35: turing.v1.AgentDescriptor
-	(ToolPolicy)(0),                             // 36: turing.v1.ToolPolicy
+	(SearchMessagesResponseFormat)(0),           // 2: turing.v1.SearchMessagesResponseFormat
+	(*Session)(nil),                             // 3: turing.v1.Session
+	(*CreateSessionRequest)(nil),                // 4: turing.v1.CreateSessionRequest
+	(*CreateSessionResponse)(nil),               // 5: turing.v1.CreateSessionResponse
+	(*ListSessionsRequest)(nil),                 // 6: turing.v1.ListSessionsRequest
+	(*ListSessionsResponse)(nil),                // 7: turing.v1.ListSessionsResponse
+	(*GetSessionRequest)(nil),                   // 8: turing.v1.GetSessionRequest
+	(*DeleteSessionRequest)(nil),                // 9: turing.v1.DeleteSessionRequest
+	(*SessionDeletionReceipt)(nil),              // 10: turing.v1.SessionDeletionReceipt
+	(*ListSessionDeletionReceiptsRequest)(nil),  // 11: turing.v1.ListSessionDeletionReceiptsRequest
+	(*ListSessionDeletionReceiptsResponse)(nil), // 12: turing.v1.ListSessionDeletionReceiptsResponse
+	(*DeleteSessionResponse)(nil),               // 13: turing.v1.DeleteSessionResponse
+	(*RenameSessionRequest)(nil),                // 14: turing.v1.RenameSessionRequest
+	(*RenameSessionResponse)(nil),               // 15: turing.v1.RenameSessionResponse
+	(*ArchiveSessionRequest)(nil),               // 16: turing.v1.ArchiveSessionRequest
+	(*ArchiveSessionResponse)(nil),              // 17: turing.v1.ArchiveSessionResponse
+	(*RestoreSessionRequest)(nil),               // 18: turing.v1.RestoreSessionRequest
+	(*RestoreSessionResponse)(nil),              // 19: turing.v1.RestoreSessionResponse
+	(*ListMessagesRequest)(nil),                 // 20: turing.v1.ListMessagesRequest
+	(*ListMessagesResponse)(nil),                // 21: turing.v1.ListMessagesResponse
+	(*SearchHit)(nil),                           // 22: turing.v1.SearchHit
+	(*SearchMessagesRequest)(nil),               // 23: turing.v1.SearchMessagesRequest
+	(*SearchMessagesResponse)(nil),              // 24: turing.v1.SearchMessagesResponse
+	(*GetConfigRequest)(nil),                    // 25: turing.v1.GetConfigRequest
+	(*GetConfigResponse)(nil),                   // 26: turing.v1.GetConfigResponse
+	(*ListAgentsRequest)(nil),                   // 27: turing.v1.ListAgentsRequest
+	(*ListAgentsResponse)(nil),                  // 28: turing.v1.ListAgentsResponse
+	(*ToolDescriptor)(nil),                      // 29: turing.v1.ToolDescriptor
+	(*ListToolsRequest)(nil),                    // 30: turing.v1.ListToolsRequest
+	(*ListToolsResponse)(nil),                   // 31: turing.v1.ListToolsResponse
+	(*timestamppb.Timestamp)(nil),               // 32: google.protobuf.Timestamp
+	(*PageRequest)(nil),                         // 33: turing.v1.PageRequest
+	(*PageResponse)(nil),                        // 34: turing.v1.PageResponse
+	(*Message)(nil),                             // 35: turing.v1.Message
+	(*ProviderConfig)(nil),                      // 36: turing.v1.ProviderConfig
+	(*AgentDescriptor)(nil),                     // 37: turing.v1.AgentDescriptor
+	(ToolPolicy)(0),                             // 38: turing.v1.ToolPolicy
 }
 var file_turing_v1_sessions_proto_depIdxs = []int32{
-	30, // 0: turing.v1.Session.created_at:type_name -> google.protobuf.Timestamp
-	30, // 1: turing.v1.Session.updated_at:type_name -> google.protobuf.Timestamp
-	30, // 2: turing.v1.CreateSessionResponse.created_at:type_name -> google.protobuf.Timestamp
-	31, // 3: turing.v1.ListSessionsRequest.page:type_name -> turing.v1.PageRequest
+	32, // 0: turing.v1.Session.created_at:type_name -> google.protobuf.Timestamp
+	32, // 1: turing.v1.Session.updated_at:type_name -> google.protobuf.Timestamp
+	32, // 2: turing.v1.CreateSessionResponse.created_at:type_name -> google.protobuf.Timestamp
+	33, // 3: turing.v1.ListSessionsRequest.page:type_name -> turing.v1.PageRequest
 	0,  // 4: turing.v1.ListSessionsRequest.filter:type_name -> turing.v1.SessionListFilter
-	2,  // 5: turing.v1.ListSessionsResponse.sessions:type_name -> turing.v1.Session
-	32, // 6: turing.v1.ListSessionsResponse.page:type_name -> turing.v1.PageResponse
+	3,  // 5: turing.v1.ListSessionsResponse.sessions:type_name -> turing.v1.Session
+	34, // 6: turing.v1.ListSessionsResponse.page:type_name -> turing.v1.PageResponse
 	1,  // 7: turing.v1.SessionDeletionReceipt.state:type_name -> turing.v1.SessionDeletionState
-	9,  // 8: turing.v1.ListSessionDeletionReceiptsResponse.deletions:type_name -> turing.v1.SessionDeletionReceipt
-	9,  // 9: turing.v1.DeleteSessionResponse.deletion:type_name -> turing.v1.SessionDeletionReceipt
-	2,  // 10: turing.v1.RenameSessionResponse.session:type_name -> turing.v1.Session
-	2,  // 11: turing.v1.ArchiveSessionResponse.session:type_name -> turing.v1.Session
-	2,  // 12: turing.v1.RestoreSessionResponse.session:type_name -> turing.v1.Session
-	33, // 13: turing.v1.ListMessagesResponse.messages:type_name -> turing.v1.Message
-	33, // 14: turing.v1.SearchMessagesResponse.messages:type_name -> turing.v1.Message
-	34, // 15: turing.v1.GetConfigResponse.providers:type_name -> turing.v1.ProviderConfig
-	35, // 16: turing.v1.ListAgentsResponse.agents:type_name -> turing.v1.AgentDescriptor
-	36, // 17: turing.v1.ToolDescriptor.policy:type_name -> turing.v1.ToolPolicy
-	27, // 18: turing.v1.ListToolsResponse.tools:type_name -> turing.v1.ToolDescriptor
-	3,  // 19: turing.v1.SessionService.CreateSession:input_type -> turing.v1.CreateSessionRequest
-	5,  // 20: turing.v1.SessionService.ListSessions:input_type -> turing.v1.ListSessionsRequest
-	7,  // 21: turing.v1.SessionService.GetSession:input_type -> turing.v1.GetSessionRequest
-	8,  // 22: turing.v1.SessionService.DeleteSession:input_type -> turing.v1.DeleteSessionRequest
-	10, // 23: turing.v1.SessionService.ListSessionDeletionReceipts:input_type -> turing.v1.ListSessionDeletionReceiptsRequest
-	19, // 24: turing.v1.SessionService.ListMessages:input_type -> turing.v1.ListMessagesRequest
-	21, // 25: turing.v1.SessionService.SearchMessages:input_type -> turing.v1.SearchMessagesRequest
-	23, // 26: turing.v1.SessionService.GetConfig:input_type -> turing.v1.GetConfigRequest
-	25, // 27: turing.v1.SessionService.ListAgents:input_type -> turing.v1.ListAgentsRequest
-	28, // 28: turing.v1.SessionService.ListTools:input_type -> turing.v1.ListToolsRequest
-	13, // 29: turing.v1.SessionService.RenameSession:input_type -> turing.v1.RenameSessionRequest
-	15, // 30: turing.v1.SessionService.ArchiveSession:input_type -> turing.v1.ArchiveSessionRequest
-	17, // 31: turing.v1.SessionService.RestoreSession:input_type -> turing.v1.RestoreSessionRequest
-	4,  // 32: turing.v1.SessionService.CreateSession:output_type -> turing.v1.CreateSessionResponse
-	6,  // 33: turing.v1.SessionService.ListSessions:output_type -> turing.v1.ListSessionsResponse
-	2,  // 34: turing.v1.SessionService.GetSession:output_type -> turing.v1.Session
-	12, // 35: turing.v1.SessionService.DeleteSession:output_type -> turing.v1.DeleteSessionResponse
-	11, // 36: turing.v1.SessionService.ListSessionDeletionReceipts:output_type -> turing.v1.ListSessionDeletionReceiptsResponse
-	20, // 37: turing.v1.SessionService.ListMessages:output_type -> turing.v1.ListMessagesResponse
-	22, // 38: turing.v1.SessionService.SearchMessages:output_type -> turing.v1.SearchMessagesResponse
-	24, // 39: turing.v1.SessionService.GetConfig:output_type -> turing.v1.GetConfigResponse
-	26, // 40: turing.v1.SessionService.ListAgents:output_type -> turing.v1.ListAgentsResponse
-	29, // 41: turing.v1.SessionService.ListTools:output_type -> turing.v1.ListToolsResponse
-	14, // 42: turing.v1.SessionService.RenameSession:output_type -> turing.v1.RenameSessionResponse
-	16, // 43: turing.v1.SessionService.ArchiveSession:output_type -> turing.v1.ArchiveSessionResponse
-	18, // 44: turing.v1.SessionService.RestoreSession:output_type -> turing.v1.RestoreSessionResponse
-	32, // [32:45] is the sub-list for method output_type
-	19, // [19:32] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	10, // 8: turing.v1.ListSessionDeletionReceiptsResponse.deletions:type_name -> turing.v1.SessionDeletionReceipt
+	10, // 9: turing.v1.DeleteSessionResponse.deletion:type_name -> turing.v1.SessionDeletionReceipt
+	3,  // 10: turing.v1.RenameSessionResponse.session:type_name -> turing.v1.Session
+	3,  // 11: turing.v1.ArchiveSessionResponse.session:type_name -> turing.v1.Session
+	3,  // 12: turing.v1.RestoreSessionResponse.session:type_name -> turing.v1.Session
+	35, // 13: turing.v1.ListMessagesResponse.messages:type_name -> turing.v1.Message
+	35, // 14: turing.v1.SearchHit.message:type_name -> turing.v1.Message
+	2,  // 15: turing.v1.SearchMessagesRequest.response_format:type_name -> turing.v1.SearchMessagesResponseFormat
+	35, // 16: turing.v1.SearchMessagesResponse.messages:type_name -> turing.v1.Message
+	22, // 17: turing.v1.SearchMessagesResponse.hits:type_name -> turing.v1.SearchHit
+	36, // 18: turing.v1.GetConfigResponse.providers:type_name -> turing.v1.ProviderConfig
+	37, // 19: turing.v1.ListAgentsResponse.agents:type_name -> turing.v1.AgentDescriptor
+	38, // 20: turing.v1.ToolDescriptor.policy:type_name -> turing.v1.ToolPolicy
+	29, // 21: turing.v1.ListToolsResponse.tools:type_name -> turing.v1.ToolDescriptor
+	4,  // 22: turing.v1.SessionService.CreateSession:input_type -> turing.v1.CreateSessionRequest
+	6,  // 23: turing.v1.SessionService.ListSessions:input_type -> turing.v1.ListSessionsRequest
+	8,  // 24: turing.v1.SessionService.GetSession:input_type -> turing.v1.GetSessionRequest
+	9,  // 25: turing.v1.SessionService.DeleteSession:input_type -> turing.v1.DeleteSessionRequest
+	11, // 26: turing.v1.SessionService.ListSessionDeletionReceipts:input_type -> turing.v1.ListSessionDeletionReceiptsRequest
+	20, // 27: turing.v1.SessionService.ListMessages:input_type -> turing.v1.ListMessagesRequest
+	23, // 28: turing.v1.SessionService.SearchMessages:input_type -> turing.v1.SearchMessagesRequest
+	25, // 29: turing.v1.SessionService.GetConfig:input_type -> turing.v1.GetConfigRequest
+	27, // 30: turing.v1.SessionService.ListAgents:input_type -> turing.v1.ListAgentsRequest
+	30, // 31: turing.v1.SessionService.ListTools:input_type -> turing.v1.ListToolsRequest
+	14, // 32: turing.v1.SessionService.RenameSession:input_type -> turing.v1.RenameSessionRequest
+	16, // 33: turing.v1.SessionService.ArchiveSession:input_type -> turing.v1.ArchiveSessionRequest
+	18, // 34: turing.v1.SessionService.RestoreSession:input_type -> turing.v1.RestoreSessionRequest
+	5,  // 35: turing.v1.SessionService.CreateSession:output_type -> turing.v1.CreateSessionResponse
+	7,  // 36: turing.v1.SessionService.ListSessions:output_type -> turing.v1.ListSessionsResponse
+	3,  // 37: turing.v1.SessionService.GetSession:output_type -> turing.v1.Session
+	13, // 38: turing.v1.SessionService.DeleteSession:output_type -> turing.v1.DeleteSessionResponse
+	12, // 39: turing.v1.SessionService.ListSessionDeletionReceipts:output_type -> turing.v1.ListSessionDeletionReceiptsResponse
+	21, // 40: turing.v1.SessionService.ListMessages:output_type -> turing.v1.ListMessagesResponse
+	24, // 41: turing.v1.SessionService.SearchMessages:output_type -> turing.v1.SearchMessagesResponse
+	26, // 42: turing.v1.SessionService.GetConfig:output_type -> turing.v1.GetConfigResponse
+	28, // 43: turing.v1.SessionService.ListAgents:output_type -> turing.v1.ListAgentsResponse
+	31, // 44: turing.v1.SessionService.ListTools:output_type -> turing.v1.ListToolsResponse
+	15, // 45: turing.v1.SessionService.RenameSession:output_type -> turing.v1.RenameSessionResponse
+	17, // 46: turing.v1.SessionService.ArchiveSession:output_type -> turing.v1.ArchiveSessionResponse
+	19, // 47: turing.v1.SessionService.RestoreSession:output_type -> turing.v1.RestoreSessionResponse
+	35, // [35:48] is the sub-list for method output_type
+	22, // [22:35] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_sessions_proto_init() }
@@ -1777,8 +1930,8 @@ func file_turing_v1_sessions_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_sessions_proto_rawDesc), len(file_turing_v1_sessions_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   28,
+			NumEnums:      3,
+			NumMessages:   29,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

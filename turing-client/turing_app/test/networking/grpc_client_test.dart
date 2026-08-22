@@ -213,34 +213,43 @@ void main() {
   });
 
   test(
-    'searchMessages preserves the raw query, empty session filter, limit, and bounded deadline',
+    'searchMessages requests hit format and preserves the raw query, empty session filter, limit, and bounded deadline',
     () async {
       final service = _CapturingSessionService();
-      final server = grpc.Server.create(services: [service]);
-      await server.serve(address: '127.0.0.1', port: 0);
-      final channel = grpc.ClientChannel(
-        '127.0.0.1',
-        port: server.port!,
-        options: const grpc.ChannelOptions(
-          credentials: grpc.ChannelCredentials.insecure(),
-        ),
+      service.searchMessagesResponse = sessionpb.SearchMessagesResponse(
+        hits: [
+          sessionpb.SearchHit(
+            message: commonpb.Message(
+              messageId: 'message-42',
+              sessionId: 'session-42',
+              runId: 'run-42',
+              role: commonpb.MessageRole.MESSAGE_ROLE_ASSISTANT,
+              content: 'hello  there',
+              sequence: Int64(99),
+              createdAt: timestamppb.Timestamp.fromDateTime(
+                DateTime.utc(2026, 8, 13, 12, 35, 56),
+              ),
+            ),
+            score: 0.5,
+            snippet: 'hello  there',
+          ),
+        ],
       );
-      addTearDown(() async {
-        await channel.shutdown();
-        await server.shutdown();
-      });
-      final api = TuringGrpcApi(
-        baseUrl: 'http://127.0.0.1:${server.port}',
-        apiKey: 'client-key',
-        channel: channel,
-      );
+      final api = await _startSessionApi(service);
 
       final startedAt = DateTime.now();
       final hits = await api.searchMessages(query: 'hello  there', limit: 25);
 
+      expect(service.searchMessagesCallCount, 1);
       expect(service.searchMessagesRequest?.query, 'hello  there');
       expect(service.searchMessagesRequest?.sessionId, '');
       expect(service.searchMessagesRequest?.limit, 25);
+      expect(
+        service.searchMessagesRequest?.responseFormat,
+        sessionpb
+            .SearchMessagesResponseFormat
+            .SEARCH_MESSAGES_RESPONSE_FORMAT_HITS,
+      );
       expect(service.searchMessagesDeadline, isNotNull);
       expect(service.searchMessagesDeadline!.isAfter(startedAt), isTrue);
       expect(
@@ -249,6 +258,8 @@ void main() {
       );
       expect(hits, hasLength(1));
       expect(hits.single.sessionId, 'session-42');
+      expect(hits.single.score, 0.5);
+      expect(hits.single.snippet, 'hello  there');
       expect(hits.single.message.messageId, 'message-42');
       expect(hits.single.message.runId, 'run-42');
       expect(hits.single.message.role, 'assistant');
@@ -260,6 +271,332 @@ void main() {
       );
     },
   );
+
+  // The server ranks hits and the client must render that exact order: it may
+  // not drop, reorder, or reverse rows on the way to the search list.
+  test(
+    'searchMessages preserves server hit order across every canonical hit',
+    () async {
+      final service = _CapturingSessionService();
+      service.searchMessagesResponse = sessionpb.SearchMessagesResponse(
+        hits: [
+          sessionpb.SearchHit(
+            message: commonpb.Message(
+              messageId: 'message-top',
+              sessionId: 'session-a',
+              role: commonpb.MessageRole.MESSAGE_ROLE_USER,
+              content: 'top  needle',
+              sequence: Int64(1),
+              createdAt: timestamppb.Timestamp.fromDateTime(
+                DateTime.utc(2026, 8, 13, 12, 35, 56),
+              ),
+            ),
+            score: 0.91,
+            snippet: 'top  needle snippet',
+          ),
+          sessionpb.SearchHit(
+            message: commonpb.Message(
+              messageId: 'message-middle',
+              sessionId: 'session-b',
+              role: commonpb.MessageRole.MESSAGE_ROLE_ASSISTANT,
+              content: 'middle needle',
+              sequence: Int64(2),
+              createdAt: timestamppb.Timestamp.fromDateTime(
+                DateTime.utc(2026, 8, 13, 12, 36, 56),
+              ),
+            ),
+            score: 0.52,
+            snippet: 'middle needle snippet',
+          ),
+          sessionpb.SearchHit(
+            message: commonpb.Message(
+              messageId: 'message-bottom',
+              sessionId: 'session-c',
+              role: commonpb.MessageRole.MESSAGE_ROLE_USER,
+              content: 'bottom needle',
+              sequence: Int64(3),
+              createdAt: timestamppb.Timestamp.fromDateTime(
+                DateTime.utc(2026, 8, 13, 12, 37, 56),
+              ),
+            ),
+            score: 0.13,
+            snippet: 'bottom needle snippet',
+          ),
+        ],
+      );
+      final api = await _startSessionApi(service);
+
+      final hits = await api.searchMessages(query: 'needle');
+
+      expect(service.searchMessagesCallCount, 1);
+      expect(hits, hasLength(3));
+      expect(hits.map((hit) => hit.message.messageId).toList(), <String>[
+        'message-top',
+        'message-middle',
+        'message-bottom',
+      ]);
+      expect(hits.map((hit) => hit.sessionId).toList(), <String>[
+        'session-a',
+        'session-b',
+        'session-c',
+      ]);
+      expect(hits.map((hit) => hit.score).toList(), <double>[0.91, 0.52, 0.13]);
+      expect(hits.map((hit) => hit.snippet).toList(), <String>[
+        'top  needle snippet',
+        'middle needle snippet',
+        'bottom needle snippet',
+      ]);
+      expect(hits.map((hit) => hit.message.content).toList(), <String>[
+        'top  needle',
+        'middle needle',
+        'bottom needle',
+      ]);
+    },
+  );
+
+  // A nonconforming server may echo the same result in both arrays. Hits win
+  // outright: concatenating would double every row in the search list.
+  test('searchMessages prefers hits and ignores duplicate messages', () async {
+    final duplicated = commonpb.Message(
+      messageId: 'message-42',
+      sessionId: 'session-42',
+      role: commonpb.MessageRole.MESSAGE_ROLE_ASSISTANT,
+      content: 'hello  there',
+      sequence: Int64(99),
+      createdAt: timestamppb.Timestamp.fromDateTime(
+        DateTime.utc(2026, 8, 13, 12, 35, 56),
+      ),
+    );
+    final service = _CapturingSessionService();
+    service.searchMessagesResponse = sessionpb.SearchMessagesResponse(
+      hits: [
+        sessionpb.SearchHit(
+          message: duplicated,
+          score: 0.25,
+          snippet: 'hello  there',
+        ),
+      ],
+      messages: [
+        duplicated,
+        commonpb.Message(
+          messageId: 'message-43',
+          sessionId: 'session-43',
+          role: commonpb.MessageRole.MESSAGE_ROLE_USER,
+          content: 'stale legacy row',
+          sequence: Int64(100),
+          createdAt: timestamppb.Timestamp.fromDateTime(
+            DateTime.utc(2026, 8, 13, 12, 36, 56),
+          ),
+        ),
+      ],
+    );
+    final api = await _startSessionApi(service);
+
+    final hits = await api.searchMessages(query: 'hello  there');
+
+    expect(service.searchMessagesCallCount, 1);
+    expect(hits, hasLength(1));
+    expect(hits.single.message.messageId, 'message-42');
+    expect(hits.single.score, 0.25);
+    expect(hits.single.snippet, 'hello  there');
+  });
+
+  test(
+    'searchMessages maps an old-server messages-only response through legacy fallback',
+    () async {
+      final service = _CapturingSessionService();
+      service.searchMessagesResponse = sessionpb.SearchMessagesResponse(
+        messages: [
+          commonpb.Message(
+            messageId: 'message-1',
+            sessionId: 'session-1',
+            runId: 'run-1',
+            role: commonpb.MessageRole.MESSAGE_ROLE_USER,
+            content: 'first  legacy',
+            sequence: Int64(1),
+            createdAt: timestamppb.Timestamp.fromDateTime(
+              DateTime.utc(2026, 8, 13, 12, 30),
+            ),
+          ),
+          commonpb.Message(
+            messageId: 'message-2',
+            sessionId: 'session-2',
+            role: commonpb.MessageRole.MESSAGE_ROLE_ASSISTANT,
+            content: 'second legacy',
+            sequence: Int64(2),
+            createdAt: timestamppb.Timestamp.fromDateTime(
+              DateTime.utc(2026, 8, 13, 12, 31),
+            ),
+          ),
+        ],
+      );
+      final api = await _startSessionApi(service);
+
+      final hits = await api.searchMessages(query: 'legacy');
+
+      expect(service.searchMessagesCallCount, 1);
+      expect(hits.map((hit) => hit.message.messageId).toList(), <String>[
+        'message-1',
+        'message-2',
+      ]);
+      expect(hits.map((hit) => hit.sessionId).toList(), <String>[
+        'session-1',
+        'session-2',
+      ]);
+      expect(hits.every((hit) => hit.score == null), isTrue);
+      expect(hits.every((hit) => hit.snippet == null), isTrue);
+      expect(hits.first.message.runId, 'run-1');
+      expect(hits.first.message.role, 'user');
+      expect(hits.first.message.content, 'first  legacy');
+      expect(hits.first.message.sequence, 1);
+      expect(hits.first.message.createdAt, DateTime.utc(2026, 8, 13, 12, 30));
+      expect(hits.last.message.runId, isNull);
+      expect(hits.last.message.role, 'assistant');
+      expect(hits.last.message.content, 'second legacy');
+      expect(hits.last.message.sequence, 2);
+      expect(hits.last.message.createdAt, DateTime.utc(2026, 8, 13, 12, 31));
+    },
+  );
+
+  test('searchMessages returns empty when both arrays are empty', () async {
+    final service = _CapturingSessionService();
+    service.searchMessagesResponse = sessionpb.SearchMessagesResponse();
+    final api = await _startSessionApi(service);
+
+    final hits = await api.searchMessages(query: 'no  results');
+
+    expect(service.searchMessagesCallCount, 1);
+    expect(hits, isEmpty);
+  });
+
+  // Callers group and sort hits without owning the list, so both branches must
+  // hand back a fixed-length result rather than a mutable buffer.
+  test(
+    'searchMessages returns fixed-length lists from both branches',
+    () async {
+      final service = _CapturingSessionService();
+      final message = commonpb.Message(
+        messageId: 'message-42',
+        sessionId: 'session-42',
+        role: commonpb.MessageRole.MESSAGE_ROLE_USER,
+        content: 'needle',
+        sequence: Int64(1),
+        createdAt: timestamppb.Timestamp.fromDateTime(
+          DateTime.utc(2026, 8, 13, 12, 35, 56),
+        ),
+      );
+      service.searchMessagesResponse = sessionpb.SearchMessagesResponse(
+        hits: [
+          sessionpb.SearchHit(message: message, score: 0.5, snippet: 'needle'),
+        ],
+      );
+      final api = await _startSessionApi(service);
+
+      final canonical = await api.searchMessages(query: 'needle');
+      expect(
+        () => canonical.add(canonical.single),
+        throwsA(isA<UnsupportedError>()),
+      );
+
+      service.searchMessagesResponse = sessionpb.SearchMessagesResponse(
+        messages: [message],
+      );
+      final legacy = await api.searchMessages(query: 'needle');
+      expect(() => legacy.add(legacy.single), throwsA(isA<UnsupportedError>()));
+    },
+  );
+
+  // The strict mapper's rejection has to reach the caller through the network
+  // path too, instead of being softened into a partial or legacy result.
+  test('searchMessages propagates a malformed canonical hit', () async {
+    final service = _CapturingSessionService();
+    service.searchMessagesResponse = sessionpb.SearchMessagesResponse(
+      hits: [
+        sessionpb.SearchHit(
+          message: commonpb.Message(
+            messageId: 'message-42',
+            sessionId: 'session-42',
+            role: commonpb.MessageRole.MESSAGE_ROLE_USER,
+            content: 'needle',
+            sequence: Int64(1),
+            createdAt: timestamppb.Timestamp.fromDateTime(
+              DateTime.utc(2026, 8, 13, 12, 35, 56),
+            ),
+          ),
+          score: 0.5,
+          snippet: '',
+        ),
+      ],
+      messages: [
+        commonpb.Message(
+          messageId: 'message-43',
+          sessionId: 'session-43',
+          role: commonpb.MessageRole.MESSAGE_ROLE_USER,
+          content: 'legacy fallback that must not be used',
+          sequence: Int64(2),
+          createdAt: timestamppb.Timestamp.fromDateTime(
+            DateTime.utc(2026, 8, 13, 12, 36, 56),
+          ),
+        ),
+      ],
+    );
+    final api = await _startSessionApi(service);
+
+    await expectLater(
+      api.searchMessages(query: 'needle'),
+      throwsA(isA<FormatException>()),
+    );
+    expect(service.searchMessagesCallCount, 1);
+  });
+
+  // A failed hit-format call must surface as a failure. Retrying in legacy
+  // format would double server load on overload and hide the real status.
+  group('searchMessages propagates rpc failures without a legacy retry', () {
+    final failures = <String, grpc.GrpcError>{
+      'internal': const grpc.GrpcError.internal('boom'),
+      'resource exhausted': const grpc.GrpcError.resourceExhausted('slow down'),
+      'deadline exceeded': const grpc.GrpcError.deadlineExceeded('too late'),
+    };
+
+    failures.forEach((name, failure) {
+      test(name, () async {
+        final service = _CapturingSessionService();
+        service.searchMessagesError = failure;
+        final api = await _startSessionApi(service);
+
+        await expectLater(
+          api.searchMessages(query: 'boom'),
+          throwsA(
+            isA<grpc.GrpcError>().having(
+              (error) => error.code,
+              'code',
+              failure.code,
+            ),
+          ),
+        );
+
+        expect(service.searchMessagesCallCount, 1);
+        expect(
+          service.searchMessagesRequest?.responseFormat,
+          sessionpb
+              .SearchMessagesResponseFormat
+              .SEARCH_MESSAGES_RESPONSE_FORMAT_HITS,
+        );
+      });
+    });
+  });
+
+  test('searchMessages sends the default limit when omitted', () async {
+    final service = _CapturingSessionService();
+    service.searchMessagesResponse = sessionpb.SearchMessagesResponse();
+    final api = await _startSessionApi(service);
+
+    await api.searchMessages(query: 'default limit');
+
+    expect(service.searchMessagesRequest?.limit, 50);
+    expect(service.searchMessagesRequest?.query, 'default limit');
+    expect(service.searchMessagesRequest?.sessionId, '');
+  });
 
   test(
     'listEvents preserves latest sequence with a bounded deadline',
@@ -736,6 +1073,29 @@ void main() {
   );
 }
 
+/// Starts an in-process session server bound to a client for one test and
+/// tears both down afterwards.
+Future<TuringGrpcApi> _startSessionApi(_CapturingSessionService service) async {
+  final server = grpc.Server.create(services: [service]);
+  await server.serve(address: '127.0.0.1', port: 0);
+  final channel = grpc.ClientChannel(
+    '127.0.0.1',
+    port: server.port!,
+    options: const grpc.ChannelOptions(
+      credentials: grpc.ChannelCredentials.insecure(),
+    ),
+  );
+  addTearDown(() async {
+    await channel.shutdown();
+    await server.shutdown();
+  });
+  return TuringGrpcApi(
+    baseUrl: 'http://127.0.0.1:${server.port}',
+    apiKey: 'client-key',
+    channel: channel,
+  );
+}
+
 class _CapturingSessionService extends sessiongrpc.SessionServiceBase {
   sessionpb.GetSessionRequest? getSessionRequest;
   DateTime? getSessionDeadline;
@@ -759,6 +1119,10 @@ class _CapturingSessionService extends sessiongrpc.SessionServiceBase {
   DateTime? listMessagesDeadline;
   sessionpb.SearchMessagesRequest? searchMessagesRequest;
   DateTime? searchMessagesDeadline;
+  int searchMessagesCallCount = 0;
+  grpc.GrpcError? searchMessagesError;
+  sessionpb.SearchMessagesResponse searchMessagesResponse =
+      sessionpb.SearchMessagesResponse();
 
   @override
   Future<sessionpb.Session> getSession(
@@ -861,21 +1225,12 @@ class _CapturingSessionService extends sessiongrpc.SessionServiceBase {
   ) async {
     searchMessagesRequest = request;
     searchMessagesDeadline = call.deadline;
-    return sessionpb.SearchMessagesResponse(
-      messages: [
-        commonpb.Message(
-          messageId: 'message-42',
-          sessionId: 'session-42',
-          runId: 'run-42',
-          role: commonpb.MessageRole.MESSAGE_ROLE_ASSISTANT,
-          content: 'hello  there',
-          sequence: Int64(99),
-          createdAt: timestamppb.Timestamp.fromDateTime(
-            DateTime.utc(2026, 8, 13, 12, 35, 56),
-          ),
-        ),
-      ],
-    );
+    searchMessagesCallCount++;
+    final failure = searchMessagesError;
+    if (failure != null) {
+      throw failure;
+    }
+    return searchMessagesResponse;
   }
 
   @override

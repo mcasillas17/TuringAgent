@@ -103,6 +103,13 @@ func TestSearchMessagesForwardsScopeExclusionAndAuth(t *testing.T) {
 	if fake.gotReq.GetLimit() != 7 {
 		t.Errorf("Limit = %d, want 7", fake.gotReq.GetLimit())
 	}
+	// The runtime asks for the legacy projection by saying nothing. The scored
+	// hit format is opt-in, so the zero value has to stay the format recall
+	// already knows how to read.
+	if fake.gotReq.GetResponseFormat() !=
+		turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_UNSPECIFIED {
+		t.Errorf("ResponseFormat = %v, want unspecified", fake.gotReq.GetResponseFormat())
+	}
 	md, ok := metadata.FromOutgoingContext(fake.gotCtx)
 	if !ok || len(md.Get("authorization")) != 1 || md.Get("authorization")[0] != "Bearer secret-token" {
 		t.Errorf("authorization metadata = %v, want [Bearer secret-token]", md.Get("authorization"))

@@ -437,6 +437,64 @@ func (r *Repository) ListMessagesBefore(ctx context.Context, sessionID, beforeMe
 	return scanHistoryPage(rows)
 }
 
+// searchMessagesInput is the caller-supplied part of a message search. Both
+// projections take exactly these knobs; anything else would be a difference in
+// what the two searches are allowed to see.
+type searchMessagesInput struct {
+	sessionID         string
+	excludedSessionID string
+	query             string
+	limit             int
+}
+
+// searchMessagesPredicate builds the FROM/WHERE/ORDER/LIMIT fragment shared by
+// the legacy message projection and the scored hit projection, together with
+// its bound arguments in placeholder order.
+//
+// Sharing it is the point: lifecycle visibility, literal-phrase handling, scope,
+// exclusion, ordering, and the limit domain are search's authorization and
+// determinism rules, and two copies of them could drift apart silently. Each
+// projection only chooses its own SELECT list and prepends its own arguments,
+// so the returned arguments always come last in that order.
+//
+// The false result means the query has no FTS5 token at all. That is a
+// successful empty search, not an error, and callers return their own empty
+// result rather than executing a statement that cannot match anything.
+func searchMessagesPredicate(input searchMessagesInput) (string, []any, bool) {
+	limit := input.limit
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	query := strings.ReplaceAll(input.query, "\x00", " ")
+	if !hasFTS5Token(query) {
+		return "", nil, false
+	}
+
+	// The status predicate is redundant with today's schema CHECK and is stated
+	// anyway: a future lifecycle status must decide explicitly whether its
+	// conversations are searchable instead of becoming searchable by default.
+	predicate := `
+		FROM messages_fts
+		JOIN messages m ON m.rowid = messages_fts.rowid
+		JOIN sessions s
+		  ON s.id = m.session_id
+		 AND s.deletion_state = 'active'
+		 AND s.status IN ('active', 'archived')
+		WHERE messages_fts MATCH ?`
+	args := []any{fts5Phrase(query)}
+	if input.sessionID != "" {
+		predicate += ` AND m.session_id = ?`
+		args = append(args, input.sessionID)
+	}
+	if input.excludedSessionID != "" {
+		predicate += ` AND m.session_id <> ?`
+		args = append(args, input.excludedSessionID)
+	}
+	predicate += ` ORDER BY bm25(messages_fts), m.id LIMIT ?`
+	args = append(args, limit)
+	return predicate, args, true
+}
+
 func (r *Repository) SearchMessages(
 	ctx context.Context,
 	sessionID string,
@@ -444,31 +502,19 @@ func (r *Repository) SearchMessages(
 	query string,
 	limit int,
 ) ([]Message, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 20
-	}
-	query = strings.ReplaceAll(query, "\x00", " ")
-	if !hasFTS5Token(query) {
+	predicate, args, ok := searchMessagesPredicate(searchMessagesInput{
+		sessionID:         sessionID,
+		excludedSessionID: excludedSessionID,
+		query:             query,
+		limit:             limit,
+	})
+	if !ok {
 		return []Message{}, nil
 	}
 
 	sqlQuery := `
-		SELECT m.id, m.session_id, COALESCE(m.run_id, ''), m.role, m.content, m.content_type, m.sequence, m.created_at
-		FROM messages_fts
-		JOIN messages m ON m.rowid = messages_fts.rowid
-		JOIN sessions s ON s.id = m.session_id AND s.deletion_state = 'active'
-		WHERE messages_fts MATCH ?`
-	args := []any{fts5Phrase(query)}
-	if sessionID != "" {
-		sqlQuery += ` AND m.session_id = ?`
-		args = append(args, sessionID)
-	}
-	if excludedSessionID != "" {
-		sqlQuery += ` AND m.session_id <> ?`
-		args = append(args, excludedSessionID)
-	}
-	sqlQuery += ` ORDER BY bm25(messages_fts), m.id LIMIT ?`
-	args = append(args, limit)
+		SELECT m.id, m.session_id, COALESCE(m.run_id, ''), m.role, m.content, m.content_type, m.sequence, m.created_at` +
+		predicate
 
 	rows, err := r.db.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {

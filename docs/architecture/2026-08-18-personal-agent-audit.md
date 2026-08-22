@@ -516,11 +516,67 @@ remains blocked until the commit containing the contract is on `main`.
 
 #### MEM-002 — Return scored, explainable search hits
 
-**Outcome:** Search consumers receive the ranking signal SQLite already computes.
-**Scope:** Add an additive `SearchHit` with message, normalized score semantics, and snippet while temporarily preserving the legacy messages field.
-**Likely files:** `proto/turing/v1/sessions.proto`, sessions repository/service, generated Go/Dart, client mappers.
-**Acceptance:** Results expose documented score ordering and safe snippets; legacy callers receive identical messages; proto checks pass.
+**Status:** Implemented on the `mcasillas17-mem-002-scored-search-hits` branch
+and in full-diff review; not yet merged to `main`. The canonical public contract
+— score semantics, snippet safety rules, format negotiation, and the visibility
+and limit domain — is specified in [Session recall
+scope](session-recall.md#scored-search-hits); the summary below restates it
+only in outline.
+
+**Outcome:** Search consumers receive the ranking signal SQLite already
+computes.
+
+**Scope:** Shipped an additive `SearchHit` alongside the preserved legacy
+messages field, selected by `SearchMessagesRequest.response_format`: exactly one
+projection per response, an unrecognized value rejected as `InvalidArgument`,
+and a one-call legacy fallback for a new client talking to an older server.
+`SearchHit.score` is normalized `-bm25(messages_fts)` with deterministic
+`message_id` tie-breaking; `SearchHit.snippet` is a sanitized, single-line
+plain-text excerpt of the matched message only, centered on the match whenever
+FTS5's 32-token snippet window could mark one and an unhighlighted bounded
+excerpt of that same message when the phrase is wider than the window. Within
+the 200-scalar and 800-byte caps the complete match outranks the U+2026 cut
+indicators around it: a match that fits both caps on its own is published whole
+and the indicators are dropped together when they cannot fit beside it, so they
+are best-effort at that boundary. Snippet preparation holds a fixed-size window
+and never copies the fragment: the marked value SQLite returns is validated in
+place and streamed into that window, so one unbroken multi-megabyte token cannot
+make the server allocate in proportion to it at any stage. Both projections
+share one predicate, so lifecycle visibility, scope, exclusion, limits, and
+literal-phrase handling are unchanged.
+
+**Likely files:** `proto/turing/v1/sessions.proto`, sessions repository and
+service, generated Go/Dart, client mappers.
+
+**Acceptance:** Results expose documented score ordering and safe snippets;
+legacy callers receive identical messages; proto checks pass.
+
 **Dependencies:** None.
+
+**Non-goals:** This ships the ranking signal and a safe preview only. Runtime
+recall deliberately still sends the unspecified format and reads `messages`, so
+its own excerpts and ranking are untouched; no evaluation harness, metric,
+threshold, structured multi-term search request, tokenization change, or
+semantic retrieval lands here. That work stays with the pending tasks that own
+it: MEM-003 (evaluation harness and metrics), MEM-004 (structured multi-term
+search request), MEM-016 (tokenization for scripts without whitespace
+boundaries), and MEM-013 (optional local semantic retrieval).
+
+**Acceptance evidence:** Repository tests cover score normalization and the
+pinned finite non-positive bm25 canary, `message_id` tie-breaking, marker
+grammar/entropy/round-trip and fail-closed collision handling, match-centered
+windowing, bounded marker-free excerpts for phrases wider than the snippet
+window, exact scalar and byte bounds, oversized-token truncation, literal
+markup, whitespace/control/bidi normalization, natural-script preservation,
+same-message snippet provenance, active/archived inclusion with `deleting`
+exclusion, scope/exclusion/limit parity with the legacy projection, literal
+phrase injection resistance, and tokenless empty success. Service tests cover
+format negotiation, unknown-format rejection, message parity between formats,
+single-projection payloads, invariant-class-only logging, and opaque database
+errors. `turing-backend/tests/proto_contract_test.go` pins the additive wire
+contract in both directions against the legacy descriptor. Flutter mapper,
+client, and search-screen tests cover canonical hit mapping, value-free mapping
+failures, one-call legacy fallback, and verbatim plain-text snippet rendering.
 
 #### MEM-003 — Build a deterministic recall evaluation harness
 

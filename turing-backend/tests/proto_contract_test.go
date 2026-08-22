@@ -7,8 +7,12 @@ import (
 	"testing"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	descriptorpb "google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 func TestProtoContractsDefineRequiredServices(t *testing.T) {
@@ -51,9 +55,32 @@ func TestSearchMessagesProtoContract(t *testing.T) {
 	assertProtoField(t, request, "query", 1, protoreflect.StringKind, false, "")
 	assertProtoField(t, request, "session_id", 2, protoreflect.StringKind, false, "")
 	assertProtoField(t, request, "limit", 3, protoreflect.Int32Kind, false, "")
+	assertProtoField(t, request, "exclude_session_id", 4, protoreflect.StringKind, false, "")
+	assertProtoField(t, request, "response_format", 5, protoreflect.EnumKind, false, "")
+
+	format := file.Enums().ByName("SearchMessagesResponseFormat")
+	if format == nil {
+		t.Fatal("SearchMessagesResponseFormat is missing")
+	}
+	for name, number := range map[protoreflect.Name]protoreflect.EnumNumber{
+		"SEARCH_MESSAGES_RESPONSE_FORMAT_UNSPECIFIED":     0,
+		"SEARCH_MESSAGES_RESPONSE_FORMAT_LEGACY_MESSAGES": 1,
+		"SEARCH_MESSAGES_RESPONSE_FORMAT_HITS":            2,
+	} {
+		value := format.Values().ByName(name)
+		if value == nil || value.Number() != number {
+			t.Fatalf("%s = %v, want number %d", name, value, number)
+		}
+	}
 
 	response := file.Messages().ByName("SearchMessagesResponse")
 	assertProtoField(t, response, "messages", 1, protoreflect.MessageKind, true, "turing.v1.Message")
+
+	hit := file.Messages().ByName("SearchHit")
+	assertProtoField(t, hit, "message", 1, protoreflect.MessageKind, false, "turing.v1.Message")
+	assertProtoField(t, hit, "score", 2, protoreflect.DoubleKind, false, "")
+	assertProtoField(t, hit, "snippet", 3, protoreflect.StringKind, false, "")
+	assertProtoField(t, response, "hits", 2, protoreflect.MessageKind, true, "turing.v1.SearchHit")
 
 	service := file.Services().ByName("SessionService")
 	if service == nil {
@@ -68,6 +95,127 @@ func TestSearchMessagesProtoContract(t *testing.T) {
 	}
 	if got := string(method.Output().FullName()); got != "turing.v1.SearchMessagesResponse" {
 		t.Fatalf("SearchMessages output = %q, want turing.v1.SearchMessagesResponse", got)
+	}
+}
+
+// legacyFileDescriptor clones the real turing/v1/sessions.proto descriptor
+// and removes one field from one message, simulating a caller that only
+// knows about the file as it looked before this change landed.
+func legacyFileDescriptor(t *testing.T, messageName protoreflect.Name, fieldNumber protoreflect.FieldNumber) protoreflect.FileDescriptor {
+	t.Helper()
+	cloned := protodesc.ToFileDescriptorProto(turingv1.File_turing_v1_sessions_proto)
+	found := false
+	for _, message := range cloned.GetMessageType() {
+		if message.GetName() != string(messageName) {
+			continue
+		}
+		kept := make([]*descriptorpb.FieldDescriptorProto, 0, len(message.GetField()))
+		for _, field := range message.GetField() {
+			if field.GetNumber() == int32(fieldNumber) {
+				found = true
+				continue
+			}
+			kept = append(kept, field)
+		}
+		message.Field = kept
+	}
+	if !found {
+		t.Fatalf("field %d not present on %s in the real descriptor", fieldNumber, messageName)
+	}
+	legacyFile, err := protodesc.NewFile(cloned, protoregistry.GlobalFiles)
+	if err != nil {
+		t.Fatalf("build legacy file descriptor: %v", err)
+	}
+	return legacyFile
+}
+
+func TestSearchMessagesNewRequestIsReadableByLegacyDescriptor(t *testing.T) {
+	legacyFile := legacyFileDescriptor(t, "SearchMessagesRequest", 5)
+	legacyDescriptor := legacyFile.Messages().ByName("SearchMessagesRequest")
+	if legacyDescriptor.Fields().ByNumber(5) != nil {
+		t.Fatal("legacy SearchMessagesRequest descriptor unexpectedly retains field 5")
+	}
+
+	newRequest := &turingv1.SearchMessagesRequest{
+		Query:            "budget",
+		SessionId:        "session-1",
+		Limit:            10,
+		ExcludeSessionId: "session-2",
+		ResponseFormat:   turingv1.SearchMessagesResponseFormat_SEARCH_MESSAGES_RESPONSE_FORMAT_HITS,
+	}
+	wire, err := proto.Marshal(newRequest)
+	if err != nil {
+		t.Fatalf("marshal new request: %v", err)
+	}
+
+	legacyMessage := dynamicpb.NewMessage(legacyDescriptor)
+	if err := proto.Unmarshal(wire, legacyMessage); err != nil {
+		t.Fatalf("unmarshal into legacy request: %v", err)
+	}
+
+	if got := legacyMessage.Get(legacyDescriptor.Fields().ByNumber(1)).String(); got != newRequest.GetQuery() {
+		t.Fatalf("query = %q, want %q", got, newRequest.GetQuery())
+	}
+	if got := legacyMessage.Get(legacyDescriptor.Fields().ByNumber(2)).String(); got != newRequest.GetSessionId() {
+		t.Fatalf("session_id = %q, want %q", got, newRequest.GetSessionId())
+	}
+	if got := legacyMessage.Get(legacyDescriptor.Fields().ByNumber(3)).Int(); got != int64(newRequest.GetLimit()) {
+		t.Fatalf("limit = %d, want %d", got, newRequest.GetLimit())
+	}
+	if got := legacyMessage.Get(legacyDescriptor.Fields().ByNumber(4)).String(); got != newRequest.GetExcludeSessionId() {
+		t.Fatalf("exclude_session_id = %q, want %q", got, newRequest.GetExcludeSessionId())
+	}
+}
+
+func TestSearchMessagesNewResponseIsReadableByLegacyDescriptor(t *testing.T) {
+	legacyFile := legacyFileDescriptor(t, "SearchMessagesResponse", 2)
+	legacyDescriptor := legacyFile.Messages().ByName("SearchMessagesResponse")
+	if legacyDescriptor.Fields().ByNumber(2) != nil {
+		t.Fatal("legacy SearchMessagesResponse descriptor unexpectedly retains field 2")
+	}
+
+	newResponse := &turingv1.SearchMessagesResponse{
+		Hits: []*turingv1.SearchHit{{
+			Message: &turingv1.Message{MessageId: "hit-1"},
+			Score:   0.75,
+			Snippet: "the budget was approved",
+		}},
+	}
+	wire, err := proto.Marshal(newResponse)
+	if err != nil {
+		t.Fatalf("marshal new response: %v", err)
+	}
+
+	legacyMessage := dynamicpb.NewMessage(legacyDescriptor)
+	if err := proto.Unmarshal(wire, legacyMessage); err != nil {
+		t.Fatalf("unmarshal into legacy response: %v", err)
+	}
+	if len(legacyMessage.GetUnknown()) == 0 {
+		t.Fatal("legacy message has no unknown fields, want field 2 (hits) preserved as unknown data")
+	}
+	if got := legacyMessage.Get(legacyDescriptor.Fields().ByNumber(1)).List().Len(); got != 0 {
+		t.Fatalf("legacy messages length = %d, want 0", got)
+	}
+}
+
+func TestSearchMessagesLegacyResponseIsReadableByNewBindings(t *testing.T) {
+	legacyShaped := &turingv1.SearchMessagesResponse{
+		Messages: []*turingv1.Message{{MessageId: "legacy"}},
+	}
+	wire, err := proto.Marshal(legacyShaped)
+	if err != nil {
+		t.Fatalf("marshal legacy-shaped response: %v", err)
+	}
+
+	var newResponse turingv1.SearchMessagesResponse
+	if err := proto.Unmarshal(wire, &newResponse); err != nil {
+		t.Fatalf("unmarshal into new response bindings: %v", err)
+	}
+	if len(newResponse.GetMessages()) != 1 || newResponse.GetMessages()[0].GetMessageId() != "legacy" {
+		t.Fatalf("messages = %+v, want one message with id 'legacy'", newResponse.GetMessages())
+	}
+	if len(newResponse.GetHits()) != 0 {
+		t.Fatalf("hits = %+v, want empty", newResponse.GetHits())
 	}
 }
 
