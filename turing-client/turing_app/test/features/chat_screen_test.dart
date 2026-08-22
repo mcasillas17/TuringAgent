@@ -2990,12 +2990,13 @@ void main() {
   // `_completedHistoryRunIds` — even though the event is arriving live and
   // carries the one state update that actually advances this run.
   //
-  // Before the fix, this combination fed `insertAdjacent:
-  // _isHistoricalRunEvent(event)` into `_handleIncomingRunState`, so a run
-  // that happened to already be historical for this unrelated reason would
-  // have its live terminal card placed immediately beside the assistant
-  // row — ABOVE the tool artifact — instead of walking past it. Restoring
-  // that flag must fail this test.
+  // Durable invariant: artifact-aware placement of a run's terminal card
+  // must NOT be conditional on `_isHistoricalRunEvent`. If placement is
+  // ever made to walk past artifacts only when the event is classified as
+  // live (skipping that walk once `_isHistoricalRunEvent` says otherwise),
+  // this run's card would land immediately beside the assistant row —
+  // ABOVE the tool artifact — instead of walking past it. Reintroducing
+  // that classification-dependent artifact walking must fail this test.
   testWidgets(
     'a live terminal event for a run already marked historical by an '
     'earlier resync still lands after a tool artifact',
