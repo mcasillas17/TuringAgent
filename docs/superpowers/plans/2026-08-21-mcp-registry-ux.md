@@ -299,6 +299,14 @@ func (s *Server) RotateMcpServerToken(
 
 Registration infers/canonicalizes the URL, verifies the requested non-bundled tier, seals by server name, inserts disabled, returns a field-by-field descriptor, audits only name/tier, notifies the runtime, and does not contact the endpoint. Rotation reads the server first, rejects bundled, seals or clears, updates, audits only server name plus `tokenConfigured: bool`, and returns a descriptor.
 
+> **Superseded by later fail-closed reconciliation fixes (see the addendum
+> below):** registration may also atomically adopt an existing url-empty
+> migration-0016 placeholder in place instead of inserting, and its audit
+> payload records which branch ran via `adopted: bool` alongside the URL.
+> Rotation also atomically resets liveness to unknown/empty in the same
+> transaction as the sealed-token update, since a prior status reading was
+> taken under the credential being replaced or cleared.
+
 - [ ] **Step 5: Add narrow audit and import-source dependencies**
 
 Add:
@@ -529,6 +537,14 @@ Document that:
 - registration (in-app or via `mcp.json`) never contacts the endpoint by itself — a server stays silent until explicitly enabled;
 - explicitly enabling a non-bundled server, including a remote-url one, performs a bounded liveness/tool discovery request against its endpoint at that moment, separately from and in addition to the per-run egress consent a later tool call still requires.
 
+> **Superseded by later fail-closed reconciliation fixes (see the addendum
+> below):** "create-only for existing names" has one narrow exception — a
+> legacy migration-0016 url-empty placeholder is adopted in place (by a file
+> reimport or an explicit in-app Register), fail-closed: liveness resets to
+> unknown and every carried tool is withdrawn before being reconfirmed by a
+> valid static snapshot or a later live discovery, preserving whatever policy
+> an operator had migrated onto it.
+
 - [ ] **Step 2: Sweep stale MCP restart-only copy**
 
 Run:
@@ -634,3 +650,42 @@ liveness contact at the moment of the operator's own explicit action, not a
 substitute for that per-run consent. This document remains a record of how
 the feature was implemented; see `docs/mcp-security-and-integration.md` for
 the current, authoritative description of shipped behavior.
+
+## Addendum: fail-closed reconciliation follow-up
+
+A further set of accepted review findings ("fix: make MCP import atomic and
+fail closed", "fix: make MCP imports deterministic and bounded", "fix:
+finish MCP management edge cases", "fix: keep MCP management state
+authoritative") closed the remaining gaps in this plan's create-only and
+rotation semantics:
+
+- **Mobile placeholder adoption.** `RegisterMcpServer` (not only a file
+  reimport) can now adopt a legacy migration-0016 url-empty placeholder in
+  place, so an operator who cannot edit `mcp.json` can still register a
+  matching name. Both adoption paths are fail-closed: the row is forced
+  disabled, liveness resets to unknown/empty, and every carried tool is
+  withdrawn (present=0, enabled=0) before being reconfirmed by a valid
+  static snapshot (reimport only) or a later live discovery, preserving
+  whatever policy an operator had migrated onto it.
+- **Atomic, validated static tool snapshots.** An `mcp.json` entry's
+  optional `tools` snapshot is now fully validated (name/schema shape,
+  bundled/inter-server collision, no embedded token, the same count/byte
+  bounds live discovery enforces) and reconciled in the same transaction as
+  the row mutation, so an invalid, colliding, or oversized snapshot leaves
+  no partial row.
+- **Deterministic imports.** Header parsing sorts names before deciding, so
+  a duplicate case-insensitive `Authorization` key or an unsupported header
+  name is refused the same way regardless of Go's map iteration order, and
+  entries are processed in sorted name order so a same-tool-name collision
+  between two entries has a fixed winner.
+- **Rotation liveness.** `RotateMcpServerToken` now also resets liveness to
+  unknown/empty atomically with the token change, matching placeholder
+  adoption's reasoning.
+- **Authoritative UI state.** The MCPs page now renders each server's actual
+  endpoint (with an explicit warning for an unadopted placeholder), reloads
+  the registry before surfacing an enable/disable or policy-change error so
+  a post-commit failure never shows stale state, and labels a skipped
+  reimport entry as "already registered; existing settings were kept."
+
+`docs/mcp-security-and-integration.md` remains the authoritative description
+of this final behavior.

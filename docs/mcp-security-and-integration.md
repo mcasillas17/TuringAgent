@@ -29,8 +29,21 @@ and bundled-name refusal, stdio refusal, URL canonicalization/hardening, and
 bearer-token normalization, then seals the token with the same
 `internal/secretbox` sealer (the server name as AAD) under
 `TURING_INTEGRATION_KEY`; no public or internal response contains a token or
-ciphertext. A newly registered server always arrives disabled, and
-registration itself never contacts the server's endpoint.
+ciphertext. Naming an existing non-bundled, url-empty legacy migration-0016
+placeholder is the one existing name this call does not refuse — it is
+treated as the operator's own consent to adopt that row in place (see below),
+which lets a mobile operator who cannot edit `mcp.json` register a server the
+backend already knows about by name. Any other existing name, or a bundled
+name, is still refused. Every genuinely new registration still arrives
+disabled, and registration itself never contacts the server's endpoint. The
+`mcp.server.registered` audit record distinguishes which branch ran via an
+`adopted: bool` field alongside the existing token-free name/tier/url keys —
+computed inside the same transaction that decided which happened, so it can
+never diverge from, or race, what was actually committed. The MCPs page
+renders each server's canonical `url` (selectable, ellipsized, with a tooltip
+for the full value) so an operator can verify the destination they
+registered; an unadopted placeholder with no URL renders an explicit
+"Endpoint not configured" warning instead of blank space.
 
 `mcp.json` remains the bulk/config-file path. The orchestrator imports it at
 startup and, without a restart, whenever an operator chooses Re-import
@@ -38,16 +51,61 @@ mcp.json on the MCPs page; both runs report imported, skipped, and refused
 names with reasons. A `command` entry is refused as an import issue
 explaining that stdio is unsupported, and no server row is created for it.
 Malformed documents and entries whose token cannot be sealed are reported the
-same way, without preventing the rest of the backend from starting.
+same way, without preventing the rest of the backend from starting. An
+entry's `headers` object may carry at most one case-insensitive
+`Authorization` key: a second one (for example both `Authorization` and
+`authorization`, which decode into distinct map entries) is refused
+deterministically with a fixed, generic reason, never a value that depends on
+Go's randomized map iteration order; header names are sorted first, so an
+unsupported header name, if one is also present, is always the
+lexicographically first one reported and always takes precedence over the
+duplicate-Authorization refusal, regardless of how many of either are
+present. Each on-demand Reimport RPC's response is call-local and
+deterministic: its `Refused` list is built from that call's own report,
+sorted by name, rather than by re-reading the shared issues table two
+overlapping reimports could otherwise race and swap into each other's
+response. Skipped names in that response mean the row already had a real,
+non-empty endpoint and mcp.json's current url/token/policy for it was
+**not** applied — the MCPs page's reimport dialog states this explicitly per
+skipped name ("already registered; existing settings were kept") so an edit
+to an already-registered entry is never mistaken for having taken effect.
 
 Reimport is create-only: an existing row for a name that already has a real,
 non-empty endpoint is left completely untouched — its enabled state,
 endpoint, tier, liveness, rotated token, tool snapshot, and policies never
-change. The one exception is a legacy migration-0016 placeholder (a
-non-bundled row seeded with `url == ""` solely to carry a pre-registry tool
-policy forward): that row is narrowly adopted in place, updating only its
-URL, sealed token, and tier. Every genuinely new entry, whether from a file
-import or in-app registration, still arrives disabled.
+change, and that entry's own `Tools` is not even inspected. The one exception
+is a legacy migration-0016 placeholder: a non-bundled row seeded with
+`url == ""` solely to carry a pre-registry tool policy forward until an
+operator supplies a real endpoint. A file reimport or an explicit in-app
+Register naming that exact server both adopt the row in place (same id) and
+are fail-closed about it: url, sealed token, and tier update to the newly
+supplied values; the row is forced disabled regardless of what it carried;
+liveness resets to unknown/empty, because whatever status the placeholder's
+`url == ""` row happened to carry says nothing about the endpoint now
+replacing it; and every tool the placeholder carried is withdrawn
+(present=0, enabled=0) before this call's own tools, if any, are considered.
+A withdrawn tool is not gone for good — a valid static `tools` snapshot
+supplied by that same reimport, or a later live discovery once the adopted
+server is enabled, reconfirms any tool by matching name, and reconfirmation
+preserves whatever policy an operator had already migrated/edited onto it
+rather than resetting it to a default; only the tool's presence/enabled state
+was ever touched by the withdrawal. Every genuinely new entry, whether from a
+file import or in-app registration, still arrives disabled.
+
+An mcp.json entry's optional static `tools` snapshot is fully validated
+before the repository is ever touched — well-formed name/schema shape, no
+bundled-namespace collision, and the entry's own configured bearer token
+never appearing verbatim in a tool's name or serialized schema — and bounded
+by the exact same tool-count and encoded-byte limits live `tools/list`
+discovery enforces, counted the same way. It is then handed to the same
+repository helper (`replaceServerToolsTx`) live discovery's `RecordDiscovery`
+also uses, inside the very same transaction as the server row insert or
+placeholder adoption: an inter-server tool-name collision there rolls back
+that whole transaction too. Either way, an invalid, colliding, token-bearing,
+or oversized snapshot refuses the whole entry with a fixed, generic reason
+that never echoes the token, the offending name/schema, or which check
+tripped, and leaves no partial row behind for a corrected reimport to get
+stuck skipping.
 
 Deleting a server writes a local import tombstone, so an unchanged
 `mcp.json` cannot silently recreate it on the next reimport; the file path
@@ -59,9 +117,15 @@ that still has a live row, or over a bundled name, is refused either way.
 Token rotation is write-only for non-bundled servers: a new bearer replaces
 the sealed value, an empty bearer clears it, and a bundled server refuses
 rotation outright. A nonempty token still requires `TURING_INTEGRATION_KEY`
-to seal. No response, log line, registry-change event, or audit row ever
-carries the plaintext token or its ciphertext; audit rows record only the
-server name and whether a token is now configured.
+to seal. Because a prior Up/Down liveness observation was made under the
+credential rotation is replacing or clearing, rotation atomically resets
+liveness to unknown/empty in the same transaction as the sealed-token
+update — a status-write failure rolls back the token change too, so a
+rotated (or cleared) token can never be left paired with a stale liveness
+reading taken under the credential it just replaced. No response, log line,
+registry-change event, or audit row ever carries the plaintext token or its
+ciphertext; audit rows record only the server name and whether a token is
+now configured.
 
 Enabling any non-bundled server — local-container or remote-URL — performs a
 bounded `tools/list` liveness discovery as part of that call. For a
@@ -81,8 +145,9 @@ operator's edited policy on a tool that is still present is left untouched. A
 failed discovery leaves the enabled state exactly as the operator set it,
 marks the server down with a bounded, bearer-redacted status message, and
 preserves whatever tool snapshot the last successful discovery produced.
-Enable/disable, discovery outcome, and token rotation are all audited; the
-audit payload and any status text never carry a token.
+Enable/disable, discovery outcome, registration (including whether it
+adopted a placeholder), and token rotation are all audited; the audit
+payload and any status text never carry a token.
 
 Peer-controlled MCP errors and results are scrubbed of the registered bearer
 before they can cross the internal RPC boundary or reach liveness state, tool
