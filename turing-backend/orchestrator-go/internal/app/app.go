@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -191,11 +192,23 @@ func New(cfg config.Config) (*App, error) {
 		// starts clean, a malformed document is recorded as a bounded
 		// "_document" issue and startup still proceeds, and any other
 		// unreadable-file or repository failure aborts startup with a fixed,
-		// safe error (ReimportConfiguredJSON has already logged its own
-		// diagnostic, which never includes the file's contents or path).
-		if _, err := mcpRegistryService.ReimportConfiguredJSON(context.Background()); err != nil {
+		// safe error — the error returned here never includes the file's
+		// contents or path, but ReimportConfiguredJSON's own local log line
+		// for that failure may still name the path (os.ReadFile's error
+		// includes it), which is acceptable for an operator reading their
+		// own install's log but must never leave this process as a
+		// returned error, an RPC response, or an audit record.
+		report, err := mcpRegistryService.ReimportConfiguredJSON(context.Background())
+		if err != nil {
 			_ = database.Close()
 			return nil, fmt.Errorf("import mcp.json: %w", err)
+		}
+		if len(report.Unsupported) > 0 {
+			// A count is the one diagnostic an operator needs at startup —
+			// something in mcp.json was refused — without this line
+			// becoming a second, unaudited channel for the names, reasons,
+			// headers, or tokens that a refusal's details can carry.
+			log.Printf("mcp.json import refused %d entries", len(report.Unsupported))
 		}
 	}
 	healthService := &HealthServer{schemaVersion: schemaVersion}

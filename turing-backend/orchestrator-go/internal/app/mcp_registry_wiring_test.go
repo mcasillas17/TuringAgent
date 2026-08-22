@@ -67,6 +67,59 @@ func findMCPServerRecord(servers []repository.MCPServerRecord, name string) (rep
 	return repository.MCPServerRecord{}, false
 }
 
+// A malformed or refused entry in mcp.json at startup must still leave an
+// operator-visible diagnostic in the process log — but only a bare count,
+// never the entry's name, its refusal reason, a header name, or a token,
+// any of which a refusal's details can carry. This test fails before
+// app.New captured ReimportConfiguredJSON's ImportReport and logged its
+// count: with no diagnostic at all, an operator staring at a silent
+// startup log has no way to know mcp.json contained anything wrong.
+func TestStartupImportRefusalLogsCountOnlyNeverNamesOrReasons(t *testing.T) {
+	const headerSentinel = "X-Sentinel-Header-Do-Not-Log-9f21ac"
+	const commandSentinel = "sentinel-command-do-not-log-4b7e"
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "mcp.json"), []byte(`{
+		"mcpServers": {
+			"sentinel-header-vendor": {"url": "https://vendor.example/mcp", "headers": {"`+headerSentinel+`": "value"}},
+			"sentinel-command-vendor": {"command": "`+commandSentinel+`", "args": ["x"]}
+		}
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var logged bytes.Buffer
+	previousLogOutput := log.Writer()
+	log.SetOutput(&logged)
+	defer log.SetOutput(previousLogOutput)
+
+	application, err := New(config.Config{
+		ClientAPIKey: "client",
+		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
+		ApprovalJWTSecret: "approval-secret",
+		DatabasePath:      t.TempDir() + "/turing.db",
+		OllamaModel:       "llama3.2",
+		MCPConfigRoot:     root,
+		IntegrationKey:    mcpWiringIntegrationKey,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(application.Stop)
+
+	if !strings.Contains(logged.String(), "mcp.json import refused 2 entries") {
+		t.Fatalf("startup log = %q, want a count-only refusal diagnostic naming exactly 2 entries", logged.String())
+	}
+	for _, sentinel := range []string{
+		headerSentinel, commandSentinel,
+		"sentinel-header-vendor", "sentinel-command-vendor",
+		"unsupported; only Authorization",
+	} {
+		if strings.Contains(logged.String(), sentinel) {
+			t.Fatalf("startup log leaked %q: %s", sentinel, logged.String())
+		}
+	}
+}
+
 // Writing mcp.json after the app has already started and then reimporting it
 // through the real public gRPC server (not by calling into the service
 // directly, and not by restarting the app) is exactly the on-demand path
@@ -430,6 +483,21 @@ func TestPublicRegisterAndRotateAuditThroughRealAppWithoutLeakingTheToken(t *tes
 		t.Fatalf("RotateMcpServerToken response leaked the bearer token: %s", rotateJSON)
 	}
 
+	// A map keyed by action would silently collapse a duplicate row for the
+	// same action into a single entry, so the exact row count is checked
+	// directly against the database before any of the map-based checks
+	// below — which only ever see one payload per action — run.
+	var auditedRowCount int
+	if err := app.database.QueryRowContext(context.Background(), `
+		SELECT COUNT(*) FROM audit_logs
+		WHERE action IN ('mcp.server.registered', 'mcp.server.token_rotated')
+	`).Scan(&auditedRowCount); err != nil {
+		t.Fatal(err)
+	}
+	if auditedRowCount != 2 {
+		t.Fatalf("audit_logs rows for register/rotate = %d, want exactly 2 (one register, one rotate, with no duplicate hidden behind a repeated action)", auditedRowCount)
+	}
+
 	rows, err := app.database.QueryContext(context.Background(), `
 		SELECT action, payload_json FROM audit_logs
 		WHERE action IN ('mcp.server.registered', 'mcp.server.token_rotated')
@@ -460,6 +528,22 @@ func TestPublicRegisterAndRotateAuditThroughRealAppWithoutLeakingTheToken(t *tes
 	}
 	if strings.Contains(logged.String(), sentinel) {
 		t.Fatalf("process log leaked the bearer token: %s", logged.String())
+	}
+}
+
+// An install that never configured MCPConfigRoot (cfg.MCPConfigRoot == "")
+// must keep refusing ReimportMcpJson through the real public gRPC server,
+// not just inside a unit test of the service in isolation: this is the
+// production wiring app.New assembles, so it is the proof that fail-closed
+// behavior for an unconfigured config root actually reaches an operator's
+// deployment rather than only the mcpregistry package's own tests.
+func TestReimportMcpJsonThroughPublicRPCFailsPreconditionWithoutConfigRoot(t *testing.T) {
+	app := newTestApp(t)
+	client := publicMCPRegistryClient(t, app)
+
+	_, err := client.ReimportMcpJson(publicMCPRegistryContext(), &turingv1.ReimportMcpJsonRequest{})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("ReimportMcpJson code = %v, want FailedPrecondition for an unconfigured MCPConfigRoot", status.Code(err))
 	}
 }
 
