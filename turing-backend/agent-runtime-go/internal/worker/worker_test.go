@@ -384,22 +384,43 @@ func TestSendFiresOnStartedExactlyOnceImmediatelyBeforeTransportSend(t *testing.
 	}
 }
 
-// TestSendOnStartedFiresOnlyForItsOwnRequestInFIFOOrder sends several
-// requests back to back over the same writer, each with its own onStarted
-// closure identifying it, and checks that every one fires paired with its own
-// stream.Send and nowhere else. run() only ever reads request.onStarted off
-// the single *outboundRequest it just dequeued, so nothing here is expected
-// to catch a live bug today; it exists to pin that invariant against a future
-// change to the writer's dispatch loop (for instance, one that batched or
-// pipelined requests) that could let one request's hook fire for another's
-// send.
+// TestSendOnStartedFiresOnlyForItsOwnRequestInFIFOOrder pins that when
+// several requests are genuinely queued together behind the writer — not
+// completed one at a time before the next is even issued, which is all an
+// earlier version of this test exercised, since calling send() synchronously
+// in a loop lets each request finish before the next is created and never
+// puts more than one request in the queue at once — each one's onStarted
+// still fires paired with its own stream.Send, and the writer still starts
+// them in the order they were queued.
+//
+// Request 1 is sent on its own goroutine and blocked inside stream.Send by
+// the fake transport, so the writer's single goroutine is provably busy and
+// cannot dequeue anything else. Requests 2 and 3 are then placed directly
+// onto the writer's own queue, in that order, from this goroutine — not from
+// two goroutines racing worker.send against each other, which would leave
+// their relative order exactly as undetermined as the bug this test exists to
+// catch. That is the one deterministic way to fix "2 before 3" without
+// relying on a scheduler race: a channel send is synchronous once it
+// executes, so doing both from a single goroutine, in this order, fixes their
+// arrival order in the buffered queue by construction. Both are still handed
+// their own goroutine to await completion, so the queue genuinely holds two
+// requests concurrently while the writer works through them one at a time —
+// the load-bearing part of the invariant this test checks.
 func TestSendOnStartedFiresOnlyForItsOwnRequestInFIFOOrder(t *testing.T) {
 	stream := newFakeStream()
 	var mu sync.Mutex
 	var order []string
+	blocked1 := make(chan struct{})
+	release1 := make(chan struct{})
+	var blockOnce sync.Once
 	stream.sendFn = func(update *turingv1.RuntimeUpdate) error {
+		id := update.GetHeartbeat().GetWorkerId()
+		if id == "1" {
+			blockOnce.Do(func() { close(blocked1) })
+			<-release1
+		}
 		mu.Lock()
-		order = append(order, "send:"+update.GetHeartbeat().GetWorkerId())
+		order = append(order, "send:"+id)
 		mu.Unlock()
 		return nil
 	}
@@ -407,21 +428,70 @@ func TestSendOnStartedFiresOnlyForItsOwnRequestInFIFOOrder(t *testing.T) {
 	worker.startOutboundWriter(stream)
 	defer worker.stopOutboundWriter()
 
-	for _, id := range []string{"1", "2", "3"} {
-		id := id
-		err := worker.send(context.Background(), stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Heartbeat{Heartbeat: &turingv1.RuntimeHeartbeat{WorkerId: id}}}, func() {
+	heartbeat := func(id string) *turingv1.RuntimeUpdate {
+		return &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Heartbeat{Heartbeat: &turingv1.RuntimeHeartbeat{WorkerId: id}}}
+	}
+	onStarted := func(id string) func() {
+		return func() {
 			mu.Lock()
 			order = append(order, "onStarted:"+id)
 			mu.Unlock()
-		})
-		if err != nil {
-			t.Fatalf("send %s error = %v", id, err)
+		}
+	}
+
+	results := make(chan error, 3)
+	go func() {
+		results <- worker.send(context.Background(), stream, heartbeat("1"), onStarted("1"))
+	}()
+	select {
+	case <-blocked1:
+	case <-time.After(time.Second):
+		t.Fatal("first send never reached the outbound writer")
+	}
+
+	worker.writerMu.Lock()
+	writer := worker.writer
+	worker.writerMu.Unlock()
+	if writer == nil {
+		t.Fatal("outbound writer not initialized")
+	}
+	req2 := &outboundRequest{ctx: context.Background(), update: heartbeat("2"), result: make(chan error, 1), started: make(chan struct{}), onStarted: onStarted("2")}
+	req3 := &outboundRequest{ctx: context.Background(), update: heartbeat("3"), result: make(chan error, 1), started: make(chan struct{}), onStarted: onStarted("3")}
+	select {
+	case writer.queue <- req2:
+	case <-time.After(time.Second):
+		t.Fatal("request 2 never queued")
+	}
+	select {
+	case writer.queue <- req3:
+	case <-time.After(time.Second):
+		t.Fatal("request 3 never queued")
+	}
+	if n := len(writer.queue); n != 2 {
+		t.Fatalf("outbound queue length = %d, want 2: requests 2 and 3 must both be genuinely queued behind the blocked request 1", n)
+	}
+	go func() { results <- req2.classify(<-req2.result) }()
+	go func() { results <- req3.classify(<-req3.result) }()
+
+	close(release1)
+
+	for i := 0; i < 3; i++ {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatalf("queued send result %d error = %v", i, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for queued sends to complete")
 		}
 	}
 
 	want := []string{"onStarted:1", "send:1", "onStarted:2", "send:2", "onStarted:3", "send:3"}
-	if !slices.Equal(order, want) {
-		t.Fatalf("call order = %v, want %v: each request's onStarted must fire only for its own send, immediately before it", order, want)
+	mu.Lock()
+	got := append([]string(nil), order...)
+	mu.Unlock()
+	if !slices.Equal(got, want) {
+		t.Fatalf("call order = %v, want %v: each request's onStarted must fire only for its own send, immediately before it, in the order the requests were queued", got, want)
 	}
 }
 

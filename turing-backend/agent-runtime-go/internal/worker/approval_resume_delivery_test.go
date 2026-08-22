@@ -384,7 +384,7 @@ func TestReadyWithheldByPausedNarrationFailsGracefully(t *testing.T) {
 // refusal into a win.
 //
 // entry.outboundPaused() answers true before
-// sendRunUpdateReportingPauseGated ever calls its onSendStarting hook or
+// sendRunUpdateReportingPauseGated ever calls its onStarted hook or
 // w.send, so this Ready never reaches the transport — the orchestrator
 // cannot have produced a durable acceptance for it. The only honest gate is
 // therefore one that never runs pending.beginReadySend for this call at all.
