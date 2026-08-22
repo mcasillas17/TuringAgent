@@ -55,6 +55,28 @@ const approvalIdentityPayloadPath = "$." + approvalIdentityPayloadKey
 // event a given transition wrote.
 const runStateVersionPayloadPath = "$.runState.stateVersion"
 
+// ownershipWorkerIdentityPayloadKey and ownershipAssignmentAttemptIdentityPayloadKey
+// name the worker and assignment attempt that triggered a clearsOwnership
+// transition, committed into that transition's own event on the same terms the
+// live claim already uses on agent.run.started. They exist because clearing
+// ownership erases the only place the row itself could have recorded who did
+// it: worker_id and execution_attempt_id both go to NULL in the same write, so
+// a replay reaching this version later has nothing left on the row to compare
+// against. The event is where the trigger survives.
+//
+// Both are already execution-only keys the public payload boundary
+// (service/events.executionOnlyKeys) strips on every event type, so persisting
+// them here adds no new public surface — it reuses the filter the claim event
+// already depends on.
+const ownershipWorkerIdentityPayloadKey = "workerId"
+const ownershipAssignmentAttemptIdentityPayloadKey = "assignmentAttemptId"
+
+// ownershipWorkerIdentityPayloadPath and ownershipAssignmentAttemptIdentityPayloadPath
+// are the same two keys as JSON paths, bound as query arguments rather than
+// concatenated into SQL.
+const ownershipWorkerIdentityPayloadPath = "$." + ownershipWorkerIdentityPayloadKey
+const ownershipAssignmentAttemptIdentityPayloadPath = "$." + ownershipAssignmentAttemptIdentityPayloadKey
+
 // unresolvedStateVersion marks a transaction-local transition whose caller
 // carries no expected version. It is never a stored or public value — zero is
 // protobuf absence — and it is only reachable through the ...InTx constructors
@@ -193,8 +215,14 @@ type runTransition struct {
 	terminal         *runTerminalContent
 	// clearsOwnership marks a transition that releases the run's worker and
 	// attempt. Its duplicate check cannot compare the identity the command
-	// carried against the row, because the row no longer has one; it requires
-	// the absence the transition itself produced instead.
+	// carried against the row, because the row no longer has one; it first
+	// requires the absence the transition itself produced, and then — because
+	// an absent row is only proof that SOME clear happened, not that this
+	// command's trigger was the one that did it — requires the durable event
+	// that committed this version to name the same worker and attempt this
+	// command asserts. A command that asserts neither (lease recovery has no
+	// owner to prove) is not held to that second test, on the same terms
+	// matchesTransitionIdentity already uses before the row is cleared.
 	clearsOwnership bool
 	// requiresAuthorizedApproval demands that the named approval still
 	// authorizes something. It is opt-in because most transitions that name an
@@ -691,13 +719,20 @@ func isRunTransitionDuplicate(row runRow, transition runTransition, expected int
 //
 // A transition that carries no durable trigger keeps the row-only rule it
 // always had. An event written before this rule existed carries no trigger
-// either, so a resume replayed across an upgrade is refused rather than
-// replayed — the honest answer, since nothing durable says which approval put
-// that run where it is.
+// either, so a replay across an upgrade is refused rather than replayed — the
+// honest answer, since nothing durable says which approval or which assignment
+// attempt put that run where it is.
 func transitionCommittedThisTriggerTx(ctx context.Context, tx *sql.Tx, transition runTransition, version int64) (bool, error) {
-	if !transition.durableApprovalIdentity {
-		return true, nil
+	if transition.durableApprovalIdentity {
+		return approvalCommittedThisTriggerTx(ctx, tx, transition, version)
 	}
+	if transition.clearsOwnership {
+		return ownershipClearCommittedThisTriggerTx(ctx, tx, transition, version)
+	}
+	return true, nil
+}
+
+func approvalCommittedThisTriggerTx(ctx context.Context, tx *sql.Tx, transition runTransition, version int64) (bool, error) {
 	if transition.identity.approvalID == "" {
 		return false, nil
 	}
@@ -715,6 +750,70 @@ func transitionCommittedThisTriggerTx(ctx context.Context, tx *sql.Tx, transitio
 		return false, err
 	}
 	return matches == 1, nil
+}
+
+// ownershipClearCommittedThisTriggerTx answers whether the worker and
+// assignment attempt this command asserts are the ones that actually cleared
+// the run's ownership at the version the row now sits at.
+//
+// isRunTransitionDuplicate's row-only check above only proves that ownership
+// IS clear, which every clearing trigger produces identically — the row after
+// attempt A's release and the row after attempt B's release are the same row.
+// That is not proof that THIS command's trigger is the one that cleared it, so
+// a second, different assignment attempt replaying the same duplicate-shaped
+// request must not be told "yes, that was you". This reads the trigger back
+// from the event the clearing transition committed, on the same terms
+// approvalCommittedThisTriggerTx reads which approval resumed a run — the row
+// itself no longer has an answer, and the event is where the transition wrote
+// one.
+//
+// A command that asserts neither a worker nor an attempt (lease recovery has
+// no owner to prove) is not held to this test: there is nothing in it to
+// contradict, on the same terms matchesTransitionIdentity uses before the row
+// is cleared. A command that asserts one or both must find that same identity
+// on the committing event, in full — including when the event predates this
+// rule and carries no trigger at all, which fails closed rather than treating
+// an unexplained clear as this command's own.
+func ownershipClearCommittedThisTriggerTx(ctx context.Context, tx *sql.Tx, transition runTransition, version int64) (bool, error) {
+	if transition.identity.workerID == "" && transition.identity.assignmentAttemptID == "" {
+		return true, nil
+	}
+	var matches int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM events
+		WHERE run_id = ? AND type = ?
+			AND json_extract(payload_json, ?) = ?
+			AND (? = '' OR json_extract(payload_json, ?) = ?)
+			AND (? = '' OR json_extract(payload_json, ?) = ?)
+	`,
+		transition.runID, transitionEventType(transition),
+		runStateVersionPayloadPath, version,
+		transition.identity.workerID, ownershipWorkerIdentityPayloadPath, transition.identity.workerID,
+		transition.identity.assignmentAttemptID, ownershipAssignmentAttemptIdentityPayloadPath, transition.identity.assignmentAttemptID,
+	).Scan(&matches); err != nil {
+		return false, err
+	}
+	return matches == 1, nil
+}
+
+// ownershipTriggerIdentityPayload is the durable trigger a clearsOwnership
+// transition commits into its own event, so a later replay can be told apart
+// from a different assignment attempt's replay by
+// ownershipClearCommittedThisTriggerTx — see that function for why the row
+// itself cannot answer this once ownership is cleared.
+//
+// An identity field the transition was not given is simply absent from the
+// payload rather than written empty, matching how matchesTransitionIdentity
+// already treats an absent field as no claim to check.
+func ownershipTriggerIdentityPayload(identity runTransitionIdentity) map[string]any {
+	payload := map[string]any{}
+	if identity.workerID != "" {
+		payload[ownershipWorkerIdentityPayloadKey] = identity.workerID
+	}
+	if identity.assignmentAttemptID != "" {
+		payload[ownershipAssignmentAttemptIdentityPayloadKey] = identity.assignmentAttemptID
+	}
+	return payload
 }
 
 // runApprovalStatusTx reports the durable status of an approval this run owns.
@@ -910,6 +1009,11 @@ func requeueTransition(runID string, expectedVersion int64, allowedFrom []string
 			execution_state = 'none',
 			execution_lease_expires_at = NULL,
 			execution_lease_expires_at_ns = NULL`,
+		// The clear this UPDATE performs is exactly why the trigger has to be
+		// committed here, into the event: ownershipClearCommittedThisTriggerTx
+		// reads it back to tell this command's own release apart from a
+		// different assignment attempt's.
+		eventPayload: ownershipTriggerIdentityPayload(identity),
 	}
 }
 
