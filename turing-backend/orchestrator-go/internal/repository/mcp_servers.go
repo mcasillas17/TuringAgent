@@ -55,6 +55,15 @@ type ImportedMCPServer struct {
 	URL         string
 	SealedToken []byte
 	Tier        MCPServerTier
+	// Tools is an optional static tools snapshot — already fully
+	// validated and policy-defaulted by the caller — that ImportMCPServer
+	// reconciles atomically with the server row itself. A nil slice
+	// means the mcp.json entry carried no "tools" key at all; a non-nil
+	// empty slice means an explicit `"tools": []`; both leave a legacy
+	// placeholder's carried tools withdrawn (see ImportMCPServer) with
+	// nothing reconfirmed. RegisterMCPServer ignores this field: direct
+	// registration never accepts a tools snapshot.
+	Tools []MCPServerTool
 }
 
 // MCPImportResult reports what ImportMCPServer did: Created is false when an
@@ -75,12 +84,14 @@ type MCPImportIssue struct {
 	Reason string
 }
 
-// ImportMCPServer registers a server discovered from an mcp.json import. It
-// is create-only: if a row of that name already exists (and is not
-// bundled) with a real, non-empty URL, it is left completely untouched and
-// Created is reported false, so a reimport never disturbs an operator's
-// enablement, endpoint, sealed token, liveness, or tool policies. Bundled
-// and tombstoned names are refused so the caller can decide how to surface
+// ImportMCPServer registers a server discovered from an mcp.json import,
+// reconciling its optional Tools snapshot in the very same transaction as
+// the server row itself. It is create-only: if a row of that name already
+// exists (and is not bundled) with a real, non-empty URL, it is left
+// completely untouched — Created is reported false and Tools is not even
+// inspected — so a reimport never disturbs an operator's enablement,
+// endpoint, sealed token, liveness, or tool policies. Bundled and
+// tombstoned names are refused so the caller can decide how to surface
 // that as unsupported without needing a separate lookup call.
 //
 // The one narrow exception is a legacy placeholder from migration 0016: a
@@ -89,7 +100,20 @@ type MCPImportIssue struct {
 // real endpoint. That row is adopted in place (its id is preserved, and
 // only url, sealed_token, and tier are updated) rather than skipped
 // forever, and Created is reported true so the caller classifies it as
-// imported.
+// imported. Because that endpoint was never verified, adopting it always
+// withdraws every tool it carried (present=0, enabled=0) before
+// reconfirming whichever tools this call's Tools snapshot supplies — which
+// may be none, if the reimported entry carried no "tools" key at all or an
+// explicit empty one. A tool that survives keeps whatever policy an
+// operator had already edited onto it; only its presence/enabled/schema
+// state is touched.
+//
+// Reconciling Tools is folded into the same tx as the row mutation (via
+// replaceServerToolsTx, the same helper ReplaceMCPServerTools itself
+// uses): a bundled-namespace or inter-server tool-name collision rolls
+// back the row insert/adoption too, so a corrected reimport sees no row
+// (new name) or the placeholder exactly as it was (adoption) rather than a
+// partial row it could only ever skip.
 func (r *Repository) ImportMCPServer(ctx context.Context, input ImportedMCPServer) (MCPImportResult, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -124,8 +148,10 @@ func (r *Repository) ImportMCPServer(ctx context.Context, input ImportedMCPServe
 		return MCPImportResult{Server: record, Created: false}, nil
 	case err == nil:
 		// Legacy placeholder: adopt it in place. Only url, sealed_token,
-		// and tier change; enabled, tools, and mcp_server_status are left
-		// exactly as they were.
+		// and tier change directly; enabled and mcp_server_status are
+		// left exactly as they were. Tools are reconciled below, after
+		// the update, via the same withdraw-then-reconfirm helper live
+		// discovery uses.
 		if _, uerr := tx.ExecContext(ctx, `
 			UPDATE mcp_servers
 			SET url = ?, sealed_token = ?, tier = ?
@@ -136,6 +162,9 @@ func (r *Repository) ImportMCPServer(ctx context.Context, input ImportedMCPServe
 		record, ferr := mcpServerByName(ctx, tx, input.Name)
 		if ferr != nil {
 			return MCPImportResult{}, ferr
+		}
+		if terr := replaceServerToolsTx(ctx, tx, record, input.Tools); terr != nil {
+			return MCPImportResult{}, terr
 		}
 		if cerr := tx.Commit(); cerr != nil {
 			return MCPImportResult{}, cerr
@@ -162,6 +191,9 @@ func (r *Repository) ImportMCPServer(ctx context.Context, input ImportedMCPServe
 	}
 	record, err := mcpServerByName(ctx, tx, input.Name)
 	if err != nil {
+		return MCPImportResult{}, err
+	}
+	if err := replaceServerToolsTx(ctx, tx, record, input.Tools); err != nil {
 		return MCPImportResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -225,6 +257,14 @@ func (r *Repository) RegisterMCPServer(ctx context.Context, input ImportedMCPSer
 // ReplaceMCPServerToken replaces a non-bundled server's sealed credential in
 // place and returns the updated record. Passing empty bytes clears the
 // column to SQL NULL rather than storing a zero-length blob.
+//
+// A prior Up/Down liveness observation was made using the credential this
+// call is replacing (or clearing), so it says nothing about whether the
+// new one — or the absence of one — actually works: in the same
+// transaction as the sealed_token update, liveness is reset to unknown
+// with an empty status message. A failure resetting liveness rolls back
+// the token change too, rather than leaving a rotated token paired with a
+// stale liveness reading from the credential it just replaced.
 func (r *Repository) ReplaceMCPServerToken(ctx context.Context, serverID string, sealedToken []byte) (MCPServerRecord, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -245,6 +285,15 @@ func (r *Repository) ReplaceMCPServerToken(ctx context.Context, serverID string,
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE mcp_servers SET sealed_token = ? WHERE id = ?
 	`, nullableBytes(sealedToken), serverID); err != nil {
+		return MCPServerRecord{}, err
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE mcp_server_status SET status = 'unknown', error = '', checked_at = NULL WHERE mcp_server_id = ?
+	`, serverID)
+	if err != nil {
+		return MCPServerRecord{}, err
+	}
+	if err := expectOneRow(result, "MCP server status not found"); err != nil {
 		return MCPServerRecord{}, err
 	}
 	record, err := mcpServerByID(ctx, tx, serverID)
@@ -544,7 +593,23 @@ func (r *Repository) ReplaceMCPServerTools(ctx context.Context, serverID string,
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE tools SET present = 0, enabled = 0 WHERE mcp_server_id = ?`, serverID); err != nil {
+	if err := replaceServerToolsTx(ctx, tx, server, tools); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// replaceServerToolsTx is the one shared implementation of "withdraw every
+// tool currently attributed to server, then reconfirm exactly the tools
+// supplied, refusing a name collision with another server's present tool":
+// ReplaceMCPServerTools uses it for live discovery (opening and committing
+// its own transaction around it), and ImportMCPServer folds it into its
+// own already-open transaction so a static mcp.json snapshot's tool
+// reconciliation rolls back together with the server row mutation it
+// belongs to. Both callers see identical collision/upsert behavior because
+// there is exactly one implementation of it.
+func replaceServerToolsTx(ctx context.Context, tx *sql.Tx, server MCPServerRecord, tools []MCPServerTool) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE tools SET present = 0, enabled = 0 WHERE mcp_server_id = ?`, server.ID); err != nil {
 		return err
 	}
 	discoveredAt := now()
@@ -576,11 +641,11 @@ func (r *Repository) ReplaceMCPServerTools(ctx context.Context, serverID string,
 				discovered_at = excluded.discovered_at,
 				mcp_server_id = excluded.mcp_server_id,
 				present = 1
-		`, ids.New("tool"), server.Name, tool.Name, tool.Policy, tool.SchemaJSON, enabled, discoveredAt, serverID); err != nil {
+		`, ids.New("tool"), server.Name, tool.Name, tool.Policy, tool.SchemaJSON, enabled, discoveredAt, server.ID); err != nil {
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (r *Repository) ListMCPServerTools(ctx context.Context, serverID string) ([]MCPServerTool, error) {

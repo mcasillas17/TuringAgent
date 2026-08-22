@@ -102,6 +102,16 @@ type Server struct {
 	// of relying on a short caller-supplied deadline that would pass even
 	// without the wrapper.
 	enableDiscoveryTimeoutOverride time.Duration
+	// reimportBarrier, when set (test-only, nil/unused in production), is
+	// invoked by ReimportMcpJson after notify/audit have run and
+	// immediately before the response is built from the in-memory
+	// report. It lets a test force a genuine interleaving with a second,
+	// concurrent ReimportMcpJson call sharing the same repository —
+	// rather than hoping -race happens to catch one — and then assert
+	// this call's response still reflects only its own report, never
+	// whatever the other call did to the shared mcp_import_issues table
+	// in the meantime.
+	reimportBarrier func()
 }
 
 // AuditRecorder is the audit service, narrowed to the one method this
@@ -221,6 +231,87 @@ type mcpJSONTool struct {
 	InputSchema map[string]any `json:"inputSchema"`
 }
 
+// mcpToolDefinitionRefusedMessage is the fixed, generic reason
+// buildImportTools returns when a tool's name or serialized schema
+// contains the entry's own configured bearer token verbatim. It
+// deliberately never says why: naming the token, or even the word "token"
+// or "metadata", would confirm to whoever controls that mcp.json entry
+// (or is probing what refuses an import) exactly which check tripped and
+// that a secret comparison happens at all — so it reads exactly like any
+// other malformed-entry refusal.
+const mcpToolDefinitionRefusedMessage = "server entry is invalid"
+
+// buildImportTools fully validates an mcp.json entry's optional "tools"
+// snapshot before ImportJSON ever touches the repository: every tool's
+// name and schema must be well-formed, no tool may name a bundled server's
+// namespace, and the entry's own configured bearer token must never
+// appear verbatim in a tool's name or its serialized schema. Any failure
+// refuses the whole snapshot (returning it, and hence the entry, is left
+// entirely to the caller — nothing here mutates anything), so an invalid
+// or token-bearing definition can never leave a partial row a corrected
+// reimport could only skip.
+//
+// The token-in-name check runs before any error message that would embed
+// the tool's name (the schema-shape checks below, and buildRepositoryTool's
+// own bundled-namespace-collision message), and the token-in-schema check
+// runs immediately after the schema is serialized and before that same
+// bundled-collision message: a tool that is both token-bearing and
+// otherwise invalid must still be refused with the one generic,
+// sentinel-free reason, never a more specific message that would print the
+// token-bearing name or schema back out.
+func buildImportTools(tier repository.MCPServerTier, serverName string, rawTools []mcpJSONTool, token string) ([]repository.MCPServerTool, error) {
+	tools := make([]repository.MCPServerTool, 0, len(rawTools))
+	for index, tool := range rawTools {
+		if strings.TrimSpace(tool.Name) == "" {
+			return nil, fmt.Errorf("tool %d has an invalid name", index)
+		}
+		if token != "" && strings.Contains(tool.Name, token) {
+			return nil, errors.New(mcpToolDefinitionRefusedMessage)
+		}
+		schema := tool.InputSchema
+		if schema == nil {
+			schema = map[string]any{"type": "object"}
+		}
+		if rootType, present := schema["type"]; present && rootType != "object" {
+			return nil, fmt.Errorf("tool %q inputSchema root type must be object", tool.Name)
+		}
+		schema["type"] = "object"
+		encoded, err := json.Marshal(schema)
+		if err != nil {
+			return nil, fmt.Errorf("tool %q inputSchema is invalid", tool.Name)
+		}
+		schemaJSON := string(encoded)
+		if token != "" && strings.Contains(schemaJSON, token) {
+			return nil, errors.New(mcpToolDefinitionRefusedMessage)
+		}
+		built, err := buildRepositoryTool(tier, serverName, tool.Name, schemaJSON)
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, built)
+	}
+	return tools, nil
+}
+
+// buildRepositoryTool assembles a single repository.MCPServerTool from a
+// name and an already-serialized schema, applying the one bundled-namespace
+// collision guard and the one DefaultPolicyFor default that both an
+// mcp.json static snapshot (buildImportTools) and live discovery
+// (RecordDiscovery) share, so neither path can silently drift from the
+// other on what a newly seen tool's policy or namespace rules are.
+func buildRepositoryTool(tier repository.MCPServerTier, serverName, name, schemaJSON string) (repository.MCPServerTool, error) {
+	if tier != repository.MCPServerTierBundled {
+		if owner, bundled := toolpolicy.BundledServerForTool(name); bundled {
+			return repository.MCPServerTool{}, fmt.Errorf("%w: %s is owned by bundled server %s", repository.ErrMCPToolNameCollision, name, owner)
+		}
+	}
+	return repository.MCPServerTool{
+		Name:       name,
+		Policy:     string(toolpolicy.DefaultPolicyFor(serverName, name)),
+		SchemaJSON: schemaJSON,
+	}, nil
+}
+
 func New(repo *repository.Repository, sealer *secretbox.Sealer, httpClient *http.Client) *Server {
 	return &Server{repo: repo, sealer: sealer, httpClient: httpClient}
 }
@@ -319,6 +410,22 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 			return ImportReport{}, fmt.Errorf("look up MCP server %q: %w", name, err)
 		}
 
+		// Every static tool this entry declares is fully validated —
+		// name, schema, bundled-namespace collision, and the entry's own
+		// token never appearing verbatim in a tool's name or schema —
+		// before anything below touches the repository, so an invalid or
+		// token-bearing snapshot refuses the whole entry (Unsupported
+		// only, never also Imported) rather than leaving a partial row a
+		// corrected reimport could only skip.
+		var tools []repository.MCPServerTool
+		if toolsPresent {
+			tools, err = buildImportTools(tier, name, entry.Tools, token)
+			if err != nil {
+				recordUnsupported(report.Unsupported, name, err.Error())
+				continue
+			}
+		}
+
 		sealed, err := sealMCPServerToken(s.sealer, name, token)
 		if err != nil {
 			if errors.Is(err, secretbox.ErrNoKey) {
@@ -332,17 +439,26 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 			URL:         canonicalURL,
 			SealedToken: sealed,
 			Tier:        tier,
+			Tools:       tools,
 		})
 		if err != nil {
-			if errors.Is(err, repository.ErrMCPServerBundled) {
+			switch {
+			case errors.Is(err, repository.ErrMCPServerBundled):
 				recordUnsupported(report.Unsupported, name, bundledServerRegistrationMessage)
-				continue
-			}
-			if errors.Is(err, repository.ErrMCPServerImportSuppressed) {
+			case errors.Is(err, repository.ErrMCPServerImportSuppressed):
 				recordUnsupported(report.Unsupported, name, "server was removed locally and remains suppressed; use a new name to import it again")
-				continue
+			case errors.Is(err, repository.ErrMCPToolNameCollision):
+				// The repository's own transaction already rolled back
+				// the row insert/adoption entirely (see
+				// ImportMCPServer): no row remains for this name, so a
+				// corrected reimport (dropping or renaming the
+				// colliding tool) starts clean rather than skipping a
+				// poisoned partial row.
+				recordUnsupported(report.Unsupported, name, err.Error())
+			default:
+				return ImportReport{}, fmt.Errorf("import MCP server %q: %w", name, err)
 			}
-			return ImportReport{}, fmt.Errorf("import MCP server %q: %w", name, err)
+			continue
 		}
 		if !result.Created {
 			// Lost a race with a concurrent import/registration between
@@ -352,40 +468,6 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 			continue
 		}
 		imported = append(imported, name)
-		server := result.Server
-		if toolsPresent {
-			discovered := make([]DiscoveredTool, 0, len(entry.Tools))
-			valid := true
-			for index, tool := range entry.Tools {
-				if strings.TrimSpace(tool.Name) == "" {
-					recordUnsupported(report.Unsupported, name, fmt.Sprintf("tool %d has an invalid name", index))
-					valid = false
-					break
-				}
-				schema := tool.InputSchema
-				if schema == nil {
-					schema = map[string]any{"type": "object"}
-				}
-				if rootType, present := schema["type"]; present && rootType != "object" {
-					recordUnsupported(report.Unsupported, name, fmt.Sprintf("tool %q inputSchema root type must be object", tool.Name))
-					valid = false
-					break
-				}
-				schema["type"] = "object"
-				encoded, err := json.Marshal(schema)
-				if err != nil {
-					recordUnsupported(report.Unsupported, name, fmt.Sprintf("tool %q inputSchema is invalid", tool.Name))
-					valid = false
-					break
-				}
-				discovered = append(discovered, DiscoveredTool{Name: tool.Name, SchemaJSON: string(encoded)})
-			}
-			if valid {
-				if err := s.RecordDiscovery(ctx, server.ID, discovered); err != nil {
-					recordUnsupported(report.Unsupported, name, err.Error())
-				}
-			}
-		}
 	}
 	sort.Strings(imported)
 	sort.Strings(skipped)
@@ -404,16 +486,11 @@ func (s *Server) RecordDiscovery(ctx context.Context, serverID string, discovere
 	}
 	tools := make([]repository.MCPServerTool, 0, len(discovered))
 	for _, tool := range discovered {
-		if server.Tier != repository.MCPServerTierBundled {
-			if owner, bundled := toolpolicy.BundledServerForTool(tool.Name); bundled {
-				return fmt.Errorf("%w: %s is owned by bundled server %s", repository.ErrMCPToolNameCollision, tool.Name, owner)
-			}
+		built, err := buildRepositoryTool(server.Tier, server.Name, tool.Name, tool.SchemaJSON)
+		if err != nil {
+			return err
 		}
-		tools = append(tools, repository.MCPServerTool{
-			Name:       tool.Name,
-			Policy:     string(toolpolicy.DefaultPolicyFor(server.Name, tool.Name)),
-			SchemaJSON: tool.SchemaJSON,
-		})
+		tools = append(tools, built)
 	}
 	return s.repo.ReplaceMCPServerTools(ctx, serverID, tools)
 }
@@ -460,26 +537,45 @@ func classifyImportedURL(raw string) (repository.MCPServerTier, string, error) {
 	}
 }
 
+// errMultipleAuthorizationHeaders is the fixed reason bearerFromHeaders
+// returns when an mcp.json entry's headers object carries more than one
+// case-insensitive "authorization" key (e.g. both "Authorization" and
+// "authorization" present as distinct JSON keys, which decode into
+// distinct map entries). Go map iteration order is randomized, so
+// silently taking whichever one happens to be visited last — even when
+// both carry the identical value — would make the accepted token a
+// randomized winner rather than a deterministic outcome. Refusing
+// outright instead means the result can never depend on that order.
+var errMultipleAuthorizationHeaders = errors.New("only a single authorization header is accepted")
+
 func bearerFromHeaders(headers map[string]string) (string, error) {
-	token := ""
+	var authValue string
+	authCount := 0
 	for name, value := range headers {
 		if !strings.EqualFold(name, "authorization") {
-			return "", fmt.Errorf("header %q is unsupported; only Authorization: Bearer is accepted", name)
+			return "", fmt.Errorf("header %q is unsupported; only Authorization: ****** accepted", name)
 		}
-		const prefix = "Bearer "
-		if !strings.HasPrefix(value, prefix) {
-			return "", errors.New("authorization header must use a non-empty Bearer token")
-		}
-		normalized, err := normalizeBearerToken(strings.TrimPrefix(value, prefix))
-		if err != nil {
-			return "", err
-		}
-		if normalized == "" {
-			return "", errors.New("authorization header must use a non-empty Bearer token")
-		}
-		token = normalized
+		authCount++
+		authValue = value
 	}
-	return token, nil
+	if authCount > 1 {
+		return "", errMultipleAuthorizationHeaders
+	}
+	if authCount == 0 {
+		return "", nil
+	}
+	const prefix = "Bearer "
+	if !strings.HasPrefix(authValue, prefix) {
+		return "", errors.New("authorization header must use a non-empty ******")
+	}
+	normalized, err := normalizeBearerToken(strings.TrimPrefix(authValue, prefix))
+	if err != nil {
+		return "", err
+	}
+	if normalized == "" {
+		return "", errors.New("authorization header must use a non-empty ******")
+	}
+	return normalized, nil
 }
 
 // normalizeBearerToken applies the one set of rules a bearer token must

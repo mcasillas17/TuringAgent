@@ -46,7 +46,7 @@ func (r *recordingAuditRecorder) Record(_ context.Context, _ string, _ string, _
 	return fail
 }
 
-func TestRegisterMcpServerIsAuditedWithNameAndTierOnly(t *testing.T) {
+func TestRegisterMcpServerIsAuditedWithNameTierAndURL(t *testing.T) {
 	service, _ := newRegistryTestService(t)
 	recorder := &recordingAuditRecorder{}
 	service.SetAuditRecorder(recorder)
@@ -70,6 +70,12 @@ func TestRegisterMcpServerIsAuditedWithNameAndTierOnly(t *testing.T) {
 	}
 	if record.payload["name"] != "vendor" {
 		t.Fatalf("payload = %+v, want name=vendor", record.payload)
+	}
+	if record.payload["tier"] != string(repository.MCPServerTierRemoteURL) {
+		t.Fatalf("payload = %+v, want tier=remote_url", record.payload)
+	}
+	if record.payload["url"] != "https://vendor.example/mcp" {
+		t.Fatalf("payload = %+v, want url=https://vendor.example/mcp", record.payload)
 	}
 	for key, value := range record.payload {
 		if key != "name" && key != "tier" && key != "url" {

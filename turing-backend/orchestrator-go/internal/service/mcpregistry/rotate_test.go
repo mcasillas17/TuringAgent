@@ -199,6 +199,69 @@ func TestRotateMcpServerTokenNotifiesRegistryChange(t *testing.T) {
 	}
 }
 
+// A successful rotation must reset liveness to unknown with an empty
+// status message: a prior Up/Down observation was made using the
+// credential being replaced. The same holds for clearing the token
+// (an empty bearer_token), and repeatedly, across multiple
+// rotate/clear cycles.
+func TestRotateMcpServerTokenResetsLivenessToUnknown(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
+		Name: "vendor", URL: "https://vendor.example/mcp", Tier: repository.MCPServerTierRemoteURL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetMCPServerStatus(context.Background(), server.ID, "up", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	descriptor, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
+		ServerId: server.ID, BearerToken: "vendor-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor.GetLiveness() != turingv1.McpServerLiveness_MCP_SERVER_LIVENESS_UNKNOWN {
+		t.Fatalf("liveness = %v, want unknown after rotating the token", descriptor.GetLiveness())
+	}
+	if descriptor.GetStatusMessage() != "" {
+		t.Fatalf("status message = %q, want empty after rotating the token", descriptor.GetStatusMessage())
+	}
+
+	if err := repo.SetMCPServerStatus(context.Background(), server.ID, "down", "connection refused"); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
+		ServerId: server.ID, BearerToken: "",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.GetLiveness() != turingv1.McpServerLiveness_MCP_SERVER_LIVENESS_UNKNOWN {
+		t.Fatalf("liveness = %v, want unknown after clearing the token", cleared.GetLiveness())
+	}
+	if cleared.GetStatusMessage() != "" {
+		t.Fatalf("status message = %q, want empty after clearing the token", cleared.GetStatusMessage())
+	}
+
+	// Repeated rotations/clears must each keep resetting liveness.
+	for i, token := range []string{"second-secret", "", "third-secret", ""} {
+		if err := repo.SetMCPServerStatus(context.Background(), server.ID, "up", ""); err != nil {
+			t.Fatalf("round %d: seed status: %v", i, err)
+		}
+		again, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
+			ServerId: server.ID, BearerToken: token,
+		})
+		if err != nil {
+			t.Fatalf("round %d: %v", i, err)
+		}
+		if again.GetLiveness() != turingv1.McpServerLiveness_MCP_SERVER_LIVENESS_UNKNOWN {
+			t.Fatalf("round %d: liveness = %v, want unknown", i, again.GetLiveness())
+		}
+	}
+}
+
 func TestRotateMcpServerTokenResponseNeverIncludesTokenOrCiphertext(t *testing.T) {
 	service, repo := newRegistryTestService(t)
 	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{

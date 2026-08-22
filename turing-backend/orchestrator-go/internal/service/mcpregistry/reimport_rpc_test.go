@@ -9,9 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/secretbox"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -333,41 +336,56 @@ func TestReimportMcpJsonAuditsEveryRunIncludingEmptyAndMalformedOnly(t *testing.
 	}
 }
 
-// The audit call must survive a later failure in the response-mapping
-// step (re-reading mcp_import_issues to build the Refused list): it must
-// never be skippable by something that goes wrong after the mutation and
-// the audit write have both already succeeded. This uses an audit
-// recorder that, once it has captured the row, cancels the very context
-// the RPC was called with — simulating the audit write's own effects
-// becoming visible to a later use of that same context — so the
-// subsequent ListMCPImportIssues call deterministically fails and the
-// RPC returns Internal, while the row from the already-completed
-// mutation must still be there. Moving the audit call to after that later
-// read (e.g. to the very end of ReimportMcpJson) would make this test
-// fail: the cancellation would then happen too late to affect
-// ListMCPImportIssues, the RPC would return success, and no audit call
-// would ever have run.
+// The notify and audit steps — and, now that Refused is built purely from
+// this call's own in-memory report rather than a second repository read,
+// the response mapping itself — must not be skippable by anything that
+// could race in immediately after ReimportConfiguredJSON's mutation has
+// already committed. This uses an audit recorder that, once it has
+// captured the row, cancels the very context the RPC was called with —
+// simulating a side effect of the audit write (or of the notifier)
+// becoming visible to whatever runs next. Previously this deterministically
+// broke the later ListMCPImportIssues re-read used to build the response,
+// so the RPC returned Internal; now that read is gone, so the RPC must
+// succeed regardless, and notify/audit/the response itself must all still
+// reflect the committed import. Moving notify or audit to after the
+// response is built (or reintroducing a second repository read for
+// Refused) would reopen exactly this race.
 func TestReimportMcpJsonAuditSurvivesALaterResponseMappingFailure(t *testing.T) {
 	service, _ := newRegistryTestService(t)
 	root := t.TempDir()
 	service.SetMCPConfigRoot(root)
+	if err := os.WriteFile(filepath.Join(root, "mcp.json"), []byte(`{
+		"mcpServers": {
+			"vendor": {"url": "https://vendor.example/mcp"}
+		}
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	recorder := &recordingAuditRecorder{afterRecord: cancel}
 	service.SetAuditRecorder(recorder)
+	notifier := &countingRegistryChangeNotifier{}
+	service.SetRegistryChangeNotifier(notifier)
 
-	_, err := service.ReimportMcpJson(ctx, &turingv1.ReimportMcpJsonRequest{})
-	if status.Code(err) != codes.Internal {
-		t.Fatalf("code = %v, want Internal from the later ListMCPImportIssues call observing the now-cancelled context", status.Code(err))
+	response, err := service.ReimportMcpJson(ctx, &turingv1.ReimportMcpJsonRequest{})
+	if err != nil {
+		t.Fatalf("ReimportMcpJson must still succeed: the response is mapped entirely from the in-memory report, not a second read that could observe the now-cancelled context: %v", err)
 	}
 	if ctx.Err() == nil {
 		t.Fatal("test setup failed: the audit recorder never cancelled the original request context")
 	}
 	if len(recorder.records) != 1 {
-		t.Fatalf("records = %+v, want the reimport audited despite the later response-mapping failure", recorder.records)
+		t.Fatalf("records = %+v, want the reimport audited despite the later cancellation", recorder.records)
 	}
 	if recorder.records[0].action != "mcp.server.reimported" {
 		t.Fatalf("action = %q, want mcp.server.reimported", recorder.records[0].action)
+	}
+	if notifier.calls != 1 {
+		t.Fatalf("notify calls = %d, want 1: notify must fire for a committed import despite the later cancellation", notifier.calls)
+	}
+	if len(response.GetImported()) != 1 || response.GetImported()[0] != "vendor" {
+		t.Fatalf("Imported = %v, want [vendor] despite the later cancellation", response.GetImported())
 	}
 }
 
@@ -421,4 +439,108 @@ func TestReimportMcpJsonBearerSentinelRunStaysSentinelFree(t *testing.T) {
 		}
 	}
 	assertStringSentinelFree(t, "process log", logged.String(), sentinel)
+}
+
+// TestReimportMcpJsonConcurrentOverlappingRunsCannotSwapRefusedResponses
+// proves two overlapping ReimportMcpJson calls sharing one repository can
+// never swap each other's Refused response: each call's response must
+// reflect only its own report.Unsupported, never whatever the shared
+// mcp_import_issues table looked like by the time the OTHER call finished
+// writing to it. reimportBarrier forces call A to pause after its own
+// ImportJSON has already persisted its issues ("bad-a") but before A's
+// response is built, while call B (a second *Server sharing the same
+// repository, with no barrier of its own) runs an entire overlapping
+// reimport to completion first — persisting a different issue ("bad-b")
+// into the same shared table and returning before A resumes. If the
+// response were still built by re-reading that shared table (the bug this
+// change removes), A's response would show bad-b's reason instead of its
+// own.
+func TestReimportMcpJsonConcurrentOverlappingRunsCannotSwapRefusedResponses(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := db.ApplyMigrations(context.Background(), database); err != nil {
+		t.Fatal(err)
+	}
+	repo := repository.New(database)
+	sealer, err := secretbox.New(bytes.Repeat([]byte{0x41}, secretbox.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	serviceA := New(repo, sealer, nil)
+	rootA := t.TempDir()
+	serviceA.SetMCPConfigRoot(rootA)
+	if err := os.WriteFile(filepath.Join(rootA, "mcp.json"), []byte(`{
+		"mcpServers": {
+			"bad-a": {"command": "npx", "args": ["x"]}
+		}
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	serviceB := New(repo, sealer, nil)
+	rootB := t.TempDir()
+	serviceB.SetMCPConfigRoot(rootB)
+	if err := os.WriteFile(filepath.Join(rootB, "mcp.json"), []byte(`{
+		"mcpServers": {
+			"bad-b": {"command": "npx", "args": ["x"]}
+		}
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reached := make(chan struct{})
+	release := make(chan struct{})
+	var barrierFired int
+	serviceA.reimportBarrier = func() {
+		barrierFired++
+		close(reached)
+		<-release
+	}
+
+	type outcome struct {
+		response *turingv1.ReimportMcpJsonResponse
+		err      error
+	}
+	resultA := make(chan outcome, 1)
+	go func() {
+		response, err := serviceA.ReimportMcpJson(context.Background(), &turingv1.ReimportMcpJsonRequest{})
+		resultA <- outcome{response: response, err: err}
+	}()
+
+	select {
+	case <-reached:
+		// call A has persisted "bad-a" and is now paused before building
+		// its response.
+	case <-time.After(5 * time.Second):
+		t.Fatal("test setup failed: reimportBarrier was never invoked by ReimportMcpJson")
+	}
+
+	responseB, err := serviceB.ReimportMcpJson(context.Background(), &turingv1.ReimportMcpJsonRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := responseB.GetRefused(); len(got) != 1 || got[0].GetName() != "bad-b" {
+		t.Fatalf("B's Refused = %v, want [bad-b]", got)
+	}
+
+	close(release)
+	var final outcome
+	select {
+	case final = <-resultA:
+	case <-time.After(5 * time.Second):
+		t.Fatal("call A never returned after its barrier was released")
+	}
+	if final.err != nil {
+		t.Fatal(final.err)
+	}
+	if barrierFired != 1 {
+		t.Fatalf("barrier fired %d times, want exactly 1", barrierFired)
+	}
+	if got := final.response.GetRefused(); len(got) != 1 || got[0].GetName() != "bad-a" {
+		t.Fatalf("A's Refused = %v, want [bad-a]: it must never reflect B's concurrent refusal", got)
+	}
 }

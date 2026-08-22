@@ -2,7 +2,10 @@ package mcpregistry
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -248,5 +251,112 @@ func TestSetMcpServerEnabledBoundsWholeDiscoveryByASingleContextTimeout(t *testi
 	}
 	if !found {
 		t.Fatal("server missing from ListMCPServers")
+	}
+}
+
+// slowButValidPageTransport lets every request complete after perPage — a
+// real, but short, wait — and then forwards it to inner for a genuine,
+// syntactically valid response. It stands in for a vendor that always
+// answers promptly and validly per page but never stops paginating,
+// distinguishing a per-page timeout (which would let every page keep
+// finishing within its own fresh budget forever) from a whole-operation
+// timeout (which must eventually land mid-wait and fail the in-flight
+// request).
+type slowButValidPageTransport struct {
+	inner   http.RoundTripper
+	perPage time.Duration
+	calls   int32
+}
+
+func (t *slowButValidPageTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	atomic.AddInt32(&t.calls, 1)
+	select {
+	case <-time.After(t.perPage):
+	case <-req.Context().Done():
+		return nil, req.Context().Err()
+	}
+	return t.inner.RoundTrip(req)
+}
+
+// TestSetMcpServerEnabledWholeOperationTimeoutStopsAfterFewPagesNotAllPages
+// is the discriminating case TestSetMcpServerEnabledBoundsWholeDiscoveryByASingleContextTimeout
+// cannot cover: that test's transport never responds at all, so it only
+// proves the *first* request is bounded — a per-page timeout applied
+// fresh to every tools/list call would pass that test too, since the
+// first (and only) request still never returns. Here every page
+// completes with a real, valid response and a fresh nextCursor, so
+// pagination only stops because the whole-operation timeout eventually
+// lands mid-wait on some later page. With enableDiscoveryTimeoutOverride
+// set to about 3 pages' worth of budget, discovery must stop after a
+// small number of pages; a per-page timeout regression (a fresh deadline
+// re-armed on every request instead of one deadline wrapping the entire
+// discover() call) would instead let every page keep finishing inside its
+// own fresh budget and paginate all the way to maxMCPToolPages (100),
+// taking roughly maxMCPToolPages x perPage and making that many HTTP
+// calls — both far more than this test allows, while still finishing in
+// well under a second either way, so it stays fast and deterministic.
+func TestSetMcpServerEnabledWholeOperationTimeoutStopsAfterFewPagesNotAllPages(t *testing.T) {
+	var pageCount int32
+	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID int64 `json:"id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		n := atomic.AddInt32(&pageCount, 1)
+		w.Header().Set("content-type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"result": map[string]any{
+				"tools":      []any{},
+				"nextCursor": fmt.Sprintf("page-%d", n),
+			},
+		})
+	}))
+	t.Cleanup(vendor.Close)
+
+	const perPage = 30 * time.Millisecond
+	transport := &slowButValidPageTransport{inner: vendor.Client().Transport, perPage: perPage}
+
+	service, repo := newRegistryTestService(t)
+	service.httpClient = &http.Client{Transport: transport}
+	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
+		Name: "remote", URL: vendor.URL, Tier: repository.MCPServerTierRemoteURL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// enableDiscoveryTimeoutOverride stands in for the real 30s
+	// enableDiscoveryTimeout: about 3 pages' worth of budget for the
+	// whole operation, the same test-only seam
+	// TestSetMcpServerEnabledBoundsWholeDiscoveryByASingleContextTimeout
+	// uses.
+	service.enableDiscoveryTimeoutOverride = 3 * perPage
+
+	start := time.Now()
+	_, _ = service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
+		ServerId: server.ID, Enabled: true,
+	})
+	elapsed := time.Since(start)
+
+	const maxAcceptablePages = 10 // generously above ~3, nowhere near maxMCPToolPages (100)
+	if calls := atomic.LoadInt32(&transport.calls); calls > maxAcceptablePages {
+		t.Fatalf("HTTP calls = %d, want at most %d: a per-page timeout regression would keep "+
+			"paginating toward maxMCPToolPages (%d) instead of stopping early", calls, maxAcceptablePages, maxMCPToolPages)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("elapsed = %v, want well under what maxMCPToolPages pages at %v each would take: "+
+			"the whole-operation timeout must stop discovery after a handful of pages", elapsed, perPage)
+	}
+
+	updated, err := repo.GetMCPServer(context.Background(), server.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.Enabled {
+		t.Fatal("the enable must have committed even though discovery timed out mid-pagination")
+	}
+	if updated.Status != "down" {
+		t.Fatalf("status = %q, want down: the timed-out discovery attempt must still be recorded", updated.Status)
 	}
 }

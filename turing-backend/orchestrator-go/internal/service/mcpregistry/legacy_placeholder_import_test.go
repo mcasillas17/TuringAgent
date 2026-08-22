@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 )
@@ -92,6 +93,125 @@ func TestImportJSONAdoptsLegacyPlaceholderInsteadOfSkippingForever(t *testing.T)
 	}
 	if tombstoned {
 		t.Fatal("adopting a placeholder must not involve the tombstone table")
+	}
+}
+
+// A reimport whose mcp.json entry carries no "tools" key at all (as
+// opposed to the previous test's matching snapshot) must still withdraw
+// every tool the placeholder carried: that endpoint was never verified, so
+// its tools must not simply carry over as present just because this
+// reimport happened to say nothing about tools.
+func TestImportJSONAdoptsLegacyPlaceholderWithNoToolsKeyWithdrawsCarriedTools(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	ctx := context.Background()
+
+	placeholder, err := repo.RegisterMCPServer(ctx, repository.ImportedMCPServer{
+		Name: "vendor", URL: "", Tier: repository.MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ReplaceMCPServerTools(ctx, placeholder.ID, []repository.MCPServerTool{
+		{Name: "vendor.lookup", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := service.ImportJSON(ctx, []byte(`{
+		"mcpServers": {
+			"vendor": {"url": "https://vendor.example/mcp"}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Imported) != 1 || report.Imported[0] != "vendor" {
+		t.Fatalf("Imported = %v, want [vendor]", report.Imported)
+	}
+
+	servers, err := repo.ListMCPServers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vendorRecord := findRepositoryServer(t, servers, "vendor")
+	if vendorRecord.ID != placeholder.ID {
+		t.Fatalf("ID = %q, want the placeholder %q adopted in place", vendorRecord.ID, placeholder.ID)
+	}
+
+	tools, err := repo.ListMCPServerTools(ctx, vendorRecord.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 1 || tools[0].Present || tools[0].Enabled {
+		t.Fatalf("tools = %+v, want the carried tool withdrawn (present=0, enabled=0): the reimport carried no tools snapshot", tools)
+	}
+}
+
+// TestImportedPlaceholderEnableWithFailedDiscoveryDoesNotActivateWithdrawnTools
+// covers the discriminating case a plain adoption test cannot: once a
+// placeholder is adopted and its carried tool withdrawn (present=0,
+// enabled=0), enabling the server and having live discovery then fail must
+// not resurrect it. discover() never calls
+// RecordDiscovery/ReplaceMCPServerTools when the vendor round trip itself
+// fails, so the withdrawn tool must still be exactly as the adoption left
+// it. This uses repo.ImportMCPServer directly (the same call ImportJSON
+// itself makes for a placeholder adoption) rather than service.ImportJSON,
+// because the httptest server's loopback URL would fail ImportJSON's own
+// URL classification — unrelated to what this test is proving — the same
+// workaround TestImportedRemoteServerDiscoveryFailurePreservesSnapshotAndPolicy
+// uses for the same reason.
+func TestImportedPlaceholderEnableWithFailedDiscoveryDoesNotActivateWithdrawnTools(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	ctx := context.Background()
+
+	placeholder, err := repo.RegisterMCPServer(ctx, repository.ImportedMCPServer{
+		Name: "vendor", URL: "", Tier: repository.MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ReplaceMCPServerTools(ctx, placeholder.ID, []repository.MCPServerTool{
+		{Name: "vendor.lookup", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	vendor := failingVendor(t, "tools/list unavailable")
+	service.httpClient = vendor.Client()
+
+	result, err := repo.ImportMCPServer(ctx, repository.ImportedMCPServer{
+		Name: "vendor", URL: vendor.URL, Tier: repository.MCPServerTierRemoteURL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Server.ID != placeholder.ID {
+		t.Fatal("test setup failed: adoption must reuse the placeholder's id")
+	}
+	adoptedTools, err := repo.ListMCPServerTools(ctx, placeholder.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(adoptedTools) != 1 || adoptedTools[0].Present {
+		t.Fatalf("test setup failed: tools after adoption = %+v, want withdrawn before the enable attempt", adoptedTools)
+	}
+
+	descriptor, err := service.SetMcpServerEnabled(ctx, &turingv1.SetMcpServerEnabledRequest{
+		ServerId: placeholder.ID, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor.GetLiveness() != turingv1.McpServerLiveness_MCP_SERVER_LIVENESS_DOWN {
+		t.Fatalf("liveness = %v, want down: the vendor's tools/list call fails", descriptor.GetLiveness())
+	}
+
+	stillWithdrawn, err := repo.ListMCPServerTools(ctx, placeholder.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stillWithdrawn) != 1 || stillWithdrawn[0].Present || stillWithdrawn[0].Enabled {
+		t.Fatalf("tools after enabling with failed discovery = %+v, want still withdrawn", stillWithdrawn)
 	}
 }
 

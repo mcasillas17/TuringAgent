@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -217,9 +218,14 @@ func (s *Server) SetMcpServerEnabled(ctx context.Context, req *turingv1.SetMcpSe
 	// already-persisted enable/disable unannounced or unaudited. This
 	// also means a discovery failure still produces an audit record: the
 	// enable itself succeeded and committed even though the server came
-	// back down. The payload never carries a token, URL, or status/error
-	// text — only the name, tier, and whether discovery was attempted and
-	// whether it succeeded.
+	// back down. This enable/disable payload never carries a token, URL,
+	// or status/error text — only the name, tier, and whether discovery
+	// was attempted and whether it succeeded. That is a rule about this
+	// payload, not every audit call in this file: RegisterMcpServer's own
+	// payload below legitimately includes the server's URL, because by
+	// the time it is audited there validateServerDefinition has already
+	// canonicalized and hardened it, so it is auditing what was actually
+	// registered rather than raw, untrusted operator input.
 	s.notifyRegistryChanged()
 	action := "mcp.server.disabled"
 	if req.GetEnabled() {
@@ -385,7 +391,12 @@ func (s *Server) RegisterMcpServer(ctx context.Context, req *turingv1.RegisterMc
 	// Notify and audit immediately once the repository mutation has
 	// committed — before building the response descriptor — so an
 	// unexpected descriptor/schema failure below can never leave a real,
-	// already-persisted registration unannounced or unaudited.
+	// already-persisted registration unannounced or unaudited. Unlike
+	// SetMcpServerEnabled's payload, this one legitimately includes the
+	// server's URL: validateServerDefinition has already canonicalized
+	// and hardened it (no userinfo, query, or fragment; classified into
+	// exactly one tier), so this audits what was actually registered,
+	// not raw operator input.
 	s.notifyRegistryChanged()
 	s.auditMCPEvent(ctx, "mcp.server.registered", server.ID, map[string]any{
 		"name": server.Name,
@@ -456,10 +467,17 @@ func (s *Server) RotateMcpServerToken(ctx context.Context, req *turingv1.RotateM
 }
 
 // ReimportMcpJson re-reads mcp.json from the configured config root the
-// same way app startup does, and reports what happened the same way
-// ListMcpServers reports Unsupported entries: sorted by name, from the
-// mcp_import_issues table rather than from ImportReport's map so ordering
-// stays consistent with the rest of the registry surface.
+// same way app startup does. notify and audit both run immediately once
+// ReimportConfiguredJSON's mutation has already committed — before
+// anything below that could still fail — so neither can ever be skipped
+// by a later failure, and two overlapping ReimportMcpJson calls can never
+// suppress or delay each other's notification. The response's Refused
+// list is built directly from this call's own report.Unsupported, sorted
+// by name, rather than by re-reading the shared mcp_import_issues table
+// (which ListMcpServers still uses for its own Unsupported list): a
+// concurrent reimport can freely overwrite that table with its own,
+// different refusals without ever being able to leak into — or borrow
+// from — this call's response.
 func (s *Server) ReimportMcpJson(ctx context.Context, _ *turingv1.ReimportMcpJsonRequest) (*turingv1.ReimportMcpJsonResponse, error) {
 	report, err := s.ReimportConfiguredJSON(ctx)
 	if err != nil {
@@ -468,36 +486,34 @@ func (s *Server) ReimportMcpJson(ctx context.Context, _ *turingv1.ReimportMcpJso
 		}
 		return nil, status.Error(codes.Internal, "reimport mcp.json failed")
 	}
-	// The mutation is already complete at this point: report.Unsupported
-	// is the same map ReimportConfiguredJSON just wrote to the
-	// mcp_import_issues table, so its length is exactly the refused
-	// count without a second (fallible) repository read. Auditing here,
-	// before the ListMCPImportIssues call below that only re-derives the
-	// response's Refused list, means a later failure to read that table
-	// back can never cause a real, already-committed reimport to go
-	// unaudited. Only counts are recorded — never names or reasons.
+	if len(report.Imported) > 0 {
+		s.notifyRegistryChanged()
+	}
+	// Only counts are recorded — never names or reasons.
 	s.auditMCPEvent(ctx, "mcp.server.reimported", "mcp.json", map[string]any{
 		"imported": len(report.Imported),
 		"skipped":  len(report.Skipped),
 		"refused":  len(report.Unsupported),
 	})
-	issues, err := s.repo.ListMCPImportIssues(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "list MCP import issues failed")
+	if s.reimportBarrier != nil {
+		s.reimportBarrier()
 	}
-	response := &turingv1.ReimportMcpJsonResponse{
-		Imported: report.Imported,
-		Skipped:  report.Skipped,
+	names := make([]string, 0, len(report.Unsupported))
+	for name := range report.Unsupported {
+		names = append(names, name)
 	}
-	for _, issue := range issues {
-		response.Refused = append(response.Refused, &turingv1.UnsupportedMcpServer{
-			Name: issue.Name, Reason: issue.Reason,
+	sort.Strings(names)
+	refused := make([]*turingv1.UnsupportedMcpServer, 0, len(names))
+	for _, name := range names {
+		refused = append(refused, &turingv1.UnsupportedMcpServer{
+			Name: name, Reason: report.Unsupported[name],
 		})
 	}
-	if len(report.Imported) > 0 {
-		s.notifyRegistryChanged()
-	}
-	return response, nil
+	return &turingv1.ReimportMcpJsonResponse{
+		Imported: report.Imported,
+		Skipped:  report.Skipped,
+		Refused:  refused,
+	}, nil
 }
 
 func (s *Server) CallRegisteredMcpTool(ctx context.Context, req *turingv1.CallRegisteredMcpToolRequest) (*turingv1.CallRegisteredMcpToolResponse, error) {
