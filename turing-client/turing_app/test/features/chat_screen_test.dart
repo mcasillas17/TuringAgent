@@ -677,8 +677,8 @@ void main() {
     unawaited(events.close());
   });
 
-  // Live-path baseline (F10): the modern `RunState`-bearing terminal event
-  // itself carries no post-tool delta — the assistant bubble's last content
+  // Live-path baseline: the modern `RunState`-bearing terminal event itself
+  // carries no post-tool delta — the assistant bubble's last content
   // arrived BEFORE the tool card, so the same, single assistant row is what
   // `_assistantEntryIndexForRun` resolves to. `_upsertRunStateCard` always
   // walks past contiguous same-run artifacts via
@@ -686,17 +686,11 @@ void main() {
   // is the parity target the page/resync, duplicate-row, and
   // startup-buffer-drain paths below are held to.
   //
-  // Correction: unlike those other paths, this one was already GREEN
-  // against pre-fix production (HEAD 2fb25907) — for a plain live event
-  // with no watermark/history reason to classify it historical,
-  // `_isHistoricalRunEvent(event)` was already false, so the removed
-  // `insertAdjacent: _isHistoricalRunEvent(event)` argument the live path
-  // fed `_handleIncomingRunState` was already `false` (walk past
-  // artifacts) both before and after the fix. It is a GREEN-before parity
-  // control the other paths are held to, not one more RED-before case —
-  // the commit that added it (8fcd0507) inaccurately generalized "All 5
-  // were confirmed RED against production HEAD 2fb25907 ... before the
-  // fix" to include this one.
+  // For a plain live event there is no watermark/history reason to
+  // classify it as historical, so `_isHistoricalRunEvent(event)` is false
+  // and artifact-aware insertion (walk past artifacts) already applied to
+  // this path before this fix. It is a GREEN-before parity control the
+  // other paths are held to, not a RED-before regression test.
   testWidgets(
     'a live terminal state with no post-tool delta still renders below the '
     'tool card',

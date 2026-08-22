@@ -1068,8 +1068,10 @@ class _ChatScreenState extends State<ChatScreen> {
   /// can only CREATE a card that did not exist or REMOVE one that no longer
   /// wants to exist — never reinsert an already-present card purely to
   /// reposition it. This method itself never crosses into a later turn
-  /// merely because its own state update arrived late — insertion always
-  /// stops at the first entry belonging to a different run.
+  /// merely because its own state update arrived late — insertion only ever
+  /// walks over contiguous same-run tool/notice entries and stops at any
+  /// other entry, including one belonging to a different run or turn, not
+  /// merely the first different-run entry.
   ///
   /// Must be called from inside a `setState`.
   void _upsertRunStateCard(RunState state, _MessageEntry assistantEntry) {
