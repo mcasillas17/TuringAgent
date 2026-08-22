@@ -203,3 +203,38 @@ func registerRepositoryTestServer(t *testing.T, ctx context.Context, database *d
 		t.Fatal(err)
 	}
 }
+
+// The by-name policy write must mirror SetMCPToolPolicy's derivation for
+// server-backed rows: a third-party tool the server no longer exports
+// (present = 0 after its last discovery prune) must not be resurrected into
+// ListEnabledTools by a policy edit.
+func TestSetToolPolicyByNameDoesNotResurrectAbsentThirdPartyTool(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	registerRepositoryTestServer(t, ctx, database, "vendor")
+	if err := repo.UpsertTools(ctx, []DiscoveredTool{{
+		ServerName: "vendor", ToolName: "vendor.write", SchemaJSON: `{}`, Policy: "approval_required",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		UPDATE tools SET present = 0, enabled = 0
+		WHERE server_name = 'vendor' AND tool_name = 'vendor.write'
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetToolPolicyByName(ctx, "vendor", "vendor.write", "safe"); err != nil {
+		t.Fatal(err)
+	}
+	var enabled, present int
+	if err := database.QueryRowContext(ctx, `
+		SELECT enabled, present FROM tools
+		WHERE server_name = 'vendor' AND tool_name = 'vendor.write'
+	`).Scan(&enabled, &present); err != nil {
+		t.Fatal(err)
+	}
+	if enabled != 0 || present != 0 {
+		t.Fatalf("enabled=%d present=%d after by-name policy write, want the absent tool to stay dark", enabled, present)
+	}
+}

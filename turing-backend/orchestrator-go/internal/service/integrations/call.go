@@ -66,7 +66,13 @@ func (s *Server) CallIntegrationTool(ctx context.Context, req *turingv1.CallInte
 	if sealed.Provider != "github" {
 		return nil, status.Error(codes.InvalidArgument, "connection is not a GitHub account")
 	}
-	if s.sealer == nil || !s.sealer.SealedWithThisKey(sealed.Ciphertext) {
+	if s.sealer == nil {
+		// No TURING_INTEGRATION_KEY: reconnecting cannot help, so do not tell
+		// the user to. Defence-in-depth — a keyless install advertises no
+		// integration tools, so this branch is unreachable in normal flow.
+		return nil, status.Error(codes.FailedPrecondition, unconfiguredReason)
+	}
+	if !s.sealer.SealedWithThisKey(sealed.Ciphertext) {
 		return nil, status.Error(codes.FailedPrecondition, "integration credential is unreadable; reconnect the account")
 	}
 	credential, err := s.sealer.Open(sealed.Ciphertext, []byte(connectionID))
