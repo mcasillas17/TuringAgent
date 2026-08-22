@@ -351,6 +351,74 @@ func TestRunStepWithoutReservedKeysStaysPassThrough(t *testing.T) {
 	}
 }
 
+// TestRunStepFailsClosedOnIncompleteRetryCounters covers a row carrying only
+// half of a retry notice's counters: an attempt (or attempts) with no
+// maxAttempts budget, or a maxAttempts budget with no attempt/attempts
+// counter. Neither reserved key here is malformed — one of them is simply
+// missing. hasReservedRetryNoticeKey recognizes the row as a retry-notice
+// attempt from the presence of any one reserved key, not from every counter
+// being present together, so the row must still resolve to a bounded,
+// category-only notice: NewStepNotice rejects a zero attempt or a zero
+// maxAttempts, so the counters are dropped, but the category the row named
+// itself is kept and the raw note/reason are not published. This is distinct
+// from TestRunStepFailsClosedOnMalformedRetryCounters above, which covers
+// keys that are present but hold an untrustworthy value, not one absent
+// outright.
+func TestRunStepFailsClosedOnIncompleteRetryCounters(t *testing.T) {
+	tests := []struct {
+		name         string
+		payload      string
+		wantCategory string
+	}{
+		{
+			name:         "attempt present, maxAttempts absent",
+			payload:      `{"note":"retrying after connection refused by ollama at 127.0.0.1:11434","attempt":2,"reason":"model_error"}`,
+			wantCategory: "dispatch_retry",
+		},
+		{
+			name:         "attempt present, maxAttempts absent, worker_unavailable reason",
+			payload:      `{"note":"retrying","attempt":2,"reason":"worker_unavailable"}`,
+			wantCategory: "recovery_retry",
+		},
+		{
+			name:         "attempts present, maxAttempts absent, give-up notice",
+			payload:      `{"note":"giving up: connection refused by ollama at 127.0.0.1:11434","attempts":3,"reason":"runtime_error"}`,
+			wantCategory: "recovery_exhausted",
+		},
+		{
+			name:         "maxAttempts present, attempt and attempts absent",
+			payload:      `{"note":"retrying","maxAttempts":3,"reason":"model_error"}`,
+			wantCategory: "dispatch_retry",
+		},
+		{
+			name:         "maxAttempts present, attempt and attempts absent, worker_unavailable reason",
+			payload:      `{"note":"retrying","maxAttempts":3,"reason":"worker_unavailable"}`,
+			wantCategory: "recovery_retry",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newEventHarness(t)
+			run := seedEventRun(t, h, test.name)
+			seeded := appendLegacyEvent(t, h, run, "agent.run.step", test.payload)
+			public := listedEvent(t, h, run.sessionID, seeded.EventID)
+			assertNoRawDiagnostics(t, public.GetPayload())
+			fields := public.GetPayload().GetFields()
+			if got := fields["category"].GetStringValue(); got != test.wantCategory {
+				t.Fatalf("category = %q, want %q (%s)", got, test.wantCategory, public.GetPayload())
+			}
+			for _, leaked := range []string{"attempt", "attempts", "maxAttempts", "note", "reason"} {
+				if _, exists := fields[leaked]; exists {
+					t.Fatalf("public payload carries %q from a notice missing its counter pair: %s", leaked, public.GetPayload())
+				}
+			}
+			if len(fields) != 1 {
+				t.Fatalf("public payload = %s, want only the bounded category", public.GetPayload())
+			}
+		})
+	}
+}
+
 // TestEventServiceSanitizesMalformedLegacyFailureEvents covers the row nobody
 // can parse. It must not become a parser message on the wire, and it must not
 // become a plausible outcome either.

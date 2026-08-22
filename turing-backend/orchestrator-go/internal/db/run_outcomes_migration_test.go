@@ -3156,6 +3156,90 @@ func TestRunOutcomeMigrationFailsClosedOnMalformedRetryCounters(t *testing.T) {
 	}
 }
 
+// TestRunOutcomeMigrationFailsClosedOnIncompleteRetryCounters covers a row
+// that carries only half of a retry notice's counters: an attempt (or
+// attempts) with no maxAttempts budget at all, or a maxAttempts budget with
+// no attempt/attempts counter at all. Neither key is malformed here — one of
+// them is simply absent. hasReservedRetryNoticeKey still recognizes the row
+// as a retry-notice attempt because it is gated on presence of *any* reserved
+// key, not on every counter being present together, so the row must still be
+// rewritten to a bounded, category-only notice rather than left with its raw
+// note and reason durable. The pre-fix rewrite required both a parsed
+// attempt/attempts *and* a parsed maxAttempts before treating the row as
+// failure-like at all; a row missing one of them fell through to the "not a
+// retry notice" branch and was left completely untouched, note/reason and
+// all. This is the case that gate closed, distinct from
+// TestRunOutcomeMigrationFailsClosedOnMalformedRetryCounters above, which
+// covers keys that are present but hold an untrustworthy value.
+func TestRunOutcomeMigrationFailsClosedOnIncompleteRetryCounters(t *testing.T) {
+	testCases := []struct {
+		name    string
+		payload string
+		want    map[string]any
+	}{
+		{
+			name:    "attempt present, maxAttempts absent",
+			payload: `{"note":"retrying after connection refused by ollama at 127.0.0.1:11434","attempt":2,"reason":"model_error"}`,
+			want:    map[string]any{"category": "dispatch_retry"},
+		},
+		{
+			name:    "attempt present, maxAttempts absent, worker_unavailable reason",
+			payload: `{"note":"retrying","attempt":2,"reason":"worker_unavailable"}`,
+			want:    map[string]any{"category": "recovery_retry"},
+		},
+		{
+			name:    "attempts present, maxAttempts absent, give-up notice",
+			payload: `{"note":"giving up: connection refused by ollama at 127.0.0.1:11434","attempts":3,"reason":"runtime_error"}`,
+			want:    map[string]any{"category": "recovery_exhausted"},
+		},
+		{
+			name:    "maxAttempts present, attempt and attempts absent",
+			payload: `{"note":"retrying","maxAttempts":3,"reason":"model_error"}`,
+			want:    map[string]any{"category": "dispatch_retry"},
+		},
+		{
+			name:    "maxAttempts present, attempt and attempts absent, worker_unavailable reason",
+			payload: `{"note":"retrying","maxAttempts":3,"reason":"worker_unavailable"}`,
+			want:    map[string]any{"category": "recovery_retry"},
+		},
+	}
+
+	ctx := context.Background()
+	database := openMigratedThroughLegacy(t, ctx, filepath.Join(t.TempDir(), "incomplete-counters.db"))
+	defer database.Close()
+	seedLegacySession(t, ctx, database, "sess_incomplete_counters")
+	for index, testCase := range testCases {
+		seedLegacyEvent(t, ctx, database, "sess_incomplete_counters", "", index+1, "agent.run.step", testCase.payload)
+	}
+
+	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	for index, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			payload := readEventPayload(t, ctx, database, "sess_incomplete_counters", index+1)
+			if !reflect.DeepEqual(payload, testCase.want) {
+				t.Fatalf("payload = %#v, want %#v (row left carrying more than the bounded category)", payload, testCase.want)
+			}
+			if _, leaked := payload["note"]; leaked {
+				t.Fatalf("payload retained the raw note: %#v", payload)
+			}
+			if _, leaked := payload["reason"]; leaked {
+				t.Fatalf("payload retained the raw reason: %#v", payload)
+			}
+			if _, leaked := payload["attempt"]; leaked {
+				t.Fatalf("payload published an attempt counter with no budget to bound it: %#v", payload)
+			}
+			if _, leaked := payload["attempts"]; leaked {
+				t.Fatalf("payload published an attempts counter with no budget to bound it: %#v", payload)
+			}
+			if _, leaked := payload["maxAttempts"]; leaked {
+				t.Fatalf("payload published a maxAttempts counter with no attempt count to pair it with: %#v", payload)
+			}
+		})
+	}
+}
+
 const legacyDenialRationale = "I did not want that file touched"
 const legacyApprovalComment = "looked risky to me"
 
