@@ -82,6 +82,61 @@ func TestBearerFromHeadersNoHeadersMeansNoToken(t *testing.T) {
 	}
 }
 
+// When an mcp.json entry's headers carry both an unsupported header name
+// and more than one case-insensitive Authorization key, the outcome must
+// be the exact same fixed, deterministic result on every call — never a
+// randomized pick between "which unsupported header name gets named" or
+// "unsupported header vs. duplicate Authorization" that would depend on
+// Go's randomized map iteration order. This runs many trials specifically
+// because that randomization would otherwise only show up intermittently.
+func TestBearerFromHeadersDeterministicWithUnsupportedAndDuplicateAuthorizationHeaders(t *testing.T) {
+	headers := map[string]string{
+		"Authorization": "Bearer first-header-value",
+		"authorization": "Bearer second-header-value",
+		"X-Api-Key":     "attacker-controlled-key-value",
+	}
+	const trials = 200
+	for i := 0; i < trials; i++ {
+		token, err := bearerFromHeaders(headers)
+		if token != "" {
+			t.Fatalf("trial %d: token = %q, want empty on any refusal", i, token)
+		}
+		if err == nil {
+			t.Fatalf("trial %d: want an error", i)
+		}
+		if err.Error() != `header "X-Api-Key" is unsupported; only Authorization: ****** accepted` {
+			t.Fatalf("trial %d: err = %q, want the fixed, deterministic unsupported-header reason naming X-Api-Key every time", i, err.Error())
+		}
+		for _, sentinel := range []string{"first-header-value", "second-header-value", "attacker-controlled-key-value"} {
+			if strings.Contains(err.Error(), sentinel) {
+				t.Fatalf("trial %d: err = %q, must not leak a header value", i, err.Error())
+			}
+		}
+	}
+}
+
+// With two distinct unsupported header names present (and no Authorization
+// header at all), the one named in the error must always be the
+// lexicographically first — sorted, not whichever one iteration happens to
+// visit first — on every trial.
+func TestBearerFromHeadersUnsupportedHeaderSelectionIsSortedNotRandom(t *testing.T) {
+	headers := map[string]string{
+		"X-Zebra-Header": "1",
+		"X-Alpha-Header": "2",
+		"X-Mid-Header":   "3",
+	}
+	const trials = 200
+	for i := 0; i < trials; i++ {
+		_, err := bearerFromHeaders(headers)
+		if err == nil {
+			t.Fatalf("trial %d: want an error", i)
+		}
+		if err.Error() != `header "X-Alpha-Header" is unsupported; only Authorization: ****** accepted` {
+			t.Fatalf("trial %d: err = %q, want the lexicographically first unsupported header named every time", i, err.Error())
+		}
+	}
+}
+
 // The duplicate-header refusal must also be reachable — and stay
 // sentinel-free and generic — through the full ImportJSON path, not just
 // the unit-level bearerFromHeaders call.

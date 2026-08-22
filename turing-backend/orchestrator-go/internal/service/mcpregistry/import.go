@@ -259,8 +259,23 @@ const mcpToolDefinitionRefusedMessage = "server entry is invalid"
 // otherwise invalid must still be refused with the one generic,
 // sentinel-free reason, never a more specific message that would print the
 // token-bearing name or schema back out.
+//
+// A static snapshot is bounded by the exact same maxMCPTools/
+// maxMCPToolBytes limits mcpClient.listTools applies to a live
+// tools/list response, counted the same way: the tool count against
+// maxMCPTools, and a running total of each tool's serialized name plus
+// its already-built schemaJSON against maxMCPToolBytes. Either limit
+// being exceeded refuses the whole snapshot with a fixed, generic
+// message — bounded and free of the offending name or schema, the same
+// way an over-limit live discovery response never repeats it — before
+// anything here has mutated the repository, so there is never a partial
+// row a corrected, smaller snapshot could only skip.
 func buildImportTools(tier repository.MCPServerTier, serverName string, rawTools []mcpJSONTool, token string) ([]repository.MCPServerTool, error) {
+	if len(rawTools) > maxMCPTools {
+		return nil, fmt.Errorf("static tools snapshot exceeds limit of %d tools", maxMCPTools)
+	}
 	tools := make([]repository.MCPServerTool, 0, len(rawTools))
+	encodedBytes := 0
 	for index, tool := range rawTools {
 		if strings.TrimSpace(tool.Name) == "" {
 			return nil, fmt.Errorf("tool %d has an invalid name", index)
@@ -284,6 +299,11 @@ func buildImportTools(tier repository.MCPServerTier, serverName string, rawTools
 		if token != "" && strings.Contains(schemaJSON, token) {
 			return nil, errors.New(mcpToolDefinitionRefusedMessage)
 		}
+		size := len(tool.Name) + len(schemaJSON)
+		if size > maxMCPToolBytes-encodedBytes {
+			return nil, fmt.Errorf("static tools snapshot exceeds encoded descriptor limit of %d bytes", maxMCPToolBytes)
+		}
+		encodedBytes += size
 		built, err := buildRepositoryTool(tier, serverName, tool.Name, schemaJSON)
 		if err != nil {
 			return nil, err
@@ -335,7 +355,21 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 	report := ImportReport{Unsupported: make(map[string]string)}
 	imported := make([]string, 0)
 	skipped := make([]string, 0)
-	for name, raw := range document.Servers {
+	// Entries are processed in sorted name order, never Go's randomized
+	// map iteration order: when two entries in the same document claim
+	// the same tool name, whichever is processed first wins the
+	// repository's inter-server collision check (see
+	// replaceServerToolsTx) and the other is refused. Sorting first
+	// makes that winner the lexicographically first server name, every
+	// time, rather than a randomized one that could differ between two
+	// imports of the identical file.
+	names := make([]string, 0, len(document.Servers))
+	for name := range document.Servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		raw := document.Servers[name]
 		// The name check runs before the entry's body is even decoded:
 		// a reserved or pattern-invalid name is refused for that reason
 		// regardless of whether its body would otherwise fail strict
@@ -548,15 +582,41 @@ func classifyImportedURL(raw string) (repository.MCPServerTier, string, error) {
 // outright instead means the result can never depend on that order.
 var errMultipleAuthorizationHeaders = errors.New("only a single authorization header is accepted")
 
+// bearerFromHeaders never lets Go's randomized map iteration influence its
+// outcome: it sorts the header names first, so which unsupported header is
+// named in the error (when more than one is present) is always the
+// lexicographically first one, not whichever one iteration happened to
+// visit first, and the fixed precedence between the two possible refusals
+// — an unsupported header name versus more than one case-insensitive
+// Authorization key — is the same regardless of how many of either are
+// present: an unsupported header, if any, is always reported first, the
+// same way the original single-pass loop always failed on the first
+// non-Authorization key it happened to visit before it could ever reach
+// the duplicate-Authorization check below. Neither the chosen unsupported
+// name nor errMultipleAuthorizationHeaders' fixed message ever includes a
+// header's value.
 func bearerFromHeaders(headers map[string]string) (string, error) {
+	names := make([]string, 0, len(headers))
+	for name := range headers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var unsupportedName string
 	var authValue string
 	authCount := 0
-	for name, value := range headers {
+	for _, name := range names {
 		if !strings.EqualFold(name, "authorization") {
-			return "", fmt.Errorf("header %q is unsupported; only Authorization: ****** accepted", name)
+			if unsupportedName == "" {
+				unsupportedName = name
+			}
+			continue
 		}
 		authCount++
-		authValue = value
+		authValue = headers[name]
+	}
+	if unsupportedName != "" {
+		return "", fmt.Errorf("header %q is unsupported; only Authorization: ****** accepted", unsupportedName)
 	}
 	if authCount > 1 {
 		return "", errMultipleAuthorizationHeaders

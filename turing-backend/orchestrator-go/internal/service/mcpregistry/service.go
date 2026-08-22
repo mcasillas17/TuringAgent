@@ -384,6 +384,15 @@ func (s *Server) RegisterMcpServer(ctx context.Context, req *turingv1.RegisterMc
 			return nil, status.Error(codes.FailedPrecondition, bundledServerRegistrationMessage)
 		case errors.Is(err, repository.ErrMCPServerNameTaken):
 			return nil, status.Error(codes.AlreadyExists, "MCP server name is already registered")
+		case errors.Is(err, repository.ErrMCPServerToolsNotAllowed):
+			// This RPC never sets Tools on the ImportedMCPServer above,
+			// so reaching this case would mean this handler itself
+			// regressed — not anything an operator's request could
+			// trigger — and it is mapped to the same generic Internal
+			// status the default case below already uses, named
+			// explicitly here so that regression fails loudly in a test
+			// rather than silently falling through.
+			return nil, status.Error(codes.Internal, "register MCP server failed")
 		default:
 			return nil, status.Error(codes.Internal, "register MCP server failed")
 		}
@@ -467,11 +476,15 @@ func (s *Server) RotateMcpServerToken(ctx context.Context, req *turingv1.RotateM
 }
 
 // ReimportMcpJson re-reads mcp.json from the configured config root the
-// same way app startup does. notify and audit both run immediately once
+// same way app startup does. Both run immediately once
 // ReimportConfiguredJSON's mutation has already committed — before
-// anything below that could still fail — so neither can ever be skipped
-// by a later failure, and two overlapping ReimportMcpJson calls can never
-// suppress or delay each other's notification. The response's Refused
+// anything below that could still fail. notify is conditional: it only
+// fires when this reimport actually imported something, since nothing
+// else about the registry changed for a reimport that only skipped or
+// refused entries. audit always runs, unconditionally, recording only
+// counts; unlike notify it is never skipped by a later failure, and two
+// overlapping ReimportMcpJson calls can never suppress or delay each
+// other's audit record. The response's Refused
 // list is built directly from this call's own report.Unsupported, sorted
 // by name, rather than by re-reading the shared mcp_import_issues table
 // (which ListMcpServers still uses for its own Unsupported list): a
