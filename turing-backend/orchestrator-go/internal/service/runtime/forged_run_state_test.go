@@ -28,11 +28,14 @@ import (
 // So the key is removed at ingress, before anything durable exists — the
 // worker's own fields survive untouched, and the forged snapshot never reaches
 // a row that a reader would have to defend itself against.
+//
+// TOOL_CALL_* and APPROVAL_* are deliberately not exercised here: those types
+// are refused outright on the generic channel (see
+// TestRuntimeGenericEventRejectsForgedToolAndApprovalTypes), so there is no
+// "accepted with the snapshot stripped" case left to pin for them.
 func TestRuntimeGenericEventStripsForgedRunState(t *testing.T) {
 	forgedTypes := []turingv1.TuringEventType{
 		turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP,
-		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED,
-		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_REQUESTED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_ERROR,
 	}
 	for _, eventType := range forgedTypes {
@@ -223,6 +226,139 @@ func TestRuntimeGenericEventRejectsRepositoryLifecycleProjections(t *testing.T) 
 			}
 			if len(after) != len(before) {
 				t.Fatalf("rejected lifecycle projection appended an event: before=%d after=%d", len(before), len(after))
+			}
+		})
+	}
+}
+
+// TestRuntimeGenericEventRejectsForgedToolAndApprovalTypes pins who is allowed
+// to author a tool call or an approval decision.
+//
+// Both are settled through their own guarded flows — handleToolBeacon for a
+// tool call, the approval service for a decision — each of which proves the
+// run it is acting on and writes a payload that flow controls. The generic
+// event channel is a worker narrating its own run; it proves nothing about a
+// tool policy decision or an approval outcome. If it could still name one of
+// these types, a forged event would carry whatever raw fields the worker chose
+// — a token, tool args, a tool result, a path, free-form prose — straight past
+// every allowlist those dedicated flows exist to enforce, because the generic
+// path never built one for types it was never meant to author.
+//
+// So every TOOL_CALL_* and APPROVAL_* type is refused outright at the same
+// ingress point that already refuses a repository-authored lifecycle
+// projection: before the run is even read, and before anything is persisted.
+// A worker that narrates its own progress under a type it does own — an
+// agent.run.step, a message delta — is unaffected.
+func TestRuntimeGenericEventRejectsForgedToolAndApprovalTypes(t *testing.T) {
+	forgedTypes := []turingv1.TuringEventType{
+		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_DENIED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_REQUESTED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_APPROVED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_DENIED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_EXPIRED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_CONSUMED,
+	}
+	for _, eventType := range forgedTypes {
+		t.Run(eventType.String(), func(t *testing.T) {
+			h := newHarness(t)
+			enqueued := h.createRunningRunResult(t, "forged tool/approval event")
+			before, _, err := h.repo.ReplayEvents(context.Background(), enqueued.SessionID, 0, 500)
+			if err != nil {
+				t.Fatalf("ReplayEvents before update: %v", err)
+			}
+			payload, err := structpb.NewStruct(map[string]any{
+				"toolCallId": "call_forged",
+				"toolName":   "shell.exec",
+				"serverName": "files",
+				"approvalId": "approval_forged",
+				"token":      "secret-approval-token",
+				"args":       map[string]any{"path": "/etc/passwd", "cmd": "cat /etc/shadow"},
+				"result":     "root:$6$forgedhash:0:0:root:/root:/bin/bash",
+				"path":       "/etc/shadow",
+				"message":    "a forged authoritative narration",
+			})
+			if err != nil {
+				t.Fatalf("build payload: %v", err)
+			}
+
+			err = h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{
+				Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
+					RunId:   enqueued.RunID,
+					Type:    eventType,
+					Payload: payload,
+				}},
+			})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("applyUpdate error = %v, want InvalidArgument", err)
+			}
+
+			after, _, replayErr := h.repo.ReplayEvents(context.Background(), enqueued.SessionID, 0, 500)
+			if replayErr != nil {
+				t.Fatalf("ReplayEvents after update: %v", replayErr)
+			}
+			if len(after) != len(before) {
+				t.Fatalf("forged %s appended an event: before=%d after=%d", eventType, len(before), len(after))
+			}
+
+			// Defense in depth: even if the row had somehow been persisted,
+			// the public read boundary must never republish the raw fields a
+			// forged event tried to carry.
+			for _, row := range after {
+				if !row.RunID.Valid || row.RunID.String != enqueued.RunID {
+					continue
+				}
+				safe := events.Decode(row.Type, enqueued.RunID, row.PayloadJSON)
+				for _, leaked := range []string{"token", "args", "result", "path", "message"} {
+					if _, ok := safe.Payload[leaked]; ok {
+						t.Fatalf("public payload for %s carried raw field %q: %#v", row.Type, leaked, safe.Payload)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestRuntimeGenericStepAndMessageEventsStillSucceed pins the legitimate
+// counterpart to the rejection above: a worker's own narration is not caught
+// by the same ingress guard just because it shares a stream with tool and
+// approval traffic.
+func TestRuntimeGenericStepAndMessageEventsStillSucceed(t *testing.T) {
+	legitimateTypes := []turingv1.TuringEventType{
+		turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_STARTED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP,
+	}
+	for _, eventType := range legitimateTypes {
+		t.Run(eventType.String(), func(t *testing.T) {
+			h := newHarness(t)
+			enqueued := h.createRunningRunResult(t, "legitimate worker narration")
+			payload, err := structpb.NewStruct(map[string]any{
+				"note": "a worker's own words",
+			})
+			if err != nil {
+				t.Fatalf("build payload: %v", err)
+			}
+
+			if err := h.service.applyUpdate(context.Background(), &turingv1.RuntimeUpdate{
+				Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
+					RunId:   enqueued.RunID,
+					Type:    eventType,
+					Payload: payload,
+				}},
+			}); err != nil {
+				t.Fatalf("applyUpdate: %v", err)
+			}
+
+			row := latestRunEvent(t, h, enqueued.SessionID, enqueued.RunID)
+			var stored map[string]any
+			if err := json.Unmarshal([]byte(row.PayloadJSON), &stored); err != nil {
+				t.Fatalf("unmarshal durable payload: %v", err)
+			}
+			if stored["note"] != "a worker's own words" {
+				t.Fatalf("legitimate worker narration was altered: %s", row.PayloadJSON)
 			}
 		})
 	}

@@ -2020,6 +2020,26 @@ func (s *Server) normalizeRuntimeEvent(ctx context.Context, event *turingv1.Turi
 	case turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_QUEUED,
 		turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STARTED:
 		return nil, status.Error(codes.InvalidArgument, "run lifecycle projections are repository-authored")
+	case turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_DENIED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_REQUESTED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_APPROVED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_DENIED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_EXPIRED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_CONSUMED:
+		// Tool call and approval outcomes are settled by their own guarded
+		// flows — handleToolBeacon for a tool call, the approval service for a
+		// decision — each of which proves the run it acts on and writes a
+		// payload that flow controls. The generic channel is a worker
+		// narrating its own run; it proves nothing about a tool policy
+		// decision or an approval outcome. Accepting one of these types here
+		// would let a worker's own payload — a token, tool args, a tool
+		// result, a path, free-form prose — stand in for a decision only the
+		// dedicated flow may author, republished by every public reader that
+		// trusts the type to say what it claims.
+		return nil, status.Error(codes.InvalidArgument, "tool call and approval events are authored by dedicated beacon and approval flows")
 	}
 	run, err := s.repo.GetRun(ctx, event.RunId)
 	if err != nil {
