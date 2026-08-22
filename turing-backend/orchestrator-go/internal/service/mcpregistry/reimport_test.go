@@ -233,6 +233,129 @@ func TestTombstonedNameRemainsRefusedByFileReimport(t *testing.T) {
 	}
 }
 
+// A reimport must never reset a server's observed liveness. The old
+// UpsertImportedMCPServer path reset mcp_server_status to 'unknown'
+// whenever the URL or tier changed; ImportJSON's create-only path must
+// leave a healthy server's status and status message untouched even when
+// the incoming mcp.json points at a different, still-valid endpoint.
+func TestReimportPreservesLivenessStatusAcrossEndpointChange(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	if _, err := service.ImportJSON(context.Background(), []byte(`{
+		"mcpServers": {
+			"vendor": {"url": "https://vendor.example/mcp"}
+		}
+	}`)); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	vendor := findRepositoryServer(t, servers, "vendor")
+
+	const wantMessage = "healthy: last probe succeeded at 2024-01-01T00:00:00Z"
+	if err := repo.SetMCPServerStatus(context.Background(), vendor.ID, "up", wantMessage); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reimport the same name with a changed but still-valid endpoint and
+	// tier-compatible URL.
+	report, err := service.ImportJSON(context.Background(), []byte(`{
+		"mcpServers": {
+			"vendor": {"url": "https://vendor-v2.example/mcp"}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Skipped) != 1 || report.Skipped[0] != "vendor" {
+		t.Fatalf("Skipped = %v, want [vendor]", report.Skipped)
+	}
+
+	servers, err = repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := findRepositoryServer(t, servers, "vendor")
+	if after.Status != "up" {
+		t.Fatalf("Status = %q, want reimport to preserve the up status", after.Status)
+	}
+	if after.StatusError != wantMessage {
+		t.Fatalf("StatusError = %q, want unchanged %q", after.StatusError, wantMessage)
+	}
+	if after.URL != vendor.URL {
+		t.Fatalf("URL = %q, want the original endpoint %q preserved by the create-only reimport", after.URL, vendor.URL)
+	}
+}
+
+// A user who rotates a server's token out-of-band (via the Rotate RPC,
+// modeled here directly through repository.ReplaceMCPServerToken) must not
+// have that rotation silently undone by a later mcp.json reimport. This
+// chains ReplaceMCPServerToken -> ImportJSON so it proves the create-only
+// import path cannot clobber a rotation that happened after the original
+// import.
+func TestReimportDoesNotUndoAnOutOfBandTokenRotation(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	sealer, err := secretbox.New(bytes.Repeat([]byte{0x41}, secretbox.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ImportJSON(context.Background(), []byte(`{
+		"mcpServers": {
+			"vendor": {
+				"url": "https://vendor.example/mcp",
+				"headers": {"Authorization": "Bearer original-token"}
+			}
+		}
+	}`)); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	vendor := findRepositoryServer(t, servers, "vendor")
+
+	rotatedToken := []byte("rotated-out-of-band-token")
+	rotatedSealed, err := sealer.Seal(rotatedToken, []byte(vendor.Name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ReplaceMCPServerToken(context.Background(), vendor.ID, rotatedSealed); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reimport mcp.json carrying a bearer again (the original one, or any
+	// other) for the same server name.
+	report, err := service.ImportJSON(context.Background(), []byte(`{
+		"mcpServers": {
+			"vendor": {
+				"url": "https://vendor.example/mcp",
+				"headers": {"Authorization": "Bearer original-token"}
+			}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Skipped) != 1 || report.Skipped[0] != "vendor" {
+		t.Fatalf("Skipped = %v, want [vendor]", report.Skipped)
+	}
+
+	servers, err = repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := findRepositoryServer(t, servers, "vendor")
+	opened, err := sealer.Open(after.SealedToken, []byte(after.Name))
+	if err != nil {
+		t.Fatalf("Open(after.SealedToken) failed: %v", err)
+	}
+	if string(opened) != string(rotatedToken) {
+		t.Fatalf("stored token = %q, want the out-of-band rotated value %q", opened, rotatedToken)
+	}
+}
+
 func TestImportReportSortsImportedAndSkippedDeterministically(t *testing.T) {
 	service, repo := newRegistryTestService(t)
 	if _, err := service.ImportJSON(context.Background(), []byte(`{
