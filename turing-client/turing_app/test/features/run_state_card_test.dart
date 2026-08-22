@@ -104,6 +104,79 @@ void main() {
     },
   );
 
+  testWidgets(
+    'completed unknown outcome without content shows generic '
+    'outcome-unavailable copy, not the completed-no-content copy',
+    (tester) async {
+      await tester.pumpWidget(
+        host(
+          RunStateCard(
+            state: state(
+              lifecycle: RunLifecycle.completed,
+              outcomeReason: RunOutcomeReason.unknown,
+              hasDisplayableContent: false,
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Outcome unavailable'), findsOneWidget);
+      expect(
+        find.text('This app cannot identify why the run ended.'),
+        findsOneWidget,
+      );
+      expect(find.text('Completed'), findsNothing);
+      expect(find.text('No assistant response was recorded.'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'completed legacyUnknown outcome without content shows generic '
+    'outcome-unavailable copy, not the completed-no-content copy',
+    (tester) async {
+      await tester.pumpWidget(
+        host(
+          RunStateCard(
+            state: state(
+              lifecycle: RunLifecycle.completed,
+              outcomeReason: RunOutcomeReason.legacyUnknown,
+              hasDisplayableContent: false,
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Outcome unavailable'), findsOneWidget);
+      expect(
+        find.text('This app cannot identify why the run ended.'),
+        findsOneWidget,
+      );
+      expect(find.text('Completed'), findsNothing);
+      expect(find.text('No assistant response was recorded.'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'completed explicit no-content outcome keeps the canonical completed '
+    'copy, unaffected by the unknown-outcome branch',
+    (tester) async {
+      await tester.pumpWidget(
+        host(
+          RunStateCard(
+            state: state(
+              lifecycle: RunLifecycle.completed,
+              outcomeReason: RunOutcomeReason.completedNoContent,
+              hasDisplayableContent: false,
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Completed'), findsOneWidget);
+      expect(find.text('No assistant response was recorded.'), findsOneWidget);
+    },
+  );
+
   testWidgets('failed lifecycle delegates to RunFailureCard', (tester) async {
     await tester.pumpWidget(
       host(

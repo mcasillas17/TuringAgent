@@ -33,6 +33,17 @@ LocalizedRunCopy localizedRunStateCopy(AppLocalizations l10n, RunState state) {
     case RunLifecycle.recovering:
       return localizedRunLifecycleCopy(l10n, state.lifecycle);
     case RunLifecycle.completed:
+      // A genuinely unknown/unrecognized outcome reason (a future backend
+      // value this client cannot name) must not be reinterpreted as the
+      // specific completedNoContent outcome just because there is no
+      // displayable content — that would fabricate a truthful-sounding
+      // explanation this client does not actually have. Consult
+      // outcomeReason for that case before inferring completedNoContent.
+      if (!state.hasDisplayableContent &&
+          (state.outcomeReason == RunOutcomeReason.unknown ||
+              state.outcomeReason == RunOutcomeReason.legacyUnknown)) {
+        return localizedRunOutcomeCopy(l10n, state.outcomeReason);
+      }
       if (!state.hasDisplayableContent ||
           state.outcomeReason == RunOutcomeReason.completedNoContent) {
         return localizedRunOutcomeCopy(

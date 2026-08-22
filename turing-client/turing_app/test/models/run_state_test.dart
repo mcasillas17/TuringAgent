@@ -446,6 +446,145 @@ void main() {
     },
   );
 
+  // A completed run with no displayable content and a genuinely unknown
+  // outcome reason (a future/unrecognized backend value this client cannot
+  // name) must not be reinterpreted as the specific completed_no_content
+  // outcome — that would fabricate a truthful-sounding explanation for a
+  // reason this client cannot actually identify. It must render the same
+  // generic outcome-unavailable copy any other lifecycle uses for an
+  // unknown outcome.
+  test(
+    'completed run with unknown outcome and no content renders generic '
+    'outcome-unavailable copy, not completed-no-content',
+    () async {
+      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+      final copy = localizedRunStateCopy(
+        l10n,
+        RunState(
+          runId: 'run_1',
+          userMessageId: 'msg_user',
+          assistantMessageId: 'msg_assistant',
+          lifecycle: RunLifecycle.completed,
+          outcomeReason: RunOutcomeReason.unknown,
+          stateVersion: 1,
+          stateUpdatedAt: updatedAt,
+          finishedAt: finishedAt,
+          hasDisplayableContent: false,
+        ),
+      );
+
+      expect(copy.title, 'Outcome unavailable');
+      expect(copy.detail, 'This app cannot identify why the run ended.');
+    },
+  );
+
+  test(
+    'completed run with legacyUnknown outcome and no content renders '
+    'generic outcome-unavailable copy, not completed-no-content',
+    () async {
+      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+      final copy = localizedRunStateCopy(
+        l10n,
+        RunState(
+          runId: 'run_1',
+          userMessageId: 'msg_user',
+          assistantMessageId: 'msg_assistant',
+          lifecycle: RunLifecycle.completed,
+          outcomeReason: RunOutcomeReason.legacyUnknown,
+          stateVersion: 1,
+          stateUpdatedAt: updatedAt,
+          finishedAt: finishedAt,
+          hasDisplayableContent: false,
+        ),
+      );
+
+      expect(copy.title, 'Outcome unavailable');
+      expect(copy.detail, 'This app cannot identify why the run ended.');
+    },
+  );
+
+  // Controls: the known no-content outcomes keep their existing canonical
+  // completed copy exactly as before — only the unknown/legacyUnknown
+  // branch order changes.
+  test(
+    'completed run with explicit completed-no-content outcome keeps '
+    'canonical completed-no-content copy',
+    () async {
+      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+      final copy = localizedRunStateCopy(
+        l10n,
+        RunState(
+          runId: 'run_1',
+          userMessageId: 'msg_user',
+          assistantMessageId: 'msg_assistant',
+          lifecycle: RunLifecycle.completed,
+          outcomeReason: RunOutcomeReason.completedNoContent,
+          stateVersion: 1,
+          stateUpdatedAt: updatedAt,
+          finishedAt: finishedAt,
+          hasDisplayableContent: false,
+        ),
+      );
+
+      expect(copy.title, 'Completed');
+      expect(copy.detail, 'No assistant response was recorded.');
+    },
+  );
+
+  test(
+    'completed run with no outcome reason (none) and no content keeps '
+    'canonical completed-no-content copy',
+    () async {
+      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+      final copy = localizedRunStateCopy(
+        l10n,
+        RunState(
+          runId: 'run_1',
+          userMessageId: 'msg_user',
+          assistantMessageId: 'msg_assistant',
+          lifecycle: RunLifecycle.completed,
+          outcomeReason: RunOutcomeReason.none,
+          stateVersion: 1,
+          stateUpdatedAt: updatedAt,
+          finishedAt: finishedAt,
+          hasDisplayableContent: false,
+        ),
+      );
+
+      expect(copy.title, 'Completed');
+      expect(copy.detail, 'No assistant response was recorded.');
+    },
+  );
+
+  // Control: actual displayable content present alongside an unknown
+  // outcome still keeps the canonical completed copy — the unknown-outcome
+  // branch only applies while no displayable content backs it, so this
+  // never suppresses or replaces a real assistant bubble's copy.
+  test(
+    'completed run with unknown outcome but displayable content keeps '
+    'canonical completed copy',
+    () async {
+      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+      final copy = localizedRunStateCopy(
+        l10n,
+        RunState(
+          runId: 'run_1',
+          userMessageId: 'msg_user',
+          assistantMessageId: 'msg_assistant',
+          lifecycle: RunLifecycle.completed,
+          outcomeReason: RunOutcomeReason.unknown,
+          stateVersion: 1,
+          stateUpdatedAt: updatedAt,
+          finishedAt: finishedAt,
+          hasDisplayableContent: true,
+        ),
+      );
+
+      expect(copy.title, 'Completed');
+      expect(copy.detail, 'The assistant response is complete.');
+    },
+  );
+
   test('every lifecycle and outcome has localized safe copy', () async {
     final l10n = await AppLocalizations.delegate.load(const Locale('en'));
 
