@@ -67,6 +67,20 @@ const (
 // decision has already arrived, so only the Ready exchange is left.
 func newResumeDeliveryHarness(t *testing.T) *resumeDeliveryHarness {
 	t.Helper()
+	harness := newUndecidedResumeDeliveryHarness(t)
+	harness.worker.markApprovalDecided(resumeDeliveryApproval)
+	return harness
+}
+
+// newUndecidedResumeDeliveryHarness is newResumeDeliveryHarness stopped one
+// step earlier: the approval's requirement is known, but the approved
+// decision command has not arrived, so pending.decided has not fired and
+// beginReadySend can never have run. It exists for tests that need to prove
+// something about that specific gap — an acceptance delivered into it must
+// have no effect — rather than about the Ready exchange the decided harness
+// starts past.
+func newUndecidedResumeDeliveryHarness(t *testing.T) *resumeDeliveryHarness {
+	t.Helper()
 	stream := newFakeStream()
 	stream.ctx = context.Background()
 	executor := &blockingExecutor{started: make(chan string, 4)}
@@ -95,7 +109,6 @@ func newResumeDeliveryHarness(t *testing.T) *resumeDeliveryHarness {
 	runtimeWorker.active[resumeDeliveryRunID] = entry
 	runtimeWorker.mu.Unlock()
 	runtimeWorker.rememberApproval(resumeDeliveryApproval, resumeDeliveryRunID)
-	runtimeWorker.markApprovalDecided(resumeDeliveryApproval)
 
 	runtimeWorker.mu.Lock()
 	pending := runtimeWorker.resumes[resumeDeliveryApproval]
@@ -459,6 +472,164 @@ func TestFailedResumeRemembersItsAttemptOnEveryOwnedPath(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// A rejected or absent acceptance must never move the run's observed version.
+//
+// deliverResumeAcceptance validates identity and version before
+// pending.recordAccepted ever runs, and that validation must never itself
+// adopt anything: only completeAcceptedResume, reached exclusively through a
+// claimed accepted outcome, is allowed to move the version forward. The tests
+// below drive both ways a version could otherwise have moved for nothing —
+// once through a rejected delivery, once through no delivery at all.
+// ---------------------------------------------------------------------------
+
+// TestRejectedAcceptanceLeavesTheRunsVersionUnchanged is the fix for a version
+// that used to move even when the acceptance carrying it was ultimately
+// refused: deliverResumeAcceptance validated the version through the same
+// call that adopted it, before recordAccepted ever got a say, so a late
+// acceptance arriving after the resume had already been abandoned still
+// dragged the run's observed version forward on its way to being dropped.
+// Adoption now happens exactly once, in completeAcceptedResume, and only for
+// an outcome recordAccepted or abandonOrClaim actually committed — so a
+// rejected acceptance must leave the version exactly where it was.
+func TestRejectedAcceptanceLeavesTheRunsVersionUnchanged(t *testing.T) {
+	harness := newResumeDeliveryHarness(t)
+	// Settle the resume to abandoned directly, without driving resumeApproval
+	// through a whole failure path: recordAccepted must refuse anything for
+	// it from here on, which is exactly the rejection this test needs.
+	if accepted, ok := harness.pending.abandonOrClaim(); ok {
+		t.Fatalf("abandonOrClaim on a fresh resume found an existing acceptance: %v", accepted)
+	}
+	before := harness.entry.expectedVersion()
+	late := &turingv1.RuntimeApprovalResumeAccepted{
+		RunId: resumeDeliveryRunID, ApprovalId: resumeDeliveryApproval,
+		StateVersion: before + 1, AssignmentAttemptId: resumeDeliveryAttempt,
+	}
+
+	harness.worker.deliverResumeAcceptance(late)
+
+	if got := harness.entry.expectedVersion(); got != before {
+		t.Fatalf("run version after a rejected acceptance = %d, want unchanged %d", got, before)
+	}
+	if accepted, ok := harness.pending.abandonOrClaim(); ok {
+		t.Fatalf("a rejected acceptance was still claimable: %v", accepted)
+	}
+}
+
+// TestNoAcceptanceLeavesTheRunsVersionUnchanged is the companion case: a
+// resume that never receives any acceptance at all — its wait simply expires
+// — must leave the run's observed version exactly where it started. Nothing
+// in the failing path has ever had reason to touch it, and this pins that
+// down as an explicit invariant rather than an accident of what the failing
+// path happens not to call.
+func TestNoAcceptanceLeavesTheRunsVersionUnchanged(t *testing.T) {
+	harness := newResumeDeliveryHarness(t)
+	before := harness.entry.expectedVersion()
+
+	err := harness.resume(time.Now().Add(50 * time.Millisecond))
+
+	if !runWasTerminalized(err) {
+		t.Fatalf("resume error = %v, want a terminal run error", err)
+	}
+	if got := harness.entry.expectedVersion(); got != before {
+		t.Fatalf("run version after a resume with no acceptance = %d, want unchanged %d", got, before)
+	}
+}
+
+// TestAcceptanceDeliveredBeforeTheDecisionCannotResumeTheRun proves the
+// decision-select's failing branch is unconditional now that its claim branch
+// is gone: using newUndecidedResumeDeliveryHarness so the "before decision"
+// gap is exact rather than a race against the worker's own command loop,
+// pending.decided never fires here, so the wait ends purely on its own
+// deadline and a premature acceptance delivered into that gap must not have
+// changed the outcome.
+//
+// Before this fix, resumeApproval's decision-select had its own claim branch
+// that called abandonOrClaim directly on a wait-context timeout, without
+// requiring the Ready to have ever been sent. That branch is what let a
+// premature acceptance recorded here — dropped now, by recordAccepted's
+// readyStarted gate — resume the run anyway once the deadline fired.
+func TestAcceptanceDeliveredBeforeTheDecisionCannotResumeTheRun(t *testing.T) {
+	harness := newUndecidedResumeDeliveryHarness(t)
+	premature := &turingv1.RuntimeApprovalResumeAccepted{
+		RunId: resumeDeliveryRunID, ApprovalId: resumeDeliveryApproval,
+		StateVersion: resumeDeliveryVersion + 1, AssignmentAttemptId: resumeDeliveryAttempt,
+	}
+
+	harness.worker.deliverResumeAcceptance(premature)
+
+	err := harness.resume(time.Now().Add(50 * time.Millisecond))
+
+	if !runWasTerminalized(err) {
+		t.Fatalf("resume error = %v, want a terminal run error: a premature acceptance must not have resumed the run", err)
+	}
+	assertTypedDeliveryFailure(t, harness.sentUpdates())
+	if got := harness.entry.expectedVersion(); got != resumeDeliveryVersion {
+		t.Fatalf("run version after a premature acceptance = %d, want unchanged %d", got, resumeDeliveryVersion)
+	}
+	if fatal := harness.fatalErr(); fatal != nil {
+		t.Fatalf("a premature acceptance dropped the whole worker stream instead of failing the resume alone: %v", fatal)
+	}
+}
+
+// TestAcceptanceDeliveredBeforeTheDecisionCannotSatisfyTheSubsequentReady is
+// the scenario the readyStarted gate most directly defends in production, and
+// a stricter one than the test above: the decision arrives AFTER the
+// premature acceptance, so the Ready this resume goes on to send actually
+// succeeds, and resumeApproval reaches its real final select — the one on
+// pending.signal and waitCtx.Done(), not the decision-select's removed claim
+// branch.
+//
+// Without the readyStarted gate, the premature acceptance recorded here would
+// have closed pending.signal well before that final select is ever reached,
+// so the select would find it already closed and claim it immediately —
+// wrongly resuming the run, and adopting a version, on an acceptance that
+// answers no Ready this process had sent yet. With the gate, the premature
+// delivery is dropped, so the final select has nothing recorded and waits out
+// its own deadline instead.
+func TestAcceptanceDeliveredBeforeTheDecisionCannotSatisfyTheSubsequentReady(t *testing.T) {
+	harness := newUndecidedResumeDeliveryHarness(t)
+	premature := &turingv1.RuntimeApprovalResumeAccepted{
+		RunId: resumeDeliveryRunID, ApprovalId: resumeDeliveryApproval,
+		StateVersion: resumeDeliveryVersion + 1, AssignmentAttemptId: resumeDeliveryAttempt,
+	}
+
+	// Delivered before the decision: readyStarted is false, so recordAccepted
+	// must refuse it rather than merely defer it.
+	harness.worker.deliverResumeAcceptance(premature)
+
+	// The decision arrives now, so resumeApproval's first select proceeds and
+	// the Ready send that follows actually succeeds — reaching the exact
+	// final select a surviving stale acceptance would otherwise have already
+	// won before this resume ever asked for anything.
+	harness.worker.markApprovalDecided(resumeDeliveryApproval)
+
+	err := harness.resume(time.Now().Add(50 * time.Millisecond))
+
+	if !runWasTerminalized(err) {
+		t.Fatalf("resume error = %v, want a terminal run error: a premature acceptance must not satisfy the Ready this resume goes on to send", err)
+	}
+	// The Ready this resume sends here is real and legitimately reaches the
+	// stream, so — unlike the "decision never arrives" test above — the
+	// failure is the unacknowledged-resume fatal, not a typed pre-Ready
+	// transport failure: the row may have been durably resumed for all this
+	// process can tell, so the stream drops rather than reporting anything
+	// about the run itself.
+	fatal := harness.fatalErr()
+	if !errors.Is(fatal, errApprovalResumeUnacknowledged) {
+		t.Fatalf("fatal = %v, want %v: a premature acceptance must not have satisfied the Ready this resume actually sent", fatal, errApprovalResumeUnacknowledged)
+	}
+	if got := harness.entry.expectedVersion(); got != resumeDeliveryVersion {
+		t.Fatalf("run version after a premature acceptance = %d, want unchanged %d", got, resumeDeliveryVersion)
+	}
+	waitForInactiveRun(t, harness.worker, resumeDeliveryRunID)
+	for _, update := range harness.sentUpdates() {
+		if update.GetRunFailed() != nil || update.GetRunCompleted() != nil || update.GetRunCancelledAck() != nil {
+			t.Fatalf("the worker reported %+v for a run whose Ready may have been committed", update)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // A committed acceptance already in hand outranks a Ready send error or a
 // simultaneously expiring wait.
 //
@@ -555,12 +726,15 @@ func TestBufferedAcceptanceOutranksReadySendError(t *testing.T) {
 }
 
 // TestAcceptedRecordedBeforeTheWaitBeginsIsClaimedWithoutBlocking is the
-// "pre-select" path the old code's separate nonblocking drain existed for: an
+// "pre-select" case a separate nonblocking peek used to exist for: an
 // acceptance recorded while the Ready's send was still in flight, with nothing
 // racing the wait context at all. There is no coincidence to force here - the
 // send succeeds and the acceptance is on file before resumeApproval ever
-// creates its blocking select, so peekAccepted must claim it immediately
-// rather than making the resume sit out a wait it has already won.
+// reaches its blocking select, so the select must claim it immediately rather
+// than making the resume sit out a wait it has already won. A channel that is
+// already closed by the time a select evaluates it is always the case chosen,
+// so pending.signal already being closed is enough on its own — no separate
+// peek is needed to avoid blocking here.
 func TestAcceptedRecordedBeforeTheWaitBeginsIsClaimedWithoutBlocking(t *testing.T) {
 	harness := newResumeDeliveryHarness(t)
 	accepted := &turingv1.RuntimeApprovalResumeAccepted{
@@ -599,34 +773,34 @@ func TestAcceptedRecordedBeforeTheWaitBeginsIsClaimedWithoutBlocking(t *testing.
 }
 
 // TestBufferedAcceptanceOutranksSimultaneousDeadline covers the select the old
-// code left to the scheduler: an acceptance recorded for a resume whose wait
-// is, at essentially the same instant, also being cancelled - the final select
-// resumeApproval blocks on once the Ready has been sent.
+// code left to the scheduler: an acceptance recorded for a resume racing, at
+// essentially the same instant, the cancellation of its own wait - the final
+// select resumeApproval blocks on once the Ready has been sent.
 //
 // An earlier version of this test recorded the acceptance and cancelled the
-// wait from inside the Ready's own sendFn. That reliably raced the send's own
-// context down to a send-started error instead: cancelling the wait context
-// cancels the same sendCtx the in-flight send is using, and the outbound
-// writer's internal select between "the send completed" and "the context was
-// cancelled" is won by whichever event happened first in real time - which,
-// with the cancel happening from inside the callback, was always the
-// cancellation. So every attempt took the send-error branch and the final
-// select below this comment was never actually reached; see
-// TestBufferedAcceptanceOutranksReadySendError for that path.
+// wait from inside the Ready's own sendFn, which reliably raced the send's
+// own context down to a send-started error instead (see
+// TestBufferedAcceptanceOutranksReadySendError for that path). A later
+// version fixed that by waiting for the Ready to leave the writer first, but
+// still issued the recording and the cancellation back to back from the
+// test's own goroutine — sequential calls with no actual concurrency between
+// them, which proves nothing about a race, only about whichever of the two
+// the test itself chose to do first.
 //
-// This version instead waits for the Ready to actually leave the writer
-// (proven by receiving it off the fake stream, never a sleep) before recording
-// the acceptance and cancelling the wait, back to back with nothing between
-// them. That keeps the barrier out of the send's own in-flight state, so
-// resumeApproval reaches peekAccepted and the final select on pending.signal
-// and waitCtx.Done() for real - confirmed by coverage: across attempts this
-// exercises both the peek shortcut and the blocking select's own claim via
-// abandonOrClaim. The acceptance must win every one of these attempts
-// regardless of which path resolves it, because abandonOrClaim resolves both
-// to the same answer: nothing about a wait expiring at the same instant
-// changes what an already-recorded acceptance proves.
+// This version puts each side on its own goroutine, released together from a
+// shared barrier, so the two are actually contending for outcomeMu rather
+// than being ordered by construction. That is the same commit point
+// TestAcceptanceRacingAbandonmentIsLinearized exercises directly against the
+// bare approvalResume; repeating it here, through the full resumeApproval
+// call and its own select, additionally proves that contention surfaces
+// correctly at that layer too — the resume must land on exactly one of the
+// two outcomes, and the two sides racing for it must never observably
+// disagree about which one won. Repeated many times to exercise both
+// lock-acquisition orders; nothing here waits on a clock, only on channels and
+// a WaitGroup.
 func TestBufferedAcceptanceOutranksSimultaneousDeadline(t *testing.T) {
-	for attempt := 0; attempt < 32; attempt++ {
+	const iterations = 100
+	for attempt := 0; attempt < iterations; attempt++ {
 		harness := newResumeDeliveryHarness(t)
 		ctx, cancel := context.WithCancel(context.Background())
 		accepted := &turingv1.RuntimeApprovalResumeAccepted{
@@ -639,14 +813,10 @@ func TestBufferedAcceptanceOutranksSimultaneousDeadline(t *testing.T) {
 
 		// Wait for the Ready to actually leave the writer before racing
 		// anything. This harness uses the fake stream's default Send (no
-		// custom sendFn), so the update lands on stream.sent. Recording and
-		// cancelling only after this point is what keeps this barrier from
-		// colliding with the Ready send's own in-flight state: doing either
-		// from inside sendFn (as a naive version of this test once did)
-		// reliably raced the ready-send's own context down to a
-		// send-started error instead, taking the send-error branch on every
-		// attempt and never actually reaching the final select this test is
-		// named for.
+		// custom sendFn), so the update lands on stream.sent. Only past this
+		// point has beginReadySend made the resume eligible to accept
+		// anything at all, and only past this point is resumeApproval
+		// provably about to enter (or already inside) its final select.
 		select {
 		case update := <-harness.stream.sent:
 			if update.GetApprovalResumeReady() == nil {
@@ -656,31 +826,48 @@ func TestBufferedAcceptanceOutranksSimultaneousDeadline(t *testing.T) {
 			t.Fatalf("attempt %d: the Ready never reached the stream", attempt)
 		}
 
-		// The barrier: record the acceptance, then cancel the wait, back to
-		// back with no gap in between. Whether resumeApproval is already
-		// parked in its final select or reaches it a moment later, by the
-		// time it gets there pending.signal is either already closed or
-		// closes before waitCtx.Done() does, so abandonOrClaim must observe
-		// the accepted outcome regardless of which of the two ready cases
-		// select happens to pick — an acceptance recorded before a deadline
-		// fires must win every time, not just when the scheduler is kind.
-		harness.pending.recordAccepted(accepted)
-		cancel()
+		// The barrier: two goroutines, released together, one recording the
+		// acceptance directly on the pending resume and the other cancelling
+		// the wait — a real race for outcomeMu rather than a sequence the
+		// test itself imposed.
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			harness.pending.recordAccepted(accepted)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			cancel()
+		}()
+		close(start)
+		wg.Wait()
 
 		err := <-result
 		cancel()
 
-		if err != nil {
-			t.Fatalf("attempt %d: resume error = %v, want nil: a recorded acceptance must win a simultaneous-ready select", attempt, err)
-		}
-		if fatal := harness.fatalErr(); fatal != nil {
-			t.Fatalf("attempt %d: a recorded acceptance still dropped the whole worker stream: %v", attempt, fatal)
-		}
-		if entry := harness.worker.activeRun(resumeDeliveryRunID); entry == nil {
-			t.Fatalf("attempt %d: a recorded acceptance forced the durably running run into recovery", attempt)
-		}
-		if harness.entry.outboundPaused() {
-			t.Fatalf("attempt %d: a winning acceptance left the resumed run's outbound narration paused", attempt)
+		switch {
+		case err == nil:
+			if fatal := harness.fatalErr(); fatal != nil {
+				t.Fatalf("attempt %d: resume succeeded but the worker still reported fatal: %v", attempt, fatal)
+			}
+			if entry := harness.worker.activeRun(resumeDeliveryRunID); entry == nil {
+				t.Fatalf("attempt %d: resume succeeded but the run was released as if it had failed", attempt)
+			}
+			if harness.entry.outboundPaused() {
+				t.Fatalf("attempt %d: a winning acceptance left the resumed run's outbound narration paused", attempt)
+			}
+		case runWasTerminalized(err):
+			fatal := harness.fatalErr()
+			if !errors.Is(fatal, errApprovalResumeUnacknowledged) {
+				t.Fatalf("attempt %d: resume failed but fatal = %v, want %v", attempt, fatal, errApprovalResumeUnacknowledged)
+			}
+			waitForInactiveRun(t, harness.worker, resumeDeliveryRunID)
+		default:
+			t.Fatalf("attempt %d: resume error = %v, want either nil or a terminal run error", attempt, err)
 		}
 	}
 }
@@ -702,6 +889,11 @@ func TestAcceptanceForAnotherApprovalCannotSatisfyResume(t *testing.T) {
 	if other == nil {
 		t.Fatal("no pending resume for the unrelated approval")
 	}
+	// A resume this far along would have already called beginReadySend
+	// itself; simulating that here is what makes other.recordAccepted a
+	// legitimate acceptance rather than one recordAccepted would refuse on
+	// its own gate, keeping this test about approval-scoping and nothing else.
+	other.beginReadySend()
 	if !other.recordAccepted(&turingv1.RuntimeApprovalResumeAccepted{
 		RunId: resumeDeliveryRunID, ApprovalId: otherApproval, StateVersion: resumeDeliveryVersion + 1,
 		AssignmentAttemptId: resumeDeliveryAttempt,
@@ -754,8 +946,11 @@ func TestAcceptanceAfterAbandonmentCannotReviveTheResume(t *testing.T) {
 	if harness.pending.recordAccepted(late) {
 		t.Fatal("an acceptance recorded after abandonment was accepted instead of dropped")
 	}
-	if accepted, ok := harness.pending.peekAccepted(); ok {
-		t.Fatalf("peekAccepted after abandonment = (%v, true), want (nil, false)", accepted)
+	// abandonOrClaim is the single commit point: calling it again after
+	// abandonment must observe the same settled abandonment, not the late
+	// acceptance that recordAccepted above just refused to record.
+	if accepted, ok := harness.pending.abandonOrClaim(); ok {
+		t.Fatalf("abandonOrClaim after abandonment = (%v, true), want (nil, false)", accepted)
 	}
 }
 
@@ -769,6 +964,7 @@ func TestAcceptanceAfterAbandonmentCannotReviveTheResume(t *testing.T) {
 func TestApprovalResumeOutcomeCommitPoint(t *testing.T) {
 	t.Run("nothing recorded, abandonOrClaim abandons and a later acceptance cannot revive it", func(t *testing.T) {
 		pending := newApprovalResume("run_commit_abandon_first")
+		pending.beginReadySend()
 		accepted, ok := pending.abandonOrClaim()
 		if ok || accepted != nil {
 			t.Fatalf("abandonOrClaim with nothing recorded = (%v, %v), want (nil, false)", accepted, ok)
@@ -783,6 +979,7 @@ func TestApprovalResumeOutcomeCommitPoint(t *testing.T) {
 
 	t.Run("an acceptance recorded first is claimed instead of abandoned", func(t *testing.T) {
 		pending := newApprovalResume("run_commit_accept_first")
+		pending.beginReadySend()
 		want := &turingv1.RuntimeApprovalResumeAccepted{RunId: "run_commit_accept_first"}
 		if !pending.recordAccepted(want) {
 			t.Fatal("recordAccepted on a pending resume reported failure")
@@ -800,6 +997,7 @@ func TestApprovalResumeOutcomeCommitPoint(t *testing.T) {
 
 	t.Run("a second acceptance is ignored once one is already recorded", func(t *testing.T) {
 		pending := newApprovalResume("run_commit_duplicate")
+		pending.beginReadySend()
 		first := &turingv1.RuntimeApprovalResumeAccepted{RunId: "run_commit_duplicate", StateVersion: 1}
 		second := &turingv1.RuntimeApprovalResumeAccepted{RunId: "run_commit_duplicate", StateVersion: 2}
 		if !pending.recordAccepted(first) {
@@ -808,24 +1006,35 @@ func TestApprovalResumeOutcomeCommitPoint(t *testing.T) {
 		if pending.recordAccepted(second) {
 			t.Fatal("recordAccepted of a second acceptance reported success")
 		}
-		if got, ok := pending.peekAccepted(); !ok || got != first {
-			t.Fatalf("peekAccepted after a duplicate = (%v, %v), want (%v, true)", got, ok, first)
+		if got, ok := pending.abandonOrClaim(); !ok || got != first {
+			t.Fatalf("abandonOrClaim after a duplicate = (%v, %v), want (%v, true)", got, ok, first)
 		}
 	})
 
-	t.Run("peekAccepted never abandons a resume that has not given up", func(t *testing.T) {
-		pending := newApprovalResume("run_commit_peek")
-		if accepted, ok := pending.peekAccepted(); ok || accepted != nil {
-			t.Fatalf("peekAccepted with nothing recorded = (%v, %v), want (nil, false)", accepted, ok)
+	// An acceptance before the Ready send has started cannot satisfy the
+	// resume, no matter what outcome is otherwise in play: recordAccepted's
+	// readyStarted gate is what makes resumeApproval's own decision-select
+	// failing branch provably unable to observe a recorded acceptance,
+	// because beginReadySend only ever runs after that select returns.
+	t.Run("an acceptance before the Ready send has started cannot satisfy the resume", func(t *testing.T) {
+		pending := newApprovalResume("run_commit_ready_not_started")
+		premature := &turingv1.RuntimeApprovalResumeAccepted{RunId: "run_commit_ready_not_started"}
+		if pending.recordAccepted(premature) {
+			t.Fatal("recordAccepted succeeded before the Ready send had started")
 		}
-		// A peek finding nothing must not have committed to abandonment: an
-		// acceptance recorded afterward still has to be claimable.
-		want := &turingv1.RuntimeApprovalResumeAccepted{RunId: "run_commit_peek"}
-		if !pending.recordAccepted(want) {
-			t.Fatal("recordAccepted after an empty peek reported failure")
+		// abandonOrClaim is the same commit point recordAccepted uses, and it
+		// abandons whatever is still pending here — so it confirms the
+		// rejection above was final rather than merely a miss.
+		if accepted, ok := pending.abandonOrClaim(); ok {
+			t.Fatalf("abandonOrClaim found a premature acceptance claimable: %v", accepted)
 		}
-		if got, ok := pending.abandonOrClaim(); !ok || got != want {
-			t.Fatalf("abandonOrClaim after an empty peek and a recording = (%v, %v), want (%v, true)", got, ok, want)
+		// The same acceptance on a FRESH resume whose Ready send has already
+		// started succeeds, proving the earlier rejection was about timing —
+		// readyStarted — and not about the acceptance value itself.
+		fresh := newApprovalResume("run_commit_ready_started_after")
+		fresh.beginReadySend()
+		if !fresh.recordAccepted(premature) {
+			t.Fatal("recordAccepted failed once the Ready send had started")
 		}
 	})
 }
@@ -844,6 +1053,11 @@ func TestAcceptanceRacingAbandonmentIsLinearized(t *testing.T) {
 	const iterations = 500
 	for i := 0; i < iterations; i++ {
 		pending := newApprovalResume("run_commit_race")
+		// The Ready send is already underway for every iteration of this
+		// race: this test is about the recordAccepted/abandonOrClaim commit
+		// point itself, not about the readyStarted gate that a separate test
+		// covers on its own.
+		pending.beginReadySend()
 		accepted := &turingv1.RuntimeApprovalResumeAccepted{RunId: "run_commit_race", StateVersion: int64(i + 1)}
 		start := make(chan struct{})
 		var recordedOK bool
@@ -876,9 +1090,11 @@ func TestAcceptanceRacingAbandonmentIsLinearized(t *testing.T) {
 			t.Fatalf("iteration %d: recordAccepted ok=%v, abandonOrClaim ok=%v — exactly one of these must be true together with the other, never split", i, recordedOK, claimedOK)
 		}
 		// Whichever won, the outcome is now fixed: neither call can ever
-		// change what a later observer sees.
-		if got, ok := pending.peekAccepted(); recordedOK && claimedOK && (!ok || got != accepted) {
-			t.Fatalf("iteration %d: peekAccepted after a settled acceptance = (%v, %v), want (%v, true)", i, got, ok, accepted)
+		// change what a later observer sees. abandonOrClaim is idempotent —
+		// calling it again is a read, not a second commit — so it doubles as
+		// that observer here.
+		if got, ok := pending.abandonOrClaim(); recordedOK && claimedOK && (!ok || got != accepted) {
+			t.Fatalf("iteration %d: abandonOrClaim after a settled acceptance = (%v, %v), want (%v, true)", i, got, ok, accepted)
 		}
 	}
 }

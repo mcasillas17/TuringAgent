@@ -136,23 +136,39 @@ type approvalResume struct {
 	decideOnce sync.Once
 	deadline   time.Time
 
-	// outcomeMu guards outcome and accepted. It is deliberately its own lock,
-	// not the worker's w.mu: deliverResumeAcceptance and resumeApproval's
-	// failing paths reach this decision from call sites that each already
-	// touch other locks (w.mu, the entry's) on their own way here, just never
-	// while holding outcomeMu itself. Giving the resume's outcome a lock that
-	// nothing else ever acquires — always taken and released on its own,
-	// never nested inside another lock — is what keeps this decision from
-	// ever needing a lock order with anything else in the worker.
+	// outcomeMu guards outcome, accepted, and readyStarted. It is deliberately
+	// its own lock, not the worker's w.mu: deliverResumeAcceptance and
+	// resumeApproval's failing paths reach this decision from call sites that
+	// each already touch other locks (w.mu, the entry's) on their own way
+	// here, just never while holding outcomeMu itself. Giving the resume's
+	// outcome a lock that nothing else ever acquires — always taken and
+	// released on its own, never nested inside another lock — is what keeps
+	// this decision from ever needing a lock order with anything else in the
+	// worker.
 	outcomeMu sync.Mutex
 	outcome   resumeOutcome
 	accepted  *turingv1.RuntimeApprovalResumeAccepted
+	// readyStarted records that this resume's Ready send has begun. It is set
+	// exactly once, by beginReadySend, immediately before resumeApproval
+	// attempts to send the Ready — never before the decision has arrived,
+	// because beginReadySend is only ever called after resumeApproval's
+	// decision select returns. recordAccepted refuses to commit an acceptance
+	// until this is true: the orchestrator cannot have produced a durable
+	// acceptance for a Ready this worker had not yet started sending, so a
+	// stray or premature delivery arriving before this point can never be
+	// recorded, no matter what races it here. That is what makes the
+	// decision select's own failing branch unable to ever observe a recorded
+	// acceptance — the invariant is enforced locally rather than merely
+	// assumed.
+	readyStarted bool
 	// signal is closed exactly once, the instant an acceptance is recorded, so
 	// a blocked wait can wake up rather than poll for one. It carries no
 	// payload and settles nothing by itself — outcome and accepted, read under
-	// outcomeMu, are the only source of truth once it fires.
-	signal     chan struct{}
-	signalOnce sync.Once
+	// outcomeMu, are the only source of truth once it fires. Closing it here
+	// needs no sync.Once of its own: recordAccepted is the only place that
+	// closes it, and it only ever reaches that close once, on the single call
+	// that wins the transition out of resumeOutcomePending under outcomeMu.
+	signal chan struct{}
 }
 
 // resumeOutcome is the one durable fact a pending resume ever settles into.
@@ -1143,36 +1159,44 @@ func newApprovalResume(runID string) *approvalResume {
 
 // recordAccepted stores a durable acceptance for later claiming, unless a
 // failing path has already reached outcomeMu first and abandoned this resume
-// — once abandoned, no later acceptance can revive it. It reports whether the
+// — once abandoned, no later acceptance can revive it — or the Ready send this
+// acceptance would answer has not even started yet. It reports whether the
 // acceptance was recorded.
 //
 // This is the "record" half of the single linearizable commit point: whether
 // this call or a concurrent abandonOrClaim acquires outcomeMu first is what
 // decides the resume's fate, and each of them only ever acts on what it
-// observes after acquiring it.
+// observes after acquiring it. The readyStarted check is a local invariant on
+// top of that commit point, not a race with it: readyStarted can only ever be
+// true after beginReadySend runs, which is only ever after the decision
+// arrived, so an acceptance offered any earlier is refused here regardless of
+// what outcome is otherwise in play.
 func (p *approvalResume) recordAccepted(accepted *turingv1.RuntimeApprovalResumeAccepted) bool {
 	p.outcomeMu.Lock()
 	defer p.outcomeMu.Unlock()
-	if p.outcome != resumeOutcomePending {
+	if !p.readyStarted || p.outcome != resumeOutcomePending {
 		return false
 	}
 	p.outcome = resumeOutcomeAccepted
 	p.accepted = accepted
-	p.signalOnce.Do(func() { close(p.signal) })
+	close(p.signal)
 	return true
 }
 
-// peekAccepted is a non-committing read: it reports a recorded acceptance
-// without deciding anything for a resume that has not yet given up. It never
-// abandons, so it is safe to call before the wait has any reason to end —
-// unlike abandonOrClaim, calling this and finding nothing changes nothing.
-func (p *approvalResume) peekAccepted() (*turingv1.RuntimeApprovalResumeAccepted, bool) {
+// beginReadySend records, under outcomeMu, that this resume's Ready send is
+// about to leave this process. Called at most once, immediately before
+// resumeApproval attempts the send — never before the decision select
+// returns — it is what makes recordAccepted's readyStarted gate an honest
+// local proof rather than an assumption: an acceptance cannot be durably
+// recorded for this resume before this call has run, so nothing racing the
+// decision select's own failing branch can ever produce a recorded acceptance
+// for it to observe.
+func (p *approvalResume) beginReadySend() {
 	p.outcomeMu.Lock()
 	defer p.outcomeMu.Unlock()
-	if p.outcome == resumeOutcomeAccepted {
-		return p.accepted, true
+	if p.outcome == resumeOutcomePending {
+		p.readyStarted = true
 	}
-	return nil, false
 }
 
 // abandonOrClaim is the resume's single commit point for giving up. It is the
@@ -1270,7 +1294,14 @@ func (w *Worker) beginApprovalResume(approvalID string, runID string, deadline t
 // A mismatched acceptance is dropped rather than acted on, and dropping it
 // changes nothing else — in particular it does not restart the wait, because
 // then any stream could hold this run paused indefinitely by sending
-// acceptances that were never about it.
+// acceptances that were never about it. Every check here, including the
+// version check, is deliberately non-mutating: this function only decides
+// whether pending.recordAccepted gets a chance to commit the outcome, never
+// adopts anything itself. That is what keeps a duplicate, late, or
+// already-abandoned acceptance — one recordAccepted goes on to refuse — from
+// having moved the run's observed version before it was dropped;
+// completeAcceptedResume is the only place that adopts a version, and it only
+// runs for an outcome recordAccepted or abandonOrClaim actually claimed.
 func (w *Worker) deliverResumeAcceptance(accepted *turingv1.RuntimeApprovalResumeAccepted) {
 	if accepted == nil || accepted.GetApprovalId() == "" {
 		return
@@ -1293,7 +1324,13 @@ func (w *Worker) deliverResumeAcceptance(accepted *turingv1.RuntimeApprovalResum
 	if accepted.GetAssignmentAttemptId() != "" && accepted.GetAssignmentAttemptId() != attemptID {
 		return
 	}
-	if version := accepted.GetStateVersion(); version > 0 && !entry.acceptVersion(version) {
+	// versionAcceptable only validates: it never moves the run's version.
+	// Adoption happens exactly once, in completeAcceptedResume, and only for
+	// an outcome recordAccepted actually commits below — so a duplicate,
+	// late, or already-abandoned acceptance that fails to record leaves the
+	// run's observed version exactly where it was, rather than having
+	// dragged it forward on its way to being dropped.
+	if version := accepted.GetStateVersion(); version > 0 && !entry.versionAcceptable(version) {
 		return
 	}
 	pending.recordAccepted(accepted)
@@ -1329,19 +1366,24 @@ func (w *Worker) resumeApproval(ctx context.Context, stream RuntimeStream, resum
 	case <-pending.decided:
 	case <-waitCtx.Done():
 		// Still waiting-approval, and this attempt still owns the run, so the
-		// worker can name what actually went wrong — unless an acceptance
-		// already won the race for the commit point, which abandonOrClaim
-		// alone decides. In practice an acceptance cannot precede its own
-		// decision: the orchestrator only accepts a Ready this worker has not
-		// sent yet without a decided approval. This claim branch exists so
-		// that invariant is enforced by the same commit point everywhere
-		// rather than assumed here too, not because it is expected to fire.
-		if accepted, ok := pending.abandonOrClaim(); ok {
-			return w.completeAcceptedResume(entry, accepted)
-		}
+		// worker can name what actually went wrong. There is no claim branch
+		// here: beginReadySend has not run yet at this point in the call —
+		// it only ever runs after this select returns — so recordAccepted's
+		// readyStarted gate guarantees no acceptance can have been committed
+		// for this resume no matter what raced this deadline. The decision
+		// gate is authoritative and this failure is unconditional.
 		return w.failApprovalResume(ctx, stream, entry, runID, false, waitCtx.Err())
 	}
 	_, attemptID := entry.identity()
+	// beginReadySend marks, under the resume's own lock, that recordAccepted
+	// may now commit an acceptance for this resume. It runs immediately
+	// before the send begins so that a send error below — the only case
+	// where the Ready's fate becomes unknowable from here — still leaves an
+	// acceptance racing it eligible to win: readyStarted is set regardless of
+	// how the send below turns out, so "the send started" is true from this
+	// worker's own point of view the instant it is attempted, not only once
+	// it is confirmed to have reached the wire.
+	pending.beginReadySend()
 	// Bounded by what is LEFT of the approval budget, never by a fresh one.
 	// The send is part of the same wait the user already sat through, so a
 	// timeout of its own would let a resume outlive the deadline everything
@@ -1385,14 +1427,11 @@ func (w *Worker) resumeApproval(ctx context.Context, stream RuntimeStream, resum
 		// any more, and the stream goes so the ownership fence can decide.
 		return w.failApprovalResume(ctx, stream, entry, runID, outboundSendStarted(err), err)
 	}
-	// A non-committing peek before the blocking wait, so an acceptance that
-	// arrived while the send was still in flight is taken immediately rather
-	// than through a select. It never abandons on a miss — the wait has not
-	// earned the right to give up yet — so it can never turn a resume that
-	// still has time left into one that already failed.
-	if accepted, ok := pending.peekAccepted(); ok {
-		return w.completeAcceptedResume(entry, accepted)
-	}
+	// The Ready is away. An acceptance recorded while the send was still in
+	// flight already closed pending.signal, so the select below claims it
+	// immediately rather than blocking — a channel that is already closed is
+	// always the ready case, which is what makes a separate non-blocking peek
+	// before this select redundant rather than merely equivalent.
 	select {
 	case <-pending.signal:
 	case <-waitCtx.Done():
@@ -1417,10 +1456,11 @@ func (w *Worker) resumeApproval(ctx context.Context, stream RuntimeStream, resum
 // paused anything: the point is that a Ready send error must never leave a
 // durably-resumed run muted just because the acceptance that saved it happens
 // to be observed after the pause was already set.
+//
+// entry is never nil here: every call site obtains it from w.activeRun and
+// already returns early when that lookup fails, before this is ever reached.
 func (w *Worker) completeAcceptedResume(entry *activeRun, accepted *turingv1.RuntimeApprovalResumeAccepted) error {
-	if entry != nil {
-		entry.unpauseAfterAcceptedResume(accepted.GetStateVersion())
-	}
+	entry.unpauseAfterAcceptedResume(accepted.GetStateVersion())
 	return nil
 }
 
@@ -1937,6 +1977,24 @@ func (r *activeRun) acceptVersion(version int64) bool {
 	}
 	r.version = version
 	return true
+}
+
+// versionAcceptable reports whether version could be adopted as a forward
+// move for this assignment, using the same forward-only rule as acceptVersion
+// — but without moving anything. deliverResumeAcceptance uses this instead of
+// acceptVersion to validate an acceptance before recordAccepted decides
+// whether the resume is still open to it: a duplicate, late, or
+// already-abandoned acceptance must leave the version untouched, and only
+// completeAcceptedResume — reached once recordAccepted or abandonOrClaim has
+// actually claimed the outcome — is allowed to adopt it, via
+// unpauseAfterAcceptedResume.
+func (r *activeRun) versionAcceptable(version int64) bool {
+	if version <= 0 {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return version >= r.version
 }
 
 // pauseOutbound stops this run narrating itself after an update failed to reach
