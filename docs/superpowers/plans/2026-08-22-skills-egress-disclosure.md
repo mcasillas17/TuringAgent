@@ -105,11 +105,18 @@ outside the fingerprint preimage, voiding the binding.
 **`body_may_be_sent` comes from the snapshot's own `Withheld` bit — never
 recomputed.** The field is `!snapshot.Withheld`, read from the same snapshot
 entry the fingerprint covers. Recomputing it from `skill_capability_grants`
-is the trap, twice over: `enabledSkillSnapshotsReadOnlyTx` classifies and
-drops *stale-scoped* grants (a skill that widened its `requires:` since the
-grant), while the naive `SELECT` does not — and prepare deliberately never
-reconciles, so the divergence is live, not theoretical; and a skill
-declaring zero capabilities must trivially read as not withheld. The proto
+is the trap, and the divergence case is precise — get it wrong and the
+anti-trap test tests nothing: grant scope encodes
+`Revision + requires-list`, and `classifyGrantScope` **drops** a grant as
+stale when the scope string changed while the requires list stayed
+identical — i.e. **a body/file edit with `requires:` unchanged** (a
+*widened* `requires:` classifies as Refresh and is kept, and diverges
+nothing: both computations see the new capability ungranted). Prepare
+classifies without reconciling (`enabledSkillSnapshotsReadOnlyTx`), while
+the naive `SELECT` is only correct after `reconcileSkillsTx` has deleted
+stale rows — so at prepare, after a body edit, the snapshot withholds and
+the naive query says fully granted. That is the live divergence. And a
+skill declaring zero capabilities must trivially read as not withheld. The proto
 name says "may be" because it is a ceiling (see above); the dialog tags read
 "full content may be sent" and "name and description only." References ride
 under the same ceiling as the body (`skill_view` reaches both) and need no
@@ -124,17 +131,35 @@ message SkillEgressDisclosure {
 repeated SkillEgressDisclosure skills = 11;
 ```
 
-**Skill names are untrusted strings entering a consent surface — flatten
-and cap them.** Skill content is untrusted prompt material (CLAUDE.md), and
-a name can carry newlines, absurd length, or direction-control characters
-into the very dialog that gates egress. The runtime already flattens skill
-metadata for exactly this reason (`oneLine()` in `agent/skills.go`); the
-disclosure applies the same flattening plus a rune cap
-(`maxSkillDisplayNameRunes = 80`, ellipsis-truncated) **server-side**, so
-the property is testable in Go, not a Flutter styling hope. The list itself
-is bounded: `maxEgressSkills = 256` (the `maxEgressTools` mold), refused at
-`resolveEgressContext` with a legible `FailedPrecondition` naming the remedy
-(disable skills); the run-notice line truncates at 8 names with "+N more".
+**Skill names are untrusted strings entering two consent surfaces — one
+shared sanitizer, in the shared package, on both paths.** Skill content is
+untrusted prompt material (CLAUDE.md), and a name can carry newlines,
+absurd length, or format/direction-control characters into the dialog that
+gates egress and the transcript notice that records it. The runtime's
+`oneLine()` is the precedent but **not sufficient for the named threat**
+(`strings.Fields` splits on whitespace only — RLO, bidi isolates, and
+zero-width characters are category Cf, not whitespace, and survive; a name
+of only zero-width characters even renders as a blank consent row), and it
+is **not importable anyway**: it lives under `agent-runtime-go/internal/`,
+which `orchestrator-go` cannot reach. The sanitizer therefore lives in
+`turing-backend/internal/egress` (the shared package both modules already
+import): whitespace-flatten, strip `unicode.Cf` and control runes, cap at
+`maxSkillDisplayNameRunes = 80` with ellipsis — and it is applied on
+**both** paths, the disclosure (`SkillEgressInfo`) and the run notice
+(`jobs.go` builds the notice from raw `SkillSnapshot.Name` today; the
+notice goes through the same helper, or an unflattened untrusted string
+lands in the transcript event payload while every test passes). The
+loader already caps names at 120 runes at parse, so the cap only bites in
+the 81–120 range end to end; the wilder inputs are unit territory. The
+list itself is bounded: `maxEgressSkills = 256` (the `maxEgressTools`
+mold), refused at `resolveEgressContext` with a legible
+`FailedPrecondition` naming the remedy (disable skills) — **conditioned on
+`providerEgress`**, matching the condition that populates the list, so an
+MCP-only local run with 257 enabled skills is not refused over a list that
+is empty by construction. The run-notice line truncates at 8 names with
+"+N more"; the disclosure's structured list is **never** truncated below
+the 256 bound — the two policies are different on purpose and tested as
+different.
 
 **The legible refusal lives where users actually hit it —
 `service/chat/egress.go`, not primarily `jobs.go`.** The common drift case
@@ -143,15 +168,26 @@ send) is caught by `applyRemoteEgress` → `payloadMatchesEgressContext`,
 today's message "remote egress context changed; prepare the send again" —
 `SendMessage` returns there and `EnqueueUserMessage` is never reached. That
 message gains the specific cause when the fingerprint is the mismatched
-field: "the skill snapshot changed since consent was prepared; prepare the
-send again" — worded for *any* snapshot change (set membership, body edit,
-grant change), not just enable/disable, because the fingerprint covers all
-of them. The `jobs.go` check guards only the narrow race between
+field — mechanically: `payloadMatchesEgressContext` returns a bare `bool`
+and stays that way; the call site adds a separate
+`payload.SkillSnapshotFingerprint != resolved.SkillSnapshotFingerprint`
+comparison to pick the wording — "the skill snapshot changed since consent
+was prepared; prepare the send again", worded for *any* snapshot change
+(set membership, body edit, grant change) because the fingerprint covers
+all of them. Non-skill drift (tools, endpoints, categories) keeps the
+existing generic wording, and a test pins that boundary — an
+implementation that swaps the skill message onto every mismatch mislabels
+every kind of drift. The `jobs.go` check guards only the narrow race between
 `applyRemoteEgress`'s read and the enqueue transaction; it gets a distinct
 sentinel (`ErrEgressSkillSnapshotChanged`) plus a new arm in
 `mapEnqueueError` (`service/chat/service.go`) — without that arm the
 sentinel collapses into the generic "decision is invalid" status and the
-wording never reaches a client. Both files are in the build list. One
+wording never reaches a client. Stated for the test-writer: that window is
+single-threaded with no seam, so it is **not reachable through
+`SendMessage`** — it is pinned by two direct unit assertions (the
+repository check returns the sentinel; `mapEnqueueError` maps the sentinel
+to its distinguishable status), not by hunting for an interleaving that
+does not exist. Both files are in the build list. One
 pre-existing behavior inherited and accepted: the fingerprint is computed
 and bound even for MCP-only local runs (harmless over-binding — a skill
 edit refuses a send that carries no skills); the chosen wording reads
@@ -208,12 +244,16 @@ nothing new leaves the machine because of this plan.
 - **Client** — `remote_egress_dialog.dart` renders the skill list with the
   may-be-sent tags; `models/remote_egress.dart` + `grpc_client.dart`
   mapping.
+- **`turing-backend/internal/egress`** — the shared name sanitizer (both
+  modules and both call sites use this one function).
 - **Existing fixtures** — a real, budgeted cost, not collateral: at least
   `agent-runtime-go/internal/agent/external_agent_test.go` (`routedJob`,
-  `authorizeDirectRemoteJob`), `egress_mcp_test.go`,
-  `service/runtime/service_test.go`, and `service/chat/egress_test.go`'s
-  exact-category assertions all encode the unconditional rule and must
-  move to the conditional one.
+  `authorizeDirectRemoteJob`), `service/runtime/service_test.go`, and
+  `service/chat/egress_test.go`'s exact-category assertions all encode the
+  unconditional rule and must move to the conditional one.
+  (`egress_mcp_test.go` needs **no** repair — its local-provider decision
+  never carried `SKILL_CONTENT`; it is instead the natural home for the
+  new divergence test.)
 
 ## The tests that gate the merge
 
@@ -235,34 +275,50 @@ For 1–5, break the production gate, watch the right test fail, restore.
    refused by the runtime** — the undisclosed-content direction is the one
    that matters most. And the divergence case: enabled skills + local
    Ollama + remote MCP tool ⇒ no `SKILL_CONTENT`, no skill names in
-   disclosure or notice (the scenario
-   `TestLocalRemoteMCPConsentNoticeAndAuditNameDestination` covers with
-   zero skills, re-run with skills). Plus: one *enabled but unparseable*
+   disclosure or notice — the notice half extends
+   `TestLocalRemoteMCPConsentNoticeAndAuditNameDestination`'s
+   repository-level scenario with skills; the disclosure half needs a
+   **service-layer** variant, since that test constructs no disclosure at
+   all. Plus: one *enabled but unparseable*
    skill and nothing else ⇒ snapshot empty ⇒ no category — the leg that
    kills gating on `skill_settings.enabled` instead of snapshot content.
 3. **`body_may_be_sent` is the snapshot's bit.** All-granted ⇒ true; one
    grant revoked ⇒ false; a skill declaring **zero** capabilities ⇒ true;
-   and the stale-scope case that kills a parallel grant query: widen a
-   skill's `requires:` after granting, don't reconcile — the snapshot
-   withholds, and the disclosure must say so.
-4. **Drift is refused, legibly, end to end.** Through `SendMessage` (not a
-   bare repository call — the repository-only variant passes without the
-   service-layer wording ever existing): prepare, then enable a skill —
-   and separately disable one, edit a body, and revoke a grant — then
-   send ⇒ refused with the skill-snapshot-changed wording from
-   `applyRemoteEgress`. The enqueue-window sentinel maps through
-   `mapEnqueueError` to a distinguishable status. Pure-function leg: two
+   and the stale-scope case that kills a parallel grant query — the case
+   is a **body edit with `requires:` unchanged**, after granting, without
+   reconciling: the snapshot classifies the grant stale and withholds,
+   while the naive grant `SELECT` says fully granted; the disclosure must
+   report `false`. (Widening `requires:` is *not* the kill-case — that
+   classifies Refresh and both computations agree.)
+4. **Drift is refused, legibly, end to end — and only skill drift gets the
+   skill wording.** Through `SendMessage` (not a bare repository call —
+   the repository-only variant passes without the service-layer wording
+   ever existing): prepare, then enable a skill — and separately disable
+   one, edit a body, and revoke a grant — then send ⇒ refused with the
+   skill-snapshot-changed wording from `applyRemoteEgress`. The negative
+   boundary: change something *other* than skills between prepare and
+   send ⇒ the existing generic context-changed wording, not the skill
+   message. The enqueue-window sentinel is pinned by its two direct unit
+   assertions (repository returns it; `mapEnqueueError` maps it) — that
+   window has no `SendMessage`-reachable seam. Pure-function leg: two
    snapshots differing only in set membership produce different
    fingerprints (the existing `context_test.go` pins a *content* change;
    membership is the new leg).
-5. **The notice names them, keyed on the category.** A consented remote run
-   with skills lists their names in the notice; a remote run with zero
-   skills has no skill line; an MCP-only local run with enabled skills has
-   no skill line; twelve skills render eight names + "+4 more".
-6. **Bounds and sanitization hold.** A 257th enabled skill refuses at
-   prepare with the legible message; a name with newlines and 300 runes
-   arrives flattened and capped in the disclosure — asserted in Go against
-   the server-side value, not in Flutter.
+5. **The notice names them, keyed on the category — and the two truncation
+   policies stay distinct.** A consented remote run with skills lists
+   their names in the notice; a remote run with zero skills has no skill
+   line; an MCP-only local run with enabled skills has no skill line;
+   twelve skills render eight notice names + "+4 more" **while the same
+   run's disclosure `skills` list carries all twelve** — the leg that
+   catches the notice's truncation leaking into the structured list.
+6. **Bounds and sanitization hold, on both surfaces.** A 257th enabled
+   skill refuses at prepare with the legible message — and an MCP-only
+   local run with 257 skills is *not* refused; a ~100-rune name with
+   embedded newlines arrives flattened and capped end to end in **both**
+   the disclosure and the notice; the wilder inputs (300 runes, RLO/bidi
+   isolates, zero-width-only names) are unit tests on the shared
+   sanitizer, which must strip `unicode.Cf` and control runes — the
+   loader's 120-rune parse cap makes them unreachable end to end.
 7. **The dialog renders the distinction.** Flutter: one may-be-sent and one
    metadata-only skill render with correct tags inside the existing
    scrolling dialog.
