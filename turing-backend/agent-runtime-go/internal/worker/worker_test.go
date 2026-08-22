@@ -330,7 +330,7 @@ func TestOutboundWriterCanRestartForASubsequentStream(t *testing.T) {
 	firstStream := newFakeStream()
 	worker := New(Options{WorkerID: "worker-reconnect", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: firstStream}, terminalExecutor{})
 	worker.startOutboundWriter(firstStream)
-	if err := worker.send(context.Background(), firstStream, &turingv1.RuntimeUpdate{}); err != nil {
+	if err := worker.send(context.Background(), firstStream, &turingv1.RuntimeUpdate{}, nil); err != nil {
 		t.Fatalf("send on first stream: %v", err)
 	}
 	worker.stopOutboundWriter()
@@ -338,13 +338,215 @@ func TestOutboundWriterCanRestartForASubsequentStream(t *testing.T) {
 	secondStream := newFakeStream()
 	worker.startOutboundWriter(secondStream)
 	defer worker.stopOutboundWriter()
-	if err := worker.send(context.Background(), secondStream, &turingv1.RuntimeUpdate{}); err != nil {
+	if err := worker.send(context.Background(), secondStream, &turingv1.RuntimeUpdate{}, nil); err != nil {
 		t.Fatalf("send on second stream: %v", err)
 	}
 	select {
 	case <-secondStream.sent:
 	case <-time.After(time.Second):
 		t.Fatal("second stream did not receive update")
+	}
+}
+
+// TestSendFiresOnStartedExactlyOnceImmediatelyBeforeTransportSend pins the
+// positive half of onStarted's contract: for a request that actually reaches
+// the outbound writer's own goroutine and begins, onStarted runs exactly
+// once, and strictly before stream.Send is invoked for it — never after,
+// never concurrently, and never more than once. Both onStarted and
+// stream.Send run on the writer's single goroutine in run(), so appending to
+// the same unsynchronized slice from both is safe and the order recorded is
+// exactly the order they executed in.
+func TestSendFiresOnStartedExactlyOnceImmediatelyBeforeTransportSend(t *testing.T) {
+	stream := newFakeStream()
+	var order []string
+	stream.sendFn = func(*turingv1.RuntimeUpdate) error {
+		order = append(order, "send")
+		return nil
+	}
+	worker := New(Options{WorkerID: "worker-onstarted-order", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+	worker.startOutboundWriter(stream)
+	defer worker.stopOutboundWriter()
+
+	var calls int
+	err := worker.send(context.Background(), stream, &turingv1.RuntimeUpdate{}, func() {
+		calls++
+		order = append(order, "onStarted")
+	})
+
+	if err != nil {
+		t.Fatalf("send error = %v, want nil", err)
+	}
+	if calls != 1 {
+		t.Fatalf("onStarted called %d times, want exactly 1", calls)
+	}
+	if len(order) != 2 || order[0] != "onStarted" || order[1] != "send" {
+		t.Fatalf("call order = %v, want [onStarted send]: onStarted must run immediately before stream.Send", order)
+	}
+}
+
+// TestSendOnStartedFiresOnlyForItsOwnRequestInFIFOOrder sends several
+// requests back to back over the same writer, each with its own onStarted
+// closure identifying it, and checks that every one fires paired with its own
+// stream.Send and nowhere else. run() only ever reads request.onStarted off
+// the single *outboundRequest it just dequeued, so nothing here is expected
+// to catch a live bug today; it exists to pin that invariant against a future
+// change to the writer's dispatch loop (for instance, one that batched or
+// pipelined requests) that could let one request's hook fire for another's
+// send.
+func TestSendOnStartedFiresOnlyForItsOwnRequestInFIFOOrder(t *testing.T) {
+	stream := newFakeStream()
+	var mu sync.Mutex
+	var order []string
+	stream.sendFn = func(update *turingv1.RuntimeUpdate) error {
+		mu.Lock()
+		order = append(order, "send:"+update.GetHeartbeat().GetWorkerId())
+		mu.Unlock()
+		return nil
+	}
+	worker := New(Options{WorkerID: "worker-fifo-onstarted", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+	worker.startOutboundWriter(stream)
+	defer worker.stopOutboundWriter()
+
+	for _, id := range []string{"1", "2", "3"} {
+		id := id
+		err := worker.send(context.Background(), stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Heartbeat{Heartbeat: &turingv1.RuntimeHeartbeat{WorkerId: id}}}, func() {
+			mu.Lock()
+			order = append(order, "onStarted:"+id)
+			mu.Unlock()
+		})
+		if err != nil {
+			t.Fatalf("send %s error = %v", id, err)
+		}
+	}
+
+	want := []string{"onStarted:1", "send:1", "onStarted:2", "send:2", "onStarted:3", "send:3"}
+	if !slices.Equal(order, want) {
+		t.Fatalf("call order = %v, want %v: each request's onStarted must fire only for its own send, immediately before it", order, want)
+	}
+}
+
+// TestSendRunUpdateReportingPauseGatedFiresOnStartedEvenWithNilEntry pins the
+// nil-entry fix directly at the layer that makes it: a hook-supplying caller
+// with a nil entry has no pause check to skip past — outboundPaused() is
+// never even asked — but that must not stop onStarted from being threaded
+// through to a send that actually begins. Every production caller that
+// supplies a hook (only resumeApproval) always has a non-nil entry, so
+// without this test the nil-entry branch of that fix is exercised only by
+// code inspection, never by anything that fails if it regresses.
+func TestSendRunUpdateReportingPauseGatedFiresOnStartedEvenWithNilEntry(t *testing.T) {
+	stream := newFakeStream()
+	worker := New(Options{WorkerID: "worker-nil-entry-hook", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+	worker.startOutboundWriter(stream)
+	defer worker.stopOutboundWriter()
+
+	var started bool
+	err := worker.sendRunUpdateReportingPauseGated(context.Background(), nil, stream, &turingv1.RuntimeUpdate{}, func() { started = true })
+
+	if err != nil {
+		t.Fatalf("send error = %v, want nil", err)
+	}
+	if !started {
+		t.Fatal("onStarted never fired for a nil-entry caller even though the send began: a nil entry must skip only the pause check, not the hook")
+	}
+	select {
+	case <-stream.sent:
+	case <-time.After(time.Second):
+		t.Fatal("update never reached the stream")
+	}
+}
+
+// TestSendNeverFiresOnStartedWhenNoWriterIsInitialized and the two tests that
+// follow pin the negative half: onStarted must never fire for a request that
+// never reaches the writer's own run() loop at all, no matter which of the
+// three ways that can happen. A caller that supplies onStarted expecting it
+// to gate something durable — resumeApproval's recordAccepted gate is the
+// only production example — must never see it armed for a send this process
+// never actually attempted.
+func TestSendNeverFiresOnStartedWhenNoWriterIsInitialized(t *testing.T) {
+	stream := newFakeStream()
+	worker := New(Options{WorkerID: "worker-no-writer", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+
+	var started bool
+	err := worker.send(context.Background(), stream, &turingv1.RuntimeUpdate{}, func() { started = true })
+
+	if err == nil {
+		t.Fatal("send with no outbound writer initialized = nil error, want a failure")
+	}
+	if started {
+		t.Fatal("onStarted fired for a send that never reached an outbound writer at all")
+	}
+}
+
+func TestSendNeverFiresOnStartedWhenTheWriterHasAlreadyStopped(t *testing.T) {
+	stream := newFakeStream()
+	worker := New(Options{WorkerID: "worker-stopped-writer", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+	worker.startOutboundWriter(stream)
+	defer worker.stopOutboundWriter()
+	worker.writerMu.Lock()
+	writer := worker.writer
+	worker.writerMu.Unlock()
+	writer.stop(errors.New("writer stopped ahead of the send"))
+	waitForOutboundWriterExit(t, worker)
+
+	var started bool
+	err := worker.send(context.Background(), stream, &turingv1.RuntimeUpdate{}, func() { started = true })
+
+	if err == nil {
+		t.Fatal("send handed to an already-stopped writer = nil error, want a failure")
+	}
+	if started {
+		t.Fatal("onStarted fired for a send handed to a writer that had already stopped")
+	}
+}
+
+// TestSendNeverFiresOnStartedForARequestAbandonedUnstartedInTheQueue is the
+// third and most important way onStarted must never fire: a request that is
+// genuinely queued behind another still in flight, and whose own context runs
+// out before the writer ever gets to dequeue it. begin() abandons a request
+// like that without ever transitioning it to started, so onStarted — which
+// run() only calls once begin() has succeeded — must never see it. This is
+// the exact case an earlier placement of the equivalent hook (armed by the
+// caller of w.send, before the request was even queued) got wrong: it would
+// have fired regardless of whether the request was ever dequeued at all.
+func TestSendNeverFiresOnStartedForARequestAbandonedUnstartedInTheQueue(t *testing.T) {
+	stream := newFakeStream()
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	stream.sendFn = func(*turingv1.RuntimeUpdate) error {
+		close(blocked)
+		<-release
+		return nil
+	}
+	worker := New(Options{WorkerID: "worker-abandoned-queue", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+	worker.startOutboundWriter(stream)
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		worker.stopOutboundWriter()
+	})
+
+	// Occupy the writer with a send it will not finish, so the next request
+	// queues behind it and the writer never gets to dequeue that one.
+	go func() { _ = worker.send(context.Background(), stream, &turingv1.RuntimeUpdate{}, nil) }()
+	select {
+	case <-blocked:
+	case <-time.After(time.Second):
+		t.Fatal("the outbound writer never started the blocking send")
+	}
+
+	sendCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	var started bool
+	err := worker.send(sendCtx, stream, &turingv1.RuntimeUpdate{}, func() { started = true })
+
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("send error = %v, want the spent context", err)
+	}
+	if outboundSendStarted(err) {
+		t.Fatalf("send error = %v, claims the send started for a request abandoned unstarted in the queue", err)
+	}
+	if started {
+		t.Fatal("onStarted fired for a request abandoned unstarted while still sitting in the writer's queue")
 	}
 }
 

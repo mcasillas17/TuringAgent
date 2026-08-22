@@ -145,7 +145,7 @@ func (h *resumeDeliveryHarness) blockWriter(t *testing.T) {
 	go func() {
 		_ = h.worker.send(context.Background(), h.stream, &turingv1.RuntimeUpdate{
 			Update: &turingv1.RuntimeUpdate_Heartbeat{Heartbeat: &turingv1.RuntimeHeartbeat{WorkerId: "worker-resume-delivery"}},
-		})
+		}, nil)
 	}()
 	select {
 	case <-entered:
@@ -437,6 +437,74 @@ func TestReadyWithheldByPausedNarrationNeverArmsAcceptance(t *testing.T) {
 	}
 	if fatal := harness.fatalErr(); fatal != nil {
 		t.Fatalf("a Ready that was never queued dropped the whole worker stream: %v", fatal)
+	}
+	waitForInactiveRun(t, harness.worker, resumeDeliveryRunID)
+	assertTypedDeliveryFailure(t, harness.sentUpdates())
+}
+
+// TestReadyAbandonedInQueueNeverArmsAcceptance pins the other boundary
+// TestReadyBudgetSpentBeforeTheSendBeginsFailsGracefully only shows the
+// ordinary case of, the mirror of what
+// TestReadyWithheldByPausedNarrationNeverArmsAcceptance pins for a Ready
+// refused before it is ever queued: a Ready that IS queued but whose budget
+// runs out before the writer ever dequeues it must never arm recordAccepted's
+// gate either.
+//
+// The writer is occupied by blockWriter for the whole call, so this Ready's
+// outboundRequest sits in the queue the entire time — begin() never runs for
+// it, because the writer's single goroutine never gets to it. onStarted (here,
+// pending.beginReadySend) is only ever invoked from inside that goroutine,
+// immediately after begin() succeeds, so a request abandoned unstarted like
+// this one can never have reached it. An earlier placement of the equivalent
+// hook — called by the caller of w.send, before the request was even created —
+// could not tell these two apart: it fired regardless of whether the request
+// was ever dequeued, so a concurrent or forged acceptance racing this exact
+// window would wrongly be recorded and would outrank the abandonment via
+// abandonOrClaim, unpausing the run and adopting a version for a Ready that
+// never left this process.
+//
+// testBeforeReadyFailureClaim — the same deterministic barrier
+// TestReadyWithheldByPausedNarrationNeverArmsAcceptance uses — fires
+// synchronously on resumeApproval's own goroutine immediately before
+// abandonOrClaim commits this abandonment, so attempting a matching
+// recordAccepted from inside it exercises the exact race window
+// deterministically rather than by hoping a goroutine wins a scheduling race.
+func TestReadyAbandonedInQueueNeverArmsAcceptance(t *testing.T) {
+	harness := newResumeDeliveryHarness(t)
+	harness.blockWriter(t)
+	deadline := time.Now().Add(150 * time.Millisecond)
+	accepted := &turingv1.RuntimeApprovalResumeAccepted{
+		RunId: resumeDeliveryRunID, ApprovalId: resumeDeliveryApproval,
+		StateVersion: resumeDeliveryVersion + 1, AssignmentAttemptId: resumeDeliveryAttempt,
+	}
+
+	var recordedDuringCall bool
+	harness.pending.testBeforeReadyFailureClaim = func() {
+		recordedDuringCall = harness.pending.recordAccepted(accepted)
+	}
+
+	result := harness.resumeAsync(deadline)
+	// The writer is still occupied here, so the Ready is still sitting
+	// unstarted in the queue; the resume has already abandoned it and is now
+	// reporting the failure.
+	harness.awaitSpentBudget(t)
+	harness.releaseWriter()
+	err := harness.awaitResume(t, result)
+
+	if recordedDuringCall {
+		t.Fatal("a Ready abandoned unstarted in the writer's queue still let a matching acceptance record during the call: onStarted armed before the send actually began")
+	}
+	if !runWasTerminalized(err) {
+		t.Fatalf("resume error = %v, want a terminal run error", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("resume error = %v, want the spent budget", err)
+	}
+	if got := harness.entry.expectedVersion(); got != resumeDeliveryVersion {
+		t.Fatalf("run version = %d, want the untouched %d: a forged acceptance must not move it", got, resumeDeliveryVersion)
+	}
+	if fatal := harness.fatalErr(); fatal != nil {
+		t.Fatalf("an unstarted Ready dropped the whole worker stream: %v", fatal)
 	}
 	waitForInactiveRun(t, harness.worker, resumeDeliveryRunID)
 	assertTypedDeliveryFailure(t, harness.sentUpdates())
@@ -937,22 +1005,41 @@ func TestAcceptedRecordedBeforeTheWaitBeginsIsClaimedWithoutBlocking(t *testing.
 // them, which proves nothing about a race, only about whichever of the two
 // the test itself chose to do first.
 //
-// This version puts each side on its own goroutine, released together from a
-// shared barrier, so the two are actually contending for outcomeMu rather
-// than being ordered by construction. That is the same commit point
-// TestAcceptanceRacingAbandonmentIsLinearized exercises directly against the
-// bare approvalResume; repeating it here, through the full resumeApproval
-// call and its own select, additionally proves that contention surfaces
-// correctly at that layer too. Note what this test does NOT pin: because the
-// two goroutines below are only released together, not made to reach
-// outcomeMu in a guaranteed order, either side may legitimately win — the
-// switch below accepts both a clean acceptance and a clean abandonment. What
-// it proves is only that the resume always lands on exactly one of those two
-// outcomes and the two sides racing for it never observably disagree about
-// which one won — linearized, never a mix of both or neither. It does not
-// prove the acceptance always outranks the deadline; for that unconditional
-// guarantee, given an acceptance already recorded before resumeApproval's
-// final select is even reached, see
+// A still later version waited for the Ready to reach harness.stream.sent
+// before releasing the racer goroutines, reasoning that only past that point
+// had beginReadySend armed the resume and resumeApproval reached its final
+// select. That was never a sound barrier: stream.sent is a buffered channel,
+// and the writer's send to it happens-before the racer goroutines start, but
+// nothing then requires resumeApproval's own goroutine — which still has to
+// be scheduled, receive the send's result, and reach the final select — to
+// have gotten there first. A test reading the update off that channel proves
+// only that the writer called stream.Send; it does not prove resumeApproval
+// is parked at (or entering) its select, so it could claim a request as
+// "parked" before that request had actually completed the round trip back to
+// resumeApproval.
+//
+// This version uses pending.testBeforeFinalSelect instead — the same
+// deterministic seam TestAcceptanceRecordedBeforeFinalSelectAlwaysWins below
+// uses, but here only to signal arrival rather than to also act inside it.
+// resumeApproval calls it synchronously, on its own goroutine, immediately
+// before that select and nowhere else, so a hook that closes a channel and
+// returns is a direct, unambiguous proof that resumeApproval has reached the
+// select — not a proxy for it. Only once that signal fires are the two racer
+// goroutines released, each on its own goroutine, so the two are actually
+// contending for outcomeMu rather than being ordered by construction. That is
+// the same commit point TestAcceptanceRacingAbandonmentIsLinearized exercises
+// directly against the bare approvalResume; repeating it here, through the
+// full resumeApproval call and its own select, additionally proves that
+// contention surfaces correctly at that layer too. Note what this test does
+// NOT pin: because the two goroutines below are only released together, not
+// made to reach outcomeMu in a guaranteed order, either side may legitimately
+// win — the switch below accepts both a clean acceptance and a clean
+// abandonment. What it proves is only that the resume always lands on exactly
+// one of those two outcomes and the two sides racing for it never observably
+// disagree about which one won — linearized, never a mix of both or neither.
+// It does not prove the acceptance always outranks the deadline; for that
+// unconditional guarantee, given an acceptance already recorded before
+// resumeApproval's final select is even reached, see
 // TestAcceptanceRecordedBeforeFinalSelectAlwaysWins below. Repeated many times
 // to exercise both lock-acquisition orders; nothing here waits on a clock,
 // only on channels and a WaitGroup.
@@ -966,28 +1053,29 @@ func TestAcceptanceRaceWithTheDeadlineIsLinearizedNeverMixed(t *testing.T) {
 			StateVersion: resumeDeliveryVersion + 1, AssignmentAttemptId: resumeDeliveryAttempt,
 		}
 
+		// arrived closes the instant resumeApproval itself signals it has
+		// reached its final select — direct proof of arrival, not an
+		// inference from something else that merely happens around the same
+		// time.
+		arrived := make(chan struct{})
+		harness.pending.testBeforeFinalSelect = func() {
+			close(arrived)
+		}
+
 		result := make(chan error, 1)
 		go func() { result <- harness.resumeWithContext(ctx, time.Time{}) }()
 
-		// Wait for the Ready to actually leave the writer before racing
-		// anything. This harness uses the fake stream's default Send (no
-		// custom sendFn), so the update lands on stream.sent. Only past this
-		// point has beginReadySend made the resume eligible to accept
-		// anything at all, and only past this point is resumeApproval
-		// provably about to enter (or already inside) its final select.
 		select {
-		case update := <-harness.stream.sent:
-			if update.GetApprovalResumeReady() == nil {
-				t.Fatalf("attempt %d: first update sent = %+v, want the approval Ready", attempt, update)
-			}
+		case <-arrived:
 		case <-time.After(5 * time.Second):
-			t.Fatalf("attempt %d: the Ready never reached the stream", attempt)
+			t.Fatalf("attempt %d: resumeApproval never reached its final select", attempt)
 		}
 
-		// The barrier: two goroutines, released together, one recording the
-		// acceptance directly on the pending resume and the other cancelling
-		// the wait — a real race for outcomeMu rather than a sequence the
-		// test itself imposed.
+		// The barrier: two goroutines, released together only after
+		// resumeApproval's own signal confirms it is genuinely parked at the
+		// select, one recording the acceptance directly on the pending
+		// resume and the other cancelling the wait — a real race for
+		// outcomeMu rather than a sequence the test itself imposed.
 		start := make(chan struct{})
 		var wg sync.WaitGroup
 		wg.Add(2)
@@ -1365,15 +1453,19 @@ func TestAcceptanceRacingAbandonmentIsLinearized(t *testing.T) {
 // TestAcceptanceDeliveryRacingTheFailureCommitNeverProducesAMixedOutcome is the
 // same race one layer up, through the worker's own deliverResumeAcceptance and
 // resumeApproval's failing path, rather than the bare approvalResume methods.
-// resumeApproval is parked in its final blocking select — proven by observing
-// the Ready actually reach the stream, never by a sleep — and is then released
-// by a barrier that fires a context cancellation and a durable delivery at
-// once, from two separate goroutines. Repeating this many times exercises both
-// lock-acquisition orders at the worker level; either the resume comes all the
-// way up as an accepted success (unpaused, no fatal, run still active) or all
-// the way up as the existing abandonment failure (fatal reported, run
-// released) — and it must always be exactly one of those two, never a mix of
-// both or neither.
+// resumeApproval is parked in its final blocking select — proven by
+// pending.testBeforeFinalSelect firing, the same seam
+// TestAcceptanceRecordedBeforeFinalSelectAlwaysWins uses, never by observing
+// the Ready reach the stream (a buffered channel: the writer's send to it can
+// complete well before resumeApproval's own goroutine is even scheduled to
+// receive the send's result and reach its select) and never by a sleep — and
+// is then released by a barrier that fires a context cancellation and a
+// durable delivery at once, from two separate goroutines. Repeating this many
+// times exercises both lock-acquisition orders at the worker level; either the
+// resume comes all the way up as an accepted success (unpaused, no fatal, run
+// still active) or all the way up as the existing abandonment failure (fatal
+// reported, run released) — and it must always be exactly one of those two,
+// never a mix of both or neither.
 func TestAcceptanceDeliveryRacingTheFailureCommitNeverProducesAMixedOutcome(t *testing.T) {
 	const iterations = 100
 	for i := 0; i < iterations; i++ {
@@ -1384,23 +1476,28 @@ func TestAcceptanceDeliveryRacingTheFailureCommitNeverProducesAMixedOutcome(t *t
 			StateVersion: resumeDeliveryVersion + 1, AssignmentAttemptId: resumeDeliveryAttempt,
 		}
 
+		// arrived closes the instant resumeApproval itself signals it has
+		// reached its final select — direct proof of arrival, not an
+		// inference from the Ready having reached the stream.
+		arrived := make(chan struct{})
+		harness.pending.testBeforeFinalSelect = func() {
+			close(arrived)
+		}
+
 		result := make(chan error, 1)
 		go func() { result <- harness.resumeWithContext(ctx, time.Time{}) }()
 
-		// Wait for the Ready to actually reach the stream before racing
-		// anything: only then is resumeApproval provably parked in its final
-		// select rather than still somewhere earlier in the handshake. This
-		// harness uses the fake stream's default Send (no custom sendFn), so
-		// the update lands on stream.sent rather than harness.started.
 		select {
-		case update := <-harness.stream.sent:
-			if update.GetApprovalResumeReady() == nil {
-				t.Fatalf("iteration %d: first update sent = %+v, want the approval Ready", i, update)
-			}
+		case <-arrived:
 		case <-time.After(5 * time.Second):
-			t.Fatalf("iteration %d: the Ready never reached the stream", i)
+			t.Fatalf("iteration %d: resumeApproval never reached its final select", i)
 		}
 
+		// Both racer goroutines are released only after that signal, never
+		// merely because the Ready reached the stream: releasing them any
+		// earlier could race an acceptance or cancellation against a resume
+		// that had not actually finished the round trip back to its own
+		// select yet.
 		start := make(chan struct{})
 		var wg sync.WaitGroup
 		wg.Add(2)
