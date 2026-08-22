@@ -15,9 +15,15 @@ class LocalizedRunCopy {
 /// This is presentation policy, not a model-level fact, so it lives beside
 /// the localized copy it drives rather than on the model itself:
 ///
-/// - [RunOutcomeReason.unknown] is a *live* forward-compatibility path: a
-///   future backend can introduce outcome reason values this client's
-///   generated proto does not yet know about, and those decode to
+/// - [RunOutcomeReason.unknown] is a *live* path, reachable today: the
+///   backend's own projection deliberately maps a persisted reason string it
+///   does not recognize to the explicit `RUN_OUTCOME_REASON_UNKNOWN` wire
+///   value, and it allows that even paired with a `completed` lifecycle — it
+///   is not restricted to `failed`/`cancelled` the way the named reasons
+///   are. On top of that, a future backend can introduce outcome reason
+///   values this client's generated proto does not yet know about, and this
+///   client also decodes an absent/`UNSPECIFIED` value the same way, even
+///   though the backend does not normally emit it. All three collapse to
 ///   `unknown` on the wire today. This client must still render something
 ///   truthful for them right now, without waiting for a client update.
 /// - [RunOutcomeReason.legacyUnknown] is *defensive*, not currently
