@@ -775,10 +775,10 @@ func TestAcceptedRecordedBeforeTheWaitBeginsIsClaimedWithoutBlocking(t *testing.
 	}
 }
 
-// TestBufferedAcceptanceOutranksSimultaneousDeadline covers the select the old
-// code left to the scheduler: an acceptance recorded for a resume racing, at
-// essentially the same instant, the cancellation of its own wait - the final
-// select resumeApproval blocks on once the Ready has been sent.
+// TestAcceptanceRaceWithTheDeadlineIsLinearizedNeverMixed covers the select the
+// old code left to the scheduler: an acceptance recorded for a resume racing,
+// at essentially the same instant, the cancellation of its own wait - the
+// final select resumeApproval blocks on once the Ready has been sent.
 //
 // An earlier version of this test recorded the acceptance and cancelled the
 // wait from inside the Ready's own sendFn, which reliably raced the send's
@@ -796,12 +796,20 @@ func TestAcceptedRecordedBeforeTheWaitBeginsIsClaimedWithoutBlocking(t *testing.
 // TestAcceptanceRacingAbandonmentIsLinearized exercises directly against the
 // bare approvalResume; repeating it here, through the full resumeApproval
 // call and its own select, additionally proves that contention surfaces
-// correctly at that layer too — the resume must land on exactly one of the
-// two outcomes, and the two sides racing for it must never observably
-// disagree about which one won. Repeated many times to exercise both
-// lock-acquisition orders; nothing here waits on a clock, only on channels and
-// a WaitGroup.
-func TestBufferedAcceptanceOutranksSimultaneousDeadline(t *testing.T) {
+// correctly at that layer too. Note what this test does NOT pin: because the
+// two goroutines below are only released together, not made to reach
+// outcomeMu in a guaranteed order, either side may legitimately win — the
+// switch below accepts both a clean acceptance and a clean abandonment. What
+// it proves is only that the resume always lands on exactly one of those two
+// outcomes and the two sides racing for it never observably disagree about
+// which one won — linearized, never a mix of both or neither. It does not
+// prove the acceptance always outranks the deadline; for that unconditional
+// guarantee, given an acceptance already recorded before resumeApproval's
+// final select is even reached, see
+// TestAcceptanceRecordedBeforeFinalSelectAlwaysWins below. Repeated many times
+// to exercise both lock-acquisition orders; nothing here waits on a clock,
+// only on channels and a WaitGroup.
+func TestAcceptanceRaceWithTheDeadlineIsLinearizedNeverMixed(t *testing.T) {
 	const iterations = 100
 	for attempt := 0; attempt < iterations; attempt++ {
 		harness := newResumeDeliveryHarness(t)
@@ -874,6 +882,127 @@ func TestBufferedAcceptanceOutranksSimultaneousDeadline(t *testing.T) {
 			waitForInactiveRun(t, harness.worker, resumeDeliveryRunID)
 		default:
 			t.Fatalf("attempt %d: resume error = %v, want either nil or a terminal run error", attempt, err)
+		}
+	}
+}
+
+// TestAcceptanceRecordedBeforeFinalSelectAlwaysWins pins the unconditional
+// half of the guarantee TestAcceptanceRaceWithTheDeadlineIsLinearizedNeverMixed
+// above only shows as one of two acceptable outcomes: once an acceptance has
+// been durably recorded — closing pending.signal — BEFORE resumeApproval's
+// final select is even entered, the resume must win with that acceptance
+// every single time, regardless of which of the select's two already-ready
+// cases Go's runtime happens to observe first. abandonOrClaim is what makes
+// this true: it checks the resume's committed outcome under outcomeMu, not
+// which channel fired, so a signal already closed by a committed acceptance
+// answers the same way whichever case the select picks.
+//
+// This is deliberately NOT a race, and it is deliberately NOT built by
+// cancelling the wait from inside the Ready's own sendFn either — an earlier
+// version of TestAcceptanceRaceWithTheDeadlineIsLinearizedNeverMixed tried
+// exactly that and found it "reliably raced the send's own context down to a
+// send-started error instead", because sendCtx is a child of waitCtx: cancel
+// it before the send has actually completed and the send's OWN inner select
+// (in outboundWriter.send, between the result channel and sendCtx.Done()) is
+// what gets decided, not resumeApproval's final select this test is actually
+// about. A mutation confined to the final select would go completely
+// unexercised by a test that never reliably reaches it with a nil error.
+//
+// So this test establishes the ordering through an explicit, un-raced
+// happens-before instead of timing:
+//
+//  1. Wait for the Ready to actually leave the writer (the default fakeStream
+//     Send, unmodified, so nothing here can itself return an error).
+//  2. Send a second, sentinel update through the SAME outbound writer and
+//     wait for it to complete. The writer is single-threaded and strictly
+//     FIFO — begin, Send, complete, only then does it loop back to dequeue
+//     the next request — so this sentinel cannot finish before the Ready's
+//     own request.complete has already run. That is what proves, without any
+//     clock, that the Ready's send has already durably succeeded and
+//     resumeApproval's own blocked receive on request.result has already been
+//     resolved with a nil error — while sendCtx was still live, because
+//     nothing has cancelled anything yet at this point.
+//  3. Only now record the acceptance and cancel the wait. Neither action can
+//     any longer race the send's own completion — that already happened in
+//     step 2 — so the only thing left for either of them to affect is exactly
+//     the final select this test targets.
+//
+// Repeated so that, under a regression that lets the deadline arm win
+// outright instead of deferring to abandonOrClaim, the run of iterations is
+// exceedingly unlikely to have Go's select land on the signal arm every
+// single time and mask the bug.
+func TestAcceptanceRecordedBeforeFinalSelectAlwaysWins(t *testing.T) {
+	const iterations = 200
+	for attempt := 0; attempt < iterations; attempt++ {
+		harness := newResumeDeliveryHarness(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		accepted := &turingv1.RuntimeApprovalResumeAccepted{
+			RunId: resumeDeliveryRunID, ApprovalId: resumeDeliveryApproval,
+			StateVersion: resumeDeliveryVersion + 1, AssignmentAttemptId: resumeDeliveryAttempt,
+		}
+
+		result := make(chan error, 1)
+		go func() { result <- harness.resumeWithContext(ctx, time.Time{}) }()
+
+		// Step 1: the Ready reaches the stream via the default, unmodified
+		// Send — nothing here can produce a send error.
+		select {
+		case update := <-harness.stream.sent:
+			if update.GetApprovalResumeReady() == nil {
+				t.Fatalf("attempt %d: first update sent = %+v, want the approval Ready", attempt, update)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("attempt %d: the Ready never reached the stream", attempt)
+		}
+
+		// Step 2: a sentinel update through the same writer, proving by FIFO
+		// order alone — not by timing — that the Ready's own request.complete
+		// has already run and resumeApproval has already been handed a nil
+		// error for its send.
+		sentinelErr := harness.worker.send(context.Background(), harness.stream, &turingv1.RuntimeUpdate{
+			Update: &turingv1.RuntimeUpdate_Heartbeat{Heartbeat: &turingv1.RuntimeHeartbeat{WorkerId: "worker-resume-delivery"}},
+		})
+		if sentinelErr != nil {
+			t.Fatalf("attempt %d: sentinel send after the Ready = %v, want nil", attempt, sentinelErr)
+		}
+		select {
+		case <-harness.stream.sent:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("attempt %d: the sentinel never reached the stream", attempt)
+		}
+
+		// Step 3: the barrier. Both actions run sequentially on THIS
+		// goroutine — recordAccepted first, so its commit is visible to any
+		// concurrent abandonOrClaim before cancel can possibly make one run —
+		// and both only after step 2 proved the send itself is already
+		// settled, so neither can land anywhere but the final select.
+		if !harness.pending.recordAccepted(accepted) {
+			t.Fatalf("attempt %d: recordAccepted refused an acceptance for a Ready send already durably sent", attempt)
+		}
+		cancel()
+
+		err := <-result
+		cancel()
+
+		if err != nil {
+			t.Fatalf("attempt %d: resume error = %v, want nil: an acceptance recorded before the final select must win regardless of which ready case the select observes", attempt, err)
+		}
+		if fatal := harness.fatalErr(); fatal != nil {
+			t.Fatalf("attempt %d: resume succeeded but the worker still reported fatal: %v", attempt, fatal)
+		}
+		if entry := harness.worker.activeRun(resumeDeliveryRunID); entry == nil {
+			t.Fatalf("attempt %d: resume succeeded but the run was released as if it had failed", attempt)
+		}
+		for _, update := range harness.sentUpdates() {
+			if update.GetRunFailed() != nil || update.GetRunCancelledAck() != nil {
+				t.Fatalf("attempt %d: worker reported %+v for a run whose Ready was durably accepted", attempt, update)
+			}
+		}
+		if harness.entry.outboundPaused() {
+			t.Fatalf("attempt %d: a winning acceptance left the resumed run's outbound narration paused", attempt)
+		}
+		if got := harness.entry.expectedVersion(); got != resumeDeliveryVersion+1 {
+			t.Fatalf("attempt %d: run version after a winning acceptance = %d, want the accepted %d", attempt, got, resumeDeliveryVersion+1)
 		}
 	}
 }
