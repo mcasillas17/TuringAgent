@@ -228,6 +228,17 @@ func publicRunStep(payload map[string]any) map[string]any {
 // runStepNotice recognizes a failure-like notice from either shape: the
 // normalized one this build writes, and the legacy one a row written before the
 // migration still has.
+//
+// Which of these two shapes a row is attempting is decided by which of
+// repositoryAuthoredStepKeys it carries at all, never by whether those keys
+// happen to parse. Gating on a successful parse used to mean a malformed
+// counter — a string, or a value outside this build's vocabulary — read as
+// "this key was never here", and a row that named itself a retry fell through
+// to the pass-through arm below with its raw note and reason intact. A row
+// carrying any reserved key is claiming to be a repository-authored notice,
+// and only the repository ever writes them, so that claim is honored by
+// resolving to a bounded typed notice — never by republishing what came with
+// it.
 func runStepNotice(payload map[string]any) (runoutcome.NoticeCategory, int32, int32, bool) {
 	maxAttempts, _ := payloadInt32(payload, "maxAttempts")
 	if stored, ok := payload["category"].(string); ok {
@@ -238,19 +249,35 @@ func runStepNotice(payload map[string]any) (runoutcome.NoticeCategory, int32, in
 			return category, attempt, maxAttempts, true
 		}
 	}
-	attempt, isRetry := payloadInt32(payload, "attempt")
-	attempts, isGiveUp := payloadInt32(payload, "attempts")
-	if _, hasBudget := payloadInt32(payload, "maxAttempts"); !hasBudget || (!isRetry && !isGiveUp) {
+	if !hasReservedRetryNoticeKey(payload) {
 		return "", 0, 0, false
 	}
+	_, hasAttempts := payload["attempts"]
+	attempt, _ := payloadInt32(payload, "attempt")
+	attempts, _ := payloadInt32(payload, "attempts")
 	switch {
-	case isGiveUp:
+	case hasAttempts:
 		return runoutcome.NoticeRecoveryExhausted, attempts, maxAttempts, true
 	case payloadText(payload, "reason") == "worker_unavailable":
 		return runoutcome.NoticeRecoveryRetry, attempt, maxAttempts, true
 	default:
 		return runoutcome.NoticeDispatchRetry, attempt, maxAttempts, true
 	}
+}
+
+// hasReservedRetryNoticeKey reports whether payload carries any key only the
+// repository's retry/recovery notice writer ever sets. Presence, not parse
+// success, is the signal: a worker's generic step content never carries these
+// keys (StripRepositoryAuthoredEventFields removes them at ingress), so seeing
+// one at all — with a valid value or a corrupted one — means the row is
+// claiming to be a repository-authored notice.
+func hasReservedRetryNoticeKey(payload map[string]any) bool {
+	for _, key := range repositoryAuthoredStepKeys {
+		if _, ok := payload[key]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // runStateFrom projects the committed snapshot a lifecycle event carries.
@@ -315,6 +342,13 @@ func payloadInt64(payload map[string]any, key string) (int64, bool) {
 		return parsed, true
 	case float64:
 		if math.IsNaN(value) || math.IsInf(value, 0) || value < math.MinInt64 || value > math.MaxInt64 {
+			return 0, false
+		}
+		if value != math.Trunc(value) {
+			// A fractional value is not a counter any writer this build
+			// produces: truncating it (2.9 -> 2) would fabricate a
+			// plausible-looking count instead of surfacing that the stored
+			// value was never a real one.
 			return 0, false
 		}
 		return int64(value), true

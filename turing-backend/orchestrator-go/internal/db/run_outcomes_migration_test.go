@@ -3069,6 +3069,93 @@ func TestRunOutcomeMigrationPreservesNonfailureRunStepNotices(t *testing.T) {
 	}
 }
 
+// TestRunOutcomeMigrationFailsClosedOnMalformedRetryCounters covers a row the
+// old truncate-or-fall-through rewrite mishandled two different ways: a
+// counter stored as a string parsed as absent, which sent the whole notice
+// down the "no attempt budget" path and left the row untouched — its raw
+// note and reason durable forever — and a fractional counter silently
+// truncated into a plausible-looking integer count. Both must instead resolve
+// to a bounded, category-only notice: the reserved keys (attempt/attempts/
+// maxAttempts) are what mark this row as a retry-notice attempt, so a
+// malformed value must fail the notice closed rather than fall through to the
+// raw payload.
+func TestRunOutcomeMigrationFailsClosedOnMalformedRetryCounters(t *testing.T) {
+	testCases := []struct {
+		name    string
+		payload string
+		want    map[string]any
+	}{
+		{
+			name: "string attempt counter",
+			payload: `{"note":"retrying after connection refused by ollama at 127.0.0.1:11434",` +
+				`"attempt":"two","maxAttempts":3,"reason":"model_error"}`,
+			want: map[string]any{"category": "dispatch_retry"},
+		},
+		{
+			name: "string attempts counter on a give-up notice",
+			payload: `{"note":"giving up: connection refused by ollama at 127.0.0.1:11434",` +
+				`"attempts":"three","maxAttempts":3,"reason":"runtime_error"}`,
+			want: map[string]any{"category": "recovery_exhausted"},
+		},
+		{
+			name: "string maxAttempts counter",
+			payload: `{"note":"retrying","attempt":2,"maxAttempts":"three",` +
+				`"reason":"worker_unavailable"}`,
+			want: map[string]any{"category": "recovery_retry"},
+		},
+		{
+			name:    "fractional attempt counter truncated toward a plausible count",
+			payload: `{"note":"retrying","attempt":2.9,"maxAttempts":3,"reason":"model_error"}`,
+			want:    map[string]any{"category": "dispatch_retry"},
+		},
+		{
+			name:    "fractional maxAttempts counter",
+			payload: `{"note":"retrying","attempt":2,"maxAttempts":3.5,"reason":"worker_unavailable"}`,
+			want:    map[string]any{"category": "recovery_retry"},
+		},
+		{
+			name:    "fractional attempts counter on a give-up notice",
+			payload: `{"note":"giving up","attempts":2.5,"maxAttempts":3,"reason":"runtime_error"}`,
+			want:    map[string]any{"category": "recovery_exhausted"},
+		},
+	}
+
+	ctx := context.Background()
+	database := openMigratedThroughLegacy(t, ctx, filepath.Join(t.TempDir(), "malformed-counters.db"))
+	defer database.Close()
+	seedLegacySession(t, ctx, database, "sess_malformed_counters")
+	for index, testCase := range testCases {
+		seedLegacyEvent(t, ctx, database, "sess_malformed_counters", "", index+1, "agent.run.step", testCase.payload)
+	}
+
+	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	for index, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			payload := readEventPayload(t, ctx, database, "sess_malformed_counters", index+1)
+			if !reflect.DeepEqual(payload, testCase.want) {
+				t.Fatalf("payload = %#v, want %#v (row left carrying more than the bounded category)", payload, testCase.want)
+			}
+			if _, leaked := payload["note"]; leaked {
+				t.Fatalf("payload retained the raw note: %#v", payload)
+			}
+			if _, leaked := payload["reason"]; leaked {
+				t.Fatalf("payload retained the raw reason: %#v", payload)
+			}
+			if _, leaked := payload["attempt"]; leaked {
+				t.Fatalf("payload published an attempt counter derived from a malformed value: %#v", payload)
+			}
+			if _, leaked := payload["attempts"]; leaked {
+				t.Fatalf("payload published an attempts counter derived from a malformed value: %#v", payload)
+			}
+			if _, leaked := payload["maxAttempts"]; leaked {
+				t.Fatalf("payload published a maxAttempts counter derived from a malformed value: %#v", payload)
+			}
+		})
+	}
+}
+
 const legacyDenialRationale = "I did not want that file touched"
 const legacyApprovalComment = "looked risky to me"
 

@@ -253,6 +253,104 @@ func TestNonFailureRunStepNoticesSurvivePublicRead(t *testing.T) {
 	}
 }
 
+// TestRunStepFailsClosedOnMalformedRetryCounters covers a legacy or replayed
+// agent.run.step row whose reserved counters (attempt/attempts/maxAttempts)
+// are present but malformed: stored as the wrong JSON type, or as a number
+// with a fractional part no writer this build has ever produced would emit. A
+// malformed counter must not send the whole notice down the "not failure-like"
+// path — the reserved keys are what mark the row as a retry-notice attempt in
+// the first place, so a value this build cannot trust closes the notice to a
+// bounded category rather than letting the raw note/reason pass through, and a
+// fractional value must not be truncated into a plausible-looking count.
+func TestRunStepFailsClosedOnMalformedRetryCounters(t *testing.T) {
+	tests := []struct {
+		name         string
+		payload      string
+		wantCategory string
+	}{
+		{
+			name: "string attempt counter",
+			payload: `{"note":"retrying after connection refused by ollama at 127.0.0.1:11434",` +
+				`"attempt":"two","maxAttempts":3,"reason":"model_error"}`,
+			wantCategory: "dispatch_retry",
+		},
+		{
+			name: "string attempts counter on a give-up notice",
+			payload: `{"note":"giving up: connection refused by ollama at 127.0.0.1:11434",` +
+				`"attempts":"three","maxAttempts":3,"reason":"runtime_error"}`,
+			wantCategory: "recovery_exhausted",
+		},
+		{
+			name:         "string maxAttempts counter",
+			payload:      `{"note":"retrying","attempt":2,"maxAttempts":"three","reason":"worker_unavailable"}`,
+			wantCategory: "recovery_retry",
+		},
+		{
+			name:         "fractional attempt counter truncated toward a plausible count",
+			payload:      `{"note":"retrying","attempt":2.9,"maxAttempts":3,"reason":"model_error"}`,
+			wantCategory: "dispatch_retry",
+		},
+		{
+			name:         "fractional maxAttempts counter",
+			payload:      `{"note":"retrying","attempt":2,"maxAttempts":3.5,"reason":"worker_unavailable"}`,
+			wantCategory: "recovery_retry",
+		},
+		{
+			name:         "fractional attempts counter on a give-up notice",
+			payload:      `{"note":"giving up","attempts":2.5,"maxAttempts":3,"reason":"runtime_error"}`,
+			wantCategory: "recovery_exhausted",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newEventHarness(t)
+			run := seedEventRun(t, h, test.name)
+			seeded := appendLegacyEvent(t, h, run, "agent.run.step", test.payload)
+			public := listedEvent(t, h, run.sessionID, seeded.EventID)
+			assertNoRawDiagnostics(t, public.GetPayload())
+			fields := public.GetPayload().GetFields()
+			if got := fields["category"].GetStringValue(); got != test.wantCategory {
+				t.Fatalf("category = %q, want %q (%s)", got, test.wantCategory, public.GetPayload())
+			}
+			for _, leaked := range []string{"attempt", "attempts", "maxAttempts", "note", "reason"} {
+				if _, exists := fields[leaked]; exists {
+					t.Fatalf("public payload carries %q derived from a malformed counter: %s", leaked, public.GetPayload())
+				}
+			}
+			if len(fields) != 1 {
+				t.Fatalf("public payload = %s, want only the bounded category", public.GetPayload())
+			}
+		})
+	}
+}
+
+// TestRunStepWithoutReservedKeysStaysPassThrough proves the malformed-counter
+// gate above does not widen what counts as a retry notice. A run-step payload
+// that carries none of the repository-authored reserved keys is legitimate
+// non-retry content — an egress warning, a routing note — and must still
+// publish exactly as written.
+func TestRunStepWithoutReservedKeysStaysPassThrough(t *testing.T) {
+	h := newEventHarness(t)
+	run := seedEventRun(t, h, "Non-retry step, no reserved keys")
+	const payload = `{"note":"Sending to Claude — this message leaves your machine",` +
+		`"externalAgent":"Claude","endpoint":"api.anthropic.com"}`
+	seeded := appendLegacyEvent(t, h, run, "agent.run.step", payload)
+	public := listedEvent(t, h, run.sessionID, seeded.EventID)
+	fields := public.GetPayload().GetFields()
+	if _, exists := fields["category"]; exists {
+		t.Fatalf("non-retry step published a category it never had: %s", public.GetPayload())
+	}
+	if got := fields["note"].GetStringValue(); got != "Sending to Claude — this message leaves your machine" {
+		t.Fatalf("note = %q, want it intact", got)
+	}
+	if got := fields["endpoint"].GetStringValue(); got != "api.anthropic.com" {
+		t.Fatalf("endpoint = %q, want it intact", got)
+	}
+	if got := fields["externalAgent"].GetStringValue(); got != "Claude" {
+		t.Fatalf("externalAgent = %q, want it intact", got)
+	}
+}
+
 // TestEventServiceSanitizesMalformedLegacyFailureEvents covers the row nobody
 // can parse. It must not become a parser message on the wire, and it must not
 // become a plausible outcome either.

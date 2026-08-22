@@ -1060,6 +1060,26 @@ var approvalEventIdentityKeys = []string{"approvalId", "toolCallId", "toolName",
 
 var toolCallEventIdentityKeys = []string{"toolCallId", "toolName", "serverName", "modelToolCallId"}
 
+// reservedRetryNoticeKeys are the payload keys only the repository's retry and
+// recovery notice writer ever sets on an agent.run.step row (see
+// repositoryAuthoredStepKeys in the events package's public-read boundary,
+// which this list mirrors so the two boundaries answer the same question
+// identically). Their presence — not whether their values still parse — is
+// what marks a legacy row as a retry-notice attempt rather than a governed
+// non-retry step, so a value this build cannot trust must still resolve to a
+// bounded typed notice instead of being left as an unrewritten row that keeps
+// republishing its raw note and reason forever.
+var reservedRetryNoticeKeys = []string{"category", "attempt", "attempts", "maxAttempts", "stateVersion"}
+
+func hasReservedRetryNoticeKey(payload map[string]any) bool {
+	for _, key := range reservedRetryNoticeKeys {
+		if _, ok := payload[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func rewriteFailureEventPayload(row legacyEventRow) (string, bool, error) {
 	switch row.eventType {
 	case "agent.run.failed", "agent.run.cancelled":
@@ -1119,19 +1139,28 @@ func rewriteIdentityEvent(row legacyEventRow, identityKeys []string, category ru
 }
 
 // rewriteRunStepNotice rewrites only the failure-like notices. A run-step
-// payload that carries no attempt budget is a redacted-egress or model-limit
-// projection, which is governed elsewhere and is left exactly as it was.
+// payload that carries none of reservedRetryNoticeKeys is a redacted-egress or
+// model-limit projection, which is governed elsewhere and is left exactly as
+// it was.
+//
+// A payload that does carry one of those keys is claiming to be a
+// repository-authored retry or recovery notice, and that claim is resolved to
+// a bounded typed notice below whether or not the counters it carries still
+// parse — gating on a successful parse instead would read a malformed counter
+// as "this key was never here" and leave the row's raw note and reason
+// unrewritten, which is exactly the row this rewrite exists to close.
 func rewriteRunStepNotice(row legacyEventRow) (string, bool, error) {
 	legacy, err := decodeEventPayload(row.payloadJSON)
 	if err != nil {
 		return "", false, err
 	}
-	maxAttempts, hasBudget := payloadInt32(legacy, "maxAttempts")
-	attempt, isRetry := payloadInt32(legacy, "attempt")
-	attempts, isGiveUp := payloadInt32(legacy, "attempts")
-	if !hasBudget || (!isRetry && !isGiveUp) {
+	if !hasReservedRetryNoticeKey(legacy) {
 		return "", false, nil
 	}
+	maxAttempts, _ := payloadInt32(legacy, "maxAttempts")
+	attempt, _ := payloadInt32(legacy, "attempt")
+	attempts, _ := payloadInt32(legacy, "attempts")
+	_, isGiveUp := legacy["attempts"]
 	category := runoutcome.NoticeDispatchRetry
 	switch {
 	case isGiveUp:
@@ -1182,10 +1211,21 @@ func marshalEventPayload(payload any) (string, bool, error) {
 	return string(encoded), true, nil
 }
 
+// payloadInt32 accepts only an exact integral value in the supported int32
+// range. A stored counter this build ever wrote is always a whole number, so a
+// fractional value (2.9) is not a counter that lost precision — it is a value
+// no writer here produced, and truncating it would fabricate a
+// plausible-looking count. Out of range and fractional are both reported as
+// present-but-unusable (ok=true, value=0) rather than absent, so a caller can
+// still tell "this key was never here" apart from "this key was here but
+// broken".
 func payloadInt32(payload map[string]any, key string) (int32, bool) {
 	number, ok := payload[key].(float64)
 	if !ok {
 		return 0, false
+	}
+	if number != math.Trunc(number) {
+		return 0, true
 	}
 	if number < math.MinInt32 || number > math.MaxInt32 {
 		return 0, true
