@@ -18,6 +18,7 @@ void main() {
       0x20, 0x02, // lifecycle field 4, recognized QUEUED
       0x20, 0x7f, // lifecycle field 4, unknown enum value 127
       0x30, 0x01, // state_version field 6
+      0x3a, 0x00, // state_updated_at field 7, explicit zero-valued Timestamp
     ]);
 
     expect(proto.lifecycle, commonpb.RunLifecycle.RUN_LIFECYCLE_QUEUED);
@@ -30,6 +31,7 @@ void main() {
       0x28, 0x02, // outcome_reason field 5, recognized NONE
       0x28, 0x7f, // outcome_reason field 5, unknown enum value 127
       0x30, 0x01, // state_version field 6
+      0x3a, 0x00, // state_updated_at field 7, explicit zero-valued Timestamp
     ]);
 
     expect(
@@ -82,6 +84,8 @@ void main() {
       0x7e,
       0x30,
       0x01,
+      0x3a,
+      0x00, // state_updated_at field 7, explicit zero-valued Timestamp
     ]);
 
     final state = GrpcMappers.runStateToModel(proto);

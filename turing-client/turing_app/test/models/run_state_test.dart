@@ -159,6 +159,82 @@ void main() {
     expect(GrpcMappers.runStateToModel(state), isNull);
   });
 
+  test(
+    'rejects a run state with no state_updated_at rather than fabricate epoch',
+    () {
+      final state = protoState()..clearStateUpdatedAt();
+
+      expect(GrpcMappers.runStateToModel(state), isNull);
+    },
+  );
+
+  test(
+    'rejects a run state whose state_updated_at nanos escape the valid range',
+    () {
+      final state = protoState();
+      state.stateUpdatedAt.nanos = 1000000000;
+
+      expect(GrpcMappers.runStateToModel(state), isNull);
+    },
+  );
+
+  test('rejects a run state whose state_updated_at nanos are negative', () {
+    final state = protoState();
+    state.stateUpdatedAt.nanos = -1;
+
+    expect(GrpcMappers.runStateToModel(state), isNull);
+  });
+
+  test(
+    'rejects a run state whose state_updated_at seconds exceed 9999-12-31T23:59:59Z',
+    () {
+      final state = protoState();
+      // One second past the documented maximum (253402300799).
+      state.stateUpdatedAt.seconds = Int64(253402300800);
+
+      expect(GrpcMappers.runStateToModel(state), isNull);
+    },
+  );
+
+  test(
+    'rejects a run state whose state_updated_at seconds precede 0001-01-01T00:00:00Z',
+    () {
+      final state = protoState();
+      // One second before the documented minimum (-62135596800).
+      state.stateUpdatedAt.seconds = Int64(-62135596801);
+
+      expect(GrpcMappers.runStateToModel(state), isNull);
+    },
+  );
+
+  test(
+    'accepts a run state whose state_updated_at seconds sit exactly at the documented bounds',
+    () {
+      final min = protoState();
+      min.stateUpdatedAt.seconds = Int64(-62135596800);
+      final max = protoState();
+      max.stateUpdatedAt.seconds = Int64(253402300799);
+
+      expect(GrpcMappers.runStateToModel(min), isNotNull);
+      expect(GrpcMappers.runStateToModel(max), isNotNull);
+    },
+  );
+
+  test(
+    'accepts an explicitly present zero-valued state_updated_at as the real epoch',
+    () {
+      final state = protoState();
+      state.stateUpdatedAt = timestamppb.Timestamp();
+
+      final mapped = GrpcMappers.runStateToModel(state);
+
+      expect(
+        mapped?.stateUpdatedAt,
+        DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      );
+    },
+  );
+
   test('accepts the maximum signed 64-bit state version', () {
     final state = GrpcMappers.runStateToModel(
       protoState(stateVersion: Int64.MAX_VALUE),

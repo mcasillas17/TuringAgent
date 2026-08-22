@@ -1597,6 +1597,10 @@ func TestRunOutcomeMigrationAfterHookValidatesCanonicalStateWithoutTheSchemaChec
 		{name: "outcome outside the closed vocabulary", column: "outcome_reason", value: `'legacy_unknown'`},
 		{name: "version below the first stored one", column: "state_version", value: `0`},
 		{name: "variable-width state timestamp", column: "state_updated_at", value: `'2026-01-01T00:00:00Z'`},
+		// This value is exactly the canonical 30-character width — the length
+		// check alone would accept it — but month 13 is not a valid calendar
+		// month, so only a real parse of the value catches it.
+		{name: "thirty-character noncanonical state timestamp", column: "state_updated_at", value: `'2026-13-01T00:00:00.000000000Z'`},
 		{name: "truncated content digest", column: "assistant_content_sha256", value: `'deadbeef'`},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -1640,6 +1644,109 @@ func TestRunOutcomeMigrationAfterHookValidatesCanonicalStateWithoutTheSchemaChec
 			assertNoForeignKeyViolations(t, ctx, reopened)
 		})
 	}
+}
+
+func stateTimestampBatches(batches []runOutcomeBatch) []runOutcomeBatch {
+	filtered := make([]runOutcomeBatch, 0, len(batches))
+	for _, batch := range batches {
+		if batch.Scan == runOutcomesStateTimestampScan {
+			filtered = append(filtered, batch)
+		}
+	}
+	return filtered
+}
+
+// TestRunOutcomeMigrationSplitsStateTimestampScanAtOneHundredTwentyEightRows
+// proves the After hook's canonical-timestamp pass is itself a bounded keyset
+// scan over the rebuilt table, not an unbounded read of it: it is a third,
+// independently written loop, alongside the run and event backfill passes,
+// so its row bound is proven separately rather than assumed to be inherited.
+func TestRunOutcomeMigrationSplitsStateTimestampScanAtOneHundredTwentyEightRows(t *testing.T) {
+	ctx := context.Background()
+	database := openMigratedThroughLegacy(t, ctx, filepath.Join(t.TempDir(), "state-timestamp-row-split.db"))
+	defer database.Close()
+	seedLegacySession(t, ctx, database, "sess_state_ts_rows")
+	for index := 0; index < 300; index++ {
+		id := fmt.Sprintf("run_ts_%03d", index)
+		seedLegacyRun(t, ctx, database, legacyRun{
+			id:                 id,
+			sessionID:          "sess_state_ts_rows",
+			status:             "queued",
+			assistantMessageID: id + "_assistant",
+		})
+	}
+
+	batches := recordRunOutcomeBatches(t)
+	if err := applyRunOutcomesMigration(t, ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	var gotRows []int
+	for _, batch := range stateTimestampBatches(*batches) {
+		gotRows = append(gotRows, batch.Rows)
+	}
+	if want := []int{128, 128, 44}; !reflect.DeepEqual(gotRows, want) {
+		t.Fatalf("state-timestamp batch sizes = %v, want %v", gotRows, want)
+	}
+}
+
+// TestRunOutcomeMigrationRejectsOneOversizedStateTimestampValueFree proves the
+// canonical-timestamp pass measures each row's selected bytes before it is
+// read, the same defense in depth every other keyset scan in this migration
+// applies. A state_updated_at wide enough to defeat the CHECK constraint is
+// only reachable the same way the canonical-gate test reaches one: by
+// disabling checks for one injected write, the situation a future ALTER, a
+// relaxed constraint, or a direct table edit would create. That row must be
+// refused without ever being read into Go, and the whole migration must roll
+// back rather than leave a partially rebuilt table behind.
+func TestRunOutcomeMigrationRejectsOneOversizedStateTimestampValueFree(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state-timestamp-oversized.db")
+	database := openMigratedThroughLegacy(t, ctx, path)
+	seedLegacySession(t, ctx, database, "sess_state_ts_oversized")
+	seedLegacyRun(t, ctx, database, legacyRun{
+		id: "run_ts_oversized", sessionID: "sess_state_ts_oversized", status: "failed",
+		errorCode: "weird_legacy_code", errorMessage: "provider stack trace",
+		assistantMessageID: "msg_ts_oversized", assistantContent: "partial answer",
+		finishedAt: "2026-01-01T00:00:07.000000000Z",
+	})
+	seedRunOwnedChildren(t, ctx, database, "sess_state_ts_oversized", "run_ts_oversized", "msg_ts_oversized")
+	oversized := strings.Repeat("9", int(runOutcomesByteBudget+1))
+	migrationPhaseHook = func(ctx context.Context, _ string, phase string, tx *sql.Tx) error {
+		if phase != migrationPhaseAfterIndexes {
+			return nil
+		}
+		if _, err := tx.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE agent_runs SET state_updated_at = ? WHERE id = 'run_ts_oversized'`, oversized); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `PRAGMA ignore_check_constraints = OFF`)
+		return err
+	}
+	t.Cleanup(func() { migrationPhaseHook = nil })
+
+	err := applyRunOutcomesMigration(t, ctx, database)
+	if err == nil {
+		t.Fatal("ApplyMigrations accepted a state_updated_at above the byte budget")
+	}
+	if got := err.Error(); got != "run outcome migration row exceeds byte limit" {
+		t.Fatalf("error = %q, want exactly the value-free byte-limit sentinel", got)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	assertPreMigrationRunShape(t, ctx, reopened, "run_ts_oversized",
+		"weird_legacy_code", "provider stack trace")
+	assertRunOwnedChildrenIntact(t, ctx, reopened, "run_ts_oversized")
+	assertNoForeignKeyViolations(t, ctx, reopened)
 }
 
 func TestRunOutcomeSchemaRejectsNoncanonicalStateWrites(t *testing.T) {

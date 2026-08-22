@@ -328,10 +328,11 @@ func sqlSectionIsEmpty(section string) bool {
 // the variable-width data actually selected, so one enormous assistant message
 // cannot turn a bounded transaction into an unbounded allocation.
 const (
-	runOutcomesBatchRows        = 128
-	runOutcomesByteBudget int64 = 16 << 20
-	runOutcomesRunScan          = "runs"
-	runOutcomesEventScan        = "events"
+	runOutcomesBatchRows                = 128
+	runOutcomesByteBudget         int64 = 16 << 20
+	runOutcomesRunScan                  = "runs"
+	runOutcomesEventScan                = "events"
+	runOutcomesStateTimestampScan       = "state-timestamps"
 )
 
 // runOutcomesRunBytesExpr measures one run's selected variable-width data. It
@@ -1227,7 +1228,6 @@ func requireCanonicalRunState(ctx context.Context, tx *sql.Tx) error {
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM agent_runs
 		WHERE state_version < 1
-			OR length(state_updated_at) <> 30
 			OR length(assistant_content_sha256) <> 64
 			OR outcome_reason NOT IN (
 				'none','completed_no_content','user_cancelled','abandoned','expired','context_limit',
@@ -1240,6 +1240,9 @@ func requireCanonicalRunState(ctx context.Context, tx *sql.Tx) error {
 	if invalid != 0 {
 		return errRunOutcomeCanonicalFields
 	}
+	if err := requireCanonicalStateUpdatedAt(ctx, tx); err != nil {
+		return err
+	}
 	// Correlation is deliberately not re-judged here beyond the duplicate
 	// preflight above. A mutually named pair that disagrees about session or
 	// role still has exactly one claimant on each side, so it has one honest
@@ -1250,4 +1253,93 @@ func requireCanonicalRunState(ctx context.Context, tx *sql.Tx) error {
 	// terminal row the fallback handles neutrally would contradict the
 	// fallback.
 	return nil
+}
+
+// requireCanonicalStateUpdatedAt proves every rebuilt row's state_updated_at
+// is a value persisttime.ParseCanonical actually accepts, not merely a value
+// of the canonical width. A relaxed CHECK constraint or a direct table edit
+// can produce a 30-character string that fails the calendar or the exact
+// fixed-width shape ParseCanonical requires — length alone would let that
+// row through the surrounding COUNT-based check. The scan is paged with the
+// same row-count and selected-byte bounds every other keyset scan in this
+// migration honors, so proving this on a large table never turns one bounded
+// transaction into an unbounded allocation.
+func requireCanonicalStateUpdatedAt(ctx context.Context, tx *sql.Tx) error {
+	var cursor int64
+	for {
+		lastRowID, batchRows, batchBytes, err := runOutcomeStateTimestampBatchBounds(ctx, tx, cursor)
+		if err != nil {
+			return err
+		}
+		if batchRows == 0 {
+			return nil
+		}
+		observeRunOutcomeBatch(runOutcomesStateTimestampScan, batchRows, batchBytes)
+		values, err := readRunStateUpdatedAtBatch(ctx, tx, cursor, lastRowID)
+		if err != nil {
+			return err
+		}
+		for _, value := range values {
+			if _, err := persisttime.ParseCanonical(value); err != nil {
+				return errRunOutcomeCanonicalFields
+			}
+		}
+		cursor = lastRowID
+	}
+}
+
+// runOutcomeStateTimestampBatchBounds is the length-only cursor for the
+// canonical-timestamp scan: it measures each candidate row's
+// state_updated_at byte length before any value is read, so a corrupted,
+// oversized value cannot be materialized before it is known to be
+// affordable.
+func runOutcomeStateTimestampBatchBounds(ctx context.Context, tx *sql.Tx, cursor int64) (int64, int, int64, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT rowid, COALESCE(length(CAST(state_updated_at AS BLOB)), 0)
+		FROM agent_runs
+		WHERE rowid > ?
+		ORDER BY rowid
+		LIMIT ?
+	`, cursor, runOutcomesBatchRows)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	lastRowID, count, total, err := accumulateBatchBounds(rows)
+	if closeErr := rows.Close(); closeErr != nil && err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return lastRowID, count, total, nil
+}
+
+// readRunStateUpdatedAtBatch reads only the rows the bounds pass already
+// proved affordable, (cursor, lastRowID].
+func readRunStateUpdatedAtBatch(ctx context.Context, tx *sql.Tx, cursor int64, lastRowID int64) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT state_updated_at FROM agent_runs
+		WHERE rowid > ? AND rowid <= ?
+		ORDER BY rowid
+	`, cursor, lastRowID)
+	if err != nil {
+		return nil, err
+	}
+	values := make([]string, 0)
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return values, nil
 }

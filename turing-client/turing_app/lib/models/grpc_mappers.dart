@@ -442,6 +442,10 @@ class GrpcMappers {
         Int64(version) != runState.stateVersion) {
       return null;
     }
+    final stateUpdatedAt = _validStateUpdatedAt(runState);
+    if (stateUpdatedAt == null) {
+      return null;
+    }
     return model_run_state.RunState(
       runId: runState.runId,
       userMessageId: runState.userMessageId,
@@ -463,12 +467,44 @@ class GrpcMappers {
         ),
       ),
       stateVersion: version,
-      stateUpdatedAt: _timestampToDateTime(runState.stateUpdatedAt),
+      stateUpdatedAt: stateUpdatedAt,
       finishedAt: runState.hasFinishedAt()
           ? _timestampToDateTime(runState.finishedAt)
           : null,
       hasDisplayableContent: runState.hasDisplayableContent,
     );
+  }
+
+  // state_updated_at is the model's only ordering signal, so an absent field
+  // must not silently become epoch — which is exactly the instant
+  // _timestampToDateTime returns for a genuinely-set all-zero Timestamp.
+  // hasStateUpdatedAt() tells a submessage this build never populated apart
+  // from one that was populated with all-default values, and a populated one
+  // whose seconds or nanos escape the documented ranges (see
+  // google.protobuf.Timestamp: seconds must be from 0001-01-01T00:00:00Z to
+  // 9999-12-31T23:59:59Z inclusive, i.e. -62135596800..253402300799, and
+  // nanos from 0 to 999999999) is rejected before conversion, the same bounds
+  // the well-known type's own JSON codec enforces. Either failure omits the
+  // whole snapshot instead of fabricating a fallback field value: the same
+  // fail-closed pattern used above for a missing run id or a nonpositive
+  // version.
+  static const int _timestampMinSeconds = -62135596800;
+  static const int _timestampMaxSeconds = 253402300799;
+
+  static DateTime? _validStateUpdatedAt(commonpb.RunState runState) {
+    if (!runState.hasStateUpdatedAt()) {
+      return null;
+    }
+    final seconds = runState.stateUpdatedAt.seconds;
+    if (seconds < Int64(_timestampMinSeconds) ||
+        seconds > Int64(_timestampMaxSeconds)) {
+      return null;
+    }
+    final nanos = runState.stateUpdatedAt.nanos;
+    if (nanos < 0 || nanos > 999999999) {
+      return null;
+    }
+    return _timestampToDateTime(runState.stateUpdatedAt);
   }
 
   static model_run_lifecycle.RunLifecycle runLifecycleToModel(

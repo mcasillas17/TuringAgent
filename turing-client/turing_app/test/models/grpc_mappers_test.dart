@@ -194,7 +194,11 @@ void main() {
         runId: 'run_1',
         sequence: Int64(44),
         runStateChanged: RunStateChanged(
-          runState: commonpb.RunState(runId: 'run_1', stateVersion: Int64(7)),
+          runState: commonpb.RunState(
+            runId: 'run_1',
+            stateVersion: Int64(7),
+            stateUpdatedAt: timestamppb.Timestamp(),
+          ),
         ),
       ),
     );
@@ -211,7 +215,11 @@ void main() {
     final mapped = GrpcMappers.turingEventToTuringEvent(
       eventpb.TuringEvent(
         type: eventpb.TuringEventType.TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED,
-        runState: commonpb.RunState(runId: 'run_1', stateVersion: Int64(7)),
+        runState: commonpb.RunState(
+          runId: 'run_1',
+          stateVersion: Int64(7),
+          stateUpdatedAt: timestamppb.Timestamp(),
+        ),
         payload: structpb.Struct(
           fields: <String, structpb.Value>{
             'outcomeReason': structpb.Value(stringValue: 'provider_failure'),
@@ -258,7 +266,11 @@ void main() {
     final mapped = GrpcMappers.turingEventToTuringEvent(
       eventpb.TuringEvent(
         type: eventpb.TuringEventType.TURING_EVENT_TYPE_AGENT_RUN_FAILED,
-        runState: commonpb.RunState(runId: 'run_1', stateVersion: Int64(7)),
+        runState: commonpb.RunState(
+          runId: 'run_1',
+          stateVersion: Int64(7),
+          stateUpdatedAt: timestamppb.Timestamp(),
+        ),
         payload: structpb.Struct(
           fields: <String, structpb.Value>{
             'errorCode': structpb.Value(stringValue: 'provider_failure'),
